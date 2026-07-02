@@ -1,8 +1,17 @@
 # steps — a state-machine runtime for micro-agents
 
 **Status:** v1 implemented, 2026-07-02 — see [README.md](README.md); examples pass as the acceptance suite
-**Language:** Go · **Config:** YAML over a Go DSL · **Guards:** [expr-lang/expr](https://github.com/expr-lang/expr)
+**Language:** Go · **Config:** JavaScript machines evaluated by [goja](https://github.com/dop251/goja) · structure is data, logic is plain functions
 **Stack:** [google/adk-go](https://github.com/google/adk-go) v1 (agent loop, sessions, tools) + [adk-utils-go](https://github.com/achetronic/adk-utils-go) (Anthropic + OpenAI-compatible clients)
+
+> **2026-07 config-language revision:** machines were originally YAML with Go
+> templates and Expr guards embedded in strings. That accumulated two
+> languages smuggled inside a third — exactly the "programming in YAML" the
+> project set out to avoid. Machines are now single `.js` files
+> (`module.exports = {...}`): structure is data, validated as before; any
+> computed value (prompt, guard, foreach source, model routing, tool args)
+> is a plain function of one scope argument. Older YAML snippets below have
+> been converted; the semantics they document are unchanged.
 
 > Implementation deltas from this document: the Go builder DSL (`steps.State(...)`)
 > is not yet exposed — Go users construct machines via `machine.Parse`; `tool_choice:
@@ -16,7 +25,7 @@
 > low|medium|high` (maps to provider reasoning effort; per-micro-agent thinking
 > budgets); `agent.structured_output: prompt|native` (native = decoder-constrained
 > JSON on OpenAI-compatible backends; opt-in because grammar sampling degenerates on
-> some local model/backend combos); `adopt: {from, last_turns}` trim; reasoning-
+> some local model/backend combos); `adopt: {from, lastTurns}` trim; reasoning-
 > channel messages are journaled flagged `thought` but NEVER replayed on adopt and
 > excluded from `history` unless `include: [thoughts]` — scratch thinking is not
 > context. `steps inspect <run-id>` renders per-state token usage and routing.
@@ -40,23 +49,26 @@ to three rules, in priority order:
 
 1. **Fail before you spend.** Anything checkable at load time IS checked at
    load time, with an error that names the state, the field, and the valid
-   options (`unknown model "senoir" — … or one of the models: aliases (scout,
-   senior)`). A machine that validates should not surprise you mid-run.
-2. **Say it once, read it anywhere.** Shorthands exist wherever the long form
-   is noise: schema shorthand (`risk: enum(low, medium, high)`,
-   `leads: [{where: string, concern: string}]`, `tags: string[]`), `models:`
-   aliases so states read semantically (`model: senior`), scalar transitions
-   (`transitions: done`), linear-flow defaults. The long form always remains
-   valid — shorthand is sugar, never a second semantics.
-3. **The expanded truth is one command away.** `steps validate --print` shows
-   the machine after defaults; `steps inspect` shows what a run actually did.
-   Sugar never hides behavior.
+   options. Opaque functions are no excuse: `steps validate` **dry-runs every
+   function** against stub scopes derived from the declared schemas, so
+   `output.sevrity` fails the load naming the misspelled field *and* the
+   available ones. Declaring `input:` buys strict checking of run inputs too.
+2. **One honest language, nothing smuggled into strings.** Structure is data;
+   logic is a plain JS function of one scope argument. Interpolation is a
+   template literal, a predicate is `.every(...)`, a join is `.find(...)` —
+   never a mini-language inside a string. Schema shorthand
+   (`risk: "enum(low, medium, high)"`, `leads: [{where: "string"}]`,
+   `tags: "string[]"`) stays because it is data, not code.
+3. **The truth is one command away.** `steps validate --print` shows the
+   machine after defaults; `steps context` shows what each state's functions
+   may reference; `steps inspect` shows what a run actually did. And
+   `types/steps.d.ts` gives editors autocomplete over the whole DSL.
 
 ## Decisions (locked)
 
 | Question | Decision |
 |---|---|
-| Transition driver | **Agent proposes, guards dispose** — agent output includes a self-declared event; transitions match on `on:` (event) AND `when:` (Expr guard); ordered, first match wins; mandatory fallback |
+| Transition driver | **Agent proposes, guards dispose** — agent output includes a self-declared event; transitions match on `on:` (event) AND `when:` (guard function); ordered, first match wins; mandatory fallback |
 | State body | **Pluggable handlers** — `agent` (LLM+tools loop), `llm` (single call), `action` (registered Go func), `human` (gate) |
 | Data flow | **Explicit contracts** — templated `input:` pulled from run context, typed `output:` schema merged back as `ctx.<state>.*`; fresh conversation per state; declared escape hatches only (`history` projection, `adopt` continuation) |
 | Durability | **Durable from day one** — event-sourced journal; runs survive crashes and park on human gates |
@@ -71,98 +83,93 @@ to three rules, in priority order:
 
 - **Machine** — the workflow definition (states + transitions + limits). Immutable, validated at load.
 - **State** — one handler + an input contract + an output contract + transitions + retry/catch policy.
-- **Transition** — `{on?, when?, to}`. `on` matches the agent-declared event; `when` is a compiled
-  Expr guard. Both optional; both must hold if present. Evaluated in order; a bare `{to}` is the fallback.
+- **Transition** — `{on?, when?, to}`. `on` matches the agent-declared event; `when` is a
+  guard function. Both optional; both must hold if present. Evaluated in order; a bare `{to}` is the fallback.
 - **Run** — one durable execution instance: journal + context fold + current position.
 - **Handler** — the pluggable state body (`agent`, `llm`, `action`, `human`).
-- **Guard** — an Expr expression compiled at load time against a typed environment.
+- **Guard** — a plain function of scope returning bool; dry-run at load against schema-derived stubs.
 - **Journal** — append-only event log; the run's source of truth.
 
-## YAML sketch
+## The machine format
 
-```yaml
-version: 1
-name: support-triage
+A machine is one `.js` file evaluated once at load (goja — pure Go, no
+Node). Structure is data; any computed value is a function of one scope:
 
-input:                          # required run inputs, validated at start
-  ticket: {type: object, required: true}
+```js
+module.exports = {
+  name: "support-triage",
+  input: { ticket: { type: "object", required: true } },
 
-limits:                         # run-level guardrails (all have engine defaults)
-  max_transitions: 25           # cycle guard
-  max_cost: 2.50                # USD across all providers
-  timeout: 30m
+  models: { triager: "anthropic/claude-haiku-4-5" },
+  defaults: { agent: { model: "triager", reasoning: "low" } },
+  limits: { maxTransitions: 25, maxCost: 2.5, timeout: "30m" },
 
-initial: fetch_history
+  states: {
+    fetch_history: {
+      action: "crm.fetch_history", // registered Go func
+      input: { customer_id: ({ ctx }) => ctx.ticket.customer_id },
+      catch: [{ match: ["action_error"], to: "dead_letter" }],
+    },
 
-states:
-  fetch_history:
-    action: crm.fetch_history           # registered Go func
-    input:
-      customer_id: "{{ .ctx.ticket.customer_id }}"
-    transitions:
-      - to: triage
-    catch:
-      - match: [action_error]
-        to: dead_letter
+    triage: {
+      agent: {
+        system: "You classify inbound support tickets.",
+        tools: ["kb.search"],
+        prompt: ({ ctx }) => `
+TICKET: ${ctx.ticket.body}
+HISTORY: ${ctx.fetch_history.summary}`,
+      },
+      output: {
+        schema: {
+          severity: "enum(low, high, critical)",
+          confidence: "number",
+          reply_draft: "string",
+        },
+        events: ["resolved", "escalate"], // injected into the schema as an enum
+      },
+      transitions: [
+        { on: "resolved", when: ({ output }) => output.confidence >= 0.8, to: "send_reply" },
+        { on: "escalate", when: ({ output }) => output.severity === "critical", to: "page_oncall" },
+        { to: "human_review" }, // fallback — agent unsure or guards vetoed
+      ],
+    },
 
-  triage:
-    agent:
-      model: anthropic/claude-haiku-4-5
-      system: "You classify inbound support tickets."
-      tools: [kb.search]                # from the Go registry or builtin lib
-      max_turns: 6                      # agent-loop budget
-    input:                              # ONLY this crosses the boundary
-      ticket: "{{ .ctx.ticket.body }}"
-      history: "{{ .ctx.fetch_history.summary }}"
-    output:
-      schema:
-        severity: {enum: [low, high, critical]}
-        confidence: {type: number}
-        reply_draft: {type: string}
-      events: [resolved, escalate]      # injected into the output schema as an enum
-    retry:
-      - match: [rate_limited, provider_error]      # transient: replay same input
-        max_attempts: 5
-        backoff: {initial: 1s, factor: 2.0, jitter: true}
-      - match: [schema_violation, guard_rejected]  # semantic: re-prompt with the error
-        max_attempts: 2
-    transitions:
-      - on: resolved
-        when: output.confidence >= 0.8
-        to: send_reply
-      - on: escalate
-        when: output.severity == "critical"
-        to: page_oncall
-      - to: human_review                # fallback — agent unsure or guards vetoed
+    human_review: {
+      human: {
+        prompt: ({ ctx }) => `Agent unsure (confidence ${ctx.triage.confidence}). Approve draft?`,
+        timeout: "24h",
+        onTimeout: "page_oncall",
+      },
+      transitions: [
+        { on: "approved", to: "send_reply" },
+        { on: "rejected", to: "triage" }, // loop back; maxTransitions bounds it
+      ],
+    },
 
-  human_review:
-    human:
-      prompt: "Agent unsure (confidence {{ .ctx.triage.confidence }}). Approve draft?"
-      timeout: 24h
-      on_timeout: page_oncall
-    transitions:
-      - on: approved
-        to: send_reply
-      - on: rejected
-        to: triage                      # loop back; max_transitions bounds it
+    send_reply: {
+      action: "mail.send",
+      input: {
+        to: ({ ctx }) => ctx.ticket.customer_email,
+        body: ({ ctx }) => ctx.triage.reply_draft,
+      },
+      transitions: "done",
+    },
 
-  send_reply:
-    action: mail.send
-    input:
-      to: "{{ .ctx.ticket.customer_email }}"
-      body: "{{ .ctx.triage.reply_draft }}"
-    transitions:
-      - to: done
+    page_oncall: {
+      action: "pagerduty.page",
+      input: { summary: ({ ctx }) => ctx.triage.reply_draft },
+      transitions: "done",
+    },
 
-  page_oncall:
-    action: pagerduty.page
-    input: {summary: "{{ .ctx.triage.reply_draft }}"}
-    transitions:
-      - to: done
-
-  done:        {terminal: true}
-  dead_letter: {terminal: true, status: failed}
+    dead_letter: { terminal: true, status: "failed" },
+  },
+};
 ```
+
+The scope argument is the whole vocabulary: `{ ctx, output, event, visits,
+run, attempt }`, plus the foreach item under its `as` name (+ `index`,
+`total`), plus `args`/`calls`/`turn` inside tool guards. `include("file.md")`
+reads a prompt file at load; its contents are pinned with the run.
 
 ## Defaults — convention over configuration
 
@@ -171,8 +178,8 @@ Every key except `states` and each state's handler is optional. Defaults are app
 `steps validate --print` shows the expanded form.
 
 **Flow**
-- `initial` → the first state declared in the file (document order is preserved).
-- A state with no `transitions:` → one transition to the next state in document order;
+- `initial` → the first state declared (JS object insertion order is preserved).
+- A state with no `transitions:` → one transition to the next declared state;
   the last state → `done`. Linear pipelines need zero transition blocks.
 - `done` and `failed` terminals always exist implicitly; declare them only to customize.
 - No `catch:` → unhandled exhaustion routes to `failed` with the reason journaled.
@@ -197,14 +204,17 @@ Every key except `states` and each state's handler is optional. Defaults are app
 
 The payoff — this is a complete, valid machine:
 
-```yaml
-name: summarize
-states:
-  draft:
-    agent: "Summarize in 3 bullets: {{ .ctx.article }}"
-  publish:
-    action: file.write
-    input: {path: out/summary.md, content: "{{ .ctx.draft.text }}"}
+```js
+module.exports = {
+  name: "summarize",
+  states: {
+    draft: { agent: ({ ctx }) => `Summarize in 3 bullets: ${ctx.article}` },
+    publish: {
+      action: "file.write",
+      input: { path: "out/summary.md", content: ({ ctx }) => ctx.draft.text },
+    },
+  },
+};
 ```
 
 ## Actions vs. agent tools: who chooses?
@@ -239,34 +249,37 @@ boundary — and **a tool call is the interior's transition**: the moment the mo
 choice becomes an effect. It gets the same treatment. Agent proposes, guards dispose,
 recursively:
 
-```yaml
-triage:
-  agent:
-    model: anthropic/claude-haiku-4-5
-    max_turns: 6
-    tools:
-      - kb.search                        # bare: unrestricted
-      - name: crm.refund
-        max_calls: 1                     # per-tool budget within this state
-        when: args.amount <= 500 && run.cost < 1.00
-        on_reject: feedback              # feedback (default) | fail
-      - name: mail.send
-        require: kb.search               # only callable after a kb.search call
+```js
+triage: {
+  agent: {
+    maxTurns: 6,
+    tools: [
+      "kb.search", // bare: unrestricted
+      {
+        name: "crm.refund",
+        maxCalls: 1, // per-tool budget within this state
+        when: ({ args, run }) => args.amount <= 500 && run.cost < 1.0,
+        onReject: "feedback", // feedback (default) | fail
+      },
+      { name: "mail.send", require: "kb.search" }, // only after a search
+    ],
+  },
+},
 ```
 
-- **Tool guards** are Expr, evaluated at call time. The environment adds `args` (the
-  model-authored arguments — the thing being judged), `calls.<tool>` (invocation counts
-  this state), and `turn`, alongside the usual `ctx` / `run.*`.
+- **Tool guards** are functions evaluated at call time. Their scope adds `args`
+  (the model-authored arguments — the thing being judged), `calls.<tool>`
+  (invocation counts this state), and `turn`, alongside the usual `ctx`/`run`.
 - **`on_reject: feedback`** (default): the guard failure is returned to the model as
   the tool result, so it adapts within the loop — the same retry-with-feedback shape as
   schema violations, bounded by `max_turns`. **`on_reject: fail`** surfaces a semantic
   failure to the state's retry/catch instead.
 - **`max_calls`** and **`require`** give the loop budget and ordering constraints
   without promoting every tool call to a full state.
-- **`bind`** pins machine-authored args (templates over ctx) merged over the
-  model's args at execution — repo roots, tenant IDs, credentials-by-ref. The
-  model never sees them and cannot override them: the model chooses *when*,
-  the machine chooses *where*.
+- **`args`** pins machine-authored args (an object or a function of scope)
+  merged over the model's args at execution — repo roots, tenant IDs,
+  credentials-by-ref. The model never sees them and cannot override them:
+  the model chooses *when*, the machine chooses *where*.
 - Every proposed call, guard verdict, and rejection feedback is journaled — the
   interior is stochastic but fully audited.
 
@@ -274,11 +287,13 @@ triage:
 
 `tool_choice: one_of` — the state completes after exactly one tool call:
 
-```yaml
-route:
-  agent:
-    tool_choice: one_of        # auto (default) | required | one_of
-    tools: [billing.lookup, shipping.trace, kb.search]
+```js
+route: {
+  agent: {
+    toolChoice: "one_of", // auto (default) | required | one_of
+    tools: ["billing.lookup", "shipping.trace", "kb.search"],
+  },
+},
 ```
 
 Choosing a tool *is* proposing an event, so in `one_of` mode the chosen tool's name
@@ -292,15 +307,17 @@ schema-validated args, guarded routing. It fills the middle ground between `acti
 
 A state may map its handler over a list evaluated from ctx:
 
-```yaml
-scout_files:
-  foreach:
-    over: ctx.split_diff.files          # Expr over ctx returning a list
-    as: file                            # template variable ({{ .file.path }})
-  agent:
-    prompt: "What deserves a senior's attention in {{ .file.path }}? ..."
-  output:
-    schema: {path: string, risk: {enum: [low, medium, high]}}   # PER-ITEM shape
+```js
+scout_files: {
+  forEach: {
+    over: ({ ctx }) => ctx.split_diff.files, // function returning the list
+    as: "file",                              // the item's scope name
+  },
+  agent: {
+    prompt: ({ file }) => `What deserves a senior's attention in ${file.path}? ...`,
+  },
+  output: { schema: { path: "string", risk: "enum(low, medium, high)" } }, // PER-ITEM shape
+},
 ```
 
 - Each item is **hermetic**: agents get a fresh conversation per item — N
@@ -308,13 +325,13 @@ scout_files:
   applied to scale: the machine assembles per-item context; no item sees its
   siblings.
 - The state's ctx entry becomes `{items: [...], count: n}` (plus
-  `skipped`/`failures` under `on_item_failure: skip`, and `memo_hits` when
-  memoized items replayed); downstream guards and `over:` expressions compose
-  with Expr builtins: `filter(ctx.scout_files.items, {.risk != "low"})`.
+  `skipped`/`failures` under `onItemFailure: "skip"`, and `memo_hits` when
+  memoized items replayed); downstream guards and `over` functions compose
+  with plain JS: `ctx.scout_files.items.filter(i => i.risk !== "low")`.
 - Items share the state's retry policy; templates also see `.index`/`.total`.
-- `concurrency: N` bounds parallel items (default 1; mock runs force
+- `concurrency` bounds parallel items (default 1; mock runs force
   sequential so scripted queues stay deterministic).
-- `on_item_failure: skip` drops poisoned items instead of failing the state;
+- `onItemFailure: "skip"` drops poisoned items instead of failing the state;
   guards react via `output.skipped`.
 - foreach states cannot declare events (no single event exists — route with
   guards over the aggregate), cannot adopt/history, and cannot wrap human gates.
@@ -326,10 +343,9 @@ scout_files:
   Byte-identical input replays the cached output for zero tokens — re-review
   a PR and only changed files re-pay. Actions never memoize: side effects
   must not be skipped.
-- **Dynamic model routing** (`model: {expr: '...'}`): an Expr over ctx (and
-  the foreach item) picks the model per execution —
-  `'lead.risk == "high" ? "senior" : "scout"'`. Compiled and typo-checked at
-  load; the result must be a `models:` alias or provider ref.
+- **Dynamic model routing** (`model` as a function): the scope picks the
+  model per execution — `({ lead }) => lead.risk === "high" ? "senior" :
+  "scout"`. Dry-run at load; the result must be a `models:` alias or ref.
 - **`models:` aliases** name capabilities, not vendors: states say `senior`,
   the header says what senior means today.
 
@@ -350,17 +366,20 @@ prefer making upstream declare it as an output field (`notes`, `dead_ends`, `sou
 rendered as text into a fresh conversation. For verifiers that must judge process, not
 just results; for escalation context ("here's what was tried"); for human-gate display.
 
-```yaml
-verify:
-  agent:
-    history:
-      from: research
-      include: [tool_calls]     # messages | tool_calls (default both)
-      last_turns: 10            # default all
-      as: trace                 # exposed to templates as {{ .trace }}
-    prompt: |
-      Did the researcher actually consult real sources?
-      {{ .trace }}
+```js
+verify: {
+  agent: {
+    history: {
+      from: "research",
+      include: ["tool_calls"], // messages | tool_calls | thoughts (default: messages+tool_calls)
+      lastTurns: 10,           // default all
+      as: "trace",             // exposed in scope under this name
+    },
+    prompt: ({ trace }) => `
+Did the researcher actually consult real sources?
+${trace}`,
+  },
+},
 ```
 
 Hermetic in mechanism: the record crosses as declared input text, statically validated
@@ -370,17 +389,19 @@ Hermetic in mechanism: the record crosses as declared input text, statically val
 **Rung 3 — `adopt`: *becoming* a state's continuation.** The state receives the prior
 state's actual normalized message array with its own prompt appended.
 
-```yaml
-take_over:
-  agent:
-    model: anthropic/claude-opus-4-8   # tier escalation: opus resumes where haiku stalled
-    adopt: triage
-    prompt: "The previous agent could not resolve this. Take over."
+```js
+take_over: {
+  agent: {
+    model: "anthropic/claude-opus-4-8", // tier escalation: opus resumes where haiku stalled
+    adopt: "triage",
+    prompt: "The previous agent could not resolve this. Take over.",
+  },
+},
 ```
 
 Earned by two cases: **tier escalation** (tool results already in the transcript are
 not re-executed — they may be non-idempotent and they cost money) and **revision
-loops** via `adopt: self` (on revisit, continue your own prior conversation instead of
+loops** via `adopt: "self"` (on revisit, continue your own prior conversation instead of
 being re-primed). This rung genuinely breaks hermeticity — explicitly, one declared
 edge at a time.
 
@@ -392,7 +413,7 @@ Mechanics and rules:
 - `history.from` / `adopt` targets must be graph-predecessors (load-time check).
   Adopting a state that never executed on this run's path is a semantic failure routed
   to `catch:` — never a silent fresh start. `history` of a never-executed state renders
-  empty with a journaled warning. Exception: `adopt: self` on a state's *first* visit
+  empty with a journaled warning. Exception: `adopt: "self"` on a state's *first* visit
   starts fresh by definition — that is its documented semantics, not an error.
 - State budgets still apply: adopted transcripts count toward token/cost limits;
   `max_turns` counts new turns only.
@@ -461,90 +482,58 @@ steps resume <run-id> --event approved --data '{"note": "ship it"}'
 
 `timeout` + `on_timeout` route stale gates. Webhook resumption is a v1.x daemon concern.
 
-## Guards: the Expr environment
+## The scope: one argument, the whole vocabulary
 
-All guards are compiled at load time against a typed environment derived from the state's
-declared output schema — typos and type errors fail `steps validate`, not production.
+Every machine function receives one destructurable scope object. It IS the
+language surface — there is nothing else to learn:
 
-| Symbol | Meaning |
+| Key | Meaning |
 |---|---|
-| `ctx` | run context (namespaced per-state outputs + run input) |
-| `output` | current state's validated output |
-| `event` | agent-declared event (string, may be empty) |
-| `attempt` | attempt number within current state |
-| `state.elapsed` | duration in current state |
-| `visits.<state>` | entry count per state this run — bound loops in guards (`visits.draft < 3`) |
-| `run.transitions` | transitions so far |
-| `run.tokens`, `run.cost` | cumulative usage |
+| `ctx` | run input at the root + `ctx.<state>` = that state's output |
+| `output` | current state's validated output (transition guards) |
+| `event` | agent-declared event (transition guards) |
+| `visits` | entry count per state — bound loops (`visits.draft < 3`) |
+| `run` | `{transitions, tokens, cost}` cumulative |
+| `attempt` | attempt number within the current state |
+| `<as>`, `index`, `total` | the foreach item and its position |
+| `args`, `calls`, `turn` | tool guards: model-authored args, per-tool counts, turn |
 
-Example: `when: output.confidence >= 0.8 && run.cost < 1.50 && attempt <= 2`
+Example: `when: ({ output, run, attempt }) => output.confidence >= 0.8 && run.cost < 1.5 && attempt <= 2`
 
 ## Load-time validation (the guardrail payoff)
 
-`steps validate workflow.yaml` — and the same checks at `Machine` build in Go:
+`steps validate machine.js` — and the same checks at `machine.Load` in Go:
 
 - every state reachable from `initial`; a terminal state reachable from every state
 - every non-terminal state ends in an unconditional fallback transition (the linear-flow
   default fills these in)
 - every `on:` event is declared in that state's `output.events`
-- every guard compiles, and references only fields that exist in the output schema / ctx shape
-- every `{{ .ctx.X.Y }}` template resolves to a declared output of an upstream state or run input
-- `limits.max_transitions` always in effect (engine default 50); models resolve to a registered provider; tools resolve to the registry
+- **every function is dry-run** against schema-derived proxy stubs: accessing a
+  field that cannot exist fails the load, naming the function, the field, and
+  the available fields; infinite loops surface as warnings (1s interrupt)
+- `limits.maxTransitions` always in effect (engine default 50); model aliases resolve;
+  tools resolve to the registry
 
-This is the differentiation vs. LangGraph-style code-wired graphs: because contracts are
-declared, the machine is **statically checkable**.
+This is the differentiation vs. code-wired graphs: because contracts are
+declared and the machine is data, even the opaque functions are checkable
+before a single token is spent.
 
-## Go DSL sketch
+## Go embedding
 
-YAML compiles to this; Go users can skip YAML entirely.
-
-```go
-m, err := steps.New("support-triage",
-    steps.Limits(steps.MaxTransitions(25), steps.MaxCost(2.50), steps.Timeout(30*time.Minute)),
-    steps.Initial("triage"),
-
-    steps.State("triage",
-        steps.Agent(
-            steps.Model("anthropic/claude-haiku-4-5"),
-            steps.System("You classify inbound support tickets."),
-            steps.Tools(kbSearch),
-            steps.MaxTurns(6),
-        ),
-        steps.In("ticket", "{{ .ctx.ticket.body }}"),
-        steps.Out[TriageResult](steps.Events("resolved", "escalate")),
-        steps.On("resolved").When(`output.confidence >= 0.8`).To("send_reply"),
-        steps.On("escalate").When(`output.severity == "critical"`).To("page_oncall"),
-        steps.Fallback("human_review"),
-        steps.Retry(
-            steps.Transient(5, steps.Backoff(time.Second, 2.0)),
-            steps.Semantic(2),
-        ),
-    ),
-    // ...
-)
-
-engine := steps.NewEngine(store, providers, registry)
-run, err := engine.Start(ctx, m, steps.Input("ticket", ticket))
-```
-
-Key interfaces:
+The engine is a library first: `machine.Load`/`machine.Parse` build machines
+from JS source, `engine.New(store, providers, registry, listener)` runs them,
+and `toolreg.Register` exposes Go functions to machines. A fluent Go builder
+(`steps.State(...)`) remains future work — with logic living in the machine's
+own JS, the builder's value is mostly programmatic generation.
 
 ```go
-// The pluggable state body. agent/llm/action/human all implement this.
-type Handler interface {
-    Run(ctx context.Context, in HandlerInput) (HandlerResult, error)
-}
-// HandlerResult{Output map[string]any, Event string, Usage Usage}
+m, err := machine.Load("review.js")
+engine := engine.New(store, provider.NewRegistry(), registry, listener)
+res, err := engine.Start(ctx, m, map[string]any{"diff": diff})
 
-// Providers do ONE completion; the agent loop lives in the engine so
-// retry/budget/journal semantics are identical across providers.
-type Provider interface {
-    Complete(ctx context.Context, req CompletionRequest) (CompletionResponse, error)
-}
-
-// Tools: Go funcs, schema derived by reflection from the params struct.
-registry.Tool("kb.search", "Search the knowledge base",
-    func(ctx context.Context, p SearchParams) (SearchResult, error) { ... })
+// Tools: Go funcs the machine can name in action:/tools:.
+registry.Register("kb.search", "Search the knowledge base",
+    func(ctx context.Context, args map[string]any) (map[string]any, error) { ... })
 ```
 
 ## Testing strategy
@@ -556,7 +545,7 @@ Never assert LLM content; assert machine semantics. Three tiers:
    provider errors, so retry/guard/journal behavior is asserted *exactly*:
 
    ```
-   steps run workflow.yaml --input article=@fixtures/article.txt --mock mock_responses.yaml
+   steps run workflow.js --input article=@fixtures/article.txt --mock mock_responses.yaml
    ```
 
    Tests assert the journal event sequence, retry counts, `visits` counters, terminal
@@ -578,13 +567,13 @@ conversation adoption) with the context mechanics as the only variable.
 ## Package layout (proposal)
 
 ```
-steps/            # public API: Machine, State builders, Engine, Run
-  yaml/           # YAML → Machine compiler + validator
-  expr/           # guard compilation, typed env derivation
-  journal/        # event types, Store interface, sqlite store
-  provider/       # Provider iface, anthropic/, openaicompat/, mock/
-  tool/           # registry, reflection schemas, builtin/ (http, json, file, ...)
-  cmd/steps/      # CLI: run, resume, runs, validate, inspect
+machine/          # JS loader (goja), Dyn values, defaults, schemas, validation, dry-run
+journal/          # event types, Store interface, sqlite store, fold
+engine/           # run loop, retries, budgets, handlers (agent via ADK, action, human)
+provider/         # model-ref registry, mock provider, error classification
+toolreg/          # named Go functions + builtins (file, diff, http, gh)
+types/            # steps.d.ts — editor autocomplete for machine files
+cmd/steps/        # CLI: run, resume, runs, validate, context, inspect
 examples/         # runnable canonical examples; double as acceptance specs
 ```
 

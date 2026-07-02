@@ -14,20 +14,20 @@ split_diff ──▶ scout_files ──▶ scout_pr ──┬─(trivial + guard
 - **`scout_files`** asks a small model, per file, in a hermetic per-file
   context: *"for a larger model, what deserves review here?"* It gathers
   leads; it never reviews. With `--input root=<checkout>`, `diff.split`
-  attaches the current file (capped at `context_bytes`) so scouts see the
+  attaches the current file (capped at `context_bytes`, an action arg) so scouts see the
   code around the patch, not just hunks — deterministic enrichment, the
   machine assembles it.
 - **The senior pulls context on demand**: it carries a `file.read` tool with
-  three guards — `max_calls: 3`, an Expr guard allowing **only paths that are
-  part of this PR** (`args.path in map(ctx.split_diff.files, {.path})`), and
-  a `bind:` that pins the repo root so the model never authors it and cannot
-  escape it. The model decides *when* it needs a full file; the machine
-  decides *what* it may touch.
+  three guards — `maxCalls: 3`, a guard allowing **only paths that are part
+  of this PR** (`({ctx, args}) => ctx.split_diff.files.some(f => f.path ===
+  args.path)`), and machine-pinned `args` for the repo root so the model
+  never authors it and cannot escape it. The model decides *when* it needs a
+  full file; the machine decides *what* it may touch.
 - **`scout_pr`** asks the same question at whole-PR altitude — cross-file
   concerns (docs promising what code retracts, APIs changed without callers)
   — seeing only file stats and scout conclusions, never full patches.
 - **`deep_review`** is the senior: it fans out **only over flagged files**
-  (`filter(ctx.scout_files.items, {.risk != "low"})`), each with its patch
+  (`ctx.scout_files.items.filter(i => i.risk !== "low")`), each with its patch
   and pre-gathered leads. Its job is verify-or-refute, never research.
 - **Two guard showpieces**: the scout can propose `trivial`, but the guard
   only allows skipping the senior when *no* file scout was worried; and the
@@ -35,34 +35,34 @@ split_diff ──▶ scout_files ──▶ scout_pr ──┬─(trivial + guard
   findings exist. Agent proposes, guards dispose.
 - **The trivial path never invokes the large model at all** — a docs-only PR
   costs three small-model calls.
-- **Spend controls, all declared in the YAML**: `memo: true` on every agent
-  state (re-review a PR and only changed files re-pay — a re-run of an
-  unchanged PR costs zero tokens); `model: {expr: 'lead.risk == "high" ?
-  "senior" : "scout"'}` sends medium-risk files to the small model; `models:`
-  aliases keep the machine readable; `foreach: {concurrency: 3,
-  on_item_failure: skip}` parallelizes scouting and survives poisoned files.
+- **Spend controls, all declared in the machine**: `memo: true` on every
+  agent state (re-review a PR and only changed files re-pay — a re-run of an
+  unchanged PR costs zero tokens); a model-routing function sends medium-risk
+  files to the small model; `models:` aliases keep the machine readable;
+  `forEach: {concurrency: 3, onItemFailure: "skip"}` parallelizes scouting
+  and survives poisoned files.
 - To review real PRs, swap the file plumbing for the gh action pack:
-  `action: gh.pr_diff` with `input: {pr: "{{ .ctx.pr }}"}` up front, and
-  `action: gh.post_review` with `input: {pr: ..., body: "{{ .ctx.verdict.body }}",
-  event: comment}` at the end.
+  `action: "gh.pr_diff"` with `input: {pr: ({ctx}) => ctx.pr}` up front, and
+  `action: "gh.post_review"` with `input: {pr: ..., body: ({ctx}) =>
+  ctx.verdict.body, event: "comment"}` at the end.
 
 ## Run it
 
 ```sh
 # Deterministic (CI): deep path — findings, vetoed approve
-steps run workflow.yaml \
+steps run workflow.js \
   --input diff=@fixtures/pr.diff \
   --input "title=queue: parallel worker pool" \
   --input "description=Process jobs concurrently" \
   --mock mock_responses.yaml
 
 # Deterministic: trivial path — senior never runs
-steps run workflow.yaml --input diff=@fixtures/pr.diff --mock mock_trivial.yaml
+steps run workflow.js --input diff=@fixtures/pr.diff --mock mock_trivial.yaml
 
 # Live: scouts on a small local model, senior on a larger one, with full
 # file context (root points at the checkout the diff applies to)
 gh pr diff 123 > pr.diff   # or use fixtures/pr.diff + fixtures/repo
-steps run workflow.yaml --input diff=@pr.diff --input root=.
+steps run workflow.js --input diff=@pr.diff --input root=.
 
 # Review artifact
 cat out/review.md

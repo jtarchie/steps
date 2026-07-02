@@ -1,8 +1,9 @@
 # steps
 
-A state-machine runtime for LLM micro-agents, in Go. YAML config over a Go
-engine, [Expr](https://github.com/expr-lang/expr) guards, durable-by-default
-execution. Built on [google/adk-go](https://github.com/google/adk-go) and
+A state-machine runtime for LLM micro-agents, in Go. Machines are JavaScript
+files evaluated by [goja](https://github.com/dop251/goja) — structure is data,
+logic is plain functions, execution is durable by default. Built on
+[google/adk-go](https://github.com/google/adk-go) and
 [achetronic/adk-utils-go](https://github.com/achetronic/adk-utils-go).
 
 **Thesis:** agents need structure, not vibes. Each state is a hyper-specific
@@ -18,35 +19,47 @@ go build -o steps ./cmd/steps
 
 # Deterministic demo — no models, no keys, scripted provider:
 cd examples/summarize-critic
-../../steps run workflow.yaml \
+../../steps run workflow.js \
   --input article=@fixtures/article.txt \
   --mock mock_responses.yaml
 
 # Live, against any OpenAI-compatible local server (LM Studio, Ollama, vLLM):
-../../steps run workflow.yaml --input article=@fixtures/article.txt
+../../steps run workflow.js --input article=@fixtures/article.txt
 ```
 
 A machine can be this small — everything else is defaulted (linear flow,
-implicit terminals, retry policies, budgets):
+implicit terminals, retry policies, budgets). Any computed value is a plain
+function of one scope argument; there are no template or expression
+mini-languages:
 
-```yaml
-name: summarize
-states:
-  draft:
-    agent: "Summarize in 3 bullets: {{ .ctx.article }}"
-  publish:
-    action: file.write
-    input: {path: out/summary.md, content: "{{ .ctx.draft.text }}"}
+```js
+module.exports = {
+  name: "summarize",
+  states: {
+    draft: { agent: ({ ctx }) => `Summarize in 3 bullets: ${ctx.article}` },
+    publish: {
+      action: "file.write",
+      input: { path: "out/summary.md", content: ({ ctx }) => ctx.draft.text },
+    },
+  },
+};
 ```
+
+Editors autocomplete the whole DSL via [types/steps.d.ts](types/steps.d.ts)
+(`// @ts-check` + a jsconfig), and `steps validate` **dry-runs every function**
+against schema-derived stubs — a typo like `ctx.scout_file` fails at load,
+naming the available fields, before any token is spent. `steps context
+machine.js` prints what each state's functions may reference.
 
 ## CLI
 
 | Command | What it does |
 |---|---|
-| `steps validate wf.yaml [--print]` | Load-time checks: reachability, guard compilation, event declarations, fallback transitions. `--print` shows the defaults-expanded machine. |
-| `steps run wf.yaml --input k=v\|k=@file [--mock file] [-v]` | Start a run; narrates every state, chat message, tool call, retry, and transition to stderr; JSON summary to stdout. |
+| `steps validate machine.js [--print]` | Structure checks + a stub dry-run of every function (unknown-field access fails with the available fields listed). `--print` shows the defaults-expanded machine. |
+| `steps run machine.js --input k=v\|k=@file [--mock file] [-v]` | Start a run; narrates every state, chat message, tool call, retry, and transition to stderr; JSON summary to stdout. |
 | `steps resume <run-id> --event X [--data '{...}']` | Answer a parked human gate, or continue a crashed run from its journal. |
 | `steps runs` | List runs and their status. |
+| `steps context machine.js [--state s]` | Show what each state's functions may reference, derived from declared schemas. |
 | `steps inspect <run-id> [--messages]` | Per-state token usage, failures, and routing from the journal; `--messages` dumps recorded conversations. |
 
 Runs journal to SQLite (`.steps.db` by default, `--db` to move it). Every
@@ -69,24 +82,25 @@ deterministic CI.
 The machine, not the transcript, carries the logic — so every context and
 output cost is a declared property of a state:
 
-- `max_output_tokens` (default 2048): no state may generate unboundedly; cap
+- `maxOutputTokens` (default 2048): no state may generate unboundedly; cap
   exhaustion is a `budget_exceeded` failure, never a hang, never retried.
 - `reasoning: low|medium|high`: per-micro-agent thinking budgets (provider
   reasoning effort). A drafting state rarely deserves deep thought; a judge might.
-- `structured_output: native` (opt-in): decoder-constrained JSON on
+- `structuredOutput: "native"` (opt-in): decoder-constrained JSON on
   OpenAI-compatible backends — zero preamble tokens, no malformed JSON. The
   prompt contract stays as the portable fallback.
-- Output schemas double as output budgets: `issues: {type: array, maxItems: 3}`.
+- Output schemas double as output budgets: `issues: {type: "array", maxItems: 3}`.
 - Reasoning-channel text is journaled (flagged `thought`) but **never** replayed
   on `adopt` and excluded from `history` — scratch thinking is not context.
   Measured on a live 3-revision loop: adopted-prompt growth dropped from
   540→1739→3624 tokens to 495→745→1052.
-- `adopt: {from: self, last_turns: N}` trims long revision transcripts.
+- `adopt: {from: "self", lastTurns: N}` trims long revision transcripts.
 - `memo: true` caches agent outputs by rendered-input hash across runs —
   re-running a review only re-pays for files that changed.
-- `model: {expr: '...'}` routes each execution to the cheapest capable model;
-  `models:` aliases (scout/senior) keep machines readable and swappable.
-- `foreach: {concurrency: N, on_item_failure: skip}` fans out in parallel and
+- `model` as a function routes each execution to the cheapest capable model
+  (`({lead}) => lead.risk === "high" ? "senior" : "scout"`); `models:` aliases
+  keep machines readable and swappable.
+- `forEach: {concurrency: N, onItemFailure: "skip"}` fans out in parallel and
   survives poisoned items.
 
 ## Failure taxonomy
@@ -103,11 +117,12 @@ Three failure classes, three behaviors (per state, overridable):
 ## Package layout
 
 ```
-machine/    types, YAML loader (order-preserving), defaults, Expr guards, validation
+machine/    JS loader (goja), Dyn values, defaults, schemas, validation, dry-run
 journal/    event types, Store interface, SQLite store, fold
 engine/     run loop, retries, budgets, handlers (agent via ADK, action, human)
 provider/   model-ref registry, mock provider, error classification
 toolreg/    named Go functions + builtins (file.write, file.read, http.get)
+types/      steps.d.ts — editor autocomplete for machine files
 cmd/steps/  CLI + human-readable narration
 examples/   canonical examples — they double as the acceptance spec
 ```

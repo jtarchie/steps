@@ -9,14 +9,14 @@ human gate) while exercising nearly every feature in [DESIGN.md](../../DESIGN.md
 | Feature | Where |
 |---|---|
 | Micro-agents with per-state models | `draft` (qwen3:8b) vs `critique` (llama3.2:3b) |
-| Agent proposes, guards dispose | `critique` emits `approve`/`revise`; Expr guards veto |
-| Engine-bounded loops | `visits.draft < 3` guard + `max_transitions: 12` backstop |
-| Explicit contracts | typed output schemas; prompt templates are the input contract |
-| Feedback loops between states | rejected draft sees `.ctx.critique.issues` on the next pass |
+| Agent proposes, guards dispose | `critique` emits `approve`/`revise`; guard functions veto |
+| Engine-bounded loops | `visits.draft < 3` guard + `maxTransitions: 12` backstop |
+| Explicit contracts | typed output schemas; prompt functions are the input contract |
+| Feedback loops between states | rejected draft sees `ctx.critique.issues` on the next pass |
 | Semantic retry (re-prompt with error) | mock's non-JSON critique response; small local models also trigger this naturally |
 | Transient retry (backoff) | mock's `rate_limited` injection; or kill Ollama mid-run |
 | Fallback transitions | `critique` falls through to `escalate` |
-| Human gate + park/resume + timeout | `escalate` with `on_timeout: failed` |
+| Human gate + park/resume + timeout | `escalate` with `onTimeout: "failed"` |
 | Builtin tool library | `file.write` in `publish` |
 | Defaults | no `initial`, no transitions on `draft`/`publish`, implicit `done`/`failed` |
 | Durability | kill the process mid-run, `steps resume` finishes it |
@@ -26,7 +26,7 @@ human gate) while exercising nearly every feature in [DESIGN.md](../../DESIGN.md
 
 [`../summarize-critic-adopt/`](../summarize-critic-adopt/README.md) is the same machine
 with one change: the drafter continues its own conversation across revisions
-(`adopt: self`, context rung 3) instead of being re-primed with distilled feedback
+(`adopt: "self"`, context rung 3) instead of being re-primed with distilled feedback
 (`ctx`, rung 1, this example). It shares this example's mock script and article
 fixture, so running both A/B-tests the two context philosophies — token cost per
 revision, transcript growth, anchoring behavior — with the context mechanics as the
@@ -49,13 +49,13 @@ Mock mode needs nothing — no network, no models, no keys.
 
 ```sh
 # 1. Deterministic (CI): scripted provider, exact journal assertions
-steps run workflow.yaml --input article=@fixtures/article.txt --mock mock_responses.yaml
+steps run workflow.js --input article=@fixtures/article.txt --mock mock_responses.yaml
 
 # 2. Live local iteration
-steps run workflow.yaml --input article=@fixtures/article.txt
+steps run workflow.js --input article=@fixtures/article.txt
 
-# 3. Validate without running (this must catch typos in guards/templates)
-steps validate workflow.yaml --print
+# 3. Validate without running — dry-runs every function; typos fail here
+steps validate workflow.js --print
 
 # 4. Human gate: force escalation (mock file where critique never approves),
 #    then resume the parked run
@@ -63,7 +63,7 @@ steps runs list
 steps resume <run-id> --event approved
 
 # 5. Durability drill
-steps run workflow.yaml --input article=@fixtures/article.txt &
+steps run workflow.js --input article=@fixtures/article.txt &
 kill -9 %1
 steps resume <run-id>
 

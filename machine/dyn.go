@@ -75,6 +75,9 @@ func (d Dyn) Display() string {
 	if d.fn != nil {
 		return firstLine(d.Src)
 	}
+	if d.Static == nil {
+		return ""
+	}
 	if s, ok := d.Static.(string); ok {
 		return s
 	}
