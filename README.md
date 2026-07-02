@@ -123,7 +123,9 @@ examples/   canonical examples — they double as the acceptance spec
   specialist: `foreach` fans a small model over each file of a diff
   (hermetic context per file), a whole-PR scout adds cross-file leads, and
   the large model only ever verifies flagged files. Trivial PRs never reach
-  it.
+  it. File context flows both ways: `diff.split` deterministically attaches
+  the current file to each scout item, and the senior carries a guarded
+  `file.read` tool (only PR files, bounded calls, machine-pinned root).
 
 ## Testing
 

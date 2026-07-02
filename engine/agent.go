@@ -155,7 +155,7 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 		return nil, nil
 	}
 
-	tools, beforeTool, afterTool, err := e.buildAgentTools(st, rs, &turns)
+	tools, beforeTool, afterTool, err := e.buildAgentTools(st, rs, &turns, data)
 	if err != nil {
 		return nil, err
 	}
@@ -531,7 +531,7 @@ func adoptEvent(agentName string, msg journal.Message) *session.Event {
 // buildAgentTools wraps registered tools for the agent loop, with tool
 // guards enforced in BeforeToolCallbacks: agent proposes, guards dispose,
 // recursively.
-func (e *Engine) buildAgentTools(st *machine.State, rs *journal.RunState, turns *int) ([]adktool.Tool, llmagent.BeforeToolCallback, llmagent.AfterToolCallback, error) {
+func (e *Engine) buildAgentTools(st *machine.State, rs *journal.RunState, turns *int, data map[string]any) ([]adktool.Tool, llmagent.BeforeToolCallback, llmagent.AfterToolCallback, error) {
 	refs := st.Agent.Tools
 	calls := map[string]int{}
 	byADKName := map[string]machine.ToolRef{}
@@ -545,12 +545,33 @@ func (e *Engine) buildAgentTools(st *machine.State, rs *journal.RunState, turns 
 		adkName := sanitizeName(ref.Name)
 		byADKName[adkName] = ref
 		fn := reg.Fn
+
+		// bind: machine-authored args, rendered from ctx now, merged over
+		// the model's args at execution — after guards judge the model's
+		// proposal, and never overridable by it.
+		bound := make(map[string]any, len(ref.Bind))
+		for k, tmpl := range ref.Bind {
+			v, err := machine.RenderTemplate(st.Name+".tool."+ref.Name+".bind."+k, tmpl, data)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("state %q: tool %q bind %q: %w", st.Name, ref.Name, k, err)
+			}
+			bound[k] = v
+		}
+
 		t, err := functiontool.New(functiontool.Config{
 			Name:         adkName,
 			Description:  reg.Description,
 			InputSchema:  &jsonschema.Schema{Type: "object"},
 			OutputSchema: &jsonschema.Schema{Type: "object"},
 		}, func(cctx adktool.Context, args map[string]any) (map[string]any, error) {
+			if len(bound) > 0 {
+				if args == nil {
+					args = map[string]any{}
+				}
+				for k, v := range bound {
+					args[k] = v
+				}
+			}
 			return fn(cctx, args)
 		})
 		if err != nil {

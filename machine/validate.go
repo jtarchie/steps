@@ -212,6 +212,11 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 			if tr.OnReject != "feedback" && tr.OnReject != "fail" {
 				fail("state %q: tool %q: on_reject must be feedback or fail", s.Name, tr.Name)
 			}
+			for k, v := range tr.Bind {
+				if _, err := ParseTemplate(s.Name+".tool."+tr.Name+".bind."+k, v); err != nil {
+					fail("state %q: tool %q bind %q: %v", s.Name, tr.Name, k, err)
+				}
+			}
 			if tr.Require != "" && !seen[tr.Require] {
 				// require must reference another tool on this state
 				found := false

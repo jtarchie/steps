@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -66,6 +67,17 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]any) (
 		return nil, fmt.Errorf("tool %q is not registered (have: %v)", name, r.Names())
 	}
 	return t.Fn(ctx, args)
+}
+
+// confine joins path under root and refuses escapes — tool args may be
+// model-authored, and the model does not get to read outside the sandbox.
+func confine(root, path string) (string, error) {
+	joined := filepath.Join(root, path)
+	rel, err := filepath.Rel(root, joined)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q escapes root %q", path, root)
+	}
+	return joined, nil
 }
 
 func str(args map[string]any, key string) (string, error) {
@@ -169,11 +181,18 @@ func registerBuiltins(r *Registry) {
 			return map[string]any{"path": path, "bytes": len(content)}, nil
 		})
 
-	r.Register("file.read", "Read a file as text",
+	r.Register("file.read", "Read a file as text; an optional root confines and anchors relative paths",
 		func(ctx context.Context, args map[string]any) (map[string]any, error) {
 			path, err := str(args, "path")
 			if err != nil {
 				return nil, err
+			}
+			if root, _ := args["root"].(string); root != "" {
+				joined, err := confine(root, path)
+				if err != nil {
+					return nil, err
+				}
+				path = joined
 			}
 			raw, err := os.ReadFile(path)
 			if err != nil {
@@ -182,7 +201,7 @@ func registerBuiltins(r *Registry) {
 			return map[string]any{"content": string(raw), "bytes": len(raw)}, nil
 		})
 
-	r.Register("diff.split", "Split a unified diff into per-file (or per-hunk, by: hunk) entries with change counts",
+	r.Register("diff.split", "Split a unified diff into per-file (or per-hunk, by: hunk) entries; a root attaches current file contents (capped by context_bytes)",
 		func(ctx context.Context, args map[string]any) (map[string]any, error) {
 			diff, err := str(args, "diff")
 			if err != nil {
@@ -191,6 +210,15 @@ func registerBuiltins(r *Registry) {
 			by, _ := args["by"].(string)
 			if by != "" && by != "file" && by != "hunk" {
 				return nil, fmt.Errorf("by must be file or hunk, got %q", by)
+			}
+			root, _ := args["root"].(string)
+			contextBytes := 4096
+			if v, _ := args["context_bytes"].(string); v != "" {
+				n, err := strconv.Atoi(strings.TrimSpace(v))
+				if err != nil || n < 0 {
+					return nil, fmt.Errorf("context_bytes must be a non-negative integer, got %q", v)
+				}
+				contextBytes = n
 			}
 			var files []any
 			var current map[string]any
@@ -226,6 +254,32 @@ func registerBuiltins(r *Registry) {
 			flush()
 			if by == "hunk" {
 				files = splitHunks(files)
+			}
+			// Deterministic enrichment: the machine attaches the current
+			// file so scouts see code around the patch, capped so scout
+			// prompts stay cheap. The senior pulls FULL files on demand
+			// via a guarded file.read tool instead.
+			if root != "" && contextBytes > 0 {
+				for _, f := range files {
+					file, ok := f.(map[string]any)
+					if !ok {
+						continue
+					}
+					path, _ := file["path"].(string)
+					joined, err := confine(root, path)
+					if err != nil {
+						continue
+					}
+					raw, err := os.ReadFile(joined)
+					if err != nil {
+						continue // deleted/renamed files simply carry no content
+					}
+					content := string(raw)
+					if len(content) > contextBytes {
+						content = content[:contextBytes] + "\n… (truncated; full file available via file.read)"
+					}
+					file["content"] = content
+				}
 			}
 			return map[string]any{"files": files, "count": len(files)}, nil
 		})

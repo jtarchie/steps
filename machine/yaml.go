@@ -133,11 +133,12 @@ type yamlAdopt struct {
 }
 
 type yamlToolRef struct {
-	Name     string `yaml:"name"`
-	MaxCalls int    `yaml:"max_calls"`
-	When     string `yaml:"when"`
-	OnReject string `yaml:"on_reject"`
-	Require  string `yaml:"require"`
+	Name     string            `yaml:"name"`
+	MaxCalls int               `yaml:"max_calls"`
+	When     string            `yaml:"when"`
+	OnReject string            `yaml:"on_reject"`
+	Require  string            `yaml:"require"`
+	Bind     map[string]string `yaml:"bind"`
 }
 
 type yamlHistory struct {
@@ -443,6 +444,7 @@ func parseAgent(node *yaml.Node) (*AgentSpec, error) {
 			When:     yt.When,
 			OnReject: yt.OnReject,
 			Require:  yt.Require,
+			Bind:     yt.Bind,
 		})
 	}
 	return ag, nil

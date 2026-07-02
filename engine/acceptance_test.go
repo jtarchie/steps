@@ -304,6 +304,7 @@ func TestPRReviewDeepPath(t *testing.T) {
 
 	res, err := eng.Start(context.Background(), m, map[string]any{
 		"diff":        string(diff),
+		"root":        repoPath(t, "examples/pr-review/fixtures/repo"),
 		"title":       "queue: parallel worker pool",
 		"description": "Process jobs concurrently",
 	})
@@ -312,6 +313,19 @@ func TestPRReviewDeepPath(t *testing.T) {
 	}
 	if res.Status != journal.StatusDone {
 		t.Fatalf("status = %s at %s, want done", res.Status, res.Terminal)
+	}
+
+	// With a root, split_diff enriches each entry with the current file —
+	// scouts see code around the patch, not just hunks.
+	split, _ := res.State.Ctx["split_diff"].(map[string]any)
+	files, _ := split["files"].([]any)
+	if len(files) != 3 {
+		t.Fatalf("split_diff.files = %d entries, want 3", len(files))
+	}
+	worker, _ := files[1].(map[string]any)
+	content, _ := worker["content"].(string)
+	if !strings.Contains(content, "func (p *Pool) Process") {
+		t.Errorf("worker.go entry missing current-file context (got %d bytes)", len(content))
 	}
 
 	states, _, transitions := eventTrace(t, store, res.RunID)

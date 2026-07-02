@@ -263,6 +263,10 @@ triage:
   failure to the state's retry/catch instead.
 - **`max_calls`** and **`require`** give the loop budget and ordering constraints
   without promoting every tool call to a full state.
+- **`bind`** pins machine-authored args (templates over ctx) merged over the
+  model's args at execution — repo roots, tenant IDs, credentials-by-ref. The
+  model never sees them and cannot override them: the model chooses *when*,
+  the machine chooses *where*.
 - Every proposed call, guard verdict, and rejection feedback is journaled — the
   interior is stochastic but fully audited.
 

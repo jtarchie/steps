@@ -7,6 +7,7 @@ description: >
 
 input:
   diff: {type: string, required: true} # e.g. gh pr diff 123 > pr.diff
+  root: {type: string} # checkout root — enables file context beyond the diff
   title: {type: string}
   description: {type: string}
 
@@ -20,9 +21,14 @@ defaults:
 limits: {max_transitions: 15, max_tokens: 200000}
 
 states:
+  # With a root, each entry also carries the current file (capped) — scouts
+  # see code around the patch, deterministically. add by: hunk for huge files.
   split_diff:
-    action: diff.split # add by: hunk to scout huge files piecewise
-    input: {diff: "{{ .ctx.diff }}"}
+    action: diff.split
+    input:
+      diff: "{{ .ctx.diff }}"
+      root: "{{ if .ctx.root }}{{ .ctx.root }}{{ end }}"
+      context_bytes: "3000"
 
   # One hermetic micro-context per file. memo: unchanged files are free on
   # re-review; skip: one unparseable file doesn't sink the PR.
@@ -39,6 +45,8 @@ states:
         {{ if .ctx.title }}PR: {{ .ctx.title }}{{ end }}
         FILE {{ .file.path }} ({{ .file.additions }}+ / {{ .file.deletions }}-):
         {{ .file.patch }}
+        {{ if .file.content }}CURRENT FILE (for context):
+        {{ .file.content }}{{ end }}
     output:
       schema:
         path: string
@@ -95,11 +103,21 @@ states:
       model: {expr: 'lead.risk == "high" ? "senior" : "scout"'}
       reasoning: high
       max_output_tokens: 8192
+      max_turns: 6 # room for on-demand file reads before the verdict
+      tools:
+        # On-demand context: the senior decides WHEN it needs a full file;
+        # the guard decides WHICH files exist for it — only files in this
+        # PR, at most three reads, rooted where the machine says.
+        - name: file.read
+          max_calls: 3
+          when: 'args.path in map(ctx.split_diff.files, {.path})'
+          bind: {root: "{{ if .ctx.root }}{{ .ctx.root }}{{ end }}"}
       prompt: |
         You are a senior reviewer. A scout flagged this file with specific
         leads. Verify or refute EACH lead against the patch, and report any
         defect the scout missed. Do not restate the diff. Report only what
-        you can substantiate.
+        you can substantiate. If the patch alone is not enough context, read
+        the full file with file_read before concluding.
         PR THEMES:{{ range .ctx.scout_pr.themes }} {{ . }};{{ end }}
         FILE: {{ .lead.path }}
         LEADS:

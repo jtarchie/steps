@@ -13,7 +13,16 @@ split_diff ──▶ scout_files ──▶ scout_pr ──┬─(trivial + guard
 
 - **`scout_files`** asks a small model, per file, in a hermetic per-file
   context: *"for a larger model, what deserves review here?"* It gathers
-  leads; it never reviews.
+  leads; it never reviews. With `--input root=<checkout>`, `diff.split`
+  attaches the current file (capped at `context_bytes`) so scouts see the
+  code around the patch, not just hunks — deterministic enrichment, the
+  machine assembles it.
+- **The senior pulls context on demand**: it carries a `file.read` tool with
+  three guards — `max_calls: 3`, an Expr guard allowing **only paths that are
+  part of this PR** (`args.path in map(ctx.split_diff.files, {.path})`), and
+  a `bind:` that pins the repo root so the model never authors it and cannot
+  escape it. The model decides *when* it needs a full file; the machine
+  decides *what* it may touch.
 - **`scout_pr`** asks the same question at whole-PR altitude — cross-file
   concerns (docs promising what code retracts, APIs changed without callers)
   — seeing only file stats and scout conclusions, never full patches.
@@ -50,10 +59,10 @@ steps run workflow.yaml \
 # Deterministic: trivial path — senior never runs
 steps run workflow.yaml --input diff=@fixtures/pr.diff --mock mock_trivial.yaml
 
-# Live: scouts on a small local model, senior on a larger one
-# (edit defaults.agent.model / deep_review.agent.model to taste)
-gh pr diff 123 > pr.diff   # or use fixtures/pr.diff
-steps run workflow.yaml --input diff=@pr.diff
+# Live: scouts on a small local model, senior on a larger one, with full
+# file context (root points at the checkout the diff applies to)
+gh pr diff 123 > pr.diff   # or use fixtures/pr.diff + fixtures/repo
+steps run workflow.yaml --input diff=@pr.diff --input root=.
 
 # Review artifact
 cat out/review.md

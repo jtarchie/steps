@@ -184,6 +184,9 @@ type ToolRef struct {
 	When     string // Expr guard evaluated at call time (env includes args)
 	OnReject string // feedback (default) | fail
 	Require  string // another tool that must have been called first
+	// Bind pins machine-authored args (templates over ctx) that the model
+	// never sees and cannot override — repo roots, IDs, credentials-by-ref.
+	Bind map[string]string
 
 	Guard *vm.Program // compiled from When at load time
 }
