@@ -74,11 +74,15 @@ func ApplyDefaults(m *Machine) {
 
 		// Agent cascade: state -> defaults.agent -> engine default.
 		if a := s.Agent; a != nil {
-			if a.Model == "" && a.ModelExpr == "" {
-				a.Model = m.Defaults.Agent.Model
+			if a.Model.IsZero() && m.Defaults.Agent.Model != "" {
+				a.Model = Dyn{Static: m.Defaults.Agent.Model}
 			}
-			if ref, ok := m.Models[a.Model]; ok {
-				a.Model = ref
+			// Static aliases resolve at load; function results resolve at
+			// runtime (the engine re-checks against Models).
+			if ref, ok := a.Model.Static.(string); ok {
+				if resolved, isAlias := m.Models[ref]; isAlias {
+					a.Model = Dyn{Static: resolved}
+				}
 			}
 			if a.Temperature == nil {
 				a.Temperature = m.Defaults.Agent.Temperature

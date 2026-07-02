@@ -48,7 +48,7 @@ func newTestEngine(t *testing.T, mockScript string) (*engine.Engine, *journal.SQ
 
 func loadExample(t *testing.T, dir string) (*machine.Machine, string) {
 	t.Helper()
-	wf := repoPath(t, filepath.Join("examples", dir, "workflow.yaml"))
+	wf := repoPath(t, filepath.Join("examples", dir, "workflow.js"))
 	m, err := machine.Load(wf)
 	if err != nil {
 		t.Fatalf("load %s: %v", wf, err)
@@ -204,7 +204,7 @@ critique:
 		t.Fatal(err)
 	}
 
-	wf := repoPath(t, "examples/summarize-critic/workflow.yaml")
+	wf := repoPath(t, "examples/summarize-critic/workflow.js")
 	m, err := machine.Load(wf)
 	if err != nil {
 		t.Fatal(err)
@@ -252,16 +252,16 @@ func TestMaxTurnsOneSurvivesSemanticRetry(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	wf := `
-name: tight
-defaults: {agent: {model: mock, max_turns: 1}}
-states:
-  work:
-    agent:
-      prompt: "produce the thing"
-    output:
-      schema:
-        answer: {type: string}
-`
+module.exports = {
+  name: "tight",
+  defaults: { agent: { model: "mock", maxTurns: 1 } },
+  states: {
+    work: {
+      agent: { prompt: "produce the thing" },
+      output: { schema: { answer: "string" } },
+    },
+  },
+};`
 	script := `
 work:
   - text: "not json at all"
@@ -384,7 +384,7 @@ func TestPRReviewDeepPath(t *testing.T) {
 func TestPRReviewTrivialPath(t *testing.T) {
 	t.Chdir(t.TempDir())
 
-	wf := repoPath(t, "examples/pr-review/workflow.yaml")
+	wf := repoPath(t, "examples/pr-review/workflow.js")
 	m, err := machine.Load(wf)
 	if err != nil {
 		t.Fatal(err)
@@ -462,30 +462,32 @@ func TestForEachSkipOnFailure(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	wf := `
-name: skips
-defaults: {agent: {model: mock}}
-states:
-  seed:
-    action: diff.split
-    input:
-      diff: |
-        diff --git a/one.go b/one.go
-        +a
-        diff --git a/two.go b/two.go
-        +b
-        diff --git a/three.go b/three.go
-        +c
-  work:
-    foreach: {over: ctx.seed.files, as: file, on_item_failure: skip}
-    retry: none
-    agent:
-      prompt: "look at {{ .file.path }}"
-    output:
-      schema: {path: string}
-    transitions:
-      - {when: 'output.skipped == 1 && output.count == 2', to: done}
-      - {to: failed}
-`
+module.exports = {
+  name: "skips",
+  defaults: { agent: { model: "mock" } },
+  states: {
+    seed: {
+      action: "diff.split",
+      input: {
+        diff: [
+          "diff --git a/one.go b/one.go", "+a",
+          "diff --git a/two.go b/two.go", "+b",
+          "diff --git a/three.go b/three.go", "+c",
+        ].join("\n"),
+      },
+    },
+    work: {
+      forEach: { over: ({ctx}) => ctx.seed.files, as: "file", onItemFailure: "skip" },
+      retry: "none",
+      agent: { prompt: ({file}) => "look at " + file.path },
+      output: { schema: { path: "string" } },
+      transitions: [
+        { when: ({output}) => output.skipped === 1 && output.count === 2, to: "done" },
+        { to: "failed" },
+      ],
+    },
+  },
+};`
 	script := `
 work:
   - text: '{"path": "one.go"}'
@@ -532,7 +534,7 @@ critique:
 	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m, err := machine.Load(repoPath(t, "examples/summarize-critic/workflow.yaml"))
+	m, err := machine.Load(repoPath(t, "examples/summarize-critic/workflow.js"))
 	if err != nil {
 		t.Fatal(err)
 	}

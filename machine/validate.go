@@ -127,8 +127,10 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 		if s.Human != nil {
 			fail("state %q: foreach cannot wrap a human gate", s.Name)
 		}
-		if f.Over == "" {
-			fail("state %q: foreach needs over", s.Name)
+		if f.Over.IsZero() {
+			fail("state %q: foreach needs over (a function of scope returning a list)", s.Name)
+		} else if !f.Over.IsFn() {
+			fail("state %q: foreach.over must be a function of scope returning a list", s.Name)
 		}
 		if f.Concurrency < 1 {
 			fail("state %q: foreach.concurrency must be >= 1", s.Name)
@@ -149,33 +151,38 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 
 	if a := s.Agent; a != nil {
 		switch {
-		case a.ModelExpr != "":
-			// compiled (or failed with a pointed error) in Compile
-		case a.Model == "":
+		case a.Model.IsFn():
+			// routed at runtime; the dry-run exercises it
+		case a.Model.IsZero():
 			fail("state %q: no model (set agent.model, defaults.agent.model, or an engine default)", s.Name)
-		case !strings.Contains(a.Model, "/") && a.Model != "mock":
-			hint := "e.g. anthropic/claude-haiku-4-5"
-			if len(m.Models) > 0 {
-				aliases := make([]string, 0, len(m.Models))
-				for k := range m.Models {
-					aliases = append(aliases, k)
+		default:
+			ref, ok := a.Model.Static.(string)
+			if !ok {
+				fail("state %q: model must be a string or a function, got %T", s.Name, a.Model.Static)
+			} else if !strings.Contains(ref, "/") && ref != "mock" {
+				hint := "e.g. anthropic/claude-haiku-4-5"
+				if len(m.Models) > 0 {
+					aliases := make([]string, 0, len(m.Models))
+					for k := range m.Models {
+						aliases = append(aliases, k)
+					}
+					sort.Strings(aliases)
+					hint = fmt.Sprintf("or one of the models: aliases (%s)", strings.Join(aliases, ", "))
 				}
-				sort.Strings(aliases)
-				hint = fmt.Sprintf("or one of the models: aliases (%s)", strings.Join(aliases, ", "))
+				fail("state %q: unknown model %q — must be provider-namespaced, %s", s.Name, ref, hint)
 			}
-			fail("state %q: unknown model %q — must be provider-namespaced, %s", s.Name, a.Model, hint)
 		}
-		if a.Prompt == "" && len(s.Input) == 0 {
+		if a.Prompt.IsZero() && s.Input.IsZero() {
 			fail("state %q: agent needs a prompt or an input block", s.Name)
 		}
-		if a.Prompt != "" {
-			if _, err := ParseTemplate(s.Name+".prompt", a.Prompt); err != nil {
-				fail("state %q: %v", s.Name, err)
+		if !a.Prompt.IsZero() && !a.Prompt.IsFn() {
+			if _, ok := a.Prompt.Static.(string); !ok {
+				fail("state %q: prompt must be a string or a function, got %T", s.Name, a.Prompt.Static)
 			}
 		}
-		if a.System != "" {
-			if _, err := ParseTemplate(s.Name+".system", a.System); err != nil {
-				fail("state %q: %v", s.Name, err)
+		if !a.System.IsZero() && !a.System.IsFn() {
+			if _, ok := a.System.Static.(string); !ok {
+				fail("state %q: system must be a string or a function, got %T", s.Name, a.System.Static)
 			}
 		}
 		if a.StructuredOutput != "prompt" && a.StructuredOutput != "native" {
@@ -210,11 +217,14 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 				fail("state %q: tool %q is not registered", s.Name, tr.Name)
 			}
 			if tr.OnReject != "feedback" && tr.OnReject != "fail" {
-				fail("state %q: tool %q: on_reject must be feedback or fail", s.Name, tr.Name)
+				fail("state %q: tool %q: onReject must be feedback or fail", s.Name, tr.Name)
 			}
-			for k, v := range tr.Bind {
-				if _, err := ParseTemplate(s.Name+".tool."+tr.Name+".bind."+k, v); err != nil {
-					fail("state %q: tool %q bind %q: %v", s.Name, tr.Name, k, err)
+			if !tr.When.IsZero() && !tr.When.IsFn() {
+				fail("state %q: tool %q: when must be a function of scope", s.Name, tr.Name)
+			}
+			if !tr.Args.IsZero() && !tr.Args.IsFn() {
+				if _, ok := tr.Args.Static.(map[string]any); !ok {
+					fail("state %q: tool %q: args must be an object or a function returning one", s.Name, tr.Name)
 				}
 			}
 			if tr.Require != "" && !seen[tr.Require] {
@@ -240,10 +250,8 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 	}
 
 	if h := s.Human; h != nil {
-		if h.Prompt == "" {
+		if h.Prompt.IsZero() {
 			fail("state %q: human gate needs a prompt", s.Name)
-		} else if _, err := ParseTemplate(s.Name+".human", h.Prompt); err != nil {
-			fail("state %q: %v", s.Name, err)
 		}
 		if h.OnTimeout != "" && m.State(h.OnTimeout) == nil {
 			fail("state %q: on_timeout target %q does not exist", s.Name, h.OnTimeout)
@@ -253,9 +261,9 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 		}
 	}
 
-	for k, v := range s.Input {
-		if _, err := ParseTemplate(s.Name+".input."+k, v); err != nil {
-			fail("state %q: input %q: %v", s.Name, k, err)
+	if !s.Input.IsZero() && !s.Input.IsFn() {
+		if _, ok := s.Input.Static.(map[string]any); !ok {
+			fail("state %q: input must be an object or a function returning one, got %T", s.Name, s.Input.Static)
 		}
 	}
 

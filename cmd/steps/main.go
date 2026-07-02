@@ -42,7 +42,7 @@ func main() {
 	root.PersistentFlags().StringVar(&flagMock, "mock", "", "mock responses YAML — replaces every model with scripted replies")
 	root.PersistentFlags().StringVar(&flagDefaultModel, "default-model", os.Getenv("STEPS_DEFAULT_MODEL"), "engine-level default model (last rung of the cascade)")
 
-	root.AddCommand(cmdValidate(), cmdRun(), cmdResume(), cmdRuns(), cmdInspect())
+	root.AddCommand(cmdValidate(), cmdRun(), cmdResume(), cmdRuns(), cmdInspect(), cmdContext())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "%serror:%s %v\n", cRed, cReset, err)
@@ -83,13 +83,17 @@ func buildEngine(l engine.Listener) (*engine.Engine, *journal.SQLiteStore, error
 func cmdValidate() *cobra.Command {
 	var printExpanded bool
 	c := &cobra.Command{
-		Use:   "validate <workflow.yaml>",
-		Short: "Validate a workflow (defaults expanded first — errors point at the explicit machine)",
+		Use:   "validate <machine.js>",
+		Short: "Validate a machine: structure, schemas, and a stub dry-run of every function",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			m, err := machine.Load(args[0], parseOpts()...)
 			if err != nil {
 				return err
+			}
+			_, warnings := machine.DryRun(m)
+			for _, w := range warnings {
+				fmt.Printf("%s⚠%s %s\n", cYellow, cReset, w)
 			}
 			fmt.Printf("%s✔%s %s is valid (%d states, hash %s)\n", cGreen, cReset, args[0], len(m.States), m.Hash[:12])
 			if printExpanded {
@@ -99,6 +103,30 @@ func cmdValidate() *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&printExpanded, "print", false, "print the fully-expanded machine")
+	return c
+}
+
+func cmdContext() *cobra.Command {
+	var stateName string
+	c := &cobra.Command{
+		Use:   "context <machine.js>",
+		Short: "Show what each state's functions may reference (derived from declared schemas)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			m, err := machine.Load(args[0], parseOpts()...)
+			if err != nil {
+				return err
+			}
+			for _, s := range m.States {
+				if s.Terminal || (stateName != "" && s.Name != stateName) {
+					continue
+				}
+				fmt.Println(machine.ScopeDoc(m, s))
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVar(&stateName, "state", "", "limit to one state")
 	return c
 }
 
@@ -151,10 +179,11 @@ func cmdResume() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// The run is pinned to the machine it started with.
-			m, err := machine.Parse(run.YAML, parseOpts()...)
+			// The run is pinned to the machine it started with; include()
+			// resolves from pinned assets, never the filesystem.
+			m, err := machine.ParseWithAssets(run.Source, run.Assets, parseOpts()...)
 			if err != nil {
-				return fmt.Errorf("re-parsing pinned machine: %w", err)
+				return fmt.Errorf("re-evaluating pinned machine: %w", err)
 			}
 
 			var data map[string]any
@@ -266,7 +295,7 @@ func printMachine(m *machine.Machine) {
 		detail := s.HandlerKind()
 		switch {
 		case s.Agent != nil:
-			detail = fmt.Sprintf("agent %s, max_turns=%d", s.Agent.Model, s.Agent.MaxTurns)
+			detail = fmt.Sprintf("agent %s, maxTurns=%d", s.Agent.Model.Display(), s.Agent.MaxTurns)
 			if s.Agent.Adopt != "" {
 				detail += ", adopt=" + s.Agent.Adopt
 			}
@@ -298,8 +327,8 @@ func printMachine(m *machine.Machine) {
 			if t.On != "" {
 				cond += " on:" + t.On
 			}
-			if t.When != "" {
-				cond += " when:" + t.When
+			if !t.When.IsZero() {
+				cond += " when: " + t.When.Display()
 			}
 			if cond == "" {
 				cond = " (fallback)"

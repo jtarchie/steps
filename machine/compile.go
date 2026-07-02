@@ -5,118 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"time"
 
-	"github.com/expr-lang/expr"
-	"github.com/expr-lang/expr/vm"
 	"github.com/google/jsonschema-go/jsonschema"
 	"google.golang.org/genai"
 )
 
-// GuardEnv is the shape guards compile against. Compilation catches unknown
-// top-level identifiers (`outputs.confidence` fails at load); member access on
-// the maps stays dynamic and is checked at evaluation time.
-func GuardEnv() map[string]any {
-	return map[string]any{
-		"ctx":     map[string]any{},
-		"output":  map[string]any{},
-		"event":   "",
-		"attempt": 0,
-		"visits":  map[string]int{},
-		"run":     map[string]any{"transitions": 0, "tokens": 0, "cost": 0.0},
-		"state":   map[string]any{"elapsed": 0.0},
-		// tool-guard additions
-		"args":  map[string]any{},
-		"calls": map[string]int{},
-		"turn":  0,
-	}
-}
-
-// CompileGuard compiles an Expr guard against the guard environment.
-func CompileGuard(src string) (*vm.Program, error) {
-	return expr.Compile(src, expr.Env(GuardEnv()), expr.AsBool())
-}
-
-// CompileExpr compiles a non-boolean Expr (e.g. foreach.over) against the
-// same environment.
-func CompileExpr(src string) (*vm.Program, error) {
-	return expr.Compile(src, expr.Env(GuardEnv()))
-}
-
-// EvalExpr evaluates a compiled non-boolean Expr.
-func EvalExpr(p *vm.Program, env map[string]any) (any, error) {
-	return expr.Run(p, env)
-}
-
-// EvalGuard evaluates a compiled guard. Errors (e.g. a missing output field)
-// are returned so the engine can treat the guard as false with a warning.
-func EvalGuard(p *vm.Program, env map[string]any) (bool, error) {
-	out, err := expr.Run(p, env)
-	if err != nil {
-		return false, err
-	}
-	b, ok := out.(bool)
-	if !ok {
-		return false, fmt.Errorf("guard returned %T, want bool", out)
-	}
-	return b, nil
-}
-
-// Elapsed converts a duration for the guard env (seconds as float).
-func Elapsed(d time.Duration) float64 { return d.Seconds() }
-
-// Compile compiles every guard and output schema in the machine.
-// It must run after ApplyDefaults and before Validate.
+// Compile resolves every output schema in the machine. Guards and prompts
+// need no compilation — they are already JS functions; Validate dry-runs
+// them against schema-derived stubs instead.
 func Compile(m *Machine) error {
 	var errs []error
 	for _, s := range m.States {
-		for i := range s.Transitions {
-			t := &s.Transitions[i]
-			if t.When == "" {
-				continue
-			}
-			p, err := CompileGuard(t.When)
-			if err != nil {
-				errs = append(errs, fmt.Errorf("state %q transition %d: guard %q: %w", s.Name, i, t.When, err))
-				continue
-			}
-			t.Guard = p
-		}
-		if s.Agent != nil && s.Agent.ModelExpr != "" {
-			env := GuardEnv()
-			if s.ForEach != nil {
-				env[s.ForEach.As] = map[string]any{}
-				env["index"], env["total"] = 0, 0
-			}
-			p, err := expr.Compile(s.Agent.ModelExpr, expr.Env(env))
-			if err != nil {
-				errs = append(errs, fmt.Errorf("state %q model.expr %q: %w", s.Name, s.Agent.ModelExpr, err))
-			} else {
-				s.Agent.ModelExprProgram = p
-			}
-		}
-		if s.Agent != nil {
-			for i := range s.Agent.Tools {
-				tr := &s.Agent.Tools[i]
-				if tr.When == "" {
-					continue
-				}
-				p, err := CompileGuard(tr.When)
-				if err != nil {
-					errs = append(errs, fmt.Errorf("state %q tool %q: guard %q: %w", s.Name, tr.Name, tr.When, err))
-					continue
-				}
-				tr.Guard = p
-			}
-		}
-		if f := s.ForEach; f != nil && f.Over != "" {
-			p, err := CompileExpr(f.Over)
-			if err != nil {
-				errs = append(errs, fmt.Errorf("state %q foreach.over %q: %w", s.Name, f.Over, err))
-			} else {
-				f.Program = p
-			}
-		}
 		if len(s.Output.Schema) > 0 {
 			resolved, err := CompileOutputSchema(s.Output.Schema, s.Output.Events)
 			if err != nil {
@@ -129,7 +28,7 @@ func Compile(m *Machine) error {
 	return errors.Join(errs...)
 }
 
-// CompileOutputSchema turns the YAML property map (shorthand welcome — see
+// CompileOutputSchema turns the schema map (shorthand welcome — see
 // schema.go) into a resolved JSON schema. Every declared property is
 // required. When events are declared, an `event` enum property is injected
 // and required — the agent-proposed event rides inside the output.

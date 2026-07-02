@@ -80,6 +80,20 @@ func confine(root, path string) (string, error) {
 	return joined, nil
 }
 
+func toInt(v any) (int, error) {
+	switch n := v.(type) {
+	case int:
+		return n, nil
+	case int64:
+		return int(n), nil
+	case float64:
+		return int(n), nil
+	case string:
+		return strconv.Atoi(strings.TrimSpace(n))
+	}
+	return 0, fmt.Errorf("not a number: %T", v)
+}
+
 func str(args map[string]any, key string) (string, error) {
 	v, ok := args[key]
 	if !ok {
@@ -213,10 +227,10 @@ func registerBuiltins(r *Registry) {
 			}
 			root, _ := args["root"].(string)
 			contextBytes := 4096
-			if v, _ := args["context_bytes"].(string); v != "" {
-				n, err := strconv.Atoi(strings.TrimSpace(v))
+			if v, ok := args["context_bytes"]; ok && v != nil {
+				n, err := toInt(v)
 				if err != nil || n < 0 {
-					return nil, fmt.Errorf("context_bytes must be a non-negative integer, got %q", v)
+					return nil, fmt.Errorf("context_bytes must be a non-negative integer, got %v", v)
 				}
 				contextBytes = n
 			}

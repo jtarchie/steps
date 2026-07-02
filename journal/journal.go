@@ -35,10 +35,13 @@ type Event struct {
 
 // Run is the queryable run row (denormalized from the journal for listing).
 type Run struct {
-	ID           string
-	Machine      string
-	Hash         string
-	YAML         []byte // machine definition pinned at start; resume needs no file
+	ID      string
+	Machine string
+	Hash    string
+	// Source is the machine's JS pinned at start; Assets are its include()d
+	// files. Resume re-evaluates these bytes — never the filesystem.
+	Source       []byte
+	Assets       map[string]string
 	Status       string // running | parked | done | failed
 	CurrentState string
 	Created      time.Time

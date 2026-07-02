@@ -1,14 +1,16 @@
 // Package machine defines the workflow model: states, transitions, guards,
-// retry policies, and limits. A Machine is loaded from YAML (or built in Go),
-// expanded with defaults, and validated before it can run.
+// retry policies, and limits. A Machine is a JavaScript file (evaluated by
+// goja) exporting a data structure; any computed value is a plain JS
+// function. Structure is data, logic is one honest language — nothing is
+// smuggled into strings.
 package machine
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"sort"
 	"time"
 
-	"github.com/expr-lang/expr/vm"
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
@@ -24,12 +26,14 @@ type Machine struct {
 	Defaults Defaults
 	Limits   Limits
 	Initial  string
-	States   []*State // document order preserved
+	States   []*State // declaration order preserved
 
-	RawYAML []byte // exact bytes the machine was loaded from ("" when built in Go)
-	Hash    string // sha256 of RawYAML
+	Source []byte            // exact JS bytes the machine was loaded from
+	Assets map[string]string // include()d files, pinned with the source
+	Hash   string            // sha256 over Source + Assets
 
 	index map[string]*State
+	rt    *jsRT // shared runtime for every Dyn in this machine
 }
 
 // State returns the named state, or nil.
@@ -42,9 +46,21 @@ func (m *Machine) buildIndex() {
 	}
 }
 
-func hashBytes(b []byte) string {
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
+func hashMachine(src []byte, assets map[string]string) string {
+	h := sha256.New()
+	h.Write(src)
+	keys := make([]string, 0, len(assets))
+	for k := range assets {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		h.Write([]byte{0})
+		h.Write([]byte(k))
+		h.Write([]byte{0})
+		h.Write([]byte(assets[k]))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // InputSpec declares a required/optional run input.
@@ -94,8 +110,10 @@ type State struct {
 	Terminal bool
 	Status   string // "" (success) or "failed" — terminal states only
 
-	Input       map[string]string // templated inputs (action args / agent user message)
-	ForEach     *ForEachSpec      // fan the handler out over a list from ctx
+	// Input: action args / agent user message. A static object (whose values
+	// may individually be functions) or one function returning the whole map.
+	Input   Dyn
+	ForEach *ForEachSpec // fan the handler out over a list from ctx
 	// Memo replays the journaled output when the rendered input (model +
 	// system + prompt) is byte-identical to a previous execution — re-runs
 	// only re-pay for what changed. Agent states only: actions have side
@@ -114,16 +132,14 @@ type State struct {
 // becomes {items: [...], count: n}. Sequential in v1; items share the
 // state's retry policy.
 type ForEachSpec struct {
-	Over string // Expr over ctx returning a list
-	As   string // template variable for the current item (default "item")
+	Over Dyn    // function of scope returning the list
+	As   string // scope name for the current item (default "item")
 	// Concurrency bounds parallel items (default 1; mock runs force 1 so
 	// scripted queues stay deterministic).
 	Concurrency int
 	// OnItemFailure: fail (default — one bad item fails the state) or skip
 	// (drop the item; aggregate output reports skipped/failures for guards).
 	OnItemFailure string
-
-	Program *vm.Program // compiled from Over at load time
 }
 
 // HandlerKind reports which handler the state runs.
@@ -143,14 +159,11 @@ func (s *State) HandlerKind() string {
 
 // AgentSpec configures an LLM agent-loop handler.
 type AgentSpec struct {
-	Model string
-	// ModelExpr routes the model at runtime: an Expr over ctx (plus the
-	// foreach item) returning a model alias or provider ref — e.g.
-	// 'lead.risk == "high" ? "senior" : "scout"'. Compiled at load.
-	ModelExpr        string
-	ModelExprProgram *vm.Program
-	System           string
-	Prompt           string
+	// Model: a static alias/provider ref, or a function of scope returning
+	// one — per-execution routing (e.g. by a foreach item's risk).
+	Model  Dyn
+	System Dyn // static string or function of scope
+	Prompt Dyn // static string or function of scope
 	Tools       []ToolRef
 	MaxTurns    int
 	Temperature *float64
@@ -180,15 +193,16 @@ type AgentSpec struct {
 // ToolRef attaches a registered tool to an agent state, optionally guarded.
 type ToolRef struct {
 	Name     string
-	MaxCalls int    // 0 = unlimited
-	When     string // Expr guard evaluated at call time (env includes args)
+	MaxCalls int // 0 = unlimited
+	// When guards each call: a function of scope (which includes the
+	// model-authored args) returning bool.
+	When     Dyn
 	OnReject string // feedback (default) | fail
 	Require  string // another tool that must have been called first
-	// Bind pins machine-authored args (templates over ctx) that the model
-	// never sees and cannot override — repo roots, IDs, credentials-by-ref.
-	Bind map[string]string
-
-	Guard *vm.Program // compiled from When at load time
+	// Args pins machine-authored args merged over the model's at execution —
+	// repo roots, IDs, credentials-by-ref. A static object or a function of
+	// scope returning one. The model never sees or overrides them.
+	Args Dyn
 }
 
 // HistorySpec injects a rendered journal projection of a prior state.
@@ -206,7 +220,7 @@ type ActionSpec struct {
 
 // HumanSpec parks the run until a human resumes it.
 type HumanSpec struct {
-	Prompt    string
+	Prompt    Dyn           // static string or function of scope
 	Timeout   time.Duration // 0 = no timeout
 	OnTimeout string        // state routed to when the gate expires
 }
@@ -229,17 +243,16 @@ func (o OutputSpec) DefaultOutput() bool {
 }
 
 // Transition routes out of a state. On matches the agent-declared event;
-// When is an Expr guard. Both optional; both must hold when present.
+// When is a guard function of scope. Both optional; both must hold when
+// present.
 type Transition struct {
 	On   string
-	When string
+	When Dyn
 	To   string
-
-	Guard *vm.Program // compiled from When at load time
 }
 
 // Fallback reports whether the transition matches unconditionally.
-func (t Transition) Fallback() bool { return t.On == "" && t.When == "" }
+func (t Transition) Fallback() bool { return t.On == "" && t.When.IsZero() }
 
 // RetryPolicy retries handler failures whose class is in Match.
 type RetryPolicy struct {

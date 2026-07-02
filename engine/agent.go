@@ -41,19 +41,18 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 		return nil, err
 	}
 
-	// Template data: ctx, foreach item data, optional history projection.
-	extra := map[string]any{}
+	// Scope: ctx + foreach item data + optional history projection.
+	data := baseScope(rs)
 	for k, v := range extraData {
-		extra[k] = v
+		data[k] = v
 	}
 	if h := spec.History; h != nil {
 		msgs := rs.Convos[h.From]
 		if len(msgs) == 0 {
 			e.Listener.Warn("history source has no recorded execution", "state", st.Name, "from", h.From)
 		}
-		extra[h.As] = renderHistory(msgs, h)
+		data[h.As] = renderHistory(msgs, h)
 	}
-	data := templateData(rs, extra)
 
 	// The user message: the rendered prompt, or the rendered input block.
 	userMsg, err := e.buildUserMessage(st, data)
@@ -335,19 +334,19 @@ func chooseFinalText(texts []string, spec machine.OutputSpec) string {
 	return texts[len(texts)-1]
 }
 
-// buildUserMessage renders the prompt template, or the input block as a
+// buildUserMessage resolves the prompt, or renders the input block as a
 // labeled message when no prompt is declared.
-func (e *Engine) buildUserMessage(st *machine.State, data map[string]any) (string, error) {
-	if st.Agent.Prompt != "" {
-		return machine.RenderTemplate(st.Name+".prompt", st.Agent.Prompt, data)
+func (e *Engine) buildUserMessage(st *machine.State, scope map[string]any) (string, error) {
+	if !st.Agent.Prompt.IsZero() {
+		return st.Agent.Prompt.String(scope)
+	}
+	inputs, err := machine.ResolveInputs(st.Input, scope)
+	if err != nil {
+		return "", err
 	}
 	var b strings.Builder
-	for _, k := range sortedKeys(st.Input) {
-		rendered, err := machine.RenderTemplate(st.Name+".input."+k, st.Input[k], data)
-		if err != nil {
-			return "", err
-		}
-		fmt.Fprintf(&b, "%s:\n%s\n\n", k, rendered)
+	for _, k := range sortedKeys(inputs) {
+		fmt.Fprintf(&b, "%s:\n%v\n\n", k, inputs[k])
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
 }
@@ -357,8 +356,8 @@ func (e *Engine) buildUserMessage(st *machine.State, data map[string]any) (strin
 // providers, including small local models with no JSON mode.
 func (e *Engine) buildSystemInstruction(st *machine.State, data map[string]any) (string, error) {
 	var parts []string
-	if st.Agent.System != "" {
-		system, err := machine.RenderTemplate(st.Name+".system", st.Agent.System, data)
+	if !st.Agent.System.IsZero() {
+		system, err := st.Agent.System.String(data)
 		if err != nil {
 			return "", err
 		}
@@ -546,16 +545,12 @@ func (e *Engine) buildAgentTools(st *machine.State, rs *journal.RunState, turns 
 		byADKName[adkName] = ref
 		fn := reg.Fn
 
-		// bind: machine-authored args, rendered from ctx now, merged over
+		// args: machine-authored args, resolved from scope now, merged over
 		// the model's args at execution — after guards judge the model's
 		// proposal, and never overridable by it.
-		bound := make(map[string]any, len(ref.Bind))
-		for k, tmpl := range ref.Bind {
-			v, err := machine.RenderTemplate(st.Name+".tool."+ref.Name+".bind."+k, tmpl, data)
-			if err != nil {
-				return nil, nil, nil, fmt.Errorf("state %q: tool %q bind %q: %w", st.Name, ref.Name, k, err)
-			}
-			bound[k] = v
+		bound, err := machine.ResolveInputs(ref.Args, data)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("state %q: tool %q args: %w", st.Name, ref.Name, err)
 		}
 
 		t, err := functiontool.New(functiontool.Config{
@@ -603,26 +598,22 @@ func (e *Engine) buildAgentTools(st *machine.State, rs *journal.RunState, turns 
 		if ref.Require != "" && calls[ref.Require] == 0 {
 			return reject(fmt.Sprintf("tool %q requires %q to have been called first", ref.Name, ref.Require))
 		}
-		if ref.Guard != nil {
-			env := machine.GuardEnv()
-			env["ctx"] = rs.Ctx
-			env["args"] = args
-			env["calls"] = calls
-			env["turn"] = *turns
-			env["visits"] = rs.Visits
-			env["run"] = map[string]any{
-				"transitions": rs.Transitions,
-				"tokens":      rs.Usage.Total(),
-				"cost":        rs.Usage.Cost,
+		if !ref.When.IsZero() {
+			scope := baseScope(rs)
+			for k, v := range data {
+				scope[k] = v
 			}
-			ok, err := machine.EvalGuard(ref.Guard, env)
+			scope["args"] = args
+			scope["calls"] = calls
+			scope["turn"] = *turns
+			ok, err := ref.When.Bool(scope)
 			if err != nil {
 				e.Listener.Warn("tool guard evaluation failed; rejecting call",
 					"state", st.Name, "tool", ref.Name, "error", err.Error())
 				return reject(fmt.Sprintf("guard error: %v", err))
 			}
 			if !ok {
-				return reject(fmt.Sprintf("guard %q rejected the call", ref.When))
+				return reject(fmt.Sprintf("guard %s rejected the call", ref.When.Display()))
 			}
 		}
 		calls[ref.Name]++
@@ -639,40 +630,29 @@ func (e *Engine) buildAgentTools(st *machine.State, rs *journal.RunState, turns 
 	return tools, beforeTool, afterTool, nil
 }
 
-// resolveModelRef returns the state's model ref, evaluating model: {expr}
-// routing and resolving aliases.
+// resolveModelRef returns the state's model ref, calling routing functions
+// and resolving aliases.
 func (e *Engine) resolveModelRef(m *machine.Machine, st *machine.State, rs *journal.RunState, extraData map[string]any) (string, error) {
 	spec := st.Agent
-	if spec.ModelExprProgram == nil {
-		return spec.Model, nil
+	if !spec.Model.IsFn() {
+		ref, _ := spec.Model.Static.(string)
+		return ref, nil
 	}
-	env := machine.GuardEnv()
-	env["ctx"] = rs.Ctx
-	env["visits"] = rs.Visits
-	env["run"] = map[string]any{
-		"transitions": rs.Transitions,
-		"tokens":      rs.Usage.Total(),
-		"cost":        rs.Usage.Cost,
-	}
+	scope := baseScope(rs)
 	for k, v := range extraData {
-		env[k] = v
+		scope[k] = v
 	}
-	out, err := machine.EvalExpr(spec.ModelExprProgram, env)
+	ref, err := spec.Model.String(scope)
 	if err != nil {
 		return "", &provider.ClassifiedError{Class: machine.ClassProviderError,
-			Msg: fmt.Sprintf("model.expr %q: %v", spec.ModelExpr, err)}
-	}
-	ref, ok := out.(string)
-	if !ok {
-		return "", &provider.ClassifiedError{Class: machine.ClassProviderError,
-			Msg: fmt.Sprintf("model.expr returned %T, want a model alias or ref", out)}
+			Msg: fmt.Sprintf("model: %v", err)}
 	}
 	if resolved, ok := m.Models[ref]; ok {
 		ref = resolved
 	}
 	if !strings.Contains(ref, "/") && ref != "mock" {
 		return "", &provider.ClassifiedError{Class: machine.ClassProviderError,
-			Msg: fmt.Sprintf("model.expr returned %q — not a models: alias or provider-namespaced ref", ref)}
+			Msg: fmt.Sprintf("model function returned %q — not a models: alias or provider-namespaced ref", ref)}
 	}
 	return ref, nil
 }

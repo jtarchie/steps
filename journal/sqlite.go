@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS runs (
     id            TEXT PRIMARY KEY,
     machine       TEXT NOT NULL,
     hash          TEXT NOT NULL,
-    yaml          BLOB NOT NULL,
+    source        BLOB NOT NULL,
+    assets        TEXT NOT NULL DEFAULT '{}',
     status        TEXT NOT NULL,
     current_state TEXT NOT NULL DEFAULT '',
     created       INTEGER NOT NULL,
@@ -95,10 +96,14 @@ func (s *SQLiteStore) MemoPut(ctx context.Context, key string, output map[string
 // CreateRun inserts a new run row.
 func (s *SQLiteStore) CreateRun(ctx context.Context, run *Run) error {
 	now := time.Now().UnixMilli()
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO runs (id, machine, hash, yaml, status, current_state, created, updated)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.ID, run.Machine, run.Hash, run.YAML, run.Status, run.CurrentState, now, now)
+	assets, err := json.Marshal(run.Assets)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO runs (id, machine, hash, source, assets, status, current_state, created, updated)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.ID, run.Machine, run.Hash, run.Source, string(assets), run.Status, run.CurrentState, now, now)
 	return err
 }
 
@@ -120,14 +125,14 @@ func (s *SQLiteStore) UpdateRun(ctx context.Context, id, status, currentState st
 // GetRun fetches one run.
 func (s *SQLiteStore) GetRun(ctx context.Context, id string) (*Run, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, machine, hash, yaml, status, current_state, created, updated FROM runs WHERE id = ?`, id)
+		`SELECT id, machine, hash, source, assets, status, current_state, created, updated FROM runs WHERE id = ?`, id)
 	return scanRun(row)
 }
 
 // ListRuns returns all runs, most recent first.
 func (s *SQLiteStore) ListRuns(ctx context.Context) ([]*Run, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, machine, hash, yaml, status, current_state, created, updated FROM runs ORDER BY created DESC`)
+		`SELECT id, machine, hash, source, assets, status, current_state, created, updated FROM runs ORDER BY created DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -148,11 +153,15 @@ type scannable interface{ Scan(dest ...any) error }
 func scanRun(row scannable) (*Run, error) {
 	var r Run
 	var created, updated int64
-	if err := row.Scan(&r.ID, &r.Machine, &r.Hash, &r.YAML, &r.Status, &r.CurrentState, &created, &updated); err != nil {
+	var assets string
+	if err := row.Scan(&r.ID, &r.Machine, &r.Hash, &r.Source, &assets, &r.Status, &r.CurrentState, &created, &updated); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("run not found")
 		}
 		return nil, err
+	}
+	if err := json.Unmarshal([]byte(assets), &r.Assets); err != nil {
+		return nil, fmt.Errorf("decoding pinned assets: %w", err)
 	}
 	r.Created = time.UnixMilli(created)
 	r.Updated = time.UnixMilli(updated)

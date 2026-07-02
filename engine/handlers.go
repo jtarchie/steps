@@ -12,17 +12,17 @@ import (
 	"github.com/jtarchie/steps/provider"
 )
 
-// runAction renders the input block into args and calls the registered tool.
-// extra carries foreach item data ({as}: item, index, total).
+// runAction resolves the input block into args and calls the registered
+// tool. extra carries foreach item data ({as}: item, index, total). Static
+// values pass through with their real types — numbers stay numbers.
 func (e *Engine) runAction(ctx context.Context, st *machine.State, rs *journal.RunState, extra map[string]any) (*HandlerResult, error) {
-	data := templateData(rs, extra)
-	args := make(map[string]any, len(st.Input))
-	for _, k := range sortedKeys(st.Input) {
-		rendered, err := machine.RenderTemplate(st.Name+".input."+k, st.Input[k], data)
-		if err != nil {
-			return nil, &provider.ClassifiedError{Class: machine.ClassActionError, Msg: err.Error()}
-		}
-		args[k] = rendered
+	scope := baseScope(rs)
+	for k, v := range extra {
+		scope[k] = v
+	}
+	args, err := machine.ResolveInputs(st.Input, scope)
+	if err != nil {
+		return nil, &provider.ClassifiedError{Class: machine.ClassActionError, Msg: err.Error()}
 	}
 
 	e.Listener.ToolCalled(st.Name, st.Action.Name, args)
@@ -44,9 +44,9 @@ func (e *Engine) runAction(ctx context.Context, st *machine.State, rs *journal.R
 	return &HandlerResult{Output: out}, nil
 }
 
-// runHuman renders the gate prompt and requests a park.
+// runHuman resolves the gate prompt and requests a park.
 func (e *Engine) runHuman(st *machine.State, rs *journal.RunState) (*HandlerResult, error) {
-	prompt, err := machine.RenderTemplate(st.Name+".human", st.Human.Prompt, templateData(rs, nil))
+	prompt, err := st.Human.Prompt.String(baseScope(rs))
 	if err != nil {
 		return nil, err
 	}
@@ -60,23 +60,13 @@ func (e *Engine) runHuman(st *machine.State, rs *journal.RunState) (*HandlerResu
 // sortedKeys keeps rendering deterministic: map iteration order is random,
 // and nondeterministic prompts defeat both journaled reproducibility and
 // provider prefix caches.
-func sortedKeys(m map[string]string) []string {
+func sortedKeys(m map[string]any) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
 	}
 	sort.Strings(out)
 	return out
-}
-
-// templateData builds the data every template renders against: ctx plus any
-// history projections.
-func templateData(rs *journal.RunState, extra map[string]any) map[string]any {
-	data := map[string]any{"ctx": rs.Ctx}
-	for k, v := range extra {
-		data[k] = v
-	}
-	return data
 }
 
 // renderHistory produces the rung-2 journal projection: a plain-text record

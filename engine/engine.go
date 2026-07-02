@@ -108,7 +108,8 @@ func (e *Engine) Start(ctx context.Context, m *machine.Machine, input map[string
 		ID:      runID,
 		Machine: m.Name,
 		Hash:    m.Hash,
-		YAML:    m.RawYAML,
+		Source:  m.Source,
+		Assets:  m.Assets,
 		Status:  journal.StatusRunning,
 	}
 	if err := e.Store.CreateRun(ctx, run); err != nil {
@@ -256,7 +257,7 @@ func (e *Engine) loop(ctx context.Context, m *machine.Machine, runID string, rs 
 			inFlight = false
 			model := ""
 			if st.Agent != nil {
-				model = st.Agent.Model
+				model = st.Agent.Model.Display()
 			}
 			e.Listener.StateEntered(current, st.HandlerKind(), rs.Visits[current], model)
 			if err := e.Store.UpdateRun(ctx, runID, journal.StatusRunning, current); err != nil {
@@ -332,7 +333,7 @@ func (e *Engine) loop(ctx context.Context, m *machine.Machine, runID string, rs 
 			current = next
 			continue
 		}
-		next, err := e.fireTransition(ctx, m, runID, rs, current, tr.To, tr.On, tr.When)
+		next, err := e.fireTransition(ctx, m, runID, rs, current, tr.To, tr.On, tr.When.Display())
 		if err != nil {
 			return nil, err
 		}
@@ -383,29 +384,35 @@ func (e *Engine) checkBudgets(m *machine.Machine, rs *journal.RunState) (string,
 	return "", false
 }
 
+// baseScope builds the scope every machine function receives.
+func baseScope(rs *journal.RunState) map[string]any {
+	return map[string]any{
+		"ctx":    rs.Ctx,
+		"visits": rs.Visits,
+		"run": map[string]any{
+			"transitions": rs.Transitions,
+			"tokens":      rs.Usage.Total(),
+			"cost":        rs.Usage.Cost,
+		},
+		"attempt": 1,
+	}
+}
+
 // pickTransition evaluates the state's transitions in order.
 func (e *Engine) pickTransition(st *machine.State, res *HandlerResult, rs *journal.RunState, enteredAt time.Time) (machine.Transition, error) {
-	env := machine.GuardEnv()
-	env["ctx"] = rs.Ctx
-	env["output"] = res.Output
-	env["event"] = res.Event
-	env["visits"] = rs.Visits
-	env["run"] = map[string]any{
-		"transitions": rs.Transitions,
-		"tokens":      rs.Usage.Total(),
-		"cost":        rs.Usage.Cost,
-	}
-	env["state"] = map[string]any{"elapsed": time.Since(enteredAt).Seconds()}
+	scope := baseScope(rs)
+	scope["output"] = res.Output
+	scope["event"] = res.Event
 
 	for _, t := range st.Transitions {
 		if t.On != "" && t.On != res.Event {
 			continue
 		}
-		if t.Guard != nil {
-			ok, err := machine.EvalGuard(t.Guard, env)
+		if !t.When.IsZero() {
+			ok, err := t.When.Bool(scope)
 			if err != nil {
 				e.Listener.Warn("guard evaluation failed; treating as false",
-					"state", st.Name, "guard", t.When, "error", err.Error())
+					"state", st.Name, "guard", t.When.Display(), "error", err.Error())
 				continue
 			}
 			if !ok {
@@ -452,23 +459,10 @@ const maxForEachItems = 1000
 // small context windows instead of one big one) under the state's retry
 // policy. Output: {items: [per-item outputs], count}. Sequential in v1.
 func (e *Engine) runForEach(ctx context.Context, m *machine.Machine, st *machine.State, runID string, rs *journal.RunState) (*HandlerResult, error) {
-	env := machine.GuardEnv()
-	env["ctx"] = rs.Ctx
-	env["visits"] = rs.Visits
-	env["run"] = map[string]any{
-		"transitions": rs.Transitions,
-		"tokens":      rs.Usage.Total(),
-		"cost":        rs.Usage.Cost,
-	}
-	val, err := machine.EvalExpr(st.ForEach.Program, env)
+	list, err := st.ForEach.Over.List(baseScope(rs))
 	if err != nil {
 		return nil, &provider.ClassifiedError{Class: machine.ClassActionError,
-			Msg: fmt.Sprintf("foreach.over %q: %v", st.ForEach.Over, err)}
-	}
-	list, ok := val.([]any)
-	if !ok {
-		return nil, &provider.ClassifiedError{Class: machine.ClassActionError,
-			Msg: fmt.Sprintf("foreach.over %q evaluated to %T, want a list", st.ForEach.Over, val)}
+			Msg: fmt.Sprintf("foreach.over: %v", err)}
 	}
 	if len(list) > maxForEachItems {
 		return nil, &provider.ClassifiedError{Class: machine.ClassBudgetExceeded,
