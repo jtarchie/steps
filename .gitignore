@@ -1,3 +1,5 @@
 *.db
+*.db-wal
+*.db-shm
 out/
-.steps.db
+.steps.db*
