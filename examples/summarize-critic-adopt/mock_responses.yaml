@@ -1,0 +1,38 @@
+# INTENTIONALLY IDENTICAL to ../summarize-critic/mock_responses.yaml.
+# The two examples share one mock script so that the only variable between
+# them is the context mechanics (rung 1 ctx re-priming vs rung 3 adopt:self).
+# CI runs both against this script and asserts the same routing trace but
+# different conversation shapes (see README).
+#
+#   steps run workflow.yaml \
+#     --input article=@../summarize-critic/fixtures/article.txt \
+#     --mock mock_responses.yaml
+
+draft:
+  - text: |
+      {"summary": "Containers made shipping cheap.",
+       "key_points": ["cheap", "fast", "big ships"]}
+  - text: |
+      {"summary": "Malcom McLean's 1956 voyage of the Ideal X introduced the
+        shipping container. Standardization through ISO in 1968-1970 let ships,
+        trucks, trains, ports, and cranes interoperate, collapsing loading costs
+        from dollars to cents per ton and cutting port time from weeks to hours.
+        The result reshaped global trade: manufacturing moved offshore,
+        purpose-built container ports displaced traditional docks, and goods
+        became cheap to move worldwide.",
+       "key_points": [
+        "The Ideal X carried the first 58 containers in April 1956",
+        "ISO standardization (1968-1970) made every link in the chain interoperable",
+        "Loading costs fell roughly 97 percent, enabling offshore manufacturing"]}
+
+critique:
+  - error: rate_limited # 1st call fails -> exercises TRANSIENT retry with backoff
+  - text: "the summary seems fine to me I guess" # not JSON -> SEMANTIC retry with feedback
+  - text: |
+      {"score": 4,
+       "issues": ["no mention of the Ideal X or when containerization began",
+                  "omits ISO standardization entirely",
+                  "no cost data, which is the core of the story"],
+       "event": "revise"}
+  - text: |
+      {"score": 9, "issues": [], "event": "approve"}

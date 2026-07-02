@@ -302,7 +302,8 @@ Mechanics and rules:
 - `history.from` / `adopt` targets must be graph-predecessors (load-time check).
   Adopting a state that never executed on this run's path is a semantic failure routed
   to `catch:` — never a silent fresh start. `history` of a never-executed state renders
-  empty with a journaled warning.
+  empty with a journaled warning. Exception: `adopt: self` on a state's *first* visit
+  starts fresh by definition — that is its documented semantics, not an error.
 - State budgets still apply: adopted transcripts count toward token/cost limits;
   `max_turns` counts new turns only.
 - Cross-provider `adopt` relies on the engine's normalized message format being
@@ -478,7 +479,11 @@ Never assert LLM content; assert machine semantics. Three tiers:
    backoff appear as journal events.
 
 The canonical example lives in [`examples/summarize-critic/`](examples/summarize-critic/)
-and doubles as the acceptance spec for v1: every command in its README must work.
+and doubles as the acceptance spec for v1: every command in its README must work. Its
+paired variant, [`examples/summarize-critic-adopt/`](examples/summarize-critic-adopt/),
+is the same machine with `adopt: self` revisions and an identical mock script — running
+both A/B-tests the two context philosophies (rung 1 `ctx` re-priming vs rung 3
+conversation adoption) with the context mechanics as the only variable.
 
 ## Package layout (proposal)
 

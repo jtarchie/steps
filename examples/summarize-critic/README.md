@@ -22,6 +22,16 @@ human gate) while exercising nearly every feature in [DESIGN.md](../../DESIGN.md
 | Durability | kill the process mid-run, `steps resume` finishes it |
 | Multi-provider | change one `model:` line, nothing else moves |
 
+## Paired variant: `adopt: self`
+
+[`../summarize-critic-adopt/`](../summarize-critic-adopt/README.md) is the same machine
+with one change: the drafter continues its own conversation across revisions
+(`adopt: self`, context rung 3) instead of being re-primed with distilled feedback
+(`ctx`, rung 1, this example). It shares this example's mock script and article
+fixture, so running both A/B-tests the two context philosophies — token cost per
+revision, transcript growth, anchoring behavior — with the context mechanics as the
+only variable. Its README carries the delta table and the extra assertions.
+
 ## Prerequisites (live mode only)
 
 ```sh
