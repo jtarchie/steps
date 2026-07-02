@@ -137,6 +137,17 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 				fail("state %q: %v", s.Name, err)
 			}
 		}
+		if a.StructuredOutput != "prompt" && a.StructuredOutput != "native" {
+			fail("state %q: structured_output must be prompt or native, got %q", s.Name, a.StructuredOutput)
+		}
+		switch a.Reasoning {
+		case "", "low", "medium", "high":
+		default:
+			fail("state %q: reasoning must be low, medium, or high, got %q", s.Name, a.Reasoning)
+		}
+		if a.MaxOutputTokens < 0 {
+			fail("state %q: max_output_tokens must be positive", s.Name)
+		}
 		switch a.ToolChoice {
 		case "auto":
 		case "required", "one_of":

@@ -74,9 +74,12 @@ type yamlDefaults struct {
 }
 
 type yamlAgentDefaults struct {
-	Model       string   `yaml:"model"`
-	Temperature *float64 `yaml:"temperature"`
-	MaxTurns    int      `yaml:"max_turns"`
+	Model            string   `yaml:"model"`
+	Temperature      *float64 `yaml:"temperature"`
+	MaxTurns         int      `yaml:"max_turns"`
+	MaxOutputTokens  int      `yaml:"max_output_tokens"`
+	StructuredOutput string   `yaml:"structured_output"`
+	Reasoning        string   `yaml:"reasoning"`
 }
 
 type yamlLimits struct {
@@ -100,15 +103,23 @@ type yamlState struct {
 }
 
 type yamlAgent struct {
-	Model       string       `yaml:"model"`
-	System      string       `yaml:"system"`
-	Prompt      string       `yaml:"prompt"`
-	Tools       []yaml.Node  `yaml:"tools"`
-	MaxTurns    int          `yaml:"max_turns"`
-	Temperature *float64     `yaml:"temperature"`
-	Adopt       string       `yaml:"adopt"`
-	History     *yamlHistory `yaml:"history"`
-	ToolChoice  string       `yaml:"tool_choice"`
+	Model            string       `yaml:"model"`
+	System           string       `yaml:"system"`
+	Prompt           string       `yaml:"prompt"`
+	Tools            []yaml.Node  `yaml:"tools"`
+	MaxTurns         int          `yaml:"max_turns"`
+	MaxOutputTokens  int          `yaml:"max_output_tokens"`
+	StructuredOutput string       `yaml:"structured_output"`
+	Reasoning        string       `yaml:"reasoning"`
+	Temperature      *float64     `yaml:"temperature"`
+	Adopt            yaml.Node    `yaml:"adopt"` // scalar name, or {from, last_turns}
+	History          *yamlHistory `yaml:"history"`
+	ToolChoice       string       `yaml:"tool_choice"`
+}
+
+type yamlAdopt struct {
+	From      string `yaml:"from"`
+	LastTurns int    `yaml:"last_turns"`
 }
 
 type yamlToolRef struct {
@@ -184,9 +195,12 @@ func parseRaw(src []byte) (*Machine, error) {
 	}
 
 	m.Defaults.Agent = AgentDefaults{
-		Model:       ym.Defaults.Agent.Model,
-		Temperature: ym.Defaults.Agent.Temperature,
-		MaxTurns:    ym.Defaults.Agent.MaxTurns,
+		Model:            ym.Defaults.Agent.Model,
+		Temperature:      ym.Defaults.Agent.Temperature,
+		MaxTurns:         ym.Defaults.Agent.MaxTurns,
+		MaxOutputTokens:  ym.Defaults.Agent.MaxOutputTokens,
+		StructuredOutput: ym.Defaults.Agent.StructuredOutput,
+		Reasoning:        ym.Defaults.Agent.Reasoning,
 	}
 	for _, r := range ym.Defaults.Retry {
 		rp, err := convertRetry(r)
@@ -337,13 +351,36 @@ func parseAgent(node *yaml.Node) (*AgentSpec, error) {
 		return nil, err
 	}
 	ag := &AgentSpec{
-		Model:       ya.Model,
-		System:      ya.System,
-		Prompt:      ya.Prompt,
-		MaxTurns:    ya.MaxTurns,
-		Temperature: ya.Temperature,
-		Adopt:       ya.Adopt,
-		ToolChoice:  ya.ToolChoice,
+		Model:            ya.Model,
+		System:           ya.System,
+		Prompt:           ya.Prompt,
+		MaxTurns:         ya.MaxTurns,
+		MaxOutputTokens:  ya.MaxOutputTokens,
+		StructuredOutput: ya.StructuredOutput,
+		Reasoning:        ya.Reasoning,
+		Temperature:      ya.Temperature,
+		ToolChoice:       ya.ToolChoice,
+	}
+	switch ya.Adopt.Kind {
+	case 0:
+		// not set
+	case yaml.ScalarNode:
+		ag.Adopt = ya.Adopt.Value
+	case yaml.MappingNode:
+		var yad yamlAdopt
+		if err := ya.Adopt.Decode(&yad); err != nil {
+			return nil, fmt.Errorf("adopt: %w", err)
+		}
+		if yad.From == "" {
+			return nil, fmt.Errorf("adopt: map form requires from")
+		}
+		if yad.LastTurns < 0 {
+			return nil, fmt.Errorf("adopt: last_turns must be >= 0")
+		}
+		ag.Adopt = yad.From
+		ag.AdoptLastTurns = yad.LastTurns
+	default:
+		return nil, fmt.Errorf("adopt must be a state name or {from, last_turns}")
 	}
 	if ya.History != nil {
 		ag.History = &HistorySpec{

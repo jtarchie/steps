@@ -16,7 +16,7 @@ the delta.
 |---|---|---|
 | Revision context | fresh conversation; article + distilled `ctx.critique.issues` re-sent | own prior conversation replayed; only the feedback appended |
 | Article tokens | re-sent on every revision | sent once, on the first visit |
-| Transcript size | constant per visit | accumulates across visits |
+| Transcript size | constant per visit | accumulates across visits (reasoning-channel messages are stripped from replay; `adopt: {from: self, last_turns: N}` trims further) |
 | Behavior | clean slate — no anchoring to prior phrasing | working memory — remembers its own reasoning, may anchor to it |
 | Critic | fresh every round | fresh every round (deliberately **not** adopted — judges must not drift) |
 

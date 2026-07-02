@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/vm"
 	"github.com/google/jsonschema-go/jsonschema"
+	"google.golang.org/genai"
 )
 
 // GuardEnv is the shape guards compile against. Compilation catches unknown
@@ -136,7 +138,9 @@ func CompileOutputSchema(props map[string]any, events []string) (*jsonschema.Res
 }
 
 // SchemaJSON renders the schema the model is asked to satisfy, for embedding
-// in the output-contract instruction.
+// in the output-contract instruction. Compact on purpose: the system
+// instruction is re-sent on every model call, so every byte here is a
+// recurring token cost.
 func SchemaJSON(props map[string]any, events []string) (string, error) {
 	properties := make(map[string]any, len(props)+1)
 	for k, v := range props {
@@ -149,6 +153,112 @@ func SchemaJSON(props map[string]any, events []string) (string, error) {
 	if len(events) > 0 {
 		properties["event"] = map[string]any{"type": "string", "enum": events}
 	}
-	raw, err := json.MarshalIndent(map[string]any{"type": "object", "properties": properties}, "", "  ")
+	raw, err := json.Marshal(map[string]any{"type": "object", "properties": properties})
 	return string(raw), err
+}
+
+// GenaiSchema converts the state's output contract into a *genai.Schema so
+// providers with native structured output (OpenAI-compatible: LM Studio,
+// Ollama, OpenAI) constrain the decoder itself — no preamble tokens, no
+// malformed JSON, and most semantic retries never happen. Providers without
+// support ignore it; the prompt contract remains the portable fallback.
+func GenaiSchema(props map[string]any, events []string) *genai.Schema {
+	root := &genai.Schema{
+		Type:       genai.TypeObject,
+		Properties: map[string]*genai.Schema{},
+	}
+	keys := make([]string, 0, len(props)+1)
+	for k := range props {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		root.Properties[k] = genaiProp(props[k])
+		root.Required = append(root.Required, k)
+	}
+	if len(events) > 0 {
+		root.Properties["event"] = &genai.Schema{Type: genai.TypeString, Enum: events}
+		root.Required = append(root.Required, "event")
+	}
+	return root
+}
+
+func genaiProp(v any) *genai.Schema {
+	if ts, ok := v.(string); ok {
+		return &genai.Schema{Type: genaiType(ts)}
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return &genai.Schema{Type: genai.TypeString}
+	}
+	s := &genai.Schema{}
+	if t, ok := m["type"].(string); ok {
+		s.Type = genaiType(t)
+	}
+	if d, ok := m["description"].(string); ok {
+		s.Description = d
+	}
+	if enum, ok := m["enum"].([]any); ok {
+		s.Type = genai.TypeString
+		for _, e := range enum {
+			s.Enum = append(s.Enum, fmt.Sprintf("%v", e))
+		}
+	}
+	if items, ok := m["items"]; ok {
+		if s.Type == genai.TypeUnspecified {
+			s.Type = genai.TypeArray
+		}
+		s.Items = genaiProp(items)
+	}
+	if props, ok := m["properties"].(map[string]any); ok {
+		if s.Type == genai.TypeUnspecified {
+			s.Type = genai.TypeObject
+		}
+		s.Properties = map[string]*genai.Schema{}
+		for k, pv := range props {
+			s.Properties[k] = genaiProp(pv)
+			s.Required = append(s.Required, k)
+		}
+		sort.Strings(s.Required)
+	}
+	if n, ok := asInt64(m["minItems"]); ok {
+		s.MinItems = genai.Ptr(n)
+	}
+	if n, ok := asInt64(m["maxItems"]); ok {
+		s.MaxItems = genai.Ptr(n)
+	}
+	if s.Type == genai.TypeUnspecified {
+		s.Type = genai.TypeString
+	}
+	return s
+}
+
+func genaiType(t string) genai.Type {
+	switch t {
+	case "string":
+		return genai.TypeString
+	case "number":
+		return genai.TypeNumber
+	case "integer":
+		return genai.TypeInteger
+	case "boolean":
+		return genai.TypeBoolean
+	case "array":
+		return genai.TypeArray
+	case "object":
+		return genai.TypeObject
+	}
+	return genai.TypeString
+}
+
+func asInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int:
+		return int64(n), true
+	case int64:
+		return n, true
+	case float64:
+		return int64(n), true
+	}
+	return 0, false
 }

@@ -81,8 +81,15 @@ func (l *prettyListener) StateEntered(state, kind string, visit int, model strin
 
 func (l *prettyListener) AgentMessage(state, role, text string) {
 	arrow, color := "→", cDim
-	if role == "model" {
+	switch role {
+	case "model":
 		arrow, color = "←", cMag
+	case "thought":
+		if !l.verbose {
+			l.p("  %s… thought (%d chars)%s", cDim, len(text), cReset)
+			return
+		}
+		arrow, color = "…", cDim
 	}
 	l.p("  %s%s %s:%s %s", color, arrow, role, cReset, l.clip(text))
 }

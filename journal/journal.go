@@ -72,6 +72,10 @@ type Message struct {
 	Text        string       `json:"text,omitempty"`
 	ToolCalls   []ToolCall   `json:"tool_calls,omitempty"`
 	ToolResults []ToolResult `json:"tool_results,omitempty"`
+	// Thought marks reasoning-channel content: journaled for audit, but
+	// never replayed on adopt and excluded from history by default —
+	// scratch thinking is not context, and replaying it re-bills it.
+	Thought bool `json:"thought,omitempty"`
 }
 
 // ToolCall is a model-authored tool invocation.

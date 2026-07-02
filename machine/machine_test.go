@@ -25,8 +25,8 @@ func TestLoadSummarizeCritic(t *testing.T) {
 	if draft.Agent.Model != "ollama/qwen3:8b" {
 		t.Errorf("draft model = %q (defaults cascade)", draft.Agent.Model)
 	}
-	if draft.Agent.MaxTurns != DefaultMaxTurns {
-		t.Errorf("draft max_turns = %d, want engine default %d", draft.Agent.MaxTurns, DefaultMaxTurns)
+	if draft.Agent.MaxTurns != 2 {
+		t.Errorf("draft max_turns = %d, want 2 from defaults.agent (machine-level cascade)", draft.Agent.MaxTurns)
 	}
 	if len(draft.Retry) != 2 {
 		t.Errorf("draft retry = %+v, want engine default policies", draft.Retry)
@@ -116,6 +116,58 @@ states:
 	}
 	if draft.Agent.Model != "mock" {
 		t.Errorf("draft model = %q, want engine default", draft.Agent.Model)
+	}
+}
+
+func TestAdoptMapForm(t *testing.T) {
+	src := `
+name: trim
+defaults: {agent: {model: mock}}
+states:
+  work:
+    agent:
+      adopt: {from: self, last_turns: 6}
+      prompt: "go"
+`
+	m, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	a := m.State("work").Agent
+	if a.Adopt != "self" || a.AdoptLastTurns != 6 {
+		t.Errorf("adopt = %q last_turns = %d, want self/6", a.Adopt, a.AdoptLastTurns)
+	}
+}
+
+func TestGenaiSchema(t *testing.T) {
+	s := GenaiSchema(map[string]any{
+		"score":  map[string]any{"type": "number"},
+		"issues": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 3},
+		"title":  "string",
+	}, []string{"approve", "revise"})
+
+	if s.Type != "OBJECT" {
+		t.Errorf("root type = %q", s.Type)
+	}
+	if len(s.Required) != 4 { // score, issues, title + event
+		t.Errorf("required = %v, want 4 entries", s.Required)
+	}
+	if s.Properties["score"].Type != "NUMBER" {
+		t.Errorf("score type = %q", s.Properties["score"].Type)
+	}
+	if s.Properties["title"].Type != "STRING" {
+		t.Errorf("scalar shorthand type = %q", s.Properties["title"].Type)
+	}
+	issues := s.Properties["issues"]
+	if issues.Type != "ARRAY" || issues.Items == nil || issues.Items.Type != "STRING" {
+		t.Errorf("issues schema = %+v", issues)
+	}
+	if issues.MaxItems == nil || *issues.MaxItems != 3 {
+		t.Errorf("issues maxItems = %v, want 3", issues.MaxItems)
+	}
+	ev := s.Properties["event"]
+	if ev == nil || len(ev.Enum) != 2 {
+		t.Errorf("event enum = %+v", ev)
 	}
 }
 

@@ -245,6 +245,50 @@ critique:
 	_ = store
 }
 
+// TestMaxTurnsOneSurvivesSemanticRetry: the turn budget bounds model calls
+// within ONE conversation turn and resets per retry — max_turns: 1 on a
+// tool-less state must not starve retry-with-feedback.
+func TestMaxTurnsOneSurvivesSemanticRetry(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	wf := `
+name: tight
+defaults: {agent: {model: mock, max_turns: 1}}
+states:
+  work:
+    agent:
+      prompt: "produce the thing"
+    output:
+      schema:
+        answer: {type: string}
+`
+	script := `
+work:
+  - text: "not json at all"
+  - text: '{"answer": "fixed"}'
+`
+	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := machine.Parse([]byte(wf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, _ := newTestEngine(t, scriptPath)
+	res, err := eng.Start(context.Background(), m, nil)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Status != journal.StatusDone {
+		t.Fatalf("status = %s at %s, want done — semantic retry must get a fresh turn budget", res.Status, res.Terminal)
+	}
+	out, _ := res.State.Ctx["work"].(map[string]any)
+	if out["answer"] != "fixed" {
+		t.Errorf("ctx.work = %v, want the corrected output", out)
+	}
+}
+
 // TestResumeWithoutEventFails: parked gates demand an explicit event.
 func TestResumeWithoutEventFails(t *testing.T) {
 	t.Chdir(t.TempDir())

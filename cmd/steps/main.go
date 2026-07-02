@@ -42,7 +42,7 @@ func main() {
 	root.PersistentFlags().StringVar(&flagMock, "mock", "", "mock responses YAML — replaces every model with scripted replies")
 	root.PersistentFlags().StringVar(&flagDefaultModel, "default-model", os.Getenv("STEPS_DEFAULT_MODEL"), "engine-level default model (last rung of the cascade)")
 
-	root.AddCommand(cmdValidate(), cmdRun(), cmdResume(), cmdRuns())
+	root.AddCommand(cmdValidate(), cmdRun(), cmdResume(), cmdRuns(), cmdInspect())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "%serror:%s %v\n", cRed, cReset, err)

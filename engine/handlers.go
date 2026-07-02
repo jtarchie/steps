@@ -73,12 +73,15 @@ func renderHistory(msgs []journal.Message, spec *machine.HistorySpec) string {
 	}
 	includeMessages := false
 	includeTools := false
+	includeThoughts := false
 	for _, inc := range spec.Include {
 		switch inc {
 		case "messages":
 			includeMessages = true
 		case "tool_calls":
 			includeTools = true
+		case "thoughts":
+			includeThoughts = true
 		}
 	}
 
@@ -88,6 +91,12 @@ func renderHistory(msgs []journal.Message, spec *machine.HistorySpec) string {
 
 	var b strings.Builder
 	for _, m := range msgs {
+		if m.Thought {
+			if includeThoughts && m.Text != "" {
+				fmt.Fprintf(&b, "[%s thinking] %s\n", m.Role, m.Text)
+			}
+			continue
+		}
 		if includeMessages && m.Text != "" {
 			fmt.Fprintf(&b, "[%s] %s\n", m.Role, m.Text)
 		}

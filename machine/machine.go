@@ -58,9 +58,12 @@ type Defaults struct {
 
 // AgentDefaults cascade into every agent state that leaves the field unset.
 type AgentDefaults struct {
-	Model       string
-	Temperature *float64
-	MaxTurns    int
+	Model            string
+	Temperature      *float64
+	MaxTurns         int
+	MaxOutputTokens  int
+	StructuredOutput string // prompt (default) | native
+	Reasoning        string // low | medium | high ("" = provider default)
 }
 
 // Limits are run-level guardrails. Zero values mean "engine default" for
@@ -73,9 +76,10 @@ type Limits struct {
 }
 
 const (
-	DefaultMaxTransitions = 50
-	DefaultTimeout        = 15 * time.Minute
-	DefaultMaxTurns       = 10
+	DefaultMaxTransitions  = 50
+	DefaultTimeout         = 15 * time.Minute
+	DefaultMaxTurns        = 10
+	DefaultMaxOutputTokens = 2048 // per model call — no state may generate unboundedly
 )
 
 // State is one node of the machine: exactly one handler, contracts, policies.
@@ -118,7 +122,25 @@ type AgentSpec struct {
 	MaxTurns    int
 	Temperature *float64
 	Adopt       string // "", "self", or a predecessor state name
-	History     *HistorySpec
+	// AdoptLastTurns trims the adopted transcript to its last N messages
+	// (0 = all). Token hygiene for long revision loops.
+	AdoptLastTurns int
+	// MaxOutputTokens caps each model call. A state may never generate
+	// unboundedly — grammar-degenerate or runaway completions become a
+	// bounded failure instead of a hang.
+	MaxOutputTokens int
+	// StructuredOutput selects how the output contract is enforced:
+	// "prompt" (default, portable) embeds the schema in the instruction;
+	// "native" additionally constrains the decoder on providers that
+	// support it (OpenAI-compatible response_format json_schema). Native
+	// is a token win on well-supported backends, but grammar-constrained
+	// sampling degenerates on some local model/backend combos — opt in.
+	StructuredOutput string
+	// Reasoning caps the model's thinking effort (low | medium | high;
+	// "" = provider default). Reasoning tokens are billed output — a
+	// drafting micro-agent rarely needs deep thought, a judge might.
+	Reasoning string
+	History   *HistorySpec
 	ToolChoice  string // auto (default) | required | one_of — one_of not yet implemented
 }
 

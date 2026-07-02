@@ -7,8 +7,19 @@
 > Implementation deltas from this document: the Go builder DSL (`steps.State(...)`)
 > is not yet exposed — Go users construct machines via `machine.Parse`; `tool_choice:
 > required/one_of` validates as "not implemented in v1"; `history` renders
-> messages/tool_calls with `last_turns` but no per-turn pairing; costs are tracked
-> but no per-model pricing table exists yet (token budgets work).
+> messages/tool_calls/thoughts with `last_turns` but no per-turn pairing; costs are
+> tracked but no per-model pricing table exists yet (token budgets work).
+>
+> Token-discipline additions beyond this document (all measured on live runs):
+> `agent.max_output_tokens` (default 2048 — no state may generate unboundedly;
+> cap exhaustion classifies as `budget_exceeded`, never retried); `agent.reasoning:
+> low|medium|high` (maps to provider reasoning effort; per-micro-agent thinking
+> budgets); `agent.structured_output: prompt|native` (native = decoder-constrained
+> JSON on OpenAI-compatible backends; opt-in because grammar sampling degenerates on
+> some local model/backend combos); `adopt: {from, last_turns}` trim; reasoning-
+> channel messages are journaled flagged `thought` but NEVER replayed on adopt and
+> excluded from `history` unless `include: [thoughts]` — scratch thinking is not
+> context. `steps inspect <run-id>` renders per-state token usage and routing.
 
 ## Thesis
 
@@ -147,8 +158,11 @@ Every key except `states` and each state's handler is optional. Defaults are app
 - No `catch:` → unhandled exhaustion routes to `failed` with the reason journaled.
 
 **Agent states**
-- `model`, `temperature` (0), `max_turns` (10) cascade: state → machine `defaults.agent`
-  → engine option → validation error only if still unresolved.
+- `model`, `temperature` (0), `max_turns` (10), `max_output_tokens` (2048),
+  `structured_output` (prompt), `reasoning` (provider default) cascade:
+  state → machine `defaults.agent` → engine option → validation error only if
+  still unresolved. `max_turns` bounds model calls per conversation turn and
+  resets across semantic retries.
 - `agent: "one-line prompt"` scalar shorthand for `agent: {prompt: "..."}`.
 - `output` omitted → `{text: string}` and no events (fallback-only routing).
 - **The prompt template doubles as the input contract**: templates are Go

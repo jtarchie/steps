@@ -22,9 +22,8 @@ import (
 )
 
 const (
-	appName    = "steps"
-	userID     = "steps"
-	mockPrefix = "mock"
+	appName = "steps"
+	userID  = "steps"
 )
 
 // runAgent executes an agent state: fresh (or adopted) conversation, ADK
@@ -39,7 +38,7 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 		llm = e.mockForRun(runID).ForState(st.Name)
 	} else {
 		var err error
-		llm, err = e.Providers.Resolve(spec.Model)
+		llm, err = e.resolveLLM(spec.Model)
 		if err != nil {
 			return nil, &provider.ClassifiedError{Class: machine.ClassProviderError, Msg: err.Error()}
 		}
@@ -92,14 +91,27 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 				Msg:   fmt.Sprintf("state %q adopts %q, which has not executed this run", st.Name, spec.Adopt),
 			}
 		}
+		// Scratch reasoning is not context: replaying it re-bills it and
+		// anchors the model to stale thinking. Only real exchanges replay.
+		trimmed := make([]journal.Message, 0, len(prior))
 		for _, msg := range prior {
+			if !msg.Thought {
+				trimmed = append(trimmed, msg)
+			}
+		}
+		if n := spec.AdoptLastTurns; n > 0 && len(trimmed) > n {
+			trimmed = trimmed[len(trimmed)-n:]
+		}
+		for _, msg := range trimmed {
 			if err := svc.AppendEvent(ctx, sess, adoptEvent(agentName, msg)); err != nil {
 				return nil, fmt.Errorf("seeding adopted conversation: %w", err)
 			}
 		}
 	}
 
-	// Callbacks: usage accounting, turn budget, chat narration.
+	// Callbacks: usage accounting, turn budget, chat narration. The turn
+	// budget bounds model calls within ONE conversation turn (the tool loop);
+	// it resets before each driveTurn so semantic retries get a fresh budget.
 	usage := &journal.Usage{}
 	turns := 0
 	maxTurns := spec.MaxTurns
@@ -129,6 +141,24 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 	genCfg := &genai.GenerateContentConfig{}
 	if spec.Temperature != nil {
 		genCfg.Temperature = genai.Ptr(float32(*spec.Temperature))
+	}
+	// No state may generate unboundedly: a runaway or grammar-degenerate
+	// completion becomes a bounded failure, never a hang.
+	genCfg.MaxOutputTokens = int32(spec.MaxOutputTokens)
+	// Reasoning tokens are billed output; each micro-agent declares how much
+	// thinking its one job deserves (OpenAI-compatible: reasoning_effort).
+	if spec.Reasoning != "" {
+		genCfg.ThinkingConfig = &genai.ThinkingConfig{ThinkingLevel: thinkingLevel(spec.Reasoning)}
+	}
+	// structured_output: native constrains the decoder itself on providers
+	// that support it (OpenAI-compatible maps this to response_format
+	// json_schema). Opt-in: a token win on well-supported backends, but
+	// grammar-constrained sampling degenerates on some local model/backend
+	// combos. Gated to tool-less states — constrained decoding and tool
+	// calls conflict on several backends. The prompt contract always applies.
+	if spec.StructuredOutput == "native" && len(spec.Tools) == 0 && !plainTextContract(st.Output) {
+		genCfg.ResponseMIMEType = "application/json"
+		genCfg.ResponseSchema = machine.GenaiSchema(st.Output.Schema, st.Output.Events)
 	}
 
 	ag, err := llmagent.New(llmagent.Config{
@@ -163,11 +193,13 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 	semanticAttempts := 0
 	msg := userMsg
 	for {
+		turns = 0 // the budget is per conversation turn, not per handler
 		e.Listener.AgentMessage(st.Name, "user", msg)
-		finalText, runErr := e.driveTurn(ctx, r, st.Name, sess.ID(), msg)
+		texts, runErr := e.driveTurn(ctx, r, st.Name, sess.ID(), msg)
 		if runErr != nil {
 			return nil, runErr // transient: engine retry driver replays the handler
 		}
+		finalText := chooseFinalText(texts, st.Output)
 
 		output, event, parseErr := parseOutput(finalText, st.Output)
 		if parseErr == nil {
@@ -212,21 +244,32 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 	}
 }
 
-// driveTurn runs one runner invocation and returns the final model text.
-func (e *Engine) driveTurn(ctx context.Context, r *runner.Runner, state, sessionID, msg string) (string, error) {
-	finalText := ""
+// driveTurn runs one runner invocation and returns every model text part, in
+// order. The caller picks the authoritative one against the output contract.
+func (e *Engine) driveTurn(ctx context.Context, r *runner.Runner, state, sessionID, msg string) ([]string, error) {
+	var texts []string
+	var lastFinish genai.FinishReason
 	for ev, err := range r.Run(ctx, userID, sessionID, genai.NewContentFromText(msg, genai.RoleUser), adkagent.RunConfig{}) {
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		if ev == nil || ev.Content == nil || ev.Partial {
+		if ev == nil {
+			continue
+		}
+		if ev.FinishReason != "" {
+			lastFinish = ev.FinishReason
+		}
+		if ev.Content == nil || ev.Partial {
 			continue
 		}
 		for _, part := range ev.Content.Parts {
 			switch {
+			case part.Text != "" && part.Thought:
+				// Reasoning channel: narrated, never a contract candidate.
+				e.Listener.AgentMessage(state, "thought", part.Text)
 			case part.Text != "" && ev.Author != "user":
 				e.Listener.AgentMessage(state, "model", part.Text)
-				finalText = part.Text
+				texts = append(texts, part.Text)
 			case part.FunctionCall != nil:
 				e.Listener.ToolCalled(state, part.FunctionCall.Name, part.FunctionCall.Args)
 			case part.FunctionResponse != nil:
@@ -234,10 +277,35 @@ func (e *Engine) driveTurn(ctx context.Context, r *runner.Runner, state, session
 			}
 		}
 	}
-	if finalText == "" {
-		return "", &provider.ClassifiedError{Class: machine.ClassProviderError, Msg: "model produced no text"}
+	if len(texts) == 0 {
+		if lastFinish == genai.FinishReasonMaxTokens {
+			// Deterministic, not transient: the output cap was exhausted
+			// (typically inside the reasoning channel) before any content.
+			return nil, &provider.ClassifiedError{
+				Class: machine.ClassBudgetExceeded,
+				Msg:   "max_output_tokens exhausted before any content — raise it or lower reasoning",
+			}
+		}
+		return nil, &provider.ClassifiedError{Class: machine.ClassProviderError, Msg: "model produced no text"}
 	}
-	return finalText, nil
+	return texts, nil
+}
+
+// chooseFinalText picks the authoritative reply. For JSON contracts, prefer
+// the LAST part that actually parses — models sometimes emit reasoning before
+// (or remarks after) the JSON, and position is not a reliable signal.
+func chooseFinalText(texts []string, spec machine.OutputSpec) string {
+	if len(texts) == 0 {
+		return ""
+	}
+	if !plainTextContract(spec) {
+		for i := len(texts) - 1; i >= 0; i-- {
+			if _, err := extractJSON(texts[i]); err == nil {
+				return texts[i]
+			}
+		}
+	}
+	return texts[len(texts)-1]
 }
 
 // buildUserMessage renders the prompt template, or the input block as a
@@ -275,7 +343,8 @@ func (e *Engine) buildSystemInstruction(st *machine.State, data map[string]any) 
 		if err != nil {
 			return "", err
 		}
-		contract := "Your final reply must be a single JSON object and nothing else — no prose, no markdown fences.\nIt must match this schema:\n" + schemaJSON
+		contract := "Reply with a single JSON object matching this schema: " + schemaJSON +
+			"\nBegin your reply with { and end with }. No analysis, no preamble, no prose, no markdown fences."
 		if len(st.Output.Events) > 0 {
 			contract += fmt.Sprintf("\nSet \"event\" to exactly one of %v — it declares your conclusion and routes the workflow.", st.Output.Events)
 		}
@@ -373,8 +442,17 @@ func (e *Engine) collectMessages(ctx context.Context, svc session.Service, sessi
 		if ev.Author == "user" {
 			msg.Role = "user"
 		}
+		var thought journal.Message
 		for _, part := range ev.Content.Parts {
 			switch {
+			case part.Text != "" && part.Thought:
+				// Audit-only: kept as its own flagged message so adopt
+				// and history can skip it cheaply.
+				if thought.Text != "" {
+					thought.Text += "\n"
+				}
+				thought.Role, thought.Thought = msg.Role, true
+				thought.Text += part.Text
 			case part.Text != "":
 				if msg.Text != "" {
 					msg.Text += "\n"
@@ -389,6 +467,9 @@ func (e *Engine) collectMessages(ctx context.Context, svc session.Service, sessi
 					Name: part.FunctionResponse.Name, Result: part.FunctionResponse.Response,
 				})
 			}
+		}
+		if thought.Text != "" {
+			out = append(out, thought)
 		}
 		if msg.Text != "" || len(msg.ToolCalls) > 0 || len(msg.ToolResults) > 0 {
 			out = append(out, msg)
@@ -508,6 +589,17 @@ func (e *Engine) buildAgentTools(st *machine.State, rs *journal.RunState, turns 
 	}
 
 	return tools, beforeTool, afterTool, nil
+}
+
+// thinkingLevel maps the YAML reasoning knob to genai's enum.
+func thinkingLevel(r string) genai.ThinkingLevel {
+	switch r {
+	case "low":
+		return genai.ThinkingLevelLow
+	case "high":
+		return genai.ThinkingLevelHigh
+	}
+	return genai.ThinkingLevelMedium
 }
 
 // sanitizeName maps state/tool names to identifiers ADK and providers accept

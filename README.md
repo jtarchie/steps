@@ -47,6 +47,7 @@ states:
 | `steps run wf.yaml --input k=v\|k=@file [--mock file] [-v]` | Start a run; narrates every state, chat message, tool call, retry, and transition to stderr; JSON summary to stdout. |
 | `steps resume <run-id> --event X [--data '{...}']` | Answer a parked human gate, or continue a crashed run from its journal. |
 | `steps runs` | List runs and their status. |
+| `steps inspect <run-id> [--messages]` | Per-state token usage, failures, and routing from the journal; `--messages` dumps recorded conversations. |
 
 Runs journal to SQLite (`.steps.db` by default, `--db` to move it). Every
 prompt, reply, tool call, guard verdict, retry, and transition is an
@@ -62,6 +63,25 @@ are the same OpenAI-compatible client with different default base URLs
 (`OLLAMA_BASE_URL`, `LMSTUDIO_BASE_URL`, `OPENAI_BASE_URL` to override).
 `--mock script.yaml` replaces every model with scripted responses for
 deterministic CI.
+
+## Token discipline
+
+The machine, not the transcript, carries the logic — so every context and
+output cost is a declared property of a state:
+
+- `max_output_tokens` (default 2048): no state may generate unboundedly; cap
+  exhaustion is a `budget_exceeded` failure, never a hang, never retried.
+- `reasoning: low|medium|high`: per-micro-agent thinking budgets (provider
+  reasoning effort). A drafting state rarely deserves deep thought; a judge might.
+- `structured_output: native` (opt-in): decoder-constrained JSON on
+  OpenAI-compatible backends — zero preamble tokens, no malformed JSON. The
+  prompt contract stays as the portable fallback.
+- Output schemas double as output budgets: `issues: {type: array, maxItems: 3}`.
+- Reasoning-channel text is journaled (flagged `thought`) but **never** replayed
+  on `adopt` and excluded from `history` — scratch thinking is not context.
+  Measured on a live 3-revision loop: adopted-prompt growth dropped from
+  540→1739→3624 tokens to 495→745→1052.
+- `adopt: {from: self, last_turns: N}` trims long revision transcripts.
 
 ## Failure taxonomy
 

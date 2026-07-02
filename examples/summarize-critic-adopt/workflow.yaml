@@ -12,6 +12,8 @@ input:
 defaults:
   agent:
     model: ollama/qwen3:8b # any OpenAI-compatible endpoint works
+    max_turns: 2 # tool-less states need one model call per turn; 2 is headroom
+    reasoning: low # reasoning tokens are billed output; summarizing needs none
 
 limits:
   max_transitions: 12 # hard backstop, independent of the guard below
@@ -20,6 +22,8 @@ states:
   draft:
     agent:
       adopt: self # revisits continue this state's own prior conversation
+      # long loops can trim the replayed transcript for token hygiene:
+      #   adopt: {from: self, last_turns: 6}
       prompt: |
         {{ if .ctx.critique }}
         Your reviewer rejected the previous draft for these reasons:
@@ -45,7 +49,8 @@ states:
       model: ollama/llama3.2:3b # fresh judge every round — deliberately NOT adopted,
       prompt: |                 # so scoring never drifts with conversational anchoring
         You are a strict editor. Score the summary 0-10 for accuracy and
-        completeness against the article, and list concrete issues.
+        completeness against the article. List at most three concrete
+        issues, each under 20 words.
         ARTICLE:
         {{ .ctx.article }}
         SUMMARY:
@@ -53,7 +58,7 @@ states:
     output:
       schema:
         score: {type: number}
-        issues: {type: array, items: {type: string}}
+        issues: {type: array, items: {type: string}, maxItems: 3} # schema doubles as an output-token budget
       events: [approve, revise]
     transitions:
       - on: approve

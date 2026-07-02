@@ -83,6 +83,21 @@ func ApplyDefaults(m *Machine) {
 			if a.MaxTurns == 0 {
 				a.MaxTurns = DefaultMaxTurns
 			}
+			if a.MaxOutputTokens == 0 {
+				a.MaxOutputTokens = m.Defaults.Agent.MaxOutputTokens
+			}
+			if a.MaxOutputTokens == 0 {
+				a.MaxOutputTokens = DefaultMaxOutputTokens
+			}
+			if a.StructuredOutput == "" {
+				a.StructuredOutput = m.Defaults.Agent.StructuredOutput
+			}
+			if a.StructuredOutput == "" {
+				a.StructuredOutput = "prompt"
+			}
+			if a.Reasoning == "" {
+				a.Reasoning = m.Defaults.Agent.Reasoning
+			}
 			if a.ToolChoice == "" {
 				a.ToolChoice = "auto"
 			}

@@ -10,7 +10,10 @@ import (
 	"fmt"
 	"math"
 	mrand "math/rand"
+	"sync"
 	"time"
+
+	adkmodel "google.golang.org/adk/model"
 
 	"github.com/jtarchie/steps/journal"
 	"github.com/jtarchie/steps/machine"
@@ -29,6 +32,28 @@ type Engine struct {
 	Mock provider.Script
 
 	mocks map[string]*provider.Mock // per-run scripted queues
+
+	llmMu sync.Mutex
+	llms  map[string]adkmodel.LLM // resolved clients, keyed by model ref
+}
+
+// resolveLLM caches provider clients per model ref: states re-run and revisit
+// constantly, and rebuilding HTTP clients per execution is pure waste.
+func (e *Engine) resolveLLM(ref string) (adkmodel.LLM, error) {
+	e.llmMu.Lock()
+	defer e.llmMu.Unlock()
+	if llm, ok := e.llms[ref]; ok {
+		return llm, nil
+	}
+	llm, err := e.Providers.Resolve(ref)
+	if err != nil {
+		return nil, err
+	}
+	if e.llms == nil {
+		e.llms = map[string]adkmodel.LLM{}
+	}
+	e.llms[ref] = llm
+	return llm, nil
 }
 
 // New builds an engine with sane defaults.
