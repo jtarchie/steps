@@ -47,9 +47,9 @@ Routing is identical to the sibling — same 5 transitions, `visits.draft == 2`,
 retries on `critique`, `out/summary.md` written. What differs, and what CI asserts on
 top of the sibling's assertions:
 
-- `state_entered draft (visit 2)` is journaled with `context: adopted(self)`.
 - Draft visit 2's conversation *contains* visit 1's messages (the replayed transcript)
-  followed by the feedback message.
+  followed by the feedback message — asserted from the `handler_finished` event's
+  journaled `messages`.
 - The article text appears **exactly once** across the drafter's entire conversation
   (it is never re-sent), while in the sibling it appears once per visit.
 - The feedback message on visit 2 contains only the critique issues — no ARTICLE block

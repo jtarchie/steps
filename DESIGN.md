@@ -1,7 +1,14 @@
 # steps — a state-machine runtime for micro-agents
 
-**Status:** design exploration, 2026-07-02
+**Status:** v1 implemented, 2026-07-02 — see [README.md](README.md); examples pass as the acceptance suite
 **Language:** Go · **Config:** YAML over a Go DSL · **Guards:** [expr-lang/expr](https://github.com/expr-lang/expr)
+**Stack:** [google/adk-go](https://github.com/google/adk-go) v1 (agent loop, sessions, tools) + [adk-utils-go](https://github.com/achetronic/adk-utils-go) (Anthropic + OpenAI-compatible clients)
+
+> Implementation deltas from this document: the Go builder DSL (`steps.State(...)`)
+> is not yet exposed — Go users construct machines via `machine.Parse`; `tool_choice:
+> required/one_of` validates as "not implemented in v1"; `history` renders
+> messages/tool_calls with `last_turns` but no per-turn pairing; costs are tracked
+> but no per-model pricing table exists yet (token budgets work).
 
 ## Thesis
 

@@ -39,6 +39,10 @@ ollama pull qwen3:8b
 ollama pull llama3.2:3b
 ```
 
+For LM Studio instead of Ollama, either change the `model:` refs to
+`lmstudio/<model-id>` (see `lms ls`), or leave them and point the ollama
+provider at LM Studio's server: `OLLAMA_BASE_URL=http://localhost:1234/v1`.
+
 Mock mode needs nothing — no network, no models, no keys.
 
 ## Run it
