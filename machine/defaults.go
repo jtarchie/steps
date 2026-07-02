@@ -121,6 +121,10 @@ func ApplyDefaults(m *Machine) {
 			}
 		}
 
+		if f := s.ForEach; f != nil && f.As == "" {
+			f.As = "item"
+		}
+
 		// Retry: nil means unset -> machine defaults.retry -> engine default.
 		// An explicit empty slice (retry: none) stays empty.
 		if s.Retry == nil {

@@ -1,0 +1,63 @@
+diff --git a/README.md b/README.md
+index 83b2e5a..9f41c07 100644
+--- a/README.md
++++ b/README.md
+@@ -12,6 +12,8 @@ The queue package processes jobs from multiple producers.
+
+ ## Usage
+
++Workers now run concurrently; set `WORKERS` to control pool size
++(defaults to 4).
+
+ See `examples/` for end-to-end usage.
+diff --git a/internal/queue/worker.go b/internal/queue/worker.go
+index 2c7d1aa..5e88f3b 100644
+--- a/internal/queue/worker.go
++++ b/internal/queue/worker.go
+@@ -18,20 +18,26 @@ type Pool struct {
+ 	jobs    chan Job
+ 	results map[string]Result
+-	mu      sync.Mutex
+ }
+
+-// Process runs jobs one at a time.
++// Process runs jobs across the worker pool.
+ func (p *Pool) Process(ctx context.Context) error {
+-	for job := range p.jobs {
+-		res := p.run(ctx, job)
+-		p.mu.Lock()
+-		p.results[job.ID] = res
+-		p.mu.Unlock()
+-	}
++	var wg sync.WaitGroup
++	for i := 0; i < p.workers; i++ {
++		go func() {
++			wg.Add(1)
++			defer wg.Done()
++			for job := range p.jobs {
++				res := p.run(ctx, job)
++				p.results[job.ID] = res
++			}
++		}()
++	}
++	wg.Wait()
+ 	return nil
+ }
+diff --git a/api/handler.go b/api/handler.go
+index 77aa210..c1d94ef 100644
+--- a/api/handler.go
++++ b/api/handler.go
+@@ -31,12 +31,10 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
+ 	id := chi.URLParam(r, "id")
+-	u, err := h.store.Find(r.Context(), id)
+-	if err != nil {
+-		http.Error(w, "lookup failed", http.StatusInternalServerError)
+-		return
+-	}
++	u, _ := h.store.Find(r.Context(), id)
+ 	if u == nil {
+ 		http.Error(w, "not found", http.StatusNotFound)
+ 		return
+ 	}
+ 	writeJSON(w, u.Profile())
+ }

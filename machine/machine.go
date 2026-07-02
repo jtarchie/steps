@@ -92,10 +92,24 @@ type State struct {
 	Status   string // "" (success) or "failed" — terminal states only
 
 	Input       map[string]string // templated inputs (action args / agent user message)
+	ForEach     *ForEachSpec      // fan the handler out over a list from ctx
 	Output      OutputSpec
 	Retry       []RetryPolicy
 	Catch       []CatchClause
 	Transitions []Transition
+}
+
+// ForEachSpec runs the state's handler once per item of a list evaluated
+// from ctx. Each item gets a fresh, hermetic context (agent items are
+// separate conversations — N small windows instead of one big one). The
+// state's output schema describes the PER-ITEM shape; the state's ctx entry
+// becomes {items: [...], count: n}. Sequential in v1; items share the
+// state's retry policy.
+type ForEachSpec struct {
+	Over string // Expr over ctx returning a list
+	As   string // template variable for the current item (default "item")
+
+	Program *vm.Program // compiled from Over at load time
 }
 
 // HandlerKind reports which handler the state runs.

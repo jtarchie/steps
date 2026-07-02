@@ -43,7 +43,7 @@ LLM agents need structure, not vibes. A finite state machine gives you:
 | Providers | **Multi-provider from day one** — thin owned interface; Anthropic + OpenAI-compatible adapters |
 | Tools | **Registered Go functions** (reflection-derived schemas) + **built-in tool library** (http, json, exec…) |
 | Packaging | **Library + CLI** — `steps run`, `steps resume`, `steps runs`, `steps validate` |
-| Graph model | **Flat FSM in v1** — schema designed so sub-machines/fan-out can land in v1.x without breaking YAML |
+| Graph model | **Flat FSM + `foreach` fan-out** — states may map their handler over a ctx list (sequential v1; hermetic per-item contexts); sub-machines and parallel regions remain v1.x |
 | Defaults | **Convention over configuration** — linear flow by document order, implicit terminals, default retry/limits; every key optional except `states` and each state's handler |
 | Testing | **Mock provider in CI** (scripted responses, fully deterministic), live iteration via Ollama, durability drills; `examples/` double as the acceptance spec |
 
@@ -263,6 +263,34 @@ becomes the state's event and ordinary transitions guard it
 nondeterministic in *which* branch, deterministic in *shape* — exactly one call,
 schema-validated args, guarded routing. It fills the middle ground between `action`
 (no chooser) and a free agent loop.
+
+## Fan-out: foreach
+
+A state may map its handler over a list evaluated from ctx:
+
+```yaml
+scout_files:
+  foreach:
+    over: ctx.split_diff.files          # Expr over ctx returning a list
+    as: file                            # template variable ({{ .file.path }})
+  agent:
+    prompt: "What deserves a senior's attention in {{ .file.path }}? ..."
+  output:
+    schema: {path: string, risk: {enum: [low, medium, high]}}   # PER-ITEM shape
+```
+
+- Each item is **hermetic**: agents get a fresh conversation per item — N
+  small context windows instead of one big one. This is the context thesis
+  applied to scale: the machine assembles per-item context; no item sees its
+  siblings.
+- The state's ctx entry becomes `{items: [...], count: n}`; downstream guards
+  and `over:` expressions compose with Expr builtins:
+  `filter(ctx.scout_files.items, {.risk != "low"})`.
+- Items share the state's retry policy; templates also see `.index`/`.total`.
+- foreach states cannot declare events (no single event exists — route with
+  guards over the aggregate), cannot adopt/history, and cannot wrap human gates.
+- Sequential in v1 (mock scripts stay deterministic); bounded concurrency is
+  the planned extension.
 
 ## Context between states: hermetic by default
 

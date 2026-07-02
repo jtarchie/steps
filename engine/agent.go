@@ -28,8 +28,9 @@ const (
 
 // runAgent executes an agent state: fresh (or adopted) conversation, ADK
 // agent loop, engine-owned output contract, semantic retries with feedback.
-// Transient model errors bubble up to the engine's retry driver.
-func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.State, runID string, rs *journal.RunState) (*HandlerResult, error) {
+// Transient model errors bubble up to the engine's retry driver. extraData
+// carries foreach item data ({as}: item, index, total).
+func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.State, runID string, rs *journal.RunState, extraData map[string]any) (*HandlerResult, error) {
 	spec := st.Agent
 
 	// Model: the mock script (when set) replaces every provider.
@@ -44,8 +45,11 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 		}
 	}
 
-	// Template data: ctx plus optional history projection (rung 2).
+	// Template data: ctx, foreach item data, optional history projection.
 	extra := map[string]any{}
+	for k, v := range extraData {
+		extra[k] = v
+	}
 	if h := spec.History; h != nil {
 		msgs := rs.Convos[h.From]
 		if len(msgs) == 0 {

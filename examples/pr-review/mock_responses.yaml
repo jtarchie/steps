@@ -1,0 +1,38 @@
+# Deep path: scouts flag two files, the senior substantiates findings, and
+# the verdict's "approve" is VETOED by the guard (findings exist) — agent
+# proposes, guards dispose. Queues are consumed per foreach item, in order.
+
+scout_files:
+  - text: '{"path": "README.md", "risk": "low", "leads": []}'
+  - text: >-
+      {"path": "internal/queue/worker.go", "risk": "high", "leads": [
+      {"where": "Process()", "concern": "results map written from multiple goroutines after the mutex was removed"},
+      {"where": "worker spawn loop", "concern": "wg.Add(1) inside the goroutine races with wg.Wait()"}]}
+  - text: >-
+      {"path": "api/handler.go", "risk": "medium", "leads": [
+      {"where": "GetUser", "concern": "store.Find error now discarded; error case indistinguishable from missing user"}]}
+
+scout_pr:
+  - text: >-
+      {"themes": ["concurrency safety in the worker pool rewrite",
+      "error handling regressions in the api layer",
+      "README promises a WORKERS knob the diff never wires up"],
+      "reading_order": ["internal/queue/worker.go", "api/handler.go"],
+      "event": "deep_review"}
+
+deep_review:
+  - text: >-
+      {"path": "internal/queue/worker.go", "findings": [
+      {"where": "Process()", "severity": "blocking", "issue": "concurrent map write: results is mutated by every worker with the mutex deleted", "fix": "reinstate the mutex or collect via a channel"},
+      {"where": "worker spawn loop", "severity": "blocking", "issue": "wg.Add(1) runs inside each goroutine, so wg.Wait() can return before any worker registers", "fix": "wg.Add(1) before go func"}],
+      "leads_refuted": []}
+  - text: >-
+      {"path": "api/handler.go", "findings": [
+      {"where": "GetUser", "severity": "important", "issue": "store.Find error is swallowed; infrastructure failures surface as 404s", "fix": "restore the error branch with a 500"}],
+      "leads_refuted": []}
+
+verdict:
+  - text: >-
+      {"summary": "Two blocking concurrency defects and one swallowed error; request changes.",
+      "body": "worker.go: concurrent map write after mutex removal (blocking); wg.Add races with Wait (blocking). handler.go: store.Find error swallowed, 500s become 404s (important). README documents a WORKERS variable the code never reads.",
+      "event": "approve"}

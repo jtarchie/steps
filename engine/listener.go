@@ -11,6 +11,7 @@ import (
 type Listener interface {
 	RunStarted(runID, machineName string, input map[string]any)
 	StateEntered(state, kind string, visit int, model string)
+	ForEachItem(state string, index, total int, item any)
 	AgentMessage(state, role, text string)
 	ToolCalled(state, tool string, args map[string]any)
 	ToolResult(state, tool string, result map[string]any)
@@ -30,6 +31,7 @@ type NopListener struct{}
 
 func (NopListener) RunStarted(string, string, map[string]any)                       {}
 func (NopListener) StateEntered(string, string, int, string)                        {}
+func (NopListener) ForEachItem(string, int, int, any)                               {}
 func (NopListener) AgentMessage(string, string, string)                             {}
 func (NopListener) ToolCalled(string, string, map[string]any)                       {}
 func (NopListener) ToolResult(string, string, map[string]any)                       {}

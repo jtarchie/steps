@@ -1,0 +1,174 @@
+version: 1
+name: pr-review
+description: >
+  Cheap scouts, expensive specialist. Small models triage each file and the
+  PR as a whole ("for a larger model, what deserves review here?"); the large
+  model only ever sees flagged files with pre-gathered leads — it verifies,
+  it never researches. Trivial PRs never reach it at all.
+
+input:
+  diff: {type: string, required: true} # e.g. gh pr diff 123 > pr.diff
+  title: {type: string}
+  description: {type: string}
+
+defaults:
+  agent:
+    model: lmstudio/google/gemma-4-e4b # the scout: small, local, effectively free
+    reasoning: low
+    max_turns: 2
+
+limits:
+  max_transitions: 15
+  max_tokens: 200000
+
+states:
+  split_diff:
+    action: diff.split
+    input:
+      diff: "{{ .ctx.diff }}"
+    # linear default -> scout_files
+
+  # One hermetic micro-context per file: the scout sees ONE patch, nothing
+  # else. N small windows instead of one large one.
+  scout_files:
+    foreach:
+      over: ctx.split_diff.files
+      as: file
+    agent:
+      prompt: |
+        You are a scout for a senior code reviewer. Do NOT review. Identify
+        what in this one file DESERVES the senior's attention, so they spend
+        zero time researching: risky hunks, broken invariants, suspicious
+        deletions. Echo the exact path. If nothing warrants attention, say
+        risk low with no leads.
+        {{ if .ctx.title }}PR: {{ .ctx.title }}{{ end }}
+        FILE {{ .file.path }} ({{ .file.additions }}+ / {{ .file.deletions }}-):
+        {{ .file.patch }}
+    output:
+      schema:
+        path: {type: string}
+        risk: {enum: [low, medium, high]}
+        leads:
+          type: array
+          maxItems: 3 # schema doubles as an output budget
+          items:
+            type: object
+            properties:
+              where: {type: string}
+              concern: {type: string}
+    # linear default -> scout_pr
+
+  # Same question, whole-PR altitude: cross-file concerns no single-file
+  # view can catch. Sees file stats + scout conclusions — never full patches.
+  scout_pr:
+    agent:
+      prompt: |
+        You are a scout for a senior code reviewer, looking at a pull request
+        AS A WHOLE. Identify cross-file concerns the per-file scouts below
+        cannot see: APIs changed without callers updated, docs promising what
+        code retracts, missing tests. Then decide: does this PR need the
+        senior at all? Choose event "trivial" only if nothing warrants review.
+        {{ if .ctx.title }}PR: {{ .ctx.title }} — {{ .ctx.description }}{{ end }}
+        FILES:
+        {{ range .ctx.split_diff.files }}- {{ .path }} ({{ .additions }}+/{{ .deletions }}-)
+        {{ end }}
+        SCOUT REPORTS:
+        {{ range .ctx.scout_files.items }}- {{ .path }} [{{ .risk }}]:{{ range .leads }} {{ .concern }};{{ end }}
+        {{ end }}
+    output:
+      schema:
+        themes: {type: array, maxItems: 4, items: {type: string}}
+        reading_order: {type: array, items: {type: string}}
+      events: [deep_review, trivial]
+    transitions:
+      - on: trivial
+        # The scout proposes skipping the senior; the guard only allows it
+        # when no file scout was worried. Agent proposes, guards dispose.
+        when: all(ctx.scout_files.items, {.risk == "low"})
+        to: note_trivial
+      - to: deep_review # fallback: any doubt goes to the senior
+
+  note_trivial:
+    action: file.write
+    input:
+      path: out/review.md
+      content: |
+        ## Automated triage: no senior review needed
+
+        {{ range .ctx.scout_pr.themes }}- {{ . }}
+        {{ end }}
+    transitions: [{to: done}]
+
+  # The senior. Only flagged files, one hermetic context per file, leads
+  # pre-gathered: verify or refute — never research.
+  deep_review:
+    foreach:
+      over: filter(ctx.scout_files.items, {.risk != "low"})
+      as: lead
+    agent:
+      model: lmstudio/google/gemma-4-26b-a4b # the senior: larger, spent sparingly
+      reasoning: high
+      max_output_tokens: 8192
+      prompt: |
+        You are a senior reviewer. A scout flagged this file with specific
+        leads. Verify or refute EACH lead against the patch, and report any
+        defect the scout missed. Do not restate the diff. Report only what
+        you can substantiate.
+        PR THEMES:{{ range .ctx.scout_pr.themes }} {{ . }};{{ end }}
+        FILE: {{ .lead.path }}
+        LEADS:
+        {{ range .lead.leads }}- {{ .where }}: {{ .concern }}
+        {{ end }}
+        PATCH:
+        {{ range .ctx.split_diff.files }}{{ if eq .path $.lead.path }}{{ .patch }}{{ end }}{{ end }}
+    output:
+      schema:
+        path: {type: string}
+        findings:
+          type: array
+          maxItems: 5
+          items:
+            type: object
+            properties:
+              where: {type: string}
+              severity: {enum: [blocking, important, nit]}
+              issue: {type: string}
+              fix: {type: string}
+        leads_refuted: {type: array, items: {type: string}}
+    # linear default -> verdict
+
+  verdict:
+    agent:
+      model: lmstudio/google/gemma-4-26b-a4b
+      prompt: |
+        Compose the review verdict from these substantiated findings.
+        Be direct; credit refuted leads briefly.
+        {{ range .ctx.deep_review.items }}FILE {{ .path }}:
+        {{ range .findings }}- [{{ .severity }}] {{ .where }}: {{ .issue }} — fix: {{ .fix }}
+        {{ end }}{{ range .leads_refuted }}- refuted: {{ . }}
+        {{ end }}
+        {{ end }}
+    output:
+      schema:
+        summary: {type: string}
+        body: {type: string}
+      events: [approve, comment, request_changes]
+    transitions:
+      - on: approve
+        # The senior cannot approve past substantiated findings, no matter
+        # what event it proposes.
+        when: all(ctx.deep_review.items, {len(.findings) == 0})
+        to: write_review
+      - to: write_review # comment / request_changes / vetoed approve
+
+  write_review:
+    action: file.write
+    input:
+      path: out/review.md
+      content: |
+        ## Code review
+
+        {{ .ctx.verdict.summary }}
+
+        {{ .ctx.verdict.body }}
+    # linear default -> done

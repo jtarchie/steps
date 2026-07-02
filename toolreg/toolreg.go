@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // ActionFunc is the uniform tool signature: JSON-ish maps in and out.
@@ -112,6 +113,47 @@ func registerBuiltins(r *Registry) {
 				return nil, err
 			}
 			return map[string]any{"content": string(raw), "bytes": len(raw)}, nil
+		})
+
+	r.Register("diff.split", "Split a unified diff into per-file entries with change counts",
+		func(ctx context.Context, args map[string]any) (map[string]any, error) {
+			diff, err := str(args, "diff")
+			if err != nil {
+				return nil, err
+			}
+			var files []any
+			var current map[string]any
+			var patch []string
+			flush := func() {
+				if current != nil {
+					current["patch"] = strings.Join(patch, "\n")
+					files = append(files, current)
+				}
+				patch = nil
+			}
+			for _, line := range strings.Split(diff, "\n") {
+				switch {
+				case strings.HasPrefix(line, "diff --git "):
+					flush()
+					// "diff --git a/path b/path" — the b/ side is the new path.
+					path := line[len("diff --git "):]
+					if i := strings.LastIndex(path, " b/"); i >= 0 {
+						path = path[i+3:]
+					}
+					current = map[string]any{"path": path, "additions": 0, "deletions": 0}
+				case current == nil:
+					continue
+				case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
+					current["additions"] = current["additions"].(int) + 1
+				case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
+					current["deletions"] = current["deletions"].(int) + 1
+				}
+				if current != nil {
+					patch = append(patch, line)
+				}
+			}
+			flush()
+			return map[string]any{"files": files, "count": len(files)}, nil
 		})
 
 	r.Register("http.get", "HTTP GET a URL and return the body (up to 256KB)",

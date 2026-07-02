@@ -289,6 +289,120 @@ work:
 	}
 }
 
+// TestPRReviewDeepPath asserts the token-funnel machine: per-file foreach
+// scouting, filtered fan-out to the senior, and the guard vetoing the
+// senior's "approve" while findings exist.
+func TestPRReviewDeepPath(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	m, script := loadExample(t, "pr-review")
+	eng, store := newTestEngine(t, script)
+	diff, err := os.ReadFile(repoPath(t, "examples/pr-review/fixtures/pr.diff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := eng.Start(context.Background(), m, map[string]any{
+		"diff":        string(diff),
+		"title":       "queue: parallel worker pool",
+		"description": "Process jobs concurrently",
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Status != journal.StatusDone {
+		t.Fatalf("status = %s at %s, want done", res.Status, res.Terminal)
+	}
+
+	states, _, transitions := eventTrace(t, store, res.RunID)
+	want := []string{"split_diff", "scout_files", "scout_pr", "deep_review", "verdict", "write_review"}
+	if strings.Join(states, ",") != strings.Join(want, ",") {
+		t.Errorf("state sequence = %v, want %v", states, want)
+	}
+	if transitions != 6 {
+		t.Errorf("transitions = %d, want 6", transitions)
+	}
+
+	scouts, _ := res.State.Ctx["scout_files"].(map[string]any)
+	if n, _ := scouts["count"].(int); n != 3 {
+		t.Errorf("scout_files.count = %v, want 3 (one hermetic context per file)", scouts["count"])
+	}
+	deep, _ := res.State.Ctx["deep_review"].(map[string]any)
+	if n, _ := deep["count"].(int); n != 2 {
+		t.Errorf("deep_review.count = %v, want 2 (low-risk file filtered out)", deep["count"])
+	}
+
+	// The senior proposed approve; the guard must have vetoed it: the fired
+	// verdict transition is the fallback (on == "").
+	verdict, _ := res.State.Ctx["verdict"].(map[string]any)
+	if verdict["event"] != "approve" {
+		t.Fatalf("verdict.event = %v, want approve (the proposal being vetoed)", verdict["event"])
+	}
+	events, err := store.Events(context.Background(), res.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range events {
+		if ev.Type != journal.TransitionFired {
+			continue
+		}
+		if from, _ := ev.Data["from"].(string); from != "verdict" {
+			continue
+		}
+		if on, _ := ev.Data["on"].(string); on != "" {
+			t.Errorf("verdict transition fired on %q, want fallback (guard-vetoed approve)", on)
+		}
+	}
+
+	review, err := os.ReadFile("out/review.md")
+	if err != nil {
+		t.Fatalf("artifact: %v", err)
+	}
+	for _, wantStr := range []string{"concurrent map write", "wg.Add", "store.Find"} {
+		if !strings.Contains(string(review), wantStr) {
+			t.Errorf("review.md missing %q", wantStr)
+		}
+	}
+}
+
+// TestPRReviewTrivialPath: every scout reports low risk, the guard allows the
+// trivial skip, and the senior model never runs.
+func TestPRReviewTrivialPath(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	wf := repoPath(t, "examples/pr-review/workflow.yaml")
+	m, err := machine.Load(wf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, store := newTestEngine(t, repoPath(t, "examples/pr-review/mock_trivial.yaml"))
+	diff, err := os.ReadFile(repoPath(t, "examples/pr-review/fixtures/pr.diff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := eng.Start(context.Background(), m, map[string]any{"diff": string(diff)})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Status != journal.StatusDone {
+		t.Fatalf("status = %s, want done", res.Status)
+	}
+
+	states, _, _ := eventTrace(t, store, res.RunID)
+	want := []string{"split_diff", "scout_files", "scout_pr", "note_trivial"}
+	if strings.Join(states, ",") != strings.Join(want, ",") {
+		t.Errorf("state sequence = %v, want %v — the senior must never run", states, want)
+	}
+	review, err := os.ReadFile("out/review.md")
+	if err != nil {
+		t.Fatalf("artifact: %v", err)
+	}
+	if !strings.Contains(string(review), "no senior review needed") {
+		t.Errorf("review.md = %q, want the triage note", string(review))
+	}
+}
+
 // TestResumeWithoutEventFails: parked gates demand an explicit event.
 func TestResumeWithoutEventFails(t *testing.T) {
 	t.Chdir(t.TempDir())

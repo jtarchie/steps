@@ -79,6 +79,20 @@ func (l *prettyListener) StateEntered(state, kind string, visit int, model strin
 	l.p("%s● %s%s %s— %s%s%s", cBlue, cBold, state, cReset+cDim, detail, cReset, suffix)
 }
 
+func (l *prettyListener) ForEachItem(state string, index, total int, item any) {
+	preview := ""
+	if m, ok := item.(map[string]any); ok {
+		if p, ok := m["path"].(string); ok {
+			preview = p
+		} else {
+			preview = l.clip(compactJSON(m))
+		}
+	} else {
+		preview = l.clip(fmt.Sprintf("%v", item))
+	}
+	l.p("  %s◦ item %d/%d%s %s", cCyan, index+1, total, cReset, preview)
+}
+
 func (l *prettyListener) AgentMessage(state, role, text string) {
 	arrow, color := "→", cDim
 	switch role {

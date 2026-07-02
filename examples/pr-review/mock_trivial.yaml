@@ -1,0 +1,14 @@
+# Trivial path: every scout says low risk, the PR scout proposes "trivial",
+# the guard verifies no scout was worried, and the senior model NEVER RUNS —
+# the whole review costs three small-model calls.
+
+scout_files:
+  - text: '{"path": "README.md", "risk": "low", "leads": []}'
+  - text: '{"path": "internal/queue/worker.go", "risk": "low", "leads": []}'
+  - text: '{"path": "api/handler.go", "risk": "low", "leads": []}'
+
+scout_pr:
+  - text: >-
+      {"themes": ["documentation-only changes"],
+      "reading_order": [],
+      "event": "trivial"}

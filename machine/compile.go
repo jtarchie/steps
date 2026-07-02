@@ -37,6 +37,17 @@ func CompileGuard(src string) (*vm.Program, error) {
 	return expr.Compile(src, expr.Env(GuardEnv()), expr.AsBool())
 }
 
+// CompileExpr compiles a non-boolean Expr (e.g. foreach.over) against the
+// same environment.
+func CompileExpr(src string) (*vm.Program, error) {
+	return expr.Compile(src, expr.Env(GuardEnv()))
+}
+
+// EvalExpr evaluates a compiled non-boolean Expr.
+func EvalExpr(p *vm.Program, env map[string]any) (any, error) {
+	return expr.Run(p, env)
+}
+
 // EvalGuard evaluates a compiled guard. Errors (e.g. a missing output field)
 // are returned so the engine can treat the guard as false with a warning.
 func EvalGuard(p *vm.Program, env map[string]any) (bool, error) {
@@ -83,6 +94,14 @@ func Compile(m *Machine) error {
 					continue
 				}
 				tr.Guard = p
+			}
+		}
+		if f := s.ForEach; f != nil && f.Over != "" {
+			p, err := CompileExpr(f.Over)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("state %q foreach.over %q: %w", s.Name, f.Over, err))
+			} else {
+				f.Program = p
 			}
 		}
 		if len(s.Output.Schema) > 0 {

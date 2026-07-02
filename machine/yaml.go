@@ -96,10 +96,16 @@ type yamlState struct {
 	Terminal    bool              `yaml:"terminal"`
 	Status      string            `yaml:"status"`
 	Input       map[string]string `yaml:"input"`
+	ForEach     *yamlForEach      `yaml:"foreach"`
 	Output      *yamlOutput       `yaml:"output"`
 	Retry       yaml.Node         `yaml:"retry"`
 	Catch       []yamlCatch       `yaml:"catch"`
 	Transitions yaml.Node         `yaml:"transitions"`
+}
+
+type yamlForEach struct {
+	Over string `yaml:"over"`
+	As   string `yaml:"as"`
 }
 
 type yamlAgent struct {
@@ -266,6 +272,9 @@ func parseState(name string, node *yaml.Node) (*State, error) {
 		Terminal: ys.Terminal,
 		Status:   ys.Status,
 		Input:    ys.Input,
+	}
+	if ys.ForEach != nil {
+		st.ForEach = &ForEachSpec{Over: ys.ForEach.Over, As: ys.ForEach.As}
 	}
 
 	if ys.Agent.Kind != 0 {

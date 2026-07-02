@@ -416,19 +416,82 @@ func (e *Engine) pickTransition(st *machine.State, res *HandlerResult, rs *journ
 // policy wrapped around it. Semantic (schema) retries happen inside the agent
 // handler, where the conversation lives.
 func (e *Engine) runHandler(ctx context.Context, m *machine.Machine, st *machine.State, runID string, rs *journal.RunState) (*HandlerResult, error) {
-	switch {
-	case st.Human != nil:
+	if st.Human != nil {
 		return e.runHuman(st, rs)
+	}
+	if st.ForEach != nil {
+		return e.runForEach(ctx, m, st, runID, rs)
+	}
+	return e.withRetries(ctx, st, runID, func(attempt int) (*HandlerResult, error) {
+		return e.runOnce(ctx, m, st, runID, rs, nil)
+	})
+}
+
+// runOnce executes the state's body a single time with optional extra
+// template data (foreach items).
+func (e *Engine) runOnce(ctx context.Context, m *machine.Machine, st *machine.State, runID string, rs *journal.RunState, extra map[string]any) (*HandlerResult, error) {
+	switch {
 	case st.Action != nil:
-		return e.withRetries(ctx, st, runID, func(attempt int) (*HandlerResult, error) {
-			return e.runAction(ctx, st, rs)
-		})
+		return e.runAction(ctx, st, rs, extra)
 	case st.Agent != nil:
-		return e.withRetries(ctx, st, runID, func(attempt int) (*HandlerResult, error) {
-			return e.runAgent(ctx, m, st, runID, rs)
-		})
+		return e.runAgent(ctx, m, st, runID, rs, extra)
 	}
 	return nil, fmt.Errorf("state %q has no handler", st.Name)
+}
+
+// maxForEachItems is a runaway backstop, far above any sane fan-out.
+const maxForEachItems = 1000
+
+// runForEach fans the state's handler out over a list evaluated from ctx.
+// Each item runs hermetically (agents: a fresh conversation per item — N
+// small context windows instead of one big one) under the state's retry
+// policy. Output: {items: [per-item outputs], count}. Sequential in v1.
+func (e *Engine) runForEach(ctx context.Context, m *machine.Machine, st *machine.State, runID string, rs *journal.RunState) (*HandlerResult, error) {
+	env := machine.GuardEnv()
+	env["ctx"] = rs.Ctx
+	env["visits"] = rs.Visits
+	env["run"] = map[string]any{
+		"transitions": rs.Transitions,
+		"tokens":      rs.Usage.Total(),
+		"cost":        rs.Usage.Cost,
+	}
+	val, err := machine.EvalExpr(st.ForEach.Program, env)
+	if err != nil {
+		return nil, &provider.ClassifiedError{Class: machine.ClassActionError,
+			Msg: fmt.Sprintf("foreach.over %q: %v", st.ForEach.Over, err)}
+	}
+	list, ok := val.([]any)
+	if !ok {
+		return nil, &provider.ClassifiedError{Class: machine.ClassActionError,
+			Msg: fmt.Sprintf("foreach.over %q evaluated to %T, want a list", st.ForEach.Over, val)}
+	}
+	if len(list) > maxForEachItems {
+		return nil, &provider.ClassifiedError{Class: machine.ClassBudgetExceeded,
+			Msg: fmt.Sprintf("foreach over %d items exceeds the %d backstop", len(list), maxForEachItems)}
+	}
+
+	items := make([]any, 0, len(list))
+	var usage journal.Usage
+	for i, item := range list {
+		e.Listener.ForEachItem(st.Name, i, len(list), item)
+		extra := map[string]any{
+			st.ForEach.As: item,
+			"index":       i,
+			"total":       len(list),
+		}
+		res, err := e.withRetries(ctx, st, runID, func(attempt int) (*HandlerResult, error) {
+			return e.runOnce(ctx, m, st, runID, rs, extra)
+		})
+		if err != nil {
+			return nil, fmt.Errorf("item %d/%d: %w", i+1, len(list), err)
+		}
+		items = append(items, res.Output)
+		usage.Add(res.Usage)
+	}
+	return &HandlerResult{
+		Output: map[string]any{"items": items, "count": len(items)},
+		Usage:  usage,
+	}, nil
 }
 
 // withRetries drives attempts for retryable error classes.

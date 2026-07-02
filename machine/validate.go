@@ -118,6 +118,24 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 		return
 	}
 
+	if f := s.ForEach; f != nil {
+		if s.Human != nil {
+			fail("state %q: foreach cannot wrap a human gate", s.Name)
+		}
+		if f.Over == "" {
+			fail("state %q: foreach needs over", s.Name)
+		}
+		if f.As == "ctx" || f.As == "index" || f.As == "total" {
+			fail("state %q: foreach.as %q collides with a reserved template name", s.Name, f.As)
+		}
+		if len(s.Output.Events) > 0 {
+			fail("state %q: foreach states cannot declare events — items produce no single event; route with guards over ctx.%s.items", s.Name, s.Name)
+		}
+		if s.Agent != nil && (s.Agent.Adopt != "" || s.Agent.History != nil) {
+			fail("state %q: foreach states cannot use adopt/history — items are hermetic by design", s.Name)
+		}
+	}
+
 	if a := s.Agent; a != nil {
 		if a.Model == "" {
 			fail("state %q: no model (set agent.model, defaults.agent.model, or an engine default)", s.Name)

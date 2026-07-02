@@ -12,8 +12,9 @@ import (
 )
 
 // runAction renders the input block into args and calls the registered tool.
-func (e *Engine) runAction(ctx context.Context, st *machine.State, rs *journal.RunState) (*HandlerResult, error) {
-	data := templateData(rs, nil)
+// extra carries foreach item data ({as}: item, index, total).
+func (e *Engine) runAction(ctx context.Context, st *machine.State, rs *journal.RunState, extra map[string]any) (*HandlerResult, error) {
+	data := templateData(rs, extra)
 	args := make(map[string]any, len(st.Input))
 	for k, tmpl := range st.Input {
 		rendered, err := machine.RenderTemplate(st.Name+".input."+k, tmpl, data)

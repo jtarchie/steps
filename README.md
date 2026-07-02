@@ -106,6 +106,19 @@ cmd/steps/  CLI + human-readable narration
 examples/   canonical examples — they double as the acceptance spec
 ```
 
+## Examples
+
+- [`examples/summarize-critic/`](examples/summarize-critic/) — writer/critic
+  revision loop: guards, bounded loops, semantic retries, human gate.
+- [`examples/summarize-critic-adopt/`](examples/summarize-critic-adopt/) —
+  same machine with `adopt: self` conversation continuation; A/B the two
+  context philosophies.
+- [`examples/pr-review/`](examples/pr-review/) — cheap scouts, expensive
+  specialist: `foreach` fans a small model over each file of a diff
+  (hermetic context per file), a whole-PR scout adds cross-file leads, and
+  the large model only ever verifies flagged files. Trivial PRs never reach
+  it.
+
 ## Testing
 
 `go test ./...` — no network, no models: the acceptance tests run both
