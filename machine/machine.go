@@ -18,10 +18,13 @@ type Machine struct {
 	Name        string
 	Description string
 	Input       map[string]InputSpec
-	Defaults    Defaults
-	Limits      Limits
-	Initial     string
-	States      []*State // document order preserved
+	// Models are human-named aliases (scout, senior) for provider refs —
+	// states read semantically, and swapping backends is one edit.
+	Models   map[string]string
+	Defaults Defaults
+	Limits   Limits
+	Initial  string
+	States   []*State // document order preserved
 
 	RawYAML []byte // exact bytes the machine was loaded from ("" when built in Go)
 	Hash    string // sha256 of RawYAML
@@ -93,7 +96,12 @@ type State struct {
 
 	Input       map[string]string // templated inputs (action args / agent user message)
 	ForEach     *ForEachSpec      // fan the handler out over a list from ctx
-	Output      OutputSpec
+	// Memo replays the journaled output when the rendered input (model +
+	// system + prompt) is byte-identical to a previous execution — re-runs
+	// only re-pay for what changed. Agent states only: actions have side
+	// effects that must not be skipped.
+	Memo   bool
+	Output OutputSpec
 	Retry       []RetryPolicy
 	Catch       []CatchClause
 	Transitions []Transition
@@ -108,6 +116,12 @@ type State struct {
 type ForEachSpec struct {
 	Over string // Expr over ctx returning a list
 	As   string // template variable for the current item (default "item")
+	// Concurrency bounds parallel items (default 1; mock runs force 1 so
+	// scripted queues stay deterministic).
+	Concurrency int
+	// OnItemFailure: fail (default — one bad item fails the state) or skip
+	// (drop the item; aggregate output reports skipped/failures for guards).
+	OnItemFailure string
 
 	Program *vm.Program // compiled from Over at load time
 }
@@ -129,9 +143,14 @@ func (s *State) HandlerKind() string {
 
 // AgentSpec configures an LLM agent-loop handler.
 type AgentSpec struct {
-	Model       string
-	System      string
-	Prompt      string
+	Model string
+	// ModelExpr routes the model at runtime: an Expr over ctx (plus the
+	// foreach item) returning a model alias or provider ref — e.g.
+	// 'lead.risk == "high" ? "senior" : "scout"'. Compiled at load.
+	ModelExpr        string
+	ModelExprProgram *vm.Program
+	System           string
+	Prompt           string
 	Tools       []ToolRef
 	MaxTurns    int
 	Temperature *float64

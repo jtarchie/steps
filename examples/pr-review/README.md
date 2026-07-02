@@ -26,6 +26,16 @@ split_diff ──▶ scout_files ──▶ scout_pr ──┬─(trivial + guard
   findings exist. Agent proposes, guards dispose.
 - **The trivial path never invokes the large model at all** — a docs-only PR
   costs three small-model calls.
+- **Spend controls, all declared in the YAML**: `memo: true` on every agent
+  state (re-review a PR and only changed files re-pay — a re-run of an
+  unchanged PR costs zero tokens); `model: {expr: 'lead.risk == "high" ?
+  "senior" : "scout"'}` sends medium-risk files to the small model; `models:`
+  aliases keep the machine readable; `foreach: {concurrency: 3,
+  on_item_failure: skip}` parallelizes scouting and survives poisoned files.
+- To review real PRs, swap the file plumbing for the gh action pack:
+  `action: gh.pr_diff` with `input: {pr: "{{ .ctx.pr }}"}` up front, and
+  `action: gh.post_review` with `input: {pr: ..., body: "{{ .ctx.verdict.body }}",
+  event: comment}` at the end.
 
 ## Run it
 

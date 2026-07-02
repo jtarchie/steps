@@ -82,6 +82,12 @@ output cost is a declared property of a state:
   Measured on a live 3-revision loop: adopted-prompt growth dropped from
   540→1739→3624 tokens to 495→745→1052.
 - `adopt: {from: self, last_turns: N}` trims long revision transcripts.
+- `memo: true` caches agent outputs by rendered-input hash across runs —
+  re-running a review only re-pays for files that changed.
+- `model: {expr: '...'}` routes each execution to the cheapest capable model;
+  `models:` aliases (scout/senior) keep machines readable and swappable.
+- `foreach: {concurrency: N, on_item_failure: skip}` fans out in parallel and
+  survives poisoned items.
 
 ## Failure taxonomy
 

@@ -80,6 +80,73 @@ func str(args map[string]any, key string) (string, error) {
 	return s, nil
 }
 
+// splitHunks explodes per-file entries into per-hunk entries, each carrying
+// the file header for context — huge files become several small scout
+// contexts instead of one big one.
+func splitHunks(files []any) []any {
+	var out []any
+	for _, f := range files {
+		file, ok := f.(map[string]any)
+		if !ok {
+			continue
+		}
+		patch, _ := file["patch"].(string)
+		header, hunks := carveHunks(patch)
+		if len(hunks) <= 1 {
+			out = append(out, file)
+			continue
+		}
+		for i, hunk := range hunks {
+			counts := countChanges(hunk)
+			out = append(out, map[string]any{
+				"path":      file["path"],
+				"hunk":      i + 1,
+				"hunks":     len(hunks),
+				"patch":     header + "\n" + hunk,
+				"additions": counts[0],
+				"deletions": counts[1],
+			})
+		}
+	}
+	return out
+}
+
+func carveHunks(patch string) (header string, hunks []string) {
+	lines := strings.Split(patch, "\n")
+	var head, current []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "@@") {
+			if len(current) > 0 {
+				hunks = append(hunks, strings.Join(current, "\n"))
+			}
+			current = []string{line}
+			continue
+		}
+		if current == nil {
+			head = append(head, line)
+		} else {
+			current = append(current, line)
+		}
+	}
+	if len(current) > 0 {
+		hunks = append(hunks, strings.Join(current, "\n"))
+	}
+	return strings.Join(head, "\n"), hunks
+}
+
+func countChanges(hunk string) [2]int {
+	var c [2]int
+	for _, line := range strings.Split(hunk, "\n") {
+		switch {
+		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
+			c[0]++
+		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
+			c[1]++
+		}
+	}
+	return c
+}
+
 func registerBuiltins(r *Registry) {
 	r.Register("file.write", "Write content to a file, creating parent directories",
 		func(ctx context.Context, args map[string]any) (map[string]any, error) {
@@ -115,11 +182,15 @@ func registerBuiltins(r *Registry) {
 			return map[string]any{"content": string(raw), "bytes": len(raw)}, nil
 		})
 
-	r.Register("diff.split", "Split a unified diff into per-file entries with change counts",
+	r.Register("diff.split", "Split a unified diff into per-file (or per-hunk, by: hunk) entries with change counts",
 		func(ctx context.Context, args map[string]any) (map[string]any, error) {
 			diff, err := str(args, "diff")
 			if err != nil {
 				return nil, err
+			}
+			by, _ := args["by"].(string)
+			if by != "" && by != "file" && by != "hunk" {
+				return nil, fmt.Errorf("by must be file or hunk, got %q", by)
 			}
 			var files []any
 			var current map[string]any
@@ -153,8 +224,13 @@ func registerBuiltins(r *Registry) {
 				}
 			}
 			flush()
+			if by == "hunk" {
+				files = splitHunks(files)
+			}
 			return map[string]any{"files": files, "count": len(files)}, nil
 		})
+
+	registerGH(r)
 
 	r.Register("http.get", "HTTP GET a URL and return the body (up to 256KB)",
 		func(ctx context.Context, args map[string]any) (map[string]any, error) {

@@ -403,6 +403,103 @@ func TestPRReviewTrivialPath(t *testing.T) {
 	}
 }
 
+// TestMemoReplaysAcrossRuns: run the same machine twice against one store —
+// the second run's memo states replay cached outputs, spend zero tokens, and
+// never touch the model.
+func TestMemoReplaysAcrossRuns(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	m, script := loadExample(t, "pr-review")
+	eng, store := newTestEngine(t, script)
+	diff, err := os.ReadFile(repoPath(t, "examples/pr-review/fixtures/pr.diff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := map[string]any{"diff": string(diff), "title": "queue: parallel worker pool", "description": "Process jobs concurrently"}
+
+	first, err := eng.Start(context.Background(), m, input)
+	if err != nil || first.Status != journal.StatusDone {
+		t.Fatalf("first run: %v (%v)", err, first)
+	}
+
+	// Second run: mock queues are per-run (fresh), but memo hits mean the
+	// scouts and senior never consume them.
+	second, err := eng.Start(context.Background(), m, input)
+	if err != nil || second.Status != journal.StatusDone {
+		t.Fatalf("second run: %v (%v)", err, second)
+	}
+	if got := second.State.Usage.Total(); got != 0 {
+		t.Errorf("second run spent %d tokens, want 0 (every agent state memoized)", got)
+	}
+	scouts, _ := second.State.Ctx["scout_files"].(map[string]any)
+	if scouts["memo_hits"] != 3 {
+		t.Errorf("scout_files.memo_hits = %v, want 3 (unchanged files are free on re-review)", scouts["memo_hits"])
+	}
+	deep, _ := second.State.Ctx["deep_review"].(map[string]any)
+	if deep["memo_hits"] != 2 {
+		t.Errorf("deep_review.memo_hits = %v, want 2", deep["memo_hits"])
+	}
+	_ = store
+}
+
+// TestForEachSkipOnFailure: one poisoned item is skipped, the rest survive,
+// and the aggregate reports it for guards.
+func TestForEachSkipOnFailure(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	wf := `
+name: skips
+defaults: {agent: {model: mock}}
+states:
+  seed:
+    action: diff.split
+    input:
+      diff: |
+        diff --git a/one.go b/one.go
+        +a
+        diff --git a/two.go b/two.go
+        +b
+        diff --git a/three.go b/three.go
+        +c
+  work:
+    foreach: {over: ctx.seed.files, as: file, on_item_failure: skip}
+    retry: none
+    agent:
+      prompt: "look at {{ .file.path }}"
+    output:
+      schema: {path: string}
+    transitions:
+      - {when: 'output.skipped == 1 && output.count == 2', to: done}
+      - {to: failed}
+`
+	script := `
+work:
+  - text: '{"path": "one.go"}'
+  - error: provider_error
+  - text: '{"path": "three.go"}'
+`
+	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := machine.Parse([]byte(wf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, _ := newTestEngine(t, scriptPath)
+	res, err := eng.Start(context.Background(), m, nil)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Status != journal.StatusDone {
+		t.Fatalf("status = %s at %s, want done via the skipped==1 guard", res.Status, res.Terminal)
+	}
+	work, _ := res.State.Ctx["work"].(map[string]any)
+	if work["skipped"] != 1 || work["count"] != 2 {
+		t.Errorf("work aggregate = %v, want count 2 / skipped 1", work)
+	}
+}
+
 // TestResumeWithoutEventFails: parked gates demand an explicit event.
 func TestResumeWithoutEventFails(t *testing.T) {
 	t.Chdir(t.TempDir())

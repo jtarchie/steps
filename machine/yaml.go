@@ -57,6 +57,7 @@ type yamlMachine struct {
 	Name        string                   `yaml:"name"`
 	Description string                   `yaml:"description"`
 	Input       map[string]yamlInputSpec `yaml:"input"`
+	Models      map[string]string        `yaml:"models"`
 	Defaults    yamlDefaults             `yaml:"defaults"`
 	Limits      yamlLimits               `yaml:"limits"`
 	Initial     string                   `yaml:"initial"`
@@ -97,6 +98,7 @@ type yamlState struct {
 	Status      string            `yaml:"status"`
 	Input       map[string]string `yaml:"input"`
 	ForEach     *yamlForEach      `yaml:"foreach"`
+	Memo        bool              `yaml:"memo"`
 	Output      *yamlOutput       `yaml:"output"`
 	Retry       yaml.Node         `yaml:"retry"`
 	Catch       []yamlCatch       `yaml:"catch"`
@@ -104,12 +106,14 @@ type yamlState struct {
 }
 
 type yamlForEach struct {
-	Over string `yaml:"over"`
-	As   string `yaml:"as"`
+	Over          string `yaml:"over"`
+	As            string `yaml:"as"`
+	Concurrency   int    `yaml:"concurrency"`
+	OnItemFailure string `yaml:"on_item_failure"`
 }
 
 type yamlAgent struct {
-	Model            string       `yaml:"model"`
+	Model            yaml.Node    `yaml:"model"` // scalar ref/alias, or {expr: ...}
 	System           string       `yaml:"system"`
 	Prompt           string       `yaml:"prompt"`
 	Tools            []yaml.Node  `yaml:"tools"`
@@ -199,6 +203,7 @@ func parseRaw(src []byte) (*Machine, error) {
 			m.Input[k] = InputSpec{Type: v.Type, Required: v.Required}
 		}
 	}
+	m.Models = ym.Models
 
 	m.Defaults.Agent = AgentDefaults{
 		Model:            ym.Defaults.Agent.Model,
@@ -273,8 +278,14 @@ func parseState(name string, node *yaml.Node) (*State, error) {
 		Status:   ys.Status,
 		Input:    ys.Input,
 	}
+	st.Memo = ys.Memo
 	if ys.ForEach != nil {
-		st.ForEach = &ForEachSpec{Over: ys.ForEach.Over, As: ys.ForEach.As}
+		st.ForEach = &ForEachSpec{
+			Over:          ys.ForEach.Over,
+			As:            ys.ForEach.As,
+			Concurrency:   ys.ForEach.Concurrency,
+			OnItemFailure: ys.ForEach.OnItemFailure,
+		}
 	}
 
 	if ys.Agent.Kind != 0 {
@@ -360,7 +371,6 @@ func parseAgent(node *yaml.Node) (*AgentSpec, error) {
 		return nil, err
 	}
 	ag := &AgentSpec{
-		Model:            ya.Model,
 		System:           ya.System,
 		Prompt:           ya.Prompt,
 		MaxTurns:         ya.MaxTurns,
@@ -369,6 +379,25 @@ func parseAgent(node *yaml.Node) (*AgentSpec, error) {
 		Reasoning:        ya.Reasoning,
 		Temperature:      ya.Temperature,
 		ToolChoice:       ya.ToolChoice,
+	}
+	switch ya.Model.Kind {
+	case 0:
+		// not set; the defaults cascade fills it in
+	case yaml.ScalarNode:
+		ag.Model = ya.Model.Value
+	case yaml.MappingNode:
+		var ym struct {
+			Expr string `yaml:"expr"`
+		}
+		if err := ya.Model.Decode(&ym); err != nil {
+			return nil, fmt.Errorf("model: %w", err)
+		}
+		if ym.Expr == "" {
+			return nil, fmt.Errorf("model: map form requires expr (an Expr returning a model alias or ref)")
+		}
+		ag.ModelExpr = ym.Expr
+	default:
+		return nil, fmt.Errorf("model must be a ref/alias or {expr: ...}")
 	}
 	switch ya.Adopt.Kind {
 	case 0:

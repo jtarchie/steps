@@ -60,6 +60,12 @@ func ApplyDefaults(m *Machine) {
 		m.Limits.Timeout = DefaultTimeout
 	}
 
+	// Model aliases resolve everywhere a ref appears, including the
+	// defaults block itself.
+	if ref, ok := m.Models[m.Defaults.Agent.Model]; ok {
+		m.Defaults.Agent.Model = ref
+	}
+
 	zero := 0.0
 	for _, s := range m.States {
 		if s.Terminal {
@@ -68,8 +74,11 @@ func ApplyDefaults(m *Machine) {
 
 		// Agent cascade: state -> defaults.agent -> engine default.
 		if a := s.Agent; a != nil {
-			if a.Model == "" {
+			if a.Model == "" && a.ModelExpr == "" {
 				a.Model = m.Defaults.Agent.Model
+			}
+			if ref, ok := m.Models[a.Model]; ok {
+				a.Model = ref
 			}
 			if a.Temperature == nil {
 				a.Temperature = m.Defaults.Agent.Temperature
@@ -121,8 +130,16 @@ func ApplyDefaults(m *Machine) {
 			}
 		}
 
-		if f := s.ForEach; f != nil && f.As == "" {
-			f.As = "item"
+		if f := s.ForEach; f != nil {
+			if f.As == "" {
+				f.As = "item"
+			}
+			if f.Concurrency == 0 {
+				f.Concurrency = 1
+			}
+			if f.OnItemFailure == "" {
+				f.OnItemFailure = "fail"
+			}
 		}
 
 		// Retry: nil means unset -> machine defaults.retry -> engine default.

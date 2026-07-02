@@ -3,6 +3,7 @@ package machine
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -118,12 +119,22 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 		return
 	}
 
+	if s.Memo && s.Agent == nil {
+		fail("state %q: memo is only supported on agent states — skipping an action would skip its side effects", s.Name)
+	}
+
 	if f := s.ForEach; f != nil {
 		if s.Human != nil {
 			fail("state %q: foreach cannot wrap a human gate", s.Name)
 		}
 		if f.Over == "" {
 			fail("state %q: foreach needs over", s.Name)
+		}
+		if f.Concurrency < 1 {
+			fail("state %q: foreach.concurrency must be >= 1", s.Name)
+		}
+		if f.OnItemFailure != "fail" && f.OnItemFailure != "skip" {
+			fail("state %q: foreach.on_item_failure must be fail or skip, got %q", s.Name, f.OnItemFailure)
 		}
 		if f.As == "ctx" || f.As == "index" || f.As == "total" {
 			fail("state %q: foreach.as %q collides with a reserved template name", s.Name, f.As)
@@ -137,10 +148,22 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 	}
 
 	if a := s.Agent; a != nil {
-		if a.Model == "" {
+		switch {
+		case a.ModelExpr != "":
+			// compiled (or failed with a pointed error) in Compile
+		case a.Model == "":
 			fail("state %q: no model (set agent.model, defaults.agent.model, or an engine default)", s.Name)
-		} else if !strings.Contains(a.Model, "/") && a.Model != "mock" {
-			fail("state %q: model %q must be provider-namespaced, e.g. anthropic/claude-haiku-4-5", s.Name, a.Model)
+		case !strings.Contains(a.Model, "/") && a.Model != "mock":
+			hint := "e.g. anthropic/claude-haiku-4-5"
+			if len(m.Models) > 0 {
+				aliases := make([]string, 0, len(m.Models))
+				for k := range m.Models {
+					aliases = append(aliases, k)
+				}
+				sort.Strings(aliases)
+				hint = fmt.Sprintf("or one of the models: aliases (%s)", strings.Join(aliases, ", "))
+			}
+			fail("state %q: unknown model %q — must be provider-namespaced, %s", s.Name, a.Model, hint)
 		}
 		if a.Prompt == "" && len(s.Input) == 0 {
 			fail("state %q: agent needs a prompt or an input block", s.Name)

@@ -78,6 +78,7 @@ type HandlerResult struct {
 	Event    string
 	Usage    journal.Usage
 	Messages []journal.Message
+	Memo     bool         // output replayed from the memo cache — zero tokens spent
 	Park     *parkRequest // human gates request a park instead of producing output
 }
 
@@ -296,13 +297,17 @@ func (e *Engine) loop(ctx context.Context, m *machine.Machine, runID string, rs 
 		if len(res.Messages) > 0 {
 			rs.Convos[current] = res.Messages
 		}
-		if err := e.append(ctx, runID, journal.HandlerFinished, map[string]any{
+		finished := map[string]any{
 			"state":    current,
 			"output":   res.Output,
 			"event":    res.Event,
 			"usage":    res.Usage,
 			"messages": res.Messages,
-		}); err != nil {
+		}
+		if res.Memo {
+			finished["memo"] = true
+		}
+		if err := e.append(ctx, runID, journal.HandlerFinished, finished); err != nil {
 			return nil, err
 		}
 		e.Listener.HandlerFinished(current, res.Output, res.Event, res.Usage)
@@ -470,28 +475,78 @@ func (e *Engine) runForEach(ctx context.Context, m *machine.Machine, st *machine
 			Msg: fmt.Sprintf("foreach over %d items exceeds the %d backstop", len(list), maxForEachItems)}
 	}
 
-	items := make([]any, 0, len(list))
-	var usage journal.Usage
-	for i, item := range list {
+	runItem := func(i int, item any) (*HandlerResult, error) {
 		e.Listener.ForEachItem(st.Name, i, len(list), item)
 		extra := map[string]any{
 			st.ForEach.As: item,
 			"index":       i,
 			"total":       len(list),
 		}
-		res, err := e.withRetries(ctx, st, runID, func(attempt int) (*HandlerResult, error) {
+		return e.withRetries(ctx, st, runID, func(attempt int) (*HandlerResult, error) {
 			return e.runOnce(ctx, m, st, runID, rs, extra)
 		})
-		if err != nil {
-			return nil, fmt.Errorf("item %d/%d: %w", i+1, len(list), err)
-		}
-		items = append(items, res.Output)
-		usage.Add(res.Usage)
 	}
-	return &HandlerResult{
-		Output: map[string]any{"items": items, "count": len(items)},
-		Usage:  usage,
-	}, nil
+
+	// Bounded concurrency; mock runs stay sequential so scripted queues
+	// remain deterministic.
+	concurrency := st.ForEach.Concurrency
+	if concurrency < 1 || e.Mock != nil {
+		concurrency = 1
+	}
+	results := make([]*HandlerResult, len(list))
+	errs := make([]error, len(list))
+	if concurrency == 1 {
+		for i, item := range list {
+			results[i], errs[i] = runItem(i, item)
+		}
+	} else {
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, concurrency)
+		for i, item := range list {
+			wg.Add(1)
+			go func(i int, item any) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				results[i], errs[i] = runItem(i, item)
+			}(i, item)
+		}
+		wg.Wait()
+	}
+
+	items := make([]any, 0, len(list))
+	var failures []any
+	var usage journal.Usage
+	memoHits := 0
+	for i := range list {
+		if errs[i] != nil {
+			if st.ForEach.OnItemFailure == "skip" {
+				e.Listener.Warn("foreach item skipped", "state", st.Name,
+					"item", fmt.Sprintf("%d/%d", i+1, len(list)), "error", errs[i].Error())
+				failures = append(failures, map[string]any{
+					"index": i,
+					"class": provider.Classify(errs[i]),
+					"error": errs[i].Error(),
+				})
+				continue
+			}
+			return nil, fmt.Errorf("item %d/%d: %w", i+1, len(list), errs[i])
+		}
+		items = append(items, results[i].Output)
+		usage.Add(results[i].Usage)
+		if results[i].Memo {
+			memoHits++
+		}
+	}
+	output := map[string]any{"items": items, "count": len(items)}
+	if st.ForEach.OnItemFailure == "skip" {
+		output["skipped"] = len(failures)
+		output["failures"] = failures
+	}
+	if memoHits > 0 {
+		output["memo_hits"] = memoHits
+	}
+	return &HandlerResult{Output: output, Usage: usage, Memo: memoHits == len(list) && len(list) > 0}, nil
 }
 
 // withRetries drives attempts for retryable error classes.

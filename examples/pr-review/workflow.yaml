@@ -2,38 +2,33 @@ version: 1
 name: pr-review
 description: >
   Cheap scouts, expensive specialist. Small models triage each file and the
-  PR as a whole ("for a larger model, what deserves review here?"); the large
-  model only ever sees flagged files with pre-gathered leads — it verifies,
-  it never researches. Trivial PRs never reach it at all.
+  PR as a whole; the large model only verifies flagged files with
+  pre-gathered leads. Trivial PRs never reach it.
 
 input:
   diff: {type: string, required: true} # e.g. gh pr diff 123 > pr.diff
   title: {type: string}
   description: {type: string}
 
-defaults:
-  agent:
-    model: lmstudio/google/gemma-4-e4b # the scout: small, local, effectively free
-    reasoning: low
-    max_turns: 2
+models:
+  scout: lmstudio/google/gemma-4-e4b # small, local, effectively free
+  senior: lmstudio/google/gemma-4-26b-a4b # larger, spent sparingly
 
-limits:
-  max_transitions: 15
-  max_tokens: 200000
+defaults:
+  agent: {model: scout, reasoning: low, max_turns: 2}
+
+limits: {max_transitions: 15, max_tokens: 200000}
 
 states:
   split_diff:
-    action: diff.split
-    input:
-      diff: "{{ .ctx.diff }}"
-    # linear default -> scout_files
+    action: diff.split # add by: hunk to scout huge files piecewise
+    input: {diff: "{{ .ctx.diff }}"}
 
-  # One hermetic micro-context per file: the scout sees ONE patch, nothing
-  # else. N small windows instead of one large one.
+  # One hermetic micro-context per file. memo: unchanged files are free on
+  # re-review; skip: one unparseable file doesn't sink the PR.
   scout_files:
-    foreach:
-      over: ctx.split_diff.files
-      as: file
+    foreach: {over: ctx.split_diff.files, as: file, concurrency: 3, on_item_failure: skip}
+    memo: true
     agent:
       prompt: |
         You are a scout for a senior code reviewer. Do NOT review. Identify
@@ -46,21 +41,14 @@ states:
         {{ .file.patch }}
     output:
       schema:
-        path: {type: string}
-        risk: {enum: [low, medium, high]}
-        leads:
-          type: array
-          maxItems: 3 # schema doubles as an output budget
-          items:
-            type: object
-            properties:
-              where: {type: string}
-              concern: {type: string}
-    # linear default -> scout_pr
+        path: string
+        risk: enum(low, medium, high)
+        leads: [{where: string, concern: string}]
 
-  # Same question, whole-PR altitude: cross-file concerns no single-file
-  # view can catch. Sees file stats + scout conclusions — never full patches.
+  # Same question, whole-PR altitude: sees stats and scout conclusions,
+  # never full patches.
   scout_pr:
+    memo: true
     agent:
       prompt: |
         You are a scout for a senior code reviewer, looking at a pull request
@@ -77,16 +65,14 @@ states:
         {{ end }}
     output:
       schema:
-        themes: {type: array, maxItems: 4, items: {type: string}}
-        reading_order: {type: array, items: {type: string}}
+        themes: {type: array, maxItems: 4, items: string}
+        reading_order: string[]
       events: [deep_review, trivial]
     transitions:
-      - on: trivial
-        # The scout proposes skipping the senior; the guard only allows it
-        # when no file scout was worried. Agent proposes, guards dispose.
-        when: all(ctx.scout_files.items, {.risk == "low"})
-        to: note_trivial
-      - to: deep_review # fallback: any doubt goes to the senior
+      # The scout proposes skipping the senior; the guard only allows it when
+      # no file scout was worried. Agent proposes, guards dispose.
+      - {on: trivial, when: 'all(ctx.scout_files.items, {.risk == "low"})', to: note_trivial}
+      - {to: deep_review}
 
   note_trivial:
     action: file.write
@@ -97,16 +83,16 @@ states:
 
         {{ range .ctx.scout_pr.themes }}- {{ . }}
         {{ end }}
-    transitions: [{to: done}]
+    transitions: done
 
-  # The senior. Only flagged files, one hermetic context per file, leads
-  # pre-gathered: verify or refute — never research.
+  # The senior: only flagged files, one hermetic context per file, leads
+  # pre-gathered. Verify or refute — never research. Medium-risk files route
+  # to the small model; only high risk earns the big one.
   deep_review:
-    foreach:
-      over: filter(ctx.scout_files.items, {.risk != "low"})
-      as: lead
+    foreach: {over: 'filter(ctx.scout_files.items, {.risk != "low"})', as: lead}
+    memo: true
     agent:
-      model: lmstudio/google/gemma-4-26b-a4b # the senior: larger, spent sparingly
+      model: {expr: 'lead.risk == "high" ? "senior" : "scout"'}
       reasoning: high
       max_output_tokens: 8192
       prompt: |
@@ -123,23 +109,14 @@ states:
         {{ range .ctx.split_diff.files }}{{ if eq .path $.lead.path }}{{ .patch }}{{ end }}{{ end }}
     output:
       schema:
-        path: {type: string}
-        findings:
-          type: array
-          maxItems: 5
-          items:
-            type: object
-            properties:
-              where: {type: string}
-              severity: {enum: [blocking, important, nit]}
-              issue: {type: string}
-              fix: {type: string}
-        leads_refuted: {type: array, items: {type: string}}
-    # linear default -> verdict
+        path: string
+        findings: [{where: string, severity: enum(blocking|important|nit), issue: string, fix: string}]
+        leads_refuted: string[]
 
   verdict:
+    memo: true
     agent:
-      model: lmstudio/google/gemma-4-26b-a4b
+      model: senior
       prompt: |
         Compose the review verdict from these substantiated findings.
         Be direct; credit refuted leads briefly.
@@ -149,20 +126,15 @@ states:
         {{ end }}
         {{ end }}
     output:
-      schema:
-        summary: {type: string}
-        body: {type: string}
+      schema: {summary: string, body: string}
       events: [approve, comment, request_changes]
     transitions:
-      - on: approve
-        # The senior cannot approve past substantiated findings, no matter
-        # what event it proposes.
-        when: all(ctx.deep_review.items, {len(.findings) == 0})
-        to: write_review
-      - to: write_review # comment / request_changes / vetoed approve
+      # The senior cannot approve past substantiated findings.
+      - {on: approve, when: 'all(ctx.deep_review.items, {len(.findings) == 0})', to: write_review}
+      - {to: write_review}
 
   write_review:
-    action: file.write
+    action: file.write # swap for gh.post_review to publish for real
     input:
       path: out/review.md
       content: |
@@ -171,4 +143,3 @@ states:
         {{ .ctx.verdict.summary }}
 
         {{ .ctx.verdict.body }}
-    # linear default -> done

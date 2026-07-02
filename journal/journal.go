@@ -62,6 +62,10 @@ type Store interface {
 	// Append assigns and returns the next sequence number.
 	Append(ctx context.Context, ev *Event) (int, error)
 	Events(ctx context.Context, runID string) ([]*Event, error)
+	// Memoization: cache state outputs keyed by a hash of their rendered
+	// input, across runs. Byte-identical input -> replayed output.
+	MemoGet(ctx context.Context, key string) (map[string]any, bool, error)
+	MemoPut(ctx context.Context, key string, output map[string]any) error
 	Close() error
 }
 

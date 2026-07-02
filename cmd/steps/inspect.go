@@ -60,10 +60,15 @@ func cmdInspect() *cobra.Command {
 						State string        `json:"state"`
 						Event string        `json:"event"`
 						Usage journal.Usage `json:"usage"`
+						Memo  bool          `json:"memo"`
 					}
 					if journal.DecodeData(ev, &d) == nil {
 						visitSeen[d.State]++
-						rows = append(rows, row{d.State, visitSeen[d.State], d.Usage.InputTokens, d.Usage.OutputTokens, d.Event})
+						event := d.Event
+						if d.Memo {
+							event = strings.TrimSpace(event + " ⚡memo")
+						}
+						rows = append(rows, row{d.State, visitSeen[d.State], d.Usage.InputTokens, d.Usage.OutputTokens, event})
 					}
 				case journal.HandlerFailed:
 					state, _ := ev.Data["state"].(string)

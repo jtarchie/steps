@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go driver, CGO-free
@@ -13,6 +14,9 @@ import (
 // SQLiteStore is the default durable Store.
 type SQLiteStore struct {
 	db *sql.DB
+	// appendMu serializes Append: seq is MAX(seq)+1 per run, and concurrent
+	// foreach items journal their retries in parallel.
+	appendMu sync.Mutex
 }
 
 // OpenSQLite opens (and migrates) the journal database at path.
@@ -50,7 +54,41 @@ CREATE TABLE IF NOT EXISTS events (
     ts     INTEGER NOT NULL,
     data   TEXT NOT NULL,
     PRIMARY KEY (run_id, seq)
+);
+CREATE TABLE IF NOT EXISTS memo (
+    key     TEXT PRIMARY KEY,
+    output  TEXT NOT NULL,
+    created INTEGER NOT NULL
 );`)
+	return err
+}
+
+// MemoGet looks up a cached output by input hash.
+func (s *SQLiteStore) MemoGet(ctx context.Context, key string) (map[string]any, bool, error) {
+	var raw string
+	err := s.db.QueryRowContext(ctx, `SELECT output FROM memo WHERE key = ?`, key).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
+}
+
+// MemoPut caches an output by input hash.
+func (s *SQLiteStore) MemoPut(ctx context.Context, key string, output map[string]any) error {
+	raw, err := json.Marshal(output)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT OR REPLACE INTO memo (key, output, created) VALUES (?, ?, ?)`,
+		key, string(raw), time.Now().UnixMilli())
 	return err
 }
 
@@ -123,6 +161,8 @@ func scanRun(row scannable) (*Run, error) {
 
 // Append writes the event with the next sequence number for its run.
 func (s *SQLiteStore) Append(ctx context.Context, ev *Event) (int, error) {
+	s.appendMu.Lock()
+	defer s.appendMu.Unlock()
 	data, err := json.Marshal(ev.Data)
 	if err != nil {
 		return 0, err

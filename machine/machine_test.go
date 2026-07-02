@@ -171,6 +171,53 @@ func TestGenaiSchema(t *testing.T) {
 	}
 }
 
+func TestSchemaShorthand(t *testing.T) {
+	frag, err := NormalizeSchemaFragment(map[string]any{
+		"risk":  "enum(low, medium, high)",
+		"tags":  "string[]",
+		"leads": []any{map[string]any{"where": "string", "concern": "string"}},
+	})
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	props := frag["properties"].(map[string]any)
+	risk := props["risk"].(map[string]any)
+	if enum, _ := risk["enum"].([]any); len(enum) != 3 {
+		t.Errorf("risk enum = %v", risk)
+	}
+	// Pipe separator survives YAML flow mappings.
+	pipe, err := NormalizeSchemaFragment("enum(a|b|c)")
+	if err != nil || len(pipe["enum"].([]any)) != 3 {
+		t.Errorf("pipe enum = %v, %v", pipe, err)
+	}
+	tags := props["tags"].(map[string]any)
+	if tags["type"] != "array" || tags["items"].(map[string]any)["type"] != "string" {
+		t.Errorf("tags = %v", tags)
+	}
+	leads := props["leads"].(map[string]any)
+	if leads["type"] != "array" || leads["items"].(map[string]any)["type"] != "object" {
+		t.Errorf("leads = %v", leads)
+	}
+
+	if _, err := NormalizeSchemaFragment("strng"); err == nil || !strings.Contains(err.Error(), "unknown type") {
+		t.Errorf("typo should produce a friendly error, got %v", err)
+	}
+}
+
+func TestModelAliasErrors(t *testing.T) {
+	src := `
+name: aliased
+models: {scout: mock, senior: mock}
+states:
+  a:
+    agent: {model: senoir, prompt: "hi"}
+`
+	_, err := Parse([]byte(src))
+	if err == nil || !strings.Contains(err.Error(), "scout, senior") {
+		t.Errorf("unknown alias should list the valid aliases, got %v", err)
+	}
+}
+
 func TestGuardCompileAndEval(t *testing.T) {
 	p, err := CompileGuard(`output.score >= 8 && visits.draft < 3`)
 	if err != nil {

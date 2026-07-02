@@ -93,6 +93,10 @@ func (l *prettyListener) ForEachItem(state string, index, total int, item any) {
 	l.p("  %s◦ item %d/%d%s %s", cCyan, index+1, total, cReset, preview)
 }
 
+func (l *prettyListener) MemoHit(state string) {
+	l.p("  %s⚡ memo hit — replayed cached output, zero tokens%s", cGreen, cReset)
+}
+
 func (l *prettyListener) AgentMessage(state, role, text string) {
 	arrow, color := "→", cDim
 	switch role {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/jtarchie/steps/journal"
@@ -16,8 +17,8 @@ import (
 func (e *Engine) runAction(ctx context.Context, st *machine.State, rs *journal.RunState, extra map[string]any) (*HandlerResult, error) {
 	data := templateData(rs, extra)
 	args := make(map[string]any, len(st.Input))
-	for k, tmpl := range st.Input {
-		rendered, err := machine.RenderTemplate(st.Name+".input."+k, tmpl, data)
+	for _, k := range sortedKeys(st.Input) {
+		rendered, err := machine.RenderTemplate(st.Name+".input."+k, st.Input[k], data)
 		if err != nil {
 			return nil, &provider.ClassifiedError{Class: machine.ClassActionError, Msg: err.Error()}
 		}
@@ -54,6 +55,18 @@ func (e *Engine) runHuman(st *machine.State, rs *journal.RunState) (*HandlerResu
 		Timeout:   st.Human.Timeout,
 		OnTimeout: st.Human.OnTimeout,
 	}}, nil
+}
+
+// sortedKeys keeps rendering deterministic: map iteration order is random,
+// and nondeterministic prompts defeat both journaled reproducibility and
+// provider prefix caches.
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // templateData builds the data every template renders against: ctx plus any

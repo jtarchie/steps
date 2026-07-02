@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -33,16 +35,10 @@ const (
 func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.State, runID string, rs *journal.RunState, extraData map[string]any) (*HandlerResult, error) {
 	spec := st.Agent
 
-	// Model: the mock script (when set) replaces every provider.
-	var llm adkmodel.LLM
-	if e.Mock != nil {
-		llm = e.mockForRun(runID).ForState(st.Name)
-	} else {
-		var err error
-		llm, err = e.resolveLLM(spec.Model)
-		if err != nil {
-			return nil, &provider.ClassifiedError{Class: machine.ClassProviderError, Msg: err.Error()}
-		}
+	// The model ref may be routed at runtime (model: {expr: ...}).
+	modelRef, err := e.resolveModelRef(m, st, rs, extraData)
+	if err != nil {
+		return nil, err
 	}
 
 	// Template data: ctx, foreach item data, optional history projection.
@@ -68,6 +64,28 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 	system, err := e.buildSystemInstruction(st, data)
 	if err != nil {
 		return nil, err
+	}
+
+	// Memoization: byte-identical rendered input (model + system + prompt)
+	// replays the cached output — re-runs only re-pay for what changed.
+	memoKey := ""
+	if st.Memo {
+		memoKey = memoHash(modelRef, system, userMsg)
+		if cached, ok, memoErr := e.Store.MemoGet(ctx, memoKey); memoErr == nil && ok {
+			e.Listener.MemoHit(st.Name)
+			return &HandlerResult{Output: cached, Memo: true}, nil
+		}
+	}
+
+	// Model client: the mock script (when set) replaces every provider.
+	var llm adkmodel.LLM
+	if e.Mock != nil {
+		llm = e.mockForRun(runID).ForState(st.Name)
+	} else {
+		llm, err = e.resolveLLM(modelRef)
+		if err != nil {
+			return nil, &provider.ClassifiedError{Class: machine.ClassProviderError, Msg: err.Error()}
+		}
 	}
 
 	// Fresh conversation per state — hermetic by default. adopt (rung 3)
@@ -211,6 +229,11 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 			if err != nil {
 				e.Listener.Warn("could not collect conversation for journal", "error", err.Error())
 			}
+			if memoKey != "" {
+				if err := e.Store.MemoPut(ctx, memoKey, output); err != nil {
+					e.Listener.Warn("memo store failed", "state", st.Name, "error", err.Error())
+				}
+			}
 			return &HandlerResult{
 				Output:   output,
 				Event:    event,
@@ -319,8 +342,8 @@ func (e *Engine) buildUserMessage(st *machine.State, data map[string]any) (strin
 		return machine.RenderTemplate(st.Name+".prompt", st.Agent.Prompt, data)
 	}
 	var b strings.Builder
-	for k, tmpl := range st.Input {
-		rendered, err := machine.RenderTemplate(st.Name+".input."+k, tmpl, data)
+	for _, k := range sortedKeys(st.Input) {
+		rendered, err := machine.RenderTemplate(st.Name+".input."+k, st.Input[k], data)
 		if err != nil {
 			return "", err
 		}
@@ -593,6 +616,54 @@ func (e *Engine) buildAgentTools(st *machine.State, rs *journal.RunState, turns 
 	}
 
 	return tools, beforeTool, afterTool, nil
+}
+
+// resolveModelRef returns the state's model ref, evaluating model: {expr}
+// routing and resolving aliases.
+func (e *Engine) resolveModelRef(m *machine.Machine, st *machine.State, rs *journal.RunState, extraData map[string]any) (string, error) {
+	spec := st.Agent
+	if spec.ModelExprProgram == nil {
+		return spec.Model, nil
+	}
+	env := machine.GuardEnv()
+	env["ctx"] = rs.Ctx
+	env["visits"] = rs.Visits
+	env["run"] = map[string]any{
+		"transitions": rs.Transitions,
+		"tokens":      rs.Usage.Total(),
+		"cost":        rs.Usage.Cost,
+	}
+	for k, v := range extraData {
+		env[k] = v
+	}
+	out, err := machine.EvalExpr(spec.ModelExprProgram, env)
+	if err != nil {
+		return "", &provider.ClassifiedError{Class: machine.ClassProviderError,
+			Msg: fmt.Sprintf("model.expr %q: %v", spec.ModelExpr, err)}
+	}
+	ref, ok := out.(string)
+	if !ok {
+		return "", &provider.ClassifiedError{Class: machine.ClassProviderError,
+			Msg: fmt.Sprintf("model.expr returned %T, want a model alias or ref", out)}
+	}
+	if resolved, ok := m.Models[ref]; ok {
+		ref = resolved
+	}
+	if !strings.Contains(ref, "/") && ref != "mock" {
+		return "", &provider.ClassifiedError{Class: machine.ClassProviderError,
+			Msg: fmt.Sprintf("model.expr returned %q — not a models: alias or provider-namespaced ref", ref)}
+	}
+	return ref, nil
+}
+
+// memoHash keys the memo cache on everything that shapes the reply.
+func memoHash(modelRef, system, userMsg string) string {
+	h := sha256.New()
+	for _, part := range []string{modelRef, system, userMsg} {
+		h.Write([]byte(part))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // thinkingLevel maps the YAML reasoning knob to genai's enum.

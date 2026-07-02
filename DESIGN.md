@@ -32,6 +32,26 @@ LLM agents need structure, not vibes. A finite state machine gives you:
 - **Operational semantics** — retries, timeouts, budgets, and exits are properties of the
   machine, not conventions inside prompts.
 
+## Design principle: optimize for the human
+
+The YAML (and the Go DSL under it) is read far more often than it is written,
+and every mistake that survives to runtime wastes tokens. So the DSL is held
+to three rules, in priority order:
+
+1. **Fail before you spend.** Anything checkable at load time IS checked at
+   load time, with an error that names the state, the field, and the valid
+   options (`unknown model "senoir" — … or one of the models: aliases (scout,
+   senior)`). A machine that validates should not surprise you mid-run.
+2. **Say it once, read it anywhere.** Shorthands exist wherever the long form
+   is noise: schema shorthand (`risk: enum(low, medium, high)`,
+   `leads: [{where: string, concern: string}]`, `tags: string[]`), `models:`
+   aliases so states read semantically (`model: senior`), scalar transitions
+   (`transitions: done`), linear-flow defaults. The long form always remains
+   valid — shorthand is sugar, never a second semantics.
+3. **The expanded truth is one command away.** `steps validate --print` shows
+   the machine after defaults; `steps inspect` shows what a run actually did.
+   Sugar never hides behavior.
+
 ## Decisions (locked)
 
 | Question | Decision |
@@ -283,14 +303,31 @@ scout_files:
   small context windows instead of one big one. This is the context thesis
   applied to scale: the machine assembles per-item context; no item sees its
   siblings.
-- The state's ctx entry becomes `{items: [...], count: n}`; downstream guards
-  and `over:` expressions compose with Expr builtins:
-  `filter(ctx.scout_files.items, {.risk != "low"})`.
+- The state's ctx entry becomes `{items: [...], count: n}` (plus
+  `skipped`/`failures` under `on_item_failure: skip`, and `memo_hits` when
+  memoized items replayed); downstream guards and `over:` expressions compose
+  with Expr builtins: `filter(ctx.scout_files.items, {.risk != "low"})`.
 - Items share the state's retry policy; templates also see `.index`/`.total`.
+- `concurrency: N` bounds parallel items (default 1; mock runs force
+  sequential so scripted queues stay deterministic).
+- `on_item_failure: skip` drops poisoned items instead of failing the state;
+  guards react via `output.skipped`.
 - foreach states cannot declare events (no single event exists — route with
   guards over the aggregate), cannot adopt/history, and cannot wrap human gates.
-- Sequential in v1 (mock scripts stay deterministic); bounded concurrency is
-  the planned extension.
+
+## Spend controls: memo, routing, budgets
+
+- **Memoization** (`memo: true`, agent states only): outputs are cached in
+  the journal store keyed on hash(model + rendered system + rendered prompt).
+  Byte-identical input replays the cached output for zero tokens — re-review
+  a PR and only changed files re-pay. Actions never memoize: side effects
+  must not be skipped.
+- **Dynamic model routing** (`model: {expr: '...'}`): an Expr over ctx (and
+  the foreach item) picks the model per execution —
+  `'lead.risk == "high" ? "senior" : "scout"'`. Compiled and typo-checked at
+  load; the result must be a `models:` alias or provider ref.
+- **`models:` aliases** name capabilities, not vendors: states say `senior`,
+  the header says what senior means today.
 
 ## Context between states: hermetic by default
 

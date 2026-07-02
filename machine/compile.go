@@ -82,6 +82,19 @@ func Compile(m *Machine) error {
 			}
 			t.Guard = p
 		}
+		if s.Agent != nil && s.Agent.ModelExpr != "" {
+			env := GuardEnv()
+			if s.ForEach != nil {
+				env[s.ForEach.As] = map[string]any{}
+				env["index"], env["total"] = 0, 0
+			}
+			p, err := expr.Compile(s.Agent.ModelExpr, expr.Env(env))
+			if err != nil {
+				errs = append(errs, fmt.Errorf("state %q model.expr %q: %w", s.Name, s.Agent.ModelExpr, err))
+			} else {
+				s.Agent.ModelExprProgram = p
+			}
+		}
 		if s.Agent != nil {
 			for i := range s.Agent.Tools {
 				tr := &s.Agent.Tools[i]
@@ -116,19 +129,19 @@ func Compile(m *Machine) error {
 	return errors.Join(errs...)
 }
 
-// CompileOutputSchema turns the YAML property map into a resolved JSON schema.
-// Scalar shorthand (`severity: string`) becomes {type: string}. Every declared
-// property is required. When events are declared, an `event` enum property is
-// injected and required — the agent-proposed event rides inside the output.
+// CompileOutputSchema turns the YAML property map (shorthand welcome — see
+// schema.go) into a resolved JSON schema. Every declared property is
+// required. When events are declared, an `event` enum property is injected
+// and required — the agent-proposed event rides inside the output.
 func CompileOutputSchema(props map[string]any, events []string) (*jsonschema.Resolved, error) {
-	properties := make(map[string]any, len(props)+1)
-	required := make([]string, 0, len(props)+1)
-	for k, v := range props {
-		if ts, ok := v.(string); ok {
-			properties[k] = map[string]any{"type": ts}
-		} else {
-			properties[k] = v
-		}
+	normalized, err := NormalizeSchema(props)
+	if err != nil {
+		return nil, err
+	}
+	properties := make(map[string]any, len(normalized)+1)
+	required := make([]string, 0, len(normalized)+1)
+	for k, v := range normalized {
+		properties[k] = v
 		required = append(required, k)
 	}
 	if len(events) > 0 {
@@ -161,13 +174,13 @@ func CompileOutputSchema(props map[string]any, events []string) (*jsonschema.Res
 // instruction is re-sent on every model call, so every byte here is a
 // recurring token cost.
 func SchemaJSON(props map[string]any, events []string) (string, error) {
-	properties := make(map[string]any, len(props)+1)
-	for k, v := range props {
-		if ts, ok := v.(string); ok {
-			properties[k] = map[string]any{"type": ts}
-		} else {
-			properties[k] = v
-		}
+	normalized, err := NormalizeSchema(props)
+	if err != nil {
+		return "", err
+	}
+	properties := make(map[string]any, len(normalized)+1)
+	for k, v := range normalized {
+		properties[k] = v
 	}
 	if len(events) > 0 {
 		properties["event"] = map[string]any{"type": "string", "enum": events}
@@ -182,17 +195,21 @@ func SchemaJSON(props map[string]any, events []string) (string, error) {
 // malformed JSON, and most semantic retries never happen. Providers without
 // support ignore it; the prompt contract remains the portable fallback.
 func GenaiSchema(props map[string]any, events []string) *genai.Schema {
+	normalized, err := NormalizeSchema(props)
+	if err != nil {
+		normalized = props // compile already validated; defensive fallback
+	}
 	root := &genai.Schema{
 		Type:       genai.TypeObject,
 		Properties: map[string]*genai.Schema{},
 	}
-	keys := make([]string, 0, len(props)+1)
-	for k := range props {
+	keys := make([]string, 0, len(normalized)+1)
+	for k := range normalized {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		root.Properties[k] = genaiProp(props[k])
+		root.Properties[k] = genaiProp(normalized[k])
 		root.Required = append(root.Required, k)
 	}
 	if len(events) > 0 {
