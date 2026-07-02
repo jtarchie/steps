@@ -1,0 +1,27 @@
+The Box That Shrank the World
+
+On April 26, 1956, a converted wartime tanker called the Ideal X left Newark,
+New Jersey for Houston carrying 58 aluminum boxes on its deck. The man behind
+the voyage, trucking entrepreneur Malcom McLean, was not trying to invent a
+technology. He was trying to avoid the cost of hand-loading cargo, where gangs
+of longshoremen moved goods crate by crate, sack by sack, at a cost of roughly
+$5.86 per ton. Loading the Ideal X cost about 16 cents per ton.
+
+The box itself was the least interesting part. What mattered was everything
+that had to change around it. Ships, trucks, railcars, cranes, and ports all
+had to agree on the same dimensions and corner fittings before the container
+could go anywhere. That agreement took more than a decade of fighting between
+shipping lines, railroads, unions, and standards bodies, and was only settled
+when the International Organization for Standardization published container
+standards between 1968 and 1970.
+
+Once the pieces snapped together, the economics were merciless. Port time fell
+from weeks to hours. Freight costs fell so far that they nearly stopped
+mattering to manufacturers, who discovered they could build factories wherever
+labor was cheapest and ship components across oceans for pennies. Traditional
+dockside districts in New York, London, and San Francisco emptied out, while
+purpose-built container ports like Oakland, Felixstowe, and Singapore boomed.
+
+The container did not just make shipping cheaper. It rearranged the world's
+economic geography, and it did so almost invisibly, one identical steel box at
+a time.
