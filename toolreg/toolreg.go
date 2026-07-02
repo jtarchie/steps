@@ -1,0 +1,138 @@
+// Package toolreg is the registry of named Go functions used two ways:
+// as action-state handlers (the engine authors the args from the rendered
+// input block) and as agent tools (the model authors the args, optionally
+// guarded). Ships a small builtin library so YAML-only machines can do
+// real work.
+package toolreg
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+)
+
+// ActionFunc is the uniform tool signature: JSON-ish maps in and out.
+type ActionFunc func(ctx context.Context, args map[string]any) (map[string]any, error)
+
+// Tool is a registered function.
+type Tool struct {
+	Name        string
+	Description string
+	Fn          ActionFunc
+}
+
+// Registry holds registered tools by name.
+type Registry struct {
+	tools map[string]Tool
+}
+
+// New returns a registry pre-loaded with the builtin library.
+func New() *Registry {
+	r := &Registry{tools: map[string]Tool{}}
+	registerBuiltins(r)
+	return r
+}
+
+// Register adds a tool. Names are namespaced with dots (file.write).
+func (r *Registry) Register(name, description string, fn ActionFunc) {
+	r.tools[name] = Tool{Name: name, Description: description, Fn: fn}
+}
+
+// Has reports whether name is registered (for the machine validator).
+func (r *Registry) Has(name string) bool { _, ok := r.tools[name]; return ok }
+
+// Get returns a tool.
+func (r *Registry) Get(name string) (Tool, bool) { t, ok := r.tools[name]; return t, ok }
+
+// Names lists registered tools, sorted.
+func (r *Registry) Names() []string {
+	out := make([]string, 0, len(r.tools))
+	for k := range r.tools {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Call invokes a tool by name.
+func (r *Registry) Call(ctx context.Context, name string, args map[string]any) (map[string]any, error) {
+	t, ok := r.tools[name]
+	if !ok {
+		return nil, fmt.Errorf("tool %q is not registered (have: %v)", name, r.Names())
+	}
+	return t.Fn(ctx, args)
+}
+
+func str(args map[string]any, key string) (string, error) {
+	v, ok := args[key]
+	if !ok {
+		return "", fmt.Errorf("missing required argument %q", key)
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("argument %q must be a string, got %T", key, v)
+	}
+	return s, nil
+}
+
+func registerBuiltins(r *Registry) {
+	r.Register("file.write", "Write content to a file, creating parent directories",
+		func(ctx context.Context, args map[string]any) (map[string]any, error) {
+			path, err := str(args, "path")
+			if err != nil {
+				return nil, err
+			}
+			content, err := str(args, "content")
+			if err != nil {
+				return nil, err
+			}
+			if dir := filepath.Dir(path); dir != "." {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					return nil, err
+				}
+			}
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				return nil, err
+			}
+			return map[string]any{"path": path, "bytes": len(content)}, nil
+		})
+
+	r.Register("file.read", "Read a file as text",
+		func(ctx context.Context, args map[string]any) (map[string]any, error) {
+			path, err := str(args, "path")
+			if err != nil {
+				return nil, err
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"content": string(raw), "bytes": len(raw)}, nil
+		})
+
+	r.Register("http.get", "HTTP GET a URL and return the body (up to 256KB)",
+		func(ctx context.Context, args map[string]any) (map[string]any, error) {
+			url, err := str(args, "url")
+			if err != nil {
+				return nil, err
+			}
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			if err != nil {
+				return nil, err
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return nil, err
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"status": resp.StatusCode, "body": string(body)}, nil
+		})
+}
