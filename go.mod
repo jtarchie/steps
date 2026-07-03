@@ -4,7 +4,7 @@ go 1.26.4
 
 require (
 	github.com/achetronic/adk-utils-go v0.21.1
-	github.com/expr-lang/expr v1.17.8
+	github.com/dop251/goja v0.0.0-20260701091749-b07b74453ea9
 	github.com/google/jsonschema-go v0.4.2
 	github.com/spf13/cobra v1.10.2
 	google.golang.org/adk v1.4.0
@@ -20,7 +20,6 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.19.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
-	github.com/dop251/goja v0.0.0-20260701091749-b07b74453ea9 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
