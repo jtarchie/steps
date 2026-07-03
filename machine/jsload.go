@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/dop251/goja"
+	esbuild "github.com/evanw/esbuild/pkg/api"
 	"gopkg.in/yaml.v3"
 )
 
@@ -27,17 +27,19 @@ func WithEngineDefaultModel(model string) ParseOption {
 	}
 }
 
-// Load reads, evaluates, expands, compiles, and validates a machine from a
-// .js file. include() paths resolve relative to the file.
+// Load reads, transpiles (TypeScript), evaluates, expands, compiles, and
+// validates a machine from a .ts or .js file. include() paths resolve
+// relative to the file.
 func Load(path string, opts ...ParseOption) (*Machine, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	if strings.HasSuffix(path, ".yaml") || strings.HasSuffix(path, ".yml") {
-		return nil, fmt.Errorf("%s: machines are JavaScript (export default {...}); YAML machine files are no longer supported", path)
+		return nil, fmt.Errorf("%s: machines are TypeScript (export default {...}); YAML machine files are no longer supported", path)
 	}
-	return parseSource(src, filepath.Dir(path), opts...)
+	l := &loader{dir: filepath.Dir(path), assets: map[string]string{}, sourcefile: filepath.Base(path)}
+	return l.parse(src, opts...)
 }
 
 // Parse builds a machine from JS source (include() relative to cwd).
@@ -58,15 +60,41 @@ func parseSource(src []byte, dir string, opts ...ParseOption) (*Machine, error) 
 }
 
 type loader struct {
-	rt     *jsRT
-	dir    string
-	assets map[string]string
-	pinned bool // resume: include() serves pinned assets only
+	rt         *jsRT
+	dir        string
+	assets     map[string]string
+	pinned     bool   // resume: include() serves pinned assets only
+	sourcefile string // for esbuild error locations (defaults to machine.ts)
 }
 
-// exportDefaultRe rewrites the first `export default` into a module.exports
-// assignment — goja has no ESM, but machine files should read like modern JS.
-var exportDefaultRe = regexp.MustCompile(`(?m)^(\s*)export\s+default\s`)
+// transpile strips TypeScript and lowers `export default` to CommonJS so goja
+// (no ESM, no types) can run it. TS is a superset of JS, so plain-JS machines
+// pass through unchanged. `/// <reference>` directives are editor-only and
+// carried through as comments — esbuild does not resolve them in transform mode.
+func (l *loader) transpile(src []byte) (string, error) {
+	name := l.sourcefile
+	if name == "" {
+		name = "machine.ts"
+	}
+	result := esbuild.Transform(string(src), esbuild.TransformOptions{
+		Loader:     esbuild.LoaderTS,
+		Format:     esbuild.FormatCommonJS, // export default -> module.exports.default
+		Target:     esbuild.ES2020,         // goja-safe; keeps spread/optional-chaining
+		Sourcefile: name,
+	})
+	if len(result.Errors) > 0 {
+		var msgs []string
+		for _, e := range result.Errors {
+			if e.Location != nil {
+				msgs = append(msgs, fmt.Sprintf("%s:%d: %s", e.Location.File, e.Location.Line, e.Text))
+			} else {
+				msgs = append(msgs, e.Text)
+			}
+		}
+		return "", fmt.Errorf("transpiling machine: %s", strings.Join(msgs, "; "))
+	}
+	return string(result.Code), nil
+}
 
 func (l *loader) parse(src []byte, opts ...ParseOption) (*Machine, error) {
 	vm := goja.New()
@@ -84,16 +112,30 @@ func (l *loader) parse(src []byte, opts ...ParseOption) (*Machine, error) {
 		return nil, fmt.Errorf("installing flow combinators: %w", err)
 	}
 
-	shimmed := exportDefaultRe.ReplaceAllString(string(src), "${1}module.exports = ")
-	if _, err := vm.RunString(shimmed); err != nil {
+	code, err := l.transpile(src)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := vm.RunString(code); err != nil {
 		return nil, fmt.Errorf("evaluating machine: %w", err)
 	}
 	exports, ok := module.Get("exports").(*goja.Object)
-	if !ok || len(exports.Keys()) == 0 {
+	if !ok {
+		return nil, fmt.Errorf("machine must export default { name, states, ... }")
+	}
+	// esbuild's CommonJS output puts the default export under .default
+	// (alongside a synthetic __esModule flag); unwrap to the machine object.
+	root := exports
+	if def := exports.Get("default"); defined(def) {
+		if o := l.obj(def); o != nil {
+			root = o
+		}
+	}
+	if len(root.Keys()) == 0 {
 		return nil, fmt.Errorf("machine must export default { name, states, ... }")
 	}
 
-	m, err := l.machine(exports)
+	m, err := l.machine(root)
 	if err != nil {
 		return nil, err
 	}

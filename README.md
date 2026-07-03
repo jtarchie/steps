@@ -1,11 +1,13 @@
 # steps
 
 A state-machine runtime for LLM micro-agents, in Go. A machine is a
-JavaScript file (evaluated by [goja](https://github.com/dop251/goja)):
-plain state consts plus ONE flow expression — the whole topology visible in
-one place, compiled into an enforced graph. Every computed value is a
-function of one flat scope, destructured by name. Durable by default. Built
-on [google/adk-go](https://github.com/google/adk-go) and
+TypeScript file (`workflow.ts`) — transpiled by
+[esbuild](https://github.com/evanw/esbuild) and run on
+[goja](https://github.com/dop251/goja), both in-process, no Node: plain
+state consts plus ONE flow expression — the whole topology visible in one
+place, compiled into an enforced graph. Every computed value is a function
+of one flat scope, destructured by name. Durable by default. Built on
+[google/adk-go](https://github.com/google/adk-go) and
 [achetronic/adk-utils-go](https://github.com/achetronic/adk-utils-go).
 
 **Thesis:** agents need structure, not vibes. Each state is a hyper-specific
@@ -21,18 +23,18 @@ go build -o steps ./cmd/steps
 
 # Deterministic demo — no models, no keys, scripted provider:
 cd examples/summarize-critic
-../../steps run workflow.js \
+../../steps run workflow.ts \
   --input article=@fixtures/article.txt \
   --mock mock_responses.yaml
 
 # Live, against any OpenAI-compatible local server (LM Studio, Ollama, vLLM):
-../../steps run workflow.js --input article=@fixtures/article.txt
+../../steps run workflow.ts --input article=@fixtures/article.txt
 ```
 
 A machine can be this small — everything else is defaulted (linear flow,
 implicit terminals, retry policies, budgets):
 
-```js
+```ts
 export default {
   name: "summarize",
   states: {
@@ -46,7 +48,7 @@ When a machine branches, the graph lives in ONE expression — and it is still
 a fully enforced state machine (guards select among declared edges; the
 engine owns budgets, retries, and loop bounds):
 
-```js
+```ts
 flow: pipe(
   draft,
   branch(critique, {
@@ -57,21 +59,24 @@ flow: pipe(
 ),
 ```
 
-Editors autocomplete the whole DSL via [types/steps.d.ts](types/steps.d.ts)
-(`// @ts-check` + a jsconfig), and `steps validate` **dry-runs every function**
-against schema-derived stubs — a typo like `({ scout_file })` fails at load,
-naming the available fields, before any token is spent. `steps context
-machine.js` prints what each state's functions may reference.
+Because machines are TypeScript, editors type-check them out of the box: each
+`workflow.ts` opens with `/// <reference path=".../docs/src/global.d.ts" />`,
+so `pipe`/`branch`/`when`/`done`/`fail`/`list` and the `Machine` shape all
+autocomplete (add `satisfies Machine` for full structural checking). And
+`steps validate` **dry-runs every function** against schema-derived stubs —
+a typo like `({ scout_file })` fails at load, naming the available fields,
+before any token is spent. `steps context machine.ts` prints what each
+state's functions may reference.
 
 ## CLI
 
 | Command | What it does |
 |---|---|
-| `steps validate machine.js [--print]` | Structure checks + a stub dry-run of every function (unknown-field access fails with the available fields listed). `--print` shows the defaults-expanded machine. |
-| `steps run machine.js --input k=v\|k=@file [--mock file] [-v]` | Start a run; narrates every state, chat message, tool call, retry, and transition to stderr; JSON summary to stdout. |
+| `steps validate machine.ts [--print]` | Structure checks + a stub dry-run of every function (unknown-field access fails with the available fields listed). `--print` shows the defaults-expanded machine. |
+| `steps run machine.ts --input k=v\|k=@file [--mock file] [-v]` | Start a run; narrates every state, chat message, tool call, retry, and transition to stderr; JSON summary to stdout. |
 | `steps resume <run-id> --event X [--data '{...}']` | Answer a parked human gate, or continue a crashed run from its journal. |
 | `steps runs` | List runs and their status. |
-| `steps context machine.js [--state s]` | Show what each state's functions may reference, derived from declared schemas. |
+| `steps context machine.ts [--state s]` | Show what each state's functions may reference, derived from declared schemas. |
 | `steps inspect <run-id> [--messages]` | Per-state token usage, failures, and routing from the journal; `--messages` dumps recorded conversations. |
 
 Runs journal to SQLite (`.steps.db` by default, `--db` to move it). Every
@@ -129,12 +134,12 @@ Three failure classes, three behaviors (per state, overridable):
 ## Package layout
 
 ```
-machine/    JS loader (goja), Dyn values, defaults, schemas, validation, dry-run
+machine/    TS loader (esbuild→goja), Dyn values, defaults, schemas, validation, dry-run
 journal/    event types, Store interface, SQLite store, fold
 engine/     run loop, retries, budgets, handlers (agent via ADK, action, human)
 provider/   model-ref registry, mock provider, error classification
 toolreg/    named Go functions + builtins (file.write, file.read, http.get)
-types/      steps.d.ts — editor autocomplete for machine files
+docs/src/    global.d.ts — ambient TypeScript declarations for machine files
 cmd/steps/  CLI + human-readable narration
 examples/   canonical examples — they double as the acceptance spec
 ```

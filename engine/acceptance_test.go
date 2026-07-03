@@ -48,7 +48,7 @@ func newTestEngine(t *testing.T, mockScript string) (*engine.Engine, *journal.SQ
 
 func loadExample(t *testing.T, dir string) (*machine.Machine, string) {
 	t.Helper()
-	wf := repoPath(t, filepath.Join("examples", dir, "workflow.js"))
+	wf := repoPath(t, filepath.Join("examples", dir, "workflow.ts"))
 	m, err := machine.Load(wf)
 	if err != nil {
 		t.Fatalf("load %s: %v", wf, err)
@@ -204,7 +204,7 @@ critique:
 		t.Fatal(err)
 	}
 
-	wf := repoPath(t, "examples/summarize-critic/workflow.js")
+	wf := repoPath(t, "examples/summarize-critic/workflow.ts")
 	m, err := machine.Load(wf)
 	if err != nil {
 		t.Fatal(err)
@@ -382,7 +382,7 @@ func TestPRReviewDeepPath(t *testing.T) {
 func TestPRReviewTrivialPath(t *testing.T) {
 	t.Chdir(t.TempDir())
 
-	wf := repoPath(t, "examples/pr-review/workflow.js")
+	wf := repoPath(t, "examples/pr-review/workflow.ts")
 	m, err := machine.Load(wf)
 	if err != nil {
 		t.Fatal(err)
@@ -617,7 +617,7 @@ critique:
 	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m, err := machine.Load(repoPath(t, "examples/summarize-critic/workflow.js"))
+	m, err := machine.Load(repoPath(t, "examples/summarize-critic/workflow.ts"))
 	if err != nil {
 		t.Fatal(err)
 	}

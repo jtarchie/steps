@@ -6,7 +6,7 @@ import (
 )
 
 func TestLoadSummarizeCritic(t *testing.T) {
-	m, err := Load("../examples/summarize-critic/workflow.js")
+	m, err := Load("../examples/summarize-critic/workflow.ts")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestLoadSummarizeCritic(t *testing.T) {
 }
 
 func TestLoadAdoptVariant(t *testing.T) {
-	m, err := Load("../examples/summarize-critic-adopt/workflow.js")
+	m, err := Load("../examples/summarize-critic-adopt/workflow.ts")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

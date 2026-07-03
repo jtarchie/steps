@@ -1,7 +1,7 @@
 // Command steps runs state-machine workflows for micro-agents.
 //
-//	steps validate workflow.yaml [--print]
-//	steps run workflow.yaml --input article=@fixtures/article.txt [--mock mock.yaml]
+//	steps validate workflow.ts [--print]
+//	steps run workflow.ts --input article=@fixtures/article.txt [--mock mock.yaml]
 //	steps resume <run-id> --event approved [--data '{"note":"ship it"}']
 //	steps runs
 package main
@@ -83,7 +83,7 @@ func buildEngine(l engine.Listener) (*engine.Engine, *journal.SQLiteStore, error
 func cmdValidate() *cobra.Command {
 	var printExpanded bool
 	c := &cobra.Command{
-		Use:   "validate <machine.js>",
+		Use:   "validate <machine.ts>",
 		Short: "Validate a machine: structure, schemas, and a stub dry-run of every function",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -109,7 +109,7 @@ func cmdValidate() *cobra.Command {
 func cmdContext() *cobra.Command {
 	var stateName string
 	c := &cobra.Command{
-		Use:   "context <machine.js>",
+		Use:   "context <machine.ts>",
 		Short: "Show what each state's functions may reference (derived from declared schemas)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -133,7 +133,7 @@ func cmdContext() *cobra.Command {
 func cmdRun() *cobra.Command {
 	var inputs []string
 	c := &cobra.Command{
-		Use:   "run <workflow.yaml>",
+		Use:   "run <workflow.ts>",
 		Short: "Start a run and drive it until it finishes or parks",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

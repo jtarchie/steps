@@ -49,13 +49,13 @@ Mock mode needs nothing — no network, no models, no keys.
 
 ```sh
 # 1. Deterministic (CI): scripted provider, exact journal assertions
-steps run workflow.js --input article=@fixtures/article.txt --mock mock_responses.yaml
+steps run workflow.ts --input article=@fixtures/article.txt --mock mock_responses.yaml
 
 # 2. Live local iteration
-steps run workflow.js --input article=@fixtures/article.txt
+steps run workflow.ts --input article=@fixtures/article.txt
 
 # 3. Validate without running — dry-runs every function; typos fail here
-steps validate workflow.js --print
+steps validate workflow.ts --print
 
 # 4. Human gate: force escalation (mock file where critique never approves),
 #    then resume the parked run
@@ -63,7 +63,7 @@ steps runs list
 steps resume <run-id> --event approved
 
 # 5. Durability drill
-steps run workflow.js --input article=@fixtures/article.txt &
+steps run workflow.ts --input article=@fixtures/article.txt &
 kill -9 %1
 steps resume <run-id>
 

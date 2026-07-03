@@ -1,24 +1,31 @@
-// Type declarations for steps machine files.
+// Ambient type declarations for steps machine files (workflow.ts).
 //
-// Enable editor autocomplete and checking with a jsconfig.json next to your
-// machine ({ "compilerOptions": { "checkJs": true } }) and:
+// Machines are TypeScript: `steps` transpiles them with esbuild before
+// running them in goja, so the types are stripped at load — they exist
+// purely for editor autocomplete and checking. Reference this file from the
+// top of a machine to pull the flow combinators and helpers into scope:
 //
-//   // @ts-check
-//   /// <reference path="./types/steps.d.ts" />
+//   /// <reference path="../../docs/src/global.d.ts" />
+//   export default { ... } satisfies Machine;   // `satisfies` optional
 //
 // A machine is: state consts + one flow expression. Structure is data; any
 // computed value is a function of ONE flat scope — destructure what you
 // need: ({ article, critique }) => `...`. The parameter list doubles as the
 // state's declared input contract, checked at load.
 
-/** The single flat argument every machine function receives. */
+// The single flat argument every machine function receives. Every member is
+// optional: destructuring `({ article, critique }) => ...` in an untyped
+// state const must type-check, so `Scope` is an open bag (its index
+// signature covers run inputs and state outputs by name). The engine-supplied
+// keys below exist for autocomplete and hover; the runtime dry-run is what
+// actually verifies a destructured name against the state's real scope.
 interface Scope {
   /** Entry counts per state — bound loops with visits.draft < 3. */
-  visits: Record<string, number>;
+  visits?: Record<string, number>;
   /** Cumulative run accounting. */
-  run: { transitions: number; tokens: number; cost: number };
+  run?: { transitions: number; tokens: number; cost: number };
   /** Attempt number within the current state. */
-  attempt: number;
+  attempt?: number;
   /** This state's validated output (flow guards only). */
   output?: any;
   /** The agent-declared event (flow guards only). */
@@ -154,5 +161,3 @@ declare function list(items: any[]): string;
 declare function yaml(value: any): string;
 /** Read a text asset (prompt file) relative to the machine; pinned with the run. */
 declare function include(path: string): string;
-
-declare var module: { exports: Machine };

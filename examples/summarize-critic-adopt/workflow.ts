@@ -1,9 +1,10 @@
+/// <reference path="../../docs/src/global.d.ts" />
 // The adopt variant of summarize-critic: the drafter CONTINUES its own
 // conversation across revisions (context rung 3, adopt: "self") instead of
 // being re-primed with distilled feedback (rung 1). Same machine shape,
 // same mock script — A/B the two context philosophies.
 
-const draft = {
+const draft: State = {
   adopt: "self", // revisits continue this state's own prior conversation
   // long loops can trim the replayed transcript for token hygiene:
   //   adopt: { from: "self", lastTurns: 6 },
@@ -25,7 +26,7 @@ const draft = {
   },
 };
 
-const critique = {
+const critique: State = {
   model: "ollama/llama3.2:3b", // fresh judge every round — deliberately NOT adopted
   prompt: ({ article, draft }) => `
     You are a strict editor. Score the summary 0-10 for accuracy and
@@ -42,12 +43,12 @@ const critique = {
   events: ["approve", "revise"],
 };
 
-const escalate = {
+const escalate: State = {
   human: ({ critique }) => `Revisions exhausted (last score ${critique.score}). Approve the current draft or fail the run?`,
   timeout: "1h",
 };
 
-const publish = {
+const publish: State = {
   write: "out/summary.md",
   content: ({ draft }) => `${draft.summary}\n\n${list(draft.key_points)}\n`,
 };

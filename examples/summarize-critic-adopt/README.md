@@ -30,15 +30,15 @@ staying hermetic in *both* variants is the design point that doesn't change.
 
 ```sh
 # Deterministic (CI) — fixture shared with the sibling example
-steps run workflow.js \
+steps run workflow.ts \
   --input article=@../summarize-critic/fixtures/article.txt \
   --mock mock_responses.yaml
 
 # Live local iteration
-steps run workflow.js --input article=@../summarize-critic/fixtures/article.txt
+steps run workflow.ts --input article=@../summarize-critic/fixtures/article.txt
 
 # Validate (adopt: self must pass the graph-predecessor check)
-steps validate workflow.js --print
+steps validate workflow.ts --print
 ```
 
 ## Expected mock trace (what CI asserts)

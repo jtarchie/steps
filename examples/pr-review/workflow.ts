@@ -1,3 +1,4 @@
+/// <reference path="../../docs/src/global.d.ts" />
 // Cheap scouts, expensive specialist. Small models triage each file and the
 // PR as a whole; the large model only verifies flagged files with
 // pre-gathered leads. Trivial PRs never reach it.
@@ -26,14 +27,14 @@ const clean = ({ deep_review }) => deep_review.items.every(i => i.findings.lengt
 // Without it, entries carry no `content` and the machine still works —
 // scouts judge from patches alone. Pass by: "hunk" instead to split huge
 // files into one entry per hunk.
-const split_diff = {
+const split_diff: State = {
   action: "diff.split",
   input: ({ diff, root }) => ({ diff, root: root || "", context_bytes: 3000 }),
 };
 
 // One hermetic micro-context per file. memo: unchanged files are free on
 // re-review; skip: one unparseable file doesn't sink the PR.
-const scout_files = {
+const scout_files: State = {
   forEach: { over: ({ split_diff }) => split_diff.files, as: "file", concurrency: 3, onItemFailure: "skip" },
   memo: true,
   prompt: ({ title, file }) => `
@@ -55,7 +56,7 @@ const scout_files = {
 
 // Same question, whole-PR altitude: sees stats and scout conclusions,
 // never full patches.
-const scout_pr = {
+const scout_pr: State = {
   memo: true,
   prompt: ({ title, description, split_diff, scout_files }) => `
     You are a scout for a senior code reviewer, looking at a pull request
@@ -75,7 +76,7 @@ const scout_pr = {
   events: ["deep_review", "trivial"],
 };
 
-const note_trivial = {
+const note_trivial: State = {
   write: "out/review.md",
   content: ({ scout_pr }) => `## Automated triage: no senior review needed\n\n${list(scout_pr.themes)}\n`,
 };
@@ -84,7 +85,7 @@ const note_trivial = {
 // pre-gathered (the over mapper joins each lead with its patch). Verify or
 // refute — never research. Medium risk routes to the small model; only
 // high risk earns the big one.
-const deep_review = {
+const deep_review: State = {
   forEach: {
     over: ({ scout_files, split_diff }) => scout_files.items
       .filter(i => i.risk !== "low")
@@ -133,7 +134,7 @@ const deep_review = {
   },
 };
 
-const verdict = {
+const verdict: State = {
   memo: true,
   model: "senior",
   prompt: ({ deep_review }) => `
@@ -146,7 +147,7 @@ const verdict = {
   events: ["approve", "comment", "request_changes"],
 };
 
-const write_review = {
+const write_review: State = {
   write: "out/review.md", // swap for gh.post_review to publish for real
   content: ({ verdict }) => `## Code review\n\n${verdict.summary}\n\n${verdict.body}\n`,
 };

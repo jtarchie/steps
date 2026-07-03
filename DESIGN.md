@@ -1,8 +1,8 @@
 # steps — a state-machine runtime for micro-agents
 
 **Status:** v1 implemented, 2026-07-02 — see [README.md](README.md); examples pass as the acceptance suite
-**Language:** Go · **Config:** JavaScript machines (goja) — state consts + one flow expression; every computed value is a function of one flat scope
-**Stack:** [google/adk-go](https://github.com/google/adk-go) v1 (agent loop, sessions, tools) + [adk-utils-go](https://github.com/achetronic/adk-utils-go) (Anthropic + OpenAI-compatible clients)
+**Language:** Go · **Config:** TypeScript machines (esbuild → goja) — state consts + one flow expression; every computed value is a function of one flat scope
+**Stack:** [google/adk-go](https://github.com/google/adk-go) v1 (agent loop, sessions, tools) + [adk-utils-go](https://github.com/achetronic/adk-utils-go) (Anthropic + OpenAI-compatible clients) · [esbuild](https://github.com/evanw/esbuild) (TS transpile)
 
 > **2026-07 config-language revision (two rounds):** machines were originally
 > YAML with Go templates and Expr guards embedded in strings — two languages
@@ -65,7 +65,7 @@ to three rules, in priority order:
 3. **The truth is one command away.** `steps validate --print` shows the
    machine after defaults; `steps context` shows what each state's functions
    may reference; `steps inspect` shows what a run actually did. And
-   `types/steps.d.ts` gives editors autocomplete over the whole DSL.
+   `docs/src/global.d.ts` gives editors autocomplete over the whole DSL.
 
 ## Decisions (locked)
 
@@ -95,12 +95,22 @@ to three rules, in priority order:
 
 ## The machine format
 
-A machine is one `.js` file: plain state consts, a `states:` map that names
-them, and a `flow` expression that IS the topology. Any computed value is a
-function of one flat scope — destructure what you need; the parameter list
-is the state's declared contract.
+A machine is one `workflow.ts` file: plain state consts, a `states:` map that
+names them, and a `flow` expression that IS the topology. Any computed value
+is a function of one flat scope — destructure what you need; the parameter
+list is the state's declared contract.
 
-```js
+Machines are **TypeScript**, not raw JS: `machine.Load` transpiles them with
+[esbuild](https://github.com/evanw/esbuild) (in-process, no Node) — types are
+stripped, `export default` lowers to CommonJS — then runs the result on goja.
+So machines type-check in any editor: each file opens with
+`/// <reference path=".../docs/src/global.d.ts" />`, and annotating state
+consts `: State` (plus an optional `satisfies Machine` on the export) turns on
+full key/value autocomplete and structural checking — `tsc --noEmit` passes on
+the examples. Types are an authoring aid only; the runtime dry-run is what
+verifies a destructured name against a state's *actual* scope.
+
+```ts
 const triage = {
   system: "You classify inbound support tickets.",
   tools: ["kb.search"],
@@ -236,7 +246,7 @@ Every key except `states` and each state's handler is optional. Defaults are app
 The payoff — this is a complete, valid machine (no flow: linear declaration
 order; bare-string state = agent prompt):
 
-```js
+```ts
 export default {
   name: "summarize",
   states: {
@@ -278,7 +288,7 @@ boundary — and **a tool call is the interior's transition**: the moment the mo
 choice becomes an effect. It gets the same treatment. Agent proposes, guards dispose,
 recursively:
 
-```js
+```ts
 const triage = {
   maxTurns: 6,
   tools: [
@@ -315,7 +325,7 @@ const triage = {
 
 `tool_choice: one_of` — the state completes after exactly one tool call:
 
-```js
+```ts
 const route = {
   toolChoice: "one_of", // auto (default) | required | one_of
   tools: ["billing.lookup", "shipping.trace", "kb.search"],
@@ -333,7 +343,7 @@ schema-validated args, guarded routing. It fills the middle ground between `acti
 
 A state may map its handler over a list evaluated from ctx:
 
-```js
+```ts
 const scout_files = {
   forEach: {
     over: ({ split_diff }) => split_diff.files, // function of scope returning the list
@@ -390,7 +400,7 @@ prefer making upstream declare it as an output field (`notes`, `dead_ends`, `sou
 rendered as text into a fresh conversation. For verifiers that must judge process, not
 just results; for escalation context ("here's what was tried"); for human-gate display.
 
-```js
+```ts
 const verify = {
   history: {
     from: "research",
@@ -411,7 +421,7 @@ Hermetic in mechanism: the record crosses as declared input text, statically val
 **Rung 3 — `adopt`: *becoming* a state's continuation.** The state receives the prior
 state's actual normalized message array with its own prompt appended.
 
-```js
+```ts
 const take_over = {
   model: "anthropic/claude-opus-4-8", // tier escalation: opus resumes where haiku stalled
   adopt: "triage",
@@ -504,7 +514,7 @@ steps resume <run-id> --event approved --data '{"note": "ship it"}'
 
 ## Load-time validation (the guardrail payoff)
 
-`steps validate machine.js` — and the same checks at `machine.Load` in Go:
+`steps validate machine.ts` — and the same checks at `machine.Load` in Go:
 
 - every state reachable from `initial`; a terminal state reachable from every state
 - every non-terminal state ends in an unconditional fallback transition (the linear-flow
@@ -547,7 +557,7 @@ Never assert LLM content; assert machine semantics. Three tiers:
    provider errors, so retry/guard/journal behavior is asserted *exactly*:
 
    ```
-   steps run workflow.js --input article=@fixtures/article.txt --mock mock_responses.yaml
+   steps run workflow.ts --input article=@fixtures/article.txt --mock mock_responses.yaml
    ```
 
    Tests assert the journal event sequence, retry counts, `visits` counters, terminal
@@ -574,7 +584,7 @@ journal/          # event types, Store interface, sqlite store, fold
 engine/           # run loop, retries, budgets, handlers (agent via ADK, action, human)
 provider/         # model-ref registry, mock provider, error classification
 toolreg/          # named Go functions + builtins (file, diff, http, gh)
-types/            # steps.d.ts — editor autocomplete for machine files
+docs/src/         # global.d.ts — ambient TypeScript types for machine files
 cmd/steps/        # CLI: run, resume, runs, validate, context, inspect
 examples/         # runnable canonical examples; double as acceptance specs
 ```

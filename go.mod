@@ -5,6 +5,7 @@ go 1.26.4
 require (
 	github.com/achetronic/adk-utils-go v0.21.1
 	github.com/dop251/goja v0.0.0-20260701091749-b07b74453ea9
+	github.com/evanw/esbuild v0.28.1
 	github.com/google/jsonschema-go v0.4.2
 	github.com/spf13/cobra v1.10.2
 	google.golang.org/adk v1.4.0

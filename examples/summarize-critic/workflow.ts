@@ -1,9 +1,10 @@
+/// <reference path="../../docs/src/global.d.ts" />
 // Draft a summary with a small local model, have a second micro-agent
 // critique it, loop with feedback until it passes or a human decides.
 // Context rung 1: each revision is a FRESH conversation re-primed with the
 // article + distilled feedback. Compare ../summarize-critic-adopt/.
 
-const draft = {
+const draft: State = {
   prompt: ({ article, critique }) => `
     Summarize the article below in at most 150 words, then give exactly
     three key points.
@@ -16,7 +17,7 @@ const draft = {
   },
 };
 
-const critique = {
+const critique: State = {
   model: "ollama/llama3.2:3b", // different micro-agent, different model
   prompt: ({ article, draft }) => `
     You are a strict editor. Score the summary 0-10 for accuracy and
@@ -33,12 +34,12 @@ const critique = {
   events: ["approve", "revise"],
 };
 
-const escalate = {
+const escalate: State = {
   human: ({ critique }) => `Revisions exhausted (last score ${critique.score}). Approve the current draft or fail the run?`,
   timeout: "1h",
 };
 
-const publish = {
+const publish: State = {
   write: "out/summary.md",
   content: ({ draft }) => `${draft.summary}\n\n${list(draft.key_points)}\n`,
 };

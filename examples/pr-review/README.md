@@ -50,19 +50,19 @@ split_diff ──▶ scout_files ──▶ scout_pr ──┬─(trivial + guard
 
 ```sh
 # Deterministic (CI): deep path — findings, vetoed approve
-steps run workflow.js \
+steps run workflow.ts \
   --input diff=@fixtures/pr.diff \
   --input "title=queue: parallel worker pool" \
   --input "description=Process jobs concurrently" \
   --mock mock_responses.yaml
 
 # Deterministic: trivial path — senior never runs
-steps run workflow.js --input diff=@fixtures/pr.diff --mock mock_trivial.yaml
+steps run workflow.ts --input diff=@fixtures/pr.diff --mock mock_trivial.yaml
 
 # Live: scouts on a small local model, senior on a larger one, with full
 # file context (root points at the checkout the diff applies to)
 gh pr diff 123 > pr.diff   # or use fixtures/pr.diff + fixtures/repo
-steps run workflow.js --input diff=@pr.diff --input root=.
+steps run workflow.ts --input diff=@pr.diff --input root=.
 
 # Review artifact
 cat out/review.md
