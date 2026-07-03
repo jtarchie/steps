@@ -14,7 +14,7 @@ the delta.
 
 | | `summarize-critic` (rung 1: `ctx`) | this example (rung 3: `adopt: "self"`) |
 |---|---|---|
-| Revision context | fresh conversation; article + distilled `ctx.critique.issues` re-sent | own prior conversation replayed; only the feedback appended |
+| Revision context | fresh conversation; article + distilled `critique.issues` re-sent | own prior conversation replayed; only the feedback appended |
 | Article tokens | re-sent on every revision | sent once, on the first visit |
 | Transcript size | constant per visit | accumulates across visits (reasoning-channel messages are stripped from replay; `adopt: {from: "self", lastTurns: N}` trims further) |
 | Behavior | clean slate — no anchoring to prior phrasing | working memory — remembers its own reasoning, may anchor to it |
@@ -53,7 +53,7 @@ top of the sibling's assertions:
 - The article text appears **exactly once** across the drafter's entire conversation
   (it is never re-sent), while in the sibling it appears once per visit.
 - The feedback message on visit 2 contains only the critique issues — no ARTICLE block
-  (the `ctx.critique ? ... : ...` branch).
+  (the `critique ? ... : ...` branch).
 - Token accounting: adopted transcript tokens count toward the state's usage in
   `handler_finished` (budget rules from DESIGN.md apply).
 

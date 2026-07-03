@@ -252,14 +252,12 @@ func TestMaxTurnsOneSurvivesSemanticRetry(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	wf := `
-module.exports = {
+export default {
   name: "tight",
-  defaults: { agent: { model: "mock", maxTurns: 1 } },
+  model: "mock",
+  defaults: { maxTurns: 1 },
   states: {
-    work: {
-      agent: { prompt: "produce the thing" },
-      output: { schema: { answer: "string" } },
-    },
+    work: { prompt: "produce the thing", output: { answer: "string" } },
   },
 };`
 	script := `
@@ -462,31 +460,30 @@ func TestForEachSkipOnFailure(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	wf := `
-module.exports = {
-  name: "skips",
-  defaults: { agent: { model: "mock" } },
-  states: {
-    seed: {
-      action: "diff.split",
-      input: {
-        diff: [
-          "diff --git a/one.go b/one.go", "+a",
-          "diff --git a/two.go b/two.go", "+b",
-          "diff --git a/three.go b/three.go", "+c",
-        ].join("\n"),
-      },
-    },
-    work: {
-      forEach: { over: ({ctx}) => ctx.seed.files, as: "file", onItemFailure: "skip" },
-      retry: "none",
-      agent: { prompt: ({file}) => "look at " + file.path },
-      output: { schema: { path: "string" } },
-      transitions: [
-        { when: ({output}) => output.skipped === 1 && output.count === 2, to: "done" },
-        { to: "failed" },
-      ],
-    },
+const seed = {
+  action: "diff.split",
+  input: {
+    diff: [
+      "diff --git a/one.go b/one.go", "+a",
+      "diff --git a/two.go b/two.go", "+b",
+      "diff --git a/three.go b/three.go", "+c",
+    ].join("\n"),
   },
+};
+const work = {
+  forEach: { over: ({ seed }) => seed.files, as: "file", onItemFailure: "skip" },
+  retry: "none",
+  prompt: ({ file }) => "look at " + file.path,
+  output: { path: "string" },
+};
+export default {
+  name: "skips",
+  model: "mock",
+  states: { seed, work },
+  flow: pipe(seed, branch(work, [
+    when(({ output }) => output.skipped === 1 && output.count === 2).to(done),
+    fail,
+  ])),
 };`
 	script := `
 work:
@@ -513,6 +510,92 @@ work:
 	work, _ := res.State.Ctx["work"].(map[string]any)
 	if work["skipped"] != 1 || work["count"] != 2 {
 		t.Errorf("work aggregate = %v, want count 2 / skipped 1", work)
+	}
+}
+
+// TestMemoReplayKeepsEvent: a memoized event-routing state must route by the
+// CACHED event on replay — not silently take the fallback.
+func TestMemoReplayKeepsEvent(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	wf := `
+const decide = { memo: true, prompt: "pick", output: { x: "string" }, events: ["yes", "no"] };
+const won = { write: "out/w.txt", content: "won" };
+export default {
+  name: "memoevent",
+  model: "mock",
+  states: { decide, won },
+  flow: pipe(branch(decide, { yes: won, else: fail })),
+};`
+	script := `
+decide:
+  - text: '{"x": "a", "event": "yes"}'
+  - text: '{"x": "a", "event": "yes"}'
+`
+	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := machine.Parse([]byte(wf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, _ := newTestEngine(t, scriptPath)
+
+	first, err := eng.Start(context.Background(), m, nil)
+	if err != nil || first.Status != journal.StatusDone {
+		t.Fatalf("first run: %v (%v)", err, first)
+	}
+	second, err := eng.Start(context.Background(), m, nil)
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if second.Status != journal.StatusDone {
+		t.Fatalf("memo replay lost the event: status = %s at %s, want done via yes", second.Status, second.Terminal)
+	}
+	if second.State.Usage.Total() != 0 {
+		t.Errorf("second run spent %d tokens, want 0 (memo hit)", second.State.Usage.Total())
+	}
+}
+
+// TestVisitsDefinedForUnvisitedStates: `visits.x < N` on a never-entered
+// state must read 0, not undefined (undefined < N is false in JS).
+func TestVisitsDefinedForUnvisitedStates(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	wf := `
+const a = { prompt: "go", output: { x: "string" } };
+const b = { prompt: "go2" };
+export default {
+  name: "visits0",
+  model: "mock",
+  states: { a, b },
+  flow: pipe(branch(a, [
+    when(({ visits }) => visits.b < 1).to(b),
+    fail,
+  ])),
+};`
+	script := `
+a:
+  - text: '{"x": "1"}'
+b:
+  - text: "hello"
+`
+	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := machine.Parse([]byte(wf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, _ := newTestEngine(t, scriptPath)
+	res, err := eng.Start(context.Background(), m, nil)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Status != journal.StatusDone {
+		t.Fatalf("status = %s at %s, want done — visits.b should read 0, not undefined", res.Status, res.Terminal)
 	}
 }
 

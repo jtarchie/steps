@@ -34,6 +34,22 @@ func Validate(m *Machine, opts ...ValidateOption) error {
 		fail("initial state %q does not exist", m.Initial)
 	}
 
+	// The flat scope makes inputs and states first-class names: they may not
+	// shadow engine keys or each other.
+	for name := range m.Input {
+		if contains(scopeReserved, name) {
+			fail("input %q shadows a reserved scope key (%s)", name, strings.Join(scopeReserved, ", "))
+		}
+		if m.State(name) != nil {
+			fail("input %q collides with a state of the same name", name)
+		}
+	}
+	for _, s := range m.States {
+		if contains(scopeReserved, s.Name) {
+			fail("state %q shadows a reserved scope key (%s)", s.Name, strings.Join(scopeReserved, ", "))
+		}
+	}
+
 	for _, s := range m.States {
 		validateState(m, s, cfg, fail)
 	}
@@ -78,6 +94,9 @@ func Validate(m *Machine, opts ...ValidateOption) error {
 				fail("state %q history.from unknown state %q", s.Name, h.From)
 			} else if !reachableFrom(m, h.From)[s.Name] {
 				fail("state %q history.from %q, which is not a predecessor", s.Name, h.From)
+			}
+			if bad := scopeNameCollision(m, h.As); bad != "" {
+				fail("state %q: history.as %q shadows %s in the scope", s.Name, h.As, bad)
 			}
 		}
 	}
@@ -138,8 +157,8 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 		if f.OnItemFailure != "fail" && f.OnItemFailure != "skip" {
 			fail("state %q: foreach.on_item_failure must be fail or skip, got %q", s.Name, f.OnItemFailure)
 		}
-		if f.As == "ctx" || f.As == "index" || f.As == "total" {
-			fail("state %q: foreach.as %q collides with a reserved template name", s.Name, f.As)
+		if bad := scopeNameCollision(m, f.As); bad != "" {
+			fail("state %q: forEach.as %q shadows %s in the scope", s.Name, f.As, bad)
 		}
 		if len(s.Output.Events) > 0 {
 			fail("state %q: foreach states cannot declare events — items produce no single event; route with guards over ctx.%s.items", s.Name, s.Name)
@@ -254,10 +273,13 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 			fail("state %q: human gate needs a prompt", s.Name)
 		}
 		if h.OnTimeout != "" && m.State(h.OnTimeout) == nil {
-			fail("state %q: on_timeout target %q does not exist", s.Name, h.OnTimeout)
+			fail("state %q: timeout route target %q does not exist", s.Name, h.OnTimeout)
 		}
 		if h.Timeout > 0 && h.OnTimeout == "" {
-			fail("state %q: human timeout set but no on_timeout target", s.Name)
+			fail("state %q: human timeout duration set but the gate's branch has no timeout: route", s.Name)
+		}
+		if h.OnTimeout != "" && h.Timeout == 0 {
+			fail("state %q: gate has a timeout: route but no timeout duration on the state", s.Name)
 		}
 	}
 
@@ -313,6 +335,22 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 			fail("state %q: retry policy has no match classes", s.Name)
 		}
 	}
+}
+
+// scopeNameCollision reports what a proposed scope name (forEach.as,
+// history.as) would shadow — engine keys, run inputs, or state names all
+// live at the flat scope root.
+func scopeNameCollision(m *Machine, name string) string {
+	if contains(scopeReserved, name) {
+		return "a reserved engine key"
+	}
+	if _, ok := m.Input[name]; ok {
+		return "a run input"
+	}
+	if m.State(name) != nil {
+		return "a state's output"
+	}
+	return ""
 }
 
 // edges returns every state directly reachable from s: transitions, catch

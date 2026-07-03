@@ -1,9 +1,11 @@
 # steps
 
-A state-machine runtime for LLM micro-agents, in Go. Machines are JavaScript
-files evaluated by [goja](https://github.com/dop251/goja) — structure is data,
-logic is plain functions, execution is durable by default. Built on
-[google/adk-go](https://github.com/google/adk-go) and
+A state-machine runtime for LLM micro-agents, in Go. A machine is a
+JavaScript file (evaluated by [goja](https://github.com/dop251/goja)):
+plain state consts plus ONE flow expression — the whole topology visible in
+one place, compiled into an enforced graph. Every computed value is a
+function of one flat scope, destructured by name. Durable by default. Built
+on [google/adk-go](https://github.com/google/adk-go) and
 [achetronic/adk-utils-go](https://github.com/achetronic/adk-utils-go).
 
 **Thesis:** agents need structure, not vibes. Each state is a hyper-specific
@@ -28,26 +30,36 @@ cd examples/summarize-critic
 ```
 
 A machine can be this small — everything else is defaulted (linear flow,
-implicit terminals, retry policies, budgets). Any computed value is a plain
-function of one scope argument; there are no template or expression
-mini-languages:
+implicit terminals, retry policies, budgets):
 
 ```js
-module.exports = {
+export default {
   name: "summarize",
   states: {
-    draft: { agent: ({ ctx }) => `Summarize in 3 bullets: ${ctx.article}` },
-    publish: {
-      action: "file.write",
-      input: { path: "out/summary.md", content: ({ ctx }) => ctx.draft.text },
-    },
+    draft: "Summarize the article in 3 bullets",
+    publish: { write: "out/summary.md", content: ({ draft }) => draft.text },
   },
 };
 ```
 
+When a machine branches, the graph lives in ONE expression — and it is still
+a fully enforced state machine (guards select among declared edges; the
+engine owns budgets, retries, and loop bounds):
+
+```js
+flow: pipe(
+  draft,
+  branch(critique, {
+    approve: when(({ output }) => output.score >= 8).to(publish),
+    revise:  when(({ visits }) => visits.draft < 3).to(draft),
+    else: branch(escalate, { approved: publish, rejected: fail, timeout: fail }),
+  }),
+),
+```
+
 Editors autocomplete the whole DSL via [types/steps.d.ts](types/steps.d.ts)
 (`// @ts-check` + a jsconfig), and `steps validate` **dry-runs every function**
-against schema-derived stubs — a typo like `ctx.scout_file` fails at load,
+against schema-derived stubs — a typo like `({ scout_file })` fails at load,
 naming the available fields, before any token is spent. `steps context
 machine.js` prints what each state's functions may reference.
 

@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/dop251/goja"
+	"gopkg.in/yaml.v3"
 )
 
 // ParseOption adjusts a machine between evaluation and defaults expansion —
@@ -33,7 +35,7 @@ func Load(path string, opts ...ParseOption) (*Machine, error) {
 		return nil, err
 	}
 	if strings.HasSuffix(path, ".yaml") || strings.HasSuffix(path, ".yml") {
-		return nil, fmt.Errorf("%s: machines are JavaScript now (module.exports = {...}); YAML machine files are no longer supported", path)
+		return nil, fmt.Errorf("%s: machines are JavaScript (export default {...}); YAML machine files are no longer supported", path)
 	}
 	return parseSource(src, filepath.Dir(path), opts...)
 }
@@ -62,6 +64,10 @@ type loader struct {
 	pinned bool // resume: include() serves pinned assets only
 }
 
+// exportDefaultRe rewrites the first `export default` into a module.exports
+// assignment — goja has no ESM, but machine files should read like modern JS.
+var exportDefaultRe = regexp.MustCompile(`(?m)^(\s*)export\s+default\s`)
+
 func (l *loader) parse(src []byte, opts ...ParseOption) (*Machine, error) {
 	vm := goja.New()
 	l.rt = &jsRT{vm: vm}
@@ -70,13 +76,21 @@ func (l *loader) parse(src []byte, opts ...ParseOption) (*Machine, error) {
 	_ = module.Set("exports", vm.NewObject())
 	_ = vm.Set("module", module)
 	_ = vm.Set("include", l.include)
+	_ = vm.Set("yaml", func(v any) (string, error) {
+		raw, err := yaml.Marshal(v)
+		return strings.TrimRight(string(raw), "\n"), err
+	})
+	if _, err := vm.RunString(flowBootstrapJS); err != nil {
+		return nil, fmt.Errorf("installing flow combinators: %w", err)
+	}
 
-	if _, err := vm.RunString(string(src)); err != nil {
+	shimmed := exportDefaultRe.ReplaceAllString(string(src), "${1}module.exports = ")
+	if _, err := vm.RunString(shimmed); err != nil {
 		return nil, fmt.Errorf("evaluating machine: %w", err)
 	}
 	exports, ok := module.Get("exports").(*goja.Object)
 	if !ok || len(exports.Keys()) == 0 {
-		return nil, fmt.Errorf("machine must assign module.exports = { name, states, ... }")
+		return nil, fmt.Errorf("machine must export default { name, states, ... }")
 	}
 
 	m, err := l.machine(exports)
@@ -98,8 +112,12 @@ func (l *loader) parse(src []byte, opts ...ParseOption) (*Machine, error) {
 	if err := Validate(m); err != nil {
 		return nil, err
 	}
-	// Fail before you spend: every function is exercised against
-	// schema-derived stubs; impossible field access fails the load.
+	// Fail before you spend: destructured parameters are each function's
+	// declared contract; then every function is exercised against
+	// schema-derived stubs. Impossible access fails the load.
+	if err := CheckContracts(m); err != nil {
+		return nil, err
+	}
 	if fatals, _ := DryRun(m); len(fatals) > 0 {
 		return nil, errors.Join(fatals...)
 	}
@@ -254,7 +272,20 @@ func stringSlice(v goja.Value) []string {
 
 // ---- machine construction ---------------------------------------------------
 
+// Top-level machine keys. Anything else is a load error — flat formats need
+// hard typo protection.
+var machineKeys = []string{
+	"name", "version", "description", "input", "models", "model",
+	"defaults", "limits", "initial", "states", "flow",
+}
+
 func (l *loader) machine(root *goja.Object) (*Machine, error) {
+	for _, k := range root.Keys() {
+		if !contains(machineKeys, k) {
+			return nil, fmt.Errorf("unknown machine key %q — valid keys: %s", k, strings.Join(machineKeys, ", "))
+		}
+	}
+
 	m := &Machine{
 		Version:     integer(root.Get("version")),
 		Name:        str(root.Get("name")),
@@ -265,7 +296,13 @@ func (l *loader) machine(root *goja.Object) (*Machine, error) {
 	if o := l.obj(root.Get("input")); o != nil {
 		m.Input = map[string]InputSpec{}
 		for _, k := range o.Keys() {
-			spec := l.obj(o.Get(k))
+			v := o.Get(k)
+			// Shorthand: article: "string"
+			if s, ok := v.Export().(string); ok {
+				m.Input[k] = InputSpec{Type: s}
+				continue
+			}
+			spec := l.obj(v)
 			is := InputSpec{}
 			if spec != nil {
 				is.Type = str(spec.Get("type"))
@@ -282,57 +319,98 @@ func (l *loader) machine(root *goja.Object) (*Machine, error) {
 		}
 	}
 
+	// model: top-level sugar for the default agent model.
+	if v := root.Get("model"); defined(v) {
+		m.Defaults.Agent.Model = v.String()
+	}
+
+	// defaults: FLAT — agent knobs and retry policies directly.
 	if o := l.obj(root.Get("defaults")); o != nil {
-		if a := l.obj(o.Get("agent")); a != nil {
-			m.Defaults.Agent = AgentDefaults{
-				Model:            str(a.Get("model")),
-				MaxTurns:         integer(a.Get("maxTurns")),
-				MaxOutputTokens:  integer(a.Get("maxOutputTokens")),
-				StructuredOutput: str(a.Get("structuredOutput")),
-				Reasoning:        str(a.Get("reasoning")),
-			}
-			if defined(a.Get("temperature")) {
-				t := a.Get("temperature").ToFloat()
+		for _, k := range o.Keys() {
+			switch k {
+			case "model":
+				m.Defaults.Agent.Model = str(o.Get(k))
+			case "maxTurns":
+				m.Defaults.Agent.MaxTurns = integer(o.Get(k))
+			case "maxOutputTokens":
+				m.Defaults.Agent.MaxOutputTokens = integer(o.Get(k))
+			case "temperature":
+				t := o.Get(k).ToFloat()
 				m.Defaults.Agent.Temperature = &t
+			case "reasoning":
+				m.Defaults.Agent.Reasoning = str(o.Get(k))
+			case "structuredOutput":
+				m.Defaults.Agent.StructuredOutput = str(o.Get(k))
+			case "retry":
+				r, err := l.retries(o.Get(k), "defaults.retry")
+				if err != nil {
+					return nil, err
+				}
+				m.Defaults.Retry = r
+			default:
+				return nil, fmt.Errorf("unknown defaults key %q — valid: model, maxTurns, maxOutputTokens, temperature, reasoning, structuredOutput, retry", k)
 			}
-		}
-		if r, err := l.retries(o.Get("retry"), "defaults.retry"); err != nil {
-			return nil, err
-		} else if r != nil {
-			m.Defaults.Retry = r
 		}
 	}
 
 	if o := l.obj(root.Get("limits")); o != nil {
-		m.Limits.MaxTransitions = integer(o.Get("maxTransitions"))
-		if defined(o.Get("maxCost")) {
-			m.Limits.MaxCost = o.Get("maxCost").ToFloat()
+		for _, k := range o.Keys() {
+			switch k {
+			case "maxTransitions":
+				m.Limits.MaxTransitions = integer(o.Get(k))
+			case "maxCost":
+				m.Limits.MaxCost = o.Get(k).ToFloat()
+			case "maxTokens":
+				m.Limits.MaxTokens = integer(o.Get(k))
+			case "timeout":
+				d, err := duration(o.Get(k), "limits.timeout")
+				if err != nil {
+					return nil, err
+				}
+				m.Limits.Timeout = d
+			default:
+				return nil, fmt.Errorf("unknown limits key %q — valid: maxTransitions, maxCost, maxTokens, timeout", k)
+			}
 		}
-		m.Limits.MaxTokens = integer(o.Get("maxTokens"))
-		d, err := duration(o.Get("timeout"), "limits.timeout")
-		if err != nil {
-			return nil, err
-		}
-		m.Limits.Timeout = d
 	}
 
 	states := l.obj(root.Get("states"))
 	if states == nil || len(states.Keys()) == 0 {
-		return nil, fmt.Errorf("machine has no states")
+		return nil, fmt.Errorf("machine has no states — export default { states: { ... } }")
 	}
 	// Keys() preserves declaration order — linear-flow defaults depend on it.
 	for _, name := range states.Keys() {
 		if containsState(m.States, name) {
 			return nil, fmt.Errorf("state %q declared twice", name)
 		}
-		st, err := l.state(name, l.obj(states.Get(name)))
+		v := states.Get(name)
+		st, err := l.state(name, v)
 		if err != nil {
 			return nil, fmt.Errorf("state %q: %w", name, err)
 		}
 		m.States = append(m.States, st)
+		// Mark identity so the flow expression can reference the const.
+		if obj := l.obj(v); obj != nil {
+			_ = obj.DefineDataProperty(stateNameProp, l.rt.vm.ToValue(name), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_FALSE)
+		}
 	}
 	m.buildIndex()
+
+	if flow := root.Get("flow"); defined(flow) {
+		if err := l.compileFlow(m, flow); err != nil {
+			return nil, err
+		}
+	}
 	return m, nil
+}
+
+func contains(list []string, s string) bool {
+	for _, e := range list {
+		if e == s {
+			return true
+		}
+	}
+	return false
 }
 
 func containsState(states []*State, name string) bool {
@@ -344,37 +422,97 @@ func containsState(states []*State, name string) bool {
 	return false
 }
 
-func (l *loader) state(name string, o *goja.Object) (*State, error) {
-	if o == nil {
-		return nil, fmt.Errorf("state must be an object")
+// State keys, by handler. Shared keys apply to every handler.
+var (
+	sharedStateKeys = []string{"memo", "forEach", "retry", "output", "events", "input"}
+	agentStateKeys  = []string{"prompt", "system", "tools", "model", "maxTurns",
+		"maxOutputTokens", "temperature", "reasoning", "structuredOutput",
+		"toolChoice", "adopt", "history"}
+	actionStateKeys   = []string{"action"}
+	writeStateKeys    = []string{"write", "content"}
+	humanStateKeys    = []string{"human", "timeout"}
+	terminalStateKeys = []string{"terminal", "status"}
+	movedToFlowKeys   = []string{"transitions", "catch", "onTimeout", "to", "next"}
+)
+
+func (l *loader) state(name string, v goja.Value) (*State, error) {
+	// Bare-string state: the whole state is an agent prompt.
+	if s, ok := v.Export().(string); ok {
+		return &State{Name: name, Agent: &AgentSpec{Prompt: Dyn{Static: s}}}, nil
 	}
-	st := &State{
-		Name:     name,
-		Terminal: boolean(o.Get("terminal")),
-		Status:   str(o.Get("status")),
-		Memo:     boolean(o.Get("memo")),
+	if fn, ok := goja.AssertFunction(v); ok {
+		return &State{Name: name, Agent: &AgentSpec{Prompt: Dyn{fn: fn, Src: v.String(), rt: l.rt}}}, nil
+	}
+	o := l.obj(v)
+	if o == nil {
+		return nil, fmt.Errorf("a state must be an object, a prompt string, or a prompt function")
 	}
 
-	if v := o.Get("agent"); defined(v) {
-		ag, err := l.agent(v)
-		if err != nil {
-			return nil, fmt.Errorf("agent: %w", err)
+	keys := o.Keys()
+	has := func(k string) bool { return contains(keys, k) }
+
+	// Infer the handler from the keys present.
+	var handler string
+	var handlerKeys []string
+	switch {
+	case has("action"):
+		handler, handlerKeys = "action", actionStateKeys
+	case has("write"):
+		handler, handlerKeys = "write", writeStateKeys
+	case has("human"):
+		handler, handlerKeys = "human", humanStateKeys
+	case has("terminal"):
+		handler, handlerKeys = "terminal", terminalStateKeys
+	default:
+		handler, handlerKeys = "agent", agentStateKeys
+	}
+
+	valid := append(append([]string{}, sharedStateKeys...), handlerKeys...)
+	for _, k := range keys {
+		if k == stateNameProp {
+			continue
 		}
-		st.Agent = ag
+		if contains(movedToFlowKeys, k) {
+			return nil, fmt.Errorf("key %q moved to the flow expression — wire routing with pipe/branch/when", k)
+		}
+		if !contains(valid, k) {
+			return nil, fmt.Errorf("unknown key %q for a %s state — valid keys: %s", k, handler, strings.Join(valid, ", "))
+		}
 	}
-	if v := o.Get("action"); defined(v) {
-		st.Action = &ActionSpec{Name: v.String()}
+
+	st := &State{
+		Name:  name,
+		Memo:  boolean(o.Get("memo")),
+		Input: l.dyn(o.Get("input")),
 	}
-	if h := l.obj(o.Get("human")); h != nil {
-		timeout, err := duration(h.Get("timeout"), "human.timeout")
+
+	switch handler {
+	case "terminal":
+		st.Terminal = true
+		st.Status = str(o.Get("status"))
+	case "action":
+		st.Action = &ActionSpec{Name: str(o.Get("action"))}
+	case "write":
+		st.Action = &ActionSpec{Name: "file.write"}
+		if !st.Input.IsZero() {
+			return nil, fmt.Errorf("write states take write:/content:, not input:")
+		}
+		st.Input = Dyn{Static: map[string]any{
+			"path":    l.exportValue(o.Get("write")),
+			"content": l.exportValue(o.Get("content")),
+		}}
+	case "human":
+		timeout, err := duration(o.Get("timeout"), "timeout")
 		if err != nil {
 			return nil, err
 		}
-		st.Human = &HumanSpec{
-			Prompt:    l.dyn(h.Get("prompt")),
-			Timeout:   timeout,
-			OnTimeout: str(h.Get("onTimeout")),
+		st.Human = &HumanSpec{Prompt: l.dyn(o.Get("human")), Timeout: timeout}
+	case "agent":
+		ag, err := l.agent(o)
+		if err != nil {
+			return nil, err
 		}
+		st.Agent = ag
 	}
 
 	if f := l.obj(o.Get("forEach")); f != nil {
@@ -386,22 +524,18 @@ func (l *loader) state(name string, o *goja.Object) (*State, error) {
 		}
 	}
 
-	st.Input = l.dyn(o.Get("input"))
-
-	if out := l.obj(o.Get("output")); out != nil {
-		schema, err := l.exportData(out.Get("schema"), "output.schema")
+	if out := o.Get("output"); defined(out) {
+		schema, err := l.exportData(out, "output")
 		if err != nil {
 			return nil, err
 		}
-		if schema != nil {
-			sm, ok := schema.(map[string]any)
-			if !ok {
-				return nil, fmt.Errorf("output.schema must be an object")
-			}
-			st.Output.Schema = sm
+		sm, ok := schema.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("output must be a schema object")
 		}
-		st.Output.Events = stringSlice(out.Get("events"))
+		st.Output.Schema = sm
 	}
+	st.Output.Events = stringSlice(o.Get("events"))
 
 	if r, err := l.retries(o.Get("retry"), "retry"); err != nil {
 		return nil, err
@@ -409,55 +543,10 @@ func (l *loader) state(name string, o *goja.Object) (*State, error) {
 		st.Retry = r
 	}
 
-	if c := l.obj(o.Get("catch")); c != nil {
-		n := int(c.Get("length").ToInteger())
-		for i := 0; i < n; i++ {
-			e := l.obj(c.Get(fmt.Sprintf("%d", i)))
-			st.Catch = append(st.Catch, CatchClause{
-				Match: stringSlice(e.Get("match")),
-				To:    str(e.Get("to")),
-			})
-		}
-	}
-
-	if v := o.Get("transitions"); defined(v) {
-		if _, isFn := goja.AssertFunction(v); isFn {
-			return nil, fmt.Errorf("transitions must be data ({on, when, to}); only when: is a function")
-		}
-		if to, ok := v.Export().(string); ok {
-			st.Transitions = []Transition{{To: to}}
-		} else if t := l.obj(v); t != nil {
-			n := int(t.Get("length").ToInteger())
-			for i := 0; i < n; i++ {
-				e := l.obj(t.Get(fmt.Sprintf("%d", i)))
-				if e == nil {
-					return nil, fmt.Errorf("transitions[%d] must be an object", i)
-				}
-				st.Transitions = append(st.Transitions, Transition{
-					On:   str(e.Get("on")),
-					When: l.dyn(e.Get("when")),
-					To:   str(e.Get("to")),
-				})
-			}
-		}
-	}
-
 	return st, nil
 }
 
-func (l *loader) agent(v goja.Value) (*AgentSpec, error) {
-	// Shorthand: agent: "prompt" or agent: ({ctx}) => `...`
-	if _, isFn := goja.AssertFunction(v); isFn {
-		return &AgentSpec{Prompt: l.dyn(v)}, nil
-	}
-	if s, ok := v.Export().(string); ok {
-		return &AgentSpec{Prompt: Dyn{Static: s}}, nil
-	}
-	o := l.obj(v)
-	if o == nil {
-		return nil, fmt.Errorf("agent must be a prompt, a function, or an object")
-	}
-
+func (l *loader) agent(o *goja.Object) (*AgentSpec, error) {
 	ag := &AgentSpec{
 		Model:            l.dyn(o.Get("model")),
 		System:           l.dyn(o.Get("system")),

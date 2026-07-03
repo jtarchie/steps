@@ -1,32 +1,29 @@
 // Type declarations for steps machine files.
 //
-// Enable editor autocomplete and checking by adding a jsconfig.json next to
-// your machine:
-//
-//   { "compilerOptions": { "checkJs": true } }
-//
-// and referencing this file from your machine:
+// Enable editor autocomplete and checking with a jsconfig.json next to your
+// machine ({ "compilerOptions": { "checkJs": true } }) and:
 //
 //   // @ts-check
 //   /// <reference path="./types/steps.d.ts" />
 //
-// Structure is data; any computed value is a plain function of one Scope.
+// A machine is: state consts + one flow expression. Structure is data; any
+// computed value is a function of ONE flat scope — destructure what you
+// need: ({ article, critique }) => `...`. The parameter list doubles as the
+// state's declared input contract, checked at load.
 
-/** The single argument every machine function receives. */
+/** The single flat argument every machine function receives. */
 interface Scope {
-  /** Run input at the root, plus ctx.<state> = that state's output. */
-  ctx: Record<string, any>;
-  /** The current state's validated output (transition guards only). */
-  output?: any;
-  /** The agent-declared event (transition guards only). */
-  event?: string;
   /** Entry counts per state — bound loops with visits.draft < 3. */
   visits: Record<string, number>;
   /** Cumulative run accounting. */
   run: { transitions: number; tokens: number; cost: number };
   /** Attempt number within the current state. */
   attempt: number;
-  /** foreach: item position. The item itself appears under its `as` name. */
+  /** This state's validated output (flow guards only). */
+  output?: any;
+  /** The agent-declared event (flow guards only). */
+  event?: string;
+  /** forEach: item position. The item itself appears under its `as` name. */
   index?: number;
   total?: number;
   /** Tool guards: the model-authored arguments being judged. */
@@ -35,21 +32,14 @@ interface Scope {
   calls?: Record<string, number>;
   /** Tool guards: model calls this conversation turn. */
   turn?: number;
-  /** foreach item under its `as` name (file, lead, item, ...). */
-  [as: string]: any;
+  /** Run inputs and state outputs, by name (and the forEach item). */
+  [name: string]: any;
 }
 
 type Fn<T> = (scope: Scope) => T;
 
 /** A schema fragment: "string", "enum(a, b)", "string[]", [{...shape}], or JSON schema. */
 type SchemaFragment = string | SchemaFragment[] | { [key: string]: any };
-
-interface OutputSpec {
-  /** Property shapes; every declared property is required. */
-  schema?: Record<string, SchemaFragment>;
-  /** Allowed events — injected into the schema as a required enum. */
-  events?: string[];
-}
 
 interface ToolRef {
   name: string;
@@ -65,12 +55,14 @@ interface ToolRef {
   args?: Record<string, any> | Fn<Record<string, any>>;
 }
 
-interface AgentSpec {
+/** A state: one handler (inferred from keys) + contracts + spend controls. */
+interface State {
+  // agent (default handler)
+  prompt?: string | Fn<string>;
+  system?: string | Fn<string>;
+  tools?: (string | ToolRef)[];
   /** Alias/provider ref, or a routing function returning one. */
   model?: string | Fn<string>;
-  system?: string | Fn<string>;
-  prompt?: string | Fn<string>;
-  tools?: (string | ToolRef)[];
   /** Model calls per conversation turn (resets across semantic retries). */
   maxTurns?: number;
   /** Cap per model call — no state may generate unboundedly. */
@@ -84,64 +76,82 @@ interface AgentSpec {
   adopt?: string | { from: string; lastTurns?: number };
   /** Inject a journal projection of a prior state (rung 2). */
   history?: { from: string; include?: ("messages" | "tool_calls" | "thoughts")[]; lastTurns?: number; as?: string };
-}
 
-interface RetryPolicy {
-  match: string[];
-  maxAttempts: number;
-  backoff?: { initial?: string; factor?: number; jitter?: boolean; cap?: string };
-}
-
-interface Transition {
-  /** Match the agent-declared event. */
-  on?: string;
-  /** Guard: agent proposes, guards dispose. */
-  when?: Fn<boolean>;
-  to: string;
-}
-
-interface State {
-  /** Exactly one handler: agent, action, or human (or terminal: true). */
-  agent?: string | Fn<string> | AgentSpec;
+  // action handler
   action?: string;
-  human?: { prompt: string | Fn<string>; timeout?: string; onTimeout?: string };
+
+  // write sugar (action file.write)
+  write?: string | Fn<string>;
+  content?: string | Fn<string>;
+
+  // human gate — routes live in the flow (branch timeout:/event keys)
+  human?: string | Fn<string>;
+  timeout?: string;
+
+  // shared
   /** Fan the handler out over a list — one hermetic context per item. */
-  forEach?: {
-    over: Fn<any[]>;
-    as?: string;
-    concurrency?: number;
-    onItemFailure?: "fail" | "skip";
-  };
+  forEach?: { over: Fn<any[]>; as?: string; concurrency?: number; onItemFailure?: "fail" | "skip" };
   /** Replay cached output when the rendered input is byte-identical. */
   memo?: boolean;
   /** Action args / agent user message: object (values may be functions) or one function. */
   input?: Record<string, any> | Fn<Record<string, any>>;
-  output?: OutputSpec;
-  retry?: RetryPolicy[] | "none";
-  catch?: { match: string[]; to: string }[];
-  /** Omitted: linear default to the next declared state. */
-  transitions?: string | Transition[];
+  /** The output schema — every property required; shorthand welcome. */
+  output?: Record<string, SchemaFragment>;
+  /** Allowed events — injected into the schema as a required enum. */
+  events?: string[];
+  retry?: { match: string[]; maxAttempts: number; backoff?: { initial?: string; factor?: number; jitter?: boolean; cap?: string } }[] | "none";
+
   terminal?: boolean;
   status?: "failed";
 }
+
+/** Opaque flow nodes built by pipe/branch/when. */
+interface FlowNode { readonly __steps: string }
+type FlowTarget = State | FlowNode;
+type FlowEdge = FlowNode; // when(...).to(...)
 
 interface Machine {
   name: string;
   version?: number;
   description?: string;
-  /** Declaring inputs buys strict ctx checking at validate time. */
-  input?: Record<string, { type?: string; required?: boolean }>;
+  /** Declaring inputs buys strict contract checking at load. */
+  input?: Record<string, string | { type?: string; required?: boolean }>;
   /** Human-named aliases (scout, senior) for provider refs. */
   models?: Record<string, string>;
+  /** Default agent model (sugar for defaults.model). */
+  model?: string;
+  /** Flat agent defaults + retry policies. */
   defaults?: {
-    agent?: Pick<AgentSpec, "model" | "maxTurns" | "maxOutputTokens" | "temperature" | "structuredOutput" | "reasoning"> & { model?: string };
-    retry?: RetryPolicy[];
+    model?: string; maxTurns?: number; maxOutputTokens?: number;
+    temperature?: number; reasoning?: "low" | "medium" | "high";
+    structuredOutput?: "prompt" | "native";
+    retry?: { match: string[]; maxAttempts: number; backoff?: object }[];
   };
   limits?: { maxTransitions?: number; maxTokens?: number; maxCost?: number; timeout?: string };
   initial?: string;
-  states: Record<string, State>;
+  /** Name registration: the shorthand keys name your state consts. */
+  states: Record<string, State | string | Fn<string>>;
+  /** The whole topology in one expression. Omit for linear declaration order. */
+  flow?: FlowNode;
 }
 
+/** Sequence: each step falls through to the next. */
+declare function pipe(...steps: FlowTarget[]): FlowNode;
+/** All outgoing edges of a state: event keys, else, catch classes, gate timeout. */
+declare function branch(
+  state: State,
+  edges: { [eventOrElse: string]: FlowTarget | FlowEdge | Record<string, FlowTarget> } | (FlowEdge | FlowTarget)[],
+): FlowNode;
+/** Guard an edge: when(s => ...).to(target). */
+declare function when(guard: Fn<boolean>): { to(target: FlowTarget): FlowEdge };
+/** Terminal states. */
+declare const done: FlowNode;
+declare const fail: FlowNode;
+
+/** Render a list as bulleted lines for prompts. */
+declare function list(items: any[]): string;
+/** Render any value as compact YAML for prompts. */
+declare function yaml(value: any): string;
 /** Read a text asset (prompt file) relative to the machine; pinned with the run. */
 declare function include(path: string): string;
 

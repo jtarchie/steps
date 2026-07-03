@@ -15,8 +15,9 @@ import (
 // runAction resolves the input block into args and calls the registered
 // tool. extra carries foreach item data ({as}: item, index, total). Static
 // values pass through with their real types — numbers stay numbers.
-func (e *Engine) runAction(ctx context.Context, st *machine.State, rs *journal.RunState, extra map[string]any) (*HandlerResult, error) {
+func (e *Engine) runAction(ctx context.Context, st *machine.State, rs *journal.RunState, extra map[string]any, attempt int) (*HandlerResult, error) {
 	scope := baseScope(rs)
+	scope["attempt"] = attempt
 	for k, v := range extra {
 		scope[k] = v
 	}
@@ -50,6 +51,7 @@ func (e *Engine) runHuman(st *machine.State, rs *journal.RunState) (*HandlerResu
 	if err != nil {
 		return nil, err
 	}
+	prompt = machine.Dedent(prompt)
 	return &HandlerResult{Park: &parkRequest{
 		Prompt:    prompt,
 		Timeout:   st.Human.Timeout,

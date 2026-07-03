@@ -12,11 +12,11 @@ human gate) while exercising nearly every feature in [DESIGN.md](../../DESIGN.md
 | Agent proposes, guards dispose | `critique` emits `approve`/`revise`; guard functions veto |
 | Engine-bounded loops | `visits.draft < 3` guard + `maxTransitions: 12` backstop |
 | Explicit contracts | typed output schemas; prompt functions are the input contract |
-| Feedback loops between states | rejected draft sees `ctx.critique.issues` on the next pass |
+| Feedback loops between states | rejected draft destructures `({ critique })` on the next pass |
 | Semantic retry (re-prompt with error) | mock's non-JSON critique response; small local models also trigger this naturally |
 | Transient retry (backoff) | mock's `rate_limited` injection; or kill Ollama mid-run |
 | Fallback transitions | `critique` falls through to `escalate` |
-| Human gate + park/resume + timeout | `escalate` with `onTimeout: "failed"` |
+| Human gate + park/resume + timeout | `escalate` with `timeout: "1h"` + a `timeout:` route in the flow |
 | Builtin tool library | `file.write` in `publish` |
 | Defaults | no `initial`, no transitions on `draft`/`publish`, implicit `done`/`failed` |
 | Durability | kill the process mid-run, `steps resume` finishes it |

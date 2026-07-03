@@ -54,8 +54,15 @@ func DryRun(m *Machine) (fatals []error, warnings []string) {
 
 		if a := s.Agent; a != nil {
 			record(s.Name, "model", dryCall(a.Model, itemScope))
-			record(s.Name, "system", dryCall(a.System, itemScope))
-			record(s.Name, "prompt", dryCall(a.Prompt, itemScope))
+			// The history projection appears in the prompt/system scope
+			// under its `as` name.
+			promptScope := itemScope
+			if a.History != nil {
+				promptScope = cloneScope(itemScope)
+				promptScope[a.History.As] = "history projection"
+			}
+			record(s.Name, "system", dryCall(a.System, promptScope))
+			record(s.Name, "prompt", dryCall(a.Prompt, promptScope))
 			toolScope := cloneScope(itemScope)
 			toolScope["args"] = anyMarker()
 			calls := map[string]any{}
@@ -66,7 +73,9 @@ func DryRun(m *Machine) (fatals []error, warnings []string) {
 			toolScope["turn"] = 1
 			for _, tr := range a.Tools {
 				record(s.Name, "tool "+tr.Name+" when", dryCall(tr.When, toolScope))
-				record(s.Name, "tool "+tr.Name+" args", dryCall(tr.Args, toolScope))
+				// Machine-pinned args resolve at agent-build time — no
+				// args/calls/turn exist there. Match the runtime scope.
+				record(s.Name, "tool "+tr.Name+" args", dryCall(tr.Args, itemScope))
 			}
 		}
 		if h := s.Human; h != nil {
@@ -74,8 +83,9 @@ func DryRun(m *Machine) (fatals []error, warnings []string) {
 		}
 		record(s.Name, "input", dryInputs(s.Input, itemScope))
 		for i, t := range s.Transitions {
-			// Transition guards also see the state's own output.
-			guardScope := cloneScope(itemScope)
+			// Guards run AFTER the state (foreach aggregate included): they
+			// see output/event but never a per-item variable.
+			guardScope := cloneScope(base)
 			guardScope["output"] = m.outputStub(s)
 			guardScope["event"] = ""
 			record(s.Name, fmt.Sprintf("transitions[%d].when", i), dryCall(t.When, guardScope))
@@ -88,11 +98,13 @@ func dryCall(d Dyn, scope map[string]any) error {
 	if !d.IsFn() {
 		return nil
 	}
-	stubbed, err := d.rt.stubScope(scope)
+	// The WHOLE scope is one proxied root, so destructuring an unknown key
+	// throws with the available keys listed.
+	root, err := d.rt.stubRoot(scope)
 	if err != nil {
 		return err
 	}
-	_, err = d.rt.call(d.fn, d.Src, stubbed)
+	_, err = d.rt.callValue(d.fn, d.Src, root)
 	return err
 }
 
@@ -120,41 +132,38 @@ func cloneScope(scope map[string]any) map[string]any {
 	return out
 }
 
-// stubScope builds the sample data for a state's scope. The JS side wraps it
+// stubScope builds the sample data for a state's FLAT scope: run inputs and
+// state outputs at the root, alongside the engine keys. The JS side wraps it
 // in throwing proxies.
 func (m *Machine) stubScope(s *State) map[string]any {
-	ctx := map[string]any{}
+	scope := map[string]any{}
 	if len(m.Input) == 0 {
-		// No declared inputs: run input keys are unknowable, so ctx cannot
-		// be checked strictly. Declaring input: buys strict checking.
-		ctx[openMarkerKey] = true
+		// No declared inputs: run input keys are unknowable, so the root
+		// cannot be checked strictly. Declaring input: buys strict checking.
+		scope[openMarkerKey] = true
 	}
 	for name, spec := range m.Input {
-		ctx[name] = sampleForType(spec.Type)
+		scope[name] = sampleForType(spec.Type)
 	}
 	for _, p := range m.States {
 		if p.Terminal || p.Name == s.Name {
 			continue
 		}
 		if reachableFrom(m, p.Name)[s.Name] {
-			ctx[p.Name] = m.outputStub(p)
+			scope[p.Name] = m.outputStub(p)
 		}
 	}
 	// A state's own output is visible to itself on revisits (loops).
-	ctx[s.Name] = m.outputStub(s)
+	scope[s.Name] = m.outputStub(s)
 
 	visits := map[string]any{}
 	for _, st := range m.States {
 		visits[st.Name] = 0
 	}
-	return map[string]any{
-		"ctx":     ctx,
-		"visits":  visits,
-		"run":     map[string]any{"transitions": 0, "tokens": 0, "cost": 0.0},
-		"attempt": 1,
-		"output":  anyMarker(),
-		"event":   "",
-	}
+	scope["visits"] = visits
+	scope["run"] = map[string]any{"transitions": 0, "tokens": 0, "cost": 0.0}
+	scope["attempt"] = 1
+	return scope
 }
 
 // outputStub models what ctx.<state> looks like downstream.
@@ -233,15 +242,17 @@ func ScopeDoc(m *Machine, s *State) string {
 	var b strings.Builder
 	scope := m.stubScope(s)
 
-	fmt.Fprintf(&b, "scope for functions in state %q:\n", s.Name)
-	ctx, _ := scope["ctx"].(map[string]any)
-	keys := make([]string, 0, len(ctx))
-	for k := range ctx {
+	fmt.Fprintf(&b, "scope for functions in state %q — destructure what you need:\n", s.Name)
+	keys := make([]string, 0, len(scope))
+	for k := range scope {
+		if k == "visits" || k == "run" || k == "attempt" || k == openMarkerKey {
+			continue
+		}
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		fmt.Fprintf(&b, "  ctx.%s%s\n", k, describeShape(ctx[k], "    "))
+		fmt.Fprintf(&b, "  %s%s\n", k, describeShape(scope[k], "    "))
 	}
 	if f := s.ForEach; f != nil {
 		fmt.Fprintf(&b, "  %s — the current item (shape depends on over)\n", f.As)
@@ -249,7 +260,7 @@ func ScopeDoc(m *Machine, s *State) string {
 	}
 	fmt.Fprintf(&b, "  visits.<state> — entry counts; run.{transitions, tokens, cost}; attempt\n")
 	if len(s.Transitions) > 0 {
-		fmt.Fprintf(&b, "  output, event — this state's result (transition guards only)\n")
+		fmt.Fprintf(&b, "  output, event — this state's result (flow guards only)\n")
 	}
 	if s.Agent != nil && len(s.Agent.Tools) > 0 {
 		fmt.Fprintf(&b, "  args, calls.<tool>, turn — tool guards only\n")
@@ -306,23 +317,15 @@ func (rt *jsRT) installStubs() error {
 	return err
 }
 
-// stubScope wraps sample data into throwing/permissive proxies.
-func (rt *jsRT) stubScope(scope map[string]any) (map[string]any, error) {
+// stubRoot wraps the whole sample scope into one throwing/permissive proxy.
+func (rt *jsRT) stubRoot(scope map[string]any) (goja.Value, error) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	wrap, ok := goja.AssertFunction(rt.vm.Get("__stepsStub"))
 	if !ok {
 		return nil, fmt.Errorf("stub helper not installed")
 	}
-	out := make(map[string]any, len(scope))
-	for k, v := range scope {
-		wrapped, err := wrap(goja.Undefined(), rt.vm.ToValue(v), rt.vm.ToValue(k))
-		if err != nil {
-			return nil, err
-		}
-		out[k] = wrapped
-	}
-	return out, nil
+	return wrap(goja.Undefined(), rt.vm.ToValue(scope), rt.vm.ToValue("scope"))
 }
 
 const stubHelperJS = `

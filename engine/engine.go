@@ -78,6 +78,7 @@ type HandlerResult struct {
 	Event    string
 	Usage    journal.Usage
 	Messages []journal.Message
+	Attempts int          // handler attempts consumed (1 = first try)
 	Memo     bool         // output replayed from the memo cache — zero tokens spent
 	Park     *parkRequest // human gates request a park instead of producing output
 }
@@ -198,6 +199,15 @@ func (e *Engine) loop(ctx context.Context, m *machine.Machine, runID string, rs 
 	current := rs.Current
 	if current == "" {
 		current = m.Initial
+	}
+
+	// visits.<state> must be a number for EVERY state — a guard like
+	// `visits.draft < 3` on a never-entered state reads undefined in JS,
+	// and `undefined < 3` is false: a silent misroute.
+	for _, s := range m.States {
+		if _, ok := rs.Visits[s.Name]; !ok {
+			rs.Visits[s.Name] = 0
+		}
 	}
 
 	for {
@@ -384,18 +394,22 @@ func (e *Engine) checkBudgets(m *machine.Machine, rs *journal.RunState) (string,
 	return "", false
 }
 
-// baseScope builds the scope every machine function receives.
+// baseScope builds the FLAT scope every machine function receives: run
+// inputs and state outputs at the root (destructure what you need), plus
+// the engine keys. Collisions with reserved names are rejected at load.
 func baseScope(rs *journal.RunState) map[string]any {
-	return map[string]any{
-		"ctx":    rs.Ctx,
-		"visits": rs.Visits,
-		"run": map[string]any{
-			"transitions": rs.Transitions,
-			"tokens":      rs.Usage.Total(),
-			"cost":        rs.Usage.Cost,
-		},
-		"attempt": 1,
+	scope := make(map[string]any, len(rs.Ctx)+3)
+	for k, v := range rs.Ctx {
+		scope[k] = v
 	}
+	scope["visits"] = rs.Visits
+	scope["run"] = map[string]any{
+		"transitions": rs.Transitions,
+		"tokens":      rs.Usage.Total(),
+		"cost":        rs.Usage.Cost,
+	}
+	scope["attempt"] = 1
+	return scope
 }
 
 // pickTransition evaluates the state's transitions in order.
@@ -403,6 +417,9 @@ func (e *Engine) pickTransition(st *machine.State, res *HandlerResult, rs *journ
 	scope := baseScope(rs)
 	scope["output"] = res.Output
 	scope["event"] = res.Event
+	if res.Attempts > 0 {
+		scope["attempt"] = res.Attempts
+	}
 
 	for _, t := range st.Transitions {
 		if t.On != "" && t.On != res.Event {
@@ -435,18 +452,18 @@ func (e *Engine) runHandler(ctx context.Context, m *machine.Machine, st *machine
 		return e.runForEach(ctx, m, st, runID, rs)
 	}
 	return e.withRetries(ctx, st, runID, func(attempt int) (*HandlerResult, error) {
-		return e.runOnce(ctx, m, st, runID, rs, nil)
+		return e.runOnce(ctx, m, st, runID, rs, nil, attempt)
 	})
 }
 
 // runOnce executes the state's body a single time with optional extra
 // template data (foreach items).
-func (e *Engine) runOnce(ctx context.Context, m *machine.Machine, st *machine.State, runID string, rs *journal.RunState, extra map[string]any) (*HandlerResult, error) {
+func (e *Engine) runOnce(ctx context.Context, m *machine.Machine, st *machine.State, runID string, rs *journal.RunState, extra map[string]any, attempt int) (*HandlerResult, error) {
 	switch {
 	case st.Action != nil:
-		return e.runAction(ctx, st, rs, extra)
+		return e.runAction(ctx, st, rs, extra, attempt)
 	case st.Agent != nil:
-		return e.runAgent(ctx, m, st, runID, rs, extra)
+		return e.runAgent(ctx, m, st, runID, rs, extra, attempt)
 	}
 	return nil, fmt.Errorf("state %q has no handler", st.Name)
 }
@@ -477,7 +494,7 @@ func (e *Engine) runForEach(ctx context.Context, m *machine.Machine, st *machine
 			"total":       len(list),
 		}
 		return e.withRetries(ctx, st, runID, func(attempt int) (*HandlerResult, error) {
-			return e.runOnce(ctx, m, st, runID, rs, extra)
+			return e.runOnce(ctx, m, st, runID, rs, extra, attempt)
 		})
 	}
 
@@ -550,6 +567,7 @@ func (e *Engine) withRetries(ctx context.Context, st *machine.State, runID strin
 	for {
 		res, err := fn(attempt)
 		if err == nil {
+			res.Attempts = attempt
 			return res, nil
 		}
 		class := provider.Classify(err)

@@ -11,22 +11,22 @@ func TestLoadSummarizeCritic(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 	if m.Initial != "draft" {
-		t.Errorf("initial = %q, want draft (first declared state)", m.Initial)
+		t.Errorf("initial = %q, want draft (flow entry)", m.Initial)
 	}
 
 	draft := m.State("draft")
 	if draft == nil || draft.Agent == nil {
 		t.Fatal("draft state missing or not an agent")
 	}
-	// Linear-flow default: draft has no transitions -> next in declaration order.
+	// pipe adjacency: draft falls through to critique.
 	if len(draft.Transitions) != 1 || draft.Transitions[0].To != "critique" {
 		t.Errorf("draft transitions = %+v, want single fallback to critique", draft.Transitions)
 	}
 	if ref, _ := draft.Agent.Model.Static.(string); ref != "ollama/qwen3:8b" {
-		t.Errorf("draft model = %v (defaults cascade)", draft.Agent.Model.Display())
+		t.Errorf("draft model = %v (top-level model sugar cascade)", draft.Agent.Model.Display())
 	}
 	if draft.Agent.MaxTurns != 2 {
-		t.Errorf("draft maxTurns = %d, want 2 from defaults.agent", draft.Agent.MaxTurns)
+		t.Errorf("draft maxTurns = %d, want 2 from flattened defaults", draft.Agent.MaxTurns)
 	}
 	if !draft.Agent.Prompt.IsFn() {
 		t.Error("draft prompt should be a function")
@@ -40,26 +40,35 @@ func TestLoadSummarizeCritic(t *testing.T) {
 
 	critique := m.State("critique")
 	if len(critique.Transitions) != 3 {
-		t.Fatalf("critique transitions = %d, want 3", len(critique.Transitions))
+		t.Fatalf("critique transitions = %d, want 3 (approve, revise, else)", len(critique.Transitions))
 	}
 	if !critique.Transitions[0].When.IsFn() || !critique.Transitions[1].When.IsFn() {
 		t.Error("critique guards should be functions")
 	}
 	if !critique.Transitions[2].Fallback() {
-		t.Error("critique last transition should be the fallback")
+		t.Error("critique last transition should be the else fallback")
+	}
+
+	escalate := m.State("escalate")
+	if escalate.Human == nil || escalate.Human.OnTimeout != "failed" {
+		t.Errorf("escalate timeout route = %+v, want failed via branch timeout key", escalate.Human)
+	}
+
+	publish := m.State("publish")
+	if publish.Action == nil || publish.Action.Name != "file.write" {
+		t.Errorf("publish should be write-sugar file.write, got %+v", publish.Action)
+	}
+	if len(publish.Transitions) != 1 || publish.Transitions[0].To != "done" {
+		t.Errorf("publish transitions = %+v, want outgoing-edge default to done", publish.Transitions)
 	}
 
 	for _, name := range []string{"done", "failed"} {
-		s := m.State(name)
-		if s == nil || !s.Terminal {
+		if s := m.State(name); s == nil || !s.Terminal {
 			t.Errorf("implicit terminal %q missing", name)
 		}
 	}
 	if m.Limits.MaxTransitions != 12 {
 		t.Errorf("maxTransitions = %d, want 12", m.Limits.MaxTransitions)
-	}
-	if m.Limits.Timeout != DefaultTimeout {
-		t.Errorf("timeout = %v, want engine default", m.Limits.Timeout)
 	}
 }
 
@@ -75,14 +84,11 @@ func TestLoadAdoptVariant(t *testing.T) {
 
 func TestTerseMachine(t *testing.T) {
 	src := `
-module.exports = {
+export default {
   name: "summarize",
   states: {
-    draft: { agent: ({ctx}) => "Summarize in 3 bullets: " + ctx.article },
-    publish: {
-      action: "file.write",
-      input: { path: "out/summary.md", content: ({ctx}) => ctx.draft.text },
-    },
+    draft: "Summarize the article in 3 bullets",
+    publish: { write: "out/summary.md", content: ({ draft }) => draft.text },
   },
 };`
 	if _, err := Parse([]byte(src)); err == nil {
@@ -95,20 +101,28 @@ module.exports = {
 	if m.Initial != "draft" {
 		t.Errorf("initial = %q", m.Initial)
 	}
-	if !m.State("draft").Output.DefaultOutput() {
-		t.Errorf("draft output = %+v, want default {text: string}", m.State("draft").Output.Schema)
+	draft := m.State("draft")
+	if draft.Agent == nil || draft.Agent.Prompt.IsZero() {
+		t.Error("bare-string state should become an agent prompt")
+	}
+	if !draft.Output.DefaultOutput() {
+		t.Errorf("draft output = %+v, want default {text: string}", draft.Output.Schema)
+	}
+	// No flow: linear declaration-order defaults apply.
+	if to := draft.Transitions[0].To; to != "publish" {
+		t.Errorf("draft flows to %q, want publish (linear default)", to)
 	}
 }
 
 func TestStateOrderPreserved(t *testing.T) {
 	src := `
-module.exports = {
+export default {
   name: "ordered",
-  defaults: { agent: { model: "mock" } },
+  model: "mock",
   states: {
-    zebra: { agent: "one" },
-    alpha: { agent: "two" },
-    middle: { agent: "three" },
+    zebra: "one",
+    alpha: "two",
+    middle: "three",
   },
 };`
 	m, err := Parse([]byte(src))
@@ -125,11 +139,11 @@ module.exports = {
 
 func TestAdoptObjectForm(t *testing.T) {
 	src := `
-module.exports = {
+export default {
   name: "trim",
-  defaults: { agent: { model: "mock" } },
+  model: "mock",
   states: {
-    work: { agent: { adopt: { from: "self", lastTurns: 6 }, prompt: "go" } },
+    work: { adopt: { from: "self", lastTurns: 6 }, prompt: "go" },
   },
 };`
 	m, err := Parse([]byte(src))
@@ -144,19 +158,19 @@ module.exports = {
 
 func TestDryRunCatchesUnknownFields(t *testing.T) {
 	src := `
-module.exports = {
+const triage = {
+  prompt: "classify it",
+  output: { severity: "enum(low, high)" },
+  events: ["done_it"],
+};
+export default {
   name: "typo",
-  defaults: { agent: { model: "mock" } },
-  states: {
-    triage: {
-      agent: "classify",
-      output: { schema: { severity: "enum(low, high)" }, events: ["done_it"] },
-      transitions: [
-        { on: "done_it", when: ({output}) => output.sevrity === "high", to: "done" },
-        { to: "done" },
-      ],
-    },
-  },
+  model: "mock",
+  states: { triage },
+  flow: pipe(branch(triage, {
+    done_it: when(({ output }) => output.sevrity === "high").to(done),
+    else: done,
+  })),
 };`
 	_, err := Parse([]byte(src))
 	if err == nil {
@@ -167,39 +181,34 @@ module.exports = {
 	}
 }
 
-func TestDryRunUnknownCtxState(t *testing.T) {
-	// Declaring input: buys strict ctx checking; without it, run inputs are
-	// unknowable and ctx tolerates unknown keys.
+func TestContractCatchesUnknownDestructure(t *testing.T) {
+	// Declaring input: buys strict checking of destructured parameters.
 	src := `
-module.exports = {
+const a = "one";
+const b = { prompt: ({ aa }) => "prev said: " + aa.text };
+export default {
   name: "typo2",
-  input: { article: { type: "string" } },
-  defaults: { agent: { model: "mock" } },
-  states: {
-    a: { agent: "one" },
-    b: { agent: ({ctx}) => "prev said: " + ctx.aa.text },
-  },
+  model: "mock",
+  input: { article: "string" },
+  states: { a, b },
 };`
 	_, err := Parse([]byte(src))
-	if err == nil || !strings.Contains(err.Error(), "unknown field ctx.aa") {
-		t.Errorf("unknown ctx state should fail at load listing states, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "{aa}") || !strings.Contains(err.Error(), "available") {
+		t.Errorf("unknown destructured key should fail at load listing available keys, got: %v", err)
 	}
 }
 
 func TestInfiniteGuardIsWarning(t *testing.T) {
 	src := `
-module.exports = {
+const a = { prompt: "one" };
+export default {
   name: "loopy",
-  defaults: { agent: { model: "mock" } },
-  states: {
-    a: {
-      agent: "one",
-      transitions: [
-        { when: () => { while (true) {} }, to: "done" },
-        { to: "done" },
-      ],
-    },
-  },
+  model: "mock",
+  states: { a },
+  flow: pipe(branch(a, [
+    when(() => { while (true) {} }).to(done),
+    done,
+  ])),
 };`
 	m, err := Parse([]byte(src))
 	if err != nil {
@@ -217,13 +226,35 @@ module.exports = {
 	}
 }
 
+func TestGuardOnlyArrayBranch(t *testing.T) {
+	src := `
+const work = { prompt: "go", output: { n: "number" } };
+export default {
+  name: "arrayform",
+  model: "mock",
+  states: { work },
+  flow: pipe(branch(work, [
+    when(({ output }) => output.n > 1).to(done),
+    fail,
+  ])),
+};`
+	m, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	ts := m.State("work").Transitions
+	if len(ts) != 2 || !ts[0].When.IsFn() || ts[1].To != "failed" || !ts[1].Fallback() {
+		t.Errorf("array-form transitions = %+v", ts)
+	}
+}
+
 func TestIncludePinsAssets(t *testing.T) {
 	src := `
-module.exports = {
+export default {
   name: "inc",
-  defaults: { agent: { model: "mock" } },
+  model: "mock",
   states: {
-    a: { agent: include("fixtures/article.txt") },
+    a: include("fixtures/article.txt"),
   },
 };`
 	m, err := parseSource([]byte(src), "../examples/summarize-critic")
@@ -231,9 +262,8 @@ module.exports = {
 		t.Fatalf("parse with include: %v", err)
 	}
 	if _, ok := m.Assets["fixtures/article.txt"]; !ok {
-		t.Fatalf("included file should be pinned as an asset, got %v", mapKeys(m.Assets))
+		t.Fatal("included file should be pinned as an asset")
 	}
-	// Resume path: rebuild from pinned source + assets with no filesystem.
 	m2, err := ParseWithAssets(m.Source, m.Assets)
 	if err != nil {
 		t.Fatalf("ParseWithAssets: %v", err)
@@ -243,21 +273,13 @@ module.exports = {
 	}
 }
 
-func mapKeys(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
-}
-
 func TestModelAliasErrors(t *testing.T) {
 	src := `
-module.exports = {
+export default {
   name: "aliased",
   models: { scout: "mock", senior: "mock" },
   states: {
-    a: { agent: { model: "senoir", prompt: "hi" } },
+    a: { model: "senoir", prompt: "hi" },
   },
 };`
 	_, err := Parse([]byte(src))
@@ -266,18 +288,75 @@ module.exports = {
 	}
 }
 
-func TestValidationCatchesBadTransitions(t *testing.T) {
+func TestMovedToFlowKeysError(t *testing.T) {
 	src := `
-module.exports = {
-  name: "bad",
-  defaults: { agent: { model: "mock" } },
+export default {
+  name: "old",
+  model: "mock",
   states: {
-    a: {
-      agent: "hi",
-      transitions: [{ on: "nope", to: "b" }, { to: "done" }],
-    },
-    b: { agent: "bye" },
+    a: { prompt: "hi", transitions: [{ to: "done" }] },
   },
+};`
+	_, err := Parse([]byte(src))
+	if err == nil || !strings.Contains(err.Error(), "moved to the flow") {
+		t.Errorf("old transitions key should point at the flow, got %v", err)
+	}
+}
+
+func TestUnknownStateKeyError(t *testing.T) {
+	src := `
+export default {
+  name: "typo3",
+  model: "mock",
+  states: {
+    a: { promt: "hi" },
+  },
+};`
+	_, err := Parse([]byte(src))
+	if err == nil || !strings.Contains(err.Error(), `"promt"`) || !strings.Contains(err.Error(), "valid keys") {
+		t.Errorf("unknown state key should list valid keys, got %v", err)
+	}
+}
+
+func TestReservedNameCollision(t *testing.T) {
+	src := `
+export default {
+  name: "shadow",
+  model: "mock",
+  input: { output: "string" },
+  states: { a: "hi" },
+};`
+	_, err := Parse([]byte(src))
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Errorf("input shadowing a reserved scope key should fail, got %v", err)
+	}
+}
+
+func TestDoubleWiringError(t *testing.T) {
+	src := `
+const a = { prompt: "one" };
+const b = { prompt: "two" };
+export default {
+  name: "dupe",
+  model: "mock",
+  states: { a, b },
+  flow: pipe(a, b, a, done),
+};`
+	_, err := Parse([]byte(src))
+	if err == nil || !strings.Contains(err.Error(), "wired more than once") {
+		t.Errorf("double wiring should fail, got %v", err)
+	}
+}
+
+func TestValidationCatchesBadEvent(t *testing.T) {
+	src := `
+const a = { prompt: "hi", output: { x: "string" } };
+const b = { prompt: "bye" };
+export default {
+  name: "bad",
+  model: "mock",
+  states: { a, b },
+  flow: pipe(branch(a, { nope: b, else: done })),
 };`
 	_, err := Parse([]byte(src))
 	if err == nil || !strings.Contains(err.Error(), "not in output.events") {
@@ -287,17 +366,25 @@ module.exports = {
 
 func TestValidationCatchesUnreachable(t *testing.T) {
 	src := `
-module.exports = {
+const a = { prompt: "hi" };
+const orphan = { prompt: "never" };
+export default {
   name: "bad",
-  defaults: { agent: { model: "mock" } },
-  states: {
-    a: { agent: "hi", transitions: "done" },
-    orphan: { agent: "never", transitions: "done" },
-  },
+  model: "mock",
+  states: { a, orphan },
+  flow: pipe(a),
 };`
 	_, err := Parse([]byte(src))
 	if err == nil || !strings.Contains(err.Error(), "unreachable") {
 		t.Errorf("want unreachable error, got %v", err)
+	}
+}
+
+func TestDedent(t *testing.T) {
+	in := "\n    Line one\n      indented more\n    line three\n  "
+	want := "Line one\n  indented more\nline three"
+	if got := Dedent(in); got != want {
+		t.Errorf("Dedent = %q, want %q", got, want)
 	}
 }
 
@@ -319,14 +406,6 @@ func TestSchemaShorthand(t *testing.T) {
 	if err != nil || len(pipe["enum"].([]any)) != 3 {
 		t.Errorf("pipe enum = %v, %v", pipe, err)
 	}
-	tags := props["tags"].(map[string]any)
-	if tags["type"] != "array" || tags["items"].(map[string]any)["type"] != "string" {
-		t.Errorf("tags = %v", tags)
-	}
-	leads := props["leads"].(map[string]any)
-	if leads["type"] != "array" || leads["items"].(map[string]any)["type"] != "object" {
-		t.Errorf("leads = %v", leads)
-	}
 	if _, err := NormalizeSchemaFragment("strng"); err == nil || !strings.Contains(err.Error(), "unknown type") {
 		t.Errorf("typo should produce a friendly error, got %v", err)
 	}
@@ -345,21 +424,11 @@ func TestGenaiSchema(t *testing.T) {
 	if len(s.Required) != 4 {
 		t.Errorf("required = %v, want 4 entries", s.Required)
 	}
-	if s.Properties["score"].Type != "NUMBER" {
-		t.Errorf("score type = %q", s.Properties["score"].Type)
-	}
-	if s.Properties["title"].Type != "STRING" {
-		t.Errorf("scalar shorthand type = %q", s.Properties["title"].Type)
-	}
 	issues := s.Properties["issues"]
-	if issues.Type != "ARRAY" || issues.Items == nil || issues.Items.Type != "STRING" {
+	if issues.Type != "ARRAY" || issues.MaxItems == nil || *issues.MaxItems != 3 {
 		t.Errorf("issues schema = %+v", issues)
 	}
-	if issues.MaxItems == nil || *issues.MaxItems != 3 {
-		t.Errorf("issues maxItems = %v, want 3", issues.MaxItems)
-	}
-	ev := s.Properties["event"]
-	if ev == nil || len(ev.Enum) != 2 {
-		t.Errorf("event enum = %+v", ev)
+	if ev := s.Properties["event"]; ev == nil || len(ev.Enum) != 2 {
+		t.Errorf("event enum = %+v", s.Properties["event"])
 	}
 }

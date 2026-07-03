@@ -19,7 +19,7 @@ split_diff ──▶ scout_files ──▶ scout_pr ──┬─(trivial + guard
   machine assembles it.
 - **The senior pulls context on demand**: it carries a `file.read` tool with
   three guards — `maxCalls: 3`, a guard allowing **only paths that are part
-  of this PR** (`({ctx, args}) => ctx.split_diff.files.some(f => f.path ===
+  of this PR** (`({split_diff, args}) => split_diff.files.some(f => f.path ===
   args.path)`), and machine-pinned `args` for the repo root so the model
   never authors it and cannot escape it. The model decides *when* it needs a
   full file; the machine decides *what* it may touch.
@@ -27,7 +27,7 @@ split_diff ──▶ scout_files ──▶ scout_pr ──┬─(trivial + guard
   concerns (docs promising what code retracts, APIs changed without callers)
   — seeing only file stats and scout conclusions, never full patches.
 - **`deep_review`** is the senior: it fans out **only over flagged files**
-  (`ctx.scout_files.items.filter(i => i.risk !== "low")`), each with its patch
+  (`scout_files.items.filter(i => i.risk !== "low")` in the over mapper, which also joins each lead with its patch), each with its patch
   and pre-gathered leads. Its job is verify-or-refute, never research.
 - **Two guard showpieces**: the scout can propose `trivial`, but the guard
   only allows skipping the senior when *no* file scout was worried; and the
@@ -42,9 +42,9 @@ split_diff ──▶ scout_files ──▶ scout_pr ──┬─(trivial + guard
   `forEach: {concurrency: 3, onItemFailure: "skip"}` parallelizes scouting
   and survives poisoned files.
 - To review real PRs, swap the file plumbing for the gh action pack:
-  `action: "gh.pr_diff"` with `input: {pr: ({ctx}) => ctx.pr}` up front, and
-  `action: "gh.post_review"` with `input: {pr: ..., body: ({ctx}) =>
-  ctx.verdict.body, event: "comment"}` at the end.
+  `action: "gh.pr_diff"` with `input: ({pr}) => ({pr})` up front, and
+  `action: "gh.post_review"` with `input: ({verdict, pr}) => ({pr,
+  body: verdict.body, event: "comment"})` at the end.
 
 ## Run it
 
@@ -77,8 +77,8 @@ code never reads (a cross-file lead only the PR-level scout can catch).
 
 - State sequence `split_diff, scout_files, scout_pr, deep_review, verdict,
   write_review`; 6 transitions.
-- `ctx.scout_files.count == 3` (one hermetic context per file);
-  `ctx.deep_review.count == 2` (the low-risk README never reached the senior).
+- `scout_files.count == 3` (one hermetic context per file);
+  `deep_review.count == 2` (the low-risk README never reached the senior).
 - The verdict event was `approve`, but the fired transition was the fallback
   — the guard veto is visible in the journal (`on` is empty).
 - `out/review.md` contains the substantiated findings.

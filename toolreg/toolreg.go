@@ -215,6 +215,13 @@ func registerBuiltins(r *Registry) {
 			return map[string]any{"content": string(raw), "bytes": len(raw)}, nil
 		})
 
+	// diff.split: unified diff text -> {files: [{path, patch, additions,
+	// deletions, content?}], count}. Args: diff (required); by: "file"
+	// (default) | "hunk" (one entry per hunk, file header repeated for
+	// context); root: a checkout directory — when given, each entry gains
+	// `content`, the file's CURRENT text read from root (path-confined),
+	// capped at context_bytes (default 4096) with a truncation marker.
+	// Deleted/renamed files simply carry no content.
 	r.Register("diff.split", "Split a unified diff into per-file (or per-hunk, by: hunk) entries; a root attaches current file contents (capped by context_bytes)",
 		func(ctx context.Context, args map[string]any) (map[string]any, error) {
 			diff, err := str(args, "diff")

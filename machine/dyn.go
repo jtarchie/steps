@@ -15,6 +15,10 @@ import (
 type jsRT struct {
 	mu sync.Mutex
 	vm *goja.Runtime
+	// intMu serializes interrupt arming/clearing against the timeout timer's
+	// goroutine — Stop() does not wait for a fired callback, so without this
+	// a raced timer could poison the NEXT unrelated call.
+	intMu sync.Mutex
 }
 
 // callTimeout bounds every user function: a while(true) in a guard becomes
@@ -23,17 +27,32 @@ const callTimeout = time.Second
 
 func (rt *jsRT) call(fn goja.Callable, src string, scope map[string]any) (goja.Value, error) {
 	rt.mu.Lock()
+	arg := rt.vm.ToValue(scope)
+	rt.mu.Unlock()
+	return rt.callValue(fn, src, arg)
+}
+
+func (rt *jsRT) callValue(fn goja.Callable, src string, arg goja.Value) (goja.Value, error) {
+	rt.mu.Lock()
 	defer rt.mu.Unlock()
 
+	done := false
 	timer := time.AfterFunc(callTimeout, func() {
-		rt.vm.Interrupt(fmt.Sprintf("function exceeded %s", callTimeout))
+		rt.intMu.Lock()
+		defer rt.intMu.Unlock()
+		if !done {
+			rt.vm.Interrupt(fmt.Sprintf("function exceeded %s", callTimeout))
+		}
 	})
 	defer func() {
+		rt.intMu.Lock()
+		done = true
 		timer.Stop()
 		rt.vm.ClearInterrupt()
+		rt.intMu.Unlock()
 	}()
 
-	val, err := fn(goja.Undefined(), rt.vm.ToValue(scope))
+	val, err := fn(goja.Undefined(), arg)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", firstLine(src), err)
 	}

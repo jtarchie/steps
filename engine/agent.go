@@ -32,7 +32,7 @@ const (
 // agent loop, engine-owned output contract, semantic retries with feedback.
 // Transient model errors bubble up to the engine's retry driver. extraData
 // carries foreach item data ({as}: item, index, total).
-func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.State, runID string, rs *journal.RunState, extraData map[string]any) (*HandlerResult, error) {
+func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.State, runID string, rs *journal.RunState, extraData map[string]any, attempt int) (*HandlerResult, error) {
 	spec := st.Agent
 
 	// The model ref may be routed at runtime (model: {expr: ...}).
@@ -41,8 +41,9 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 		return nil, err
 	}
 
-	// Scope: ctx + foreach item data + optional history projection.
+	// Scope: flat run data + foreach item data + optional history projection.
 	data := baseScope(rs)
+	data["attempt"] = attempt
 	for k, v := range extraData {
 		data[k] = v
 	}
@@ -72,7 +73,10 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 		memoKey = memoHash(modelRef, system, userMsg)
 		if cached, ok, memoErr := e.Store.MemoGet(ctx, memoKey); memoErr == nil && ok {
 			e.Listener.MemoHit(st.Name)
-			return &HandlerResult{Output: cached, Memo: true}, nil
+			// The event rides inside the cached output — re-extract it, or
+			// memoized event-routing states would silently take the fallback.
+			event, _ := cached["event"].(string)
+			return &HandlerResult{Output: cached, Event: event, Memo: true}, nil
 		}
 	}
 
@@ -338,7 +342,11 @@ func chooseFinalText(texts []string, spec machine.OutputSpec) string {
 // labeled message when no prompt is declared.
 func (e *Engine) buildUserMessage(st *machine.State, scope map[string]any) (string, error) {
 	if !st.Agent.Prompt.IsZero() {
-		return st.Agent.Prompt.String(scope)
+		prompt, err := st.Agent.Prompt.String(scope)
+		if err != nil {
+			return "", err
+		}
+		return machine.Dedent(prompt), nil
 	}
 	inputs, err := machine.ResolveInputs(st.Input, scope)
 	if err != nil {
@@ -361,7 +369,7 @@ func (e *Engine) buildSystemInstruction(st *machine.State, data map[string]any) 
 		if err != nil {
 			return "", err
 		}
-		parts = append(parts, system)
+		parts = append(parts, machine.Dedent(system))
 	}
 
 	if !plainTextContract(st.Output) {
