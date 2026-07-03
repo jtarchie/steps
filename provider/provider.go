@@ -49,6 +49,10 @@ func NewRegistry() *Registry {
 	})
 	r.Register("ollama", openAICompatible("OLLAMA_BASE_URL", "http://localhost:11434/v1"))
 	r.Register("lmstudio", openAICompatible("LMSTUDIO_BASE_URL", "http://localhost:1234/v1"))
+	// OpenRouter is OpenAI-compatible but needs per-request cache handling
+	// (x-session-id sticky routing, cache_control for Anthropic, cached-token
+	// accounting) — see openrouter.go.
+	r.Register("openrouter", newOpenRouter)
 	return r
 }
 

@@ -57,3 +57,37 @@ func TestDiffSplitEnrichment(t *testing.T) {
 		t.Errorf("gone.go should have no content, got %v", gone["content"])
 	}
 }
+
+func TestExecRunGateResultIsData(t *testing.T) {
+	r := New()
+
+	// A passing gate: ok true, exit 0, and no Go error.
+	out, err := r.Call(context.Background(), "exec.run", map[string]any{"cmd": "printf out; printf err >&2"})
+	if err != nil {
+		t.Fatalf("passing command should not error: %v", err)
+	}
+	if out["ok"] != true || out["exit_code"] != 0 {
+		t.Errorf("passing gate = %v, want ok:true exit:0", out)
+	}
+	if out["stdout"] != "out" || out["stderr"] != "err" {
+		t.Errorf("captured streams = %q / %q", out["stdout"], out["stderr"])
+	}
+
+	// The contract: a FAILING build is DATA, not a Go error — the engine
+	// must route on it, not retry it as a transient action_error.
+	out, err = r.Call(context.Background(), "exec.run", map[string]any{"cmd": "echo boom >&2; exit 3"})
+	if err != nil {
+		t.Fatalf("non-zero exit must be data, not error: %v", err)
+	}
+	if out["ok"] != false || out["exit_code"] != 3 {
+		t.Errorf("failing gate = %v, want ok:false exit:3", out)
+	}
+	if !strings.Contains(out["stderr"].(string), "boom") {
+		t.Errorf("stderr = %q, want it to carry the failure text", out["stderr"])
+	}
+
+	// A command that cannot LAUNCH is genuine (transient) infra failure.
+	if _, err := r.Call(context.Background(), "exec.run", map[string]any{"cmd": "true", "cwd": "/no/such/dir"}); err == nil {
+		t.Error("unreadable cwd should raise a (transient) error")
+	}
+}

@@ -6,15 +6,19 @@
 package toolreg
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ActionFunc is the uniform tool signature: JSON-ish maps in and out.
@@ -92,6 +96,17 @@ func toInt(v any) (int, error) {
 		return strconv.Atoi(strings.TrimSpace(n))
 	}
 	return 0, fmt.Errorf("not a number: %T", v)
+}
+
+// capOutput bounds captured stdout/stderr so a chatty build cannot blow the
+// journal or a downstream prompt; the tail is what a fixer needs (the error
+// usually lands last).
+func capOutput(s string) string {
+	const max = 16 * 1024
+	if len(s) <= max {
+		return s
+	}
+	return "… (truncated; showing last 16KB)\n" + s[len(s)-max:]
 }
 
 func str(args map[string]any, key string) (string, error) {
@@ -303,6 +318,66 @@ func registerBuiltins(r *Registry) {
 				}
 			}
 			return map[string]any{"files": files, "count": len(files)}, nil
+		})
+
+	// exec.run: run a shell command as a build/test GATE. The crucial
+	// contract — a non-zero exit is DATA, not an error: it returns
+	// {ok:false, exit_code, stdout, stderr} so a guard can route on it
+	// (build red -> loop back and fix). Only a genuine failure to LAUNCH
+	// (missing shell, unreadable cwd) or a timeout raises a Go error, which
+	// the engine classifies transient and retries with backoff. If a build
+	// failure raised instead, the engine would replay the SAME broken code
+	// three times and then fail the run — the fix loop would never see it.
+	//
+	// SECURITY: this runs an arbitrary shell command. The command line is a
+	// rendered `input:` block — machine/operator-authored, never model text —
+	// so it is trusted the way any action's args are; do NOT expose exec.run
+	// as an agent `tool` where a model would author `cmd`.
+	r.Register("exec.run", "Run a shell command as a build/test gate: returns {ok, exit_code, stdout, stderr}; a non-zero exit is a routing signal, not an error (only a launch failure or timeout raises)",
+		func(ctx context.Context, args map[string]any) (map[string]any, error) {
+			cmdline, err := str(args, "cmd")
+			if err != nil {
+				return nil, err
+			}
+			cwd, _ := args["cwd"].(string)
+			timeout := 120 * time.Second
+			if v, ok := args["timeout_ms"]; ok && v != nil {
+				n, err := toInt(v)
+				if err != nil || n <= 0 {
+					return nil, fmt.Errorf("timeout_ms must be a positive integer, got %v", v)
+				}
+				timeout = time.Duration(n) * time.Millisecond
+			}
+			runCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+
+			cmd := exec.CommandContext(runCtx, "sh", "-c", cmdline)
+			cmd.Dir = cwd
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			runErr := cmd.Run()
+
+			// Timeout/cancellation is transient infra, never a build verdict.
+			if runCtx.Err() != nil {
+				return nil, fmt.Errorf("command timed out after %s: %s", timeout, cmdline)
+			}
+			exitCode := 0
+			if runErr != nil {
+				var ee *exec.ExitError
+				if errors.As(runErr, &ee) {
+					exitCode = ee.ExitCode() // ran, exited non-zero: that's the gate result
+				} else {
+					// Could not launch (no shell, bad cwd): transient, retryable.
+					return nil, fmt.Errorf("exec %q: %w", cmdline, runErr)
+				}
+			}
+			return map[string]any{
+				"cmd":       cmdline,
+				"exit_code": exitCode,
+				"ok":        exitCode == 0,
+				"stdout":    capOutput(stdout.String()),
+				"stderr":    capOutput(stderr.String()),
+			}, nil
 		})
 
 	registerGH(r)

@@ -1,0 +1,88 @@
+# Scripted responses for the mock provider — the LLM states (plan,
+# generate, review) are deterministic; the ACTIONS (write_files=file.write,
+# build=exec.run) run for real. So the reader loop is scripted here, and
+# the build gate genuinely executes the generated test in `out`.
+#
+#   ../../steps run workflow.ts --mock mock_responses.yaml \
+#     --input spec=@fixtures/spec.md --input language=bash \
+#     --input out=out --input 'verify_cmd=bash greet_test.sh'
+#
+# Trace: plan -> generate x2 -> review(revise) -> generate x2 ->
+#        review(approve) -> write_files x2 -> build(ok) -> report -> done
+
+plan:
+  - text: "{\"files\": [{\"path\": \"greet.sh\", \"purpose\": \"CLI entry: parse --name/--shout, print the greeting\"}, {\"path\": \"greet_test.sh\", \"purpose\": \"executable check of both flags against greet.sh\"}], \"contract\": \"greet.sh prints 'Hello, <name>!' (name defaults to world); --name NAME sets the name; --shout uppercases the whole line; unknown flags exit non-zero.\", \"acceptance\": [\"greet.sh with no args prints 'Hello, world!'\", \"--name Ada prints 'Hello, Ada!'\", \"--shout uppercases the greeting\", \"greet_test.sh exits 0 when behaviour is correct\"]}"
+
+generate:
+  - text: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      name="world"
+      if [ "$#" -ge 2 ] && [ "$1" = "--name" ]; then
+        name="$2"
+      fi
+      printf "Hello, %s!\n" "$name"
+
+  - text: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      here="$(cd "$(dirname "$0")" && pwd)"
+      got="$(bash "$here/greet.sh" --name Ada)"
+      [ "$got" = "Hello, Ada!" ] || exit 1
+      echo ok
+
+  - text: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      name="world"
+      shout="no"
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --name)
+            name="$2"
+            shift 2
+            ;;
+          --shout)
+            shout="yes"
+            shift
+            ;;
+          *)
+            echo "usage: greet [--name NAME] [--shout]" >&2
+            exit 2
+            ;;
+        esac
+      done
+
+      msg="Hello, ${name}!"
+      if [ "$shout" = "yes" ]; then
+        msg="$(printf "%s" "$msg" | tr "[:lower:]" "[:upper:]")"
+      fi
+      printf "%s\n" "$msg"
+
+  - text: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      here="$(cd "$(dirname "$0")" && pwd)"
+
+      got="$(bash "$here/greet.sh" --name Ada)"
+      if [ "$got" != "Hello, Ada!" ]; then
+        echo "want 'Hello, Ada!' got '$got'" >&2
+        exit 1
+      fi
+
+      got="$(bash "$here/greet.sh" --shout)"
+      if [ "$got" != "HELLO, WORLD!" ]; then
+        echo "want 'HELLO, WORLD!' got '$got'" >&2
+        exit 1
+      fi
+
+      echo "all tests passed"
+
+
+review:
+  - text: "{\"score\": 5, \"issues\": [\"--shout flag is never implemented\", \"no test exercises --shout\", \"unknown flags are silently ignored\"], \"event\": \"revise\"}"
+  - text: "{\"score\": 9, \"issues\": [], \"event\": \"approve\"}"
+

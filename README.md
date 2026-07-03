@@ -87,10 +87,15 @@ it, never a replay of side effects.
 ## Providers
 
 Models are provider-namespaced: `anthropic/claude-haiku-4-5`,
-`openai/gpt-4o`, `ollama/qwen3:8b`, `lmstudio/qwen3-0.6b`. Anthropic and
-OpenAI-compatible clients come from adk-utils-go; `ollama/` and `lmstudio/`
-are the same OpenAI-compatible client with different default base URLs
-(`OLLAMA_BASE_URL`, `LMSTUDIO_BASE_URL`, `OPENAI_BASE_URL` to override).
+`openai/gpt-4o`, `ollama/qwen3:8b`, `lmstudio/qwen3-0.6b`,
+`openrouter/qwen/qwen3-coder`. Anthropic and OpenAI-compatible clients come
+from adk-utils-go; `ollama/` and `lmstudio/` are the same OpenAI-compatible
+client with different default base URLs (`OLLAMA_BASE_URL`, `LMSTUDIO_BASE_URL`,
+`OPENAI_BASE_URL` to override). `openrouter/` (`OPENROUTER_API_KEY`,
+`OPENROUTER_BASE_URL`) adds OpenRouter's prompt-caching surface — `x-session-id`
+sticky routing keyed on the run id, `cache_control` for Anthropic-routed models,
+and cached-token accounting — on a scoped HTTP client. Unlike LM Studio, it
+honors `reasoning_effort`, so the `reasoning:` knob actually bounds thinking.
 `--mock script.yaml` replaces every model with scripted responses for
 deterministic CI.
 
@@ -138,7 +143,7 @@ machine/    TS loader (esbuild→goja), Dyn values, defaults, schemas, validatio
 journal/    event types, Store interface, SQLite store, fold
 engine/     run loop, retries, budgets, handlers (agent via ADK, action, human)
 provider/   model-ref registry, mock provider, error classification
-toolreg/    named Go functions + builtins (file.write, file.read, http.get)
+toolreg/    named Go functions + builtins (file.write, file.read, http.get, exec.run, diff.split, gh.*)
 docs/src/    global.d.ts — ambient TypeScript declarations for machine files
 cmd/steps/  CLI + human-readable narration
 examples/   canonical examples — they double as the acceptance spec
@@ -158,10 +163,18 @@ examples/   canonical examples — they double as the acceptance spec
   it. File context flows both ways: `diff.split` deterministically attaches
   the current file to each scout item, and the senior carries a guarded
   `file.read` tool (only PR files, bounded calls, machine-pinned root).
+- [`examples/codegen/`](examples/codegen/) — spec → working code with **two
+  gates**: an LLM reviewer, then a *real* `exec.run` build/test command whose
+  exit code routes the flow. The reviewer can be fooled; the build cannot — so
+  a build failure loops the coder back with the stderr until it goes green. An
+  architect plans the files, a coder `foreach`-writes them (raw text, not JSON),
+  and the gates run on `openrouter/` where `reasoning:` actually bounds thinking.
 
 ## Testing
 
-`go test ./...` — no network, no models: the acceptance tests run both
-examples against their mock scripts and assert the exact journal traces
-documented in the example READMEs (state sequence, retry counts, visit
-counters, artifacts, park/resume). Live runs are iteration, not CI.
+`go test ./...` — no network, no models: the acceptance tests run the examples
+against their mock scripts and assert the exact journal traces documented in
+the example READMEs (state sequence, retry counts, visit counters, artifacts,
+park/resume). The `codegen` acceptance test is scripted for the LLM states but
+runs its `exec.run` build gate for real (`bash greet_test.sh`), so it also
+proves the ground-truth loop end to end. Live runs are iteration, not CI.

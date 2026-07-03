@@ -75,7 +75,7 @@ to three rules, in priority order:
 | State body | **Pluggable handlers** — `agent` (LLM+tools loop), `llm` (single call), `action` (registered Go func), `human` (gate) |
 | Data flow | **Explicit contracts** — templated `input:` pulled from run context, typed `output:` schema merged back as `ctx.<state>.*`; fresh conversation per state; declared escape hatches only (`history` projection, `adopt` continuation) |
 | Durability | **Durable from day one** — event-sourced journal; runs survive crashes and park on human gates |
-| Providers | **Multi-provider from day one** — thin owned interface; Anthropic + OpenAI-compatible adapters |
+| Providers | **Multi-provider from day one** — thin owned interface; Anthropic + OpenAI-compatible adapters (`openai`, `ollama`, `lmstudio`) + `openrouter` (OpenAI-compatible plus OpenRouter's prompt-caching surface on a scoped HTTP client) |
 | Tools | **Registered Go functions** (reflection-derived schemas) + **built-in tool library** (http, json, exec…) |
 | Packaging | **Library + CLI** — `steps run`, `steps resume`, `steps runs`, `steps validate` |
 | Graph model | **Flat FSM + `foreach` fan-out** — states may map their handler over a ctx list (sequential v1; hermetic per-item contexts); sub-machines and parallel regions remain v1.x |
@@ -583,7 +583,7 @@ machine/          # JS loader (goja), Dyn values, defaults, schemas, validation,
 journal/          # event types, Store interface, sqlite store, fold
 engine/           # run loop, retries, budgets, handlers (agent via ADK, action, human)
 provider/         # model-ref registry, mock provider, error classification
-toolreg/          # named Go functions + builtins (file, diff, http, gh)
+toolreg/          # named Go functions + builtins (file, diff, http, gh, exec)
 docs/src/         # global.d.ts — ambient TypeScript types for machine files
 cmd/steps/        # CLI: run, resume, runs, validate, context, inspect
 examples/         # runnable canonical examples; double as acceptance specs

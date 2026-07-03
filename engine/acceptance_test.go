@@ -633,3 +633,72 @@ critique:
 		t.Error("resume without an event should error while parked")
 	}
 }
+
+// TestCodegenMockTrace asserts the exact deterministic trace from
+// examples/codegen/README.md: the reader loop rejects once, the coder
+// regenerates, and gate two ACTUALLY RUNS the generated test — the second
+// gate is real, not scripted. exec.run returns a non-zero exit as data, so
+// here (exit 0) the machine ships; a red build would loop instead.
+func TestCodegenMockTrace(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	m, script := loadExample(t, "codegen")
+	eng, store := newTestEngine(t, script)
+	spec, err := os.ReadFile(repoPath(t, "examples/codegen/fixtures/spec.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := eng.Start(context.Background(), m, map[string]any{
+		"spec":       string(spec),
+		"language":   "bash",
+		"out":        "out",
+		"verify_cmd": "bash greet_test.sh", // the real ground-truth gate
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Status != journal.StatusDone {
+		t.Fatalf("status = %s at %s, want done", res.Status, res.Terminal)
+	}
+
+	// Reader rejected once, so generate/review each ran twice before disk.
+	states, _, transitions := eventTrace(t, store, res.RunID)
+	want := []string{"plan", "generate", "review", "generate", "review", "write_files", "build", "report"}
+	if strings.Join(states, ",") != strings.Join(want, ",") {
+		t.Errorf("state sequence = %v, want %v", states, want)
+	}
+	if transitions != 8 {
+		t.Errorf("transitions = %d, want 8", transitions)
+	}
+
+	// Gate two really executed the generated test: its exit code is DATA.
+	build, _ := res.State.Ctx["build"].(map[string]any)
+	if build["ok"] != true || build["exit_code"] != 0 {
+		t.Fatalf("build gate = %v, want ok:true exit:0 (test actually ran)", build)
+	}
+	if out, _ := build["stdout"].(string); !strings.Contains(out, "all tests passed") {
+		t.Errorf("build stdout = %q, want the generated test's own output", build["stdout"])
+	}
+
+	gen, _ := res.State.Ctx["generate"].(map[string]any)
+	if n, _ := gen["count"].(int); n != 2 {
+		t.Errorf("generate.count = %v, want 2 (one hermetic context per planned file)", gen["count"])
+	}
+
+	// The approved code reached disk and runs for real.
+	greet, err := os.ReadFile("out/greet.sh")
+	if err != nil {
+		t.Fatalf("artifact: %v", err)
+	}
+	if !strings.Contains(string(greet), "shout") {
+		t.Errorf("out/greet.sh missing the revised --shout handling")
+	}
+	manifest, err := os.ReadFile("out/GENERATED.md")
+	if err != nil {
+		t.Fatalf("manifest: %v", err)
+	}
+	if !strings.Contains(string(manifest), "PASSED") {
+		t.Errorf("GENERATED.md should record the build gate as PASSED")
+	}
+}

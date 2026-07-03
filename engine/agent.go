@@ -35,6 +35,11 @@ const (
 func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.State, runID string, rs *journal.RunState, extraData map[string]any, attempt int) (*HandlerResult, error) {
 	spec := st.Agent
 
+	// Tag the run so the openrouter/ provider can pin all of a run's calls to
+	// one endpoint (x-session-id) and keep the prompt cache warm. No-op for
+	// other providers.
+	ctx = provider.WithSessionID(ctx, runID)
+
 	// The model ref may be routed at runtime (model: {expr: ...}).
 	modelRef, err := e.resolveModelRef(m, st, rs, extraData)
 	if err != nil {

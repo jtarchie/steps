@@ -1,0 +1,177 @@
+# codegen
+
+A spec goes in; working, **checked** code comes out. This example is the
+`steps` thesis at its sharpest — *determinism at the boundaries, choice in the
+interior* — with **two gates** wrapped around a stochastic middle:
+
+1. an architect turns prose into a typed file plan (once),
+2. a coder **fans out** over the plan — one hermetic context per file,
+3. **gate one, the reader:** an LLM reviewer scores the tree and, on approve,
+   lets it reach disk (rung-1 `ctx`, fallible judgement),
+4. **gate two, the ground truth:** a *real* build/test command runs against
+   the written files. Its exit code is the verdict — an LLM reviewer can be
+   fooled, a compiler cannot.
+
+Either gate can send the coder back with feedback: the reader loop fixes what
+a human reader would catch (`review.issues`), the build loop fixes what only
+the toolchain knows (`build.stderr`). `visits` bounds both loops; a human
+breaks the tie when a budget is spent.
+
+The machine is **language-agnostic**: `language` and `verify_cmd` are run
+inputs. Point it at Go with `verify_cmd="go build ./... && go test ./..."`,
+at Python with `pytest -q`, at anything with an exit code.
+
+## The second gate is the point
+
+Most "agentic codegen" stops at gate one — a model reviewing a model. This
+machine adds `exec.run`, a builtin action that runs a shell command as a
+**gate**:
+
+> A non-zero exit is **data**, not an exception. `exec.run` returns
+> `{ok, exit_code, stdout, stderr}`; only a genuine failure to *launch* (no
+> shell, bad cwd) or a timeout raises. That distinction is load-bearing: if a
+> failed build raised, the engine would classify it a transient
+> `action_error` and replay the **same broken code** three times before
+> failing the run. Returning the verdict as data lets a guard route on it —
+> `build red → loop back to the coder with the stderr → fix`.
+
+`verify_cmd` is a rendered `input:` block — operator-authored, never model
+text — so `exec.run` is safe as an *action*. Do **not** hand it to a model as
+a `tool`.
+
+We watched this pay off live: the reviewer approved a tree with a perfect
+**10/10**, and then the real `bash greet_test.sh` **failed (exit 1)**. The
+build loop kicked it back to the coder, the second attempt passed, and the run
+finished green. The stochastic interior was fooled; the deterministic boundary
+was not.
+
+## What it exercises
+
+| Feature | Where |
+|---|---|
+| Plan → fan-out | `plan` emits a file list; `generate` `forEach`-maps over it |
+| Hermetic per-item context | each file is its own conversation; no file sees its siblings |
+| Per-state models | `architect` plans, `coder` writes, `reviewer` judges — three aliases, swap freely |
+| Agent proposes, guards dispose | `review` emits `approve`/`revise`; the score guard vetoes |
+| Two feedback loops into one state | `generate` destructures `({ review, build })` — reader issues *and* build stderr |
+| Engine-bounded loops | `visits.generate < 5` (reader) and `< 6` (build) + `maxTransitions: 40` |
+| `forEach` over an **action** | `write_files` maps `file.write` — each write its own journal entry |
+| Real build/test gate | `build` runs `exec.run`; guards route on `output.ok` |
+| `memo` | `generate` caches per (file, feedback) — a build fix re-pays only touched files |
+| Human tie-break | `escalate` (reader spent / model choked) and `accept_build` (build spent) |
+| Function `write:` target | `report` writes `${out}/GENERATED.md` |
+
+## Models & providers — a hard-won lesson
+
+The gates (`plan`, `review`) need a model that reasons *and* returns clean
+structured JSON; the `coder` just writes files. They're `models:` aliases, so
+you swap them in one place. As committed:
+
+```ts
+architect: "openrouter/qwen/qwen3.6-27b",   // gate: the plan
+coder:     "openrouter/qwen/qwen3-coder-flash",
+reviewer:  "openrouter/qwen/qwen3.6-27b",   // gate: the reader
+```
+
+**Why the gates run on OpenRouter, not a raw local server.** These are reasoning
+models, and the gate states set `reasoning: "low"` to keep the thinking short.
+That knob maps to `reasoning_effort` — which **OpenRouter honors but LM Studio
+silently ignores** (Ollama too). On a local server a reasoning model will spend
+its *entire* output budget thinking and never emit the answer (`budget_exceeded`),
+or the local server files the answer into a separate `reasoning_content` channel
+the engine discards (`model produced no text`). Same model, same machine, behind
+OpenRouter: it just works. This is a **provider integration** fact, not a flaw in
+the model or the machine — the machine stays clean (no `/no_think`, no
+`structuredOutput: "native"` hacks).
+
+**Want it fully local?** Point the aliases at `lmstudio/…` or `ollama/…`, but
+**disable thinking for the gate model at the server** (LM Studio: the model's
+thinking toggle / `enable_thinking=false` in its chat template; Ollama:
+similarly), because the API-level `reasoning:` knob won't reach it. The
+`catch: { budget_exceeded: escalate }` on `review` is the safety net if a local
+reasoning model still runs away.
+
+The `openrouter/` provider is first-class (`provider/openrouter.go`): it adds
+`x-session-id` sticky routing (keyed on the run id, keeps the prompt cache
+warm), `cache_control` for `openrouter/anthropic/*` models, and recovers
+cached-token counts into usage. Set `OPENROUTER_API_KEY` (and optionally
+`OPENROUTER_BASE_URL`).
+
+## Run it
+
+```sh
+# 1. Deterministic (CI): the LLM states are scripted; the build gate runs for
+#    real. Needs nothing but a POSIX `sh` — no network, no models, no keys.
+steps run workflow.ts --mock mock_responses.yaml \
+  --input spec=@fixtures/spec.md --input language=bash \
+  --input out=out --input 'verify_cmd=bash greet_test.sh'
+
+# 2. Validate without running — dry-runs every function; typos fail here.
+steps validate workflow.ts --print
+
+# 3. Live (as committed): gates on OpenRouter, real build gate.
+export OPENROUTER_API_KEY=sk-or-...
+steps run workflow.ts -v \
+  --input spec=@fixtures/spec.md --input language=bash \
+  --input out=out --input 'verify_cmd=bash greet_test.sh'
+
+# 4. Live, a different target — language and gate are inputs, nothing else moves.
+steps run workflow.ts \
+  --input spec=@fixtures/my-spec.md --input language=go \
+  --input out=./scratch --input 'verify_cmd=go build ./... && go test ./...'
+```
+
+The generated files land in `out/`, and `out/GENERATED.md` records what was
+built and whether the gate went green.
+
+## A real end-to-end run (live)
+
+```
+plan → generate → review (approve, score 10) → write_files
+     → build  (bash greet_test.sh → exit 1, FAILED)           ← gate two vetoes the 10/10
+     → generate (visit 2, fixes it) → review (approve, 10) → write_files
+     → build  (exit 0, "All tests passed!") → report → done   (10 transitions)
+```
+
+The generated `greet.sh` handles `--name`/`--shout`, composes them, and exits
+non-zero with usage on an unknown flag; `greet_test.sh` asserts all of it and
+passes.
+
+## Expected mock trace (what CI asserts)
+
+The mock scripts a rejected first draft (`--shout` unimplemented), so the
+reader loop fires once. The build gate is **not** scripted — it genuinely runs
+`bash greet_test.sh` against the written files:
+
+```
+run_started
+state_entered    plan               -> two files + contract + acceptance
+transition_fired plan -> generate                        (linear default)
+state_entered    generate (visit 1) -> greet.sh, greet_test.sh (foreach x2)
+transition_fired generate -> review
+state_entered    review             -> score 5, event=revise
+transition_fired review -> generate                      (on: revise, visits.generate < 5)
+state_entered    generate (visit 2) -> prompt now carries review.issues
+transition_fired generate -> review
+state_entered    review             -> score 9, event=approve
+transition_fired review -> write_files                   (on: approve, score >= 8)
+state_entered    write_files        -> writes out/greet.sh, out/greet_test.sh
+transition_fired write_files -> build
+state_entered    build              -> RUNS `bash greet_test.sh` -> exit 0, ok:true
+transition_fired build -> report                         (when: output.ok)
+state_entered    report             -> writes out/GENERATED.md
+transition_fired report -> done
+run_finished     done
+```
+
+Assertions (`engine/acceptance_test.go`): exact state sequence above;
+`transitions == 8`; `generate.count == 2` (one hermetic context per planned
+file); `build.ok == true` with the generated test's own `all tests passed` on
+stdout; `out/greet.sh` contains the revised `--shout` handling;
+`out/GENERATED.md` records `PASSED`.
+
+To watch **gate two** loop instead, hand it a failing command (`verify_cmd='exit
+1'`, with enough scripted rounds): `build` routes back to `generate` with the
+stderr until `visits.generate` hits 6, then parks at `accept_build` for a human.
+In live mode the loop closes on the real toolchain — the coder keeps fixing
+until `verify_cmd` is green or the budget is spent.
