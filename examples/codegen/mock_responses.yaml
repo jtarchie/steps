@@ -1,14 +1,28 @@
 # Scripted responses for the mock provider — the LLM states (plan,
-# generate, review) are deterministic; the ACTIONS (write_files=file.write,
-# build=exec.run) run for real. So the reader loop is scripted here, and
-# the build gate genuinely executes the generated test in `out`.
+# generate#spec, generate, review) are deterministic; the ACTIONS
+# (write_files=file.write, build=exec.run) run for real. So the reader loop
+# is scripted here, and the build gate genuinely executes the generated test
+# in `out`.
 #
 #   ../../steps run workflow.ts --mock mock_responses.yaml \
 #     --input spec=@fixtures/spec.md --input language=bash \
 #     --input out=out --input 'verify_cmd=bash greet_test.sh'
 #
-# Trace: plan -> generate x2 -> review(revise) -> generate x2 ->
+# Trace: plan -> generate#spec x2 -> generate#build_cause (no build yet:
+#        empty slices, no model calls) -> generate x2 -> review(revise) ->
+#        generate#spec (memo x2: same source+need, zero tokens) ->
+#        generate#build_cause (still empty) -> generate x2 ->
 #        review(approve) -> write_files x2 -> build(ok) -> report -> done
+#
+# generate#spec needs only TWO responses even though the coder loops: the
+# revisit's (source, need) pairs are byte-identical, so both items replay
+# from the memo cache. generate#build_cause never consumes a response —
+# the build hasn't run on this trace, and an absent source distills to ""
+# for free.
+
+"generate#spec":
+  - text: "greet.sh: parse --name NAME (default world) and --shout; print 'Hello, <name>!'; --shout uppercases the whole line; unknown flags exit non-zero with usage."
+  - text: "greet_test.sh: run greet.sh with no args, with --name Ada, and with --shout; assert 'Hello, world!', 'Hello, Ada!', 'HELLO, WORLD!'; exit 0 only when all pass."
 
 plan:
   - text: "{\"files\": [{\"path\": \"greet.sh\", \"purpose\": \"CLI entry: parse --name/--shout, print the greeting\"}, {\"path\": \"greet_test.sh\", \"purpose\": \"executable check of both flags against greet.sh\"}], \"contract\": \"greet.sh prints 'Hello, <name>!' (name defaults to world); --name NAME sets the name; --shout uppercases the whole line; unknown flags exit non-zero.\", \"acceptance\": [\"greet.sh with no args prints 'Hello, world!'\", \"--name Ada prints 'Hello, Ada!'\", \"--shout uppercases the greeting\", \"greet_test.sh exits 0 when behaviour is correct\"]}"

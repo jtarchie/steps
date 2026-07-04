@@ -663,13 +663,43 @@ func TestCodegenMockTrace(t *testing.T) {
 	}
 
 	// Reader rejected once, so generate/review each ran twice before disk.
+	// Every coder visit enters through its distill chain: generate#spec
+	// slices the spec per file, generate#build_cause is empty (no build yet).
 	states, _, transitions := eventTrace(t, store, res.RunID)
-	want := []string{"plan", "generate", "review", "generate", "review", "write_files", "build", "report"}
+	want := []string{
+		"plan",
+		"generate#spec", "generate#build_cause", "generate", "review",
+		"generate#spec", "generate#build_cause", "generate", "review",
+		"write_files", "build", "report",
+	}
 	if strings.Join(states, ",") != strings.Join(want, ",") {
 		t.Errorf("state sequence = %v, want %v", states, want)
 	}
-	if transitions != 8 {
-		t.Errorf("transitions = %d, want 8", transitions)
+	// 12 journal events, but the 4 distill hops are implicit — the authored
+	// topology still spends exactly 8 of the maxTransitions budget.
+	if transitions != 12 {
+		t.Errorf("journaled transitions = %d, want 12 (8 authored + 4 implicit)", transitions)
+	}
+	if res.State.Transitions != 8 {
+		t.Errorf("counted transitions = %d, want 8 (distill hops are free)", res.State.Transitions)
+	}
+
+	// The revisit's (source, need) pairs are byte-identical, so the second
+	// pass through generate#spec replays both items from the memo cache.
+	slices, _ := res.State.Ctx["generate#spec"].(map[string]any)
+	if slices["memo_hits"] != 2 {
+		t.Errorf("generate#spec.memo_hits = %v, want 2 (revisit re-distills for free)", slices["memo_hits"])
+	}
+	// No build has run on this trace: the absent source distilled to "".
+	causes, _ := res.State.Ctx["generate#build_cause"].(map[string]any)
+	if items, _ := causes["items"].([]any); len(items) != 2 {
+		t.Errorf("generate#build_cause.items = %v, want 2 empty slices", causes["items"])
+	} else {
+		for i, it := range items {
+			if m, _ := it.(map[string]any); m["text"] != "" {
+				t.Errorf("generate#build_cause item %d = %v, want \"\" (absent source)", i, m["text"])
+			}
+		}
 	}
 
 	// Gate two really executed the generated test: its exit code is DATA.

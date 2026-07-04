@@ -14,8 +14,9 @@ interior* — with **two gates** wrapped around a stochastic middle:
 
 Either gate can send the coder back with feedback: the reader loop fixes what
 a human reader would catch (`review.issues`), the build loop fixes what only
-the toolchain knows (`build.stderr`). `visits` bounds both loops; a human
-breaks the tie when a budget is spent.
+the toolchain knows (`build_cause` — the build record distilled to its root
+cause). `visits` bounds both loops; a human breaks the tie when a budget is
+spent.
 
 The machine is **language-agnostic**: `language` and `verify_cmd` are run
 inputs. Point it at Go with `verify_cmd="go build ./... && go test ./..."`,
@@ -33,7 +34,7 @@ machine adds `exec.run`, a builtin action that runs a shell command as a
 > failed build raised, the engine would classify it a transient
 > `action_error` and replay the **same broken code** three times before
 > failing the run. Returning the verdict as data lets a guard route on it —
-> `build red → loop back to the coder with the stderr → fix`.
+> `build red → loop back to the coder with the distilled root cause → fix`.
 
 `verify_cmd` is a rendered `input:` block — operator-authored, never model
 text — so `exec.run` is safe as an *action*. Do **not** hand it to a model as
@@ -53,8 +54,9 @@ was not.
 | Hermetic per-item context | each file is its own conversation; no file sees its siblings |
 | Per-state models | `architect` plans, `coder` writes, `reviewer` judges — three aliases, swap freely |
 | Agent proposes, guards dispose | `review` emits `approve`/`revise`; the score guard vetoes |
-| Two feedback loops into one state | `generate` destructures `({ review, build })` — reader issues *and* build stderr |
-| Engine-bounded loops | `visits.generate < 5` (reader) and `< 6` (build) + `maxTransitions: 40` |
+| Two feedback loops into one state | `generate` destructures `({ review, build_cause })` — reader issues *and* the distilled build failure |
+| Declared context slicing (`distill:`) | `generate#spec` slices the spec per file; `generate#build_cause` boils the build record down to its root cause — see [docs/distill.md](../../docs/distill.md) |
+| Engine-bounded loops | `visits.generate < 5` (reader) and `< 6` (build) + `maxTransitions: 40` (distill hops are free) |
 | `forEach` over an **action** | `write_files` maps `file.write` — each write its own journal entry |
 | Real build/test gate | `build` runs `exec.run`; guards route on `output.ok` |
 | `memo` | `generate` caches per (file, feedback) — a build fix re-pays only touched files |
@@ -71,6 +73,7 @@ you swap them in one place. As committed:
 architect: "openrouter/qwen/qwen3.6-27b",   // gate: the plan
 coder:     "openrouter/qwen/qwen3-coder-flash",
 reviewer:  "openrouter/qwen/qwen3.6-27b",   // gate: the reader
+distiller: "openrouter/qwen/qwen3-coder-flash", // context slicing; a small local model also fits
 ```
 
 **Why the gates run on OpenRouter, not a raw local server.** These are reasoning
@@ -148,38 +151,57 @@ passes.
 ## Expected mock trace (what CI asserts)
 
 The mock scripts a rejected first draft (`--shout` unimplemented), so the
-reader loop fires once. The build gate is **not** scripted — it genuinely runs
+reader loop fires once. Every coder visit enters through its distill chain
+first. The build gate is **not** scripted — it genuinely runs
 `bash greet_test.sh` against the written files:
 
 ```
 run_started
-state_entered    plan               -> two files + contract + acceptance
-transition_fired plan -> generate                        (linear default)
-state_entered    generate (visit 1) -> greet.sh, greet_test.sh (foreach x2)
+state_entered    plan                 -> two files + contract + acceptance
+transition_fired plan -> generate#spec                   (linear default, retargeted)
+state_entered    generate#spec        -> per-file spec slices (foreach x2, scripted)
+transition_fired generate#spec -> generate#build_cause   (implicit — free)
+state_entered    generate#build_cause -> no build yet: "" x2, NO model calls
+transition_fired generate#build_cause -> generate        (implicit — free)
+state_entered    generate (visit 1)   -> greet.sh, greet_test.sh (foreach x2)
 transition_fired generate -> review
-state_entered    review             -> score 5, event=revise
-transition_fired review -> generate                      (on: revise, visits.generate < 5)
-state_entered    generate (visit 2) -> prompt now carries review.issues
+state_entered    review               -> score 5, event=revise
+transition_fired review -> generate#spec                 (on: revise, visits.generate < 5)
+state_entered    generate#spec        -> memo x2: same (source, need), zero tokens
+transition_fired generate#spec -> generate#build_cause   (implicit — free)
+state_entered    generate#build_cause -> still no build: "" x2
+transition_fired generate#build_cause -> generate        (implicit — free)
+state_entered    generate (visit 2)   -> prompt now carries review.issues
 transition_fired generate -> review
-state_entered    review             -> score 9, event=approve
+state_entered    review               -> score 9, event=approve
 transition_fired review -> write_files                   (on: approve, score >= 8)
-state_entered    write_files        -> writes out/greet.sh, out/greet_test.sh
+state_entered    write_files          -> writes out/greet.sh, out/greet_test.sh
 transition_fired write_files -> build
-state_entered    build              -> RUNS `bash greet_test.sh` -> exit 0, ok:true
+state_entered    build                -> RUNS `bash greet_test.sh` -> exit 0, ok:true
 transition_fired build -> report                         (when: output.ok)
-state_entered    report             -> writes out/GENERATED.md
+state_entered    report               -> writes out/GENERATED.md
 transition_fired report -> done
 run_finished     done
 ```
 
-Assertions (`engine/acceptance_test.go`): exact state sequence above;
-`transitions == 8`; `generate.count == 2` (one hermetic context per planned
-file); `build.ok == true` with the generated test's own `all tests passed` on
-stdout; `out/greet.sh` contains the revised `--shout` handling;
-`out/GENERATED.md` records `PASSED`.
+Assertions (`engine/acceptance_test.go`): exact state sequence above; 12
+journaled transitions but a **counted budget of 8** — the 4 distill hops are
+implicit and free against `maxTransitions`; `generate#spec.memo_hits == 2`
+(the revisit re-distills for free); `generate#build_cause` yields two `""`
+slices with no model calls (absent source); `generate.count == 2` (one
+hermetic context per planned file); `build.ok == true` with the generated
+test's own `all tests passed` on stdout; `out/greet.sh` contains the revised
+`--shout` handling; `out/GENERATED.md` records `PASSED`.
+
+On a **live** build failure the trace differs in one place: `build` red loops
+back through the chain, `generate#build_cause` now has a source (the build
+record, yaml-rendered) and distills the stderr dump down to `maxTokens: 200`
+of root cause — so the coder's revisit context carries three lines, not the
+whole compiler transcript, and `generate#spec` still replays from memo.
 
 To watch **gate two** loop instead, hand it a failing command (`verify_cmd='exit
 1'`, with enough scripted rounds): `build` routes back to `generate` with the
-stderr until `visits.generate` hits 6, then parks at `accept_build` for a human.
+distilled root cause until `visits.generate` hits 6, then parks at
+`accept_build` for a human.
 In live mode the loop closes on the real toolchain — the coder keeps fixing
 until `verify_cmd` is green or the budget is spent.

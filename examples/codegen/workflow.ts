@@ -45,7 +45,7 @@ const plan: State = {
 // siblings' bodies. memo: an unchanged (file, feedback) pair is free on the
 // next loop, so a build failure re-pays only for the files it actually
 // touches. On a revisit the two feedback channels light up: `review.issues`
-// (what a reader rejected) and `build.stderr` (what the command rejected).
+// (what a reader rejected) and `build_cause` (what the command rejected).
 // RAW TEXT out, deliberately NOT a JSON object. A source file is multi-line;
 // packing it into a JSON `content` string is exactly where small local models
 // break — they write real newlines and the JSON is invalid. Default {text}
@@ -57,7 +57,25 @@ const generate: State = {
   model: "coder",
   maxOutputTokens: 32768, // a whole source file is the biggest payload here — give it room
 
-  prompt: ({ spec, language, plan, target, review, build }) => `
+  // Rung 1.5 — declared context slicing (docs/distill.md). Each entry lowers
+  // to a real micro-state (generate#spec, generate#build_cause) on the cheap
+  // distiller model, memoized by (source, need). Inside this state, `spec`
+  // IS the per-file slice — the whole document never enters a coder context,
+  // and an unchanged slice keeps the coder's own memo key stable. Before the
+  // first build, `build_cause` has no source yet and reads as "" for free.
+  distill: {
+    spec: {
+      for: ({ target }) => `only what is needed to implement ${target.path} (${target.purpose})`,
+      maxTokens: 400,
+    },
+    build_cause: {
+      from: "build",
+      for: "the root-cause error(s) only — exact messages with file and line, nothing else",
+      maxTokens: 200,
+    },
+  },
+
+  prompt: ({ spec, language, plan, target, review, build_cause }) => `
     Write the COMPLETE contents of exactly one file for a ${language}
     project. Output ONLY the raw file body — no markdown fences, no
     commentary, no JSON, nothing before or after the code.
@@ -65,10 +83,10 @@ const generate: State = {
     PURPOSE: ${target.purpose}
     PUBLIC CONTRACT (every file must honour this):
     ${plan.contract}
-    SPEC:
+    SPEC (the slice relevant to this file):
     ${spec}
     ${review ? "A reviewer rejected the previous attempt:\n" + list(review.issues) + "\nAddress every issue." : ""}
-    ${build && !build.ok ? "The build/test command FAILED last time (exit " + build.exit_code + "):\n" + build.stderr + "\nFix the underlying cause; do not paper over it." : ""}`,
+    ${build_cause ? "The build/test command FAILED last time. Root cause:\n" + build_cause + "\nFix the underlying cause; do not paper over it." : ""}`,
   // no output schema -> default { text: string }: generate.items[i].text is
   // the raw body of plan.files[i].
 };
@@ -183,6 +201,7 @@ export default {
     architect: "openrouter/qwen/qwen3.6-27b",       // larger model: one careful plan
     coder: "openrouter/qwen/qwen3-coder-flash",      // a real coder model, fanned out per file
     reviewer: "openrouter/qwen/qwen3.6-27b",         // the reader gate; spent sparingly
+    distiller: "openrouter/qwen/qwen3-coder-flash",  // extraction is a small-model job; lmstudio/… works too
   },
   model: "coder",
   defaults: { maxTurns: 2 }, // tool-less states: one model call per turn, 2 is headroom

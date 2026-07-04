@@ -173,7 +173,8 @@ examples/   canonical examples — they double as the acceptance spec
 - [`examples/codegen/`](examples/codegen/) — spec → working code with **two
   gates**: an LLM reviewer, then a *real* `exec.run` build/test command whose
   exit code routes the flow. The reviewer can be fooled; the build cannot — so
-  a build failure loops the coder back with the stderr until it goes green. An
+  a build failure loops the coder back with the distilled root cause until it
+  goes green. An
   architect plans the files, a coder `foreach`-writes them (raw text, not JSON),
   and the gates run on `openrouter/` where `reasoning:` actually bounds thinking.
 
