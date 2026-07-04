@@ -48,6 +48,23 @@ type Fn<T> = (scope: Scope) => T;
 /** A schema fragment: "string", "enum(a, b)", "string[]", [{...shape}], or JSON schema. */
 type SchemaFragment = string | SchemaFragment[] | { [key: string]: any };
 
+/** One model-extracted slice of a scope value (rung 1.5 — see docs/distill.md). */
+interface Distill {
+  /** What this state needs from the source. A string or a function of the
+   *  state's (pre-distill) scope — per-item for forEach consumers. Required. */
+  for: string | Fn<string>;
+  /** Source scope key: a run input or a predecessor state's output.
+   *  Default: this entry's key — shadowing it (inside the state, the key IS
+   *  the slice). */
+  from?: string;
+  /** Output budget of the slice (the implicit state's maxOutputTokens). Default 512. */
+  maxTokens?: number;
+  /** Alias/ref. Default: models.distiller, then the machine default model. */
+  model?: string;
+  /** Replay by hash(model + source + need). Default true — distillation is pure. */
+  memo?: boolean;
+}
+
 interface ToolRef {
   name: string;
   /** Per-state call budget (0 = unlimited). */
@@ -100,6 +117,10 @@ interface State {
   forEach?: { over: Fn<any[]>; as?: string; concurrency?: number; onItemFailure?: "fail" | "skip" };
   /** Replay cached output when the rendered input is byte-identical. */
   memo?: boolean;
+  /** Replace (or derive from) large scope values with model-extracted slices
+   *  before this state runs. Each entry lowers to a real implicit agent state
+   *  (`name#key`) — journaled, memoized, budgeted like any state. */
+  distill?: Record<string, Distill>;
   /** Action args / agent user message: object (values may be functions) or one function. */
   input?: Record<string, any> | Fn<Record<string, any>>;
   /** The output schema — every property required; shorthand welcome. */

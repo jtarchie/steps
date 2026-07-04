@@ -21,6 +21,7 @@ func (e *Engine) runAction(ctx context.Context, st *machine.State, rs *journal.R
 	for k, v := range extra {
 		scope[k] = v
 	}
+	applyDistill(st, rs, scope)
 	args, err := machine.ResolveInputs(st.Input, scope)
 	if err != nil {
 		return nil, &provider.ClassifiedError{Class: machine.ClassActionError, Msg: err.Error()}
@@ -47,7 +48,9 @@ func (e *Engine) runAction(ctx context.Context, st *machine.State, rs *journal.R
 
 // runHuman resolves the gate prompt and requests a park.
 func (e *Engine) runHuman(st *machine.State, rs *journal.RunState) (*HandlerResult, error) {
-	prompt, err := st.Human.Prompt.String(baseScope(rs))
+	scope := baseScope(rs)
+	applyDistill(st, rs, scope)
+	prompt, err := st.Human.Prompt.String(scope)
 	if err != nil {
 		return nil, err
 	}
@@ -57,6 +60,32 @@ func (e *Engine) runHuman(st *machine.State, rs *journal.RunState) (*HandlerResu
 		Timeout:   st.Human.Timeout,
 		OnTimeout: st.Human.OnTimeout,
 	}}, nil
+}
+
+// applyDistill maps each distilled slice into the consumer's handler scope:
+// inside the state, the declared key IS the slice. The implicit `name#key`
+// states are graph-guaranteed to have run already; forEach consumers zip
+// against the implicit fan-out's items by index (alignment is guaranteed —
+// distill fan-outs pin onItemFailure to fail).
+func applyDistill(st *machine.State, rs *journal.RunState, scope map[string]any) {
+	for i := range st.Distill {
+		d := &st.Distill[i]
+		var text any
+		if out, ok := rs.Ctx[d.StateName].(map[string]any); ok {
+			if st.ForEach != nil {
+				if items, ok := out["items"].([]any); ok {
+					if idx, ok := scope["index"].(int); ok && idx >= 0 && idx < len(items) {
+						if item, ok := items[idx].(map[string]any); ok {
+							text = item["text"]
+						}
+					}
+				}
+			} else {
+				text = out["text"]
+			}
+		}
+		scope[d.Key] = text
+	}
 }
 
 // sortedKeys keeps rendering deterministic: map iteration order is random,

@@ -351,20 +351,31 @@ func (e *Engine) loop(ctx context.Context, m *machine.Machine, runID string, rs 
 	}
 }
 
-// fireTransition journals a transition and enforces the cycle guard.
+// fireTransition journals a transition and enforces the cycle guard. Hops
+// out of implicit distill states don't count toward maxTransitions — loop
+// bounds are properties of the authored topology, and each distill chain is
+// authored as part of its consumer.
 func (e *Engine) fireTransition(ctx context.Context, m *machine.Machine, runID string, rs *journal.RunState, from, to, on, when string) (string, error) {
-	if rs.Transitions >= m.Limits.MaxTransitions {
+	implicit := false
+	if fs := m.State(from); fs != nil && fs.IsDistill() {
+		implicit = true
+	}
+	if !implicit && rs.Transitions >= m.Limits.MaxTransitions {
 		// The cycle guard itself cannot be caught into a loop: go straight
 		// to the failed terminal.
 		e.Listener.Warn("max_transitions reached; failing run", "limit", m.Limits.MaxTransitions)
 		to, on, when = "failed", "max_transitions", ""
 	}
-	if err := e.append(ctx, runID, journal.TransitionFired, map[string]any{
-		"from": from, "to": to, "on": on, "guard": when,
-	}); err != nil {
+	data := map[string]any{"from": from, "to": to, "on": on, "guard": when}
+	if implicit {
+		data["implicit"] = true
+	}
+	if err := e.append(ctx, runID, journal.TransitionFired, data); err != nil {
 		return "", err
 	}
-	rs.Transitions++
+	if !implicit {
+		rs.Transitions++
+	}
 	rs.Current = to
 	e.Listener.TransitionFired(from, to, on, when)
 	return to, nil

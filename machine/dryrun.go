@@ -52,18 +52,31 @@ func DryRun(m *Machine) (fatals []error, warnings []string) {
 			itemScope["total"] = 1
 		}
 
+		// distill: for: functions see the pre-distill scope; the handler
+		// scopes below see the distilled keys as text stubs — field access on
+		// a shadowed key fails the load naming the distillation.
+		handlerScope := itemScope
+		if len(s.Distill) > 0 {
+			handlerScope = cloneScope(itemScope)
+			for i := range s.Distill {
+				d := &s.Distill[i]
+				record(s.Name, "distill."+d.Key+".for", dryCall(d.For, itemScope))
+				handlerScope[d.Key] = distilledMarker(s.Name + "." + d.Key)
+			}
+		}
+
 		if a := s.Agent; a != nil {
-			record(s.Name, "model", dryCall(a.Model, itemScope))
+			record(s.Name, "model", dryCall(a.Model, handlerScope))
 			// The history projection appears in the prompt/system scope
 			// under its `as` name.
-			promptScope := itemScope
+			promptScope := handlerScope
 			if a.History != nil {
-				promptScope = cloneScope(itemScope)
+				promptScope = cloneScope(handlerScope)
 				promptScope[a.History.As] = "history projection"
 			}
 			record(s.Name, "system", dryCall(a.System, promptScope))
 			record(s.Name, "prompt", dryCall(a.Prompt, promptScope))
-			toolScope := cloneScope(itemScope)
+			toolScope := cloneScope(handlerScope)
 			toolScope["args"] = anyMarker()
 			calls := map[string]any{}
 			for _, tr := range a.Tools {
@@ -75,13 +88,13 @@ func DryRun(m *Machine) (fatals []error, warnings []string) {
 				record(s.Name, "tool "+tr.Name+" when", dryCall(tr.When, toolScope))
 				// Machine-pinned args resolve at agent-build time — no
 				// args/calls/turn exist there. Match the runtime scope.
-				record(s.Name, "tool "+tr.Name+" args", dryCall(tr.Args, itemScope))
+				record(s.Name, "tool "+tr.Name+" args", dryCall(tr.Args, handlerScope))
 			}
 		}
 		if h := s.Human; h != nil {
-			record(s.Name, "human.prompt", dryCall(h.Prompt, itemScope))
+			record(s.Name, "human.prompt", dryCall(h.Prompt, handlerScope))
 		}
-		record(s.Name, "input", dryInputs(s.Input, itemScope))
+		record(s.Name, "input", dryInputs(s.Input, handlerScope))
 		for i, t := range s.Transitions {
 			// Guards run AFTER the state (foreach aggregate included): they
 			// see output/event but never a per-item variable.
@@ -95,8 +108,8 @@ func DryRun(m *Machine) (fatals []error, warnings []string) {
 }
 
 func dryCall(d Dyn, scope map[string]any) error {
-	if !d.IsFn() {
-		return nil
+	if !d.IsJS() {
+		return nil // static values and Go-native lowered prompts have no JS to exercise
 	}
 	// The WHOLE scope is one proxied root, so destructuring an unknown key
 	// throws with the available keys listed.
@@ -243,10 +256,17 @@ func ScopeDoc(m *Machine, s *State) string {
 	scope := m.stubScope(s)
 
 	fmt.Fprintf(&b, "scope for functions in state %q — destructure what you need:\n", s.Name)
+	distilled := map[string]bool{}
+	for _, d := range s.Distill {
+		distilled[d.Key] = true
+	}
 	keys := make([]string, 0, len(scope))
 	for k := range scope {
 		if k == "visits" || k == "run" || k == "attempt" || k == openMarkerKey {
 			continue
+		}
+		if strings.Contains(k, "#") || distilled[k] {
+			continue // implicit distill outputs; shadowed keys get their own line
 		}
 		keys = append(keys, k)
 	}
@@ -257,6 +277,10 @@ func ScopeDoc(m *Machine, s *State) string {
 	if f := s.ForEach; f != nil {
 		fmt.Fprintf(&b, "  %s — the current item (shape depends on over)\n", f.As)
 		fmt.Fprintf(&b, "  index, total — item position\n")
+	}
+	for _, d := range s.Distill {
+		fmt.Fprintf(&b, "  %s: string — distilled slice of %s (≤%d tokens, via %s)\n",
+			d.Key, d.From, d.MaxTokens, d.StateName)
 	}
 	fmt.Fprintf(&b, "  visits.<state> — entry counts; run.{transitions, tokens, cost}; attempt\n")
 	if len(s.Transitions) > 0 {
@@ -301,10 +325,19 @@ func describeShape(v any, indent string) string {
 
 const anyMarkerKey = "__steps_any__"
 const openMarkerKey = "__steps_open__"
+const distilledMarkerKey = "__steps_distilled__"
 
 // anyMarker marks a region of unknown shape; the JS wrapper turns it into a
 // permissive stub that tolerates any access, call, or iteration.
 func anyMarker() map[string]any { return map[string]any{anyMarkerKey: true} }
+
+// distilledMarker marks a scope value replaced by a distill slice: at runtime
+// it is a plain string, so the stub behaves like one (interpolation, string
+// methods) but throws on field access — `spec.title` on a shadowed `spec`
+// fails the load naming the distillation.
+func distilledMarker(label string) map[string]any {
+	return map[string]any{distilledMarkerKey: label}
+}
 
 // installStubs registers the proxy helpers in the machine's runtime.
 func (rt *jsRT) installStubs() error {
@@ -332,6 +365,21 @@ const stubHelperJS = `
 (function () {
   const ANY = "` + anyMarkerKey + `";
   const OPEN = "` + openMarkerKey + `";
+  const DIST = "` + distilledMarkerKey + `";
+  function distilledStub(label) {
+    const s = "«distilled slice»";
+    return new Proxy({}, {
+      get(t, k) {
+        if (k === Symbol.toPrimitive || k === "toString" || k === "valueOf") return () => s;
+        if (typeof k === "symbol") return undefined;
+        if (k === "length") return s.length;
+        if (typeof String.prototype[k] === "function") return String.prototype[k].bind(s);
+        throw new Error("unknown field " + label + "." + String(k) +
+          " — the value is distilled to plain text by distill: (drop the field access, or distill under a new name with from:)");
+      },
+      has() { return false; },
+    });
+  }
   function anyStub() {
     const f = function () { return anyStub(); };
     return new Proxy(f, {
@@ -350,6 +398,7 @@ const stubHelperJS = `
     if (Array.isArray(v)) return v.map((e, i) => wrap(e, path + "[" + i + "]"));
     if (typeof v === "object") {
       if (v[ANY]) return anyStub();
+      if (v[DIST]) return distilledStub(v[DIST]);
       const open = !!v[OPEN];
       const out = {};
       for (const k of Object.keys(v)) {

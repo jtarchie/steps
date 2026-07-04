@@ -32,6 +32,10 @@
 > channel messages are journaled flagged `thought` but NEVER replayed on adopt and
 > excluded from `history` unless `include: [thoughts]` — scratch thinking is not
 > context. `steps inspect <run-id>` renders per-state token usage and routing.
+> `distill:` (rung 1.5, [docs/distill.md](docs/distill.md)): a state declares
+> what it needs from a large scope value; a cheap model extracts only that
+> slice via a lowered implicit state (`name#key`) — journaled, memoized,
+> budgeted — and inside the state the declared key IS the slice.
 
 ## Thesis
 

@@ -119,6 +119,13 @@ output cost is a declared property of a state:
 - `adopt: {from: "self", lastTurns: N}` trims long revision transcripts.
 - `memo: true` caches agent outputs by rendered-input hash across runs —
   re-running a review only re-pays for files that changed.
+- `distill: {spec: {for: ({target}) => ..., maxTokens: 400}}` replaces a large
+  scope value with a model-extracted slice before the state runs — inside the
+  state, `spec` IS the slice. Each entry lowers to a real implicit state
+  (`state#spec`) on a cheap `distiller` model: journaled, memoized (unchanged
+  source+need pairs replay free), budgeted by `maxTokens`. forEach consumers
+  distill per item — the slice of the spec that matters is a function of the
+  item. See [docs/distill.md](docs/distill.md).
 - `model` as a function routes each execution to the cheapest capable model
   (`({lead}) => lead.risk === "high" ? "senior" : "scout"`); `models:` aliases
   keep machines readable and swappable.

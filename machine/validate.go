@@ -48,6 +48,12 @@ func Validate(m *Machine, opts ...ValidateOption) error {
 		if contains(scopeReserved, s.Name) {
 			fail("state %q shadows a reserved scope key (%s)", s.Name, strings.Join(scopeReserved, ", "))
 		}
+		// User state names must be destructurable identifiers — which also
+		// keeps the lowered `name#key` namespace collision-free by
+		// construction (# cannot appear in an identifier).
+		if !s.IsDistill() && !isIdentifier(s.Name) {
+			fail("state %q: names must be valid identifiers (letters, digits, _)", s.Name)
+		}
 	}
 
 	for _, s := range m.States {
@@ -75,6 +81,12 @@ func Validate(m *Machine, opts ...ValidateOption) error {
 		if !reachesTerminal(m, s.Name) {
 			fail("no terminal state is reachable from %q", s.Name)
 		}
+	}
+
+	// distill sources must be run inputs or graph-predecessors; keys must not
+	// collide with anything already in the flat scope (unless shadowing).
+	for _, s := range m.States {
+		validateDistill(m, s, fail)
 	}
 
 	// history.from / adopt targets must be graph-predecessors.
@@ -172,6 +184,9 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 		switch {
 		case a.Model.IsFn():
 			// routed at runtime; the dry-run exercises it
+		case a.Model.IsZero() && s.IsDistill():
+			fail("state %q: no model for the distiller — set distill.%s.model, a models.%s alias, or a machine default",
+				s.DistillOf, s.DistillKey, DistillerAlias)
 		case a.Model.IsZero():
 			fail("state %q: no model (set agent.model, defaults.agent.model, or an engine default)", s.Name)
 		default:
@@ -335,6 +350,88 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 			fail("state %q: retry policy has no match classes", s.Name)
 		}
 	}
+}
+
+// validateDistill checks a state's distill entries: for: present, budgets
+// sane, keys collision-free, and every source a run input or a
+// graph-predecessor (mirroring history.from). Runs after lowering, so
+// reachability includes the implicit chains.
+func validateDistill(m *Machine, s *State, fail func(string, ...any)) {
+	if len(s.Distill) == 0 {
+		return
+	}
+	if s.Terminal {
+		fail("state %q: terminal states cannot distill", s.Name)
+		return
+	}
+	for i := range s.Distill {
+		d := &s.Distill[i]
+		where := fmt.Sprintf("state %q distill.%s", s.Name, d.Key)
+
+		if d.For.IsZero() {
+			fail("%s: needs for: (what this state needs from the source)", where)
+		} else if !d.For.IsFn() {
+			if _, ok := d.For.Static.(string); !ok {
+				fail("%s: for must be a string or a function of scope, got %T", where, d.For.Static)
+			}
+		}
+		if d.MaxTokens < 0 {
+			fail("%s: maxTokens must be positive", where)
+		}
+
+		if contains(scopeReserved, d.Key) {
+			fail("%s: key shadows a reserved scope key (%s)", where, strings.Join(scopeReserved, ", "))
+		}
+		if f := s.ForEach; f != nil && f.As == d.Key {
+			fail("%s: key collides with forEach.as %q", where, f.As)
+		}
+		if a := s.Agent; a != nil && a.History != nil && a.History.As == d.Key {
+			fail("%s: key collides with history.as %q", where, a.History.As)
+		}
+		if d.From != d.Key { // derived name: must not shadow anything real
+			if bad := scopeNameCollision(m, d.Key); bad != "" {
+				fail("%s: introduces %q, which shadows %s", where, d.Key, bad)
+			}
+		}
+
+		if contains(scopeReserved, d.From) {
+			fail("%s: cannot distill engine key %q", where, d.From)
+			continue
+		}
+		if _, isInput := m.Input[d.From]; isInput {
+			continue
+		}
+		if src := m.State(d.From); src != nil {
+			if !reachableFrom(m, d.From)[s.Name] {
+				fail("%s: source state %q is not a predecessor", where, d.From)
+			}
+		} else if len(m.Input) > 0 {
+			// Without an input: block, run input keys are unknowable —
+			// declaring input: buys strict source checking too.
+			fail("%s: source %q is not a run input or a predecessor state", where, d.From)
+		}
+	}
+}
+
+// isIdentifier reports whether a name is a valid JS identifier — the flat
+// scope requires destructurable names, and the `#` in lowered distill names
+// stays collision-free only because user names can never contain it.
+func isIdentifier(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '_', r == '$':
+		case r >= '0' && r <= '9':
+			if i == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // scopeNameCollision reports what a proposed scope name (forEach.as,

@@ -74,24 +74,30 @@ func firstLine(s string) string {
 // Dyn is a machine value that is either static data or a JS function of one
 // destructurable scope argument — the ONLY two kinds of value the config
 // language has. Functions carry their source text for journaling, --print,
-// and error messages.
+// and error messages. Native is the third, engine-only kind: Go-composed
+// values for lowered sugar (distill prompts) — never authorable from a
+// machine file, so the config language stays two kinds for users.
 type Dyn struct {
 	Static any
 	Src    string // function source (empty for static values)
+	Native func(scope map[string]any) (any, error)
 
 	fn goja.Callable
 	rt *jsRT
 }
 
 // IsZero reports an unset value.
-func (d Dyn) IsZero() bool { return d.Static == nil && d.fn == nil }
+func (d Dyn) IsZero() bool { return d.Static == nil && d.fn == nil && d.Native == nil }
 
 // IsFn reports whether the value is computed.
-func (d Dyn) IsFn() bool { return d.fn != nil }
+func (d Dyn) IsFn() bool { return d.fn != nil || d.Native != nil }
+
+// IsJS reports a goja-backed function — the only kind the dry-run can proxy.
+func (d Dyn) IsJS() bool { return d.fn != nil }
 
 // Display renders the value for humans (--print, journal).
 func (d Dyn) Display() string {
-	if d.fn != nil {
+	if d.IsFn() {
 		return firstLine(d.Src)
 	}
 	if d.Static == nil {
@@ -105,6 +111,9 @@ func (d Dyn) Display() string {
 
 // Value resolves the raw value.
 func (d Dyn) Value(scope map[string]any) (any, error) {
+	if d.Native != nil {
+		return d.Native(scope)
+	}
 	if d.fn == nil {
 		return d.Static, nil
 	}

@@ -46,18 +46,32 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 		return nil, err
 	}
 
-	// Scope: flat run data + foreach item data + optional history projection.
+	// Scope: flat run data + foreach item data + distilled slices + optional
+	// history projection.
 	data := baseScope(rs)
 	data["attempt"] = attempt
 	for k, v := range extraData {
 		data[k] = v
 	}
+	applyDistill(st, rs, data)
 	if h := spec.History; h != nil {
 		msgs := rs.Convos[h.From]
 		if len(msgs) == 0 {
 			e.Listener.Warn("history source has no recorded execution", "state", st.Name, "from", h.From)
 		}
 		data[h.As] = renderHistory(msgs, h)
+	}
+
+	// A distill state whose source is absent yields an empty slice for free —
+	// no model call. Loop-feedback sources (build stderr before the first
+	// build) simply haven't happened yet; like adopt:self on a first visit,
+	// that is defined semantics, not an error.
+	if st.IsDistill() {
+		if d := m.DistillEntryFor(st); d != nil {
+			if v, ok := data[d.From]; !ok || v == nil {
+				return &HandlerResult{Output: map[string]any{"text": ""}}, nil
+			}
+		}
 	}
 
 	// The user message: the rendered prompt, or the rendered input block.
@@ -655,6 +669,7 @@ func (e *Engine) resolveModelRef(m *machine.Machine, st *machine.State, rs *jour
 	for k, v := range extraData {
 		scope[k] = v
 	}
+	applyDistill(st, rs, scope)
 	ref, err := spec.Model.String(scope)
 	if err != nil {
 		return "", &provider.ClassifiedError{Class: machine.ClassProviderError,

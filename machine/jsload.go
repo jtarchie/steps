@@ -466,7 +466,7 @@ func containsState(states []*State, name string) bool {
 
 // State keys, by handler. Shared keys apply to every handler.
 var (
-	sharedStateKeys = []string{"memo", "forEach", "retry", "output", "events", "input"}
+	sharedStateKeys = []string{"memo", "forEach", "distill", "retry", "output", "events", "input"}
 	agentStateKeys  = []string{"prompt", "system", "tools", "model", "maxTurns",
 		"maxOutputTokens", "temperature", "reasoning", "structuredOutput",
 		"toolChoice", "adopt", "history"}
@@ -563,6 +563,37 @@ func (l *loader) state(name string, v goja.Value) (*State, error) {
 			As:            str(f.Get("as")),
 			Concurrency:   integer(f.Get("concurrency")),
 			OnItemFailure: str(f.Get("onItemFailure")),
+		}
+	}
+
+	if v := o.Get("distill"); defined(v) {
+		d := l.obj(v)
+		if d == nil {
+			return nil, fmt.Errorf("distill must be an object of {name: {for, from?, maxTokens?, model?, memo?}}")
+		}
+		// Keys() preserves declaration order — the implicit chain runs in it.
+		for _, key := range d.Keys() {
+			eo := l.obj(d.Get(key))
+			if eo == nil {
+				return nil, fmt.Errorf("distill.%s must be an object {for, from?, maxTokens?, model?, memo?}", key)
+			}
+			for _, k := range eo.Keys() {
+				if !contains([]string{"for", "from", "maxTokens", "model", "memo"}, k) {
+					return nil, fmt.Errorf("distill.%s: unknown key %q — valid keys: for, from, maxTokens, model, memo", key, k)
+				}
+			}
+			entry := DistillEntry{
+				Key:       key,
+				From:      str(eo.Get("from")),
+				For:       l.dyn(eo.Get("for")),
+				MaxTokens: integer(eo.Get("maxTokens")),
+				Model:     str(eo.Get("model")),
+				Memo:      true, // distillation is pure; replay is always safe
+			}
+			if defined(eo.Get("memo")) {
+				entry.Memo = boolean(eo.Get("memo"))
+			}
+			st.Distill = append(st.Distill, entry)
 		}
 	}
 

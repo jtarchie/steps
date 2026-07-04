@@ -120,6 +120,14 @@ type State struct {
 	// effects that must not be skipped.
 	Memo   bool
 	Output OutputSpec
+	// Distill entries replace (or derive from) large scope values with
+	// model-extracted slices before this state runs. Each entry lowers to an
+	// implicit agent state (`name#key`) in ApplyDefaults — see distill.go.
+	Distill []DistillEntry
+	// DistillOf/DistillKey mark a lowered implicit distill state: the
+	// consumer state it serves and the scope key it produces.
+	DistillOf  string
+	DistillKey string
 	Retry       []RetryPolicy
 	Catch       []CatchClause
 	Transitions []Transition

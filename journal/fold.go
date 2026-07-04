@@ -85,7 +85,11 @@ func Fold(events []*Event) *RunState {
 			}
 		case TransitionFired:
 			rs.InFlight = false
-			rs.Transitions++
+			// Hops out of implicit distill states don't count toward
+			// maxTransitions — mirror the engine's accounting.
+			if impl, _ := ev.Data["implicit"].(bool); !impl {
+				rs.Transitions++
+			}
 			if to, ok := ev.Data["to"].(string); ok {
 				rs.Current = to
 			}

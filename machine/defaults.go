@@ -52,6 +52,11 @@ func ApplyDefaults(m *Machine) {
 	}
 	m.buildIndex()
 
+	// distill: lowers to implicit `name#key` states — after every edge exists
+	// (flow or linear defaults), before the cascade below defaults them like
+	// any other agent state.
+	lowerDistill(m)
+
 	// Limits.
 	if m.Limits.MaxTransitions == 0 {
 		m.Limits.MaxTransitions = DefaultMaxTransitions

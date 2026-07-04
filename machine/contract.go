@@ -61,28 +61,40 @@ func CheckContracts(m *Machine) error {
 			check("forEach.over", f.Over)
 			itemExtras = []string{f.As, "index", "total"}
 		}
-		if a := s.Agent; a != nil {
-			historyExtras := itemExtras
-			if a.History != nil {
-				historyExtras = append(append([]string{}, itemExtras...), a.History.As)
+		// distill: for: functions see the pre-distill scope; every handler
+		// site below additionally sees the distilled keys (shadow keys are
+		// already state/input names — duplicates are harmless).
+		handlerExtras := itemExtras
+		if len(s.Distill) > 0 {
+			handlerExtras = append([]string{}, itemExtras...)
+			for i := range s.Distill {
+				d := &s.Distill[i]
+				check("distill."+d.Key+".for", d.For, itemExtras...)
+				handlerExtras = append(handlerExtras, d.Key)
 			}
-			check("model", a.Model, itemExtras...)
+		}
+		if a := s.Agent; a != nil {
+			historyExtras := handlerExtras
+			if a.History != nil {
+				historyExtras = append(append([]string{}, handlerExtras...), a.History.As)
+			}
+			check("model", a.Model, handlerExtras...)
 			check("prompt", a.Prompt, historyExtras...)
 			check("system", a.System, historyExtras...)
-			toolExtras := append(append([]string{}, itemExtras...), "args", "calls", "turn")
+			toolExtras := append(append([]string{}, handlerExtras...), "args", "calls", "turn")
 			for _, tr := range a.Tools {
 				check("tool "+tr.Name+" when", tr.When, toolExtras...)
-				check("tool "+tr.Name+" args", tr.Args, itemExtras...)
+				check("tool "+tr.Name+" args", tr.Args, handlerExtras...)
 			}
 		}
 		if h := s.Human; h != nil {
-			check("human", h.Prompt)
+			check("human", h.Prompt, handlerExtras...)
 		}
-		check("input", s.Input, itemExtras...)
+		check("input", s.Input, handlerExtras...)
 		if inputs, ok := s.Input.Static.(map[string]any); ok {
 			for k, v := range inputs {
 				if nested, isDyn := v.(Dyn); isDyn {
-					check("input."+k, nested, itemExtras...)
+					check("input."+k, nested, handlerExtras...)
 				}
 			}
 		}
@@ -107,6 +119,9 @@ func (m *Machine) scopeKeys(s *State) []string {
 		keys = append(keys, name)
 	}
 	for _, st := range m.States {
+		if st.IsDistill() {
+			continue // `name#key` is not an identifier — never destructurable
+		}
 		keys = append(keys, st.Name)
 	}
 	return keys
