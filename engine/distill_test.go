@@ -42,6 +42,13 @@ func writeScript(t *testing.T, script string) string {
 	return path
 }
 
+// longSource builds a source comfortably past the pass-through threshold
+// (default slice budget 512 tokens ≈ 2048 chars) with a greppable marker, so
+// tests exercise real extraction, not the verbatim pass-through.
+func longSource(marker string) string {
+	return marker + " " + strings.Repeat("the quick brown fox jumps over the lazy dog. ", 80)
+}
+
 // TestDistillBasicTrace: the implicit state runs first, the consumer sees the
 // slice (never the raw source), and the implicit hop does not count toward
 // maxTransitions.
@@ -73,7 +80,8 @@ summarize:
 	rec := &recorder{}
 	eng.Listener = rec
 
-	res, err := eng.Start(context.Background(), m, map[string]any{"article": "RAW ARTICLE BODY"})
+	raw := longSource("RAW-ARTICLE-MARKER")
+	res, err := eng.Start(context.Background(), m, map[string]any{"article": raw})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -93,15 +101,15 @@ summarize:
 		t.Errorf("consumer prompt = %q, want the distilled slice interpolated", msgs)
 	}
 	for _, msg := range msgs {
-		if strings.Contains(msg, "RAW ARTICLE BODY") {
+		if strings.Contains(msg, "RAW-ARTICLE-MARKER") {
 			t.Errorf("consumer prompt leaked the raw source: %q", msg)
 		}
 	}
 	// The distiller saw NEED + the raw source.
 	dmsgs := rec.user["summarize#article"]
 	if len(dmsgs) != 1 || !strings.Contains(dmsgs[0], "NEED: the key claims only") ||
-		!strings.Contains(dmsgs[0], "SOURCE:\nRAW ARTICLE BODY") {
-		t.Errorf("distiller prompt = %q, want NEED + SOURCE", dmsgs)
+		!strings.Contains(dmsgs[0], "SOURCE:\n"+raw) {
+		t.Errorf("distiller prompt = %.120q, want NEED + SOURCE", dmsgs)
 	}
 
 	// Implicit hop excluded: only summarize -> done counts.
@@ -151,7 +159,7 @@ work:
 	rec := &recorder{}
 	eng.Listener = rec
 
-	res, err := eng.Start(context.Background(), m, map[string]any{"manual": "THE WHOLE MANUAL"})
+	res, err := eng.Start(context.Background(), m, map[string]any{"manual": longSource("MANUAL-MARKER")})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -169,6 +177,86 @@ work:
 	if len(dmsgs) != 2 || !strings.Contains(dmsgs[0], "guidance for one.go") ||
 		!strings.Contains(dmsgs[1], "guidance for two.go") {
 		t.Errorf("distiller prompts = %v, want per-item needs", dmsgs)
+	}
+}
+
+// TestDistillPassthroughSmallSource: a source that already fits the slice
+// budget crosses verbatim — the identity is the best possible extraction, so
+// no model call happens (the mock has no queue for the distiller: any call
+// would fail the run loudly).
+func TestDistillPassthroughSmallSource(t *testing.T) {
+	wf := `
+const seed = {
+  action: "diff.split",
+  input: {
+    diff: [
+      "diff --git a/one.go b/one.go", "+a",
+      "diff --git a/two.go b/two.go", "+b",
+    ].join("\n"),
+  },
+};
+const work = {
+  forEach: { over: ({ seed }) => seed.files, as: "file" },
+  distill: { guide: { from: "manual", for: ({ file }) => "guidance for " + file.path } },
+  prompt: ({ file, guide }) => "work on " + file.path + " using " + guide,
+};
+export default {
+  name: "passthrough",
+  input: { manual: { type: "string", required: true } },
+  models: { distiller: "mock" },
+  model: "mock",
+  states: { seed, work },
+};`
+	script := `
+work:
+  - text: "done one"
+  - text: "done two"
+`
+	m, err := machine.Parse([]byte(wf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, store := newTestEngine(t, writeScript(t, script))
+	rec := &recorder{}
+	eng.Listener = rec
+
+	res, err := eng.Start(context.Background(), m, map[string]any{"manual": "TINY MANUAL"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Status != journal.StatusDone {
+		t.Fatalf("status = %s at %s, want done", res.Status, res.Terminal)
+	}
+
+	// The consumer got the source verbatim; the distiller never spoke.
+	msgs := rec.user["work"]
+	want := []string{"work on one.go using TINY MANUAL", "work on two.go using TINY MANUAL"}
+	if strings.Join(msgs, "|") != strings.Join(want, "|") {
+		t.Errorf("consumer prompts = %v, want the verbatim source %v", msgs, want)
+	}
+	if dmsgs := rec.user["work#guide"]; len(dmsgs) != 0 {
+		t.Errorf("distiller made %d model calls on a pass-through source", len(dmsgs))
+	}
+	guide, _ := res.State.Ctx["work#guide"].(map[string]any)
+	if guide["passthrough_hits"] != 2 {
+		t.Errorf("work#guide.passthrough_hits = %v, want 2", guide["passthrough_hits"])
+	}
+
+	// The journal records the pass-through like it records memo.
+	events, err := store.Events(context.Background(), res.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flagged := false
+	for _, ev := range events {
+		if ev.Type == journal.HandlerFinished {
+			if s, _ := ev.Data["state"].(string); s == "work#guide" {
+				flagged, _ = ev.Data["passthrough"].(bool)
+			}
+		}
+	}
+	if !flagged {
+		t.Error("work#guide handler_finished should carry passthrough: true")
 	}
 }
 
@@ -201,7 +289,7 @@ summarize:
 		t.Fatal(err)
 	}
 	eng, _ := newTestEngine(t, writeScript(t, script))
-	input := map[string]any{"article": "RAW ARTICLE BODY"}
+	input := map[string]any{"article": longSource("MEMO-MARKER")}
 
 	first, err := eng.Start(context.Background(), m, input)
 	if err != nil || first.Status != journal.StatusDone {
@@ -304,7 +392,7 @@ export default {
 	}
 	eng, store := newTestEngine(t, writeScript(t, script))
 
-	res, err := eng.Start(context.Background(), m, map[string]any{"article": "RAW"})
+	res, err := eng.Start(context.Background(), m, map[string]any{"article": longSource("CATCH-MARKER")})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}

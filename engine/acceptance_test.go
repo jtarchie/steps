@@ -684,11 +684,17 @@ func TestCodegenMockTrace(t *testing.T) {
 		t.Errorf("counted transitions = %d, want 8 (distill hops are free)", res.State.Transitions)
 	}
 
-	// The revisit's (source, need) pairs are byte-identical, so the second
-	// pass through generate#spec replays both items from the memo cache.
+	// The fixture spec (~180 tokens) already fits the 400-token slice budget,
+	// so every visit passes it through verbatim — zero model calls, and the
+	// coder items carry the full spec.
 	slices, _ := res.State.Ctx["generate#spec"].(map[string]any)
-	if slices["memo_hits"] != 2 {
-		t.Errorf("generate#spec.memo_hits = %v, want 2 (revisit re-distills for free)", slices["memo_hits"])
+	if slices["passthrough_hits"] != 2 {
+		t.Errorf("generate#spec.passthrough_hits = %v, want 2 (source fits the slice budget)", slices["passthrough_hits"])
+	}
+	if items, _ := slices["items"].([]any); len(items) != 2 {
+		t.Errorf("generate#spec.items = %v, want 2", slices["items"])
+	} else if first, _ := items[0].(map[string]any); first["text"] != string(spec) {
+		t.Errorf("generate#spec item 0 should be the verbatim spec, got %.80q", first["text"])
 	}
 	// No build has run on this trace: the absent source distilled to "".
 	causes, _ := res.State.Ctx["generate#build_cause"].(map[string]any)

@@ -80,7 +80,10 @@ type HandlerResult struct {
 	Messages []journal.Message
 	Attempts int          // handler attempts consumed (1 = first try)
 	Memo     bool         // output replayed from the memo cache — zero tokens spent
-	Park     *parkRequest // human gates request a park instead of producing output
+	// Passthrough: a distill source already fit its slice budget and crossed
+	// verbatim — zero tokens, no model call.
+	Passthrough bool
+	Park        *parkRequest // human gates request a park instead of producing output
 }
 
 type parkRequest struct {
@@ -318,6 +321,9 @@ func (e *Engine) loop(ctx context.Context, m *machine.Machine, runID string, rs 
 		if res.Memo {
 			finished["memo"] = true
 		}
+		if res.Passthrough {
+			finished["passthrough"] = true
+		}
 		if err := e.append(ctx, runID, journal.HandlerFinished, finished); err != nil {
 			return nil, err
 		}
@@ -540,6 +546,7 @@ func (e *Engine) runForEach(ctx context.Context, m *machine.Machine, st *machine
 	var failures []any
 	var usage journal.Usage
 	memoHits := 0
+	passthroughHits := 0
 	for i := range list {
 		if errs[i] != nil {
 			if st.ForEach.OnItemFailure == "skip" {
@@ -559,6 +566,9 @@ func (e *Engine) runForEach(ctx context.Context, m *machine.Machine, st *machine
 		if results[i].Memo {
 			memoHits++
 		}
+		if results[i].Passthrough {
+			passthroughHits++
+		}
 	}
 	output := map[string]any{"items": items, "count": len(items)}
 	if st.ForEach.OnItemFailure == "skip" {
@@ -568,7 +578,15 @@ func (e *Engine) runForEach(ctx context.Context, m *machine.Machine, st *machine
 	if memoHits > 0 {
 		output["memo_hits"] = memoHits
 	}
-	return &HandlerResult{Output: output, Usage: usage, Memo: memoHits == len(list) && len(list) > 0}, nil
+	if passthroughHits > 0 {
+		output["passthrough_hits"] = passthroughHits
+	}
+	return &HandlerResult{
+		Output:      output,
+		Usage:       usage,
+		Memo:        memoHits == len(list) && len(list) > 0,
+		Passthrough: passthroughHits == len(list) && len(list) > 0,
+	}, nil
 }
 
 // withRetries drives attempts for retryable error classes.

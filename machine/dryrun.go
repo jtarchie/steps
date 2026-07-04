@@ -196,11 +196,12 @@ func (m *Machine) outputStub(s *State) any {
 	}
 	if s.ForEach != nil {
 		return map[string]any{
-			"items":     []any{body},
-			"count":     1,
-			"skipped":   0,
-			"failures":  []any{},
-			"memo_hits": 0,
+			"items":            []any{body},
+			"count":            1,
+			"skipped":          0,
+			"failures":         []any{},
+			"memo_hits":        0,
+			"passthrough_hits": 0,
 		}
 	}
 	return body

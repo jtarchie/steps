@@ -168,6 +168,9 @@ A/B on this fixture — the committed machine vs the same machine without
   tokens when **source ≫ maxTokens** — a real spec, a real compiler dump —
   and this fixture has neither. The parts that are free regardless (memo
   replay, the absent-source rule) are what showed up here.
+  *This finding is now enforced by the runtime:* a source that fits the
+  slice budget passes through verbatim with no model call, so the overhead
+  measured above is structurally zero on re-runs.
 - **Run-to-run variance dwarfs the feature.** The baseline run's reviewer
   approved first pass (9.1k tokens total); the distill run's reviewer
   rejected five times on test-harness nitpicks (44.2k total — 65% of it the
@@ -194,7 +197,7 @@ first. The build gate is **not** scripted — it genuinely runs
 run_started
 state_entered    plan                 -> two files + contract + acceptance
 transition_fired plan -> generate#spec                   (linear default, retargeted)
-state_entered    generate#spec        -> per-file spec slices (foreach x2, scripted)
+state_entered    generate#spec        -> pass-through x2: spec fits the budget, NO model calls
 transition_fired generate#spec -> generate#build_cause   (implicit — free)
 state_entered    generate#build_cause -> no build yet: "" x2, NO model calls
 transition_fired generate#build_cause -> generate        (implicit — free)
@@ -202,7 +205,7 @@ state_entered    generate (visit 1)   -> greet.sh, greet_test.sh (foreach x2)
 transition_fired generate -> review
 state_entered    review               -> score 5, event=revise
 transition_fired review -> generate#spec                 (on: revise, visits.generate < 5)
-state_entered    generate#spec        -> memo x2: same (source, need), zero tokens
+state_entered    generate#spec        -> pass-through x2 again, still free
 transition_fired generate#spec -> generate#build_cause   (implicit — free)
 state_entered    generate#build_cause -> still no build: "" x2
 transition_fired generate#build_cause -> generate        (implicit — free)
@@ -221,12 +224,14 @@ run_finished     done
 
 Assertions (`engine/acceptance_test.go`): exact state sequence above; 12
 journaled transitions but a **counted budget of 8** — the 4 distill hops are
-implicit and free against `maxTransitions`; `generate#spec.memo_hits == 2`
-(the revisit re-distills for free); `generate#build_cause` yields two `""`
-slices with no model calls (absent source); `generate.count == 2` (one
-hermetic context per planned file); `build.ok == true` with the generated
-test's own `all tests passed` on stdout; `out/greet.sh` contains the revised
-`--shout` handling; `out/GENERATED.md` records `PASSED`.
+implicit and free against `maxTransitions`;
+`generate#spec.passthrough_hits == 2` (the fixture spec fits the slice
+budget, so it crosses verbatim with zero model calls, every visit);
+`generate#build_cause` yields two `""` slices with no model calls (absent
+source); `generate.count == 2` (one hermetic context per planned file);
+`build.ok == true` with the generated test's own `all tests passed` on
+stdout; `out/greet.sh` contains the revised `--shout` handling;
+`out/GENERATED.md` records `PASSED`.
 
 On a **live** build failure the trace differs in one place: `build` red loops
 back through the chain, `generate#build_cause` now has a source (the build

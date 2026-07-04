@@ -62,14 +62,23 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 		data[h.As] = renderHistory(msgs, h)
 	}
 
-	// A distill state whose source is absent yields an empty slice for free —
-	// no model call. Loop-feedback sources (build stderr before the first
-	// build) simply haven't happened yet; like adopt:self on a first visit,
-	// that is defined semantics, not an error.
+	// Distill short-circuits — the two cases where the best slice needs no
+	// model call:
+	//   absent source  -> empty slice. Loop-feedback sources (build stderr
+	//   before the first build) simply haven't happened yet; like adopt:self
+	//   on a first visit, that is defined semantics, not an error.
+	//   small source   -> the source verbatim. When the whole source fits
+	//   the slice budget, the identity is the best possible extraction —
+	//   paying a model to approximate it is the measured failure mode.
 	if st.IsDistill() {
 		if d := m.DistillEntryFor(st); d != nil {
-			if v, ok := data[d.From]; !ok || v == nil {
+			v, ok := data[d.From]
+			if !ok || v == nil {
 				return &HandlerResult{Output: map[string]any{"text": ""}}, nil
+			}
+			if text, err := machine.RenderDistillSource(v); err == nil &&
+				machine.EstimateTokens(text) <= d.MaxTokens {
+				return &HandlerResult{Output: map[string]any{"text": text}, Passthrough: true}, nil
 			}
 		}
 	}

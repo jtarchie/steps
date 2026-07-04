@@ -57,7 +57,9 @@ interface Distill {
    *  Default: this entry's key — shadowing it (inside the state, the key IS
    *  the slice). */
   from?: string;
-  /** Output budget of the slice (the implicit state's maxOutputTokens). Default 512. */
+  /** Output budget of the slice (the implicit state's maxOutputTokens). Default 512.
+   *  Doubles as the pass-through threshold: a source that already fits this
+   *  budget crosses verbatim with no model call — distill never loses. */
   maxTokens?: number;
   /** Alias/ref. Default: models.distiller, then the machine default model. */
   model?: string;

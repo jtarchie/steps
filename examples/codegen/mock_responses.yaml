@@ -8,21 +8,18 @@
 #     --input spec=@fixtures/spec.md --input language=bash \
 #     --input out=out --input 'verify_cmd=bash greet_test.sh'
 #
-# Trace: plan -> generate#spec x2 -> generate#build_cause (no build yet:
+# Trace: plan -> generate#spec x2 (pass-through: the spec fits the slice
+#        budget, no model calls) -> generate#build_cause x2 (no build yet:
 #        empty slices, no model calls) -> generate x2 -> review(revise) ->
-#        generate#spec (memo x2: same source+need, zero tokens) ->
-#        generate#build_cause (still empty) -> generate x2 ->
-#        review(approve) -> write_files x2 -> build(ok) -> report -> done
+#        generate#spec + generate#build_cause (both free again) ->
+#        generate x2 -> review(approve) -> write_files x2 -> build(ok) ->
+#        report -> done
 #
-# generate#spec needs only TWO responses even though the coder loops: the
-# revisit's (source, need) pairs are byte-identical, so both items replay
-# from the memo cache. generate#build_cause never consumes a response —
-# the build hasn't run on this trace, and an absent source distills to ""
-# for free.
-
-"generate#spec":
-  - text: "greet.sh: parse --name NAME (default world) and --shout; print 'Hello, <name>!'; --shout uppercases the whole line; unknown flags exit non-zero with usage."
-  - text: "greet_test.sh: run greet.sh with no args, with --name Ada, and with --shout; assert 'Hello, world!', 'Hello, Ada!', 'HELLO, WORLD!'; exit 0 only when all pass."
+# Neither distill state consumes a response on this trace: the fixture spec
+# (~180 tokens) already fits generate#spec's 400-token budget so it crosses
+# verbatim, and generate#build_cause has no source until a build has failed.
+# Distillation would only bill on a live build failure with a stderr dump
+# bigger than its 200-token budget.
 
 plan:
   - text: "{\"files\": [{\"path\": \"greet.sh\", \"purpose\": \"CLI entry: parse --name/--shout, print the greeting\"}, {\"path\": \"greet_test.sh\", \"purpose\": \"executable check of both flags against greet.sh\"}], \"contract\": \"greet.sh prints 'Hello, <name>!' (name defaults to world); --name NAME sets the name; --shout uppercases the whole line; unknown flags exit non-zero.\", \"acceptance\": [\"greet.sh with no args prints 'Hello, world!'\", \"--name Ada prints 'Hello, Ada!'\", \"--shout uppercases the greeting\", \"greet_test.sh exits 0 when behaviour is correct\"]}"

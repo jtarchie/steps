@@ -73,6 +73,27 @@ func (m *Machine) DistillEntryFor(s *State) *DistillEntry {
 	return nil
 }
 
+// RenderDistillSource renders a scope value as distiller input: strings
+// verbatim, everything else compact YAML. The engine uses the same rendering
+// to decide pass-through, so the text the size rule judges is exactly the
+// text the model would have seen.
+func RenderDistillSource(v any) (string, error) {
+	if s, ok := v.(string); ok {
+		return s, nil
+	}
+	raw, err := yaml.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(string(raw), "\n"), nil
+}
+
+// EstimateTokens is the engine's chars/4 heuristic (the same one the mock
+// provider bills with) — used where a real tokenizer would be overkill:
+// the distill pass-through rule and the maxInputTokens cap. Estimates only;
+// enforcement that needs exactness belongs on the provider's own counts.
+func EstimateTokens(s string) int { return len(s) / 4 }
+
 // distillPrompt builds the implicit state's user message: the rendered need
 // plus the raw source value (yaml-rendered when not a string). A Go-native
 // Dyn — there is no JS source to carry, only engine-owned composition.
@@ -86,13 +107,9 @@ func distillPrompt(d DistillEntry) func(map[string]any) (any, error) {
 		if !ok || src == nil {
 			return nil, fmt.Errorf("distill.%s: source %q is missing from scope", d.Key, d.From)
 		}
-		text, isStr := src.(string)
-		if !isStr {
-			raw, err := yaml.Marshal(src)
-			if err != nil {
-				return nil, fmt.Errorf("distill.%s: rendering source %q: %w", d.Key, d.From, err)
-			}
-			text = strings.TrimRight(string(raw), "\n")
+		text, err := RenderDistillSource(src)
+		if err != nil {
+			return nil, fmt.Errorf("distill.%s: rendering source %q: %w", d.Key, d.From, err)
 		}
 		return "NEED: " + strings.TrimSpace(need) + "\n\nSOURCE:\n" + text, nil
 	}

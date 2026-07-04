@@ -24,6 +24,15 @@ estimator; see Implementation deltas below).
 >   stderr on the coder's first visit) yields `""` with no model call, like
 >   `adopt: "self"` on a first visit. The consumer's ternary
 >   (`${build_cause ? ... : ""}`) reads it as falsy.
+> - **Small source = verbatim pass-through, for free** (added after the
+>   2026-07-04 measurement). If the rendered source fits the slice budget
+>   (chars/4 estimate ≤ `maxTokens`), the identity is the best possible
+>   extraction — the source crosses verbatim with no model call, `for:` is
+>   never rendered, and the ledger records `passthrough` /
+>   `passthrough_hits` like it records memo. Distill is never-lose: small
+>   sources cost nothing, big sources pay for real compression. If a
+>   pass-through then trips a consumer's opt-in `maxInputTokens`, that is
+>   correct pressure — raise the slice budget so extraction actually runs.
 > - User state names are now validated as JS identifiers, which is what keeps
 >   the lowered `name#key` namespace collision-free.
 

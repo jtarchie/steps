@@ -123,9 +123,10 @@ output cost is a declared property of a state:
   scope value with a model-extracted slice before the state runs — inside the
   state, `spec` IS the slice. Each entry lowers to a real implicit state
   (`state#spec`) on a cheap `distiller` model: journaled, memoized (unchanged
-  source+need pairs replay free), budgeted by `maxTokens`. forEach consumers
-  distill per item — the slice of the spec that matters is a function of the
-  item. See [docs/distill.md](docs/distill.md).
+  source+need pairs replay free), budgeted by `maxTokens`. Never-lose: a
+  source that already fits the budget passes through verbatim with no model
+  call. forEach consumers distill per item — the slice of the spec that
+  matters is a function of the item. See [docs/distill.md](docs/distill.md).
 - `model` as a function routes each execution to the cheapest capable model
   (`({lead}) => lead.risk === "high" ? "senior" : "scout"`); `models:` aliases
   keep machines readable and swappable.
