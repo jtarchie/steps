@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	mrand "math/rand"
+	"slices"
 	"sync"
 	"time"
 
@@ -90,6 +91,7 @@ type parkRequest struct {
 	Prompt    string
 	Timeout   time.Duration
 	OnTimeout string
+	Choices   *journal.ParkChoices
 }
 
 type pendingResume struct {
@@ -180,6 +182,22 @@ func (e *Engine) Resume(ctx context.Context, m *machine.Machine, runID, event st
 		}
 		if event == "" {
 			return nil, fmt.Errorf("run %s is parked at human gate %q — resume with an event", runID, p.State)
+		}
+		// A typo'd --event (or a forged web POST) should fail here, not as a
+		// mid-run "no transition matched": the gate's alphabet is closed.
+		if st := m.State(p.State); st != nil {
+			known, fallback := []string{}, false
+			for _, t := range st.Transitions {
+				if t.On != "" {
+					known = append(known, t.On)
+				}
+				if t.Fallback() {
+					fallback = true
+				}
+			}
+			if !fallback && !slices.Contains(known, event) {
+				return nil, fmt.Errorf("gate %q has no route for event %q — expected one of %v", p.State, event, known)
+			}
 		}
 		if err := e.append(ctx, runID, journal.RunResumed, map[string]any{"event": event, "data": data}); err != nil {
 			return nil, err
@@ -289,19 +307,34 @@ func (e *Engine) loop(ctx context.Context, m *machine.Machine, runID string, rs 
 		}
 
 		if res.Park != nil {
-			if err := e.append(ctx, runID, journal.RunParked, map[string]any{
+			parked := map[string]any{
 				"state":      current,
 				"reason":     "human_gate",
 				"prompt":     res.Park.Prompt,
 				"timeout":    res.Park.Timeout,
 				"on_timeout": res.Park.OnTimeout,
-			}); err != nil {
+			}
+			if res.Park.Choices != nil {
+				parked["choices"] = res.Park.Choices
+			}
+			if err := e.append(ctx, runID, journal.RunParked, parked); err != nil {
 				return nil, err
 			}
 			if err := e.Store.UpdateRun(ctx, runID, journal.StatusParked, current); err != nil {
 				return nil, err
 			}
-			e.Listener.RunParked(runID, current, res.Park.Prompt, res.Park.Timeout)
+			// Mirror the journal into the in-memory state so same-process
+			// callers (interactive gates, tests) see the park without re-folding.
+			rs.Parked = &journal.ParkInfo{
+				State:     current,
+				Reason:    "human_gate",
+				Prompt:    res.Park.Prompt,
+				At:        time.Now(),
+				Timeout:   res.Park.Timeout,
+				OnTimeout: res.Park.OnTimeout,
+				Choices:   res.Park.Choices,
+			}
+			e.Listener.RunParked(runID, current, res.Park.Prompt, res.Park.Timeout, res.Park.Choices)
 			return &Result{RunID: runID, Status: journal.StatusParked, State: rs}, nil
 		}
 

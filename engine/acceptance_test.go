@@ -225,6 +225,23 @@ critique:
 		t.Errorf("visits.draft = %d, want 3 (guard-bounded revisions)", v)
 	}
 
+	// The park journals the gate's declared choices — the answer surface any
+	// later CLI resume or webview renders from the journal alone.
+	c := res.State.Parked.Choices
+	if c == nil || c.Kind != "single" || len(c.Options) != 2 {
+		t.Fatalf("parked choices = %+v, want single with the 2 declared options", c)
+	}
+	if c.Options[0].Event != "approved" || c.Options[0].Label != "Ship the current draft as-is" ||
+		c.Options[1].Event != "rejected" || c.Options[1].Label != "Fail the run" {
+		t.Errorf("options = %+v, want the workflow.ts choices in declaration order", c.Options)
+	}
+
+	// An event outside the gate's alphabet fails cleanly, before any routing.
+	if _, err := eng.Resume(context.Background(), m, res.RunID, "shipit", nil); err == nil ||
+		!strings.Contains(err.Error(), `no route for event "shipit"`) {
+		t.Errorf("out-of-alphabet resume err = %v, want a closed-alphabet rejection", err)
+	}
+
 	// Resume in a "new process": fresh fold from the store.
 	res2, err := eng.Resume(context.Background(), m, res.RunID, "approved", map[string]any{"note": "ship it"})
 	if err != nil {
@@ -631,6 +648,74 @@ critique:
 	}
 	if _, err := eng.Resume(context.Background(), m, res.RunID, "", nil); err == nil {
 		t.Error("resume without an event should error while parked")
+	}
+}
+
+// TestMultiChoiceGate: a multi gate evaluates its options from scope at park
+// time (journaled in run_parked), and the resume's {selected} lands in the
+// gate's ctx entry, routing on the gate's single event edge.
+func TestMultiChoiceGate(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	wf := `
+const scan = { prompt: "scan", output: { modules: { type: "array", items: "string" } } };
+const pick = {
+  human: "Which modules should be regenerated?",
+  choices: { multi: ({ scan }) => scan.modules, min: 1 },
+};
+const report = {
+  write: "out/picked.txt",
+  content: ({ pick }) => pick.selected.join(","),
+};
+export default {
+  name: "multi-gate",
+  model: "mock",
+  states: { scan, pick, report },
+  flow: pipe(scan, branch(pick, { chosen: report })),
+};`
+	script := `
+scan:
+  - text: '{"modules": ["auth", "billing", "search"]}'
+`
+	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := machine.Parse([]byte(wf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, _ := newTestEngine(t, scriptPath)
+	res, err := eng.Start(context.Background(), m, nil)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Status != journal.StatusParked {
+		t.Fatalf("status = %s, want parked", res.Status)
+	}
+
+	c := res.State.Parked.Choices
+	if c == nil || c.Kind != "multi" || c.Event != "chosen" || c.Min != 1 {
+		t.Fatalf("parked choices = %+v, want multi/chosen/min 1 (event defaulted from the single edge)", c)
+	}
+	if len(c.Options) != 3 || c.Options[0].Value != "auth" || c.Options[2].Value != "search" {
+		t.Errorf("options = %+v, want the scope-evaluated module list", c.Options)
+	}
+
+	res2, err := eng.Resume(context.Background(), m, res.RunID, "chosen",
+		map[string]any{"selected": []any{"auth", "search"}})
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if res2.Status != journal.StatusDone {
+		t.Fatalf("status = %s at %s, want done", res2.Status, res2.Terminal)
+	}
+	raw, err := os.ReadFile("out/picked.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "auth,search" {
+		t.Errorf("picked.txt = %q — the selection should flow to downstream states", raw)
 	}
 }
 

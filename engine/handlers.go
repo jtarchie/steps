@@ -46,7 +46,7 @@ func (e *Engine) runAction(ctx context.Context, st *machine.State, rs *journal.R
 	return &HandlerResult{Output: out}, nil
 }
 
-// runHuman resolves the gate prompt and requests a park.
+// runHuman resolves the gate prompt and choices and requests a park.
 func (e *Engine) runHuman(st *machine.State, rs *journal.RunState) (*HandlerResult, error) {
 	scope := baseScope(rs)
 	applyDistill(st, rs, scope)
@@ -55,11 +55,54 @@ func (e *Engine) runHuman(st *machine.State, rs *journal.RunState) (*HandlerResu
 		return nil, err
 	}
 	prompt = machine.Dedent(prompt)
+	choices, err := renderChoices(st, scope)
+	if err != nil {
+		return nil, err
+	}
 	return &HandlerResult{Park: &parkRequest{
 		Prompt:    prompt,
 		Timeout:   st.Human.Timeout,
 		OnTimeout: st.Human.OnTimeout,
+		Choices:   choices,
 	}}, nil
+}
+
+// renderChoices evaluates the gate's answer surface at park time, so later
+// CLI resumes and the webview render from the journal alone. Free-form-only
+// gates synthesize one option per resume event — every gate journals a
+// uniform shape. (A gate with only a fallback edge yields zero options; UIs
+// fall back to a free-form event field.)
+func renderChoices(st *machine.State, scope map[string]any) (*journal.ParkChoices, error) {
+	c := st.Human.Choices
+	if c == nil {
+		out := &journal.ParkChoices{Kind: "single"}
+		for _, t := range st.Transitions {
+			if t.On != "" {
+				out.Options = append(out.Options, journal.ParkOption{Event: t.On, Label: t.On})
+			}
+		}
+		return out, nil
+	}
+	if c.Kind == "single" {
+		out := &journal.ParkChoices{Kind: "single"}
+		for _, opt := range c.Options {
+			out.Options = append(out.Options, journal.ParkOption{Event: opt.Event, Label: opt.Label})
+		}
+		return out, nil
+	}
+	items, err := c.Dynamic.List(scope)
+	if err != nil {
+		return nil, fmt.Errorf("state %q choices.multi: %w", st.Name, err)
+	}
+	out := &journal.ParkChoices{Kind: "multi", Event: c.Event, Min: c.Min, Max: c.Max}
+	for i, it := range items {
+		s, ok := it.(string)
+		if !ok {
+			return nil, fmt.Errorf("state %q choices.multi[%d]: options must be strings, got %T", st.Name, i, it)
+		}
+		out.Options = append(out.Options, journal.ParkOption{Value: s, Label: s})
+	}
+	return out, nil
 }
 
 // applyDistill maps each distilled slice into the consumer's handler scope:

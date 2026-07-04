@@ -167,12 +167,42 @@ func (l *prettyListener) TransitionFired(from, to, on, when string) {
 	l.p("%s→ %s → %s%s%s", cBold, from, to, cReset, cond)
 }
 
-func (l *prettyListener) RunParked(runID, state, prompt string, timeout time.Duration) {
+func (l *prettyListener) RunParked(runID, state, prompt string, timeout time.Duration, choices *journal.ParkChoices) {
 	l.p("%s⏸ parked%s at %s%s%s — %s", cYellow, cReset, cBold, state, cReset, l.clip(prompt))
+	printParkChoices(l.p, choices)
 	if timeout > 0 {
 		l.p("  %sgate expires in %s%s", cDim, timeout, cReset)
 	}
 	l.p("  %sresume with: steps resume %s --event <event> [--data '{...}']%s", cDim, runID, cReset)
+}
+
+// printParkChoices renders a parked gate's numbered options through any
+// line printer (shared by both listeners).
+func printParkChoices(p func(format string, args ...any), c *journal.ParkChoices) {
+	if c == nil || len(c.Options) == 0 {
+		return
+	}
+	for i, opt := range c.Options {
+		name := opt.Event
+		if c.Kind == "multi" {
+			name = opt.Value
+		}
+		label := ""
+		if opt.Label != name {
+			label = "  " + opt.Label
+		}
+		p("  %s%d)%s %s%s", cBold, i+1, cReset, name, cDim+label+cReset)
+	}
+	if c.Kind == "multi" {
+		bounds := ""
+		if c.Min > 0 {
+			bounds = fmt.Sprintf(" at least %d;", c.Min)
+		}
+		if c.Max > 0 {
+			bounds += fmt.Sprintf(" at most %d;", c.Max)
+		}
+		p("  %sselect several —%s answered as event %q%s", cDim, bounds, c.Event, cReset)
+	}
 }
 
 func (l *prettyListener) RunResumed(runID, event string) {

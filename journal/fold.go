@@ -31,9 +31,32 @@ type RunState struct {
 type ParkInfo struct {
 	State     string        `json:"state"`
 	Reason    string        `json:"reason"`
+	Prompt    string        `json:"prompt"`
 	At        time.Time     `json:"at"`
 	Timeout   time.Duration `json:"timeout"`
 	OnTimeout string        `json:"on_timeout"`
+	// Choices is the gate's answer surface, rendered at park time so a later
+	// CLI resume or the webview can present it without re-evaluating the
+	// machine. Nil on journals written before choices existed.
+	Choices *ParkChoices `json:"choices,omitempty"`
+}
+
+// ParkChoices is the renderable answer surface of a parked gate. Single
+// gates (confirm included) route each option to its own resume event; multi
+// gates emit one Event with the selected values in the gate's output.
+type ParkChoices struct {
+	Kind    string       `json:"kind"`            // single | multi
+	Event   string       `json:"event,omitempty"` // multi only
+	Options []ParkOption `json:"options"`
+	Min     int          `json:"min,omitempty"`
+	Max     int          `json:"max,omitempty"`
+}
+
+// ParkOption is one presentable answer.
+type ParkOption struct {
+	Event string `json:"event,omitempty"` // single: the resume event fired
+	Value string `json:"value,omitempty"` // multi: the selected value
+	Label string `json:"label"`
 }
 
 // Expired reports whether a parked human gate has passed its timeout.
