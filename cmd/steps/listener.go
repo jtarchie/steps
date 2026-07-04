@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -32,10 +33,15 @@ func init() {
 // prettyListener narrates the run to stderr, human-readable first.
 type prettyListener struct {
 	verbose bool
+	w       io.Writer // defaults to os.Stderr; injected in tests
 }
 
 func (l *prettyListener) p(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
+	w := l.w
+	if w == nil {
+		w = os.Stderr
+	}
+	fmt.Fprintf(w, format+"\n", args...)
 }
 
 // clip renders text as a single loggable line unless verbose.

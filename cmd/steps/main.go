@@ -25,7 +25,7 @@ import (
 
 var (
 	flagDB           string
-	flagVerbose      bool
+	flagVerbose      int
 	flagMock         string
 	flagDefaultModel string
 )
@@ -38,7 +38,7 @@ func main() {
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().StringVar(&flagDB, "db", ".steps.db", "journal database path")
-	root.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "log full prompts, replies, and tool payloads")
+	root.PersistentFlags().CountVarP(&flagVerbose, "verbose", "v", "-v: narrate every message and tool call, -vv: full payloads and thoughts")
 	root.PersistentFlags().StringVar(&flagMock, "mock", "", "mock responses YAML — replaces every model with scripted replies")
 	root.PersistentFlags().StringVar(&flagDefaultModel, "default-model", os.Getenv("STEPS_DEFAULT_MODEL"), "engine-level default model (last rung of the cascade)")
 
@@ -48,6 +48,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%serror:%s %v\n", cRed, cReset, err)
 		os.Exit(1)
 	}
+}
+
+// newListener picks the narration level: condensed (default, one line per
+// state execution), -v (every message and tool call), -vv (full payloads).
+func newListener() engine.Listener {
+	if flagVerbose >= 1 {
+		return &prettyListener{verbose: flagVerbose >= 2}
+	}
+	return &condensedListener{}
 }
 
 func parseOpts() []machine.ParseOption {
@@ -145,7 +154,7 @@ func cmdRun() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			eng, store, err := buildEngine(&prettyListener{verbose: flagVerbose})
+			eng, store, err := buildEngine(newListener())
 			if err != nil {
 				return err
 			}
@@ -169,7 +178,7 @@ func cmdResume() *cobra.Command {
 		Short: "Resume a parked or crashed run from its journal",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			eng, store, err := buildEngine(&prettyListener{verbose: flagVerbose})
+			eng, store, err := buildEngine(newListener())
 			if err != nil {
 				return err
 			}

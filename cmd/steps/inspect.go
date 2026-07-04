@@ -136,7 +136,7 @@ func cmdInspect() *cobra.Command {
 					fmt.Printf("\n%sconversation: %s%s (last execution)\n", cBold, s, cReset)
 					for _, m := range rs.Convos[s] {
 						text := m.Text
-						if !flagVerbose {
+						if flagVerbose < 1 {
 							text = strings.Join(strings.Fields(text), " ")
 							if len(text) > 200 {
 								text = text[:200] + "…"
