@@ -75,21 +75,29 @@ reviewer:  "openrouter/qwen/qwen3.6-27b",   // gate: the reader
 
 **Why the gates run on OpenRouter, not a raw local server.** These are reasoning
 models, and the gate states set `reasoning: "low"` to keep the thinking short.
-That knob maps to `reasoning_effort` — which **OpenRouter honors but LM Studio
-silently ignores** (Ollama too). On a local server a reasoning model will spend
-its *entire* output budget thinking and never emit the answer (`budget_exceeded`),
-or the local server files the answer into a separate `reasoning_content` channel
-the engine discards (`model produced no text`). Same model, same machine, behind
-OpenRouter: it just works. This is a **provider integration** fact, not a flaw in
-the model or the machine — the machine stays clean (no `/no_think`, no
-`structuredOutput: "native"` hacks).
+That maps to the standard `reasoning_effort` request field — which **OpenRouter
+honors and LM Studio ignores** (LM Studio bug #988). When the knob is ignored, a
+reasoning model spends its *entire* output budget thinking and never emits the
+answer (`budget_exceeded`); or, depending on LM Studio's "Separate
+reasoning_content and content" setting, it files the answer into a
+`reasoning_content` channel the engine treats as scratch and discards (`model
+produced no text`). Same model, same machine, behind a provider that honors the
+field: it just works, no `/no_think` or `structuredOutput: "native"` hacks.
 
-**Want it fully local?** Point the aliases at `lmstudio/…` or `ollama/…`, but
-**disable thinking for the gate model at the server** (LM Studio: the model's
-thinking toggle / `enable_thinking=false` in its chat template; Ollama:
-similarly), because the API-level `reasoning:` knob won't reach it. The
-`catch: { budget_exceeded: escalate }` on `review` is the safety net if a local
-reasoning model still runs away.
+This is **provider non-conformance**, and the fix belongs at the provider, not
+in the machine or the engine. The engine deliberately does *not* try to salvage
+answers from the reasoning channel or retry a starved turn — that would be
+permanent complexity to paper over one server's quirks, and could mask a
+genuinely-too-small budget. Two honest ways to run it:
+
+- **A conformant provider** (as committed): `openrouter/`, or any backend that
+  honors `reasoning_effort` and returns the answer in `content`.
+- **Fully local**: point the gate aliases at `lmstudio/…` (or `ollama/…`) but
+  **turn thinking off for the gate model at the server** — LM Studio's model
+  thinking toggle, or `enable_thinking=false` in its chat template — since the
+  API-level `reasoning:` knob won't reach it. (The `coder` isn't a reasoning
+  model, so it's fine local either way.) The `catch: { budget_exceeded: escalate }`
+  on `review` is the last-resort net if a local reasoning model still runs away.
 
 The `openrouter/` provider is first-class (`provider/openrouter.go`): it adds
 `x-session-id` sticky routing (keyed on the run id, keeps the prompt cache
