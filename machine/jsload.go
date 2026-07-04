@@ -377,7 +377,8 @@ func (l *loader) machine(root *goja.Object) (*Machine, error) {
 			case "maxOutputTokens":
 				m.Defaults.Agent.MaxOutputTokens = integer(o.Get(k))
 			case "maxInputTokens":
-				m.Defaults.Agent.MaxInputTokens = integer(o.Get(k))
+				cap := integer(o.Get(k))
+				m.Defaults.Agent.MaxInputTokens = &cap
 			case "temperature":
 				t := o.Get(k).ToFloat()
 				m.Defaults.Agent.Temperature = &t
@@ -628,10 +629,13 @@ func (l *loader) agent(o *goja.Object) (*AgentSpec, error) {
 		Prompt:           l.dyn(o.Get("prompt")),
 		MaxTurns:         integer(o.Get("maxTurns")),
 		MaxOutputTokens:  integer(o.Get("maxOutputTokens")),
-		MaxInputTokens:   integer(o.Get("maxInputTokens")),
 		StructuredOutput: str(o.Get("structuredOutput")),
 		Reasoning:        str(o.Get("reasoning")),
 		ToolChoice:       str(o.Get("toolChoice")),
+	}
+	if v := o.Get("maxInputTokens"); defined(v) {
+		cap := int(v.ToInteger())
+		ag.MaxInputTokens = &cap
 	}
 	if defined(o.Get("temperature")) {
 		t := o.Get("temperature").ToFloat()

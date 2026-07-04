@@ -99,7 +99,13 @@ func ApplyDefaults(m *Machine) {
 				a.MaxTurns = m.Defaults.Agent.MaxTurns
 			}
 			if a.MaxTurns == 0 {
-				a.MaxTurns = DefaultMaxTurns
+				// Tool-less states make one model call per turn — 2 is
+				// headroom; only a tool-use loop needs room to iterate.
+				if len(a.Tools) > 0 {
+					a.MaxTurns = DefaultMaxTurns
+				} else {
+					a.MaxTurns = DefaultMaxTurnsToolless
+				}
 			}
 			if a.MaxOutputTokens == 0 {
 				a.MaxOutputTokens = m.Defaults.Agent.MaxOutputTokens
@@ -107,11 +113,15 @@ func ApplyDefaults(m *Machine) {
 			if a.MaxOutputTokens == 0 {
 				a.MaxOutputTokens = DefaultMaxOutputTokens
 			}
-			// maxInputTokens is opt-in (0 = off) and never cascades onto
-			// implicit distill states — the distiller is the one place the
-			// big payload is supposed to appear.
-			if a.MaxInputTokens == 0 && !s.IsDistill() {
+			// maxInputTokens: nil cascades to the engine default; an author's
+			// 0 means off. Never cascades onto implicit distill states — the
+			// distiller is the one place the big payload is supposed to appear.
+			if a.MaxInputTokens == nil && !s.IsDistill() {
 				a.MaxInputTokens = m.Defaults.Agent.MaxInputTokens
+			}
+			if a.MaxInputTokens == nil && !s.IsDistill() {
+				cap := DefaultMaxInputTokens
+				a.MaxInputTokens = &cap
 			}
 			if a.StructuredOutput == "" {
 				a.StructuredOutput = m.Defaults.Agent.StructuredOutput

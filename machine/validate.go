@@ -230,8 +230,8 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 		if a.MaxOutputTokens < 0 {
 			fail("state %q: max_output_tokens must be positive", s.Name)
 		}
-		if a.MaxInputTokens < 0 {
-			fail("state %q: max_input_tokens must be positive", s.Name)
+		if a.MaxInputTokens != nil && *a.MaxInputTokens < 0 {
+			fail("state %q: max_input_tokens must be positive (0 disables the cap)", s.Name)
 		}
 		switch a.ToolChoice {
 		case "auto":
@@ -380,6 +380,12 @@ func validateDistill(m *Machine, s *State, fail func(string, ...any)) {
 		}
 		if d.MaxTokens < 0 {
 			fail("%s: maxTokens must be positive", where)
+		}
+		// A slice must fit under its consumer's input budget, or the distill
+		// exists only to blow the cap it was meant to protect.
+		if a := s.Agent; a != nil && a.MaxInputTokens != nil && *a.MaxInputTokens > 0 && d.MaxTokens >= *a.MaxInputTokens {
+			fail("%s: maxTokens %d does not fit under the consumer's maxInputTokens %d — a slice must be smaller than its consumer's input budget",
+				where, d.MaxTokens, *a.MaxInputTokens)
 		}
 
 		if contains(scopeReserved, d.Key) {

@@ -9,8 +9,8 @@ human gate) while exercising nearly every feature in [DESIGN.md](../../DESIGN.md
 | Feature | Where |
 |---|---|
 | Micro-agents with per-state models | `draft` (qwen3:8b) vs `critique` (llama3.2:3b) |
-| Agent proposes, guards dispose | `critique` emits `approve`/`revise`; guard functions veto |
-| Engine-bounded loops | `visits.draft < 3` guard + `maxTransitions: 12` backstop |
+| Agent proposes, guards dispose | `critique` emits `approve`/`revise`; the `accept` guard rules on the score |
+| Engine-bounded loops | `loop()` with `maxVisits: 3` (lowers to a `visits.critique < 3` guard) + `maxTransitions: 12` backstop |
 | Explicit contracts | typed output schemas; prompt functions are the input contract |
 | Feedback loops between states | rejected draft destructures `({ critique })` on the next pass |
 | Semantic retry (re-prompt with error) | mock's non-JSON critique response; small local models also trigger this naturally |
@@ -78,18 +78,18 @@ With `mock_responses.yaml`, the run is fully deterministic:
 run_started
 state_entered    draft (visit 1)
 handler_finished draft            -> weak summary
-transition_fired draft -> critique                    (linear default)
+transition_fired draft -> critique                    (loop body -> judge)
 state_entered    critique
   attempt 1: rate_limited         -> transient retry, backoff journaled
   attempt 2: non-JSON output      -> semantic retry, feedback appended
   attempt 3: score 4, event=revise
-transition_fired critique -> draft                    (on: revise, visits.draft < 3)
+transition_fired critique -> draft                    (revise: visits.critique < 3)
 state_entered    draft (visit 2)  -> prompt now contains critique.issues
 handler_finished draft            -> improved summary
 transition_fired draft -> critique
 state_entered    critique
   attempt 1: score 9, event=approve
-transition_fired critique -> publish                  (on: approve, score >= 8)
+transition_fired critique -> publish                  (accept: score >= 8)
 state_entered    publish          -> writes out/summary.md
 transition_fired publish -> done                      (linear default)
 run_finished     done
@@ -100,4 +100,4 @@ one semantic retry on `critique`; `out/summary.md` exists and contains the three
 points; total transitions = 5 (well under the limit of 12).
 
 Live-mode assertions are invariants only (never content): the run reaches `done` or
-parks at `escalate`; `visits.draft <= 3`; every output validated against its schema.
+parks at `escalate`; `visits.critique <= 3`; every output validated against its schema.

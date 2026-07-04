@@ -179,6 +179,30 @@ declare function branch(
 ): FlowNode;
 /** Guard an edge: when(s => ...).to(target). */
 declare function when(guard: Fn<boolean>): { to(target: FlowTarget): FlowEdge };
+/** Bounded judge/revise cycle — the body falls through to the judge; accept
+ *  exits, rejection revises while the visits budget lasts, exhaustion routes
+ *  out. Pure sugar over branch: the judge gets exactly [accept -> then,
+ *  visits.<judge> < maxVisits -> revise, fallback -> exhausted].
+ *  A gate that never loops is just a `branch`. */
+declare function loop(body: FlowTarget, opts: LoopOptions): FlowNode;
+interface LoopOptions {
+  /** The state whose out-edges the loop owns. May be an action state — a
+   *  build command's exit code judges as well as a model's score. */
+  judge: State;
+  /** Exit test on the judge's result: ({ output, event, ... }) => boolean. */
+  accept: Fn<boolean>;
+  /** The judge runs at most this many times (visits.<judge> < maxVisits). */
+  maxVisits: number;
+  /** Accept route. Defaults to the pipe successor (exactly one must exist). */
+  then?: FlowTarget;
+  /** Reject route while budget lasts. Defaults to the body's entry —
+   *  explicit for loops that re-enter upstream of the body. */
+  revise?: FlowTarget;
+  /** Budget spent without acceptance. Defaults to fail. */
+  exhausted?: FlowTarget;
+  /** The judge's catch edges, same as branch: {errorClass: target}. */
+  catch?: Record<string, FlowTarget>;
+}
 /** Terminal states. */
 declare const done: FlowNode;
 declare const fail: FlowNode;

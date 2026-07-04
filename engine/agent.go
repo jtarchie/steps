@@ -94,15 +94,15 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 		return nil, err
 	}
 
-	// maxInputTokens (opt-in): the mirror of maxOutputTokens — no state may
-	// read unboundedly either. Over-budget is exhaustion (never retried,
-	// routable by catch:), and distill at the callsite is the intended fix.
-	if cap := spec.MaxInputTokens; cap > 0 {
-		if est := machine.EstimateTokens(system) + machine.EstimateTokens(userMsg); est > cap {
+	// maxInputTokens (default-on): the mirror of maxOutputTokens — no state
+	// may read unboundedly either. Over-budget is exhaustion (never retried,
+	// routable by catch:), attributed to the largest inputs so the fix —
+	// distill at the callsite, or trim — is one look away.
+	if cap := spec.MaxInputTokens; cap != nil && *cap > 0 {
+		if est := machine.EstimateTokens(system) + machine.EstimateTokens(userMsg); est > *cap {
 			return nil, &provider.ClassifiedError{
 				Class: machine.ClassBudgetExceeded,
-				Msg: fmt.Sprintf("rendered input ~%d tokens exceeds maxInputTokens %d — distill or trim the largest inputs",
-					est, cap),
+				Msg:   inputBudgetMsg(st, data, est, *cap),
 			}
 		}
 	}
@@ -435,6 +435,24 @@ func (e *Engine) buildSystemInstruction(st *machine.State, data map[string]any) 
 // no JSON — the raw reply is the output.
 func plainTextContract(o machine.OutputSpec) bool {
 	return o.DefaultOutput() && len(o.Events) == 0
+}
+
+// inputBudgetMsg names an input overflow's biggest offenders (top three) so
+// the fix is one look away.
+func inputBudgetMsg(st *machine.State, scope map[string]any, est, cap int) string {
+	msg := fmt.Sprintf("rendered input ~%d tokens exceeds maxInputTokens %d", est, cap)
+	tops := machine.LargestInputs(st, scope)
+	if len(tops) > 3 {
+		tops = tops[:3]
+	}
+	if len(tops) > 0 {
+		parts := make([]string, 0, len(tops))
+		for _, t := range tops {
+			parts = append(parts, fmt.Sprintf("%s ~%d", t.Key, t.Tokens))
+		}
+		msg += " — largest inputs: " + strings.Join(parts, ", ")
+	}
+	return msg + " — distill: or trim the biggest, or set maxInputTokens: 0 to disable"
 }
 
 // parseOutput validates the model's reply against the state contract.

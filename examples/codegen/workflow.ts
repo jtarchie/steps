@@ -204,39 +204,40 @@ export default {
     distiller: "openrouter/qwen/qwen3-coder-flash",  // extraction is a small-model job; lmstudio/… works too
   },
   model: "coder",
-  defaults: { maxTurns: 2 }, // tool-less states: one model call per turn, 2 is headroom
   limits: { maxTransitions: 40, maxTokens: 400000, timeout: "1h" }, // generous wall clock: a local coder is slow and gates may park for a human
 
   states: { plan, generate, review, escalate, write_files, build, accept_build, report },
 
+  // Two bounded loops, one per gate — and each loop owns its own budget,
+  // bound on the gate that observes it (visits.review / visits.build).
+  // Measured live before that split, the reader loop spent the shared budget
+  // and the build loop got one shot.
   flow: pipe(
     plan,
-    generate,
-    // Gate one. A branch with an `else` is a pipe's last node, so the
-    // continuation lives inside the `approve` edge, not as a trailing step.
-    // write_files' own out-edge (to gate two) is defined there, once; the
-    // escalation below only *references* write_files as a jump-in target.
-    branch(review, {
-      approve: when(({ output }) => output.score >= 8).to(
-        // Materialise, then gate two — guard-only (an action declares no
-        // events). Green ships to the manifest; red loops the coder with the
-        // distilled root cause; exhausted retries escalate to a human.
-        // Bound the loop on the gate that observes it (visits.build), not on
-        // the state being re-run: the reader loop also spends
-        // visits.generate, and measured live it spent ALL of it — the build
-        // loop got one shot. Each loop owns its own budget.
-        pipe(write_files, branch(build, [
-          when(({ output }) => output.ok).to(report),
-          when(({ visits }) => visits.build < 4).to(generate), // build loop: 3 red retries, reader-independent
-          branch(accept_build, { approved: report, rejected: fail, timeout: fail }),
-        ])),
-      ),
-      revise: when(({ visits }) => visits.generate < 5).to(generate), // reader loop — a few passes to converge
+    // Gate one — the reader. Reject revises the coder while the budget
+    // lasts; exhausted escalates to a human; accept proceeds to gate two.
+    loop(generate, {
+      judge: review,
+      accept: ({ output }) => output.score >= 8,
+      maxVisits: 5, // reader loop — a few passes to converge
       // Defensive: if a reviewer model ever burns its whole budget thinking
-      // (common on local backends that ignore reasoning_effort), don't kill the
-      // run — route it to the same human tie-break.
+      // (common on local backends that ignore reasoning_effort), don't kill
+      // the run — route it to the same human tie-break.
       catch: { budget_exceeded: escalate },
-      else: branch(escalate, { approved: write_files, rejected: fail, timeout: fail }),
+      exhausted: branch(escalate, { approved: write_files, rejected: fail, timeout: fail }),
+      // Gate two — the ground truth. Materialise, then let the command's
+      // exit code judge (an action state judges as well as a model: accept
+      // reads output.ok, not a score). Red loops the coder with the
+      // distilled root cause — revise re-enters UPSTREAM of this loop's
+      // body, which is why it is explicit.
+      then: loop(write_files, {
+        judge: build,
+        accept: ({ output }) => output.ok,
+        revise: generate, // build loop: 3 red retries, reader-independent
+        maxVisits: 4,
+        then: report,
+        exhausted: branch(accept_build, { approved: report, rejected: fail, timeout: fail }),
+      }),
     }),
   ),
 };

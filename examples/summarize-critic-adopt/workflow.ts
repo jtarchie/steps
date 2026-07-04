@@ -57,21 +57,22 @@ export default {
   name: "summarize-critic-adopt",
   input: { article: "string" },
   model: "ollama/qwen3:8b",
-  defaults: { maxTurns: 2, reasoning: "low" },
+  defaults: { reasoning: "low" },
   limits: { maxTransitions: 12 },
 
   states: { draft, critique, escalate, publish },
 
   flow: pipe(
-    draft,
-    branch(critique, {
-      approve: when(({ output }) => output.score >= 8).to(publish),
-      revise: when(({ visits }) => visits.draft < 3).to(draft),
-      else: branch(escalate, {
+    loop(draft, {
+      judge: critique,
+      accept: ({ output }) => output.score >= 8,
+      maxVisits: 3,
+      exhausted: branch(escalate, {
         approved: publish,
         rejected: fail,
         timeout: fail,
       }),
     }),
+    publish,
   ),
 };

@@ -26,7 +26,7 @@ func TestLoadSummarizeCritic(t *testing.T) {
 		t.Errorf("draft model = %v (top-level model sugar cascade)", draft.Agent.Model.Display())
 	}
 	if draft.Agent.MaxTurns != 2 {
-		t.Errorf("draft maxTurns = %d, want 2 from flattened defaults", draft.Agent.MaxTurns)
+		t.Errorf("draft maxTurns = %d, want 2 (engine tool-less default)", draft.Agent.MaxTurns)
 	}
 	if !draft.Agent.Prompt.IsFn() {
 		t.Error("draft prompt should be a function")
@@ -38,15 +38,23 @@ func TestLoadSummarizeCritic(t *testing.T) {
 		t.Error("draft output schema not compiled")
 	}
 
+	// loop() lowering: the judge owns exactly [accept -> then,
+	// visits budget -> revise, fallback -> exhausted].
 	critique := m.State("critique")
 	if len(critique.Transitions) != 3 {
-		t.Fatalf("critique transitions = %d, want 3 (approve, revise, else)", len(critique.Transitions))
+		t.Fatalf("critique transitions = %d, want 3 (accept, revise budget, exhausted)", len(critique.Transitions))
 	}
 	if !critique.Transitions[0].When.IsFn() || !critique.Transitions[1].When.IsFn() {
 		t.Error("critique guards should be functions")
 	}
+	if src := critique.Transitions[1].When.Src; src != "({ visits }) => visits.critique < 3" {
+		t.Errorf("visits guard src = %q, want the synthesized budget over the judge", src)
+	}
+	if to := critique.Transitions[1].To; to != "draft" {
+		t.Errorf("revise routes to %q, want draft (the body's entry)", to)
+	}
 	if !critique.Transitions[2].Fallback() {
-		t.Error("critique last transition should be the else fallback")
+		t.Error("critique last transition should be the exhausted fallback")
 	}
 
 	escalate := m.State("escalate")

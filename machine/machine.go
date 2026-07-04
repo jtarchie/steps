@@ -81,7 +81,7 @@ type AgentDefaults struct {
 	Temperature      *float64
 	MaxTurns         int
 	MaxOutputTokens  int
-	MaxInputTokens   int // implicit distill states are exempt from this cascade
+	MaxInputTokens   *int   // nil = unset (0 means off); distill states are exempt from this cascade
 	StructuredOutput string // prompt (default) | native
 	Reasoning        string // low | medium | high ("" = provider default)
 }
@@ -96,10 +96,17 @@ type Limits struct {
 }
 
 const (
-	DefaultMaxTransitions  = 50
-	DefaultTimeout         = 15 * time.Minute
-	DefaultMaxTurns        = 10
-	DefaultMaxOutputTokens = 2048 // per model call — no state may generate unboundedly
+	DefaultMaxTransitions   = 50
+	DefaultTimeout          = 15 * time.Minute
+	DefaultMaxTurns         = 10   // states with tools: room for a tool-use loop
+	DefaultMaxTurnsToolless = 2    // one model call per turn; 2 is headroom for a semantic retry
+	DefaultMaxOutputTokens  = 2048 // per model call — no state may generate unboundedly
+	// DefaultMaxInputTokens is the input mirror of maxOutputTokens: no state
+	// may read unboundedly either. Sized for the practical local-model floor
+	// (8k in + 2k out fits a 16k window with headroom); every overflow is a
+	// zero-token failure that names the largest inputs. maxInputTokens: 0
+	// opts a state (or the machine) out.
+	DefaultMaxInputTokens = 8192
 )
 
 // State is one node of the machine: exactly one handler, contracts, policies.
@@ -127,8 +134,8 @@ type State struct {
 	Distill []DistillEntry
 	// DistillOf/DistillKey mark a lowered implicit distill state: the
 	// consumer state it serves and the scope key it produces.
-	DistillOf  string
-	DistillKey string
+	DistillOf   string
+	DistillKey  string
 	Retry       []RetryPolicy
 	Catch       []CatchClause
 	Transitions []Transition
@@ -170,9 +177,9 @@ func (s *State) HandlerKind() string {
 type AgentSpec struct {
 	// Model: a static alias/provider ref, or a function of scope returning
 	// one — per-execution routing (e.g. by a foreach item's risk).
-	Model  Dyn
-	System Dyn // static string or function of scope
-	Prompt Dyn // static string or function of scope
+	Model       Dyn
+	System      Dyn // static string or function of scope
+	Prompt      Dyn // static string or function of scope
 	Tools       []ToolRef
 	MaxTurns    int
 	Temperature *float64
@@ -185,10 +192,13 @@ type AgentSpec struct {
 	// bounded failure instead of a hang.
 	MaxOutputTokens int
 	// MaxInputTokens caps the rendered input (system + user message,
-	// chars/4 estimate). 0 = off. Strictly opt-in: over-budget classifies
-	// budget_exceeded — never retried, routable by catch:. The enforcement
-	// half of the context thesis; distill is the fix at the callsite.
-	MaxInputTokens int
+	// chars/4 estimate). nil cascades defaults -> DefaultMaxInputTokens; an
+	// author's 0 means off. Over-budget classifies budget_exceeded — never
+	// retried, routable by catch:, attributed to the largest inputs. The
+	// enforcement half of the context thesis; distill is the fix at the
+	// callsite, and implicit distill states are exempt (the distiller is the
+	// one place the big payload is supposed to appear).
+	MaxInputTokens *int
 	// StructuredOutput selects how the output contract is enforced:
 	// "prompt" (default, portable) embeds the schema in the instruction;
 	// "native" additionally constrains the decoder on providers that
@@ -199,9 +209,9 @@ type AgentSpec struct {
 	// Reasoning caps the model's thinking effort (low | medium | high;
 	// "" = provider default). Reasoning tokens are billed output — a
 	// drafting micro-agent rarely needs deep thought, a judge might.
-	Reasoning string
-	History   *HistorySpec
-	ToolChoice  string // auto (default) | required | one_of — one_of not yet implemented
+	Reasoning  string
+	History    *HistorySpec
+	ToolChoice string // auto (default) | required | one_of — one_of not yet implemented
 }
 
 // ToolRef attaches a registered tool to an agent state, optionally guarded.
@@ -324,15 +334,15 @@ func (c CatchClause) Matches(class string) bool {
 // Error classes used by retry/catch matching. Handlers and the engine
 // classify every failure into one of these.
 const (
-	ClassRateLimited     = "rate_limited"
-	ClassProviderError   = "provider_error"
-	ClassActionError     = "action_error"
-	ClassTimeout         = "timeout"
-	ClassSchemaViolation = "schema_violation"
-	ClassGuardRejected   = "guard_rejected"
+	ClassRateLimited      = "rate_limited"
+	ClassProviderError    = "provider_error"
+	ClassActionError      = "action_error"
+	ClassTimeout          = "timeout"
+	ClassSchemaViolation  = "schema_violation"
+	ClassGuardRejected    = "guard_rejected"
 	ClassRetriesExhausted = "retries_exhausted"
-	ClassBudgetExceeded  = "budget_exceeded"
-	ClassMaxTransitions  = "max_transitions"
-	ClassRunTimeout      = "run_timeout"
-	ClassAdoptMissing    = "adopt_missing"
+	ClassBudgetExceeded   = "budget_exceeded"
+	ClassMaxTransitions   = "max_transitions"
+	ClassRunTimeout       = "run_timeout"
+	ClassAdoptMissing     = "adopt_missing"
 )

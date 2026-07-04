@@ -3,17 +3,22 @@
 **Status:** implemented (2026-07-04) — `machine/distill.go` is the lowering,
 `engine.applyDistill` the scope mapping; acceptance coverage in
 `machine/distill_test.go` and `engine/distill_test.go`. The companion knob
-`maxInputTokens` is implemented as a strictly **opt-in** cap (chars/4
-estimate, no default) — the estimator arrived with the pass-through rule.
+`maxInputTokens` is implemented as a **default-on** cap (8192, chars/4
+estimate, `0` opts out) with per-value attribution on overflow — it shipped
+opt-in first, then defaulted on once the attribution existed to make the
+failure self-explanatory.
 **Position in the rung ladder:** rung 1.5 — between "what upstream *concluded*"
 (rung 1 `ctx`) and "what upstream *did*" (rung 2 `history`).
 
 > **Implementation deltas from this sketch:**
-> - `maxInputTokens` shipped **opt-in only** (no 16k default): per-state or
->   `defaults.maxInputTokens`, chars/4 estimate over system + prompt,
->   over-budget classifies `budget_exceeded`. Implicit distill states are
->   exempt from the defaults cascade — the distiller is the one place the
->   big payload is supposed to appear.
+> - `maxInputTokens` shipped opt-in first, then **defaulted on at 8192**
+>   (half the sketched 16k — the local-model thesis argues tighter):
+>   per-state or `defaults.maxInputTokens`, chars/4 estimate over system +
+>   prompt, over-budget classifies `budget_exceeded` and **names the largest
+>   destructured inputs** (`largest inputs: spec ~6100, plan ~2100`).
+>   `maxInputTokens: 0` opts a state or the machine out. Implicit distill
+>   states are exempt from every rung of the cascade — the distiller is the
+>   one place the big payload is supposed to appear.
 > - `forEach.over` and flow guards see the **pre-distill** scope: `over` must
 >   produce the same list for the implicit fan-out and the consumer (zip by
 >   index), and guards run at the boundary, not inside the state.
@@ -34,7 +39,7 @@ estimate, no default) — the estimator arrived with the pass-through rule.
 >   never rendered, and the ledger records `passthrough` /
 >   `passthrough_hits` like it records memo. Distill is never-lose: small
 >   sources cost nothing, big sources pay for real compression. If a
->   pass-through then trips a consumer's opt-in `maxInputTokens`, that is
+>   pass-through then trips a consumer's `maxInputTokens`, that is
 >   correct pressure — raise the slice budget so extraction actually runs.
 > - User state names are now validated as JS identifiers, which is what keeps
 >   the lowered `name#key` namespace collision-free.
@@ -201,20 +206,24 @@ exists (write a real state), which is the correct pressure.
 The mirror of `maxOutputTokens`, and what makes the thesis *enforced* rather
 than aspirational:
 
-As shipped (opt-in, no default):
+As shipped (default-on):
 
-- `maxInputTokens` on a state (cascade: state → `defaults.maxInputTokens` →
-  off). No engine default — existing machines are untouched; opting in is a
-  deliberate act, per state or machine-wide.
+- `maxInputTokens` cascades state → `defaults.maxInputTokens` → engine
+  default **8192**. An author's `0` means off, per state or machine-wide.
+  8192 pairs with the 2048 output default inside the 16k window that is the
+  practical local-model floor, and covers every shipped example with ~10×
+  headroom.
 - Rendered input (system + prompt, chars/4 estimate) over budget →
-  `budget_exceeded` (exhaustion class: never retried, routable by `catch:`).
-  The error message points at the fix: "distill or trim the largest inputs."
-- The implicit distiller states are exempt from the `defaults:` cascade —
+  `budget_exceeded` (exhaustion class: never retried, routable by `catch:`),
+  **attributed**: the error names the largest destructured inputs
+  (`largest inputs: spec ~6100, plan ~2100`) so the fix — `distill:` or trim
+  — is one look away. Attribution is computed only on the overflow path.
+- The implicit distiller states are exempt from every rung of the cascade —
   they are the one place the big payload is *supposed* to appear. (A source
   exceeding the distiller model's actual context window still fails at the
   provider; map-reduce chunked distillation remains v1.x.)
 - Still open: a `steps validate` warning when schema stubs make overflow
-  statically plausible, and per-value attribution in the error message.
+  statically plausible.
 
 ## Validation (fail before you spend)
 
@@ -270,6 +279,7 @@ finding about `for:` authoring and goes in the example README either way.
 3. **Cross-entry staging** — distilling a distillation (map-reduce over huge
    sources). Deliberately excluded from v1; the flat-FSM answer is "write a
    real state," and that answer might just be correct.
-4. **Should `maxInputTokens` default tighter than 16k?** Tighter default =
-   stronger thesis, more migration friction for existing machines. Decide
-   after the context-bill column exists and real machines show their sizes.
+4. ~~**Should `maxInputTokens` default tighter than 16k?**~~ Resolved
+   (2026-07-04): defaulted on at **8192** — tighter than the sketch, per the
+   local-model thesis — once overflow attribution existed to make the
+   failure self-explanatory and `0` gave a one-line opt-out.

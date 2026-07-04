@@ -170,7 +170,7 @@ export default {
     senior: "lmstudio/google/gemma-4-26b-a4b", // larger, spent sparingly
   },
   model: "scout",
-  defaults: { reasoning: "low", maxTurns: 2 },
+  defaults: { reasoning: "low" },
   limits: { maxTransitions: 15, maxTokens: 200000, timeout: "30m" }, // local models think slowly; the wall clock is enforced
 
   states: { split_diff, scout_files, scout_pr, note_trivial, deep_review, verdict, write_review },

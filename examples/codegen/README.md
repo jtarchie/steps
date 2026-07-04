@@ -56,7 +56,8 @@ was not.
 | Agent proposes, guards dispose | `review` emits `approve`/`revise`; the score guard vetoes |
 | Two feedback loops into one state | `generate` destructures `({ review, build_cause })` — reader issues *and* the distilled build failure |
 | Declared context slicing (`distill:`) | `generate#spec` slices the spec per file; `generate#build_cause` boils the build record down to its root cause — see [docs/distill.md](../../docs/distill.md) |
-| Engine-bounded loops | reader: `visits.generate < 5`; build: `visits.build < 4` — each loop owns its budget + `maxTransitions: 40` (distill hops are free) |
+| Engine-bounded loops | two nested `loop()`s — reader: `maxVisits: 5` on judge `review`; build: `maxVisits: 4` on judge `build` — each loop owns its budget + `maxTransitions: 40` (distill hops are free) |
+| An **action** as a loop judge | the inner `loop()`'s judge is `build`; `accept: ({ output }) => output.ok` routes on the exit code |
 | `forEach` over an **action** | `write_files` maps `file.write` — each write its own journal entry |
 | Real build/test gate | `build` runs `exec.run`; guards route on `output.ok` |
 | `memo` | `generate` caches per (file, feedback) — a build fix re-pays only touched files |
@@ -183,9 +184,9 @@ A/B on this fixture — the committed machine vs the same machine without
   reviewer had been right about (`./greet.sh` isn't executable — exit 126 on
   the second build). And because the reader loop had already spent
   `visits.generate`, the build loop got only one shot before parking at
-  `accept_build` — the two loops shared one budget. *Fixed since:* the build
-  loop is now bounded on `visits.build`, the gate that observes it, so each
-  loop owns its own budget.
+  `accept_build` — the two loops shared one budget. *Fixed since:* each loop
+  is bounded on the gate that observes it, and the `loop()` combinator now
+  bakes that lesson in — `maxVisits` always counts the judge's visits.
 
 ## Expected mock trace (what CI asserts)
 
@@ -205,7 +206,7 @@ transition_fired generate#build_cause -> generate        (implicit — free)
 state_entered    generate (visit 1)   -> greet.sh, greet_test.sh (foreach x2)
 transition_fired generate -> review
 state_entered    review               -> score 5, event=revise
-transition_fired review -> generate#spec                 (on: revise, visits.generate < 5)
+transition_fired review -> generate#spec                 (revise: visits.review < 5)
 state_entered    generate#spec        -> pass-through x2 again, still free
 transition_fired generate#spec -> generate#build_cause   (implicit — free)
 state_entered    generate#build_cause -> still no build: "" x2
@@ -213,7 +214,7 @@ transition_fired generate#build_cause -> generate        (implicit — free)
 state_entered    generate (visit 2)   -> prompt now carries review.issues
 transition_fired generate -> review
 state_entered    review               -> score 9, event=approve
-transition_fired review -> write_files                   (on: approve, score >= 8)
+transition_fired review -> write_files                   (accept: score >= 8)
 state_entered    write_files          -> writes out/greet.sh, out/greet_test.sh
 transition_fired write_files -> build
 state_entered    build                -> RUNS `bash greet_test.sh` -> exit 0, ok:true

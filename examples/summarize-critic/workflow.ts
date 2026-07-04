@@ -49,7 +49,6 @@ export default {
   input: { article: "string" },
   model: "ollama/qwen3:8b", // any OpenAI-compatible endpoint works
   defaults: {
-    maxTurns: 2, // tool-less states need one model call per turn; 2 is headroom
     reasoning: "low", // reasoning tokens are billed output; summarizing needs none
   },
   limits: { maxTransitions: 12 }, // hard backstop for the revision loop
@@ -57,15 +56,16 @@ export default {
   states: { draft, critique, escalate, publish },
 
   flow: pipe(
-    draft,
-    branch(critique, {
-      approve: when(({ output }) => output.score >= 8).to(publish),
-      revise: when(({ visits }) => visits.draft < 3).to(draft), // the ENGINE bounds the loop
-      else: branch(escalate, {
+    loop(draft, {
+      judge: critique,
+      accept: ({ output }) => output.score >= 8,
+      maxVisits: 3, // the ENGINE bounds the loop: visits.critique < 3
+      exhausted: branch(escalate, {
         approved: publish,
         rejected: fail,
         timeout: fail,
       }),
     }),
+    publish, // accept falls through here (loop's then defaults to the pipe successor)
   ),
 };

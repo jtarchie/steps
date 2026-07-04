@@ -46,22 +46,32 @@ export default {
 
 When a machine branches, the graph lives in ONE expression — and it is still
 a fully enforced state machine (guards select among declared edges; the
-engine owns budgets, retries, and loop bounds):
+engine owns budgets, retries, and loop bounds). The commonest shape — a judge
+gating a producer in a bounded revise loop — is one combinator:
 
 ```ts
 flow: pipe(
-  draft,
-  branch(critique, {
-    approve: when(({ output }) => output.score >= 8).to(publish),
-    revise:  when(({ visits }) => visits.draft < 3).to(draft),
-    else: branch(escalate, { approved: publish, rejected: fail, timeout: fail }),
+  loop(draft, {
+    judge: critique,                            // the state whose out-edges the loop owns
+    accept: ({ output }) => output.score >= 8,  // exit test on the judge's result
+    maxVisits: 3,                               // the ENGINE bounds the loop: visits.critique < 3
+    exhausted: branch(escalate, { approved: publish, rejected: fail, timeout: fail }),
   }),
+  publish, // accept falls through here
 ),
 ```
 
+`loop()` is pure sugar over `branch`: the judge gets exactly
+`[accept → then, visits budget → revise, fallback → exhausted]`, and every
+existing validation (reachability, terminal proofs, fallback presence) runs
+on the result. The judge may be an *action* state — a build command's exit
+code (`accept: ({ output }) => output.ok`) judges as well as a model's score.
+A gate that never loops is just a `branch`; arbitrary fan-out is
+`branch(state, { event: when(guard).to(target), else, catch, timeout })`.
+
 Because machines are TypeScript, editors type-check them out of the box: each
 `workflow.ts` opens with `/// <reference path=".../docs/src/global.d.ts" />`,
-so `pipe`/`branch`/`when`/`done`/`fail`/`list` and the `Machine` shape all
+so `pipe`/`branch`/`loop`/`when`/`done`/`fail`/`list` and the `Machine` shape all
 autocomplete (add `satisfies Machine` for full structural checking). And
 `steps validate` **dry-runs every function** against schema-derived stubs —
 a typo like `({ scout_file })` fails at load, naming the available fields,
@@ -106,6 +116,15 @@ output cost is a declared property of a state:
 
 - `maxOutputTokens` (default 2048): no state may generate unboundedly; cap
   exhaustion is a `budget_exceeded` failure, never a hang, never retried.
+- `maxInputTokens` (default 8192): the input mirror — no state may *read*
+  unboundedly either. The rendered system+prompt is estimated (chars/4)
+  before any model call; overflow is a zero-token `budget_exceeded` that
+  names the largest inputs (`largest inputs: spec ~6100, plan ~2100`) so the
+  fix — `distill:` or trim — is one look away. `maxInputTokens: 0` opts a
+  state (or the machine, via `defaults:`) out; implicit distill states are
+  exempt, since the distiller is the one place the big payload belongs.
+- `maxTurns` defaults by shape: 2 for tool-less states (one model call per
+  turn; 2 is headroom), 10 when tools are attached (a tool loop needs room).
 - `reasoning: low|medium|high`: per-micro-agent thinking budgets (provider
   reasoning effort). A drafting state rarely deserves deep thought; a judge might.
 - `structuredOutput: "native"` (opt-in): decoder-constrained JSON on

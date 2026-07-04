@@ -362,16 +362,17 @@ use:
 	}
 }
 
-// TestMaxInputTokensBudget: the opt-in input cap classifies over-budget
-// renders as budget_exceeded (never retried, routable by catch:), and a
-// machine-wide default never cascades onto implicit distill states — the
-// distiller is the one place the big payload is supposed to appear.
+// TestMaxInputTokensBudget: the input cap classifies over-budget renders as
+// budget_exceeded (never retried, routable by catch:), and a machine-wide
+// cap never cascades onto implicit distill states — the distiller is the one
+// place the big payload is supposed to appear. The slice budget must fit
+// under the consumer's cap (validated at load), so it is explicit here.
 func TestMaxInputTokensBudget(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	wf := `
 const summarize = {
-  distill: { article: { for: "the key claims only" } },
+  distill: { article: { for: "the key claims only", maxTokens: 80 } },
   prompt: ({ article }) => "Summarize:\n" + article,
 };
 const note = { write: "out/over.txt", content: "input budget blown" };
@@ -410,6 +411,69 @@ export default {
 	}
 	if failed["budget_exceeded"] != 1 {
 		t.Errorf("budget_exceeded failures = %d, want 1 (exhaustion: never retried)", failed["budget_exceeded"])
+	}
+}
+
+// TestInputBudgetAttribution: an input overflow names its biggest offenders —
+// the destructured scope values, largest first — and trips before any model
+// call (zero tokens spent; the mock never plays).
+func TestInputBudgetAttribution(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	wf := `
+const use = {
+  maxInputTokens: 50,
+  prompt: ({ big, small }) => "CONTEXT:\n" + big + "\n" + small,
+};
+export default {
+  name: "attr",
+  input: { big: { type: "string", required: true }, small: { type: "string", required: true } },
+  model: "mock",
+  states: { use },
+  flow: pipe(branch(use, { catch: { budget_exceeded: done }, else: done })),
+};`
+	script := `
+use:
+  - text: "should never be reached"
+`
+	m, err := machine.Parse([]byte(wf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, store := newTestEngine(t, writeScript(t, script))
+
+	res, err := eng.Start(context.Background(), m, map[string]any{
+		"big":   strings.Repeat("alpha ", 200), // ~300 tokens, way over the 50 cap
+		"small": "tiny",
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Status != journal.StatusDone {
+		t.Fatalf("status = %s at %s, want done via the budget_exceeded catch", res.Status, res.Terminal)
+	}
+
+	events, err := store.Events(context.Background(), res.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var msg string
+	for _, ev := range events {
+		if ev.Type == journal.HandlerFailed && ev.Data["class"] == "budget_exceeded" {
+			msg, _ = ev.Data["error"].(string)
+		}
+	}
+	if msg == "" {
+		t.Fatal("no budget_exceeded handler_failed event recorded")
+	}
+	if !strings.Contains(msg, "exceeds maxInputTokens 50") {
+		t.Errorf("error = %q, want the cap named", msg)
+	}
+	if !strings.Contains(msg, "largest inputs: big ~") {
+		t.Errorf("error = %q, want attribution naming the largest input first", msg)
+	}
+	if res.State.Usage.InputTokens != 0 || res.State.Usage.OutputTokens != 0 {
+		t.Errorf("usage = %+v, want zero tokens (the cap trips before any model call)", res.State.Usage)
 	}
 }
 

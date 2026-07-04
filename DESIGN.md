@@ -36,6 +36,13 @@
 > what it needs from a large scope value; a cheap model extracts only that
 > slice via a lowered implicit state (`name#key`) — journaled, memoized,
 > budgeted — and inside the state the declared key IS the slice.
+> `agent.maxInputTokens` (default 8192 — the input mirror of the output cap;
+> the rendered system+prompt is estimated at chars/4 before any model call,
+> and overflow is a zero-token `budget_exceeded` naming the largest
+> destructured inputs; `0` opts out; implicit distill states are exempt).
+> `maxTurns` defaults conditionally: 2 for tool-less states, 10 with tools.
+> The `loop()` combinator (see flow combinators below) packages the bounded
+> judge/revise cycle every example was hand-writing as a raw branch.
 
 ## Thesis
 
@@ -185,8 +192,25 @@ export default {
   routes an expired gate. Array form for guard-only edges:
   `branch(s, [when(g).to(a), fallback])`.
 - `when(fn).to(target)` — a guarded edge (`.to`, not `.then` — thenables are
-  a Promise footgun). Targets are state consts, nested `pipe`/`branch`, or
-  the terminals `done`/`fail` — a typo'd const is a native ReferenceError.
+  a Promise footgun). Targets are state consts, nested `pipe`/`branch`/`loop`,
+  or the terminals `done`/`fail` — a typo'd const is a native ReferenceError.
+- `loop(body, { judge, accept, maxVisits, then?, revise?, exhausted?,
+  catch? })` — the bounded judge/revise cycle, the shape every example was
+  hand-writing as a raw branch. The body falls through to the judge; the
+  judge gets exactly `[accept → then, visits.<judge> < maxVisits → revise,
+  fallback → exhausted]`. Guard-only — the combinator never touches the
+  judge's `output`/`events` (flow shapes topology, states own contracts),
+  which is what lets an *action* be a judge: a build command's exit code
+  routes via `accept: ({ output }) => output.ok`. The bound counts the
+  judge's own visits — the gate that observes the loop — synthesized as real
+  JS so it dry-runs, contract-checks, and `--print`s like a hand-written
+  guard. `maxVisits` is required (the declared bound is the point); `then`
+  defaults to the pipe successor, `revise` to the body's entry (explicit for
+  loops that re-enter upstream, e.g. a build loop that resubmits the coder),
+  `exhausted` to `fail`. Event-conjunction stays expressible in the guard:
+  `accept: ({ event, output }) => event === "approve" && output.score >= 8`.
+  A gate that never loops is just a `branch`; self-judging states (judge ==
+  body) are hand-written array-form branches in v1.
 - A non-terminal state with no wiring anywhere flows to `done`. Without a
   `flow:`, linear declaration order applies — trivial machines need none.
 - The combinators COMPILE INTO the per-state transition lists the engine has
@@ -230,11 +254,12 @@ Every key except `states` and each state's handler is optional. Defaults are app
 - No `catch:` → unhandled exhaustion routes to `failed` with the reason journaled.
 
 **Agent states**
-- `model`, `temperature` (0), `max_turns` (10), `max_output_tokens` (2048),
-  `structured_output` (prompt), `reasoning` (provider default) cascade:
-  state → machine `defaults.agent` → engine option → validation error only if
-  still unresolved. `max_turns` bounds model calls per conversation turn and
-  resets across semantic retries.
+- `model`, `temperature` (0), `max_turns` (2 tool-less / 10 with tools),
+  `max_output_tokens` (2048), `max_input_tokens` (8192; `0` = off; distill
+  states exempt), `structured_output` (prompt), `reasoning` (provider
+  default) cascade: state → machine `defaults.agent` → engine option →
+  validation error only if still unresolved. `max_turns` bounds model calls
+  per conversation turn and resets across semantic retries.
 - `agent: "one-line prompt"` scalar shorthand for `agent: {prompt: "..."}`.
 - `output` omitted → `{text: string}` and no events (fallback-only routing).
 - **The prompt template doubles as the input contract**: templates are Go
