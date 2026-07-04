@@ -56,7 +56,7 @@ was not.
 | Agent proposes, guards dispose | `review` emits `approve`/`revise`; the score guard vetoes |
 | Two feedback loops into one state | `generate` destructures `({ review, build_cause })` — reader issues *and* the distilled build failure |
 | Declared context slicing (`distill:`) | `generate#spec` slices the spec per file; `generate#build_cause` boils the build record down to its root cause — see [docs/distill.md](../../docs/distill.md) |
-| Engine-bounded loops | `visits.generate < 5` (reader) and `< 6` (build) + `maxTransitions: 40` (distill hops are free) |
+| Engine-bounded loops | reader: `visits.generate < 5`; build: `visits.build < 4` — each loop owns its budget + `maxTransitions: 40` (distill hops are free) |
 | `forEach` over an **action** | `write_files` maps `file.write` — each write its own journal entry |
 | Real build/test gate | `build` runs `exec.run`; guards route on `output.ok` |
 | `memo` | `generate` caches per (file, feedback) — a build fix re-pays only touched files |
@@ -183,8 +183,9 @@ A/B on this fixture — the committed machine vs the same machine without
   reviewer had been right about (`./greet.sh` isn't executable — exit 126 on
   the second build). And because the reader loop had already spent
   `visits.generate`, the build loop got only one shot before parking at
-  `accept_build` — the two loops share one budget, which is worth knowing
-  when you tune the bounds.
+  `accept_build` — the two loops shared one budget. *Fixed since:* the build
+  loop is now bounded on `visits.build`, the gate that observes it, so each
+  loop owns its own budget.
 
 ## Expected mock trace (what CI asserts)
 
@@ -241,7 +242,7 @@ whole compiler transcript, and `generate#spec` still replays from memo.
 
 To watch **gate two** loop instead, hand it a failing command (`verify_cmd='exit
 1'`, with enough scripted rounds): `build` routes back to `generate` with the
-distilled root cause until `visits.generate` hits 6, then parks at
+distilled root cause until `visits.build` hits 4, then parks at
 `accept_build` for a human.
 In live mode the loop closes on the real toolchain — the coder keeps fixing
 until `verify_cmd` is green or the budget is spent.

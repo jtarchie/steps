@@ -220,10 +220,14 @@ export default {
       approve: when(({ output }) => output.score >= 8).to(
         // Materialise, then gate two — guard-only (an action declares no
         // events). Green ships to the manifest; red loops the coder with the
-        // command's stderr; exhausted retries escalate to a human.
+        // distilled root cause; exhausted retries escalate to a human.
+        // Bound the loop on the gate that observes it (visits.build), not on
+        // the state being re-run: the reader loop also spends
+        // visits.generate, and measured live it spent ALL of it — the build
+        // loop got one shot. Each loop owns its own budget.
         pipe(write_files, branch(build, [
           when(({ output }) => output.ok).to(report),
-          when(({ visits }) => visits.generate < 6).to(generate), // build loop
+          when(({ visits }) => visits.build < 4).to(generate), // build loop: 3 red retries, reader-independent
           branch(accept_build, { approved: report, rejected: fail, timeout: fail }),
         ])),
       ),
