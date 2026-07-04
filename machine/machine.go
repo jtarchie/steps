@@ -81,6 +81,7 @@ type AgentDefaults struct {
 	Temperature      *float64
 	MaxTurns         int
 	MaxOutputTokens  int
+	MaxInputTokens   int // implicit distill states are exempt from this cascade
 	StructuredOutput string // prompt (default) | native
 	Reasoning        string // low | medium | high ("" = provider default)
 }
@@ -183,6 +184,11 @@ type AgentSpec struct {
 	// unboundedly — grammar-degenerate or runaway completions become a
 	// bounded failure instead of a hang.
 	MaxOutputTokens int
+	// MaxInputTokens caps the rendered input (system + user message,
+	// chars/4 estimate). 0 = off. Strictly opt-in: over-budget classifies
+	// budget_exceeded — never retried, routable by catch:. The enforcement
+	// half of the context thesis; distill is the fix at the callsite.
+	MaxInputTokens int
 	// StructuredOutput selects how the output contract is enforced:
 	// "prompt" (default, portable) embeds the schema in the instruction;
 	// "native" additionally constrains the decoder on providers that

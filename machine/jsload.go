@@ -376,6 +376,8 @@ func (l *loader) machine(root *goja.Object) (*Machine, error) {
 				m.Defaults.Agent.MaxTurns = integer(o.Get(k))
 			case "maxOutputTokens":
 				m.Defaults.Agent.MaxOutputTokens = integer(o.Get(k))
+			case "maxInputTokens":
+				m.Defaults.Agent.MaxInputTokens = integer(o.Get(k))
 			case "temperature":
 				t := o.Get(k).ToFloat()
 				m.Defaults.Agent.Temperature = &t
@@ -390,7 +392,7 @@ func (l *loader) machine(root *goja.Object) (*Machine, error) {
 				}
 				m.Defaults.Retry = r
 			default:
-				return nil, fmt.Errorf("unknown defaults key %q — valid: model, maxTurns, maxOutputTokens, temperature, reasoning, structuredOutput, retry", k)
+				return nil, fmt.Errorf("unknown defaults key %q — valid: model, maxTurns, maxOutputTokens, maxInputTokens, temperature, reasoning, structuredOutput, retry", k)
 			}
 		}
 	}
@@ -468,8 +470,8 @@ func containsState(states []*State, name string) bool {
 var (
 	sharedStateKeys = []string{"memo", "forEach", "distill", "retry", "output", "events", "input"}
 	agentStateKeys  = []string{"prompt", "system", "tools", "model", "maxTurns",
-		"maxOutputTokens", "temperature", "reasoning", "structuredOutput",
-		"toolChoice", "adopt", "history"}
+		"maxOutputTokens", "maxInputTokens", "temperature", "reasoning",
+		"structuredOutput", "toolChoice", "adopt", "history"}
 	actionStateKeys   = []string{"action"}
 	writeStateKeys    = []string{"write", "content"}
 	humanStateKeys    = []string{"human", "timeout"}
@@ -626,6 +628,7 @@ func (l *loader) agent(o *goja.Object) (*AgentSpec, error) {
 		Prompt:           l.dyn(o.Get("prompt")),
 		MaxTurns:         integer(o.Get("maxTurns")),
 		MaxOutputTokens:  integer(o.Get("maxOutputTokens")),
+		MaxInputTokens:   integer(o.Get("maxInputTokens")),
 		StructuredOutput: str(o.Get("structuredOutput")),
 		Reasoning:        str(o.Get("reasoning")),
 		ToolChoice:       str(o.Get("toolChoice")),

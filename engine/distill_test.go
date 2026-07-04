@@ -362,6 +362,57 @@ use:
 	}
 }
 
+// TestMaxInputTokensBudget: the opt-in input cap classifies over-budget
+// renders as budget_exceeded (never retried, routable by catch:), and a
+// machine-wide default never cascades onto implicit distill states — the
+// distiller is the one place the big payload is supposed to appear.
+func TestMaxInputTokensBudget(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	wf := `
+const summarize = {
+  distill: { article: { for: "the key claims only" } },
+  prompt: ({ article }) => "Summarize:\n" + article,
+};
+const note = { write: "out/over.txt", content: "input budget blown" };
+export default {
+  name: "input-budget",
+  input: { article: { type: "string", required: true } },
+  models: { distiller: "mock" },
+  model: "mock",
+  defaults: { maxInputTokens: 100 },
+  states: { summarize, note },
+  flow: pipe(branch(summarize, { catch: { budget_exceeded: note }, else: done })),
+};`
+	// The distiller reads the whole long source (exempt from the default
+	// cap) and returns a slice that still blows the consumer's 100-token cap.
+	script := `
+"summarize#article":
+  - text: "` + strings.Repeat("slice ", 120) + `"
+`
+	m, err := machine.Parse([]byte(wf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, store := newTestEngine(t, writeScript(t, script))
+
+	res, err := eng.Start(context.Background(), m, map[string]any{"article": longSource("BUDGET-MARKER")})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Status != journal.StatusDone {
+		t.Fatalf("status = %s at %s, want done via the budget_exceeded catch", res.Status, res.Terminal)
+	}
+	states, failed, _ := eventTrace(t, store, res.RunID)
+	want := []string{"summarize#article", "summarize", "note"}
+	if strings.Join(states, ",") != strings.Join(want, ",") {
+		t.Errorf("state sequence = %v, want %v (distiller exempt, consumer capped)", states, want)
+	}
+	if failed["budget_exceeded"] != 1 {
+		t.Errorf("budget_exceeded failures = %d, want 1 (exhaustion: never retried)", failed["budget_exceeded"])
+	}
+}
+
 // TestDistillFailureRoutesConsumerCatch: a distiller failure is the
 // consumer's failure — same catch edges, so the run routes instead of dying.
 func TestDistillFailureRoutesConsumerCatch(t *testing.T) {

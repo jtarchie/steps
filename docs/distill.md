@@ -3,14 +3,17 @@
 **Status:** implemented (2026-07-04) — `machine/distill.go` is the lowering,
 `engine.applyDistill` the scope mapping; acceptance coverage in
 `machine/distill_test.go` and `engine/distill_test.go`. The companion knob
-`maxInputTokens` is **not yet implemented** (needs a pre-call token
-estimator; see Implementation deltas below).
+`maxInputTokens` is implemented as a strictly **opt-in** cap (chars/4
+estimate, no default) — the estimator arrived with the pass-through rule.
 **Position in the rung ladder:** rung 1.5 — between "what upstream *concluded*"
 (rung 1 `ctx`) and "what upstream *did*" (rung 2 `history`).
 
 > **Implementation deltas from this sketch:**
-> - `maxInputTokens` is deferred — enforcement before the call needs a token
->   estimator the engine doesn't have yet; distill stands alone.
+> - `maxInputTokens` shipped **opt-in only** (no 16k default): per-state or
+>   `defaults.maxInputTokens`, chars/4 estimate over system + prompt,
+>   over-budget classifies `budget_exceeded`. Implicit distill states are
+>   exempt from the defaults cascade — the distiller is the one place the
+>   big payload is supposed to appear.
 > - `forEach.over` and flow guards see the **pre-distill** scope: `over` must
 >   produce the same list for the implicit fan-out and the consumer (zip by
 >   index), and guards run at the boundary, not inside the state.
@@ -198,22 +201,20 @@ exists (write a real state), which is the correct pressure.
 The mirror of `maxOutputTokens`, and what makes the thesis *enforced* rather
 than aspirational:
 
+As shipped (opt-in, no default):
+
 - `maxInputTokens` on a state (cascade: state → `defaults.maxInputTokens` →
-  engine default — proposed default generous, 16k, so existing machines keep
-  loading; tighten per state).
-- Rendered prompt over budget → `budget_exceeded` (exhaustion class: never
-  retried, routable by `catch:`). The natural fix at the callsite is a
-  `distill:` entry — the error message says so, naming the largest scope
-  values in the rendered prompt.
-- `steps validate` warns when schema stubs make overflow statically plausible;
-  `steps inspect` grows an input-tokens column (the context bill) next to the
-  output column it already has.
-- The distiller states themselves get `maxInputTokens: unlimited` — they are
-  the one place the big payload is *supposed* to appear. A source exceeding
-  the distiller model's context window is a hard, named load-or-run error
-  (`distill source ~Nk tokens exceeds distiller context; split upstream or
-  pick a larger distiller`); map-reduce chunked distillation is explicitly
-  v1.x.
+  off). No engine default — existing machines are untouched; opting in is a
+  deliberate act, per state or machine-wide.
+- Rendered input (system + prompt, chars/4 estimate) over budget →
+  `budget_exceeded` (exhaustion class: never retried, routable by `catch:`).
+  The error message points at the fix: "distill or trim the largest inputs."
+- The implicit distiller states are exempt from the `defaults:` cascade —
+  they are the one place the big payload is *supposed* to appear. (A source
+  exceeding the distiller model's actual context window still fails at the
+  provider; map-reduce chunked distillation remains v1.x.)
+- Still open: a `steps validate` warning when schema stubs make overflow
+  statically plausible, and per-value attribution in the error message.
 
 ## Validation (fail before you spend)
 

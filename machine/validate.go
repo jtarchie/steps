@@ -230,6 +230,9 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 		if a.MaxOutputTokens < 0 {
 			fail("state %q: max_output_tokens must be positive", s.Name)
 		}
+		if a.MaxInputTokens < 0 {
+			fail("state %q: max_input_tokens must be positive", s.Name)
+		}
 		switch a.ToolChoice {
 		case "auto":
 		case "required", "one_of":

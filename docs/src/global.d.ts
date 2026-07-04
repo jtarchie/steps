@@ -93,6 +93,10 @@ interface State {
   maxTurns?: number;
   /** Cap per model call — no state may generate unboundedly. */
   maxOutputTokens?: number;
+  /** Opt-in cap on the rendered input (system + prompt, ~chars/4). Over
+   *  budget classifies budget_exceeded — distill: is the fix at the callsite.
+   *  Never cascades onto implicit distill states. */
+  maxInputTokens?: number;
   temperature?: number;
   /** prompt (default, portable) | native (decoder-constrained JSON). */
   structuredOutput?: "prompt" | "native";
@@ -153,6 +157,7 @@ interface Machine {
   /** Flat agent defaults + retry policies. */
   defaults?: {
     model?: string; maxTurns?: number; maxOutputTokens?: number;
+    maxInputTokens?: number;
     temperature?: number; reasoning?: "low" | "medium" | "high";
     structuredOutput?: "prompt" | "native";
     retry?: { match: string[]; maxAttempts: number; backoff?: object }[];

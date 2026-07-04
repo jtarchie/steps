@@ -107,6 +107,12 @@ func ApplyDefaults(m *Machine) {
 			if a.MaxOutputTokens == 0 {
 				a.MaxOutputTokens = DefaultMaxOutputTokens
 			}
+			// maxInputTokens is opt-in (0 = off) and never cascades onto
+			// implicit distill states — the distiller is the one place the
+			// big payload is supposed to appear.
+			if a.MaxInputTokens == 0 && !s.IsDistill() {
+				a.MaxInputTokens = m.Defaults.Agent.MaxInputTokens
+			}
 			if a.StructuredOutput == "" {
 				a.StructuredOutput = m.Defaults.Agent.StructuredOutput
 			}

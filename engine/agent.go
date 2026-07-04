@@ -94,6 +94,19 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 		return nil, err
 	}
 
+	// maxInputTokens (opt-in): the mirror of maxOutputTokens — no state may
+	// read unboundedly either. Over-budget is exhaustion (never retried,
+	// routable by catch:), and distill at the callsite is the intended fix.
+	if cap := spec.MaxInputTokens; cap > 0 {
+		if est := machine.EstimateTokens(system) + machine.EstimateTokens(userMsg); est > cap {
+			return nil, &provider.ClassifiedError{
+				Class: machine.ClassBudgetExceeded,
+				Msg: fmt.Sprintf("rendered input ~%d tokens exceeds maxInputTokens %d — distill or trim the largest inputs",
+					est, cap),
+			}
+		}
+	}
+
 	// Memoization: byte-identical rendered input (model + system + prompt)
 	// replays the cached output — re-runs only re-pay for what changed.
 	memoKey := ""
