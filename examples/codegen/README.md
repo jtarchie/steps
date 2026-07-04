@@ -148,6 +148,41 @@ The generated `greet.sh` handles `--name`/`--shout`, composes them, and exits
 non-zero with usage on an unknown flag; `greet_test.sh` asserts all of it and
 passes.
 
+## Measured: distill, live (2026-07-04)
+
+A/B on this fixture — the committed machine vs the same machine without
+`distill:` — gates on OpenRouter, per-state numbers from `steps inspect`:
+
+- **Every mechanism behaved.** `generate#spec` paid 630 in / 404 out once
+  (visit 1); all five reader-loop revisits replayed both slices from memo —
+  ⚡ zero tokens, ten times. `generate#build_cause` made **no model calls for
+  five visits** (no build yet — absent source), then, after the first real
+  build failure, distilled the yaml build record to the exact root-cause line
+  (`greet_test.sh: line 23: exit_code: unbound variable`, verbatim, both
+  items) for 314 in / 32 out. The coder's input stayed flat at ~1k/visit
+  across six visits.
+- **On a fixture this small, slicing itself doesn't pay.** The whole spec is
+  already slice-sized, so the distiller returned essentially the full
+  document and the coder's visit-1 input was unchanged (797 vs 730 baseline).
+  Total distill overhead: ~1.4k tokens, ~3% of the run. `distill:` buys
+  tokens when **source ≫ maxTokens** — a real spec, a real compiler dump —
+  and this fixture has neither. The parts that are free regardless (memo
+  replay, the absent-source rule) are what showed up here.
+- **Run-to-run variance dwarfs the feature.** The baseline run's reviewer
+  approved first pass (9.1k tokens total); the distill run's reviewer
+  rejected five times on test-harness nitpicks (44.2k total — 65% of it the
+  27b reviewer's own thinking). Same machine, temperature 0, different
+  generated code each round. Totals compare *runs*; the per-visit numbers
+  above are the honest comparison.
+- **The gates disagreed in both directions.** The reviewer nitpicked five
+  rounds yet missed the actual bug the build caught (`exit_code: unbound
+  variable`); the human override then approved past the one issue the
+  reviewer had been right about (`./greet.sh` isn't executable — exit 126 on
+  the second build). And because the reader loop had already spent
+  `visits.generate`, the build loop got only one shot before parking at
+  `accept_build` — the two loops share one budget, which is worth knowing
+  when you tune the bounds.
+
 ## Expected mock trace (what CI asserts)
 
 The mock scripts a rejected first draft (`--shout` unimplemented), so the

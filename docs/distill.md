@@ -224,15 +224,28 @@ than aspirational:
 
 ## What proves it (measurement, not vibes)
 
-Same discipline as the adopt/thought-exclusion numbers in DESIGN.md: run
-`examples/codegen` live through a 3-iteration build loop, before and after
-adding the two distill entries above, and compare `steps inspect` totals —
-per-visit input tokens to `generate` items, and end-to-end cost. The claim to
-beat: per-file input cost should drop from O(spec) to O(slice) after visit 1,
-and re-visits with unchanged files should show `memo_hits` on both `generate`
-AND `generate#spec`. If the distilled runs don't converge as reliably (slices
-lost something the coder needed), that is a finding about `for:` authoring,
-and it must go in the example README either way.
+**Measured 2026-07-04** (live A/B on `examples/codegen`, gates on OpenRouter —
+full numbers in the [example README](../examples/codegen/README.md)): the
+mechanics all held — six coder visits re-distilled for zero tokens (memo),
+five visits of `generate#build_cause` made no model calls (absent source),
+and the one real build failure distilled to the exact root-cause line
+verbatim for 346 tokens. The economics did **not** pay on that fixture: its
+spec is already slice-sized, so the distiller returned essentially the whole
+document at ~1.4k tokens of overhead (~3% of the run). The honest guidance
+that falls out: `distill:` is for sources **much larger than `maxTokens`** —
+a real spec, a compiler transcript — not a reflex for every input. Run-to-run
+reviewer variance (first-pass approve vs five rejections, same machine, temp
+0) dominated totals by 5×, so per-visit `steps inspect` numbers, not run
+totals, are the comparison that means anything.
+
+The original protocol, for re-running on a fixture big enough to show the
+slice savings: run `examples/codegen` live through a multi-iteration build
+loop, before and after the two distill entries, and compare `steps inspect`
+per-visit input tokens to `generate` items and end-to-end cost. The claim:
+per-file input cost drops from O(spec) to O(slice), and re-visits show
+`memo_hits` on both `generate` AND `generate#spec`. If distilled runs don't
+converge as reliably (slices lost something the coder needed), that is a
+finding about `for:` authoring and goes in the example README either way.
 
 ## Open questions
 
