@@ -247,6 +247,27 @@ type HumanSpec struct {
 	Prompt    Dyn           // static string or function of scope
 	Timeout   time.Duration // 0 = no timeout
 	OnTimeout string        // state routed to when the gate expires
+	Choices   *ChoiceSpec   // nil = free-form-only gate
+}
+
+// ChoiceSpec declares how a gate's answer is collected. Two forms:
+// single (confirm is a two-option single) maps each option to one of the
+// gate's resume events; multi collects a subset of options, emits ONE event,
+// and carries the selection in the gate's output as `selected`. Every gate
+// answer may additionally carry a free-form `note` string.
+type ChoiceSpec struct {
+	Kind    string         // "single" | "multi"
+	Options []ChoiceOption // single: event/label pairs, declaration order
+	Dynamic Dyn            // multi: static []string or function of scope
+	Event   string         // multi: the one resume event emitted
+	Min     int            // multi: minimum selections (0 = none)
+	Max     int            // multi: maximum selections (0 = unbounded)
+}
+
+// ChoiceOption is one selectable answer on a single-choice gate.
+type ChoiceOption struct {
+	Event string // the resume event this option fires
+	Label string // human-readable description
 }
 
 // OutputSpec is the state's output contract.

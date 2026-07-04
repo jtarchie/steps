@@ -312,6 +312,60 @@ func stringSlice(v goja.Value) []string {
 	return out
 }
 
+// choices parses a gate's choices: declaration. Two forms, discriminated by
+// the reserved `multi` key: {event: label, ...} (single/confirm — each key is
+// one of the gate's resume events) or {multi: [...]|fn, event?, min?, max?}
+// (multi-select — one event, selection in output).
+func (l *loader) choices(v goja.Value) (*ChoiceSpec, error) {
+	if !defined(v) {
+		return nil, nil
+	}
+	o := l.obj(v)
+	if o == nil {
+		return nil, fmt.Errorf("choices must be an object")
+	}
+	keys := o.Keys()
+	if !contains(keys, "multi") {
+		// Single/confirm: {resumeEvent: label}, declaration order preserved.
+		spec := &ChoiceSpec{Kind: "single"}
+		for _, k := range keys {
+			label, ok := o.Get(k).Export().(string)
+			if !ok {
+				return nil, fmt.Errorf("choices.%s: label must be a string", k)
+			}
+			spec.Options = append(spec.Options, ChoiceOption{Event: k, Label: label})
+		}
+		if len(spec.Options) == 0 {
+			return nil, fmt.Errorf("choices must declare at least one option")
+		}
+		return spec, nil
+	}
+	for _, k := range keys {
+		if !contains([]string{"multi", "event", "min", "max"}, k) {
+			return nil, fmt.Errorf("unknown key %q for multi choices — valid keys: multi, event, min, max", k)
+		}
+	}
+	spec := &ChoiceSpec{
+		Kind:    "multi",
+		Dynamic: l.dyn(o.Get("multi")),
+		Event:   str(o.Get("event")),
+		Min:     integer(o.Get("min")),
+		Max:     integer(o.Get("max")),
+	}
+	if !spec.Dynamic.IsFn() {
+		items, ok := spec.Dynamic.Static.([]any)
+		if !ok {
+			return nil, fmt.Errorf("choices.multi must be an array of strings or a function of scope")
+		}
+		for i, it := range items {
+			if _, ok := it.(string); !ok {
+				return nil, fmt.Errorf("choices.multi[%d] must be a string", i)
+			}
+		}
+	}
+	return spec, nil
+}
+
 // ---- machine construction ---------------------------------------------------
 
 // Top-level machine keys. Anything else is a load error — flat formats need
@@ -475,7 +529,7 @@ var (
 		"structuredOutput", "toolChoice", "adopt", "history"}
 	actionStateKeys   = []string{"action"}
 	writeStateKeys    = []string{"write", "content"}
-	humanStateKeys    = []string{"human", "timeout"}
+	humanStateKeys    = []string{"human", "timeout", "choices"}
 	terminalStateKeys = []string{"terminal", "status"}
 	movedToFlowKeys   = []string{"transitions", "catch", "onTimeout", "to", "next"}
 )
@@ -551,7 +605,11 @@ func (l *loader) state(name string, v goja.Value) (*State, error) {
 		if err != nil {
 			return nil, err
 		}
-		st.Human = &HumanSpec{Prompt: l.dyn(o.Get("human")), Timeout: timeout}
+		choices, err := l.choices(o.Get("choices"))
+		if err != nil {
+			return nil, err
+		}
+		st.Human = &HumanSpec{Prompt: l.dyn(o.Get("human")), Timeout: timeout, Choices: choices}
 	case "agent":
 		ag, err := l.agent(o)
 		if err != nil {

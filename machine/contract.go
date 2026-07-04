@@ -89,6 +89,9 @@ func CheckContracts(m *Machine) error {
 		}
 		if h := s.Human; h != nil {
 			check("human", h.Prompt, handlerExtras...)
+			if h.Choices != nil {
+				check("choices.multi", h.Choices.Dynamic, handlerExtras...)
+			}
 		}
 		check("input", s.Input, handlerExtras...)
 		if inputs, ok := s.Input.Static.(map[string]any); ok {

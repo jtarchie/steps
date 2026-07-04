@@ -36,6 +36,10 @@ const critique: State = {
 
 const escalate: State = {
   human: ({ critique }) => `Revisions exhausted (last score ${critique.score}). Approve the current draft or fail the run?`,
+  choices: {
+    approved: "Ship the current draft as-is",
+    rejected: "Fail the run",
+  },
   timeout: "1h",
 };
 

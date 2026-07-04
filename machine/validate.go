@@ -299,6 +299,41 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 		if h.OnTimeout != "" && h.Timeout == 0 {
 			fail("state %q: gate has a timeout: route but no timeout duration on the state", s.Name)
 		}
+		if c := h.Choices; c != nil {
+			// The gate's resume-event alphabet is its transition on: values
+			// (flow wiring has already populated Transitions).
+			alphabet := []string{}
+			for _, t := range s.Transitions {
+				if t.On != "" {
+					alphabet = append(alphabet, t.On)
+				}
+			}
+			switch c.Kind {
+			case "single":
+				for _, opt := range c.Options {
+					if !contains(alphabet, opt.Event) {
+						fail("state %q: choice %q is not a resume event of this gate — branch keys: %v", s.Name, opt.Event, alphabet)
+					}
+				}
+			case "multi":
+				if c.Event == "" {
+					switch len(alphabet) {
+					case 1:
+						c.Event = alphabet[0]
+					default:
+						fail("state %q: multi choices need event: — the gate's branch has %d event edges %v", s.Name, len(alphabet), alphabet)
+					}
+				} else if !contains(alphabet, c.Event) {
+					fail("state %q: multi choices event %q is not a resume event of this gate — branch keys: %v", s.Name, c.Event, alphabet)
+				}
+				if c.Min < 0 {
+					fail("state %q: choices min must be >= 0", s.Name)
+				}
+				if c.Max != 0 && c.Max < c.Min {
+					fail("state %q: choices max (%d) must be >= min (%d)", s.Name, c.Max, c.Min)
+				}
+			}
+		}
 	}
 
 	if !s.Input.IsZero() && !s.Input.IsFn() {

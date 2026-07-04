@@ -93,6 +93,9 @@ func DryRun(m *Machine) (fatals []error, warnings []string) {
 		}
 		if h := s.Human; h != nil {
 			record(s.Name, "human.prompt", dryCall(h.Prompt, handlerScope))
+			if h.Choices != nil {
+				record(s.Name, "human.choices.multi", dryCall(h.Choices.Dynamic, handlerScope))
+			}
 		}
 		record(s.Name, "input", dryInputs(s.Input, handlerScope))
 		for i, t := range s.Transitions {

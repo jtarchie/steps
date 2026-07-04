@@ -117,6 +117,15 @@ interface State {
   // human gate — routes live in the flow (branch timeout:/event keys)
   human?: string | Fn<string>;
   timeout?: string;
+  /** How the gate's answer is collected. Two forms:
+   *  - `{resumeEvent: label}` — single choice (confirm is two options);
+   *    each key must be one of the gate's branch keys.
+   *  - `{multi: [...]|fn, event?, min?, max?}` — multi-select; emits ONE
+   *    event (defaulted when the branch has exactly one) and puts the
+   *    selection in the gate's output as `selected`.
+   *  Every gate answer may also carry a free-form `note` string. */
+  choices?: Record<string, string>
+    | { multi: string[] | Fn<string[]>; event?: string; min?: number; max?: number };
 
   // shared
   /** Fan the handler out over a list — one hermetic context per item. */
