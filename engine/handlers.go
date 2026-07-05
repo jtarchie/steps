@@ -113,22 +113,34 @@ func renderChoices(st *machine.State, scope map[string]any) (*journal.ParkChoice
 func applyDistill(st *machine.State, rs *journal.RunState, scope map[string]any) {
 	for i := range st.Distill {
 		d := &st.Distill[i]
-		var text any
-		if out, ok := rs.Ctx[d.StateName].(map[string]any); ok {
-			if st.ForEach != nil {
-				if items, ok := out["items"].([]any); ok {
-					if idx, ok := scope["index"].(int); ok && idx >= 0 && idx < len(items) {
-						if item, ok := items[idx].(map[string]any); ok {
-							text = item["text"]
-						}
-					}
-				}
-			} else {
-				text = out["text"]
-			}
-		}
-		scope[d.Key] = text
+		scope[d.Key] = distilledText(st, rs, scope, d.StateName)
 	}
+}
+
+// distilledText reads one distill chain's output for the current scope:
+// the whole slice's text normally, or — for a forEach consumer, which zips
+// against the implicit fan-out's items by index — that item's own text.
+func distilledText(st *machine.State, rs *journal.RunState, scope map[string]any, stateName string) any {
+	out, ok := rs.Ctx[stateName].(map[string]any)
+	if !ok {
+		return nil
+	}
+	if st.ForEach == nil {
+		return out["text"]
+	}
+	items, ok := out["items"].([]any)
+	if !ok {
+		return nil
+	}
+	idx, ok := scope["index"].(int)
+	if !ok || idx < 0 || idx >= len(items) {
+		return nil
+	}
+	item, ok := items[idx].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return item["text"]
 }
 
 // sortedKeys keeps rendering deterministic: map iteration order is random,
@@ -149,19 +161,7 @@ func renderHistory(msgs []journal.Message, spec *machine.HistorySpec) string {
 	if len(msgs) == 0 {
 		return "(no recorded history)"
 	}
-	includeMessages := false
-	includeTools := false
-	includeThoughts := false
-	for _, inc := range spec.Include {
-		switch inc {
-		case "messages":
-			includeMessages = true
-		case "tool_calls":
-			includeTools = true
-		case "thoughts":
-			includeThoughts = true
-		}
-	}
+	includeMessages, includeTools, includeThoughts := historyIncludeFlags(spec)
 
 	if spec.LastTurns > 0 && len(msgs) > spec.LastTurns {
 		msgs = msgs[len(msgs)-spec.LastTurns:]
@@ -169,35 +169,54 @@ func renderHistory(msgs []journal.Message, spec *machine.HistorySpec) string {
 
 	var b strings.Builder
 	for _, m := range msgs {
-		if m.Thought {
-			if includeThoughts && m.Text != "" {
-				fmt.Fprintf(&b, "[%s thinking] %s\n", m.Role, m.Text)
-			}
-			continue
-		}
-		if includeMessages && m.Text != "" {
-			fmt.Fprintf(&b, "[%s] %s\n", m.Role, m.Text)
-		}
-		if includeTools {
-			for _, tc := range m.ToolCalls {
-				args, err := json.Marshal(tc.Args)
-				if err != nil {
-					fmt.Fprintf(&b, "[tool_call] %s(%v)\n", tc.Name, tc.Args)
-					continue
-				}
-				fmt.Fprintf(&b, "[tool_call] %s(%s)\n", tc.Name, args)
-			}
-			for _, tr := range m.ToolResults {
-				res, err := json.Marshal(tr.Result)
-				if err != nil {
-					fmt.Fprintf(&b, "[tool_result] %s -> %v\n", tr.Name, tr.Result)
-					continue
-				}
-				fmt.Fprintf(&b, "[tool_result] %s -> %s\n", tr.Name, res)
-			}
-		}
+		writeHistoryMessage(&b, m, includeMessages, includeTools, includeThoughts)
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func historyIncludeFlags(spec *machine.HistorySpec) (messages, tools, thoughts bool) {
+	for _, inc := range spec.Include {
+		switch inc {
+		case "messages":
+			messages = true
+		case "tool_calls":
+			tools = true
+		case "thoughts":
+			thoughts = true
+		}
+	}
+	return messages, tools, thoughts
+}
+
+func writeHistoryMessage(b *strings.Builder, m journal.Message, includeMessages, includeTools, includeThoughts bool) {
+	if m.Thought {
+		if includeThoughts && m.Text != "" {
+			fmt.Fprintf(b, "[%s thinking] %s\n", m.Role, m.Text)
+		}
+		return
+	}
+	if includeMessages && m.Text != "" {
+		fmt.Fprintf(b, "[%s] %s\n", m.Role, m.Text)
+	}
+	if !includeTools {
+		return
+	}
+	for _, tc := range m.ToolCalls {
+		args, err := json.Marshal(tc.Args)
+		if err != nil {
+			fmt.Fprintf(b, "[tool_call] %s(%v)\n", tc.Name, tc.Args)
+			continue
+		}
+		fmt.Fprintf(b, "[tool_call] %s(%s)\n", tc.Name, args)
+	}
+	for _, tr := range m.ToolResults {
+		res, err := json.Marshal(tr.Result)
+		if err != nil {
+			fmt.Fprintf(b, "[tool_result] %s -> %v\n", tr.Name, tr.Result)
+			continue
+		}
+		fmt.Fprintf(b, "[tool_result] %s -> %s\n", tr.Name, res)
+	}
 }
 
 // normalizeJSON round-trips a map through JSON so schema validation sees
