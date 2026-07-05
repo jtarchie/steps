@@ -59,14 +59,18 @@ func CompileOutputSchema(props map[string]any, events []string) (*jsonschema.Res
 	}
 	raw, err := json.Marshal(full)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("encoding schema: %w", err)
 	}
 	var schema jsonschema.Schema
 	err = json.Unmarshal(raw, &schema)
 	if err != nil {
 		return nil, fmt.Errorf("invalid schema: %w", err)
 	}
-	return schema.Resolve(nil)
+	resolved, err := schema.Resolve(nil)
+	if err != nil {
+		return nil, fmt.Errorf("resolving schema: %w", err)
+	}
+	return resolved, nil
 }
 
 // SchemaJSON renders the schema the model is asked to satisfy, for embedding

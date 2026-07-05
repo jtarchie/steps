@@ -34,7 +34,7 @@ func WithEngineDefaultModel(model string) ParseOption {
 func Load(path string, opts ...ParseOption) (*Machine, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading machine file %s: %w", path, err)
 	}
 	if strings.HasSuffix(path, ".yaml") || strings.HasSuffix(path, ".yml") {
 		return nil, fmt.Errorf("%s: machines are TypeScript (export default {...}); YAML machine files are no longer supported", path)

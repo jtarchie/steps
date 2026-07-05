@@ -83,7 +83,7 @@ func RenderDistillSource(v any) (string, error) {
 	}
 	raw, err := yaml.Marshal(v)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("encoding distill source to yaml: %w", err)
 	}
 	return strings.TrimRight(string(raw), "\n"), nil
 }

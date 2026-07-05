@@ -367,7 +367,10 @@ func (rt *jsRT) installStubs() error {
 		return nil
 	}
 	_, err := rt.vm.RunString(stubHelperJS)
-	return err
+	if err != nil {
+		return fmt.Errorf("installing stub helper: %w", err)
+	}
+	return nil
 }
 
 // stubRoot wraps the whole sample scope into one throwing/permissive proxy.
