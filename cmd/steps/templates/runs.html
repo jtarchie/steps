@@ -1,0 +1,67 @@
+{{template "page_head" .}}
+
+{{if .Attention}}
+<h1>Needs attention</h1>
+{{range .Attention}}
+<div class="card gate">
+  <div>
+    <a class="mono" href="/runs/{{.ID}}">{{.ID}}</a>
+    <b>{{.Machine}}</b> is parked at <code>{{.CurrentState}}</code>
+    <span class="muted">— {{.Updated | ago}}</span>
+  </div>
+  {{if .Prompt}}<p class="prompt muted">{{.Prompt}}</p>{{end}}
+</div>
+{{end}}
+{{end}}
+
+<h1>Runs</h1>
+<div class="chips">
+  {{$f := .Filter}}
+  <a href="/runs" {{if eq $f ""}}class="on"{{end}}>all</a>
+  <a href="/runs?status=running" {{if eq $f "running"}}class="on"{{end}}>running</a>
+  <a href="/runs?status=parked" {{if eq $f "parked"}}class="on"{{end}}>parked</a>
+  <a href="/runs?status=done" {{if eq $f "done"}}class="on"{{end}}>done</a>
+  <a href="/runs?status=failed" {{if eq $f "failed"}}class="on"{{end}}>failed</a>
+</div>
+
+{{if .Runs}}
+<div class="scroll">
+<table>
+  <tr><th>run</th><th>machine</th><th>status</th><th>state</th><th class="num">tokens</th><th class="num">cost</th><th>updated</th></tr>
+  {{range .Runs}}
+  <tr>
+    <td><a class="mono" href="/runs/{{.ID}}">{{.ID}}</a></td>
+    <td>{{.Machine}}</td>
+    <td>{{template "status" .Status}}</td>
+    <td><code>{{.CurrentState}}</code></td>
+    <td class="num">{{.Tokens | tokens}}</td>
+    <td class="num">{{if .Cost}}{{.Cost | cost}}{{end}}</td>
+    <td class="muted">{{.Updated | ago}}</td>
+  </tr>
+  {{end}}
+</table>
+</div>
+{{else}}
+<p class="muted">No runs{{if .Filter}} with status “{{.Filter}}”{{end}}. Start one with <code>steps run workflow.ts</code>.</p>
+{{end}}
+
+{{if .Totals}}
+<h2>Per machine</h2>
+<div class="scroll">
+<table>
+  <tr><th>machine</th><th class="num">runs</th><th class="num">done</th><th class="num">failed</th><th class="num">tokens</th><th class="num">cost</th></tr>
+  {{range .Totals}}
+  <tr>
+    <td>{{.Machine}}</td>
+    <td class="num">{{.Runs}}</td>
+    <td class="num">{{.Done}}</td>
+    <td class="num">{{.Failed}}</td>
+    <td class="num">{{.Tokens | tokens}}</td>
+    <td class="num">{{if .Cost}}{{.Cost | cost}}{{end}}</td>
+  </tr>
+  {{end}}
+</table>
+</div>
+{{end}}
+
+{{template "page_foot"}}

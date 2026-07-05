@@ -1,0 +1,454 @@
+package main
+
+// The webview is a read-mostly window on the journal plus a gate-answer
+// form. It shares the SQLite file with any running `steps run` processes:
+// WAL + busy_timeout(5000) (journal/sqlite.go) makes concurrent readers and
+// short writes safe. The only writes here happen during a resume, guarded by
+// the in-process `resuming` set so a double-POST can't launch two engines on
+// one run. Cross-process double-resume is prevented by the gate itself — the
+// second Resume folds a journal whose park is already consumed and errors.
+// (Two engines appending to the SAME run would still race on MAX(seq)+1;
+// "one resumer per parked gate" keeps that off the table in practice.)
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/labstack/echo/v5"
+
+	"github.com/jtarchie/steps/engine"
+	"github.com/jtarchie/steps/journal"
+	"github.com/jtarchie/steps/machine"
+)
+
+type server struct {
+	store    journal.Store
+	eng      *engine.Engine
+	resuming sync.Map // runID -> struct{}: a resume is in flight
+}
+
+// newServer wires the routes onto a fresh echo instance — the httptest seam.
+func newServer(store journal.Store, eng *engine.Engine) *echo.Echo {
+	s := &server{store: store, eng: eng}
+	e := echo.New()
+	e.GET("/", func(c *echo.Context) error { return c.Redirect(http.StatusFound, "/runs") })
+	e.GET("/runs", s.handleRuns)
+	e.GET("/runs/:id", s.handleRun)
+	e.POST("/runs/:id/resume", s.handleResume)
+	return e
+}
+
+// ---- runs list --------------------------------------------------------------
+
+type runRow struct {
+	*journal.Run
+	Prompt string
+	Tokens int
+	Cost   float64
+}
+
+type machineTotals struct {
+	Machine            string
+	Runs, Done, Failed int
+	Tokens             int
+	Cost               float64
+}
+
+func (s *server) handleRuns(c *echo.Context) error {
+	ctx := c.Request().Context()
+	filter := c.QueryParam("status")
+
+	runs, err := s.store.ListRuns(ctx)
+	if err != nil {
+		return err
+	}
+
+	var rows []runRow
+	var attention []runRow
+	totalsByMachine := map[string]*machineTotals{}
+	anyRunning := false
+
+	for _, r := range runs {
+		rs := s.fold(ctx, r.ID)
+		row := runRow{Run: r}
+		if rs != nil {
+			row.Tokens = rs.Usage.Total()
+			row.Cost = rs.Usage.Cost
+			if rs.Parked != nil {
+				row.Prompt = clipLine(rs.Parked.Prompt, 160)
+			}
+		}
+
+		t := totalsByMachine[r.Machine]
+		if t == nil {
+			t = &machineTotals{Machine: r.Machine}
+			totalsByMachine[r.Machine] = t
+		}
+		t.Runs++
+		t.Tokens += row.Tokens
+		t.Cost += row.Cost
+		switch r.Status {
+		case journal.StatusDone:
+			t.Done++
+		case journal.StatusFailed:
+			t.Failed++
+		case journal.StatusRunning:
+			anyRunning = true
+		}
+
+		if r.Status == journal.StatusParked {
+			attention = append(attention, row)
+		}
+		if filter == "" || r.Status == filter {
+			rows = append(rows, row)
+		}
+	}
+
+	totals := make([]machineTotals, 0, len(totalsByMachine))
+	for _, t := range totalsByMachine {
+		totals = append(totals, *t)
+	}
+	sort.Slice(totals, func(i, j int) bool { return totals[i].Machine < totals[j].Machine })
+
+	refresh := 0
+	if anyRunning {
+		refresh = 5
+	}
+	return s.render(c, http.StatusOK, "runs.html", map[string]any{
+		"Title":     "steps — runs",
+		"Refresh":   refresh,
+		"Filter":    filter,
+		"Runs":      rows,
+		"Attention": attention,
+		"Totals":    totals,
+	})
+}
+
+// ---- run detail -------------------------------------------------------------
+
+type execRow struct {
+	State    string
+	Visit    int
+	Event    string
+	Memo     bool
+	TokIn    int
+	TokOut   int
+	Duration string
+	Hint     string
+}
+
+type failureRow struct {
+	State string
+	Class string
+	Count int
+}
+
+type routeRow struct{ From, To, On, Guard string }
+
+type artifactRow struct{ Path, State string }
+
+type convoRow struct {
+	State    string
+	Messages []journal.Message
+}
+
+func (s *server) handleRun(c *echo.Context) error {
+	ctx := c.Request().Context()
+	id := c.Param("id")
+
+	run, err := s.store.GetRun(ctx, id)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "run not found")
+	}
+	events, err := s.store.Events(ctx, id)
+	if err != nil {
+		return err
+	}
+	rs := journal.Fold(events)
+
+	rows := execRows(events)
+	failures := failureRows(events)
+	routing := routeRows(events)
+	artifacts := artifactRows(rs)
+
+	convos := make([]convoRow, 0, len(rs.Convos))
+	states := make([]string, 0, len(rs.Convos))
+	for st := range rs.Convos {
+		states = append(states, st)
+	}
+	sort.Strings(states)
+	for _, st := range states {
+		convos = append(convos, convoRow{State: st, Messages: rs.Convos[st]})
+	}
+
+	hash := run.Hash
+	if len(hash) > 12 {
+		hash = hash[:12]
+	}
+	refresh := 0
+	if run.Status == journal.StatusRunning {
+		refresh = 3
+	}
+
+	data := map[string]any{
+		"Title":       "steps — " + run.ID,
+		"Refresh":     refresh,
+		"Run":         run,
+		"Hash":        hash,
+		"Transitions": rs.Transitions,
+		"Usage":       rs.Usage,
+		"Rows":        rows,
+		"Failures":    failures,
+		"Routing":     routing,
+		"Artifacts":   artifacts,
+		"Convos":      convos,
+	}
+	if p := rs.Parked; p != nil && run.Status == journal.StatusParked {
+		data["Parked"] = p
+		data["GateSingle"] = p.Choices != nil && p.Choices.Kind == "single" && len(p.Choices.Options) > 0
+		data["GateMulti"] = p.Choices != nil && p.Choices.Kind == "multi"
+		if p.Timeout > 0 {
+			data["GateExpires"] = humanizeSince(p.At.Add(p.Timeout))
+		}
+	}
+	return s.render(c, http.StatusOK, "run.html", data)
+}
+
+// execRows mirrors inspect.go's per-execution derivation, adding a duration
+// (state_entered ts paired with the next terminating event for that state)
+// and a one-glance result hint.
+func execRows(events []*journal.Event) []execRow {
+	var rows []execRow
+	visitSeen := map[string]int{}
+	enteredAt := map[string]time.Time{}
+
+	for _, ev := range events {
+		state, _ := ev.Data["state"].(string)
+		switch ev.Type {
+		case journal.StateEntered:
+			enteredAt[state] = ev.Time
+		case journal.HandlerFinished:
+			var d struct {
+				State  string         `json:"state"`
+				Event  string         `json:"event"`
+				Output map[string]any `json:"output"`
+				Usage  journal.Usage  `json:"usage"`
+				Memo   bool           `json:"memo"`
+			}
+			if journal.DecodeData(ev, &d) != nil {
+				continue
+			}
+			visitSeen[d.State]++
+			row := execRow{
+				State:  d.State,
+				Visit:  visitSeen[d.State],
+				Event:  d.Event,
+				Memo:   d.Memo,
+				TokIn:  d.Usage.InputTokens,
+				TokOut: d.Usage.OutputTokens,
+				Hint:   hint(d.Output),
+			}
+			if t, ok := enteredAt[d.State]; ok {
+				row.Duration = ev.Time.Sub(t).Round(100 * time.Millisecond).String()
+			}
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+func failureRows(events []*journal.Event) []failureRow {
+	counts := map[string]map[string]int{}
+	for _, ev := range events {
+		if ev.Type != journal.HandlerFailed {
+			continue
+		}
+		state, _ := ev.Data["state"].(string)
+		class, _ := ev.Data["class"].(string)
+		if counts[state] == nil {
+			counts[state] = map[string]int{}
+		}
+		counts[state][class]++
+	}
+	var out []failureRow
+	states := make([]string, 0, len(counts))
+	for st := range counts {
+		states = append(states, st)
+	}
+	sort.Strings(states)
+	for _, st := range states {
+		for class, n := range counts[st] {
+			out = append(out, failureRow{State: st, Class: class, Count: n})
+		}
+	}
+	return out
+}
+
+func routeRows(events []*journal.Event) []routeRow {
+	var out []routeRow
+	for _, ev := range events {
+		if ev.Type != journal.TransitionFired {
+			continue
+		}
+		from, _ := ev.Data["from"].(string)
+		to, _ := ev.Data["to"].(string)
+		on, _ := ev.Data["on"].(string)
+		guard, _ := ev.Data["guard"].(string)
+		out = append(out, routeRow{From: from, To: to, On: on, Guard: guard})
+	}
+	return out
+}
+
+// artifactRows surfaces files the run wrote: file.write tool calls and any
+// state output carrying a path.
+func artifactRows(rs *journal.RunState) []artifactRow {
+	seen := map[string]bool{}
+	var out []artifactRow
+	add := func(path, state string) {
+		if path == "" || seen[path] {
+			return
+		}
+		seen[path] = true
+		out = append(out, artifactRow{Path: path, State: state})
+	}
+	for state, msgs := range rs.Convos {
+		for _, m := range msgs {
+			for _, tc := range m.ToolCalls {
+				if tc.Name == "file.write" {
+					if p, ok := tc.Args["path"].(string); ok {
+						add(p, state)
+					}
+				}
+			}
+		}
+	}
+	for state, v := range rs.Ctx {
+		if out, ok := v.(map[string]any); ok {
+			if p, ok := out["path"].(string); ok {
+				add(p, state)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
+}
+
+// ---- resume -----------------------------------------------------------------
+
+func (s *server) handleResume(c *echo.Context) error {
+	ctx := c.Request().Context()
+	id := c.Param("id")
+
+	if _, busy := s.resuming.LoadOrStore(id, struct{}{}); busy {
+		return echo.NewHTTPError(http.StatusConflict, "a resume is already in flight for this run")
+	}
+	release := func() { s.resuming.Delete(id) }
+
+	run, err := s.store.GetRun(ctx, id)
+	if err != nil {
+		release()
+		return echo.NewHTTPError(http.StatusNotFound, "run not found")
+	}
+	rs := s.fold(ctx, id)
+	if rs == nil || rs.Parked == nil {
+		release()
+		return echo.NewHTTPError(http.StatusConflict, "run is not parked at a gate")
+	}
+
+	event, data, herr := gateFormAnswer(c, rs.Parked)
+	if herr != nil {
+		release()
+		return herr
+	}
+
+	m, err := machine.ParseWithAssets(run.Source, run.Assets, parseOpts()...)
+	if err != nil {
+		release()
+		return echo.NewHTTPError(http.StatusInternalServerError, "re-evaluating pinned machine: "+err.Error())
+	}
+
+	// A resume drives a real engine loop — agent states can run for minutes.
+	// Never block the request: launch it, redirect, let meta-refresh show
+	// progress. Errors land in the journal (handler_failed) and the run row.
+	go func() {
+		defer release()
+		bg, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		if _, err := s.eng.Resume(bg, m, id, event, data); err != nil {
+			s.eng.Listener.Warn("web resume failed", "run", id, "err", err.Error())
+		}
+	}()
+
+	return c.Redirect(http.StatusSeeOther, "/runs/"+id)
+}
+
+// gateFormAnswer maps the posted form to a resume (event, data), mirroring
+// the CLI: single -> the chosen event; multi -> the gate's fixed event with
+// the checked values; free-form -> a typed event. A note always merges in.
+func gateFormAnswer(c *echo.Context, p *journal.ParkInfo) (string, map[string]any, *echo.HTTPError) {
+	data := map[string]any{}
+	if note := strings.TrimSpace(c.FormValue("note")); note != "" {
+		data["note"] = note
+	}
+
+	ch := p.Choices
+	if ch != nil && ch.Kind == "multi" {
+		form, err := c.FormValues()
+		if err != nil {
+			return "", nil, echo.NewHTTPError(http.StatusBadRequest, "malformed form")
+		}
+		valid := map[string]bool{}
+		for _, o := range ch.Options {
+			valid[o.Value] = true
+		}
+		var selected []any
+		for _, v := range form["selected"] {
+			if valid[v] {
+				selected = append(selected, v)
+			}
+		}
+		if ch.Min > 0 && len(selected) < ch.Min {
+			return "", nil, echo.NewHTTPError(http.StatusBadRequest, "select at least "+itoa(ch.Min)+" option(s)")
+		}
+		if ch.Max > 0 && len(selected) > ch.Max {
+			return "", nil, echo.NewHTTPError(http.StatusBadRequest, "select at most "+itoa(ch.Max)+" option(s)")
+		}
+		data["selected"] = selected
+		return ch.Event, data, nil
+	}
+
+	event := strings.TrimSpace(c.FormValue("event"))
+	if event == "" {
+		return "", nil, echo.NewHTTPError(http.StatusBadRequest, "choose an option")
+	}
+	return event, data, nil
+}
+
+// ---- helpers ----------------------------------------------------------------
+
+// fold loads and folds a run's journal, swallowing errors (a run row without
+// readable events is skipped, not fatal to the whole list).
+func (s *server) fold(ctx context.Context, id string) *journal.RunState {
+	events, err := s.store.Events(ctx, id)
+	if err != nil {
+		return nil
+	}
+	return journal.Fold(events)
+}
+
+// render executes a page template into the response.
+func (s *server) render(c *echo.Context, code int, name string, data any) error {
+	c.Response().Header().Set("Content-Type", "text/html; charset=utf-8")
+	c.Response().WriteHeader(code)
+	return webTemplates.ExecuteTemplate(c.Response(), name, data)
+}
+
+func itoa(n int) string {
+	raw, _ := json.Marshal(n)
+	return string(raw)
+}

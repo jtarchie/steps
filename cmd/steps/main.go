@@ -44,7 +44,7 @@ func main() {
 	root.PersistentFlags().StringVar(&flagDefaultModel, "default-model", os.Getenv("STEPS_DEFAULT_MODEL"), "engine-level default model (last rung of the cascade)")
 	root.PersistentFlags().BoolVar(&flagNoPrompt, "no-prompt", false, "never prompt at human gates — park and exit even on a TTY")
 
-	root.AddCommand(cmdValidate(), cmdRun(), cmdResume(), cmdRuns(), cmdInspect(), cmdContext())
+	root.AddCommand(cmdValidate(), cmdRun(), cmdResume(), cmdRuns(), cmdInspect(), cmdContext(), cmdServe())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "%serror:%s %v\n", cRed, cReset, err)

@@ -1,0 +1,101 @@
+{{template "page_head" .}}
+
+<h1><span class="mono">{{.Run.ID}}</span> — {{.Run.Machine}} {{template "status" .Run.Status}}</h1>
+<div class="kv">
+  <div><b>current state</b><code>{{.Run.CurrentState}}</code></div>
+  <div><b>transitions</b>{{.Transitions}}</div>
+  <div><b>tokens</b>{{.Usage.InputTokens | tokens}} in / {{.Usage.OutputTokens | tokens}} out</div>
+  {{if .Usage.Cost}}<div><b>cost</b>{{.Usage.Cost | cost}}</div>{{end}}
+  <div><b>started</b>{{.Run.Created | ago}}</div>
+  <div><b>updated</b>{{.Run.Updated | ago}}</div>
+  <div><b>machine hash</b><span class="mono">{{.Hash}}</span></div>
+</div>
+
+{{if .Parked}}
+<div class="card gate">
+  <h2>⏸ Waiting on you — <code>{{.Parked.State}}</code></h2>
+  <p class="prompt">{{.Parked.Prompt}}</p>
+  <form method="post" action="/runs/{{.Run.ID}}/resume">
+    {{if .GateSingle}}
+      {{range $i, $o := .Parked.Choices.Options}}
+      <label class="opt">
+        <input type="radio" name="event" value="{{$o.Event}}" {{if eq $i 0}}checked{{end}}>
+        <b>{{$o.Event}}</b>{{if ne $o.Label $o.Event}} — {{$o.Label}}{{end}}
+      </label>
+      {{end}}
+    {{else if .GateMulti}}
+      <input type="hidden" name="event" value="{{.Parked.Choices.Event}}">
+      {{range .Parked.Choices.Options}}
+      <label class="opt"><input type="checkbox" name="selected" value="{{.Value}}"> {{.Label}}</label>
+      {{end}}
+      {{if or .Parked.Choices.Min .Parked.Choices.Max}}
+      <p class="muted">select
+        {{if .Parked.Choices.Min}}at least {{.Parked.Choices.Min}}{{end}}
+        {{if and .Parked.Choices.Min .Parked.Choices.Max}}and{{end}}
+        {{if .Parked.Choices.Max}}at most {{.Parked.Choices.Max}}{{end}}</p>
+      {{end}}
+    {{else}}
+      <label class="opt">event <input type="text" name="event" placeholder="event name"></label>
+    {{end}}
+    <label class="opt">note (optional)<br><textarea name="note" rows="2"></textarea></label>
+    <button type="submit">Resume run</button>
+  </form>
+  {{if .GateExpires}}<p class="muted">gate expires {{.GateExpires}}</p>{{end}}
+</div>
+{{end}}
+
+<h2>Executions</h2>
+<div class="scroll">
+<table>
+  <tr><th>state</th><th class="num">visit</th><th>event</th><th class="num">tok in</th><th class="num">tok out</th><th class="num">duration</th><th>result</th></tr>
+  {{range .Rows}}
+  <tr>
+    <td><code>{{.State}}</code></td>
+    <td class="num">{{.Visit}}</td>
+    <td>{{.Event}}{{if .Memo}} <span class="muted">⚡memo</span>{{end}}</td>
+    <td class="num">{{.TokIn | tokens}}</td>
+    <td class="num">{{.TokOut | tokens}}</td>
+    <td class="num">{{.Duration}}</td>
+    <td class="muted">{{.Hint}}</td>
+  </tr>
+  {{end}}
+</table>
+</div>
+
+{{if .Failures}}
+<h2>Failures</h2>
+<div class="scroll">
+<table>
+  <tr><th>state</th><th>class</th><th class="num">count</th></tr>
+  {{range .Failures}}<tr><td><code>{{.State}}</code></td><td>{{.Class}}</td><td class="num">{{.Count}}</td></tr>{{end}}
+</table>
+</div>
+{{end}}
+
+{{if .Artifacts}}
+<h2>Artifacts</h2>
+<ul>{{range .Artifacts}}<li><code>{{.Path}}</code> <span class="muted">from {{.State}}</span></li>{{end}}</ul>
+{{end}}
+
+{{if .Routing}}
+<h2>Routing</h2>
+<ul class="routing">
+  {{range .Routing}}<li>{{.From}} → {{.To}}{{if .On}} <span class="muted">on:{{.On}}</span>{{end}}{{if .Guard}} <span class="muted">when:{{.Guard}}</span>{{end}}</li>{{end}}
+</ul>
+{{end}}
+
+{{if .Convos}}
+<h2>Conversations <span class="muted">(last execution per state)</span></h2>
+{{range .Convos}}
+<details>
+  <summary><code>{{.State}}</code> <span class="muted">{{len .Messages}} messages</span></summary>
+  {{range .Messages}}
+  <pre><b>[{{.Role}}{{if .Thought}} thought{{end}}]</b> {{.Text}}{{range .ToolCalls}}
+<b>[tool_call]</b> {{.Name}} {{.Args | json}}{{end}}{{range .ToolResults}}
+<b>[tool_result]</b> {{.Name}} {{.Result | json}}{{end}}</pre>
+  {{end}}
+</details>
+{{end}}
+{{end}}
+
+{{template "page_foot"}}

@@ -1,0 +1,99 @@
+{{define "page_head"}}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
+<title>{{.Title}}</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #1a1d21; --muted: #6a737d; --line: #e3e6e9;
+  --card: #f6f8fa; --accent: #0b62d6;
+  --running: #0b62d6; --parked: #b98300; --done: #1a7f37; --failed: #c62828;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171a; --fg: #e6e9ec; --muted: #9aa4ae; --line: #2b3138;
+    --card: #1c2126; --accent: #5aa2ff;
+    --running: #5aa2ff; --parked: #e0b341; --done: #4bc26b; --failed: #ef6a5f;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+header {
+  display: flex; align-items: baseline; gap: 1rem;
+  padding: .7rem 1.2rem; border-bottom: 1px solid var(--line);
+}
+header .brand { font-weight: 700; color: var(--fg); text-decoration: none; }
+header .sub { color: var(--muted); font-size: .85rem; }
+main { max-width: 70rem; margin: 0 auto; padding: 1rem 1.2rem 3rem; }
+h1 { font-size: 1.2rem; margin: 1rem 0 .5rem; }
+h2 { font-size: 1rem; margin: 1.5rem 0 .5rem; }
+a { color: var(--accent); }
+code, .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .86em; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: .78rem; text-transform: uppercase; letter-spacing: .03em; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.scroll { overflow-x: auto; }
+.badge {
+  display: inline-block; padding: 0 .5em; border-radius: 99px;
+  font-size: .78rem; font-weight: 600; line-height: 1.6; color: var(--bg);
+}
+.badge.running { background: var(--running); }
+.badge.parked { background: var(--parked); }
+.badge.done { background: var(--done); }
+.badge.failed { background: var(--failed); }
+.chips { display: flex; gap: .4rem; margin: .8rem 0; flex-wrap: wrap; }
+.chips a {
+  padding: .1rem .7rem; border: 1px solid var(--line); border-radius: 99px;
+  text-decoration: none; color: var(--fg); font-size: .85rem;
+}
+.chips a.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.card {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 8px; padding: .9rem 1.1rem; margin: .8rem 0;
+}
+.gate { border-left: 4px solid var(--parked); }
+.gate .prompt { white-space: pre-wrap; }
+.gate label.opt { display: block; margin: .3rem 0; }
+.gate textarea, .gate input[type=text] {
+  width: 100%; max-width: 32rem; background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 6px; padding: .4rem .6rem; font: inherit;
+}
+.gate button {
+  margin-top: .7rem; padding: .45rem 1.1rem; border: 0; border-radius: 6px;
+  background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer;
+}
+.muted { color: var(--muted); }
+.kv { display: flex; flex-wrap: wrap; gap: .3rem 2rem; margin: .4rem 0 1rem; }
+.kv div { font-size: .9rem; }
+.kv b { display: block; font-size: .74rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+details { margin: .4rem 0; }
+details pre {
+  white-space: pre-wrap; word-break: break-word; background: var(--card);
+  border: 1px solid var(--line); border-radius: 6px; padding: .6rem .8rem;
+}
+.routing { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .85rem; }
+.routing li { margin: .15rem 0; }
+</style>
+</head>
+<body>
+<header>
+  <a class="brand" href="/runs">steps</a>
+  <span class="sub">runs &amp; gates</span>
+</header>
+<main>
+{{end}}
+
+{{define "page_foot"}}
+</main>
+</body>
+</html>
+{{end}}
+
+{{define "status"}}<span class="badge {{.}}">{{.}}</span>{{end}}
