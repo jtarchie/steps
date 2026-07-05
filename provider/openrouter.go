@@ -96,7 +96,11 @@ type captureSlot struct {
 func (s *captureSlot) write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.buf.Write(p)
+	n, err := s.buf.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("writing to capture buffer: %w", err)
+	}
+	return n, nil
 }
 
 // parse extracts usage.prompt_tokens_details.cached_tokens once. Handles a
@@ -162,7 +166,11 @@ type openRouterTransport struct {
 
 func (t *openRouterTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if !isOpenRouterChatCompletion(req) {
-		return t.base.RoundTrip(req)
+		resp, err := t.base.RoundTrip(req)
+		if err != nil {
+			return resp, fmt.Errorf("round trip: %w", err)
+		}
+		return resp, nil
 	}
 	if sid := sessionIDFromContext(req.Context()); sid != "" {
 		req.Header.Set("x-session-id", sid)
@@ -172,8 +180,11 @@ func (t *openRouterTransport) RoundTrip(req *http.Request) (*http.Response, erro
 		return nil, fmt.Errorf("inject cache_control: %w", err)
 	}
 	resp, err := t.base.RoundTrip(req)
-	if err != nil || resp == nil {
-		return resp, err
+	if err != nil {
+		return resp, fmt.Errorf("round trip: %w", err)
+	}
+	if resp == nil {
+		return nil, nil //nolint:nilnil // mirrors the base RoundTripper's own (nil, nil) case; net/http's contract treats it as impossible, not forbidden
 	}
 	if slot, ok := req.Context().Value(captureSlotKey{}).(*captureSlot); ok && slot != nil {
 		resp.Body = teeBody(resp.Body, slot)
@@ -240,8 +251,18 @@ type teeReadCloser struct {
 	c io.Closer
 }
 
-func (t *teeReadCloser) Read(p []byte) (int, error) { return t.r.Read(p) }
-func (t *teeReadCloser) Close() error               { return t.c.Close() }
+// Read must pass io.EOF through unwrapped: io.Copy and other stdlib readers
+// compare err == io.EOF directly, not via errors.Is, so wrapping it here
+// would break every normal body-reading path.
+func (t *teeReadCloser) Read(p []byte) (int, error) { return t.r.Read(p) } //nolint:wrapcheck
+
+func (t *teeReadCloser) Close() error {
+	err := t.c.Close()
+	if err != nil {
+		return fmt.Errorf("closing tee body: %w", err)
+	}
+	return nil
+}
 
 type writerFunc func(p []byte) (int, error)
 

@@ -62,7 +62,7 @@ type Script map[string][]ScriptResponse
 func LoadScript(path string) (Script, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading mock script %s: %w", path, err)
 	}
 	var s Script
 	err = yaml.Unmarshal(raw, &s)
