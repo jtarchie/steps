@@ -26,13 +26,13 @@ func OpenSQLite(path string) (*SQLiteStore, error) {
 	// concurrent CLI invocations (run + runs list) from erroring.
 	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("opening sqlite %s: %w", path, err)
 	}
 	s := &SQLiteStore{db: db}
 	err = s.migrate()
 	if err != nil {
 		db.Close()
-		return nil, err
+		return nil, fmt.Errorf("migrating schema: %w", err)
 	}
 	return s, nil
 }
@@ -63,23 +63,26 @@ CREATE TABLE IF NOT EXISTS memo (
     output  TEXT NOT NULL,
     created INTEGER NOT NULL
 );`)
-	return err
+	if err != nil {
+		return fmt.Errorf("creating schema: %w", err)
+	}
+	return nil
 }
 
 // MemoGet looks up a cached output by input hash.
 func (s *SQLiteStore) MemoGet(ctx context.Context, key string) (map[string]any, bool, error) {
 	var raw string
 	err := s.db.QueryRowContext(ctx, `SELECT output FROM memo WHERE key = ?`, key).Scan(&raw)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("querying memo: %w", err)
 	}
 	var out map[string]any
 	err = json.Unmarshal([]byte(raw), &out)
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("decoding memo output: %w", err)
 	}
 	return out, true, nil
 }
@@ -88,12 +91,15 @@ func (s *SQLiteStore) MemoGet(ctx context.Context, key string) (map[string]any, 
 func (s *SQLiteStore) MemoPut(ctx context.Context, key string, output map[string]any) error {
 	raw, err := json.Marshal(output)
 	if err != nil {
-		return err
+		return fmt.Errorf("encoding memo output: %w", err)
 	}
 	_, err = s.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO memo (key, output, created) VALUES (?, ?, ?)`,
 		key, string(raw), time.Now().UnixMilli())
-	return err
+	if err != nil {
+		return fmt.Errorf("writing memo: %w", err)
+	}
+	return nil
 }
 
 // CreateRun inserts a new run row.
@@ -101,13 +107,16 @@ func (s *SQLiteStore) CreateRun(ctx context.Context, run *Run) error {
 	now := time.Now().UnixMilli()
 	assets, err := json.Marshal(run.Assets)
 	if err != nil {
-		return err
+		return fmt.Errorf("encoding assets: %w", err)
 	}
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO runs (id, machine, hash, source, assets, status, current_state, created, updated)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.ID, run.Machine, run.Hash, run.Source, string(assets), run.Status, run.CurrentState, now, now)
-	return err
+	if err != nil {
+		return fmt.Errorf("inserting run %s: %w", run.ID, err)
+	}
+	return nil
 }
 
 // UpdateRun updates status and current state.
@@ -116,7 +125,7 @@ func (s *SQLiteStore) UpdateRun(ctx context.Context, id, status, currentState st
 		`UPDATE runs SET status = ?, current_state = ?, updated = ? WHERE id = ?`,
 		status, currentState, time.Now().UnixMilli(), id)
 	if err != nil {
-		return err
+		return fmt.Errorf("updating run %s: %w", id, err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
@@ -137,7 +146,7 @@ func (s *SQLiteStore) ListRuns(ctx context.Context) ([]*Run, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, machine, hash, source, assets, status, current_state, created, updated FROM runs ORDER BY created DESC`)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("listing runs: %w", err)
 	}
 	defer rows.Close()
 	var out []*Run
@@ -148,7 +157,11 @@ func (s *SQLiteStore) ListRuns(ctx context.Context) ([]*Run, error) {
 		}
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("iterating runs: %w", err)
+	}
+	return out, nil
 }
 
 type scannable interface{ Scan(dest ...any) error }
@@ -162,7 +175,7 @@ func scanRun(row scannable) (*Run, error) {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.New("run not found")
 		}
-		return nil, err
+		return nil, fmt.Errorf("scanning run: %w", err)
 	}
 	err = json.Unmarshal([]byte(assets), &r.Assets)
 	if err != nil {
@@ -179,31 +192,31 @@ func (s *SQLiteStore) Append(ctx context.Context, ev *Event) (int, error) {
 	defer s.appendMu.Unlock()
 	data, err := json.Marshal(ev.Data)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("encoding event data: %w", err)
 	}
 	if ev.Time.IsZero() {
 		ev.Time = time.Now()
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	var seq int
 	err = tx.QueryRowContext(ctx,
 		`SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE run_id = ?`, ev.RunID).Scan(&seq)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("computing next sequence for run %s: %w", ev.RunID, err)
 	}
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO events (run_id, seq, type, ts, data) VALUES (?, ?, ?, ?, ?)`,
 		ev.RunID, seq, string(ev.Type), ev.Time.UnixMilli(), string(data))
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("inserting event: %w", err)
 	}
 	err = tx.Commit()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("committing event: %w", err)
 	}
 	ev.Seq = seq
 	return seq, nil
@@ -214,7 +227,7 @@ func (s *SQLiteStore) Events(ctx context.Context, runID string) ([]*Event, error
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT seq, type, ts, data FROM events WHERE run_id = ? ORDER BY seq`, runID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying events for run %s: %w", runID, err)
 	}
 	defer rows.Close()
 	var out []*Event
@@ -224,17 +237,27 @@ func (s *SQLiteStore) Events(ctx context.Context, runID string) ([]*Event, error
 		var data string
 		err := rows.Scan(&ev.Seq, &ev.Type, &ts, &data)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scanning event: %w", err)
 		}
 		ev.Time = time.UnixMilli(ts)
 		err = json.Unmarshal([]byte(data), &ev.Data)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("decoding event data: %w", err)
 		}
 		out = append(out, ev)
 	}
-	return out, rows.Err()
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("iterating events for run %s: %w", runID, err)
+	}
+	return out, nil
 }
 
 // Close closes the database.
-func (s *SQLiteStore) Close() error { return s.db.Close() }
+func (s *SQLiteStore) Close() error {
+	err := s.db.Close()
+	if err != nil {
+		return fmt.Errorf("closing database: %w", err)
+	}
+	return nil
+}

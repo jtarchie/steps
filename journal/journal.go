@@ -6,6 +6,7 @@ package journal
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -118,7 +119,11 @@ func (u *Usage) Add(o Usage) {
 func DecodeData(ev *Event, into any) error {
 	raw, err := json.Marshal(ev.Data)
 	if err != nil {
-		return err
+		return fmt.Errorf("encoding event data: %w", err)
 	}
-	return json.Unmarshal(raw, into)
+	err = json.Unmarshal(raw, into)
+	if err != nil {
+		return fmt.Errorf("decoding event data: %w", err)
+	}
+	return nil
 }
