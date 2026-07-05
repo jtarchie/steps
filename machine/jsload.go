@@ -398,8 +398,12 @@ func (l *loader) applyWebhook(m *Machine, root *goja.Object) error {
 			w.Path = str(o.Get(k))
 		case "map":
 			w.Map = l.dyn(o.Get(k))
+		case "maxInFlight":
+			w.MaxInFlight = integer(o.Get(k))
+		case "maxQueued":
+			w.MaxQueued = integer(o.Get(k))
 		default:
-			return fmt.Errorf("unknown webhook key %q — valid: path, map", k)
+			return fmt.Errorf("unknown webhook key %q — valid: path, map, maxInFlight, maxQueued", k)
 		}
 	}
 	if w.Path == "" {

@@ -29,22 +29,28 @@ import (
 )
 
 type server struct {
-	store    journal.Store
-	eng      *engine.Engine
-	resuming sync.Map  // runID -> struct{}: a resume is in flight
-	hook     *hookSpec // nil = no webhook registered
+	store       journal.Store
+	eng         *engine.Engine
+	resuming    sync.Map              // runID -> struct{}: a resume is in flight
+	hooksByPath map[string]*hookSpec  // webhook path slug -> hook; nil = none registered
+	disp        *dispatcher           // drains the durable queue; nil when no hooks
 }
 
 // hookSpec is a webhook-triggerable machine, loaded once at startup.
 type hookSpec struct {
 	m      *machine.Machine
 	inputs map[string]any // --hook-input base values (operator config)
-	token  string         // --hook-token; "" = unauthenticated
+	token  string         // resolved per-hook token; "" = unauthenticated
 }
 
 // newServer wires the routes onto a fresh echo instance — the httptest seam.
-func newServer(store journal.Store, eng *engine.Engine, hook *hookSpec) *echo.Echo {
-	s := &server{store: store, eng: eng, hook: hook}
+// ctx bounds the dispatcher goroutine (cancel it to stop draining the queue).
+func newServer(ctx context.Context, store journal.Store, eng *engine.Engine, hooks map[string]*hookSpec, maxInFlight int) *echo.Echo {
+	s := &server{store: store, eng: eng, hooksByPath: hooks}
+	if len(hooks) > 0 {
+		s.disp = newDispatcher(eng, store, hooks, maxInFlight)
+		go s.disp.run(ctx)
+	}
 	e := echo.New()
 	e.GET("/", func(c *echo.Context) error { return c.Redirect(http.StatusFound, "/runs") })
 	e.GET("/runs", s.handleRuns)
@@ -55,13 +61,16 @@ func newServer(store journal.Store, eng *engine.Engine, hook *hookSpec) *echo.Ec
 }
 
 // handleHook receives an inbound webhook, maps the JSON payload to run inputs
-// via the machine's webhook.map, and starts the run in the background.
-// Trigger-only: gates are answered via the UI or CLI, never the webhook.
+// via the machine's webhook.map, and durably enqueues a run. A dispatcher
+// starts it when a slot frees; a full queue is rejected with 429. Trigger-only:
+// gates are answered via the UI or CLI, never the webhook.
 func (s *server) handleHook(c *echo.Context) error {
-	if s.hook == nil || c.Param("path") != s.hook.m.Webhook.Path {
+	ctx := c.Request().Context()
+	hook := s.hooksByPath[c.Param("path")]
+	if hook == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "no such hook")
 	}
-	herr := s.checkHookToken(c)
+	herr := checkHookToken(c, hook.token)
 	if herr != nil {
 		return herr
 	}
@@ -74,47 +83,82 @@ func (s *server) handleHook(c *echo.Context) error {
 
 	// One flat scope: the request, plus operator-supplied hook inputs by name.
 	scope := map[string]any{"body": body, "headers": flatHeaders(c), "query": flatQuery(c)}
-	for k, v := range s.hook.inputs {
+	for k, v := range hook.inputs {
 		scope[k] = v
 	}
-	mapped, err := s.hook.m.Webhook.Map.Map(scope)
+	mapped, err := hook.m.Webhook.Map.Map(scope)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "webhook.map: "+err.Error())
 	}
 
-	input, herr := s.hookInput(mapped)
+	input, herr := hookInput(hook, mapped)
 	if herr != nil {
 		return herr
 	}
 
-	// A run can take minutes — never block the request (same shape as
-	// handleResume's background resume). Errors land in the journal.
-	go func() {
-		bg, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-		_, err := s.eng.Start(bg, s.hook.m, input)
-		if err != nil {
-			s.eng.Listener.Warn("webhook run failed", "hook", s.hook.m.Webhook.Path, "err", err.Error())
-		}
-	}()
-	err = c.JSON(http.StatusAccepted, map[string]any{"machine": s.hook.m.Name, "status": "accepted"})
+	// Backpressure: reject when the durable queue for this hook is full. Soft
+	// cap — concurrent POSTs count-then-insert can overshoot by a few.
+	herr = s.checkQueueDepth(ctx, hook)
+	if herr != nil {
+		return herr
+	}
+
+	runID, err := s.eng.Enqueue(ctx, hook.m, input, hook.m.Webhook.Path)
+	if err != nil {
+		return fmt.Errorf("enqueuing hook run: %w", err)
+	}
+	if s.disp != nil {
+		s.disp.poke()
+	}
+
+	err = c.JSON(http.StatusAccepted, map[string]any{"machine": hook.m.Name, "run": runID, "status": "queued"})
 	if err != nil {
 		return fmt.Errorf("responding to hook: %w", err)
 	}
 	return nil
 }
 
+// hookMaxQueued resolves the hook's queue bound, applying the default.
+func hookMaxQueued(hook *hookSpec) int {
+	n := hook.m.Webhook.MaxQueued
+	if n <= 0 {
+		n = machine.DefaultHookMaxQueued
+	}
+	return n
+}
+
+// checkQueueDepth returns 429 when this hook already has maxQueued runs waiting
+// for a slot.
+func (s *server) checkQueueDepth(ctx context.Context, hook *hookSpec) *echo.HTTPError {
+	limit := hookMaxQueued(hook)
+	queued, err := s.store.ListRunsByStatus(ctx, journal.StatusQueued)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "checking queue depth: "+err.Error())
+	}
+	n := 0
+	for _, r := range queued {
+		if r.Machine == hook.m.Name {
+			n++
+		}
+	}
+	if n >= limit {
+		return echo.NewHTTPError(http.StatusTooManyRequests,
+			fmt.Sprintf("hook queue full (%d/%d) — retry later", n, limit))
+	}
+	return nil
+}
+
 // checkHookToken enforces the shared secret when one is configured, accepting
 // it as a Bearer header or a ?token= query param.
-func (s *server) checkHookToken(c *echo.Context) *echo.HTTPError {
-	if s.hook.token == "" {
+func checkHookToken(c *echo.Context, token string) *echo.HTTPError {
+	if token == "" {
 		return nil
 	}
 	got := c.QueryParam("token")
 	if auth := c.Request().Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
 		got = strings.TrimPrefix(auth, "Bearer ")
 	}
-	if got != s.hook.token {
+	if got != token {
 		return echo.NewHTTPError(http.StatusUnauthorized, "bad or missing hook token")
 	}
 	return nil
@@ -122,19 +166,19 @@ func (s *server) checkHookToken(c *echo.Context) *echo.HTTPError {
 
 // hookInput merges hook inputs (under) with the map's payload-derived values
 // (over), keeping only declared inputs, and fails if a required one is absent.
-func (s *server) hookInput(mapped map[string]any) (map[string]any, *echo.HTTPError) {
+func hookInput(hook *hookSpec, mapped map[string]any) (map[string]any, *echo.HTTPError) {
 	input := map[string]any{}
-	for k, v := range s.hook.inputs {
-		if _, ok := s.hook.m.Input[k]; ok {
+	for k, v := range hook.inputs {
+		if _, ok := hook.m.Input[k]; ok {
 			input[k] = v
 		}
 	}
 	for k, v := range mapped {
-		if _, ok := s.hook.m.Input[k]; ok {
+		if _, ok := hook.m.Input[k]; ok {
 			input[k] = v
 		}
 	}
-	for name, spec := range s.hook.m.Input {
+	for name, spec := range hook.m.Input {
 		if spec.Required {
 			if _, ok := input[name]; !ok {
 				return nil, echo.NewHTTPError(http.StatusBadRequest,
@@ -175,10 +219,10 @@ type runRow struct {
 }
 
 type machineTotals struct {
-	Machine            string
-	Runs, Done, Failed int
-	Tokens             int
-	Cost               float64
+	Machine                    string
+	Runs, Done, Failed, Queued int
+	Tokens                     int
+	Cost                       float64
 }
 
 func (s *server) handleRuns(c *echo.Context) error {
@@ -193,7 +237,7 @@ func (s *server) handleRuns(c *echo.Context) error {
 	var rows []runRow
 	var attention []runRow
 	totalsByMachine := map[string]*machineTotals{}
-	anyRunning := false
+	anyActive := false // running or queued -> auto-refresh
 
 	for _, r := range runs {
 		rs := s.fold(ctx, r.ID)
@@ -219,8 +263,11 @@ func (s *server) handleRuns(c *echo.Context) error {
 			t.Done++
 		case journal.StatusFailed:
 			t.Failed++
+		case journal.StatusQueued:
+			t.Queued++
+			anyActive = true
 		case journal.StatusRunning:
-			anyRunning = true
+			anyActive = true
 		}
 
 		if r.Status == journal.StatusParked {
@@ -238,7 +285,7 @@ func (s *server) handleRuns(c *echo.Context) error {
 	sort.Slice(totals, func(i, j int) bool { return totals[i].Machine < totals[j].Machine })
 
 	refresh := 0
-	if anyRunning {
+	if anyActive {
 		refresh = 5
 	}
 	return s.render(c, http.StatusOK, "runs.html", map[string]any{
@@ -355,7 +402,7 @@ func (s *server) handleRun(c *echo.Context) error {
 		hash = hash[:12]
 	}
 	refresh := 0
-	if run.Status == journal.StatusRunning {
+	if run.Status == journal.StatusRunning || run.Status == journal.StatusQueued {
 		refresh = 3
 	}
 
@@ -473,10 +520,11 @@ func machineInfo(run *journal.Run) map[string]stateInfo {
 	return out
 }
 
-// runInputs returns the run's inputs as recorded in run_started.
+// runInputs returns the run's inputs as recorded in run_started, falling back
+// to run_enqueued so a still-queued run (no run_started yet) shows its inputs.
 func runInputs(events []*journal.Event) map[string]any {
 	for _, ev := range events {
-		if ev.Type == journal.RunStarted {
+		if ev.Type == journal.RunStarted || ev.Type == journal.RunEnqueued {
 			if in, ok := ev.Data["input"].(map[string]any); ok {
 				return in
 			}

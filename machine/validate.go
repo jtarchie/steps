@@ -84,6 +84,12 @@ func validateWebhook(m *Machine, fail func(string, ...any)) {
 	if !w.Map.IsFn() {
 		fail("webhook.map must be a function of scope, not a literal value")
 	}
+	if w.MaxInFlight < 0 {
+		fail("webhook.maxInFlight %d must be >= 0 (0 = default)", w.MaxInFlight)
+	}
+	if w.MaxQueued < 0 {
+		fail("webhook.maxQueued %d must be >= 0 (0 = default)", w.MaxQueued)
+	}
 }
 
 // validateNameCollisions checks that inputs and states — the flat scope's

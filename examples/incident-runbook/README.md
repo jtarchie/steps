@@ -53,9 +53,11 @@ webhook: {
 (here `hb_base`). It returns run inputs; only declared `input:` keys pass
 through, and any missing **required** input rejects the POST with `400`. Like
 every other function in a machine, `map` is dry-run at load. `steps serve --hook
-workflow.ts` registers `POST /hooks/honeybadger`; the POST starts a run and
-returns `202` — gates are still answered in the web UI or CLI (webhook
-*resumption* is a later feature).
+workflow.ts` registers `POST /hooks/honeybadger`; the POST **durably queues** a
+run and returns `202` — gates are still answered in the web UI or CLI (webhook
+*resumption* is a later feature). `serve` takes `--hook` more than once to host
+several webhooks at once, each bounded by its own `maxInFlight`/`maxQueued`; see
+[docs/webhook.md](../../docs/webhook.md) for the full trigger + queue reference.
 
 **The payload is the primary source, not a notification.** Honeybadger's webhook
 is [summary-only](https://docs.honeybadger.io/guides/integrations/webhook/) — it

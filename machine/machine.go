@@ -252,7 +252,21 @@ type ActionSpec struct {
 type WebhookSpec struct {
 	Path string // URL slug under /hooks/; defaults to the machine name
 	Map  Dyn    // function of {body, headers, query, ...hook inputs} -> run inputs
+	// MaxInFlight bounds concurrent runs of this hook; 0 = DefaultHookMaxInFlight.
+	// MaxQueued bounds durably-queued runs awaiting a slot; 0 = DefaultHookMaxQueued.
+	// Overflowing MaxQueued rejects the POST with 429.
+	MaxInFlight int
+	MaxQueued   int
 }
+
+const (
+	// DefaultHookMaxInFlight serializes a hook unless it opts up — one run at a
+	// time is the safe default for side-effecting workflows.
+	DefaultHookMaxInFlight = 1
+	// DefaultHookMaxQueued bounds the durable queue so 429 backpressure fires;
+	// an unbounded queue is the footgun this feature removes.
+	DefaultHookMaxQueued = 100
+)
 
 // HumanSpec parks the run until a human resumes it.
 type HumanSpec struct {

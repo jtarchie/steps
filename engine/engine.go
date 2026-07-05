@@ -102,11 +102,21 @@ type pendingResume struct {
 
 // Start validates input, creates the run, and drives it until it finishes or
 // parks.
-func (e *Engine) Start(ctx context.Context, m *machine.Machine, input map[string]any) (*Result, error) {
+// validateRequiredInputs fails if any required machine input is absent — the
+// admission check shared by Start and Enqueue.
+func validateRequiredInputs(m *machine.Machine, input map[string]any) error {
 	for name, spec := range m.Input {
 		if _, ok := input[name]; !ok && spec.Required {
-			return nil, fmt.Errorf("missing required input %q", name)
+			return fmt.Errorf("missing required input %q", name)
 		}
+	}
+	return nil
+}
+
+func (e *Engine) Start(ctx context.Context, m *machine.Machine, input map[string]any) (*Result, error) {
+	err := validateRequiredInputs(m, input)
+	if err != nil {
+		return nil, err
 	}
 
 	runID := newRunID()
@@ -118,7 +128,7 @@ func (e *Engine) Start(ctx context.Context, m *machine.Machine, input map[string
 		Assets:  m.Assets,
 		Status:  journal.StatusRunning,
 	}
-	err := e.Store.CreateRun(ctx, run)
+	err = e.Store.CreateRun(ctx, run)
 	if err != nil {
 		return nil, fmt.Errorf("creating run %s: %w", runID, err)
 	}
@@ -180,6 +190,103 @@ func (e *Engine) Resume(ctx context.Context, m *machine.Machine, runID, event st
 		return nil, fmt.Errorf("updating run %s: %w", runID, err)
 	}
 	return e.loop(ctx, m, runID, rs, inFlight, pending)
+}
+
+// Enqueue durably records a queued run and pins its inputs, returning its ID
+// without running it. A dispatcher later calls StartQueued to execute it. The
+// run row is born StatusQueued and only a run_enqueued event is written — no
+// run_started, so the timeout baseline does not begin until dispatch.
+func (e *Engine) Enqueue(ctx context.Context, m *machine.Machine, input map[string]any, hookPath string) (string, error) {
+	err := validateRequiredInputs(m, input)
+	if err != nil {
+		return "", err
+	}
+	runID := newRunID()
+	run := &journal.Run{
+		ID:           runID,
+		Machine:      m.Name,
+		Hash:         m.Hash,
+		Source:       m.Source,
+		Assets:       m.Assets,
+		Status:       journal.StatusQueued,
+		CurrentState: m.Initial,
+	}
+	err = e.Store.CreateRun(ctx, run)
+	if err != nil {
+		return "", fmt.Errorf("creating queued run %s: %w", runID, err)
+	}
+	inputAny := make(map[string]any, len(input))
+	for k, v := range input {
+		inputAny[k] = v
+	}
+	err = e.append(ctx, runID, journal.RunEnqueued, map[string]any{
+		"machine_hash": m.Hash,
+		"machine":      m.Name,
+		"input":        inputAny,
+		"initial":      m.Initial,
+		"hook_path":    hookPath,
+	})
+	if err != nil {
+		return "", err
+	}
+	return runID, nil
+}
+
+// StartQueued dispatches a previously Enqueue'd run: it folds the pinned
+// inputs, marks the run running, and drives the loop. Appending run_started
+// here (not at enqueue) is what makes queue wait exempt from limits.timeout —
+// the wall-clock baseline is set to dispatch time, mirroring Resume.
+func (e *Engine) StartQueued(ctx context.Context, m *machine.Machine, runID string) (*Result, error) {
+	events, err := e.Store.Events(ctx, runID)
+	if err != nil {
+		return nil, fmt.Errorf("loading journal for run %s: %w", runID, err)
+	}
+	rs := journal.Fold(events)
+	if rs.Finished {
+		return nil, fmt.Errorf("run %s already finished (%s)", runID, rs.Status)
+	}
+	if !rs.Queued {
+		return nil, fmt.Errorf("run %s is not queued", runID)
+	}
+	input := enqueuedInput(events)
+
+	// run_started marks execution begin and re-carries the pinned inputs, so
+	// every existing journal reader (runInputs, the timeline, Fold) is unchanged.
+	inputAny := make(map[string]any, len(input))
+	for k, v := range input {
+		inputAny[k] = v
+	}
+	err = e.append(ctx, runID, journal.RunStarted, map[string]any{
+		"machine_hash": m.Hash,
+		"machine":      m.Name,
+		"input":        inputAny,
+		"initial":      m.Initial,
+	})
+	if err != nil {
+		return nil, err
+	}
+	e.Listener.RunStarted(runID, m.Name, inputAny)
+
+	err = e.Store.UpdateRun(ctx, runID, journal.StatusRunning, m.Initial)
+	if err != nil {
+		return nil, fmt.Errorf("updating run %s: %w", runID, err)
+	}
+	rs.Started = time.Now()
+	rs.Current = m.Initial
+	return e.loop(ctx, m, runID, rs, false, nil)
+}
+
+// enqueuedInput reads the pinned inputs from a run's run_enqueued event.
+func enqueuedInput(events []*journal.Event) map[string]any {
+	for _, ev := range events {
+		if ev.Type == journal.RunEnqueued {
+			if in, ok := ev.Data["input"].(map[string]any); ok {
+				return in
+			}
+			return nil
+		}
+	}
+	return nil
 }
 
 // resolveParkedResume validates and consumes a parked human gate's resume.

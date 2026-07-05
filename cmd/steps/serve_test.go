@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/labstack/echo/v5"
+
 	"github.com/jtarchie/steps/engine"
 	"github.com/jtarchie/steps/journal"
 	"github.com/jtarchie/steps/machine"
@@ -76,7 +78,7 @@ critique:
 
 func TestServeRunsList(t *testing.T) {
 	s, id, _, _ := parkedRun(t)
-	e := newServer(s.store, s.eng, nil)
+	e := newServer(t.Context(), s.store, s.eng, nil, 0)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/runs", nil)
 	rec := httptest.NewRecorder()
@@ -95,7 +97,7 @@ func TestServeRunsList(t *testing.T) {
 
 func TestServeRunDetailShowsGateForm(t *testing.T) {
 	s, id, _, _ := parkedRun(t)
-	e := newServer(s.store, s.eng, nil)
+	e := newServer(t.Context(), s.store, s.eng, nil, 0)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/runs/"+id, nil)
 	rec := httptest.NewRecorder()
@@ -120,7 +122,7 @@ func TestServeRunDetailShowsGateForm(t *testing.T) {
 
 func TestServeRunDetailTimeline(t *testing.T) {
 	s, id, _, _ := parkedRun(t)
-	e := newServer(s.store, s.eng, nil)
+	e := newServer(t.Context(), s.store, s.eng, nil, 0)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/runs/"+id, nil)
 	rec := httptest.NewRecorder()
@@ -159,7 +161,7 @@ func TestServeDoneRunArtifacts(t *testing.T) {
 		t.Fatalf("status = %s, want done after approving", run.Status)
 	}
 
-	e := newServer(s.store, s.eng, nil)
+	e := newServer(t.Context(), s.store, s.eng, nil, 0)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/runs/"+id, nil)
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
@@ -179,7 +181,7 @@ func TestServeDoneRunArtifacts(t *testing.T) {
 
 func TestServeResumeAdvancesRun(t *testing.T) {
 	s, id, eng, _ := parkedRun(t)
-	e := newServer(s.store, s.eng, nil)
+	e := newServer(t.Context(), s.store, s.eng, nil, 0)
 
 	form := url.Values{"event": {"approved"}, "note": {"ship it"}}
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/runs/"+id+"/resume", strings.NewReader(form.Encode()))
@@ -218,7 +220,7 @@ func TestServeResumeRejectsNotParked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := newServer(s.store, s.eng, nil)
+	e := newServer(t.Context(), s.store, s.eng, nil, 0)
 
 	form := url.Values{"event": {"approved"}}
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/runs/"+id+"/resume", strings.NewReader(form.Encode()))
@@ -259,7 +261,7 @@ export default {
 	eng := engine.New(store, provider.NewRegistry(), toolreg.New(), engine.NopListener{})
 
 	hook := &hookSpec{m: m, inputs: map[string]any{"region": "us-east-1"}, token: "sekrit"}
-	e := newServer(store, eng, hook)
+	e := newServer(t.Context(), store, eng, map[string]*hookSpec{m.Webhook.Path: hook}, 1)
 
 	post := func(target, jsonBody string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, target, strings.NewReader(jsonBody))
@@ -320,7 +322,8 @@ export default {
 	}
 	t.Cleanup(func() { store.Close() })
 	eng := engine.New(store, provider.NewRegistry(), toolreg.New(), engine.NopListener{})
-	e := newServer(store, eng, &hookSpec{m: m, inputs: map[string]any{}})
+	hook := &hookSpec{m: m, inputs: map[string]any{}}
+	e := newServer(t.Context(), store, eng, map[string]*hookSpec{m.Webhook.Path: hook}, 1)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/hooks/hb",
 		strings.NewReader(`{"message": "boom"}`))
@@ -375,7 +378,7 @@ func TestWebhookTriggersIncidentRunbook(t *testing.T) {
 		},
 		token: "sekrit",
 	}
-	e := newServer(store, eng, hook)
+	e := newServer(t.Context(), store, eng, map[string]*hookSpec{m.Webhook.Path: hook}, 1)
 
 	payload, err := os.ReadFile(filepath.Join(root, "examples", "incident-runbook", "fixtures", "webhook.json"))
 	if err != nil {
@@ -452,6 +455,196 @@ func waitForRunStatus(t *testing.T, store journal.Store, runID, want string) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("run status = %s, want %s", run.Status, want)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestParseHookTokens(t *testing.T) {
+	tokens, fallback := parseHookTokens([]string{"honeybadger=s1", "github=s2", "bare-fallback"})
+	if tokens["honeybadger"] != "s1" || tokens["github"] != "s2" {
+		t.Errorf("per-path tokens = %v, want honeybadger=s1 github=s2", tokens)
+	}
+	if fallback != "bare-fallback" {
+		t.Errorf("fallback = %q, want bare-fallback", fallback)
+	}
+	// A secret may itself contain '='; only the first '=' splits.
+	tokens, _ = parseHookTokens([]string{"hb=a=b=c"})
+	if tokens["hb"] != "a=b=c" {
+		t.Errorf("token with '=' = %q, want a=b=c", tokens["hb"])
+	}
+}
+
+// writeHook builds a mock write-action machine keyed by webhook path.
+func writeHook(t *testing.T, name, path, outFile string, token string) *hookSpec {
+	t.Helper()
+	wf := `
+const work = { write: "` + outFile + `", content: ({ msg }) => msg };
+export default {
+  name: "` + name + `",
+  model: "mock",
+  input: { msg: { type: "string", required: true } },
+  states: { work },
+  webhook: { path: "` + path + `", map: ({ body }) => ({ msg: "` + name + `:" + body.v }) },
+};`
+	m, err := machine.Parse([]byte(wf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &hookSpec{m: m, inputs: map[string]any{}, token: token}
+}
+
+// TestHookMultiRouting registers two hooks and asserts POSTs route to the right
+// machine by path, with per-hook token enforcement.
+func TestHookMultiRouting(t *testing.T) {
+	t.Chdir(t.TempDir())
+	store, err := journal.OpenSQLite(filepath.Join(t.TempDir(), "journal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	eng := engine.New(store, provider.NewRegistry(), toolreg.New(), engine.NopListener{})
+
+	hookA := writeHook(t, "hooked-a", "a", "out/a.txt", "tok-a")
+	hookB := writeHook(t, "hooked-b", "b", "out/b.txt", "") // b is unauthenticated
+	hooks := map[string]*hookSpec{"a": hookA, "b": hookB}
+	e := newServer(t.Context(), store, eng, hooks, 2)
+
+	post := func(target, body string) int {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, target, strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := post("/hooks/a", `{"v": "1"}`); code != http.StatusUnauthorized {
+		t.Fatalf("hook a without token = %d, want 401", code)
+	}
+	if code := post("/hooks/zzz?token=whatever", `{"v": "1"}`); code != http.StatusNotFound {
+		t.Fatalf("unknown path = %d, want 404", code)
+	}
+	if code := post("/hooks/a?token=tok-a", `{"v": "1"}`); code != http.StatusAccepted {
+		t.Fatalf("hook a = %d, want 202", code)
+	}
+	if code := post("/hooks/b", `{"v": "2"}`); code != http.StatusAccepted {
+		t.Fatalf("hook b (no token) = %d, want 202", code)
+	}
+
+	waitForNRuns(t, store, journal.StatusDone, 2)
+	byMachine := map[string]bool{}
+	runs, _ := store.ListRuns(context.Background())
+	for _, r := range runs {
+		byMachine[r.Machine] = true
+	}
+	if !byMachine["hooked-a"] || !byMachine["hooked-b"] {
+		t.Errorf("machines = %v, want both hooked-a and hooked-b", byMachine)
+	}
+	a, _ := os.ReadFile("out/a.txt")
+	b, _ := os.ReadFile("out/b.txt")
+	if string(a) != "hooked-a:1" || string(b) != "hooked-b:2" {
+		t.Errorf("artifacts a=%q b=%q, want payloads routed to their own machine", a, b)
+	}
+}
+
+// TestHookQueueFull429 fills a hook's durable queue (no dispatcher draining) and
+// asserts the overflowing POST is rejected with 429 — isolating the admission
+// arithmetic from dispatch timing.
+func TestHookQueueFull429(t *testing.T) {
+	t.Chdir(t.TempDir())
+	wf := `
+const work = { write: "out/x.txt", content: ({ msg }) => msg };
+export default {
+  name: "capped",
+  model: "mock",
+  input: { msg: { type: "string", required: true } },
+  states: { work },
+  webhook: { path: "hb", map: ({ body }) => ({ msg: body.v }), maxQueued: 2 },
+};`
+	m, err := machine.Parse([]byte(wf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := journal.OpenSQLite(filepath.Join(t.TempDir(), "journal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	eng := engine.New(store, provider.NewRegistry(), toolreg.New(), engine.NopListener{})
+
+	// Bare server: no dispatcher, so the queue never drains between POSTs.
+	s := &server{store: store, eng: eng, hooksByPath: map[string]*hookSpec{"hb": {m: m, inputs: map[string]any{}}}}
+	e := echo.New()
+	e.POST("/hooks/:path", s.handleHook)
+
+	post := func() int {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/hooks/hb", strings.NewReader(`{"v": "x"}`))
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := post(); code != http.StatusAccepted { // queue -> 1
+		t.Fatalf("post 1 = %d, want 202", code)
+	}
+	if code := post(); code != http.StatusAccepted { // queue -> 2 (== maxQueued)
+		t.Fatalf("post 2 = %d, want 202", code)
+	}
+	if code := post(); code != http.StatusTooManyRequests { // full -> 429
+		t.Fatalf("post 3 = %d, want 429", code)
+	}
+}
+
+// TestHookDurableQueueDrain proves queued runs survive a "restart": rows are
+// enqueued with no server running, then a fresh newServer's startup scan drains
+// them to completion.
+func TestHookDurableQueueDrain(t *testing.T) {
+	t.Chdir(t.TempDir())
+	store, err := journal.OpenSQLite(filepath.Join(t.TempDir(), "journal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	eng := engine.New(store, provider.NewRegistry(), toolreg.New(), engine.NopListener{})
+
+	hook := writeHook(t, "recover", "cr", "out/cr.txt", "")
+
+	// Pre-crash: three durably-queued runs, no dispatcher yet.
+	for i := range 3 {
+		_, err := eng.Enqueue(context.Background(), hook.m, map[string]any{"msg": "run" + string(rune('0'+i))}, "cr")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	queued, _ := store.ListRunsByStatus(context.Background(), journal.StatusQueued)
+	if len(queued) != 3 {
+		t.Fatalf("queued = %d, want 3 before restart", len(queued))
+	}
+
+	// "Restart": a fresh server over the same journal. Its dispatcher's first
+	// drain (global cap 1 = strictly serial) picks up all queued rows.
+	newServer(t.Context(), store, eng, map[string]*hookSpec{"cr": hook}, 1)
+
+	waitForNRuns(t, store, journal.StatusDone, 3)
+	left, _ := store.ListRunsByStatus(context.Background(), journal.StatusQueued)
+	if len(left) != 0 {
+		t.Errorf("still queued = %d, want 0 after drain", len(left))
+	}
+}
+
+// waitForNRuns polls until at least n runs reach the wanted status.
+func waitForNRuns(t *testing.T, store journal.Store, want string, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		runs, err := store.ListRunsByStatus(context.Background(), want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(runs) >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d runs reached %s, want %d", len(runs), want, n)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

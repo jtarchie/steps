@@ -15,9 +15,13 @@ import (
 // SQLiteStore is the default durable Store.
 type SQLiteStore struct {
 	db *sql.DB
-	// appendMu serializes Append: seq is MAX(seq)+1 per run, and concurrent
-	// foreach items journal their retries in parallel.
-	appendMu sync.Mutex
+	// writeMu serializes every in-process write (Append, CreateRun, UpdateRun,
+	// MemoPut). SQLite allows only one writer anyway; serializing here also
+	// closes the read-then-write window inside Append (SELECT MAX(seq) then
+	// INSERT) that otherwise races a concurrent UpdateRun into
+	// SQLITE_BUSY_SNAPSHOT once multiple runs execute at once. Reads stay
+	// lock-free under WAL; cross-process writers still rely on busy_timeout.
+	writeMu sync.Mutex
 }
 
 // OpenSQLite opens (and migrates) the journal database at path.
@@ -89,6 +93,8 @@ func (s *SQLiteStore) MemoGet(ctx context.Context, key string) (map[string]any, 
 
 // MemoPut caches an output by input hash.
 func (s *SQLiteStore) MemoPut(ctx context.Context, key string, output map[string]any) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	raw, err := json.Marshal(output)
 	if err != nil {
 		return fmt.Errorf("encoding memo output: %w", err)
@@ -104,6 +110,8 @@ func (s *SQLiteStore) MemoPut(ctx context.Context, key string, output map[string
 
 // CreateRun inserts a new run row.
 func (s *SQLiteStore) CreateRun(ctx context.Context, run *Run) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	now := time.Now().UnixMilli()
 	assets, err := json.Marshal(run.Assets)
 	if err != nil {
@@ -121,6 +129,8 @@ func (s *SQLiteStore) CreateRun(ctx context.Context, run *Run) error {
 
 // UpdateRun updates status and current state.
 func (s *SQLiteStore) UpdateRun(ctx context.Context, id, status, currentState string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE runs SET status = ?, current_state = ?, updated = ? WHERE id = ?`,
 		status, currentState, time.Now().UnixMilli(), id)
@@ -164,6 +174,30 @@ func (s *SQLiteStore) ListRuns(ctx context.Context) ([]*Run, error) {
 	return out, nil
 }
 
+// ListRunsByStatus returns runs with the given status, oldest first (FIFO) so
+// the dispatcher drains the queue in enqueue order.
+func (s *SQLiteStore) ListRunsByStatus(ctx context.Context, status string) ([]*Run, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, machine, hash, source, assets, status, current_state, created, updated FROM runs WHERE status = ? ORDER BY created ASC`, status)
+	if err != nil {
+		return nil, fmt.Errorf("listing runs by status %q: %w", status, err)
+	}
+	defer rows.Close()
+	var out []*Run
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("iterating runs by status %q: %w", status, err)
+	}
+	return out, nil
+}
+
 type scannable interface{ Scan(dest ...any) error }
 
 func scanRun(row scannable) (*Run, error) {
@@ -188,8 +222,8 @@ func scanRun(row scannable) (*Run, error) {
 
 // Append writes the event with the next sequence number for its run.
 func (s *SQLiteStore) Append(ctx context.Context, ev *Event) (int, error) {
-	s.appendMu.Lock()
-	defer s.appendMu.Unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	data, err := json.Marshal(ev.Data)
 	if err != nil {
 		return 0, fmt.Errorf("encoding event data: %w", err)

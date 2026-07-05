@@ -12,6 +12,7 @@ type RunState struct {
 	Current     string               // current state name
 	Started     time.Time            // run_started time (run timeout baseline)
 	Parked      *ParkInfo            // non-nil while parked at a human gate
+	Queued      bool                 // enqueued but not yet dispatched (only a run_enqueued event)
 	Finished    bool                 // run reached a terminal
 	Status      string               // final status when Finished
 	Convos      map[string][]Message // last execution's conversation per state
@@ -82,6 +83,8 @@ func Fold(events []*Event) *RunState {
 		// (only handler_finished/transition_fired do), so they leave RunState
 		// untouched — resume re-runs the handler from InFlight, as it should.
 		switch ev.Type {
+		case RunEnqueued:
+			rs.applyRunEnqueued(ev)
 		case RunStarted:
 			rs.applyRunStarted(ev)
 		case StateEntered:
@@ -101,7 +104,23 @@ func Fold(events []*Event) *RunState {
 	return rs
 }
 
+// applyRunEnqueued seeds the run's inputs and initial state from a durable
+// enqueue, but leaves Started zero: the timeout baseline begins at dispatch
+// (applyRunStarted), so queue wait does not count against limits.timeout.
+func (rs *RunState) applyRunEnqueued(ev *Event) {
+	rs.Queued = true
+	if input, ok := ev.Data["input"].(map[string]any); ok {
+		for k, v := range input {
+			rs.Ctx[k] = v
+		}
+	}
+	if initial, ok := ev.Data["initial"].(string); ok {
+		rs.Current = initial
+	}
+}
+
 func (rs *RunState) applyRunStarted(ev *Event) {
+	rs.Queued = false
 	rs.Started = ev.Time
 	if input, ok := ev.Data["input"].(map[string]any); ok {
 		for k, v := range input {

@@ -14,6 +14,11 @@ import (
 type EventType string
 
 const (
+	// RunEnqueued records a durably-queued run: the inputs are pinned so a
+	// dispatcher can start it later (even after a serve restart), but the loop
+	// has not run. RunStarted is appended at dispatch — never here — so the
+	// run's timeout baseline begins when it executes, not when it queues.
+	RunEnqueued     EventType = "run_enqueued"
 	RunStarted      EventType = "run_started"
 	StateEntered    EventType = "state_entered"
 	HandlerFinished EventType = "handler_finished"
@@ -43,7 +48,7 @@ type Run struct {
 	// files. Resume re-evaluates these bytes — never the filesystem.
 	Source       []byte
 	Assets       map[string]string
-	Status       string // running | parked | done | failed
+	Status       string // queued | running | parked | done | failed
 	CurrentState string
 	Created      time.Time
 	Updated      time.Time
@@ -51,6 +56,9 @@ type Run struct {
 
 // Run statuses.
 const (
+	// StatusQueued: durably enqueued, awaiting a dispatch slot. The run row
+	// and its inputs exist, but the loop has not run.
+	StatusQueued  = "queued"
 	StatusRunning = "running"
 	StatusParked  = "parked"
 	StatusDone    = "done"
@@ -63,6 +71,9 @@ type Store interface {
 	UpdateRun(ctx context.Context, id, status, currentState string) error
 	GetRun(ctx context.Context, id string) (*Run, error)
 	ListRuns(ctx context.Context) ([]*Run, error)
+	// ListRunsByStatus returns runs with the given status, oldest first (FIFO)
+	// — the dispatcher drains queued runs in enqueue order.
+	ListRunsByStatus(ctx context.Context, status string) ([]*Run, error)
 	// Append assigns and returns the next sequence number.
 	Append(ctx context.Context, ev *Event) (int, error)
 	Events(ctx context.Context, runID string) ([]*Event, error)

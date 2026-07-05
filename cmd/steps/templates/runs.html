@@ -18,6 +18,7 @@
 <div class="chips">
   {{$f := .Filter}}
   <a href="/runs" {{if eq $f ""}}class="on"{{end}}>all</a>
+  <a href="/runs?status=queued" {{if eq $f "queued"}}class="on"{{end}}>queued</a>
   <a href="/runs?status=running" {{if eq $f "running"}}class="on"{{end}}>running</a>
   <a href="/runs?status=parked" {{if eq $f "parked"}}class="on"{{end}}>parked</a>
   <a href="/runs?status=done" {{if eq $f "done"}}class="on"{{end}}>done</a>
@@ -49,11 +50,12 @@
 <h2>Per machine</h2>
 <div class="scroll">
 <table>
-  <tr><th>machine</th><th class="num">runs</th><th class="num">done</th><th class="num">failed</th><th class="num">tokens</th><th class="num">cost</th></tr>
+  <tr><th>machine</th><th class="num">runs</th><th class="num">queued</th><th class="num">done</th><th class="num">failed</th><th class="num">tokens</th><th class="num">cost</th></tr>
   {{range .Totals}}
   <tr>
     <td>{{.Machine}}</td>
     <td class="num">{{.Runs}}</td>
+    <td class="num">{{if .Queued}}{{.Queued}}{{end}}</td>
     <td class="num">{{.Done}}</td>
     <td class="num">{{.Failed}}</td>
     <td class="num">{{.Tokens | tokens}}</td>

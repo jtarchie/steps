@@ -10,13 +10,13 @@
 :root {
   --bg: #ffffff; --fg: #1a1d21; --muted: #6a737d; --line: #e3e6e9;
   --card: #f6f8fa; --accent: #0b62d6;
-  --running: #0b62d6; --parked: #b98300; --done: #1a7f37; --failed: #c62828;
+  --queued: #6a737d; --running: #0b62d6; --parked: #b98300; --done: #1a7f37; --failed: #c62828;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #14171a; --fg: #e6e9ec; --muted: #9aa4ae; --line: #2b3138;
     --card: #1c2126; --accent: #5aa2ff;
-    --running: #5aa2ff; --parked: #e0b341; --done: #4bc26b; --failed: #ef6a5f;
+    --queued: #9aa4ae; --running: #5aa2ff; --parked: #e0b341; --done: #4bc26b; --failed: #ef6a5f;
   }
 }
 * { box-sizing: border-box; }
@@ -44,6 +44,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   display: inline-block; padding: 0 .5em; border-radius: 99px;
   font-size: .78rem; font-weight: 600; line-height: 1.6; color: var(--bg);
 }
+.badge.queued { background: var(--queued); }
 .badge.running { background: var(--running); }
 .badge.parked { background: var(--parked); }
 .badge.done { background: var(--done); }

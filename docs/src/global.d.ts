@@ -175,8 +175,12 @@ interface Machine {
   initial?: string;
   /** Name registration: the shorthand keys name your state consts. */
   states: Record<string, State | string | Fn<string>>;
-  /** Inbound trigger: `steps serve --hook` maps a webhook payload to run inputs. */
-  webhook?: { path?: string; map: (scope: any) => Record<string, any> };
+  /**
+   * Inbound trigger: `steps serve --hook` maps a webhook payload to run inputs.
+   * maxInFlight bounds concurrent runs of this hook (default 1); maxQueued
+   * bounds durably-queued runs awaiting a slot (default 100) — overflow → 429.
+   */
+  webhook?: { path?: string; map: (scope: any) => Record<string, any>; maxInFlight?: number; maxQueued?: number };
   /** The whole topology in one expression. Omit for linear declaration order. */
   flow?: FlowNode;
 }
