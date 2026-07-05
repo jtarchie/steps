@@ -105,6 +105,39 @@ ol.timeline > li { position: relative; margin: .1rem 0; padding: .15rem 0 .15rem
 .tl-fail { color: var(--failed); font-size: .85rem; margin: .2rem 0 .2rem .3rem; }
 .tl-wrote { font-size: .84rem; margin: .15rem 0 .15rem .3rem; }
 pre.msg { margin: .3rem 0; }
+/* State-machine diagram: an inline SVG whose colors ride the same status vars
+   as the badges, plus a pan/zoom viewport and a hover panel. */
+.graph-wrap { position: relative; border: 1px solid var(--line); border-radius: 8px; background: var(--card); overflow: hidden; margin: .8rem 0; }
+.graph-viewport { overflow: hidden; height: 440px; cursor: grab; touch-action: none; }
+.graph-viewport.dragging { cursor: grabbing; }
+.graph-svg { display: block; max-width: 100%; height: auto; font: 12px ui-monospace, Menlo, monospace; user-select: none; }
+.graph-svg .node rect { fill: var(--bg); stroke: var(--muted); stroke-width: 1.5; }
+.graph-svg .node text { fill: var(--fg); }
+.graph-svg .node.initial rect { stroke: var(--accent); stroke-width: 2; }
+.graph-svg .node.kind-human rect { stroke: var(--parked); }
+.graph-svg .node.kind-terminal rect { fill: var(--card); }
+.graph-svg .node.kind-terminal text { fill: var(--done); }
+.graph-svg .node.kind-terminal.status-failed text { fill: var(--failed); }
+.graph-svg .node.failed rect { stroke: var(--failed); stroke-width: 2; }
+.graph-svg .node.current rect { stroke: var(--running); stroke-width: 3; }
+.graph-svg .node.parked rect { stroke: var(--parked); stroke-width: 3; }
+.graph-svg.has-run .node:not(.visited):not(.current) { opacity: .4; }
+.graph-svg .edge path { stroke: var(--muted); stroke-width: 1.5; }
+.graph-svg .edge.edge-catch path, .graph-svg .edge.edge-timeout path { stroke-dasharray: 5 3; }
+.graph-svg .edge.fired path { stroke: var(--running); stroke-width: 2.5; }
+.graph-svg .edge-label { fill: var(--muted); paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
+.graph-svg .gv-arrowhead { fill: var(--muted); }
+.graph-svg .gv-arrowhead-fired { fill: var(--running); }
+.graph-hint { position: absolute; top: .4rem; right: .5rem; z-index: 2; font-size: .72rem; color: var(--muted); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: .05rem .45rem; opacity: .85; pointer-events: none; }
+.graph-panel { position: absolute; z-index: 3; pointer-events: none; display: none; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .35rem .55rem; font-size: .8rem; box-shadow: 0 2px 10px rgba(0,0,0,.18); max-width: 22rem; }
+.graph-panel .muted { color: var(--muted); }
+.graph-legend { display: flex; flex-wrap: wrap; gap: .3rem 1rem; padding: .45rem .7rem; font-size: .76rem; color: var(--muted); border-top: 1px solid var(--line); }
+.graph-legend span { display: inline-flex; align-items: center; gap: .35rem; }
+.graph-legend i { width: .8rem; height: .8rem; border-radius: 3px; border: 2px solid var(--muted); box-sizing: border-box; }
+.graph-legend i.current { border-color: var(--running); }
+.graph-legend i.visited { border-color: var(--line); background: var(--card); }
+.graph-legend i.parked { border-color: var(--parked); }
+.graph-legend i.failed { border-color: var(--failed); }
 </style>
 </head>
 <body>

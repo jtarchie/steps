@@ -390,7 +390,14 @@ func (s *server) handleRun(c *echo.Context) error {
 	}
 	rs := journal.Fold(events)
 
-	minfo := machineInfo(run)
+	// Parse the pinned machine once: it labels the timeline (kind/model) and
+	// draws the topology diagram. A parse failure is non-fatal — the page still
+	// renders, just without those.
+	m, merr := loadPinnedMachine(run)
+	minfo := map[string]stateInfo{}
+	if merr == nil {
+		minfo = stateInfoFrom(m)
+	}
 	rows := execRows(events)
 	failures := failureRows(events)
 	artifacts := artifactRows(rs)
@@ -418,6 +425,9 @@ func (s *server) handleRun(c *echo.Context) error {
 		"Artifacts":   artifacts,
 		"Timeline":    timeline,
 		"Inputs":      inputs,
+	}
+	if merr == nil {
+		data["Graph"] = renderGraphSVG(m.Graph(), buildRunOverlay(run, rs, events))
 	}
 	if p := rs.Parked; p != nil && run.Status == journal.StatusParked {
 		data["Parked"] = p
@@ -501,21 +511,70 @@ func failureRows(events []*journal.Event) []failureRow {
 	return out
 }
 
-// machineInfo recovers each state's kind and model from the pinned machine so
-// the timeline can label steps. A parse failure is non-fatal — the page still
-// renders, just without kind/model labels.
-func machineInfo(run *journal.Run) map[string]stateInfo {
-	out := map[string]stateInfo{}
+// loadPinnedMachine re-evaluates the exact machine a run started with, from the
+// source + assets pinned in its journal. Shared by the timeline labels and the
+// topology diagram so the page parses it once.
+func loadPinnedMachine(run *journal.Run) (*machine.Machine, error) {
 	m, err := machine.ParseWithAssets(run.Source, run.Assets, parseOpts()...)
 	if err != nil {
-		return out
+		return nil, fmt.Errorf("re-evaluating pinned machine: %w", err)
 	}
+	return m, nil
+}
+
+// stateInfoFrom recovers each state's kind and model so the timeline can label
+// steps.
+func stateInfoFrom(m *machine.Machine) map[string]stateInfo {
+	out := map[string]stateInfo{}
 	for _, st := range m.States {
 		si := stateInfo{Kind: st.HandlerKind()}
 		if st.Agent != nil {
 			si.Model = st.Agent.Model.Display()
 		}
 		out[st.Name] = si
+	}
+	return out
+}
+
+// buildRunOverlay projects a run's journal onto the topology: which states were
+// visited (and how often), which failed, which edges fired, and where the run
+// currently sits. Distill hops keep their lowered names, so a machine that uses
+// distill may not light its collapsed edge — an accepted v1 imprecision.
+func buildRunOverlay(run *journal.Run, rs *journal.RunState, events []*journal.Event) RunOverlay {
+	return RunOverlay{
+		Visits:  rs.Visits,
+		Failed:  failedSet(events),
+		Fired:   firedEdges(events),
+		Current: run.CurrentState,
+		Parked:  run.Status == journal.StatusParked,
+		Status:  run.Status,
+	}
+}
+
+// failedSet is the set of states that recorded a handler_failed.
+func failedSet(events []*journal.Event) map[string]bool {
+	out := map[string]bool{}
+	for _, ev := range events {
+		if ev.Type == journal.HandlerFailed {
+			if s, _ := ev.Data["state"].(string); s != "" {
+				out[s] = true
+			}
+		}
+	}
+	return out
+}
+
+// firedEdges is the set of {from,to} transitions the run actually took.
+func firedEdges(events []*journal.Event) map[[2]string]bool {
+	out := map[[2]string]bool{}
+	for _, ev := range events {
+		if ev.Type == journal.TransitionFired {
+			from, _ := ev.Data["from"].(string)
+			to, _ := ev.Data["to"].(string)
+			if from != "" && to != "" {
+				out[[2]string{from, to}] = true
+			}
+		}
 	}
 	return out
 }

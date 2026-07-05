@@ -53,6 +53,24 @@
 </div>
 {{end}}
 
+{{if .Graph}}
+<h2>Machine</h2>
+<div class="graph-wrap" id="graph">
+  <div class="graph-hint">drag to pan · scroll to zoom · click a state to jump</div>
+  <div class="graph-viewport" id="graph-viewport">
+    {{.Graph}}
+  </div>
+  <div class="graph-panel" id="graph-panel"></div>
+  <div class="graph-legend">
+    <span><i class="current"></i>current</span>
+    <span><i class="visited"></i>visited</span>
+    <span><i class="parked"></i>parked</span>
+    <span><i class="failed"></i>failed</span>
+    <span class="muted">solid = transition · dashed = catch/timeout · bold = fired</span>
+  </div>
+</div>
+{{end}}
+
 <h2>Executions</h2>
 <div class="scroll">
 <table>
@@ -142,6 +160,88 @@
   {{end}}
   {{end}}
 </ol>
+{{end}}
+
+{{if .Graph}}
+<script>
+(function () {
+  var wrap = document.getElementById('graph');
+  if (!wrap) return;
+  var vp = document.getElementById('graph-viewport');
+  var panel = document.getElementById('graph-panel');
+  var svg = vp && vp.querySelector('svg');
+  if (!svg) return;
+
+  // Pan/zoom by transforming the SVG inside a fixed viewport window.
+  var scale = 1, tx = 0, ty = 0, dragging = false, ox = 0, oy = 0;
+  function apply() {
+    svg.style.transformOrigin = '0 0';
+    svg.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
+  }
+  vp.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    var r = vp.getBoundingClientRect();
+    var mx = e.clientX - r.left, my = e.clientY - r.top;
+    var ns = Math.min(4, Math.max(0.3, scale * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
+    tx = mx - (mx - tx) * (ns / scale);
+    ty = my - (my - ty) * (ns / scale);
+    scale = ns;
+    apply();
+  }, { passive: false });
+  vp.addEventListener('pointerdown', function (e) {
+    dragging = true; ox = e.clientX - tx; oy = e.clientY - ty;
+    vp.classList.add('dragging');
+    if (vp.setPointerCapture) vp.setPointerCapture(e.pointerId);
+  });
+  vp.addEventListener('pointermove', function (e) {
+    if (dragging) { tx = e.clientX - ox; ty = e.clientY - oy; apply(); }
+  });
+  function endDrag() { dragging = false; vp.classList.remove('dragging'); }
+  vp.addEventListener('pointerup', endDrag);
+  vp.addEventListener('pointercancel', endDrag);
+  vp.addEventListener('pointerleave', endDrag);
+
+  // Hover panel built with textContent — never innerHTML, since labels/models
+  // are arbitrary machine source.
+  function kv(label, val) {
+    var d = document.createElement('div');
+    var s = document.createElement('span'); s.className = 'muted'; s.textContent = label + ' ';
+    d.appendChild(s); d.appendChild(document.createTextNode(val));
+    return d;
+  }
+  svg.querySelectorAll('.node').forEach(function (g) {
+    g.style.cursor = 'pointer';
+    g.addEventListener('mouseenter', function () {
+      var d = g.dataset;
+      panel.textContent = '';
+      var head = document.createElement('div');
+      var b = document.createElement('b'); b.textContent = d.name; head.appendChild(b);
+      var k = document.createElement('span'); k.className = 'muted'; k.textContent = ' ' + d.kind;
+      head.appendChild(k);
+      panel.appendChild(head);
+      if (d.model) panel.appendChild(kv('model', d.model));
+      panel.appendChild(kv('state', d.status));
+      panel.style.display = 'block';
+    });
+    g.addEventListener('mousemove', function (e) {
+      var r = wrap.getBoundingClientRect();
+      panel.style.left = (e.clientX - r.left + 14) + 'px';
+      panel.style.top = (e.clientY - r.top + 14) + 'px';
+    });
+    g.addEventListener('mouseleave', function () { panel.style.display = 'none'; });
+    g.addEventListener('click', function () {
+      var name = g.dataset.name;
+      var codes = document.querySelectorAll('ol.timeline code');
+      for (var i = 0; i < codes.length; i++) {
+        if (codes[i].textContent === name) {
+          codes[i].scrollIntoView({ behavior: 'smooth', block: 'center' });
+          break;
+        }
+      }
+    });
+  });
+})();
+</script>
 {{end}}
 
 {{template "page_foot"}}

@@ -146,6 +146,35 @@ func TestServeRunDetailTimeline(t *testing.T) {
 	}
 }
 
+func TestServeRunDetailGraph(t *testing.T) {
+	s, id, _, _ := parkedRun(t)
+	e := newServer(t.Context(), s.store, s.eng, nil, 0)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/runs/"+id, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /runs/%s = %d, want 200", id, rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"<h2>Machine</h2>",          // the diagram section renders
+		"<svg",                      // as inline SVG
+		"graph-svg has-run",         // with this run overlaid
+		`data-name="escalate"`,      // the gate state is a node
+		`data-name="critique"`,      // the judge state is a node
+		" current",                  // the parked gate is marked current
+		" parked",                   // and parked
+		" fired",                    // at least one traversed edge is emphasized
+		"drag to pan",               // the pan/zoom affordance is wired
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("run detail graph missing %q", want)
+		}
+	}
+}
+
 func TestServeDoneRunArtifacts(t *testing.T) {
 	s, id, eng, m := parkedRun(t)
 	// Approve the gate directly to completion, then render the finished run.
