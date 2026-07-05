@@ -318,7 +318,7 @@ func stringSlice(v goja.Value) []string {
 // (multi-select — one event, selection in output).
 func (l *loader) choices(v goja.Value) (*ChoiceSpec, error) {
 	if !defined(v) {
-		return nil, nil
+		return nil, nil //nolint:nilnil // no choices: declared is a valid absence, not an error
 	}
 	o := l.obj(v)
 	if o == nil {

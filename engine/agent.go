@@ -181,6 +181,8 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 	usage := &journal.Usage{}
 	turns := 0
 	maxTurns := spec.MaxTurns
+	// before/after: (nil, nil) is the ADK convention for "no override, proceed
+	// normally" — it is not this codebase's choice of signature.
 	before := func(cctx adkagent.CallbackContext, req *adkmodel.LLMRequest) (*adkmodel.LLMResponse, error) {
 		turns++
 		if turns > maxTurns {
@@ -189,14 +191,14 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 				Msg:   fmt.Sprintf("agent exceeded max_turns %d", maxTurns),
 			}
 		}
-		return nil, nil
+		return nil, nil //nolint:nilnil
 	}
 	after := func(cctx adkagent.CallbackContext, resp *adkmodel.LLMResponse, respErr error) (*adkmodel.LLMResponse, error) {
 		if resp != nil && resp.UsageMetadata != nil {
 			usage.InputTokens += int(resp.UsageMetadata.PromptTokenCount)
 			usage.OutputTokens += int(resp.UsageMetadata.CandidatesTokenCount)
 		}
-		return nil, nil
+		return nil, nil //nolint:nilnil
 	}
 
 	tools, beforeTool, afterTool, err := e.buildAgentTools(st, rs, &turns, data) //nolint:contextcheck // its tool closures run later against the ADK runner's own per-call ToolContext, not a context available at build time
@@ -642,10 +644,12 @@ func (e *Engine) buildAgentTools(st *machine.State, rs *journal.RunState, turns 
 		tools = append(tools, t)
 	}
 
+	// beforeTool/afterTool: (nil, nil) is the ADK convention for "no override,
+	// proceed normally" — it is not this codebase's choice of signature.
 	beforeTool := func(cctx adkagent.ToolContext, t adktool.Tool, args map[string]any) (map[string]any, error) {
 		ref, ok := byADKName[t.Name()]
 		if !ok {
-			return nil, nil
+			return nil, nil //nolint:nilnil
 		}
 		e.Listener.ToolCalled(st.Name, ref.Name, args)
 
@@ -684,14 +688,14 @@ func (e *Engine) buildAgentTools(st *machine.State, rs *journal.RunState, turns 
 			}
 		}
 		calls[ref.Name]++
-		return nil, nil
+		return nil, nil //nolint:nilnil
 	}
 
 	afterTool := func(cctx adkagent.ToolContext, t adktool.Tool, args, result map[string]any, err error) (map[string]any, error) {
 		if ref, ok := byADKName[t.Name()]; ok && err == nil {
 			e.Listener.ToolResult(st.Name, ref.Name, result)
 		}
-		return nil, nil
+		return nil, nil //nolint:nilnil
 	}
 
 	return tools, beforeTool, afterTool, nil

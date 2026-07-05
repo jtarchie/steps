@@ -117,7 +117,7 @@ func selectionPrompt(c *journal.ParkChoices) string {
 // testable core of the prompt. Empty input means "leave parked" (nil, nil).
 func parseGateSelection(c *journal.ParkChoices, line string) (*gateAnswer, error) {
 	if line == "" {
-		return nil, nil
+		return nil, nil //nolint:nilnil // (nil, nil) is "leave parked", a valid non-error outcome; see the doc comment above
 	}
 	// Free-form event: no options to choose from, or a typed event name.
 	if c == nil || len(c.Options) == 0 {
