@@ -590,7 +590,7 @@ func adoptEvent(agentName string, msg journal.Message) *session.Event {
 	for _, tr := range msg.ToolResults {
 		parts = append(parts, genai.NewPartFromFunctionResponse(tr.Name, tr.Result))
 	}
-	ev.Content = &genai.Content{Role: string(role), Parts: parts}
+	ev.Content = &genai.Content{Role: role, Parts: parts}
 	return ev
 }
 
