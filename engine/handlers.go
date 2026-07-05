@@ -39,7 +39,8 @@ func (e *Engine) runAction(ctx context.Context, st *machine.State, rs *journal.R
 
 	// Actions only validate when the state declares a contract.
 	if st.Output.Compiled != nil && len(st.Output.Schema) > 0 && !st.Output.DefaultOutput() {
-		if err := st.Output.Compiled.Validate(normalizeJSON(out)); err != nil {
+		err := st.Output.Compiled.Validate(normalizeJSON(out))
+		if err != nil {
 			return nil, &provider.ClassifiedError{Class: machine.ClassSchemaViolation, Msg: err.Error()}
 		}
 	}
@@ -227,7 +228,8 @@ func normalizeJSON(m map[string]any) map[string]any {
 		return m
 	}
 	var out map[string]any
-	if err := json.Unmarshal(raw, &out); err != nil {
+	err = json.Unmarshal(raw, &out)
+	if err != nil {
 		return m
 	}
 	return out

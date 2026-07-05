@@ -201,7 +201,8 @@ critique:
   - text: '{"score": 5, "issues": ["nope"], "event": "revise"}'
 `
 	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
-	if err := os.WriteFile(scriptPath, []byte(neverApproves), 0o600); err != nil {
+	err := os.WriteFile(scriptPath, []byte(neverApproves), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -234,7 +235,8 @@ critique:
 	checkResumedDoneWithGateData(t, res2)
 
 	// Resuming a finished run must fail.
-	if _, err := eng.Resume(context.Background(), m, res.RunID, "approved", nil); err == nil {
+	_, err = eng.Resume(context.Background(), m, res.RunID, "approved", nil)
+	if err == nil {
 		t.Error("resuming a finished run should error")
 	}
 	_ = store
@@ -304,7 +306,8 @@ work:
   - text: '{"answer": "fixed"}'
 `
 	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+	err := os.WriteFile(scriptPath, []byte(script), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
 	m, err := machine.Parse([]byte(wf))
@@ -545,7 +548,8 @@ work:
   - text: '{"path": "three.go"}'
 `
 	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+	err := os.WriteFile(scriptPath, []byte(script), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
 	m, err := machine.Parse([]byte(wf))
@@ -586,7 +590,8 @@ decide:
   - text: '{"x": "a", "event": "yes"}'
 `
 	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+	err := os.WriteFile(scriptPath, []byte(script), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
 	m, err := machine.Parse([]byte(wf))
@@ -635,7 +640,8 @@ b:
   - text: "hello"
 `
 	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+	err := os.WriteFile(scriptPath, []byte(script), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
 	m, err := machine.Parse([]byte(wf))
@@ -667,7 +673,8 @@ critique:
   - text: '{"score": 1, "issues": ["x"], "event": "revise"}'
 `
 	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+	err := os.WriteFile(scriptPath, []byte(script), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
 	m, err := machine.Load(repoPath(t, "examples/summarize-critic/workflow.ts"))
@@ -682,7 +689,8 @@ critique:
 	if res.Status != journal.StatusParked {
 		t.Fatalf("status = %s, want parked", res.Status)
 	}
-	if _, err := eng.Resume(context.Background(), m, res.RunID, "", nil); err == nil {
+	_, err = eng.Resume(context.Background(), m, res.RunID, "", nil)
+	if err == nil {
 		t.Error("resume without an event should error while parked")
 	}
 }
@@ -714,7 +722,8 @@ scan:
   - text: '{"modules": ["auth", "billing", "search"]}'
 `
 	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+	err := os.WriteFile(scriptPath, []byte(script), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
 	m, err := machine.Parse([]byte(wf))

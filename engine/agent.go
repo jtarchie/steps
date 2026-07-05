@@ -78,7 +78,8 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 	// may read unboundedly either. Over-budget is exhaustion (never retried,
 	// routable by catch:), attributed to the largest inputs so the fix —
 	// distill at the callsite, or trim — is one look away.
-	if err := checkInputBudget(st, spec, data, system, userMsg); err != nil {
+	err = checkInputBudget(st, spec, data, system, userMsg)
+	if err != nil {
 		return nil, err
 	}
 
@@ -213,7 +214,8 @@ func (e *Engine) finishAgentRun(ctx context.Context, st *machine.State, svc sess
 		e.Listener.Warn("could not collect conversation for journal", "error", err.Error())
 	}
 	if memoKey != "" {
-		if err := e.Store.MemoPut(ctx, memoKey, output); err != nil {
+		err := e.Store.MemoPut(ctx, memoKey, output)
+		if err != nil {
 			e.Listener.Warn("memo store failed", "state", st.Name, "error", err.Error())
 		}
 	}
@@ -290,7 +292,8 @@ func (e *Engine) buildAgentSession(ctx context.Context, st *machine.State, rs *j
 	agentName := sanitizeName(st.Name)
 
 	if spec.Adopt != "" {
-		if err := seedAdoptedConversation(ctx, svc, sess, agentName, st, rs, spec); err != nil {
+		err := seedAdoptedConversation(ctx, svc, sess, agentName, st, rs, spec)
+		if err != nil {
 			return nil, nil, "", err
 		}
 	}
@@ -313,7 +316,8 @@ func distillShortCircuit(m *machine.Machine, st *machine.State, data map[string]
 	if !ok || v == nil {
 		return &HandlerResult{Output: map[string]any{"text": ""}}, true
 	}
-	if text, err := machine.RenderDistillSource(v); err == nil && machine.EstimateTokens(text) <= d.MaxTokens {
+	text, err := machine.RenderDistillSource(v)
+	if err == nil && machine.EstimateTokens(text) <= d.MaxTokens {
 		return &HandlerResult{Output: map[string]any{"text": text}, Passthrough: true}, true
 	}
 	return nil, false
@@ -395,7 +399,8 @@ func seedAdoptedConversation(ctx context.Context, svc session.Service, sess sess
 		trimmed = trimmed[len(trimmed)-n:]
 	}
 	for _, msg := range trimmed {
-		if err := svc.AppendEvent(ctx, sess, adoptEvent(agentName, msg)); err != nil {
+		err := svc.AppendEvent(ctx, sess, adoptEvent(agentName, msg))
+		if err != nil {
 			return fmt.Errorf("seeding adopted conversation: %w", err)
 		}
 	}
@@ -495,7 +500,8 @@ func chooseFinalText(texts []string, spec machine.OutputSpec) string {
 	}
 	if !plainTextContract(spec) {
 		for i := len(texts) - 1; i >= 0; i-- {
-			if _, err := extractJSON(texts[i]); err == nil {
+			_, err := extractJSON(texts[i])
+			if err == nil {
 				return texts[i]
 			}
 		}
@@ -589,7 +595,8 @@ func parseOutput(text string, spec machine.OutputSpec) (map[string]any, string, 
 		return nil, "", err
 	}
 	if spec.Compiled != nil {
-		if err := spec.Compiled.Validate(raw); err != nil {
+		err := spec.Compiled.Validate(raw)
+		if err != nil {
 			return nil, "", fmt.Errorf("schema validation: %w", err)
 		}
 	}

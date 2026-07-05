@@ -36,7 +36,8 @@ func (r *recorder) AgentMessage(state, role, text string) {
 func writeScript(t *testing.T, script string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "mock.yaml")
-	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
+	err := os.WriteFile(path, []byte(script), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -522,7 +523,8 @@ export default {
 	if failed["provider_error"] != 1 {
 		t.Errorf("provider_error failures = %d, want 1 (retry: none inherited)", failed["provider_error"])
 	}
-	if _, err := os.ReadFile("out/note.txt"); err != nil {
+	_, err = os.ReadFile("out/note.txt")
+	if err != nil {
 		t.Errorf("catch artifact: %v", err)
 	}
 }
