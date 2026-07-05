@@ -579,45 +579,65 @@ func (e *Engine) runForEach(ctx context.Context, m *machine.Machine, st *machine
 	if concurrency < 1 || e.Mock != nil {
 		concurrency = 1
 	}
+	results, errs := runForEachItems(list, concurrency, runItem)
+
+	output, usage, memoHits, passthroughHits, err := e.aggregateForEachResults(st, list, results, errs)
+	if err != nil {
+		return nil, err
+	}
+	return &HandlerResult{
+		Output:      output,
+		Usage:       usage,
+		Memo:        memoHits == len(list) && len(list) > 0,
+		Passthrough: passthroughHits == len(list) && len(list) > 0,
+	}, nil
+}
+
+// runForEachItems drives the item list sequentially or with bounded
+// concurrency, returning each item's result/error by index.
+func runForEachItems(list []any, concurrency int, runItem func(int, any) (*HandlerResult, error)) ([]*HandlerResult, []error) {
 	results := make([]*HandlerResult, len(list))
 	errs := make([]error, len(list))
 	if concurrency == 1 {
 		for i, item := range list {
 			results[i], errs[i] = runItem(i, item)
 		}
-	} else {
-		var wg sync.WaitGroup
-		sem := make(chan struct{}, concurrency)
-		for i, item := range list {
-			wg.Add(1)
-			go func(i int, item any) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-				results[i], errs[i] = runItem(i, item)
-			}(i, item)
-		}
-		wg.Wait()
+		return results, errs
 	}
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, concurrency)
+	for i, item := range list {
+		wg.Add(1)
+		go func(i int, item any) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			results[i], errs[i] = runItem(i, item)
+		}(i, item)
+	}
+	wg.Wait()
+	return results, errs
+}
 
+// aggregateForEachResults folds per-item results into the foreach state's
+// output, tallying memo/passthrough hits. A non-skip failure aborts with the
+// first offending item's error.
+func (e *Engine) aggregateForEachResults(st *machine.State, list []any, results []*HandlerResult, errs []error) (output map[string]any, usage journal.Usage, memoHits, passthroughHits int, err error) {
 	items := make([]any, 0, len(list))
 	var failures []any
-	var usage journal.Usage
-	memoHits := 0
-	passthroughHits := 0
 	for i := range list {
 		if errs[i] != nil {
-			if st.ForEach.OnItemFailure == "skip" {
-				e.Listener.Warn("foreach item skipped", "state", st.Name,
-					"item", fmt.Sprintf("%d/%d", i+1, len(list)), "error", errs[i].Error())
-				failures = append(failures, map[string]any{
-					"index": i,
-					"class": provider.Classify(errs[i]),
-					"error": errs[i].Error(),
-				})
-				continue
+			if st.ForEach.OnItemFailure != "skip" {
+				return nil, journal.Usage{}, 0, 0, fmt.Errorf("item %d/%d: %w", i+1, len(list), errs[i])
 			}
-			return nil, fmt.Errorf("item %d/%d: %w", i+1, len(list), errs[i])
+			e.Listener.Warn("foreach item skipped", "state", st.Name,
+				"item", fmt.Sprintf("%d/%d", i+1, len(list)), "error", errs[i].Error())
+			failures = append(failures, map[string]any{
+				"index": i,
+				"class": provider.Classify(errs[i]),
+				"error": errs[i].Error(),
+			})
+			continue
 		}
 		items = append(items, results[i].Output)
 		usage.Add(results[i].Usage)
@@ -628,7 +648,7 @@ func (e *Engine) runForEach(ctx context.Context, m *machine.Machine, st *machine
 			passthroughHits++
 		}
 	}
-	output := map[string]any{"items": items, "count": len(items)}
+	output = map[string]any{"items": items, "count": len(items)}
 	if st.ForEach.OnItemFailure == "skip" {
 		output["skipped"] = len(failures)
 		output["failures"] = failures
@@ -639,12 +659,7 @@ func (e *Engine) runForEach(ctx context.Context, m *machine.Machine, st *machine
 	if passthroughHits > 0 {
 		output["passthrough_hits"] = passthroughHits
 	}
-	return &HandlerResult{
-		Output:      output,
-		Usage:       usage,
-		Memo:        memoHits == len(list) && len(list) > 0,
-		Passthrough: passthroughHits == len(list) && len(list) > 0,
-	}, nil
+	return output, usage, memoHits, passthroughHits, nil
 }
 
 // withRetries drives attempts for retryable error classes.
