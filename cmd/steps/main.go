@@ -28,6 +28,7 @@ var (
 	flagVerbose      int
 	flagMock         string
 	flagDefaultModel string
+	flagNoPrompt     bool
 )
 
 func main() {
@@ -41,6 +42,7 @@ func main() {
 	root.PersistentFlags().CountVarP(&flagVerbose, "verbose", "v", "-v: narrate every message and tool call, -vv: full payloads and thoughts")
 	root.PersistentFlags().StringVar(&flagMock, "mock", "", "mock responses YAML — replaces every model with scripted replies")
 	root.PersistentFlags().StringVar(&flagDefaultModel, "default-model", os.Getenv("STEPS_DEFAULT_MODEL"), "engine-level default model (last rung of the cascade)")
+	root.PersistentFlags().BoolVar(&flagNoPrompt, "no-prompt", false, "never prompt at human gates — park and exit even on a TTY")
 
 	root.AddCommand(cmdValidate(), cmdRun(), cmdResume(), cmdRuns(), cmdInspect(), cmdContext())
 
@@ -164,6 +166,10 @@ func cmdRun() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			res, err = driveGates(context.Background(), eng, m, res)
+			if err != nil {
+				return err
+			}
 			return emitResult(res)
 		},
 	}
@@ -201,7 +207,26 @@ func cmdResume() *cobra.Command {
 					return fmt.Errorf("--data must be a JSON object: %w", err)
 				}
 			}
+			// No --event on a TTY: present the parked gate right here.
+			// (Crash-resumes and expired gates fall through — the engine
+			// handles both without an event.)
+			if event == "" {
+				res, handled, err := resumeInteractive(context.Background(), eng, store, m, args[0])
+				if err != nil {
+					return err
+				}
+				if handled {
+					if res == nil {
+						return nil // answer left blank — still parked
+					}
+					return emitResult(res)
+				}
+			}
 			res, err := eng.Resume(context.Background(), m, args[0], event, data)
+			if err != nil {
+				return err
+			}
+			res, err = driveGates(context.Background(), eng, m, res)
 			if err != nil {
 				return err
 			}
