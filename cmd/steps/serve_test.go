@@ -76,7 +76,7 @@ critique:
 
 func TestServeRunsList(t *testing.T) {
 	s, id, _, _ := parkedRun(t)
-	e := newServer(s.store, s.eng)
+	e := newServer(s.store, s.eng, nil)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/runs", nil)
 	rec := httptest.NewRecorder()
@@ -95,7 +95,7 @@ func TestServeRunsList(t *testing.T) {
 
 func TestServeRunDetailShowsGateForm(t *testing.T) {
 	s, id, _, _ := parkedRun(t)
-	e := newServer(s.store, s.eng)
+	e := newServer(s.store, s.eng, nil)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/runs/"+id, nil)
 	rec := httptest.NewRecorder()
@@ -120,7 +120,7 @@ func TestServeRunDetailShowsGateForm(t *testing.T) {
 
 func TestServeRunDetailTimeline(t *testing.T) {
 	s, id, _, _ := parkedRun(t)
-	e := newServer(s.store, s.eng)
+	e := newServer(s.store, s.eng, nil)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/runs/"+id, nil)
 	rec := httptest.NewRecorder()
@@ -159,7 +159,7 @@ func TestServeDoneRunArtifacts(t *testing.T) {
 		t.Fatalf("status = %s, want done after approving", run.Status)
 	}
 
-	e := newServer(s.store, s.eng)
+	e := newServer(s.store, s.eng, nil)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/runs/"+id, nil)
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
@@ -179,7 +179,7 @@ func TestServeDoneRunArtifacts(t *testing.T) {
 
 func TestServeResumeAdvancesRun(t *testing.T) {
 	s, id, eng, _ := parkedRun(t)
-	e := newServer(s.store, s.eng)
+	e := newServer(s.store, s.eng, nil)
 
 	form := url.Values{"event": {"approved"}, "note": {"ship it"}}
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/runs/"+id+"/resume", strings.NewReader(form.Encode()))
@@ -218,7 +218,7 @@ func TestServeResumeRejectsNotParked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := newServer(s.store, s.eng)
+	e := newServer(s.store, s.eng, nil)
 
 	form := url.Values{"event": {"approved"}}
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/runs/"+id+"/resume", strings.NewReader(form.Encode()))
@@ -228,5 +228,246 @@ func TestServeResumeRejectsNotParked(t *testing.T) {
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("POST resume on finished run = %d, want 409", rec.Code)
+	}
+}
+
+func TestHookStartsRun(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	wf := `
+const work = {
+  write: "out/incident.txt",
+  content: ({ incident }) => incident,
+};
+export default {
+  name: "hooked",
+  model: "mock",
+  input: { incident: { type: "string", required: true }, region: { type: "string", required: true } },
+  states: { work },
+  webhook: { path: "hb", map: ({ body, region }) => ({ incident: body.fault.klass + " in " + region }) },
+};`
+	m, err := machine.Parse([]byte(wf))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := journal.OpenSQLite(filepath.Join(t.TempDir(), "journal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	eng := engine.New(store, provider.NewRegistry(), toolreg.New(), engine.NopListener{})
+
+	hook := &hookSpec{m: m, inputs: map[string]any{"region": "us-east-1"}, token: "sekrit"}
+	e := newServer(store, eng, hook)
+
+	post := func(target, jsonBody string) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, target, strings.NewReader(jsonBody))
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// wrong/missing token -> 401
+	if rec := post("/hooks/hb", `{"fault": {"klass": "Redis::TimeoutError"}}`); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no token = %d, want 401", rec.Code)
+	}
+	// unknown path -> 404
+	if rec := post("/hooks/nope?token=sekrit", `{}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown hook = %d, want 404", rec.Code)
+	}
+	// malformed JSON -> 400
+	if rec := post("/hooks/hb?token=sekrit", `{nope`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad JSON = %d, want 400", rec.Code)
+	}
+
+	// good payload -> 202, run completes in background, artifact written
+	if rec := post("/hooks/hb?token=sekrit", `{"fault": {"klass": "Redis::TimeoutError"}}`); rec.Code != http.StatusAccepted {
+		t.Fatalf("hook = %d body=%s, want 202", rec.Code, rec.Body.String())
+	}
+
+	waitForSingleRun(t, store, journal.StatusDone)
+	raw, err := os.ReadFile("out/incident.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "Redis::TimeoutError in us-east-1" {
+		t.Errorf("incident = %q — payload body and hook-input should both reach the map", raw)
+	}
+}
+
+func TestHookMissingRequiredInput(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	// severity is required but the map never produces it -> 400.
+	wf := `
+const work = { write: "out/x.txt", content: ({ incident }) => incident };
+export default {
+  name: "hooked",
+  model: "mock",
+  input: { incident: { type: "string", required: true }, severity: { type: "string", required: true } },
+  states: { work },
+  webhook: { path: "hb", map: ({ body }) => ({ incident: body.message }) },
+};`
+	m, err := machine.Parse([]byte(wf))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := journal.OpenSQLite(filepath.Join(t.TempDir(), "journal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	eng := engine.New(store, provider.NewRegistry(), toolreg.New(), engine.NopListener{})
+	e := newServer(store, eng, &hookSpec{m: m, inputs: map[string]any{}})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/hooks/hb",
+		strings.NewReader(`{"message": "boom"}`))
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing required = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "severity") {
+		t.Errorf("400 body = %q, should name the missing input", rec.Body.String())
+	}
+}
+
+// TestWebhookTriggersIncidentRunbook drives the full serve lifecycle: a
+// Honeybadger-shaped webhook starts the run, it parks at the multi gate, and
+// the gate is answered through the existing web form.
+func TestWebhookTriggersIncidentRunbook(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	root := repoRoot()
+	wf := filepath.Join(root, "examples", "incident-runbook", "workflow.ts")
+	m, err := machine.Load(wf, machine.WithEngineDefaultModel("mock/scripted"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := journal.OpenSQLite(filepath.Join(t.TempDir(), "journal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	eng := engine.New(store, provider.NewRegistry(), toolreg.New(), engine.NopListener{})
+	script, err := provider.LoadScript(filepath.Join(root, "examples", "incident-runbook", "mock_responses.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng.Mock = script
+
+	// Real fixture server for the probes; dead endpoint for the tracker.
+	docroot := filepath.Join(root, "examples", "incident-runbook", "fixtures", "serve")
+	fixtures := httptest.NewServer(http.FileServer(http.Dir(docroot)))
+	t.Cleanup(fixtures.Close)
+	dead := httptest.NewServer(http.NotFoundHandler())
+	dead.Close()
+
+	hook := &hookSpec{
+		m: m,
+		inputs: map[string]any{
+			"services":    "api,worker,cache,search",
+			"status_base": fixtures.URL + "/status",
+			"hb_base":     dead.URL, // tracker down -> the escalation path
+		},
+		token: "sekrit",
+	}
+	e := newServer(store, eng, hook)
+
+	payload, err := os.ReadFile(filepath.Join(root, "examples", "incident-runbook", "fixtures", "webhook.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost,
+		"/hooks/honeybadger?token=sekrit", strings.NewReader(string(payload)))
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("hook = %d body=%s, want 202", rec.Code, rec.Body.String())
+	}
+
+	// The run starts in the background: poll until it parks at the gate.
+	runID := waitForSingleRun(t, store, journal.StatusParked)
+	checkMappedIncidentInputs(t, store, runID)
+
+	// Answer the multi gate through the existing web form.
+	form := url.Values{
+		"selected": {"Restart the cache cluster", "Enable request coalescing on api"},
+		"note":     {"hold the scale-up"},
+	}
+	req = httptest.NewRequestWithContext(context.Background(), http.MethodPost,
+		"/runs/"+runID+"/resume", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec = httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("resume = %d, want 303", rec.Code)
+	}
+
+	waitForRunStatus(t, store, runID, journal.StatusDone)
+
+	report, err := os.ReadFile("out/incident-report.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(report), "hold the scale-up") {
+		t.Error("gate note should reach the report")
+	}
+}
+
+// waitForSingleRun polls until exactly one run reaches the wanted status and
+// returns its id.
+func waitForSingleRun(t *testing.T, store journal.Store, want string) string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		runs, err := store.ListRuns(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(runs) == 1 && runs[0].Status == want {
+			return runs[0].ID
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no run reached %s in time; runs=%+v", want, runs)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// waitForRunStatus polls one run until it reaches the wanted status.
+func waitForRunStatus(t *testing.T, store journal.Store, runID, want string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		run, err := store.GetRun(context.Background(), runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run.Status == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("run status = %s, want %s", run.Status, want)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func checkMappedIncidentInputs(t *testing.T, store journal.Store, runID string) {
+	t.Helper()
+	events, err := store.Events(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := journal.Fold(events)
+	if incident, _ := rs.Ctx["incident"].(string); !strings.Contains(incident, "83214792") || !strings.Contains(incident, "Redis::TimeoutError") {
+		t.Errorf("mapped incident = %q, want payload-derived text", rs.Ctx["incident"])
+	}
+	if faultURL, _ := rs.Ctx["fault_url"].(string); !strings.Contains(faultURL, "/v2/projects/8412/faults/83214792") {
+		t.Errorf("mapped fault_url = %q, want composed from hb_base + payload ids", rs.Ctx["fault_url"])
 	}
 }

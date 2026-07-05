@@ -451,3 +451,63 @@ func TestGenaiSchema(t *testing.T) {
 		t.Errorf("event enum = %+v", s.Properties["event"])
 	}
 }
+
+func TestWebhookParsesAndDefaultsPath(t *testing.T) {
+	src := `
+export default {
+  name: "hooked",
+  model: "mock",
+  input: { incident: { type: "string", required: true } },
+  states: { work: { prompt: ({ incident }) => incident } },
+  webhook: { map: ({ body }) => ({ incident: body.message }) },
+};`
+	m, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if m.Webhook == nil || m.Webhook.Path != "hooked" {
+		t.Fatalf("webhook = %+v, want path defaulted to machine name", m.Webhook)
+	}
+	if !m.Webhook.Map.IsFn() {
+		t.Error("webhook.map should have parsed as a function")
+	}
+}
+
+func TestWebhookExplicitPathAndBadKey(t *testing.T) {
+	src := `
+export default {
+  name: "hooked", model: "mock",
+  states: { work: "go" },
+  webhook: { path: "hb", map: () => ({}) },
+};`
+	m, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if m.Webhook.Path != "hb" {
+		t.Errorf("path = %q, want hb", m.Webhook.Path)
+	}
+	bad := `
+export default {
+  name: "hooked", model: "mock",
+  states: { work: "go" },
+  webhook: { pth: "hb", map: () => ({}) },
+};`
+	_, err = Parse([]byte(bad))
+	if err == nil || !strings.Contains(err.Error(), "unknown webhook key") {
+		t.Errorf("want unknown webhook key error, got: %v", err)
+	}
+}
+
+func TestWebhookMapMustBeFunction(t *testing.T) {
+	src := `
+export default {
+  name: "hooked", model: "mock",
+  states: { work: "go" },
+  webhook: { path: "hb", map: "nope" },
+};`
+	_, err := Parse([]byte(src))
+	if err == nil || !strings.Contains(err.Error(), "webhook.map must be a function") {
+		t.Errorf("want map-must-be-function error, got: %v", err)
+	}
+}

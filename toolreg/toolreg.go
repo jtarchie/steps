@@ -218,7 +218,7 @@ func registerBuiltins(r *Registry) {
 	// as an agent `tool` where a model would author `cmd`.
 	r.Register("exec.run", "Run a shell command as a build/test gate: returns {ok, exit_code, stdout, stderr}; a non-zero exit is a routing signal, not an error (only a launch failure or timeout raises)", execRunTool)
 	registerGH(r)
-	r.Register("http.get", "HTTP GET a URL and return the body (up to 256KB)", httpGetTool)
+	r.Register("http.get", "HTTP GET a URL and return {status, body} (body capped at 256KB); optional headers: {name: value}. Non-2xx statuses are returned as data, never as an error", httpGetTool)
 }
 
 func fileWriteTool(ctx context.Context, args map[string]any) (map[string]any, error) {
@@ -409,6 +409,19 @@ func httpGetTool(ctx context.Context, args map[string]any) (map[string]any, erro
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("building request for %s: %w", url, err)
+	}
+	if raw, ok := args["headers"]; ok && raw != nil {
+		hdrs, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("headers must be a map of header name to string value, got %T", raw)
+		}
+		for k, v := range hdrs {
+			s, ok := v.(string)
+			if !ok {
+				return nil, fmt.Errorf("header %q must be a string value, got %T", k, v)
+			}
+			req.Header.Set(k, s)
+		}
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

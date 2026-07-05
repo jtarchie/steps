@@ -20,7 +20,12 @@
 > is not yet exposed — Go users construct machines via `machine.Parse`; `tool_choice:
 > required/one_of` validates as "not implemented in v1"; `history` renders
 > messages/tool_calls/thoughts with `last_turns` but no per-turn pairing; costs are
-> tracked but no per-model pricing table exists yet (token budgets work).
+> tracked but no per-model pricing table exists yet (token budgets work). Webhook
+> *triggering* shipped ahead of this document: a machine may declare a `webhook:
+> {path, map}` block (map is a function of `{body, headers, query, ...hook inputs}`
+> returning run inputs, dry-run at load), and `steps serve --hook wf.ts` exposes
+> `POST /hooks/<path>` to start a run — trigger-only; webhook *resumption* of a
+> parked gate remains v1.x. `http.get` gained an optional `headers:` arg.
 >
 > Token-discipline additions beyond this document (all measured on live runs):
 > `agent.max_output_tokens` (default 2048 — no state may generate unboundedly;

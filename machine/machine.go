@@ -28,6 +28,12 @@ type Machine struct {
 	Initial  string
 	States   []*State // declaration order preserved
 
+	// Webhook declares how an inbound HTTP payload becomes a run of this
+	// machine (trigger-only; served by `steps serve --hook`). Map is a
+	// function of one flat scope {body, headers, query, ...hook inputs}
+	// returning run inputs.
+	Webhook *WebhookSpec
+
 	Source []byte            // exact JS bytes the machine was loaded from
 	Assets map[string]string // include()d files, pinned with the source
 	Hash   string            // sha256 over Source + Assets
@@ -240,6 +246,12 @@ type HistorySpec struct {
 // ActionSpec names a registered Go function; the rendered state Input is its args.
 type ActionSpec struct {
 	Name string
+}
+
+// WebhookSpec maps an inbound HTTP payload to run inputs (trigger-only).
+type WebhookSpec struct {
+	Path string // URL slug under /hooks/; defaults to the machine name
+	Map  Dyn    // function of {body, headers, query, ...hook inputs} -> run inputs
 }
 
 // HumanSpec parks the run until a human resumes it.

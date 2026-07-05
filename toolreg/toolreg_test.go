@@ -2,6 +2,8 @@ package toolreg
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,5 +96,77 @@ func TestExecRunGateResultIsData(t *testing.T) {
 	_, err = r.Call(context.Background(), "exec.run", map[string]any{"cmd": "true", "cwd": "/no/such/dir"})
 	if err == nil {
 		t.Error("unreadable cwd should raise a (transient) error")
+	}
+}
+
+func TestHTTPGetSendsHeaders(t *testing.T) {
+	// The server compares the header itself and reports a fixed verdict —
+	// reflecting untrusted input back into the body would trip gosec.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer tok-123" {
+			_, _ = w.Write([]byte("authorized"))
+			return
+		}
+		_, _ = w.Write([]byte("missing"))
+	}))
+	defer srv.Close()
+
+	r := New()
+	out, err := r.Call(context.Background(), "http.get", map[string]any{
+		"url":     srv.URL,
+		"headers": map[string]any{"Authorization": "Bearer tok-123"},
+	})
+	if err != nil {
+		t.Fatalf("http.get with headers: %v", err)
+	}
+	if out["status"] != 200 {
+		t.Errorf("status = %v, want 200", out["status"])
+	}
+	if out["body"] != "authorized" {
+		t.Errorf("body = %q, want the header to have arrived verbatim", out["body"])
+	}
+}
+
+func TestHTTPGetNoHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	r := New()
+	out, err := r.Call(context.Background(), "http.get", map[string]any{"url": srv.URL})
+	if err != nil {
+		t.Fatalf("http.get without headers should still work: %v", err)
+	}
+	if out["status"] != 200 || out["body"] != "ok" {
+		t.Errorf("out = %v, want status 200 body ok", out)
+	}
+}
+
+func TestHTTPGetNon2xxIsData(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("nope"))
+	}))
+	defer srv.Close()
+
+	r := New()
+	out, err := r.Call(context.Background(), "http.get", map[string]any{"url": srv.URL})
+	if err != nil {
+		t.Fatalf("non-2xx must be data, not error: %v", err)
+	}
+	if out["status"] != 404 || out["body"] != "nope" {
+		t.Errorf("out = %v, want status 404 body nope (non-2xx is DATA)", out)
+	}
+}
+
+func TestHTTPGetBadHeaderType(t *testing.T) {
+	r := New()
+	_, err := r.Call(context.Background(), "http.get", map[string]any{
+		"url":     "http://127.0.0.1:1",
+		"headers": map[string]any{"X-Bad": 5},
+	})
+	if err == nil || !strings.Contains(err.Error(), "must be a string") {
+		t.Errorf("non-string header value should error naming the type, got: %v", err)
 	}
 }

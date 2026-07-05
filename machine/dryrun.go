@@ -45,6 +45,18 @@ func DryRun(m *Machine) (fatals []error, warnings []string) {
 		}
 		dryRunState(m, s, record)
 	}
+
+	if m.Webhook != nil && m.Webhook.Map.IsJS() {
+		scope := map[string]any{
+			"body":    anyMarker(),
+			"headers": anyMarker(),
+			"query":   anyMarker(),
+			// Hook inputs arrive at serve time under operator-chosen names —
+			// the root stays permissive so referencing them is not a fatal.
+			openMarkerKey: true,
+		}
+		record("webhook", "map", dryCall(m.Webhook.Map, scope))
+	}
 	return fatals, warnings
 }
 

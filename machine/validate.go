@@ -36,6 +36,7 @@ func Validate(m *Machine, opts ...ValidateOption) error {
 	}
 
 	validateNameCollisions(m, fail)
+	validateWebhook(m, fail)
 
 	for _, s := range m.States {
 		validateState(m, s, cfg, fail)
@@ -59,6 +60,30 @@ func Validate(m *Machine, opts ...ValidateOption) error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// validateWebhook checks a trigger-only webhook: block. The map is a
+// function of scope (payload + hook inputs) that returns run inputs; the
+// dry-run (DryRun) proves it only reads declared inputs.
+func validateWebhook(m *Machine, fail func(string, ...any)) {
+	w := m.Webhook
+	if w == nil {
+		return
+	}
+	for _, r := range w.Path {
+		ok := r == '-' || r == '_' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if !ok {
+			fail("webhook.path %q must be a URL-safe slug (lowercase letters, digits, - and _)", w.Path)
+			break
+		}
+	}
+	if w.Map.IsZero() {
+		fail("webhook needs map — a function of ({body, headers, query, ...hook inputs}) returning run inputs")
+		return
+	}
+	if !w.Map.IsFn() {
+		fail("webhook.map must be a function of scope, not a literal value")
+	}
 }
 
 // validateNameCollisions checks that inputs and states — the flat scope's

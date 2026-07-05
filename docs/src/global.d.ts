@@ -175,6 +175,8 @@ interface Machine {
   initial?: string;
   /** Name registration: the shorthand keys name your state consts. */
   states: Record<string, State | string | Fn<string>>;
+  /** Inbound trigger: `steps serve --hook` maps a webhook payload to run inputs. */
+  webhook?: { path?: string; map: (scope: any) => Record<string, any> };
   /** The whole topology in one expression. Omit for linear declaration order. */
   flow?: FlowNode;
 }

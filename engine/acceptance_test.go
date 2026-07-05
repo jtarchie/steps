@@ -2,6 +2,8 @@ package engine_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -894,5 +896,274 @@ func checkCodegenArtifacts(t *testing.T) {
 	}
 	if !strings.Contains(string(manifest), "PASSED") {
 		t.Errorf("GENERATED.md should record the build gate as PASSED")
+	}
+}
+
+// incidentServers serves the incident-runbook fixtures over real HTTP —
+// actions are never mocked. Paths under /v2/ require the auth header the
+// machine sends via http.get's headers arg. The second URL is a
+// deterministic connection-refused endpoint (server closed immediately).
+func incidentServers(t *testing.T) (baseURL, deadURL string) {
+	t.Helper()
+	docroot := repoPath(t, "examples/incident-runbook/fixtures/serve")
+	files := http.FileServer(http.Dir(docroot))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v2/") && r.Header.Get("Authorization") != "Bearer test-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		files.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	dead := httptest.NewServer(http.NotFoundHandler())
+	dead.Close() // closed on purpose: connection refused, deterministically
+	return srv.URL, dead.URL
+}
+
+const incidentText = "Honeybadger fault #83214792 (production): Redis::TimeoutError — Connection timed out after 5000ms in CheckoutController#create"
+
+func incidentInputs(baseURL, faultURL string) map[string]any {
+	return map[string]any{
+		"incident":    incidentText,
+		"services":    "api,worker,cache,search",
+		"status_base": baseURL + "/status",
+		"fault_url":   faultURL,
+		"hb_auth":     "Bearer test-token",
+	}
+}
+
+// TestIncidentRunbookEscalationTrace: the tracker is down (dead fault_url),
+// so the run dead-letters it, the responder diagnoses on thin evidence at
+// low confidence, the auditor flags it, and the senior ADOPTS the
+// responder's actual conversation (lastTurns:2 trims the primer away).
+func TestIncidentRunbookEscalationTrace(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	m, script := loadExample(t, "incident-runbook")
+	eng, store := newTestEngine(t, script)
+	baseURL, deadURL := incidentServers(t)
+
+	res, err := eng.Start(context.Background(), m, incidentInputs(baseURL, deadURL))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Status != journal.StatusParked || res.State.Current != "pick" {
+		t.Fatalf("status = %s at %s, want parked at pick", res.Status, res.State.Current)
+	}
+
+	checkIncidentProbes(t, res)
+	checkTrackerDeadLetter(t, store, res.RunID)
+	checkIncidentAdoptTrim(t, res)
+	checkMultiRemediationGate(t, res.State.Parked.Choices)
+
+	// NOTE: the engine does not enforce min: on Resume — tests pass
+	// well-formed selections; the CLI/web surfaces enforce it.
+	res2, err := eng.Resume(context.Background(), m, res.RunID, "chosen", map[string]any{
+		"selected": []any{"Restart the cache cluster", "Enable request coalescing on api"},
+		"note":     "hold the scale-up",
+	})
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if res2.Status != journal.StatusDone {
+		t.Fatalf("status = %s at %s, want done", res2.Status, res2.Terminal)
+	}
+
+	states, _, transitions := eventTrace(t, store, res.RunID)
+	want := []string{"probe", "fetch_fault", "note_tracker", "responder", "verify", "take_over", "propose", "pick", "apply", "report"}
+	if strings.Join(states, ",") != strings.Join(want, ",") {
+		t.Errorf("state sequence = %v, want %v", states, want)
+	}
+	if transitions != 10 {
+		t.Errorf("transitions = %d, want 10", transitions)
+	}
+	if apply, _ := res2.State.Ctx["apply"].(map[string]any); apply["count"] != 2 {
+		t.Errorf("apply.count = %v, want 2 (one per selected remediation)", apply["count"])
+	}
+	checkReportContains(t, "83214792", "Restart the cache cluster", "hold the scale-up", "coalescing", "UNREACHABLE")
+}
+
+func checkIncidentProbes(t *testing.T, res *engine.Result) {
+	t.Helper()
+	// Probes ran for real: 4 items, the unknown service is 404-as-data,
+	// the cache status file was actually served.
+	probe, _ := res.State.Ctx["probe"].(map[string]any)
+	if n, _ := probe["count"].(int); n != 4 {
+		t.Fatalf("probe.count = %v, want 4", probe["count"])
+	}
+	items, _ := probe["items"].([]any)
+	if last, _ := items[3].(map[string]any); last["status"] != 404 {
+		t.Errorf("search probe status = %v, want 404 (non-2xx is DATA)", items[3])
+	}
+	if cache, _ := items[2].(map[string]any); !strings.Contains(cache["body"].(string), "down") {
+		t.Errorf("cache probe body = %v, want the served fixture", items[2])
+	}
+}
+
+func checkTrackerDeadLetter(t *testing.T, store journal.Store, runID string) {
+	t.Helper()
+	// The dead tracker dead-lettered: fetch_fault -> note_tracker via catch.
+	_, statErr := os.Stat("out/tracker-failure.md")
+	if statErr != nil {
+		t.Errorf("tracker dead-letter note missing: %v", statErr)
+	}
+	_, failed, _ := eventTrace(t, store, runID)
+	if failed["action_error"] != 1 || failed["rate_limited"] != 1 || failed["schema_violation"] != 1 {
+		t.Errorf("failures by class = %v, want action_error:1 rate_limited:1 schema_violation:1", failed)
+	}
+}
+
+func checkIncidentAdoptTrim(t *testing.T, res *engine.Result) {
+	t.Helper()
+	// Rung 2: the auditor's prompt carries the responder's transcript,
+	// failed attempt included.
+	verifyConvo := res.State.Convos["verify"]
+	if len(verifyConvo) == 0 || !strings.Contains(verifyConvo[0].Text, "the cache looks sus") {
+		t.Error("verify's prompt should embed the responder's transcript, failed attempt included")
+	}
+	// Rung 3 + trim: the responder's transcript is 4 messages
+	// [prompt, bad reply, feedback, good JSON]; lastTurns:2 adopts only the
+	// last exchange, so the senior's conversation is 2 adopted + its own
+	// prompt + reply = 4 (untrimmed would be 6). The incident marker appears
+	// exactly once — in the senior's OWN prompt.
+	if n := len(res.State.Convos["responder"]); n != 4 {
+		t.Fatalf("responder conversation = %d messages, want 4", n)
+	}
+	seniorConvo := res.State.Convos["take_over"]
+	if len(seniorConvo) != 4 {
+		t.Fatalf("take_over conversation = %d messages, want 4 (2 adopted + prompt + reply)", len(seniorConvo))
+	}
+	if !strings.Contains(seniorConvo[0].Text, "did not satisfy the output contract") {
+		t.Errorf("adopted head = %q, want the responder's feedback exchange (the trimmed tail)", seniorConvo[0].Text)
+	}
+	count := 0
+	for _, msg := range seniorConvo {
+		count += strings.Count(msg.Text, "83214792")
+	}
+	if count != 1 {
+		t.Errorf("incident marker appears %d times in the senior's conversation, want exactly 1 (trim dropped the primer)", count)
+	}
+}
+
+func checkMultiRemediationGate(t *testing.T, ch *journal.ParkChoices) {
+	t.Helper()
+	if ch == nil || ch.Kind != "multi" || ch.Event != "chosen" || ch.Min != 1 || len(ch.Options) != 3 {
+		t.Fatalf("parked choices = %+v, want multi/chosen/min 1 with 3 options", ch)
+	}
+	if ch.Options[0].Value != "Restart the cache cluster" {
+		t.Errorf("option 0 = %q, want the first scripted remediation", ch.Options[0].Value)
+	}
+}
+
+func checkReportContains(t *testing.T, want ...string) {
+	t.Helper()
+	report, err := os.ReadFile("out/incident-report.md")
+	if err != nil {
+		t.Fatalf("artifact: %v", err)
+	}
+	for _, wantStr := range want {
+		if !strings.Contains(string(report), wantStr) {
+			t.Errorf("incident-report.md missing %q", wantStr)
+		}
+	}
+}
+
+// TestIncidentRunbookFastPathReportAnyway: the tracker is reachable, the
+// responder is confident first try, the auditor agrees (no escalation), and
+// a mis-drafted apply step routes catch:"*" straight to the report — which
+// ships anyway with the "not drafted" fallback.
+func TestIncidentRunbookFastPathReportAnyway(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	m, _ := loadExample(t, "incident-runbook")
+	eng, store := newTestEngine(t, repoPath(t, "examples/incident-runbook/mock_fast_path.yaml"))
+	baseURL, _ := incidentServers(t)
+
+	faultURL := baseURL + "/v2/projects/8412/faults/83214792"
+	res, err := eng.Start(context.Background(), m, incidentInputs(baseURL, faultURL))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Status != journal.StatusParked {
+		t.Fatalf("status = %s, want parked", res.Status)
+	}
+
+	// The fault fetch succeeded THROUGH the auth middleware — the headers
+	// arg works end to end over real HTTP.
+	fault, _ := res.State.Ctx["fetch_fault"].(map[string]any)
+	if fault["status"] != 200 {
+		t.Fatalf("fetch_fault.status = %v, want 200", fault["status"])
+	}
+	if body, _ := fault["body"].(string); !strings.Contains(body, "Redis::TimeoutError") {
+		t.Errorf("fetch_fault.body should be the served fixture, got %.80q", body)
+	}
+
+	res2, err := eng.Resume(context.Background(), m, res.RunID, "chosen",
+		map[string]any{"selected": []any{"Restart the cache cluster"}})
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if res2.Status != journal.StatusDone {
+		t.Fatalf("status = %s at %s, want done", res2.Status, res2.Terminal)
+	}
+
+	// No escalation, no dead letter — and apply's schema violation routed
+	// catch:"*" straight to the report.
+	states, failed, transitions := eventTrace(t, store, res.RunID)
+	want := []string{"probe", "fetch_fault", "responder", "verify", "propose", "pick", "apply", "report"}
+	if strings.Join(states, ",") != strings.Join(want, ",") {
+		t.Errorf("state sequence = %v, want %v", states, want)
+	}
+	if transitions != 8 {
+		t.Errorf("transitions = %d, want 8", transitions)
+	}
+	// retry:"none" still double-journals the exhausted semantic failure: the
+	// in-conversation retry layer and withRetries both record it.
+	if failed["schema_violation"] != 2 {
+		t.Errorf("schema_violation failures = %d, want 2 (conversation layer + withRetries)", failed["schema_violation"])
+	}
+
+	checkVerifyFiredOnSound(t, store, res.RunID)
+	checkApplyRoutedByCatch(t, store, res.RunID)
+	checkReportContains(t, "83214792", "not drafted", "cache cluster down", "Fault detail fetched")
+}
+
+func checkVerifyFiredOnSound(t *testing.T, store journal.Store, runID string) {
+	t.Helper()
+	events, err := store.Events(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range events {
+		if ev.Type != journal.TransitionFired {
+			continue
+		}
+		if from, _ := ev.Data["from"].(string); from != "verify" {
+			continue
+		}
+		if on, _ := ev.Data["on"].(string); on != "sound" {
+			t.Errorf("verify fired on %q, want sound (guard passed)", on)
+		}
+	}
+}
+
+func checkApplyRoutedByCatch(t *testing.T, store journal.Store, runID string) {
+	t.Helper()
+	events, err := store.Events(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range events {
+		if ev.Type != journal.TransitionFired {
+			continue
+		}
+		if from, _ := ev.Data["from"].(string); from != "apply" {
+			continue
+		}
+		to, _ := ev.Data["to"].(string)
+		on, _ := ev.Data["on"].(string)
+		if to != "report" || on != "catch:schema_violation" {
+			t.Errorf("apply routed to %q on %q, want report on catch:schema_violation", to, on)
+		}
 	}
 }

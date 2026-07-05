@@ -1,0 +1,26 @@
+# The FAST path: point fault_url at the fixture server (the fault fetch
+# SUCCEEDS through http.get's headers arg), the responder nails it first
+# try, the auditor agrees, and the senior never runs. The single apply
+# entry is deliberately non-JSON: with retry:"none" that one schema
+# violation routes catch:"*" straight to report — the report ships anyway.
+#
+#   python3 -m http.server 8787 --directory fixtures/serve &
+#   ../../steps run workflow.ts --mock mock_fast_path.yaml \
+#     --input incident="Honeybadger fault #83214792 (production): Redis::TimeoutError — Connection timed out after 5000ms in CheckoutController#create" \
+#     --input services=api,worker,cache,search \
+#     --input status_base=http://127.0.0.1:8787/status \
+#     --input fault_url=http://127.0.0.1:8787/v2/projects/8412/faults/83214792
+#
+# MARKER DISCIPLINE: 83214792 must never appear in a reply.
+
+responder:
+  - text: '{"diagnosis": "cache cluster down (heartbeats lost 09:11Z, confirmed by tracker backtrace in lib/cache_client.rb); restart and let api recover", "confidence": 0.9, "affected": ["cache", "api"], "event": "diagnosed"}'
+
+verify:
+  - text: '{"process_ok": true, "concerns": [], "event": "sound"}'
+
+propose:
+  - text: '{"summary": "Restart the cache; api recovers on its own.", "remediations": ["Restart the cache cluster", "Monitor api p99 for 30 minutes"]}'
+
+apply:
+  - text: "restart it and watch the graphs"

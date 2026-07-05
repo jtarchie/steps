@@ -86,7 +86,7 @@ state's functions may reference.
 | `steps run machine.ts --input k=v\|k=@file [--mock file] [-v]` | Start a run. Default output is condensed — one line per state (event, tokens, duration, a result hint); `-v` narrates every message/tool call/transition, `-vv` adds full payloads and thoughts. On a TTY, human gates prompt inline (`--no-prompt` to opt out). JSON summary to stdout. |
 | `steps resume <run-id> [--event X --data '{...}']` | Answer a parked human gate, or continue a crashed run from its journal. With no `--event` on a TTY, the gate's choices are presented inline. |
 | `steps runs` | List runs and their status. |
-| `steps serve [--addr host:port]` | Web view of runs (default `127.0.0.1:8484`): list with status filters and per-machine token/cost totals, run detail (inputs, a per-execution table, a chronological timeline threading each state's prompts/replies/tools and the transition it took, artifacts, and journaled output/content), and a form to answer parked gates. |
+| `steps serve [--addr host:port] [--hook wf.ts --hook-input k=v --hook-token t]` | Web view of runs (default `127.0.0.1:8484`): list with status filters and per-machine token/cost totals, run detail (inputs, a per-execution table, a chronological timeline threading each state's prompts/replies/tools and the transition it took, artifacts, and journaled output/content), and a form to answer parked gates. With `--hook`, a machine that declares a `webhook:` block is triggerable: `POST /hooks/<path>` maps the JSON payload to run inputs and starts a run (`202`); `--hook-input` supplies fixed inputs, `--hook-token` a shared secret. |
 | `steps context machine.ts [--state s]` | Show what each state's functions may reference, derived from declared schemas. |
 | `steps inspect <run-id> [--messages]` | Per-state token usage, failures, and routing from the journal; `--messages` dumps recorded conversations. |
 
@@ -239,6 +239,15 @@ examples/   canonical examples — they double as the acceptance spec
   goes green. An
   architect plans the files, a coder `foreach`-writes them (raw text, not JSON),
   and the gates run on `openrouter/` where `reasoning:` actually bounds thinking.
+- [`examples/incident-runbook/`](examples/incident-runbook/) — a Honeybadger
+  **webhook** starts the run (`webhook:` block + `steps serve --hook`). It
+  probes services over `http.get`, dead-letters the tracker when it too is down
+  (`catch: action_error`), then chains all three context rungs: an auditor
+  judges the responder's process via `history:`, a senior model `adopt:`s the
+  responder's conversation, and a human answers a **multi-select** gate before
+  the report ships. Also the widest single feature spread — `history:`, cross-
+  state `adopt:`, `catch: {"*"}`, `retry: "none"`, `structuredOutput: "native"`,
+  `system:`, `yaml()`/`include()`.
 
 ## Testing
 
@@ -247,4 +256,7 @@ against their mock scripts and assert the exact journal traces documented in
 the example READMEs (state sequence, retry counts, visit counters, artifacts,
 park/resume). The `codegen` acceptance test is scripted for the LLM states but
 runs its `exec.run` build gate for real (`bash greet_test.sh`), so it also
-proves the ground-truth loop end to end. Live runs are iteration, not CI.
+proves the ground-truth loop end to end. The `incident-runbook` tests run their
+`http.get` probes and fault fetch against a real `httptest` server — actions are
+never mocked — and one drives the full `steps serve` webhook lifecycle
+(POST → run → park → gate answer → report). Live runs are iteration, not CI.

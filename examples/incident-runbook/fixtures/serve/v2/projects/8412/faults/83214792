@@ -1,0 +1,1 @@
+{"id": 83214792, "klass": "Redis::TimeoutError", "message": "Connection timed out after 5000ms in CheckoutController#create", "environment": "production", "notices_count": 412, "backtrace": ["app/controllers/checkout_controller.rb:41:in `create'", "lib/cache_client.rb:88:in `fetch'"]}

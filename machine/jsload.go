@@ -381,7 +381,32 @@ func (l *loader) choices(v goja.Value) (*ChoiceSpec, error) {
 // hard typo protection.
 var machineKeys = []string{
 	"name", "version", "description", "input", "models", "model",
-	"defaults", "limits", "initial", "states", "flow",
+	"defaults", "limits", "initial", "states", "flow", "webhook",
+}
+
+// applyWebhook parses a trigger-only webhook: block onto m, if present. Path
+// defaults to the machine name; map is a function of scope returning inputs.
+func (l *loader) applyWebhook(m *Machine, root *goja.Object) error {
+	o := l.obj(root.Get("webhook"))
+	if o == nil {
+		return nil
+	}
+	w := &WebhookSpec{}
+	for _, k := range o.Keys() {
+		switch k {
+		case "path":
+			w.Path = str(o.Get(k))
+		case "map":
+			w.Map = l.dyn(o.Get(k))
+		default:
+			return fmt.Errorf("unknown webhook key %q — valid: path, map", k)
+		}
+	}
+	if w.Path == "" {
+		w.Path = m.Name
+	}
+	m.Webhook = w
+	return nil
 }
 
 func (l *loader) machine(root *goja.Object) (*Machine, error) {
@@ -429,7 +454,12 @@ func (l *loader) machine(root *goja.Object) (*Machine, error) {
 		}
 	}
 
-	err := l.parseStates(m, root)
+	err := l.applyWebhook(m, root)
+	if err != nil {
+		return nil, err
+	}
+
+	err = l.parseStates(m, root)
 	if err != nil {
 		return nil, err
 	}

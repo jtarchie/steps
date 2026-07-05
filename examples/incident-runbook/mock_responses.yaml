@@ -1,0 +1,42 @@
+# Scripted responses for the mock provider — LLM states only; the ACTIONS
+# (probe/fetch_fault = http.get, note_tracker/report = file.write) run for
+# real against the fixture server. This script drives the ESCALATION path:
+# point fault_url/hb_base at a dead endpoint (e.g. http://127.0.0.1:1) so
+# fetch_fault dead-letters, the responder diagnoses on thin evidence at low
+# confidence, the auditor says "flawed", and the senior adopts the
+# responder's conversation.
+#
+#   python3 -m http.server 8787 --directory fixtures/serve &
+#   ../../steps run workflow.ts --mock mock_responses.yaml \
+#     --input incident="Honeybadger fault #83214792 (production): Redis::TimeoutError — Connection timed out after 5000ms in CheckoutController#create" \
+#     --input services=api,worker,cache,search \
+#     --input status_base=http://127.0.0.1:8787/status \
+#     --input fault_url=http://127.0.0.1:1
+#
+# Trace: probe x4 -> fetch_fault(action_error) -> note_tracker -> responder
+#        (rate_limited, then non-JSON, then diagnosed@0.55) -> verify(flawed)
+#        -> take_over(adopts) -> propose -> pick(PARKS; answer 1,2) -> apply
+#        x<selected> -> report -> done
+#
+# MARKER DISCIPLINE: the fault id 83214792 must NEVER appear in any reply
+# below — the acceptance test counts its occurrences in the senior's
+# adopted conversation to prove the lastTurns trim.
+
+responder:
+  - error: rate_limited
+  - text: "the cache looks sus, probably restart something"
+  - text: '{"diagnosis": "cache cluster is down (all nodes lost heartbeat at 09:11Z); api latency is a cache-miss stampede", "confidence": 0.55, "affected": ["cache", "api"], "event": "diagnosed"}'
+
+verify:
+  - text: '{"process_ok": false, "concerns": ["the responder never explained the search probe returning HTTP 404", "confidence 0.55 is below the 0.75 trust threshold"], "event": "flawed"}'
+
+take_over:
+  - text: '{"diagnosis": "cache cluster down since 09:11Z - cold restart required; enable request coalescing on api until hit rate recovers", "confidence": 0.92, "affected": ["cache", "api"]}'
+
+propose:
+  - text: '{"summary": "Bring the cache back, then shield api while it warms.", "remediations": ["Restart the cache cluster", "Enable request coalescing on api", "Scale api workers +50%"]}'
+
+apply:
+  - text: '{"instructions": "1. Announce in #incident.\n2. Run cache-ctl restart --all --rolling.\n3. Watch heartbeat dashboard until 3/3 green.", "risk": "medium"}'
+  - text: '{"instructions": "1. Set COALESCE_REQUESTS=1 on the api deploy.\n2. Roll pods.\n3. Confirm duplicate upstream calls drop.", "risk": "low"}'
+  - text: '{"instructions": "1. Bump api replicas from 8 to 12.\n2. Watch p99.", "risk": "low"}'

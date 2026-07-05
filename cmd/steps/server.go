@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -30,18 +31,138 @@ import (
 type server struct {
 	store    journal.Store
 	eng      *engine.Engine
-	resuming sync.Map // runID -> struct{}: a resume is in flight
+	resuming sync.Map  // runID -> struct{}: a resume is in flight
+	hook     *hookSpec // nil = no webhook registered
+}
+
+// hookSpec is a webhook-triggerable machine, loaded once at startup.
+type hookSpec struct {
+	m      *machine.Machine
+	inputs map[string]any // --hook-input base values (operator config)
+	token  string         // --hook-token; "" = unauthenticated
 }
 
 // newServer wires the routes onto a fresh echo instance — the httptest seam.
-func newServer(store journal.Store, eng *engine.Engine) *echo.Echo {
-	s := &server{store: store, eng: eng}
+func newServer(store journal.Store, eng *engine.Engine, hook *hookSpec) *echo.Echo {
+	s := &server{store: store, eng: eng, hook: hook}
 	e := echo.New()
 	e.GET("/", func(c *echo.Context) error { return c.Redirect(http.StatusFound, "/runs") })
 	e.GET("/runs", s.handleRuns)
 	e.GET("/runs/:id", s.handleRun)
 	e.POST("/runs/:id/resume", s.handleResume)
+	e.POST("/hooks/:path", s.handleHook)
 	return e
+}
+
+// handleHook receives an inbound webhook, maps the JSON payload to run inputs
+// via the machine's webhook.map, and starts the run in the background.
+// Trigger-only: gates are answered via the UI or CLI, never the webhook.
+func (s *server) handleHook(c *echo.Context) error {
+	if s.hook == nil || c.Param("path") != s.hook.m.Webhook.Path {
+		return echo.NewHTTPError(http.StatusNotFound, "no such hook")
+	}
+	herr := s.checkHookToken(c)
+	if herr != nil {
+		return herr
+	}
+
+	var body map[string]any
+	err := json.NewDecoder(c.Request().Body).Decode(&body)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "hook payload must be a JSON object: "+err.Error())
+	}
+
+	// One flat scope: the request, plus operator-supplied hook inputs by name.
+	scope := map[string]any{"body": body, "headers": flatHeaders(c), "query": flatQuery(c)}
+	for k, v := range s.hook.inputs {
+		scope[k] = v
+	}
+	mapped, err := s.hook.m.Webhook.Map.Map(scope)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "webhook.map: "+err.Error())
+	}
+
+	input, herr := s.hookInput(mapped)
+	if herr != nil {
+		return herr
+	}
+
+	// A run can take minutes — never block the request (same shape as
+	// handleResume's background resume). Errors land in the journal.
+	go func() {
+		bg, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		_, err := s.eng.Start(bg, s.hook.m, input)
+		if err != nil {
+			s.eng.Listener.Warn("webhook run failed", "hook", s.hook.m.Webhook.Path, "err", err.Error())
+		}
+	}()
+	err = c.JSON(http.StatusAccepted, map[string]any{"machine": s.hook.m.Name, "status": "accepted"})
+	if err != nil {
+		return fmt.Errorf("responding to hook: %w", err)
+	}
+	return nil
+}
+
+// checkHookToken enforces the shared secret when one is configured, accepting
+// it as a Bearer header or a ?token= query param.
+func (s *server) checkHookToken(c *echo.Context) *echo.HTTPError {
+	if s.hook.token == "" {
+		return nil
+	}
+	got := c.QueryParam("token")
+	if auth := c.Request().Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+		got = strings.TrimPrefix(auth, "Bearer ")
+	}
+	if got != s.hook.token {
+		return echo.NewHTTPError(http.StatusUnauthorized, "bad or missing hook token")
+	}
+	return nil
+}
+
+// hookInput merges hook inputs (under) with the map's payload-derived values
+// (over), keeping only declared inputs, and fails if a required one is absent.
+func (s *server) hookInput(mapped map[string]any) (map[string]any, *echo.HTTPError) {
+	input := map[string]any{}
+	for k, v := range s.hook.inputs {
+		if _, ok := s.hook.m.Input[k]; ok {
+			input[k] = v
+		}
+	}
+	for k, v := range mapped {
+		if _, ok := s.hook.m.Input[k]; ok {
+			input[k] = v
+		}
+	}
+	for name, spec := range s.hook.m.Input {
+		if spec.Required {
+			if _, ok := input[name]; !ok {
+				return nil, echo.NewHTTPError(http.StatusBadRequest,
+					fmt.Sprintf("payload did not produce required input %q", name))
+			}
+		}
+	}
+	return input, nil
+}
+
+func flatHeaders(c *echo.Context) map[string]any {
+	out := map[string]any{}
+	for k, vs := range c.Request().Header {
+		if len(vs) > 0 {
+			out[k] = vs[0]
+		}
+	}
+	return out
+}
+
+func flatQuery(c *echo.Context) map[string]any {
+	out := map[string]any{}
+	for k, vs := range c.Request().URL.Query() {
+		if len(vs) > 0 {
+			out[k] = vs[0]
+		}
+	}
+	return out
 }
 
 // ---- runs list --------------------------------------------------------------

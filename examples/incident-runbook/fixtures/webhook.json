@@ -1,0 +1,13 @@
+{
+  "event": "occurred",
+  "message": "New error in production",
+  "fault": {
+    "id": 83214792,
+    "project_id": 8412,
+    "klass": "Redis::TimeoutError",
+    "message": "Connection timed out after 5000ms in CheckoutController#create",
+    "environment": "production",
+    "notices_count": 412,
+    "last_notice_at": "2026-07-05T09:11:42Z"
+  }
+}
