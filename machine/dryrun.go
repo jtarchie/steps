@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -360,7 +361,7 @@ func (rt *jsRT) stubRoot(scope map[string]any) (goja.Value, error) {
 	defer rt.mu.Unlock()
 	wrap, ok := goja.AssertFunction(rt.vm.Get("__stepsStub"))
 	if !ok {
-		return nil, fmt.Errorf("stub helper not installed")
+		return nil, errors.New("stub helper not installed")
 	}
 	return wrap(goja.Undefined(), rt.vm.ToValue(scope), rt.vm.ToValue("scope"))
 }

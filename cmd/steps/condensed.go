@@ -129,11 +129,11 @@ func (l *condensedListener) RunFinished(runID, status, terminal string, transiti
 }
 
 func (l *condensedListener) Warn(msg string, args ...any) {
-	extra := ""
+	var extra strings.Builder
 	for i := 0; i+1 < len(args); i += 2 {
-		extra += fmt.Sprintf(" %v=%v", args[i], args[i+1])
+		fmt.Fprintf(&extra, " %v=%v", args[i], args[i+1])
 	}
-	l.p("  %s⚠ %s%s%s", cYellow, msg, extra, cReset)
+	l.p("  %s⚠ %s%s%s", cYellow, msg, extra.String(), cReset)
 }
 
 // clipLine renders text as one loggable line of at most n runes.

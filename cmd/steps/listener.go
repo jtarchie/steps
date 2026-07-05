@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -243,5 +244,5 @@ func formatCount(n int) string {
 	if n >= 1000 {
 		return fmt.Sprintf("%.1fk", float64(n)/1000)
 	}
-	return fmt.Sprintf("%d", n)
+	return strconv.Itoa(n)
 }

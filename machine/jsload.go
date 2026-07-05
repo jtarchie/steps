@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -121,7 +122,7 @@ func (l *loader) parse(src []byte, opts ...ParseOption) (*Machine, error) {
 	}
 	exports, ok := module.Get("exports").(*goja.Object)
 	if !ok {
-		return nil, fmt.Errorf("machine must export default { name, states, ... }")
+		return nil, errors.New("machine must export default { name, states, ... }")
 	}
 	// esbuild's CommonJS output puts the default export under .default
 	// (alongside a synthetic __esModule flag); unwrap to the machine object.
@@ -132,7 +133,7 @@ func (l *loader) parse(src []byte, opts ...ParseOption) (*Machine, error) {
 		}
 	}
 	if len(root.Keys()) == 0 {
-		return nil, fmt.Errorf("machine must export default { name, states, ... }")
+		return nil, errors.New("machine must export default { name, states, ... }")
 	}
 
 	m, err := l.machine(root)
@@ -217,7 +218,7 @@ func (l *loader) exportValue(v goja.Value) any {
 			n := int(o.Get("length").ToInteger())
 			out := make([]any, 0, n)
 			for i := range n {
-				out = append(out, l.exportValue(o.Get(fmt.Sprintf("%d", i))))
+				out = append(out, l.exportValue(o.Get(strconv.Itoa(i))))
 			}
 			return out
 		}
@@ -307,7 +308,7 @@ func stringSlice(v goja.Value) []string {
 	n := int(o.Get("length").ToInteger())
 	out := make([]string, 0, n)
 	for i := range n {
-		out = append(out, o.Get(fmt.Sprintf("%d", i)).String())
+		out = append(out, o.Get(strconv.Itoa(i)).String())
 	}
 	return out
 }
@@ -322,7 +323,7 @@ func (l *loader) choices(v goja.Value) (*ChoiceSpec, error) {
 	}
 	o := l.obj(v)
 	if o == nil {
-		return nil, fmt.Errorf("choices must be an object")
+		return nil, errors.New("choices must be an object")
 	}
 	keys := o.Keys()
 	if !contains(keys, "multi") {
@@ -336,7 +337,7 @@ func (l *loader) choices(v goja.Value) (*ChoiceSpec, error) {
 			spec.Options = append(spec.Options, ChoiceOption{Event: k, Label: label})
 		}
 		if len(spec.Options) == 0 {
-			return nil, fmt.Errorf("choices must declare at least one option")
+			return nil, errors.New("choices must declare at least one option")
 		}
 		return spec, nil
 	}
@@ -355,7 +356,7 @@ func (l *loader) choices(v goja.Value) (*ChoiceSpec, error) {
 	if !spec.Dynamic.IsFn() {
 		items, ok := spec.Dynamic.Static.([]any)
 		if !ok {
-			return nil, fmt.Errorf("choices.multi must be an array of strings or a function of scope")
+			return nil, errors.New("choices.multi must be an array of strings or a function of scope")
 		}
 		for i, it := range items {
 			if _, ok := it.(string); !ok {
@@ -475,7 +476,7 @@ func (l *loader) machine(root *goja.Object) (*Machine, error) {
 
 	states := l.obj(root.Get("states"))
 	if states == nil || len(states.Keys()) == 0 {
-		return nil, fmt.Errorf("machine has no states — export default { states: { ... } }")
+		return nil, errors.New("machine has no states — export default { states: { ... } }")
 	}
 	// Keys() preserves declaration order — linear-flow defaults depend on it.
 	for _, name := range states.Keys() {
@@ -544,7 +545,7 @@ func (l *loader) state(name string, v goja.Value) (*State, error) {
 	}
 	o := l.obj(v)
 	if o == nil {
-		return nil, fmt.Errorf("a state must be an object, a prompt string, or a prompt function")
+		return nil, errors.New("a state must be an object, a prompt string, or a prompt function")
 	}
 
 	keys := o.Keys()
@@ -594,7 +595,7 @@ func (l *loader) state(name string, v goja.Value) (*State, error) {
 	case "write":
 		st.Action = &ActionSpec{Name: "file.write"}
 		if !st.Input.IsZero() {
-			return nil, fmt.Errorf("write states take write: or content:, not input")
+			return nil, errors.New("write states take write: or content:, not input")
 		}
 		st.Input = Dyn{Static: map[string]any{
 			"path":    l.exportValue(o.Get("write")),
@@ -630,7 +631,7 @@ func (l *loader) state(name string, v goja.Value) (*State, error) {
 	if v := o.Get("distill"); defined(v) {
 		d := l.obj(v)
 		if d == nil {
-			return nil, fmt.Errorf("distill must be an object of {name: {for, from?, maxTokens?, model?, memo?}}")
+			return nil, errors.New("distill must be an object of {name: {for, from?, maxTokens?, model?, memo?}}")
 		}
 		// Keys() preserves declaration order — the implicit chain runs in it.
 		for _, key := range d.Keys() {
@@ -665,7 +666,7 @@ func (l *loader) state(name string, v goja.Value) (*State, error) {
 		}
 		sm, ok := schema.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("output must be a schema object")
+			return nil, errors.New("output must be a schema object")
 		}
 		st.Output.Schema = sm
 	}
@@ -707,7 +708,7 @@ func (l *loader) agent(o *goja.Object) (*AgentSpec, error) {
 		ag.Adopt = str(a.Get("from"))
 		ag.AdoptLastTurns = integer(a.Get("lastTurns"))
 		if ag.Adopt == "" {
-			return nil, fmt.Errorf("adopt: object form requires from")
+			return nil, errors.New("adopt: object form requires from")
 		}
 	default:
 		ag.Adopt = adopt.String()
@@ -725,7 +726,7 @@ func (l *loader) agent(o *goja.Object) (*AgentSpec, error) {
 	if tools := l.obj(o.Get("tools")); tools != nil {
 		n := int(tools.Get("length").ToInteger())
 		for i := range n {
-			tv := tools.Get(fmt.Sprintf("%d", i))
+			tv := tools.Get(strconv.Itoa(i))
 			if s, ok := tv.Export().(string); ok {
 				ag.Tools = append(ag.Tools, ToolRef{Name: s})
 				continue
@@ -761,7 +762,7 @@ func (l *loader) retries(v goja.Value, where string) ([]RetryPolicy, error) {
 	n := int(o.Get("length").ToInteger())
 	out := make([]RetryPolicy, 0, n)
 	for i := range n {
-		e := l.obj(o.Get(fmt.Sprintf("%d", i)))
+		e := l.obj(o.Get(strconv.Itoa(i)))
 		if e == nil {
 			return nil, fmt.Errorf("%s[%d] must be an object", where, i)
 		}

@@ -157,7 +157,7 @@ func scanRun(row scannable) (*Run, error) {
 	var assets string
 	if err := row.Scan(&r.ID, &r.Machine, &r.Hash, &r.Source, &assets, &r.Status, &r.CurrentState, &created, &updated); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("run not found")
+			return nil, errors.New("run not found")
 		}
 		return nil, err
 	}

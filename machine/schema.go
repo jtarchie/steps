@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -66,7 +67,7 @@ func normalizeScalar(s string) (map[string]any, error) {
 			}
 		}
 		if len(vals) == 0 {
-			return nil, fmt.Errorf("enum() needs at least one value")
+			return nil, errors.New("enum() needs at least one value")
 		}
 		return map[string]any{"type": "string", "enum": vals}, nil
 	}

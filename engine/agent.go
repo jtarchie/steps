@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -502,7 +503,7 @@ func extractJSON(text string) (map[string]any, error) {
 		lastErr = err
 	}
 	if lastErr == nil {
-		lastErr = fmt.Errorf("no JSON object found")
+		lastErr = errors.New("no JSON object found")
 	}
 	return nil, fmt.Errorf("expected a JSON object: %w", lastErr)
 }

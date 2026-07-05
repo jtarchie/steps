@@ -1,7 +1,9 @@
 package machine
 
 import (
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/dop251/goja"
@@ -85,13 +87,13 @@ func (l *loader) wireNode(m *Machine, v goja.Value, successor string) (string, e
 		steps := obj.Get("steps").(*goja.Object)
 		n := int(steps.Get("length").ToInteger())
 		if n == 0 {
-			return "", fmt.Errorf("pipe() needs at least one step")
+			return "", errors.New("pipe() needs at least one step")
 		}
 		// Wire back to front so each step knows its successor's entry.
 		next := successor
 		entry := ""
 		for i := n - 1; i >= 0; i-- {
-			e, err := l.wireNode(m, steps.Get(fmt.Sprintf("%d", i)), next)
+			e, err := l.wireNode(m, steps.Get(strconv.Itoa(i)), next)
 			if err != nil {
 				return "", err
 			}
@@ -107,9 +109,9 @@ func (l *loader) wireNode(m *Machine, v goja.Value, successor string) (string, e
 		return l.wireLoop(m, obj, successor)
 
 	case "when":
-		return "", fmt.Errorf("when(...) must be completed with .to(target)")
+		return "", errors.New("when(...) must be completed with .to(target)")
 	case "edge":
-		return "", fmt.Errorf("when(...).to(...) is only valid as a branch edge value")
+		return "", errors.New("when(...).to(...) is only valid as a branch edge value")
 	}
 	return "", fmt.Errorf("flow contains a value that is not a state, pipe, branch, loop, or terminal — got %s", v)
 }
@@ -118,7 +120,7 @@ func (l *loader) wireBranch(m *Machine, obj *goja.Object, successor string) (str
 	stateVal := obj.Get("state")
 	kind, stateObj := l.flowKind(stateVal)
 	if kind != "state" {
-		return "", fmt.Errorf("branch(...) must start from a registered state")
+		return "", errors.New("branch(...) must start from a registered state")
 	}
 	name := l.stateName(stateObj)
 	st := m.State(name)
@@ -142,7 +144,7 @@ func (l *loader) wireBranch(m *Machine, obj *goja.Object, successor string) (str
 	if edges.ClassName() == "Array" {
 		n := int(edges.Get("length").ToInteger())
 		for i := range n {
-			entry := edges.Get(fmt.Sprintf("%d", i))
+			entry := edges.Get(strconv.Itoa(i))
 			if k, edgeObj := l.flowKind(entry); k == "edge" {
 				guard := l.dyn(edgeObj.Get("when"))
 				to, err := l.wireTarget(m, edgeObj.Get("to"), name, fmt.Sprintf("edge %d", i))
@@ -245,7 +247,7 @@ var loopKeys = []string{"judge", "accept", "maxVisits", "then", "revise", "exhau
 func (l *loader) wireLoop(m *Machine, obj *goja.Object, successor string) (string, error) {
 	opts, ok := obj.Get("opts").(*goja.Object)
 	if !ok {
-		return "", fmt.Errorf("loop(body, {...}) needs an options object")
+		return "", errors.New("loop(body, {...}) needs an options object")
 	}
 	for _, k := range opts.Keys() {
 		if !contains(loopKeys, k) {
@@ -257,7 +259,7 @@ func (l *loader) wireLoop(m *Machine, obj *goja.Object, successor string) (strin
 	// gate routes on resume events, not guards — that is branch territory.
 	kind, judgeObj := l.flowKind(opts.Get("judge"))
 	if kind != "state" {
-		return "", fmt.Errorf("loop: judge must be a registered state")
+		return "", errors.New("loop: judge must be a registered state")
 	}
 	judge := l.stateName(judgeObj)
 	st := m.State(judge)
@@ -277,7 +279,7 @@ func (l *loader) wireLoop(m *Machine, obj *goja.Object, successor string) (strin
 	// The body falls through to the judge.
 	body := obj.Get("body")
 	if bodyKind, _ := l.flowKind(body); bodyKind == "terminal" {
-		return "", fmt.Errorf("loop: the body cannot be a terminal state")
+		return "", errors.New("loop: the body cannot be a terminal state")
 	}
 	entry, err := l.wireNode(m, body, judge)
 	if err != nil {
