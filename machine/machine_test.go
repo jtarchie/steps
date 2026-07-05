@@ -14,6 +14,34 @@ func TestLoadSummarizeCritic(t *testing.T) {
 		t.Errorf("initial = %q, want draft (flow entry)", m.Initial)
 	}
 
+	checkSummarizeCriticDraftState(t, m)
+	checkSummarizeCriticCritiqueLoop(t, m)
+
+	escalate := m.State("escalate")
+	if escalate.Human == nil || escalate.Human.OnTimeout != "failed" {
+		t.Errorf("escalate timeout route = %+v, want failed via branch timeout key", escalate.Human)
+	}
+
+	publish := m.State("publish")
+	if publish.Action == nil || publish.Action.Name != "file.write" {
+		t.Errorf("publish should be write-sugar file.write, got %+v", publish.Action)
+	}
+	if len(publish.Transitions) != 1 || publish.Transitions[0].To != "done" {
+		t.Errorf("publish transitions = %+v, want outgoing-edge default to done", publish.Transitions)
+	}
+
+	for _, name := range []string{"done", "failed"} {
+		if s := m.State(name); s == nil || !s.Terminal {
+			t.Errorf("implicit terminal %q missing", name)
+		}
+	}
+	if m.Limits.MaxTransitions != 12 {
+		t.Errorf("maxTransitions = %d, want 12", m.Limits.MaxTransitions)
+	}
+}
+
+func checkSummarizeCriticDraftState(t *testing.T, m *Machine) {
+	t.Helper()
 	draft := m.State("draft")
 	if draft == nil || draft.Agent == nil {
 		t.Fatal("draft state missing or not an agent")
@@ -37,9 +65,12 @@ func TestLoadSummarizeCritic(t *testing.T) {
 	if draft.Output.Compiled == nil {
 		t.Error("draft output schema not compiled")
 	}
+}
 
-	// loop() lowering: the judge owns exactly [accept -> then,
-	// visits budget -> revise, fallback -> exhausted].
+// checkSummarizeCriticCritiqueLoop: loop() lowering means the judge owns
+// exactly [accept -> then, visits budget -> revise, fallback -> exhausted].
+func checkSummarizeCriticCritiqueLoop(t *testing.T, m *Machine) {
+	t.Helper()
 	critique := m.State("critique")
 	if len(critique.Transitions) != 3 {
 		t.Fatalf("critique transitions = %d, want 3 (accept, revise budget, exhausted)", len(critique.Transitions))
@@ -55,28 +86,6 @@ func TestLoadSummarizeCritic(t *testing.T) {
 	}
 	if !critique.Transitions[2].Fallback() {
 		t.Error("critique last transition should be the exhausted fallback")
-	}
-
-	escalate := m.State("escalate")
-	if escalate.Human == nil || escalate.Human.OnTimeout != "failed" {
-		t.Errorf("escalate timeout route = %+v, want failed via branch timeout key", escalate.Human)
-	}
-
-	publish := m.State("publish")
-	if publish.Action == nil || publish.Action.Name != "file.write" {
-		t.Errorf("publish should be write-sugar file.write, got %+v", publish.Action)
-	}
-	if len(publish.Transitions) != 1 || publish.Transitions[0].To != "done" {
-		t.Errorf("publish transitions = %+v, want outgoing-edge default to done", publish.Transitions)
-	}
-
-	for _, name := range []string{"done", "failed"} {
-		if s := m.State(name); s == nil || !s.Terminal {
-			t.Errorf("implicit terminal %q missing", name)
-		}
-	}
-	if m.Limits.MaxTransitions != 12 {
-		t.Errorf("maxTransitions = %d, want 12", m.Limits.MaxTransitions)
 	}
 }
 

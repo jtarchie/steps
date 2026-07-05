@@ -99,6 +99,14 @@ export default {
 		t.Fatalf("parse: %v", err)
 	}
 
+	t.Run("review routes and catch", func(t *testing.T) { checkReviewRoutesAndCatch(t, m) })
+	t.Run("build routes with explicit revise upstream", func(t *testing.T) { checkBuildExplicitRevise(t, m) })
+	t.Run("write falls through to build", func(t *testing.T) { checkWriteFallsThroughToBuild(t, m) })
+	t.Run("escalate timeout falls through to failed", func(t *testing.T) { checkEscalateTimeout(t, m) })
+}
+
+func checkReviewRoutesAndCatch(t *testing.T, m *Machine) {
+	t.Helper()
 	review := m.State("review")
 	if got := []string{review.Transitions[0].To, review.Transitions[1].To, review.Transitions[2].To}; got[0] != "write" || got[1] != "gen" || got[2] != "escalate" {
 		t.Errorf("review routes = %v, want [write gen escalate]", got)
@@ -106,7 +114,10 @@ export default {
 	if len(review.Catch) != 1 || review.Catch[0].To != "escalate" || review.Catch[0].Match[0] != "budget_exceeded" {
 		t.Errorf("review catch = %+v, want budget_exceeded -> escalate", review.Catch)
 	}
+}
 
+func checkBuildExplicitRevise(t *testing.T, m *Machine) {
+	t.Helper()
 	build := m.State("build")
 	if src := build.Transitions[1].When.Src; src != "({ visits }) => visits.build < 4" {
 		t.Errorf("inner budget guard src = %q", src)
@@ -114,9 +125,17 @@ export default {
 	if got := []string{build.Transitions[0].To, build.Transitions[1].To, build.Transitions[2].To}; got[0] != "done" || got[1] != "gen" || got[2] != "failed" {
 		t.Errorf("build routes = %v, want [done gen failed] (explicit revise re-enters upstream)", got)
 	}
+}
+
+func checkWriteFallsThroughToBuild(t *testing.T, m *Machine) {
+	t.Helper()
 	if w := m.State("write"); len(w.Transitions) != 1 || w.Transitions[0].To != "build" {
 		t.Errorf("write transitions = %+v, want fallback to build (inner body)", w.Transitions)
 	}
+}
+
+func checkEscalateTimeout(t *testing.T, m *Machine) {
+	t.Helper()
 	if esc := m.State("escalate"); esc.Human == nil || esc.Human.OnTimeout != "failed" {
 		t.Errorf("escalate timeout route = %+v, want failed", esc.Human)
 	}

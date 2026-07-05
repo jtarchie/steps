@@ -216,19 +216,45 @@ critique:
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
+	checkParkedAtEscalate(t, res, 3)
+
+	// The park journals the gate's declared choices — the answer surface any
+	// later CLI resume or webview renders from the journal alone.
+	checkEscalateChoices(t, res.State.Parked.Choices)
+
+	// An event outside the gate's alphabet fails cleanly, before any routing.
+	_, err = eng.Resume(context.Background(), m, res.RunID, "shipit", nil)
+	checkOutOfAlphabetRejected(t, err)
+
+	// Resume in a "new process": fresh fold from the store.
+	res2, err := eng.Resume(context.Background(), m, res.RunID, "approved", map[string]any{"note": "ship it"})
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	checkResumedDoneWithGateData(t, res2)
+
+	// Resuming a finished run must fail.
+	if _, err := eng.Resume(context.Background(), m, res.RunID, "approved", nil); err == nil {
+		t.Error("resuming a finished run should error")
+	}
+	_ = store
+}
+
+func checkParkedAtEscalate(t *testing.T, res *engine.Result, wantVisits int) {
+	t.Helper()
 	if res.Status != journal.StatusParked {
 		t.Fatalf("status = %s, want parked", res.Status)
 	}
 	if res.State.Current != "escalate" {
 		t.Fatalf("parked at %s, want escalate", res.State.Current)
 	}
-	if v := res.State.Visits["draft"]; v != 3 {
-		t.Errorf("visits.draft = %d, want 3 (guard-bounded revisions)", v)
+	if v := res.State.Visits["draft"]; v != wantVisits {
+		t.Errorf("visits.draft = %d, want %d (guard-bounded revisions)", v, wantVisits)
 	}
+}
 
-	// The park journals the gate's declared choices — the answer surface any
-	// later CLI resume or webview renders from the journal alone.
-	c := res.State.Parked.Choices
+func checkEscalateChoices(t *testing.T, c *journal.ParkChoices) {
+	t.Helper()
 	if c == nil || c.Kind != "single" || len(c.Options) != 2 {
 		t.Fatalf("parked choices = %+v, want single with the 2 declared options", c)
 	}
@@ -236,31 +262,25 @@ critique:
 		c.Options[1].Event != "rejected" || c.Options[1].Label != "Fail the run" {
 		t.Errorf("options = %+v, want the workflow.ts choices in declaration order", c.Options)
 	}
+}
 
-	// An event outside the gate's alphabet fails cleanly, before any routing.
-	if _, err := eng.Resume(context.Background(), m, res.RunID, "shipit", nil); err == nil ||
-		!strings.Contains(err.Error(), `no route for event "shipit"`) {
+func checkOutOfAlphabetRejected(t *testing.T, err error) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), `no route for event "shipit"`) {
 		t.Errorf("out-of-alphabet resume err = %v, want a closed-alphabet rejection", err)
 	}
+}
 
-	// Resume in a "new process": fresh fold from the store.
-	res2, err := eng.Resume(context.Background(), m, res.RunID, "approved", map[string]any{"note": "ship it"})
-	if err != nil {
-		t.Fatalf("resume: %v", err)
-	}
-	if res2.Status != journal.StatusDone || res2.Terminal != "done" {
-		t.Fatalf("resumed status = %s at %s, want done", res2.Status, res2.Terminal)
+func checkResumedDoneWithGateData(t *testing.T, res *engine.Result) {
+	t.Helper()
+	if res.Status != journal.StatusDone || res.Terminal != "done" {
+		t.Fatalf("resumed status = %s at %s, want done", res.Status, res.Terminal)
 	}
 	// The gate's data merged into ctx.
-	gate, _ := res2.State.Ctx["escalate"].(map[string]any)
+	gate, _ := res.State.Ctx["escalate"].(map[string]any)
 	if gate["note"] != "ship it" {
 		t.Errorf("ctx.escalate = %v, want the resume data merged", gate)
 	}
-	// Resuming a finished run must fail.
-	if _, err := eng.Resume(context.Background(), m, res.RunID, "approved", nil); err == nil {
-		t.Error("resuming a finished run should error")
-	}
-	_ = store
 }
 
 // TestMaxTurnsOneSurvivesSemanticRetry: the turn budget bounds model calls
@@ -333,16 +353,7 @@ func TestPRReviewDeepPath(t *testing.T) {
 
 	// With a root, split_diff enriches each entry with the current file —
 	// scouts see code around the patch, not just hunks.
-	split, _ := res.State.Ctx["split_diff"].(map[string]any)
-	files, _ := split["files"].([]any)
-	if len(files) != 3 {
-		t.Fatalf("split_diff.files = %d entries, want 3", len(files))
-	}
-	worker, _ := files[1].(map[string]any)
-	content, _ := worker["content"].(string)
-	if !strings.Contains(content, "func (p *Pool) Process") {
-		t.Errorf("worker.go entry missing current-file context (got %d bytes)", len(content))
-	}
+	checkSplitDiffHasFileContext(t, res)
 
 	states, _, transitions := eventTrace(t, store, res.RunID)
 	want := []string{"split_diff", "scout_files", "scout_pr", "deep_review", "verdict", "write_review"}
@@ -353,14 +364,7 @@ func TestPRReviewDeepPath(t *testing.T) {
 		t.Errorf("transitions = %d, want 6", transitions)
 	}
 
-	scouts, _ := res.State.Ctx["scout_files"].(map[string]any)
-	if n, _ := scouts["count"].(int); n != 3 {
-		t.Errorf("scout_files.count = %v, want 3 (one hermetic context per file)", scouts["count"])
-	}
-	deep, _ := res.State.Ctx["deep_review"].(map[string]any)
-	if n, _ := deep["count"].(int); n != 2 {
-		t.Errorf("deep_review.count = %v, want 2 (low-risk file filtered out)", deep["count"])
-	}
+	checkScoutAndDeepReviewCounts(t, res)
 
 	// The senior proposed approve; the guard must have vetoed it: the fired
 	// verdict transition is the fallback (on == "").
@@ -372,6 +376,47 @@ func TestPRReviewDeepPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	checkVerdictTransitionVetoed(t, events)
+
+	review, err := os.ReadFile("out/review.md")
+	if err != nil {
+		t.Fatalf("artifact: %v", err)
+	}
+	for _, wantStr := range []string{"concurrent map write", "wg.Add", "store.Find"} {
+		if !strings.Contains(string(review), wantStr) {
+			t.Errorf("review.md missing %q", wantStr)
+		}
+	}
+}
+
+func checkSplitDiffHasFileContext(t *testing.T, res *engine.Result) {
+	t.Helper()
+	split, _ := res.State.Ctx["split_diff"].(map[string]any)
+	files, _ := split["files"].([]any)
+	if len(files) != 3 {
+		t.Fatalf("split_diff.files = %d entries, want 3", len(files))
+	}
+	worker, _ := files[1].(map[string]any)
+	content, _ := worker["content"].(string)
+	if !strings.Contains(content, "func (p *Pool) Process") {
+		t.Errorf("worker.go entry missing current-file context (got %d bytes)", len(content))
+	}
+}
+
+func checkScoutAndDeepReviewCounts(t *testing.T, res *engine.Result) {
+	t.Helper()
+	scouts, _ := res.State.Ctx["scout_files"].(map[string]any)
+	if n, _ := scouts["count"].(int); n != 3 {
+		t.Errorf("scout_files.count = %v, want 3 (one hermetic context per file)", scouts["count"])
+	}
+	deep, _ := res.State.Ctx["deep_review"].(map[string]any)
+	if n, _ := deep["count"].(int); n != 2 {
+		t.Errorf("deep_review.count = %v, want 2 (low-risk file filtered out)", deep["count"])
+	}
+}
+
+func checkVerdictTransitionVetoed(t *testing.T, events []*journal.Event) {
+	t.Helper()
 	for _, ev := range events {
 		if ev.Type != journal.TransitionFired {
 			continue
@@ -381,16 +426,6 @@ func TestPRReviewDeepPath(t *testing.T) {
 		}
 		if on, _ := ev.Data["on"].(string); on != "" {
 			t.Errorf("verdict transition fired on %q, want fallback (guard-vetoed approve)", on)
-		}
-	}
-
-	review, err := os.ReadFile("out/review.md")
-	if err != nil {
-		t.Fatalf("artifact: %v", err)
-	}
-	for _, wantStr := range []string{"concurrent map write", "wg.Add", "store.Find"} {
-		if !strings.Contains(string(review), wantStr) {
-			t.Errorf("review.md missing %q", wantStr)
 		}
 	}
 }
@@ -695,13 +730,7 @@ scan:
 		t.Fatalf("status = %s, want parked", res.Status)
 	}
 
-	c := res.State.Parked.Choices
-	if c == nil || c.Kind != "multi" || c.Event != "chosen" || c.Min != 1 {
-		t.Fatalf("parked choices = %+v, want multi/chosen/min 1 (event defaulted from the single edge)", c)
-	}
-	if len(c.Options) != 3 || c.Options[0].Value != "auth" || c.Options[2].Value != "search" {
-		t.Errorf("options = %+v, want the scope-evaluated module list", c.Options)
-	}
+	checkMultiChoiceOptions(t, res.State.Parked.Choices)
 
 	res2, err := eng.Resume(context.Background(), m, res.RunID, "chosen",
 		map[string]any{"selected": []any{"auth", "search"}})
@@ -717,6 +746,16 @@ scan:
 	}
 	if string(raw) != "auth,search" {
 		t.Errorf("picked.txt = %q — the selection should flow to downstream states", raw)
+	}
+}
+
+func checkMultiChoiceOptions(t *testing.T, c *journal.ParkChoices) {
+	t.Helper()
+	if c == nil || c.Kind != "multi" || c.Event != "chosen" || c.Min != 1 {
+		t.Fatalf("parked choices = %+v, want multi/chosen/min 1 (event defaulted from the single edge)", c)
+	}
+	if len(c.Options) != 3 || c.Options[0].Value != "auth" || c.Options[2].Value != "search" {
+		t.Errorf("options = %+v, want the scope-evaluated module list", c.Options)
 	}
 }
 
@@ -773,35 +812,12 @@ func TestCodegenMockTrace(t *testing.T) {
 	// The fixture spec (~180 tokens) already fits the 400-token slice budget,
 	// so every visit passes it through verbatim — zero model calls, and the
 	// coder items carry the full spec.
-	slices, _ := res.State.Ctx["generate#spec"].(map[string]any)
-	if slices["passthrough_hits"] != 2 {
-		t.Errorf("generate#spec.passthrough_hits = %v, want 2 (source fits the slice budget)", slices["passthrough_hits"])
-	}
-	if items, _ := slices["items"].([]any); len(items) != 2 {
-		t.Errorf("generate#spec.items = %v, want 2", slices["items"])
-	} else if first, _ := items[0].(map[string]any); first["text"] != string(spec) {
-		t.Errorf("generate#spec item 0 should be the verbatim spec, got %.80q", first["text"])
-	}
+	checkGenerateSpecPassthrough(t, res, string(spec))
 	// No build has run on this trace: the absent source distilled to "".
-	causes, _ := res.State.Ctx["generate#build_cause"].(map[string]any)
-	if items, _ := causes["items"].([]any); len(items) != 2 {
-		t.Errorf("generate#build_cause.items = %v, want 2 empty slices", causes["items"])
-	} else {
-		for i, it := range items {
-			if m, _ := it.(map[string]any); m["text"] != "" {
-				t.Errorf("generate#build_cause item %d = %v, want \"\" (absent source)", i, m["text"])
-			}
-		}
-	}
+	checkBuildCauseDistilledEmpty(t, res)
 
 	// Gate two really executed the generated test: its exit code is DATA.
-	build, _ := res.State.Ctx["build"].(map[string]any)
-	if build["ok"] != true || build["exit_code"] != 0 {
-		t.Fatalf("build gate = %v, want ok:true exit:0 (test actually ran)", build)
-	}
-	if out, _ := build["stdout"].(string); !strings.Contains(out, "all tests passed") {
-		t.Errorf("build stdout = %q, want the generated test's own output", build["stdout"])
-	}
+	checkBuildGateRanForReal(t, res)
 
 	gen, _ := res.State.Ctx["generate"].(map[string]any)
 	if n, _ := gen["count"].(int); n != 2 {
@@ -809,6 +825,53 @@ func TestCodegenMockTrace(t *testing.T) {
 	}
 
 	// The approved code reached disk and runs for real.
+	checkCodegenArtifacts(t)
+}
+
+func checkGenerateSpecPassthrough(t *testing.T, res *engine.Result, spec string) {
+	t.Helper()
+	slices, _ := res.State.Ctx["generate#spec"].(map[string]any)
+	if slices["passthrough_hits"] != 2 {
+		t.Errorf("generate#spec.passthrough_hits = %v, want 2 (source fits the slice budget)", slices["passthrough_hits"])
+	}
+	items, ok := slices["items"].([]any)
+	if !ok || len(items) != 2 {
+		t.Errorf("generate#spec.items = %v, want 2", slices["items"])
+		return
+	}
+	if first, _ := items[0].(map[string]any); first["text"] != spec {
+		t.Errorf("generate#spec item 0 should be the verbatim spec, got %.80q", first["text"])
+	}
+}
+
+func checkBuildCauseDistilledEmpty(t *testing.T, res *engine.Result) {
+	t.Helper()
+	causes, _ := res.State.Ctx["generate#build_cause"].(map[string]any)
+	items, ok := causes["items"].([]any)
+	if !ok || len(items) != 2 {
+		t.Errorf("generate#build_cause.items = %v, want 2 empty slices", causes["items"])
+		return
+	}
+	for i, it := range items {
+		if m, _ := it.(map[string]any); m["text"] != "" {
+			t.Errorf("generate#build_cause item %d = %v, want \"\" (absent source)", i, m["text"])
+		}
+	}
+}
+
+func checkBuildGateRanForReal(t *testing.T, res *engine.Result) {
+	t.Helper()
+	build, _ := res.State.Ctx["build"].(map[string]any)
+	if build["ok"] != true || build["exit_code"] != 0 {
+		t.Fatalf("build gate = %v, want ok:true exit:0 (test actually ran)", build)
+	}
+	if out, _ := build["stdout"].(string); !strings.Contains(out, "all tests passed") {
+		t.Errorf("build stdout = %q, want the generated test's own output", build["stdout"])
+	}
+}
+
+func checkCodegenArtifacts(t *testing.T) {
+	t.Helper()
 	greet, err := os.ReadFile("out/greet.sh")
 	if err != nil {
 		t.Fatalf("artifact: %v", err)

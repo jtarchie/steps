@@ -38,6 +38,15 @@ export default {
 		t.Fatalf("load: %v", err)
 	}
 
+	spec := checkGenSpecImplicitState(t, m)
+	slice := checkContractSliceState(t, m)
+
+	// Chain wiring: plan -> gen#spec -> gen#contract_slice -> gen.
+	checkDistillChainWiring(t, m, spec, slice)
+}
+
+func checkGenSpecImplicitState(t *testing.T, m *Machine) *State {
+	t.Helper()
 	spec := m.State("gen#spec")
 	if spec == nil || spec.Agent == nil {
 		t.Fatal("gen#spec implicit state missing or not an agent")
@@ -66,7 +75,11 @@ export default {
 	if !spec.Output.DefaultOutput() {
 		t.Errorf("gen#spec output = %+v, want default {text: string}", spec.Output.Schema)
 	}
+	return spec
+}
 
+func checkContractSliceState(t *testing.T, m *Machine) *State {
+	t.Helper()
 	slice := m.State("gen#contract_slice")
 	if slice == nil {
 		t.Fatal("gen#contract_slice implicit state missing")
@@ -77,8 +90,11 @@ export default {
 	if slice.Agent.MaxOutputTokens != DefaultDistillMaxTokens {
 		t.Errorf("default slice budget = %d, want %d", slice.Agent.MaxOutputTokens, DefaultDistillMaxTokens)
 	}
+	return slice
+}
 
-	// Chain wiring: plan -> gen#spec -> gen#contract_slice -> gen.
+func checkDistillChainWiring(t *testing.T, m *Machine, spec, slice *State) {
+	t.Helper()
 	if to := m.State("plan").Transitions[0].To; to != "gen#spec" {
 		t.Errorf("plan flows to %q, want the chain head gen#spec", to)
 	}
