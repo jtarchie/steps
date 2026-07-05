@@ -110,7 +110,7 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 	// tool loop); it resets before each driveTurn so semantic retries get a
 	// fresh budget.
 	turns := 0
-	r, usage, err := e.buildAgentRunner(st, rs, data, &turns, llm, svc, agentName, system)
+	r, usage, err := e.buildAgentRunner(st, rs, data, &turns, llm, svc, agentName, system) //nolint:contextcheck // its tool closures run later against the ADK runner's own per-call ToolContext, not a context available at build time
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +171,7 @@ func (e *Engine) buildAgentRunner(st *machine.State, rs *journal.RunState, data 
 		return nil, nil //nolint:nilnil
 	}
 
-	tools, beforeTool, afterTool, err := e.buildAgentTools(st, rs, turns, data) //nolint:contextcheck // its tool closures run later against the ADK runner's own per-call ToolContext, not a context available at build time
+	tools, beforeTool, afterTool, err := e.buildAgentTools(st, rs, turns, data)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -515,13 +515,13 @@ func (e *Engine) buildUserMessage(st *machine.State, scope map[string]any) (stri
 	if !st.Agent.Prompt.IsZero() {
 		prompt, err := st.Agent.Prompt.String(scope)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("rendering prompt: %w", err)
 		}
 		return machine.Dedent(prompt), nil
 	}
 	inputs, err := machine.ResolveInputs(st.Input, scope)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("resolving input block: %w", err)
 	}
 	var b strings.Builder
 	for _, k := range sortedKeys(inputs) {
@@ -538,7 +538,7 @@ func (e *Engine) buildSystemInstruction(st *machine.State, data map[string]any) 
 	if !st.Agent.System.IsZero() {
 		system, err := st.Agent.System.String(data)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("rendering system instruction: %w", err)
 		}
 		parts = append(parts, machine.Dedent(system))
 	}
@@ -546,7 +546,7 @@ func (e *Engine) buildSystemInstruction(st *machine.State, data map[string]any) 
 	if !plainTextContract(st.Output) {
 		schemaJSON, err := machine.SchemaJSON(st.Output.Schema, st.Output.Events)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("rendering output schema: %w", err)
 		}
 		contract := "Reply with a single JSON object matching this schema: " + schemaJSON +
 			"\nBegin your reply with { and end with }. No analysis, no preamble, no prose, no markdown fences."
@@ -655,7 +655,7 @@ func stripThinking(text string) string {
 func (e *Engine) collectMessages(ctx context.Context, svc session.Service, sessionID string) ([]journal.Message, error) {
 	resp, err := svc.Get(ctx, &session.GetRequest{AppName: appName, UserID: userID, SessionID: sessionID})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("loading session %s: %w", sessionID, err)
 	}
 	var out []journal.Message
 	for ev := range resp.Session.Events().All() {

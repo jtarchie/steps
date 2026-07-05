@@ -48,7 +48,7 @@ func (e *Engine) resolveLLM(ref string) (adkmodel.LLM, error) {
 	}
 	llm, err := e.Providers.Resolve(ref)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("resolving model %s: %w", ref, err)
 	}
 	if e.llms == nil {
 		e.llms = map[string]adkmodel.LLM{}
@@ -120,7 +120,7 @@ func (e *Engine) Start(ctx context.Context, m *machine.Machine, input map[string
 	}
 	err := e.Store.CreateRun(ctx, run)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("creating run %s: %w", runID, err)
 	}
 	inputAny := make(map[string]any, len(input))
 	for k, v := range input {
@@ -156,7 +156,7 @@ func (e *Engine) Start(ctx context.Context, m *machine.Machine, input map[string
 func (e *Engine) Resume(ctx context.Context, m *machine.Machine, runID, event string, data map[string]any) (*Result, error) {
 	events, err := e.Store.Events(ctx, runID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("loading journal for run %s: %w", runID, err)
 	}
 	rs := journal.Fold(events)
 	if rs.Finished {
@@ -175,8 +175,9 @@ func (e *Engine) Resume(ctx context.Context, m *machine.Machine, runID, event st
 		return result, nil
 	}
 
-	if err := e.Store.UpdateRun(ctx, runID, journal.StatusRunning, rs.Current); err != nil {
-		return nil, err
+	err = e.Store.UpdateRun(ctx, runID, journal.StatusRunning, rs.Current)
+	if err != nil {
+		return nil, fmt.Errorf("updating run %s: %w", runID, err)
 	}
 	return e.loop(ctx, m, runID, rs, inFlight, pending)
 }
@@ -199,7 +200,8 @@ func (e *Engine) resolveParkedResume(ctx context.Context, m *machine.Machine, ru
 		if err != nil {
 			return nil, false, nil, err
 		}
-		if _, err := e.fireTransition(ctx, m, runID, rs, p.State, p.OnTimeout, "timeout", ""); err != nil {
+		_, err = e.fireTransition(ctx, m, runID, rs, p.State, p.OnTimeout, "timeout", "")
+		if err != nil {
 			return nil, false, nil, err
 		}
 		res, loopErr := e.loop(ctx, m, runID, rs, false, nil)
@@ -210,10 +212,12 @@ func (e *Engine) resolveParkedResume(ctx context.Context, m *machine.Machine, ru
 	}
 	// A typo'd --event (or a forged web POST) should fail here, not as a
 	// mid-run "no transition matched": the gate's alphabet is closed.
-	if err := checkGateEventKnown(m, p, event); err != nil {
+	err = checkGateEventKnown(m, p, event)
+	if err != nil {
 		return nil, false, nil, err
 	}
-	if err := e.append(ctx, runID, journal.RunResumed, map[string]any{"event": event, "data": data}); err != nil {
+	err = e.append(ctx, runID, journal.RunResumed, map[string]any{"event": event, "data": data})
+	if err != nil {
 		return nil, false, nil, err
 	}
 	e.Listener.RunResumed(runID, event)
@@ -287,7 +291,8 @@ func (e *Engine) loop(ctx context.Context, m *machine.Machine, runID string, rs 
 			return e.parkRun(ctx, runID, current, rs, res.Park)
 		}
 
-		if err := e.recordHandlerFinished(ctx, runID, current, rs, res); err != nil {
+		err = e.recordHandlerFinished(ctx, runID, current, rs, res)
+		if err != nil {
 			return nil, err
 		}
 
@@ -346,7 +351,7 @@ func (e *Engine) finishTerminal(ctx context.Context, runID string, rs *journal.R
 	}
 	err = e.Store.UpdateRun(ctx, runID, status, st.Name)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("updating run %s: %w", runID, err)
 	}
 	e.Listener.RunFinished(runID, status, st.Name, rs.Transitions, rs.Usage)
 	return &Result{RunID: runID, Status: status, Terminal: st.Name, State: rs}, nil
@@ -382,8 +387,9 @@ func (e *Engine) acquireHandlerResult(ctx context.Context, m *machine.Machine, s
 		model = st.Agent.Model.Display()
 	}
 	e.Listener.StateEntered(current, st.HandlerKind(), rs.Visits[current], model)
-	if err := e.Store.UpdateRun(ctx, runID, journal.StatusRunning, current); err != nil {
-		return nil, pending, inFlight, "", err
+	err = e.Store.UpdateRun(ctx, runID, journal.StatusRunning, current)
+	if err != nil {
+		return nil, pending, inFlight, "", fmt.Errorf("updating run %s: %w", runID, err)
 	}
 
 	res, runErr := e.runHandler(ctx, m, st, runID, rs)
@@ -417,7 +423,7 @@ func (e *Engine) parkRun(ctx context.Context, runID, current string, rs *journal
 	}
 	err = e.Store.UpdateRun(ctx, runID, journal.StatusParked, current)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("updating run %s: %w", runID, err)
 	}
 	rs.Parked = &journal.ParkInfo{
 		State:     current,
@@ -744,7 +750,7 @@ func (e *Engine) withRetries(ctx context.Context, st *machine.State, runID strin
 		})
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, fmt.Errorf("waiting for retry backoff: %w", ctx.Err())
 		case <-time.After(delay):
 		}
 		attempt++
@@ -767,7 +773,10 @@ func backoffDelay(b machine.Backoff, attempt int) time.Duration {
 
 func (e *Engine) append(ctx context.Context, runID string, t journal.EventType, data map[string]any) error {
 	_, err := e.Store.Append(ctx, &journal.Event{RunID: runID, Type: t, Data: data})
-	return err
+	if err != nil {
+		return fmt.Errorf("appending %s event for run %s: %w", t, runID, err)
+	}
+	return nil
 }
 
 func newRunID() string {

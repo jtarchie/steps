@@ -53,7 +53,7 @@ func (e *Engine) runHuman(st *machine.State, rs *journal.RunState) (*HandlerResu
 	applyDistill(st, rs, scope)
 	prompt, err := st.Human.Prompt.String(scope)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("rendering human gate prompt: %w", err)
 	}
 	prompt = machine.Dedent(prompt)
 	choices, err := renderChoices(st, scope)
