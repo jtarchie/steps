@@ -431,8 +431,8 @@ func (l *loader) machine(root *goja.Object) (*Machine, error) {
 			case "maxOutputTokens":
 				m.Defaults.Agent.MaxOutputTokens = integer(o.Get(k))
 			case "maxInputTokens":
-				cap := integer(o.Get(k))
-				m.Defaults.Agent.MaxInputTokens = &cap
+				maxInput := integer(o.Get(k))
+				m.Defaults.Agent.MaxInputTokens = &maxInput
 			case "temperature":
 				t := o.Get(k).ToFloat()
 				m.Defaults.Agent.Temperature = &t
@@ -692,8 +692,8 @@ func (l *loader) agent(o *goja.Object) (*AgentSpec, error) {
 		ToolChoice:       str(o.Get("toolChoice")),
 	}
 	if v := o.Get("maxInputTokens"); defined(v) {
-		cap := int(v.ToInteger())
-		ag.MaxInputTokens = &cap
+		maxInput := int(v.ToInteger())
+		ag.MaxInputTokens = &maxInput
 	}
 	if defined(o.Get("temperature")) {
 		t := o.Get("temperature").ToFloat()
@@ -774,7 +774,7 @@ func (l *loader) retries(v goja.Value, where string) ([]RetryPolicy, error) {
 			if err != nil {
 				return nil, err
 			}
-			cap, err := duration(b.Get("cap"), where+".backoff.cap")
+			backoffCap, err := duration(b.Get("cap"), where+".backoff.cap")
 			if err != nil {
 				return nil, err
 			}
@@ -782,7 +782,7 @@ func (l *loader) retries(v goja.Value, where string) ([]RetryPolicy, error) {
 				Initial: initial,
 				Factor:  b.Get("factor").ToFloat(),
 				Jitter:  boolean(b.Get("jitter")),
-				Cap:     cap,
+				Cap:     backoffCap,
 			}
 		}
 		out = append(out, rp)

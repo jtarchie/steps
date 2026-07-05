@@ -120,8 +120,8 @@ func ApplyDefaults(m *Machine) {
 				a.MaxInputTokens = m.Defaults.Agent.MaxInputTokens
 			}
 			if a.MaxInputTokens == nil && !s.IsDistill() {
-				cap := DefaultMaxInputTokens
-				a.MaxInputTokens = &cap
+				maxInput := DefaultMaxInputTokens
+				a.MaxInputTokens = &maxInput
 			}
 			if a.StructuredOutput == "" {
 				a.StructuredOutput = m.Defaults.Agent.StructuredOutput

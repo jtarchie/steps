@@ -98,11 +98,11 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 	// may read unboundedly either. Over-budget is exhaustion (never retried,
 	// routable by catch:), attributed to the largest inputs so the fix —
 	// distill at the callsite, or trim — is one look away.
-	if cap := spec.MaxInputTokens; cap != nil && *cap > 0 {
-		if est := machine.EstimateTokens(system) + machine.EstimateTokens(userMsg); est > *cap {
+	if maxInput := spec.MaxInputTokens; maxInput != nil && *maxInput > 0 {
+		if est := machine.EstimateTokens(system) + machine.EstimateTokens(userMsg); est > *maxInput {
 			return nil, &provider.ClassifiedError{
 				Class: machine.ClassBudgetExceeded,
-				Msg:   inputBudgetMsg(st, data, est, *cap),
+				Msg:   inputBudgetMsg(st, data, est, *maxInput),
 			}
 		}
 	}
@@ -439,8 +439,8 @@ func plainTextContract(o machine.OutputSpec) bool {
 
 // inputBudgetMsg names an input overflow's biggest offenders (top three) so
 // the fix is one look away.
-func inputBudgetMsg(st *machine.State, scope map[string]any, est, cap int) string {
-	msg := fmt.Sprintf("rendered input ~%d tokens exceeds maxInputTokens %d", est, cap)
+func inputBudgetMsg(st *machine.State, scope map[string]any, est, maxInput int) string {
+	msg := fmt.Sprintf("rendered input ~%d tokens exceeds maxInputTokens %d", est, maxInput)
 	tops := machine.LargestInputs(st, scope)
 	if len(tops) > 3 {
 		tops = tops[:3]
@@ -493,11 +493,11 @@ func extractJSON(text string) (map[string]any, error) {
 	var lastErr error
 	for _, c := range candidates {
 		var out map[string]any
-		if err := json.Unmarshal([]byte(c), &out); err == nil {
+		err := json.Unmarshal([]byte(c), &out)
+		if err == nil {
 			return out, nil
-		} else {
-			lastErr = err
 		}
+		lastErr = err
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("no JSON object found")

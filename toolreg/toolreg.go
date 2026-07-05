@@ -102,11 +102,11 @@ func toInt(v any) (int, error) {
 // journal or a downstream prompt; the tail is what a fixer needs (the error
 // usually lands last).
 func capOutput(s string) string {
-	const max = 16 * 1024
-	if len(s) <= max {
+	const maxLen = 16 * 1024
+	if len(s) <= maxLen {
 		return s
 	}
-	return "… (truncated; showing last 16KB)\n" + s[len(s)-max:]
+	return "… (truncated; showing last 16KB)\n" + s[len(s)-maxLen:]
 }
 
 func str(args map[string]any, key string) (string, error) {
