@@ -125,31 +125,7 @@ func parseGateSelection(c *journal.ParkChoices, line string) (*gateAnswer, error
 	}
 
 	if c.Kind == "multi" {
-		var selected []any
-		if line == "all" {
-			for _, opt := range c.Options {
-				selected = append(selected, opt.Value)
-			}
-		} else {
-			for _, part := range strings.Split(line, ",") {
-				part = strings.TrimSpace(part)
-				if part == "" {
-					continue
-				}
-				n, err := strconv.Atoi(part)
-				if err != nil || n < 1 || n > len(c.Options) {
-					return nil, fmt.Errorf("%q is not an option number between 1 and %d", part, len(c.Options))
-				}
-				selected = append(selected, c.Options[n-1].Value)
-			}
-		}
-		if c.Min > 0 && len(selected) < c.Min {
-			return nil, fmt.Errorf("select at least %d option(s)", c.Min)
-		}
-		if c.Max > 0 && len(selected) > c.Max {
-			return nil, fmt.Errorf("select at most %d option(s)", c.Max)
-		}
-		return &gateAnswer{event: c.Event, data: map[string]any{"selected": selected}}, nil
+		return parseMultiSelection(c, line)
 	}
 
 	// Single: a number picks an option; anything else is a free-form event
@@ -161,6 +137,45 @@ func parseGateSelection(c *journal.ParkChoices, line string) (*gateAnswer, error
 		return &gateAnswer{event: c.Options[n-1].Event}, nil
 	}
 	return &gateAnswer{event: line}, nil
+}
+
+// parseMultiSelection handles a multi-select gate's answer line: "all", or a
+// comma-separated list of 1-based option numbers.
+func parseMultiSelection(c *journal.ParkChoices, line string) (*gateAnswer, error) {
+	selected, err := selectedValues(c, line)
+	if err != nil {
+		return nil, err
+	}
+	if c.Min > 0 && len(selected) < c.Min {
+		return nil, fmt.Errorf("select at least %d option(s)", c.Min)
+	}
+	if c.Max > 0 && len(selected) > c.Max {
+		return nil, fmt.Errorf("select at most %d option(s)", c.Max)
+	}
+	return &gateAnswer{event: c.Event, data: map[string]any{"selected": selected}}, nil
+}
+
+func selectedValues(c *journal.ParkChoices, line string) ([]any, error) {
+	if line == "all" {
+		selected := make([]any, 0, len(c.Options))
+		for _, opt := range c.Options {
+			selected = append(selected, opt.Value)
+		}
+		return selected, nil
+	}
+	var selected []any
+	for _, part := range strings.Split(line, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 1 || n > len(c.Options) {
+			return nil, fmt.Errorf("%q is not an option number between 1 and %d", part, len(c.Options))
+		}
+		selected = append(selected, c.Options[n-1].Value)
+	}
+	return selected, nil
 }
 
 // resumeInteractive handles `steps resume <id>` with no --event on a TTY:
