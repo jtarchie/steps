@@ -167,4 +167,17 @@ export default {
 	if !found {
 		t.Error("plan→gen edge missing after distill collapse")
 	}
+
+	// VisibleState maps the lowered distill hop onto its consumer, and leaves
+	// ordinary states untouched — this is what the run overlay uses to project
+	// journal events (which carry lowered names) onto the drawn nodes.
+	if got := m.VisibleState("gen#contract_slice"); got != "gen" {
+		t.Errorf("VisibleState(gen#contract_slice) = %q, want gen", got)
+	}
+	if got := m.VisibleState("plan"); got != "plan" {
+		t.Errorf("VisibleState(plan) = %q, want plan", got)
+	}
+	if got := m.VisibleState("nonexistent"); got != "nonexistent" {
+		t.Errorf("VisibleState(nonexistent) = %q, want it unchanged", got)
+	}
 }

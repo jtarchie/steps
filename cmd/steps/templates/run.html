@@ -162,86 +162,109 @@
 </ol>
 {{end}}
 
-{{if .Graph}}
-<script>
+<script data-refresh="{{.AutoRefresh}}" data-run-id="{{.Run.ID}}">
 (function () {
+  var cfg = document.currentScript.dataset;
+  var refreshMs = (parseInt(cfg.refresh, 10) || 0) * 1000;
   var wrap = document.getElementById('graph');
-  if (!wrap) return;
-  var vp = document.getElementById('graph-viewport');
-  var panel = document.getElementById('graph-panel');
+  var vp = wrap && document.getElementById('graph-viewport');
+  var panel = wrap && document.getElementById('graph-panel');
   var svg = vp && vp.querySelector('svg');
-  if (!svg) return;
 
-  // Pan/zoom by transforming the SVG inside a fixed viewport window.
-  var scale = 1, tx = 0, ty = 0, dragging = false, ox = 0, oy = 0;
-  function apply() {
-    svg.style.transformOrigin = '0 0';
-    svg.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
-  }
-  vp.addEventListener('wheel', function (e) {
-    e.preventDefault();
-    var r = vp.getBoundingClientRect();
-    var mx = e.clientX - r.left, my = e.clientY - r.top;
-    var ns = Math.min(4, Math.max(0.3, scale * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
-    tx = mx - (mx - tx) * (ns / scale);
-    ty = my - (my - ty) * (ns / scale);
-    scale = ns;
-    apply();
-  }, { passive: false });
-  vp.addEventListener('pointerdown', function (e) {
-    dragging = true; ox = e.clientX - tx; oy = e.clientY - ty;
-    vp.classList.add('dragging');
-    if (vp.setPointerCapture) vp.setPointerCapture(e.pointerId);
-  });
-  vp.addEventListener('pointermove', function (e) {
-    if (dragging) { tx = e.clientX - ox; ty = e.clientY - oy; apply(); }
-  });
-  function endDrag() { dragging = false; vp.classList.remove('dragging'); }
-  vp.addEventListener('pointerup', endDrag);
-  vp.addEventListener('pointercancel', endDrag);
-  vp.addEventListener('pointerleave', endDrag);
+  var busy = false; // pointer is over / working the graph — defer auto-refresh
 
-  // Hover panel built with textContent — never innerHTML, since labels/models
-  // are arbitrary machine source.
-  function kv(label, val) {
-    var d = document.createElement('div');
-    var s = document.createElement('span'); s.className = 'muted'; s.textContent = label + ' ';
-    d.appendChild(s); d.appendChild(document.createTextNode(val));
-    return d;
-  }
-  svg.querySelectorAll('.node').forEach(function (g) {
-    g.style.cursor = 'pointer';
-    g.addEventListener('mouseenter', function () {
-      var d = g.dataset;
-      panel.textContent = '';
-      var head = document.createElement('div');
-      var b = document.createElement('b'); b.textContent = d.name; head.appendChild(b);
-      var k = document.createElement('span'); k.className = 'muted'; k.textContent = ' ' + d.kind;
-      head.appendChild(k);
-      panel.appendChild(head);
-      if (d.model) panel.appendChild(kv('model', d.model));
-      panel.appendChild(kv('state', d.status));
-      panel.style.display = 'block';
+  if (svg) {
+    var storeKey = 'graph:' + cfg.runId;
+    var scale = 1, tx = 0, ty = 0, dragging = false, ox = 0, oy = 0, saveTimer = 0;
+    function apply() {
+      svg.style.transformOrigin = '0 0';
+      svg.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
+    }
+    function save() {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(function () {
+        try { sessionStorage.setItem(storeKey, JSON.stringify({ scale: scale, tx: tx, ty: ty })); } catch (e) {}
+      }, 200);
+    }
+    // Restore a prior pan/zoom so an auto-refresh reload doesn't reset the view.
+    try {
+      var s = JSON.parse(sessionStorage.getItem(storeKey) || 'null');
+      if (s && isFinite(s.scale) && isFinite(s.tx) && isFinite(s.ty)) { scale = s.scale; tx = s.tx; ty = s.ty; apply(); }
+    } catch (e) {}
+
+    vp.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      var r = vp.getBoundingClientRect();
+      var mx = e.clientX - r.left, my = e.clientY - r.top;
+      var ns = Math.min(4, Math.max(0.3, scale * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
+      tx = mx - (mx - tx) * (ns / scale);
+      ty = my - (my - ty) * (ns / scale);
+      scale = ns; apply(); save();
+    }, { passive: false });
+    vp.addEventListener('pointerdown', function (e) {
+      dragging = true; ox = e.clientX - tx; oy = e.clientY - ty;
+      vp.classList.add('dragging');
+      if (vp.setPointerCapture) vp.setPointerCapture(e.pointerId);
     });
-    g.addEventListener('mousemove', function (e) {
-      var r = wrap.getBoundingClientRect();
-      panel.style.left = (e.clientX - r.left + 14) + 'px';
-      panel.style.top = (e.clientY - r.top + 14) + 'px';
+    vp.addEventListener('pointermove', function (e) {
+      if (dragging) { tx = e.clientX - ox; ty = e.clientY - oy; apply(); }
     });
-    g.addEventListener('mouseleave', function () { panel.style.display = 'none'; });
-    g.addEventListener('click', function () {
-      var name = g.dataset.name;
-      var codes = document.querySelectorAll('ol.timeline code');
-      for (var i = 0; i < codes.length; i++) {
-        if (codes[i].textContent === name) {
-          codes[i].scrollIntoView({ behavior: 'smooth', block: 'center' });
-          break;
+    function endDrag() { if (dragging) { dragging = false; vp.classList.remove('dragging'); save(); } }
+    vp.addEventListener('pointerup', endDrag);
+    vp.addEventListener('pointercancel', endDrag);
+    vp.addEventListener('pointerenter', function () { busy = true; });
+    vp.addEventListener('pointerleave', function () { busy = false; endDrag(); });
+
+    // Hover panel built with textContent — never innerHTML, since labels/models
+    // are arbitrary machine source.
+    function kv(label, val) {
+      var d = document.createElement('div');
+      var s = document.createElement('span'); s.className = 'muted'; s.textContent = label + ' ';
+      d.appendChild(s); d.appendChild(document.createTextNode(val));
+      return d;
+    }
+    svg.querySelectorAll('.node').forEach(function (g) {
+      g.style.cursor = 'pointer';
+      g.addEventListener('mouseenter', function () {
+        var d = g.dataset;
+        panel.textContent = '';
+        var head = document.createElement('div');
+        var b = document.createElement('b'); b.textContent = d.name; head.appendChild(b);
+        var k = document.createElement('span'); k.className = 'muted'; k.textContent = ' ' + d.kind;
+        head.appendChild(k);
+        panel.appendChild(head);
+        if (d.model) panel.appendChild(kv('model', d.model));
+        panel.appendChild(kv('state', d.status));
+        panel.style.display = 'block';
+      });
+      g.addEventListener('mousemove', function (e) {
+        var r = wrap.getBoundingClientRect();
+        panel.style.left = (e.clientX - r.left + 14) + 'px';
+        panel.style.top = (e.clientY - r.top + 14) + 'px';
+      });
+      g.addEventListener('mouseleave', function () { panel.style.display = 'none'; });
+      g.addEventListener('click', function () {
+        var name = g.dataset.name;
+        var codes = document.querySelectorAll('ol.timeline code');
+        for (var i = 0; i < codes.length; i++) {
+          if (codes[i].textContent === name) {
+            codes[i].scrollIntoView({ behavior: 'smooth', block: 'center' });
+            break;
+          }
         }
-      }
+      });
     });
-  });
+  }
+
+  // Auto-refresh in JS (replaces <meta refresh>) so it never fires mid-drag/zoom:
+  // if the graph is busy when the timer elapses, wait another cycle. reload()
+  // also restores scroll position, which meta-refresh does not.
+  if (refreshMs > 0) {
+    (function tick() {
+      setTimeout(function () { if (busy) { tick(); } else { location.reload(); } }, refreshMs);
+    })();
+  }
 })();
 </script>
-{{end}}
 
 {{template "page_foot"}}

@@ -414,8 +414,11 @@ func (s *server) handleRun(c *echo.Context) error {
 	}
 
 	data := map[string]any{
-		"Title":       "steps — " + run.ID,
-		"Refresh":     refresh,
+		"Title": "steps — " + run.ID,
+		// The run page drives its own auto-refresh in JS (run.html) so it can
+		// pause while the graph is being panned/zoomed; no <meta refresh> here.
+		"Refresh":     0,
+		"AutoRefresh": refresh,
 		"Run":         run,
 		"Hash":        hash,
 		"Transitions": rs.Transitions,
@@ -427,7 +430,7 @@ func (s *server) handleRun(c *echo.Context) error {
 		"Inputs":      inputs,
 	}
 	if merr == nil {
-		data["Graph"] = renderGraphSVG(m.Graph(), buildRunOverlay(run, rs, events))
+		data["Graph"] = renderGraphSVG(m.Graph(), buildRunOverlay(m, run, rs, events))
 	}
 	if p := rs.Parked; p != nil && run.Status == journal.StatusParked {
 		data["Parked"] = p
@@ -538,14 +541,34 @@ func stateInfoFrom(m *machine.Machine) map[string]stateInfo {
 
 // buildRunOverlay projects a run's journal onto the topology: which states were
 // visited (and how often), which failed, which edges fired, and where the run
-// currently sits. Distill hops keep their lowered names, so a machine that uses
-// distill may not light its collapsed edge — an accepted v1 imprecision.
-func buildRunOverlay(run *journal.Run, rs *journal.RunState, events []*journal.Event) RunOverlay {
+// currently sits. Journal events carry the machine's *lowered* names, so every
+// name is mapped through machine.VisibleState — a distill hop (`consumer#key`)
+// collapses onto the visible consumer, so a run that traversed `pred → C#key →
+// C` lights the drawn `pred → C` edge and a mid-distill park/fail still marks a
+// node. A consumer's visit count therefore also includes its distiller passes.
+func buildRunOverlay(m *machine.Machine, run *journal.Run, rs *journal.RunState, events []*journal.Event) RunOverlay {
+	vis := m.VisibleState
+
+	visits := map[string]int{}
+	for name, count := range rs.Visits {
+		visits[vis(name)] += count
+	}
+	failed := map[string]bool{}
+	for name := range failedSet(events) {
+		failed[vis(name)] = true
+	}
+	fired := map[[2]string]bool{}
+	for pair := range firedEdges(events) {
+		from, to := vis(pair[0]), vis(pair[1])
+		if from != to { // internal distill hops collapse to a self-pair; drop
+			fired[[2]string{from, to}] = true
+		}
+	}
 	return RunOverlay{
-		Visits:  rs.Visits,
-		Failed:  failedSet(events),
-		Fired:   firedEdges(events),
-		Current: run.CurrentState,
+		Visits:  visits,
+		Failed:  failed,
+		Fired:   fired,
+		Current: vis(run.CurrentState),
 		Parked:  run.Status == journal.StatusParked,
 		Status:  run.Status,
 	}

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jtarchie/steps/journal"
 	"github.com/jtarchie/steps/machine"
 )
 
@@ -132,3 +133,106 @@ func TestRenderGraphSVGEmpty(t *testing.T) {
 
 // isNotFinite reports NaN or ±Inf without importing math into the hot path.
 func isNotFinite(f float64) bool { return f != f || f > 1e18 || f < -1e18 }
+
+// TestBuildRunOverlayDistill: journal events carry lowered distill names
+// (pred → C#key → C). The overlay must collapse them onto the visible consumer
+// so the drawn pred→C edge fires and a mid-distill failure marks C.
+func TestBuildRunOverlayDistill(t *testing.T) {
+	const src = `
+const plan = { prompt: () => "plan", output: { contract: "string" } };
+const gen = {
+  distill: { contract_slice: { from: "plan", for: "the public contract only" } },
+  prompt: ({ contract_slice }) => "gen " + contract_slice,
+  output: { code: "string" },
+};
+export default {
+  name: "distilloverlay",
+  models: { distiller: "mock" },
+  model: "mock",
+  states: { plan, gen },
+  flow: pipe(plan, gen),
+};`
+	m, err := machine.Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	ev := func(typ journal.EventType, data map[string]any) *journal.Event {
+		return &journal.Event{Type: typ, Data: data}
+	}
+	events := []*journal.Event{
+		ev(journal.TransitionFired, map[string]any{"from": "plan", "to": "gen#contract_slice"}),
+		ev(journal.HandlerFailed, map[string]any{"state": "gen#contract_slice", "class": "provider_error"}),
+		ev(journal.TransitionFired, map[string]any{"from": "gen#contract_slice", "to": "gen"}),
+	}
+	rs := &journal.RunState{Visits: map[string]int{"plan": 1, "gen#contract_slice": 1, "gen": 1}}
+	run := &journal.Run{CurrentState: "gen", Status: journal.StatusRunning}
+
+	ov := buildRunOverlay(m, run, rs, events)
+
+	if !ov.Fired[[2]string{"plan", "gen"}] {
+		t.Errorf("Fired should light the collapsed plan→gen edge; got %v", ov.Fired)
+	}
+	for pair := range ov.Fired {
+		if strings.Contains(pair[0], "#") || strings.Contains(pair[1], "#") {
+			t.Errorf("Fired leaked a lowered distill name: %v", pair)
+		}
+	}
+	if !ov.Failed["gen"] {
+		t.Error("a failure inside gen#contract_slice should mark the consumer gen failed")
+	}
+	if ov.Failed["gen#contract_slice"] {
+		t.Error("Failed should not carry the lowered distill name")
+	}
+	if ov.Visits["gen"] == 0 {
+		t.Error("gen should read as visited (distiller visits folded into the consumer)")
+	}
+}
+
+// TestOrderRanksReducesCrossings feeds a hand-built layout whose discovery-seed
+// ordering crosses (a→d, b→c with a<b, c<d) and asserts the ordering pass
+// removes the crossing.
+func TestOrderRanksReducesCrossings(t *testing.T) {
+	a := &nodeBox{GraphNode: machine.GraphNode{Name: "a"}, rank: 0}
+	b := &nodeBox{GraphNode: machine.GraphNode{Name: "b"}, rank: 0}
+	c := &nodeBox{GraphNode: machine.GraphNode{Name: "c"}, rank: 1}
+	d := &nodeBox{GraphNode: machine.GraphNode{Name: "d"}, rank: 1}
+	lay := &gvLayout{
+		nodes:  []*nodeBox{a, b, c, d},
+		byName: map[string]*nodeBox{"a": a, "b": b, "c": c, "d": d},
+		disco:  map[string]int{"a": 0, "b": 1, "c": 2, "d": 3},
+	}
+	edges := []machine.GraphEdge{{From: "a", To: "d"}, {From: "b", To: "c"}}
+
+	// Seed crossings under discovery order (a<b, c<d): a→d and b→c cross once.
+	_, _, fwd := forwardAdjacency(lay, edges)
+	seed := map[string]int{"a": 0, "b": 1, "c": 0, "d": 1}
+	if got := countCrossings(fwd, lay, seed); got != 1 {
+		t.Fatalf("seed crossings = %d, want 1 (the fixture must actually cross)", got)
+	}
+
+	byRank := orderRanks(lay, edges, 1)
+	final := snapshotOrder(byRank, 1)
+	if got := countCrossings(fwd, lay, final); got != 0 {
+		t.Errorf("crossings after ordering = %d, want 0 (a→d,b→c should uncross)", got)
+	}
+}
+
+// TestBuildLayoutDeterministic: identical input yields an identical ordering.
+func TestBuildLayoutDeterministic(t *testing.T) {
+	m := loadExample(t, "examples/incident-runbook/workflow.ts")
+	order := func() map[string]int {
+		lay := buildLayout(m.Graph(), RunOverlay{})
+		out := map[string]int{}
+		for _, nb := range lay.nodes {
+			out[nb.Name] = nb.order
+		}
+		return out
+	}
+	a, b := order(), order()
+	for name, oa := range a {
+		if b[name] != oa {
+			t.Errorf("ordering not deterministic: %s = %d then %d", name, oa, b[name])
+		}
+	}
+}

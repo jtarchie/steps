@@ -146,54 +146,138 @@ func assignRanks(lay *gvLayout, initial string, adj map[string][]string) int {
 	return maxRank
 }
 
-// orderRanks groups nodes by rank, seeds each rank by discovery order, then
-// runs one top-down barycenter sweep to reduce crossings. Returns the grouping.
+// orderRanks orders the nodes within each rank to reduce edge crossings. It
+// seeds by BFS discovery order (which preserves pipe order), then runs a few
+// bidirectional barycenter sweeps — down by predecessor position, up by
+// successor position — keeping the arrangement with the fewest crossings.
+// Deterministic and never worse than the seed. Enough for the small graphs
+// steps runs; not optimal crossing-minimization.
 func orderRanks(lay *gvLayout, edges []machine.GraphEdge, maxRank int) map[int][]*nodeBox {
+	byRank := groupByRank(lay)
+	preds, succs, fwd := forwardAdjacency(lay, edges)
+
+	for r := 0; r <= maxRank; r++ {
+		row := byRank[r]
+		sort.SliceStable(row, func(i, j int) bool { return lay.disco[row[i].Name] < lay.disco[row[j].Name] })
+	}
+	orderIdx := reindexAll(byRank, maxRank)
+	best, bestX := snapshotOrder(byRank, maxRank), countCrossings(fwd, lay, orderIdx)
+
+	for range 4 {
+		for r := 1; r <= maxRank; r++ {
+			barySort(byRank[r], preds, orderIdx)
+			reindexRow(byRank[r], orderIdx)
+		}
+		for r := maxRank - 1; r >= 0; r-- {
+			barySort(byRank[r], succs, orderIdx)
+			reindexRow(byRank[r], orderIdx)
+		}
+		if x := countCrossings(fwd, lay, orderIdx); x < bestX {
+			bestX, best = x, snapshotOrder(byRank, maxRank)
+		}
+	}
+	applyOrder(byRank, best, maxRank)
+	return byRank
+}
+
+func groupByRank(lay *gvLayout) map[int][]*nodeBox {
 	byRank := map[int][]*nodeBox{}
 	for _, nb := range lay.nodes {
 		byRank[nb.rank] = append(byRank[nb.rank], nb)
 	}
-	// forward predecessors only (back edges excluded from ordering)
-	preds := map[string][]string{}
+	return byRank
+}
+
+// forwardAdjacency returns predecessor and successor name lists over forward
+// edges only (back edges don't constrain within-rank order), plus the forward
+// edge slice used for crossing counting.
+func forwardAdjacency(lay *gvLayout, edges []machine.GraphEdge) (preds, succs map[string][]string, fwd []machine.GraphEdge) {
+	preds, succs = map[string][]string{}, map[string][]string{}
 	for _, e := range edges {
 		f, t := lay.byName[e.From], lay.byName[e.To]
 		if f != nil && t != nil && t.rank > f.rank {
 			preds[e.To] = append(preds[e.To], e.From)
+			succs[e.From] = append(succs[e.From], e.To)
+			fwd = append(fwd, e)
 		}
 	}
+	return preds, succs, fwd
+}
+
+// barySort orders a rank by the mean index of each node's forward neighbors;
+// a node with no neighbor in `neigh` keeps its current index.
+func barySort(row []*nodeBox, neigh map[string][]string, orderIdx map[string]int) {
+	bary := map[string]float64{}
+	for _, nb := range row {
+		ns := neigh[nb.Name]
+		if len(ns) == 0 {
+			bary[nb.Name] = float64(orderIdx[nb.Name])
+			continue
+		}
+		sum := 0.0
+		for _, n := range ns {
+			sum += float64(orderIdx[n])
+		}
+		bary[nb.Name] = sum / float64(len(ns))
+	}
+	sort.SliceStable(row, func(i, j int) bool { return bary[row[i].Name] < bary[row[j].Name] })
+}
+
+func reindexRow(row []*nodeBox, orderIdx map[string]int) {
+	for i, nb := range row {
+		orderIdx[nb.Name] = i
+		nb.order = i
+	}
+}
+
+func reindexAll(byRank map[int][]*nodeBox, maxRank int) map[string]int {
 	orderIdx := map[string]int{}
 	for r := 0; r <= maxRank; r++ {
-		row := byRank[r]
-		sort.SliceStable(row, func(i, j int) bool { return lay.disco[row[i].Name] < lay.disco[row[j].Name] })
-		for i, nb := range row {
-			orderIdx[nb.Name] = i
+		reindexRow(byRank[r], orderIdx)
+	}
+	return orderIdx
+}
+
+func snapshotOrder(byRank map[int][]*nodeBox, maxRank int) map[string]int {
+	out := map[string]int{}
+	for r := 0; r <= maxRank; r++ {
+		for i, nb := range byRank[r] {
+			out[nb.Name] = i
 		}
 	}
-	for r := 1; r <= maxRank; r++ {
+	return out
+}
+
+func applyOrder(byRank map[int][]*nodeBox, order map[string]int, maxRank int) {
+	for r := 0; r <= maxRank; r++ {
 		row := byRank[r]
-		bary := map[string]float64{}
-		for _, nb := range row {
-			ps := preds[nb.Name]
-			if len(ps) == 0 {
-				bary[nb.Name] = float64(orderIdx[nb.Name])
-				continue
-			}
-			sum := 0.0
-			for _, p := range ps {
-				sum += float64(orderIdx[p])
-			}
-			bary[nb.Name] = sum / float64(len(ps))
-		}
-		sort.SliceStable(row, func(i, j int) bool { return bary[row[i].Name] < bary[row[j].Name] })
+		sort.SliceStable(row, func(i, j int) bool { return order[row[i].Name] < order[row[j].Name] })
 		for i, nb := range row {
-			orderIdx[nb.Name] = i
 			nb.order = i
 		}
 	}
-	for i, nb := range byRank[0] {
-		nb.order = i
+}
+
+// countCrossings counts pairs of forward edges that cross given the current
+// within-rank ordering: two edges spanning the same rank pair cross when their
+// endpoints sit in opposite left-right order. O(E²), trivial at these sizes.
+func countCrossings(fwd []machine.GraphEdge, lay *gvLayout, orderIdx map[string]int) int {
+	n := 0
+	for i := range fwd {
+		for j := i + 1; j < len(fwd); j++ {
+			a, b := fwd[i], fwd[j]
+			if lay.byName[a.From].rank != lay.byName[b.From].rank ||
+				lay.byName[a.To].rank != lay.byName[b.To].rank {
+				continue
+			}
+			df := orderIdx[a.From] - orderIdx[b.From]
+			dt := orderIdx[a.To] - orderIdx[b.To]
+			if (df < 0 && dt > 0) || (df > 0 && dt < 0) {
+				n++
+			}
+		}
 	}
-	return byRank
+	return n
 }
 
 // placeNodes centers each rank horizontally around the widest rank and stacks

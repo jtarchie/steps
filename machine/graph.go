@@ -115,6 +115,15 @@ func (m *Machine) Graph() GraphView {
 // Distill states have exactly one outgoing transition, so this is a straight
 // walk; the seen guard is belt-and-suspenders against a malformed chain.
 func (m *Machine) resolveGraphTarget(name string) string {
+	return m.VisibleState(name)
+}
+
+// VisibleState maps a possibly-lowered distill state name (`consumer#key`) to
+// the visible graph node it collapses into: it follows a distill chain to its
+// consumer and returns any other name unchanged. Callers overlaying a run's
+// journal (whose events carry lowered names) use it so fired edges, the current
+// state, and failures land on the nodes the diagram actually draws.
+func (m *Machine) VisibleState(name string) string {
 	seen := map[string]bool{}
 	for {
 		s := m.State(name)
