@@ -8,11 +8,13 @@ run:
 linters:
   default: none
   enable:
+    # default
     - errcheck      # unchecked errors are bugs (file I/O, exec)
     - govet         # go vet superset
     - ineffassign   # assignments to values never read
     - staticcheck   # the SA* suite (real bugs, deadcode, simplifications)
     - unused        # unused functions/vars/types
+    # custom
     - misspell      # typos in identifiers/comments
     - bodyclose     # http.Response.Body not closed
     - errorlint     # %w vs %s on errors, typed nil
@@ -22,9 +24,67 @@ linters:
     - unparam       # unused function parameters
     - gocritic      # common pitfalls
     - reassign      # reassigning package-level vars (http.DefaultClient)
+    - tagalign
+    - wrapcheck
+    - sqlclosecheck
+    - exhaustive
+    - whitespace
+    - noinlineerr
+    - importas
+    # nil
+    - nilnil
+    - nilnesserr
+    # Correctness
+    - musttag       # JSON tags required on marshaled structs
+    - recvcheck     # consistent pointer vs value receivers
+    - wastedassign  # assignments whose values are never read
+    - nolintlint    # stale or malformed //nolint directives
+    - errchkjson    # json.Marshal returns ignored where it shouldn't be
+    - loggercheck   # slog key/value mismatch and even-arg invariants
+    # Style / consistency
+    - sloglint      # consistent slog usage
+    - revive        # replacement for golint with a tight ruleset
+    - gochecknoinits # init() side effects make wiring hard to trace
+    # Modern Go idioms
+    - intrange      # `for i := range n` (Go 1.22+)
+    - copyloopvar   # loop-var capture safe by default (Go 1.22+)
+    - mirror        # bytes/strings mirror function suggestions
+    # Performance
+    - perfsprint    # replace fmt.Sprintf/Errorf with faster alternatives
+    - prealloc      # pre-allocate slices where capacity is known
+    # Concurrency / context / HTTP safety
+    - contextcheck  # context.Context must be propagated, not ignored
+    - containedctx  # context.Context must not be stored in structs
+    # Complexity
+    - cyclop        # cyclomatic complexity per function
+    - gocognit      # cognitive complexity (deeply nested / hard-to-read logic)
+    - nestif        # deeply nested if blocks
+    # Security
+    - gosec         # Go security checker; respects existing //nolint:gosec markers
+    # Architecture
+    - depguard      # enforce the internal import-direction (no upward dep on the CLI layer)
   settings:
     staticcheck:
       checks: ["all"]
+    depguard:
+      rules:
+        # cmd/steps is the composition root (CLI wiring); domain packages
+        # below it (engine, machine, journal, provider, toolreg) must never
+        # import it, so the dependency arrow only ever points down.
+        no-cmd-import:
+          deny:
+            - pkg: github.com/jtarchie/steps/cmd/steps
+              desc: cmd/steps is the composition root; domain packages must not take an upward dependency on the CLI layer.
+          files:
+            - "!**/cmd/**"
+    sloglint:
+      no-raw-keys: false
+    cyclop:
+      max-complexity: 15
+    gocognit:
+      min-complexity: 30
+    nestif:
+      min-complexity: 7
     gocritic:
       enabled-tags:
         - diagnostic
@@ -37,6 +97,25 @@ linters:
         - ifElseChain          # refactor suggestion, not a bug
         - singleCaseSwitch     # refactor suggestion
         - preferDecodeRune     # refactor suggestion; we operate on ASCII identifiers
+    revive:
+      rules:
+        - name: var-naming
+        - name: error-return
+        - name: error-naming
+        - name: if-return
+        - name: increment-decrement
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unused-parameter
+          disabled: true # too noisy for handler signatures
+        - name: unreachable-code
+        - name: redefines-builtin-id
   exclusions:
     presets:
       - common-false-positives
