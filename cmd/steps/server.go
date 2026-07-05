@@ -12,9 +12,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -449,6 +449,5 @@ func (s *server) render(c *echo.Context, code int, name string, data any) error 
 }
 
 func itoa(n int) string {
-	raw, _ := json.Marshal(n)
-	return string(raw)
+	return strconv.Itoa(n)
 }

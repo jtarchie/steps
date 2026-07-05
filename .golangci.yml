@@ -125,9 +125,10 @@ linters:
       - "third_party$"
       - "builtin$"
     rules:
-      # tests legitimately use magic numbers and skip some error checks
+      # tests legitimately use magic numbers, skip some error checks, and
+      # marshal fixed test literals that can never fail to encode
       - path: _test\.go
-        linters: [errcheck, unparam, gocritic]
+        linters: [errcheck, unparam, gocritic, errchkjson]
       # the command package exits directly on tool errors (the CLI contract)
       - path: cmd/steps/
         linters: [errcheck]

@@ -180,11 +180,19 @@ func renderHistory(msgs []journal.Message, spec *machine.HistorySpec) string {
 		}
 		if includeTools {
 			for _, tc := range m.ToolCalls {
-				args, _ := json.Marshal(tc.Args)
+				args, err := json.Marshal(tc.Args)
+				if err != nil {
+					fmt.Fprintf(&b, "[tool_call] %s(%v)\n", tc.Name, tc.Args)
+					continue
+				}
 				fmt.Fprintf(&b, "[tool_call] %s(%s)\n", tc.Name, args)
 			}
 			for _, tr := range m.ToolResults {
-				res, _ := json.Marshal(tr.Result)
+				res, err := json.Marshal(tr.Result)
+				if err != nil {
+					fmt.Fprintf(&b, "[tool_result] %s -> %v\n", tr.Name, tr.Result)
+					continue
+				}
 				fmt.Fprintf(&b, "[tool_result] %s -> %s\n", tr.Name, res)
 			}
 		}

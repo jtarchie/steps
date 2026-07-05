@@ -301,7 +301,11 @@ func emitResult(res *engine.Result) {
 		"transitions": res.State.Transitions,
 		"tokens":      res.State.Usage.Total(),
 	}
-	raw, _ := json.MarshalIndent(summary, "", "  ")
+	raw, err := json.MarshalIndent(summary, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%serror:%s marshaling result summary: %v\n", cRed, cReset, err)
+		os.Exit(1)
+	}
 	fmt.Println(string(raw))
 	if res.Status == journal.StatusFailed {
 		os.Exit(2)
