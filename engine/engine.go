@@ -248,14 +248,7 @@ func (e *Engine) loop(ctx context.Context, m *machine.Machine, runID string, rs 
 		current = m.Initial
 	}
 
-	// visits.<state> must be a number for EVERY state — a guard like
-	// `visits.draft < 3` on a never-entered state reads undefined in JS,
-	// and `undefined < 3` is false: a silent misroute.
-	for _, s := range m.States {
-		if _, ok := rs.Visits[s.Name]; !ok {
-			rs.Visits[s.Name] = 0
-		}
-	}
+	initVisits(m, rs)
 
 	for {
 		st := m.State(current)
@@ -264,21 +257,7 @@ func (e *Engine) loop(ctx context.Context, m *machine.Machine, runID string, rs 
 		}
 
 		if st.Terminal {
-			status := journal.StatusDone
-			if st.Status == "failed" {
-				status = journal.StatusFailed
-			}
-			if err := e.append(ctx, runID, journal.RunFinished, map[string]any{
-				"terminal_state": st.Name,
-				"status":         status,
-			}); err != nil {
-				return nil, err
-			}
-			if err := e.Store.UpdateRun(ctx, runID, status, st.Name); err != nil {
-				return nil, err
-			}
-			e.Listener.RunFinished(runID, status, st.Name, rs.Transitions, rs.Usage)
-			return &Result{RunID: runID, Status: status, Terminal: st.Name, State: rs}, nil
+			return e.finishTerminal(ctx, runID, rs, st)
 		}
 
 		// Run-level wall clock.
@@ -291,101 +270,23 @@ func (e *Engine) loop(ctx context.Context, m *machine.Machine, runID string, rs 
 			continue
 		}
 
-		var res *HandlerResult
-		var runErr error
-
-		if pending != nil && pending.state == current {
-			res = &HandlerResult{Output: pending.data, Event: pending.event}
-			if res.Output == nil {
-				res.Output = map[string]any{}
-			}
-			pending = nil
-		} else {
-			if !inFlight {
-				rs.Visits[current]++
-				if err := e.append(ctx, runID, journal.StateEntered, map[string]any{
-					"state": current,
-					"visit": rs.Visits[current],
-				}); err != nil {
-					return nil, err
-				}
-			}
-			inFlight = false
-			model := ""
-			if st.Agent != nil {
-				model = st.Agent.Model.Display()
-			}
-			e.Listener.StateEntered(current, st.HandlerKind(), rs.Visits[current], model)
-			if err := e.Store.UpdateRun(ctx, runID, journal.StatusRunning, current); err != nil {
-				return nil, err
-			}
-
-			res, runErr = e.runHandler(ctx, m, st, runID, rs)
-			if runErr != nil {
-				next, err := e.routeFailure(ctx, m, runID, rs, st, provider.Classify(runErr), runErr)
-				if err != nil {
-					return nil, err
-				}
-				current = next
-				continue
-			}
+		res, newPending, newInFlight, rerouted, err := e.acquireHandlerResult(ctx, m, st, runID, rs, current, inFlight, pending)
+		if err != nil {
+			return nil, err
+		}
+		pending, inFlight = newPending, newInFlight
+		if rerouted != "" {
+			current = rerouted
+			continue
 		}
 
 		if res.Park != nil {
-			parked := map[string]any{
-				"state":      current,
-				"reason":     "human_gate",
-				"prompt":     res.Park.Prompt,
-				"timeout":    res.Park.Timeout,
-				"on_timeout": res.Park.OnTimeout,
-			}
-			if res.Park.Choices != nil {
-				parked["choices"] = res.Park.Choices
-			}
-			if err := e.append(ctx, runID, journal.RunParked, parked); err != nil {
-				return nil, err
-			}
-			if err := e.Store.UpdateRun(ctx, runID, journal.StatusParked, current); err != nil {
-				return nil, err
-			}
-			// Mirror the journal into the in-memory state so same-process
-			// callers (interactive gates, tests) see the park without re-folding.
-			rs.Parked = &journal.ParkInfo{
-				State:     current,
-				Reason:    "human_gate",
-				Prompt:    res.Park.Prompt,
-				At:        time.Now(),
-				Timeout:   res.Park.Timeout,
-				OnTimeout: res.Park.OnTimeout,
-				Choices:   res.Park.Choices,
-			}
-			e.Listener.RunParked(runID, current, res.Park.Prompt, res.Park.Timeout, res.Park.Choices)
-			return &Result{RunID: runID, Status: journal.StatusParked, State: rs}, nil
+			return e.parkRun(ctx, runID, current, rs, res.Park)
 		}
 
-		// Merge the state's conclusion into ctx and journal it.
-		rs.Ctx[current] = res.Output
-		rs.Usage.Add(res.Usage)
-		if len(res.Messages) > 0 {
-			rs.Convos[current] = res.Messages
-		}
-		finished := map[string]any{
-			"state":    current,
-			"output":   res.Output,
-			"event":    res.Event,
-			"usage":    res.Usage,
-			"messages": res.Messages,
-		}
-		if res.Memo {
-			finished["memo"] = true
-		}
-		if res.Passthrough {
-			finished["passthrough"] = true
-		}
-		if err := e.append(ctx, runID, journal.HandlerFinished, finished); err != nil {
+		if err := e.recordHandlerFinished(ctx, runID, current, rs, res); err != nil {
 			return nil, err
 		}
-		e.Listener.HandlerFinished(current, res.Output, res.Event, res.Usage)
 
 		// Token/cost budgets.
 		if class, exceeded := e.checkBudgets(m, rs); exceeded {
@@ -398,21 +299,157 @@ func (e *Engine) loop(ctx context.Context, m *machine.Machine, runID string, rs 
 		}
 
 		// Transitions: event match AND guard, in order, first match wins.
-		tr, err := e.pickTransition(st, res, rs)
-		if err != nil {
-			next, rerr := e.routeFailure(ctx, m, runID, rs, st, machine.ClassGuardRejected, err)
-			if rerr != nil {
-				return nil, rerr
-			}
-			current = next
-			continue
-		}
-		next, err := e.fireTransition(ctx, m, runID, rs, current, tr.To, tr.On, tr.When.Display())
+		next, err := e.advanceTransition(ctx, m, runID, rs, st, current, res)
 		if err != nil {
 			return nil, err
 		}
 		current = next
 	}
+}
+
+// advanceTransition picks and fires the state's next transition, rerouting
+// through catch/retry when no transition's guard matches.
+func (e *Engine) advanceTransition(ctx context.Context, m *machine.Machine, runID string, rs *journal.RunState, st *machine.State, current string, res *HandlerResult) (string, error) {
+	tr, err := e.pickTransition(st, res, rs)
+	if err != nil {
+		return e.routeFailure(ctx, m, runID, rs, st, machine.ClassGuardRejected, err)
+	}
+	return e.fireTransition(ctx, m, runID, rs, current, tr.To, tr.On, tr.When.Display())
+}
+
+// initVisits ensures visits.<state> is a number for EVERY state — a guard
+// like `visits.draft < 3` on a never-entered state reads undefined in JS,
+// and `undefined < 3` is false: a silent misroute.
+func initVisits(m *machine.Machine, rs *journal.RunState) {
+	for _, s := range m.States {
+		if _, ok := rs.Visits[s.Name]; !ok {
+			rs.Visits[s.Name] = 0
+		}
+	}
+}
+
+// finishTerminal journals and narrates a run's conclusion at a terminal state.
+func (e *Engine) finishTerminal(ctx context.Context, runID string, rs *journal.RunState, st *machine.State) (*Result, error) {
+	status := journal.StatusDone
+	if st.Status == "failed" {
+		status = journal.StatusFailed
+	}
+	if err := e.append(ctx, runID, journal.RunFinished, map[string]any{
+		"terminal_state": st.Name,
+		"status":         status,
+	}); err != nil {
+		return nil, err
+	}
+	if err := e.Store.UpdateRun(ctx, runID, status, st.Name); err != nil {
+		return nil, err
+	}
+	e.Listener.RunFinished(runID, status, st.Name, rs.Transitions, rs.Usage)
+	return &Result{RunID: runID, Status: status, Terminal: st.Name, State: rs}, nil
+}
+
+// acquireHandlerResult gets this iteration's HandlerResult: either the
+// pending resume answer, or drives the state's handler for real. On a real
+// handler error, it re-routes via catch/retry itself and returns the state
+// to continue at (rerouted != "") rather than erroring — matching loop's
+// routeFailure-then-continue pattern for its other failure points.
+func (e *Engine) acquireHandlerResult(ctx context.Context, m *machine.Machine, st *machine.State, runID string, rs *journal.RunState, current string, inFlight bool, pending *pendingResume) (res *HandlerResult, pendingOut *pendingResume, inFlightOut bool, rerouted string, err error) {
+	if pending != nil && pending.state == current {
+		res = &HandlerResult{Output: pending.data, Event: pending.event}
+		if res.Output == nil {
+			res.Output = map[string]any{}
+		}
+		return res, nil, inFlight, "", nil
+	}
+
+	if !inFlight {
+		rs.Visits[current]++
+		if err := e.append(ctx, runID, journal.StateEntered, map[string]any{
+			"state": current,
+			"visit": rs.Visits[current],
+		}); err != nil {
+			return nil, pending, inFlight, "", err
+		}
+	}
+	inFlight = false
+	model := ""
+	if st.Agent != nil {
+		model = st.Agent.Model.Display()
+	}
+	e.Listener.StateEntered(current, st.HandlerKind(), rs.Visits[current], model)
+	if err := e.Store.UpdateRun(ctx, runID, journal.StatusRunning, current); err != nil {
+		return nil, pending, inFlight, "", err
+	}
+
+	res, runErr := e.runHandler(ctx, m, st, runID, rs)
+	if runErr != nil {
+		next, err := e.routeFailure(ctx, m, runID, rs, st, provider.Classify(runErr), runErr)
+		if err != nil {
+			return nil, pending, inFlight, "", err
+		}
+		return nil, pending, inFlight, next, nil
+	}
+	return res, pending, inFlight, "", nil
+}
+
+// parkRun journals a human gate's park and mirrors it into the in-memory
+// state so same-process callers (interactive gates, tests) see it without
+// re-folding the journal.
+func (e *Engine) parkRun(ctx context.Context, runID, current string, rs *journal.RunState, park *parkRequest) (*Result, error) {
+	parked := map[string]any{
+		"state":      current,
+		"reason":     "human_gate",
+		"prompt":     park.Prompt,
+		"timeout":    park.Timeout,
+		"on_timeout": park.OnTimeout,
+	}
+	if park.Choices != nil {
+		parked["choices"] = park.Choices
+	}
+	if err := e.append(ctx, runID, journal.RunParked, parked); err != nil {
+		return nil, err
+	}
+	if err := e.Store.UpdateRun(ctx, runID, journal.StatusParked, current); err != nil {
+		return nil, err
+	}
+	rs.Parked = &journal.ParkInfo{
+		State:     current,
+		Reason:    "human_gate",
+		Prompt:    park.Prompt,
+		At:        time.Now(),
+		Timeout:   park.Timeout,
+		OnTimeout: park.OnTimeout,
+		Choices:   park.Choices,
+	}
+	e.Listener.RunParked(runID, current, park.Prompt, park.Timeout, park.Choices)
+	return &Result{RunID: runID, Status: journal.StatusParked, State: rs}, nil
+}
+
+// recordHandlerFinished merges a concluded (non-park) handler result into
+// ctx/usage/convos and journals it.
+func (e *Engine) recordHandlerFinished(ctx context.Context, runID, current string, rs *journal.RunState, res *HandlerResult) error {
+	rs.Ctx[current] = res.Output
+	rs.Usage.Add(res.Usage)
+	if len(res.Messages) > 0 {
+		rs.Convos[current] = res.Messages
+	}
+	finished := map[string]any{
+		"state":    current,
+		"output":   res.Output,
+		"event":    res.Event,
+		"usage":    res.Usage,
+		"messages": res.Messages,
+	}
+	if res.Memo {
+		finished["memo"] = true
+	}
+	if res.Passthrough {
+		finished["passthrough"] = true
+	}
+	if err := e.append(ctx, runID, journal.HandlerFinished, finished); err != nil {
+		return err
+	}
+	e.Listener.HandlerFinished(current, res.Output, res.Event, res.Usage)
+	return nil
 }
 
 // fireTransition journals a transition and enforces the cycle guard. Hops
