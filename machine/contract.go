@@ -29,89 +29,120 @@ func CheckContracts(m *Machine) error {
 		// key could be one. Declaring input: buys strict checking.
 		return nil
 	}
+	base := m.scopeKeys()
 	var errs []string
-
 	for _, s := range m.States {
 		if s.Terminal {
 			continue
 		}
-		base := m.scopeKeys()
-
-		check := func(site string, d Dyn, extra ...string) {
-			if !d.IsFn() {
-				return
-			}
-			keys, ok := destructuredKeys(d.Src)
-			if !ok {
-				return // non-destructuring param (s => ...) — proxy dry-run covers it
-			}
-			allowed := append(append([]string{}, base...), extra...)
-			for _, k := range keys {
-				if !contains(allowed, k) {
-					sort.Strings(allowed)
-					errs = append(errs, fmt.Sprintf(
-						"state %q %s destructures {%s} — unknown; available: %s",
-						s.Name, site, k, strings.Join(allowed, ", ")))
-				}
-			}
-		}
-
-		var itemExtras []string
-		if f := s.ForEach; f != nil {
-			check("forEach.over", f.Over)
-			itemExtras = []string{f.As, "index", "total"}
-		}
-		// distill: for: functions see the pre-distill scope; every handler
-		// site below additionally sees the distilled keys (shadow keys are
-		// already state/input names — duplicates are harmless).
-		handlerExtras := itemExtras
-		if len(s.Distill) > 0 {
-			handlerExtras = append([]string{}, itemExtras...)
-			for i := range s.Distill {
-				d := &s.Distill[i]
-				check("distill."+d.Key+".for", d.For, itemExtras...)
-				handlerExtras = append(handlerExtras, d.Key)
-			}
-		}
-		if a := s.Agent; a != nil {
-			historyExtras := handlerExtras
-			if a.History != nil {
-				historyExtras = append(append([]string{}, handlerExtras...), a.History.As)
-			}
-			check("model", a.Model, handlerExtras...)
-			check("prompt", a.Prompt, historyExtras...)
-			check("system", a.System, historyExtras...)
-			toolExtras := append(append([]string{}, handlerExtras...), "args", "calls", "turn")
-			for _, tr := range a.Tools {
-				check("tool "+tr.Name+" when", tr.When, toolExtras...)
-				check("tool "+tr.Name+" args", tr.Args, handlerExtras...)
-			}
-		}
-		if h := s.Human; h != nil {
-			check("human", h.Prompt, handlerExtras...)
-			if h.Choices != nil {
-				check("choices.multi", h.Choices.Dynamic, handlerExtras...)
-			}
-		}
-		check("input", s.Input, handlerExtras...)
-		if inputs, ok := s.Input.Static.(map[string]any); ok {
-			for k, v := range inputs {
-				if nested, isDyn := v.(Dyn); isDyn {
-					check("input."+k, nested, handlerExtras...)
-				}
-			}
-		}
-		// Guards run after the state completes — they see output/event but
-		// never a per-item variable (foreach guards judge the aggregate).
-		for i, t := range s.Transitions {
-			check(fmt.Sprintf("transitions[%d].when", i), t.When, "output", "event")
-		}
+		errs = append(errs, checkStateContract(s, base)...)
 	}
-
 	if len(errs) > 0 {
 		return fmt.Errorf("%s", strings.Join(errs, "\n"))
 	}
 	return nil
+}
+
+// contractCheck reports a destructured-parameter error for one function call
+// site, naming the state, site, and offending key against the currently
+// available scope (base + whatever extras that site adds).
+type contractCheck struct {
+	stateName string
+	base      []string
+	errs      []string
+}
+
+func (c *contractCheck) check(site string, d Dyn, extra ...string) {
+	if !d.IsFn() {
+		return
+	}
+	keys, ok := destructuredKeys(d.Src)
+	if !ok {
+		return // non-destructuring param (s => ...) — proxy dry-run covers it
+	}
+	allowed := append(append([]string{}, c.base...), extra...)
+	for _, k := range keys {
+		if !contains(allowed, k) {
+			sort.Strings(allowed)
+			c.errs = append(c.errs, fmt.Sprintf(
+				"state %q %s destructures {%s} — unknown; available: %s",
+				c.stateName, site, k, strings.Join(allowed, ", ")))
+		}
+	}
+}
+
+// checkStateContract validates one non-terminal state's functions'
+// destructured parameters against the scope available at each call site.
+func checkStateContract(s *State, base []string) []string {
+	c := &contractCheck{stateName: s.Name, base: base}
+
+	handlerExtras := checkForEachAndDistill(c, s)
+	if a := s.Agent; a != nil {
+		checkAgentContract(c, a, handlerExtras)
+	}
+	if h := s.Human; h != nil {
+		c.check("human", h.Prompt, handlerExtras...)
+		if h.Choices != nil {
+			c.check("choices.multi", h.Choices.Dynamic, handlerExtras...)
+		}
+	}
+	checkInputContract(c, s, handlerExtras)
+	// Guards run after the state completes — they see output/event but
+	// never a per-item variable (foreach guards judge the aggregate).
+	for i, t := range s.Transitions {
+		c.check(fmt.Sprintf("transitions[%d].when", i), t.When, "output", "event")
+	}
+	return c.errs
+}
+
+// checkForEachAndDistill checks forEach.over and each distill.for function,
+// and computes handlerExtras — the extra scope keys every handler site
+// below sees: the fan-out variable/index/total (if any), plus the
+// distilled keys (distill: for: functions themselves see only the
+// pre-distill scope; shadow keys are already state/input names, so
+// duplicates are harmless).
+func checkForEachAndDistill(c *contractCheck, s *State) (handlerExtras []string) {
+	var itemExtras []string
+	if f := s.ForEach; f != nil {
+		c.check("forEach.over", f.Over)
+		itemExtras = []string{f.As, "index", "total"}
+	}
+	handlerExtras = itemExtras
+	if len(s.Distill) > 0 {
+		handlerExtras = append([]string{}, itemExtras...)
+		for i := range s.Distill {
+			d := &s.Distill[i]
+			c.check("distill."+d.Key+".for", d.For, itemExtras...)
+			handlerExtras = append(handlerExtras, d.Key)
+		}
+	}
+	return handlerExtras
+}
+
+func checkAgentContract(c *contractCheck, a *AgentSpec, handlerExtras []string) {
+	historyExtras := handlerExtras
+	if a.History != nil {
+		historyExtras = append(append([]string{}, handlerExtras...), a.History.As)
+	}
+	c.check("model", a.Model, handlerExtras...)
+	c.check("prompt", a.Prompt, historyExtras...)
+	c.check("system", a.System, historyExtras...)
+	toolExtras := append(append([]string{}, handlerExtras...), "args", "calls", "turn")
+	for _, tr := range a.Tools {
+		c.check("tool "+tr.Name+" when", tr.When, toolExtras...)
+		c.check("tool "+tr.Name+" args", tr.Args, handlerExtras...)
+	}
+}
+
+func checkInputContract(c *contractCheck, s *State, handlerExtras []string) {
+	c.check("input", s.Input, handlerExtras...)
+	if inputs, ok := s.Input.Static.(map[string]any); ok {
+		for k, v := range inputs {
+			if nested, isDyn := v.(Dyn); isDyn {
+				c.check("input."+k, nested, handlerExtras...)
+			}
+		}
+	}
 }
 
 // scopeKeys is the flat root every function may destructure: run inputs +
