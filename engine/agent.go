@@ -199,7 +199,7 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 		return nil, nil
 	}
 
-	tools, beforeTool, afterTool, err := e.buildAgentTools(st, rs, &turns, data)
+	tools, beforeTool, afterTool, err := e.buildAgentTools(st, rs, &turns, data) //nolint:contextcheck // its tool closures run later against the ADK runner's own per-call ToolContext, not a context available at build time
 	if err != nil {
 		return nil, err
 	}
