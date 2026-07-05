@@ -24,7 +24,10 @@ var (
 	cMag    = "\033[35m"
 )
 
-func init() {
+// disableColorIfRequested clears the ANSI style vars when NO_COLOR is set.
+// Called explicitly from main rather than via init, so color state has a
+// visible entry point instead of a hidden package-load side effect.
+func disableColorIfRequested() {
 	if os.Getenv("NO_COLOR") != "" {
 		cReset, cDim, cBold, cBlue, cGreen, cYellow, cRed, cCyan, cMag = "", "", "", "", "", "", "", "", ""
 	}
@@ -86,7 +89,7 @@ func (l *prettyListener) StateEntered(state, kind string, visit int, model strin
 }
 
 func (l *prettyListener) ForEachItem(state string, index, total int, item any) {
-	preview := ""
+	var preview string
 	if m, ok := item.(map[string]any); ok {
 		if p, ok := m["path"].(string); ok {
 			preview = p
