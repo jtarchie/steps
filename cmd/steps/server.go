@@ -31,9 +31,9 @@ import (
 type server struct {
 	store       journal.Store
 	eng         *engine.Engine
-	resuming    sync.Map              // runID -> struct{}: a resume is in flight
-	hooksByPath map[string]*hookSpec  // webhook path slug -> hook; nil = none registered
-	disp        *dispatcher           // drains the durable queue; nil when no hooks
+	resuming    sync.Map             // runID -> struct{}: a resume is in flight
+	hooksByPath map[string]*hookSpec // webhook path slug -> hook; nil = none registered
+	disp        *dispatcher          // drains the durable queue; nil when no hooks
 }
 
 // hookSpec is a webhook-triggerable machine, loaded once at startup.
