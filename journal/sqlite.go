@@ -29,7 +29,8 @@ func OpenSQLite(path string) (*SQLiteStore, error) {
 		return nil, err
 	}
 	s := &SQLiteStore{db: db}
-	if err := s.migrate(); err != nil {
+	err = s.migrate()
+	if err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -76,7 +77,8 @@ func (s *SQLiteStore) MemoGet(ctx context.Context, key string) (map[string]any, 
 		return nil, false, err
 	}
 	var out map[string]any
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+	err = json.Unmarshal([]byte(raw), &out)
+	if err != nil {
 		return nil, false, err
 	}
 	return out, true, nil
@@ -155,13 +157,15 @@ func scanRun(row scannable) (*Run, error) {
 	var r Run
 	var created, updated int64
 	var assets string
-	if err := row.Scan(&r.ID, &r.Machine, &r.Hash, &r.Source, &assets, &r.Status, &r.CurrentState, &created, &updated); err != nil {
+	err := row.Scan(&r.ID, &r.Machine, &r.Hash, &r.Source, &assets, &r.Status, &r.CurrentState, &created, &updated)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.New("run not found")
 		}
 		return nil, err
 	}
-	if err := json.Unmarshal([]byte(assets), &r.Assets); err != nil {
+	err = json.Unmarshal([]byte(assets), &r.Assets)
+	if err != nil {
 		return nil, fmt.Errorf("decoding pinned assets: %w", err)
 	}
 	r.Created = time.UnixMilli(created)
@@ -186,16 +190,19 @@ func (s *SQLiteStore) Append(ctx context.Context, ev *Event) (int, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 	var seq int
-	if err := tx.QueryRowContext(ctx,
-		`SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE run_id = ?`, ev.RunID).Scan(&seq); err != nil {
+	err = tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE run_id = ?`, ev.RunID).Scan(&seq)
+	if err != nil {
 		return 0, err
 	}
-	if _, err := tx.ExecContext(ctx,
+	_, err = tx.ExecContext(ctx,
 		`INSERT INTO events (run_id, seq, type, ts, data) VALUES (?, ?, ?, ?, ?)`,
-		ev.RunID, seq, string(ev.Type), ev.Time.UnixMilli(), string(data)); err != nil {
+		ev.RunID, seq, string(ev.Type), ev.Time.UnixMilli(), string(data))
+	if err != nil {
 		return 0, err
 	}
-	if err := tx.Commit(); err != nil {
+	err = tx.Commit()
+	if err != nil {
 		return 0, err
 	}
 	ev.Seq = seq
@@ -215,11 +222,13 @@ func (s *SQLiteStore) Events(ctx context.Context, runID string) ([]*Event, error
 		ev := &Event{RunID: runID}
 		var ts int64
 		var data string
-		if err := rows.Scan(&ev.Seq, &ev.Type, &ts, &data); err != nil {
+		err := rows.Scan(&ev.Seq, &ev.Type, &ts, &data)
+		if err != nil {
 			return nil, err
 		}
 		ev.Time = time.UnixMilli(ts)
-		if err := json.Unmarshal([]byte(data), &ev.Data); err != nil {
+		err = json.Unmarshal([]byte(data), &ev.Data)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, ev)

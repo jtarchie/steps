@@ -109,7 +109,8 @@ func (l *loader) parse(src []byte, opts ...ParseOption) (*Machine, error) {
 		raw, err := yaml.Marshal(v)
 		return strings.TrimRight(string(raw), "\n"), err
 	})
-	if _, err := vm.RunString(flowBootstrapJS); err != nil {
+	_, err := vm.RunString(flowBootstrapJS)
+	if err != nil {
 		return nil, fmt.Errorf("installing flow combinators: %w", err)
 	}
 
@@ -117,7 +118,8 @@ func (l *loader) parse(src []byte, opts ...ParseOption) (*Machine, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := vm.RunString(code); err != nil {
+	_, err = vm.RunString(code)
+	if err != nil {
 		return nil, fmt.Errorf("evaluating machine: %w", err)
 	}
 	exports, ok := module.Get("exports").(*goja.Object)
@@ -149,16 +151,19 @@ func (l *loader) parse(src []byte, opts ...ParseOption) (*Machine, error) {
 		o(m)
 	}
 	ApplyDefaults(m)
-	if err := Compile(m); err != nil {
+	err = Compile(m)
+	if err != nil {
 		return nil, err
 	}
-	if err := Validate(m); err != nil {
+	err = Validate(m)
+	if err != nil {
 		return nil, err
 	}
 	// Fail before you spend: destructured parameters are each function's
 	// declared contract; then every function is exercised against
 	// schema-derived stubs. Impossible access fails the load.
-	if err := CheckContracts(m); err != nil {
+	err = CheckContracts(m)
+	if err != nil {
 		return nil, err
 	}
 	if fatals, _ := DryRun(m); len(fatals) > 0 {
@@ -235,7 +240,8 @@ func (l *loader) exportValue(v goja.Value) any {
 // an error.
 func (l *loader) exportData(v goja.Value, where string) (any, error) {
 	out := l.exportValue(v)
-	if err := noFns(out, where); err != nil {
+	err := noFns(out, where)
+	if err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -247,13 +253,15 @@ func noFns(v any, where string) error {
 		return fmt.Errorf("%s must be data, not a function", where)
 	case map[string]any:
 		for k, e := range t {
-			if err := noFns(e, where+"."+k); err != nil {
+			err := noFns(e, where+"."+k)
+			if err != nil {
 				return err
 			}
 		}
 	case []any:
 		for i, e := range t {
-			if err := noFns(e, fmt.Sprintf("%s[%d]", where, i)); err != nil {
+			err := noFns(e, fmt.Sprintf("%s[%d]", where, i))
+			if err != nil {
 				return err
 			}
 		}
@@ -408,24 +416,28 @@ func (l *loader) machine(root *goja.Object) (*Machine, error) {
 
 	// defaults: FLAT — agent knobs and retry policies directly.
 	if o := l.obj(root.Get("defaults")); o != nil {
-		if err := l.applyMachineDefaults(m, o); err != nil {
+		err := l.applyMachineDefaults(m, o)
+		if err != nil {
 			return nil, err
 		}
 	}
 
 	if o := l.obj(root.Get("limits")); o != nil {
-		if err := applyMachineLimits(m, o); err != nil {
+		err := applyMachineLimits(m, o)
+		if err != nil {
 			return nil, err
 		}
 	}
 
-	if err := l.parseStates(m, root); err != nil {
+	err := l.parseStates(m, root)
+	if err != nil {
 		return nil, err
 	}
 	m.buildIndex()
 
 	if flow := root.Get("flow"); defined(flow) {
-		if err := l.compileFlow(m, flow); err != nil {
+		err := l.compileFlow(m, flow)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -579,7 +591,8 @@ func (l *loader) state(name string, v goja.Value) (*State, error) {
 	}
 
 	handler, handlerKeys := inferStateHandler(o.Keys())
-	if err := checkStateKeys(o.Keys(), handler, handlerKeys); err != nil {
+	err := checkStateKeys(o.Keys(), handler, handlerKeys)
+	if err != nil {
 		return nil, err
 	}
 
@@ -588,7 +601,8 @@ func (l *loader) state(name string, v goja.Value) (*State, error) {
 		Memo:  boolean(o.Get("memo")),
 		Input: l.dyn(o.Get("input")),
 	}
-	if err := l.buildStateHandler(o, handler, st); err != nil {
+	err = l.buildStateHandler(o, handler, st)
+	if err != nil {
 		return nil, err
 	}
 
@@ -607,13 +621,16 @@ func (l *loader) state(name string, v goja.Value) (*State, error) {
 	}
 	st.Distill = distill
 
-	if err := l.applyStateOutput(o, st); err != nil {
+	err = l.applyStateOutput(o, st)
+	if err != nil {
 		return nil, err
 	}
 
-	if r, err := l.retries(o.Get("retry"), "retry"); err != nil {
+	r, err := l.retries(o.Get("retry"), "retry")
+	if err != nil {
 		return nil, err
-	} else if r != nil {
+	}
+	if r != nil {
 		st.Retry = r
 	}
 

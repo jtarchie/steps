@@ -108,7 +108,8 @@ export default {
     publish: { write: "out/summary.md", content: ({ draft }) => draft.text },
   },
 };`
-	if _, err := Parse([]byte(src)); err == nil {
+	_, err := Parse([]byte(src))
+	if err == nil {
 		t.Error("terse machine without any model should fail without an engine default")
 	}
 	m, err := Parse([]byte(src), WithEngineDefaultModel("mock"))
@@ -423,7 +424,8 @@ func TestSchemaShorthand(t *testing.T) {
 	if err != nil || len(pipe["enum"].([]any)) != 3 {
 		t.Errorf("pipe enum = %v, %v", pipe, err)
 	}
-	if _, err := NormalizeSchemaFragment("strng"); err == nil || !strings.Contains(err.Error(), "unknown type") {
+	_, err = NormalizeSchemaFragment("strng")
+	if err == nil || !strings.Contains(err.Error(), "unknown type") {
 		t.Errorf("typo should produce a friendly error, got %v", err)
 	}
 }

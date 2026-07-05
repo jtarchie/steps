@@ -283,7 +283,8 @@ const use = {
   prompt: ({ article }) => "Summarize:\n" + article,
 };
 export default { name: "caps-conflict", input: { article: "string" }, model: "mock", states: { use } };`
-	if _, err = Parse([]byte(src)); err == nil || !strings.Contains(err.Error(), "does not fit under the consumer's maxInputTokens") {
+	_, err = Parse([]byte(src))
+	if err == nil || !strings.Contains(err.Error(), "does not fit under the consumer's maxInputTokens") {
 		t.Errorf("slice-over-cap error = %v, want the fit check to fire", err)
 	}
 }

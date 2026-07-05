@@ -164,7 +164,8 @@ export default {
     use: { distill: { spec: { for: "x" } }, prompt: ({ spec }) => spec.trim() + " and " + spec },
   },
 };`
-	if _, err := Parse([]byte(good)); err != nil {
+	_, err = Parse([]byte(good))
+	if err != nil {
 		t.Errorf("string use of a distilled value should load: %v", err)
 	}
 }

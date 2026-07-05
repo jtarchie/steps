@@ -62,7 +62,8 @@ func CompileOutputSchema(props map[string]any, events []string) (*jsonschema.Res
 		return nil, err
 	}
 	var schema jsonschema.Schema
-	if err := json.Unmarshal(raw, &schema); err != nil {
+	err = json.Unmarshal(raw, &schema)
+	if err != nil {
 		return nil, fmt.Errorf("invalid schema: %w", err)
 	}
 	return schema.Resolve(nil)

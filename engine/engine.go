@@ -118,19 +118,21 @@ func (e *Engine) Start(ctx context.Context, m *machine.Machine, input map[string
 		Assets:  m.Assets,
 		Status:  journal.StatusRunning,
 	}
-	if err := e.Store.CreateRun(ctx, run); err != nil {
+	err := e.Store.CreateRun(ctx, run)
+	if err != nil {
 		return nil, err
 	}
 	inputAny := make(map[string]any, len(input))
 	for k, v := range input {
 		inputAny[k] = v
 	}
-	if err := e.append(ctx, runID, journal.RunStarted, map[string]any{
+	err = e.append(ctx, runID, journal.RunStarted, map[string]any{
 		"machine_hash": m.Hash,
 		"machine":      m.Name,
 		"input":        inputAny,
 		"initial":      m.Initial,
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
 	e.Listener.RunStarted(runID, m.Name, inputAny)
@@ -193,7 +195,8 @@ func (e *Engine) resolveParkedResume(ctx context.Context, m *machine.Machine, ru
 	if p.Expired(time.Now()) {
 		// Stale gate: route to on_timeout, ignoring the provided event.
 		e.Listener.Warn("human gate expired; routing to on_timeout", "state", p.State, "to", p.OnTimeout)
-		if err := e.append(ctx, runID, journal.RunResumed, map[string]any{"event": "timeout"}); err != nil {
+		err := e.append(ctx, runID, journal.RunResumed, map[string]any{"event": "timeout"})
+		if err != nil {
 			return nil, false, nil, err
 		}
 		if _, err := e.fireTransition(ctx, m, runID, rs, p.State, p.OnTimeout, "timeout", ""); err != nil {
@@ -334,13 +337,15 @@ func (e *Engine) finishTerminal(ctx context.Context, runID string, rs *journal.R
 	if st.Status == "failed" {
 		status = journal.StatusFailed
 	}
-	if err := e.append(ctx, runID, journal.RunFinished, map[string]any{
+	err := e.append(ctx, runID, journal.RunFinished, map[string]any{
 		"terminal_state": st.Name,
 		"status":         status,
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
-	if err := e.Store.UpdateRun(ctx, runID, status, st.Name); err != nil {
+	err = e.Store.UpdateRun(ctx, runID, status, st.Name)
+	if err != nil {
 		return nil, err
 	}
 	e.Listener.RunFinished(runID, status, st.Name, rs.Transitions, rs.Usage)
@@ -363,10 +368,11 @@ func (e *Engine) acquireHandlerResult(ctx context.Context, m *machine.Machine, s
 
 	if !inFlight {
 		rs.Visits[current]++
-		if err := e.append(ctx, runID, journal.StateEntered, map[string]any{
+		err := e.append(ctx, runID, journal.StateEntered, map[string]any{
 			"state": current,
 			"visit": rs.Visits[current],
-		}); err != nil {
+		})
+		if err != nil {
 			return nil, pending, inFlight, "", err
 		}
 	}
@@ -405,10 +411,12 @@ func (e *Engine) parkRun(ctx context.Context, runID, current string, rs *journal
 	if park.Choices != nil {
 		parked["choices"] = park.Choices
 	}
-	if err := e.append(ctx, runID, journal.RunParked, parked); err != nil {
+	err := e.append(ctx, runID, journal.RunParked, parked)
+	if err != nil {
 		return nil, err
 	}
-	if err := e.Store.UpdateRun(ctx, runID, journal.StatusParked, current); err != nil {
+	err = e.Store.UpdateRun(ctx, runID, journal.StatusParked, current)
+	if err != nil {
 		return nil, err
 	}
 	rs.Parked = &journal.ParkInfo{
@@ -445,7 +453,8 @@ func (e *Engine) recordHandlerFinished(ctx context.Context, runID, current strin
 	if res.Passthrough {
 		finished["passthrough"] = true
 	}
-	if err := e.append(ctx, runID, journal.HandlerFinished, finished); err != nil {
+	err := e.append(ctx, runID, journal.HandlerFinished, finished)
+	if err != nil {
 		return err
 	}
 	e.Listener.HandlerFinished(current, res.Output, res.Event, res.Usage)
@@ -471,7 +480,8 @@ func (e *Engine) fireTransition(ctx context.Context, m *machine.Machine, runID s
 	if implicit {
 		data["implicit"] = true
 	}
-	if err := e.append(ctx, runID, journal.TransitionFired, data); err != nil {
+	err := e.append(ctx, runID, journal.TransitionFired, data)
+	if err != nil {
 		return "", err
 	}
 	if !implicit {

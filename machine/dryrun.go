@@ -22,7 +22,8 @@ func DryRun(m *Machine) (fatals []error, warnings []string) {
 	if m.rt == nil {
 		return nil, nil
 	}
-	if err := m.rt.installStubs(); err != nil {
+	err := m.rt.installStubs()
+	if err != nil {
 		return []error{fmt.Errorf("installing dry-run stubs: %w", err)}, nil
 	}
 
@@ -144,7 +145,8 @@ func dryInputs(d Dyn, scope map[string]any) error {
 	if m, ok := d.Static.(map[string]any); ok {
 		for k, v := range m {
 			if nested, ok := v.(Dyn); ok {
-				if err := dryCall(nested, scope); err != nil {
+				err := dryCall(nested, scope)
+				if err != nil {
 					return fmt.Errorf("%s: %w", k, err)
 				}
 			}
@@ -199,7 +201,8 @@ func (m *Machine) stubScope(s *State) map[string]any {
 func (m *Machine) outputStub(s *State) any {
 	var body any = anyMarker() // actions and schema-less agents are opaque
 	if s.Agent != nil && len(s.Output.Schema) > 0 {
-		if normalized, err := NormalizeSchema(s.Output.Schema); err == nil {
+		normalized, err := NormalizeSchema(s.Output.Schema)
+		if err == nil {
 			shape := map[string]any{}
 			for k, frag := range normalized {
 				shape[k] = sampleFromSchema(frag)

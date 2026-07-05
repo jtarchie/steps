@@ -74,7 +74,8 @@ func (l *loader) wireNode(m *Machine, v goja.Value, successor string) (string, e
 	case "state":
 		name := l.stateName(obj)
 		if successor != "" {
-			if err := l.wireFallback(m, name, successor); err != nil {
+			err := l.wireFallback(m, name, successor)
+			if err != nil {
 				return "", err
 			}
 		}
@@ -191,7 +192,8 @@ func (l *loader) wireObjectEdges(m *Machine, st *State, name string, edges *goja
 			elseTarget, hasElse = target, true
 
 		case "catch":
-			if err := l.wireCatchEdges(m, st, name, val); err != nil {
+			err := l.wireCatchEdges(m, st, name, val)
+			if err != nil {
 				return "", false, err
 			}
 
@@ -338,7 +340,8 @@ func (l *loader) wireLoop(m *Machine, obj *goja.Object, successor string) (strin
 	}
 
 	// catch: the judge's catch edges, exactly as branch wires them.
-	if err := l.wireLoopCatch(m, opts, st, judge); err != nil {
+	err = l.wireLoopCatch(m, opts, st, judge)
+	if err != nil {
 		return "", err
 	}
 	return entry, nil
