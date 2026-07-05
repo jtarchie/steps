@@ -156,7 +156,7 @@ export default {
 		{"maxVisits zero", `pipe(loop(work, { judge: judge, accept: () => true, maxVisits: 0 }), ship)`, "maxVisits must be >= 1"},
 		{"maxVisits not a number", `pipe(loop(work, { judge: judge, accept: () => true, maxVisits: "3" }), ship)`, "maxVisits must be a number"},
 		{"then and pipe successor", `pipe(loop(work, { ` + valid + `, then: ship }), ship)`, "AND the pipe continues"},
-		{"then missing at pipe end", `loop(work, { ` + valid + ` })`, "needs a then:"},
+		{"then missing at pipe end", `loop(work, { ` + valid + ` })`, "needs a then"},
 		{"catch not an object", `pipe(loop(work, { ` + valid + `, catch: 5 }), ship)`, "catch must be an object"},
 	}
 	for _, tc := range cases {

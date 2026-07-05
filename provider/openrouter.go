@@ -1,4 +1,4 @@
-// openrouter.go makes OpenRouter a first-class provider prefix. OpenRouter is
+// Package provider makes OpenRouter a first-class provider prefix. OpenRouter is
 // OpenAI-compatible, so the base client is the same adk-utils-go adapter used
 // by openai/ollama/lmstudio — but three OpenRouter-specific quirks need
 // per-request handling, so we wrap the client with a scoped http.Transport:

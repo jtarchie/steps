@@ -594,7 +594,7 @@ func (l *loader) state(name string, v goja.Value) (*State, error) {
 	case "write":
 		st.Action = &ActionSpec{Name: "file.write"}
 		if !st.Input.IsZero() {
-			return nil, fmt.Errorf("write states take write:/content:, not input:")
+			return nil, fmt.Errorf("write states take write: or content:, not input")
 		}
 		st.Input = Dyn{Static: map[string]any{
 			"path":    l.exportValue(o.Get("write")),

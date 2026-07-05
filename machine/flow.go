@@ -123,7 +123,7 @@ func (l *loader) wireBranch(m *Machine, obj *goja.Object, successor string) (str
 	name := l.stateName(stateObj)
 	st := m.State(name)
 	if st == nil {
-		return "", fmt.Errorf("branch state %q is not registered in states:", name)
+		return "", fmt.Errorf("branch state %q is not registered in states", name)
 	}
 	if len(st.Transitions) > 0 {
 		return "", fmt.Errorf("state %q is wired more than once — each state's outgoing edges live in exactly one place", name)
@@ -262,7 +262,7 @@ func (l *loader) wireLoop(m *Machine, obj *goja.Object, successor string) (strin
 	judge := l.stateName(judgeObj)
 	st := m.State(judge)
 	if st == nil {
-		return "", fmt.Errorf("loop: judge %q is not registered in states:", judge)
+		return "", fmt.Errorf("loop: judge %q is not registered in states", judge)
 	}
 	if st.Terminal {
 		return "", fmt.Errorf("loop: judge %q is terminal and cannot route the loop", judge)
@@ -319,7 +319,7 @@ func (l *loader) wireLoop(m *Machine, obj *goja.Object, successor string) (strin
 	case successor != "":
 		then = successor
 	default:
-		return "", fmt.Errorf("loop(%s): loop at the end of a pipe needs a then:", judge)
+		return "", fmt.Errorf("loop(%s): loop at the end of a pipe needs a then", judge)
 	}
 
 	// revise: where a rejected result re-enters. Defaults to the body's
@@ -390,7 +390,7 @@ func (l *loader) wireTarget(m *Machine, v goja.Value, from, edge string) (string
 func (l *loader) wireFallback(m *Machine, name, to string) error {
 	st := m.State(name)
 	if st == nil {
-		return fmt.Errorf("flow references %q, which is not registered in states:", name)
+		return fmt.Errorf("flow references %q, which is not registered in states", name)
 	}
 	if st.Terminal {
 		return fmt.Errorf("terminal state %q cannot have outgoing wiring", name)

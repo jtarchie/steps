@@ -625,7 +625,7 @@ func (e *Engine) buildAgentTools(st *machine.State, rs *journal.RunState, turns 
 			Description:  reg.Description,
 			InputSchema:  &jsonschema.Schema{Type: "object"},
 			OutputSchema: &jsonschema.Schema{Type: "object"},
-		}, func(cctx adktool.Context, args map[string]any) (map[string]any, error) {
+		}, func(cctx adkagent.ToolContext, args map[string]any) (map[string]any, error) {
 			if len(bound) > 0 {
 				if args == nil {
 					args = map[string]any{}
@@ -642,7 +642,7 @@ func (e *Engine) buildAgentTools(st *machine.State, rs *journal.RunState, turns 
 		tools = append(tools, t)
 	}
 
-	beforeTool := func(cctx adktool.Context, t adktool.Tool, args map[string]any) (map[string]any, error) {
+	beforeTool := func(cctx adkagent.ToolContext, t adktool.Tool, args map[string]any) (map[string]any, error) {
 		ref, ok := byADKName[t.Name()]
 		if !ok {
 			return nil, nil
@@ -687,7 +687,7 @@ func (e *Engine) buildAgentTools(st *machine.State, rs *journal.RunState, turns 
 		return nil, nil
 	}
 
-	afterTool := func(cctx adktool.Context, t adktool.Tool, args, result map[string]any, err error) (map[string]any, error) {
+	afterTool := func(cctx adkagent.ToolContext, t adktool.Tool, args, result map[string]any, err error) (map[string]any, error) {
 		if ref, ok := byADKName[t.Name()]; ok && err == nil {
 			e.Listener.ToolResult(st.Name, ref.Name, result)
 		}
