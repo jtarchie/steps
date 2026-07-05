@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -65,7 +66,7 @@ func (s *server) handleRuns(c *echo.Context) error {
 
 	runs, err := s.store.ListRuns(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("listing runs: %w", err)
 	}
 
 	var rows []runRow
@@ -167,7 +168,7 @@ func (s *server) handleRun(c *echo.Context) error {
 	}
 	events, err := s.store.Events(ctx, id)
 	if err != nil {
-		return err
+		return fmt.Errorf("loading journal for run %s: %w", id, err)
 	}
 	rs := journal.Fold(events)
 
@@ -386,7 +387,11 @@ func (s *server) handleResume(c *echo.Context) error {
 		}
 	}()
 
-	return c.Redirect(http.StatusSeeOther, "/runs/"+id)
+	err = c.Redirect(http.StatusSeeOther, "/runs/"+id)
+	if err != nil {
+		return fmt.Errorf("redirecting to run %s: %w", id, err)
+	}
+	return nil
 }
 
 // gateFormAnswer maps the posted form to a resume (event, data), mirroring
@@ -447,7 +452,11 @@ func (s *server) fold(ctx context.Context, id string) *journal.RunState {
 func (s *server) render(c *echo.Context, code int, name string, data any) error {
 	c.Response().Header().Set("Content-Type", "text/html; charset=utf-8")
 	c.Response().WriteHeader(code)
-	return webTemplates.ExecuteTemplate(c.Response(), name, data)
+	err := webTemplates.ExecuteTemplate(c.Response(), name, data)
+	if err != nil {
+		return fmt.Errorf("rendering template %s: %w", name, err)
+	}
+	return nil
 }
 
 func itoa(n int) string {

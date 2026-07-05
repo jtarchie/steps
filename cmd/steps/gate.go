@@ -50,7 +50,7 @@ func driveGates(ctx context.Context, eng *engine.Engine, m *machine.Machine, res
 				fmt.Fprintf(os.Stderr, "%s✖ %v%s\n", cRed, err, cReset)
 				continue
 			}
-			return nil, err
+			return nil, fmt.Errorf("resuming run: %w", err)
 		}
 		res = next
 	}
@@ -186,7 +186,7 @@ func selectedValues(c *journal.ParkChoices, line string) ([]any, error) {
 func resumeInteractive(ctx context.Context, eng *engine.Engine, store journal.Store, m *machine.Machine, runID string) (*engine.Result, bool, error) {
 	events, err := store.Events(ctx, runID)
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("loading journal for run %s: %w", runID, err)
 	}
 	rs := journal.Fold(events)
 	p := rs.Parked
@@ -199,7 +199,7 @@ func resumeInteractive(ctx context.Context, eng *engine.Engine, store journal.St
 	}
 	res, err := eng.Resume(ctx, m, runID, ans.event, ans.data)
 	if err != nil {
-		return nil, true, err
+		return nil, true, fmt.Errorf("resuming run: %w", err)
 	}
 	res, err = driveGates(ctx, eng, m, res)
 	return res, true, err

@@ -32,17 +32,17 @@ func cmdInspect() *cobra.Command {
 func runInspect(runID string, showMessages bool) error {
 	store, err := journal.OpenSQLite(flagDB)
 	if err != nil {
-		return err
+		return fmt.Errorf("opening journal %s: %w", flagDB, err)
 	}
 	defer store.Close()
 
 	run, err := store.GetRun(context.Background(), runID)
 	if err != nil {
-		return err
+		return fmt.Errorf("loading run %s: %w", runID, err)
 	}
 	events, err := store.Events(context.Background(), runID)
 	if err != nil {
-		return err
+		return fmt.Errorf("loading journal for run %s: %w", runID, err)
 	}
 	rs := journal.Fold(events)
 

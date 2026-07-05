@@ -47,7 +47,8 @@ func main() {
 
 	root.AddCommand(cmdValidate(), cmdRun(), cmdResume(), cmdRuns(), cmdInspect(), cmdContext(), cmdServe())
 
-	if err := root.Execute(); err != nil {
+	err := root.Execute()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "%serror:%s %v\n", cRed, cReset, err)
 		os.Exit(1)
 	}
@@ -85,7 +86,7 @@ func buildEngine(l engine.Listener) (*engine.Engine, *journal.SQLiteStore, error
 		script, err := provider.LoadScript(flagMock)
 		if err != nil {
 			store.Close()
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("loading mock script %s: %w", flagMock, err)
 		}
 		eng.Mock = script
 	}
@@ -101,7 +102,7 @@ func cmdValidate() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			m, err := machine.Load(args[0], parseOpts()...)
 			if err != nil {
-				return err
+				return fmt.Errorf("loading machine: %w", err)
 			}
 			_, warnings := machine.DryRun(m)
 			for _, w := range warnings {
@@ -127,7 +128,7 @@ func cmdContext() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			m, err := machine.Load(args[0], parseOpts()...)
 			if err != nil {
-				return err
+				return fmt.Errorf("loading machine: %w", err)
 			}
 			for _, s := range m.States {
 				if s.Terminal || (stateName != "" && s.Name != stateName) {
@@ -151,7 +152,7 @@ func cmdRun() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			m, err := machine.Load(args[0], parseOpts()...)
 			if err != nil {
-				return err
+				return fmt.Errorf("loading machine: %w", err)
 			}
 			input, err := parseInputs(inputs)
 			if err != nil {
@@ -165,7 +166,7 @@ func cmdRun() *cobra.Command {
 
 			res, err := eng.Start(context.Background(), m, input)
 			if err != nil {
-				return err
+				return fmt.Errorf("starting run: %w", err)
 			}
 			res, err = driveGates(context.Background(), eng, m, res)
 			if err != nil {
@@ -194,7 +195,7 @@ func cmdResume() *cobra.Command {
 
 			run, err := store.GetRun(context.Background(), args[0])
 			if err != nil {
-				return err
+				return fmt.Errorf("loading run %s: %w", args[0], err)
 			}
 			// The run is pinned to the machine it started with; include()
 			// resolves from pinned assets, never the filesystem.
@@ -205,7 +206,8 @@ func cmdResume() *cobra.Command {
 
 			var data map[string]any
 			if dataJSON != "" {
-				if err := json.Unmarshal([]byte(dataJSON), &data); err != nil {
+				err := json.Unmarshal([]byte(dataJSON), &data)
+				if err != nil {
 					return fmt.Errorf("--data must be a JSON object: %w", err)
 				}
 			}
@@ -227,7 +229,7 @@ func cmdResume() *cobra.Command {
 			}
 			res, err := eng.Resume(context.Background(), m, args[0], event, data)
 			if err != nil {
-				return err
+				return fmt.Errorf("resuming run: %w", err)
 			}
 			res, err = driveGates(context.Background(), eng, m, res)
 			if err != nil {
@@ -250,12 +252,12 @@ func cmdRuns() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, err := journal.OpenSQLite(flagDB)
 			if err != nil {
-				return err
+				return fmt.Errorf("opening journal %s: %w", flagDB, err)
 			}
 			defer store.Close()
 			runs, err := store.ListRuns(context.Background())
 			if err != nil {
-				return err
+				return fmt.Errorf("listing runs: %w", err)
 			}
 			if len(runs) == 0 {
 				fmt.Println("no runs")
