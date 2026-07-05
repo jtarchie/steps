@@ -79,8 +79,8 @@ type HandlerResult struct {
 	Event    string
 	Usage    journal.Usage
 	Messages []journal.Message
-	Attempts int          // handler attempts consumed (1 = first try)
-	Memo     bool         // output replayed from the memo cache — zero tokens spent
+	Attempts int  // handler attempts consumed (1 = first try)
+	Memo     bool // output replayed from the memo cache — zero tokens spent
 	// Passthrough: a distill source already fit its slice budget and crossed
 	// verbatim — zero tokens, no model call.
 	Passthrough bool

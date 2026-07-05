@@ -30,19 +30,19 @@ type Listener interface {
 // NopListener discards everything (library embedding, tests).
 type NopListener struct{}
 
-func (NopListener) RunStarted(string, string, map[string]any)                       {}
-func (NopListener) StateEntered(string, string, int, string)                        {}
-func (NopListener) ForEachItem(string, int, int, any)                               {}
-func (NopListener) MemoHit(string)                                                  {}
-func (NopListener) AgentMessage(string, string, string)                             {}
-func (NopListener) ToolCalled(string, string, map[string]any)                       {}
-func (NopListener) ToolResult(string, string, map[string]any)                       {}
-func (NopListener) ToolRejected(string, string, string, string)                     {}
-func (NopListener) HandlerFinished(string, map[string]any, string, journal.Usage)   {}
-func (NopListener) HandlerFailed(string, string, error, int)                        {}
-func (NopListener) RetryScheduled(string, string, int, time.Duration)               {}
-func (NopListener) TransitionFired(string, string, string, string)                  {}
+func (NopListener) RunStarted(string, string, map[string]any)                             {}
+func (NopListener) StateEntered(string, string, int, string)                              {}
+func (NopListener) ForEachItem(string, int, int, any)                                     {}
+func (NopListener) MemoHit(string)                                                        {}
+func (NopListener) AgentMessage(string, string, string)                                   {}
+func (NopListener) ToolCalled(string, string, map[string]any)                             {}
+func (NopListener) ToolResult(string, string, map[string]any)                             {}
+func (NopListener) ToolRejected(string, string, string, string)                           {}
+func (NopListener) HandlerFinished(string, map[string]any, string, journal.Usage)         {}
+func (NopListener) HandlerFailed(string, string, error, int)                              {}
+func (NopListener) RetryScheduled(string, string, int, time.Duration)                     {}
+func (NopListener) TransitionFired(string, string, string, string)                        {}
 func (NopListener) RunParked(string, string, string, time.Duration, *journal.ParkChoices) {}
-func (NopListener) RunResumed(string, string)                                       {}
-func (NopListener) RunFinished(string, string, string, int, journal.Usage)          {}
-func (NopListener) Warn(string, ...any)                                             {}
+func (NopListener) RunResumed(string, string)                                             {}
+func (NopListener) RunFinished(string, string, string, int, journal.Usage)                {}
+func (NopListener) Warn(string, ...any)                                                   {}
