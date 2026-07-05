@@ -127,7 +127,8 @@ func (rs *RunState) applyHandlerFinished(ev *Event) {
 		Messages []Message `json:"messages"`
 		Usage    Usage     `json:"usage"`
 	}
-	if err := DecodeData(ev, &payload); err == nil {
+	err := DecodeData(ev, &payload)
+	if err == nil {
 		if len(payload.Messages) > 0 {
 			rs.Convos[state] = payload.Messages
 		}
@@ -149,7 +150,8 @@ func (rs *RunState) applyTransitionFired(ev *Event) {
 
 func (rs *RunState) applyRunParked(ev *Event) {
 	var p ParkInfo
-	if err := DecodeData(ev, &p); err == nil {
+	err := DecodeData(ev, &p)
+	if err == nil {
 		p.At = ev.Time
 		rs.Parked = &p
 	}
