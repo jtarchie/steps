@@ -204,7 +204,7 @@ func registerBuiltins(r *Registry) {
 					return nil, err
 				}
 			}
-			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 				return nil, err
 			}
 			return map[string]any{"path": path, "bytes": len(content)}, nil

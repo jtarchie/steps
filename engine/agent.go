@@ -210,7 +210,7 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 	}
 	// No state may generate unboundedly: a runaway or grammar-degenerate
 	// completion becomes a bounded failure, never a hang.
-	genCfg.MaxOutputTokens = int32(spec.MaxOutputTokens)
+	genCfg.MaxOutputTokens = int32(spec.MaxOutputTokens) //nolint:gosec // machine.Validate rejects negative values and values above math.MaxInt32 at load time
 	// Reasoning tokens are billed output; each micro-agent declares how much
 	// thinking its one job deserves (OpenAI-compatible: reasoning_effort).
 	if spec.Reasoning != "" {

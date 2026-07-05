@@ -39,7 +39,7 @@ func parkedRun(t *testing.T) (*server, string, *engine.Engine, *machine.Machine)
 
 	eng := engine.New(store, provider.NewRegistry(), toolreg.New(), engine.NopListener{})
 	mockPath := filepath.Join(t.TempDir(), "never.yaml")
-	if err := os.WriteFile(mockPath, []byte(neverApprovesScript), 0o644); err != nil {
+	if err := os.WriteFile(mockPath, []byte(neverApprovesScript), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := provider.LoadScript(mockPath)

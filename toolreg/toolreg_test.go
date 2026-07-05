@@ -10,11 +10,11 @@ import (
 
 func TestFileReadConfinement(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "ok.txt"), []byte("inside"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "ok.txt"), []byte("inside"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	secret := filepath.Join(t.TempDir(), "secret.txt")
-	if err := os.WriteFile(secret, []byte("outside"), 0o644); err != nil {
+	if err := os.WriteFile(secret, []byte("outside"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -33,7 +33,7 @@ func TestFileReadConfinement(t *testing.T) {
 
 func TestDiffSplitEnrichment(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte(strings.Repeat("x", 100)), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte(strings.Repeat("x", 100)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	diff := "diff --git a/a.go b/a.go\n+new line\ndiff --git a/gone.go b/gone.go\n-old line\n"

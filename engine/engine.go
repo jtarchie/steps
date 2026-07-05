@@ -669,7 +669,7 @@ func backoffDelay(b machine.Backoff, attempt int) time.Duration {
 	}
 	d := b.Delay(attempt)
 	if b.Jitter {
-		d = time.Duration(float64(d) * (0.5 + mrand.Float64()/2))
+		d = time.Duration(float64(d) * (0.5 + mrand.Float64()/2)) //nolint:gosec // retry-delay jitter, not a security-sensitive use of randomness
 	}
 	if d < 0 || d > time.Duration(math.MaxInt64/2) {
 		d = b.Cap

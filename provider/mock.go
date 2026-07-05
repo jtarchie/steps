@@ -129,10 +129,11 @@ func (l *mockLLM) GenerateContent(ctx context.Context, req *adkmodel.LLMRequest,
 		}
 		yield(&adkmodel.LLMResponse{
 			Content: genai.NewContentFromText(resp.Text, genai.RoleModel),
+			// crude chars/4 token estimate; overflow would need a multi-GB mock prompt/response
 			UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
 				PromptTokenCount:     int32(promptChars / 4),
-				CandidatesTokenCount: int32(len(resp.Text) / 4),
-				TotalTokenCount:      int32(promptChars/4 + len(resp.Text)/4),
+				CandidatesTokenCount: int32(len(resp.Text) / 4),               //nolint:gosec
+				TotalTokenCount:      int32(promptChars/4 + len(resp.Text)/4), //nolint:gosec
 			},
 			TurnComplete: true,
 		}, nil)

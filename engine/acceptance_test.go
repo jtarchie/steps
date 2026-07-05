@@ -200,7 +200,7 @@ critique:
   - text: '{"score": 5, "issues": ["nope"], "event": "revise"}'
 `
 	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
-	if err := os.WriteFile(scriptPath, []byte(neverApproves), 0o644); err != nil {
+	if err := os.WriteFile(scriptPath, []byte(neverApproves), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -283,7 +283,7 @@ work:
   - text: '{"answer": "fixed"}'
 `
 	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	m, err := machine.Parse([]byte(wf))
@@ -509,7 +509,7 @@ work:
   - text: '{"path": "three.go"}'
 `
 	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	m, err := machine.Parse([]byte(wf))
@@ -550,7 +550,7 @@ decide:
   - text: '{"x": "a", "event": "yes"}'
 `
 	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	m, err := machine.Parse([]byte(wf))
@@ -599,7 +599,7 @@ b:
   - text: "hello"
 `
 	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	m, err := machine.Parse([]byte(wf))
@@ -631,7 +631,7 @@ critique:
   - text: '{"score": 1, "issues": ["x"], "event": "revise"}'
 `
 	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	m, err := machine.Load(repoPath(t, "examples/summarize-critic/workflow.ts"))
@@ -678,7 +678,7 @@ scan:
   - text: '{"modules": ["auth", "billing", "search"]}'
 `
 	scriptPath := filepath.Join(t.TempDir(), "mock.yaml")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	m, err := machine.Parse([]byte(wf))

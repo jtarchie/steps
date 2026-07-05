@@ -3,6 +3,7 @@ package machine
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 )
@@ -229,6 +230,9 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 		}
 		if a.MaxOutputTokens < 0 {
 			fail("state %q: max_output_tokens must be positive", s.Name)
+		}
+		if a.MaxOutputTokens > math.MaxInt32 {
+			fail("state %q: max_output_tokens exceeds the model API's int32 limit", s.Name)
 		}
 		if a.MaxInputTokens != nil && *a.MaxInputTokens < 0 {
 			fail("state %q: max_input_tokens must be positive (0 disables the cap)", s.Name)

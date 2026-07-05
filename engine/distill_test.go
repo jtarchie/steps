@@ -36,7 +36,7 @@ func (r *recorder) AgentMessage(state, role, text string) {
 func writeScript(t *testing.T, script string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "mock.yaml")
-	if err := os.WriteFile(path, []byte(script), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
