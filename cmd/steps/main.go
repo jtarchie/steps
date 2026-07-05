@@ -32,6 +32,7 @@ var (
 )
 
 func main() {
+	disableColorIfRequested()
 	root := &cobra.Command{
 		Use:           "steps",
 		Short:         "A state-machine runtime for micro-agents",
