@@ -77,6 +77,10 @@ func Fold(events []*Event) *RunState {
 		// run_resumed means "not yet consumed".
 		rs.ResumeEvent, rs.ResumeData = "", nil
 
+		//exhaustive:ignore // handler_failed/retry_scheduled are attempt-audit
+		// events inside an already-in-flight state; they never conclude it
+		// (only handler_finished/transition_fired do), so they leave RunState
+		// untouched — resume re-runs the handler from InFlight, as it should.
 		switch ev.Type {
 		case RunStarted:
 			rs.Started = ev.Time

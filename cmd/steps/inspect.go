@@ -54,6 +54,7 @@ func cmdInspect() *cobra.Command {
 			visitSeen := map[string]int{}
 			failures := map[string]map[string]int{} // state -> class -> count
 			for _, ev := range events {
+				//exhaustive:ignore // this view only cares about per-state rows and failures; other event types carry nothing it renders
 				switch ev.Type {
 				case journal.HandlerFinished:
 					var d struct {

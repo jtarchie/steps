@@ -74,6 +74,7 @@ func eventTrace(t *testing.T, store journal.Store, runID string) (states []strin
 	}
 	failedByClass = map[string]int{}
 	for _, ev := range events {
+		//exhaustive:ignore // the trace this test asserts on only tracks these three signals
 		switch ev.Type {
 		case journal.StateEntered:
 			s, _ := ev.Data["state"].(string)

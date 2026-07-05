@@ -229,6 +229,7 @@ func execRows(events []*journal.Event) []execRow {
 
 	for _, ev := range events {
 		state, _ := ev.Data["state"].(string)
+		//exhaustive:ignore // only cares about the events that shape a per-execution row
 		switch ev.Type {
 		case journal.StateEntered:
 			enteredAt[state] = ev.Time
