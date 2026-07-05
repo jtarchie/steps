@@ -78,8 +78,32 @@ details pre {
   white-space: pre-wrap; word-break: break-word; background: var(--card);
   border: 1px solid var(--line); border-radius: 6px; padding: .6rem .8rem;
 }
-.routing { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .85rem; }
-.routing li { margin: .15rem 0; }
+details.inputs, .io { margin: .4rem 0; }
+.io pre { margin: .2rem 0; }
+.io b { color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .03em; }
+.artifacts { list-style: none; padding: 0; }
+.artifacts li { margin: .4rem 0; }
+.ev {
+  display: inline-block; padding: 0 .45em; border-radius: 4px;
+  background: var(--card); border: 1px solid var(--line);
+  font-family: ui-monospace, Menlo, monospace; font-size: .78rem;
+}
+/* Timeline: a left rule with state nodes and transition connectors. */
+ol.timeline { list-style: none; margin: .5rem 0; padding: 0 0 0 1rem; border-left: 2px solid var(--line); }
+ol.timeline > li { position: relative; margin: .1rem 0; padding: .15rem 0 .15rem .8rem; }
+.tl-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: .35rem; }
+.tl-head .dot {
+  position: absolute; left: -1.5rem; top: .5rem; width: .55rem; height: .55rem;
+  border-radius: 99px; background: var(--accent);
+}
+.tl-meta { font-size: .82rem; }
+.tl-trans { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: .85rem; }
+.tl-trans.implicit { opacity: .55; }
+.tl-park { color: var(--parked); }
+.tl-resume { color: var(--done); }
+.tl-fail { color: var(--failed); font-size: .85rem; margin: .2rem 0 .2rem .3rem; }
+.tl-wrote { font-size: .84rem; margin: .15rem 0 .15rem .3rem; }
+pre.msg { margin: .3rem 0; }
 </style>
 </head>
 <body>

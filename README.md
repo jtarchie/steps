@@ -86,7 +86,7 @@ state's functions may reference.
 | `steps run machine.ts --input k=v\|k=@file [--mock file] [-v]` | Start a run. Default output is condensed — one line per state (event, tokens, duration, a result hint); `-v` narrates every message/tool call/transition, `-vv` adds full payloads and thoughts. On a TTY, human gates prompt inline (`--no-prompt` to opt out). JSON summary to stdout. |
 | `steps resume <run-id> [--event X --data '{...}']` | Answer a parked human gate, or continue a crashed run from its journal. With no `--event` on a TTY, the gate's choices are presented inline. |
 | `steps runs` | List runs and their status. |
-| `steps serve [--addr host:port]` | Web view of runs (default `127.0.0.1:8484`): list with status filters and per-machine token/cost totals, run detail (executions, routing, conversations, artifacts), and a form to answer parked gates. |
+| `steps serve [--addr host:port]` | Web view of runs (default `127.0.0.1:8484`): list with status filters and per-machine token/cost totals, run detail (inputs, a per-execution table, a chronological timeline threading each state's prompts/replies/tools and the transition it took, artifacts, and journaled output/content), and a form to answer parked gates. |
 | `steps context machine.ts [--state s]` | Show what each state's functions may reference, derived from declared schemas. |
 | `steps inspect <run-id> [--messages]` | Per-state token usage, failures, and routing from the journal; `--messages` dumps recorded conversations. |
 

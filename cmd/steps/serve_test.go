@@ -118,6 +118,65 @@ func TestServeRunDetailShowsGateForm(t *testing.T) {
 	}
 }
 
+func TestServeRunDetailTimeline(t *testing.T) {
+	s, id, _, _ := parkedRun(t)
+	e := newServer(s.store, s.eng)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/runs/"+id, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /runs/%s = %d, want 200", id, rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"Timeline",                         // the merged routing+conversations section
+		`→ <code>critique`,                 // a transition connector in the timeline
+		"ollama/qwen3:8b",                  // per-step model label (draft), from the pinned machine
+		"a short article about containers", // the run's inputs, shown in the Inputs block
+		"Draft one.",                       // journaled step output content is readable
+		"parked at",                        // the gate park marker
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("run detail timeline missing %q", want)
+		}
+	}
+}
+
+func TestServeDoneRunArtifacts(t *testing.T) {
+	s, id, eng, m := parkedRun(t)
+	// Approve the gate directly to completion, then render the finished run.
+	_, err := eng.Resume(context.Background(), m, id, "approved", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := eng.Store.GetRun(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != journal.StatusDone {
+		t.Fatalf("status = %s, want done after approving", run.Status)
+	}
+
+	e := newServer(s.store, s.eng)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/runs/"+id, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		"Artifacts",
+		"out/summary.md", // the written file, from its {path, bytes} output
+		" B",             // a journaled byte size (no disk read)
+		"wrote <code>",   // the write step notes what it produced in the timeline
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("done-run detail missing %q", want)
+		}
+	}
+}
+
 func TestServeResumeAdvancesRun(t *testing.T) {
 	s, id, eng, _ := parkedRun(t)
 	e := newServer(s.store, s.eng)

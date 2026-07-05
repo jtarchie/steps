@@ -11,6 +11,15 @@
   <div><b>machine hash</b><span class="mono">{{.Hash}}</span></div>
 </div>
 
+{{if .Inputs}}
+<details class="inputs">
+  <summary>Inputs <span class="muted">{{len .Inputs}}</span></summary>
+  {{range $k, $v := .Inputs}}
+  <div class="io"><b>{{$k}}</b><pre>{{$v | render}}</pre></div>
+  {{end}}
+</details>
+{{end}}
+
 {{if .Parked}}
 <div class="card gate">
   <h2>⏸ Waiting on you — <code>{{.Parked.State}}</code></h2>
@@ -74,28 +83,65 @@
 
 {{if .Artifacts}}
 <h2>Artifacts</h2>
-<ul>{{range .Artifacts}}<li><code>{{.Path}}</code> <span class="muted">from {{.State}}</span></li>{{end}}</ul>
-{{end}}
-
-{{if .Routing}}
-<h2>Routing</h2>
-<ul class="routing">
-  {{range .Routing}}<li>{{.From}} → {{.To}}{{if .On}} <span class="muted">on:{{.On}}</span>{{end}}{{if .Guard}} <span class="muted">when:{{.Guard}}</span>{{end}}</li>{{end}}
+<ul class="artifacts">
+  {{range .Artifacts}}
+  <li>
+    <code>{{.Path}}</code>
+    <span class="muted">{{.Bytes | bytesize}} · from {{.State}}</span>
+    {{if .HasContent}}<details><summary class="muted">show content</summary><pre>{{.Content}}</pre></details>{{end}}
+  </li>
+  {{end}}
 </ul>
 {{end}}
 
-{{if .Convos}}
-<h2>Conversations <span class="muted">(last execution per state)</span></h2>
-{{range .Convos}}
-<details>
-  <summary><code>{{.State}}</code> <span class="muted">{{len .Messages}} messages</span></summary>
-  {{range .Messages}}
-  <pre><b>[{{.Role}}{{if .Thought}} thought{{end}}]</b> {{.Text}}{{range .ToolCalls}}
+{{if .Timeline}}
+<h2>Timeline</h2>
+<ol class="timeline">
+  {{range .Timeline}}
+  {{if eq .Kind "exec"}}
+  <li class="tl-exec">
+    <div class="tl-head">
+      <span class="dot"></span>
+      <code>{{.State}}</code>
+      {{if gt .Visit 1}}<span class="muted">visit {{.Visit}}</span>{{end}}
+      <span class="muted">· {{.StateKind}}{{if .Model}} {{.Model}}{{end}}</span>
+      {{if .Event}}<span class="ev">{{.Event}}</span>{{end}}
+      {{if .Memo}}<span class="muted">⚡memo</span>{{end}}
+      <span class="tl-meta muted">
+        {{if or .TokIn .TokOut}}{{.TokIn | tokens}}/{{.TokOut | tokens}} tok{{end}}
+        {{if .Duration}}· {{.Duration}}{{end}}
+        {{if .Hint}}· {{.Hint}}{{end}}
+      </span>
+    </div>
+    {{range .Failures}}
+    <div class="tl-fail">✖ {{.Class}} (attempt {{.Attempt}}){{if .Error}} — {{.Error}}{{end}}</div>
+    {{end}}
+    {{range .Wrote}}<div class="tl-wrote muted">wrote <code>{{.Path}}</code> ({{.Bytes | bytesize}})</div>{{end}}
+    {{if or .Messages .Output}}
+    <details>
+      <summary class="muted">details{{if .Messages}} · {{len .Messages}} messages{{end}}</summary>
+      {{range .Messages}}
+      <pre class="msg"><b>[{{.Role}}{{if .Thought}} thought{{end}}]</b> {{.Text}}{{range .ToolCalls}}
 <b>[tool_call]</b> {{.Name}} {{.Args | json}}{{end}}{{range .ToolResults}}
 <b>[tool_result]</b> {{.Name}} {{.Result | json}}{{end}}</pre>
+      {{end}}
+      {{if .Output}}
+      <div class="io"><b>output</b>
+        {{range $k, $v := .Output}}<pre><b>{{$k}}</b>  {{$v | render}}</pre>{{end}}
+      </div>
+      {{end}}
+    </details>
+    {{end}}
+  </li>
+  {{else if eq .Kind "transition"}}
+  <li class="tl-trans {{if .Implicit}}implicit{{end}}">→ <code>{{.To}}</code>{{if .On}} <span class="muted">on:{{.On}}</span>{{end}}{{if .Guard}} <span class="muted">when:{{.Guard}}</span>{{end}}{{if .Implicit}} <span class="muted">(distill)</span>{{end}}</li>
+  {{else if eq .Kind "park"}}
+  <li class="tl-park">⏸ parked at <code>{{.State}}</code>{{if .Prompt}} — <span class="muted">{{.Prompt}}</span>{{end}}</li>
+  {{else if eq .Kind "resume"}}
+  <li class="tl-resume">⏵ resumed <span class="ev">{{.Event}}</span></li>
   {{end}}
-</details>
-{{end}}
+  {{end}}
+</ol>
 {{end}}
 
 {{template "page_foot"}}

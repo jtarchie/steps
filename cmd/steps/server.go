@@ -149,13 +149,63 @@ type failureRow struct {
 	Count int
 }
 
-type routeRow struct{ From, To, On, Guard string }
+type artifactRow struct {
+	Path       string
+	State      string
+	Bytes      int
+	Content    string
+	HasContent bool
+}
 
-type artifactRow struct{ Path, State string }
+// stepFailure is one failed attempt within a state execution.
+type stepFailure struct {
+	Class   string
+	Attempt int
+	Error   string
+}
 
-type convoRow struct {
-	State    string
-	Messages []journal.Message
+// writtenFile is a file a step's output recorded writing (path + size only —
+// the bytes themselves are not journaled).
+type writtenFile struct {
+	Path  string
+	Bytes int
+}
+
+// timelineItem is one entry in the chronological run story. Kind selects
+// which fields matter: "exec" (a state execution and everything it did),
+// "transition" (a routing hop), or "park"/"resume" (gate markers).
+type timelineItem struct {
+	Kind string
+
+	// exec
+	State     string
+	Visit     int
+	StateKind string // agent | action | human | terminal (from the pinned machine)
+	Model     string // agent steps only
+	Event     string
+	Memo      bool
+	TokIn     int
+	TokOut    int
+	Duration  string
+	Hint      string
+	Messages  []journal.Message
+	Output    map[string]any
+	Wrote     []writtenFile
+	Failures  []stepFailure
+
+	// transition
+	From, To, On, Guard string
+	Implicit            bool
+
+	// park / resume
+	Prompt string
+}
+
+// stateInfo is the static shape of a state, recovered from the pinned
+// machine so the timeline can label steps with their kind and model.
+type stateInfo struct {
+	Kind  string
+	Model string
 }
 
 func (s *server) handleRun(c *echo.Context) error {
@@ -172,20 +222,12 @@ func (s *server) handleRun(c *echo.Context) error {
 	}
 	rs := journal.Fold(events)
 
+	minfo := machineInfo(run)
 	rows := execRows(events)
 	failures := failureRows(events)
-	routing := routeRows(events)
 	artifacts := artifactRows(rs)
-
-	convos := make([]convoRow, 0, len(rs.Convos))
-	states := make([]string, 0, len(rs.Convos))
-	for st := range rs.Convos {
-		states = append(states, st)
-	}
-	sort.Strings(states)
-	for _, st := range states {
-		convos = append(convos, convoRow{State: st, Messages: rs.Convos[st]})
-	}
+	timeline := buildTimeline(events, minfo)
+	inputs := runInputs(events)
 
 	hash := run.Hash
 	if len(hash) > 12 {
@@ -205,9 +247,9 @@ func (s *server) handleRun(c *echo.Context) error {
 		"Usage":       rs.Usage,
 		"Rows":        rows,
 		"Failures":    failures,
-		"Routing":     routing,
 		"Artifacts":   artifacts,
-		"Convos":      convos,
+		"Timeline":    timeline,
+		"Inputs":      inputs,
 	}
 	if p := rs.Parked; p != nil && run.Status == journal.StatusParked {
 		data["Parked"] = p
@@ -291,53 +333,195 @@ func failureRows(events []*journal.Event) []failureRow {
 	return out
 }
 
-func routeRows(events []*journal.Event) []routeRow {
-	var out []routeRow
-	for _, ev := range events {
-		if ev.Type != journal.TransitionFired {
-			continue
+// machineInfo recovers each state's kind and model from the pinned machine so
+// the timeline can label steps. A parse failure is non-fatal — the page still
+// renders, just without kind/model labels.
+func machineInfo(run *journal.Run) map[string]stateInfo {
+	out := map[string]stateInfo{}
+	m, err := machine.ParseWithAssets(run.Source, run.Assets, parseOpts()...)
+	if err != nil {
+		return out
+	}
+	for _, st := range m.States {
+		si := stateInfo{Kind: st.HandlerKind()}
+		if st.Agent != nil {
+			si.Model = st.Agent.Model.Display()
 		}
-		from, _ := ev.Data["from"].(string)
-		to, _ := ev.Data["to"].(string)
-		on, _ := ev.Data["on"].(string)
-		guard, _ := ev.Data["guard"].(string)
-		out = append(out, routeRow{From: from, To: to, On: on, Guard: guard})
+		out[st.Name] = si
 	}
 	return out
 }
 
-// artifactRows surfaces files the run wrote: file.write tool calls and any
-// state output carrying a path.
-func artifactRows(rs *journal.RunState) []artifactRow {
-	seen := map[string]bool{}
-	var out []artifactRow
-	add := func(path, state string) {
-		if path == "" || seen[path] {
-			return
+// runInputs returns the run's inputs as recorded in run_started.
+func runInputs(events []*journal.Event) map[string]any {
+	for _, ev := range events {
+		if ev.Type == journal.RunStarted {
+			if in, ok := ev.Data["input"].(map[string]any); ok {
+				return in
+			}
+			return nil
 		}
-		seen[path] = true
-		out = append(out, artifactRow{Path: path, State: state})
 	}
+	return nil
+}
+
+// buildTimeline folds the journal into the chronological run story: each
+// state execution (with its conversation, output, writes, and failures), the
+// transitions between them, and gate park/resume markers — in journal order.
+func buildTimeline(events []*journal.Event, minfo map[string]stateInfo) []timelineItem {
+	var items []timelineItem
+	enteredAt := map[string]time.Time{}
+	visitSeen := map[string]int{}
+	pending := -1 // index of the exec awaiting its handler_finished
+
+	for _, ev := range events {
+		state, _ := ev.Data["state"].(string)
+		//exhaustive:ignore // only the events that shape the run story are rendered
+		switch ev.Type {
+		case journal.StateEntered:
+			enteredAt[state] = ev.Time
+			visitSeen[state]++
+			items = append(items, timelineItem{
+				Kind:      "exec",
+				State:     state,
+				Visit:     visitSeen[state],
+				StateKind: minfo[state].Kind,
+				Model:     minfo[state].Model,
+			})
+			pending = len(items) - 1
+		case journal.HandlerFailed:
+			if pending >= 0 {
+				class, _ := ev.Data["class"].(string)
+				msg, _ := ev.Data["error"].(string)
+				attempt, _ := ev.Data["attempt"].(float64)
+				items[pending].Failures = append(items[pending].Failures, stepFailure{
+					Class: class, Attempt: int(attempt), Error: msg,
+				})
+			}
+		case journal.HandlerFinished:
+			var d struct {
+				State    string            `json:"state"`
+				Event    string            `json:"event"`
+				Output   map[string]any    `json:"output"`
+				Usage    journal.Usage     `json:"usage"`
+				Messages []journal.Message `json:"messages"`
+				Memo     bool              `json:"memo"`
+			}
+			if journal.DecodeData(ev, &d) != nil {
+				continue
+			}
+			if pending < 0 || items[pending].State != d.State {
+				continue // finish without a matching entry — shouldn't happen
+			}
+			it := &items[pending]
+			it.Event = d.Event
+			it.Memo = d.Memo
+			it.TokIn = d.Usage.InputTokens
+			it.TokOut = d.Usage.OutputTokens
+			it.Hint = hint(d.Output)
+			it.Messages = d.Messages
+			it.Output = d.Output
+			it.Wrote = writtenFiles(d.Output)
+			if t, ok := enteredAt[d.State]; ok {
+				it.Duration = ev.Time.Sub(t).Round(100 * time.Millisecond).String()
+			}
+			pending = -1
+		case journal.TransitionFired:
+			from, _ := ev.Data["from"].(string)
+			to, _ := ev.Data["to"].(string)
+			on, _ := ev.Data["on"].(string)
+			guard, _ := ev.Data["guard"].(string)
+			implicit, _ := ev.Data["implicit"].(bool)
+			items = append(items, timelineItem{
+				Kind: "transition", From: from, To: to, On: on, Guard: guard, Implicit: implicit,
+			})
+		case journal.RunParked:
+			prompt, _ := ev.Data["prompt"].(string)
+			items = append(items, timelineItem{Kind: "park", State: state, Prompt: prompt})
+		case journal.RunResumed:
+			event, _ := ev.Data["event"].(string)
+			items = append(items, timelineItem{Kind: "resume", Event: event})
+		}
+	}
+	return items
+}
+
+// writtenFiles pulls path+size pairs out of a state's output: a single
+// {path, bytes} (file.write / write-sugar) or a forEach aggregate whose items
+// each carry one. The bytes themselves are never journaled.
+func writtenFiles(output map[string]any) []writtenFile {
+	var out []writtenFile
+	add := func(v map[string]any) {
+		if p, ok := v["path"].(string); ok && p != "" {
+			n, _ := v["bytes"].(float64)
+			out = append(out, writtenFile{Path: p, Bytes: int(n)})
+		}
+	}
+	add(output)
+	if items, ok := output["items"].([]any); ok {
+		for _, it := range items {
+			if m, ok := it.(map[string]any); ok {
+				add(m)
+			}
+		}
+	}
+	return out
+}
+
+// artifactRows surfaces files the run wrote, journal-only: path + byte count
+// from a state's {path, bytes} output, plus the content when a journaled
+// agent file.write tool call carried it (args.content). Write-sugar/action
+// states journal no content, so those show path + size alone.
+func artifactRows(rs *journal.RunState) []artifactRow {
+	byPath := map[string]*artifactRow{}
+	order := []string{}
+	get := func(path, state string) *artifactRow {
+		if a, ok := byPath[path]; ok {
+			return a
+		}
+		a := &artifactRow{Path: path, State: state}
+		byPath[path] = a
+		order = append(order, path)
+		return a
+	}
+	// Agent file.write tool calls carry the content in their args.
 	for state, msgs := range rs.Convos {
 		for _, m := range msgs {
 			for _, tc := range m.ToolCalls {
-				if tc.Name == "file.write" {
-					if p, ok := tc.Args["path"].(string); ok {
-						add(p, state)
-					}
+				if tc.Name != "file.write" {
+					continue
+				}
+				p, _ := tc.Args["path"].(string)
+				if p == "" {
+					continue
+				}
+				a := get(p, state)
+				if content, ok := tc.Args["content"].(string); ok {
+					a.Content, a.HasContent = content, true
+					a.Bytes = len(content)
 				}
 			}
 		}
 	}
+	// State outputs record {path, bytes} (no content).
 	for state, v := range rs.Ctx {
-		if out, ok := v.(map[string]any); ok {
-			if p, ok := out["path"].(string); ok {
-				add(p, state)
+		out, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, wf := range writtenFiles(out) {
+			a := get(wf.Path, state)
+			if a.Bytes == 0 {
+				a.Bytes = wf.Bytes
 			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
-	return out
+	sort.Strings(order)
+	rows := make([]artifactRow, 0, len(order))
+	for _, p := range order {
+		rows = append(rows, *byPath[p])
+	}
+	return rows
 }
 
 // ---- resume -----------------------------------------------------------------

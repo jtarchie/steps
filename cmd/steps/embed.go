@@ -15,9 +15,11 @@ var templateFS embed.FS
 // templates reference. Parsed once at startup; a parse error is a programmer
 // bug in an embedded file, so panic.
 var webTemplates = template.Must(template.New("").Funcs(template.FuncMap{
-	"tokens": formatCount,
-	"cost":   func(c float64) string { return fmt.Sprintf("$%.4f", c) },
-	"ago":    humanizeSince,
+	"tokens":   formatCount,
+	"cost":     func(c float64) string { return fmt.Sprintf("$%.4f", c) },
+	"ago":      humanizeSince,
+	"bytesize": humanizeBytes,
+	"render":   renderValue,
 	"json": func(v any) string {
 		raw, err := json.Marshal(v)
 		if err != nil {
@@ -26,6 +28,33 @@ var webTemplates = template.Must(template.New("").Funcs(template.FuncMap{
 		return string(raw)
 	},
 }).ParseFS(templateFS, "templates/*.html"))
+
+// renderValue prints a scope/output value for the page: strings verbatim (so
+// generated file text reads naturally), everything else as compact JSON.
+func renderValue(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return string(raw)
+}
+
+// humanizeBytes renders a byte count compactly (0 → "—").
+func humanizeBytes(n int) string {
+	switch {
+	case n <= 0:
+		return "—"
+	case n < 1024:
+		return fmt.Sprintf("%d B", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+	}
+}
 
 // humanizeSince renders a timestamp as a compact relative age.
 func humanizeSince(t time.Time) string {
