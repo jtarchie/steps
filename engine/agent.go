@@ -72,15 +72,8 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 	//   the slice budget, the identity is the best possible extraction —
 	//   paying a model to approximate it is the measured failure mode.
 	if st.IsDistill() {
-		if d := m.DistillEntryFor(st); d != nil {
-			v, ok := data[d.From]
-			if !ok || v == nil {
-				return &HandlerResult{Output: map[string]any{"text": ""}}, nil
-			}
-			if text, err := machine.RenderDistillSource(v); err == nil &&
-				machine.EstimateTokens(text) <= d.MaxTokens {
-				return &HandlerResult{Output: map[string]any{"text": text}, Passthrough: true}, nil
-			}
+		if res, handled := distillShortCircuit(m, st, data); handled {
+			return res, nil
 		}
 	}
 
@@ -99,13 +92,8 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 	// may read unboundedly either. Over-budget is exhaustion (never retried,
 	// routable by catch:), attributed to the largest inputs so the fix —
 	// distill at the callsite, or trim — is one look away.
-	if maxInput := spec.MaxInputTokens; maxInput != nil && *maxInput > 0 {
-		if est := machine.EstimateTokens(system) + machine.EstimateTokens(userMsg); est > *maxInput {
-			return nil, &provider.ClassifiedError{
-				Class: machine.ClassBudgetExceeded,
-				Msg:   inputBudgetMsg(st, data, est, *maxInput),
-			}
-		}
+	if err := checkInputBudget(st, spec, data, system, userMsg); err != nil {
+		return nil, err
 	}
 
 	// Memoization: byte-identical rendered input (model + system + prompt)
@@ -113,24 +101,15 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 	memoKey := ""
 	if st.Memo {
 		memoKey = memoHash(modelRef, system, userMsg)
-		if cached, ok, memoErr := e.Store.MemoGet(ctx, memoKey); memoErr == nil && ok {
-			e.Listener.MemoHit(st.Name)
-			// The event rides inside the cached output — re-extract it, or
-			// memoized event-routing states would silently take the fallback.
-			event, _ := cached["event"].(string)
-			return &HandlerResult{Output: cached, Event: event, Memo: true}, nil
+		if cached, handled := e.checkMemo(ctx, st, memoKey); handled {
+			return cached, nil
 		}
 	}
 
 	// Model client: the mock script (when set) replaces every provider.
-	var llm adkmodel.LLM
-	if e.Mock != nil {
-		llm = e.mockForRun(runID).ForState(st.Name)
-	} else {
-		llm, err = e.resolveLLM(modelRef)
-		if err != nil {
-			return nil, &provider.ClassifiedError{Class: machine.ClassProviderError, Msg: err.Error()}
-		}
+	llm, err := e.resolveAgentLLM(runID, st, modelRef)
+	if err != nil {
+		return nil, err
 	}
 
 	// Fresh conversation per state — hermetic by default. adopt (rung 3)
@@ -144,116 +123,18 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 	agentName := sanitizeName(st.Name)
 
 	if spec.Adopt != "" {
-		target := spec.Adopt
-		if target == "self" {
-			target = st.Name
-		}
-		prior := rs.Convos[target]
-		if len(prior) == 0 && spec.Adopt != "self" {
-			// Adopting a state that never executed is a semantic failure —
-			// never a silent fresh start. adopt: self on first visit starts
-			// fresh by definition.
-			return nil, &provider.ClassifiedError{
-				Class: machine.ClassAdoptMissing,
-				Msg:   fmt.Sprintf("state %q adopts %q, which has not executed this run", st.Name, spec.Adopt),
-			}
-		}
-		// Scratch reasoning is not context: replaying it re-bills it and
-		// anchors the model to stale thinking. Only real exchanges replay.
-		trimmed := make([]journal.Message, 0, len(prior))
-		for _, msg := range prior {
-			if !msg.Thought {
-				trimmed = append(trimmed, msg)
-			}
-		}
-		if n := spec.AdoptLastTurns; n > 0 && len(trimmed) > n {
-			trimmed = trimmed[len(trimmed)-n:]
-		}
-		for _, msg := range trimmed {
-			if err := svc.AppendEvent(ctx, sess, adoptEvent(agentName, msg)); err != nil {
-				return nil, fmt.Errorf("seeding adopted conversation: %w", err)
-			}
+		if err := seedAdoptedConversation(ctx, svc, sess, agentName, st, rs, spec); err != nil {
+			return nil, err
 		}
 	}
 
-	// Callbacks: usage accounting, turn budget, chat narration. The turn
-	// budget bounds model calls within ONE conversation turn (the tool loop);
-	// it resets before each driveTurn so semantic retries get a fresh budget.
-	usage := &journal.Usage{}
+	// The turn budget bounds model calls within ONE conversation turn (the
+	// tool loop); it resets before each driveTurn so semantic retries get a
+	// fresh budget.
 	turns := 0
-	maxTurns := spec.MaxTurns
-	// before/after: (nil, nil) is the ADK convention for "no override, proceed
-	// normally" — it is not this codebase's choice of signature.
-	before := func(cctx adkagent.CallbackContext, req *adkmodel.LLMRequest) (*adkmodel.LLMResponse, error) {
-		turns++
-		if turns > maxTurns {
-			return nil, &provider.ClassifiedError{
-				Class: machine.ClassBudgetExceeded,
-				Msg:   fmt.Sprintf("agent exceeded max_turns %d", maxTurns),
-			}
-		}
-		return nil, nil //nolint:nilnil
-	}
-	after := func(cctx adkagent.CallbackContext, resp *adkmodel.LLMResponse, respErr error) (*adkmodel.LLMResponse, error) {
-		if resp != nil && resp.UsageMetadata != nil {
-			usage.InputTokens += int(resp.UsageMetadata.PromptTokenCount)
-			usage.OutputTokens += int(resp.UsageMetadata.CandidatesTokenCount)
-		}
-		return nil, nil //nolint:nilnil
-	}
-
-	tools, beforeTool, afterTool, err := e.buildAgentTools(st, rs, &turns, data) //nolint:contextcheck // its tool closures run later against the ADK runner's own per-call ToolContext, not a context available at build time
+	r, usage, err := e.buildAgentRunner(st, rs, data, &turns, llm, svc, agentName, system)
 	if err != nil {
 		return nil, err
-	}
-
-	genCfg := &genai.GenerateContentConfig{}
-	if spec.Temperature != nil {
-		genCfg.Temperature = genai.Ptr(float32(*spec.Temperature))
-	}
-	// No state may generate unboundedly: a runaway or grammar-degenerate
-	// completion becomes a bounded failure, never a hang.
-	genCfg.MaxOutputTokens = int32(spec.MaxOutputTokens) //nolint:gosec // machine.Validate rejects negative values and values above math.MaxInt32 at load time
-	// Reasoning tokens are billed output; each micro-agent declares how much
-	// thinking its one job deserves (OpenAI-compatible: reasoning_effort).
-	if spec.Reasoning != "" {
-		genCfg.ThinkingConfig = &genai.ThinkingConfig{ThinkingLevel: thinkingLevel(spec.Reasoning)}
-	}
-	// structured_output: native constrains the decoder itself on providers
-	// that support it (OpenAI-compatible maps this to response_format
-	// json_schema). Opt-in: a token win on well-supported backends, but
-	// grammar-constrained sampling degenerates on some local model/backend
-	// combos. Gated to tool-less states — constrained decoding and tool
-	// calls conflict on several backends. The prompt contract always applies.
-	if spec.StructuredOutput == "native" && len(spec.Tools) == 0 && !plainTextContract(st.Output) {
-		genCfg.ResponseMIMEType = "application/json"
-		genCfg.ResponseSchema = machine.GenaiSchema(st.Output.Schema, st.Output.Events)
-	}
-
-	ag, err := llmagent.New(llmagent.Config{
-		Name:        agentName,
-		Description: "steps state " + st.Name,
-		Model:       llm,
-		InstructionProvider: func(adkagent.ReadonlyContext) (string, error) {
-			return system, nil
-		},
-		GenerateContentConfig: genCfg,
-		Tools:                 tools,
-		BeforeModelCallbacks:  []llmagent.BeforeModelCallback{before},
-		AfterModelCallbacks:   []llmagent.AfterModelCallback{after},
-		BeforeToolCallbacks:   []llmagent.BeforeToolCallback{beforeTool},
-		AfterToolCallbacks:    []llmagent.AfterToolCallback{afterTool},
-
-		DisallowTransferToParent: true,
-		DisallowTransferToPeers:  true,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("building agent: %w", err)
-	}
-
-	r, err := runner.New(runner.Config{AppName: appName, Agent: ag, SessionService: svc})
-	if err != nil {
-		return nil, fmt.Errorf("building runner: %w", err)
 	}
 
 	// The conversation driver. Semantic (schema) violations retry with the
@@ -272,50 +153,263 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 
 		output, event, parseErr := parseOutput(finalText, st.Output)
 		if parseErr == nil {
-			messages, err := e.collectMessages(ctx, svc, sess.ID())
-			if err != nil {
-				e.Listener.Warn("could not collect conversation for journal", "error", err.Error())
-			}
-			if memoKey != "" {
-				if err := e.Store.MemoPut(ctx, memoKey, output); err != nil {
-					e.Listener.Warn("memo store failed", "state", st.Name, "error", err.Error())
-				}
-			}
-			return &HandlerResult{
-				Output:   output,
-				Event:    event,
-				Usage:    *usage,
-				Messages: messages,
-			}, nil
+			return e.finishAgentRun(ctx, st, svc, sess.ID(), memoKey, output, event, *usage)
 		}
 
 		semanticAttempts++
-		e.Listener.HandlerFailed(st.Name, machine.ClassSchemaViolation, parseErr, semanticAttempts)
-		_ = e.append(ctx, runID, journal.HandlerFailed, map[string]any{
-			"state": st.Name, "class": machine.ClassSchemaViolation,
-			"error": parseErr.Error(), "attempt": semanticAttempts,
-		})
-
-		var policy *machine.RetryPolicy
-		for i := range st.Retry {
-			if st.Retry[i].Matches(machine.ClassSchemaViolation) {
-				policy = &st.Retry[i]
-				break
-			}
-		}
-		if policy == nil || semanticAttempts >= policy.MaxAttempts {
+		var retry bool
+		msg, retry = e.scheduleSemanticRetry(ctx, runID, st, parseErr, semanticAttempts)
+		if !retry {
 			return nil, &provider.ClassifiedError{Class: machine.ClassSchemaViolation, Msg: parseErr.Error()}
 		}
-		_ = e.append(ctx, runID, journal.RetryScheduled, map[string]any{
-			"state": st.Name, "class": machine.ClassSchemaViolation, "attempt": semanticAttempts + 1,
-		})
-		e.Listener.RetryScheduled(st.Name, machine.ClassSchemaViolation, semanticAttempts+1, 0)
-
-		msg = fmt.Sprintf(
-			"Your response did not satisfy the output contract: %s\n\nReply again with ONLY a corrected JSON object. No prose, no markdown fences.",
-			parseErr,
-		)
 	}
+}
+
+// buildAgentRunner assembles the ADK agent (model, tools, callbacks) and its
+// runner for one execution. turns is a shared counter: the caller resets it
+// to 0 before every semantic-retry attempt, and both the before-model
+// callback and the tool guards (via buildAgentTools) read/increment the
+// same one.
+func (e *Engine) buildAgentRunner(st *machine.State, rs *journal.RunState, data map[string]any, turns *int, llm adkmodel.LLM, svc session.Service, agentName, system string) (*runner.Runner, *journal.Usage, error) {
+	usage := &journal.Usage{}
+	maxTurns := st.Agent.MaxTurns
+	// before/after: (nil, nil) is the ADK convention for "no override, proceed
+	// normally" — it is not this codebase's choice of signature.
+	before := func(cctx adkagent.CallbackContext, req *adkmodel.LLMRequest) (*adkmodel.LLMResponse, error) {
+		*turns++
+		if *turns > maxTurns {
+			return nil, &provider.ClassifiedError{
+				Class: machine.ClassBudgetExceeded,
+				Msg:   fmt.Sprintf("agent exceeded max_turns %d", maxTurns),
+			}
+		}
+		return nil, nil //nolint:nilnil
+	}
+	after := func(cctx adkagent.CallbackContext, resp *adkmodel.LLMResponse, respErr error) (*adkmodel.LLMResponse, error) {
+		if resp != nil && resp.UsageMetadata != nil {
+			usage.InputTokens += int(resp.UsageMetadata.PromptTokenCount)
+			usage.OutputTokens += int(resp.UsageMetadata.CandidatesTokenCount)
+		}
+		return nil, nil //nolint:nilnil
+	}
+
+	tools, beforeTool, afterTool, err := e.buildAgentTools(st, rs, turns, data) //nolint:contextcheck // its tool closures run later against the ADK runner's own per-call ToolContext, not a context available at build time
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ag, err := llmagent.New(llmagent.Config{
+		Name:        agentName,
+		Description: "steps state " + st.Name,
+		Model:       llm,
+		InstructionProvider: func(adkagent.ReadonlyContext) (string, error) {
+			return system, nil
+		},
+		GenerateContentConfig: buildGenerateContentConfig(st.Agent, st.Output),
+		Tools:                 tools,
+		BeforeModelCallbacks:  []llmagent.BeforeModelCallback{before},
+		AfterModelCallbacks:   []llmagent.AfterModelCallback{after},
+		BeforeToolCallbacks:   []llmagent.BeforeToolCallback{beforeTool},
+		AfterToolCallbacks:    []llmagent.AfterToolCallback{afterTool},
+
+		DisallowTransferToParent: true,
+		DisallowTransferToPeers:  true,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("building agent: %w", err)
+	}
+
+	r, err := runner.New(runner.Config{AppName: appName, Agent: ag, SessionService: svc})
+	if err != nil {
+		return nil, nil, fmt.Errorf("building runner: %w", err)
+	}
+	return r, usage, nil
+}
+
+// finishAgentRun builds the successful HandlerResult: the conversation for
+// the journal (best-effort — a collection failure narrates but does not
+// fail the handler, since the output already satisfied its contract) and
+// the memo write when the state is memoized.
+func (e *Engine) finishAgentRun(ctx context.Context, st *machine.State, svc session.Service, sessionID, memoKey string, output map[string]any, event string, usage journal.Usage) (*HandlerResult, error) {
+	messages, err := e.collectMessages(ctx, svc, sessionID)
+	if err != nil {
+		e.Listener.Warn("could not collect conversation for journal", "error", err.Error())
+	}
+	if memoKey != "" {
+		if err := e.Store.MemoPut(ctx, memoKey, output); err != nil {
+			e.Listener.Warn("memo store failed", "state", st.Name, "error", err.Error())
+		}
+	}
+	return &HandlerResult{
+		Output:   output,
+		Event:    event,
+		Usage:    usage,
+		Messages: messages,
+	}, nil
+}
+
+// scheduleSemanticRetry journals a schema-violation failure and, if the
+// state's retry policy still allows another attempt, returns the follow-up
+// message to replay in the SAME conversation. retry=false means attempts
+// are exhausted — the caller should fail the handler.
+func (e *Engine) scheduleSemanticRetry(ctx context.Context, runID string, st *machine.State, parseErr error, attempt int) (msg string, retry bool) {
+	e.Listener.HandlerFailed(st.Name, machine.ClassSchemaViolation, parseErr, attempt)
+	_ = e.append(ctx, runID, journal.HandlerFailed, map[string]any{
+		"state": st.Name, "class": machine.ClassSchemaViolation,
+		"error": parseErr.Error(), "attempt": attempt,
+	})
+
+	var policy *machine.RetryPolicy
+	for i := range st.Retry {
+		if st.Retry[i].Matches(machine.ClassSchemaViolation) {
+			policy = &st.Retry[i]
+			break
+		}
+	}
+	if policy == nil || attempt >= policy.MaxAttempts {
+		return "", false
+	}
+	_ = e.append(ctx, runID, journal.RetryScheduled, map[string]any{
+		"state": st.Name, "class": machine.ClassSchemaViolation, "attempt": attempt + 1,
+	})
+	e.Listener.RetryScheduled(st.Name, machine.ClassSchemaViolation, attempt+1, 0)
+	return fmt.Sprintf(
+		"Your response did not satisfy the output contract: %s\n\nReply again with ONLY a corrected JSON object. No prose, no markdown fences.",
+		parseErr,
+	), true
+}
+
+// distillShortCircuit handles the two cases where the best slice needs no
+// model call: absent source (empty slice — loop-feedback sources like build
+// stderr before the first build simply haven't happened yet, which is
+// defined semantics, not an error) or small source (verbatim — when the
+// whole source fits the slice budget, the identity is the best possible
+// extraction; paying a model to approximate it is the measured failure
+// mode). handled=false means the normal agent path should run.
+func distillShortCircuit(m *machine.Machine, st *machine.State, data map[string]any) (res *HandlerResult, handled bool) {
+	d := m.DistillEntryFor(st)
+	if d == nil {
+		return nil, false
+	}
+	v, ok := data[d.From]
+	if !ok || v == nil {
+		return &HandlerResult{Output: map[string]any{"text": ""}}, true
+	}
+	if text, err := machine.RenderDistillSource(v); err == nil && machine.EstimateTokens(text) <= d.MaxTokens {
+		return &HandlerResult{Output: map[string]any{"text": text}, Passthrough: true}, true
+	}
+	return nil, false
+}
+
+// checkInputBudget enforces maxInputTokens (default-on): the mirror of
+// maxOutputTokens — no state may read unboundedly either. Over-budget is
+// exhaustion (never retried, routable by catch:), attributed to the largest
+// inputs so the fix — distill at the callsite, or trim — is one look away.
+func checkInputBudget(st *machine.State, spec *machine.AgentSpec, data map[string]any, system, userMsg string) error {
+	maxInput := spec.MaxInputTokens
+	if maxInput == nil || *maxInput <= 0 {
+		return nil
+	}
+	est := machine.EstimateTokens(system) + machine.EstimateTokens(userMsg)
+	if est <= *maxInput {
+		return nil
+	}
+	return &provider.ClassifiedError{
+		Class: machine.ClassBudgetExceeded,
+		Msg:   inputBudgetMsg(st, data, est, *maxInput),
+	}
+}
+
+// checkMemo looks up a byte-identical rendered input (model + system +
+// prompt) — a hit replays the cached output so re-runs only re-pay for what
+// changed. handled=false means no usable cache entry exists.
+func (e *Engine) checkMemo(ctx context.Context, st *machine.State, memoKey string) (res *HandlerResult, handled bool) {
+	cached, ok, memoErr := e.Store.MemoGet(ctx, memoKey)
+	if memoErr != nil || !ok {
+		return nil, false
+	}
+	e.Listener.MemoHit(st.Name)
+	// The event rides inside the cached output — re-extract it, or memoized
+	// event-routing states would silently take the fallback.
+	event, _ := cached["event"].(string)
+	return &HandlerResult{Output: cached, Event: event, Memo: true}, true
+}
+
+// resolveAgentLLM picks the model client: the mock script (when set) replaces
+// every provider.
+func (e *Engine) resolveAgentLLM(runID string, st *machine.State, modelRef string) (adkmodel.LLM, error) {
+	if e.Mock != nil {
+		return e.mockForRun(runID).ForState(st.Name), nil
+	}
+	llm, err := e.resolveLLM(modelRef)
+	if err != nil {
+		return nil, &provider.ClassifiedError{Class: machine.ClassProviderError, Msg: err.Error()}
+	}
+	return llm, nil
+}
+
+// seedAdoptedConversation replays a prior execution's normalized messages
+// (rung 3's adopt:) into the fresh session. Adopting a state that never
+// executed is a semantic failure — never a silent fresh start; adopt: self
+// on first visit starts fresh by definition, since there is nothing to adopt
+// yet.
+func seedAdoptedConversation(ctx context.Context, svc session.Service, sess session.Session, agentName string, st *machine.State, rs *journal.RunState, spec *machine.AgentSpec) error {
+	target := spec.Adopt
+	if target == "self" {
+		target = st.Name
+	}
+	prior := rs.Convos[target]
+	if len(prior) == 0 && spec.Adopt != "self" {
+		return &provider.ClassifiedError{
+			Class: machine.ClassAdoptMissing,
+			Msg:   fmt.Sprintf("state %q adopts %q, which has not executed this run", st.Name, spec.Adopt),
+		}
+	}
+	// Scratch reasoning is not context: replaying it re-bills it and anchors
+	// the model to stale thinking. Only real exchanges replay.
+	trimmed := make([]journal.Message, 0, len(prior))
+	for _, msg := range prior {
+		if !msg.Thought {
+			trimmed = append(trimmed, msg)
+		}
+	}
+	if n := spec.AdoptLastTurns; n > 0 && len(trimmed) > n {
+		trimmed = trimmed[len(trimmed)-n:]
+	}
+	for _, msg := range trimmed {
+		if err := svc.AppendEvent(ctx, sess, adoptEvent(agentName, msg)); err != nil {
+			return fmt.Errorf("seeding adopted conversation: %w", err)
+		}
+	}
+	return nil
+}
+
+// buildGenerateContentConfig assembles the model call's generation config
+// from the state's agent spec.
+func buildGenerateContentConfig(spec *machine.AgentSpec, output machine.OutputSpec) *genai.GenerateContentConfig {
+	genCfg := &genai.GenerateContentConfig{}
+	if spec.Temperature != nil {
+		genCfg.Temperature = genai.Ptr(float32(*spec.Temperature))
+	}
+	// No state may generate unboundedly: a runaway or grammar-degenerate
+	// completion becomes a bounded failure, never a hang.
+	genCfg.MaxOutputTokens = int32(spec.MaxOutputTokens) //nolint:gosec // machine.Validate rejects negative values and values above math.MaxInt32 at load time
+	// Reasoning tokens are billed output; each micro-agent declares how much
+	// thinking its one job deserves (OpenAI-compatible: reasoning_effort).
+	if spec.Reasoning != "" {
+		genCfg.ThinkingConfig = &genai.ThinkingConfig{ThinkingLevel: thinkingLevel(spec.Reasoning)}
+	}
+	// structured_output: native constrains the decoder itself on providers
+	// that support it (OpenAI-compatible maps this to response_format
+	// json_schema). Opt-in: a token win on well-supported backends, but
+	// grammar-constrained sampling degenerates on some local model/backend
+	// combos. Gated to tool-less states — constrained decoding and tool
+	// calls conflict on several backends. The prompt contract always applies.
+	if spec.StructuredOutput == "native" && len(spec.Tools) == 0 && !plainTextContract(output) {
+		genCfg.ResponseMIMEType = "application/json"
+		genCfg.ResponseSchema = machine.GenaiSchema(output.Schema, output.Events)
+	}
+	return genCfg
 }
 
 // driveTurn runs one runner invocation and returns every model text part, in
@@ -336,20 +430,7 @@ func (e *Engine) driveTurn(ctx context.Context, r *runner.Runner, state, session
 		if ev.Content == nil || ev.Partial {
 			continue
 		}
-		for _, part := range ev.Content.Parts {
-			switch {
-			case part.Text != "" && part.Thought:
-				// Reasoning channel: narrated, never a contract candidate.
-				e.Listener.AgentMessage(state, "thought", part.Text)
-			case part.Text != "" && ev.Author != "user":
-				e.Listener.AgentMessage(state, "model", part.Text)
-				texts = append(texts, part.Text)
-			case part.FunctionCall != nil:
-				e.Listener.ToolCalled(state, part.FunctionCall.Name, part.FunctionCall.Args)
-			case part.FunctionResponse != nil:
-				e.Listener.ToolResult(state, part.FunctionResponse.Name, part.FunctionResponse.Response)
-			}
-		}
+		texts = append(texts, e.narrateEventParts(state, ev)...)
 	}
 	if len(texts) == 0 {
 		if lastFinish == genai.FinishReasonMaxTokens {
@@ -363,6 +444,28 @@ func (e *Engine) driveTurn(ctx context.Context, r *runner.Runner, state, session
 		return nil, &provider.ClassifiedError{Class: machine.ClassProviderError, Msg: "model produced no text"}
 	}
 	return texts, nil
+}
+
+// narrateEventParts narrates one event's parts (thought, model text, tool
+// call/result) to the listener and returns the model-text parts it found —
+// the candidates driveTurn accumulates as the turn's texts.
+func (e *Engine) narrateEventParts(state string, ev *session.Event) []string {
+	var texts []string
+	for _, part := range ev.Content.Parts {
+		switch {
+		case part.Text != "" && part.Thought:
+			// Reasoning channel: narrated, never a contract candidate.
+			e.Listener.AgentMessage(state, "thought", part.Text)
+		case part.Text != "" && ev.Author != "user":
+			e.Listener.AgentMessage(state, "model", part.Text)
+			texts = append(texts, part.Text)
+		case part.FunctionCall != nil:
+			e.Listener.ToolCalled(state, part.FunctionCall.Name, part.FunctionCall.Args)
+		case part.FunctionResponse != nil:
+			e.Listener.ToolResult(state, part.FunctionResponse.Name, part.FunctionResponse.Response)
+		}
+	}
+	return texts
 }
 
 // chooseFinalText picks the authoritative reply. For JSON contracts, prefer
@@ -534,44 +637,51 @@ func (e *Engine) collectMessages(ctx context.Context, svc session.Service, sessi
 		if ev == nil || ev.Content == nil {
 			continue
 		}
-		msg := journal.Message{Role: "model"}
-		if ev.Author == "user" {
-			msg.Role = "user"
-		}
-		var thought journal.Message
-		for _, part := range ev.Content.Parts {
-			switch {
-			case part.Text != "" && part.Thought:
-				// Audit-only: kept as its own flagged message so adopt
-				// and history can skip it cheaply.
-				if thought.Text != "" {
-					thought.Text += "\n"
-				}
-				thought.Role, thought.Thought = msg.Role, true
-				thought.Text += part.Text
-			case part.Text != "":
-				if msg.Text != "" {
-					msg.Text += "\n"
-				}
-				msg.Text += part.Text
-			case part.FunctionCall != nil:
-				msg.ToolCalls = append(msg.ToolCalls, journal.ToolCall{
-					Name: part.FunctionCall.Name, Args: part.FunctionCall.Args,
-				})
-			case part.FunctionResponse != nil:
-				msg.ToolResults = append(msg.ToolResults, journal.ToolResult{
-					Name: part.FunctionResponse.Name, Result: part.FunctionResponse.Response,
-				})
-			}
-		}
-		if thought.Text != "" {
-			out = append(out, thought)
-		}
-		if msg.Text != "" || len(msg.ToolCalls) > 0 || len(msg.ToolResults) > 0 {
-			out = append(out, msg)
-		}
+		out = append(out, normalizeEventMessages(ev)...)
 	}
 	return out, nil
+}
+
+// normalizeEventMessages folds one session event's parts into the journal's
+// message shape: a flagged thought message (audit-only, so adopt/history can
+// skip it cheaply) plus the real reply, each present only if it has content.
+func normalizeEventMessages(ev *session.Event) []journal.Message {
+	msg := journal.Message{Role: "model"}
+	if ev.Author == "user" {
+		msg.Role = "user"
+	}
+	var thought journal.Message
+	for _, part := range ev.Content.Parts {
+		switch {
+		case part.Text != "" && part.Thought:
+			if thought.Text != "" {
+				thought.Text += "\n"
+			}
+			thought.Role, thought.Thought = msg.Role, true
+			thought.Text += part.Text
+		case part.Text != "":
+			if msg.Text != "" {
+				msg.Text += "\n"
+			}
+			msg.Text += part.Text
+		case part.FunctionCall != nil:
+			msg.ToolCalls = append(msg.ToolCalls, journal.ToolCall{
+				Name: part.FunctionCall.Name, Args: part.FunctionCall.Args,
+			})
+		case part.FunctionResponse != nil:
+			msg.ToolResults = append(msg.ToolResults, journal.ToolResult{
+				Name: part.FunctionResponse.Name, Result: part.FunctionResponse.Response,
+			})
+		}
+	}
+	var out []journal.Message
+	if thought.Text != "" {
+		out = append(out, thought)
+	}
+	if msg.Text != "" || len(msg.ToolCalls) > 0 || len(msg.ToolResults) > 0 {
+		out = append(out, msg)
+	}
+	return out
 }
 
 // adoptEvent converts a normalized journal message back into a session event.
@@ -607,41 +717,11 @@ func (e *Engine) buildAgentTools(st *machine.State, rs *journal.RunState, turns 
 
 	var tools []adktool.Tool
 	for _, ref := range refs {
-		reg, ok := e.Tools.Get(ref.Name)
-		if !ok {
-			return nil, nil, nil, fmt.Errorf("state %q: tool %q is not registered", st.Name, ref.Name)
-		}
-		adkName := sanitizeName(ref.Name)
-		byADKName[adkName] = ref
-		fn := reg.Fn
-
-		// args: machine-authored args, resolved from scope now, merged over
-		// the model's args at execution — after guards judge the model's
-		// proposal, and never overridable by it.
-		bound, err := machine.ResolveInputs(ref.Args, data)
+		t, err := e.wrapAgentTool(st, ref, data)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("state %q: tool %q args: %w", st.Name, ref.Name, err)
+			return nil, nil, nil, err
 		}
-
-		t, err := functiontool.New(functiontool.Config{
-			Name:         adkName,
-			Description:  reg.Description,
-			InputSchema:  &jsonschema.Schema{Type: "object"},
-			OutputSchema: &jsonschema.Schema{Type: "object"},
-		}, func(cctx adkagent.ToolContext, args map[string]any) (map[string]any, error) {
-			if len(bound) > 0 {
-				if args == nil {
-					args = map[string]any{}
-				}
-				for k, v := range bound {
-					args[k] = v
-				}
-			}
-			return fn(cctx, args)
-		})
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("wrapping tool %q: %w", ref.Name, err)
-		}
+		byADKName[sanitizeName(ref.Name)] = ref
 		tools = append(tools, t)
 	}
 
@@ -654,7 +734,7 @@ func (e *Engine) buildAgentTools(st *machine.State, rs *journal.RunState, turns 
 		}
 		e.Listener.ToolCalled(st.Name, ref.Name, args)
 
-		reject := func(reason string) (map[string]any, error) {
+		if allowed, reason := e.toolGuardVerdict(st, ref, calls, rs, data, args, *turns); !allowed {
 			e.Listener.ToolRejected(st.Name, ref.Name, reason, ref.OnReject)
 			if ref.OnReject == "fail" {
 				return nil, &provider.ClassifiedError{Class: machine.ClassGuardRejected, Msg: reason}
@@ -662,31 +742,6 @@ func (e *Engine) buildAgentTools(st *machine.State, rs *journal.RunState, turns 
 			// feedback: the guard verdict IS the tool result; the model
 			// adapts within the loop.
 			return map[string]any{"rejected": true, "reason": reason}, nil
-		}
-
-		if ref.MaxCalls > 0 && calls[ref.Name] >= ref.MaxCalls {
-			return reject(fmt.Sprintf("tool %q exceeded max_calls %d for this state", ref.Name, ref.MaxCalls))
-		}
-		if ref.Require != "" && calls[ref.Require] == 0 {
-			return reject(fmt.Sprintf("tool %q requires %q to have been called first", ref.Name, ref.Require))
-		}
-		if !ref.When.IsZero() {
-			scope := baseScope(rs)
-			for k, v := range data {
-				scope[k] = v
-			}
-			scope["args"] = args
-			scope["calls"] = calls
-			scope["turn"] = *turns
-			ok, err := ref.When.Bool(scope)
-			if err != nil {
-				e.Listener.Warn("tool guard evaluation failed; rejecting call",
-					"state", st.Name, "tool", ref.Name, "error", err.Error())
-				return reject(fmt.Sprintf("guard error: %v", err))
-			}
-			if !ok {
-				return reject(fmt.Sprintf("guard %s rejected the call", ref.When.Display()))
-			}
 		}
 		calls[ref.Name]++
 		return nil, nil //nolint:nilnil
@@ -700,6 +755,73 @@ func (e *Engine) buildAgentTools(st *machine.State, rs *journal.RunState, turns 
 	}
 
 	return tools, beforeTool, afterTool, nil
+}
+
+// wrapAgentTool builds the ADK function tool for one registered tool ref:
+// resolves its machine-authored args (which win over the model's own args at
+// execution time, after guards judge the model's proposal — never
+// overridable by it) and binds them into the call.
+func (e *Engine) wrapAgentTool(st *machine.State, ref machine.ToolRef, data map[string]any) (adktool.Tool, error) {
+	reg, ok := e.Tools.Get(ref.Name)
+	if !ok {
+		return nil, fmt.Errorf("state %q: tool %q is not registered", st.Name, ref.Name)
+	}
+	fn := reg.Fn
+	bound, err := machine.ResolveInputs(ref.Args, data)
+	if err != nil {
+		return nil, fmt.Errorf("state %q: tool %q args: %w", st.Name, ref.Name, err)
+	}
+	t, err := functiontool.New(functiontool.Config{
+		Name:         sanitizeName(ref.Name),
+		Description:  reg.Description,
+		InputSchema:  &jsonschema.Schema{Type: "object"},
+		OutputSchema: &jsonschema.Schema{Type: "object"},
+	}, func(cctx adkagent.ToolContext, args map[string]any) (map[string]any, error) {
+		if len(bound) > 0 {
+			if args == nil {
+				args = map[string]any{}
+			}
+			for k, v := range bound {
+				args[k] = v
+			}
+		}
+		return fn(cctx, args)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("wrapping tool %q: %w", ref.Name, err)
+	}
+	return t, nil
+}
+
+// toolGuardVerdict reports whether a proposed tool call may proceed and, if
+// not, why — max_calls/require ordering, then the declared when: guard.
+func (e *Engine) toolGuardVerdict(st *machine.State, ref machine.ToolRef, calls map[string]int, rs *journal.RunState, data, args map[string]any, turn int) (allowed bool, reason string) {
+	if ref.MaxCalls > 0 && calls[ref.Name] >= ref.MaxCalls {
+		return false, fmt.Sprintf("tool %q exceeded max_calls %d for this state", ref.Name, ref.MaxCalls)
+	}
+	if ref.Require != "" && calls[ref.Require] == 0 {
+		return false, fmt.Sprintf("tool %q requires %q to have been called first", ref.Name, ref.Require)
+	}
+	if ref.When.IsZero() {
+		return true, ""
+	}
+	scope := baseScope(rs)
+	for k, v := range data {
+		scope[k] = v
+	}
+	scope["args"] = args
+	scope["calls"] = calls
+	scope["turn"] = turn
+	ok, err := ref.When.Bool(scope)
+	if err != nil {
+		e.Listener.Warn("tool guard evaluation failed; rejecting call",
+			"state", st.Name, "tool", ref.Name, "error", err.Error())
+		return false, fmt.Sprintf("guard error: %v", err)
+	}
+	if !ok {
+		return false, fmt.Sprintf("guard %s rejected the call", ref.When.Display())
+	}
+	return true, ""
 }
 
 // resolveModelRef returns the state's model ref, calling routing functions
