@@ -137,65 +137,71 @@ func (l *loader) wireBranch(m *Machine, obj *goja.Object, successor string) (str
 	}
 
 	var elseTarget string
-	hasElse := false
-
-	// Array form: ordered guard-only edges — when(g).to(x) entries, with an
-	// optional bare target last as the else.
+	var hasElse bool
+	var err error
 	if edges.ClassName() == "Array" {
-		n := int(edges.Get("length").ToInteger())
-		for i := range n {
-			entry := edges.Get(strconv.Itoa(i))
-			if k, edgeObj := l.flowKind(entry); k == "edge" {
-				guard := l.dyn(edgeObj.Get("when"))
-				to, err := l.wireTarget(m, edgeObj.Get("to"), name, fmt.Sprintf("edge %d", i))
-				if err != nil {
-					return "", err
-				}
-				st.Transitions = append(st.Transitions, Transition{When: guard, To: to})
-				continue
-			}
-			if i != n-1 {
-				return "", fmt.Errorf("state %q: only the last array edge may be a bare target (the else)", name)
-			}
-			target, err := l.wireTarget(m, entry, name, "else")
-			if err != nil {
-				return "", err
-			}
-			elseTarget, hasElse = target, true
-		}
-		return name, l.finishBranch(st, name, elseTarget, hasElse, successor)
+		elseTarget, hasElse, err = l.wireArrayEdges(m, st, name, edges)
+	} else {
+		elseTarget, hasElse, err = l.wireObjectEdges(m, st, name, edges)
 	}
+	if err != nil {
+		return "", err
+	}
+	return name, l.finishBranch(st, name, elseTarget, hasElse, successor)
+}
 
+// wireArrayEdges wires a branch's array form: ordered guard-only edges —
+// when(g).to(x) entries, with an optional bare target last as the else.
+func (l *loader) wireArrayEdges(m *Machine, st *State, name string, edges *goja.Object) (elseTarget string, hasElse bool, err error) {
+	n := int(edges.Get("length").ToInteger())
+	for i := range n {
+		entry := edges.Get(strconv.Itoa(i))
+		if k, edgeObj := l.flowKind(entry); k == "edge" {
+			guard := l.dyn(edgeObj.Get("when"))
+			to, err := l.wireTarget(m, edgeObj.Get("to"), name, fmt.Sprintf("edge %d", i))
+			if err != nil {
+				return "", false, err
+			}
+			st.Transitions = append(st.Transitions, Transition{When: guard, To: to})
+			continue
+		}
+		if i != n-1 {
+			return "", false, fmt.Errorf("state %q: only the last array edge may be a bare target (the else)", name)
+		}
+		target, err := l.wireTarget(m, entry, name, "else")
+		if err != nil {
+			return "", false, err
+		}
+		elseTarget, hasElse = target, true
+	}
+	return elseTarget, hasElse, nil
+}
+
+// wireObjectEdges wires a branch's object form: else/catch/timeout keys plus
+// event-name keys, each an edge or a bare target.
+func (l *loader) wireObjectEdges(m *Machine, st *State, name string, edges *goja.Object) (elseTarget string, hasElse bool, err error) {
 	for _, key := range edges.Keys() {
 		val := edges.Get(key)
 		switch key {
 		case "else":
 			target, err := l.wireTarget(m, val, name, "else")
 			if err != nil {
-				return "", err
+				return "", false, err
 			}
 			elseTarget, hasElse = target, true
 
 		case "catch":
-			catches, ok := val.(*goja.Object)
-			if !ok {
-				return "", fmt.Errorf("state %q: catch must be an object of {errorClass: target}", name)
-			}
-			for _, class := range catches.Keys() {
-				target, err := l.wireTarget(m, catches.Get(class), name, "catch "+class)
-				if err != nil {
-					return "", err
-				}
-				st.Catch = append(st.Catch, CatchClause{Match: []string{class}, To: target})
+			if err := l.wireCatchEdges(m, st, name, val); err != nil {
+				return "", false, err
 			}
 
 		case "timeout":
 			if st.Human == nil {
-				return "", fmt.Errorf("state %q: timeout routes are only valid on human gates", name)
+				return "", false, fmt.Errorf("state %q: timeout routes are only valid on human gates", name)
 			}
 			target, err := l.wireTarget(m, val, name, "timeout")
 			if err != nil {
-				return "", err
+				return "", false, err
 			}
 			st.Human.OnTimeout = target
 
@@ -209,13 +215,28 @@ func (l *loader) wireBranch(m *Machine, obj *goja.Object, successor string) (str
 			}
 			to, err := l.wireTarget(m, target, name, "on "+on)
 			if err != nil {
-				return "", err
+				return "", false, err
 			}
 			st.Transitions = append(st.Transitions, Transition{On: on, When: guard, To: to})
 		}
 	}
+	return elseTarget, hasElse, nil
+}
 
-	return name, l.finishBranch(st, name, elseTarget, hasElse, successor)
+// wireCatchEdges wires a branch's catch: {errorClass: target} object.
+func (l *loader) wireCatchEdges(m *Machine, st *State, name string, val goja.Value) error {
+	catches, ok := val.(*goja.Object)
+	if !ok {
+		return fmt.Errorf("state %q: catch must be an object of {errorClass: target}", name)
+	}
+	for _, class := range catches.Keys() {
+		target, err := l.wireTarget(m, catches.Get(class), name, "catch "+class)
+		if err != nil {
+			return err
+		}
+		st.Catch = append(st.Catch, CatchClause{Match: []string{class}, To: target})
+	}
+	return nil
 }
 
 // finishBranch wires the fallback: explicit else wins; mid-pipe, the
@@ -255,25 +276,9 @@ func (l *loader) wireLoop(m *Machine, obj *goja.Object, successor string) (strin
 		}
 	}
 
-	// The judge: a registered state whose out-edges the loop owns. A human
-	// gate routes on resume events, not guards — that is branch territory.
-	kind, judgeObj := l.flowKind(opts.Get("judge"))
-	if kind != "state" {
-		return "", errors.New("loop: judge must be a registered state")
-	}
-	judge := l.stateName(judgeObj)
-	st := m.State(judge)
-	if st == nil {
-		return "", fmt.Errorf("loop: judge %q is not registered in states", judge)
-	}
-	if st.Terminal {
-		return "", fmt.Errorf("loop: judge %q is terminal and cannot route the loop", judge)
-	}
-	if st.Human != nil {
-		return "", fmt.Errorf("loop: judge %q is a human gate — gates route on resume events; use branch", judge)
-	}
-	if len(st.Transitions) > 0 {
-		return "", fmt.Errorf("state %q is wired more than once — each state's outgoing edges live in exactly one place", judge)
+	judge, st, err := l.resolveLoopJudge(m, opts)
+	if err != nil {
+		return "", err
 	}
 
 	// The body falls through to the judge.
@@ -294,51 +299,27 @@ func (l *loader) wireLoop(m *Machine, obj *goja.Object, successor string) (strin
 		return "", fmt.Errorf("loop(%s): accept must be a function of scope returning a boolean", judge)
 	}
 
-	// maxVisits is required: the declared bound is the combinator's point.
-	mv := opts.Get("maxVisits")
-	if !defined(mv) {
-		return "", fmt.Errorf("loop(%s): maxVisits is required — the bounded budget is the point of a loop", judge)
-	}
-	switch mv.Export().(type) {
-	case int64, float64:
-	default:
-		return "", fmt.Errorf("loop(%s): maxVisits must be a number, got %s", judge, mv)
-	}
-	maxVisits := int(mv.ToInteger())
-	if maxVisits < 1 {
-		return "", fmt.Errorf("loop(%s): maxVisits must be >= 1, got %s", judge, mv)
+	maxVisits, err := loopMaxVisits(opts, judge)
+	if err != nil {
+		return "", err
 	}
 
-	// then: explicit XOR the pipe successor — the same rule as branch's else.
-	var then string
-	switch thenVal := opts.Get("then"); {
-	case defined(thenVal) && successor != "":
-		return "", fmt.Errorf("loop(%s): loop has a then: AND the pipe continues after it — move the continuation into then: or drop it", judge)
-	case defined(thenVal):
-		if then, err = l.wireTarget(m, thenVal, judge, "then"); err != nil {
-			return "", err
-		}
-	case successor != "":
-		then = successor
-	default:
-		return "", fmt.Errorf("loop(%s): loop at the end of a pipe needs a then", judge)
+	then, err := l.resolveLoopThen(m, opts, judge, successor)
+	if err != nil {
+		return "", err
 	}
 
 	// revise: where a rejected result re-enters. Defaults to the body's
 	// entry; explicit for loops that re-enter upstream of the body.
-	revise := entry
-	if v := opts.Get("revise"); defined(v) {
-		if revise, err = l.wireTarget(m, v, judge, "revise"); err != nil {
-			return "", err
-		}
+	revise, err := l.resolveLoopFallback(m, opts, "revise", judge, entry)
+	if err != nil {
+		return "", err
 	}
 
 	// exhausted: budget spent without acceptance is a failure unless routed.
-	exhausted := "failed"
-	if v := opts.Get("exhausted"); defined(v) {
-		if exhausted, err = l.wireTarget(m, v, judge, "exhausted"); err != nil {
-			return "", err
-		}
+	exhausted, err := l.resolveLoopFallback(m, opts, "exhausted", judge, "failed")
+	if err != nil {
+		return "", err
 	}
 
 	// The visits budget, synthesized as real JS: it dry-runs, contract-checks,
@@ -357,21 +338,101 @@ func (l *loader) wireLoop(m *Machine, obj *goja.Object, successor string) (strin
 	}
 
 	// catch: the judge's catch edges, exactly as branch wires them.
-	if v := opts.Get("catch"); defined(v) {
-		catches, isObj := v.(*goja.Object)
-		if !isObj {
-			return "", fmt.Errorf("loop(%s): catch must be an object of {errorClass: target}", judge)
-		}
-		for _, class := range catches.Keys() {
-			target, err := l.wireTarget(m, catches.Get(class), judge, "catch "+class)
-			if err != nil {
-				return "", err
-			}
-			st.Catch = append(st.Catch, CatchClause{Match: []string{class}, To: target})
-		}
+	if err := l.wireLoopCatch(m, opts, st, judge); err != nil {
+		return "", err
 	}
-
 	return entry, nil
+}
+
+// resolveLoopFallback resolves an optional loop target (revise/exhausted):
+// wired to its declared value, or the given default when absent.
+func (l *loader) resolveLoopFallback(m *Machine, opts *goja.Object, key, judge, def string) (string, error) {
+	v := opts.Get(key)
+	if !defined(v) {
+		return def, nil
+	}
+	return l.wireTarget(m, v, judge, key)
+}
+
+// wireLoopCatch wires the judge's catch: {errorClass: target} object,
+// exactly as branch wires it.
+func (l *loader) wireLoopCatch(m *Machine, opts *goja.Object, st *State, judge string) error {
+	v := opts.Get("catch")
+	if !defined(v) {
+		return nil
+	}
+	catches, isObj := v.(*goja.Object)
+	if !isObj {
+		return fmt.Errorf("loop(%s): catch must be an object of {errorClass: target}", judge)
+	}
+	for _, class := range catches.Keys() {
+		target, err := l.wireTarget(m, catches.Get(class), judge, "catch "+class)
+		if err != nil {
+			return err
+		}
+		st.Catch = append(st.Catch, CatchClause{Match: []string{class}, To: target})
+	}
+	return nil
+}
+
+// resolveLoopJudge resolves and validates a loop's judge option: a
+// registered, non-terminal, non-human, not-yet-wired state whose out-edges
+// the loop will own.
+func (l *loader) resolveLoopJudge(m *Machine, opts *goja.Object) (judge string, st *State, err error) {
+	kind, judgeObj := l.flowKind(opts.Get("judge"))
+	if kind != "state" {
+		return "", nil, errors.New("loop: judge must be a registered state")
+	}
+	judge = l.stateName(judgeObj)
+	st = m.State(judge)
+	if st == nil {
+		return "", nil, fmt.Errorf("loop: judge %q is not registered in states", judge)
+	}
+	if st.Terminal {
+		return "", nil, fmt.Errorf("loop: judge %q is terminal and cannot route the loop", judge)
+	}
+	if st.Human != nil {
+		return "", nil, fmt.Errorf("loop: judge %q is a human gate — gates route on resume events; use branch", judge)
+	}
+	if len(st.Transitions) > 0 {
+		return "", nil, fmt.Errorf("state %q is wired more than once — each state's outgoing edges live in exactly one place", judge)
+	}
+	return judge, st, nil
+}
+
+// loopMaxVisits parses and validates the required maxVisits option — the
+// declared bound is the combinator's point, so it has no default.
+func loopMaxVisits(opts *goja.Object, judge string) (int, error) {
+	mv := opts.Get("maxVisits")
+	if !defined(mv) {
+		return 0, fmt.Errorf("loop(%s): maxVisits is required — the bounded budget is the point of a loop", judge)
+	}
+	switch mv.Export().(type) {
+	case int64, float64:
+	default:
+		return 0, fmt.Errorf("loop(%s): maxVisits must be a number, got %s", judge, mv)
+	}
+	maxVisits := int(mv.ToInteger())
+	if maxVisits < 1 {
+		return 0, fmt.Errorf("loop(%s): maxVisits must be >= 1, got %s", judge, mv)
+	}
+	return maxVisits, nil
+}
+
+// resolveLoopThen resolves the loop's then: target, explicit XOR the pipe
+// successor — the same rule as branch's else.
+func (l *loader) resolveLoopThen(m *Machine, opts *goja.Object, judge, successor string) (string, error) {
+	thenVal := opts.Get("then")
+	switch {
+	case defined(thenVal) && successor != "":
+		return "", fmt.Errorf("loop(%s): loop has a then: AND the pipe continues after it — move the continuation into then: or drop it", judge)
+	case defined(thenVal):
+		return l.wireTarget(m, thenVal, judge, "then")
+	case successor != "":
+		return successor, nil
+	default:
+		return "", fmt.Errorf("loop(%s): loop at the end of a pipe needs a then", judge)
+	}
 }
 
 // wireTarget resolves an edge target (state ref, terminal, nested pipe,
