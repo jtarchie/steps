@@ -141,7 +141,7 @@ func (l *loader) wireBranch(m *Machine, obj *goja.Object, successor string) (str
 	// optional bare target last as the else.
 	if edges.ClassName() == "Array" {
 		n := int(edges.Get("length").ToInteger())
-		for i := 0; i < n; i++ {
+		for i := range n {
 			entry := edges.Get(fmt.Sprintf("%d", i))
 			if k, edgeObj := l.flowKind(entry); k == "edge" {
 				guard := l.dyn(edgeObj.Get("when"))

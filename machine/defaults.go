@@ -31,7 +31,7 @@ func ApplyDefaults(m *Machine) {
 	// document order; the last state flows to done. Computed over the
 	// user-declared list, before implicit terminals are appended.
 	declared := len(m.States)
-	for i := 0; i < declared; i++ {
+	for i := range declared {
 		s := m.States[i]
 		if s.Terminal || len(s.Transitions) > 0 {
 			continue

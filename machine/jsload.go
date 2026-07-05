@@ -216,7 +216,7 @@ func (l *loader) exportValue(v goja.Value) any {
 		if o.ClassName() == "Array" {
 			n := int(o.Get("length").ToInteger())
 			out := make([]any, 0, n)
-			for i := 0; i < n; i++ {
+			for i := range n {
 				out = append(out, l.exportValue(o.Get(fmt.Sprintf("%d", i))))
 			}
 			return out
@@ -306,7 +306,7 @@ func stringSlice(v goja.Value) []string {
 	}
 	n := int(o.Get("length").ToInteger())
 	out := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		out = append(out, o.Get(fmt.Sprintf("%d", i)).String())
 	}
 	return out
@@ -724,7 +724,7 @@ func (l *loader) agent(o *goja.Object) (*AgentSpec, error) {
 
 	if tools := l.obj(o.Get("tools")); tools != nil {
 		n := int(tools.Get("length").ToInteger())
-		for i := 0; i < n; i++ {
+		for i := range n {
 			tv := tools.Get(fmt.Sprintf("%d", i))
 			if s, ok := tv.Export().(string); ok {
 				ag.Tools = append(ag.Tools, ToolRef{Name: s})
@@ -760,7 +760,7 @@ func (l *loader) retries(v goja.Value, where string) ([]RetryPolicy, error) {
 	}
 	n := int(o.Get("length").ToInteger())
 	out := make([]RetryPolicy, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		e := l.obj(o.Get(fmt.Sprintf("%d", i)))
 		if e == nil {
 			return nil, fmt.Errorf("%s[%d] must be an object", where, i)
