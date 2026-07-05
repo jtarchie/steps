@@ -189,47 +189,8 @@ func countChanges(hunk string) [2]int {
 }
 
 func registerBuiltins(r *Registry) {
-	r.Register("file.write", "Write content to a file, creating parent directories",
-		func(ctx context.Context, args map[string]any) (map[string]any, error) {
-			path, err := str(args, "path")
-			if err != nil {
-				return nil, err
-			}
-			content, err := str(args, "content")
-			if err != nil {
-				return nil, err
-			}
-			if dir := filepath.Dir(path); dir != "." {
-				if err := os.MkdirAll(dir, 0o755); err != nil {
-					return nil, err
-				}
-			}
-			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-				return nil, err
-			}
-			return map[string]any{"path": path, "bytes": len(content)}, nil
-		})
-
-	r.Register("file.read", "Read a file as text; an optional root confines and anchors relative paths",
-		func(ctx context.Context, args map[string]any) (map[string]any, error) {
-			path, err := str(args, "path")
-			if err != nil {
-				return nil, err
-			}
-			if root, _ := args["root"].(string); root != "" {
-				joined, err := confine(root, path)
-				if err != nil {
-					return nil, err
-				}
-				path = joined
-			}
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				return nil, err
-			}
-			return map[string]any{"content": string(raw), "bytes": len(raw)}, nil
-		})
-
+	r.Register("file.write", "Write content to a file, creating parent directories", fileWriteTool)
+	r.Register("file.read", "Read a file as text; an optional root confines and anchors relative paths", fileReadTool)
 	// diff.split: unified diff text -> {files: [{path, patch, additions,
 	// deletions, content?}], count}. Args: diff (required); by: "file"
 	// (default) | "hunk" (one entry per hunk, file header repeated for
@@ -237,89 +198,7 @@ func registerBuiltins(r *Registry) {
 	// `content`, the file's CURRENT text read from root (path-confined),
 	// capped at context_bytes (default 4096) with a truncation marker.
 	// Deleted/renamed files simply carry no content.
-	r.Register("diff.split", "Split a unified diff into per-file (or per-hunk, by: hunk) entries; a root attaches current file contents (capped by context_bytes)",
-		func(ctx context.Context, args map[string]any) (map[string]any, error) {
-			diff, err := str(args, "diff")
-			if err != nil {
-				return nil, err
-			}
-			by, _ := args["by"].(string)
-			if by != "" && by != "file" && by != "hunk" {
-				return nil, fmt.Errorf("by must be file or hunk, got %q", by)
-			}
-			root, _ := args["root"].(string)
-			contextBytes := 4096
-			if v, ok := args["context_bytes"]; ok && v != nil {
-				n, err := toInt(v)
-				if err != nil || n < 0 {
-					return nil, fmt.Errorf("context_bytes must be a non-negative integer, got %v", v)
-				}
-				contextBytes = n
-			}
-			var files []any
-			var current map[string]any
-			var patch []string
-			flush := func() {
-				if current != nil {
-					current["patch"] = strings.Join(patch, "\n")
-					files = append(files, current)
-				}
-				patch = nil
-			}
-			for _, line := range strings.Split(diff, "\n") {
-				switch {
-				case strings.HasPrefix(line, "diff --git "):
-					flush()
-					// "diff --git a/path b/path" — the b/ side is the new path.
-					path := line[len("diff --git "):]
-					if i := strings.LastIndex(path, " b/"); i >= 0 {
-						path = path[i+3:]
-					}
-					current = map[string]any{"path": path, "additions": 0, "deletions": 0}
-				case current == nil:
-					continue
-				case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
-					current["additions"] = current["additions"].(int) + 1
-				case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
-					current["deletions"] = current["deletions"].(int) + 1
-				}
-				if current != nil {
-					patch = append(patch, line)
-				}
-			}
-			flush()
-			if by == "hunk" {
-				files = splitHunks(files)
-			}
-			// Deterministic enrichment: the machine attaches the current
-			// file so scouts see code around the patch, capped so scout
-			// prompts stay cheap. The senior pulls FULL files on demand
-			// via a guarded file.read tool instead.
-			if root != "" && contextBytes > 0 {
-				for _, f := range files {
-					file, ok := f.(map[string]any)
-					if !ok {
-						continue
-					}
-					path, _ := file["path"].(string)
-					joined, err := confine(root, path)
-					if err != nil {
-						continue
-					}
-					raw, err := os.ReadFile(joined)
-					if err != nil {
-						continue // deleted/renamed files simply carry no content
-					}
-					content := string(raw)
-					if len(content) > contextBytes {
-						content = content[:contextBytes] + "\n… (truncated; full file available via file.read)"
-					}
-					file["content"] = content
-				}
-			}
-			return map[string]any{"files": files, "count": len(files)}, nil
-		})
-
+	r.Register("diff.split", "Split a unified diff into per-file (or per-hunk, by: hunk) entries; a root attaches current file contents (capped by context_bytes)", diffSplitTool)
 	// exec.run: run a shell command as a build/test GATE. The crucial
 	// contract — a non-zero exit is DATA, not an error: it returns
 	// {ok:false, exit_code, stdout, stderr} so a guard can route on it
@@ -333,74 +212,206 @@ func registerBuiltins(r *Registry) {
 	// rendered `input:` block — machine/operator-authored, never model text —
 	// so it is trusted the way any action's args are; do NOT expose exec.run
 	// as an agent `tool` where a model would author `cmd`.
-	r.Register("exec.run", "Run a shell command as a build/test gate: returns {ok, exit_code, stdout, stderr}; a non-zero exit is a routing signal, not an error (only a launch failure or timeout raises)",
-		func(ctx context.Context, args map[string]any) (map[string]any, error) {
-			cmdline, err := str(args, "cmd")
-			if err != nil {
-				return nil, err
-			}
-			cwd, _ := args["cwd"].(string)
-			timeout := 120 * time.Second
-			if v, ok := args["timeout_ms"]; ok && v != nil {
-				n, err := toInt(v)
-				if err != nil || n <= 0 {
-					return nil, fmt.Errorf("timeout_ms must be a positive integer, got %v", v)
-				}
-				timeout = time.Duration(n) * time.Millisecond
-			}
-			runCtx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-
-			cmd := exec.CommandContext(runCtx, "sh", "-c", cmdline)
-			cmd.Dir = cwd
-			var stdout, stderr bytes.Buffer
-			cmd.Stdout, cmd.Stderr = &stdout, &stderr
-			runErr := cmd.Run()
-
-			// Timeout/cancellation is transient infra, never a build verdict.
-			if runCtx.Err() != nil {
-				return nil, fmt.Errorf("command timed out after %s: %s", timeout, cmdline)
-			}
-			exitCode := 0
-			if runErr != nil {
-				var ee *exec.ExitError
-				if errors.As(runErr, &ee) {
-					exitCode = ee.ExitCode() // ran, exited non-zero: that's the gate result
-				} else {
-					// Could not launch (no shell, bad cwd): transient, retryable.
-					return nil, fmt.Errorf("exec %q: %w", cmdline, runErr)
-				}
-			}
-			return map[string]any{
-				"cmd":       cmdline,
-				"exit_code": exitCode,
-				"ok":        exitCode == 0,
-				"stdout":    capOutput(stdout.String()),
-				"stderr":    capOutput(stderr.String()),
-			}, nil
-		})
-
+	r.Register("exec.run", "Run a shell command as a build/test gate: returns {ok, exit_code, stdout, stderr}; a non-zero exit is a routing signal, not an error (only a launch failure or timeout raises)", execRunTool)
 	registerGH(r)
+	r.Register("http.get", "HTTP GET a URL and return the body (up to 256KB)", httpGetTool)
+}
 
-	r.Register("http.get", "HTTP GET a URL and return the body (up to 256KB)",
-		func(ctx context.Context, args map[string]any) (map[string]any, error) {
-			url, err := str(args, "url")
-			if err != nil {
-				return nil, err
+func fileWriteTool(ctx context.Context, args map[string]any) (map[string]any, error) {
+	path, err := str(args, "path")
+	if err != nil {
+		return nil, err
+	}
+	content, err := str(args, "content")
+	if err != nil {
+		return nil, err
+	}
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		return nil, err
+	}
+	return map[string]any{"path": path, "bytes": len(content)}, nil
+}
+
+func fileReadTool(ctx context.Context, args map[string]any) (map[string]any, error) {
+	path, err := str(args, "path")
+	if err != nil {
+		return nil, err
+	}
+	if root, _ := args["root"].(string); root != "" {
+		joined, err := confine(root, path)
+		if err != nil {
+			return nil, err
+		}
+		path = joined
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"content": string(raw), "bytes": len(raw)}, nil
+}
+
+func diffSplitTool(ctx context.Context, args map[string]any) (map[string]any, error) {
+	diff, err := str(args, "diff")
+	if err != nil {
+		return nil, err
+	}
+	by, _ := args["by"].(string)
+	if by != "" && by != "file" && by != "hunk" {
+		return nil, fmt.Errorf("by must be file or hunk, got %q", by)
+	}
+	root, _ := args["root"].(string)
+	contextBytes := 4096
+	if v, ok := args["context_bytes"]; ok && v != nil {
+		n, err := toInt(v)
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("context_bytes must be a non-negative integer, got %v", v)
+		}
+		contextBytes = n
+	}
+	files := splitDiffFiles(diff)
+	if by == "hunk" {
+		files = splitHunks(files)
+	}
+	if root != "" && contextBytes > 0 {
+		attachFileContext(files, root, contextBytes)
+	}
+	return map[string]any{"files": files, "count": len(files)}, nil
+}
+
+// splitDiffFiles walks a unified diff's lines into per-file entries with
+// additions/deletions counts and the raw patch text.
+func splitDiffFiles(diff string) []any {
+	var files []any
+	var current map[string]any
+	var patch []string
+	flush := func() {
+		if current != nil {
+			current["patch"] = strings.Join(patch, "\n")
+			files = append(files, current)
+		}
+		patch = nil
+	}
+	for _, line := range strings.Split(diff, "\n") {
+		switch {
+		case strings.HasPrefix(line, "diff --git "):
+			flush()
+			// "diff --git a/path b/path" — the b/ side is the new path.
+			path := line[len("diff --git "):]
+			if i := strings.LastIndex(path, " b/"); i >= 0 {
+				path = path[i+3:]
 			}
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-			if err != nil {
-				return nil, err
-			}
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				return nil, err
-			}
-			defer resp.Body.Close()
-			body, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
-			if err != nil {
-				return nil, err
-			}
-			return map[string]any{"status": resp.StatusCode, "body": string(body)}, nil
-		})
+			current = map[string]any{"path": path, "additions": 0, "deletions": 0}
+		case current == nil:
+			continue
+		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
+			current["additions"] = current["additions"].(int) + 1
+		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
+			current["deletions"] = current["deletions"].(int) + 1
+		}
+		if current != nil {
+			patch = append(patch, line)
+		}
+	}
+	flush()
+	return files
+}
+
+// attachFileContext enriches each diff.split entry with the current file's
+// text (path-confined to root, capped at contextBytes) so scouts see code
+// around the patch without paying for the whole file. Deterministic: the
+// senior pulls FULL files on demand via a guarded file.read tool instead.
+func attachFileContext(files []any, root string, contextBytes int) {
+	for _, f := range files {
+		file, ok := f.(map[string]any)
+		if !ok {
+			continue
+		}
+		path, _ := file["path"].(string)
+		joined, err := confine(root, path)
+		if err != nil {
+			continue
+		}
+		raw, err := os.ReadFile(joined)
+		if err != nil {
+			continue // deleted/renamed files simply carry no content
+		}
+		content := string(raw)
+		if len(content) > contextBytes {
+			content = content[:contextBytes] + "\n… (truncated; full file available via file.read)"
+		}
+		file["content"] = content
+	}
+}
+
+func execRunTool(ctx context.Context, args map[string]any) (map[string]any, error) {
+	cmdline, err := str(args, "cmd")
+	if err != nil {
+		return nil, err
+	}
+	cwd, _ := args["cwd"].(string)
+	timeout := 120 * time.Second
+	if v, ok := args["timeout_ms"]; ok && v != nil {
+		n, err := toInt(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("timeout_ms must be a positive integer, got %v", v)
+		}
+		timeout = time.Duration(n) * time.Millisecond
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, "sh", "-c", cmdline)
+	cmd.Dir = cwd
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	runErr := cmd.Run()
+
+	// Timeout/cancellation is transient infra, never a build verdict.
+	if runCtx.Err() != nil {
+		return nil, fmt.Errorf("command timed out after %s: %s", timeout, cmdline)
+	}
+	exitCode := 0
+	if runErr != nil {
+		var ee *exec.ExitError
+		if errors.As(runErr, &ee) {
+			exitCode = ee.ExitCode() // ran, exited non-zero: that's the gate result
+		} else {
+			// Could not launch (no shell, bad cwd): transient, retryable.
+			return nil, fmt.Errorf("exec %q: %w", cmdline, runErr)
+		}
+	}
+	return map[string]any{
+		"cmd":       cmdline,
+		"exit_code": exitCode,
+		"ok":        exitCode == 0,
+		"stdout":    capOutput(stdout.String()),
+		"stderr":    capOutput(stderr.String()),
+	}, nil
+}
+
+func httpGetTool(ctx context.Context, args map[string]any) (map[string]any, error) {
+	url, err := str(args, "url")
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"status": resp.StatusCode, "body": string(body)}, nil
 }
