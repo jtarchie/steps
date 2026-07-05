@@ -315,69 +315,94 @@ func emitResult(res *engine.Result) {
 func printMachine(m *machine.Machine) {
 	fmt.Printf("\nmachine %s%s%s\n", cBold, m.Name, cReset)
 	fmt.Printf("initial: %s\n", m.Initial)
-	fmt.Printf("limits: max_transitions=%d timeout=%s", m.Limits.MaxTransitions, m.Limits.Timeout)
-	if m.Limits.MaxTokens > 0 {
-		fmt.Printf(" max_tokens=%d", m.Limits.MaxTokens)
-	}
-	if m.Limits.MaxCost > 0 {
-		fmt.Printf(" max_cost=%.2f", m.Limits.MaxCost)
-	}
-	fmt.Println()
+	printMachineLimits(m.Limits)
 	fmt.Println("states:")
 	for _, s := range m.States {
-		if s.Terminal {
-			status := "success"
-			if s.Status == "failed" {
-				status = "failed"
-			}
-			fmt.Printf("  %s%s%s (terminal, %s)\n", cBold, s.Name, cReset, status)
-			continue
-		}
-		detail := s.HandlerKind()
-		switch {
-		case s.Agent != nil:
-			detail = fmt.Sprintf("agent %s, maxTurns=%d", s.Agent.Model.Display(), s.Agent.MaxTurns)
-			if s.Agent.Adopt != "" {
-				detail += ", adopt=" + s.Agent.Adopt
-			}
-		case s.Action != nil:
-			detail = "action " + s.Action.Name
-		case s.Human != nil:
-			detail = "human gate"
-			if s.Human.Timeout > 0 {
-				detail += fmt.Sprintf(", timeout=%s→%s", s.Human.Timeout, s.Human.OnTimeout)
-			}
-		}
-		fmt.Printf("  %s%s%s (%s)\n", cBold, s.Name, cReset, detail)
-		if len(s.Output.Schema) > 0 && !s.Output.DefaultOutput() {
-			keys := make([]string, 0, len(s.Output.Schema))
-			for k := range s.Output.Schema {
-				keys = append(keys, k)
-			}
-			fmt.Printf("    output: %s", strings.Join(keys, ", "))
-			if len(s.Output.Events) > 0 {
-				fmt.Printf(" (events: %s)", strings.Join(s.Output.Events, ", "))
-			}
-			fmt.Println()
-		}
-		for _, rp := range s.Retry {
-			fmt.Printf("    retry: %s ×%d\n", strings.Join(rp.Match, "|"), rp.MaxAttempts)
-		}
-		for _, t := range s.Transitions {
-			cond := ""
-			if t.On != "" {
-				cond += " on:" + t.On
-			}
-			if !t.When.IsZero() {
-				cond += " when: " + t.When.Display()
-			}
-			if cond == "" {
-				cond = " (fallback)"
-			}
-			fmt.Printf("    → %s%s\n", t.To, cond)
-		}
-		for _, ca := range s.Catch {
-			fmt.Printf("    catch %s → %s\n", strings.Join(ca.Match, "|"), ca.To)
-		}
+		printStateSummary(s)
 	}
+}
+
+func printMachineLimits(limits machine.Limits) {
+	fmt.Printf("limits: max_transitions=%d timeout=%s", limits.MaxTransitions, limits.Timeout)
+	if limits.MaxTokens > 0 {
+		fmt.Printf(" max_tokens=%d", limits.MaxTokens)
+	}
+	if limits.MaxCost > 0 {
+		fmt.Printf(" max_cost=%.2f", limits.MaxCost)
+	}
+	fmt.Println()
+}
+
+func printStateSummary(s *machine.State) {
+	if s.Terminal {
+		status := "success"
+		if s.Status == "failed" {
+			status = "failed"
+		}
+		fmt.Printf("  %s%s%s (terminal, %s)\n", cBold, s.Name, cReset, status)
+		return
+	}
+	fmt.Printf("  %s%s%s (%s)\n", cBold, s.Name, cReset, stateHandlerDetail(s))
+	printStateOutput(s)
+	for _, rp := range s.Retry {
+		fmt.Printf("    retry: %s ×%d\n", strings.Join(rp.Match, "|"), rp.MaxAttempts)
+	}
+	for _, t := range s.Transitions {
+		fmt.Printf("    → %s%s\n", t.To, transitionCond(t))
+	}
+	for _, ca := range s.Catch {
+		fmt.Printf("    catch %s → %s\n", strings.Join(ca.Match, "|"), ca.To)
+	}
+}
+
+// stateHandlerDetail summarizes a non-terminal state's handler for the
+// --print listing.
+func stateHandlerDetail(s *machine.State) string {
+	switch {
+	case s.Agent != nil:
+		detail := fmt.Sprintf("agent %s, maxTurns=%d", s.Agent.Model.Display(), s.Agent.MaxTurns)
+		if s.Agent.Adopt != "" {
+			detail += ", adopt=" + s.Agent.Adopt
+		}
+		return detail
+	case s.Action != nil:
+		return "action " + s.Action.Name
+	case s.Human != nil:
+		detail := "human gate"
+		if s.Human.Timeout > 0 {
+			detail += fmt.Sprintf(", timeout=%s→%s", s.Human.Timeout, s.Human.OnTimeout)
+		}
+		return detail
+	default:
+		return s.HandlerKind()
+	}
+}
+
+func printStateOutput(s *machine.State) {
+	if len(s.Output.Schema) == 0 || s.Output.DefaultOutput() {
+		return
+	}
+	keys := make([]string, 0, len(s.Output.Schema))
+	for k := range s.Output.Schema {
+		keys = append(keys, k)
+	}
+	fmt.Printf("    output: %s", strings.Join(keys, ", "))
+	if len(s.Output.Events) > 0 {
+		fmt.Printf(" (events: %s)", strings.Join(s.Output.Events, ", "))
+	}
+	fmt.Println()
+}
+
+func transitionCond(t machine.Transition) string {
+	cond := ""
+	if t.On != "" {
+		cond += " on:" + t.On
+	}
+	if !t.When.IsZero() {
+		cond += " when: " + t.When.Display()
+	}
+	if cond == "" {
+		cond = " (fallback)"
+	}
+	return cond
 }
