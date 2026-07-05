@@ -42,73 +42,85 @@ func DryRun(m *Machine) (fatals []error, warnings []string) {
 		if s.Terminal {
 			continue
 		}
-		base := m.stubScope(s)
-
-		itemScope := base
-		if f := s.ForEach; f != nil {
-			record(s.Name, "foreach.over", dryCall(f.Over, base))
-			itemScope = cloneScope(base)
-			itemScope[f.As] = anyMarker()
-			itemScope["index"] = 0
-			itemScope["total"] = 1
-		}
-
-		// distill: for: functions see the pre-distill scope; the handler
-		// scopes below see the distilled keys as text stubs — field access on
-		// a shadowed key fails the load naming the distillation.
-		handlerScope := itemScope
-		if len(s.Distill) > 0 {
-			handlerScope = cloneScope(itemScope)
-			for i := range s.Distill {
-				d := &s.Distill[i]
-				record(s.Name, "distill."+d.Key+".for", dryCall(d.For, itemScope))
-				handlerScope[d.Key] = distilledMarker(s.Name + "." + d.Key)
-			}
-		}
-
-		if a := s.Agent; a != nil {
-			record(s.Name, "model", dryCall(a.Model, handlerScope))
-			// The history projection appears in the prompt/system scope
-			// under its `as` name.
-			promptScope := handlerScope
-			if a.History != nil {
-				promptScope = cloneScope(handlerScope)
-				promptScope[a.History.As] = "history projection"
-			}
-			record(s.Name, "system", dryCall(a.System, promptScope))
-			record(s.Name, "prompt", dryCall(a.Prompt, promptScope))
-			toolScope := cloneScope(handlerScope)
-			toolScope["args"] = anyMarker()
-			calls := map[string]any{}
-			for _, tr := range a.Tools {
-				calls[tr.Name] = 0
-			}
-			toolScope["calls"] = calls
-			toolScope["turn"] = 1
-			for _, tr := range a.Tools {
-				record(s.Name, "tool "+tr.Name+" when", dryCall(tr.When, toolScope))
-				// Machine-pinned args resolve at agent-build time — no
-				// args/calls/turn exist there. Match the runtime scope.
-				record(s.Name, "tool "+tr.Name+" args", dryCall(tr.Args, handlerScope))
-			}
-		}
-		if h := s.Human; h != nil {
-			record(s.Name, "human.prompt", dryCall(h.Prompt, handlerScope))
-			if h.Choices != nil {
-				record(s.Name, "human.choices.multi", dryCall(h.Choices.Dynamic, handlerScope))
-			}
-		}
-		record(s.Name, "input", dryInputs(s.Input, handlerScope))
-		for i, t := range s.Transitions {
-			// Guards run AFTER the state (foreach aggregate included): they
-			// see output/event but never a per-item variable.
-			guardScope := cloneScope(base)
-			guardScope["output"] = m.outputStub(s)
-			guardScope["event"] = ""
-			record(s.Name, fmt.Sprintf("transitions[%d].when", i), dryCall(t.When, guardScope))
-		}
+		dryRunState(m, s, record)
 	}
 	return fatals, warnings
+}
+
+// dryRunState exercises one non-terminal state's functions against stub
+// scopes derived from its declared schemas, reporting each call's outcome
+// via record.
+func dryRunState(m *Machine, s *State, record func(state, site string, err error)) {
+	base := m.stubScope(s)
+
+	itemScope := base
+	if f := s.ForEach; f != nil {
+		record(s.Name, "foreach.over", dryCall(f.Over, base))
+		itemScope = cloneScope(base)
+		itemScope[f.As] = anyMarker()
+		itemScope["index"] = 0
+		itemScope["total"] = 1
+	}
+
+	// distill: for: functions see the pre-distill scope; the handler
+	// scopes below see the distilled keys as text stubs — field access on
+	// a shadowed key fails the load naming the distillation.
+	handlerScope := itemScope
+	if len(s.Distill) > 0 {
+		handlerScope = cloneScope(itemScope)
+		for i := range s.Distill {
+			d := &s.Distill[i]
+			record(s.Name, "distill."+d.Key+".for", dryCall(d.For, itemScope))
+			handlerScope[d.Key] = distilledMarker(s.Name + "." + d.Key)
+		}
+	}
+
+	if a := s.Agent; a != nil {
+		dryRunAgent(s, a, handlerScope, record)
+	}
+	if h := s.Human; h != nil {
+		record(s.Name, "human.prompt", dryCall(h.Prompt, handlerScope))
+		if h.Choices != nil {
+			record(s.Name, "human.choices.multi", dryCall(h.Choices.Dynamic, handlerScope))
+		}
+	}
+	record(s.Name, "input", dryInputs(s.Input, handlerScope))
+	for i, t := range s.Transitions {
+		// Guards run AFTER the state (foreach aggregate included): they
+		// see output/event but never a per-item variable.
+		guardScope := cloneScope(base)
+		guardScope["output"] = m.outputStub(s)
+		guardScope["event"] = ""
+		record(s.Name, fmt.Sprintf("transitions[%d].when", i), dryCall(t.When, guardScope))
+	}
+}
+
+// dryRunAgent exercises an agent state's model/system/prompt/tool functions.
+func dryRunAgent(s *State, a *AgentSpec, handlerScope map[string]any, record func(state, site string, err error)) {
+	record(s.Name, "model", dryCall(a.Model, handlerScope))
+	// The history projection appears in the prompt/system scope under its
+	// `as` name.
+	promptScope := handlerScope
+	if a.History != nil {
+		promptScope = cloneScope(handlerScope)
+		promptScope[a.History.As] = "history projection"
+	}
+	record(s.Name, "system", dryCall(a.System, promptScope))
+	record(s.Name, "prompt", dryCall(a.Prompt, promptScope))
+	toolScope := cloneScope(handlerScope)
+	toolScope["args"] = anyMarker()
+	calls := map[string]any{}
+	for _, tr := range a.Tools {
+		calls[tr.Name] = 0
+	}
+	toolScope["calls"] = calls
+	toolScope["turn"] = 1
+	for _, tr := range a.Tools {
+		record(s.Name, "tool "+tr.Name+" when", dryCall(tr.When, toolScope))
+		// Machine-pinned args resolve at agent-build time — no args/calls/turn
+		// exist there. Match the runtime scope.
+		record(s.Name, "tool "+tr.Name+" args", dryCall(tr.Args, handlerScope))
+	}
 }
 
 func dryCall(d Dyn, scope map[string]any) error {
