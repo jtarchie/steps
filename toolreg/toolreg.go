@@ -93,7 +93,11 @@ func toInt(v any) (int, error) {
 	case float64:
 		return int(n), nil
 	case string:
-		return strconv.Atoi(strings.TrimSpace(n))
+		i, err := strconv.Atoi(strings.TrimSpace(n))
+		if err != nil {
+			return 0, fmt.Errorf("parsing %q as int: %w", n, err)
+		}
+		return i, nil
 	}
 	return 0, fmt.Errorf("not a number: %T", v)
 }
@@ -229,12 +233,12 @@ func fileWriteTool(ctx context.Context, args map[string]any) (map[string]any, er
 	if dir := filepath.Dir(path); dir != "." {
 		err := os.MkdirAll(dir, 0o755)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("creating directory %s: %w", dir, err)
 		}
 	}
 	err = os.WriteFile(path, []byte(content), 0o600)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("writing file %s: %w", path, err)
 	}
 	return map[string]any{"path": path, "bytes": len(content)}, nil
 }
@@ -253,7 +257,7 @@ func fileReadTool(ctx context.Context, args map[string]any) (map[string]any, err
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading file %s: %w", path, err)
 	}
 	return map[string]any{"content": string(raw), "bytes": len(raw)}, nil
 }
@@ -404,16 +408,16 @@ func httpGetTool(ctx context.Context, args map[string]any) (map[string]any, erro
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("building request for %s: %w", url, err)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fetching %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading response from %s: %w", url, err)
 	}
 	return map[string]any{"status": resp.StatusCode, "body": string(body)}, nil
 }
