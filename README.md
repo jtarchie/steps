@@ -83,9 +83,10 @@ state's functions may reference.
 | Command | What it does |
 |---|---|
 | `steps validate machine.ts [--print]` | Structure checks + a stub dry-run of every function (unknown-field access fails with the available fields listed). `--print` shows the defaults-expanded machine. |
-| `steps run machine.ts --input k=v\|k=@file [--mock file] [-v]` | Start a run; narrates every state, chat message, tool call, retry, and transition to stderr; JSON summary to stdout. |
-| `steps resume <run-id> --event X [--data '{...}']` | Answer a parked human gate, or continue a crashed run from its journal. |
+| `steps run machine.ts --input k=v\|k=@file [--mock file] [-v]` | Start a run. Default output is condensed — one line per state (event, tokens, duration, a result hint); `-v` narrates every message/tool call/transition, `-vv` adds full payloads and thoughts. On a TTY, human gates prompt inline (`--no-prompt` to opt out). JSON summary to stdout. |
+| `steps resume <run-id> [--event X --data '{...}']` | Answer a parked human gate, or continue a crashed run from its journal. With no `--event` on a TTY, the gate's choices are presented inline. |
 | `steps runs` | List runs and their status. |
+| `steps serve [--addr host:port]` | Web view of runs (default `127.0.0.1:8484`): list with status filters and per-machine token/cost totals, run detail (executions, routing, conversations, artifacts), and a form to answer parked gates. |
 | `steps context machine.ts [--state s]` | Show what each state's functions may reference, derived from declared schemas. |
 | `steps inspect <run-id> [--messages]` | Per-state token usage, failures, and routing from the journal; `--messages` dumps recorded conversations. |
 
@@ -93,6 +94,47 @@ Runs journal to SQLite (`.steps.db` by default, `--db` to move it). Every
 prompt, reply, tool call, guard verdict, retry, and transition is an
 append-only event — the journal is the audit log, and resume is a fold over
 it, never a replay of side effects.
+
+## Human gates
+
+A `human:` state parks the run for a person. The prompt is a string or a
+function of scope; routing lives in the flow like any branch. `choices:`
+declares how the answer is collected — and every gate also accepts a
+free-form `note` merged into its output:
+
+```ts
+// Confirm / single choice: each key is one of the gate's resume events.
+const escalate: State = {
+  human: ({ critique }) => `Score ${critique.score}. Approve or fail?`,
+  choices: { approved: "Ship the current draft", rejected: "Fail the run" },
+  timeout: "1h",
+};
+// flow: branch(escalate, { approved: publish, rejected: fail, timeout: fail })
+
+// Multiple choice: options are static or a function of scope; the gate emits
+// ONE event and puts the selection in its output as `selected`.
+const pick: State = {
+  human: "Which modules should be regenerated?",
+  choices: { multi: ({ scan }) => scan.modules, event: "chosen", min: 1 },
+};
+// flow: branch(pick, { chosen: regen })  // downstream: ({ pick }) => pick.selected
+
+// Free-form only (the original shape) stays valid — no choices: needed.
+const review: State = { human: "Anything to add before we ship?" };
+```
+
+Option events are checked against the gate's branch keys at load; `multi`
+functions are dry-run like every other function. The choices are rendered
+**at park time** and journaled with the `run_parked` event, so every way of
+answering reads the same surface:
+
+- **Inline** — on a TTY, `steps run` prints numbered options and reads a
+  selection (a number, an event name, `1,3` or `all` for multi), then a note,
+  and continues in-process. `--no-prompt` (or a pipe) keeps park-and-exit.
+- **CLI later** — `steps resume <id> --event approved --data '{"note":"…"}'`,
+  or `steps resume <id>` with no `--event` on a TTY to pick interactively.
+- **Web** — `steps serve` renders the gate as a form (radios / checkboxes /
+  free-form + note) that resumes the run server-side.
 
 ## Providers
 

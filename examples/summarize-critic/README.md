@@ -16,7 +16,7 @@ human gate) while exercising nearly every feature in [DESIGN.md](../../DESIGN.md
 | Semantic retry (re-prompt with error) | mock's non-JSON critique response; small local models also trigger this naturally |
 | Transient retry (backoff) | mock's `rate_limited` injection; or kill Ollama mid-run |
 | Fallback transitions | `critique` falls through to `escalate` |
-| Human gate + park/resume + timeout | `escalate` with `timeout: "1h"` + a `timeout:` route in the flow |
+| Human gate + choices + park/resume + timeout | `escalate` with `choices: {approved, rejected}`, `timeout: "1h"`, and a `timeout:` route in the flow |
 | Builtin tool library | `file.write` in `publish` |
 | Defaults | no `initial`, no transitions on `draft`/`publish`, implicit `done`/`failed` |
 | Durability | kill the process mid-run, `steps resume` finishes it |
@@ -57,10 +57,19 @@ steps run workflow.ts --input article=@fixtures/article.txt
 # 3. Validate without running — dry-runs every function; typos fail here
 steps validate workflow.ts --print
 
-# 4. Human gate: force escalation (mock file where critique never approves),
-#    then resume the parked run
-steps runs list
-steps resume <run-id> --event approved
+# 4. Human gate: force escalation (mock file where critique never approves).
+#    On a TTY the run prints the gate's choices and reads your answer inline:
+#
+#      ⏸ parked at escalate — Revisions exhausted (last score 5). Approve …?
+#        1) approved  Ship the current draft as-is
+#        2) rejected  Fail the run
+#      choose 1-2 or an event name (enter to leave parked): 1
+#      note (optional, enter to skip): looks good enough
+#
+#    Or answer later from the CLI or the web:
+steps runs
+steps resume <run-id> --event approved --data '{"note":"ship it"}'
+steps serve        # then click the parked run and submit the gate form
 
 # 5. Durability drill
 steps run workflow.ts --input article=@fixtures/article.txt &
