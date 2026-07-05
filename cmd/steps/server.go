@@ -380,7 +380,8 @@ func (s *server) handleResume(c *echo.Context) error {
 		defer release()
 		bg, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
-		if _, err := s.eng.Resume(bg, m, id, event, data); err != nil {
+		_, err := s.eng.Resume(bg, m, id, event, data)
+		if err != nil {
 			s.eng.Listener.Warn("web resume failed", "run", id, "err", err.Error())
 		}
 	}()

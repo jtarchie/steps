@@ -130,7 +130,8 @@ func parseGateSelection(c *journal.ParkChoices, line string) (*gateAnswer, error
 
 	// Single: a number picks an option; anything else is a free-form event
 	// name (authored choices may cover only part of the gate's alphabet).
-	if n, err := strconv.Atoi(line); err == nil {
+	n, err := strconv.Atoi(line)
+	if err == nil {
 		if n < 1 || n > len(c.Options) {
 			return nil, fmt.Errorf("choose a number between 1 and %d", len(c.Options))
 		}

@@ -39,7 +39,8 @@ func parkedRun(t *testing.T) (*server, string, *engine.Engine, *machine.Machine)
 
 	eng := engine.New(store, provider.NewRegistry(), toolreg.New(), engine.NopListener{})
 	mockPath := filepath.Join(t.TempDir(), "never.yaml")
-	if err := os.WriteFile(mockPath, []byte(neverApprovesScript), 0o600); err != nil {
+	err = os.WriteFile(mockPath, []byte(neverApprovesScript), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := provider.LoadScript(mockPath)
@@ -154,7 +155,8 @@ func TestServeResumeAdvancesRun(t *testing.T) {
 func TestServeResumeRejectsNotParked(t *testing.T) {
 	s, id, eng, m := parkedRun(t)
 	// Consume the park directly so the run is no longer parked.
-	if _, err := eng.Resume(context.Background(), m, id, "rejected", nil); err != nil {
+	_, err := eng.Resume(context.Background(), m, id, "rejected", nil)
+	if err != nil {
 		t.Fatal(err)
 	}
 	e := newServer(s.store, s.eng)
