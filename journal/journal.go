@@ -105,7 +105,7 @@ type Usage struct {
 }
 
 // Total returns all tokens.
-func (u Usage) Total() int { return u.InputTokens + u.OutputTokens }
+func (u *Usage) Total() int { return u.InputTokens + u.OutputTokens }
 
 // Add accumulates.
 func (u *Usage) Add(o Usage) {
