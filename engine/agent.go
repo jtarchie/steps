@@ -49,19 +49,7 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 
 	// Scope: flat run data + foreach item data + distilled slices + optional
 	// history projection.
-	data := baseScope(rs)
-	data["attempt"] = attempt
-	for k, v := range extraData {
-		data[k] = v
-	}
-	applyDistill(st, rs, data)
-	if h := spec.History; h != nil {
-		msgs := rs.Convos[h.From]
-		if len(msgs) == 0 {
-			e.Listener.Warn("history source has no recorded execution", "state", st.Name, "from", h.From)
-		}
-		data[h.As] = renderHistory(msgs, h)
-	}
+	data := e.buildAgentScope(st, rs, extraData, attempt)
 
 	// Distill short-circuits — the two cases where the best slice needs no
 	// model call:
@@ -71,10 +59,8 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 	//   small source   -> the source verbatim. When the whole source fits
 	//   the slice budget, the identity is the best possible extraction —
 	//   paying a model to approximate it is the measured failure mode.
-	if st.IsDistill() {
-		if res, handled := distillShortCircuit(m, st, data); handled {
-			return res, nil
-		}
+	if res, handled := distillShortCircuit(m, st, data); handled {
+		return res, nil
 	}
 
 	// The user message: the rendered prompt, or the rendered input block.
@@ -114,18 +100,9 @@ func (e *Engine) runAgent(ctx context.Context, m *machine.Machine, st *machine.S
 
 	// Fresh conversation per state — hermetic by default. adopt (rung 3)
 	// replays a prior execution's normalized messages into the session.
-	svc := session.InMemoryService()
-	created, err := svc.Create(ctx, &session.CreateRequest{AppName: appName, UserID: userID})
+	svc, sess, agentName, err := e.buildAgentSession(ctx, st, rs, spec)
 	if err != nil {
-		return nil, fmt.Errorf("creating session: %w", err)
-	}
-	sess := created.Session
-	agentName := sanitizeName(st.Name)
-
-	if spec.Adopt != "" {
-		if err := seedAdoptedConversation(ctx, svc, sess, agentName, st, rs, spec); err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	// The turn budget bounds model calls within ONE conversation turn (the
@@ -277,6 +254,47 @@ func (e *Engine) scheduleSemanticRetry(ctx context.Context, runID string, st *ma
 		"Your response did not satisfy the output contract: %s\n\nReply again with ONLY a corrected JSON object. No prose, no markdown fences.",
 		parseErr,
 	), true
+}
+
+// buildAgentScope assembles the flat scope a state's functions render
+// against: run data + foreach item data + distilled slices + an optional
+// history projection (rung 2 — a plain-text record injected as data, never
+// as conversation).
+func (e *Engine) buildAgentScope(st *machine.State, rs *journal.RunState, extraData map[string]any, attempt int) map[string]any {
+	data := baseScope(rs)
+	data["attempt"] = attempt
+	for k, v := range extraData {
+		data[k] = v
+	}
+	applyDistill(st, rs, data)
+	if h := st.Agent.History; h != nil {
+		msgs := rs.Convos[h.From]
+		if len(msgs) == 0 {
+			e.Listener.Warn("history source has no recorded execution", "state", st.Name, "from", h.From)
+		}
+		data[h.As] = renderHistory(msgs, h)
+	}
+	return data
+}
+
+// buildAgentSession creates a fresh conversation for the state — hermetic
+// by default — and, when adopt: names a source, seeds it with that prior
+// execution's normalized messages before anything new is said.
+func (e *Engine) buildAgentSession(ctx context.Context, st *machine.State, rs *journal.RunState, spec *machine.AgentSpec) (session.Service, session.Session, string, error) {
+	svc := session.InMemoryService()
+	created, err := svc.Create(ctx, &session.CreateRequest{AppName: appName, UserID: userID})
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("creating session: %w", err)
+	}
+	sess := created.Session
+	agentName := sanitizeName(st.Name)
+
+	if spec.Adopt != "" {
+		if err := seedAdoptedConversation(ctx, svc, sess, agentName, st, rs, spec); err != nil {
+			return nil, nil, "", err
+		}
+	}
+	return svc, sess, agentName, nil
 }
 
 // distillShortCircuit handles the two cases where the best slice needs no
