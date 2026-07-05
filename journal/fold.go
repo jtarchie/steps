@@ -83,60 +83,88 @@ func Fold(events []*Event) *RunState {
 		// untouched — resume re-runs the handler from InFlight, as it should.
 		switch ev.Type {
 		case RunStarted:
-			rs.Started = ev.Time
-			if input, ok := ev.Data["input"].(map[string]any); ok {
-				for k, v := range input {
-					rs.Ctx[k] = v
-				}
-			}
+			rs.applyRunStarted(ev)
 		case StateEntered:
-			state, _ := ev.Data["state"].(string)
-			rs.Current = state
-			rs.Visits[state]++
-			rs.InFlight = true
+			rs.applyStateEntered(ev)
 		case HandlerFinished:
-			rs.InFlight = false
-			state, _ := ev.Data["state"].(string)
-			if out, ok := ev.Data["output"].(map[string]any); ok {
-				rs.Ctx[state] = out
-			}
-			var payload struct {
-				Messages []Message `json:"messages"`
-				Usage    Usage     `json:"usage"`
-			}
-			if err := DecodeData(ev, &payload); err == nil {
-				if len(payload.Messages) > 0 {
-					rs.Convos[state] = payload.Messages
-				}
-				rs.Usage.Add(payload.Usage)
-			}
+			rs.applyHandlerFinished(ev)
 		case TransitionFired:
-			rs.InFlight = false
-			// Hops out of implicit distill states don't count toward
-			// maxTransitions — mirror the engine's accounting.
-			if impl, _ := ev.Data["implicit"].(bool); !impl {
-				rs.Transitions++
-			}
-			if to, ok := ev.Data["to"].(string); ok {
-				rs.Current = to
-			}
+			rs.applyTransitionFired(ev)
 		case RunParked:
-			var p ParkInfo
-			if err := DecodeData(ev, &p); err == nil {
-				p.At = ev.Time
-				rs.Parked = &p
-			}
+			rs.applyRunParked(ev)
 		case RunResumed:
-			rs.Parked = nil
-			rs.ResumeEvent, _ = ev.Data["event"].(string)
-			rs.ResumeData, _ = ev.Data["data"].(map[string]any)
+			rs.applyRunResumed(ev)
 		case RunFinished:
-			rs.Finished = true
-			rs.Status, _ = ev.Data["status"].(string)
-			if ts, ok := ev.Data["terminal_state"].(string); ok {
-				rs.Current = ts
-			}
+			rs.applyRunFinished(ev)
 		}
 	}
 	return rs
+}
+
+func (rs *RunState) applyRunStarted(ev *Event) {
+	rs.Started = ev.Time
+	if input, ok := ev.Data["input"].(map[string]any); ok {
+		for k, v := range input {
+			rs.Ctx[k] = v
+		}
+	}
+}
+
+func (rs *RunState) applyStateEntered(ev *Event) {
+	state, _ := ev.Data["state"].(string)
+	rs.Current = state
+	rs.Visits[state]++
+	rs.InFlight = true
+}
+
+func (rs *RunState) applyHandlerFinished(ev *Event) {
+	rs.InFlight = false
+	state, _ := ev.Data["state"].(string)
+	if out, ok := ev.Data["output"].(map[string]any); ok {
+		rs.Ctx[state] = out
+	}
+	var payload struct {
+		Messages []Message `json:"messages"`
+		Usage    Usage     `json:"usage"`
+	}
+	if err := DecodeData(ev, &payload); err == nil {
+		if len(payload.Messages) > 0 {
+			rs.Convos[state] = payload.Messages
+		}
+		rs.Usage.Add(payload.Usage)
+	}
+}
+
+func (rs *RunState) applyTransitionFired(ev *Event) {
+	rs.InFlight = false
+	// Hops out of implicit distill states don't count toward maxTransitions
+	// — mirror the engine's accounting.
+	if impl, _ := ev.Data["implicit"].(bool); !impl {
+		rs.Transitions++
+	}
+	if to, ok := ev.Data["to"].(string); ok {
+		rs.Current = to
+	}
+}
+
+func (rs *RunState) applyRunParked(ev *Event) {
+	var p ParkInfo
+	if err := DecodeData(ev, &p); err == nil {
+		p.At = ev.Time
+		rs.Parked = &p
+	}
+}
+
+func (rs *RunState) applyRunResumed(ev *Event) {
+	rs.Parked = nil
+	rs.ResumeEvent, _ = ev.Data["event"].(string)
+	rs.ResumeData, _ = ev.Data["data"].(map[string]any)
+}
+
+func (rs *RunState) applyRunFinished(ev *Event) {
+	rs.Finished = true
+	rs.Status, _ = ev.Data["status"].(string)
+	if ts, ok := ev.Data["terminal_state"].(string); ok {
+		rs.Current = ts
+	}
 }
