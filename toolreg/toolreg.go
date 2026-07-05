@@ -227,11 +227,13 @@ func fileWriteTool(ctx context.Context, args map[string]any) (map[string]any, er
 		return nil, err
 	}
 	if dir := filepath.Dir(path); dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		err := os.MkdirAll(dir, 0o755)
+		if err != nil {
 			return nil, err
 		}
 	}
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	err = os.WriteFile(path, []byte(content), 0o600)
+	if err != nil {
 		return nil, err
 	}
 	return map[string]any{"path": path, "bytes": len(content)}, nil

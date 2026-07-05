@@ -65,7 +65,8 @@ func LoadScript(path string) (Script, error) {
 		return nil, err
 	}
 	var s Script
-	if err := yaml.Unmarshal(raw, &s); err != nil {
+	err = yaml.Unmarshal(raw, &s)
+	if err != nil {
 		return nil, fmt.Errorf("parsing mock script %s: %w", path, err)
 	}
 	return s, nil

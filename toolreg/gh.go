@@ -17,7 +17,8 @@ func runGH(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	var out, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &stderr
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+	if err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = err.Error()
@@ -50,7 +51,8 @@ func registerGH(r *Registry) {
 				Title string `json:"title"`
 				Body  string `json:"body"`
 			}
-			if err := json.Unmarshal([]byte(meta), &view); err != nil {
+			err = json.Unmarshal([]byte(meta), &view)
+			if err != nil {
 				return nil, fmt.Errorf("parsing gh pr view output: %w", err)
 			}
 			return map[string]any{"diff": diff, "title": view.Title, "description": view.Body}, nil
@@ -82,7 +84,8 @@ func registerGH(r *Registry) {
 			if repo, _ := args["repo"].(string); repo != "" {
 				ghArgs = append(ghArgs, "--repo", repo)
 			}
-			if _, err := runGH(ctx, ghArgs...); err != nil {
+			_, err = runGH(ctx, ghArgs...)
+			if err != nil {
 				return nil, err
 			}
 			return map[string]any{"posted": true, "event": event}, nil

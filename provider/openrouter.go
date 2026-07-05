@@ -167,7 +167,8 @@ func (t *openRouterTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	if sid := sessionIDFromContext(req.Context()); sid != "" {
 		req.Header.Set("x-session-id", sid)
 	}
-	if err := maybeInjectCacheControl(req); err != nil {
+	err := maybeInjectCacheControl(req)
+	if err != nil {
 		return nil, fmt.Errorf("inject cache_control: %w", err)
 	}
 	resp, err := t.base.RoundTrip(req)
@@ -214,7 +215,8 @@ func maybeInjectCacheControl(req *http.Request) error {
 	if json.Unmarshal(body, &doc) == nil {
 		if name, _ := doc["model"].(string); isAnthropicModel(name) {
 			doc["cache_control"] = map[string]string{"type": "ephemeral"}
-			if rewritten, merr := json.Marshal(doc); merr == nil {
+			rewritten, merr := json.Marshal(doc)
+			if merr == nil {
 				body = rewritten
 			}
 		}

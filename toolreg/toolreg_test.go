@@ -10,11 +10,13 @@ import (
 
 func TestFileReadConfinement(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "ok.txt"), []byte("inside"), 0o600); err != nil {
+	err := os.WriteFile(filepath.Join(root, "ok.txt"), []byte("inside"), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
 	secret := filepath.Join(t.TempDir(), "secret.txt")
-	if err := os.WriteFile(secret, []byte("outside"), 0o600); err != nil {
+	err = os.WriteFile(secret, []byte("outside"), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -25,7 +27,8 @@ func TestFileReadConfinement(t *testing.T) {
 	}
 	// Model-authored escapes must be refused, not resolved.
 	for _, escape := range []string{"../secret.txt", "../../etc/passwd", "/etc/passwd"} {
-		if _, err := r.Call(context.Background(), "file.read", map[string]any{"root": root, "path": escape}); err == nil {
+		_, err := r.Call(context.Background(), "file.read", map[string]any{"root": root, "path": escape})
+		if err == nil {
 			t.Errorf("path %q should be refused", escape)
 		}
 	}
@@ -33,7 +36,8 @@ func TestFileReadConfinement(t *testing.T) {
 
 func TestDiffSplitEnrichment(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte(strings.Repeat("x", 100)), 0o600); err != nil {
+	err := os.WriteFile(filepath.Join(root, "a.go"), []byte(strings.Repeat("x", 100)), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
 	diff := "diff --git a/a.go b/a.go\n+new line\ndiff --git a/gone.go b/gone.go\n-old line\n"
@@ -87,7 +91,8 @@ func TestExecRunGateResultIsData(t *testing.T) {
 	}
 
 	// A command that cannot LAUNCH is genuine (transient) infra failure.
-	if _, err := r.Call(context.Background(), "exec.run", map[string]any{"cmd": "true", "cwd": "/no/such/dir"}); err == nil {
+	_, err = r.Call(context.Background(), "exec.run", map[string]any{"cmd": "true", "cwd": "/no/such/dir"})
+	if err == nil {
 		t.Error("unreadable cwd should raise a (transient) error")
 	}
 }
