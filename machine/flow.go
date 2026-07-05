@@ -161,7 +161,7 @@ func (l *loader) wireBranch(m *Machine, obj *goja.Object, successor string) (str
 			}
 			elseTarget, hasElse = target, true
 		}
-		return name, l.finishBranch(m, st, name, elseTarget, hasElse, successor)
+		return name, l.finishBranch(st, name, elseTarget, hasElse, successor)
 	}
 
 	for _, key := range edges.Keys() {
@@ -213,13 +213,13 @@ func (l *loader) wireBranch(m *Machine, obj *goja.Object, successor string) (str
 		}
 	}
 
-	return name, l.finishBranch(m, st, name, elseTarget, hasElse, successor)
+	return name, l.finishBranch(st, name, elseTarget, hasElse, successor)
 }
 
 // finishBranch wires the fallback: explicit else wins; mid-pipe, the
 // successor is the else. Human gates need no else — their resume events are
 // the complete alphabet (an unknown event is a runtime error, not a route).
-func (l *loader) finishBranch(m *Machine, st *State, name, elseTarget string, hasElse bool, successor string) error {
+func (l *loader) finishBranch(st *State, name, elseTarget string, hasElse bool, successor string) error {
 	switch {
 	case hasElse && successor != "":
 		return fmt.Errorf("state %q: branch has an else AND the pipe continues after it — move the continuation inside the branch or drop the else", name)

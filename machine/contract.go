@@ -35,7 +35,7 @@ func CheckContracts(m *Machine) error {
 		if s.Terminal {
 			continue
 		}
-		base := m.scopeKeys(s)
+		base := m.scopeKeys()
 
 		check := func(site string, d Dyn, extra ...string) {
 			if !d.IsFn() {
@@ -116,7 +116,7 @@ func CheckContracts(m *Machine) error {
 
 // scopeKeys is the flat root every function may destructure: run inputs +
 // state names + the always-present engine keys.
-func (m *Machine) scopeKeys(s *State) []string {
+func (m *Machine) scopeKeys() []string {
 	keys := []string{"visits", "run", "attempt"}
 	for name := range m.Input {
 		keys = append(keys, name)

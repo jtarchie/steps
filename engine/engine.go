@@ -265,7 +265,6 @@ func (e *Engine) loop(ctx context.Context, m *machine.Machine, runID string, rs 
 			continue
 		}
 
-		enteredAt := time.Now()
 		var res *HandlerResult
 		var runErr error
 
@@ -373,7 +372,7 @@ func (e *Engine) loop(ctx context.Context, m *machine.Machine, runID string, rs 
 		}
 
 		// Transitions: event match AND guard, in order, first match wins.
-		tr, err := e.pickTransition(st, res, rs, enteredAt)
+		tr, err := e.pickTransition(st, res, rs)
 		if err != nil {
 			next, rerr := e.routeFailure(ctx, m, runID, rs, st, machine.ClassGuardRejected, err)
 			if rerr != nil {
@@ -463,7 +462,7 @@ func baseScope(rs *journal.RunState) map[string]any {
 }
 
 // pickTransition evaluates the state's transitions in order.
-func (e *Engine) pickTransition(st *machine.State, res *HandlerResult, rs *journal.RunState, enteredAt time.Time) (machine.Transition, error) {
+func (e *Engine) pickTransition(st *machine.State, res *HandlerResult, rs *journal.RunState) (machine.Transition, error) {
 	scope := baseScope(rs)
 	scope["output"] = res.Output
 	scope["event"] = res.Event

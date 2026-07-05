@@ -170,7 +170,8 @@ func cmdRun() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return emitResult(res)
+			emitResult(res)
+			return nil
 		},
 	}
 	c.Flags().StringArrayVar(&inputs, "input", nil, "run input: key=value or key=@file (repeatable)")
@@ -219,7 +220,8 @@ func cmdResume() *cobra.Command {
 					if res == nil {
 						return nil // answer left blank — still parked
 					}
-					return emitResult(res)
+					emitResult(res)
+					return nil
 				}
 			}
 			res, err := eng.Resume(context.Background(), m, args[0], event, data)
@@ -230,7 +232,8 @@ func cmdResume() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return emitResult(res)
+			emitResult(res)
+			return nil
 		},
 	}
 	c.Flags().StringVar(&event, "event", "", "event answering a parked human gate")
@@ -289,7 +292,7 @@ func parseInputs(pairs []string) (map[string]any, error) {
 
 // emitResult prints the machine-readable summary to stdout (the narration
 // went to stderr). Failed runs exit non-zero.
-func emitResult(res *engine.Result) error {
+func emitResult(res *engine.Result) {
 	summary := map[string]any{
 		"run_id":      res.RunID,
 		"status":      res.Status,
@@ -302,7 +305,6 @@ func emitResult(res *engine.Result) error {
 	if res.Status == journal.StatusFailed {
 		os.Exit(2)
 	}
-	return nil
 }
 
 func printMachine(m *machine.Machine) {

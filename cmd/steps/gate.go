@@ -38,10 +38,7 @@ func driveGates(ctx context.Context, eng *engine.Engine, m *machine.Machine, res
 	in := bufio.NewReader(os.Stdin)
 	for res.Status == journal.StatusParked && res.State.Parked != nil && interactive() {
 		// The RunParked narration just printed the prompt and options.
-		ans, err := promptGate(in, res.State.Parked, false)
-		if err != nil {
-			return nil, err
-		}
+		ans := promptGate(in, res.State.Parked, false)
 		if ans == nil {
 			return res, nil // leave parked
 		}
@@ -63,7 +60,7 @@ func driveGates(ctx context.Context, eng *engine.Engine, m *machine.Machine, res
 // promptGate collects one gate answer from stdin. showGate reprints the
 // prompt and options first (used by `steps resume` where no park narration
 // preceded). Returns nil when the user leaves the run parked (empty / EOF).
-func promptGate(in *bufio.Reader, p *journal.ParkInfo, showGate bool) (*gateAnswer, error) {
+func promptGate(in *bufio.Reader, p *journal.ParkInfo, showGate bool) *gateAnswer {
 	if showGate {
 		fmt.Fprintf(os.Stderr, "%s⏸ %s%s — %s\n", cYellow, p.State, cReset, p.Prompt)
 		printParkChoices(func(format string, args ...any) {
@@ -75,7 +72,7 @@ func promptGate(in *bufio.Reader, p *journal.ParkInfo, showGate bool) (*gateAnsw
 		line, err := in.ReadString('\n')
 		if err != nil && line == "" {
 			fmt.Fprintln(os.Stderr)
-			return nil, nil // EOF: leave parked
+			return nil // EOF: leave parked
 		}
 		ans, perr := parseGateSelection(p.Choices, strings.TrimSpace(line))
 		if perr != nil {
@@ -83,7 +80,7 @@ func promptGate(in *bufio.Reader, p *journal.ParkInfo, showGate bool) (*gateAnsw
 			continue
 		}
 		if ans == nil {
-			return nil, nil // empty: leave parked
+			return nil // empty: leave parked
 		}
 		fmt.Fprintf(os.Stderr, "%snote (optional, enter to skip):%s ", cDim, cReset)
 		note, _ := in.ReadString('\n')
@@ -93,7 +90,7 @@ func promptGate(in *bufio.Reader, p *journal.ParkInfo, showGate bool) (*gateAnsw
 			}
 			ans.data["note"] = note
 		}
-		return ans, nil
+		return ans
 	}
 }
 
@@ -180,9 +177,9 @@ func resumeInteractive(ctx context.Context, eng *engine.Engine, store journal.St
 	if p == nil || rs.Finished || !interactive() || p.Expired(time.Now()) {
 		return nil, false, nil
 	}
-	ans, err := promptGate(bufio.NewReader(os.Stdin), p, true)
-	if err != nil || ans == nil {
-		return nil, err == nil, err // answered "leave parked": done, no result
+	ans := promptGate(bufio.NewReader(os.Stdin), p, true)
+	if ans == nil {
+		return nil, true, nil // answered "leave parked": done, no result
 	}
 	res, err := eng.Resume(ctx, m, runID, ans.event, ans.data)
 	if err != nil {
