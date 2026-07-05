@@ -391,22 +391,7 @@ func (l *loader) machine(root *goja.Object) (*Machine, error) {
 	}
 
 	if o := l.obj(root.Get("input")); o != nil {
-		m.Input = map[string]InputSpec{}
-		for _, k := range o.Keys() {
-			v := o.Get(k)
-			// Shorthand: article: "string"
-			if s, ok := v.Export().(string); ok {
-				m.Input[k] = InputSpec{Type: s}
-				continue
-			}
-			spec := l.obj(v)
-			is := InputSpec{}
-			if spec != nil {
-				is.Type = str(spec.Get("type"))
-				is.Required = boolean(spec.Get("required"))
-			}
-			m.Input[k] = is
-		}
+		m.Input = l.parseInputSpecs(o)
 	}
 
 	if o := l.obj(root.Get("models")); o != nil {
@@ -423,76 +408,19 @@ func (l *loader) machine(root *goja.Object) (*Machine, error) {
 
 	// defaults: FLAT — agent knobs and retry policies directly.
 	if o := l.obj(root.Get("defaults")); o != nil {
-		for _, k := range o.Keys() {
-			switch k {
-			case "model":
-				m.Defaults.Agent.Model = str(o.Get(k))
-			case "maxTurns":
-				m.Defaults.Agent.MaxTurns = integer(o.Get(k))
-			case "maxOutputTokens":
-				m.Defaults.Agent.MaxOutputTokens = integer(o.Get(k))
-			case "maxInputTokens":
-				maxInput := integer(o.Get(k))
-				m.Defaults.Agent.MaxInputTokens = &maxInput
-			case "temperature":
-				t := o.Get(k).ToFloat()
-				m.Defaults.Agent.Temperature = &t
-			case "reasoning":
-				m.Defaults.Agent.Reasoning = str(o.Get(k))
-			case "structuredOutput":
-				m.Defaults.Agent.StructuredOutput = str(o.Get(k))
-			case "retry":
-				r, err := l.retries(o.Get(k), "defaults.retry")
-				if err != nil {
-					return nil, err
-				}
-				m.Defaults.Retry = r
-			default:
-				return nil, fmt.Errorf("unknown defaults key %q — valid: model, maxTurns, maxOutputTokens, maxInputTokens, temperature, reasoning, structuredOutput, retry", k)
-			}
+		if err := l.applyMachineDefaults(m, o); err != nil {
+			return nil, err
 		}
 	}
 
 	if o := l.obj(root.Get("limits")); o != nil {
-		for _, k := range o.Keys() {
-			switch k {
-			case "maxTransitions":
-				m.Limits.MaxTransitions = integer(o.Get(k))
-			case "maxCost":
-				m.Limits.MaxCost = o.Get(k).ToFloat()
-			case "maxTokens":
-				m.Limits.MaxTokens = integer(o.Get(k))
-			case "timeout":
-				d, err := duration(o.Get(k), "limits.timeout")
-				if err != nil {
-					return nil, err
-				}
-				m.Limits.Timeout = d
-			default:
-				return nil, fmt.Errorf("unknown limits key %q — valid: maxTransitions, maxCost, maxTokens, timeout", k)
-			}
+		if err := applyMachineLimits(m, o); err != nil {
+			return nil, err
 		}
 	}
 
-	states := l.obj(root.Get("states"))
-	if states == nil || len(states.Keys()) == 0 {
-		return nil, errors.New("machine has no states — export default { states: { ... } }")
-	}
-	// Keys() preserves declaration order — linear-flow defaults depend on it.
-	for _, name := range states.Keys() {
-		if containsState(m.States, name) {
-			return nil, fmt.Errorf("state %q declared twice", name)
-		}
-		v := states.Get(name)
-		st, err := l.state(name, v)
-		if err != nil {
-			return nil, fmt.Errorf("state %q: %w", name, err)
-		}
-		m.States = append(m.States, st)
-		// Mark identity so the flow expression can reference the const.
-		if obj := l.obj(v); obj != nil {
-			_ = obj.DefineDataProperty(stateNameProp, l.rt.vm.ToValue(name), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_FALSE)
-		}
+	if err := l.parseStates(m, root); err != nil {
+		return nil, err
 	}
 	m.buildIndex()
 
@@ -502,6 +430,108 @@ func (l *loader) machine(root *goja.Object) (*Machine, error) {
 		}
 	}
 	return m, nil
+}
+
+// parseInputSpecs parses the machine's input: block, supporting the
+// shorthand form (article: "string") alongside the full {type, required} form.
+func (l *loader) parseInputSpecs(o *goja.Object) map[string]InputSpec {
+	input := map[string]InputSpec{}
+	for _, k := range o.Keys() {
+		v := o.Get(k)
+		if s, ok := v.Export().(string); ok {
+			input[k] = InputSpec{Type: s}
+			continue
+		}
+		spec := l.obj(v)
+		is := InputSpec{}
+		if spec != nil {
+			is.Type = str(spec.Get("type"))
+			is.Required = boolean(spec.Get("required"))
+		}
+		input[k] = is
+	}
+	return input
+}
+
+// applyMachineDefaults parses the machine's flat defaults: block (agent
+// knobs and retry policies directly, not nested under an "agent" key).
+func (l *loader) applyMachineDefaults(m *Machine, o *goja.Object) error {
+	for _, k := range o.Keys() {
+		switch k {
+		case "model":
+			m.Defaults.Agent.Model = str(o.Get(k))
+		case "maxTurns":
+			m.Defaults.Agent.MaxTurns = integer(o.Get(k))
+		case "maxOutputTokens":
+			m.Defaults.Agent.MaxOutputTokens = integer(o.Get(k))
+		case "maxInputTokens":
+			maxInput := integer(o.Get(k))
+			m.Defaults.Agent.MaxInputTokens = &maxInput
+		case "temperature":
+			t := o.Get(k).ToFloat()
+			m.Defaults.Agent.Temperature = &t
+		case "reasoning":
+			m.Defaults.Agent.Reasoning = str(o.Get(k))
+		case "structuredOutput":
+			m.Defaults.Agent.StructuredOutput = str(o.Get(k))
+		case "retry":
+			r, err := l.retries(o.Get(k), "defaults.retry")
+			if err != nil {
+				return err
+			}
+			m.Defaults.Retry = r
+		default:
+			return fmt.Errorf("unknown defaults key %q — valid: model, maxTurns, maxOutputTokens, maxInputTokens, temperature, reasoning, structuredOutput, retry", k)
+		}
+	}
+	return nil
+}
+
+func applyMachineLimits(m *Machine, o *goja.Object) error {
+	for _, k := range o.Keys() {
+		switch k {
+		case "maxTransitions":
+			m.Limits.MaxTransitions = integer(o.Get(k))
+		case "maxCost":
+			m.Limits.MaxCost = o.Get(k).ToFloat()
+		case "maxTokens":
+			m.Limits.MaxTokens = integer(o.Get(k))
+		case "timeout":
+			d, err := duration(o.Get(k), "limits.timeout")
+			if err != nil {
+				return err
+			}
+			m.Limits.Timeout = d
+		default:
+			return fmt.Errorf("unknown limits key %q — valid: maxTransitions, maxCost, maxTokens, timeout", k)
+		}
+	}
+	return nil
+}
+
+// parseStates parses the machine's required states: block in declaration
+// order (linear-flow defaults depend on it), marking each state object's
+// identity so the flow expression can reference the const.
+func (l *loader) parseStates(m *Machine, root *goja.Object) error {
+	states := l.obj(root.Get("states"))
+	if states == nil || len(states.Keys()) == 0 {
+		return errors.New("machine has no states — export default { states: { ... } }")
+	}
+	for _, name := range states.Keys() {
+		if containsState(m.States, name) {
+			return fmt.Errorf("state %q declared twice", name)
+		}
+		v := states.Get(name)
+		st, err := l.state(name, v)
+		if err != nil {
+			return fmt.Errorf("state %q: %w", name, err)
+		}
+		m.States = append(m.States, st)
+		if obj := l.obj(v); obj != nil {
+			_ = obj.DefineDataProperty(stateNameProp, l.rt.vm.ToValue(name), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_FALSE)
+		}
+	}
+	return nil
 }
 
 func contains(list []string, s string) bool {
@@ -548,36 +578,9 @@ func (l *loader) state(name string, v goja.Value) (*State, error) {
 		return nil, errors.New("a state must be an object, a prompt string, or a prompt function")
 	}
 
-	keys := o.Keys()
-	has := func(k string) bool { return contains(keys, k) }
-
-	// Infer the handler from the keys present.
-	var handler string
-	var handlerKeys []string
-	switch {
-	case has("action"):
-		handler, handlerKeys = "action", actionStateKeys
-	case has("write"):
-		handler, handlerKeys = "write", writeStateKeys
-	case has("human"):
-		handler, handlerKeys = "human", humanStateKeys
-	case has("terminal"):
-		handler, handlerKeys = "terminal", terminalStateKeys
-	default:
-		handler, handlerKeys = "agent", agentStateKeys
-	}
-
-	valid := append(append([]string{}, sharedStateKeys...), handlerKeys...)
-	for _, k := range keys {
-		if k == stateNameProp {
-			continue
-		}
-		if contains(movedToFlowKeys, k) {
-			return nil, fmt.Errorf("key %q moved to the flow expression — wire routing with pipe/branch/when", k)
-		}
-		if !contains(valid, k) {
-			return nil, fmt.Errorf("unknown key %q for a %s state — valid keys: %s", k, handler, strings.Join(valid, ", "))
-		}
+	handler, handlerKeys := inferStateHandler(o.Keys())
+	if err := checkStateKeys(o.Keys(), handler, handlerKeys); err != nil {
+		return nil, err
 	}
 
 	st := &State{
@@ -585,38 +588,8 @@ func (l *loader) state(name string, v goja.Value) (*State, error) {
 		Memo:  boolean(o.Get("memo")),
 		Input: l.dyn(o.Get("input")),
 	}
-
-	switch handler {
-	case "terminal":
-		st.Terminal = true
-		st.Status = str(o.Get("status"))
-	case "action":
-		st.Action = &ActionSpec{Name: str(o.Get("action"))}
-	case "write":
-		st.Action = &ActionSpec{Name: "file.write"}
-		if !st.Input.IsZero() {
-			return nil, errors.New("write states take write: or content:, not input")
-		}
-		st.Input = Dyn{Static: map[string]any{
-			"path":    l.exportValue(o.Get("write")),
-			"content": l.exportValue(o.Get("content")),
-		}}
-	case "human":
-		timeout, err := duration(o.Get("timeout"), "timeout")
-		if err != nil {
-			return nil, err
-		}
-		choices, err := l.choices(o.Get("choices"))
-		if err != nil {
-			return nil, err
-		}
-		st.Human = &HumanSpec{Prompt: l.dyn(o.Get("human")), Timeout: timeout, Choices: choices}
-	case "agent":
-		ag, err := l.agent(o)
-		if err != nil {
-			return nil, err
-		}
-		st.Agent = ag
+	if err := l.buildStateHandler(o, handler, st); err != nil {
+		return nil, err
 	}
 
 	if f := l.obj(o.Get("forEach")); f != nil {
@@ -628,49 +601,15 @@ func (l *loader) state(name string, v goja.Value) (*State, error) {
 		}
 	}
 
-	if v := o.Get("distill"); defined(v) {
-		d := l.obj(v)
-		if d == nil {
-			return nil, errors.New("distill must be an object of {name: {for, from?, maxTokens?, model?, memo?}}")
-		}
-		// Keys() preserves declaration order — the implicit chain runs in it.
-		for _, key := range d.Keys() {
-			eo := l.obj(d.Get(key))
-			if eo == nil {
-				return nil, fmt.Errorf("distill.%s must be an object {for, from?, maxTokens?, model?, memo?}", key)
-			}
-			for _, k := range eo.Keys() {
-				if !contains([]string{"for", "from", "maxTokens", "model", "memo"}, k) {
-					return nil, fmt.Errorf("distill.%s: unknown key %q — valid keys: for, from, maxTokens, model, memo", key, k)
-				}
-			}
-			entry := DistillEntry{
-				Key:       key,
-				From:      str(eo.Get("from")),
-				For:       l.dyn(eo.Get("for")),
-				MaxTokens: integer(eo.Get("maxTokens")),
-				Model:     str(eo.Get("model")),
-				Memo:      true, // distillation is pure; replay is always safe
-			}
-			if defined(eo.Get("memo")) {
-				entry.Memo = boolean(eo.Get("memo"))
-			}
-			st.Distill = append(st.Distill, entry)
-		}
+	distill, err := l.parseStateDistill(o)
+	if err != nil {
+		return nil, err
 	}
+	st.Distill = distill
 
-	if out := o.Get("output"); defined(out) {
-		schema, err := l.exportData(out, "output")
-		if err != nil {
-			return nil, err
-		}
-		sm, ok := schema.(map[string]any)
-		if !ok {
-			return nil, errors.New("output must be a schema object")
-		}
-		st.Output.Schema = sm
+	if err := l.applyStateOutput(o, st); err != nil {
+		return nil, err
 	}
-	st.Output.Events = stringSlice(o.Get("events"))
 
 	if r, err := l.retries(o.Get("retry"), "retry"); err != nil {
 		return nil, err
@@ -679,6 +618,133 @@ func (l *loader) state(name string, v goja.Value) (*State, error) {
 	}
 
 	return st, nil
+}
+
+// inferStateHandler picks the state's handler from the keys present, and
+// the key set valid for that handler.
+func inferStateHandler(keys []string) (handler string, handlerKeys []string) {
+	has := func(k string) bool { return contains(keys, k) }
+	switch {
+	case has("action"):
+		return "action", actionStateKeys
+	case has("write"):
+		return "write", writeStateKeys
+	case has("human"):
+		return "human", humanStateKeys
+	case has("terminal"):
+		return "terminal", terminalStateKeys
+	default:
+		return "agent", agentStateKeys
+	}
+}
+
+func checkStateKeys(keys []string, handler string, handlerKeys []string) error {
+	valid := append(append([]string{}, sharedStateKeys...), handlerKeys...)
+	for _, k := range keys {
+		if k == stateNameProp {
+			continue
+		}
+		if contains(movedToFlowKeys, k) {
+			return fmt.Errorf("key %q moved to the flow expression — wire routing with pipe/branch/when", k)
+		}
+		if !contains(valid, k) {
+			return fmt.Errorf("unknown key %q for a %s state — valid keys: %s", k, handler, strings.Join(valid, ", "))
+		}
+	}
+	return nil
+}
+
+// buildStateHandler fills in the state's handler-specific fields.
+func (l *loader) buildStateHandler(o *goja.Object, handler string, st *State) error {
+	switch handler {
+	case "terminal":
+		st.Terminal = true
+		st.Status = str(o.Get("status"))
+	case "action":
+		st.Action = &ActionSpec{Name: str(o.Get("action"))}
+	case "write":
+		st.Action = &ActionSpec{Name: "file.write"}
+		if !st.Input.IsZero() {
+			return errors.New("write states take write: or content:, not input")
+		}
+		st.Input = Dyn{Static: map[string]any{
+			"path":    l.exportValue(o.Get("write")),
+			"content": l.exportValue(o.Get("content")),
+		}}
+	case "human":
+		timeout, err := duration(o.Get("timeout"), "timeout")
+		if err != nil {
+			return err
+		}
+		choices, err := l.choices(o.Get("choices"))
+		if err != nil {
+			return err
+		}
+		st.Human = &HumanSpec{Prompt: l.dyn(o.Get("human")), Timeout: timeout, Choices: choices}
+	case "agent":
+		ag, err := l.agent(o)
+		if err != nil {
+			return err
+		}
+		st.Agent = ag
+	}
+	return nil
+}
+
+// parseStateDistill parses the state's distill: {name: {for, from?,
+// maxTokens?, model?, memo?}} block, preserving declaration order (the
+// implicit chain runs in it).
+func (l *loader) parseStateDistill(o *goja.Object) ([]DistillEntry, error) {
+	v := o.Get("distill")
+	if !defined(v) {
+		return nil, nil
+	}
+	d := l.obj(v)
+	if d == nil {
+		return nil, errors.New("distill must be an object of {name: {for, from?, maxTokens?, model?, memo?}}")
+	}
+	var entries []DistillEntry
+	for _, key := range d.Keys() {
+		eo := l.obj(d.Get(key))
+		if eo == nil {
+			return nil, fmt.Errorf("distill.%s must be an object {for, from?, maxTokens?, model?, memo?}", key)
+		}
+		for _, k := range eo.Keys() {
+			if !contains([]string{"for", "from", "maxTokens", "model", "memo"}, k) {
+				return nil, fmt.Errorf("distill.%s: unknown key %q — valid keys: for, from, maxTokens, model, memo", key, k)
+			}
+		}
+		entry := DistillEntry{
+			Key:       key,
+			From:      str(eo.Get("from")),
+			For:       l.dyn(eo.Get("for")),
+			MaxTokens: integer(eo.Get("maxTokens")),
+			Model:     str(eo.Get("model")),
+			Memo:      true, // distillation is pure; replay is always safe
+		}
+		if defined(eo.Get("memo")) {
+			entry.Memo = boolean(eo.Get("memo"))
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+// applyStateOutput parses the state's output: schema and events:.
+func (l *loader) applyStateOutput(o *goja.Object, st *State) error {
+	if out := o.Get("output"); defined(out) {
+		schema, err := l.exportData(out, "output")
+		if err != nil {
+			return err
+		}
+		sm, ok := schema.(map[string]any)
+		if !ok {
+			return errors.New("output must be a schema object")
+		}
+		st.Output.Schema = sm
+	}
+	st.Output.Events = stringSlice(o.Get("events"))
+	return nil
 }
 
 func (l *loader) agent(o *goja.Object) (*AgentSpec, error) {
