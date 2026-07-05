@@ -77,7 +77,7 @@ func TestServeRunsList(t *testing.T) {
 	s, id, _, _ := parkedRun(t)
 	e := newServer(s.store, s.eng)
 
-	req := httptest.NewRequest(http.MethodGet, "/runs", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/runs", nil)
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 
@@ -96,7 +96,7 @@ func TestServeRunDetailShowsGateForm(t *testing.T) {
 	s, id, _, _ := parkedRun(t)
 	e := newServer(s.store, s.eng)
 
-	req := httptest.NewRequest(http.MethodGet, "/runs/"+id, nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/runs/"+id, nil)
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 
@@ -122,7 +122,7 @@ func TestServeResumeAdvancesRun(t *testing.T) {
 	e := newServer(s.store, s.eng)
 
 	form := url.Values{"event": {"approved"}, "note": {"ship it"}}
-	req := httptest.NewRequest(http.MethodPost, "/runs/"+id+"/resume", strings.NewReader(form.Encode()))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/runs/"+id+"/resume", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
@@ -160,7 +160,7 @@ func TestServeResumeRejectsNotParked(t *testing.T) {
 	e := newServer(s.store, s.eng)
 
 	form := url.Values{"event": {"approved"}}
-	req := httptest.NewRequest(http.MethodPost, "/runs/"+id+"/resume", strings.NewReader(form.Encode()))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/runs/"+id+"/resume", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)

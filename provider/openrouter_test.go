@@ -33,15 +33,15 @@ func (f *fakeRT) RoundTrip(req *http.Request) (*http.Response, error) {
 func chatReq(t *testing.T, model, session string, slot *captureSlot) *http.Request {
 	t.Helper()
 	body, _ := json.Marshal(map[string]any{"model": model, "messages": []any{}})
-	req, err := http.NewRequest(http.MethodPost, "http://127.0.0.1:1234/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
 	ctx := WithSessionID(context.Background(), session)
 	if slot != nil {
 		ctx = context.WithValue(ctx, captureSlotKey{}, slot)
 	}
-	return req.WithContext(ctx)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://127.0.0.1:1234/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return req
 }
 
 // Anthropic-routed model: x-session-id set, cache_control injected, cached
@@ -98,8 +98,7 @@ func TestOpenRouterTransportPassthrough(t *testing.T) {
 	base := &fakeRT{respBody: `{}`}
 	tr := &openRouterTransport{base: base}
 
-	req, _ := http.NewRequest(http.MethodGet, "http://example.com/v1/models", nil)
-	req = req.WithContext(WithSessionID(context.Background(), "run-1"))
+	req, _ := http.NewRequestWithContext(WithSessionID(context.Background(), "run-1"), http.MethodGet, "http://example.com/v1/models", nil)
 	resp, err := tr.RoundTrip(req)
 	if err != nil {
 		t.Fatal(err)

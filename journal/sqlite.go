@@ -37,7 +37,7 @@ func OpenSQLite(path string) (*SQLiteStore, error) {
 }
 
 func (s *SQLiteStore) migrate() error {
-	_, err := s.db.Exec(`
+	_, err := s.db.ExecContext(context.Background(), `
 CREATE TABLE IF NOT EXISTS runs (
     id            TEXT PRIMARY KEY,
     machine       TEXT NOT NULL,
