@@ -130,71 +130,7 @@ func lowerDistill(m *Machine) {
 			lowered = append(lowered, s)
 			continue
 		}
-
-		chain := make([]*State, 0, len(s.Distill))
-		for i := range s.Distill {
-			d := &s.Distill[i]
-			if d.From == "" {
-				d.From = d.Key // shadow: inside the state, the key IS the slice
-			}
-			if d.MaxTokens == 0 {
-				d.MaxTokens = DefaultDistillMaxTokens
-			}
-			d.StateName = s.Name + "#" + d.Key
-
-			// Model resolution: entry -> models.distiller -> machine default
-			// (the cascade below fills an empty model from defaults).
-			model := d.Model
-			if model == "" {
-				if _, ok := m.Models[DistillerAlias]; ok {
-					model = DistillerAlias
-				}
-			}
-			var modelDyn Dyn
-			if model != "" {
-				modelDyn = Dyn{Static: model}
-			}
-
-			imp := &State{
-				Name:       d.StateName,
-				DistillOf:  s.Name,
-				DistillKey: d.Key,
-				Memo:       d.Memo,
-				Agent: &AgentSpec{
-					Model:  modelDyn,
-					System: Dyn{Static: DistillSystem},
-					Prompt: Dyn{
-						Native: distillPrompt(*d),
-						Src:    fmt.Sprintf("distill(%s from %s)", d.Key, d.From),
-					},
-					MaxTurns:        1, // one call, no tools — semantic retries reset the budget
-					MaxOutputTokens: d.MaxTokens,
-					Reasoning:       "low", // extraction needs precision, not thought
-				},
-				// Distill failures are the consumer's failures: same catch
-				// edges, same retry policy (nil falls through to defaults).
-				Catch: append([]CatchClause(nil), s.Catch...),
-			}
-			if s.Retry != nil {
-				imp.Retry = append([]RetryPolicy{}, s.Retry...)
-			}
-			// forEach consumers distill per item: the implicit state inherits
-			// the fan-out and the consumer zips slices back by index.
-			// OnItemFailure pins to fail — a missing slice must never
-			// silently misalign the zip.
-			if f := s.ForEach; f != nil {
-				imp.ForEach = &ForEachSpec{Over: f.Over, As: f.As, Concurrency: f.Concurrency, OnItemFailure: "fail"}
-			}
-			chain = append(chain, imp)
-		}
-
-		for i, imp := range chain {
-			next := s.Name
-			if i+1 < len(chain) {
-				next = chain[i+1].Name
-			}
-			imp.Transitions = []Transition{{To: next}}
-		}
+		chain := buildDistillChain(m, s)
 		heads[s.Name] = chain[0].Name
 		lowered = append(lowered, chain...)
 		lowered = append(lowered, s)
@@ -204,11 +140,88 @@ func lowerDistill(m *Machine) {
 		return
 	}
 	m.States = lowered
+	retargetToChainHeads(m, heads)
+	m.buildIndex()
+}
 
-	// Retarget every in-edge that points at a consumer to its chain head —
-	// including the consumer's own loop-backs (a revisit's need may have
-	// changed; memo makes unchanged pairs free). The chain's own final hop
-	// into its consumer is the one edge that must stay.
+// buildDistillChain lowers one consumer's distill entries into a chain of
+// implicit agent states, wired head-to-tail and ending at the consumer.
+func buildDistillChain(m *Machine, s *State) []*State {
+	chain := make([]*State, 0, len(s.Distill))
+	for i := range s.Distill {
+		chain = append(chain, buildDistillState(m, s, &s.Distill[i]))
+	}
+	for i, imp := range chain {
+		next := s.Name
+		if i+1 < len(chain) {
+			next = chain[i+1].Name
+		}
+		imp.Transitions = []Transition{{To: next}}
+	}
+	return chain
+}
+
+// buildDistillState lowers one distill entry into its implicit agent state.
+func buildDistillState(m *Machine, s *State, d *DistillEntry) *State {
+	if d.From == "" {
+		d.From = d.Key // shadow: inside the state, the key IS the slice
+	}
+	if d.MaxTokens == 0 {
+		d.MaxTokens = DefaultDistillMaxTokens
+	}
+	d.StateName = s.Name + "#" + d.Key
+
+	// Model resolution: entry -> models.distiller -> machine default (the
+	// cascade below fills an empty model from defaults).
+	model := d.Model
+	if model == "" {
+		if _, ok := m.Models[DistillerAlias]; ok {
+			model = DistillerAlias
+		}
+	}
+	var modelDyn Dyn
+	if model != "" {
+		modelDyn = Dyn{Static: model}
+	}
+
+	imp := &State{
+		Name:       d.StateName,
+		DistillOf:  s.Name,
+		DistillKey: d.Key,
+		Memo:       d.Memo,
+		Agent: &AgentSpec{
+			Model:  modelDyn,
+			System: Dyn{Static: DistillSystem},
+			Prompt: Dyn{
+				Native: distillPrompt(*d),
+				Src:    fmt.Sprintf("distill(%s from %s)", d.Key, d.From),
+			},
+			MaxTurns:        1, // one call, no tools — semantic retries reset the budget
+			MaxOutputTokens: d.MaxTokens,
+			Reasoning:       "low", // extraction needs precision, not thought
+		},
+		// Distill failures are the consumer's failures: same catch edges,
+		// same retry policy (nil falls through to defaults).
+		Catch: append([]CatchClause(nil), s.Catch...),
+	}
+	if s.Retry != nil {
+		imp.Retry = append([]RetryPolicy{}, s.Retry...)
+	}
+	// forEach consumers distill per item: the implicit state inherits the
+	// fan-out and the consumer zips slices back by index. OnItemFailure
+	// pins to fail — a missing slice must never silently misalign the zip.
+	if f := s.ForEach; f != nil {
+		imp.ForEach = &ForEachSpec{Over: f.Over, As: f.As, Concurrency: f.Concurrency, OnItemFailure: "fail"}
+	}
+	return imp
+}
+
+// retargetToChainHeads retargets every in-edge that points at a consumer to
+// its chain head — including the consumer's own loop-backs (a revisit's
+// need may have changed; memo makes unchanged pairs free). The chain's own
+// final hop into its consumer is the one edge that must stay, which is why
+// each check excludes the state's own DistillOf target.
+func retargetToChainHeads(m *Machine, heads map[string]string) {
 	for _, s := range m.States {
 		for i := range s.Transitions {
 			if head, ok := heads[s.Transitions[i].To]; ok && s.DistillOf != s.Transitions[i].To {
@@ -229,5 +242,4 @@ func lowerDistill(m *Machine) {
 	if head, ok := heads[m.Initial]; ok {
 		m.Initial = head
 	}
-	m.buildIndex()
 }
