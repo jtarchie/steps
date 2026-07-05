@@ -165,52 +165,78 @@ func (e *Engine) Resume(ctx context.Context, m *machine.Machine, runID, event st
 		rs.Started = time.Now()
 	}
 
-	var pending *pendingResume
-	inFlight := rs.InFlight
-
-	if p := rs.Parked; p != nil {
-		if p.Expired(time.Now()) {
-			// Stale gate: route to on_timeout, ignoring the provided event.
-			e.Listener.Warn("human gate expired; routing to on_timeout", "state", p.State, "to", p.OnTimeout)
-			if err := e.append(ctx, runID, journal.RunResumed, map[string]any{"event": "timeout"}); err != nil {
-				return nil, err
-			}
-			if _, err := e.fireTransition(ctx, m, runID, rs, p.State, p.OnTimeout, "timeout", ""); err != nil {
-				return nil, err
-			}
-			return e.loop(ctx, m, runID, rs, false, nil)
-		}
-		if event == "" {
-			return nil, fmt.Errorf("run %s is parked at human gate %q — resume with an event", runID, p.State)
-		}
-		// A typo'd --event (or a forged web POST) should fail here, not as a
-		// mid-run "no transition matched": the gate's alphabet is closed.
-		if st := m.State(p.State); st != nil {
-			known, fallback := []string{}, false
-			for _, t := range st.Transitions {
-				if t.On != "" {
-					known = append(known, t.On)
-				}
-				if t.Fallback() {
-					fallback = true
-				}
-			}
-			if !fallback && !slices.Contains(known, event) {
-				return nil, fmt.Errorf("gate %q has no route for event %q — expected one of %v", p.State, event, known)
-			}
-		}
-		if err := e.append(ctx, runID, journal.RunResumed, map[string]any{"event": event, "data": data}); err != nil {
-			return nil, err
-		}
-		e.Listener.RunResumed(runID, event)
-		pending = &pendingResume{state: p.State, event: event, data: data}
-		inFlight = false
+	pending, inFlight, result, err := e.resolveParkedResume(ctx, m, runID, rs, event, data)
+	if err != nil {
+		return nil, err
+	}
+	if result != nil {
+		return result, nil
 	}
 
 	if err := e.Store.UpdateRun(ctx, runID, journal.StatusRunning, rs.Current); err != nil {
 		return nil, err
 	}
 	return e.loop(ctx, m, runID, rs, inFlight, pending)
+}
+
+// resolveParkedResume validates and consumes a parked human gate's resume.
+// If the gate already expired, it resumes via on_timeout directly and
+// returns the result as-is (the caller must return it unchanged). If the
+// run is not parked, it returns zero values and the caller continues
+// normally with the run's current inFlight state.
+func (e *Engine) resolveParkedResume(ctx context.Context, m *machine.Machine, runID string, rs *journal.RunState, event string, data map[string]any) (pending *pendingResume, inFlight bool, result *Result, err error) {
+	inFlight = rs.InFlight
+	p := rs.Parked
+	if p == nil {
+		return nil, inFlight, nil, nil
+	}
+	if p.Expired(time.Now()) {
+		// Stale gate: route to on_timeout, ignoring the provided event.
+		e.Listener.Warn("human gate expired; routing to on_timeout", "state", p.State, "to", p.OnTimeout)
+		if err := e.append(ctx, runID, journal.RunResumed, map[string]any{"event": "timeout"}); err != nil {
+			return nil, false, nil, err
+		}
+		if _, err := e.fireTransition(ctx, m, runID, rs, p.State, p.OnTimeout, "timeout", ""); err != nil {
+			return nil, false, nil, err
+		}
+		res, loopErr := e.loop(ctx, m, runID, rs, false, nil)
+		return nil, false, res, loopErr
+	}
+	if event == "" {
+		return nil, false, nil, fmt.Errorf("run %s is parked at human gate %q — resume with an event", runID, p.State)
+	}
+	// A typo'd --event (or a forged web POST) should fail here, not as a
+	// mid-run "no transition matched": the gate's alphabet is closed.
+	if err := checkGateEventKnown(m, p, event); err != nil {
+		return nil, false, nil, err
+	}
+	if err := e.append(ctx, runID, journal.RunResumed, map[string]any{"event": event, "data": data}); err != nil {
+		return nil, false, nil, err
+	}
+	e.Listener.RunResumed(runID, event)
+	return &pendingResume{state: p.State, event: event, data: data}, false, nil, nil
+}
+
+// checkGateEventKnown rejects an event outside a parked gate's alphabet,
+// unless the gate has a fallback edge to catch it.
+func checkGateEventKnown(m *machine.Machine, p *journal.ParkInfo, event string) error {
+	st := m.State(p.State)
+	if st == nil {
+		return nil
+	}
+	known, fallback := []string{}, false
+	for _, t := range st.Transitions {
+		if t.On != "" {
+			known = append(known, t.On)
+		}
+		if t.Fallback() {
+			fallback = true
+		}
+	}
+	if !fallback && !slices.Contains(known, event) {
+		return fmt.Errorf("gate %q has no route for event %q — expected one of %v", p.State, event, known)
+	}
+	return nil
 }
 
 // loop drives the machine until a terminal state, a park, or an error.
