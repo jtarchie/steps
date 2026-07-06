@@ -128,8 +128,15 @@ interface State {
     | { multi: string[] | Fn<string[]>; event?: string; min?: number; max?: number };
 
   // shared
-  /** Fan the handler out over a list — one hermetic context per item. */
-  forEach?: { over: Fn<any[]>; as?: string; concurrency?: number; onItemFailure?: "fail" | "skip" };
+  /** Fan the handler out over a list — one hermetic context per item.
+   *  carry: pair each output with its source item — aggregate items entries
+   *  become {item, output, index} (index into the original over list), so a
+   *  downstream state stays aligned even when onItemFailure: "skip" drops one. */
+  forEach?: { over: Fn<any[]>; as?: string; concurrency?: number; onItemFailure?: "fail" | "skip"; carry?: boolean };
+  /** This state's own acceptance test, declared once: ({ output }) => boolean.
+   *  loop() adopts it as the accept edge when accept: is omitted, so the
+   *  criterion is not restated across the schema, events, and a guard. */
+  verdict?: Fn<boolean>;
   /** Replay cached output when the rendered input is byte-identical. */
   memo?: boolean;
   /** Replace (or derive from) large scope values with model-extracted slices
@@ -148,6 +155,15 @@ interface State {
   status?: "failed";
 }
 
+/** A model tier: a provider ref plus the per-role knobs that cascade into any
+ *  agent state selecting it (where the state leaves the field unset). */
+interface ModelTier {
+  model: string;
+  reasoning?: "low" | "medium" | "high";
+  maxOutputTokens?: number;
+  memo?: boolean;
+}
+
 /** Opaque flow nodes built by pipe/branch/when. */
 interface FlowNode { readonly __steps: string }
 type FlowTarget = State | FlowNode;
@@ -159,8 +175,12 @@ interface Machine {
   description?: string;
   /** Declaring inputs buys strict contract checking at load. */
   input?: Record<string, string | { type?: string; required?: boolean }>;
-  /** Human-named aliases (scout, senior) for provider refs. */
-  models?: Record<string, string>;
+  /** Human-named tiers (scout, senior) for provider refs. A value is either a
+   *  provider-ref string or a tier object bundling the ref with per-role knobs
+   *  (reasoning, maxOutputTokens, memo) — so "cheap scout vs expensive senior"
+   *  is declared once and states just say model: "scout". Precedence:
+   *  state-explicit > tier > machine defaults > engine default. */
+  models?: Record<string, string | ModelTier>;
   /** Default agent model (sugar for defaults.model). */
   model?: string;
   /** Flat agent defaults + retry policies. */
@@ -204,8 +224,9 @@ interface LoopOptions {
   /** The state whose out-edges the loop owns. May be an action state — a
    *  build command's exit code judges as well as a model's score. */
   judge: State;
-  /** Exit test on the judge's result: ({ output, event, ... }) => boolean. */
-  accept: Fn<boolean>;
+  /** Exit test on the judge's result: ({ output, event, ... }) => boolean.
+   *  Optional when the judge declares verdict: (declaring both is an error). */
+  accept?: Fn<boolean>;
   /** The judge runs at most this many times (visits.<judge> < maxVisits). */
   maxVisits: number;
   /** Accept route. Defaults to the pipe successor (exactly one must exist). */
@@ -218,6 +239,25 @@ interface LoopOptions {
   /** The judge's catch edges, same as branch: {errorClass: target}. */
   catch?: Record<string, FlowTarget>;
 }
+/** Synthesize a human escalation state (`gate#<name>`) and its branch tail from
+ *  a prompt + a choice→target map — no hand-written escalate state. Usable
+ *  anywhere a flow target is (loop exhausted:, branch edges, mid-pipe).
+ *  - approve: shorthand → approved -> target, synthesized rejected -> fail.
+ *  - choices: full map {event: target | {to, label}}; targets may be subtrees.
+ *  - timeout: routes to fail unless onTimeout: names a target.
+ *  A state literally named `gate` shadows this — only calls reach the combinator. */
+declare function gate(name: string, opts: GateOptions): FlowNode;
+interface GateOptions {
+  prompt: string | Fn<string>;
+  /** Shorthand: approved -> target, plus a synthesized rejected -> fail. */
+  approve?: FlowTarget;
+  /** Full form: each resume event -> a target (or {to, label}). */
+  choices?: Record<string, FlowTarget | { to: FlowTarget; label?: string }>;
+  timeout?: string;
+  /** Timeout route (requires timeout:). Defaults to fail. */
+  onTimeout?: FlowTarget;
+}
+
 /** Terminal states. */
 declare const done: FlowNode;
 declare const fail: FlowNode;
