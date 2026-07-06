@@ -1,49 +1,11 @@
 # distill — declared context slicing
 
-**Status:** implemented (2026-07-04) — `machine/distill.go` is the lowering,
-`engine.applyDistill` the scope mapping; acceptance coverage in
-`machine/distill_test.go` and `engine/distill_test.go`. The companion knob
-`maxInputTokens` is implemented as a **default-on** cap (8192, chars/4 estimate,
-`0` opts out) with per-value attribution on overflow — it shipped opt-in first,
-then defaulted on once the attribution existed to make the failure
-self-explanatory. **Position in the rung ladder:** rung 1.5 — between "what
-upstream _concluded_" (rung 1 `ctx`) and "what upstream _did_" (rung 2
-`history`).
-
-> **Implementation deltas from this sketch:**
->
-> - `maxInputTokens` shipped opt-in first, then **defaulted on at 8192** (half
->   the sketched 16k — the local-model thesis argues tighter): per-state or
->   `defaults.maxInputTokens`, chars/4 estimate over system + prompt,
->   over-budget classifies `budget_exceeded` and **names the largest
->   destructured inputs** (`largest inputs: spec ~6100, plan ~2100`).
->   `maxInputTokens: 0` opts a state or the machine out. Implicit distill states
->   are exempt from every rung of the cascade — the distiller is the one place
->   the big payload is supposed to appear.
-> - `forEach.over` and flow guards see the **pre-distill** scope: `over` must
->   produce the same list for the implicit fan-out and the consumer (zip by
->   index), and guards run at the boundary, not inside the state.
-> - The dry-run's shadowed-key stub permits string methods (`spec.trim()`) and
->   interpolation; any other field access fails the load naming the
->   distillation.
-> - Distill hops don't count toward `limits.maxTransitions` and their
->   `transition_fired` events carry `implicit: true` (the fold skips them).
-> - **Absent source = empty slice, for free.** A source state that has not
->   executed on this run's path (loop feedback before the loop — `build` stderr
->   on the coder's first visit) yields `""` with no model call, like
->   `adopt: "self"` on a first visit. The consumer's ternary
->   (`${build_cause ? ... : ""}`) reads it as falsy.
-> - **Small source = verbatim pass-through, for free** (added after the
->   2026-07-04 measurement). If the rendered source fits the slice budget
->   (chars/4 estimate ≤ `maxTokens`), the identity is the best possible
->   extraction — the source crosses verbatim with no model call, `for:` is never
->   rendered, and the ledger records `passthrough` / `passthrough_hits` like it
->   records memo. Distill is never-lose: small sources cost nothing, big sources
->   pay for real compression. If a pass-through then trips a consumer's
->   `maxInputTokens`, that is correct pressure — raise the slice budget so
->   extraction actually runs.
-> - User state names are now validated as JS identifiers, which is what keeps
->   the lowered `name#key` namespace collision-free.
+`distill:` declares what a state needs from a large scope value, and a cheap
+model extracts just that slice before the state runs — so the whole payload
+never enters the context. It's rung 1.5 of the context ladder: between what
+upstream _concluded_ (rung 1, `ctx`) and what upstream _did_ (rung 2,
+`history`). Everything here lowers to real states you can see with
+`steps validate --print` — the design record is at the [bottom](#under-the-hood).
 
 ## Problem: payload copying
 
@@ -284,3 +246,51 @@ authoring and goes in the example README either way.
    (2026-07-04): defaulted on at **8192** — tighter than the sketch, per the
    local-model thesis — once overflow attribution existed to make the failure
    self-explanatory and `0` gave a one-line opt-out.
+
+## Under the hood
+
+_Design record — implementation status and the deltas from the original
+sketch. Skip this unless you're changing how distill works._
+
+**Status:** implemented (2026-07-04) — `machine/distill.go` is the lowering,
+`engine.applyDistill` the scope mapping; acceptance coverage in
+`machine/distill_test.go` and `engine/distill_test.go`. The companion knob
+`maxInputTokens` is implemented as a **default-on** cap (8192, chars/4 estimate,
+`0` opts out) with per-value attribution on overflow — it shipped opt-in first,
+then defaulted on once the attribution existed to make the failure
+self-explanatory.
+
+> **Implementation deltas from this sketch:**
+>
+> - `maxInputTokens` shipped opt-in first, then **defaulted on at 8192** (half
+>   the sketched 16k — the local-model thesis argues tighter): per-state or
+>   `defaults.maxInputTokens`, chars/4 estimate over system + prompt,
+>   over-budget classifies `budget_exceeded` and **names the largest
+>   destructured inputs** (`largest inputs: spec ~6100, plan ~2100`).
+>   `maxInputTokens: 0` opts a state or the machine out. Implicit distill states
+>   are exempt from every rung of the cascade — the distiller is the one place
+>   the big payload is supposed to appear.
+> - `forEach.over` and flow guards see the **pre-distill** scope: `over` must
+>   produce the same list for the implicit fan-out and the consumer (zip by
+>   index), and guards run at the boundary, not inside the state.
+> - The dry-run's shadowed-key stub permits string methods (`spec.trim()`) and
+>   interpolation; any other field access fails the load naming the
+>   distillation.
+> - Distill hops don't count toward `limits.maxTransitions` and their
+>   `transition_fired` events carry `implicit: true` (the fold skips them).
+> - **Absent source = empty slice, for free.** A source state that has not
+>   executed on this run's path (loop feedback before the loop — `build` stderr
+>   on the coder's first visit) yields `""` with no model call, like
+>   `adopt: "self"` on a first visit. The consumer's ternary
+>   (`${build_cause ? ... : ""}`) reads it as falsy.
+> - **Small source = verbatim pass-through, for free** (added after the
+>   2026-07-04 measurement). If the rendered source fits the slice budget
+>   (chars/4 estimate ≤ `maxTokens`), the identity is the best possible
+>   extraction — the source crosses verbatim with no model call, `for:` is never
+>   rendered, and the ledger records `passthrough` / `passthrough_hits` like it
+>   records memo. Distill is never-lose: small sources cost nothing, big sources
+>   pay for real compression. If a pass-through then trips a consumer's
+>   `maxInputTokens`, that is correct pressure — raise the slice budget so
+>   extraction actually runs.
+> - User state names are now validated as JS identifiers, which is what keeps
+>   the lowered `name#key` namespace collision-free.

@@ -1,15 +1,5 @@
 # webhook — HTTP-triggered runs
 
-**Status:** implemented (2026-07-05) — the trigger contract lives in
-`machine.WebhookSpec` (`machine/machine.go`), parsed by `applyWebhook`
-(`machine/jsload.go`) and dry-run at load; the daemon side is `steps serve`
-(`cmd/steps/serve.go`) plus `handleHook` and the durable-queue `dispatcher`
-(`cmd/steps/server.go`, `cmd/steps/dispatcher.go`). Durable queuing rides on a
-new `run_enqueued` journal event and a `queued` run status (`journal/`).
-Acceptance coverage: `cmd/steps/serve_test.go` (`TestHookMultiRouting`,
-`TestHookQueueFull429`, `TestHookDurableQueueDrain`,
-`TestWebhookTriggersIncidentRunbook`).
-
 A machine declares its own trigger. The `webhook:` block is the contract, the
 same way `input:` and `output:` are — `steps serve --hook workflow.ts` reads it,
 registers `POST /hooks/<path>`, and every accepted POST becomes a **durably
@@ -109,3 +99,18 @@ timeout baseline starts at _dispatch_ (`run_started`), not at _enqueue_
   processes on one DB would both drain the queue and double-dispatch.
 - **Webhook resumption is a later feature.** A webhook can _start_ a run, not
   _answer its gate_ — that is still the UI's or CLI's job.
+
+## Under the hood
+
+_Design record — implementation status. Skip this unless you're changing how
+webhooks work._
+
+**Status:** implemented (2026-07-05) — the trigger contract lives in
+`machine.WebhookSpec` (`machine/machine.go`), parsed by `applyWebhook`
+(`machine/jsload.go`) and dry-run at load; the daemon side is `steps serve`
+(`cmd/steps/serve.go`) plus `handleHook` and the durable-queue `dispatcher`
+(`cmd/steps/server.go`, `cmd/steps/dispatcher.go`). Durable queuing rides on a
+new `run_enqueued` journal event and a `queued` run status (`journal/`).
+Acceptance coverage: `cmd/steps/serve_test.go` (`TestHookMultiRouting`,
+`TestHookQueueFull429`, `TestHookDurableQueueDrain`,
+`TestWebhookTriggersIncidentRunbook`).
