@@ -3,6 +3,16 @@ version: 3
 tasks:
   default:
     cmds:
+      - task: fmt
+      - task: test
+
+  fmt:
+    desc: Lint (with --fix) and format the codebase
+    cmds:
       - golangci-lint run ./... --fix
       - gofmt -w .
+
+  test:
+    desc: Run the full test suite with the race detector
+    cmds:
       - go test -race ./...
