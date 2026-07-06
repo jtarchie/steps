@@ -8,12 +8,13 @@ const draft: State = {
   adopt: "self", // revisits continue this state's own prior conversation
   // long loops can trim the replayed transcript for token hygiene:
   //   adopt: { from: "self", lastTurns: 6 },
-  prompt: ({ article, critique }) => critique
-    ? `
+  prompt: ({ article, critique }) =>
+    critique
+      ? `
       Your reviewer rejected the previous draft for these reasons:
       ${list(critique.issues)}
       Revise the summary. Address every issue. Same format as before.`
-    : `
+      : `
       Summarize the article below in at most 150 words, then give exactly
       three key points.
       ARTICLE:
@@ -44,7 +45,8 @@ const critique: State = {
 };
 
 const escalate: State = {
-  human: ({ critique }) => `Revisions exhausted (last score ${critique.score}). Approve the current draft or fail the run?`,
+  human: ({ critique }) =>
+    `Revisions exhausted (last score ${critique.score}). Approve the current draft or fail the run?`,
   timeout: "1h",
 };
 

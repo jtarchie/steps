@@ -12,9 +12,10 @@
 //     instead of zipping plan.files[i] back by index.
 //   - gate(): both human tie-breaks are synthesized escalation states.
 
-const unfence = (s) => s
-  .replace(/^[ \t]*```[\w.+-]*[ \t]*\r?\n/, "")
-  .replace(/\r?\n[ \t]*```[ \t]*$/, "");
+const unfence = (s) =>
+  s
+    .replace(/^[ \t]*```[\w.+-]*[ \t]*\r?\n/, "")
+    .replace(/\r?\n[ \t]*```[ \t]*$/, "");
 
 const plan: State = {
   model: "architect", // the architect tier carries maxOutputTokens + reasoning
@@ -35,16 +36,23 @@ const plan: State = {
 
 const generate: State = {
   // carry: each output is paired with its planned file — no index zip.
-  forEach: { over: ({ plan }) => plan.files, as: "target", concurrency: 3, carry: true },
+  forEach: {
+    over: ({ plan }) => plan.files,
+    as: "target",
+    concurrency: 3,
+    carry: true,
+  },
   model: "coder", // the coder tier carries memo + maxOutputTokens
   distill: {
     spec: {
-      for: ({ target }) => `only what is needed to implement ${target.path} (${target.purpose})`,
+      for: ({ target }) =>
+        `only what is needed to implement ${target.path} (${target.purpose})`,
       maxTokens: 400,
     },
     build_cause: {
       from: "build",
-      for: "the root-cause error(s) only — exact messages with file and line, nothing else",
+      for:
+        "the root-cause error(s) only — exact messages with file and line, nothing else",
       maxTokens: 200,
     },
   },
@@ -58,8 +66,18 @@ const generate: State = {
     ${plan.contract}
     SPEC (the slice relevant to this file):
     ${spec}
-    ${review ? "A reviewer rejected the previous attempt:\n" + list(review.issues) + "\nAddress every issue." : ""}
-    ${build_cause ? "The build/test command FAILED last time. Root cause:\n" + build_cause + "\nFix the underlying cause; do not paper over it." : ""}`,
+    ${
+    review
+      ? "A reviewer rejected the previous attempt:\n" + list(review.issues) +
+        "\nAddress every issue."
+      : ""
+  }
+    ${
+    build_cause
+      ? "The build/test command FAILED last time. Root cause:\n" + build_cause +
+        "\nFix the underlying cause; do not paper over it."
+      : ""
+  }`,
 };
 
 const review: State = {
@@ -74,7 +92,11 @@ const review: State = {
     ACCEPTANCE CRITERIA:
     ${list(plan.acceptance)}
     FILES:
-    ${generate.items.map((e) => `--- ${e.item.path} ---\n${unfence(e.output.text)}`).join("\n\n")}`,
+    ${
+    generate.items.map((e) =>
+      `--- ${e.item.path} ---\n${unfence(e.output.text)}`
+    ).join("\n\n")
+  }`,
   output: {
     score: "number",
     issues: { type: "array", items: "string", maxItems: 5 },
@@ -85,11 +107,18 @@ const review: State = {
 const write_files: State = {
   // Zip is gone: carry already pairs each body with its planned path.
   forEach: {
-    over: ({ generate }) => generate.items.map((e) => ({ path: e.item.path, content: unfence(e.output.text) })),
+    over: ({ generate }) =>
+      generate.items.map((e) => ({
+        path: e.item.path,
+        content: unfence(e.output.text),
+      })),
     as: "file",
   },
   action: "file.write",
-  input: ({ out, file }) => ({ path: `${out}/${file.path}`, content: file.content }),
+  input: ({ out, file }) => ({
+    path: `${out}/${file.path}`,
+    content: file.content,
+  }),
 };
 
 const build: State = {
@@ -110,9 +139,13 @@ const report: State = {
   content: ({ plan, build }) => `
 # Generated project
 
-${list(plan.files.map(f => f.path))}
+${list(plan.files.map((f) => f.path))}
 
-**Build gate:** ${build.ok ? "PASSED" : `FAILED (exit ${build.exit_code}) — accepted by a human`}
+**Build gate:** ${
+    build.ok
+      ? "PASSED"
+      : `FAILED (exit ${build.exit_code}) — accepted by a human`
+  }
 _command:_ \`${build.cmd}\`
 
 ## Contract
@@ -126,7 +159,11 @@ ${plan.contract}
 // synthesized rejected/timeout -> fail.
 const escalate = gate("escalate", {
   prompt: ({ review }) => `
-    The reviewer did not approve${review && review.score !== undefined ? ` (last score ${review.score})` : " (its own token budget was exhausted)"}.
+    The reviewer did not approve${
+    review && review.score !== undefined
+      ? ` (last score ${review.score})`
+      : " (its own token budget was exhausted)"
+  }.
     Write the current files anyway and let the build gate judge, or fail?`,
   approve: write_files,
   timeout: "1h",
@@ -141,9 +178,21 @@ export default {
     verify_cmd: { type: "string", required: true },
   },
   models: {
-    architect: { model: "openrouter/qwen/qwen3.6-27b", maxOutputTokens: 16384, reasoning: "low" },
-    coder: { model: "openrouter/qwen/qwen3-coder-flash", maxOutputTokens: 32768, memo: true },
-    reviewer: { model: "openrouter/qwen/qwen3.6-27b", maxOutputTokens: 32768, reasoning: "low" },
+    architect: {
+      model: "openrouter/qwen/qwen3.6-27b",
+      maxOutputTokens: 16384,
+      reasoning: "low",
+    },
+    coder: {
+      model: "openrouter/qwen/qwen3-coder-flash",
+      maxOutputTokens: 32768,
+      memo: true,
+    },
+    reviewer: {
+      model: "openrouter/qwen/qwen3.6-27b",
+      maxOutputTokens: 32768,
+      reasoning: "low",
+    },
     distiller: "openrouter/qwen/qwen3-coder-flash",
   },
   model: "coder",

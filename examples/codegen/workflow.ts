@@ -14,9 +14,10 @@
 // Defensive: small local models sometimes fence code in ```blocks despite
 // being told not to. Strip a leading/trailing fence so a stray one cannot
 // poison the written file (and fail the build gate).
-const unfence = (s) => s
-  .replace(/^[ \t]*```[\w.+-]*[ \t]*\r?\n/, "")
-  .replace(/\r?\n[ \t]*```[ \t]*$/, "");
+const unfence = (s) =>
+  s
+    .replace(/^[ \t]*```[\w.+-]*[ \t]*\r?\n/, "")
+    .replace(/\r?\n[ \t]*```[ \t]*$/, "");
 
 // The architect: one strong pass turns prose into a concrete work-list plus
 // the contract every generated file must honour. No code yet — planning and
@@ -65,12 +66,14 @@ const generate: State = {
   // first build, `build_cause` has no source yet and reads as "" for free.
   distill: {
     spec: {
-      for: ({ target }) => `only what is needed to implement ${target.path} (${target.purpose})`,
+      for: ({ target }) =>
+        `only what is needed to implement ${target.path} (${target.purpose})`,
       maxTokens: 400,
     },
     build_cause: {
       from: "build",
-      for: "the root-cause error(s) only — exact messages with file and line, nothing else",
+      for:
+        "the root-cause error(s) only — exact messages with file and line, nothing else",
       maxTokens: 200,
     },
   },
@@ -85,8 +88,18 @@ const generate: State = {
     ${plan.contract}
     SPEC (the slice relevant to this file):
     ${spec}
-    ${review ? "A reviewer rejected the previous attempt:\n" + list(review.issues) + "\nAddress every issue." : ""}
-    ${build_cause ? "The build/test command FAILED last time. Root cause:\n" + build_cause + "\nFix the underlying cause; do not paper over it." : ""}`,
+    ${
+    review
+      ? "A reviewer rejected the previous attempt:\n" + list(review.issues) +
+        "\nAddress every issue."
+      : ""
+  }
+    ${
+    build_cause
+      ? "The build/test command FAILED last time. Root cause:\n" + build_cause +
+        "\nFix the underlying cause; do not paper over it."
+      : ""
+  }`,
   // no output schema -> default { text: string }: generate.items[i].text is
   // the raw body of plan.files[i].
 };
@@ -108,7 +121,11 @@ const review: State = {
     ACCEPTANCE CRITERIA:
     ${list(plan.acceptance)}
     FILES:
-    ${generate.items.map((f, i) => `--- ${plan.files[i].path} ---\n${unfence(f.text)}`).join("\n\n")}`,
+    ${
+    generate.items.map((f, i) =>
+      `--- ${plan.files[i].path} ---\n${unfence(f.text)}`
+    ).join("\n\n")
+  }`,
   output: {
     score: "number",
     issues: { type: "array", items: "string", maxItems: 5 }, // schema = output budget
@@ -122,7 +139,11 @@ const review: State = {
 // score may be absent.
 const escalate: State = {
   human: ({ review }) => `
-    The reviewer did not approve${review && review.score !== undefined ? ` (last score ${review.score})` : " (its own token budget was exhausted)"}.
+    The reviewer did not approve${
+    review && review.score !== undefined
+      ? ` (last score ${review.score})`
+      : " (its own token budget was exhausted)"
+  }.
     Write the current files anyway and let the build gate judge, or fail?`,
   timeout: "1h",
 };
@@ -134,11 +155,18 @@ const write_files: State = {
   // Zip each generated body back to its planned path by index, stripping any
   // stray fence on the way to disk.
   forEach: {
-    over: ({ plan, generate }) => plan.files.map((f, i) => ({ path: f.path, content: unfence(generate.items[i].text) })),
+    over: ({ plan, generate }) =>
+      plan.files.map((f, i) => ({
+        path: f.path,
+        content: unfence(generate.items[i].text),
+      })),
     as: "file",
   },
   action: "file.write",
-  input: ({ out, file }) => ({ path: `${out}/${file.path}`, content: file.content }),
+  input: ({ out, file }) => ({
+    path: `${out}/${file.path}`,
+    content: file.content,
+  }),
 };
 
 // Gate two — the ground truth. Runs the operator-supplied verify command in
@@ -175,9 +203,13 @@ const report: State = {
   content: ({ plan, build }) => `
 # Generated project
 
-${list(plan.files.map(f => f.path))}
+${list(plan.files.map((f) => f.path))}
 
-**Build gate:** ${build.ok ? "PASSED" : `FAILED (exit ${build.exit_code}) — accepted by a human`}
+**Build gate:** ${
+    build.ok
+      ? "PASSED"
+      : `FAILED (exit ${build.exit_code}) — accepted by a human`
+  }
 _command:_ \`${build.cmd}\`
 
 ## Contract
@@ -188,25 +220,34 @@ ${plan.contract}
 export default {
   name: "codegen",
   input: {
-    spec: { type: "string", required: true },       // the feature, in prose
-    language: { type: "string", required: true },    // names the target; keeps the machine generic
-    out: { type: "string", required: true },         // checkout dir the files land in and the build runs in
-    verify_cmd: { type: "string", required: true },  // the ground-truth gate, e.g. "go build ./..." or "pytest -q"
+    spec: { type: "string", required: true }, // the feature, in prose
+    language: { type: "string", required: true }, // names the target; keeps the machine generic
+    out: { type: "string", required: true }, // checkout dir the files land in and the build runs in
+    verify_cmd: { type: "string", required: true }, // the ground-truth gate, e.g. "go build ./..." or "pytest -q"
   },
   models: {
     // The gates run on OpenRouter (OPENROUTER_API_KEY), the bulk coder stays
     // local and free. Unlike LM Studio, OpenRouter honors reasoning_effort, so
     // the `reasoning:` knob on the gate states is live and bounds the thinking
     // — which is why these gates behave here where they ran away locally.
-    architect: "openrouter/qwen/qwen3.6-27b",       // larger model: one careful plan
-    coder: "openrouter/qwen/qwen3-coder-flash",      // a real coder model, fanned out per file
-    reviewer: "openrouter/qwen/qwen3.6-27b",         // the reader gate; spent sparingly
-    distiller: "openrouter/qwen/qwen3-coder-flash",  // extraction is a small-model job; lmstudio/… works too
+    architect: "openrouter/qwen/qwen3.6-27b", // larger model: one careful plan
+    coder: "openrouter/qwen/qwen3-coder-flash", // a real coder model, fanned out per file
+    reviewer: "openrouter/qwen/qwen3.6-27b", // the reader gate; spent sparingly
+    distiller: "openrouter/qwen/qwen3-coder-flash", // extraction is a small-model job; lmstudio/… works too
   },
   model: "coder",
   limits: { maxTransitions: 40, maxTokens: 400000, timeout: "1h" }, // generous wall clock: a local coder is slow and gates may park for a human
 
-  states: { plan, generate, review, escalate, write_files, build, accept_build, report },
+  states: {
+    plan,
+    generate,
+    review,
+    escalate,
+    write_files,
+    build,
+    accept_build,
+    report,
+  },
 
   // Two bounded loops, one per gate — and each loop owns its own budget,
   // bound on the gate that observes it (visits.review / visits.build).
@@ -224,7 +265,11 @@ export default {
       // (common on local backends that ignore reasoning_effort), don't kill
       // the run — route it to the same human tie-break.
       catch: { budget_exceeded: escalate },
-      exhausted: branch(escalate, { approved: write_files, rejected: fail, timeout: fail }),
+      exhausted: branch(escalate, {
+        approved: write_files,
+        rejected: fail,
+        timeout: fail,
+      }),
       // Gate two — the ground truth. Materialise, then let the command's
       // exit code judge (an action state judges as well as a model: accept
       // reads output.ok, not a score). Red loops the coder with the
@@ -236,7 +281,11 @@ export default {
         revise: generate, // build loop: 3 red retries, reader-independent
         maxVisits: 4,
         then: report,
-        exhausted: branch(accept_build, { approved: report, rejected: fail, timeout: fail }),
+        exhausted: branch(accept_build, {
+          approved: report,
+          rejected: fail,
+          timeout: fail,
+        }),
       }),
     }),
   ),

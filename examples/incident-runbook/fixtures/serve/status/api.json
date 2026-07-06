@@ -1,1 +1,7 @@
-{"service": "api", "status": "degraded", "p99_ms": 7400, "error_rate": 0.18, "note": "threads waiting on cache reads"}
+{
+  "service": "api",
+  "status": "degraded",
+  "p99_ms": 7400,
+  "error_rate": 0.18,
+  "note": "threads waiting on cache reads"
+}

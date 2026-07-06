@@ -1,7 +1,7 @@
 # parallel-review
 
 True concurrent **fan-out / fan-in** (fork/join): one change is reviewed from
-three independent angles *at the same time*, then a lead folds the three
+three independent angles _at the same time_, then a lead folds the three
 verdicts into a ship decision.
 
 ```
@@ -14,14 +14,14 @@ review ─┼─ performance ─┼─▶ verdict ─▶ done
 
 ## What it exercises
 
-| Feature | Where |
-|---|---|
-| Concurrent fan-out to distinct handlers | `review.parallel: { security, performance, docs }` |
-| Bounded concurrency | `concurrency: 3` (branches run at once; serial under `--mock`) |
-| Hermetic branches | each branch is a child run seeded with the pre-fork scope — no branch sees a sibling |
-| Barrier join / fan-in | `verdict` reads the label-keyed aggregate `({ review }) => review.security.risk …` |
-| Failure policy | `onBranchFailure: "fail"` — a crashing reviewer fails the review (`"collect"` would continue and report `_failures`) |
-| Durable, resumable fork | a crash mid-fork reattaches to the same branch children on `steps resume` — no re-run of a finished branch |
+| Feature                                 | Where                                                                                                                |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Concurrent fan-out to distinct handlers | `review.parallel: { security, performance, docs }`                                                                   |
+| Bounded concurrency                     | `concurrency: 3` (branches run at once; serial under `--mock`)                                                       |
+| Hermetic branches                       | each branch is a child run seeded with the pre-fork scope — no branch sees a sibling                                 |
+| Barrier join / fan-in                   | `verdict` reads the label-keyed aggregate `({ review }) => review.security.risk …`                                   |
+| Failure policy                          | `onBranchFailure: "fail"` — a crashing reviewer fails the review (`"collect"` would continue and report `_failures`) |
+| Durable, resumable fork                 | a crash mid-fork reattaches to the same branch children on `steps resume` — no re-run of a finished branch           |
 
 ## Run it
 

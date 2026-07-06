@@ -215,7 +215,18 @@ export default {
   `exhausted` to `fail`. Event-conjunction stays expressible in the guard:
   `accept: ({ event, output }) => event === "approve" && output.score >= 8`.
   A gate that never loops is just a `branch`; self-judging states (judge ==
-  body) are hand-written array-form branches in v1.
+  body) are hand-written array-form branches in v1. A judge that declares
+  `verdict:` needs no `accept:` — the state's own acceptance test IS the
+  accept edge, so the criterion is not restated across the output schema, an
+  `events:` list, and a guard.
+- `gate(name, { prompt, approve | choices, timeout?, onTimeout? })` — the
+  human-escalation counterpart of `loop()`: it synthesizes a real human state
+  (`gate#name`, the same `owner#key` move as `distill:`) and its branch tail.
+  `approve` routes to a target with a synthesized `rejected`/`timeout → fail`;
+  `choices: {event: target | {to, label}}` is the full form. Usable anywhere a
+  target is (a loop's `exhausted:`, a branch edge, mid-pipe). `gate` is a
+  shadowable global, so a state literally named `gate` still works — only calls
+  reach the combinator.
 - A non-terminal state with no wiring anywhere flows to `done`. Without a
   `flow:`, linear declaration order applies — trivial machines need none.
 - The combinators COMPILE INTO the per-state transition lists the engine has
@@ -401,6 +412,12 @@ const scout_files = {
   sequential so scripted queues stay deterministic).
 - `onItemFailure: "skip"` drops poisoned items instead of failing the state;
   guards react via `output.skipped`.
+- `carry: true` makes each `items` entry `{item, output, index}` — pairing
+  every output with its source item and its position in the original `over`
+  list. This is the skip-safe alternative to zipping a parallel list back by
+  index (`plan.files[i]`): once `skip` drops an entry the hand zip misaligns,
+  but the engine knows the true pairing, so `items.map(e => e.item.path)` stays
+  correct.
 - foreach states cannot declare events (no single event exists — route with
   guards over the aggregate), cannot adopt/history, and cannot wrap human gates.
 
@@ -415,7 +432,13 @@ const scout_files = {
   `({ lead }) => lead.risk === "high" ? "senior" : "scout"`. Dry-run at
   load; the result must be a `models:` alias or ref.
 - **`models:` aliases** name capabilities, not vendors: states say `senior`,
-  the header says what senior means today.
+  the header says what senior means today. An alias may be a **tier** —
+  `senior: { model: "…", reasoning: "high", maxOutputTokens: 8192, memo: true }`
+  — bundling the per-role knobs so "cheap scout vs expensive senior" is declared
+  once and states just select it with `model: "senior"`. Precedence:
+  state-explicit > tier > `defaults:` > engine default (an explicit
+  `memo: false` beats the tier). A tier named by a dynamic routing function
+  contributes only its ref — the knobs are load-time.
 
 ## Context between states: hermetic by default
 

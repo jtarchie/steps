@@ -69,6 +69,27 @@ code (`accept: ({ output }) => output.ok`) judges as well as a model's score.
 A gate that never loops is just a `branch`; arbitrary fan-out is
 `branch(state, { event: when(guard).to(target), else, catch, timeout })`.
 
+Three more sugars keep the common shapes terse — each lowers to the same
+enforced graph (`steps validate --print` shows the expansion):
+
+- **`verdict:`** on the judge declares its acceptance test once, so `loop()`
+  needs no `accept:` and the criterion stops being restated across the output
+  schema, an `events:` list, and a guard: `critique: { …, verdict: ({ output })
+  => output.score >= 8 }`.
+- **`gate("escalate", { prompt, approve: publish, timeout: "1h" })`** synthesizes
+  the human-escalation state (`gate#escalate`) and its branch tail — `approve`
+  routes to the target, `rejected`/`timeout` default to fail — so `exhausted:`
+  takes a gate instead of a hand-written human state.
+- **`forEach: { …, carry: true }`** pairs each fan-out output with its source
+  item (`items[i]` becomes `{item, output, index}`), so a downstream state reads
+  `items.map(e => e.item.path)` instead of zipping a parallel list back by index
+  — and it stays aligned when `onItemFailure: "skip"` drops one.
+
+And `models:` entries may be **tiers** — `scout: { model: "…", reasoning: "low",
+memo: true }` — bundling the per-role knobs so states just say `model: "scout"`
+instead of restating them. Compare any `examples/*/workflow.ts` with its
+`workflow-dsl.ts` twin: same machine, same mock trace, fewer moving parts.
+
 Because machines are TypeScript, editors type-check them out of the box: each
 `workflow.ts` opens with `/// <reference path=".../docs/src/global.d.ts" />`,
 so `pipe`/`branch`/`loop`/`when`/`done`/`fail`/`list` and the `Machine` shape all

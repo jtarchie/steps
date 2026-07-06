@@ -39,8 +39,11 @@ const review = {
 // The join: reads all three branch outputs by label and renders the verdict.
 const verdict = {
   model: "lead",
-  prompt: ({ review }) => `A change was reviewed from three angles:
-- security risk: ${review.security.risk}; findings: ${list(review.security.findings)}
+  prompt: ({ review }) =>
+    `A change was reviewed from three angles:
+- security risk: ${review.security.risk}; findings: ${
+      list(review.security.findings)
+    }
 - performance concerns: ${list(review.performance.concerns)}
 - docs gaps: ${list(review.docs.gaps)}
 

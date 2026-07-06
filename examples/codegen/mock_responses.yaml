@@ -92,8 +92,6 @@ generate:
 
       echo "all tests passed"
 
-
 review:
   - text: "{\"score\": 5, \"issues\": [\"--shout flag is never implemented\", \"no test exercises --shout\", \"unknown flags are silently ignored\"], \"event\": \"revise\"}"
   - text: "{\"score\": 9, \"issues\": [], \"event\": \"approve\"}"
-

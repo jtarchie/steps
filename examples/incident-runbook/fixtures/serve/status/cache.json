@@ -1,1 +1,6 @@
-{"service": "cache", "status": "down", "last_heartbeat": "2026-07-05T09:11:42Z", "note": "all 3 nodes unreachable"}
+{
+  "service": "cache",
+  "status": "down",
+  "last_heartbeat": "2026-07-05T09:11:42Z",
+  "note": "all 3 nodes unreachable"
+}

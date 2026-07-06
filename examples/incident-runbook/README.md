@@ -2,21 +2,21 @@
 
 An incident opens, and the machine **survives its own tooling**. A Honeybadger
 webhook fires; `steps serve` maps the payload — the fault's class, message,
-environment, and counts — straight into the run's inputs and starts it. Then,
-in order:
+environment, and counts — straight into the run's inputs and starts it. Then, in
+order:
 
 1. **`probe`** fans `http.get` over every service's status endpoint (real HTTP;
-   a missing service is a `404`, which is *data*, not an error),
-2. **`fetch_fault`** *enriches* the webhook summary with the one thing the
+   a missing service is a `404`, which is _data_, not an error),
+2. **`fetch_fault`** _enriches_ the webhook summary with the one thing the
    webhook leaves out — the **backtrace** (Honeybadger's webhook is
    summary-only; the full fault lives behind the Data API). This is best-effort:
    when the tracker is itself unreachable mid-outage, the fetch is
    **dead-lettered** (`catch: action_error`), and the run diagnoses from the
    webhook summary and live probes alone,
 3. a cheap **`responder`** diagnoses from the evidence,
-4. an **`verify`** auditor judges the responder's *process* from its transcript
+4. an **`verify`** auditor judges the responder's _process_ from its transcript
    (`history:` — rung 2), not just its conclusion,
-5. a senior model **`take_over`** *resumes the responder's actual conversation*
+5. a senior model **`take_over`** _resumes the responder's actual conversation_
    (`adopt:` — rung 3) when the diagnosis is weak,
 6. a human **`pick`**s which remediations to apply (a multi-select gate),
 7. a scribe **`apply`**s each one, and the **`report`** always ships
@@ -52,12 +52,14 @@ webhook: {
 `headers`, `query`, plus any operator-supplied `--hook-input` values by name
 (here `hb_base`). It returns run inputs; only declared `input:` keys pass
 through, and any missing **required** input rejects the POST with `400`. Like
-every other function in a machine, `map` is dry-run at load. `steps serve --hook
-workflow.ts` registers `POST /hooks/honeybadger`; the POST **durably queues** a
-run and returns `202` — gates are still answered in the web UI or CLI (webhook
-*resumption* is a later feature). `serve` takes `--hook` more than once to host
-several webhooks at once, each bounded by its own `maxInFlight`/`maxQueued`; see
-[docs/webhook.md](../../docs/webhook.md) for the full trigger + queue reference.
+every other function in a machine, `map` is dry-run at load.
+`steps serve --hook
+workflow.ts` registers `POST /hooks/honeybadger`; the POST
+**durably queues** a run and returns `202` — gates are still answered in the web
+UI or CLI (webhook _resumption_ is a later feature). `serve` takes `--hook` more
+than once to host several webhooks at once, each bounded by its own
+`maxInFlight`/`maxQueued`; see [docs/webhook.md](../../docs/webhook.md) for the
+full trigger + queue reference.
 
 **The payload is the primary source, not a notification.** Honeybadger's webhook
 is [summary-only](https://docs.honeybadger.io/guides/integrations/webhook/) — it
@@ -73,38 +75,38 @@ This is the example's headline: all three declared-access rungs, side by side,
 each earning its place.
 
 - **Rung 1 — `ctx`** (everywhere): typed outputs templated into downstream
-  prompts. `propose` reads `(take_over || responder).diagnosis`; the report
-  zips `probe.items` with the service list.
-- **Rung 2 — `history:`** (`verify`): the auditor must judge *process*, so it
-  gets a read-only projection of the responder's transcript — **the failed
-  first attempt included**. It is data *about* a conversation, not the
-  conversation; `from:` must be a graph-predecessor, checked at load.
+  prompts. `propose` reads `(take_over || responder).diagnosis`; the report zips
+  `probe.items` with the service list.
+- **Rung 2 — `history:`** (`verify`): the auditor must judge _process_, so it
+  gets a read-only projection of the responder's transcript — **the failed first
+  attempt included**. It is data _about_ a conversation, not the conversation;
+  `from:` must be a graph-predecessor, checked at load.
 - **Rung 3 — `adopt:`** (`take_over`): tier escalation. The senior does not
   start fresh — it receives the responder's actual message array and continues
   it. `lastTurns: 2` trims to the responder's final exchange, which is safe
-  *only because* the senior's own prompt re-carries the incident. (Drop the
-  trim and the original primer — with the fault id — rides along twice.)
+  _only because_ the senior's own prompt re-carries the incident. (Drop the trim
+  and the original primer — with the fault id — rides along twice.)
 
 ## What it exercises
 
-| Feature | Where |
-|---|---|
-| **Webhook trigger** | `webhook: {path, map}` + `steps serve --hook`; payload → run inputs |
-| **`http.get` builtin** | `probe` (fan-out) and `fetch_fault` (single) — real HTTP |
-| **`http.get` `headers:`** | `fetch_fault` and the senior's tool send `Authorization` |
-| **`catch: action_error`** | the dead tracker dead-letters to `note_tracker`, run continues |
-| **`catch: {"*": …}`** | a mis-drafted `apply` step routes straight to `report` |
-| **`retry: "none"`** | `probe`, `fetch_fault`, `apply` — evidence/report must not stall |
-| **`history:` (rung 2)** | `verify` audits the responder's transcript |
-| **`adopt:` other state (rung 3)** | `take_over` resumes `responder` with `lastTurns: 2` |
-| **Multi-select gate** | `pick` — `choices: {multi, event, min}`; downstream reads `pick.selected` |
-| **`forEach` `index`/`total`** | `apply` numbers each runbook entry |
-| **Explicit `system:`** | `responder` and `verify` |
-| **`yaml()` / `include()`** | `responder` renders probes as YAML; `report` includes a header template |
-| **`structuredOutput: "native"`** | `responder` (tool-less JSON contract) |
-| **Agent proposes, guard disposes** | `verify` emits `sound`; a confidence guard vetoes it |
-| **Per-state models** | `responder` / `auditor` / `senior` aliases; the senior is a tier up |
-| Tool guards (live only) | the senior's `file.read`: `require: "http.get"`, `maxCalls`, `onReject`, pinned `root`/credential `args` |
+| Feature                            | Where                                                                                                    |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **Webhook trigger**                | `webhook: {path, map}` + `steps serve --hook`; payload → run inputs                                      |
+| **`http.get` builtin**             | `probe` (fan-out) and `fetch_fault` (single) — real HTTP                                                 |
+| **`http.get` `headers:`**          | `fetch_fault` and the senior's tool send `Authorization`                                                 |
+| **`catch: action_error`**          | the dead tracker dead-letters to `note_tracker`, run continues                                           |
+| **`catch: {"*": …}`**              | a mis-drafted `apply` step routes straight to `report`                                                   |
+| **`retry: "none"`**                | `probe`, `fetch_fault`, `apply` — evidence/report must not stall                                         |
+| **`history:` (rung 2)**            | `verify` audits the responder's transcript                                                               |
+| **`adopt:` other state (rung 3)**  | `take_over` resumes `responder` with `lastTurns: 2`                                                      |
+| **Multi-select gate**              | `pick` — `choices: {multi, event, min}`; downstream reads `pick.selected`                                |
+| **`forEach` `index`/`total`**      | `apply` numbers each runbook entry                                                                       |
+| **Explicit `system:`**             | `responder` and `verify`                                                                                 |
+| **`yaml()` / `include()`**         | `responder` renders probes as YAML; `report` includes a header template                                  |
+| **`structuredOutput: "native"`**   | `responder` (tool-less JSON contract)                                                                    |
+| **Agent proposes, guard disposes** | `verify` emits `sound`; a confidence guard vetoes it                                                     |
+| **Per-state models**               | `responder` / `auditor` / `senior` aliases; the senior is a tier up                                      |
+| Tool guards (live only)            | the senior's `file.read`: `require: "http.get"`, `maxCalls`, `onReject`, pinned `root`/credential `args` |
 
 The senior's tool loop (bare-args `http.get`, `require:`-ordered `file.read`,
 machine-pinned credential) is **live-only**: the mock provider replaces models
@@ -112,9 +114,9 @@ but cannot script tool calls, so CI never depends on a tool being invoked.
 
 ## `http.get`: what is data, what is an error
 
-| Situation | Result |
-|---|---|
-| `200`, `404`, `500` — any HTTP response | `{status, body}` — **data** |
+| Situation                                | Result                              |
+| ---------------------------------------- | ----------------------------------- |
+| `200`, `404`, `500` — any HTTP response  | `{status, body}` — **data**         |
 | connection refused, DNS failure, timeout | `action_error` — routed by `catch:` |
 
 Two consequences shape the machine:
@@ -188,11 +190,12 @@ probe ×4 → fetch_fault(action_error) → note_tracker → responder
 Asserted: `probe.count == 4` with the `search` item at HTTP `404`; the
 `fetch_fault → note_tracker` catch and the dead-letter artifact; one each of
 `action_error` / `rate_limited` / `schema_violation`; the auditor's prompt
-embeds the responder's *failed* attempt; the responder transcript is 4 messages
+embeds the responder's _failed_ attempt; the responder transcript is 4 messages
 and the senior's adopted transcript is 4 (untrimmed would be 6), with the fault
 id appearing exactly once; the multi gate's 3 options; and the shipped report.
 
-**`mock_fast_path.yaml` — report anyway** (`TestIncidentRunbookFastPathReportAnyway`):
+**`mock_fast_path.yaml` — report anyway**
+(`TestIncidentRunbookFastPathReportAnyway`):
 
 ```
 probe ×4 → fetch_fault(200) → responder(diagnosed@0.9) → verify(sound)
@@ -203,7 +206,7 @@ probe ×4 → fetch_fault(200) → responder(diagnosed@0.9) → verify(sound)
 No `take_over`, no `note_tracker`; `verify` fires `on: sound` (the guard
 passed); `apply`'s lone non-JSON reply routes `catch:"*"` to the report, which
 ships with the "runbook steps were not drafted" fallback. The fault fetch
-succeeds *through the auth middleware*, proving the `headers:` arg end to end.
+succeeds _through the auth middleware_, proving the `headers:` arg end to end.
 
 ## Footguns
 
@@ -211,9 +214,9 @@ succeeds *through the auth middleware*, proving the `headers:` arg end to end.
   un-memoized: a memo replay records no conversation, which would starve both
   `verify`'s `history:` and `take_over`'s `adopt:`.
 - **No `onItemFailure: "skip"` on `probe`.** The report zips `probe.items` with
-  the service list *by index*; a dropped item would misalign every row.
+  the service list _by index_; a dropped item would misalign every row.
 - **`adopt` trims by messages, not turns.** `lastTurns: 2` keeps the last two
-  *messages*, which here is exactly the responder's final exchange.
+  _messages_, which here is exactly the responder's final exchange.
 - **Never `JSON.parse` in a machine function.** `fetch_fault.body` is a JSON
   string embedded verbatim into the prompt; the model reads it fine, and the
   load-time dry-run doesn't choke on a stubbed string.

@@ -12,7 +12,12 @@ const draft: State = {
   prompt: ({ article, critique }) => `
     Summarize the article below in at most 150 words, then give exactly
     three key points.
-    ${critique ? "A reviewer rejected your previous draft for these reasons:\n" + list(critique.issues) + "\nAddress every issue." : ""}
+    ${
+    critique
+      ? "A reviewer rejected your previous draft for these reasons:\n" +
+        list(critique.issues) + "\nAddress every issue."
+      : ""
+  }
     ARTICLE:
     ${article}`,
   output: {
@@ -57,7 +62,8 @@ export default {
       judge: critique, // accept: is the judge's verdict:
       maxVisits: 3,
       exhausted: gate("escalate", {
-        prompt: ({ critique }) => `Revisions exhausted (last score ${critique.score}). Approve the current draft or fail the run?`,
+        prompt: ({ critique }) =>
+          `Revisions exhausted (last score ${critique.score}). Approve the current draft or fail the run?`,
         approve: publish, // rejected -> fail, timeout -> fail (synthesized)
         timeout: "1h",
       }),

@@ -1,36 +1,38 @@
 # summarize-critic
 
-The canonical `steps` example and the **acceptance spec for v1**: every command in this
-README must work when v1 ships. It is deliberately small (two agents, one action, one
-human gate) while exercising nearly every feature in [DESIGN.md](../../DESIGN.md).
+The canonical `steps` example and the **acceptance spec for v1**: every command
+in this README must work when v1 ships. It is deliberately small (two agents,
+one action, one human gate) while exercising nearly every feature in
+[DESIGN.md](../../DESIGN.md).
 
 ## What it exercises
 
-| Feature | Where |
-|---|---|
-| Micro-agents with per-state models | `draft` (qwen3:8b) vs `critique` (llama3.2:3b) |
-| Agent proposes, guards dispose | `critique` emits `approve`/`revise`; the `accept` guard rules on the score |
-| Engine-bounded loops | `loop()` with `maxVisits: 3` (lowers to a `visits.critique < 3` guard) + `maxTransitions: 12` backstop |
-| Explicit contracts | typed output schemas; prompt functions are the input contract |
-| Feedback loops between states | rejected draft destructures `({ critique })` on the next pass |
-| Semantic retry (re-prompt with error) | mock's non-JSON critique response; small local models also trigger this naturally |
-| Transient retry (backoff) | mock's `rate_limited` injection; or kill Ollama mid-run |
-| Fallback transitions | `critique` falls through to `escalate` |
-| Human gate + choices + park/resume + timeout | `escalate` with `choices: {approved, rejected}`, `timeout: "1h"`, and a `timeout:` route in the flow |
-| Builtin tool library | `file.write` in `publish` |
-| Defaults | no `initial`, no transitions on `draft`/`publish`, implicit `done`/`failed` |
-| Durability | kill the process mid-run, `steps resume` finishes it |
-| Multi-provider | change one `model:` line, nothing else moves |
+| Feature                                      | Where                                                                                                  |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Micro-agents with per-state models           | `draft` (qwen3:8b) vs `critique` (llama3.2:3b)                                                         |
+| Agent proposes, guards dispose               | `critique` emits `approve`/`revise`; the `accept` guard rules on the score                             |
+| Engine-bounded loops                         | `loop()` with `maxVisits: 3` (lowers to a `visits.critique < 3` guard) + `maxTransitions: 12` backstop |
+| Explicit contracts                           | typed output schemas; prompt functions are the input contract                                          |
+| Feedback loops between states                | rejected draft destructures `({ critique })` on the next pass                                          |
+| Semantic retry (re-prompt with error)        | mock's non-JSON critique response; small local models also trigger this naturally                      |
+| Transient retry (backoff)                    | mock's `rate_limited` injection; or kill Ollama mid-run                                                |
+| Fallback transitions                         | `critique` falls through to `escalate`                                                                 |
+| Human gate + choices + park/resume + timeout | `escalate` with `choices: {approved, rejected}`, `timeout: "1h"`, and a `timeout:` route in the flow   |
+| Builtin tool library                         | `file.write` in `publish`                                                                              |
+| Defaults                                     | no `initial`, no transitions on `draft`/`publish`, implicit `done`/`failed`                            |
+| Durability                                   | kill the process mid-run, `steps resume` finishes it                                                   |
+| Multi-provider                               | change one `model:` line, nothing else moves                                                           |
 
 ## Paired variant: `adopt: self`
 
-[`../summarize-critic-adopt/`](../summarize-critic-adopt/README.md) is the same machine
-with one change: the drafter continues its own conversation across revisions
-(`adopt: "self"`, context rung 3) instead of being re-primed with distilled feedback
-(`ctx`, rung 1, this example). It shares this example's mock script and article
-fixture, so running both A/B-tests the two context philosophies — token cost per
-revision, transcript growth, anchoring behavior — with the context mechanics as the
-only variable. Its README carries the delta table and the extra assertions.
+[`../summarize-critic-adopt/`](../summarize-critic-adopt/README.md) is the same
+machine with one change: the drafter continues its own conversation across
+revisions (`adopt: "self"`, context rung 3) instead of being re-primed with
+distilled feedback (`ctx`, rung 1, this example). It shares this example's mock
+script and article fixture, so running both A/B-tests the two context
+philosophies — token cost per revision, transcript growth, anchoring behavior —
+with the context mechanics as the only variable. Its README carries the delta
+table and the extra assertions.
 
 ## Prerequisites (live mode only)
 
@@ -104,9 +106,10 @@ transition_fired publish -> done                      (linear default)
 run_finished     done
 ```
 
-Assertions: exact event sequence above; `visits.draft == 2`; one transient retry and
-one semantic retry on `critique`; `out/summary.md` exists and contains the three key
-points; total transitions = 5 (well under the limit of 12).
+Assertions: exact event sequence above; `visits.draft == 2`; one transient retry
+and one semantic retry on `critique`; `out/summary.md` exists and contains the
+three key points; total transitions = 5 (well under the limit of 12).
 
-Live-mode assertions are invariants only (never content): the run reaches `done` or
-parks at `escalate`; `visits.critique <= 3`; every output validated against its schema.
+Live-mode assertions are invariants only (never content): the run reaches `done`
+or parks at `escalate`; `visits.critique <= 3`; every output validated against
+its schema.

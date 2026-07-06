@@ -6,8 +6,10 @@
 // routing function, so no static tier applies — the one case tiers can't
 // fold. Runs against the same mock_responses.yaml.
 
-const allCalm = ({ scout_files }) => scout_files.items.every(i => i.risk === "low");
-const clean = ({ deep_review }) => deep_review.items.every(i => i.findings.length === 0);
+const allCalm = ({ scout_files }) =>
+  scout_files.items.every((i) => i.risk === "low");
+const clean = ({ deep_review }) =>
+  deep_review.items.every((i) => i.findings.length === 0);
 
 const split_diff: State = {
   action: "diff.split",
@@ -16,7 +18,12 @@ const split_diff: State = {
 
 // memo now comes from the scout tier.
 const scout_files: State = {
-  forEach: { over: ({ split_diff }) => split_diff.files, as: "file", concurrency: 3, onItemFailure: "skip" },
+  forEach: {
+    over: ({ split_diff }) => split_diff.files,
+    as: "file",
+    concurrency: 3,
+    onItemFailure: "skip",
+  },
   prompt: ({ title, file }) => `
     You are a scout for a senior code reviewer. Do NOT review. Identify what
     in this one file DESERVES the senior's attention, so they spend zero
@@ -43,9 +50,21 @@ const scout_pr: State = {
     at all? Choose event "trivial" only if nothing warrants review.
     ${title ? `PR: ${title} — ${description}` : ""}
     FILES:
-    ${list(split_diff.files.map(f => `${f.path} (${f.additions}+/${f.deletions}-)`))}
+    ${
+    list(split_diff.files.map((f) =>
+      `${f.path} (${f.additions}+/${f.deletions}-)`
+    ))
+  }
     SCOUT REPORTS:
-    ${list(scout_files.items.map(i => `${i.path} [${i.risk}]:${i.leads.map(l => " " + l.concern + ";").join("")}`))}`,
+    ${
+    list(scout_files.items.map((i) =>
+      `${i.path} [${i.risk}]:${
+        i.leads.map((l) =>
+          " " + l.concern + ";"
+        ).join("")
+      }`
+    ))
+  }`,
   output: {
     themes: { type: "array", maxItems: 4, items: "string" },
     reading_order: "string[]",
@@ -55,16 +74,23 @@ const scout_pr: State = {
 
 const note_trivial: State = {
   write: "out/review.md",
-  content: ({ scout_pr }) => `## Automated triage: no senior review needed\n\n${list(scout_pr.themes)}\n`,
+  content: ({ scout_pr }) =>
+    `## Automated triage: no senior review needed\n\n${
+      list(scout_pr.themes)
+    }\n`,
 };
 
 // A per-item routing function picks the model, so no static tier applies —
 // this state keeps memo/reasoning/maxOutputTokens explicit.
 const deep_review: State = {
   forEach: {
-    over: ({ scout_files, split_diff }) => scout_files.items
-      .filter(i => i.risk !== "low")
-      .map(l => ({ ...l, patch: (split_diff.files.find(f => f.path === l.path) || {}).patch })),
+    over: ({ scout_files, split_diff }) =>
+      scout_files.items
+        .filter((i) => i.risk !== "low")
+        .map((l) => ({
+          ...l,
+          patch: (split_diff.files.find((f) => f.path === l.path) || {}).patch,
+        })),
     as: "lead",
   },
   memo: true,
@@ -76,7 +102,8 @@ const deep_review: State = {
     {
       name: "file.read",
       maxCalls: 3,
-      when: ({ split_diff, args }) => split_diff.files.some(f => f.path === args.path),
+      when: ({ split_diff, args }) =>
+        split_diff.files.some((f) => f.path === args.path),
       args: ({ root }) => ({ root: root || "" }),
     },
   ],
@@ -86,15 +113,20 @@ const deep_review: State = {
     defect the scout missed. Do not restate the diff. Report only what you
     can substantiate. If the patch alone is not enough context, read the
     full file with file_read before concluding.
-    PR THEMES:${scout_pr.themes.map(t => " " + t + ";").join("")}
+    PR THEMES:${scout_pr.themes.map((t) => " " + t + ";").join("")}
     FILE: ${lead.path}
     LEADS:
-    ${list(lead.leads.map(l => `${l.where}: ${l.concern}`))}
+    ${list(lead.leads.map((l) => `${l.where}: ${l.concern}`))}
     PATCH:
     ${lead.patch}`,
   output: {
     path: "string",
-    findings: [{ where: "string", severity: "enum(blocking|important|nit)", issue: "string", fix: "string" }],
+    findings: [{
+      where: "string",
+      severity: "enum(blocking|important|nit)",
+      issue: "string",
+      fix: "string",
+    }],
     leads_refuted: "string[]",
   },
 };
@@ -105,16 +137,27 @@ const verdict: State = {
   prompt: ({ deep_review }) => `
     Compose the review verdict from these substantiated findings. Be
     direct; credit refuted leads briefly.
-    ${deep_review.items.map(i => `FILE ${i.path}:
-    ${list(i.findings.map(f => `[${f.severity}] ${f.where}: ${f.issue} — fix: ${f.fix}`))}
-    ${list(i.leads_refuted.map(r => "refuted: " + r))}`).join("\n")}`,
+    ${
+    deep_review.items.map((i) =>
+      `FILE ${i.path}:
+    ${
+        list(i.findings.map((f) =>
+          `[${f.severity}] ${f.where}: ${f.issue} — fix: ${f.fix}`
+        ))
+      }
+    ${
+        list(i.leads_refuted.map((r) => "refuted: " + r))
+      }`
+    ).join("\n")
+  }`,
   output: { summary: "string", body: "string" },
   events: ["approve", "comment", "request_changes"],
 };
 
 const write_review: State = {
   write: "out/review.md",
-  content: ({ verdict }) => `## Code review\n\n${verdict.summary}\n\n${verdict.body}\n`,
+  content: ({ verdict }) =>
+    `## Code review\n\n${verdict.summary}\n\n${verdict.body}\n`,
 };
 
 export default {
@@ -134,7 +177,15 @@ export default {
   defaults: { reasoning: "low" },
   limits: { maxTransitions: 15, maxTokens: 200000, timeout: "30m" },
 
-  states: { split_diff, scout_files, scout_pr, note_trivial, deep_review, verdict, write_review },
+  states: {
+    split_diff,
+    scout_files,
+    scout_pr,
+    note_trivial,
+    deep_review,
+    verdict,
+    write_review,
+  },
 
   flow: pipe(
     split_diff,

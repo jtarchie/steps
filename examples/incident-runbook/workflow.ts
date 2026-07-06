@@ -22,7 +22,9 @@ const probe: State = {
   },
   action: "http.get",
   retry: "none",
-  input: ({ status_base, service }) => ({ url: `${status_base}/${service}.json` }),
+  input: ({ status_base, service }) => ({
+    url: `${status_base}/${service}.json`,
+  }),
   output: { status: "number", body: "string" }, // per-item shape
 };
 
@@ -42,7 +44,8 @@ const fetch_fault: State = {
 
 const note_tracker: State = {
   write: "out/tracker-failure.md",
-  content: ({ fault_url }) => `# Error tracker unreachable
+  content: ({ fault_url }) =>
+    `# Error tracker unreachable
 
 Honeybadger (${fault_url}) could not be reached when the incident opened.
 Diagnosis proceeded from live probes alone.
@@ -63,10 +66,22 @@ const responder: State = {
     ${incident}
 
     LIVE PROBES (one status per service):
-    ${yaml(services.split(",").map((s, i) => ({ service: s.trim(), http_status: probe.items[i].status, body: probe.items[i].body })))}
+    ${
+    yaml(
+      services.split(",").map((s, i) => ({
+        service: s.trim(),
+        http_status: probe.items[i].status,
+        body: probe.items[i].body,
+      })),
+    )
+  }
 
     ERROR TRACKER FAULT DETAIL:
-    ${fetch_fault ? fetch_fault.body : "(error tracker unreachable — see out/tracker-failure.md)"}
+    ${
+    fetch_fault
+      ? fetch_fault.body
+      : "(error tracker unreachable — see out/tracker-failure.md)"
+  }
 
     Diagnose the root cause across these services. If you cannot, declare
     the "stuck" event. State your confidence between 0 and 1.`,
@@ -79,8 +94,14 @@ const responder: State = {
 // attempts included, rendered as text into a fresh conversation.
 const verify: State = {
   model: "auditor",
-  system: "You audit incident diagnoses. Judge the PROCESS in the transcript, not just the conclusion.",
-  history: { from: "responder", include: ["messages", "tool_calls"], lastTurns: 6, as: "trace" },
+  system:
+    "You audit incident diagnoses. Judge the PROCESS in the transcript, not just the conclusion.",
+  history: {
+    from: "responder",
+    include: ["messages", "tool_calls"],
+    lastTurns: 6,
+    as: "trace",
+  },
   prompt: ({ trace, responder }) => `
     The first responder's session transcript:
     ${trace}
@@ -89,7 +110,10 @@ const verify: State = {
 
     Did they address every anomalous probe, including non-200 statuses?
     Declare "sound" only if the process holds up.`,
-  output: { process_ok: "boolean", concerns: { type: "array", items: "string", maxItems: 3 } },
+  output: {
+    process_ok: "boolean",
+    concerns: { type: "array", items: "string", maxItems: 3 },
+  },
   events: ["sound", "flawed"],
 };
 
@@ -105,7 +129,12 @@ const take_over: State = {
   tools: [
     // The senior may re-probe or re-fetch anything — but the credential is
     // machine-pinned: merged over the model's args, never visible to it.
-    { name: "http.get", args: ({ hb_auth }) => (hb_auth ? { headers: { Authorization: hb_auth } } : {}) },
+    {
+      name: "http.get",
+      args: (
+        { hb_auth },
+      ) => (hb_auth ? { headers: { Authorization: hb_auth } } : {}),
+    },
     // The runbook is read-only reference material, only after live evidence,
     // and only inside the pinned root. A rejected call feeds back into the
     // loop rather than failing the state.
@@ -120,7 +149,11 @@ const take_over: State = {
   ],
   prompt: ({ incident, verify }) => `
     You are the senior incident commander taking over mid-session; the
-    transcript above is the first responder's attempt${verify ? `. An auditor flagged it:\n${list(verify.concerns)}` : " — they declared themselves stuck"}.
+    transcript above is the first responder's attempt${
+    verify
+      ? `. An auditor flagged it:\n${list(verify.concerns)}`
+      : " — they declared themselves stuck"
+  }.
     INCIDENT (for reference): ${incident}
     Re-diagnose. Re-probe with http_get first if live evidence would change
     your answer; consult the runbook (file_read) only AFTER re-probing.
@@ -135,9 +168,16 @@ const propose: State = {
   prompt: ({ responder, take_over, verify }) => `
     DIAGNOSIS (${take_over ? "senior incident commander" : "first responder"}):
     ${(take_over || responder).diagnosis}
-    ${verify && !verify.process_ok ? "AUDIT CONCERNS:\n" + list(verify.concerns) : ""}
+    ${
+    verify && !verify.process_ok
+      ? "AUDIT CONCERNS:\n" + list(verify.concerns)
+      : ""
+  }
     Propose 2-4 concrete remediations, most urgent first. Each under 15 words.`,
-  output: { summary: "string", remediations: { type: "array", items: "string", minItems: 2, maxItems: 4 } },
+  output: {
+    summary: "string",
+    remediations: { type: "array", items: "string", minItems: 2, maxItems: 4 },
+  },
 };
 
 // The human picks WHICH remediations to apply — a multi-select gate. The
@@ -145,9 +185,15 @@ const propose: State = {
 const pick: State = {
   human: ({ propose, responder, take_over }) => `
     ${propose.summary}
-    Diagnosis (${take_over ? "senior" : "responder"}): ${(take_over || responder).diagnosis}
+    Diagnosis (${take_over ? "senior" : "responder"}): ${
+    (take_over || responder).diagnosis
+  }
     Which remediations should be applied?`,
-  choices: { multi: ({ propose }) => propose.remediations, event: "chosen", min: 1 },
+  choices: {
+    multi: ({ propose }) => propose.remediations,
+    event: "chosen",
+    min: 1,
+  },
   timeout: "4h",
 };
 
@@ -170,25 +216,51 @@ const apply: State = {
 // this path is guarded. Written verbatim (write content is not dedented).
 const report: State = {
   write: "out/incident-report.md",
-  content: ({ incident, services, probe, fetch_fault, note_tracker, responder, verify, take_over, pick, apply }) => `${REPORT_HEADER}
+  content: (
+    {
+      incident,
+      services,
+      probe,
+      fetch_fault,
+      note_tracker,
+      responder,
+      verify,
+      take_over,
+      pick,
+      apply,
+    },
+  ) =>
+    `${REPORT_HEADER}
 ## Incident
 
 ${incident}
 
 ## Probes
 
-${services.split(",").map((s, i) => `- ${s.trim()}: HTTP ${probe.items[i].status}`).join("\n")}
+${
+      services.split(",").map((s, i) =>
+        `- ${s.trim()}: HTTP ${probe.items[i].status}`
+      ).join("\n")
+    }
 
 ## Error tracker
 
-${note_tracker ? "Honeybadger UNREACHABLE at incident open — page from the tracker UI manually (see out/tracker-failure.md)." : `Fault detail fetched (HTTP ${fetch_fault.status}).`}
+${
+      note_tracker
+        ? "Honeybadger UNREACHABLE at incident open — page from the tracker UI manually (see out/tracker-failure.md)."
+        : `Fault detail fetched (HTTP ${fetch_fault.status}).`
+    }
 
 ## Diagnosis (${take_over ? "senior incident commander" : "first responder"})
 
 ${(take_over || responder).diagnosis}
-${verify && !verify.process_ok ? `
+${
+      verify && !verify.process_ok
+        ? `
 Audit concerns:
-${list(verify.concerns)}` : ""}
+${list(verify.concerns)}`
+        : ""
+    }
 
 ## Remediations selected
 
@@ -197,24 +269,32 @@ ${pick.note ? `Operator note: ${pick.note}` : ""}
 
 ## Runbook
 
-${apply && apply.items ? apply.items.map((it, i) => `### ${i + 1}. ${pick.selected[i]} (risk: ${it.risk})\n\n${it.instructions}`).join("\n\n") : "_(runbook steps were not drafted — see the run journal)_"}
+${
+      apply && apply.items
+        ? apply.items.map((it, i) =>
+          `### ${i + 1}. ${
+            pick.selected[i]
+          } (risk: ${it.risk})\n\n${it.instructions}`
+        ).join("\n\n")
+        : "_(runbook steps were not drafted — see the run journal)_"
+    }
 `,
 };
 
 export default {
   name: "incident-runbook",
   input: {
-    incident: { type: "string", required: true },     // what happened, from the webhook payload
-    services: { type: "string", required: true },      // comma-separated service names to probe
-    status_base: { type: "string", required: true },   // base URL of the status endpoints
-    fault_url: { type: "string", required: true },     // Honeybadger fault API URL (composed by the webhook map)
-    hb_auth: "string",                                 // optional: FULL Authorization header value ("Basic <b64>" / "Bearer <tok>")
-    runbook_dir: "string",                             // optional: root for the senior's file_read (live runs)
+    incident: { type: "string", required: true }, // what happened, from the webhook payload
+    services: { type: "string", required: true }, // comma-separated service names to probe
+    status_base: { type: "string", required: true }, // base URL of the status endpoints
+    fault_url: { type: "string", required: true }, // Honeybadger fault API URL (composed by the webhook map)
+    hb_auth: "string", // optional: FULL Authorization header value ("Basic <b64>" / "Bearer <tok>")
+    runbook_dir: "string", // optional: root for the senior's file_read (live runs)
   },
   models: {
-    responder: "openrouter/qwen/qwen3.6-27b",          // cheap tier: diagnose, propose, scribe
-    auditor: "openrouter/qwen/qwen3.6-27b",            // aliases name capabilities; swap independently
-    senior: "openrouter/anthropic/claude-opus-4-8",    // tier escalation (DESIGN.md's own adopt example)
+    responder: "openrouter/qwen/qwen3.6-27b", // cheap tier: diagnose, propose, scribe
+    auditor: "openrouter/qwen/qwen3.6-27b", // aliases name capabilities; swap independently
+    senior: "openrouter/anthropic/claude-opus-4-8", // tier escalation (DESIGN.md's own adopt example)
   },
   model: "responder",
   defaults: { reasoning: "low" },
@@ -232,12 +312,25 @@ export default {
   webhook: {
     path: "honeybadger",
     map: ({ body, hb_base }) => ({
-      incident: `Honeybadger fault #${body.fault.id} in ${body.fault.environment}: ${body.fault.klass} — ${body.fault.message} (seen ${body.fault.notices_count}×, last ${body.fault.last_notice_at})`,
-      fault_url: `${hb_base}/v2/projects/${body.fault.project_id}/faults/${body.fault.id}`,
+      incident:
+        `Honeybadger fault #${body.fault.id} in ${body.fault.environment}: ${body.fault.klass} — ${body.fault.message} (seen ${body.fault.notices_count}×, last ${body.fault.last_notice_at})`,
+      fault_url:
+        `${hb_base}/v2/projects/${body.fault.project_id}/faults/${body.fault.id}`,
     }),
   },
 
-  states: { probe, fetch_fault, note_tracker, responder, verify, take_over, propose, pick, apply, report },
+  states: {
+    probe,
+    fetch_fault,
+    note_tracker,
+    responder,
+    verify,
+    take_over,
+    propose,
+    pick,
+    apply,
+    report,
+  },
 
   flow: pipe(
     probe,

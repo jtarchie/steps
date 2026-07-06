@@ -8,7 +8,12 @@ const draft: State = {
   prompt: ({ article, critique }) => `
     Summarize the article below in at most 150 words, then give exactly
     three key points.
-    ${critique ? "A reviewer rejected your previous draft for these reasons:\n" + list(critique.issues) + "\nAddress every issue." : ""}
+    ${
+    critique
+      ? "A reviewer rejected your previous draft for these reasons:\n" +
+        list(critique.issues) + "\nAddress every issue."
+      : ""
+  }
     ARTICLE:
     ${article}`,
   output: {
@@ -35,7 +40,8 @@ const critique: State = {
 };
 
 const escalate: State = {
-  human: ({ critique }) => `Revisions exhausted (last score ${critique.score}). Approve the current draft or fail the run?`,
+  human: ({ critique }) =>
+    `Revisions exhausted (last score ${critique.score}). Approve the current draft or fail the run?`,
   choices: {
     approved: "Ship the current draft as-is",
     rejected: "Fail the run",
