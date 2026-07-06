@@ -231,8 +231,15 @@ func (m *Machine) outputStub(s *State) any {
 		}
 	}
 	if s.ForEach != nil {
+		item := body
+		if s.ForEach.Carry {
+			// carry pairs each output with its source item: downstream reads
+			// items[i].output / items[i].item, so a bare items[i].field fails
+			// the load naming item/output/index.
+			item = map[string]any{"item": anyMarker(), "output": body, "index": 0}
+		}
 		return map[string]any{
-			"items":            []any{body},
+			"items":            []any{item},
 			"count":            1,
 			"skipped":          0,
 			"failures":         []any{},

@@ -659,6 +659,7 @@ var (
 	parallelStateKeys = []string{"parallel", "concurrency", "onBranchFailure"}
 	terminalStateKeys = []string{"terminal", "status"}
 	movedToFlowKeys   = []string{"transitions", "catch", "onTimeout", "to", "next"}
+	forEachKeys       = []string{"over", "as", "concurrency", "onItemFailure", "carry"}
 )
 
 func (l *loader) state(name string, v goja.Value) (*State, error) {
@@ -692,11 +693,17 @@ func (l *loader) state(name string, v goja.Value) (*State, error) {
 	}
 
 	if f := l.obj(o.Get("forEach")); f != nil {
+		for _, k := range f.Keys() {
+			if !contains(forEachKeys, k) {
+				return nil, fmt.Errorf("forEach: unknown key %q — valid: %s", k, strings.Join(forEachKeys, ", "))
+			}
+		}
 		st.ForEach = &ForEachSpec{
 			Over:          l.dyn(f.Get("over")),
 			As:            str(f.Get("as")),
 			Concurrency:   integer(f.Get("concurrency")),
 			OnItemFailure: str(f.Get("onItemFailure")),
+			Carry:         boolean(f.Get("carry")),
 		}
 	}
 

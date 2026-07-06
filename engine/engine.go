@@ -802,7 +802,15 @@ func (e *Engine) aggregateForEachResults(st *machine.State, list []any, results 
 			})
 			continue
 		}
-		items = append(items, results[i].Output)
+		if st.ForEach.Carry {
+			items = append(items, map[string]any{
+				"item":   list[i],
+				"output": results[i].Output,
+				"index":  i,
+			})
+		} else {
+			items = append(items, results[i].Output)
+		}
 		usage.Add(results[i].Usage)
 		if results[i].Memo {
 			memoHits++
