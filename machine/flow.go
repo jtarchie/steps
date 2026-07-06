@@ -108,6 +108,98 @@ globalThis.state = function (a, b) {
   }
   return config;
 };
+// machine(name, build): the aasm-style whole-machine block. build(m) runs
+// against a recorder whose verbs accumulate plain data — states (delegated to
+// the state() builder), event/transition edges, and top-level config — then it
+// RETURNS the standard config object the loader already consumes. The only new
+// structure is the {__steps:"eventset"} flow node (wired in Go by wireEventSet).
+// Events are first-class: m.event(name, {from, to, when}) owns its edge, fans in
+// from many states (from: [a, b]), and — the ergonomic win — auto-declares the
+// event on each non-human from-state so no separate events: list is needed. On
+// globalThis for the same shadowing courtesy as gate/state.
+globalThis.machine = function (name, build) {
+  if (typeof name !== "string" || typeof build !== "function") {
+    throw new TypeError("machine(name, build): name is a string, build is a function");
+  }
+  var states = {};   // insertion-ordered: key -> state config (identity preserved)
+  var edges = [];     // ordered event/transition edges for the eventset node
+  var cfg = {};       // top-level config keys
+
+  function refKey(ref) {
+    var k = ref && ref["__steps_state_name_hint"];
+    if (typeof k !== "string") {
+      throw new TypeError("machine(" + name + "): expected a state declared with m.state(...)");
+    }
+    return k;
+  }
+  function refs(from) { return Array.isArray(from) ? from : [from]; }
+
+  var api = {};
+  api.state = function (sname, buildOrConfig, opts) {
+    if (typeof sname !== "string") throw new TypeError("m.state(name, ...): name must be a string");
+    var config;
+    if (typeof buildOrConfig === "function") {
+      config = globalThis.state(sname, buildOrConfig);
+    } else if (buildOrConfig && typeof buildOrConfig === "object") {
+      config = buildOrConfig;
+      if (config["__steps_state_name_hint"] === undefined) {
+        Object.defineProperty(config, "__steps_state_name_hint", { value: sname, enumerable: false });
+      }
+    } else {
+      throw new TypeError("m.state(" + sname + ", ...): second arg must be a build function or a config object");
+    }
+    states[sname] = config;
+    if (opts && opts.initial) cfg.initial = sname;
+    return config;
+  };
+  api.start = function (ref) { cfg.initial = refKey(ref); return m; };
+
+  api.event = function (evName, spec) {
+    spec = spec || {};
+    var from = refs(spec.from);
+    edges.push({ on: evName, when: spec.when, from: from, to: spec.to });
+    for (var i = 0; i < from.length; i++) {
+      var c = from[i];
+      if (c && c.human !== undefined) continue; // gates route on resume events, not output.events
+      var evs = c.events || (c.events = []);
+      if (evs.indexOf(evName) === -1) evs.push(evName);
+    }
+    return m;
+  };
+  api.step = function (from, to) { edges.push({ from: refs(from), to: to }); return m; };
+  api.always = api.step;
+  api.guard = function (from, to, when) { edges.push({ when: when, from: refs(from), to: to }); return m; };
+  api.catch = function (from, map) { edges.push({ catch: map, from: refs(from) }); return m; };
+  api.timeout = function (gate, to) { edges.push({ timeout: true, from: refs(gate), to: to }); return m; };
+
+  function setCfg(key) { return function (v) { cfg[key] = v; return m; }; }
+  api.uses = setCfg("models"); api.models = api.uses;
+  api.needs = setCfg("input"); api.input = api.needs;
+  api.limit = setCfg("limits"); api.limits = api.limit;
+  api.model = setCfg("model");
+  api.defaults = setCfg("defaults");
+  api.describe = setCfg("description");
+  api.version = setCfg("version");
+  api.webhook = setCfg("webhook");
+
+  var valid = Object.keys(api).sort().join(", ");
+  var m = new Proxy(api, {
+    get: function (t, prop) {
+      if (typeof prop !== "string") return t[prop];
+      if (prop === "then") return undefined;
+      if (Object.prototype.hasOwnProperty.call(t, prop)) return t[prop];
+      throw new TypeError("unknown machine builder method '" + prop + "' — valid: " + valid);
+    },
+  });
+
+  build(m);
+
+  var out = { name: name, states: states };
+  ["version", "description", "model", "models", "input", "defaults", "limits", "initial", "webhook"]
+    .forEach(function (k) { if (cfg[k] !== undefined) out[k] = cfg[k]; });
+  if (edges.length) out.flow = { __steps: "eventset", edges: edges };
+  return out;
+};
 `
 
 // stateNameProp carries the registered name on each state object so flow
@@ -218,6 +310,9 @@ func (l *loader) wireNode(m *Machine, v goja.Value, successor string) (string, e
 
 	case "gate":
 		return l.wireGate(m, obj, successor)
+
+	case "eventset":
+		return l.wireEventSet(m, obj)
 
 	case "when":
 		return "", errors.New("when(...) must be completed with .to(target)")
@@ -800,6 +895,112 @@ func (l *loader) wireGateTimeout(m *Machine, st *State, name string, opts *goja.
 		st.Human.OnTimeout = "failed"
 	}
 	return nil
+}
+
+// wireEventSet wires the aasm-style machine() block: an ordered list of edges,
+// each owning a (from-states -> to) transition, a catch map, or a gate timeout.
+// It appends transitions to each from-state DIRECTLY and — unlike wireFallback /
+// wireBranch — deliberately does NOT enforce the "wired once" guard: fan-in means
+// one event edge touches many states, and a state may collect several edges. The
+// eventset is still the single place a state's out-edges are authored, so the
+// invariant holds. Fallback presence/order, event-declared, and reachability are
+// left to validate.go exactly as the flow combinators leave them.
+func (l *loader) wireEventSet(m *Machine, obj *goja.Object) (string, error) {
+	edges, ok := obj.Get("edges").(*goja.Object)
+	if !ok || edges.ClassName() != "Array" {
+		return "", errors.New("machine(): eventset has no edges")
+	}
+	n := int(edges.Get("length").ToInteger())
+	for i := range n {
+		edge := l.obj(edges.Get(strconv.Itoa(i)))
+		if edge == nil {
+			return "", fmt.Errorf("machine(): edge %d is not an object", i)
+		}
+		fromNames, err := l.eventFromStates(edge, i)
+		if err != nil {
+			return "", err
+		}
+		err = l.wireEventEdge(m, edge, fromNames)
+		if err != nil {
+			return "", err
+		}
+	}
+	return "", nil
+}
+
+// eventFromStates resolves an edge's `from` (a state ref or an array of them,
+// normalized to an array by the builder) to registered state names.
+func (l *loader) eventFromStates(edge *goja.Object, i int) ([]string, error) {
+	fromArr, ok := edge.Get("from").(*goja.Object)
+	if !ok || fromArr.ClassName() != "Array" {
+		return nil, fmt.Errorf("machine(): edge %d has no from state(s)", i)
+	}
+	n := int(fromArr.Get("length").ToInteger())
+	names := make([]string, 0, n)
+	for j := range n {
+		kind, fobj := l.flowKind(fromArr.Get(strconv.Itoa(j)))
+		if kind != "state" {
+			return nil, fmt.Errorf("machine(): edge %d from[%d] is not a registered state", i, j)
+		}
+		names = append(names, l.stateName(fobj))
+	}
+	return names, nil
+}
+
+// wireEventEdge lowers one edge onto every from-state: a catch map -> Catch, a
+// gate timeout -> Human.OnTimeout, or a (guarded) event -> Transition.
+func (l *loader) wireEventEdge(m *Machine, edge *goja.Object, fromNames []string) error {
+	switch {
+	case defined(edge.Get("catch")):
+		catches := l.obj(edge.Get("catch"))
+		if catches == nil {
+			return errors.New("machine(): catch must be an object of {errorClass: target}")
+		}
+		for _, from := range fromNames {
+			st := m.State(from)
+			for _, class := range catches.Keys() {
+				to, err := l.wireTarget(m, catches.Get(class), from, "catch "+class)
+				if err != nil {
+					return err
+				}
+				st.Catch = append(st.Catch, CatchClause{Match: []string{class}, To: to})
+			}
+		}
+		return nil
+
+	case boolean(edge.Get("timeout")):
+		to, err := l.wireTarget(m, edge.Get("to"), fromNames[0], "timeout")
+		if err != nil {
+			return err
+		}
+		for _, from := range fromNames {
+			st := m.State(from)
+			if st.Human == nil {
+				return fmt.Errorf("machine(): timeout route on %q, which is not a human gate", from)
+			}
+			st.Human.OnTimeout = to
+		}
+		return nil
+
+	default:
+		var on string
+		if defined(edge.Get("on")) {
+			on = str(edge.Get("on"))
+		}
+		var guard Dyn
+		if defined(edge.Get("when")) {
+			guard = l.dyn(edge.Get("when"))
+		}
+		to, err := l.wireTarget(m, edge.Get("to"), fromNames[0], "on "+on)
+		if err != nil {
+			return err
+		}
+		for _, from := range fromNames {
+			st := m.State(from)
+			st.Transitions = append(st.Transitions, Transition{On: on, When: guard, To: to})
+		}
+		return nil
+	}
 }
 
 // wireTarget resolves an edge target (state ref, terminal, nested pipe,

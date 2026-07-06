@@ -371,6 +371,67 @@ interface StateBuilder {
   verdict(v: Fn<boolean>): this;
 }
 
+/** The aasm-style whole-machine block: author the machine by CALLING verbs on a
+ *  builder top-to-bottom, instead of writing an object literal + flow expression.
+ *  Topology is event-centric — named events own their from->to(+guard) edges and
+ *  fan in from many states. It lowers to the same validated Machine; the object
+ *  form still works unchanged. A machine literally named `machine` shadows this. */
+declare function machine(
+  name: string,
+  build: (m: MachineBuilder) => void,
+): Machine;
+
+/** A state ref returned by m.state — referenced by identity in events. */
+type MachineState = State;
+/** One or more source states (aasm's `from: [a, b]` fan-in). */
+type From = MachineState | MachineState[];
+
+interface MachineBuilder {
+  /** Declare a state (delegates to the state() builder, or takes a config
+   *  object). Returns the ref so `const draft = m.state(...)` reads naturally. */
+  state(
+    name: string,
+    build: (s: StateBuilder) => void,
+    opts?: { initial?: boolean },
+  ): MachineState;
+  state(
+    name: string,
+    config: State,
+    opts?: { initial?: boolean },
+  ): MachineState;
+  /** Mark the initial state (else the first declared state). */
+  start(s: MachineState): this;
+
+  /** A named agent event owning its transition; `from` may fan in. Declaring an
+   *  event here auto-adds it to each non-human from-state's output.events. */
+  event(
+    name: string,
+    spec: { from: From; to: FlowTarget; when?: Fn<boolean> },
+  ): this;
+  /** Unconditional edge (linear advance / trailing fallback). Two spellings. */
+  step(from: From, to: FlowTarget): this;
+  always(from: From, to: FlowTarget): this;
+  /** Guard-only edge (no event). */
+  guard(from: From, to: FlowTarget, when: Fn<boolean>): this;
+  /** Error-class routing: { errorClass: target }. */
+  catch(from: From, map: Record<string, FlowTarget>): this;
+  /** Route an expired human gate. */
+  timeout(gate: MachineState, to: FlowTarget): this;
+
+  /** Config verbs — aasm spellings plus object-form aliases. */
+  uses(models: Machine["models"]): this;
+  models(models: Machine["models"]): this;
+  needs(input: Machine["input"]): this;
+  input(input: Machine["input"]): this;
+  limit(limits: Machine["limits"]): this;
+  limits(limits: Machine["limits"]): this;
+  model(ref: string): this;
+  defaults(d: Machine["defaults"]): this;
+  describe(text: string): this;
+  version(n: number): this;
+  webhook(w: Machine["webhook"]): this;
+}
+
 /** Terminal states. */
 declare const done: FlowNode;
 declare const fail: FlowNode;

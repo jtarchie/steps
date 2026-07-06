@@ -153,6 +153,48 @@ func TestCodegenDSLParity(t *testing.T) {
 	}
 }
 
+// TestSummarizeCriticJSDSLParity: the aasm-style whole-machine twin
+// (machine(name, m => { m.state(...); m.event(...) })) lowers to the same graph
+// and runs against the SAME mock, producing the exact trace of the object form
+// (TestSummarizeCriticMockTrace) — proving the event-centric block is pure sugar.
+func TestSummarizeCriticJSDSLParity(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	m, script := loadExampleFile(t, "summarize-critic", "workflow-js-dsl.ts")
+	eng, store := newTestEngine(t, script)
+
+	res, err := eng.Start(context.Background(), m, map[string]any{"article": article(t)})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Status != journal.StatusDone || res.Terminal != "done" {
+		t.Fatalf("status = %s at %s, want done at done", res.Status, res.Terminal)
+	}
+	if res.State.Transitions != 5 {
+		t.Errorf("transitions = %d, want 5 (parity with the object form)", res.State.Transitions)
+	}
+	if v := res.State.Visits["draft"]; v != 2 {
+		t.Errorf("visits.draft = %d, want 2", v)
+	}
+
+	states, failed, _ := eventTrace(t, store, res.RunID)
+	wantStates := []string{"draft", "critique", "draft", "critique", "publish"}
+	if strings.Join(states, ",") != strings.Join(wantStates, ",") {
+		t.Errorf("state sequence = %v, want %v", states, wantStates)
+	}
+	if failed["rate_limited"] != 1 || failed["schema_violation"] != 1 {
+		t.Errorf("failures = %v, want one rate_limited + one schema_violation", failed)
+	}
+
+	// The escalate gate exists but is never entered when the critic approves.
+	if m.State("escalate") == nil {
+		t.Error("escalate state missing")
+	}
+	if contains(states, "escalate") {
+		t.Error("escalate should not be entered on the happy path")
+	}
+}
+
 // TestCodegenBuilderParity: the builder-closure twin (state(name, s => ...))
 // lowers to the same graph and runs against the SAME mock, producing the exact
 // trace of the object form (TestCodegenMockTrace) — proving state(build) is
