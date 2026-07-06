@@ -130,7 +130,11 @@ func checkAgentContract(c *contractCheck, a *AgentSpec, handlerExtras []string) 
 	}
 	c.check("model", a.Model, handlerExtras...)
 	c.check("prompt", a.Prompt, historyExtras...)
+	c.check("prompt", a.instruction, historyExtras...)
 	c.check("system", a.System, historyExtras...)
+	for _, e := range a.Evidence {
+		c.check("evidence "+e.Key, e.Value, historyExtras...)
+	}
 	toolExtras := append(append([]string{}, handlerExtras...), "args", "calls", "turn")
 	for _, tr := range a.Tools {
 		c.check("tool "+tr.Name+" when", tr.When, toolExtras...)

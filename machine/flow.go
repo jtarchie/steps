@@ -305,7 +305,7 @@ func (l *loader) finishBranch(st *State, name, elseTarget string, hasElse bool, 
 }
 
 // loopKeys are the valid loop(body, {...}) options.
-var loopKeys = []string{"judge", "accept", "maxVisits", "then", "revise", "exhausted", "catch"}
+var loopKeys = []string{"judge", "accept", "maxVisits", "then", "revise", "exhausted", "catch", "escalate"}
 
 // wireLoop wires the bounded judge/revise cycle: the body falls through to
 // the judge, and the judge's out-edges are exactly accept -> then, budget ->
@@ -364,8 +364,10 @@ func (l *loader) wireLoop(m *Machine, obj *goja.Object, successor string) (strin
 		return "", err
 	}
 
-	// exhausted: budget spent without acceptance is a failure unless routed.
-	exhausted, err := l.resolveLoopFallback(m, opts, "exhausted", judge, "failed")
+	// exhausted: budget spent without acceptance is a failure unless routed —
+	// or, with escalate:, a synthesized human gate whose approve rejoins the
+	// loop's accept route.
+	exhausted, err := l.resolveLoopExhausted(m, opts, judge, then)
 	if err != nil {
 		return "", err
 	}
@@ -413,6 +415,70 @@ func (l *loader) resolveLoopAccept(opts *goja.Object, st *State, judge string) (
 	default:
 		return Dyn{}, fmt.Errorf("loop(%s): no acceptance test — pass accept: or declare verdict: on the judge", judge)
 	}
+}
+
+// resolveLoopExhausted resolves where a spent budget routes: the escalate:
+// shorthand (a synthesized human gate), an explicit exhausted: target, or
+// failed. escalate: fuses the commonest tail — "budget spent → ask a human →
+// approve ships where accept would have, reject/timeout fail" — into the loop
+// declaration itself: a string/function prompt, or {prompt, timeout}. The
+// synthesized state is gate#<judge>_escalate, wired exactly as
+// gate(name, {approve: <then>}) would be.
+func (l *loader) resolveLoopExhausted(m *Machine, opts *goja.Object, judge, then string) (string, error) {
+	esc := opts.Get("escalate")
+	if !defined(esc) {
+		return l.resolveLoopFallback(m, opts, "exhausted", judge, "failed")
+	}
+	if defined(opts.Get("exhausted")) {
+		return "", fmt.Errorf("loop(%s): pass escalate: or exhausted:, not both", judge)
+	}
+
+	prompt, timeout, err := l.parseLoopEscalate(esc, judge)
+	if err != nil {
+		return "", err
+	}
+
+	name := "gate#" + judge + "_escalate"
+	if m.State(name) != nil {
+		return "", fmt.Errorf("loop(%s): escalate gate %q already exists", judge, name)
+	}
+	st := &State{Name: name, Gate: true, Human: &HumanSpec{Prompt: l.dyn(prompt), Timeout: timeout}}
+	l.applyGateApprove(st, then)
+	if timeout > 0 {
+		st.Human.OnTimeout = "failed"
+	}
+	m.States = append(m.States, st)
+	m.buildIndex()
+	return name, nil
+}
+
+// parseLoopEscalate parses the escalate: value — a bare prompt (string or
+// function), or {prompt, timeout} — into the gate's prompt and timeout.
+func (l *loader) parseLoopEscalate(esc goja.Value, judge string) (goja.Value, time.Duration, error) {
+	if _, isFn := goja.AssertFunction(esc); isFn {
+		return esc, 0, nil
+	}
+	if _, isStr := esc.Export().(string); isStr {
+		return esc, 0, nil
+	}
+	o := l.obj(esc)
+	if o == nil {
+		return nil, 0, fmt.Errorf("loop(%s): escalate must be a prompt (string or function) or {prompt, timeout}", judge)
+	}
+	for _, k := range o.Keys() {
+		if k != "prompt" && k != "timeout" {
+			return nil, 0, fmt.Errorf("loop(%s): escalate: unknown key %q — valid: prompt, timeout", judge, k)
+		}
+	}
+	prompt := o.Get("prompt")
+	if !defined(prompt) {
+		return nil, 0, fmt.Errorf("loop(%s): escalate needs a prompt", judge)
+	}
+	timeout, err := duration(o.Get("timeout"), fmt.Sprintf("loop(%s).escalate.timeout", judge))
+	if err != nil {
+		return nil, 0, err
+	}
+	return prompt, timeout, nil
 }
 
 // resolveLoopFallback resolves an optional loop target (revise/exhausted):

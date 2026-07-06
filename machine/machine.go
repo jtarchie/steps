@@ -277,6 +277,24 @@ type AgentSpec struct {
 	Reasoning  string
 	History    *HistorySpec
 	ToolChoice string // auto (default) | required | one_of — one_of not yet implemented
+
+	// Evidence declares the labeled blocks appended to the prompt: prompt: is
+	// the hand-written instruction, evidence: is the mechanical plumbing that
+	// re-injects upstream values (ARTICLE:\n${article}) — declared as data
+	// instead of hand-templated. Each entry renders as LABEL:\nvalue in
+	// declaration order; a falsy value (undefined/null/false/"") omits its
+	// block, which is how conditional revision feedback disappears on the
+	// first visit. Lowered at parse into a composed Prompt (Dyn.Native);
+	// instruction keeps the original for dry-run/contract checks.
+	Evidence    []EvidenceEntry
+	instruction Dyn
+}
+
+// EvidenceEntry is one labeled block of an agent's evidence: declaration.
+// A zero Value means "the scope key named by Key" (the `article: true` form).
+type EvidenceEntry struct {
+	Key   string
+	Value Dyn
 }
 
 // ToolRef attaches a registered tool to an agent state, optionally guarded.

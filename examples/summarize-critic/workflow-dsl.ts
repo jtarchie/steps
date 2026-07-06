@@ -1,25 +1,24 @@
 /// <reference path="../../docs/src/global.d.ts" />
-// The higher-level-DSL twin of ./workflow.ts — same machine, fewer moving
-// parts. It lowers to the identical enforced graph (compare with
-// `steps validate --print` on either file) and runs against the same
-// mock_responses.yaml. Two sugar features do the work here:
-//   - verdict: the judge declares its acceptance test once (no events: + a
-//     separate accept: guard restating the same score field).
-//   - gate(): the exhausted-escalation human state is synthesized from a
-//     prompt + approve target — no hand-written `escalate` const.
+// The higher-level-DSL twin of ./workflow.ts — same machine, same
+// mock_responses.yaml, same trace (compare `steps validate --print`). Four
+// sugars do the work:
+//   - evidence: the ARTICLE:/SUMMARY: plumbing and the conditional revision
+//     feedback are declared as data; prompt: is only the instruction.
+//   - verdict: the judge declares its acceptance test once.
+//   - loop escalate: the human tie-break is one option — the gate state,
+//     its approve-rejoins-then routing, and timeout -> fail are synthesized.
 
 const draft: State = {
-  prompt: ({ article, critique }) => `
-    Summarize the article below in at most 150 words, then give exactly
-    three key points.
-    ${
-    critique
-      ? "A reviewer rejected your previous draft for these reasons:\n" +
-        list(critique.issues) + "\nAddress every issue."
-      : ""
-  }
-    ARTICLE:
-    ${article}`,
+  prompt:
+    "Summarize the article below in at most 150 words, then give exactly three key points.",
+  evidence: {
+    article: true,
+    reviewer_feedback: ({ critique }) =>
+      critique &&
+      `Your previous draft was rejected for these reasons:\n${
+        list(critique.issues)
+      }\nAddress every issue.`,
+  },
   output: {
     summary: "string",
     key_points: { type: "array", items: "string", minItems: 3, maxItems: 3 },
@@ -27,20 +26,18 @@ const draft: State = {
 };
 
 const critique: State = {
-  model: "ollama/llama3.2:3b",
-  prompt: ({ article, draft }) => `
-    You are a strict editor. Score the summary 0-10 for accuracy and
-    completeness against the article. List at most three concrete issues,
-    each under 20 words.
-    ARTICLE:
-    ${article}
-    SUMMARY:
-    ${draft.summary}`,
+  model: "ollama/llama3.2:3b", // different micro-agent, different model
+  prompt:
+    "You are a strict editor. Score the summary 0-10 for accuracy and completeness against the article. List at most three concrete issues, each under 20 words.",
+  evidence: {
+    article: true,
+    summary: ({ draft }) => draft.summary,
+  },
   output: {
     score: "number",
     issues: { type: "array", items: "string", maxItems: 3 },
   },
-  verdict: ({ output }) => output.score >= 8, // the acceptance test, declared once
+  verdict: ({ output }) => output.score >= 8, // the acceptance test, once
 };
 
 const publish: State = {
@@ -59,14 +56,13 @@ export default {
 
   flow: pipe(
     loop(draft, {
-      judge: critique, // accept: is the judge's verdict:
+      judge: critique,
       maxVisits: 3,
-      exhausted: gate("escalate", {
+      escalate: {
         prompt: ({ critique }) =>
           `Revisions exhausted (last score ${critique.score}). Approve the current draft or fail the run?`,
-        approve: publish, // rejected -> fail, timeout -> fail (synthesized)
         timeout: "1h",
-      }),
+      },
     }),
     publish,
   ),

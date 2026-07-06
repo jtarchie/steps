@@ -125,6 +125,12 @@ func dryRunAgent(s *State, a *AgentSpec, handlerScope map[string]any, record fun
 	}
 	record(s.Name, "system", dryCall(a.System, promptScope))
 	record(s.Name, "prompt", dryCall(a.Prompt, promptScope))
+	// evidence: the composed prompt is Native (not proxyable) — exercise the
+	// original instruction and each block function directly instead.
+	record(s.Name, "prompt", dryCall(a.instruction, promptScope))
+	for _, e := range a.Evidence {
+		record(s.Name, "evidence "+e.Key, dryCall(e.Value, promptScope))
+	}
 	toolScope := cloneScope(handlerScope)
 	toolScope["args"] = anyMarker()
 	calls := map[string]any{}

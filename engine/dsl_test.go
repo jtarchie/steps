@@ -31,6 +31,8 @@ func TestSummarizeCriticDSLParity(t *testing.T) {
 
 	m, script := loadExampleFile(t, "summarize-critic", "workflow-dsl.ts")
 	eng, store := newTestEngine(t, script)
+	rec := &recorder{}
+	eng.Listener = rec
 
 	res, err := eng.Start(context.Background(), m, map[string]any{"article": article(t)})
 	if err != nil {
@@ -56,11 +58,30 @@ func TestSummarizeCriticDSLParity(t *testing.T) {
 	}
 
 	// The synthesized gate exists but is never entered on this trace.
-	if m.State("gate#escalate") == nil {
-		t.Error("gate#escalate not synthesized")
+	if m.State("gate#critique_escalate") == nil {
+		t.Error("gate#critique_escalate not synthesized")
 	}
-	if contains(states, "gate#escalate") {
-		t.Error("gate#escalate should not be entered when the critic accepts")
+	if contains(states, "gate#critique_escalate") {
+		t.Error("gate#critique_escalate should not be entered when the critic accepts")
+	}
+
+	checkEvidenceComposition(t, rec)
+}
+
+// checkEvidenceComposition asserts the evidence: blocks observed at the model
+// boundary: visit one carries the ARTICLE block and no feedback; the revisit
+// carries the reviewer's issues under the derived REVIEWER FEEDBACK header.
+func checkEvidenceComposition(t *testing.T, rec *recorder) {
+	t.Helper()
+	drafts := rec.user["draft"]
+	if len(drafts) != 2 {
+		t.Fatalf("draft prompts = %d, want 2", len(drafts))
+	}
+	if !strings.Contains(drafts[0], "ARTICLE:\n") || strings.Contains(drafts[0], "REVIEWER FEEDBACK:") {
+		t.Errorf("first draft prompt = %.120q, want ARTICLE block and no feedback", drafts[0])
+	}
+	if !strings.Contains(drafts[1], "REVIEWER FEEDBACK:\n") || !strings.Contains(drafts[1], "Ideal X") {
+		t.Errorf("revisit prompt = %.120q, want the REVIEWER FEEDBACK block with the critic's issues", drafts[1])
 	}
 }
 

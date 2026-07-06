@@ -85,6 +85,13 @@ interface ToolRef {
 interface State {
   // agent (default handler)
   prompt?: string | Fn<string>;
+  /** Labeled blocks appended to the prompt, in declaration order — the
+   *  mechanical plumbing (ARTICLE:\n${article}) as data. `true` injects the
+   *  scope key named by the entry; a function computes the block and a falsy
+   *  return omits it (conditional revision feedback with no ternary); a
+   *  string is a constant block. Keys render as headers: reviewer_feedback →
+   *  REVIEWER FEEDBACK:. */
+  evidence?: Record<string, true | string | Fn<any>>;
   system?: string | Fn<string>;
   tools?: (string | ToolRef)[];
   /** Alias/provider ref, or a routing function returning one. */
@@ -236,6 +243,11 @@ interface LoopOptions {
   revise?: FlowTarget;
   /** Budget spent without acceptance. Defaults to fail. */
   exhausted?: FlowTarget;
+  /** Sugar for the commonest exhausted tail: synthesize a human gate
+   *  (`gate#<judge>_escalate`) whose approve rejoins the loop's then route
+   *  and whose reject/timeout fail. A prompt, or {prompt, timeout}.
+   *  Mutually exclusive with exhausted:. */
+  escalate?: string | Fn<string> | { prompt: string | Fn<string>; timeout?: string };
   /** The judge's catch edges, same as branch: {errorClass: target}. */
   catch?: Record<string, FlowTarget>;
 }

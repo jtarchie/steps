@@ -652,7 +652,7 @@ var (
 	sharedStateKeys = []string{"memo", "forEach", "distill", "retry", "output", "events", "input", "verdict"}
 	agentStateKeys  = []string{"prompt", "system", "tools", "model", "maxTurns",
 		"maxOutputTokens", "maxInputTokens", "temperature", "reasoning",
-		"structuredOutput", "toolChoice", "adopt", "history"}
+		"structuredOutput", "toolChoice", "adopt", "history", "evidence"}
 	actionStateKeys   = []string{"action"}
 	writeStateKeys    = []string{"write", "content"}
 	humanStateKeys    = []string{"human", "timeout", "choices"}
@@ -925,6 +925,11 @@ func (l *loader) agent(o *goja.Object) (*AgentSpec, error) {
 		}
 	}
 
+	err := l.parseEvidence(o, ag)
+	if err != nil {
+		return nil, err
+	}
+
 	if tools := l.obj(o.Get("tools")); tools != nil {
 		n := int(tools.Get("length").ToInteger())
 		for i := range n {
@@ -948,6 +953,44 @@ func (l *loader) agent(o *goja.Object) (*AgentSpec, error) {
 		}
 	}
 	return ag, nil
+}
+
+// parseEvidence parses the agent's evidence: block — {key: true | string |
+// fn} in declaration order — and lowers the prompt into the composed form.
+// `true` injects the scope key named by the entry; a function computes the
+// block (falsy return omits it); a string is a constant block.
+func (l *loader) parseEvidence(o *goja.Object, ag *AgentSpec) error {
+	v := o.Get("evidence")
+	if !defined(v) {
+		return nil
+	}
+	e := l.obj(v)
+	if e == nil {
+		return errors.New("evidence must be an object of {key: true | string | function of scope}")
+	}
+	if ag.Prompt.IsZero() {
+		return errors.New("evidence needs a prompt: — the instruction the blocks support")
+	}
+	for _, key := range e.Keys() {
+		val := e.Get(key)
+		entry := EvidenceEntry{Key: key}
+		switch {
+		case val.Export() == true:
+			// zero Dyn: the scope key named by Key
+		case val.Export() == false:
+			return fmt.Errorf("evidence.%s: false is not a value — omit the entry instead", key)
+		default:
+			if _, isFn := goja.AssertFunction(val); !isFn {
+				if _, isStr := val.Export().(string); !isStr {
+					return fmt.Errorf("evidence.%s must be true (inject the %q scope key), a string, or a function of scope", key, key)
+				}
+			}
+			entry.Value = l.dyn(val)
+		}
+		ag.Evidence = append(ag.Evidence, entry)
+	}
+	lowerEvidence(ag)
+	return nil
 }
 
 func (l *loader) retries(v goja.Value, where string) ([]RetryPolicy, error) {

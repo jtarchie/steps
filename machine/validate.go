@@ -378,6 +378,37 @@ func validateAgent(m *Machine, s *State, a *AgentSpec, cfg validateConfig, fail 
 	validateAgentPromptAndSystem(s, a, fail)
 	validateAgentOptions(s, a, fail)
 	validateAgentTools(a, cfg, s, fail)
+	validateAgentEvidence(m, s, a, fail)
+}
+
+// validateAgentEvidence checks each `key: true` entry names something the
+// state's scope can actually hold: a run input, a state output, one of this
+// state's distilled keys, or the forEach item.
+func validateAgentEvidence(m *Machine, s *State, a *AgentSpec, fail func(string, ...any)) {
+	for _, e := range a.Evidence {
+		if !e.Value.IsZero() {
+			continue // computed blocks are dry-run/contract-checked
+		}
+		if _, ok := m.Input[e.Key]; ok {
+			continue
+		}
+		if m.State(e.Key) != nil {
+			continue
+		}
+		if distillKey(s, e.Key) || (s.ForEach != nil && s.ForEach.As == e.Key) {
+			continue
+		}
+		fail("state %q: evidence %s: true names no run input, state, distilled key, or forEach item — compute it with a function instead", s.Name, e.Key)
+	}
+}
+
+func distillKey(s *State, key string) bool {
+	for i := range s.Distill {
+		if s.Distill[i].Key == key {
+			return true
+		}
+	}
+	return false
 }
 
 func validateAgentPromptAndSystem(s *State, a *AgentSpec, fail func(string, ...any)) {
