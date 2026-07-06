@@ -179,12 +179,12 @@ func TestPRReviewDSLParity(t *testing.T) {
 	}
 
 	states, _, transitions := eventTrace(t, store, res.RunID)
-	want := []string{"split_diff", "scout_files", "scout_pr", "deep_review", "verdict", "write_review"}
+	want := []string{"fetch_pr", "split_diff", "scout_files", "scout_pr", "deep_review", "verdict", "write_review"}
 	if strings.Join(states, ",") != strings.Join(want, ",") {
 		t.Errorf("state sequence = %v, want %v", states, want)
 	}
-	if transitions != 6 {
-		t.Errorf("transitions = %d, want 6", transitions)
+	if transitions != 7 {
+		t.Errorf("transitions = %d, want 7", transitions)
 	}
 
 	// The scout tier's memo lowered onto scout_files (no explicit memo: on it).

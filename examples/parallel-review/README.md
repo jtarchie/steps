@@ -23,20 +23,31 @@ review ─┼─ performance ─┼─▶ verdict ─▶ done
 | Failure policy                          | `onBranchFailure: "fail"` — a crashing reviewer fails the review (`"collect"` would continue and report `_failures`) |
 | Durable, resumable fork                 | a crash mid-fork reattaches to the same branch children on `steps resume` — no re-run of a finished branch           |
 
+Like `pr-review`, it has **two front doors**: `fetch_pr` (`gh.pr_diff`) passes a
+supplied `diff` through untouched (fixtures/CI — hermetic) and only fetches live
+from a GitHub `pull_request` webhook (`steps serve --hook workflow.ts` →
+`POST /hooks/parallel-review`). When a real `pr` is present, the ship decision
+is posted back with `gh.comment`; fixture/offline runs (no `pr`) skip that tail.
+
 ## Run it
 
 ```sh
 steps validate examples/parallel-review/workflow.ts     # accepts + draws the fork
 steps run examples/parallel-review/workflow.ts \
-  --input change=@examples/parallel-review/fixtures/change.diff \
+  --input diff=@examples/parallel-review/fixtures/change.diff \
   --mock examples/parallel-review/mock_responses.yaml
+
+# Live: fetch the diff and post the ship decision back on the PR
+steps run examples/parallel-review/workflow.ts --input pr=123 --input repo=owner/repo
+# Or via webhook:
+steps serve --hook examples/parallel-review/workflow.ts --hook-token parallel-review=$SECRET
 ```
 
-Deterministic trace (mock): the parent enters `review` (the fork) then `verdict`
-— it never enters a branch state, because the branches run in their own child
-runs. `verdict.ship` is `true`. In the web view (`steps serve`) the branch child
-runs are listed under the parent's **Branch runs** section, and the diagram
-draws the fork's fan-out edges.
+Deterministic trace (mock): the parent enters `fetch_pr`, `review` (the fork),
+then `verdict` — it never enters a branch state, because the branches run in
+their own child runs. `verdict.ship` is `true`. In the web view (`steps serve`)
+the branch child runs are listed under the parent's **Branch runs** section, and
+the diagram draws the fork's fan-out edges.
 
 ## Notes
 

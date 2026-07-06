@@ -12,8 +12,12 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -70,13 +74,20 @@ func (s *server) handleHook(c *echo.Context) error {
 	if hook == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "no such hook")
 	}
-	herr := checkHookToken(c, hook.token)
+
+	// Read the raw body once: HMAC (GitHub's X-Hub-Signature-256) must run over
+	// the exact bytes, and the JSON decode reuses them.
+	raw, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "reading hook payload: "+err.Error())
+	}
+	herr := verifyHook(c, hook.token, raw)
 	if herr != nil {
 		return herr
 	}
 
 	var body map[string]any
-	err := json.NewDecoder(c.Request().Body).Decode(&body)
+	err = json.Unmarshal(raw, &body)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "hook payload must be a JSON object: "+err.Error())
 	}
@@ -148,17 +159,29 @@ func (s *server) checkQueueDepth(ctx context.Context, hook *hookSpec) *echo.HTTP
 	return nil
 }
 
-// checkHookToken enforces the shared secret when one is configured, accepting
-// it as a Bearer header or a ?token= query param.
-func checkHookToken(c *echo.Context, token string) *echo.HTTPError {
-	if token == "" {
+// verifyHook enforces the shared secret when one is configured. It accepts
+// GitHub's HMAC-SHA256 signature (X-Hub-Signature-256, computed over the raw
+// body with the secret as key) OR — since GitHub webhooks cannot set an
+// Authorization header — a Bearer header / ?token= query param. One configured
+// secret works both ways.
+func verifyHook(c *echo.Context, secret string, raw []byte) *echo.HTTPError {
+	if secret == "" {
+		return nil
+	}
+	if sig := c.Request().Header.Get("X-Hub-Signature-256"); sig != "" {
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write(raw)
+		want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+		if !hmac.Equal([]byte(sig), []byte(want)) {
+			return echo.NewHTTPError(http.StatusUnauthorized, "bad webhook signature")
+		}
 		return nil
 	}
 	got := c.QueryParam("token")
 	if auth := c.Request().Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
 		got = strings.TrimPrefix(auth, "Bearer ")
 	}
-	if got != token {
+	if got != secret {
 		return echo.NewHTTPError(http.StatusUnauthorized, "bad or missing hook token")
 	}
 	return nil

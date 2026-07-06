@@ -361,12 +361,14 @@ func TestPRReviewDeepPath(t *testing.T) {
 	checkSplitDiffHasFileContext(t, res)
 
 	states, _, transitions := eventTrace(t, store, res.RunID)
-	want := []string{"split_diff", "scout_files", "scout_pr", "deep_review", "verdict", "write_review"}
+	// fetch_pr passes the supplied diff straight through (no gh); with no `pr`
+	// the review ends at write_review and never reaches the live publish tail.
+	want := []string{"fetch_pr", "split_diff", "scout_files", "scout_pr", "deep_review", "verdict", "write_review"}
 	if strings.Join(states, ",") != strings.Join(want, ",") {
 		t.Errorf("state sequence = %v, want %v", states, want)
 	}
-	if transitions != 6 {
-		t.Errorf("transitions = %d, want 6", transitions)
+	if transitions != 7 {
+		t.Errorf("transitions = %d, want 7", transitions)
 	}
 
 	checkScoutAndDeepReviewCounts(t, res)
@@ -460,7 +462,7 @@ func TestPRReviewTrivialPath(t *testing.T) {
 	}
 
 	states, _, _ := eventTrace(t, store, res.RunID)
-	want := []string{"split_diff", "scout_files", "scout_pr", "note_trivial"}
+	want := []string{"fetch_pr", "split_diff", "scout_files", "scout_pr", "note_trivial"}
 	if strings.Join(states, ",") != strings.Join(want, ",") {
 		t.Errorf("state sequence = %v, want %v — the senior must never run", states, want)
 	}
@@ -485,7 +487,7 @@ func TestParallelReviewTrace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := eng.Start(context.Background(), m, map[string]any{"change": string(change)})
+	res, err := eng.Start(context.Background(), m, map[string]any{"diff": string(change)})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -493,9 +495,11 @@ func TestParallelReviewTrace(t *testing.T) {
 		t.Fatalf("status = %s at %s, want done at done", res.Status, res.Terminal)
 	}
 
-	// The parent journal is single-cursor: fork then join, never a branch state.
+	// The parent journal is single-cursor: the passthrough front door, the fork,
+	// and the join — never a branch state. With no `pr`, the live comment tail is
+	// skipped.
 	states, _, _ := eventTrace(t, store, res.RunID)
-	want := []string{"review", "verdict"}
+	want := []string{"fetch_pr", "review", "verdict"}
 	if strings.Join(states, ",") != strings.Join(want, ",") {
 		t.Errorf("parent state sequence = %v, want %v (branches run in child runs)", states, want)
 	}

@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -324,6 +327,82 @@ export default {
 	}
 	if string(raw) != "Redis::TimeoutError in us-east-1" {
 		t.Errorf("incident = %q — payload body and hook-input should both reach the map", raw)
+	}
+}
+
+// TestHookHMACSignature covers GitHub's webhook auth model: the same configured
+// secret verifies an X-Hub-Signature-256 HMAC over the raw body. A valid
+// signature is accepted; a tampered body/signature is 401. Asserted at enqueue
+// (no dispatcher) so the mapped PR inputs are checked without running the
+// machine — the review would otherwise shell out to a live gh.pr_diff.
+func TestHookHMACSignature(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	// A GitHub-shaped pull_request payload → pr/repo inputs, mirroring the
+	// pr-review webhook.map.
+	wf := `
+const work = { write: "out/x.txt", content: ({ pr }) => pr };
+export default {
+  name: "hooked",
+  model: "mock",
+  input: { pr: { type: "string", required: true }, repo: "string" },
+  states: { work },
+  webhook: { path: "pr", map: ({ body }) => ({ pr: String(body.number), repo: body.repository.full_name }) },
+};`
+	m, err := machine.Parse([]byte(wf))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := journal.OpenSQLite(filepath.Join(t.TempDir(), "journal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	eng := engine.New(store, provider.NewRegistry(), toolreg.New(), engine.NopListener{})
+
+	const secret = "sh4red-s3cret"
+	hook := &hookSpec{m: m, inputs: map[string]any{}, token: secret}
+	// No dispatcher (maxInFlight 0 leaves runs queued) so the machine never runs.
+	e := newServer(t.Context(), store, eng, map[string]*hookSpec{m.Webhook.Path: hook}, 0)
+
+	body := `{"number": 42, "repository": {"full_name": "acme/widgets"}}`
+	sign := func(b string) string {
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(b))
+		return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	}
+	post := func(sig, b string) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/hooks/pr", strings.NewReader(b))
+		if sig != "" {
+			req.Header.Set("X-Hub-Signature-256", sig)
+		}
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// tampered signature -> 401
+	if rec := post("sha256=deadbeef", body); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("bad signature = %d, want 401", rec.Code)
+	}
+	// signature over a different body -> 401
+	if rec := post(sign(`{"number": 1}`), body); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("mismatched signature = %d, want 401", rec.Code)
+	}
+	// valid signature -> 202, run enqueued with mapped inputs
+	if rec := post(sign(body), body); rec.Code != http.StatusAccepted {
+		t.Fatalf("valid signature = %d body=%s, want 202", rec.Code, rec.Body.String())
+	}
+
+	id := waitForSingleRun(t, store, journal.StatusQueued)
+	events, err := store.Events(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := runInputs(events)
+	if in["pr"] != "42" || in["repo"] != "acme/widgets" {
+		t.Fatalf("enqueued inputs = %#v, want pr=42 repo=acme/widgets", in)
 	}
 }
 

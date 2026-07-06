@@ -2,7 +2,7 @@
 # so CI can assert the exact trace. Each branch runs as its own child run and
 # consumes its own state's queue; `verdict` runs in the parent after the join.
 #
-#   steps run examples/parallel-review/workflow.ts --input change=@fixtures/change.diff \
+#   steps run examples/parallel-review/workflow.ts --input diff=@fixtures/change.diff \
 #     --mock examples/parallel-review/mock_responses.yaml
 
 security:

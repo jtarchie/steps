@@ -55,8 +55,12 @@ steps serve \
   declare the _same_ input name share the value — rename to disambiguate.
 - **`--hook-token path=secret`** scopes a secret to one hook; a **bare** value
   (no `=`) is the fallback for any hook without its own. A hook with no token —
-  no per-path secret and no fallback — is unauthenticated. The token is sent as
-  `Authorization: Bearer <v>` or `?token=<v>`.
+  no per-path secret and no fallback — is unauthenticated. The **same** secret
+  is accepted three ways, so one config serves both manual callers and GitHub:
+  `Authorization: Bearer <v>`, `?token=<v>`, or an HMAC-SHA256 signature over
+  the raw body in `X-Hub-Signature-256` (GitHub's webhook secret — it can't set
+  headers, so it signs instead; verified constant-time). See
+  [github.md](./github.md).
 - **`--max-in-flight N`** caps concurrently _executing_ runs across all hooks
   (default `NumCPU`). It is the host's safety valve above each hook's own
   `maxInFlight`.
@@ -113,4 +117,6 @@ webhooks work._
 new `run_enqueued` journal event and a `queued` run status (`journal/`).
 Acceptance coverage: `cmd/steps/serve_test.go` (`TestHookMultiRouting`,
 `TestHookQueueFull429`, `TestHookDurableQueueDrain`,
-`TestWebhookTriggersIncidentRunbook`).
+`TestWebhookTriggersIncidentRunbook`, `TestHookHMACSignature`). The GitHub
+`gh.*` action pack and its webhook mapping are documented in
+[github.md](./github.md).

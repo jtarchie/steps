@@ -44,12 +44,19 @@ split_diff ──▶ scout_files ──▶ scout_pr ──┬─(trivial + guard
   small model; `models:` aliases keep the machine readable;
   `forEach: {concurrency: 3, onItemFailure: "skip"}` parallelizes scouting and
   survives poisoned files.
-- To review real PRs, swap the file plumbing for the gh action pack:
-  `action: "gh.pr_diff"` with `input: ({pr}) => ({pr})` up front, and
-  `action: "gh.post_review"` with
-  `input: ({verdict, pr}) => ({pr,
-  body: verdict.body, event: "comment"})` at
-  the end.
+- **One machine, two front doors.** `fetch_pr` (`gh.pr_diff`) is the seam: a
+  supplied `diff` is passed through untouched (fixtures, `--input diff=@…`, CI —
+  no `gh` call, fully hermetic); an empty one is fetched live from a `pr`. So
+  the same machine runs offline on a fixture and online from a GitHub webhook.
+- **Webhook trigger.** The `webhook:` block maps a GitHub `pull_request` event
+  to inputs (`steps serve --hook workflow.ts` → `POST /hooks/pr-review`). GitHub
+  already sends the title/body and PR number, so only the diff is fetched.
+  Drafts and irrelevant actions (closed/edited) are folded into `action` and
+  bounced by `skipEvent` **before** any `gh` call or model token is spent.
+- **Publish back.** When a real `pr` is present the verdict is posted to the PR
+  as a comment (`gh.comment`) and a commit check (`gh.status`, green/red from
+  the `clean` guard); `gh.pr_meta` supplies the head SHA. Fixture/offline runs
+  (no `pr`) route to `done` before this tail and never touch `gh`.
 
 ## Run it
 
@@ -64,14 +71,24 @@ steps run workflow.ts \
 # Deterministic: trivial path — senior never runs
 steps run workflow.ts --input diff=@fixtures/pr.diff --mock mock_trivial.yaml
 
-# Live: scouts on a small local model, senior on a larger one, with full
-# file context (root points at the checkout the diff applies to)
-gh pr diff 123 > pr.diff   # or use fixtures/pr.diff + fixtures/repo
+# Live, local: pass a diff you already have (root = the checkout it applies to)…
+gh pr diff 123 > pr.diff
 steps run workflow.ts --input diff=@pr.diff --input root=.
+# …or let the machine fetch it (and post back, if you pass a repo):
+steps run workflow.ts --input pr=123 --input repo=owner/repo
 
-# Review artifact
+# Live, webhook: serve the hook; point a GitHub "Pull requests" webhook at
+#   https://<host>/hooks/pr-review?token=$SECRET
+# (or set $SECRET as the webhook secret to verify HMAC X-Hub-Signature-256).
+steps serve --hook workflow.ts --hook-token pr-review=$SECRET
+
+# Review artifact (always written)
 cat out/review.md
 ```
+
+The gh action pack used here — `gh.pr_diff`, `gh.pr_meta`, `gh.comment`,
+`gh.status` (plus `gh.review_comment` for inline file:line comments and
+`gh.label`) — is documented in `docs/github.md`.
 
 The fixture diff plants real bugs: a mutex deleted around a now-concurrent map
 write, `wg.Add` inside the spawned goroutine, and a swallowed `store.Find` error
@@ -81,9 +98,10 @@ cross-file lead only the PR-level scout can catch).
 ## What CI asserts (deep path)
 
 - State sequence
-  `split_diff, scout_files, scout_pr, deep_review, verdict,
-  write_review`; 6
-  transitions.
+  `fetch_pr, split_diff, scout_files, scout_pr, deep_review, verdict,
+  write_review`;
+  7 transitions. (`fetch_pr` passes the fixture diff straight through; with no
+  `pr` the run ends at `write_review` and never reaches the live publish tail.)
 - `scout_files.count == 3` (one hermetic context per file);
   `deep_review.count == 2` (the low-risk README never reached the senior).
 - The verdict event was `approve`, but the fired transition was the fallback —

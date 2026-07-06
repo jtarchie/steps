@@ -11,9 +11,32 @@ const allCalm = ({ scout_files }) =>
 const clean = ({ deep_review }) =>
   deep_review.items.every((i) => i.findings.length === 0);
 
+const REVIEWABLE = ["opened", "synchronize", "reopened", "ready_for_review"];
+const skipEvent = ({ action }) =>
+  Boolean(action) && !REVIEWABLE.includes(action);
+
+// gh.pr_diff passes a supplied diff through untouched (fixtures/CI) and only
+// fetches live when the diff is empty and a `pr` is given — the seam that lets
+// this one machine run offline and from a GitHub webhook. See ./workflow.ts.
+const fetch_pr: State = {
+  action: "gh.pr_diff",
+  input: ({ pr, repo, diff, title, description }) => ({
+    pr: pr || "",
+    repo: repo || "",
+    diff: diff || "",
+    title: title || "",
+    description: description || "",
+  }),
+  output: { diff: "string", title: "string", description: "string" },
+};
+
 const split_diff: State = {
   action: "diff.split",
-  input: ({ diff, root }) => ({ diff, root: root || "", context_bytes: 3000 }),
+  input: ({ fetch_pr, root }) => ({
+    diff: fetch_pr.diff,
+    root: root || "",
+    context_bytes: 3000,
+  }),
 };
 
 // memo now comes from the scout tier.
@@ -24,13 +47,13 @@ const scout_files: State = {
     concurrency: 3,
     onItemFailure: "skip",
   },
-  prompt: ({ title, file }) => `
+  prompt: ({ title, fetch_pr, file }) => `
     You are a scout for a senior code reviewer. Do NOT review. Identify what
     in this one file DESERVES the senior's attention, so they spend zero
     time researching: risky hunks, broken invariants, suspicious deletions.
     Echo the exact path. If nothing warrants attention, say risk low with
     no leads.
-    ${title ? "PR: " + title : ""}
+    ${(title || fetch_pr.title) ? "PR: " + (title || fetch_pr.title) : ""}
     FILE ${file.path} (${file.additions}+ / ${file.deletions}-):
     ${file.patch}
     ${file.content ? "CURRENT FILE (for context):\n" + file.content : ""}`,
@@ -42,13 +65,19 @@ const scout_files: State = {
 };
 
 const scout_pr: State = {
-  prompt: ({ title, description, split_diff, scout_files }) => `
+  prompt: ({ title, description, fetch_pr, split_diff, scout_files }) => `
     You are a scout for a senior code reviewer, looking at a pull request
     AS A WHOLE. Identify cross-file concerns the per-file scouts below
     cannot see: APIs changed without callers updated, docs promising what
     code retracts, missing tests. Then decide: does this PR need the senior
     at all? Choose event "trivial" only if nothing warrants review.
-    ${title ? `PR: ${title} — ${description}` : ""}
+    ${
+    (title || fetch_pr.title)
+      ? `PR: ${title || fetch_pr.title} — ${
+        description || fetch_pr.description
+      }`
+      : ""
+  }
     FILES:
     ${
     list(split_diff.files.map((f) =>
@@ -160,13 +189,46 @@ const write_review: State = {
     `## Code review\n\n${verdict.summary}\n\n${verdict.body}\n`,
 };
 
+// Live PRs only (a `pr` is present) — see ./workflow.ts for the full note.
+const fetch_meta: State = {
+  action: "gh.pr_meta",
+  input: ({ pr, repo }) => ({ pr, repo: repo || "" }),
+};
+
+const post_comment: State = {
+  action: "gh.comment",
+  input: ({ pr, repo, verdict }) => ({
+    pr,
+    repo: repo || "",
+    body: `## Automated code review\n\n${verdict.summary}\n\n${verdict.body}`,
+  }),
+};
+
+const set_status: State = {
+  action: "gh.status",
+  input: ({ repo, fetch_meta, deep_review }) => ({
+    repo: repo || "",
+    sha: fetch_meta.headSha,
+    state: deep_review.items.every((i) => i.findings.length === 0)
+      ? "success"
+      : "failure",
+    context: "steps/pr-review",
+    description: "Automated senior review",
+  }),
+};
+
+const publish = pipe(fetch_meta, post_comment, set_status);
+
 export default {
   name: "pr-review",
   input: {
-    diff: { type: "string", required: true },
-    root: "string",
+    pr: "string",
+    repo: "string",
+    diff: "string",
     title: "string",
     description: "string",
+    root: "string",
+    action: "string",
   },
   models: {
     // Tiers now carry memo — the scouts and the senior are all replay-safe.
@@ -175,9 +237,23 @@ export default {
   },
   model: "scout",
   defaults: { reasoning: "low" },
-  limits: { maxTransitions: 15, maxTokens: 200000, timeout: "30m" },
+  limits: { maxTransitions: 20, maxTokens: 200000, timeout: "30m" },
+
+  webhook: {
+    path: "pr-review",
+    map: ({ body }) => ({
+      pr: String(body.number),
+      repo: body.repository.full_name,
+      title: body.pull_request.title,
+      description: body.pull_request.body || "",
+      action: (body.pull_request && body.pull_request.draft)
+        ? "draft"
+        : body.action,
+    }),
+  },
 
   states: {
+    fetch_pr,
     split_diff,
     scout_files,
     scout_pr,
@@ -185,9 +261,13 @@ export default {
     deep_review,
     verdict,
     write_review,
+    fetch_meta,
+    post_comment,
+    set_status,
   },
 
   flow: pipe(
+    branch(fetch_pr, [when(skipEvent).to(done)]),
     split_diff,
     scout_files,
     branch(scout_pr, {
@@ -196,8 +276,11 @@ export default {
         deep_review,
         branch(verdict, {
           approve: when(clean).to(write_review),
-          else: write_review,
         }),
+        branch(write_review, [
+          when(({ pr }) => Boolean(pr)).to(publish),
+          done,
+        ]),
       ),
     }),
   ),
