@@ -5,7 +5,8 @@ model extracts just that slice before the state runs — so the whole payload
 never enters the context. It's rung 1.5 of the context ladder: between what
 upstream _concluded_ (rung 1, `ctx`) and what upstream _did_ (rung 2,
 `history`). Everything here lowers to real states you can see with
-`steps validate --print` — the design record is at the [bottom](#under-the-hood).
+`steps validate --print` — the design record is at the
+[bottom](#under-the-hood).
 
 ## Problem: payload copying
 
@@ -249,8 +250,8 @@ authoring and goes in the example README either way.
 
 ## Under the hood
 
-_Design record — implementation status and the deltas from the original
-sketch. Skip this unless you're changing how distill works._
+_Design record — implementation status and the deltas from the original sketch.
+Skip this unless you're changing how distill works._
 
 **Status:** implemented (2026-07-04) — `machine/distill.go` is the lowering,
 `engine.applyDistill` the scope mapping; acceptance coverage in

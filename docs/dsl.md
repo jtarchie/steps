@@ -300,14 +300,14 @@ pipeline enforces the result; `steps validate --print` shows the expansion. Two
 precedents they follow: `loop()` (machine/flow.go, "sugar over branch") and
 `distill:` (machine/distill.go, "sugar compiles to states named `owner#key`").
 
-| Sugar | Lowers into | Synthesized state | Implementation | Tests |
-| --- | --- | --- | --- | --- |
-| `verdict:` | the judge's first `Transition{When,To}` | — | machine/flow.go (`resolveLoopAccept`), jsload.go, validate.go, contract.go, dryrun.go | machine/verdict_test.go |
-| loop `escalate:` | a `gate()` with `approve: <then>` | `gate#<judge>_escalate` | machine/flow.go (`resolveLoopExhausted`, `parseLoopEscalate`) | machine/evidence_test.go (`TestLoopEscalate*`) |
-| `gate()` | a `HumanSpec` + transitions | `gate#<name>` | machine/flow.go (`wireGate`, `flowBootstrapJS`), validate.go, contract.go | machine/gate_test.go |
-| `evidence:` | a composed `Dyn.Native` prompt | — | machine/evidence.go, jsload.go (`parseEvidence`), machine.go, validate.go, contract.go, dryrun.go | machine/evidence_test.go |
-| model tiers | per-state `AgentSpec` knobs | — | machine/machine.go (`ModelSpec`), jsload.go (`parseModels`), defaults.go (`effectiveTier`/`applyModelTier`), validate.go (`validateModels`) | machine/tiers_test.go |
-| `forEach carry` | the aggregate `items` shape | — | machine/machine.go (`ForEachSpec.Carry`), jsload.go, engine/engine.go (`aggregateForEachResults`), machine/dryrun.go | machine/carry_test.go, engine/carry_test.go |
+| Sugar            | Lowers into                             | Synthesized state       | Implementation                                                                                                                              | Tests                                          |
+| ---------------- | --------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `verdict:`       | the judge's first `Transition{When,To}` | —                       | machine/flow.go (`resolveLoopAccept`), jsload.go, validate.go, contract.go, dryrun.go                                                       | machine/verdict_test.go                        |
+| loop `escalate:` | a `gate()` with `approve: <then>`       | `gate#<judge>_escalate` | machine/flow.go (`resolveLoopExhausted`, `parseLoopEscalate`)                                                                               | machine/evidence_test.go (`TestLoopEscalate*`) |
+| `gate()`         | a `HumanSpec` + transitions             | `gate#<name>`           | machine/flow.go (`wireGate`, `flowBootstrapJS`), validate.go, contract.go                                                                   | machine/gate_test.go                           |
+| `evidence:`      | a composed `Dyn.Native` prompt          | —                       | machine/evidence.go, jsload.go (`parseEvidence`), machine.go, validate.go, contract.go, dryrun.go                                           | machine/evidence_test.go                       |
+| model tiers      | per-state `AgentSpec` knobs             | —                       | machine/machine.go (`ModelSpec`), jsload.go (`parseModels`), defaults.go (`effectiveTier`/`applyModelTier`), validate.go (`validateModels`) | machine/tiers_test.go                          |
+| `forEach carry`  | the aggregate `items` shape             | —                       | machine/machine.go (`ForEachSpec.Carry`), jsload.go, engine/engine.go (`aggregateForEachResults`), machine/dryrun.go                        | machine/carry_test.go, engine/carry_test.go    |
 
 The example twins double as acceptance coverage: `engine/dsl_test.go` runs each
 `workflow-dsl.ts` against its sibling's `mock_responses.yaml` and asserts exact
