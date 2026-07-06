@@ -179,21 +179,21 @@ export default {
   },
   models: {
     architect: {
-      model: "openrouter/qwen/qwen3.6-27b",
+      model: "openrouter/qwen/qwen3-235b-a22b-2507",
       maxOutputTokens: 16384,
       reasoning: "low",
     },
     coder: {
-      model: "openrouter/qwen/qwen3-coder-flash",
+      model: "openrouter/qwen/qwen3-coder-30b-a3b-instruct",
       maxOutputTokens: 32768,
       memo: true,
     },
     reviewer: {
-      model: "openrouter/qwen/qwen3.6-27b",
+      model: "openrouter/qwen/qwen3-235b-a22b-2507",
       maxOutputTokens: 32768,
       reasoning: "low",
     },
-    distiller: "openrouter/qwen/qwen3-coder-flash",
+    distiller: "openrouter/qwen/qwen3-coder-30b-a3b-instruct",
   },
   model: "coder",
   limits: { maxTransitions: 40, maxTokens: 400000, timeout: "1h" },

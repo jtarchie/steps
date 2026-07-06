@@ -170,8 +170,8 @@ export default {
   },
   models: {
     // Tiers now carry memo — the scouts and the senior are all replay-safe.
-    scout: { model: "lmstudio/google/gemma-4-e4b", memo: true },
-    senior: { model: "lmstudio/google/gemma-4-26b-a4b", memo: true },
+    scout: { model: "lmstudio/google/gemma-3-4b", memo: true },
+    senior: { model: "lmstudio/google/gemma-3-27b", memo: true },
   },
   model: "scout",
   defaults: { reasoning: "low" },

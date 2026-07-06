@@ -70,10 +70,10 @@ structured JSON; the `coder` just writes files. They're `models:` aliases, so
 you swap them in one place. As committed:
 
 ```ts
-architect: "openrouter/qwen/qwen3.6-27b",   // gate: the plan
-coder:     "openrouter/qwen/qwen3-coder-flash",
-reviewer:  "openrouter/qwen/qwen3.6-27b",   // gate: the reader
-distiller: "openrouter/qwen/qwen3-coder-flash", // context slicing; a small local model also fits
+architect: "openrouter/qwen/qwen3-235b-a22b-2507",   // gate: the plan
+coder:     "openrouter/qwen/qwen3-coder-30b-a3b-instruct",
+reviewer:  "openrouter/qwen/qwen3-235b-a22b-2507",   // gate: the reader
+distiller: "openrouter/qwen/qwen3-coder-30b-a3b-instruct", // context slicing; a small local model also fits
 ```
 
 **Why the gates run on OpenRouter, not a raw local server.** These are reasoning

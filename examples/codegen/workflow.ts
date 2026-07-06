@@ -230,10 +230,10 @@ export default {
     // local and free. Unlike LM Studio, OpenRouter honors reasoning_effort, so
     // the `reasoning:` knob on the gate states is live and bounds the thinking
     // — which is why these gates behave here where they ran away locally.
-    architect: "openrouter/qwen/qwen3.6-27b", // larger model: one careful plan
-    coder: "openrouter/qwen/qwen3-coder-flash", // a real coder model, fanned out per file
-    reviewer: "openrouter/qwen/qwen3.6-27b", // the reader gate; spent sparingly
-    distiller: "openrouter/qwen/qwen3-coder-flash", // extraction is a small-model job; lmstudio/… works too
+    architect: "openrouter/qwen/qwen3-235b-a22b-2507", // larger model: one careful plan
+    coder: "openrouter/qwen/qwen3-coder-30b-a3b-instruct", // a real coder model, fanned out per file
+    reviewer: "openrouter/qwen/qwen3-235b-a22b-2507", // the reader gate; spent sparingly
+    distiller: "openrouter/qwen/qwen3-coder-30b-a3b-instruct", // extraction is a small-model job; lmstudio/… works too
   },
   model: "coder",
   limits: { maxTransitions: 40, maxTokens: 400000, timeout: "1h" }, // generous wall clock: a local coder is slow and gates may park for a human

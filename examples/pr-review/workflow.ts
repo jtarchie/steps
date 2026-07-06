@@ -209,8 +209,8 @@ export default {
     description: "string",
   },
   models: {
-    scout: "lmstudio/google/gemma-4-e4b", // small, local, effectively free
-    senior: "lmstudio/google/gemma-4-26b-a4b", // larger, spent sparingly
+    scout: "lmstudio/google/gemma-3-4b", // small, local, effectively free
+    senior: "lmstudio/google/gemma-3-27b", // larger, spent sparingly
   },
   model: "scout",
   defaults: { reasoning: "low" },

@@ -292,9 +292,9 @@ export default {
     runbook_dir: "string", // optional: root for the senior's file_read (live runs)
   },
   models: {
-    responder: "openrouter/qwen/qwen3.6-27b", // cheap tier: diagnose, propose, scribe
-    auditor: "openrouter/qwen/qwen3.6-27b", // aliases name capabilities; swap independently
-    senior: "openrouter/anthropic/claude-opus-4-8", // tier escalation (DESIGN.md's own adopt example)
+    responder: "openrouter/qwen/qwen3-30b-a3b-instruct-2507", // cheap tier: diagnose, propose, scribe
+    auditor: "openrouter/qwen/qwen3-30b-a3b-instruct-2507", // aliases name capabilities; swap independently
+    senior: "openrouter/anthropic/claude-opus-4.8", // tier escalation (DESIGN.md's own adopt example)
   },
   model: "responder",
   defaults: { reasoning: "low" },
