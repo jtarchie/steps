@@ -159,15 +159,15 @@ func TestServeRunDetailGraph(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, want := range []string{
-		"<h2>Machine</h2>",          // the diagram section renders
-		"<svg",                      // as inline SVG
-		"graph-svg has-run",         // with this run overlaid
-		`data-name="escalate"`,      // the gate state is a node
-		`data-name="critique"`,      // the judge state is a node
-		" current",                  // the parked gate is marked current
-		" parked",                   // and parked
-		" fired",                    // at least one traversed edge is emphasized
-		"drag to pan",               // the pan/zoom affordance is wired
+		"<h2>Machine</h2>",     // the diagram section renders
+		"<svg",                 // as inline SVG
+		"graph-svg has-run",    // with this run overlaid
+		`data-name="escalate"`, // the gate state is a node
+		`data-name="critique"`, // the judge state is a node
+		" current",             // the parked gate is marked current
+		" parked",              // and parked
+		" fired",               // at least one traversed edge is emphasized
+		"drag to pan",          // the pan/zoom affordance is wired
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("run detail graph missing %q", want)

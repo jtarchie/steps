@@ -209,7 +209,8 @@ func scanRuns(rows *sql.Rows, what string) ([]*Run, error) {
 		}
 		out = append(out, r)
 	}
-	if err := rows.Err(); err != nil {
+	err := rows.Err()
+	if err != nil {
 		return nil, fmt.Errorf("iterating %s: %w", what, err)
 	}
 	return out, nil

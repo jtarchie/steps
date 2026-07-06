@@ -157,7 +157,8 @@ func (rs *RunState) applyForkStarted(ev *Event) {
 	var payload struct {
 		Children []ChildRef `json:"children"`
 	}
-	if err := DecodeData(ev, &payload); err == nil {
+	err := DecodeData(ev, &payload)
+	if err == nil {
 		rs.Forks[ForkKey(state, visit)] = payload.Children
 	}
 }

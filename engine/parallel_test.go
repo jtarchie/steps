@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -456,7 +457,8 @@ func forkChildIDs(t *testing.T, store journal.Store, runID string) []string {
 		var payload struct {
 			Children []journal.ChildRef `json:"children"`
 		}
-		if err := journal.DecodeData(ev, &payload); err != nil {
+		err := journal.DecodeData(ev, &payload)
+		if err != nil {
 			t.Fatal(err)
 		}
 		ids := make([]string, len(payload.Children))
@@ -526,11 +528,13 @@ func TestParallelChildrenHiddenFromRunsList(t *testing.T) {
 
 func join(ss []string) string {
 	out := ""
+	var outSb529 strings.Builder
 	for i, s := range ss {
 		if i > 0 {
-			out += ","
+			outSb529.WriteString(",")
 		}
-		out += s
+		outSb529.WriteString(s)
 	}
+	out += outSb529.String()
 	return out
 }
