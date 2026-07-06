@@ -1,0 +1,15 @@
+diff --git a/store/users.go b/store/users.go
+@@
+-func (s *Store) loadUsers(ids []int) ([]User, error) {
+-	return s.queryUsers(ids)
++func (s *Store) loadUsers(ids []int) ([]User, error) {
++	out := make([]User, 0, len(ids))
++	for _, id := range ids {
++		u, err := s.queryUser(id) // one round-trip per id
++		if err != nil {
++			return nil, err
++		}
++		out = append(out, u)
++	}
++	return out, nil
+ }

@@ -1,6 +1,9 @@
 package journal
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // RunState is the fold of a run's journal — everything the engine needs to
 // continue a run from where the journal left off.
@@ -16,6 +19,10 @@ type RunState struct {
 	Finished    bool                 // run reached a terminal
 	Status      string               // final status when Finished
 	Convos      map[string][]Message // last execution's conversation per state
+	// Forks maps a fork's "state#visit" key to its pinned branch children, so a
+	// resumed fork reattaches to the same child runs instead of spawning new
+	// ones. Populated from fork_started; it does not affect the single cursor.
+	Forks map[string][]ChildRef
 
 	// Pending resume: set when the journal ends in run_resumed — the engine
 	// consumes these as the parked state's handler result.
@@ -72,6 +79,7 @@ func Fold(events []*Event) *RunState {
 		Ctx:    map[string]any{},
 		Visits: map[string]int{},
 		Convos: map[string][]Message{},
+		Forks:  map[string][]ChildRef{},
 	}
 	for _, ev := range events {
 		// Any later event clears a pending resume; only a trailing
@@ -87,6 +95,8 @@ func Fold(events []*Event) *RunState {
 			rs.applyRunEnqueued(ev)
 		case RunStarted:
 			rs.applyRunStarted(ev)
+		case ForkStarted:
+			rs.applyForkStarted(ev)
 		case StateEntered:
 			rs.applyStateEntered(ev)
 		case HandlerFinished:
@@ -127,6 +137,43 @@ func (rs *RunState) applyRunStarted(ev *Event) {
 			rs.Ctx[k] = v
 		}
 	}
+	// Seed the entry point (mirrors applyRunEnqueued). A later state_entered /
+	// transition_fired overrides it; a run whose journal is only run_started —
+	// a fresh parallel branch child — starts at this initial, not the machine's.
+	if initial, ok := ev.Data["initial"].(string); ok {
+		rs.Current = initial
+	}
+}
+
+// ForkKey identifies a fork by state and visit — a loop body that forks each
+// iteration gets a fresh child set, keyed by the entry count at fork time.
+func ForkKey(state string, visit int) string {
+	return fmt.Sprintf("%s#%d", state, visit)
+}
+
+func (rs *RunState) applyForkStarted(ev *Event) {
+	state, _ := ev.Data["state"].(string)
+	visit := intField(ev.Data["visit"])
+	var payload struct {
+		Children []ChildRef `json:"children"`
+	}
+	if err := DecodeData(ev, &payload); err == nil {
+		rs.Forks[ForkKey(state, visit)] = payload.Children
+	}
+}
+
+// intField coerces a journal number field: int in-process, float64 after a
+// JSON round-trip through the store.
+func intField(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	}
+	return 0
 }
 
 func (rs *RunState) applyStateEntered(ev *Event) {

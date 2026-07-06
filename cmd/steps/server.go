@@ -403,6 +403,9 @@ func (s *server) handleRun(c *echo.Context) error {
 	artifacts := artifactRows(rs)
 	timeline := buildTimeline(events, minfo)
 	inputs := runInputs(events)
+	// Parallel branch children (if any) surface here rather than in the runs
+	// list; each is viewable as its own sub-run page.
+	children, _ := s.store.ListChildRuns(ctx, id)
 
 	hash := run.Hash
 	if len(hash) > 12 {
@@ -428,6 +431,7 @@ func (s *server) handleRun(c *echo.Context) error {
 		"Artifacts":   artifacts,
 		"Timeline":    timeline,
 		"Inputs":      inputs,
+		"Children":    children,
 	}
 	if merr == nil {
 		data["Graph"] = renderGraphSVG(m.Graph(), buildRunOverlay(m, run, rs, events))

@@ -57,10 +57,45 @@ func (l *loader) compileFlow(m *Machine, flow goja.Value) error {
 		m.Initial = entry
 	}
 
+	// Parallel branches are wired here — after the main flow places each fork
+	// state (and its join successor), before the unwired-to-done fallthrough,
+	// so a multi-state branch sub-flow chains internally instead of every state
+	// falling straight to done.
+	err = l.wireParallelBranches(m)
+	if err != nil {
+		return err
+	}
+
 	// Outgoing-edge rule: any non-terminal state left unwired flows to done.
 	for _, s := range m.States {
 		if !s.Terminal && len(s.Transitions) == 0 {
 			s.Transitions = []Transition{{To: "done"}}
+		}
+	}
+	return nil
+}
+
+// wireParallelBranches compiles each fork state's branch sub-flows. Each branch
+// is a state ref or a pipe/branch/loop, wired with `done` as its successor so
+// it terminates at the shared terminal; the resolved entry state and its label
+// land in the fork's ParallelSpec.Branches. The "wired more than once" guard in
+// wireNode enforces that branch closures are disjoint from the main flow and
+// from each other — which is what lets a branch run as a hermetic sub-run.
+func (l *loader) wireParallelBranches(m *Machine) error {
+	for _, s := range m.States {
+		if s.Parallel == nil {
+			continue
+		}
+		pobj := l.parallelNodes[s.Name]
+		if pobj == nil {
+			return fmt.Errorf("parallel state %q has no branches", s.Name)
+		}
+		for _, label := range pobj.Keys() {
+			entry, err := l.wireNode(m, pobj.Get(label), "done")
+			if err != nil {
+				return fmt.Errorf("parallel %q branch %q: %w", s.Name, label, err)
+			}
+			s.Parallel.Branches = append(s.Parallel.Branches, Branch{Label: label, Entry: entry})
 		}
 	}
 	return nil

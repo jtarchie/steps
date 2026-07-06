@@ -60,6 +60,9 @@ func ApplyDefaults(m *Machine) {
 		if f := s.ForEach; f != nil {
 			applyForEachDefaults(f)
 		}
+		if p := s.Parallel; p != nil {
+			applyParallelDefaults(p)
+		}
 		applyRetryDefaults(m, s)
 	}
 }
@@ -197,6 +200,15 @@ func applyForEachDefaults(f *ForEachSpec) {
 	}
 	if f.OnItemFailure == "" {
 		f.OnItemFailure = "fail"
+	}
+}
+
+func applyParallelDefaults(p *ParallelSpec) {
+	if p.Concurrency == 0 {
+		p.Concurrency = 1
+	}
+	if p.OnBranchFailure == "" {
+		p.OnBranchFailure = "fail"
 	}
 }
 

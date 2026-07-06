@@ -686,6 +686,9 @@ func (e *Engine) runHandler(ctx context.Context, m *machine.Machine, st *machine
 	if st.ForEach != nil {
 		return e.runForEach(ctx, m, st, runID, rs)
 	}
+	if st.Parallel != nil {
+		return e.runParallel(ctx, m, st, runID, rs)
+	}
 	return e.withRetries(ctx, st, runID, func(attempt int) (*HandlerResult, error) {
 		return e.runOnce(ctx, m, st, runID, rs, nil, attempt)
 	})

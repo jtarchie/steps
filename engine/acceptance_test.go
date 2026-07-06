@@ -473,6 +473,64 @@ func TestPRReviewTrivialPath(t *testing.T) {
 	}
 }
 
+// TestParallelReviewTrace asserts the fork/join trace from
+// examples/parallel-review/README.md: the parent enters only the fork and the
+// join (branches run in child runs), the aggregate is label-keyed, and the
+// three branch children are recorded under the parent.
+func TestParallelReviewTrace(t *testing.T) {
+	m, script := loadExample(t, "parallel-review")
+	eng, store := newTestEngine(t, script)
+
+	change, err := os.ReadFile(repoPath(t, "examples/parallel-review/fixtures/change.diff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := eng.Start(context.Background(), m, map[string]any{"change": string(change)})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Status != journal.StatusDone || res.Terminal != "done" {
+		t.Fatalf("status = %s at %s, want done at done", res.Status, res.Terminal)
+	}
+
+	// The parent journal is single-cursor: fork then join, never a branch state.
+	states, _, _ := eventTrace(t, store, res.RunID)
+	want := []string{"review", "verdict"}
+	if strings.Join(states, ",") != strings.Join(want, ",") {
+		t.Errorf("parent state sequence = %v, want %v (branches run in child runs)", states, want)
+	}
+
+	// The join read a label-keyed aggregate.
+	agg, ok := res.State.Ctx["review"].(map[string]any)
+	if !ok {
+		t.Fatalf("ctx.review = %T, want the label-keyed aggregate", res.State.Ctx["review"])
+	}
+	for _, label := range []string{"security", "performance", "docs"} {
+		if _, ok := agg[label].(map[string]any); !ok {
+			t.Errorf("aggregate missing branch %q: %v", label, agg)
+		}
+	}
+	if v, _ := res.State.Ctx["verdict"].(map[string]any); v["ship"] != true {
+		t.Errorf("verdict.ship = %v, want true", v["ship"])
+	}
+
+	// Three branch children, hidden from the runs list but under the parent.
+	kids, err := store.ListChildRuns(context.Background(), res.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kids) != 3 {
+		t.Errorf("child runs = %d, want 3", len(kids))
+	}
+	top, err := store.ListRuns(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(top) != 1 {
+		t.Errorf("ListRuns = %d, want 1 (children hidden)", len(top))
+	}
+}
+
 // TestMemoReplaysAcrossRuns: run the same machine twice against one store —
 // the second run's memo states replay cached outputs, spend zero tokens, and
 // never touch the model.

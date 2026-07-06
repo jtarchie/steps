@@ -1,0 +1,49 @@
+# parallel-review
+
+True concurrent **fan-out / fan-in** (fork/join): one change is reviewed from
+three independent angles *at the same time*, then a lead folds the three
+verdicts into a ship decision.
+
+```
+        ┌─ security ─┐
+review ─┼─ performance ─┼─▶ verdict ─▶ done
+        └─ docs ─────┘
+   (fork)   (3 hermetic         (join reads
+            branch sub-runs)     by label)
+```
+
+## What it exercises
+
+| Feature | Where |
+|---|---|
+| Concurrent fan-out to distinct handlers | `review.parallel: { security, performance, docs }` |
+| Bounded concurrency | `concurrency: 3` (branches run at once; serial under `--mock`) |
+| Hermetic branches | each branch is a child run seeded with the pre-fork scope — no branch sees a sibling |
+| Barrier join / fan-in | `verdict` reads the label-keyed aggregate `({ review }) => review.security.risk …` |
+| Failure policy | `onBranchFailure: "fail"` — a crashing reviewer fails the review (`"collect"` would continue and report `_failures`) |
+| Durable, resumable fork | a crash mid-fork reattaches to the same branch children on `steps resume` — no re-run of a finished branch |
+
+## Run it
+
+```sh
+steps validate examples/parallel-review/workflow.ts     # accepts + draws the fork
+steps run examples/parallel-review/workflow.ts \
+  --input change=@examples/parallel-review/fixtures/change.diff \
+  --mock examples/parallel-review/mock_responses.yaml
+```
+
+Deterministic trace (mock): the parent enters `review` (the fork) then `verdict`
+— it never enters a branch state, because the branches run in their own child
+runs. `verdict.ship` is `true`. In the web view (`steps serve`) the branch child
+runs are listed under the parent's **Branch runs** section, and the diagram
+draws the fork's fan-out edges.
+
+## Notes
+
+- The fork is one journal entry in the parent (`fork_started` pins the branch
+  child run IDs), so the parent stays single-cursor and fully resumable.
+- Branches cannot park (no human gates) or `adopt`/`history` across the fork
+  boundary in v1 — a branch gets the pre-fork scope snapshot, not sibling or
+  prior conversations.
+- Budgets and the wall-clock `limits.timeout` are enforced at the barrier and
+  per branch; a hung branch is cancelled at the fork deadline.

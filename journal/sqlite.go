@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,6 +52,7 @@ CREATE TABLE IF NOT EXISTS runs (
     assets        TEXT NOT NULL DEFAULT '{}',
     status        TEXT NOT NULL,
     current_state TEXT NOT NULL DEFAULT '',
+    parent_run_id TEXT NOT NULL DEFAULT '',
     created       INTEGER NOT NULL,
     updated       INTEGER NOT NULL
 );
@@ -69,6 +71,14 @@ CREATE TABLE IF NOT EXISTS memo (
 );`)
 	if err != nil {
 		return fmt.Errorf("creating schema: %w", err)
+	}
+	// Additive column for pre-existing databases (CREATE IF NOT EXISTS above
+	// only helps fresh ones). A duplicate-column error means it is already
+	// applied — tolerate it so migrate stays idempotent.
+	_, err = s.db.ExecContext(context.Background(),
+		`ALTER TABLE runs ADD COLUMN parent_run_id TEXT NOT NULL DEFAULT ''`)
+	if err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return fmt.Errorf("adding parent_run_id column: %w", err)
 	}
 	return nil
 }
@@ -118,9 +128,9 @@ func (s *SQLiteStore) CreateRun(ctx context.Context, run *Run) error {
 		return fmt.Errorf("encoding assets: %w", err)
 	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO runs (id, machine, hash, source, assets, status, current_state, created, updated)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.ID, run.Machine, run.Hash, run.Source, string(assets), run.Status, run.CurrentState, now, now)
+		`INSERT INTO runs (id, machine, hash, source, assets, status, current_state, parent_run_id, created, updated)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.ID, run.Machine, run.Hash, run.Source, string(assets), run.Status, run.CurrentState, run.ParentRunID, now, now)
 	if err != nil {
 		return fmt.Errorf("inserting run %s: %w", run.ID, err)
 	}
@@ -144,44 +154,52 @@ func (s *SQLiteStore) UpdateRun(ctx context.Context, id, status, currentState st
 	return nil
 }
 
+// runColumns is the canonical run projection shared by every run query, so
+// scanRun's column order stays in lockstep with the SELECTs.
+const runColumns = `id, machine, hash, source, assets, status, current_state, parent_run_id, created, updated`
+
 // GetRun fetches one run.
 func (s *SQLiteStore) GetRun(ctx context.Context, id string) (*Run, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, machine, hash, source, assets, status, current_state, created, updated FROM runs WHERE id = ?`, id)
+		`SELECT `+runColumns+` FROM runs WHERE id = ?`, id)
 	return scanRun(row)
 }
 
-// ListRuns returns all runs, most recent first.
+// ListRuns returns top-level runs, most recent first. Parallel branch children
+// (parent_run_id set) are excluded — they surface under their parent's detail
+// view, not as standalone runs in `steps runs` or the web list.
 func (s *SQLiteStore) ListRuns(ctx context.Context) ([]*Run, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, machine, hash, source, assets, status, current_state, created, updated FROM runs ORDER BY created DESC`)
+		`SELECT `+runColumns+` FROM runs WHERE parent_run_id = '' ORDER BY created DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("listing runs: %w", err)
 	}
-	defer rows.Close()
-	var out []*Run
-	for rows.Next() {
-		r, err := scanRun(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	err = rows.Err()
-	if err != nil {
-		return nil, fmt.Errorf("iterating runs: %w", err)
-	}
-	return out, nil
+	return scanRuns(rows, "runs")
 }
 
 // ListRunsByStatus returns runs with the given status, oldest first (FIFO) so
 // the dispatcher drains the queue in enqueue order.
 func (s *SQLiteStore) ListRunsByStatus(ctx context.Context, status string) ([]*Run, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, machine, hash, source, assets, status, current_state, created, updated FROM runs WHERE status = ? ORDER BY created ASC`, status)
+		`SELECT `+runColumns+` FROM runs WHERE status = ? ORDER BY created ASC`, status)
 	if err != nil {
 		return nil, fmt.Errorf("listing runs by status %q: %w", status, err)
 	}
+	return scanRuns(rows, "runs by status")
+}
+
+// ListChildRuns returns a parent run's parallel branch children, oldest first.
+func (s *SQLiteStore) ListChildRuns(ctx context.Context, parentID string) ([]*Run, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+runColumns+` FROM runs WHERE parent_run_id = ? ORDER BY created ASC`, parentID)
+	if err != nil {
+		return nil, fmt.Errorf("listing child runs of %q: %w", parentID, err)
+	}
+	return scanRuns(rows, "child runs")
+}
+
+// scanRuns drains a run-projection result set, closing it.
+func scanRuns(rows *sql.Rows, what string) ([]*Run, error) {
 	defer rows.Close()
 	var out []*Run
 	for rows.Next() {
@@ -191,9 +209,8 @@ func (s *SQLiteStore) ListRunsByStatus(ctx context.Context, status string) ([]*R
 		}
 		out = append(out, r)
 	}
-	err = rows.Err()
-	if err != nil {
-		return nil, fmt.Errorf("iterating runs by status %q: %w", status, err)
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating %s: %w", what, err)
 	}
 	return out, nil
 }
@@ -204,7 +221,7 @@ func scanRun(row scannable) (*Run, error) {
 	var r Run
 	var created, updated int64
 	var assets string
-	err := row.Scan(&r.ID, &r.Machine, &r.Hash, &r.Source, &assets, &r.Status, &r.CurrentState, &created, &updated)
+	err := row.Scan(&r.ID, &r.Machine, &r.Hash, &r.Source, &assets, &r.Status, &r.CurrentState, &r.ParentRunID, &created, &updated)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.New("run not found")

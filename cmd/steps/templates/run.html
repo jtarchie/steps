@@ -112,6 +112,18 @@
 </ul>
 {{end}}
 
+{{if .Children}}
+<h2>Branch runs</h2>
+<ul class="artifacts">
+  {{range .Children}}
+  <li>
+    <a href="/runs/{{.ID}}"><code>{{.ID}}</code></a>
+    <span class="muted">· {{.Status}}</span>
+  </li>
+  {{end}}
+</ul>
+{{end}}
+
 {{if .Timeline}}
 <h2>Timeline</h2>
 <ol class="timeline">

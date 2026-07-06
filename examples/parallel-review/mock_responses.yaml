@@ -1,0 +1,23 @@
+# Scripted responses for the mock provider — makes the fork/join deterministic
+# so CI can assert the exact trace. Each branch runs as its own child run and
+# consumes its own state's queue; `verdict` runs in the parent after the join.
+#
+#   steps run examples/parallel-review/workflow.ts --input change=@fixtures/change.diff \
+#     --mock examples/parallel-review/mock_responses.yaml
+
+security:
+  - text: >-
+      {"risk": "low", "findings": []}
+
+performance:
+  - text: >-
+      {"concerns": ["loadUsers issues one query per row — N+1 under a large page"]}
+
+docs:
+  - text: >-
+      {"gaps": []}
+
+verdict:
+  - text: >-
+      {"ship": true,
+      "summary": "Low security risk and no doc gaps; ship, but track the N+1 in loadUsers."}

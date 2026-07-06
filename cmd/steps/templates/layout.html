@@ -115,6 +115,7 @@ pre.msg { margin: .3rem 0; }
 .graph-svg .node text { fill: var(--fg); }
 .graph-svg .node.initial rect { stroke: var(--accent); stroke-width: 2; }
 .graph-svg .node.kind-human rect { stroke: var(--parked); }
+.graph-svg .node.kind-parallel rect { stroke: var(--accent); stroke-dasharray: 4 2; }
 .graph-svg .node.kind-terminal rect { fill: var(--card); }
 .graph-svg .node.kind-terminal text { fill: var(--done); }
 .graph-svg .node.kind-terminal.status-failed text { fill: var(--failed); }
@@ -124,6 +125,7 @@ pre.msg { margin: .3rem 0; }
 .graph-svg.has-run .node:not(.visited):not(.current) { opacity: .4; }
 .graph-svg .edge path { stroke: var(--muted); stroke-width: 1.5; }
 .graph-svg .edge.edge-catch path, .graph-svg .edge.edge-timeout path { stroke-dasharray: 5 3; }
+.graph-svg .edge.edge-fork path { stroke-dasharray: 2 3; stroke: var(--accent); }
 .graph-svg .edge.fired path { stroke: var(--running); stroke-width: 2.5; }
 .graph-svg .edge-label { fill: var(--muted); paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
 .graph-svg .gv-arrowhead { fill: var(--muted); }

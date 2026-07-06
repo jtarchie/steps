@@ -66,6 +66,9 @@ type loader struct {
 	assets     map[string]string
 	pinned     bool   // resume: include() serves pinned assets only
 	sourcefile string // for esbuild error locations (defaults to machine.ts)
+	// parallelNodes maps a fork state's name to its raw parallel: object, so
+	// compileFlow can wire the branch sub-flows after every state is registered.
+	parallelNodes map[string]*goja.Object
 }
 
 // transpile strips TypeScript and lowers `export default` to CommonJS so goja
@@ -474,6 +477,10 @@ func (l *loader) machine(root *goja.Object) (*Machine, error) {
 		if err != nil {
 			return nil, err
 		}
+	} else if len(l.parallelNodes) > 0 {
+		// Branch sub-flows are wired only inside compileFlow; a fork needs an
+		// explicit flow to place itself and its join.
+		return nil, errors.New("a machine with a parallel: state needs a flow: expression to place the fork and its join")
 	}
 	return m, nil
 }
@@ -607,6 +614,7 @@ var (
 	actionStateKeys   = []string{"action"}
 	writeStateKeys    = []string{"write", "content"}
 	humanStateKeys    = []string{"human", "timeout", "choices"}
+	parallelStateKeys = []string{"parallel", "concurrency", "onBranchFailure"}
 	terminalStateKeys = []string{"terminal", "status"}
 	movedToFlowKeys   = []string{"transitions", "catch", "onTimeout", "to", "next"}
 )
@@ -682,6 +690,8 @@ func inferStateHandler(keys []string) (handler string, handlerKeys []string) {
 		return "write", writeStateKeys
 	case has("human"):
 		return "human", humanStateKeys
+	case has("parallel"):
+		return "parallel", parallelStateKeys
 	case has("terminal"):
 		return "terminal", terminalStateKeys
 	default:
@@ -732,6 +742,21 @@ func (l *loader) buildStateHandler(o *goja.Object, handler string, st *State) er
 			return err
 		}
 		st.Human = &HumanSpec{Prompt: l.dyn(o.Get("human")), Timeout: timeout, Choices: choices}
+	case "parallel":
+		pobj := l.obj(o.Get("parallel"))
+		if pobj == nil {
+			return errors.New("parallel: must be an object of {label: state | pipe(...) | branch(...) | loop(...)}")
+		}
+		if l.parallelNodes == nil {
+			l.parallelNodes = map[string]*goja.Object{}
+		}
+		// Branch sub-flows are wired at flow-compile time (compileFlow), once
+		// every state object carries its identity — mirror loop/branch.
+		l.parallelNodes[st.Name] = pobj
+		st.Parallel = &ParallelSpec{
+			Concurrency:     integer(o.Get("concurrency")),
+			OnBranchFailure: str(o.Get("onBranchFailure")),
+		}
 	case "agent":
 		ag, err := l.agent(o)
 		if err != nil {

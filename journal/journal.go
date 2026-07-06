@@ -18,8 +18,14 @@ const (
 	// dispatcher can start it later (even after a serve restart), but the loop
 	// has not run. RunStarted is appended at dispatch — never here — so the
 	// run's timeout baseline begins when it executes, not when it queues.
-	RunEnqueued     EventType = "run_enqueued"
-	RunStarted      EventType = "run_started"
+	RunEnqueued EventType = "run_enqueued"
+	RunStarted  EventType = "run_started"
+	// ForkStarted records a parallel fork's intent BEFORE any branch child run
+	// exists: it pins the child run IDs (and their labels/entries) so a crash
+	// mid-fork reattaches to the same children on resume instead of spawning a
+	// new set. Written by the fork state; the parent journal stays single-cursor
+	// (one state_entered + one handler_finished bracket the whole fork).
+	ForkStarted     EventType = "fork_started"
 	StateEntered    EventType = "state_entered"
 	HandlerFinished EventType = "handler_finished"
 	HandlerFailed   EventType = "handler_failed"
@@ -29,6 +35,14 @@ const (
 	RunResumed      EventType = "run_resumed"
 	RunFinished     EventType = "run_finished"
 )
+
+// ChildRef identifies one parallel branch's child run, pinned in a fork_started
+// event so resume reattaches to the same child instead of spawning a new one.
+type ChildRef struct {
+	Label string `json:"label"`
+	RunID string `json:"run_id"`
+	Entry string `json:"entry"`
+}
 
 // Event is one journal entry. Data is event-type-specific JSON.
 type Event struct {
@@ -50,8 +64,12 @@ type Run struct {
 	Assets       map[string]string
 	Status       string // queued | running | parked | done | failed
 	CurrentState string
-	Created      time.Time
-	Updated      time.Time
+	// ParentRunID is set on a parallel branch's child run — the fork state's
+	// run. Empty for top-level runs. Lets listings hide children and the
+	// run-detail view nest branch sub-runs.
+	ParentRunID string
+	Created     time.Time
+	Updated     time.Time
 }
 
 // Run statuses.
@@ -74,6 +92,9 @@ type Store interface {
 	// ListRunsByStatus returns runs with the given status, oldest first (FIFO)
 	// — the dispatcher drains queued runs in enqueue order.
 	ListRunsByStatus(ctx context.Context, status string) ([]*Run, error)
+	// ListChildRuns returns a parent run's parallel branch children, oldest
+	// first — the run-detail view nests their sub-timelines.
+	ListChildRuns(ctx context.Context, parentID string) ([]*Run, error)
 	// Append assigns and returns the next sequence number.
 	Append(ctx context.Context, ev *Event) (int, error)
 	Events(ctx context.Context, runID string) ([]*Event, error)

@@ -194,6 +194,9 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 	if f := s.ForEach; f != nil {
 		validateForEach(m, s, f, fail)
 	}
+	if p := s.Parallel; p != nil {
+		validateParallel(m, s, p, fail)
+	}
 	if a := s.Agent; a != nil {
 		validateAgent(m, s, a, cfg, fail)
 	}
@@ -232,13 +235,13 @@ func validateTerminalState(s *State, fail func(string, ...any)) {
 // means the caller should stop validating this state further.
 func validateHandlerCount(s *State, fail func(string, ...any)) bool {
 	handlers := 0
-	for _, h := range []bool{s.Agent != nil, s.Action != nil, s.Human != nil} {
+	for _, h := range []bool{s.Agent != nil, s.Action != nil, s.Human != nil, s.Parallel != nil} {
 		if h {
 			handlers++
 		}
 	}
 	if handlers != 1 {
-		fail("state %q: needs exactly one handler (agent, action, or human), found %d", s.Name, handlers)
+		fail("state %q: needs exactly one handler (agent, action, human, or parallel), found %d", s.Name, handlers)
 		return false
 	}
 	return true
@@ -267,6 +270,67 @@ func validateForEach(m *Machine, s *State, f *ForEachSpec, fail func(string, ...
 	}
 	if s.Agent != nil && (s.Agent.Adopt != "" || s.Agent.History != nil) {
 		fail("state %q: foreach states cannot use adopt/history — items are hermetic by design", s.Name)
+	}
+}
+
+// validateParallel checks a fork state: at least two branches, sane knobs, no
+// events, unique identifier labels, and — the v1 hermeticity ban — no human
+// gate reachable in a branch and no adopt/history reaching across the fork
+// boundary (a branch runs as a sub-run with the pre-fork scope snapshot, not
+// prior conversations).
+func validateParallel(m *Machine, s *State, p *ParallelSpec, fail func(string, ...any)) {
+	if s.ForEach != nil {
+		fail("state %q: a parallel state cannot also be forEach — parallel replaces the handler", s.Name)
+	}
+	if len(p.Branches) < 2 {
+		fail("state %q: parallel needs at least two branches, found %d", s.Name, len(p.Branches))
+	}
+	if p.Concurrency < 1 {
+		fail("state %q: parallel.concurrency must be >= 1", s.Name)
+	}
+	if p.OnBranchFailure != "fail" && p.OnBranchFailure != "collect" {
+		fail("state %q: parallel.onBranchFailure must be fail or collect, got %q", s.Name, p.OnBranchFailure)
+	}
+	if len(s.Output.Events) > 0 {
+		fail("state %q: parallel states cannot declare events — branches produce no single event; route with guards over ctx.%s", s.Name, s.Name)
+	}
+	seen := map[string]bool{}
+	for _, b := range p.Branches {
+		if !isIdentifier(b.Label) {
+			fail("state %q: parallel branch label %q must be a valid identifier (the join reads ctx.%s.%s)", s.Name, b.Label, s.Name, b.Label)
+		}
+		if seen[b.Label] {
+			fail("state %q: duplicate parallel branch label %q", s.Name, b.Label)
+		}
+		seen[b.Label] = true
+		validateBranchHermetic(m, s, b, fail)
+	}
+}
+
+// validateBranchHermetic enforces that a branch sub-flow is self-contained: no
+// human gate (a branch cannot park in v1) and no adopt/history pointing outside
+// the branch (the child run receives the flat scope snapshot, not the parent's
+// conversations).
+func validateBranchHermetic(m *Machine, fork *State, b Branch, fail func(string, ...any)) {
+	within := reachableFrom(m, b.Entry)
+	for name := range within {
+		st := m.State(name)
+		if st == nil || st.Terminal {
+			continue
+		}
+		if st.Human != nil {
+			fail("state %q: parallel branch %q reaches human gate %q — a branch cannot park in v1; gate before or after the fork", fork.Name, b.Label, name)
+		}
+		a := st.Agent
+		if a == nil {
+			continue
+		}
+		if a.Adopt != "" && a.Adopt != "self" && !within[a.Adopt] {
+			fail("state %q: parallel branch %q state %q adopts %q across the fork boundary — a branch gets the pre-fork scope snapshot, not prior conversations", fork.Name, b.Label, name, a.Adopt)
+		}
+		if a.History != nil && a.History.From != "" && !within[a.History.From] {
+			fail("state %q: parallel branch %q state %q reads history from %q across the fork boundary — not available to a hermetic branch", fork.Name, b.Label, name, a.History.From)
+		}
 	}
 }
 
@@ -644,6 +708,14 @@ func edges(s *State) []string {
 	}
 	if s.Human != nil && s.Human.OnTimeout != "" {
 		out = append(out, s.Human.OnTimeout)
+	}
+	// A fork reaches its branch entries — the reachability seed that makes
+	// branch closures reachable from initial (and each branch state's pre-fork
+	// predecessors visible to adopt/history/distill and the dry-run scope).
+	if s.Parallel != nil {
+		for _, b := range s.Parallel.Branches {
+			out = append(out, b.Entry)
+		}
 	}
 	return out
 }

@@ -17,12 +17,13 @@ const (
 	EdgeFallback EdgeKind = "fallback" // an unconditional transition (the else / fallthrough)
 	EdgeCatch    EdgeKind = "catch"    // a failure route (catch: {class: target})
 	EdgeTimeout  EdgeKind = "timeout"  // a human gate's expiry route
+	EdgeFork     EdgeKind = "fork"     // a parallel fork's fan-out to a branch entry
 )
 
 // GraphNode is one state in the topology.
 type GraphNode struct {
 	Name     string
-	Kind     string // HandlerKind(): agent | action | human | terminal
+	Kind     string // HandlerKind(): agent | action | human | parallel | terminal
 	Terminal bool
 	Status   string // "" | "failed" (terminal states only)
 	Initial  bool
@@ -106,6 +107,18 @@ func (m *Machine) Graph() GraphView {
 				Kind:  EdgeTimeout,
 				Label: "timeout",
 			})
+		}
+		// A fork fans out to each branch entry; its normal transition (already
+		// emitted above) carries the join continuation.
+		if s.Parallel != nil {
+			for _, b := range s.Parallel.Branches {
+				gv.Edges = append(gv.Edges, GraphEdge{
+					From:  s.Name,
+					To:    m.resolveGraphTarget(b.Entry),
+					Kind:  EdgeFork,
+					Label: "fork:" + b.Label,
+				})
+			}
 		}
 	}
 	return gv

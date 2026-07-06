@@ -126,8 +126,9 @@ type State struct {
 
 	// Input: action args / agent user message. A static object (whose values
 	// may individually be functions) or one function returning the whole map.
-	Input   Dyn
-	ForEach *ForEachSpec // fan the handler out over a list from ctx
+	Input    Dyn
+	ForEach  *ForEachSpec  // fan the handler out over a list from ctx
+	Parallel *ParallelSpec // fork into concurrent branches, join at a barrier
 	// Memo replays the journaled output when the rendered input (model +
 	// system + prompt) is byte-identical to a previous execution — re-runs
 	// only re-pay for what changed. Agent states only: actions have side
@@ -164,6 +165,27 @@ type ForEachSpec struct {
 	OnItemFailure string
 }
 
+// ParallelSpec forks the run into concurrent branches — each a hermetic
+// sub-run of states from the SAME machine — and joins them at a barrier. It is
+// the heterogeneous generalization of ForEach: instead of one handler over N
+// homogeneous items, N distinct sub-flows run at once, each with its own
+// hermetic context. The state's ctx entry becomes a label-keyed object
+// {label: branchOutput, ...} (plus _failures under onBranchFailure: "collect");
+// the join is the fork state's successor, which reads the aggregate from the
+// flat scope. A fork is one node = one journal entry = one retry/catch owner.
+type ParallelSpec struct {
+	Branches        []Branch // label + entry state, declaration (object-key) order
+	Concurrency     int      // bounds simultaneously-running branches (default 1)
+	OnBranchFailure string   // "fail" (default — first failed branch fails the fork) | "collect"
+}
+
+// Branch is one arm of a parallel fork: a label (the aggregate key the join
+// reads) and the entry state of its sub-flow.
+type Branch struct {
+	Label string
+	Entry string
+}
+
 // HandlerKind reports which handler the state runs.
 func (s *State) HandlerKind() string {
 	switch {
@@ -175,6 +197,8 @@ func (s *State) HandlerKind() string {
 		return "action"
 	case s.Human != nil:
 		return "human"
+	case s.Parallel != nil:
+		return "parallel"
 	}
 	return "invalid"
 }
