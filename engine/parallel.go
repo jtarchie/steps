@@ -157,8 +157,8 @@ func (e *Engine) runBranch(ctx context.Context, m *machine.Machine, parentID str
 	res, err := e.driveRun(ctx, m, c.RunID)
 	if err != nil {
 		// A cancelled/errored branch must not linger as a running zombie.
-		// Best-effort on a fresh context (the fork's may be cancelled).
-		_ = e.Store.UpdateRun(context.Background(), c.RunID, journal.StatusFailed, c.Entry)
+		// Best-effort with cancellation stripped (the fork's ctx may be cancelled).
+		_ = e.Store.UpdateRun(context.WithoutCancel(ctx), c.RunID, journal.StatusFailed, c.Entry)
 		return branchOutcome{label: c.Label, err: fmt.Errorf("branch %q: %w", c.Label, err)}
 	}
 	switch res.Status {

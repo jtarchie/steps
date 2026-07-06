@@ -208,11 +208,7 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 	if h := s.Human; h != nil {
 		validateHuman(m, s, h, fail)
 	}
-	if !s.Input.IsZero() && !s.Input.IsFn() {
-		if _, ok := s.Input.Static.(map[string]any); !ok {
-			fail("state %q: input must be an object or a function returning one, got %T", s.Name, s.Input.Static)
-		}
-	}
+	validateInputShape(s, fail)
 
 	if !validateTransitionsPresent(s, fail) {
 		return
@@ -220,6 +216,16 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 	validateTransitions(m, s, fail)
 	validateCatch(m, s, fail)
 	validateRetryPolicies(s, fail)
+}
+
+// validateInputShape checks that a non-function static input is an object —
+// the only shape a state's input can merge into the run context.
+func validateInputShape(s *State, fail func(string, ...any)) {
+	if !s.Input.IsZero() && !s.Input.IsFn() {
+		if _, ok := s.Input.Static.(map[string]any); !ok {
+			fail("state %q: input must be an object or a function returning one, got %T", s.Name, s.Input.Static)
+		}
+	}
 }
 
 func validateTerminalState(s *State, fail func(string, ...any)) {

@@ -56,6 +56,14 @@ func TestParallelDiamondLoads(t *testing.T) {
 		t.Errorf("onBranchFailure = %q, want fail (default)", fork.Parallel.OnBranchFailure)
 	}
 
+	assertDiamondTopology(t, m, fork)
+}
+
+// assertDiamondTopology checks the fork's join edge, each branch's fallback
+// to done, and that branch states are reachable from initial (the edges()
+// reachability seed).
+func assertDiamondTopology(t *testing.T, m *Machine, fork *State) {
+	t.Helper()
 	// The fork's single out-edge is the join.
 	if len(fork.Transitions) != 1 || fork.Transitions[0].To != "merge" {
 		t.Errorf("fork transitions = %+v, want single fallback to merge", fork.Transitions)

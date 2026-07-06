@@ -416,6 +416,19 @@ func (l *loader) applyWebhook(m *Machine, root *goja.Object) error {
 	return nil
 }
 
+// parseModels parses the machine's models: block, a name → model-string map.
+func (l *loader) parseModels(root *goja.Object) map[string]string {
+	o := l.obj(root.Get("models"))
+	if o == nil {
+		return nil
+	}
+	models := map[string]string{}
+	for _, k := range o.Keys() {
+		models[k] = str(o.Get(k))
+	}
+	return models
+}
+
 func (l *loader) machine(root *goja.Object) (*Machine, error) {
 	for _, k := range root.Keys() {
 		if !contains(machineKeys, k) {
@@ -434,12 +447,7 @@ func (l *loader) machine(root *goja.Object) (*Machine, error) {
 		m.Input = l.parseInputSpecs(o)
 	}
 
-	if o := l.obj(root.Get("models")); o != nil {
-		m.Models = map[string]string{}
-		for _, k := range o.Keys() {
-			m.Models[k] = str(o.Get(k))
-		}
-	}
+	m.Models = l.parseModels(root)
 
 	// model: top-level sugar for the default agent model.
 	if v := root.Get("model"); defined(v) {

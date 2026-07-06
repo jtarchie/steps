@@ -4,3 +4,4 @@
 out/
 .steps.db*
 /steps
+.envrc

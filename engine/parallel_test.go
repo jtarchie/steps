@@ -307,21 +307,21 @@ func (f *faultStore) Append(ctx context.Context, ev *journal.Event) (int, error)
 		f.dead = true
 		f.mu.Unlock()
 	}
-	return seq, err
+	return seq, err //nolint:wrapcheck
 }
 
 func (f *faultStore) CreateRun(ctx context.Context, run *journal.Run) error {
 	if f.isDead() {
 		return errors.New("simulated crash: store is gone")
 	}
-	return f.Store.CreateRun(ctx, run)
+	return f.Store.CreateRun(ctx, run) //nolint:wrapcheck
 }
 
 func (f *faultStore) UpdateRun(ctx context.Context, id, status, current string) error {
 	if f.isDead() {
 		return errors.New("simulated crash: store is gone")
 	}
-	return f.Store.UpdateRun(ctx, id, status, current)
+	return f.Store.UpdateRun(ctx, id, status, current) //nolint:wrapcheck
 }
 
 // crashDrillMachine: a bare fork of three branches into a join — no pre-fork
@@ -392,6 +392,26 @@ func TestParallelCrashMidForkResume(t *testing.T) {
 	}
 
 	// No respawn: exactly the three pinned children exist, no more.
+	assertNoRespawn(t, store, parentID, pinned)
+
+	// The finished branch (alpha → state a) was not re-run.
+	if n := handlerFinishedCount(t, store, pinned[0], "a"); n != 1 {
+		t.Errorf("branch alpha state a handler_finished ×%d, want 1 (not re-run on resume)", n)
+	}
+
+	// The join saw all three branches.
+	agg, _ := out.State.Ctx["fork"].(map[string]any)
+	for _, label := range []string{"alpha", "beta", "gamma"} {
+		if _, ok := agg[label].(map[string]any); !ok {
+			t.Errorf("aggregate missing branch %q: %v", label, agg)
+		}
+	}
+}
+
+// assertNoRespawn checks that exactly the pinned children survive resume —
+// no additional children were spawned and none of the pinned set is missing.
+func assertNoRespawn(t *testing.T, store journal.Store, parentID string, pinned []string) {
+	t.Helper()
 	children, err := store.ListChildRuns(context.Background(), parentID)
 	if err != nil {
 		t.Fatal(err)
@@ -406,19 +426,6 @@ func TestParallelCrashMidForkResume(t *testing.T) {
 	for _, id := range pinned {
 		if !got[id] {
 			t.Errorf("pinned child %q missing after resume — a new set was spawned", id)
-		}
-	}
-
-	// The finished branch (alpha → state a) was not re-run.
-	if n := handlerFinishedCount(t, store, pinned[0], "a"); n != 1 {
-		t.Errorf("branch alpha state a handler_finished ×%d, want 1 (not re-run on resume)", n)
-	}
-
-	// The join saw all three branches.
-	agg, _ := out.State.Ctx["fork"].(map[string]any)
-	for _, label := range []string{"alpha", "beta", "gamma"} {
-		if _, ok := agg[label].(map[string]any); !ok {
-			t.Errorf("aggregate missing branch %q: %v", label, agg)
 		}
 	}
 }
