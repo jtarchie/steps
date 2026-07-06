@@ -468,6 +468,10 @@ func TestWebhookDrivesPRReview(t *testing.T) {
 	// then assert the machine reached out to the fake GitHub endpoint.
 	waitForSingleRun(t, store, journal.StatusDone)
 	gh.WantCall("diff", "123", "--repo", "o/r") // fetched the diff live
+	// Inline review comments at each finding's file:line.
+	gh.WantCall("api", "repos/o/r/pulls/123/comments",
+		"commit_id=deadbeefcafe", "path=internal/queue/worker.go", "line=34")
+	// The verdict summary as a top-level comment.
 	comment, ok := gh.FindCall("comment", "123")
 	if !ok {
 		t.Fatalf("no gh pr comment call; calls: %v", gh.Calls())
@@ -475,7 +479,9 @@ func TestWebhookDrivesPRReview(t *testing.T) {
 	if !strings.Contains(strings.Join(comment, "\n"), "store.Find") {
 		t.Errorf("comment body missing the verdict findings: %v", comment)
 	}
+	// A red commit check and a triage label.
 	gh.WantCall("api", "repos/o/r/statuses/deadbeefcafe", "state=failure")
+	gh.WantCall("edit", "123", "--add-label", "changes-requested")
 }
 
 func TestHookMissingRequiredInput(t *testing.T) {

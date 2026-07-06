@@ -69,14 +69,23 @@ it:
 ```ts
 // after the review is written to disk…
 branch(write_review, [
-  when(({ pr }) => Boolean(pr)).to(publish), // real PR → comment + status
+  when(({ pr }) => Boolean(pr)).to(publish), // real PR → write back
   done, // fixture/offline → stop
 ]);
 ```
 
-`publish` is just a `pipe(fetch_meta, post_comment, set_status)` of `gh.*`
-action states. In CI you pass `diff=@fixtures/pr.diff` and **no** `pr`; the
-whole publish tail is skipped and the run never touches `gh`.
+`publish` is a
+`pipe(fetch_meta, post_inline, post_comment, set_status,
+label_pr)` of `gh.*`
+action states: `fetch_meta` (`gh.pr_meta`) supplies the head SHA, `post_inline`
+is a `forEach` over the findings dropping a `gh.review_comment` at each
+`file:line`, then the summary `gh.comment`, the `gh.status` check, and a
+`gh.label`. In CI you pass `diff=@fixtures/pr.diff` and **no** `pr`; the whole
+tail is skipped and the run never touches `gh`.
+
+The inline `forEach` uses `retry: "none"` + `onItemFailure: "skip"` so a line
+GitHub rejects (a 422 for a line outside the diff) drops that one comment
+instead of failing the review — the model's line numbers are best-effort.
 
 ## Triggering from a GitHub webhook
 

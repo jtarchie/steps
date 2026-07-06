@@ -23,12 +23,12 @@ scout_pr:
 deep_review:
   - text: >-
       {"path": "internal/queue/worker.go", "findings": [
-      {"where": "Process()", "severity": "blocking", "issue": "concurrent map write: results is mutated by every worker with the mutex deleted", "fix": "reinstate the mutex or collect via a channel"},
-      {"where": "worker spawn loop", "severity": "blocking", "issue": "wg.Add(1) runs inside each goroutine, so wg.Wait() can return before any worker registers", "fix": "wg.Add(1) before go func"}],
+      {"where": "Process()", "line": 34, "severity": "blocking", "issue": "concurrent map write: results is mutated by every worker with the mutex deleted", "fix": "reinstate the mutex or collect via a channel"},
+      {"where": "worker spawn loop", "line": 28, "severity": "blocking", "issue": "wg.Add(1) runs inside each goroutine, so wg.Wait() can return before any worker registers", "fix": "wg.Add(1) before go func"}],
       "leads_refuted": []}
   - text: >-
       {"path": "api/handler.go", "findings": [
-      {"where": "GetUser", "severity": "important", "issue": "store.Find error is swallowed; infrastructure failures surface as 404s", "fix": "restore the error branch with a 500"}],
+      {"where": "GetUser", "line": 19, "severity": "important", "issue": "store.Find error is swallowed; infrastructure failures surface as 404s", "fix": "restore the error branch with a 500"}],
       "leads_refuted": []}
 
 verdict:

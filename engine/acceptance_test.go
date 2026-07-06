@@ -517,11 +517,12 @@ func TestPRReviewLivePublish(t *testing.T) {
 		t.Fatalf("status = %s at %s, want done", res.Status, res.Terminal)
 	}
 
-	// The trace now runs the live fetch and the publish tail.
+	// The trace now runs the live fetch and the full publish tail.
 	states, _, _ := eventTrace(t, store, res.RunID)
 	want := []string{
 		"fetch_pr", "split_diff", "scout_files", "scout_pr", "deep_review",
-		"verdict", "write_review", "fetch_meta", "post_comment", "set_status",
+		"verdict", "write_review", "fetch_meta", "post_inline", "post_comment",
+		"set_status", "label_pr",
 	}
 	if strings.Join(states, ",") != strings.Join(want, ",") {
 		t.Errorf("state sequence = %v, want %v", states, want)
@@ -529,8 +530,16 @@ func TestPRReviewLivePublish(t *testing.T) {
 
 	// The machine fetched the diff live (not a passthrough).
 	gh.WantCall("diff", "123", "--repo", "o/r")
-	// It posted the verdict as a comment — the body carries the substantiated
-	// findings from the mocked verdict.
+	// It dropped an inline review comment at each finding's file:line, using the
+	// fetched head SHA as the commit id (three findings from the mocked senior).
+	gh.WantCall("api", "repos/o/r/pulls/123/comments",
+		"commit_id=deadbeefcafe", "path=internal/queue/worker.go", "line=34")
+	gh.WantCall("api", "repos/o/r/pulls/123/comments", "path=api/handler.go", "line=19")
+	if n := countCalls(gh, "api", "repos/o/r/pulls/123/comments"); n != 3 {
+		t.Errorf("inline review comments = %d, want 3 (one per finding)", n)
+	}
+	// It posted the verdict summary as a comment — the body carries the
+	// substantiated findings from the mocked verdict.
 	comment, ok := gh.FindCall("comment", "123")
 	if !ok {
 		t.Fatalf("no gh pr comment call; calls: %v", gh.Calls())
@@ -538,9 +547,32 @@ func TestPRReviewLivePublish(t *testing.T) {
 	if !strings.Contains(strings.Join(comment, "\n"), "store.Find") {
 		t.Errorf("comment body missing the verdict findings: %v", comment)
 	}
-	// And set a red commit check (the deep path has substantiated findings) on
-	// the fetched head SHA.
+	// A red commit check (findings exist) on the fetched head SHA, and the PR
+	// labelled for triage.
 	gh.WantCall("api", "repos/o/r/statuses/deadbeefcafe", "state=failure")
+	gh.WantCall("edit", "123", "--add-label", "changes-requested")
+}
+
+// countCalls counts recorded gh invocations whose argv contains all tokens.
+func countCalls(gh *ghfake.GH, want ...string) int {
+	n := 0
+	for _, call := range gh.Calls() {
+		set := map[string]bool{}
+		for _, a := range call {
+			set[a] = true
+		}
+		ok := true
+		for _, w := range want {
+			if !set[w] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			n++
+		}
+	}
+	return n
 }
 
 // TestParallelReviewTrace asserts the fork/join trace from

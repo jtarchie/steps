@@ -53,10 +53,14 @@ split_diff ──▶ scout_files ──▶ scout_pr ──┬─(trivial + guard
   already sends the title/body and PR number, so only the diff is fetched.
   Drafts and irrelevant actions (closed/edited) are folded into `action` and
   bounced by `skipEvent` **before** any `gh` call or model token is spent.
-- **Publish back.** When a real `pr` is present the verdict is posted to the PR
-  as a comment (`gh.comment`) and a commit check (`gh.status`, green/red from
-  the `clean` guard); `gh.pr_meta` supplies the head SHA. Fixture/offline runs
-  (no `pr`) route to `done` before this tail and never touch `gh`.
+- **Publish back.** When a real `pr` is present the machine writes to the PR:
+  one **inline comment per finding** at its `file:line` (`gh.review_comment`,
+  `retry:none`+`skip` so a line GitHub rejects is dropped, not fatal), the
+  verdict summary as a top-level comment (`gh.comment`), a commit check
+  (`gh.status`, green/red from the `clean` guard), and a triage label
+  (`gh.label` — `changes-requested`/`reviewed`). `gh.pr_meta` supplies the head
+  SHA the inline comments and check need. Fixture/offline runs (no `pr`) route
+  to `done` before this tail and never touch `gh`.
 
 ## Run it
 
@@ -86,9 +90,9 @@ steps serve --hook workflow.ts --hook-token pr-review=$SECRET
 cat out/review.md
 ```
 
-The gh action pack used here — `gh.pr_diff`, `gh.pr_meta`, `gh.comment`,
-`gh.status` (plus `gh.review_comment` for inline file:line comments and
-`gh.label`) — is documented in `docs/github.md`.
+The gh action pack this exercises — `gh.pr_diff`, `gh.pr_meta`,
+`gh.review_comment`, `gh.comment`, `gh.status`, `gh.label` — is documented in
+`docs/github.md`.
 
 The fixture diff plants real bugs: a mutex deleted around a now-concurrent map
 write, `wg.Add` inside the spawned goroutine, and a swallowed `store.Find` error

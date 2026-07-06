@@ -8,8 +8,9 @@
 // event arrives and the machine fetches the diff itself. The seam is
 // `fetch_pr` (gh.pr_diff): a supplied diff is echoed straight through (no gh
 // call, so fixtures/CI stay hermetic), an empty one is fetched live. When a
-// real PR is under review (a `pr` is present) the verdict is posted back as a
-// comment and a commit check — otherwise the run just writes out/review.md.
+// real PR is under review (a `pr` is present) the findings are posted back —
+// inline comments, a summary comment, a commit check, and a label — otherwise
+// the run just writes out/review.md.
 //
 // States are plain consts; the flow at the bottom is the whole topology.
 // Every computed value is a function of one flat scope — destructure what
@@ -190,6 +191,8 @@ const deep_review: State = {
     defect the scout missed. Do not restate the diff. Report only what you
     can substantiate. If the patch alone is not enough context, read the
     full file with file_read before concluding.
+    For each finding, give the NEW-file line number it sits on (the line as
+    it appears in the "+" side of the patch) so it can be commented inline.
     PR THEMES:${scout_pr.themes.map((t) => " " + t + ";").join("")}
     FILE: ${lead.path}
     LEADS:
@@ -200,6 +203,7 @@ const deep_review: State = {
     path: "string",
     findings: [{
       where: "string",
+      line: "number", // new-file line, for inline review comments
       severity: "enum(blocking|important|nit)",
       issue: "string",
       fix: "string",
@@ -248,6 +252,35 @@ const fetch_meta: State = {
   input: ({ pr, repo }) => ({ pr, repo: repo || "" }),
 };
 
+// One inline review comment per substantiated finding, at its file:line —
+// gh.review_comment needs the PR head SHA (fetch_meta.headSha) as commit_id.
+// retry:none + skip: a line GitHub rejects (422) is dropped, never fatal to
+// the review. Empty when the senior substantiated nothing.
+const post_inline: State = {
+  forEach: {
+    over: ({ deep_review }) =>
+      deep_review.items.flatMap((i) =>
+        i.findings.map((f) => ({
+          path: i.path,
+          line: f.line,
+          body: `**[${f.severity}]** ${f.issue}\n\n_fix:_ ${f.fix}`,
+        }))
+      ),
+    as: "finding",
+    onItemFailure: "skip",
+  },
+  action: "gh.review_comment",
+  retry: "none",
+  input: ({ pr, repo, fetch_meta, finding }) => ({
+    repo: repo || "",
+    pr,
+    commit_id: fetch_meta.headSha,
+    path: finding.path,
+    line: finding.line,
+    body: finding.body,
+  }),
+};
+
 const post_comment: State = {
   action: "gh.comment",
   input: ({ pr, repo, verdict }) => ({
@@ -272,7 +305,27 @@ const set_status: State = {
   }),
 };
 
-const publish = pipe(fetch_meta, post_comment, set_status);
+// Tag the PR by outcome so a human can triage the queue at a glance.
+const label_pr: State = {
+  action: "gh.label",
+  input: ({ pr, repo, deep_review }) => ({
+    pr,
+    repo: repo || "",
+    add: [
+      deep_review.items.some((i) => i.findings.length > 0)
+        ? "changes-requested"
+        : "reviewed",
+    ],
+  }),
+};
+
+const publish = pipe(
+  fetch_meta,
+  post_inline,
+  post_comment,
+  set_status,
+  label_pr,
+);
 
 export default {
   name: "pr-review",
@@ -329,8 +382,10 @@ export default {
     verdict,
     write_review,
     fetch_meta,
+    post_inline,
     post_comment,
     set_status,
+    label_pr,
   },
 
   flow: pipe(
