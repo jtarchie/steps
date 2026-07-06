@@ -11,6 +11,7 @@ tasks:
     cmds:
       - golangci-lint run ./... --fix
       - gofmt -w .
+      - deno fmt docs/ examples/
 
   test:
     desc: Run the full test suite with the race detector
