@@ -14,6 +14,13 @@
 {{end}}
 {{end}}
 
+{{if .Machines}}
+<h1>Trigger</h1>
+<div class="chips">
+  {{range .Machines}}<a href="/machines/{{. | pathescape}}">▶ {{.}}</a>{{end}}
+</div>
+{{end}}
+
 <h1>Runs</h1>
 <div class="chips">
   {{$f := .Filter}}

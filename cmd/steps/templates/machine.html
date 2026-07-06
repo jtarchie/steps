@@ -1,0 +1,70 @@
+{{template "page_head" .}}
+
+<h1>▶ {{.Name}}</h1>
+{{if .Description}}<p class="muted">{{.Description}}</p>{{end}}
+<p class="muted"><a href="/machines">← all machines</a></p>
+
+<div class="card form">
+  {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
+  <form method="post" action="/machines/{{.Name | pathescape}}/run" enctype="multipart/form-data">
+    {{range .Fields}}
+    <label class="opt">
+      <b>{{.Name}}</b>{{if .Required}}<span class="req"> *</span>{{end}}
+      {{if .Type}}<span class="type">({{.Type}})</span>{{end}}
+    </label>
+    <textarea name="in_{{.Name}}" rows="3">{{index $.Values .Name}}</textarea>
+    <input type="file" name="file_{{.Name}}" title="upload a file to use its contents as this input">
+    {{end}}
+
+    <details {{if not .HasInputs}}open{{end}}>
+      <summary class="muted">{{if .HasInputs}}Extra inputs (JSON object){{else}}Inputs (JSON object){{end}}</summary>
+      <div class="jsonedit">
+        <textarea name="extras_json" rows="6" spellcheck="false" placeholder='{"key": "value"}'>{{.ExtrasValue}}</textarea>
+      </div>
+      <div class="json-hint"></div>
+    </details>
+
+    <button type="submit">Run</button>
+  </form>
+</div>
+
+<script>
+(function () {
+  var wrap = document.querySelector('.jsonedit');
+  if (!wrap) return;
+  var ta = wrap.querySelector('textarea');
+  var hint = wrap.parentNode.querySelector('.json-hint');
+  var pre = document.createElement('pre');
+  pre.className = 'backdrop';
+  var code = document.createElement('code');
+  pre.appendChild(code);
+  wrap.insertBefore(pre, ta);
+  wrap.classList.add('hl');
+
+  function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function highlight(src) {
+    return esc(src).replace(
+      /("(?:[^"\\]|\\.)*")(\s*:)?|\b(true|false|null)\b|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,
+      function (m, str, colon, lit, num) {
+        if (str) { return '<span class="' + (colon ? 'tok-key' : 'tok-str') + '">' + str + '</span>' + (colon || ''); }
+        if (lit) { return '<span class="tok-lit">' + lit + '</span>'; }
+        if (num) { return '<span class="tok-num">' + num + '</span>'; }
+        return m;
+      });
+  }
+  function sync() { pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft; }
+  function render() {
+    code.innerHTML = highlight(ta.value) + '\n';
+    sync();
+    var v = ta.value.trim();
+    if (!v) { wrap.classList.remove('invalid'); if (hint) hint.textContent = ''; return; }
+    try { JSON.parse(v); wrap.classList.remove('invalid'); if (hint) hint.textContent = ''; }
+    catch (e) { wrap.classList.add('invalid'); if (hint) hint.textContent = 'invalid JSON'; }
+  }
+  ta.addEventListener('input', render);
+  ta.addEventListener('scroll', sync);
+  render();
+})();
+</script>
+
+{{template "page_foot"}}

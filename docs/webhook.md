@@ -65,7 +65,14 @@ steps serve \
   (default `NumCPU`). It is the host's safety valve above each hook's own
   `maxInFlight`.
 
-Omit `--hook` entirely and `serve` is just the read-only run dashboard.
+Omit `--hook` entirely and `serve` is just the read-only run dashboard — unless
+you pass `--machine workflow.ts`, which exposes a machine for **manual
+triggering** from the web UI at `/machines/<name>` without requiring a
+`webhook:` block. Its form is generated from the `input:` block (a text field
+plus a file-upload alternative per input, whose contents become the value, plus
+a raw-JSON escape hatch), and a submission durably queues a run through the same
+dispatcher. Every `--hook` machine is manually triggerable this way too, so it
+also appears on `/machines`.
 
 ## Limits, queue, and backpressure
 

@@ -1,0 +1,28 @@
+{{template "page_head" .}}
+
+<h1>Machines</h1>
+{{if .Machines}}
+<div class="scroll">
+<table>
+  <tr><th>machine</th><th>inputs</th><th>webhook</th></tr>
+  {{range .Machines}}
+  <tr>
+    <td>
+      <a href="/machines/{{.Name | pathescape}}">▶ {{.Name}}</a>
+      {{if .Description}}<div class="muted">{{.Description}}</div>{{end}}
+    </td>
+    <td>
+      {{if .Fields}}
+        {{range .Fields}}<code>{{.Name}}</code>{{if .Required}}<span class="req">*</span>{{end}} {{end}}
+      {{else}}<span class="muted">any (JSON)</span>{{end}}
+    </td>
+    <td>{{if .HookPath}}<code>POST /hooks/{{.HookPath}}</code>{{else}}<span class="muted">—</span>{{end}}</td>
+  </tr>
+  {{end}}
+</table>
+</div>
+{{else}}
+<p class="muted">No machines registered. Expose one with <code>steps serve --machine workflow.ts</code>.</p>
+{{end}}
+
+{{template "page_foot"}}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"net/url"
 	"time"
 )
 
@@ -15,11 +16,12 @@ var templateFS embed.FS
 // templates reference. Parsed once at startup; a parse error is a programmer
 // bug in an embedded file, so panic.
 var webTemplates = template.Must(template.New("").Funcs(template.FuncMap{
-	"tokens":   formatCount,
-	"cost":     func(c float64) string { return fmt.Sprintf("$%.4f", c) },
-	"ago":      humanizeSince,
-	"bytesize": humanizeBytes,
-	"render":   renderValue,
+	"tokens":     formatCount,
+	"cost":       func(c float64) string { return fmt.Sprintf("$%.4f", c) },
+	"ago":        humanizeSince,
+	"bytesize":   humanizeBytes,
+	"render":     renderValue,
+	"pathescape": url.PathEscape,
 	"json": func(v any) string {
 		raw, err := json.Marshal(v)
 		if err != nil {

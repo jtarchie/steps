@@ -30,6 +30,19 @@ func repoRoot() string {
 	return filepath.Dir(filepath.Dir(filepath.Dir(file)))
 }
 
+// servedHooks builds a registry from webhook-carrying machines, indexing each
+// by both its webhook path and its name (mirroring loadServed).
+func servedHooks(machines ...*servedMachine) *served {
+	reg := &served{byName: map[string]*servedMachine{}, byPath: map[string]*servedMachine{}}
+	for _, sm := range machines {
+		reg.byName[sm.m.Name] = sm
+		if sm.m.Webhook != nil {
+			reg.byPath[sm.m.Webhook.Path] = sm
+		}
+	}
+	return reg
+}
+
 // parkedRun starts summarize-critic against a never-approving mock so it
 // parks at the escalate gate, and returns a server plus the parked run id.
 func parkedRun(t *testing.T) (*server, string, *engine.Engine, *machine.Machine) {
@@ -293,8 +306,8 @@ export default {
 	t.Cleanup(func() { store.Close() })
 	eng := engine.New(store, provider.NewRegistry(), toolreg.New(), engine.NopListener{})
 
-	hook := &hookSpec{m: m, inputs: map[string]any{"region": "us-east-1"}, token: "sekrit"}
-	e := newServer(t.Context(), store, eng, map[string]*hookSpec{m.Webhook.Path: hook}, 1)
+	hook := &servedMachine{m: m, inputs: map[string]any{"region": "us-east-1"}, token: "sekrit"}
+	e := newServer(t.Context(), store, eng, servedHooks(hook), 1)
 
 	post := func(target, jsonBody string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, target, strings.NewReader(jsonBody))
@@ -363,9 +376,9 @@ export default {
 	eng := engine.New(store, provider.NewRegistry(), toolreg.New(), engine.NopListener{})
 
 	const secret = "sh4red-s3cret"
-	hook := &hookSpec{m: m, inputs: map[string]any{}, token: secret}
+	hook := &servedMachine{m: m, inputs: map[string]any{}, token: secret}
 	// No dispatcher (maxInFlight 0 leaves runs queued) so the machine never runs.
-	e := newServer(t.Context(), store, eng, map[string]*hookSpec{m.Webhook.Path: hook}, 0)
+	e := newServer(t.Context(), store, eng, servedHooks(hook), 0)
 
 	body := `{"number": 42, "repository": {"full_name": "acme/widgets"}}`
 	sign := func(b string) string {
@@ -448,8 +461,8 @@ func TestWebhookDrivesPRReview(t *testing.T) {
 	eng.Mock = mock
 
 	const secret = "hook-secret"
-	hook := &hookSpec{m: m, inputs: map[string]any{}, token: secret}
-	e := newServer(t.Context(), store, eng, map[string]*hookSpec{m.Webhook.Path: hook}, 1)
+	hook := &servedMachine{m: m, inputs: map[string]any{}, token: secret}
+	e := newServer(t.Context(), store, eng, servedHooks(hook), 1)
 
 	payload := `{"action":"opened","number":123,
 		"repository":{"full_name":"o/r"},
@@ -508,8 +521,8 @@ export default {
 	}
 	t.Cleanup(func() { store.Close() })
 	eng := engine.New(store, provider.NewRegistry(), toolreg.New(), engine.NopListener{})
-	hook := &hookSpec{m: m, inputs: map[string]any{}}
-	e := newServer(t.Context(), store, eng, map[string]*hookSpec{m.Webhook.Path: hook}, 1)
+	hook := &servedMachine{m: m, inputs: map[string]any{}}
+	e := newServer(t.Context(), store, eng, servedHooks(hook), 1)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/hooks/hb",
 		strings.NewReader(`{"message": "boom"}`))
@@ -555,7 +568,7 @@ func TestWebhookTriggersIncidentRunbook(t *testing.T) {
 	dead := httptest.NewServer(http.NotFoundHandler())
 	dead.Close()
 
-	hook := &hookSpec{
+	hook := &servedMachine{
 		m: m,
 		inputs: map[string]any{
 			"services":    "api,worker,cache,search",
@@ -564,7 +577,7 @@ func TestWebhookTriggersIncidentRunbook(t *testing.T) {
 		},
 		token: "sekrit",
 	}
-	e := newServer(t.Context(), store, eng, map[string]*hookSpec{m.Webhook.Path: hook}, 1)
+	e := newServer(t.Context(), store, eng, servedHooks(hook), 1)
 
 	payload, err := os.ReadFile(filepath.Join(root, "examples", "incident-runbook", "fixtures", "webhook.json"))
 	if err != nil {
@@ -662,7 +675,7 @@ func TestParseHookTokens(t *testing.T) {
 }
 
 // writeHook builds a mock write-action machine keyed by webhook path.
-func writeHook(t *testing.T, name, path, outFile string, token string) *hookSpec {
+func writeHook(t *testing.T, name, path, outFile string, token string) *servedMachine {
 	t.Helper()
 	wf := `
 const work = { write: "` + outFile + `", content: ({ msg }) => msg };
@@ -677,7 +690,7 @@ export default {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &hookSpec{m: m, inputs: map[string]any{}, token: token}
+	return &servedMachine{m: m, inputs: map[string]any{}, token: token}
 }
 
 // TestHookMultiRouting registers two hooks and asserts POSTs route to the right
@@ -693,8 +706,7 @@ func TestHookMultiRouting(t *testing.T) {
 
 	hookA := writeHook(t, "hooked-a", "a", "out/a.txt", "tok-a")
 	hookB := writeHook(t, "hooked-b", "b", "out/b.txt", "") // b is unauthenticated
-	hooks := map[string]*hookSpec{"a": hookA, "b": hookB}
-	e := newServer(t.Context(), store, eng, hooks, 2)
+	e := newServer(t.Context(), store, eng, servedHooks(hookA, hookB), 2)
 
 	post := func(target, body string) int {
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, target, strings.NewReader(body))
@@ -758,7 +770,7 @@ export default {
 	eng := engine.New(store, provider.NewRegistry(), toolreg.New(), engine.NopListener{})
 
 	// Bare server: no dispatcher, so the queue never drains between POSTs.
-	s := &server{store: store, eng: eng, hooksByPath: map[string]*hookSpec{"hb": {m: m, inputs: map[string]any{}}}}
+	s := &server{store: store, eng: eng, hooksByPath: map[string]*servedMachine{"hb": {m: m, inputs: map[string]any{}}}}
 	e := echo.New()
 	e.POST("/hooks/:path", s.handleHook)
 
@@ -808,7 +820,7 @@ func TestHookDurableQueueDrain(t *testing.T) {
 
 	// "Restart": a fresh server over the same journal. Its dispatcher's first
 	// drain (global cap 1 = strictly serial) picks up all queued rows.
-	newServer(t.Context(), store, eng, map[string]*hookSpec{"cr": hook}, 1)
+	newServer(t.Context(), store, eng, servedHooks(hook), 1)
 
 	waitForNRuns(t, store, journal.StatusDone, 3)
 	left, _ := store.ListRunsByStatus(context.Background(), journal.StatusQueued)

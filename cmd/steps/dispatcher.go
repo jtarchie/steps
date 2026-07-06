@@ -17,38 +17,33 @@ import (
 
 	"github.com/jtarchie/steps/engine"
 	"github.com/jtarchie/steps/journal"
-	"github.com/jtarchie/steps/machine"
 )
 
 type dispatcher struct {
 	eng       *engine.Engine
 	store     journal.Store
-	byMachine map[string]*hookSpec     // machine name -> hook (queued rows carry Machine, not path)
-	global    chan struct{}            // cap = global --max-in-flight
-	perHook   map[string]chan struct{} // machine name -> cap = webhook.maxInFlight
-	signal    chan struct{}            // buffered(1): enqueue or slot-freed nudge
-	inflight  sync.Map                 // runID -> struct{}: launched, not yet off "queued"
+	byMachine map[string]*servedMachine // machine name -> spec (queued rows carry Machine, not path)
+	global    chan struct{}             // cap = global --max-in-flight
+	perHook   map[string]chan struct{}  // machine name -> cap = maxInFlight
+	signal    chan struct{}             // buffered(1): enqueue or slot-freed nudge
+	inflight  sync.Map                  // runID -> struct{}: launched, not yet off "queued"
 }
 
-func newDispatcher(eng *engine.Engine, store journal.Store, hooks map[string]*hookSpec, maxInFlight int) *dispatcher {
+func newDispatcher(eng *engine.Engine, store journal.Store, machines map[string]*servedMachine, maxInFlight int) *dispatcher {
 	if maxInFlight <= 0 {
 		maxInFlight = runtime.NumCPU()
 	}
 	d := &dispatcher{
 		eng:       eng,
 		store:     store,
-		byMachine: make(map[string]*hookSpec, len(hooks)),
+		byMachine: make(map[string]*servedMachine, len(machines)),
 		global:    make(chan struct{}, maxInFlight),
-		perHook:   make(map[string]chan struct{}, len(hooks)),
+		perHook:   make(map[string]chan struct{}, len(machines)),
 		signal:    make(chan struct{}, 1),
 	}
-	for _, hook := range hooks {
-		n := hook.m.Webhook.MaxInFlight
-		if n <= 0 {
-			n = machine.DefaultHookMaxInFlight
-		}
-		d.byMachine[hook.m.Name] = hook
-		d.perHook[hook.m.Name] = make(chan struct{}, n)
+	for name, sm := range machines {
+		d.byMachine[name] = sm
+		d.perHook[name] = make(chan struct{}, sm.maxInFlight())
 	}
 	return d
 }
@@ -112,7 +107,7 @@ func (d *dispatcher) drain(ctx context.Context) {
 // via the UI/CLI, not the dispatcher). The run is bounded by the server
 // lifetime ctx (shutdown cancels it) with a hard 30-minute ceiling. The defer
 // releases both semaphores and nudges the dispatcher to fill the freed slot.
-func (d *dispatcher) execute(ctx context.Context, runID, machineName string, hook *hookSpec) {
+func (d *dispatcher) execute(ctx context.Context, runID, machineName string, hook *servedMachine) {
 	defer func() {
 		<-d.perHook[machineName]
 		<-d.global
@@ -123,7 +118,7 @@ func (d *dispatcher) execute(ctx context.Context, runID, machineName string, hoo
 	defer cancel()
 	_, err := d.eng.StartQueued(runCtx, hook.m, runID)
 	if err != nil {
-		d.eng.Listener.Warn("queued run failed", "run", runID, "hook", hook.m.Webhook.Path, "err", err.Error())
+		d.eng.Listener.Warn("queued run failed", "run", runID, "machine", hook.m.Name, "err", err.Error())
 		// Demote out of the queue so a persistent start error can't hot-loop
 		// the dispatcher. If this also fails the queue list will fail too, so
 		// drain returns early rather than spinning.

@@ -35,24 +35,55 @@ import (
 type server struct {
 	store       journal.Store
 	eng         *engine.Engine
-	resuming    sync.Map             // runID -> struct{}: a resume is in flight
-	hooksByPath map[string]*hookSpec // webhook path slug -> hook; nil = none registered
-	disp        *dispatcher          // drains the durable queue; nil when no hooks
+	resuming    sync.Map                  // runID -> struct{}: a resume is in flight
+	machines    map[string]*servedMachine // machine name -> spec: every registered machine (--hook and --machine)
+	hooksByPath map[string]*servedMachine // webhook path slug -> spec: the webhook subset; nil = none registered
+	disp        *dispatcher               // drains the durable queue; nil when nothing is registered
 }
 
-// hookSpec is a webhook-triggerable machine, loaded once at startup.
-type hookSpec struct {
+// servedMachine is a machine registered with `steps serve`, triggerable
+// manually from the web UI and — when it carries a webhook: block wired via
+// --hook — by an inbound POST /hooks/<path>. Loaded once at startup.
+type servedMachine struct {
 	m      *machine.Machine
 	inputs map[string]any // --hook-input base values (operator config)
-	token  string         // resolved per-hook token; "" = unauthenticated
+	token  string         // resolved per-hook token; "" = unauthenticated (webhook only)
+}
+
+// maxInFlight resolves the machine's concurrent-run cap, nil-Webhook-safe: a
+// --machine entry without a webhook: block falls back to the default.
+func (sm *servedMachine) maxInFlight() int {
+	if sm.m.Webhook != nil && sm.m.Webhook.MaxInFlight > 0 {
+		return sm.m.Webhook.MaxInFlight
+	}
+	return machine.DefaultHookMaxInFlight
+}
+
+// maxQueued resolves the machine's durable-queue depth cap, nil-Webhook-safe.
+func (sm *servedMachine) maxQueued() int {
+	if sm.m.Webhook != nil && sm.m.Webhook.MaxQueued > 0 {
+		return sm.m.Webhook.MaxQueued
+	}
+	return machine.DefaultHookMaxQueued
+}
+
+// served is the registry of machines exposed by one `steps serve`: byName
+// indexes every machine (for the trigger UI and dispatcher), byPath the webhook
+// subset (for POST /hooks/<path>). Both maps hold the same *servedMachine.
+type served struct {
+	byName map[string]*servedMachine
+	byPath map[string]*servedMachine
 }
 
 // newServer wires the routes onto a fresh echo instance — the httptest seam.
 // ctx bounds the dispatcher goroutine (cancel it to stop draining the queue).
-func newServer(ctx context.Context, store journal.Store, eng *engine.Engine, hooks map[string]*hookSpec, maxInFlight int) *echo.Echo {
-	s := &server{store: store, eng: eng, hooksByPath: hooks}
-	if len(hooks) > 0 {
-		s.disp = newDispatcher(eng, store, hooks, maxInFlight)
+func newServer(ctx context.Context, store journal.Store, eng *engine.Engine, reg *served, maxInFlight int) *echo.Echo {
+	if reg == nil {
+		reg = &served{}
+	}
+	s := &server{store: store, eng: eng, machines: reg.byName, hooksByPath: reg.byPath}
+	if len(reg.byName) > 0 {
+		s.disp = newDispatcher(eng, store, reg.byName, maxInFlight)
 		go s.disp.run(ctx)
 	}
 	e := echo.New()
@@ -61,6 +92,9 @@ func newServer(ctx context.Context, store journal.Store, eng *engine.Engine, hoo
 	e.GET("/runs/:id", s.handleRun)
 	e.POST("/runs/:id/resume", s.handleResume)
 	e.POST("/hooks/:path", s.handleHook)
+	e.GET("/machines", s.handleMachines)
+	e.GET("/machines/:name", s.handleMachineForm)
+	e.POST("/machines/:name/run", s.handleTrigger)
 	return e
 }
 
@@ -129,19 +163,10 @@ func (s *server) handleHook(c *echo.Context) error {
 	return nil
 }
 
-// hookMaxQueued resolves the hook's queue bound, applying the default.
-func hookMaxQueued(hook *hookSpec) int {
-	n := hook.m.Webhook.MaxQueued
-	if n <= 0 {
-		n = machine.DefaultHookMaxQueued
-	}
-	return n
-}
-
-// checkQueueDepth returns 429 when this hook already has maxQueued runs waiting
-// for a slot.
-func (s *server) checkQueueDepth(ctx context.Context, hook *hookSpec) *echo.HTTPError {
-	limit := hookMaxQueued(hook)
+// checkQueueDepth returns 429 when this machine already has maxQueued runs
+// waiting for a slot.
+func (s *server) checkQueueDepth(ctx context.Context, hook *servedMachine) *echo.HTTPError {
+	limit := hook.maxQueued()
 	queued, err := s.store.ListRunsByStatus(ctx, journal.StatusQueued)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "checking queue depth: "+err.Error())
@@ -189,7 +214,7 @@ func verifyHook(c *echo.Context, secret string, raw []byte) *echo.HTTPError {
 
 // hookInput merges hook inputs (under) with the map's payload-derived values
 // (over), keeping only declared inputs, and fails if a required one is absent.
-func hookInput(hook *hookSpec, mapped map[string]any) (map[string]any, *echo.HTTPError) {
+func hookInput(hook *servedMachine, mapped map[string]any) (map[string]any, *echo.HTTPError) {
 	input := map[string]any{}
 	for k, v := range hook.inputs {
 		if _, ok := hook.m.Input[k]; ok {
@@ -318,6 +343,7 @@ func (s *server) handleRuns(c *echo.Context) error {
 		"Runs":      rows,
 		"Attention": attention,
 		"Totals":    totals,
+		"Machines":  s.machineNames(),
 	})
 }
 

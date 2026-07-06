@@ -140,6 +140,39 @@ pre.msg { margin: .3rem 0; }
 .graph-legend i.visited { border-color: var(--line); background: var(--card); }
 .graph-legend i.parked { border-color: var(--parked); }
 .graph-legend i.failed { border-color: var(--failed); }
+/* Trigger form: manual run submission, styled like the gate form but neutral. */
+.form { border-left: 4px solid var(--accent); }
+.form label.opt { display: block; margin: .6rem 0 .15rem; }
+.form label.opt .req { color: var(--failed); }
+.form label.opt .type { color: var(--muted); font-weight: 400; }
+.form textarea, .form input[type=text] {
+  width: 100%; max-width: 32rem; background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 6px; padding: .4rem .6rem; font: inherit;
+}
+.form input[type=file] { display: block; margin: .25rem 0; font-size: .85rem; color: var(--muted); }
+.form button {
+  margin-top: .9rem; padding: .45rem 1.1rem; border: 0; border-radius: 6px;
+  background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer;
+}
+.form .err { color: var(--failed); font-weight: 600; margin: .2rem 0 .6rem; }
+/* JSON editor: a transparent textarea layered over a highlighted backdrop the
+   script fills in. With JS off the .hl class is never added, so the plain
+   (opaque) textarea still works. */
+.jsonedit { position: relative; max-width: 32rem; }
+.jsonedit textarea, .jsonedit .backdrop {
+  font: .86em ui-monospace, "SF Mono", Menlo, monospace; line-height: 1.5;
+  padding: .4rem .6rem; border-radius: 6px; white-space: pre-wrap; word-break: break-word;
+  border: 1px solid var(--line);
+}
+.jsonedit textarea { position: relative; width: 100%; min-height: 6rem; resize: vertical; background: var(--bg); color: var(--fg); }
+.jsonedit.hl textarea { color: transparent; caret-color: var(--fg); background: transparent; }
+.jsonedit .backdrop { position: absolute; inset: 0; margin: 0; overflow: auto; pointer-events: none; background: var(--bg); color: var(--fg); border-color: transparent; }
+.jsonedit.invalid textarea { border-color: var(--failed); }
+.json-hint { font-size: .78rem; color: var(--failed); min-height: 1.1em; margin: .15rem 0; }
+.tok-key { color: var(--accent); }
+.tok-str { color: var(--done); }
+.tok-num { color: var(--parked); }
+.tok-lit { color: var(--failed); }
 </style>
 </head>
 <body>
