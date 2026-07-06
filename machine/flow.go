@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dop251/goja"
 )
@@ -36,6 +37,13 @@ function when(fn) {
 function loop(body, opts) {
   return { __steps: "loop", body: body, opts: opts || {} };
 }
+// gate is a global-object property, not a lexical binding, so a machine that
+// names a state "const gate = { human: ... }" shadows it without a redeclaration
+// error — the common state name keeps working; only machines that actually call
+// gate(...) reach the combinator.
+globalThis.gate = function (name, opts) {
+  return { __steps: "gate", name: name, opts: opts || {} };
+};
 const done = { __steps: "terminal", name: "done" };
 const fail = { __steps: "terminal", name: "failed" };
 function list(xs) {
@@ -143,6 +151,9 @@ func (l *loader) wireNode(m *Machine, v goja.Value, successor string) (string, e
 
 	case "loop":
 		return l.wireLoop(m, obj, successor)
+
+	case "gate":
+		return l.wireGate(m, obj, successor)
 
 	case "when":
 		return "", errors.New("when(...) must be completed with .to(target)")
@@ -495,6 +506,172 @@ func (l *loader) resolveLoopThen(m *Machine, opts *goja.Object, judge, successor
 	}
 }
 
+// gateKeys are the valid gate(name, {...}) options.
+var gateKeys = []string{"prompt", "approve", "choices", "timeout", "onTimeout"}
+
+// wireGate synthesizes a human escalation state (`gate#<name>`) and its branch
+// tail from a prompt + a choice→target map. It is the same "sugar compiles to
+// states" move as distill's `owner#key`: the `#` keeps the name collision-free
+// and non-destructurable, and the synthesized state flows through defaults,
+// validation, journal, and resume exactly like a hand-written gate.
+func (l *loader) wireGate(m *Machine, obj *goja.Object, successor string) (string, error) {
+	// Reuse: a gate node referenced from more than one target position resolves
+	// to the same synthesized state. A gate places itself, so a pipe successor
+	// (mid-pipe re-wiring) is the double-wire error.
+	if defined(obj.Get(stateNameProp)) {
+		name := l.stateName(obj)
+		if successor != "" {
+			return "", fmt.Errorf("gate %q is wired more than once — a gate routes on its own events; reference it once", name)
+		}
+		return name, nil
+	}
+
+	rawName := str(obj.Get("name"))
+	if !isIdentifier(rawName) {
+		return "", fmt.Errorf("gate(%q): name must be a valid identifier (letters, digits, _)", rawName)
+	}
+	stateName := "gate#" + rawName
+	if m.State(stateName) != nil {
+		return "", fmt.Errorf("gate %q is declared twice", rawName)
+	}
+	opts, ok := obj.Get("opts").(*goja.Object)
+	if !ok {
+		return "", fmt.Errorf("gate(%q): needs an options object", rawName)
+	}
+	for _, k := range opts.Keys() {
+		if !contains(gateKeys, k) {
+			return "", fmt.Errorf("gate(%q): unknown option %q — valid: %s", rawName, k, strings.Join(gateKeys, ", "))
+		}
+	}
+
+	prompt := opts.Get("prompt")
+	if !defined(prompt) {
+		return "", fmt.Errorf("gate(%q): needs a prompt", rawName)
+	}
+	timeout, err := duration(opts.Get("timeout"), fmt.Sprintf("gate(%q).timeout", rawName))
+	if err != nil {
+		return "", err
+	}
+
+	// Register the state before wiring targets — they may reference it or be
+	// nested subtrees that need it in the index.
+	st := &State{
+		Name:  stateName,
+		Gate:  true,
+		Human: &HumanSpec{Prompt: l.dyn(prompt), Timeout: timeout},
+	}
+	m.States = append(m.States, st)
+	m.buildIndex()
+	_ = obj.DefineDataProperty(stateNameProp, l.rt.vm.ToValue(stateName), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_FALSE)
+
+	err = l.wireGateEdges(m, st, rawName, opts, successor)
+	if err != nil {
+		return "", err
+	}
+	err = l.wireGateTimeout(m, st, rawName, opts, timeout)
+	if err != nil {
+		return "", err
+	}
+	return stateName, nil
+}
+
+// wireGateEdges resolves the choice→event transitions and the ChoiceSpec: the
+// approve: shorthand (approved → target, synthesized rejected → fail), the full
+// choices: map, or — mid-pipe with neither — approve defaults to the successor.
+func (l *loader) wireGateEdges(m *Machine, st *State, name string, opts *goja.Object, successor string) error {
+	approve := opts.Get("approve")
+	choices := opts.Get("choices")
+	switch {
+	case defined(approve) && defined(choices):
+		return fmt.Errorf("gate(%q): pass approve: or choices:, not both", name)
+	case defined(approve):
+		if successor != "" {
+			return fmt.Errorf("gate(%q): has approve and the pipe continues after it — move the continuation into approve", name)
+		}
+		to, err := l.wireTarget(m, approve, st.Name, "approve")
+		if err != nil {
+			return err
+		}
+		l.applyGateApprove(st, to)
+	case defined(choices):
+		if successor != "" {
+			return fmt.Errorf("gate(%q): has choices: AND the pipe continues after it — a gate routes on its own events", name)
+		}
+		return l.wireGateChoices(m, st, name, choices)
+	default:
+		if successor == "" {
+			return fmt.Errorf("gate(%q): needs approve: or choices: (or a pipe to fall through to)", name)
+		}
+		l.applyGateApprove(st, successor)
+	}
+	return nil
+}
+
+// applyGateApprove wires the approve: shorthand: approved → target, rejected →
+// failed, with a synthesized single-choice alphabet so the gate renders.
+func (l *loader) applyGateApprove(st *State, approveTarget string) {
+	st.Transitions = []Transition{
+		{On: "approved", To: approveTarget},
+		{On: "rejected", To: "failed"},
+	}
+	st.Human.Choices = &ChoiceSpec{Kind: "single", Options: []ChoiceOption{
+		{Event: "approved", Label: "Approve"},
+		{Event: "rejected", Label: "Reject (fail the run)"},
+	}}
+}
+
+// wireGateChoices wires the full choices: {event: target | {to, label}} map.
+func (l *loader) wireGateChoices(m *Machine, st *State, name string, v goja.Value) error {
+	o := l.obj(v)
+	if o == nil {
+		return fmt.Errorf("gate(%q): choices must be an object of {event: target | {to, label}}", name)
+	}
+	keys := o.Keys()
+	if len(keys) == 0 {
+		return fmt.Errorf("gate(%q): choices must declare at least one option", name)
+	}
+	choice := &ChoiceSpec{Kind: "single"}
+	for _, ev := range keys {
+		val := o.Get(ev)
+		target, label := val, ev
+		// {to, label} form: a plain object (not a flow node) carrying `to`.
+		if k, vo := l.flowKind(val); k == "" && vo != nil && defined(vo.Get("to")) {
+			target = vo.Get("to")
+			if defined(vo.Get("label")) {
+				label = str(vo.Get("label"))
+			}
+		}
+		to, err := l.wireTarget(m, target, st.Name, "choice "+ev)
+		if err != nil {
+			return err
+		}
+		st.Transitions = append(st.Transitions, Transition{On: ev, To: to})
+		choice.Options = append(choice.Options, ChoiceOption{Event: ev, Label: label})
+	}
+	st.Human.Choices = choice
+	return nil
+}
+
+// wireGateTimeout wires the timeout route: an explicit onTimeout: target, or —
+// when a timeout duration is set — a synthesized route to failed.
+func (l *loader) wireGateTimeout(m *Machine, st *State, name string, opts *goja.Object, timeout time.Duration) error {
+	onTimeout := opts.Get("onTimeout")
+	switch {
+	case defined(onTimeout):
+		if timeout == 0 {
+			return fmt.Errorf("gate(%q): onTimeout is set but timeout is not", name)
+		}
+		to, err := l.wireTarget(m, onTimeout, st.Name, "onTimeout")
+		if err != nil {
+			return err
+		}
+		st.Human.OnTimeout = to
+	case timeout > 0:
+		st.Human.OnTimeout = "failed"
+	}
+	return nil
+}
+
 // wireTarget resolves an edge target (state ref, terminal, nested pipe,
 // branch, or loop) and returns the entry state name.
 func (l *loader) wireTarget(m *Machine, v goja.Value, from, edge string) (string, error) {
@@ -504,10 +681,10 @@ func (l *loader) wireTarget(m *Machine, v goja.Value, from, edge string) (string
 		return l.stateName(obj), nil
 	case "terminal":
 		return str(obj.Get("name")), nil
-	case "pipe", "branch", "loop":
+	case "pipe", "branch", "loop", "gate":
 		return l.wireNode(m, v, "")
 	}
-	return "", fmt.Errorf("state %q edge %s: target must be a registered state, done/fail, pipe(...), branch(...), or loop(...)", from, edge)
+	return "", fmt.Errorf("state %q edge %s: target must be a registered state, done/fail, pipe(...), branch(...), loop(...), or gate(...)", from, edge)
 }
 
 func (l *loader) wireFallback(m *Machine, name, to string) error {

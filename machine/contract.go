@@ -157,8 +157,8 @@ func (m *Machine) scopeKeys() []string {
 		keys = append(keys, name)
 	}
 	for _, st := range m.States {
-		if st.IsDistill() {
-			continue // `name#key` is not an identifier — never destructurable
+		if st.IsDistill() || st.Gate {
+			continue // `name#key` / `gate#name` is not an identifier — never destructurable
 		}
 		keys = append(keys, st.Name)
 	}
