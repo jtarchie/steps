@@ -169,7 +169,7 @@ export default {
 		{"judge wired twice", `pipe(branch(judge, { else: ship }), loop(work, { ` + valid + ` }), ship)`, "wired more than once"},
 		{"body terminal", `pipe(loop(done, { ` + valid + ` }), ship)`, "body cannot be a terminal state"},
 		{"self-judging", `pipe(loop(judge, { ` + valid + ` }), ship)`, "cannot also be the body"},
-		{"accept missing", `pipe(loop(work, { judge: judge, maxVisits: 3 }), ship)`, "accept must be a function"},
+		{"accept missing", `pipe(loop(work, { judge: judge, maxVisits: 3 }), ship)`, "no acceptance test"},
 		{"accept not a function", `pipe(loop(work, { judge: judge, accept: true, maxVisits: 3 }), ship)`, "accept must be a function"},
 		{"maxVisits missing", `pipe(loop(work, { judge: judge, accept: () => true }), ship)`, "maxVisits is required"},
 		{"maxVisits zero", `pipe(loop(work, { judge: judge, accept: () => true, maxVisits: 0 }), ship)`, "maxVisits must be >= 1"},

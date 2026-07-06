@@ -88,7 +88,11 @@ func checkStateContract(s *State, base []string) []string {
 	}
 	checkInputContract(c, s, handlerExtras)
 	// Guards run after the state completes — they see output/event but
-	// never a per-item variable (foreach guards judge the aggregate).
+	// never a per-item variable (foreach guards judge the aggregate). The
+	// verdict: is one such guard.
+	if !s.Verdict.IsZero() {
+		c.check("verdict", s.Verdict, "output", "event")
+	}
 	for i, t := range s.Transitions {
 		c.check(fmt.Sprintf("transitions[%d].when", i), t.When, "output", "event")
 	}

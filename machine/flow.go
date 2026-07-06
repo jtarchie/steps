@@ -331,9 +331,9 @@ func (l *loader) wireLoop(m *Machine, obj *goja.Object, successor string) (strin
 		return "", fmt.Errorf("loop: judge %q cannot also be the body — write a self-judging state as an array-form branch", judge)
 	}
 
-	accept := opts.Get("accept")
-	if _, isFn := goja.AssertFunction(accept); !isFn {
-		return "", fmt.Errorf("loop(%s): accept must be a function of scope returning a boolean", judge)
+	accept, err := l.resolveLoopAccept(opts, st, judge)
+	if err != nil {
+		return "", err
 	}
 
 	maxVisits, err := loopMaxVisits(opts, judge)
@@ -369,7 +369,7 @@ func (l *loader) wireLoop(m *Machine, obj *goja.Object, successor string) (strin
 	}
 
 	st.Transitions = []Transition{
-		{When: l.dyn(accept), To: then},
+		{When: accept, To: then},
 		{When: l.dyn(guardVal), To: revise},
 		{To: exhausted},
 	}
@@ -380,6 +380,28 @@ func (l *loader) wireLoop(m *Machine, obj *goja.Object, successor string) (strin
 		return "", err
 	}
 	return entry, nil
+}
+
+// resolveLoopAccept resolves the loop's accept edge: the explicit accept:
+// option, else the judge's own verdict:. Declaring both is an error — the
+// acceptance test is declared once — and declaring neither is an error too.
+func (l *loader) resolveLoopAccept(opts *goja.Object, st *State, judge string) (Dyn, error) {
+	accept := opts.Get("accept")
+	hasAccept := defined(accept)
+	hasVerdict := !st.Verdict.IsZero()
+	switch {
+	case hasAccept && hasVerdict:
+		return Dyn{}, fmt.Errorf("loop(%s): judge declares verdict: and the loop passes accept: — declare the acceptance test once", judge)
+	case hasAccept:
+		if _, isFn := goja.AssertFunction(accept); !isFn {
+			return Dyn{}, fmt.Errorf("loop(%s): accept must be a function of scope returning a boolean", judge)
+		}
+		return l.dyn(accept), nil
+	case hasVerdict:
+		return st.Verdict, nil
+	default:
+		return Dyn{}, fmt.Errorf("loop(%s): no acceptance test — pass accept: or declare verdict: on the judge", judge)
+	}
 }
 
 // resolveLoopFallback resolves an optional loop target (revise/exhausted):

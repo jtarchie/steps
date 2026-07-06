@@ -98,12 +98,17 @@ func dryRunState(m *Machine, s *State, record func(state, site string, err error
 		}
 	}
 	record(s.Name, "input", dryInputs(s.Input, handlerScope))
+	// Guards run AFTER the state (foreach aggregate included): they see
+	// output/event but never a per-item variable. The verdict: is one such
+	// guard — exercised directly so a typo names verdict even if the state is
+	// documentation-only or wired by hand rather than as a loop judge.
+	guardScope := cloneScope(base)
+	guardScope["output"] = m.outputStub(s)
+	guardScope["event"] = ""
+	if !s.Verdict.IsZero() {
+		record(s.Name, "verdict", dryCall(s.Verdict, guardScope))
+	}
 	for i, t := range s.Transitions {
-		// Guards run AFTER the state (foreach aggregate included): they
-		// see output/event but never a per-item variable.
-		guardScope := cloneScope(base)
-		guardScope["output"] = m.outputStub(s)
-		guardScope["event"] = ""
 		record(s.Name, fmt.Sprintf("transitions[%d].when", i), dryCall(t.When, guardScope))
 	}
 }

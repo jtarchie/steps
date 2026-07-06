@@ -211,9 +211,7 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 		return
 	}
 
-	if s.Memo && s.Agent == nil {
-		fail("state %q: memo is only supported on agent states — skipping an action would skip its side effects", s.Name)
-	}
+	validateStateModifiers(s, fail)
 	if f := s.ForEach; f != nil {
 		validateForEach(m, s, f, fail)
 	}
@@ -239,6 +237,18 @@ func validateState(m *Machine, s *State, cfg validateConfig, fail func(string, .
 	validateTransitions(m, s, fail)
 	validateCatch(m, s, fail)
 	validateRetryPolicies(s, fail)
+}
+
+// validateStateModifiers checks the shared modifiers whose handler is
+// constrained: memo skips a replay (agent-only, actions have side effects) and
+// verdict is an acceptance test over output (only handlers that produce one).
+func validateStateModifiers(s *State, fail func(string, ...any)) {
+	if s.Memo && s.Agent == nil {
+		fail("state %q: memo is only supported on agent states — skipping an action would skip its side effects", s.Name)
+	}
+	if !s.Verdict.IsZero() && s.Agent == nil && s.Action == nil {
+		fail("state %q: verdict is an acceptance test for a state that produces output — only agent or action states have one", s.Name)
+	}
 }
 
 // validateInputShape checks that a non-function static input is an object —

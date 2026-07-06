@@ -649,7 +649,7 @@ func containsState(states []*State, name string) bool {
 
 // State keys, by handler. Shared keys apply to every handler.
 var (
-	sharedStateKeys = []string{"memo", "forEach", "distill", "retry", "output", "events", "input"}
+	sharedStateKeys = []string{"memo", "forEach", "distill", "retry", "output", "events", "input", "verdict"}
 	agentStateKeys  = []string{"prompt", "system", "tools", "model", "maxTurns",
 		"maxOutputTokens", "maxInputTokens", "temperature", "reasoning",
 		"structuredOutput", "toolChoice", "adopt", "history"}
@@ -717,6 +717,16 @@ func (l *loader) state(name string, v goja.Value) (*State, error) {
 	}
 	if r != nil {
 		st.Retry = r
+	}
+
+	// verdict: the state's own acceptance test, declared once — a guard
+	// function loop() adopts as its accept edge (so the criterion, the schema,
+	// and the routing stop being restated three times).
+	if v := o.Get("verdict"); defined(v) {
+		if _, isFn := goja.AssertFunction(v); !isFn {
+			return nil, errors.New("verdict must be a function of scope returning a boolean")
+		}
+		st.Verdict = l.dyn(v)
 	}
 
 	return st, nil
