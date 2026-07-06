@@ -623,6 +623,9 @@ func (l *loader) parseStates(m *Machine, root *goja.Object) error {
 		}
 		m.States = append(m.States, st)
 		if obj := l.obj(v); obj != nil {
+			if hint := obj.Get(stateNameHintProp); defined(hint) && hint.String() != name {
+				return fmt.Errorf("state(%q) is registered under key %q — the name argument must match the states: key", hint.String(), name)
+			}
 			_ = obj.DefineDataProperty(stateNameProp, l.rt.vm.ToValue(name), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_FALSE)
 		}
 	}

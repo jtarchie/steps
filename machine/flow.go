@@ -49,11 +49,75 @@ const fail = { __steps: "terminal", name: "failed" };
 function list(xs) {
   return (xs || []).map(function (x) { return "- " + x; }).join("\n");
 }
+// state(build) / state(name, build): the js-dsl closure form of a state. The
+// build closure runs against a recorder whose setters mutate a config object
+// ONLY when called — so the returned object is byte-identical to the equivalent
+// literal and flows through the whole loader unchanged (structure stays data;
+// the builder just assembles it dynamically). Like gate, it lives on globalThis
+// so a machine may still name a state "const state = {...}" and shadow it —
+// only actual state(...) calls reach the builder. An optional name is stamped
+// non-enumerably as a hint the loader cross-checks against the states: key.
+globalThis.state = function (a, b) {
+  var name, build;
+  if (typeof a === "function") {
+    build = a;
+  } else if (typeof a === "string" && typeof b === "function") {
+    name = a;
+    build = b;
+  } else {
+    throw new TypeError("state(build) or state(name, build): build must be a function");
+  }
+
+  var config = {};
+  var proxy;
+  function set(key) {
+    return function (v) { config[key] = v; return proxy; };
+  }
+  var simpleKeys = [
+    "forEach", "distill", "retry", "output", "input", "verdict",
+    "prompt", "system", "model", "maxTurns", "maxOutputTokens", "maxInputTokens",
+    "temperature", "reasoning", "structuredOutput", "toolChoice", "adopt",
+    "history", "evidence", "action", "write", "content", "human", "timeout",
+    "choices", "parallel", "concurrency", "onBranchFailure", "status",
+  ];
+  var setters = {};
+  for (var i = 0; i < simpleKeys.length; i++) setters[simpleKeys[i]] = set(simpleKeys[i]);
+
+  function toArray(a) {
+    return (a.length === 1 && Array.isArray(a[0])) ? a[0] : Array.prototype.slice.call(a);
+  }
+  setters.tools = function () { config.tools = toArray(arguments); return proxy; };
+  setters.tool = function (t) { (config.tools = config.tools || []).push(t); return proxy; };
+  setters.events = function () { config.events = toArray(arguments); return proxy; };
+  setters.memo = function (v) { config.memo = (arguments.length === 0) ? true : v; return proxy; };
+  setters.terminal = function (v) { config.terminal = (arguments.length === 0) ? true : v; return proxy; };
+
+  var valid = Object.keys(setters).sort().join(", ");
+  proxy = new Proxy(setters, {
+    get: function (target, prop) {
+      if (typeof prop !== "string") return target[prop];
+      if (prop === "then") return undefined; // never mistaken for a thenable
+      if (Object.prototype.hasOwnProperty.call(target, prop)) return target[prop];
+      throw new TypeError("unknown state builder method '" + prop + "' — valid: " + valid);
+    },
+  });
+
+  build(proxy);
+  if (name !== undefined) {
+    Object.defineProperty(config, "__steps_state_name_hint", { value: name, enumerable: false });
+  }
+  return config;
+};
 `
 
 // stateNameProp carries the registered name on each state object so flow
 // references resolve by identity regardless of goja wrapper details.
 const stateNameProp = "__steps_state_name"
+
+// stateNameHintProp carries the optional name argument passed to the state(...)
+// builder. It is stamped non-enumerably (so it never reaches checkStateKeys) and
+// the loader cross-checks it against the states: key to catch name/key drift.
+const stateNameHintProp = "__steps_state_name_hint"
 
 // compileFlow walks the exported flow value and wires the machine.
 func (l *loader) compileFlow(m *Machine, flow goja.Value) error {

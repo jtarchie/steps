@@ -316,6 +316,61 @@ interface GateOptions {
   onTimeout?: FlowTarget;
 }
 
+/** The js-dsl closure form of a state: build it by calling setters instead of
+ *  writing an object literal — so fields can be added conditionally or in a loop
+ *  (for (const t of tools) s.tool(t)). The recorder records plain data; the
+ *  result is the same validated State the literal produces, dry-run at load.
+ *  Setters return the builder for chaining; an unknown method throws at load.
+ *  An optional name must match the states: key it is registered under.
+ *  A state literally named `state` shadows this — only calls reach the builder. */
+declare function state(build: (s: StateBuilder) => void): State;
+declare function state(name: string, build: (s: StateBuilder) => void): State;
+interface StateBuilder {
+  // agent (default handler)
+  prompt(v: State["prompt"]): this;
+  system(v: State["system"]): this;
+  model(v: State["model"]): this;
+  maxTurns(n: number): this;
+  maxOutputTokens(n: number): this;
+  maxInputTokens(n: number): this;
+  temperature(n: number): this;
+  reasoning(v: "low" | "medium" | "high"): this;
+  structuredOutput(v: "prompt" | "native"): this;
+  toolChoice(v: string): this;
+  adopt(v: State["adopt"]): this;
+  history(v: State["history"]): this;
+  evidence(v: State["evidence"]): this;
+  /** Set the tool list (spread args or a single array). */
+  tools(...t: (string | ToolRef)[]): this;
+  tools(t: (string | ToolRef)[]): this;
+  /** Append one tool — the loop-friendly form. */
+  tool(t: string | ToolRef): this;
+  // action / write / human
+  action(name: string): this;
+  write(v: State["write"]): this;
+  content(v: State["content"]): this;
+  human(v: State["human"]): this;
+  timeout(v: string): this;
+  choices(v: State["choices"]): this;
+  // parallel / terminal
+  parallel(v: Record<string, FlowTarget>): this;
+  concurrency(n: number): this;
+  onBranchFailure(v: string): this;
+  terminal(v?: boolean): this;
+  status(v: "failed"): this;
+  // shared
+  memo(v?: boolean): this;
+  forEach(v: State["forEach"]): this;
+  distill(v: State["distill"]): this;
+  retry(v: State["retry"]): this;
+  output(v: State["output"]): this;
+  /** Allowed events (spread args or a single array). */
+  events(...names: string[]): this;
+  events(names: string[]): this;
+  input(v: State["input"]): this;
+  verdict(v: Fn<boolean>): this;
+}
+
 /** Terminal states. */
 declare const done: FlowNode;
 declare const fail: FlowNode;

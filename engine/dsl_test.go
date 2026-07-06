@@ -153,6 +153,67 @@ func TestCodegenDSLParity(t *testing.T) {
 	}
 }
 
+// TestCodegenBuilderParity: the builder-closure twin (state(name, s => ...))
+// lowers to the same graph and runs against the SAME mock, producing the exact
+// trace of the object form (TestCodegenMockTrace) — proving state(build) is
+// pure sugar over the literal.
+func TestCodegenBuilderParity(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	m, script := loadExampleFile(t, "codegen", "workflow-builder.ts")
+	eng, store := newTestEngine(t, script)
+	spec, err := os.ReadFile(repoPath(t, "examples/codegen/fixtures/spec.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := eng.Start(context.Background(), m, map[string]any{
+		"spec":       string(spec),
+		"language":   "bash",
+		"out":        "out",
+		"verify_cmd": "bash greet_test.sh",
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Status != journal.StatusDone {
+		t.Fatalf("status = %s at %s, want done", res.Status, res.Terminal)
+	}
+
+	states, _, transitions := eventTrace(t, store, res.RunID)
+	want := []string{
+		"plan",
+		"generate#spec", "generate#build_cause", "generate", "review",
+		"generate#spec", "generate#build_cause", "generate", "review",
+		"write_files", "build", "report",
+	}
+	if strings.Join(states, ",") != strings.Join(want, ",") {
+		t.Errorf("state sequence = %v, want %v", states, want)
+	}
+	if transitions != 12 {
+		t.Errorf("journaled transitions = %d, want 12", transitions)
+	}
+	if res.State.Transitions != 8 {
+		t.Errorf("counted transitions = %d, want 8", res.State.Transitions)
+	}
+
+	// The build gate really executed the generated test (exit code is data).
+	gen, _ := res.State.Ctx["generate"].(map[string]any)
+	if n, _ := gen["count"].(int); n != 2 {
+		t.Errorf("generate.count = %v, want 2 (one hermetic context per file)", gen["count"])
+	}
+
+	// Both human tie-breaks exist as normal (non-synthesized) states, never entered.
+	for _, g := range []string{"escalate", "accept_build"} {
+		if m.State(g) == nil {
+			t.Errorf("%s missing", g)
+		}
+		if contains(states, g) {
+			t.Errorf("%s should not be entered on the happy path", g)
+		}
+	}
+}
+
 // TestPRReviewDSLParity: the model-tier twin runs against the same mock and
 // produces the exact deep-path trace of TestPRReviewDeepPath.
 func TestPRReviewDSLParity(t *testing.T) {
