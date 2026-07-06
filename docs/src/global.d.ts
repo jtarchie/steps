@@ -112,7 +112,12 @@ interface State {
   /** Continue a prior state's conversation (rung 3). "self" for revisits. */
   adopt?: string | { from: string; lastTurns?: number };
   /** Inject a journal projection of a prior state (rung 2). */
-  history?: { from: string; include?: ("messages" | "tool_calls" | "thoughts")[]; lastTurns?: number; as?: string };
+  history?: {
+    from: string;
+    include?: ("messages" | "tool_calls" | "thoughts")[];
+    lastTurns?: number;
+    as?: string;
+  };
 
   // action handler
   action?: string;
@@ -131,15 +136,27 @@ interface State {
    *    event (defaulted when the branch has exactly one) and puts the
    *    selection in the gate's output as `selected`.
    *  Every gate answer may also carry a free-form `note` string. */
-  choices?: Record<string, string>
-    | { multi: string[] | Fn<string[]>; event?: string; min?: number; max?: number };
+  choices?:
+    | Record<string, string>
+    | {
+      multi: string[] | Fn<string[]>;
+      event?: string;
+      min?: number;
+      max?: number;
+    };
 
   // shared
   /** Fan the handler out over a list — one hermetic context per item.
    *  carry: pair each output with its source item — aggregate items entries
    *  become {item, output, index} (index into the original over list), so a
    *  downstream state stays aligned even when onItemFailure: "skip" drops one. */
-  forEach?: { over: Fn<any[]>; as?: string; concurrency?: number; onItemFailure?: "fail" | "skip"; carry?: boolean };
+  forEach?: {
+    over: Fn<any[]>;
+    as?: string;
+    concurrency?: number;
+    onItemFailure?: "fail" | "skip";
+    carry?: boolean;
+  };
   /** This state's own acceptance test, declared once: ({ output }) => boolean.
    *  loop() adopts it as the accept edge when accept: is omitted, so the
    *  criterion is not restated across the schema, events, and a guard. */
@@ -156,7 +173,16 @@ interface State {
   output?: Record<string, SchemaFragment>;
   /** Allowed events — injected into the schema as a required enum. */
   events?: string[];
-  retry?: { match: string[]; maxAttempts: number; backoff?: { initial?: string; factor?: number; jitter?: boolean; cap?: string } }[] | "none";
+  retry?: {
+    match: string[];
+    maxAttempts: number;
+    backoff?: {
+      initial?: string;
+      factor?: number;
+      jitter?: boolean;
+      cap?: string;
+    };
+  }[] | "none";
 
   terminal?: boolean;
   status?: "failed";
@@ -172,7 +198,9 @@ interface ModelTier {
 }
 
 /** Opaque flow nodes built by pipe/branch/when. */
-interface FlowNode { readonly __steps: string }
+interface FlowNode {
+  readonly __steps: string;
+}
 type FlowTarget = State | FlowNode;
 type FlowEdge = FlowNode; // when(...).to(...)
 
@@ -192,13 +220,21 @@ interface Machine {
   model?: string;
   /** Flat agent defaults + retry policies. */
   defaults?: {
-    model?: string; maxTurns?: number; maxOutputTokens?: number;
+    model?: string;
+    maxTurns?: number;
+    maxOutputTokens?: number;
     maxInputTokens?: number;
-    temperature?: number; reasoning?: "low" | "medium" | "high";
+    temperature?: number;
+    reasoning?: "low" | "medium" | "high";
     structuredOutput?: "prompt" | "native";
     retry?: { match: string[]; maxAttempts: number; backoff?: object }[];
   };
-  limits?: { maxTransitions?: number; maxTokens?: number; maxCost?: number; timeout?: string };
+  limits?: {
+    maxTransitions?: number;
+    maxTokens?: number;
+    maxCost?: number;
+    timeout?: string;
+  };
   initial?: string;
   /** Name registration: the shorthand keys name your state consts. */
   states: Record<string, State | string | Fn<string>>;
@@ -207,7 +243,12 @@ interface Machine {
    * maxInFlight bounds concurrent runs of this hook (default 1); maxQueued
    * bounds durably-queued runs awaiting a slot (default 100) — overflow → 429.
    */
-  webhook?: { path?: string; map: (scope: any) => Record<string, any>; maxInFlight?: number; maxQueued?: number };
+  webhook?: {
+    path?: string;
+    map: (scope: any) => Record<string, any>;
+    maxInFlight?: number;
+    maxQueued?: number;
+  };
   /** The whole topology in one expression. Omit for linear declaration order. */
   flow?: FlowNode;
 }
@@ -217,7 +258,9 @@ declare function pipe(...steps: FlowTarget[]): FlowNode;
 /** All outgoing edges of a state: event keys, else, catch classes, gate timeout. */
 declare function branch(
   state: State,
-  edges: { [eventOrElse: string]: FlowTarget | FlowEdge | Record<string, FlowTarget> } | (FlowEdge | FlowTarget)[],
+  edges: {
+    [eventOrElse: string]: FlowTarget | FlowEdge | Record<string, FlowTarget>;
+  } | (FlowEdge | FlowTarget)[],
 ): FlowNode;
 /** Guard an edge: when(s => ...).to(target). */
 declare function when(guard: Fn<boolean>): { to(target: FlowTarget): FlowEdge };
@@ -247,7 +290,10 @@ interface LoopOptions {
    *  (`gate#<judge>_escalate`) whose approve rejoins the loop's then route
    *  and whose reject/timeout fail. A prompt, or {prompt, timeout}.
    *  Mutually exclusive with exhausted:. */
-  escalate?: string | Fn<string> | { prompt: string | Fn<string>; timeout?: string };
+  escalate?: string | Fn<string> | {
+    prompt: string | Fn<string>;
+    timeout?: string;
+  };
   /** The judge's catch edges, same as branch: {errorClass: target}. */
   catch?: Record<string, FlowTarget>;
 }

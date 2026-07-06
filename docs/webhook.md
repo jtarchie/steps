@@ -6,8 +6,8 @@
 (`cmd/steps/serve.go`) plus `handleHook` and the durable-queue `dispatcher`
 (`cmd/steps/server.go`, `cmd/steps/dispatcher.go`). Durable queuing rides on a
 new `run_enqueued` journal event and a `queued` run status (`journal/`).
-Acceptance coverage: `cmd/steps/serve_test.go`
-(`TestHookMultiRouting`, `TestHookQueueFull429`, `TestHookDurableQueueDrain`,
+Acceptance coverage: `cmd/steps/serve_test.go` (`TestHookMultiRouting`,
+`TestHookQueueFull429`, `TestHookDurableQueueDrain`,
 `TestWebhookTriggersIncidentRunbook`).
 
 A machine declares its own trigger. The `webhook:` block is the contract, the
@@ -45,8 +45,9 @@ pattern — a summary-only webhook whose backtrace fetch is best-effort.
 
 ## Serving one or many
 
-`--hook` is repeatable; each file must declare a `webhook:` block with a **unique
-path and a unique machine name** (the dispatcher keys per-hook limits by name).
+`--hook` is repeatable; each file must declare a `webhook:` block with a
+**unique path and a unique machine name** (the dispatcher keys per-hook limits
+by name).
 
 ```sh
 steps serve \
@@ -61,12 +62,12 @@ steps serve \
 
 - **`--hook-input key=value`** (or `key=@file`) is global: every hook keeps only
   the inputs it declares, so a shared pool usually just works. Two hooks that
-  declare the *same* input name share the value — rename to disambiguate.
+  declare the _same_ input name share the value — rename to disambiguate.
 - **`--hook-token path=secret`** scopes a secret to one hook; a **bare** value
   (no `=`) is the fallback for any hook without its own. A hook with no token —
   no per-path secret and no fallback — is unauthenticated. The token is sent as
   `Authorization: Bearer <v>` or `?token=<v>`.
-- **`--max-in-flight N`** caps concurrently *executing* runs across all hooks
+- **`--max-in-flight N`** caps concurrently _executing_ runs across all hooks
   (default `NumCPU`). It is the host's safety valve above each hook's own
   `maxInFlight`.
 
@@ -81,18 +82,18 @@ hook's own `maxInFlight` slot before each start. A parked run frees its slot
 immediately (the gate is answered later, out of band), so a workflow that waits
 on a human never ties up concurrency.
 
-| Situation | Response |
-|---|---|
-| payload mapped, queue has room | `202` `{machine, run, status:"queued"}` |
-| payload is not a JSON object | `400` |
-| `map` threw, or a **required** input is missing | `400` |
-| token required and absent/wrong | `401` |
-| no hook registered at that path | `404` |
-| the hook already has `maxQueued` runs waiting | **`429`** — retry later |
+| Situation                                       | Response                                |
+| ----------------------------------------------- | --------------------------------------- |
+| payload mapped, queue has room                  | `202` `{machine, run, status:"queued"}` |
+| payload is not a JSON object                    | `400`                                   |
+| `map` threw, or a **required** input is missing | `400`                                   |
+| token required and absent/wrong                 | `401`                                   |
+| no hook registered at that path                 | `404`                                   |
+| the hook already has `maxQueued` runs waiting   | **`429`** — retry later                 |
 
 **Durability is the point of the queue.** Queued rows live in SQLite, so a
 `serve` restart re-scans and drains them — nothing accepted is lost. Because the
-timeout baseline starts at *dispatch* (`run_started`), not at *enqueue*
+timeout baseline starts at _dispatch_ (`run_started`), not at _enqueue_
 (`run_enqueued`), queue wait never counts against a run's `limits.timeout`.
 
 ## Footguns / not covered
@@ -102,9 +103,9 @@ timeout baseline starts at *dispatch* (`run_started`), not at *enqueue*
 - **`maxQueued` is a soft cap.** Concurrent POSTs count-then-insert, so a burst
   can overshoot the limit by a few. It bounds memory and signals backpressure;
   it is not a hard admission gate.
-- **Resumes bypass `--max-in-flight`.** Answering a parked gate launches its
-  own background resume — the global cap governs webhook *starts*, not resumes.
+- **Resumes bypass `--max-in-flight`.** Answering a parked gate launches its own
+  background resume — the global cap governs webhook _starts_, not resumes.
 - **One `serve` per journal.** The dispatcher is per-process; two `serve`
   processes on one DB would both drain the queue and double-dispatch.
-- **Webhook resumption is a later feature.** A webhook can *start* a run, not
-  *answer its gate* — that is still the UI's or CLI's job.
+- **Webhook resumption is a later feature.** A webhook can _start_ a run, not
+  _answer its gate_ — that is still the UI's or CLI's job.
