@@ -88,7 +88,8 @@ enforced graph (`steps validate --print` shows the expansion):
 And `models:` entries may be **tiers** — `scout: { model: "…", reasoning: "low",
 memo: true }` — bundling the per-role knobs so states just say `model: "scout"`
 instead of restating them. Compare any `examples/*/workflow.ts` with its
-`workflow-dsl.ts` twin: same machine, same mock trace, fewer moving parts.
+`workflow-dsl.ts` twin: same machine, same mock trace, fewer moving parts. Full
+guide with before/after for each: [docs/dsl.md](docs/dsl.md).
 
 Because machines are TypeScript, editors type-check them out of the box: each
 `workflow.ts` opens with `/// <reference path=".../docs/src/global.d.ts" />`,
