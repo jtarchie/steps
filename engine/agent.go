@@ -868,7 +868,7 @@ func (e *Engine) resolveModelRef(m *machine.Machine, st *machine.State, rs *jour
 			Msg: fmt.Sprintf("model: %v", err)}
 	}
 	if resolved, ok := m.Models[ref]; ok {
-		ref = resolved
+		ref = resolved.Ref
 	}
 	if !strings.Contains(ref, "/") && ref != "mock" {
 		return "", &provider.ClassifiedError{Class: machine.ClassProviderError,

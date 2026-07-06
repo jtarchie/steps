@@ -37,6 +37,7 @@ func Validate(m *Machine, opts ...ValidateOption) error {
 
 	validateNameCollisions(m, fail)
 	validateWebhook(m, fail)
+	validateModels(m, fail)
 
 	for _, s := range m.States {
 		validateState(m, s, cfg, fail)
@@ -92,6 +93,28 @@ func validateWebhook(m *Machine, fail func(string, ...any)) {
 	}
 }
 
+// validateModels checks each models: tier: a provider-namespaced (or "mock")
+// ref, a known reasoning level, and a non-negative token cap. Per-state model
+// refs are validated where they resolve (validateAgentModel); this covers tiers
+// that no state happens to select.
+func validateModels(m *Machine, fail func(string, ...any)) {
+	for name, spec := range m.Models {
+		if spec.Ref == "" {
+			fail("models.%s: a tier needs a model", name)
+		} else if !strings.Contains(spec.Ref, "/") && spec.Ref != "mock" {
+			fail("models.%s: model %q must be provider-namespaced (e.g. anthropic/claude-haiku-4-5) or \"mock\"", name, spec.Ref)
+		}
+		switch spec.Reasoning {
+		case "", "low", "medium", "high":
+		default:
+			fail("models.%s: unknown reasoning %q — valid: low, medium, high", name, spec.Reasoning)
+		}
+		if spec.MaxOutputTokens < 0 {
+			fail("models.%s: maxOutputTokens %d must be >= 0", name, spec.MaxOutputTokens)
+		}
+	}
+}
+
 // validateNameCollisions checks that inputs and states — the flat scope's
 // first-class names — never shadow engine keys or each other. User state
 // names must also be destructurable identifiers, which keeps the lowered
@@ -110,7 +133,7 @@ func validateNameCollisions(m *Machine, fail func(string, ...any)) {
 		if contains(scopeReserved, s.Name) {
 			fail("state %q shadows a reserved scope key (%s)", s.Name, strings.Join(scopeReserved, ", "))
 		}
-		if !s.IsDistill() && !isIdentifier(s.Name) {
+		if !s.IsDistill() && !s.Gate && !isIdentifier(s.Name) {
 			fail("state %q: names must be valid identifiers (letters, digits, _)", s.Name)
 		}
 	}

@@ -416,17 +416,47 @@ func (l *loader) applyWebhook(m *Machine, root *goja.Object) error {
 	return nil
 }
 
-// parseModels parses the machine's models: block, a name → model-string map.
-func (l *loader) parseModels(root *goja.Object) map[string]string {
+// parseModels parses the machine's models: block, a name → tier map. Each
+// value is either a provider-ref string (Ref-only tier) or an object bundling
+// the ref with per-role knobs {model, reasoning?, maxOutputTokens?, memo?}.
+func (l *loader) parseModels(root *goja.Object) (map[string]ModelSpec, error) {
 	o := l.obj(root.Get("models"))
 	if o == nil {
-		return nil
+		return nil, nil //nolint:nilnil // no models: block is a valid absence, not an error
 	}
-	models := map[string]string{}
+	models := map[string]ModelSpec{}
 	for _, k := range o.Keys() {
-		models[k] = str(o.Get(k))
+		v := o.Get(k)
+		if s, ok := v.Export().(string); ok {
+			models[k] = ModelSpec{Ref: s}
+			continue
+		}
+		spec, ok := v.(*goja.Object)
+		if !ok {
+			return nil, fmt.Errorf("models.%s must be a provider ref string or a tier object {model, reasoning?, maxOutputTokens?, memo?}", k)
+		}
+		ms := ModelSpec{}
+		for _, tk := range spec.Keys() {
+			switch tk {
+			case "model":
+				ms.Ref = str(spec.Get(tk))
+			case "reasoning":
+				ms.Reasoning = str(spec.Get(tk))
+			case "maxOutputTokens":
+				ms.MaxOutputTokens = integer(spec.Get(tk))
+			case "memo":
+				memo := boolean(spec.Get(tk))
+				ms.Memo = &memo
+			default:
+				return nil, fmt.Errorf("models.%s: unknown tier key %q — valid: model, reasoning, maxOutputTokens, memo", k, tk)
+			}
+		}
+		if ms.Ref == "" {
+			return nil, fmt.Errorf("models.%s: a tier object needs a model", k)
+		}
+		models[k] = ms
 	}
-	return models
+	return models, nil
 }
 
 func (l *loader) machine(root *goja.Object) (*Machine, error) {
@@ -447,7 +477,11 @@ func (l *loader) machine(root *goja.Object) (*Machine, error) {
 		m.Input = l.parseInputSpecs(o)
 	}
 
-	m.Models = l.parseModels(root)
+	models, err := l.parseModels(root)
+	if err != nil {
+		return nil, err
+	}
+	m.Models = models
 
 	// model: top-level sugar for the default agent model.
 	if v := root.Get("model"); defined(v) {
@@ -469,7 +503,7 @@ func (l *loader) machine(root *goja.Object) (*Machine, error) {
 		}
 	}
 
-	err := l.applyWebhook(m, root)
+	err = l.applyWebhook(m, root)
 	if err != nil {
 		return nil, err
 	}
@@ -647,9 +681,10 @@ func (l *loader) state(name string, v goja.Value) (*State, error) {
 	}
 
 	st := &State{
-		Name:  name,
-		Memo:  boolean(o.Get("memo")),
-		Input: l.dyn(o.Get("input")),
+		Name:         name,
+		Memo:         boolean(o.Get("memo")),
+		memoDeclared: defined(o.Get("memo")),
+		Input:        l.dyn(o.Get("input")),
 	}
 	err = l.buildStateHandler(o, handler, st)
 	if err != nil {

@@ -20,9 +20,11 @@ type Machine struct {
 	Name        string
 	Description string
 	Input       map[string]InputSpec
-	// Models are human-named aliases (scout, senior) for provider refs —
-	// states read semantically, and swapping backends is one edit.
-	Models   map[string]string
+	// Models are human-named tiers (scout, senior) for provider refs — states
+	// read semantically, and swapping backends is one edit. A tier bundles the
+	// ref with the per-role knobs (reasoning, maxOutputTokens, memo) so "cheap
+	// scout vs expensive senior" is declared once, not restated per state.
+	Models   map[string]ModelSpec
 	Defaults Defaults
 	Limits   Limits
 	Initial  string
@@ -73,6 +75,19 @@ func hashMachine(src []byte, assets map[string]string) string {
 type InputSpec struct {
 	Type     string
 	Required bool
+}
+
+// ModelSpec is one entry of the machine's models: block — a named tier. Ref is
+// the provider-namespaced model (or an engine alias like "mock"); the optional
+// knobs cascade into any agent state that selects this tier and leaves the
+// field unset (precedence: state-explicit > tier > machine defaults > engine
+// default). The plain-string models: form (models: { x: "anthropic/..." })
+// parses to a ModelSpec with only Ref set.
+type ModelSpec struct {
+	Ref             string
+	Reasoning       string // low | medium | high ("" = leave to the cascade)
+	MaxOutputTokens int    // 0 = leave to the cascade
+	Memo            *bool  // nil = leave to the state/cascade
 }
 
 // Defaults is the machine-level `defaults:` block.
@@ -133,8 +148,22 @@ type State struct {
 	// system + prompt) is byte-identical to a previous execution — re-runs
 	// only re-pay for what changed. Agent states only: actions have side
 	// effects that must not be skipped.
-	Memo   bool
-	Output OutputSpec
+	Memo bool
+	// memoDeclared records whether the state's source set memo: explicitly, so a
+	// model tier's memo knob only fills a state that stayed silent (an explicit
+	// memo: false always wins over the tier).
+	memoDeclared bool
+	// Gate marks a state synthesized by the gate() combinator (a human
+	// escalation whose branch tail was generated). Named `gate#<name>` — like
+	// distill's `owner#key`, the `#` keeps it collision-free and
+	// non-destructurable.
+	Gate bool
+	// Verdict is the state's own acceptance test, declared once: a function of
+	// the guard scope ({output, event, ...}) returning a boolean. loop() uses it
+	// as the accept edge when accept: is omitted, so the criterion, the output
+	// schema, and the routing stop being restated in three places.
+	Verdict Dyn
+	Output  OutputSpec
 	// Distill entries replace (or derive from) large scope values with
 	// model-extracted slices before this state runs. Each entry lowers to an
 	// implicit agent state (`name#key`) in ApplyDefaults — see distill.go.
@@ -163,6 +192,12 @@ type ForEachSpec struct {
 	// OnItemFailure: fail (default — one bad item fails the state) or skip
 	// (drop the item; aggregate output reports skipped/failures for guards).
 	OnItemFailure string
+	// Carry pairs each output with its source item: aggregate items entries
+	// become {item, output, index} instead of the bare output. index is the
+	// position in the original over list, so the pairing stays correct even when
+	// onItemFailure: "skip" drops entries — the misalignment that hand-written
+	// items[i] zips silently produce.
+	Carry bool
 }
 
 // ParallelSpec forks the run into concurrent branches — each a hermetic

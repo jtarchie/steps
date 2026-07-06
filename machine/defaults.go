@@ -44,11 +44,11 @@ func ApplyDefaults(m *Machine) {
 		m.Limits.Timeout = DefaultTimeout
 	}
 
-	// Model aliases resolve everywhere a ref appears, including the
-	// defaults block itself.
-	if ref, ok := m.Models[m.Defaults.Agent.Model]; ok {
-		m.Defaults.Agent.Model = ref
-	}
+	// Model tiers resolve per state (applyAgentDefaults reads the alias name to
+	// pull its knobs before the machine-default cascade). Capture the defaults
+	// block's own tier first, then resolve its ref after the loop so --print
+	// shows a concrete ref there too.
+	defaultTier, defaultIsTier := m.Models[m.Defaults.Agent.Model]
 
 	for _, s := range m.States {
 		if s.Terminal {
@@ -64,6 +64,42 @@ func ApplyDefaults(m *Machine) {
 			applyParallelDefaults(p)
 		}
 		applyRetryDefaults(m, s)
+	}
+
+	if defaultIsTier {
+		m.Defaults.Agent.Model = defaultTier.Ref
+	}
+}
+
+// effectiveTier returns the model tier a state resolves to — its own static
+// model: alias, or the machine default when the state names none — if that
+// alias is a tier declared in models:.
+func effectiveTier(m *Machine, a *AgentSpec) (ModelSpec, bool) {
+	alias := ""
+	if ref, ok := a.Model.Static.(string); ok {
+		alias = ref
+	} else if a.Model.IsZero() {
+		alias = m.Defaults.Agent.Model
+	}
+	spec, ok := m.Models[alias]
+	return spec, ok
+}
+
+// applyModelTier fills the state's per-role knobs from its tier, but only where
+// the state stayed silent — state-explicit always wins over the tier.
+func applyModelTier(m *Machine, s *State, a *AgentSpec) {
+	spec, ok := effectiveTier(m, a)
+	if !ok {
+		return
+	}
+	if a.Reasoning == "" {
+		a.Reasoning = spec.Reasoning
+	}
+	if a.MaxOutputTokens == 0 {
+		a.MaxOutputTokens = spec.MaxOutputTokens
+	}
+	if spec.Memo != nil && !s.memoDeclared {
+		s.Memo = *spec.Memo
 	}
 }
 
@@ -97,6 +133,7 @@ func ensureImplicitTerminals(m *Machine) {
 // applyAgentDefaults cascades an agent state's knobs: state -> defaults.agent
 // -> engine default.
 func applyAgentDefaults(m *Machine, s *State, a *AgentSpec) {
+	applyModelTier(m, s, a)
 	applyAgentModelDefault(m, a)
 	applyAgentTemperatureDefault(m, a)
 	applyAgentTurnsDefault(m, a)
@@ -140,7 +177,7 @@ func applyAgentModelDefault(m *Machine, a *AgentSpec) {
 	// (the engine re-checks against Models).
 	if ref, ok := a.Model.Static.(string); ok {
 		if resolved, isAlias := m.Models[ref]; isAlias {
-			a.Model = Dyn{Static: resolved}
+			a.Model = Dyn{Static: resolved.Ref}
 		}
 	}
 }
