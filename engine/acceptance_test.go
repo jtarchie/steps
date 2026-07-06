@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/engine"
+	"github.com/jtarchie/steps/internal/ghfake"
 	"github.com/jtarchie/steps/journal"
 	"github.com/jtarchie/steps/machine"
 	"github.com/jtarchie/steps/provider"
@@ -473,6 +474,73 @@ func TestPRReviewTrivialPath(t *testing.T) {
 	if !strings.Contains(string(review), "no senior review needed") {
 		t.Errorf("review.md = %q, want the triage note", string(review))
 	}
+}
+
+// TestPRReviewLivePublish is the integration test for the live path with the
+// GitHub API mocked out at the gh boundary (internal/ghfake). A real PR is
+// present, so the machine FETCHES the diff (gh pr diff), runs the review on
+// mocked models, and PUBLISHES the verdict back — comment + commit check. It
+// asserts both the trace (fetch_pr … fetch_meta, post_comment, set_status) and
+// the exact gh calls the machine made against the fake endpoint.
+func TestPRReviewLivePublish(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	gh := ghfake.Install(t)
+	diff, err := os.ReadFile(repoPath(t, "examples/pr-review/fixtures/pr.diff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fake GitHub endpoint: `gh pr diff` yields the fixture; one `pr view`
+	// JSON serves both fetch_pr (title/body) and fetch_meta (headSha, draft);
+	// the comment returns its URL; the statuses API just acks.
+	gh.Respond("pr diff", string(diff))
+	gh.Respond("pr view", `{"number":123,"title":"queue: parallel worker pool",
+		"body":"Process jobs concurrently","isDraft":false,
+		"author":{"login":"alice","is_bot":false},
+		"headRefName":"feat","headRefOid":"deadbeefcafe","baseRefName":"main",
+		"labels":[],"additions":10,"deletions":2,"changedFiles":3}`)
+	gh.Respond("pr comment", "https://github.com/o/r/pull/123#issuecomment-1\n")
+	gh.Respond("api", "{}")
+
+	m, script := loadExample(t, "pr-review")
+	eng, store := newTestEngine(t, script)
+
+	res, err := eng.Start(context.Background(), m, map[string]any{
+		"pr":   "123",
+		"repo": "o/r",
+		"root": repoPath(t, "examples/pr-review/fixtures/repo"),
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Status != journal.StatusDone {
+		t.Fatalf("status = %s at %s, want done", res.Status, res.Terminal)
+	}
+
+	// The trace now runs the live fetch and the publish tail.
+	states, _, _ := eventTrace(t, store, res.RunID)
+	want := []string{
+		"fetch_pr", "split_diff", "scout_files", "scout_pr", "deep_review",
+		"verdict", "write_review", "fetch_meta", "post_comment", "set_status",
+	}
+	if strings.Join(states, ",") != strings.Join(want, ",") {
+		t.Errorf("state sequence = %v, want %v", states, want)
+	}
+
+	// The machine fetched the diff live (not a passthrough).
+	gh.WantCall("diff", "123", "--repo", "o/r")
+	// It posted the verdict as a comment — the body carries the substantiated
+	// findings from the mocked verdict.
+	comment, ok := gh.FindCall("comment", "123")
+	if !ok {
+		t.Fatalf("no gh pr comment call; calls: %v", gh.Calls())
+	}
+	if !strings.Contains(strings.Join(comment, "\n"), "store.Find") {
+		t.Errorf("comment body missing the verdict findings: %v", comment)
+	}
+	// And set a red commit check (the deep path has substantiated findings) on
+	// the fetched head SHA.
+	gh.WantCall("api", "repos/o/r/statuses/deadbeefcafe", "state=failure")
 }
 
 // TestParallelReviewTrace asserts the fork/join trace from

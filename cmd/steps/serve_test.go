@@ -18,6 +18,7 @@ import (
 	"github.com/labstack/echo/v5"
 
 	"github.com/jtarchie/steps/engine"
+	"github.com/jtarchie/steps/internal/ghfake"
 	"github.com/jtarchie/steps/journal"
 	"github.com/jtarchie/steps/machine"
 	"github.com/jtarchie/steps/provider"
@@ -404,6 +405,77 @@ export default {
 	if in["pr"] != "42" || in["repo"] != "acme/widgets" {
 		t.Fatalf("enqueued inputs = %#v, want pr=42 repo=acme/widgets", in)
 	}
+}
+
+// TestWebhookDrivesPRReview is the full-loop integration test: a GitHub
+// pull_request webhook (HMAC-signed) hits the server, is mapped and enqueued,
+// the dispatcher runs the pr-review machine on mocked models, and the machine
+// fetches the diff and posts the verdict back — all against a fake GitHub
+// endpoint (internal/ghfake). It exercises HTTP in → map → queue → dispatch →
+// engine → gh actions out, end to end.
+func TestWebhookDrivesPRReview(t *testing.T) {
+	t.Chdir(t.TempDir())
+	root := repoRoot()
+
+	gh := ghfake.Install(t)
+	diff, err := os.ReadFile(filepath.Join(root, "examples", "pr-review", "fixtures", "pr.diff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gh.Respond("pr diff", string(diff))
+	gh.Respond("pr view", `{"number":123,"title":"queue: parallel worker pool",
+		"body":"Process jobs concurrently","isDraft":false,
+		"author":{"login":"alice","is_bot":false},
+		"headRefName":"feat","headRefOid":"deadbeefcafe","baseRefName":"main",
+		"labels":[],"additions":10,"deletions":2,"changedFiles":3}`)
+	gh.Respond("pr comment", "https://github.com/o/r/pull/123#issuecomment-1\n")
+	gh.Respond("api", "{}")
+
+	m, err := machine.Load(filepath.Join(root, "examples", "pr-review", "workflow.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := journal.OpenSQLite(filepath.Join(t.TempDir(), "journal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	eng := engine.New(store, provider.NewRegistry(), toolreg.New(), engine.NopListener{})
+	mock, err := provider.LoadScript(filepath.Join(root, "examples", "pr-review", "mock_responses.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng.Mock = mock
+
+	const secret = "hook-secret"
+	hook := &hookSpec{m: m, inputs: map[string]any{}, token: secret}
+	e := newServer(t.Context(), store, eng, map[string]*hookSpec{m.Webhook.Path: hook}, 1)
+
+	payload := `{"action":"opened","number":123,
+		"repository":{"full_name":"o/r"},
+		"pull_request":{"title":"queue: parallel worker pool","body":"Process jobs concurrently","draft":false}}`
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(payload))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/hooks/pr-review", strings.NewReader(payload))
+	req.Header.Set("X-Hub-Signature-256", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("hook = %d body=%s, want 202", rec.Code, rec.Body.String())
+	}
+
+	// The dispatcher runs the machine in the background; wait for it to finish,
+	// then assert the machine reached out to the fake GitHub endpoint.
+	waitForSingleRun(t, store, journal.StatusDone)
+	gh.WantCall("diff", "123", "--repo", "o/r") // fetched the diff live
+	comment, ok := gh.FindCall("comment", "123")
+	if !ok {
+		t.Fatalf("no gh pr comment call; calls: %v", gh.Calls())
+	}
+	if !strings.Contains(strings.Join(comment, "\n"), "store.Find") {
+		t.Errorf("comment body missing the verdict findings: %v", comment)
+	}
+	gh.WantCall("api", "repos/o/r/statuses/deadbeefcafe", "state=failure")
 }
 
 func TestHookMissingRequiredInput(t *testing.T) {
