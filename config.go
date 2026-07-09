@@ -59,7 +59,7 @@ type Step struct {
 func LoadConfig(path string) (*Config, error) {
 	slog.Debug("config.load", "path", path)
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // path is the pipeline file the user asked to run, not untrusted input
 	if err != nil {
 		err = fmt.Errorf("could not read pipeline file %q: %w", path, err)
 		slog.Error("config.load", "path", path, "error", err)

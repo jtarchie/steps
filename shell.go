@@ -13,7 +13,7 @@ import (
 func RunShell(ctx context.Context, command, cwd string) error {
 	slog.Debug("shell.run", "command", command, "cwd", cwd)
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.Dir = cwd
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -37,7 +37,7 @@ func RunShell(ctx context.Context, command, cwd string) error {
 func RunShellCapture(ctx context.Context, command, cwd string) ([]byte, error) {
 	slog.Debug("shell.capture", "command", command, "cwd", cwd)
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.Dir = cwd
 	cmd.Stdin = os.Stdin
 	cmd.Stderr = os.Stderr

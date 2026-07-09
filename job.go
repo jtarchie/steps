@@ -164,7 +164,7 @@ func fetchGetStep(ctx context.Context, resource Resource, resourceType ResourceT
 
 	destDir := filepath.Join(workspaceDir, resource.Name)
 
-	err := os.MkdirAll(destDir, 0o755)
+	err := os.MkdirAll(destDir, 0o750)
 	if err != nil {
 		err = fmt.Errorf("could not create resource dir %q: %w", destDir, err)
 		slog.Error("step.get", "resource", resource.Name, "dest_dir", destDir, "error", err)
