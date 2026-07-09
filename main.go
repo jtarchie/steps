@@ -99,6 +99,7 @@ func run(args []string) error {
 
 	err := fs.Parse(flagArgs)
 	if err != nil {
+		err = fmt.Errorf("could not parse flags: %w", err)
 		slog.Error("cli.parse", "flag_args", flagArgs, "error", err)
 
 		return err
