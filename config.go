@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -51,47 +52,80 @@ type Step struct {
 
 // LoadConfig reads and parses a pipeline YAML file at path.
 func LoadConfig(path string) (*Config, error) {
+	slog.Debug("config.load", "path", path)
+
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("could not read pipeline file %q: %w", path, err)
+		err = fmt.Errorf("could not read pipeline file %q: %w", path, err)
+		slog.Error("config.load", "path", path, "error", err)
+
+		return nil, err
 	}
 
 	var cfg Config
 
 	err = yaml.Unmarshal(data, &cfg)
 	if err != nil {
-		return nil, fmt.Errorf("could not parse pipeline YAML %q: %w", path, err)
+		err = fmt.Errorf("could not parse pipeline YAML %q: %w", path, err)
+		slog.Error("config.parse", "path", path, "error", err)
+
+		return nil, err
 	}
+
+	slog.Info("config.loaded",
+		"path", path,
+		"resource_types", len(cfg.ResourceTypes),
+		"resources", len(cfg.Resources),
+		"jobs", len(cfg.Jobs),
+	)
 
 	return &cfg, nil
 }
 
 // FindResource returns the resource with the given name, or an error if not found.
 func (c *Config) FindResource(name string) (*Resource, error) {
+	slog.Debug("resource.find", "name", name)
+
 	for i := range c.Resources {
 		if c.Resources[i].Name == name {
+			slog.Debug("resource.find", "name", name, "type", c.Resources[i].Type, "found", true)
+
 			return &c.Resources[i], nil
 		}
 	}
 
-	return nil, fmt.Errorf("no resource named %q", name)
+	err := fmt.Errorf("no resource named %q", name)
+	slog.Error("resource.find", "name", name, "error", err)
+
+	return nil, err
 }
 
 // FindResourceType returns the resource type with the given name, or an error if not found.
 func (c *Config) FindResourceType(name string) (*ResourceType, error) {
+	slog.Debug("resource_type.find", "name", name)
+
 	for i := range c.ResourceTypes {
 		if c.ResourceTypes[i].Name == name {
+			slog.Debug("resource_type.find", "name", name, "found", true)
+
 			return &c.ResourceTypes[i], nil
 		}
 	}
 
-	return nil, fmt.Errorf("no resource_type named %q", name)
+	err := fmt.Errorf("no resource_type named %q", name)
+	slog.Error("resource_type.find", "name", name, "error", err)
+
+	return nil, err
 }
 
 // FindJob returns the job with the given name, or an error if not found.
 func (c *Config) FindJob(name string) (*Job, error) {
+	slog.Debug("job.find", "name", name)
+
 	for i := range c.Jobs {
 		if c.Jobs[i].Name == name {
+			slog.Debug("job.find", "name", name, "steps", len(c.Jobs[i].Plan), "found", true)
+
 			return &c.Jobs[i], nil
 		}
 	}
@@ -101,5 +135,8 @@ func (c *Config) FindJob(name string) (*Job, error) {
 		names = append(names, j.Name)
 	}
 
-	return nil, fmt.Errorf("no job named %q (available: %v)", name, names)
+	err := fmt.Errorf("no job named %q (available: %v)", name, names)
+	slog.Error("job.find", "name", name, "available", names, "error", err)
+
+	return nil, err
 }

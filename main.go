@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -51,21 +52,40 @@ func splitPositional(args []string) (string, []string) {
 	return "", args
 }
 
+// initLogging installs a debug-level slog handler on stderr as the default
+// logger, separate from this tool's plain stdout progress lines
+// ("get: prs (version: ...)", "task: review").
+func initLogging() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})))
+}
+
 func main() {
+	initLogging()
+
 	if err := run(os.Args[1:]); err != nil {
+		slog.Error("main.run", "error", err)
 		fmt.Fprintf(os.Stderr, "steps: error: %v\n", err)
 		os.Exit(1)
 	}
+
+	slog.Debug("main.exit", "code", 0)
 }
 
 func run(args []string) error {
+	slog.Debug("cli.parse", "args", args)
+
 	// Go's flag package stops parsing flags at the first non-flag token, so
 	// the positional pipeline path must be pulled out before handing the
 	// rest to fs.Parse — otherwise "--job"/"--version" after it would never
 	// be recognized as flags.
 	pipelinePath, flagArgs := splitPositional(args)
 	if pipelinePath == "" {
-		return fmt.Errorf("usage: steps <pipeline.yml> [--job NAME] [--version key=value]...")
+		err := fmt.Errorf("usage: steps <pipeline.yml> [--job NAME] [--version key=value]...")
+		slog.Error("cli.parse", "error", err)
+
+		return err
 	}
 
 	fs := flag.NewFlagSet("steps", flag.ContinueOnError)
@@ -77,11 +97,17 @@ func run(args []string) error {
 
 	err := fs.Parse(flagArgs)
 	if err != nil {
+		slog.Error("cli.parse", "flag_args", flagArgs, "error", err)
+
 		return err
 	}
 
+	slog.Debug("cli.parsed", "pipeline", pipelinePath, "job", *jobName, "pinned", map[string]string(pinned))
+
 	cfg, err := LoadConfig(pipelinePath)
 	if err != nil {
+		slog.Error("cli.load_config", "path", pipelinePath, "error", err)
+
 		return err
 	}
 
@@ -93,22 +119,41 @@ func run(args []string) error {
 				names = append(names, j.Name)
 			}
 
-			return fmt.Errorf("--job is required when the pipeline has more than one job (available: %v)", names)
+			err := fmt.Errorf("--job is required when the pipeline has more than one job (available: %v)", names)
+			slog.Error("cli.select_job", "available", names, "error", err)
+
+			return err
 		}
 
 		name = cfg.Jobs[0].Name
+		slog.Debug("cli.select_job", "job", name, "reason", "only job in pipeline")
 	}
 
 	job, err := cfg.FindJob(name)
 	if err != nil {
+		slog.Error("cli.select_job", "job", name, "error", err)
+
 		return err
 	}
 
 	workspaceDir, err := os.MkdirTemp("", "steps-*")
 	if err != nil {
-		return fmt.Errorf("could not create workspace: %w", err)
+		err = fmt.Errorf("could not create workspace: %w", err)
+		slog.Error("workspace.create", "error", err)
+
+		return err
 	}
-	defer os.RemoveAll(workspaceDir)
+
+	slog.Debug("workspace.create", "dir", workspaceDir)
+
+	defer func() {
+		slog.Debug("workspace.remove", "dir", workspaceDir)
+
+		err := os.RemoveAll(workspaceDir)
+		if err != nil {
+			slog.Error("workspace.remove", "dir", workspaceDir, "error", err)
+		}
+	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -118,7 +163,8 @@ func run(args []string) error {
 
 	go func() {
 		select {
-		case <-sigs:
+		case sig := <-sigs:
+			slog.Warn("signal.received", "signal", sig.String())
 			cancel()
 		case <-ctx.Done():
 		}
