@@ -46,6 +46,11 @@ type Job struct {
 type Step struct {
 	Get     string `yaml:"get,omitempty"`
 	Trigger bool   `yaml:"trigger,omitempty"`
+	// Version selects which version(s) a get step fetches: unset/"latest"
+	// (default) picks the single latest version; "every" runs the rest of
+	// the plan once per version returned by check; a map pins to a specific
+	// version. Mirrors Concourse's get.version field.
+	Version any    `yaml:"version,omitempty"`
 	Task    string `yaml:"task,omitempty"`
 	Run     string `yaml:"run,omitempty"`
 }

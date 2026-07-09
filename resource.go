@@ -45,6 +45,32 @@ func CheckVersions(ctx context.Context, rt ResourceType, source map[string]any) 
 	return versions, nil
 }
 
+// VersionMode returns a get step's version selection mode ("latest",
+// "every", or "pinned" with its pinned map), per Concourse's get.version
+// field convention: unset or the string "latest" means latest, the string
+// "every" means every version, and a map means pinned to a specific version.
+func VersionMode(step Step) (mode string, pinned map[string]string) {
+	switch v := step.Version.(type) {
+	case string:
+		if v == "every" {
+			return "every", nil
+		}
+
+		return "latest", nil
+	case map[string]any:
+		m := make(map[string]string, len(v))
+		for k, val := range v {
+			m[k] = fmt.Sprint(val)
+		}
+
+		return "pinned", m
+	case map[string]string:
+		return "pinned", v
+	default:
+		return "latest", nil
+	}
+}
+
 // SelectVersion returns the version matching all key/values in pinned, or
 // (if pinned is empty) the last element of versions (latest, by convention).
 func SelectVersion(versions []map[string]any, pinned map[string]string) (map[string]any, error) {
