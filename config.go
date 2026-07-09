@@ -1,3 +1,7 @@
+// Package main implements steps, a small CLI that interprets a
+// Concourse-style pipeline YAML file (resource_types/resources/jobs):
+// check discovers resource versions, get fetches one via a rendered
+// shell command, and task runs a plan step's command.
 package main
 
 import (

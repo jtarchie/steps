@@ -84,7 +84,7 @@ func run(args []string) error {
 	// be recognized as flags.
 	pipelinePath, flagArgs := splitPositional(args)
 	if pipelinePath == "" {
-		err := errors.New("usage: steps <pipeline.yml> [--job NAME] [--version key=value]...")
+		err := errors.New("usage: steps <pipeline.yml> [--job NAME] [--version key=value] (repeatable)")
 		slog.Error("cli.parse", "error", err)
 
 		return err
