@@ -1,0 +1,20 @@
+resource_types:
+- name: pull-request
+  config:
+    check: gh pr list --json id,title,number,createdAt --repo {{ .source.repo }} --state open -q 'sort_by(.number)'
+    in: gh repo clone {{ .source.repo }} . && gh pr checkout {{ .version.number }}
+    out:  gh pr update-branch --repo {{ .source.repo }} {{ .version.number }}
+
+resources:
+- name: prs
+  type: pull-request
+  source:
+    repo: jtarchie/ci
+
+jobs:
+- name: review
+  plan:
+  - get: prs
+    trigger: true
+  - task: review
+    run: cd prs && gh pr view --json id,title,number,createdAt,body,author,url
