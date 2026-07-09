@@ -1,0 +1,65 @@
+# golangci-lint v2 configuration for steps.
+
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    # default
+    - errcheck      # unchecked errors are bugs (file I/O, exec)
+    - govet         # go vet superset
+    - ineffassign   # assignments to values never read
+    - staticcheck   # the SA* suite (real bugs, deadcode, simplifications)
+    - unused        # unused functions/vars/types
+    # custom
+    - misspell      # typos in identifiers/comments
+    - bodyclose     # http.Response.Body not closed
+    - errorlint     # %w vs %s on errors, typed nil
+    - nilerr        # returning nil after an err
+    - noctx         # http requests without context
+    - unconvert     # unnecessary type conversions
+    - unparam       # unused function parameters
+    - gocritic      # common pitfalls
+    - reassign      # reassigning package-level vars (http.DefaultClient)
+    - tagalign
+    - wrapcheck
+    - sqlclosecheck
+    - exhaustive
+    - whitespace
+    - noinlineerr
+    - importas
+    # nil
+    - nilnil
+    - nilnesserr
+    # Correctness
+    - musttag       # JSON tags required on marshaled structs
+    - recvcheck     # consistent pointer vs value receivers
+    - wastedassign  # assignments whose values are never read
+    - nolintlint    # stale or malformed //nolint directives
+    - errchkjson    # json.Marshal returns ignored where it shouldn't be
+    - loggercheck   # slog key/value mismatch and even-arg invariants
+    # Style / consistency
+    - sloglint      # consistent slog usage
+    - revive        # replacement for golint with a tight ruleset
+    - gochecknoinits # init() side effects make wiring hard to trace
+    # Modern Go idioms
+    - intrange      # `for i := range n` (Go 1.22+)
+    - copyloopvar   # loop-var capture safe by default (Go 1.22+)
+    - mirror        # bytes/strings mirror function suggestions
+    # Performance
+    - perfsprint    # replace fmt.Sprintf/Errorf with faster alternatives
+    - prealloc      # pre-allocate slices where capacity is known
+    # Concurrency / context / HTTP safety
+    - contextcheck  # context.Context must be propagated, not ignored
+    - containedctx  # context.Context must not be stored in structs
+    # Complexity
+    - cyclop        # cyclomatic complexity per function
+    - gocognit      # cognitive complexity (deeply nested / hard-to-read logic)
+    - nestif        # deeply nested if blocks
+    # Security
+    - gosec         # Go security checker; respects existing //nolint:gosec markers
+    # Architecture
+    - depguard      # enforce the internal import-direction (no upward dep on the CLI layer)

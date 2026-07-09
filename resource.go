@@ -77,7 +77,7 @@ func SelectVersion(versions []map[string]any, pinned map[string]string) (map[str
 	slog.Debug("resource.select_version", "versions", len(versions), "pinned", pinned)
 
 	if len(versions) == 0 {
-		err := fmt.Errorf("no versions available")
+		err := errors.New("no versions available")
 		slog.Error("resource.select_version", "pinned", pinned, "error", err)
 
 		return nil, err

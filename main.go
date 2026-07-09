@@ -64,7 +64,8 @@ func initLogging() {
 func main() {
 	initLogging()
 
-	if err := run(os.Args[1:]); err != nil {
+	err := run(os.Args[1:])
+	if err != nil {
 		slog.Error("main.run", "error", err)
 		fmt.Fprintf(os.Stderr, "steps: error: %v\n", err)
 		os.Exit(1)
@@ -82,7 +83,7 @@ func run(args []string) error {
 	// be recognized as flags.
 	pipelinePath, flagArgs := splitPositional(args)
 	if pipelinePath == "" {
-		err := fmt.Errorf("usage: steps <pipeline.yml> [--job NAME] [--version key=value]...")
+		err := errors.New("usage: steps <pipeline.yml> [--job NAME] [--version key=value]...")
 		slog.Error("cli.parse", "error", err)
 
 		return err
