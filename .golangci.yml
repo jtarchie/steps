@@ -63,3 +63,13 @@ linters:
     - gosec         # Go security checker; respects existing //nolint:gosec markers
     # Architecture
     - depguard      # enforce the internal import-direction (no upward dep on the CLI layer)
+
+  settings:
+    depguard:
+      rules:
+        Main:
+          files:
+            - "$all"
+          allow:
+            - "$gostd"
+            - "gopkg.in/yaml.v3"
