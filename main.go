@@ -113,7 +113,26 @@ func run(args []string) error {
 		return err
 	}
 
-	name := *jobName
+	job, err := selectJob(cfg, *jobName)
+	if err != nil {
+		return err
+	}
+
+	workspaceDir, cleanup, err := setupWorkspace()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	ctx, cancel := withSignalCancel(context.Background())
+	defer cancel()
+
+	return RunJob(ctx, cfg, job, pinned, workspaceDir)
+}
+
+// selectJob resolves which job to run: the explicit name if given, or the
+// pipeline's only job if there's exactly one and none was given.
+func selectJob(cfg *Config, name string) (*Job, error) {
 	if name == "" {
 		if len(cfg.Jobs) != 1 {
 			names := make([]string, 0, len(cfg.Jobs))
@@ -124,7 +143,7 @@ func run(args []string) error {
 			err := fmt.Errorf("--job is required when the pipeline has more than one job (available: %v)", names)
 			slog.Error("cli.select_job", "available", names, "error", err)
 
-			return err
+			return nil, err
 		}
 
 		name = cfg.Jobs[0].Name
@@ -135,30 +154,41 @@ func run(args []string) error {
 	if err != nil {
 		slog.Error("cli.select_job", "job", name, "error", err)
 
-		return err
+		return nil, err
 	}
 
+	return job, nil
+}
+
+// setupWorkspace creates the job's top-level temp workspace directory and
+// returns a cleanup func to remove it, which the caller should defer.
+func setupWorkspace() (string, func(), error) {
 	workspaceDir, err := os.MkdirTemp("", "steps-*")
 	if err != nil {
 		err = fmt.Errorf("could not create workspace: %w", err)
 		slog.Error("workspace.create", "error", err)
 
-		return err
+		return "", nil, err
 	}
 
 	slog.Debug("workspace.create", "dir", workspaceDir)
 
-	defer func() {
+	cleanup := func() {
 		slog.Debug("workspace.remove", "dir", workspaceDir)
 
 		err := os.RemoveAll(workspaceDir)
 		if err != nil {
 			slog.Error("workspace.remove", "dir", workspaceDir, "error", err)
 		}
-	}()
+	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	return workspaceDir, cleanup, nil
+}
+
+// withSignalCancel derives a context from parent that is canceled on
+// SIGINT/SIGTERM, and returns it along with its cancel func.
+func withSignalCancel(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
@@ -172,5 +202,5 @@ func run(args []string) error {
 		}
 	}()
 
-	return RunJob(ctx, cfg, job, pinned, workspaceDir)
+	return ctx, cancel
 }
