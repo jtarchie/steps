@@ -23,11 +23,10 @@ func RunJob(ctx context.Context, cfg *Config, job *Job, pinned map[string]string
 	return nil
 }
 
-// runSteps executes steps in order. A `get` step with version:every fans
-// out: it re-runs the remainder of steps (via recursion) once for each
-// version returned by check, instead of continuing this loop — this is
-// what makes "every" apply to everything downstream of the get, matching
-// Concourse's per-version build semantics within a single-pass run.
+// runSteps executes steps in order. A `get` step fans out: for each version
+// it selects (a single version normally, or every version returned by
+// check when version:every is set), that version triggers its own build
+// of the remainder of the plan — see runTriggeredBuild.
 func runSteps(ctx context.Context, cfg *Config, jobName string, steps []Step, pinned map[string]string, workspaceDir string) error {
 	for i, step := range steps {
 		switch {
@@ -43,16 +42,11 @@ func runSteps(ctx context.Context, cfg *Config, jobName string, steps []Step, pi
 			slog.Debug("job.step", "job", jobName, "index", i, "kind", "get", "resource", step.Get, "versions", len(versions))
 
 			for _, version := range versions {
-				err := fetchGetStep(ctx, *resource, *resourceType, version, workspaceDir)
+				err := runTriggeredBuild(ctx, cfg, jobName, *resource, *resourceType, version, steps[i+1:], pinned)
 				if err != nil {
 					err = fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 					slog.Error("job.step", "job", jobName, "index", i, "kind", "get", "resource", step.Get, "version", version, "error", err)
 
-					return err
-				}
-
-				err = runSteps(ctx, cfg, jobName, steps[i+1:], pinned, workspaceDir)
-				if err != nil {
 					return err
 				}
 			}
@@ -127,23 +121,50 @@ func resolveGetVersions(ctx context.Context, cfg *Config, step Step, cliPinned m
 	return resource, resourceType, []map[string]any{version}, nil
 }
 
-// fetchGetStep places one version of a resource into workspaceDir/<name>,
-// resetting that directory first so repeated fetches (version: every)
-// each start from a clean checkout rather than layering onto the last one.
+// runTriggeredBuild runs the build that a single resource version triggers:
+// per Concourse's model, the version triggering a get is what starts a
+// build, and every build gets its own isolated working directory. So this
+// creates a fresh workspace for just this version, fetches the version
+// into it, runs the remainder of the plan inside it, and tears the
+// workspace down afterward — never sharing it with any other triggered
+// build, including sibling versions fanned out by version:every.
+func runTriggeredBuild(ctx context.Context, cfg *Config, jobName string, resource Resource, resourceType ResourceType, version map[string]any, remainder []Step, pinned map[string]string) error {
+	buildWorkspace, err := os.MkdirTemp("", "steps-*")
+	if err != nil {
+		err = fmt.Errorf("could not create workspace: %w", err)
+		slog.Error("workspace.create", "resource", resource.Name, "version", version, "error", err)
+
+		return err
+	}
+
+	slog.Debug("workspace.create", "dir", buildWorkspace, "resource", resource.Name, "version", version)
+
+	defer func() {
+		removeErr := os.RemoveAll(buildWorkspace)
+		if removeErr != nil {
+			slog.Error("workspace.remove", "dir", buildWorkspace, "error", removeErr)
+
+			return
+		}
+
+		slog.Debug("workspace.remove", "dir", buildWorkspace)
+	}()
+
+	err = fetchGetStep(ctx, resource, resourceType, version, buildWorkspace)
+	if err != nil {
+		return err
+	}
+
+	return runSteps(ctx, cfg, jobName, remainder, pinned, buildWorkspace)
+}
+
+// fetchGetStep places one version of a resource into workspaceDir/<name>.
 func fetchGetStep(ctx context.Context, resource Resource, resourceType ResourceType, version map[string]any, workspaceDir string) error {
 	fmt.Printf("get: %s (version: %v)\n", resource.Name, version)
 
 	destDir := filepath.Join(workspaceDir, resource.Name)
 
-	err := os.RemoveAll(destDir)
-	if err != nil {
-		err = fmt.Errorf("could not reset resource dir %q: %w", destDir, err)
-		slog.Error("step.get", "resource", resource.Name, "dest_dir", destDir, "error", err)
-
-		return err
-	}
-
-	err = os.MkdirAll(destDir, 0o755)
+	err := os.MkdirAll(destDir, 0o755)
 	if err != nil {
 		err = fmt.Errorf("could not create resource dir %q: %w", destDir, err)
 		slog.Error("step.get", "resource", resource.Name, "dest_dir", destDir, "error", err)
