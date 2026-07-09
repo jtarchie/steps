@@ -12,6 +12,22 @@ import (
 	"syscall"
 )
 
+// CLI flag names, shared between flag registration in run and the
+// value-flag awareness in splitPositional so the two cannot drift.
+const (
+	flagJob     = "job"
+	flagVersion = "version"
+)
+
+// valueFlags are the flags that consume the following argument as their
+// value (e.g. "--job review"). splitPositional needs to know these so it
+// skips a flag's value instead of mistaking it for the pipeline path. Keep
+// in sync with the flags registered in run.
+var valueFlags = map[string]bool{
+	flagJob:     true,
+	flagVersion: true,
+}
+
 // versionFlagList implements flag.Value, accumulating "key=value" pairs
 // from repeated --version flags into a map[string]string.
 type versionFlagList map[string]string
@@ -36,17 +52,29 @@ func (v versionFlagList) Set(s string) error {
 	return nil
 }
 
-// splitPositional pulls the first non-flag token out of args as the
-// positional pipeline path, returning it along with the remaining tokens
-// (in original order) for flag parsing.
+// splitPositional pulls the positional pipeline path out of args, returning
+// it along with the remaining tokens (in original order) for flag parsing.
+// The path is the first token that is neither a flag nor the value of a
+// value-taking flag, so both "steps pipeline.yml --job x" and
+// "steps --job x pipeline.yml" resolve to the same path.
 func splitPositional(args []string) (string, []string) {
-	for i, a := range args {
-		if !strings.HasPrefix(a, "-") {
+	i := 0
+	for i < len(args) {
+		a := args[i]
+
+		switch {
+		case !strings.HasPrefix(a, "-"):
 			rest := make([]string, 0, len(args)-1)
 			rest = append(rest, args[:i]...)
 			rest = append(rest, args[i+1:]...)
 
 			return a, rest
+		case !strings.Contains(a, "=") && valueFlags[strings.TrimLeft(a, "-")]:
+			// "--job x" form: skip both the flag and its separate value.
+			i += 2
+		default:
+			// A bare flag, or "--flag=value" whose value is attached.
+			i++
 		}
 	}
 
@@ -84,33 +112,25 @@ func run(args []string) error {
 	// be recognized as flags.
 	pipelinePath, flagArgs := splitPositional(args)
 	if pipelinePath == "" {
-		err := errors.New("usage: steps <pipeline.yml> [--job NAME] [--version key=value] (repeatable)")
-		slog.Error("cli.parse", "error", err)
-
-		return err
+		return errors.New("usage: steps <pipeline.yml> [--job NAME] [--version key=value] (repeatable)")
 	}
 
 	fs := flag.NewFlagSet("steps", flag.ContinueOnError)
 
-	jobName := fs.String("job", "", "job name to run (defaults to the pipeline's only job)")
+	jobName := fs.String(flagJob, "", "job name to run (defaults to the pipeline's only job)")
 
 	pinned := make(versionFlagList)
-	fs.Var(&pinned, "version", "pin a version field, e.g. number=87 (repeatable)")
+	fs.Var(&pinned, flagVersion, "pin a version field, e.g. number=87 (repeatable)")
 
 	err := fs.Parse(flagArgs)
 	if err != nil {
-		err = fmt.Errorf("could not parse flags: %w", err)
-		slog.Error("cli.parse", "flag_args", flagArgs, "error", err)
-
-		return err
+		return fmt.Errorf("could not parse flags: %w", err)
 	}
 
 	slog.Debug("cli.parsed", "pipeline", pipelinePath, "job", *jobName, "pinned", map[string]string(pinned))
 
 	cfg, err := LoadConfig(pipelinePath)
 	if err != nil {
-		slog.Error("cli.load_config", "path", pipelinePath, "error", err)
-
 		return err
 	}
 
@@ -136,29 +156,14 @@ func run(args []string) error {
 func selectJob(cfg *Config, name string) (*Job, error) {
 	if name == "" {
 		if len(cfg.Jobs) != 1 {
-			names := make([]string, 0, len(cfg.Jobs))
-			for _, j := range cfg.Jobs {
-				names = append(names, j.Name)
-			}
-
-			err := fmt.Errorf("--job is required when the pipeline has more than one job (available: %v)", names)
-			slog.Error("cli.select_job", "available", names, "error", err)
-
-			return nil, err
+			return nil, fmt.Errorf("--job is required when the pipeline has more than one job (available: %v)", cfg.JobNames())
 		}
 
 		name = cfg.Jobs[0].Name
 		slog.Debug("cli.select_job", "job", name, "reason", "only job in pipeline")
 	}
 
-	job, err := cfg.FindJob(name)
-	if err != nil {
-		slog.Error("cli.select_job", "job", name, "error", err)
-
-		return nil, err
-	}
-
-	return job, nil
+	return cfg.FindJob(name)
 }
 
 // setupWorkspace creates the job's top-level temp workspace directory and
@@ -166,10 +171,7 @@ func selectJob(cfg *Config, name string) (*Job, error) {
 func setupWorkspace() (string, func(), error) {
 	workspaceDir, err := os.MkdirTemp("", "steps-*")
 	if err != nil {
-		err = fmt.Errorf("could not create workspace: %w", err)
-		slog.Error("workspace.create", "error", err)
-
-		return "", nil, err
+		return "", nil, fmt.Errorf("could not create workspace: %w", err)
 	}
 
 	slog.Debug("workspace.create", "dir", workspaceDir)

@@ -65,20 +65,14 @@ func LoadConfig(path string) (*Config, error) {
 
 	data, err := os.ReadFile(path) //nolint:gosec // path is the pipeline file the user asked to run, not untrusted input
 	if err != nil {
-		err = fmt.Errorf("could not read pipeline file %q: %w", path, err)
-		slog.Error("config.load", "path", path, "error", err)
-
-		return nil, err
+		return nil, fmt.Errorf("could not read pipeline file %q: %w", path, err)
 	}
 
 	var cfg Config
 
 	err = yaml.Unmarshal(data, &cfg)
 	if err != nil {
-		err = fmt.Errorf("could not parse pipeline YAML %q: %w", path, err)
-		slog.Error("config.parse", "path", path, "error", err)
-
-		return nil, err
+		return nil, fmt.Errorf("could not parse pipeline YAML %q: %w", path, err)
 	}
 
 	slog.Info("config.loaded",
@@ -103,10 +97,7 @@ func (c *Config) FindResource(name string) (*Resource, error) {
 		}
 	}
 
-	err := fmt.Errorf("no resource named %q", name)
-	slog.Error("resource.find", "name", name, "error", err)
-
-	return nil, err
+	return nil, fmt.Errorf("no resource named %q", name)
 }
 
 // FindResourceType returns the resource type with the given name, or an error if not found.
@@ -121,10 +112,7 @@ func (c *Config) FindResourceType(name string) (*ResourceType, error) {
 		}
 	}
 
-	err := fmt.Errorf("no resource_type named %q", name)
-	slog.Error("resource_type.find", "name", name, "error", err)
-
-	return nil, err
+	return nil, fmt.Errorf("no resource_type named %q", name)
 }
 
 // FindJob returns the job with the given name, or an error if not found.
@@ -139,13 +127,16 @@ func (c *Config) FindJob(name string) (*Job, error) {
 		}
 	}
 
+	return nil, fmt.Errorf("no job named %q (available: %v)", name, c.JobNames())
+}
+
+// JobNames returns the names of every job in the pipeline, in declaration
+// order, for use in "which job?" error messages.
+func (c *Config) JobNames() []string {
 	names := make([]string, 0, len(c.Jobs))
 	for _, j := range c.Jobs {
 		names = append(names, j.Name)
 	}
 
-	err := fmt.Errorf("no job named %q (available: %v)", name, names)
-	slog.Error("job.find", "name", name, "available", names, "error", err)
-
-	return nil, err
+	return names
 }

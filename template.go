@@ -14,20 +14,14 @@ func Render(tmpl string, data map[string]any) (string, error) {
 
 	t, err := template.New("step").Option("missingkey=error").Parse(tmpl)
 	if err != nil {
-		err = fmt.Errorf("could not parse template %q: %w", tmpl, err)
-		slog.Error("template.render", "template", tmpl, "error", err)
-
-		return "", err
+		return "", fmt.Errorf("could not parse template %q: %w", tmpl, err)
 	}
 
 	var out strings.Builder
 
 	err = t.Execute(&out, data)
 	if err != nil {
-		err = fmt.Errorf("could not render template %q: %w", tmpl, err)
-		slog.Error("template.render", "template", tmpl, "data", data, "error", err)
-
-		return "", err
+		return "", fmt.Errorf("could not render template %q: %w", tmpl, err)
 	}
 
 	rendered := out.String()

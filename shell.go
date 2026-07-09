@@ -21,10 +21,7 @@ func RunShell(ctx context.Context, command, cwd string) error {
 
 	err := cmd.Run()
 	if err != nil {
-		err = fmt.Errorf("command %q failed: %w", command, err)
-		slog.Error("shell.run", "command", command, "cwd", cwd, "error", err)
-
-		return err
+		return fmt.Errorf("command %q failed: %w", command, err)
 	}
 
 	slog.Debug("shell.run", "command", command, "cwd", cwd, "exit_code", 0)
@@ -44,10 +41,7 @@ func RunShellCapture(ctx context.Context, command, cwd string) ([]byte, error) {
 
 	out, err := cmd.Output()
 	if err != nil {
-		err = fmt.Errorf("command %q failed: %w", command, err)
-		slog.Error("shell.capture", "command", command, "cwd", cwd, "error", err)
-
-		return nil, err
+		return nil, fmt.Errorf("command %q failed: %w", command, err)
 	}
 
 	slog.Debug("shell.capture", "command", command, "cwd", cwd, "output_bytes", len(out), "output", string(out))

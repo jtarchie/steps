@@ -33,10 +33,7 @@ func runSteps(ctx context.Context, cfg *Config, jobName string, steps []Step, pi
 		case step.Get != "":
 			resource, resourceType, versions, err := resolveGetVersions(ctx, cfg, step, pinned)
 			if err != nil {
-				err = fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
-				slog.Error("job.step", "job", jobName, "index", i, "kind", "get", "resource", step.Get, "error", err)
-
-				return err
+				return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 			}
 
 			slog.Debug("job.step", "job", jobName, "index", i, "kind", "get", "resource", step.Get, "versions", len(versions))
@@ -44,10 +41,7 @@ func runSteps(ctx context.Context, cfg *Config, jobName string, steps []Step, pi
 			for _, version := range versions {
 				err := runTriggeredBuild(ctx, cfg, jobName, *resource, *resourceType, version, steps[i+1:], pinned)
 				if err != nil {
-					err = fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
-					slog.Error("job.step", "job", jobName, "index", i, "kind", "get", "resource", step.Get, "version", version, "error", err)
-
-					return err
+					return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 				}
 			}
 
@@ -59,16 +53,10 @@ func runSteps(ctx context.Context, cfg *Config, jobName string, steps []Step, pi
 
 			err := RunShell(ctx, step.Run, workspaceDir)
 			if err != nil {
-				err = fmt.Errorf("step %d (task %q): %w", i, step.Task, err)
-				slog.Error("job.step", "job", jobName, "index", i, "kind", "task", "task", step.Task, "error", err)
-
-				return err
+				return fmt.Errorf("step %d (task %q): %w", i, step.Task, err)
 			}
 		default:
-			err := fmt.Errorf("step %d: unrecognized step (must be get or task)", i)
-			slog.Error("job.step", "job", jobName, "index", i, "error", err)
-
-			return err
+			return fmt.Errorf("step %d: unrecognized step (must be get or task)", i)
 		}
 	}
 
@@ -96,24 +84,23 @@ func resolveGetVersions(ctx context.Context, cfg *Config, step Step, cliPinned m
 		return nil, nil, nil, err
 	}
 
-	if len(cliPinned) > 0 {
-		version, err := SelectVersion(versions, cliPinned)
-		if err != nil {
-			return nil, nil, nil, err
+	// A CLI --version pin always wins; otherwise the step's own version:
+	// field decides. version:every is the only path that fans out to more
+	// than one version — every other path narrows to a single pin (an empty
+	// pin meaning "latest").
+	pin := cliPinned
+	if len(pin) == 0 {
+		mode, stepPinned := VersionMode(step)
+		slog.Debug("resource.version_mode", "resource", resource.Name, "mode", mode)
+
+		if mode == "every" {
+			return resource, resourceType, versions, nil
 		}
 
-		return resource, resourceType, []map[string]any{version}, nil
+		pin = stepPinned
 	}
 
-	mode, stepPinned := VersionMode(step)
-
-	slog.Debug("resource.version_mode", "resource", resource.Name, "mode", mode)
-
-	if mode == "every" {
-		return resource, resourceType, versions, nil
-	}
-
-	version, err := SelectVersion(versions, stepPinned)
+	version, err := SelectVersion(versions, pin)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -131,10 +118,7 @@ func resolveGetVersions(ctx context.Context, cfg *Config, step Step, cliPinned m
 func runTriggeredBuild(ctx context.Context, cfg *Config, jobName string, resource Resource, resourceType ResourceType, version map[string]any, remainder []Step, pinned map[string]string) error {
 	buildWorkspace, err := os.MkdirTemp("", "steps-*")
 	if err != nil {
-		err = fmt.Errorf("could not create workspace: %w", err)
-		slog.Error("workspace.create", "resource", resource.Name, "version", version, "error", err)
-
-		return err
+		return fmt.Errorf("could not create workspace for %q: %w", resource.Name, err)
 	}
 
 	slog.Debug("workspace.create", "dir", buildWorkspace, "resource", resource.Name, "version", version)
@@ -166,10 +150,7 @@ func fetchGetStep(ctx context.Context, resource Resource, resourceType ResourceT
 
 	err := os.MkdirAll(destDir, 0o750)
 	if err != nil {
-		err = fmt.Errorf("could not create resource dir %q: %w", destDir, err)
-		slog.Error("step.get", "resource", resource.Name, "dest_dir", destDir, "error", err)
-
-		return err
+		return fmt.Errorf("could not create resource dir %q: %w", destDir, err)
 	}
 
 	return RunIn(ctx, resourceType, resource.Source, version, destDir)

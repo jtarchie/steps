@@ -17,28 +17,21 @@ func CheckVersions(ctx context.Context, rt ResourceType, source map[string]any) 
 
 	command, err := Render(rt.Config.Check, map[string]any{"source": source})
 	if err != nil {
-		err = fmt.Errorf("check %q: %w", rt.Name, err)
-		slog.Error("resource.check", "resource_type", rt.Name, "error", err)
-
-		return nil, err
+		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
 
 	out, err := RunShellCapture(ctx, command, "")
 	if err != nil {
-		err = fmt.Errorf("check %q: %w", rt.Name, err)
-		slog.Error("resource.check", "resource_type", rt.Name, "command", command, "error", err)
-
-		return nil, err
+		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
 
 	var versions []map[string]any
 
 	err = json.Unmarshal(out, &versions)
 	if err != nil {
-		err = fmt.Errorf("check %q: could not parse JSON output: %w", rt.Name, err)
-		slog.Error("resource.check", "resource_type", rt.Name, "output", string(out), "error", err)
+		slog.Debug("resource.check", "resource_type", rt.Name, "output", string(out))
 
-		return nil, err
+		return nil, fmt.Errorf("check %q: could not parse JSON output: %w", rt.Name, err)
 	}
 
 	slog.Info("resource.checked", "resource_type", rt.Name, "versions", len(versions))
@@ -78,10 +71,7 @@ func SelectVersion(versions []map[string]any, pinned map[string]string) (map[str
 	slog.Debug("resource.select_version", "versions", len(versions), "pinned", pinned)
 
 	if len(versions) == 0 {
-		err := errors.New("no versions available")
-		slog.Error("resource.select_version", "pinned", pinned, "error", err)
-
-		return nil, err
+		return nil, errors.New("no versions available")
 	}
 
 	if len(pinned) == 0 {
@@ -99,10 +89,7 @@ func SelectVersion(versions []map[string]any, pinned map[string]string) (map[str
 		}
 	}
 
-	err := fmt.Errorf("no version matches pin %v", pinned)
-	slog.Error("resource.select_version", "pinned", pinned, "versions", versions, "error", err)
-
-	return nil, err
+	return nil, fmt.Errorf("no version matches pin %v", pinned)
 }
 
 func matchesPin(version map[string]any, pinned map[string]string) bool {
@@ -127,18 +114,12 @@ func RunIn(ctx context.Context, rt ResourceType, source, version map[string]any,
 
 	command, err := Render(rt.Config.In, map[string]any{"source": source, "version": version})
 	if err != nil {
-		err = fmt.Errorf("in %q: %w", rt.Name, err)
-		slog.Error("resource.in", "resource_type", rt.Name, "error", err)
-
-		return err
+		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
 
 	err = RunShell(ctx, command, destDir)
 	if err != nil {
-		err = fmt.Errorf("in %q: %w", rt.Name, err)
-		slog.Error("resource.in", "resource_type", rt.Name, "command", command, "dest_dir", destDir, "error", err)
-
-		return err
+		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
 
 	slog.Info("resource.fetched", "resource_type", rt.Name, "dest_dir", destDir)
