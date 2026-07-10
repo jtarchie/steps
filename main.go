@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/alecthomas/kong"
+	"github.com/lmittmann/tint"
 )
 
 // CLI is the pipeline runner's command-line grammar, parsed by kong.
@@ -24,8 +25,9 @@ type CLI struct {
 // logger, separate from this tool's plain stdout progress lines
 // ("get: prs (version: ...)", "task: review").
 func initLogging() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+	slog.SetDefault(slog.New(tint.NewHandler(os.Stderr, &tint.Options{
 		Level: slog.LevelDebug,
+		AddSource: true,
 	})))
 }
 
