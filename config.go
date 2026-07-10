@@ -57,6 +57,10 @@ type Step struct {
 	Version any    `yaml:"version,omitempty"`
 	Task    string `yaml:"task,omitempty"`
 	Run     string `yaml:"run,omitempty"`
+	// Put names a resource to run its out command against; Params are
+	// passed through to the out command as {{ params.x }}.
+	Put    string         `yaml:"put,omitempty"`
+	Params map[string]any `yaml:"params,omitempty"`
 }
 
 // LoadConfig reads and parses a pipeline YAML file at path.

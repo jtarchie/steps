@@ -126,3 +126,35 @@ func RunIn(ctx context.Context, rt ResourceType, source, version map[string]any,
 
 	return nil
 }
+
+// RunOut renders rt.Config.Out against {"source": source, "params": params}
+// and executes it with cwd = srcDir. If stdout parses as a JSON object it's
+// returned as result (loosely mirroring check's convention of emitting the
+// version produced); unparsable or empty stdout is not an error — result
+// is simply nil, since many out scripts won't emit anything.
+func RunOut(ctx context.Context, rt ResourceType, source, params map[string]any, srcDir string) (map[string]any, error) {
+	slog.Debug("resource.out", "resource_type", rt.Name, "source", source, "params", params, "src_dir", srcDir)
+
+	command, err := Render(rt.Config.Out, map[string]any{"source": source, "params": params})
+	if err != nil {
+		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
+	}
+
+	out, err := RunShellCapture(ctx, command, srcDir)
+	if err != nil {
+		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
+	}
+
+	var result map[string]any
+
+	unmarshalErr := json.Unmarshal(out, &result)
+	if unmarshalErr != nil {
+		slog.Debug("resource.out", "resource_type", rt.Name, "output", string(out), "parse_error", unmarshalErr)
+
+		return nil, nil //nolint:nilnil // unparsable/empty stdout is not an error; nil result means "no version produced"
+	}
+
+	slog.Info("resource.put", "resource_type", rt.Name, "src_dir", srcDir, "result", result)
+
+	return result, nil
+}

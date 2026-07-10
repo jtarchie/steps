@@ -1,2 +1,5 @@
 # Compiled binary (module name)
 /steps
+
+# Persisted job-run state (sqlite)
+.steps/

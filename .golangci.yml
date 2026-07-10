@@ -74,3 +74,4 @@ linters:
             - "$gostd"
             - "gopkg.in/yaml.v3"
             - "github.com/alecthomas/kong"
+            - "modernc.org/sqlite"

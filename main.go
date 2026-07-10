@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/alecthomas/kong"
@@ -13,9 +14,10 @@ import (
 
 // CLI is the pipeline runner's command-line grammar, parsed by kong.
 type CLI struct {
-	Pipeline string            `arg:""                                                       help:"path to the pipeline YAML file"`
+	Pipeline string            `arg:""                                                                 help:"path to the pipeline YAML file"`
 	Job      string            `help:"job name to run (defaults to the pipeline's only job)"`
 	Version  map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"`
+	Force    bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
 }
 
 // initLogging installs a debug-level slog handler on stderr as the default
@@ -67,6 +69,17 @@ func run(args []string) error {
 		return err
 	}
 
+	store, err := OpenStore(statePath(cli.Pipeline))
+	if err != nil {
+		return err
+	}
+	defer func() {
+		closeErr := store.Close()
+		if closeErr != nil {
+			slog.Error("store.close", "error", closeErr)
+		}
+	}()
+
 	workspaceDir, cleanup, err := setupWorkspace()
 	if err != nil {
 		return err
@@ -76,7 +89,14 @@ func run(args []string) error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	return RunJob(ctx, cfg, job, cli.Version, workspaceDir)
+	return RunJob(ctx, cfg, job, cli.Version, workspaceDir, store, cli.Force)
+}
+
+// statePath returns the sqlite database path for pipeline's persisted job
+// state: .steps/state.db colocated with the pipeline YAML's own directory,
+// so distinct pipelines never share a database file.
+func statePath(pipeline string) string {
+	return filepath.Join(filepath.Dir(pipeline), ".steps", "state.db")
 }
 
 // selectJob resolves which job to run: the explicit name if given, or the
