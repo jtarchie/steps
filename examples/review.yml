@@ -1,7 +1,7 @@
 resource_types:
 - name: pull-request
   config:
-    check: gh pr list --json id,title,number,createdAt --repo {{ .source.repo }} --state open -q 'sort_by(.number)'
+    check: gh pr list --json id,title,number,createdAt,updatedAt --repo {{ .source.repo }} --state open -q 'sort_by(.updatedAt)'
     in: gh repo clone {{ .source.repo }} . && gh pr checkout {{ .version.number }}
     out:  gh pr update-branch --repo {{ .source.repo }} {{ .version.number }}
 
