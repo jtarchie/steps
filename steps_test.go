@@ -7,75 +7,70 @@ import (
 	"testing"
 )
 
-func TestSplitPositional(t *testing.T) {
+func TestRunFlagParsing(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name     string
-		args     []string
-		wantPath string
-		wantRest []string
-	}{
-		{"positional first", []string{"pipeline.yml", "--job", "x"}, "pipeline.yml", []string{"--job", "x"}},
-		{"positional only", []string{"pipeline.yml"}, "pipeline.yml", nil},
-		{"only flags", []string{"--job", "x"}, "", []string{"--job", "x"}},
-		{"empty", nil, "", nil},
-		// A value-taking flag's value must not be mistaken for the path, so
-		// the path resolves the same whether it comes before or after flags.
-		{"path after flag and its value", []string{"--job", "x", "pipeline.yml"}, "pipeline.yml", []string{"--job", "x"}},
-		{"path after attached flag value", []string{"--job=x", "pipeline.yml"}, "pipeline.yml", []string{"--job=x"}},
-		{"version flag value skipped", []string{"--version", "n=1", "pipeline.yml"}, "pipeline.yml", []string{"--version", "n=1"}},
+	const pipeline = `
+jobs:
+- name: build
+  plan:
+  - task: build
+    run: echo hi
+- name: test
+  plan:
+  - task: test
+    run: echo hi
+`
+
+	path := filepath.Join(t.TempDir(), "pipeline.yml")
+
+	err := os.WriteFile(path, []byte(pipeline), 0o600)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			gotPath, gotRest := splitPositional(tt.args)
-			if gotPath != tt.wantPath {
-				t.Errorf("path = %q, want %q", gotPath, tt.wantPath)
-			}
-
-			if len(gotRest) != 0 || len(tt.wantRest) != 0 {
-				if !reflect.DeepEqual(gotRest, tt.wantRest) {
-					t.Errorf("rest = %v, want %v", gotRest, tt.wantRest)
-				}
-			}
-		})
-	}
-}
-
-func TestVersionFlagListSet(t *testing.T) {
-	t.Parallel()
-
-	t.Run("accumulates pairs", func(t *testing.T) {
+	t.Run("job flag before positional path", func(t *testing.T) {
 		t.Parallel()
 
-		list := make(versionFlagList)
-
-		for _, arg := range []string{"number=87", "ref=abc"} {
-			err := list.Set(arg)
-			if err != nil {
-				t.Fatalf("Set(%q): %v", arg, err)
-			}
-		}
-
-		want := versionFlagList{"number": "87", "ref": "abc"}
-		if !reflect.DeepEqual(list, want) {
-			t.Errorf("list = %v, want %v", list, want)
+		err := run([]string{"--job", "build", path})
+		if err != nil {
+			t.Errorf("run: %v", err)
 		}
 	})
 
-	t.Run("rejects malformed", func(t *testing.T) {
+	t.Run("job flag after positional path", func(t *testing.T) {
 		t.Parallel()
 
-		for _, bad := range []string{"noequals", "=novalue"} {
-			list := make(versionFlagList)
+		err := run([]string{path, "--job", "test"})
+		if err != nil {
+			t.Errorf("run: %v", err)
+		}
+	})
 
-			err := list.Set(bad)
-			if err == nil {
-				t.Errorf("Set(%q) = nil, want error", bad)
-			}
+	t.Run("job flag attached value", func(t *testing.T) {
+		t.Parallel()
+
+		err := run([]string{"--job=build", path})
+		if err != nil {
+			t.Errorf("run: %v", err)
+		}
+	})
+
+	t.Run("missing job on ambiguous pipeline", func(t *testing.T) {
+		t.Parallel()
+
+		err := run([]string{path})
+		if err == nil {
+			t.Error("expected error when --job is omitted and multiple jobs exist")
+		}
+	})
+
+	t.Run("missing pipeline path", func(t *testing.T) {
+		t.Parallel()
+
+		err := run(nil)
+		if err == nil {
+			t.Error("expected error for missing positional pipeline path")
 		}
 	})
 }

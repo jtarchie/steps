@@ -2,83 +2,20 @@ package main
 
 import (
 	"context"
-	"errors"
-	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
+
+	"github.com/alecthomas/kong"
 )
 
-// CLI flag names, shared between flag registration in run and the
-// value-flag awareness in splitPositional so the two cannot drift.
-const (
-	flagJob     = "job"
-	flagVersion = "version"
-)
-
-// valueFlags are the flags that consume the following argument as their
-// value (e.g. "--job review"). splitPositional needs to know these so it
-// skips a flag's value instead of mistaking it for the pipeline path. Keep
-// in sync with the flags registered in run.
-var valueFlags = map[string]bool{
-	flagJob:     true,
-	flagVersion: true,
-}
-
-// versionFlagList implements flag.Value, accumulating "key=value" pairs
-// from repeated --version flags into a map[string]string.
-type versionFlagList map[string]string
-
-func (v versionFlagList) String() string {
-	parts := make([]string, 0, len(v))
-	for k, val := range v {
-		parts = append(parts, k+"="+val)
-	}
-
-	return strings.Join(parts, ",")
-}
-
-func (v versionFlagList) Set(s string) error {
-	key, value, found := strings.Cut(s, "=")
-	if !found || key == "" {
-		return fmt.Errorf("invalid --version flag %q: expected key=value", s)
-	}
-
-	v[key] = value
-
-	return nil
-}
-
-// splitPositional pulls the positional pipeline path out of args, returning
-// it along with the remaining tokens (in original order) for flag parsing.
-// The path is the first token that is neither a flag nor the value of a
-// value-taking flag, so both "steps pipeline.yml --job x" and
-// "steps --job x pipeline.yml" resolve to the same path.
-func splitPositional(args []string) (string, []string) {
-	i := 0
-	for i < len(args) {
-		a := args[i]
-
-		switch {
-		case !strings.HasPrefix(a, "-"):
-			rest := make([]string, 0, len(args)-1)
-			rest = append(rest, args[:i]...)
-			rest = append(rest, args[i+1:]...)
-
-			return a, rest
-		case !strings.Contains(a, "=") && valueFlags[strings.TrimLeft(a, "-")]:
-			// "--job x" form: skip both the flag and its separate value.
-			i += 2
-		default:
-			// A bare flag, or "--flag=value" whose value is attached.
-			i++
-		}
-	}
-
-	return "", args
+// CLI is the pipeline runner's command-line grammar, parsed by kong.
+type CLI struct {
+	Pipeline string            `arg:""                                                       help:"path to the pipeline YAML file"`
+	Job      string            `help:"job name to run (defaults to the pipeline's only job)"`
+	Version  map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"`
 }
 
 // initLogging installs a debug-level slog handler on stderr as the default
@@ -106,35 +43,26 @@ func main() {
 func run(args []string) error {
 	slog.Debug("cli.parse", "args", args)
 
-	// Go's flag package stops parsing flags at the first non-flag token, so
-	// the positional pipeline path must be pulled out before handing the
-	// rest to fs.Parse — otherwise "--job"/"--version" after it would never
-	// be recognized as flags.
-	pipelinePath, flagArgs := splitPositional(args)
-	if pipelinePath == "" {
-		return errors.New("usage: steps <pipeline.yml> [--job NAME] [--version key=value] (repeatable)")
+	var cli CLI
+
+	parser, err := kong.New(&cli, kong.Name("steps"), kong.Description("run a single job from a pipeline YAML file"))
+	if err != nil {
+		return fmt.Errorf("could not build CLI parser: %w", err)
 	}
 
-	fs := flag.NewFlagSet("steps", flag.ContinueOnError)
-
-	jobName := fs.String(flagJob, "", "job name to run (defaults to the pipeline's only job)")
-
-	pinned := make(versionFlagList)
-	fs.Var(&pinned, flagVersion, "pin a version field, e.g. number=87 (repeatable)")
-
-	err := fs.Parse(flagArgs)
+	_, err = parser.Parse(args)
 	if err != nil {
 		return fmt.Errorf("could not parse flags: %w", err)
 	}
 
-	slog.Debug("cli.parsed", "pipeline", pipelinePath, "job", *jobName, "pinned", map[string]string(pinned))
+	slog.Debug("cli.parsed", "pipeline", cli.Pipeline, "job", cli.Job, "pinned", cli.Version)
 
-	cfg, err := LoadConfig(pipelinePath)
+	cfg, err := LoadConfig(cli.Pipeline)
 	if err != nil {
 		return err
 	}
 
-	job, err := selectJob(cfg, *jobName)
+	job, err := selectJob(cfg, cli.Job)
 	if err != nil {
 		return err
 	}
@@ -148,7 +76,7 @@ func run(args []string) error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	return RunJob(ctx, cfg, job, pinned, workspaceDir)
+	return RunJob(ctx, cfg, job, cli.Version, workspaceDir)
 }
 
 // selectJob resolves which job to run: the explicit name if given, or the
