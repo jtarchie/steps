@@ -65,6 +65,14 @@ func OpenStore(path string) (*Store, error) {
 		return nil, fmt.Errorf("could not open state db %q: %w", path, err)
 	}
 
+	// SQLite only ever allows one writer at a time regardless of pool size,
+	// so a pool of more than one just adds needless contention within this
+	// process for no throughput benefit. This does not, by itself, prevent
+	// contention with *other* processes' Stores (each `steps` invocation
+	// opens its own pool) — that's what enableWAL's retry and busy_timeout
+	// above are for.
+	db.SetMaxOpenConns(1)
+
 	ctx := context.Background()
 
 	enableWAL(ctx, db)
