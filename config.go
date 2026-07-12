@@ -16,6 +16,7 @@ import (
 type Config struct {
 	ResourceTypes []ResourceType `yaml:"resource_types"`
 	Resources     []Resource     `yaml:"resources"`
+	Agents        []Agent        `yaml:"agents"`
 	Jobs          []Job          `yaml:"jobs"`
 }
 
@@ -40,13 +41,70 @@ type Resource struct {
 	Source map[string]any `yaml:"source"`
 }
 
+// Agent is a named OpenAI-compatible model an `agent` step drives.
+type Agent struct {
+	Name   string      `yaml:"name"`
+	Source AgentSource `yaml:"source"`
+}
+
+// AgentSource selects the model and how to reach it. Model may carry a
+// provider prefix (e.g. "openrouter/anthropic/claude-3.5-sonnet",
+// "lmstudio/qwen2.5-coder") that resolves Endpoint and a default APIKeyEnv
+// from a built-in table (see resolveAgentTarget in agent.go); Endpoint, when
+// set, is the API base URL (e.g. "https://api.openai.com/v1/") and overrides
+// the derived one. APIKeyEnv names an OS environment variable read at run
+// time — the key is never stored in YAML.
+type AgentSource struct {
+	Endpoint  string `yaml:"endpoint,omitempty"`
+	Model     string `yaml:"model"`
+	APIKeyEnv string `yaml:"api_key_env,omitempty"`
+}
+
+// ToolSpec is one entry in an agent step's tools: list — either a built-in
+// tool referenced by name, or a custom command-backed tool. It implements
+// yaml.Unmarshaler because a tools: list mixes bare scalar entries (builtin
+// names) with mapping entries (custom tool definitions).
+type ToolSpec struct {
+	Builtin     string // set when the entry is a bare builtin name
+	Name        string // custom tool: function name exposed to the model
+	Description string // custom tool: description shown to the model
+	Run         string // custom tool: sh -c template, {{ .args.X }} interpolated
+}
+
+// UnmarshalYAML decodes a ToolSpec from either a scalar (builtin name) or a
+// mapping ({name, description, run}) YAML node.
+func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias kinds that can't appear in a decoded sequence element
+	case yaml.ScalarNode:
+		return value.Decode(&t.Builtin) //nolint:wrapcheck // yaml.v3 error is already descriptive
+	case yaml.MappingNode:
+		var m struct {
+			Name        string `yaml:"name"`
+			Description string `yaml:"description"`
+			Run         string `yaml:"run"`
+		}
+
+		err := value.Decode(&m)
+		if err != nil {
+			return fmt.Errorf("agent tool: %w", err)
+		}
+
+		t.Name, t.Description, t.Run = m.Name, m.Description, m.Run
+
+		return nil
+	default:
+		return fmt.Errorf("agent tool at line %d must be a builtin name or a {name, description, run} mapping", value.Line)
+	}
+}
+
 // Job is a named sequence of steps to run.
 type Job struct {
 	Name string `yaml:"name"`
 	Plan []Step `yaml:"plan"`
 }
 
-// Step is a flat union of the step kinds this interpreter supports: get and task.
+// Step is a flat union of the step kinds this interpreter supports: get,
+// task, put, and agent.
 type Step struct {
 	Get     string `yaml:"get,omitempty"`
 	Trigger bool   `yaml:"trigger,omitempty"`
@@ -61,6 +119,19 @@ type Step struct {
 	// passed through to the out command as {{ params.x }}.
 	Put    string         `yaml:"put,omitempty"`
 	Params map[string]any `yaml:"params,omitempty"`
+	// Agent names an agents: entry this step runs against. Prompt is the
+	// task given to the model (not templated — freeform text is likely to
+	// contain literal {{ }} that isn't meant as a template). Dir is the
+	// step's working directory relative to the job's workspace, since
+	// there's no run: string to embed a cd in. Tools restricts/extends the
+	// built-in tool set (empty means all built-ins). Attempts is the total
+	// number of tries, Concourse-style (attempts: 3 = up to 3 total tries,
+	// including the first); 0/unset means 1.
+	Agent    string     `yaml:"agent,omitempty"`
+	Prompt   string     `yaml:"prompt,omitempty"`
+	Dir      string     `yaml:"dir,omitempty"`
+	Tools    []ToolSpec `yaml:"tools,omitempty"`
+	Attempts int        `yaml:"attempts,omitempty"`
 }
 
 // LoadConfig reads and parses a pipeline YAML file at path.
@@ -117,6 +188,21 @@ func (c *Config) FindResourceType(name string) (*ResourceType, error) {
 	}
 
 	return nil, fmt.Errorf("no resource_type named %q", name)
+}
+
+// FindAgent returns the agent with the given name, or an error if not found.
+func (c *Config) FindAgent(name string) (*Agent, error) {
+	slog.Debug("agent.find", "name", name)
+
+	for i := range c.Agents {
+		if c.Agents[i].Name == name {
+			slog.Debug("agent.find", "name", name, "found", true)
+
+			return &c.Agents[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("no agent named %q", name)
 }
 
 // FindJob returns the job with the given name, or an error if not found.

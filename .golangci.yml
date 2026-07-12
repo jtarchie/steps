@@ -76,3 +76,6 @@ linters:
             - "github.com/alecthomas/kong"
             - "modernc.org/sqlite"
             - "github.com/lmittmann/tint"
+            - "google.golang.org/adk/v2"
+            - "google.golang.org/genai"
+            - "github.com/achetronic/adk-utils-go"

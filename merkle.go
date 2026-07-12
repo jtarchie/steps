@@ -13,9 +13,10 @@ import (
 type NodeKind string
 
 const (
-	NodeKindGet  NodeKind = "get"
-	NodeKindTask NodeKind = "task"
-	NodeKindPut  NodeKind = "put"
+	NodeKindGet   NodeKind = "get"
+	NodeKindTask  NodeKind = "task"
+	NodeKindPut   NodeKind = "put"
+	NodeKindAgent NodeKind = "agent"
 )
 
 // Node is one content-addressed step in a job's resolved execution chain.
@@ -36,13 +37,16 @@ type Node struct {
 type Chain struct {
 	Nodes    []Node
 	RootHash string
-	HasPut   bool // true if any node is a put — forces this chain non-skippable
+	// Unskippable is true if any node is a put or agent step — both have
+	// side effects (or are non-deterministic, in the agent's case) and must
+	// always run rather than reuse a prior hash match.
+	Unskippable bool
 }
 
-// getNodeContent, taskNodeContent, and putNodeContent build the exact
-// content maps hashed for each step kind. They're shared between planning
-// (merkle.go) and real execution (job.go) so both compute identical hashes
-// for identical steps.
+// getNodeContent, taskNodeContent, putNodeContent, and agentNodeContent
+// build the exact content maps hashed for each step kind. They're shared
+// between planning (merkle.go) and real execution (job.go) so both compute
+// identical hashes for identical steps.
 func getNodeContent(resourceType ResourceType, source, version map[string]any) map[string]any {
 	return map[string]any{
 		"in_template": resourceType.Config.In,
@@ -60,6 +64,33 @@ func putNodeContent(resourceType ResourceType, source, params map[string]any) ma
 		"out_template": resourceType.Config.Out,
 		"source":       source,
 		"params":       params,
+	}
+}
+
+// agentNodeContent hashes what defines an agent step's behavior: which
+// agent it targets, the (unrendered) prompt, the working directory, the
+// resolved target (modelName/baseURL, post provider-prefix resolution, so
+// switching providers changes the hash), and the tools list (so editing a
+// tool re-runs the step). api_key_env's name and value are deliberately
+// excluded — nothing secret-adjacent belongs in hashed/persisted content.
+func agentNodeContent(agentName, prompt, dir, modelName, baseURL string, tools []ToolSpec) map[string]any {
+	toolsContent := make([]map[string]any, len(tools))
+	for i, t := range tools {
+		toolsContent[i] = map[string]any{
+			"builtin":     t.Builtin,
+			"name":        t.Name,
+			"description": t.Description,
+			"run":         t.Run,
+		}
+	}
+
+	return map[string]any{
+		"agent":    agentName,
+		"prompt":   prompt,
+		"dir":      dir,
+		"model":    modelName,
+		"endpoint": baseURL,
+		"tools":    toolsContent,
 	}
 }
 
@@ -107,11 +138,11 @@ func PlanChains(ctx context.Context, cfg *Config, jobName string, steps []Step, 
 	return chains, nil
 }
 
-func planSteps(ctx context.Context, cfg *Config, steps []Step, pinned map[string]string, prefix []Node, parentHash string, hasPut bool) ([]Chain, error) {
+func planSteps(ctx context.Context, cfg *Config, steps []Step, pinned map[string]string, prefix []Node, parentHash string, unskippable bool) ([]Chain, error) {
 	for i, step := range steps {
 		switch {
 		case step.Get != "":
-			return planGetStep(ctx, cfg, steps, i, step, pinned, prefix, parentHash, hasPut)
+			return planGetStep(ctx, cfg, steps, i, step, pinned, prefix, parentHash, unskippable)
 		case step.Task != "":
 			node, err := taskNode(step, i, parentHash)
 			if err != nil {
@@ -128,19 +159,28 @@ func planSteps(ctx context.Context, cfg *Config, steps []Step, pinned map[string
 
 			prefix = append(prefix, node)
 			parentHash = node.Hash
-			hasPut = true
+			unskippable = true
+		case step.Agent != "":
+			node, err := agentNode(cfg, step, i, parentHash)
+			if err != nil {
+				return nil, err
+			}
+
+			prefix = append(prefix, node)
+			parentHash = node.Hash
+			unskippable = true
 		default:
-			return nil, fmt.Errorf("step %d: unrecognized step (must be get, task, or put)", i)
+			return nil, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 		}
 	}
 
-	return []Chain{{Nodes: prefix, RootHash: parentHash, HasPut: hasPut}}, nil
+	return []Chain{{Nodes: prefix, RootHash: parentHash, Unskippable: unskippable}}, nil
 }
 
 // planGetStep resolves step's version(s) and recurses into the remainder of
 // steps once per version, returning one Chain per leaf reached. It always
 // terminates the calling planSteps loop, mirroring runGetStep's control flow.
-func planGetStep(ctx context.Context, cfg *Config, steps []Step, i int, step Step, pinned map[string]string, prefix []Node, parentHash string, hasPut bool) ([]Chain, error) {
+func planGetStep(ctx context.Context, cfg *Config, steps []Step, i int, step Step, pinned map[string]string, prefix []Node, parentHash string, unskippable bool) ([]Chain, error) {
 	resource, resourceType, versions, err := resolveGetVersions(ctx, cfg, step, pinned)
 	if err != nil {
 		return nil, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
@@ -158,7 +198,7 @@ func planGetStep(ctx context.Context, cfg *Config, steps []Step, i int, step Ste
 
 		node := Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindGet, StepIndex: i, Resource: resource.Name, Content: content}
 
-		sub, err := planSteps(ctx, cfg, steps[i+1:], pinned, append(append([]Node{}, prefix...), node), hash, hasPut)
+		sub, err := planSteps(ctx, cfg, steps[i+1:], pinned, append(append([]Node{}, prefix...), node), hash, unskippable)
 		if err != nil {
 			return nil, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 		}
@@ -199,4 +239,25 @@ func putNode(cfg *Config, step Step, i int, parentHash string) (Node, error) {
 	}
 
 	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindPut, StepIndex: i, Resource: resource.Name, Content: content}, nil
+}
+
+func agentNode(cfg *Config, step Step, i int, parentHash string) (Node, error) {
+	agent, err := cfg.FindAgent(step.Agent)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+	}
+
+	baseURL, modelName, _, _, err := resolveAgentTarget(agent.Source)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+	}
+
+	content := agentNodeContent(step.Agent, step.Prompt, step.Dir, modelName, baseURL, step.Tools)
+
+	hash, err := hashNode(NodeKindAgent, content, parentHash)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+	}
+
+	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindAgent, StepIndex: i, Resource: agent.Name, Content: content}, nil
 }

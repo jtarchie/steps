@@ -46,18 +46,18 @@ func RunJob(ctx context.Context, cfg *Config, job *Job, pinned map[string]string
 
 // buildSkippableIndex returns, for every node hash reachable across chains,
 // whether every leaf Chain passing through it is already covered by a
-// prior succeeded job_runs row. Any chain with HasPut is forced
-// non-skippable everywhere along it — put steps (and everything feeding
-// them) must always run. A node hash shared by multiple chains is
-// skippable only if ALL chains through it are skippable (AND-rollup),
-// which correctly forces get/task ancestors of a put-containing branch to
-// execute even if a sibling branch without a put is independently
+// prior succeeded job_runs row. Any Unskippable chain (contains a put or
+// agent step) is forced non-skippable everywhere along it — those steps
+// (and everything feeding them) must always run. A node hash shared by
+// multiple chains is skippable only if ALL chains through it are skippable
+// (AND-rollup), which correctly forces get/task ancestors of an
+// unskippable branch to execute even if a sibling branch is independently
 // skippable.
 func buildSkippableIndex(ctx context.Context, store *Store, jobName string, chains []Chain) (map[string]bool, error) {
 	chainSkippable := make([]bool, len(chains))
 
 	for i, chain := range chains {
-		if chain.HasPut {
+		if chain.Unskippable {
 			continue
 		}
 
@@ -99,47 +99,61 @@ func buildSkippableIndex(ctx context.Context, store *Store, jobName string, chai
 // runSteps executes steps in order. A `get` step fans out: for each version
 // it selects (a single version normally, or every version returned by
 // check when version:every is set), that version triggers its own build
-// of the remainder of the plan — see runTriggeredBuild. A `get` or `task`
-// step whose content hash is in skippable is not executed at all, since
-// that means an identical chain already succeeded. `put` steps are never
-// looked up in skippable and always execute.
-func runSteps(ctx context.Context, cfg *Config, jobName string, steps []Step, pinned map[string]string, workspaceDir string, store *Store, skippable map[string]bool, parentHash string, chainHasPut bool) error {
+// of the remainder of the plan — see runTriggeredBuild. It always
+// terminates this loop, since it delegates the rest of the plan to its
+// triggered build(s). A `task`/`put`/`agent` step is handled by
+// runNonGetStep; `put`/`agent` steps are never looked up in skippable and
+// always execute.
+func runSteps(ctx context.Context, cfg *Config, jobName string, steps []Step, pinned map[string]string, workspaceDir string, store *Store, skippable map[string]bool, parentHash string, chainUnskippable bool) error {
 	for i, step := range steps {
-		switch {
-		case step.Get != "":
-			return runGetStep(ctx, cfg, jobName, i, step, steps[i+1:], pinned, store, skippable, parentHash, chainHasPut)
-		case step.Task != "":
-			newParentHash, skipped, err := runTaskStep(ctx, jobName, i, step, workspaceDir, store, skippable, parentHash)
-			if err != nil {
-				return err
-			}
+		if step.Get != "" {
+			return runGetStep(ctx, cfg, jobName, i, step, steps[i+1:], pinned, store, skippable, parentHash, chainUnskippable)
+		}
 
-			if skipped {
-				return nil
-			}
+		newParentHash, skipped, err := runNonGetStep(ctx, cfg, jobName, i, step, workspaceDir, store, skippable, parentHash)
+		if err != nil {
+			return err
+		}
 
-			parentHash = newParentHash
-		case step.Put != "":
-			newParentHash, err := runPutStep(ctx, cfg, jobName, i, step, workspaceDir, store, parentHash)
-			if err != nil {
-				return err
-			}
+		if skipped {
+			return nil
+		}
 
-			parentHash = newParentHash
-			chainHasPut = true
-		default:
-			return fmt.Errorf("step %d: unrecognized step (must be get, task, or put)", i)
+		parentHash = newParentHash
+		if step.Put != "" || step.Agent != "" {
+			chainUnskippable = true
 		}
 	}
 
-	return recordChainSucceeded(ctx, store, jobName, parentHash, chainHasPut)
+	return recordChainSucceeded(ctx, store, jobName, parentHash, chainUnskippable)
+}
+
+// runNonGetStep dispatches a task/put/agent step — the three kinds that,
+// unlike get, run in place and return a single new parentHash rather than
+// fanning out or delegating the remainder of the plan. skipped is only ever
+// true for a skipped task step; put/agent steps are never skippable.
+func runNonGetStep(ctx context.Context, cfg *Config, jobName string, i int, step Step, workspaceDir string, store *Store, skippable map[string]bool, parentHash string) (string, bool, error) {
+	switch {
+	case step.Task != "":
+		return runTaskStep(ctx, jobName, i, step, workspaceDir, store, skippable, parentHash)
+	case step.Put != "":
+		hash, err := runPutStep(ctx, cfg, jobName, i, step, workspaceDir, store, parentHash)
+
+		return hash, false, err
+	case step.Agent != "":
+		hash, err := runAgentStep(ctx, cfg, jobName, i, step, workspaceDir, store, parentHash)
+
+		return hash, false, err
+	default:
+		return "", false, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
+	}
 }
 
 // recordChainSucceeded records the leaf of a fully-executed chain as
-// succeeded, unless it contains a put (put-containing chains are never
-// skippable, so recording job_runs for them would be unused).
-func recordChainSucceeded(ctx context.Context, store *Store, jobName, rootHash string, chainHasPut bool) error {
-	if chainHasPut {
+// succeeded, unless it contains a put or agent step (those chains are
+// never skippable, so recording job_runs for them would be unused).
+func recordChainSucceeded(ctx context.Context, store *Store, jobName, rootHash string, chainUnskippable bool) error {
+	if chainUnskippable {
 		return nil
 	}
 
@@ -155,7 +169,7 @@ func recordChainSucceeded(ctx context.Context, store *Store, jobName, rootHash s
 // version(s), then runs the remainder of the plan for each — see
 // runTriggeredBuild. It always terminates the calling runSteps loop, since
 // a get step delegates the rest of the plan to its triggered build(s).
-func runGetStep(ctx context.Context, cfg *Config, jobName string, i int, step Step, remainder []Step, pinned map[string]string, store *Store, skippable map[string]bool, parentHash string, chainHasPut bool) error {
+func runGetStep(ctx context.Context, cfg *Config, jobName string, i int, step Step, remainder []Step, pinned map[string]string, store *Store, skippable map[string]bool, parentHash string, chainUnskippable bool) error {
 	resource, resourceType, versions, err := resolveGetVersions(ctx, cfg, step, pinned)
 	if err != nil {
 		return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
@@ -180,7 +194,7 @@ func runGetStep(ctx context.Context, cfg *Config, jobName string, i int, step St
 
 		node := Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindGet, StepIndex: i, Resource: resource.Name, Content: content}
 
-		err = runTriggeredBuild(ctx, cfg, jobName, *resource, *resourceType, version, remainder, pinned, store, skippable, node, chainHasPut)
+		err = runTriggeredBuild(ctx, cfg, jobName, *resource, *resourceType, version, remainder, pinned, store, skippable, node, chainUnskippable)
 		if err != nil {
 			return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 		}
@@ -323,7 +337,7 @@ func resolveGetVersions(ctx context.Context, cfg *Config, step Step, cliPinned m
 // into it, runs the remainder of the plan inside it, and tears the
 // workspace down afterward — never sharing it with any other triggered
 // build, including sibling versions fanned out by version:every.
-func runTriggeredBuild(ctx context.Context, cfg *Config, jobName string, resource Resource, resourceType ResourceType, version map[string]any, remainder []Step, pinned map[string]string, store *Store, skippable map[string]bool, node Node, chainHasPut bool) error {
+func runTriggeredBuild(ctx context.Context, cfg *Config, jobName string, resource Resource, resourceType ResourceType, version map[string]any, remainder []Step, pinned map[string]string, store *Store, skippable map[string]bool, node Node, chainUnskippable bool) error {
 	buildWorkspace, err := os.MkdirTemp("", "steps-*")
 	if err != nil {
 		return fmt.Errorf("could not create workspace for %q: %w", resource.Name, err)
@@ -355,7 +369,7 @@ func runTriggeredBuild(ctx context.Context, cfg *Config, jobName string, resourc
 		return err
 	}
 
-	return runSteps(ctx, cfg, jobName, remainder, pinned, buildWorkspace, store, skippable, node.Hash, chainHasPut)
+	return runSteps(ctx, cfg, jobName, remainder, pinned, buildWorkspace, store, skippable, node.Hash, chainUnskippable)
 }
 
 // fetchGetStep places one version of a resource into workspaceDir/<name>.

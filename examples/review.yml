@@ -11,6 +11,22 @@ resources:
   source:
     repo: jtarchie/ci
 
+agents:
+- name: reviewer
+  source:
+    model: openrouter/anthropic/claude-3.5-sonnet
+    # endpoint: derived from the "openrouter/" prefix (openrouter.ai/api/v1/)
+    # api_key_env: defaults to OPENROUTER_API_KEY; override here if desired
+    #
+    # A local model works too, with no key needed:
+    #   model: lmstudio/qwen2.5-coder
+    #   model: ollama/llama3.1
+    #
+    # Any other OpenAI-compatible server works by being fully explicit:
+    #   endpoint: https://my-llm-gateway.internal/v1/
+    #   model: gpt-4o
+    #   api_key_env: MY_GATEWAY_KEY
+
 jobs:
 - name: review
   plan:
@@ -18,3 +34,22 @@ jobs:
     trigger: true
   - task: review
     run: cd prs && gh pr view --json id,title,number,createdAt,body,author,url
+  - agent: reviewer
+    dir: prs
+    attempts: 3
+    tools:
+    - read_file
+    - run_shell
+    - name: post_review
+      description: Post a review verdict on the current PR. action is one of --approve or --comment.
+      run: gh pr review {{ .args.action }} -b "{{ .args.body }}"
+    prompt: |
+      You are reviewing a GitHub pull request checked out in your working
+      directory. Use read_file to inspect changed files and run_shell for
+      read-only git/gh commands (e.g. `git diff main...HEAD`, `gh pr view`).
+
+      When done, call post_review once with action "--approve" (no issues)
+      or "--comment" (feedback in body). Check `gh pr view --json reviews`
+      first: if a retry occurs after you already posted, do not post again.
+
+      Reply with a final short plain-text summary of the review you posted.
