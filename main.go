@@ -26,7 +26,7 @@ type CLI struct {
 // ("get: prs (version: ...)", "task: review").
 func initLogging() {
 	slog.SetDefault(slog.New(tint.NewHandler(os.Stderr, &tint.Options{
-		Level: slog.LevelDebug,
+		Level:     slog.LevelDebug,
 		AddSource: true,
 	})))
 }
