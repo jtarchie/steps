@@ -41,10 +41,29 @@ type Resource struct {
 	Source map[string]any `yaml:"source"`
 }
 
-// Agent is a named OpenAI-compatible model an `agent` step drives.
+// Agent is a named, reusable worker an `agent` step invokes: it owns the
+// model connection, persona, generation dials, limits, and the tool grant
+// (the set of tools a step may draw from). A step supplies the per-task
+// prompt, working directory, and tool selection.
 type Agent struct {
 	Name   string      `yaml:"name"`
 	Source AgentSource `yaml:"source"`
+	// System is the persona/system message given to the model. Empty falls
+	// back to a generic CI-agent persona.
+	System string `yaml:"system,omitempty"`
+	// Generation dials, forwarded to the model when set. ReasoningEffort is
+	// one of "low", "medium", "high" (for reasoning-capable models).
+	Temperature     *float64 `yaml:"temperature,omitempty"`
+	TopP            *float64 `yaml:"top_p,omitempty"`
+	MaxTokens       int      `yaml:"max_tokens,omitempty"`
+	ReasoningEffort string   `yaml:"reasoning_effort,omitempty"`
+	// MaxTurns caps the tool-calling loop (default maxAgentTurns). Retries
+	// (attempts:) are a per-task concern and live on the step, not here.
+	MaxTurns int `yaml:"max_turns,omitempty"`
+	// Tools is the grant: the built-in tools this agent may use plus any
+	// reusable custom tool definitions. A step selects a subset by name and
+	// may add its own inline custom tools. Empty grants all built-ins.
+	Tools []ToolSpec `yaml:"tools,omitempty"`
 }
 
 // AgentSource selects the model and how to reach it. Model may carry a
@@ -119,14 +138,16 @@ type Step struct {
 	// passed through to the out command as {{ params.x }}.
 	Put    string         `yaml:"put,omitempty"`
 	Params map[string]any `yaml:"params,omitempty"`
-	// Agent names an agents: entry this step runs against. Prompt is the
-	// task given to the model (not templated — freeform text is likely to
-	// contain literal {{ }} that isn't meant as a template). Dir is the
-	// step's working directory relative to the job's workspace, since
-	// there's no run: string to embed a cd in. Tools restricts/extends the
-	// built-in tool set (empty means all built-ins). Attempts is the total
-	// number of tries, Concourse-style (attempts: 3 = up to 3 total tries,
-	// including the first); 0/unset means 1.
+	// Agent names an agents: entry this step invokes. Prompt is the task
+	// given to the model (not templated — freeform text is likely to contain
+	// literal {{ }} that isn't meant as a template). Dir is the step's
+	// working directory relative to the job's workspace, since there's no
+	// run: string to embed a cd in. Tools selects a subset of the agent's
+	// granted tools by name and may add inline custom tools for this task
+	// (empty means all of the agent's tools). Attempts overrides the agent's
+	// default retry count (attempts: 3 = up to 3 total tries, including the
+	// first); 0/unset inherits the agent's default (which itself defaults
+	// to 1).
 	Agent    string     `yaml:"agent,omitempty"`
 	Prompt   string     `yaml:"prompt,omitempty"`
 	Dir      string     `yaml:"dir,omitempty"`

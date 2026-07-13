@@ -25,7 +25,7 @@ type CLI struct {
 // logger, separate from this tool's plain stdout progress lines
 // ("get: prs (version: ...)", "task: review").
 func initLogging() {
-	slog.SetDefault(slog.New(tint.NewHandler(os.Stderr, &tint.Options{
+	slog.SetDefault(slog.New(tint.NewTextHandler(os.Stderr, &tint.Options{
 		Level:     slog.LevelDebug,
 		AddSource: true,
 	})))

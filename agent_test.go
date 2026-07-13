@@ -71,12 +71,7 @@ func TestRunAgentConversationMultiTurnToolCalling(t *testing.T) {
 		},
 	}
 
-	decls, registry, err := buildAgentTools(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	content, turns, err := runAgentConversation(context.Background(), fake, "do the thing", dir, agentTools{decls: decls, registry: registry})
+	content, turns, err := runAgentConversation(context.Background(), fake, newTestConversation(t, "do the thing", dir))
 	if err != nil {
 		t.Fatalf("runAgentConversation: %v", err)
 	}
@@ -95,6 +90,24 @@ func TestRunAgentConversationMultiTurnToolCalling(t *testing.T) {
 
 	if !hasFunctionResponseNamed(fake.requests[1].Contents, "run_shell") {
 		t.Error("expected the second request to include a FunctionResponse for run_shell")
+	}
+}
+
+// newTestConversation builds an agentConversation with all built-in tools
+// for exercising the loop against a fakeLLM.
+func newTestConversation(t *testing.T, prompt, dir string) agentConversation {
+	t.Helper()
+
+	decls, registry, err := buildAgentTools(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return agentConversation{
+		prompt:   prompt,
+		dir:      dir,
+		tools:    agentTools{decls: decls, registry: registry},
+		maxTurns: maxAgentTurns,
 	}
 }
 
@@ -131,12 +144,7 @@ func TestRunAgentConversationExceedsMaxTurns(t *testing.T) {
 
 	fake := &fakeLLM{responses: responses}
 
-	decls, registry, err := buildAgentTools(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, turns, err := runAgentConversation(context.Background(), fake, "loop forever", dir, agentTools{decls: decls, registry: registry})
+	_, turns, err := runAgentConversation(context.Background(), fake, newTestConversation(t, "loop forever", dir))
 	if err == nil {
 		t.Fatal("expected an error when the model never stops calling tools")
 	}
@@ -150,13 +158,7 @@ func TestWithRetryRetriesAgentConversationOnFailure(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-
-	decls, registry, err := buildAgentTools(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	tools := agentTools{decls: decls, registry: registry}
+	conv := newTestConversation(t, "hi", dir)
 
 	fake := &fakeLLM{
 		errs: []error{errors.New("transient failure")},
@@ -168,8 +170,8 @@ func TestWithRetryRetriesAgentConversationOnFailure(t *testing.T) {
 
 	var finalContent string
 
-	err = withRetry(context.Background(), 3, func(_ int) error {
-		content, _, runErr := runAgentConversation(context.Background(), fake, "hi", dir, tools)
+	err := withRetry(context.Background(), 3, func(_ int) error {
+		content, _, runErr := runAgentConversation(context.Background(), fake, conv)
 		if runErr != nil {
 			return runErr
 		}
@@ -499,6 +501,219 @@ func TestBuildAgentToolsCustom(t *testing.T) {
 		_, _, err := buildAgentTools([]ToolSpec{{Description: "no name or run"}})
 		if err == nil {
 			t.Error("expected an error for a custom tool with no name/run")
+		}
+	})
+}
+
+//nolint:gochecknoglobals // shared read-only fixture for the effective-tools tests
+var effectiveToolsAgentGrant = []ToolSpec{
+	{Builtin: "read_file"},
+	{Builtin: "list_dir"},
+	{Name: "post_review", Run: "gh pr review {{ .args.action }}"},
+}
+
+func TestResolveEffectiveToolsSelection(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty step selection inherits all agent tools", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := resolveEffectiveTools(effectiveToolsAgentGrant, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(got) != 3 {
+			t.Errorf("got %d tools, want 3", len(got))
+		}
+	})
+
+	t.Run("step selects a granted subset by name", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := resolveEffectiveTools(effectiveToolsAgentGrant, []ToolSpec{{Builtin: "read_file"}, {Builtin: "post_review"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(got) != 2 {
+			t.Fatalf("got %d tools, want 2", len(got))
+		}
+
+		if got[1].Name != "post_review" || got[1].Run == "" {
+			t.Errorf("expected the agent's post_review definition, got %+v", got[1])
+		}
+	})
+
+	t.Run("empty agent grant treats all built-ins as granted", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := resolveEffectiveTools(nil, []ToolSpec{{Builtin: "run_shell"}})
+		if err != nil {
+			t.Fatalf("a step should be able to select a built-in when the agent grants none explicitly: %v", err)
+		}
+
+		if len(got) != 1 || got[0].Builtin != "run_shell" {
+			t.Errorf("got %+v, want [run_shell]", got)
+		}
+	})
+}
+
+func TestResolveEffectiveToolsBoundary(t *testing.T) {
+	t.Parallel()
+
+	t.Run("step cannot select a tool the agent did not grant", func(t *testing.T) {
+		t.Parallel()
+
+		// agent grants no run_shell; a read-only step must not be able to add it
+		_, err := resolveEffectiveTools([]ToolSpec{{Builtin: "read_file"}}, []ToolSpec{{Builtin: "run_shell"}})
+		if err == nil {
+			t.Error("expected an error selecting a tool outside the agent's grant")
+		}
+	})
+
+	t.Run("step may add an inline custom tool even under a restricted agent", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := resolveEffectiveTools(
+			[]ToolSpec{{Builtin: "read_file"}},
+			[]ToolSpec{{Builtin: "read_file"}, {Name: "notify", Run: "echo {{ .args.msg }}"}},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(got) != 2 || got[1].Name != "notify" {
+			t.Errorf("expected an inline notify tool to be allowed, got %+v", got)
+		}
+	})
+}
+
+func TestApplyGenParams(t *testing.T) {
+	t.Parallel()
+
+	temp := 0.2
+	topP := 0.9
+	cfg := &genai.GenerateContentConfig{}
+	agentGenParams{temperature: &temp, topP: &topP, maxTokens: 512, reasoning: "high"}.applyTo(cfg)
+
+	if got := floatPtrVal(cfg.Temperature); got != 0.2 {
+		t.Errorf("temperature = %v, want 0.2", got)
+	}
+
+	if got := floatPtrVal(cfg.TopP); got != 0.9 {
+		t.Errorf("top_p = %v, want 0.9", got)
+	}
+
+	if cfg.MaxOutputTokens != 512 {
+		t.Errorf("max_output_tokens = %d, want 512", cfg.MaxOutputTokens)
+	}
+
+	if cfg.ThinkingConfig == nil || cfg.ThinkingConfig.ThinkingLevel != genai.ThinkingLevelHigh {
+		t.Errorf("thinking level = %v, want HIGH", cfg.ThinkingConfig)
+	}
+}
+
+func TestApplyGenParamsUnsetLeavesConfigUntouched(t *testing.T) {
+	t.Parallel()
+
+	cfg := &genai.GenerateContentConfig{}
+	agentGenParams{}.applyTo(cfg)
+
+	if cfg.Temperature != nil || cfg.TopP != nil || cfg.MaxOutputTokens != 0 || cfg.ThinkingConfig != nil {
+		t.Errorf("expected an untouched config, got %+v", cfg)
+	}
+}
+
+// floatPtrVal dereferences a *float32, returning a sentinel if nil so callers
+// can assert without a nil-guard branch.
+func floatPtrVal(p *float32) float32 {
+	if p == nil {
+		return -1
+	}
+
+	return *p
+}
+
+func TestResolveAgentInvocation(t *testing.T) {
+	t.Parallel()
+
+	baseCfg := func(agent Agent) *Config {
+		return &Config{Agents: []Agent{agent}}
+	}
+
+	t.Run("step sets its own attempts; agent max_turns applies", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := baseCfg(Agent{Name: "a", Source: AgentSource{Model: "openai/gpt-4o"}, MaxTurns: 20})
+
+		ri, err := resolveAgentInvocation(cfg, Step{Agent: "a", Attempts: 2})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if ri.attempts != 2 {
+			t.Errorf("attempts = %d, want 2 (step value)", ri.attempts)
+		}
+
+		if ri.maxTurns != 20 {
+			t.Errorf("maxTurns = %d, want 20 (agent value)", ri.maxTurns)
+		}
+	})
+
+	t.Run("defaults apply when unset", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := baseCfg(Agent{Name: "a", Source: AgentSource{Model: "openai/gpt-4o"}})
+
+		ri, err := resolveAgentInvocation(cfg, Step{Agent: "a"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if ri.attempts != 1 {
+			t.Errorf("attempts = %d, want 1", ri.attempts)
+		}
+
+		if ri.maxTurns != maxAgentTurns {
+			t.Errorf("maxTurns = %d, want %d", ri.maxTurns, maxAgentTurns)
+		}
+	})
+
+	t.Run("invalid reasoning_effort errors", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := baseCfg(Agent{Name: "a", Source: AgentSource{Model: "openai/gpt-4o"}, ReasoningEffort: "turbo"})
+
+		_, err := resolveAgentInvocation(cfg, Step{Agent: "a"})
+		if err == nil {
+			t.Error("expected an error for an invalid reasoning_effort")
+		}
+	})
+}
+
+func TestBuildSystemMessage(t *testing.T) {
+	t.Parallel()
+
+	t.Run("custom persona is preserved and dir noted", func(t *testing.T) {
+		t.Parallel()
+
+		got := buildSystemMessage("You are a terse reviewer.", "/work/prs")
+		if !strings.HasPrefix(got, "You are a terse reviewer.") {
+			t.Errorf("persona not preserved: %q", got)
+		}
+
+		if !strings.Contains(got, "/work/prs") {
+			t.Errorf("working directory not mentioned: %q", got)
+		}
+	})
+
+	t.Run("empty persona falls back to the default", func(t *testing.T) {
+		t.Parallel()
+
+		got := buildSystemMessage("", "/work")
+		if !strings.HasPrefix(got, defaultAgentPersona) {
+			t.Errorf("expected the default persona, got %q", got)
 		}
 	})
 }

@@ -11,45 +11,73 @@ resources:
   source:
     repo: jtarchie/ci
 
+# An agent is a reusable worker: its model connection, persona, generation
+# dials, limits, and the set of tools a step may draw from. A step supplies
+# the per-task prompt, working directory, and tool selection.
 agents:
 - name: reviewer
   source:
     model: openrouter/anthropic/claude-3.5-sonnet
     # endpoint: derived from the "openrouter/" prefix (openrouter.ai/api/v1/)
-    # api_key_env: defaults to OPENROUTER_API_KEY; override here if desired
+    # api_key_env: defaults to OPENROUTER_API_KEY
     #
-    # A local model works too, with no key needed:
-    #   model: lmstudio/qwen2.5-coder
-    #   model: ollama/llama3.1
-    #
-    # Any other OpenAI-compatible server works by being fully explicit:
-    #   endpoint: https://my-llm-gateway.internal/v1/
-    #   model: gpt-4o
-    #   api_key_env: MY_GATEWAY_KEY
+    # Local models work with no key:  model: lmstudio/qwen2.5-coder
+    #                                 model: ollama/llama3.1
+
+  # persona — becomes the system message, shared across every step below
+  system: |
+    You are a security-focused reviewer for pull requests. Be terse, cite
+    file:line, prioritize correctness and security over style, and never
+    claim to have reviewed a diff you did not actually read.
+
+  # generation dials (all optional)
+  temperature: 0.2
+  # top_p: 0.9
+  # max_tokens: 4096
+  # reasoning_effort: high     # low | medium | high, for reasoning models
+
+  # limit — a ceiling every step invoking this agent shares
+  max_turns: 12
+
+  # the tool GRANT: the ceiling of what any step may use. run_shell is
+  # gated here — a step can pick a subset of these but can't add run_shell
+  # if it isn't listed. Custom tools defined here are reusable by name.
+  tools:
+  - read_file
+  - list_dir
+  - run_shell
+  - name: post_review
+    description: Post a review verdict on the current PR. action is --approve or --comment.
+    run: gh pr review {{ .args.action }} -b "{{ .args.body }}"
 
 jobs:
+# Full review: can read, run read-only git/gh, and post a verdict.
 - name: review
   plan:
   - get: prs
     trigger: true
-  - task: review
-    run: cd prs && gh pr view --json id,title,number,createdAt,body,author,url
   - agent: reviewer
     dir: prs
     attempts: 3
-    tools:
-    - read_file
-    - run_shell
-    - name: post_review
-      description: Post a review verdict on the current PR. action is one of --approve or --comment.
-      run: gh pr review {{ .args.action }} -b "{{ .args.body }}"
+    # tools omitted -> inherits all of the agent's granted tools
     prompt: |
-      You are reviewing a GitHub pull request checked out in your working
-      directory. Use read_file to inspect changed files and run_shell for
-      read-only git/gh commands (e.g. `git diff main...HEAD`, `gh pr view`).
-
-      When done, call post_review once with action "--approve" (no issues)
-      or "--comment" (feedback in body). Check `gh pr view --json reviews`
-      first: if a retry occurs after you already posted, do not post again.
+      Review the checked-out pull request. Use `git diff main...HEAD` and
+      read the touched files to understand the change, then call post_review
+      exactly once. Check `gh pr view --json reviews` first: if a prior run
+      already posted, do not post again.
 
       Reply with a final short plain-text summary of the review you posted.
+
+# Same worker, locked to read-only for a different task: it selects a subset
+# of the agent's tools (so it *cannot* run_shell or post_review, which it
+# didn't select) and sets its own attempts, unrelated to the review job's.
+- name: triage
+  plan:
+  - get: prs
+    trigger: true
+  - agent: reviewer
+    dir: prs
+    attempts: 1
+    tools: [read_file, list_dir]
+    prompt: |
+      Summarize what this pull request changes in two sentences. Post nothing.

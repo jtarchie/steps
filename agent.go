@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,12 +17,11 @@ import (
 	"google.golang.org/genai"
 )
 
-// maxAgentTurns bounds one attempt's tool-calling loop. 3-6 round trips
-// covers a typical review (list a dir, read a few files, run a command,
-// respond); 8 leaves headroom while still bounding a runaway loop (a model
-// that never stops requesting tools) to a small, predictable number of
-// calls. It's a Go const, not a YAML field, because there's no evidence yet
-// that pipelines need to tune it.
+// maxAgentTurns is the default cap on one attempt's tool-calling loop when
+// an agent doesn't set max_turns. 3-6 round trips covers a typical review
+// (list a dir, read a few files, run a command, respond); 8 leaves headroom
+// while still bounding a runaway loop (a model that never stops requesting
+// tools) to a small, predictable number of calls.
 const maxAgentTurns = 8
 
 // agentStepTimeout bounds one agent step's total wall-clock time (across
@@ -38,7 +38,24 @@ const agentStepTimeout = 10 * time.Minute
 // trailing marker so the model knows output was cut.
 const maxToolOutputBytes = 100_000
 
-const agentSystemPromptTemplate = `You are an automated agent running as one step of a CI pipeline job. Your working directory is %s. Use the tools available to you (all scoped to that directory) to complete the task described below. When finished, reply with a final plain-text message and no further tool calls.`
+// defaultAgentPersona is the system persona used when an agent doesn't set
+// its own `system:`.
+const defaultAgentPersona = `You are an automated agent running as one step of a CI pipeline job.`
+
+// agentOperatingNote is appended to the persona to give the model its
+// operating context (working directory + tool discipline). Filled with the
+// resolved working directory.
+const agentOperatingNote = `Your working directory is %s. Use the tools available to you (all scoped to that directory) to complete the task described below. When finished, reply with a final plain-text message and no further tool calls.`
+
+// buildSystemMessage combines an agent's persona with the operating note for
+// a given working directory.
+func buildSystemMessage(persona, dir string) string {
+	if persona == "" {
+		persona = defaultAgentPersona
+	}
+
+	return persona + "\n\n" + fmt.Sprintf(agentOperatingNote, dir)
+}
 
 // agentProvider is a built-in base URL + default API key env var for a
 // model-name prefix like "openrouter/anthropic/claude-3.5-sonnet".
@@ -197,10 +214,69 @@ func builtinAgentTools() map[string]builtinTool {
 	}
 }
 
-// defaultAgentToolSpecs is used when a step's tools: list is empty —
-// backward-compatible default of every built-in.
+// defaultAgentToolSpecs is used when an agent grants no tools — the default
+// is every built-in.
 func defaultAgentToolSpecs() []ToolSpec {
 	return []ToolSpec{{Builtin: "read_file"}, {Builtin: "list_dir"}, {Builtin: "run_shell"}}
+}
+
+// toolSpecName is the name a ToolSpec is referenced by: the builtin name for
+// a builtin, or the custom tool's name.
+func toolSpecName(spec ToolSpec) string {
+	if spec.Builtin != "" {
+		return spec.Builtin
+	}
+
+	return spec.Name
+}
+
+// grantedToolIndex maps each tool an agent grants (by reference name) to its
+// spec. An agent that grants nothing is treated as granting every built-in,
+// so the simple "no tools: block" case still works.
+func grantedToolIndex(agentTools []ToolSpec) map[string]ToolSpec {
+	specs := agentTools
+	if len(specs) == 0 {
+		specs = defaultAgentToolSpecs()
+	}
+
+	index := make(map[string]ToolSpec, len(specs))
+	for _, spec := range specs {
+		index[toolSpecName(spec)] = spec
+	}
+
+	return index
+}
+
+// resolveEffectiveTools merges an agent's tool grant with a step's tool
+// selection. An empty step selection inherits all of the agent's tools. A
+// bare-name step entry must reference a tool the agent granted (built-ins,
+// especially run_shell, are agent-gated — a step can't add one the agent
+// withheld). An inline custom tool is always allowed: it is a specific,
+// human-authored command, not a grant of arbitrary model capability.
+func resolveEffectiveTools(agentTools, stepTools []ToolSpec) ([]ToolSpec, error) {
+	if len(stepTools) == 0 {
+		return agentTools, nil
+	}
+
+	granted := grantedToolIndex(agentTools)
+	effective := make([]ToolSpec, 0, len(stepTools))
+
+	for _, spec := range stepTools {
+		if spec.Builtin != "" {
+			grantedSpec, ok := granted[spec.Builtin]
+			if !ok {
+				return nil, fmt.Errorf("step selects tool %q, which the agent does not provide", spec.Builtin)
+			}
+
+			effective = append(effective, grantedSpec)
+
+			continue
+		}
+
+		effective = append(effective, spec)
+	}
+
+	return effective, nil
 }
 
 // buildAgentTools turns a step's resolved tools: list into the genai
@@ -422,25 +498,190 @@ func executeAgentTool(ctx context.Context, call *genai.FunctionCall, dir string,
 	return impl(ctx, call.Args, dir)
 }
 
-// runAgentConversation runs one full attempt: an initial system+user
-// message, then up to maxAgentTurns request/tool-execute/append round
-// trips, terminating when the model responds with no tool calls. There is
-// no turn-level checkpointing — a retry (see withRetry in runAgentStep)
-// restarts the whole conversation from scratch. If a tool call already had
-// a side effect (e.g. posting a PR review) before a later turn failed, a
-// retry may re-invoke it again; pipeline prompts should tell the model to
-// check current state before acting, the same caveat Concourse's own
-// task.attempts carries for non-idempotent tasks.
-func runAgentConversation(ctx context.Context, llm model.LLM, prompt, dir string, tools agentTools) (string, int, error) {
-	req := &model.LLMRequest{
-		Contents: []*genai.Content{{Role: genai.RoleUser, Parts: []*genai.Part{{Text: prompt}}}},
-		Config: &genai.GenerateContentConfig{
-			SystemInstruction: &genai.Content{Parts: []*genai.Part{{Text: fmt.Sprintf(agentSystemPromptTemplate, dir)}}},
-			Tools:             []*genai.Tool{tools.decls},
-		},
+// agentGenParams holds the generation dials an agent configures. Unset
+// fields (nil pointers, zero maxTokens, empty reasoning) are left off the
+// request so the model's own defaults apply.
+type agentGenParams struct {
+	temperature *float64
+	topP        *float64
+	maxTokens   int
+	reasoning   string // "", "low", "medium", or "high"
+}
+
+//nolint:gochecknoglobals // static, read-only lookup table
+var reasoningLevels = map[string]genai.ThinkingLevel{
+	"low":    genai.ThinkingLevelLow,
+	"medium": genai.ThinkingLevelMedium,
+	"high":   genai.ThinkingLevelHigh,
+}
+
+// applyTo sets the configured dials on a genai generation config.
+func (p agentGenParams) applyTo(cfg *genai.GenerateContentConfig) {
+	if p.temperature != nil {
+		t := float32(*p.temperature)
+		cfg.Temperature = &t
 	}
 
-	for turn := range maxAgentTurns {
+	if p.topP != nil {
+		t := float32(*p.topP)
+		cfg.TopP = &t
+	}
+
+	if p.maxTokens > 0 {
+		tokens := min(p.maxTokens, math.MaxInt32)
+		cfg.MaxOutputTokens = int32(tokens) //nolint:gosec // clamped to MaxInt32 on the line above
+	}
+
+	if level, ok := reasoningLevels[p.reasoning]; ok {
+		cfg.ThinkingConfig = &genai.ThinkingConfig{ThinkingLevel: level}
+	}
+}
+
+// resolvedInvocation is an agent + step reduced to everything needed to hash
+// and run the step: the resolved connection, persona, dials, limits, and the
+// effective (merged) tool set. resolveAgentInvocation produces it for both
+// planning (merkle.go's agentNode) and execution (runAgentStep), so both
+// compute identical hashes.
+type resolvedInvocation struct {
+	agentName   string
+	baseURL     string
+	modelName   string
+	apiKeyEnv   string
+	requiresKey bool
+	persona     string
+	genParams   agentGenParams
+	maxTurns    int
+	attempts    int
+	toolSpecs   []ToolSpec
+}
+
+// resolveAgentInvocation resolves the agent named by step against cfg,
+// applying provider-prefix resolution, tool-grant merging, and defaulting
+// (step.Attempts defaults to 1 — retries are a per-task concern, not part of
+// the agent's config; agent.MaxTurns defaults to maxAgentTurns).
+func resolveAgentInvocation(cfg *Config, step Step) (resolvedInvocation, error) {
+	agent, err := cfg.FindAgent(step.Agent)
+	if err != nil {
+		return resolvedInvocation{}, err
+	}
+
+	baseURL, modelName, apiKeyEnv, requiresKey, err := resolveAgentTarget(agent.Source)
+	if err != nil {
+		return resolvedInvocation{}, err
+	}
+
+	toolSpecs, err := resolveEffectiveTools(agent.Tools, step.Tools)
+	if err != nil {
+		return resolvedInvocation{}, err
+	}
+
+	reasoning := strings.ToLower(agent.ReasoningEffort)
+	if reasoning != "" {
+		if _, ok := reasoningLevels[reasoning]; !ok {
+			return resolvedInvocation{}, fmt.Errorf("reasoning_effort %q must be one of low, medium, high", agent.ReasoningEffort)
+		}
+	}
+
+	maxTurns := agent.MaxTurns
+	if maxTurns <= 0 {
+		maxTurns = maxAgentTurns
+	}
+
+	attempts := step.Attempts
+	if attempts <= 0 {
+		attempts = 1
+	}
+
+	return resolvedInvocation{
+		agentName:   agent.Name,
+		baseURL:     baseURL,
+		modelName:   modelName,
+		apiKeyEnv:   apiKeyEnv,
+		requiresKey: requiresKey,
+		persona:     agent.System,
+		genParams: agentGenParams{
+			temperature: agent.Temperature,
+			topP:        agent.TopP,
+			maxTokens:   agent.MaxTokens,
+			reasoning:   reasoning,
+		},
+		maxTurns:  maxTurns,
+		attempts:  attempts,
+		toolSpecs: toolSpecs,
+	}, nil
+}
+
+// agentContentMap is the content hashed for an agent node: everything that
+// determines the model's output (agent, prompt, dir, resolved model/endpoint,
+// persona, dials, and the effective tool set). Attempts is excluded (a pure
+// retry policy doesn't change the intended result); the API key and its env
+// var name are excluded (nothing secret-adjacent belongs in hashed content).
+func agentContentMap(step Step, ri resolvedInvocation) map[string]any {
+	toolsContent := make([]map[string]any, len(ri.toolSpecs))
+	for i, t := range ri.toolSpecs {
+		toolsContent[i] = map[string]any{
+			"builtin":     t.Builtin,
+			"name":        t.Name,
+			"description": t.Description,
+			"run":         t.Run,
+		}
+	}
+
+	return map[string]any{
+		"agent":            step.Agent,
+		"prompt":           step.Prompt,
+		"dir":              step.Dir,
+		"model":            ri.modelName,
+		"endpoint":         ri.baseURL,
+		"system":           ri.persona,
+		"temperature":      ri.genParams.temperature,
+		"top_p":            ri.genParams.topP,
+		"max_tokens":       ri.genParams.maxTokens,
+		"reasoning_effort": ri.genParams.reasoning,
+		"max_turns":        ri.maxTurns,
+		"tools":            toolsContent,
+	}
+}
+
+// agentConversation is one runnable attempt's inputs.
+type agentConversation struct {
+	system   string
+	prompt   string
+	dir      string
+	tools    agentTools
+	params   agentGenParams
+	maxTurns int
+}
+
+// buildAgentRequest builds a fresh LLM request (system + user prompt + tools
+// + dials). A fresh one is built per attempt so a retry starts from a clean
+// conversation rather than the grown Contents of a failed attempt.
+func buildAgentRequest(conv agentConversation) *model.LLMRequest {
+	cfg := &genai.GenerateContentConfig{
+		SystemInstruction: &genai.Content{Parts: []*genai.Part{{Text: conv.system}}},
+		Tools:             []*genai.Tool{conv.tools.decls},
+	}
+	conv.params.applyTo(cfg)
+
+	return &model.LLMRequest{
+		Contents: []*genai.Content{{Role: genai.RoleUser, Parts: []*genai.Part{{Text: conv.prompt}}}},
+		Config:   cfg,
+	}
+}
+
+// runAgentConversation runs one full attempt: an initial system+user
+// message, then up to conv.maxTurns request/tool-execute/append round trips,
+// terminating when the model responds with no tool calls. There is no
+// turn-level checkpointing — a retry (see withRetry in runAgentStep) restarts
+// the whole conversation from scratch. If a tool call already had a side
+// effect (e.g. posting a PR review) before a later turn failed, a retry may
+// re-invoke it again; pipeline prompts should tell the model to check current
+// state before acting, the same caveat Concourse's own task.attempts carries
+// for non-idempotent tasks.
+func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversation) (string, int, error) {
+	req := buildAgentRequest(conv)
+
+	for turn := range conv.maxTurns {
 		resp, err := generateOnce(ctx, llm, req)
 		if err != nil {
 			return "", turn, err
@@ -455,11 +696,11 @@ func runAgentConversation(ctx context.Context, llm model.LLM, prompt, dir string
 
 		req.Contents = append(req.Contents, &genai.Content{
 			Role:  genai.RoleUser,
-			Parts: toolResponseParts(ctx, calls, dir, tools.registry),
+			Parts: toolResponseParts(ctx, calls, conv.dir, conv.tools.registry),
 		})
 	}
 
-	return "", maxAgentTurns, fmt.Errorf("agent exceeded %d turns without a final response", maxAgentTurns)
+	return "", conv.maxTurns, fmt.Errorf("agent exceeded %d turns without a final response", conv.maxTurns)
 }
 
 // generateOnce drains llm.GenerateContent's iterator for the non-streaming
@@ -536,15 +777,10 @@ func recordAgentFailure(ctx context.Context, store *Store, node Node, jobName st
 
 // runAgentStep hashes step against parentHash (agent steps are never
 // skippable — see runSteps) and runs it, retrying the whole conversation up
-// to step.Attempts times. It returns the hash to use as parentHash for the
-// next step.
+// to the resolved attempt count. It returns the hash to use as parentHash
+// for the next step.
 func runAgentStep(ctx context.Context, cfg *Config, jobName string, i int, step Step, workspaceDir string, store *Store, parentHash string) (string, error) {
-	agent, err := cfg.FindAgent(step.Agent)
-	if err != nil {
-		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
-	}
-
-	baseURL, modelName, apiKeyEnv, requiresKey, err := resolveAgentTarget(agent.Source)
+	ri, err := resolveAgentInvocation(cfg, step)
 	if err != nil {
 		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
@@ -554,17 +790,17 @@ func runAgentStep(ctx context.Context, cfg *Config, jobName string, i int, step 
 		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
-	decls, registry, err := buildAgentTools(step.Tools)
+	decls, registry, err := buildAgentTools(ri.toolSpecs)
 	if err != nil {
 		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
-	apiKey, err := lookupAPIKey(apiKeyEnv, requiresKey)
+	apiKey, err := lookupAPIKey(ri.apiKeyEnv, ri.requiresKey)
 	if err != nil {
 		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
-	content := agentNodeContent(step.Agent, step.Prompt, step.Dir, modelName, baseURL, step.Tools)
+	content := agentContentMap(step, ri)
 
 	hash, err := hashNode(NodeKindAgent, content, parentHash)
 	if err != nil {
@@ -575,9 +811,17 @@ func runAgentStep(ctx context.Context, cfg *Config, jobName string, i int, step 
 
 	fmt.Printf("agent: %s\n", step.Agent)
 
-	node := Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindAgent, StepIndex: i, Resource: agent.Name, Content: content}
-	llm := newAgentLLM(baseURL, modelName, apiKey)
-	tools := agentTools{decls: decls, registry: registry}
+	node := Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindAgent, StepIndex: i, Resource: ri.agentName, Content: content}
+
+	conv := agentConversation{
+		system:   buildSystemMessage(ri.persona, dir),
+		prompt:   step.Prompt,
+		dir:      dir,
+		tools:    agentTools{decls: decls, registry: registry},
+		params:   ri.genParams,
+		maxTurns: ri.maxTurns,
+	}
+	llm := newAgentLLM(ri.baseURL, ri.modelName, apiKey)
 
 	agentCtx, cancel := context.WithTimeout(ctx, agentStepTimeout)
 	defer cancel()
@@ -587,8 +831,8 @@ func runAgentStep(ctx context.Context, cfg *Config, jobName string, i int, step 
 		turnsUsed    int
 	)
 
-	err = withRetry(agentCtx, step.Attempts, func(_ int) error {
-		answer, turns, runErr := runAgentConversation(agentCtx, llm, step.Prompt, dir, tools)
+	err = withRetry(agentCtx, ri.attempts, func(_ int) error {
+		answer, turns, runErr := runAgentConversation(agentCtx, llm, conv)
 		turnsUsed = turns
 
 		if runErr != nil {

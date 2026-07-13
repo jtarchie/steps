@@ -67,33 +67,6 @@ func putNodeContent(resourceType ResourceType, source, params map[string]any) ma
 	}
 }
 
-// agentNodeContent hashes what defines an agent step's behavior: which
-// agent it targets, the (unrendered) prompt, the working directory, the
-// resolved target (modelName/baseURL, post provider-prefix resolution, so
-// switching providers changes the hash), and the tools list (so editing a
-// tool re-runs the step). api_key_env's name and value are deliberately
-// excluded — nothing secret-adjacent belongs in hashed/persisted content.
-func agentNodeContent(agentName, prompt, dir, modelName, baseURL string, tools []ToolSpec) map[string]any {
-	toolsContent := make([]map[string]any, len(tools))
-	for i, t := range tools {
-		toolsContent[i] = map[string]any{
-			"builtin":     t.Builtin,
-			"name":        t.Name,
-			"description": t.Description,
-			"run":         t.Run,
-		}
-	}
-
-	return map[string]any{
-		"agent":    agentName,
-		"prompt":   prompt,
-		"dir":      dir,
-		"model":    modelName,
-		"endpoint": baseURL,
-		"tools":    toolsContent,
-	}
-}
-
 // hashNode computes a Node's content-addressed hash: sha256 hex of the
 // canonical JSON of {kind, content, parent}. encoding/json.Marshal sorts
 // map keys, which is what makes this deterministic — content must stay
@@ -242,22 +215,17 @@ func putNode(cfg *Config, step Step, i int, parentHash string) (Node, error) {
 }
 
 func agentNode(cfg *Config, step Step, i int, parentHash string) (Node, error) {
-	agent, err := cfg.FindAgent(step.Agent)
+	ri, err := resolveAgentInvocation(cfg, step)
 	if err != nil {
 		return Node{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
-	baseURL, modelName, _, _, err := resolveAgentTarget(agent.Source)
-	if err != nil {
-		return Node{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
-	}
-
-	content := agentNodeContent(step.Agent, step.Prompt, step.Dir, modelName, baseURL, step.Tools)
+	content := agentContentMap(step, ri)
 
 	hash, err := hashNode(NodeKindAgent, content, parentHash)
 	if err != nil {
 		return Node{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
-	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindAgent, StepIndex: i, Resource: agent.Name, Content: content}, nil
+	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindAgent, StepIndex: i, Resource: ri.agentName, Content: content}, nil
 }
