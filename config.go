@@ -116,6 +116,52 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 	}
 }
 
+// FixSpec is a task step's fix: — the agent to invoke when the task's run:
+// command exits nonzero. A bare scalar names the agent (all other fields
+// derived); a mapping allows per-task overrides. It implements
+// yaml.Unmarshaler for the same scalar-or-mapping reason ToolSpec does.
+//
+// On a task failure, the named agent is invoked seeded with the captured
+// output, with the parent task auto-injected as a zero-arg rerun tool (its
+// run:, never its fix:, so a rerun can't recurse); after it stops, the task's
+// command is re-run and that exit code is the step's verdict. Fields left
+// unset fall back to the agent's own defaults (Attempts to 1).
+type FixSpec struct {
+	Agent    string     // agents: entry to invoke on failure
+	Prompt   string     // optional override; empty uses a default fix prompt
+	Dir      string     // optional working dir, relative to the workspace
+	Tools    []ToolSpec // optional subset/addition to the agent's tool grant
+	Attempts int        // optional whole-conversation retry count (default 1)
+}
+
+// UnmarshalYAML decodes a FixSpec from either a scalar (agent name) or a
+// mapping ({agent, prompt, dir, tools, attempts}) YAML node.
+func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias kinds that can't appear here
+	case yaml.ScalarNode:
+		return value.Decode(&f.Agent) //nolint:wrapcheck // yaml.v3 error is already descriptive
+	case yaml.MappingNode:
+		var m struct {
+			Agent    string     `yaml:"agent"`
+			Prompt   string     `yaml:"prompt"`
+			Dir      string     `yaml:"dir"`
+			Tools    []ToolSpec `yaml:"tools"`
+			Attempts int        `yaml:"attempts"`
+		}
+
+		err := value.Decode(&m)
+		if err != nil {
+			return fmt.Errorf("task fix: %w", err)
+		}
+
+		f.Agent, f.Prompt, f.Dir, f.Tools, f.Attempts = m.Agent, m.Prompt, m.Dir, m.Tools, m.Attempts
+
+		return nil
+	default:
+		return fmt.Errorf("task fix at line %d must be an agent name or a {agent, prompt, ...} mapping", value.Line)
+	}
+}
+
 // Job is a named sequence of steps to run.
 type Job struct {
 	Name string `yaml:"name"`
@@ -134,6 +180,11 @@ type Step struct {
 	Version any    `yaml:"version,omitempty"`
 	Task    string `yaml:"task,omitempty"`
 	Run     string `yaml:"run,omitempty"`
+	// Fix, on a task step, names an agent to invoke when run: exits nonzero:
+	// the agent is seeded with the captured output and given the task itself
+	// as a rerun tool, then the command is re-run to decide the step. A green
+	// run never constructs the agent. See FixSpec.
+	Fix *FixSpec `yaml:"fix,omitempty"`
 	// Put names a resource to run its out command against; Params are
 	// passed through to the out command as {{ params.x }}.
 	Put    string         `yaml:"put,omitempty"`

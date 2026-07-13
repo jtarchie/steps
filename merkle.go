@@ -37,9 +37,10 @@ type Node struct {
 type Chain struct {
 	Nodes    []Node
 	RootHash string
-	// Unskippable is true if any node is a put or agent step — both have
-	// side effects (or are non-deterministic, in the agent's case) and must
-	// always run rather than reuse a prior hash match.
+	// Unskippable is true if any node is a put step, an agent step, or a task
+	// with a fix: — all have side effects or are non-deterministic (agent
+	// runs, and a fix: task's success may depend on one) and must always run
+	// rather than reuse a prior hash match.
 	Unskippable bool
 }
 
@@ -113,41 +114,44 @@ func PlanChains(ctx context.Context, cfg *Config, jobName string, steps []Step, 
 
 func planSteps(ctx context.Context, cfg *Config, steps []Step, pinned map[string]string, prefix []Node, parentHash string, unskippable bool) ([]Chain, error) {
 	for i, step := range steps {
-		switch {
-		case step.Get != "":
+		if step.Get != "" {
 			return planGetStep(ctx, cfg, steps, i, step, pinned, prefix, parentHash, unskippable)
-		case step.Task != "":
-			node, err := taskNode(step, i, parentHash)
-			if err != nil {
-				return nil, err
-			}
-
-			prefix = append(prefix, node)
-			parentHash = node.Hash
-		case step.Put != "":
-			node, err := putNode(cfg, step, i, parentHash)
-			if err != nil {
-				return nil, err
-			}
-
-			prefix = append(prefix, node)
-			parentHash = node.Hash
-			unskippable = true
-		case step.Agent != "":
-			node, err := agentNode(cfg, step, i, parentHash)
-			if err != nil {
-				return nil, err
-			}
-
-			prefix = append(prefix, node)
-			parentHash = node.Hash
-			unskippable = true
-		default:
-			return nil, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 		}
+
+		node, stepUnskippable, err := planNonGetNode(cfg, step, i, parentHash)
+		if err != nil {
+			return nil, err
+		}
+
+		prefix = append(prefix, node)
+		parentHash = node.Hash
+		unskippable = unskippable || stepUnskippable
 	}
 
 	return []Chain{{Nodes: prefix, RootHash: parentHash, Unskippable: unskippable}}, nil
+}
+
+// planNonGetNode builds the plan node for a task/put/agent step and reports
+// whether that step makes its chain unskippable: put/agent always do (side
+// effects, non-determinism), and a task does when it has a fix: (its success
+// may depend on non-deterministic agent work).
+func planNonGetNode(cfg *Config, step Step, i int, parentHash string) (Node, bool, error) {
+	switch {
+	case step.Task != "":
+		node, err := taskNode(step, i, parentHash)
+
+		return node, step.Fix != nil, err
+	case step.Put != "":
+		node, err := putNode(cfg, step, i, parentHash)
+
+		return node, true, err
+	case step.Agent != "":
+		node, err := agentNode(cfg, step, i, parentHash)
+
+		return node, true, err
+	default:
+		return Node{}, false, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
+	}
 }
 
 // planGetStep resolves step's version(s) and recurses into the remainder of

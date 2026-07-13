@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // RunJob executes job's plan steps in order inside workspaceDir (a fresh
@@ -120,7 +121,7 @@ func runSteps(ctx context.Context, cfg *Config, jobName string, steps []Step, pi
 		}
 
 		parentHash = newParentHash
-		if step.Put != "" || step.Agent != "" {
+		if step.Put != "" || step.Agent != "" || step.Fix != nil {
 			chainUnskippable = true
 		}
 	}
@@ -135,7 +136,7 @@ func runSteps(ctx context.Context, cfg *Config, jobName string, steps []Step, pi
 func runNonGetStep(ctx context.Context, cfg *Config, jobName string, i int, step Step, workspaceDir string, store *Store, skippable map[string]bool, parentHash string) (string, bool, error) {
 	switch {
 	case step.Task != "":
-		return runTaskStep(ctx, jobName, i, step, workspaceDir, store, skippable, parentHash)
+		return runTaskStep(ctx, cfg, jobName, i, step, workspaceDir, store, skippable, parentHash)
 	case step.Put != "":
 		hash, err := runPutStep(ctx, cfg, jobName, i, step, workspaceDir, store, parentHash)
 
@@ -206,7 +207,7 @@ func runGetStep(ctx context.Context, cfg *Config, jobName string, i int, step St
 // runTaskStep hashes step against parentHash and, unless that hash is
 // skippable, runs it. It returns the hash to use as parentHash for the
 // next step (unchanged, along with skipped=true, when skipped).
-func runTaskStep(ctx context.Context, jobName string, i int, step Step, workspaceDir string, store *Store, skippable map[string]bool, parentHash string) (string, bool, error) {
+func runTaskStep(ctx context.Context, cfg *Config, jobName string, i int, step Step, workspaceDir string, store *Store, skippable map[string]bool, parentHash string) (string, bool, error) {
 	content := taskNodeContent(step.Run)
 
 	hash, err := hashNode(NodeKindTask, content, parentHash)
@@ -227,7 +228,7 @@ func runTaskStep(ctx context.Context, jobName string, i int, step Step, workspac
 
 	node := Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindTask, StepIndex: i, Resource: step.Task, Content: content}
 
-	err = RunShell(ctx, step.Run, workspaceDir)
+	err = runTaskCommand(ctx, cfg, step, workspaceDir)
 	if err != nil {
 		_ = store.RecordNode(ctx, node, jobName, "failed", nil, err)
 		_ = store.RecordJobRun(ctx, jobName, hash, "failed", err)
@@ -241,6 +242,85 @@ func runTaskStep(ctx context.Context, jobName string, i int, step Step, workspac
 	}
 
 	return hash, false, nil
+}
+
+// runTaskCommand runs a task's run: command. Without a fix:, it streams
+// output live and any nonzero exit is a hard failure (unchanged behavior).
+// With a fix:, it captures output instead, and on a nonzero exit invokes the
+// fix agent — seeded with that output and given the task itself as a rerun
+// tool — then re-runs the command once; that re-run's exit code is the
+// verdict. A green run never constructs the agent.
+func runTaskCommand(ctx context.Context, cfg *Config, step Step, workspaceDir string) error {
+	if step.Fix == nil {
+		return RunShell(ctx, step.Run, workspaceDir)
+	}
+
+	stdout, stderr, exitCode, err := RunShellCaptureFull(ctx, step.Run, workspaceDir)
+	if err != nil {
+		return err
+	}
+
+	printTaskOutput(stdout, stderr)
+
+	if exitCode == 0 {
+		return nil
+	}
+
+	fmt.Printf("task %q failed (exit %d); invoking fix agent %q\n", step.Task, exitCode, step.Fix.Agent)
+
+	err = runFixAgent(ctx, cfg, step, taskFailureOutput(stdout, stderr, exitCode), workspaceDir)
+	if err != nil {
+		return fmt.Errorf("fix agent %q: %w", step.Fix.Agent, err)
+	}
+
+	// Verdict: re-run the command (its run:, not its fix:) and gate on it.
+	stdout, stderr, exitCode, err = RunShellCaptureFull(ctx, step.Run, workspaceDir)
+	if err != nil {
+		return err
+	}
+
+	printTaskOutput(stdout, stderr)
+
+	if exitCode != 0 {
+		return fmt.Errorf("still failing after fix agent %q (exit %d)", step.Fix.Agent, exitCode)
+	}
+
+	return nil
+}
+
+// printTaskOutput echoes a captured task run's streams to the terminal, so a
+// fix-enabled task's output is still visible (RunShellCaptureFull buffers
+// rather than streaming live the way RunShell does).
+func printTaskOutput(stdout, stderr string) {
+	if stdout != "" {
+		fmt.Print(stdout)
+	}
+
+	if stderr != "" {
+		fmt.Fprint(os.Stderr, stderr)
+	}
+}
+
+// taskFailureOutput formats a failed run's exit code and streams into the
+// text seeded into the fix agent's prompt.
+func taskFailureOutput(stdout, stderr string, exitCode int) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "exit code: %d\n", exitCode)
+
+	if stdout != "" {
+		b.WriteString("stdout:\n")
+		b.WriteString(stdout)
+		b.WriteString("\n")
+	}
+
+	if stderr != "" {
+		b.WriteString("stderr:\n")
+		b.WriteString(stderr)
+		b.WriteString("\n")
+	}
+
+	return b.String()
 }
 
 // runPutStep hashes and always runs step (put steps are never skipped),

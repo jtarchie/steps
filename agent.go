@@ -703,6 +703,91 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 	return "", conv.maxTurns, fmt.Errorf("agent exceeded %d turns without a final response", conv.maxTurns)
 }
 
+// defaultFixPrompt is used when a task's fix: supplies no prompt of its own.
+// %q is the task name (also the name of the injected rerun tool). The
+// captured failure output is appended after this.
+const defaultFixPrompt = `A command that must pass has just failed; its output is below. Investigate the working directory, make the smallest change that resolves the failure, then call the %q tool to re-run the command and confirm it passes. Repeat until it passes, then reply with a brief summary and stop.`
+
+// runFixAgent invokes a failed task's fix: agent. It reuses the normal
+// agent-invocation resolution (tool grant, dials, attempts, max_turns) by
+// projecting the FixSpec onto an agent Step, then injects the parent task as
+// a zero-arg rerun tool — the task's own run: command (never its fix:, so a
+// rerun can't recurse), exposed under the task's name — and seeds the
+// conversation with the captured failure output. It does no merkle/store
+// recording: the enclosing task step records the overall outcome, and the
+// task's re-run (not the model's word) is the verdict.
+func runFixAgent(ctx context.Context, cfg *Config, task Step, failureOutput, workspaceDir string) error {
+	fix := task.Fix
+
+	// Project the fix spec onto an agent Step so resolveAgentInvocation can
+	// resolve grants/dials/limits exactly as it does for a real agent step.
+	ri, err := resolveAgentInvocation(cfg, Step{
+		Agent:    fix.Agent,
+		Prompt:   fix.Prompt,
+		Dir:      fix.Dir,
+		Tools:    fix.Tools,
+		Attempts: fix.Attempts,
+	})
+	if err != nil {
+		return err
+	}
+
+	dir, err := resolveAgentDir(workspaceDir, fix.Dir)
+	if err != nil {
+		return err
+	}
+
+	// Expand "no tools granted means all built-ins" before appending, so the
+	// injected task tool doesn't accidentally suppress the default built-ins.
+	baseTools := ri.toolSpecs
+	if len(baseTools) == 0 {
+		baseTools = defaultAgentToolSpecs()
+	}
+
+	taskTool := ToolSpec{
+		Name:        task.Task,
+		Description: fmt.Sprintf("Re-run the %q task's command. Returns exit_code, stdout, stderr.", task.Task),
+		Run:         task.Run,
+	}
+	toolSpecs := append(append([]ToolSpec{}, baseTools...), taskTool)
+
+	decls, registry, err := buildAgentTools(toolSpecs)
+	if err != nil {
+		return err
+	}
+
+	apiKey, err := lookupAPIKey(ri.apiKeyEnv, ri.requiresKey)
+	if err != nil {
+		return err
+	}
+
+	prompt := fix.Prompt
+	if prompt == "" {
+		prompt = fmt.Sprintf(defaultFixPrompt, task.Task)
+	}
+
+	prompt += "\n\n--- failure output ---\n" + truncateToolOutput(failureOutput)
+
+	conv := agentConversation{
+		system:   buildSystemMessage(ri.persona, dir),
+		prompt:   prompt,
+		dir:      dir,
+		tools:    agentTools{decls: decls, registry: registry},
+		params:   ri.genParams,
+		maxTurns: ri.maxTurns,
+	}
+	llm := newAgentLLM(ri.baseURL, ri.modelName, apiKey)
+
+	agentCtx, cancel := context.WithTimeout(ctx, agentStepTimeout)
+	defer cancel()
+
+	return withRetry(agentCtx, ri.attempts, func(_ int) error {
+		_, _, runErr := runAgentConversation(agentCtx, llm, conv)
+
+		return runErr
+	})
+}
+
 // generateOnce drains llm.GenerateContent's iterator for the non-streaming
 // case, which yields exactly one (response, error) pair.
 func generateOnce(ctx context.Context, llm model.LLM, req *model.LLMRequest) (*model.LLMResponse, error) {
