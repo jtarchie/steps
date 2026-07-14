@@ -9,10 +9,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
@@ -283,6 +283,89 @@ func TestRunAgentConversationRequiredToolCalled(t *testing.T) {
 	}
 }
 
+// TestRunAgentConversationRecoversFailedRequiredTool is the core behavior
+// this design exists for: a required tool that fails once and succeeds on a
+// second call recovers entirely within one conversation — no withRetry cold
+// restart (that would rebuild the request from the original prompt with
+// empty history; this test only ever calls runAgentConversation once, so a
+// restart isn't even available — recovery has to happen in-session or not
+// at all). It also confirms the model actually saw the first failure before
+// trying again, not just that things happened to work out.
+func TestRunAgentConversationRecoversFailedRequiredTool(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// Fails on its first invocation, succeeds on every one after — a marker
+	// file tracks which call this is.
+	specs := []ToolSpec{{
+		Name:     "post_review",
+		Run:      "[ -f done ] && exit 0 || { touch done; exit 1; }",
+		Required: true,
+	}}
+
+	decls, registry, err := buildAgentTools(specs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conv := agentConversation{
+		prompt:   "review it",
+		dir:      dir,
+		tools:    agentTools{decls: decls, registry: registry, required: requiredToolNames(specs)},
+		maxTurns: maxAgentTurns,
+	}
+
+	call := &genai.Part{FunctionCall: &genai.FunctionCall{ID: "call", Name: "post_review", Args: map[string]any{}}}
+
+	fake := &fakeLLM{
+		responses: []*model.LLMResponse{
+			{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{call}}},
+			{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{call}}},
+			{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "posted"}}}},
+		},
+	}
+
+	content, _, err := runAgentConversation(context.Background(), fake, conv)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if content != "posted" {
+		t.Errorf("content = %q, want %q", content, "posted")
+	}
+
+	if len(fake.requests) != 3 {
+		t.Fatalf("expected exactly 3 requests (one conversation, no restart), got %d", len(fake.requests))
+	}
+
+	exitCode, ok := functionResponseExitCode(fake.requests[1].Contents, "post_review")
+	if !ok || exitCode != 1 {
+		t.Errorf("expected the second request to carry the first call's exit_code 1, got %v (ok=%v)", exitCode, ok)
+	}
+}
+
+// functionResponseExitCode returns the exit_code from the last FunctionResponse
+// named name across contents, and whether one was found.
+func functionResponseExitCode(contents []*genai.Content, name string) (int, bool) {
+	for _, c := range contents {
+		for _, p := range c.Parts {
+			if p.FunctionResponse != nil && p.FunctionResponse.Name == name {
+				code, ok := p.FunctionResponse.Response["exit_code"].(int)
+
+				return code, ok
+			}
+		}
+	}
+
+	return 0, false
+}
+
+// TestToolResponseParts confirms a failed call (required or not) never stops
+// its siblings, and its failure comes back as ordinary FunctionResponse
+// data — exit_code — rather than aborting anything. That's what lets
+// runAgentConversation hand a required tool's failure back to the model for
+// in-session recovery instead of restarting the conversation.
 func TestToolResponseParts(t *testing.T) {
 	t.Parallel()
 
@@ -303,18 +386,21 @@ func TestToolResponseParts(t *testing.T) {
 		{ID: "3", Name: "ok"},
 	}
 
-	parts, err := toolResponseParts(context.Background(), calls, dir, registry)
+	parts := toolResponseParts(context.Background(), calls, dir, registry)
 
 	if len(parts) != 3 {
-		t.Fatalf("expected a response part for every call, even after a fatal one, got %d", len(parts))
+		t.Fatalf("expected a response part for every call, even after a failed one, got %d", len(parts))
 	}
 
-	if err == nil {
-		t.Fatal("expected a joined error from the two required tool failures")
+	got := make(map[string]int, 3)
+	for _, part := range parts {
+		code, _ := part.FunctionResponse.Response["exit_code"].(int)
+		got[part.FunctionResponse.Name] = code
 	}
 
-	if !strings.Contains(err.Error(), "fail_a") || !strings.Contains(err.Error(), "fail_b") {
-		t.Errorf("expected both required failures in the joined error, got: %v", err)
+	want := map[string]int{"fail_a": 1, "fail_b": 1, "ok": 0}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("exit codes = %v, want %v", got, want)
 	}
 }
 
@@ -882,6 +968,10 @@ func TestBuildSystemMessage(t *testing.T) {
 	})
 }
 
+// TestExecCustomTool confirms a custom tool's failure — required or not —
+// is reported as ordinary data, never a Go error; required: is enforced
+// entirely by runAgentConversation (see TestRunAgentConversationForces*
+// and TestRunAgentConversationRecovers*), not by execCustomTool itself.
 func TestExecCustomTool(t *testing.T) {
 	t.Parallel()
 
@@ -891,11 +981,7 @@ func TestExecCustomTool(t *testing.T) {
 	t.Run("renders args and shells out", func(t *testing.T) {
 		t.Parallel()
 
-		result, err := impl(context.Background(), map[string]any{"name": "world"}, dir)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
+		result := impl(context.Background(), map[string]any{"name": "world"}, dir)
 		if result["error"] != nil {
 			t.Fatalf("unexpected error: %v", result["error"])
 		}
@@ -908,67 +994,20 @@ func TestExecCustomTool(t *testing.T) {
 	t.Run("missing required arg yields an error map, not a Go error", func(t *testing.T) {
 		t.Parallel()
 
-		result, err := impl(context.Background(), map[string]any{}, dir)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
+		result := impl(context.Background(), map[string]any{}, dir)
 		if result["error"] == nil {
 			t.Error("expected an \"error\" key in the result map")
 		}
 	})
-}
 
-func TestExecCustomToolRequired(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-
-	t.Run("required tool returns a Go error on nonzero exit", func(t *testing.T) {
+	t.Run("required: true does not change a nonzero exit's shape", func(t *testing.T) {
 		t.Parallel()
 
 		requiredImpl := execCustomTool(ToolSpec{Name: "fail", Run: "exit 1", Required: true})
 
-		result, err := requiredImpl(context.Background(), map[string]any{}, dir)
-		if err == nil {
-			t.Fatal("expected a fatal error for a required tool's nonzero exit")
-		}
-
+		result := requiredImpl(context.Background(), map[string]any{}, dir)
 		if result["exit_code"] != 1 {
 			t.Errorf("exit_code = %v, want 1", result["exit_code"])
-		}
-	})
-
-	t.Run("non-required tool reports nonzero exit as data, not an error", func(t *testing.T) {
-		t.Parallel()
-
-		optionalImpl := execCustomTool(ToolSpec{Name: "fail", Run: "exit 1"})
-
-		result, err := optionalImpl(context.Background(), map[string]any{}, dir)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		if result["exit_code"] != 1 {
-			t.Errorf("exit_code = %v, want 1", result["exit_code"])
-		}
-	})
-
-	t.Run("required tool is fatal even when the command never runs at all", func(t *testing.T) {
-		t.Parallel()
-
-		requiredImpl := execCustomTool(ToolSpec{Name: "fail", Run: "true", Required: true})
-
-		// A nonexistent cwd makes the command fail to start rather than run
-		// and exit nonzero — shellToolResult reports that as {"error": ...}
-		// with no exit_code key, which the required check must catch too.
-		result, err := requiredImpl(context.Background(), map[string]any{}, "/nonexistent/dir/for/sure")
-		if err == nil {
-			t.Fatal("expected a fatal error when a required tool's command never runs")
-		}
-
-		if result["error"] == nil {
-			t.Errorf(`result["error"] = nil, want the underlying failure`)
 		}
 	})
 }
@@ -1000,47 +1039,6 @@ func TestTruncateToolOutput(t *testing.T) {
 
 		if !strings.Contains(got, "truncated 500 bytes") {
 			t.Errorf("expected a truncation marker, got tail %q", got[len(got)-40:])
-		}
-	})
-}
-
-func TestErrorDetail(t *testing.T) {
-	t.Parallel()
-
-	t.Run("short text is trimmed but otherwise unchanged", func(t *testing.T) {
-		t.Parallel()
-
-		if got := errorDetail("  boom  "); got != "boom" {
-			t.Errorf("got %q, want %q", got, "boom")
-		}
-	})
-
-	t.Run("oversized text keeps only the tail, capped at maxErrorDetailBytes", func(t *testing.T) {
-		t.Parallel()
-
-		big := strings.Repeat("a", maxErrorDetailBytes) + "TAIL"
-
-		got := errorDetail(big)
-		if !strings.HasSuffix(got, "TAIL") {
-			t.Errorf("expected the tail to be preserved, got suffix %q", got[len(got)-10:])
-		}
-
-		if len(got) > maxErrorDetailBytes+len("...(truncated)... ") {
-			t.Errorf("errorDetail did not cap length: got %d bytes", len(got))
-		}
-	})
-
-	t.Run("the cut point never splits a multi-byte rune", func(t *testing.T) {
-		t.Parallel()
-
-		// "a" + "é" (2 bytes) + suffixLen-1 "b"s positions the naive cut
-		// point (len(s) - maxErrorDetailBytes) exactly on é's second byte —
-		// a UTF-8 continuation byte, not a valid slice-and-keep boundary.
-		big := "a" + "é" + strings.Repeat("b", maxErrorDetailBytes-1)
-
-		got := errorDetail(big)
-		if !utf8.ValidString(got) {
-			t.Fatalf("errorDetail produced invalid UTF-8: %q", got)
 		}
 	})
 }
@@ -1146,11 +1144,7 @@ func TestExecReadFile(t *testing.T) {
 	t.Run("read_file returns content", func(t *testing.T) {
 		t.Parallel()
 
-		result, err := execReadFile(context.Background(), map[string]any{"path": "a.txt"}, dir)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
+		result := execReadFile(context.Background(), map[string]any{"path": "a.txt"}, dir)
 		if result["content"] != "hello" {
 			t.Errorf("content = %v, want %q", result["content"], "hello")
 		}
@@ -1159,11 +1153,7 @@ func TestExecReadFile(t *testing.T) {
 	t.Run("read_file rejects traversal", func(t *testing.T) {
 		t.Parallel()
 
-		result, err := execReadFile(context.Background(), map[string]any{"path": "../../etc/passwd"}, dir)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
+		result := execReadFile(context.Background(), map[string]any{"path": "../../etc/passwd"}, dir)
 		if result["error"] == nil {
 			t.Error("expected an error for a traversal path")
 		}
@@ -1172,11 +1162,7 @@ func TestExecReadFile(t *testing.T) {
 	t.Run("read_file requires path", func(t *testing.T) {
 		t.Parallel()
 
-		result, err := execReadFile(context.Background(), map[string]any{}, dir)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
+		result := execReadFile(context.Background(), map[string]any{}, dir)
 		if result["error"] == nil {
 			t.Error("expected an error for a missing path argument")
 		}
@@ -1196,10 +1182,7 @@ func TestExecListDir(t *testing.T) {
 	t.Run("list_dir defaults to the working directory", func(t *testing.T) {
 		t.Parallel()
 
-		result, err := execListDir(context.Background(), map[string]any{}, dir)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		result := execListDir(context.Background(), map[string]any{}, dir)
 
 		entries, ok := result["entries"].([]map[string]any)
 		if !ok || len(entries) != 1 {

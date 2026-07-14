@@ -49,9 +49,12 @@ agents:
   - name: post_review
     description: Post a review verdict on the current PR. action is approve or comment.
     run: gh pr review --{{ .args.action }} -b "{{ .args.body }}"
-    # required: true makes a nonzero exit (e.g. a malformed gh invocation)
-    # fail the step/job outright, instead of being handed back to the model
-    # as data it can silently shrug off in its final summary.
+    # required: true means the step can't finish until this tool has
+    # actually succeeded (exit 0) at least once. A failure (e.g. a
+    # malformed gh invocation) is handed back to the model as normal data
+    # so it can see what went wrong and retry in the same session; if it
+    # tries to wrap up without a successful call, it's forced to call this
+    # tool again rather than being allowed to just summarize and stop.
     required: true
 
 jobs:
@@ -62,12 +65,15 @@ jobs:
     trigger: true
   - agent: reviewer
     dir: prs
-    # attempts: 3 retries the whole conversation if a required tool (like
-    # post_review) fails partway through. post_review isn't idempotent —
-    # gh doesn't stop you posting the same review twice — so a retry after
-    # a partial success (post succeeded, a later turn errored) could double
-    # post. The prompt's "check gh pr view first" instruction is what
-    # prevents that; if you change this prompt, keep that check.
+    # attempts: 3 only retries the whole conversation from scratch for a
+    # non-tool failure (an LLM/transport error, or max_turns exhausted
+    # while post_review still hasn't succeeded) — a required tool's own
+    # failure is recovered within the same conversation, not by this.
+    # post_review isn't idempotent — gh doesn't stop you posting the same
+    # review twice — and the model may end up calling it more than once
+    # while recovering from an earlier failed attempt in-session, so the
+    # prompt's "check gh pr view first" instruction still matters; if you
+    # change this prompt, keep that check.
     attempts: 3
     # tools omitted -> inherits all of the agent's granted tools
     prompt: |

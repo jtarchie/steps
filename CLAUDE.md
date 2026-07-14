@@ -91,10 +91,14 @@ golangci-lint run && go test ./... -p 1 && go build -v
 5. Record output and return
 
 ### Custom Tool `required:` Semantics
-A custom tool (a `tools:` entry with `name`/`description`/`run`) may set `required: true` (see `examples/review.yml`'s `post_review`). This marks it as a resource-like action whose failure must fail the pipeline, not just get reported to the model as data it can react to (or ignore):
-- **Nonzero exit, or the command failing to run at all** → the tool call returns a Go error, which aborts the conversation attempt (retried per `attempts:`, then fails the step/job — same as a `put` step's failure).
-- **The model tries to stop without calling it** → it isn't just asked to reconsider. Its next turn is constrained via the provider's `tool_choice` (`forceRequiredTool`, mapped by `genaiopenai` to OpenAI's named `tool_choice`) to a function call for that specific tool — a hard API-level constraint, not a text reminder the model could ignore. If every required tool is eventually called this way the attempt succeeds; if a provider doesn't honor `tool_choice` (or the model still can't comply), `max_turns` bounds the loop and the step fails. This closes the silent-success gap where a model could just claim success without acting.
-- Built-in tools (`read_file`, `list_dir`, `run_shell`) and the fix-agent's injected task-rerun tool are never required — they're intentionally exploratory/iterative, and a failing `run_shell` call reporting `{exit_code, stdout, stderr}` as data for the model to react to is the normal, expected flow.
+A custom tool (a `tools:` entry with `name`/`description`/`run`) may set `required: true` (see `examples/review.yml`'s `post_review`). This marks it as an action that must *succeed* before the step can complete — but **no tool failure, required or not, ever aborts or restarts the conversation.** A failed call (nonzero exit, or the command failing to run at all) always comes back to the model as ordinary data (`{exit_code, stdout, stderr}` or `{"error": ...}`), exactly like `run_shell`, so the model sees what went wrong and can recover in the same session — no cold restart, no wasted turns re-reading files or re-running exploration.
+
+`required: true` is enforced entirely in `runAgentConversation` by tracking **success** (`exit_code == 0`), not mere invocation:
+- **The model tries to stop while a required tool hasn't yet succeeded** → its next turn is constrained via the provider's `tool_choice` (`forceRequiredTool`, mapped by `genaiopenai` to OpenAI's named `tool_choice`) to a function call for that specific tool — a hard API-level constraint, not a text reminder the model could ignore.
+- **A forced (or voluntary) call still fails** → that failure is appended to the conversation like any other tool result. The model gets another turn to fix it and try again — no attempt is aborted for this.
+- **The safety bound**: if a provider doesn't honor `tool_choice`, or the model just can't get the required tool to succeed, `max_turns` still caps the loop and the step fails, naming the tool(s) that never succeeded.
+- `withRetry`/`attempts:` (a full conversation restart from the original prompt) still exists, but only fires for *non-tool* failures — `generateOnce` erroring (LLM/transport issue) or `max_turns` exhaustion — never for a tool's own failure.
+- Only custom tools can be marked `required:`; built-ins (`read_file`, `list_dir`, `run_shell`) and the fix-agent's injected task-rerun tool are never required — they're intentionally exploratory/iterative regardless.
 
 ### State Caching via Merkle Tree
 - Each resource `get` and `agent` step is content-addressed (merkle tree) with its inputs (pinned versions, source config)

@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	genaiopenai "github.com/achetronic/adk-utils-go/genai/openai"
 	"google.golang.org/adk/v2/model"
@@ -159,14 +158,15 @@ func newAgentLLM(baseURL, modelName, apiKey string) model.LLM {
 }
 
 // toolImpl executes one resolved tool against dir, given the model's args.
-// It returns the map sent back as the FunctionResponse, plus an error. Most
-// failures are reported to the model as {"error": ...} data (err is nil) so
-// it can react on its next turn instead of aborting the whole attempt; a
-// non-nil err means the failure is fatal to the whole agent step — currently
-// only a required: true custom tool's nonzero exit does this, mirroring how
-// a put step's failure always aborts the job rather than being handed to
-// anything for a decision.
-type toolImpl func(ctx context.Context, args map[string]any, dir string) (map[string]any, error)
+// It returns the map sent back as the FunctionResponse — never a Go error;
+// every failure (including a required: true tool's) is reported to the
+// model as data ({"error": ...} or a nonzero "exit_code") so it can react on
+// its next turn instead of the whole attempt being aborted and restarted.
+// See runAgentConversation for how required: true is actually enforced —
+// by tracking success and, if the model tries to stop early, forcing
+// another call via forceRequiredTool — rather than by a tool ever failing
+// the step directly.
+type toolImpl func(ctx context.Context, args map[string]any, dir string) map[string]any
 
 // agentTools bundles what buildAgentTools produced: the declarations sent
 // to the model, the registry used to execute the calls it makes, and the
@@ -427,32 +427,6 @@ func truncateToolOutput(s string) string {
 	return s[:maxToolOutputBytes] + fmt.Sprintf("\n... [truncated %d bytes]", len(s)-maxToolOutputBytes)
 }
 
-// maxErrorDetailBytes caps how much of a failed required tool's stderr gets
-// embedded in the Go error returned up through withRetry, job failure, and
-// the top-level log — a much tighter cap than maxToolOutputBytes, since that
-// text (unlike a tool's response to the model) ends up in a single log line
-// rather than the model's own context.
-const maxErrorDetailBytes = 2_000
-
-// errorDetail returns the tail of s (trimmed), capped at maxErrorDetailBytes
-// — the end of stderr is usually where the actual failure is reported, so
-// keeping the tail rather than the head favors the most useful part. The cut
-// point is advanced to the next UTF-8 rune boundary so a multi-byte
-// character straddling the byte cap isn't split into invalid UTF-8.
-func errorDetail(s string) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= maxErrorDetailBytes {
-		return s
-	}
-
-	start := len(s) - maxErrorDetailBytes
-	for start < len(s) && !utf8.RuneStart(s[start]) {
-		start++
-	}
-
-	return "...(truncated)... " + s[start:]
-}
-
 // shellToolResult builds the FunctionResponse map for a shell-backed tool
 // (run_shell and every custom tool), truncating the captured streams.
 func shellToolResult(ctx context.Context, command, dir string) map[string]any {
@@ -468,26 +442,26 @@ func shellToolResult(ctx context.Context, command, dir string) map[string]any {
 	}
 }
 
-func execReadFile(_ context.Context, args map[string]any, dir string) (map[string]any, error) {
+func execReadFile(_ context.Context, args map[string]any, dir string) map[string]any {
 	rel := stringArg(args, "path")
 	if rel == "" {
-		return map[string]any{"error": `read_file: missing required argument "path"`}, nil
+		return map[string]any{"error": `read_file: missing required argument "path"`}
 	}
 
 	resolved, err := resolveAgentPath(dir, rel)
 	if err != nil {
-		return map[string]any{"error": err.Error()}, nil //nolint:nilerr // read_file failures are always reported as data, never fatal
+		return map[string]any{"error": err.Error()}
 	}
 
 	data, err := os.ReadFile(resolved) //nolint:gosec // resolveAgentPath rejects paths escaping dir, the step's own workspace
 	if err != nil {
-		return map[string]any{"error": err.Error()}, nil //nolint:nilerr // read_file failures are always reported as data, never fatal
+		return map[string]any{"error": err.Error()}
 	}
 
-	return map[string]any{"content": truncateToolOutput(string(data))}, nil
+	return map[string]any{"content": truncateToolOutput(string(data))}
 }
 
-func execListDir(_ context.Context, args map[string]any, dir string) (map[string]any, error) {
+func execListDir(_ context.Context, args map[string]any, dir string) map[string]any {
 	rel := stringArg(args, "path")
 	if rel == "" {
 		rel = "."
@@ -495,12 +469,12 @@ func execListDir(_ context.Context, args map[string]any, dir string) (map[string
 
 	resolved, err := resolveAgentPath(dir, rel)
 	if err != nil {
-		return map[string]any{"error": err.Error()}, nil //nolint:nilerr // list_dir failures are always reported as data, never fatal
+		return map[string]any{"error": err.Error()}
 	}
 
 	entries, err := os.ReadDir(resolved)
 	if err != nil {
-		return map[string]any{"error": err.Error()}, nil //nolint:nilerr // list_dir failures are always reported as data, never fatal
+		return map[string]any{"error": err.Error()}
 	}
 
 	items := make([]map[string]any, 0, len(entries))
@@ -516,57 +490,42 @@ func execListDir(_ context.Context, args map[string]any, dir string) (map[string
 		items = append(items, map[string]any{"name": e.Name(), "is_dir": e.IsDir(), "size": size})
 	}
 
-	return map[string]any{"entries": items}, nil
+	return map[string]any{"entries": items}
 }
 
-func execRunShell(ctx context.Context, args map[string]any, dir string) (map[string]any, error) {
+func execRunShell(ctx context.Context, args map[string]any, dir string) map[string]any {
 	command := stringArg(args, "command")
 	if command == "" {
-		return map[string]any{"error": `run_shell: missing required argument "command"`}, nil
+		return map[string]any{"error": `run_shell: missing required argument "command"`}
 	}
 
-	return shellToolResult(ctx, command, dir), nil
+	return shellToolResult(ctx, command, dir)
 }
 
 // execCustomTool renders spec.Run against the model's args and shells it
 // out. Model-supplied arg values are interpolated into the sh -c string, so
 // a custom tool is a capability-curation convenience, not a hard sandbox —
-// the same trust boundary as run_shell itself. When spec.Required is set, a
-// nonzero exit — or the command failing to run at all — is returned as a Go
-// error (fatal to the step) rather than just data left for the model to
-// interpret.
+// the same trust boundary as run_shell itself. A required: true tool is not
+// special-cased here: its nonzero exit is reported as ordinary data, same as
+// any other tool, so the model can see what went wrong and recover on its
+// next turn. required: is enforced by runAgentConversation tracking success
+// and forcing another call if the model tries to stop early — never by a
+// tool failing the step directly.
 func execCustomTool(spec ToolSpec) toolImpl {
-	return func(ctx context.Context, args map[string]any, dir string) (map[string]any, error) {
+	return func(ctx context.Context, args map[string]any, dir string) map[string]any {
 		rendered, err := Render(spec.Run, map[string]any{"args": args})
 		if err != nil {
-			return map[string]any{"error": err.Error()}, nil //nolint:nilerr // a bad template is a data error the model sees, not a fatal one — required: only gates the command's own execution
+			return map[string]any{"error": err.Error()}
 		}
 
-		result := shellToolResult(ctx, rendered, dir)
-
-		if spec.Required {
-			// shellToolResult reports a command that never ran at all (e.g. a
-			// missing working directory) as {"error": ...} with no exit_code
-			// key — that must be just as fatal as a nonzero exit, or a
-			// required tool that fails to run is silently treated as
-			// optional.
-			if errMsg, ok := result["error"].(string); ok {
-				return result, fmt.Errorf("required tool %q failed to run: %s", spec.Name, errorDetail(errMsg))
-			}
-
-			if exitCode, ok := result["exit_code"].(int); ok && exitCode != 0 {
-				return result, fmt.Errorf("required tool %q exited %d: %s", spec.Name, exitCode, errorDetail(fmt.Sprint(result["stderr"])))
-			}
-		}
-
-		return result, nil
+		return shellToolResult(ctx, rendered, dir)
 	}
 }
 
-func executeAgentTool(ctx context.Context, call *genai.FunctionCall, dir string, registry map[string]toolImpl) (map[string]any, error) {
+func executeAgentTool(ctx context.Context, call *genai.FunctionCall, dir string, registry map[string]toolImpl) map[string]any {
 	impl, ok := registry[call.Name]
 	if !ok {
-		return map[string]any{"error": fmt.Sprintf("unknown tool %q", call.Name)}, nil
+		return map[string]any{"error": fmt.Sprintf("unknown tool %q", call.Name)}
 	}
 
 	return impl(ctx, call.Args, dir)
@@ -746,25 +705,30 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 // runAgentConversation runs one full attempt: an initial system+user
 // message, then up to conv.maxTurns request/tool-execute/append round trips,
 // terminating when the model responds with no tool calls while every
-// required tool has been called. There is no turn-level checkpointing — a
+// required tool has succeeded. There is no turn-level checkpointing — a
 // retry (see withRetry in runAgentStep) restarts the whole conversation from
-// scratch. If a tool call already had a side effect (e.g. posting a PR
-// review) before a later turn failed, a retry may re-invoke it again;
-// pipeline prompts should tell the model to check current state before
-// acting, the same caveat Concourse's own task.attempts carries for
-// non-idempotent tasks.
+// scratch, but that only ever happens for a non-tool failure (generateOnce
+// erroring, or maxTurns exhausted below): a tool failure, required or not,
+// is always handed back into this same conversation as data, never a reason
+// to abort it. If a tool call already had a side effect (e.g. posting a PR
+// review) before a later turn failed for an unrelated reason, a restart may
+// re-invoke it again; pipeline prompts should tell the model to check
+// current state before acting, the same caveat Concourse's own
+// task.attempts carries for non-idempotent tasks.
 //
-// If the model tries to stop without having called every required tool, its
-// next turn is constrained via the provider's tool_choice (see
-// forceRequiredTool) to a function call for one missing tool — a hard
-// API-level constraint the model cannot decline, not a text reminder it
-// could still ignore. One missing tool is forced per turn (repeated as
-// needed for more than one), still bounded by maxTurns: a provider that
-// doesn't honor tool_choice, or a model that errors out anyway, still hits
-// the turn cap rather than looping forever.
+// If the model tries to stop without every required tool having succeeded
+// (exit_code 0 — a failed call doesn't count, and the model already saw why
+// it failed via the appended tool response), its next turn is constrained
+// via the provider's tool_choice (see forceRequiredTool) to a function call
+// for one unsatisfied tool — a hard API-level constraint the model cannot
+// decline, not a text reminder it could still ignore. One unsatisfied tool
+// is forced per turn (repeated as needed for more than one), still bounded
+// by maxTurns: a provider that doesn't honor tool_choice, or a model that
+// keeps failing the call anyway, still hits the turn cap rather than
+// looping forever.
 func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversation) (string, int, error) {
 	req := buildAgentRequest(conv)
-	invoked := make(map[string]bool, len(conv.tools.required))
+	satisfied := make(map[string]bool, len(conv.tools.required))
 
 	for turn := range conv.maxTurns {
 		resp, err := generateOnce(ctx, llm, req)
@@ -776,7 +740,7 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 
 		calls, text := collectParts(resp.Content)
 		if len(calls) == 0 {
-			missing := missingRequiredTools(conv.tools.required, invoked)
+			missing := unsatisfiedRequiredTools(conv.tools.required, satisfied)
 			if len(missing) == 0 {
 				return text, turn + 1, nil
 			}
@@ -786,21 +750,26 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 			continue
 		}
 
-		req.Config.ToolConfig = nil // clear any forcing from the prior turn — a satisfied or voluntary call, either way the model chooses freely again
+		req.Config.ToolConfig = nil // clear any forcing from the prior turn — the model chooses freely again next time it tries to stop
 
-		for _, call := range calls {
-			invoked[call.Name] = true
-		}
+		parts := toolResponseParts(ctx, calls, conv.dir, conv.tools.registry)
 
-		parts, toolErr := toolResponseParts(ctx, calls, conv.dir, conv.tools.registry)
-		if toolErr != nil {
-			return "", turn + 1, toolErr
+		for _, part := range parts {
+			name := part.FunctionResponse.Name
+			if conv.tools.required[name] && requiredCallSucceeded(part.FunctionResponse.Response) {
+				satisfied[name] = true
+			}
 		}
 
 		req.Contents = append(req.Contents, &genai.Content{
 			Role:  genai.RoleUser,
 			Parts: parts,
 		})
+	}
+
+	missing := unsatisfiedRequiredTools(conv.tools.required, satisfied)
+	if len(missing) > 0 {
+		return "", conv.maxTurns, fmt.Errorf("agent exceeded %d turns; required tool(s) never succeeded: %s", conv.maxTurns, strings.Join(missing, ", "))
 	}
 
 	return "", conv.maxTurns, fmt.Errorf("agent exceeded %d turns without a final response", conv.maxTurns)
@@ -821,16 +790,27 @@ func forceRequiredTool(req *model.LLMRequest, name string) {
 	}
 }
 
-// missingRequiredTools returns a sorted list of names present in required
-// but not in invoked, or nil if none are missing. A required tool's own
-// failure already aborts the attempt (see execCustomTool), so by the time
-// this runs, every name in invoked was called successfully — this only
-// needs to catch the case where the model never called it at all.
-func missingRequiredTools(required, invoked map[string]bool) []string {
+// requiredCallSucceeded reports whether a tool's FunctionResponse data
+// represents success: exit_code 0. Only shell-backed tools (run_shell,
+// custom tools) can be marked required:, and shellToolResult always sets
+// exit_code on anything that actually ran, so its absence means the command
+// never ran at all — also not success.
+func requiredCallSucceeded(resp map[string]any) bool {
+	code, ok := resp["exit_code"].(int)
+
+	return ok && code == 0
+}
+
+// unsatisfiedRequiredTools returns a sorted list of names present in
+// required but not yet in satisfied, or nil if none remain. A tool stays
+// unsatisfied across as many failed calls as it takes — see
+// requiredCallSucceeded — so the model can keep retrying it in-session
+// instead of the whole attempt being aborted.
+func unsatisfiedRequiredTools(required, satisfied map[string]bool) []string {
 	missing := make([]string, 0, len(required))
 
 	for name := range required {
-		if !invoked[name] {
+		if !satisfied[name] {
 			missing = append(missing, name)
 		}
 	}
@@ -961,28 +941,22 @@ func collectParts(content *genai.Content) (calls []*genai.FunctionCall, text str
 }
 
 // toolResponseParts executes each requested tool and packages the results as
-// FunctionResponse parts to feed back on the next turn. Every call in the
-// turn still runs (a fatal tool call doesn't short-circuit its siblings);
-// every fatal error encountered is joined and returned alongside the parts,
-// so the caller can abort the conversation with the full picture instead of
-// just the first of several required tools that failed in the same turn.
-func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, dir string, registry map[string]toolImpl) ([]*genai.Part, error) {
+// FunctionResponse parts to feed back on the next turn. No call's failure
+// (a nonzero exit_code, or an {"error": ...} result) stops any other call in
+// the turn, or the conversation — every failure is just data the model sees
+// on its next turn and can react to.
+func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, dir string, registry map[string]toolImpl) []*genai.Part {
 	parts := make([]*genai.Part, 0, len(calls))
 
-	var errs []error
-
 	for _, call := range calls {
-		response, err := executeAgentTool(ctx, call, dir, registry)
-		if err != nil {
-			errs = append(errs, err)
-		}
+		response := executeAgentTool(ctx, call, dir, registry)
 
 		parts = append(parts, &genai.Part{
 			FunctionResponse: &genai.FunctionResponse{ID: call.ID, Name: call.Name, Response: response},
 		})
 	}
 
-	return parts, errors.Join(errs...)
+	return parts
 }
 
 // resolveAgentDir joins and validates a step's working directory.
