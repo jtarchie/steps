@@ -53,9 +53,7 @@ func TestStoreConcurrentOpenEnablesWAL(t *testing.T) {
 	errs := make(chan error, openers)
 
 	for range openers {
-
 		wg.Go(func() {
-
 			store, err := OpenStore(path)
 			if err != nil {
 				errs <- err
