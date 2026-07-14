@@ -8,6 +8,7 @@ require (
 	github.com/achetronic/adk-utils-go v0.22.0
 	github.com/alecthomas/kong v1.15.0
 	github.com/lmittmann/tint v1.2.0
+	golang.org/x/sys v0.47.0
 	google.golang.org/adk/v2 v2.0.0
 	google.golang.org/genai v1.63.0
 	modernc.org/sqlite v1.53.0
@@ -43,7 +44,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	google.golang.org/api v0.288.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect

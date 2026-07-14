@@ -1,0 +1,100 @@
+# Demonstrates opt-in Concourse-style workspace isolation. Without a
+# workspace: block, every step in a triggered build shares one mutable
+# directory and any task/agent can corrupt state for a later step — that's
+# still the default (examples/self-heal.yml, examples/review.yml use it).
+# This pipeline opts in: each task/agent step below only sees the named
+# inputs:/outputs: it declares, materialized as a fresh copy.
+workspace:
+  strategy: copy
+  # For strategy: btrfs (Linux only; instant copy-on-write via subvolume
+  # snapshots instead of copying file contents), root is required — the
+  # system temp directory is commonly tmpfs, not btrfs:
+  #
+  # workspace:
+  #   strategy: btrfs
+  #   root: /mnt/btrfs/steps
+  #   options:
+  #     compression: zstd   # zstd | lzo | zlib | none
+  #
+  # subvolume delete (used for cleanup) is unprivileged only on filesystems
+  # mounted with user_subvol_rm_allowed; steps falls back to a plain
+  # directory removal otherwise, which still reclaims the space — just
+  # without the instant subvolume-metadata cleanup.
+
+resource_types:
+- name: github
+  config:
+    check: |
+      gh api repos/{{ .source.owner }}/{{ .source.repo }}/branches/{{ .source.branch }} -q '.commit.sha' | jq -R '{ref: .}' | jq -s .
+    in: |
+      gh repo clone {{ .source.owner }}/{{ .source.repo }} . && git -C . checkout {{ .version.ref }}
+    out: "true"
+
+resources:
+- name: repo
+  type: github
+  source:
+    owner: jtarchie
+    repo: ci
+    branch: main
+- name: results
+  type: github
+  source:
+    owner: jtarchie
+    repo: ci
+    branch: results
+
+agents:
+- name: reviewer
+  source:
+    model: openrouter/anthropic/claude-3.5-sonnet
+    # api_key_env defaults to OPENROUTER_API_KEY
+  system: |
+    You review a build's release notes for obvious mistakes. The build's
+    output is checked out under ./built in your working directory — nothing
+    else is visible to you.
+  tools:
+  - read_file
+  - list_dir
+
+# Reusable task: inputs:/outputs: declared here apply to every step
+# referencing it (task: build, no run:) unless a step sets its own —
+# mirroring how fix: overrides work.
+tasks:
+- name: build
+  run: cd repo && go build -o ../built/steps . && echo built > ../built/NOTES.md
+  inputs: [repo]
+  outputs: [built]
+
+jobs:
+- name: release
+  plan:
+  - get: repo
+    trigger: true
+
+  # Sees only repo/ (its declared input): a fresh copy, never mutated by an
+  # earlier step, and this step's own writes never leak back into repo/
+  # itself. Its outputs: [built] is captured after it succeeds, so later
+  # steps can name "built" as one of their own inputs.
+  - task: build
+
+  # Sees only built/ — not repo/, even though repo/ was fetched earlier in
+  # this same build. A step that never declares an input for a resource
+  # simply cannot reach it, by construction, not by convention.
+  - task: test
+    run: test -x built/steps
+    inputs: [built]
+
+  # Sees only built/ too. Its file tools (read_file/list_dir) are separately
+  # lexically confined to its working directory, but it's this step's own
+  # inputs: that keeps repo/ out of view in the first place.
+  - agent: reviewer
+    prompt: does NOTES.md read like a real release note, or a placeholder?
+    inputs: [built]
+
+  # inputs: selects exactly what the out: command can see. Omitted/empty
+  # means an empty (but still isolated) working directory — there is no
+  # implicit "all artifacts fetched/produced so far" view for put steps;
+  # declare whatever the out: command actually needs.
+  - put: results
+    inputs: [built]

@@ -61,10 +61,14 @@ Under high CPU contention (many tests in parallel), some shell/storage tests fla
 - **merkle.go** — Content-addressed caching; detects when get/agent work can be skipped
 - **template.go** — YAML template rendering (e.g., `{{ .source.repo }}`)
 - **retry.go** — Exponential backoff retry logic
+- **workspace.go** — `WorkspaceProvider`/`BuildWorkspace`/`StepSpace` interfaces; the default shared (single-directory) implementation; static `inputs:`/`outputs:` plan validation
+- **workspace_copy\*.go** — `strategy: copy` backend (portable; copy-on-write via platform-specific `cp` flags) and its per-platform candidate command lists
+- **workspace_btrfs\*.go** — `strategy: btrfs` backend (Linux only; subvolume create/snapshot/delete) and the non-Linux stub
 
 ### Configuration & Examples
 - **.golangci.yml** — Linter config; 40+ rules including security (gosec), correctness, concurrency, and complexity checks
 - **examples/review.yml** — Example pipeline: PR review job using an agent with `read_file`, `list_dir`, `run_shell`, and a custom `post_review` tool
+- **examples/isolated.yml** — Example pipeline demonstrating opt-in `workspace:` isolation: a reusable task with `inputs:`/`outputs:`, an isolated agent step, and a `put` step scoped to a declared input
 
 ### Root Files
 - **go.mod / go.sum** — Dependencies: yaml.v3, kong (CLI), tint (structured logging), modernc.org/sqlite, google.golang.org/genai, openai-go
@@ -106,6 +110,25 @@ This resolution (`resolveTask` in `job.go`) runs identically at plan time (`merk
 - **The safety bound**: if a provider doesn't honor `tool_choice`, or the model just can't get the required tool to succeed, `max_turns` still caps the loop and the step fails, naming the tool(s) that never succeeded.
 - `withRetry`/`attempts:` (a full conversation restart from the original prompt) still exists, but only fires for *non-tool* failures — `generateOnce` erroring (LLM/transport issue) or `max_turns` exhaustion — never for a tool's own failure.
 - Only custom tools can be marked `required:`; built-ins (`read_file`, `list_dir`, `run_shell`) and the fix-agent's injected task-rerun tool are never required — they're intentionally exploratory/iterative regardless.
+
+### Workspace Isolation (opt-in)
+
+By default every step in a triggered build shares one mutable directory: a `get` fetches into `<workspace>/<resource-name>/`, and every `task`/`agent`/`put` step after it runs with that same directory as its cwd, so one task can silently corrupt state for a later step. A top-level `workspace:` block opts a pipeline into Concourse-style per-step isolation instead; absent, behavior (and merkle hashes) are byte-identical to before this feature existed.
+
+```yaml
+workspace:
+  strategy: copy   # or: btrfs (Linux only)
+  root: /path       # optional for copy; required for btrfs
+  options:
+    compression: zstd   # btrfs only: zstd | lzo | zlib | none
+```
+
+- **`inputs:`/`outputs:`** on a `task`/`agent`/`put` step (and on a top-level `tasks:` entry, overridable per step the same way `fix:` is) name artifacts — a resource an earlier `get` fetched, or an output an earlier `task`/`agent` produced. A step sees *only* what it declares: an isolated task/agent's working directory contains an `<input>/` copy (or, on btrfs, an instant CoW snapshot) of each named input plus an empty `<output>/` dir per declared output, captured back into the build's artifact store after the step succeeds. `put` steps compose a read view the same way, from their own `inputs:`; there is no implicit "all artifacts so far" view.
+- This is corruption hygiene, not a sandbox: shell commands can still reach outside the materialized directory via absolute paths, same as today.
+- `WorkspaceProvider`/`BuildWorkspace`/`StepSpace` (`workspace.go`) are the abstraction: a `WorkspaceProvider` is built once per CLI invocation and validated at startup (`Validate()` — wrong platform, wrong filesystem, missing binaries all fail fast, before any step runs); `NewBuild` creates one triggered build's artifact store; `TaskSpace`/`PutSpace` materialize a step's directory; `Capture` persists declared outputs back into the store. The shared (no-`workspace:`) implementation makes every method a no-op/passthrough to the single directory.
+- Fix agents (`fix:`) run inside the failing task's own already-materialized `StepSpace`, not a fresh one — they need to see the exact state the task failed in, and the enclosing task's `Capture` (after the fix loop's final green verdict) is what actually persists outputs downstream.
+- Declaring `inputs:`/`outputs:` without a `workspace:` block is a `LoadConfig`-time error; an `inputs:` naming an artifact nothing earlier in the plan fetched/produced is a `RunJob`-time error (`validateArtifactFlow`) that runs unconditionally, even under `--force` (which otherwise skips merkle planning).
+- Merkle hashes (`taskNodeContent`/`putNodeContent`/`agentContentMap` in `merkle.go`/`agent.go`) fold in `inputs:`/`outputs:` **only when `cfg.Workspace != nil`** — so switching a pipeline into isolated mode invalidates its cache (correctly: the executed step's inputs changed), but a pipeline that never opts in hashes exactly as it always has. The workspace `strategy`/`root`/`options` themselves are never hashed — copy and btrfs produce the same logical view, so switching backends must not invalidate anyone's cache.
 
 ### State Caching via Merkle Tree
 - Each resource `get` and `agent` step is content-addressed (merkle tree) with its inputs (pinned versions, source config)

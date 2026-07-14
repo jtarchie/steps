@@ -5,6 +5,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,6 +20,39 @@ type Config struct {
 	Agents        []Agent        `yaml:"agents"`
 	Tasks         []Task         `yaml:"tasks"`
 	Jobs          []Job          `yaml:"jobs"`
+	// Workspace opts the pipeline into Concourse-style per-step isolation.
+	// Absent (the default) keeps every step in a triggered build sharing one
+	// mutable directory, exactly as before this field existed. See
+	// WorkspaceConfig.
+	Workspace *WorkspaceConfig `yaml:"workspace,omitempty"`
+}
+
+// WorkspaceConfig opts a pipeline into Concourse-style per-step workspace
+// isolation: when set, task/agent/put steps materialize a directory built
+// from their own declared inputs:/outputs: (see Step, Task) instead of
+// sharing the build's directory with every other step. This is corruption
+// hygiene, not a security sandbox — a step's shell commands can still reach
+// outside the materialized directory via absolute paths, exactly as today.
+type WorkspaceConfig struct {
+	// Strategy is "copy" (portable; uses copy-on-write when the underlying
+	// filesystem supports it — APFS clonefile on macOS, reflink on Linux —
+	// and falls back to a plain recursive copy otherwise) or "btrfs" (Linux
+	// only; instant copy-on-write via btrfs subvolume snapshots).
+	Strategy string `yaml:"strategy"`
+	// Root is where isolated build workspaces are materialized. Optional for
+	// strategy: copy (defaults to the system temp directory); required for
+	// strategy: btrfs, since the system temp directory (often tmpfs) is
+	// commonly not itself a btrfs filesystem.
+	Root string `yaml:"root,omitempty"`
+	// Options holds strategy-specific tuning; currently btrfs only.
+	Options WorkspaceOptions `yaml:"options,omitempty"`
+}
+
+// WorkspaceOptions holds strategy-specific workspace tuning.
+type WorkspaceOptions struct {
+	// Compression sets a btrfs subvolume's compression property: "zstd",
+	// "lzo", "zlib", or "none". Valid only for strategy: btrfs.
+	Compression string `yaml:"compression,omitempty"`
 }
 
 // ResourceType defines a resource kind as a set of shell command templates.
@@ -133,6 +167,11 @@ type Task struct {
 	Name string   `yaml:"name"`
 	Run  string   `yaml:"run"`
 	Fix  *FixSpec `yaml:"fix,omitempty"`
+	// Inputs/Outputs are consulted only when a pipeline sets workspace: (see
+	// WorkspaceConfig); a referencing step's own Inputs/Outputs, if
+	// non-nil, override these for that step only — mirroring how Fix works.
+	Inputs  []string `yaml:"inputs,omitempty"`
+	Outputs []string `yaml:"outputs,omitempty"`
 }
 
 // FixSpec is a task step's fix: — the agent to invoke when the task's run:
@@ -227,6 +266,17 @@ type Step struct {
 	Dir      string     `yaml:"dir,omitempty"`
 	Tools    []ToolSpec `yaml:"tools,omitempty"`
 	Attempts int        `yaml:"attempts,omitempty"`
+	// Inputs/Outputs declare which named artifacts a task/agent/put step
+	// draws from and (task/agent only) produces, when the pipeline sets
+	// workspace: (see WorkspaceConfig). Each name is either a resource
+	// fetched by an earlier get step or an output produced by an earlier
+	// task/agent step. Omitted/nil means "none" for every step kind — put
+	// steps have no implicit "all artifacts" view; declare inputs: for
+	// whatever the out: command needs to see. Invalid without a top-level
+	// workspace: block, and invalid on get steps; Outputs is additionally
+	// invalid on put steps.
+	Inputs  []string `yaml:"inputs,omitempty"`
+	Outputs []string `yaml:"outputs,omitempty"`
 }
 
 // LoadConfig reads and parses a pipeline YAML file at path.
@@ -252,7 +302,149 @@ func LoadConfig(path string) (*Config, error) {
 		"jobs", len(cfg.Jobs),
 	)
 
+	err = cfg.validate()
+	if err != nil {
+		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
+	}
+
 	return &cfg, nil
+}
+
+// validate checks schema-level invariants that yaml.Unmarshal can't express
+// on its own — in particular everything around workspace:/inputs:/outputs:,
+// so a misconfigured pipeline fails at load time rather than mid-build.
+func (c *Config) validate() error {
+	err := c.validateWorkspace()
+	if err != nil {
+		return err
+	}
+
+	return c.validateArtifactDecls()
+}
+
+var (
+	workspaceStrategies = map[string]bool{"copy": true, "btrfs": true}
+	compressionValues   = map[string]bool{"": true, "zstd": true, "lzo": true, "zlib": true, "none": true}
+)
+
+func (c *Config) validateWorkspace() error {
+	ws := c.Workspace
+	if ws == nil {
+		return nil
+	}
+
+	if !workspaceStrategies[ws.Strategy] {
+		return fmt.Errorf("workspace.strategy %q must be one of copy, btrfs", ws.Strategy)
+	}
+
+	if ws.Strategy == "btrfs" && ws.Root == "" {
+		return errors.New("workspace.root is required for strategy: btrfs (the system temp directory is commonly not a btrfs filesystem)")
+	}
+
+	if !compressionValues[ws.Options.Compression] {
+		return fmt.Errorf("workspace.options.compression %q must be one of zstd, lzo, zlib, none", ws.Options.Compression)
+	}
+
+	if ws.Options.Compression != "" && ws.Strategy != "btrfs" {
+		return fmt.Errorf("workspace.options.compression is only valid for strategy: btrfs, not %q", ws.Strategy)
+	}
+
+	return nil
+}
+
+// declaresArtifacts reports whether a step or task carries any inputs:/
+// outputs: at all — used to reject them outright when no workspace: block
+// is configured.
+func declaresArtifacts(inputs, outputs []string) bool {
+	return inputs != nil || outputs != nil
+}
+
+func (c *Config) validateArtifactDecls() error {
+	for i := range c.Tasks {
+		task := c.Tasks[i]
+
+		if c.Workspace == nil && declaresArtifacts(task.Inputs, task.Outputs) {
+			return fmt.Errorf("task %q: inputs/outputs require a top-level workspace: block", task.Name)
+		}
+
+		err := validateArtifactNames(fmt.Sprintf("task %q", task.Name), task.Inputs, task.Outputs)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, job := range c.Jobs {
+		for i, step := range job.Plan {
+			err := c.validateStepArtifactDecls(job.Name, i, step)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (c *Config) validateStepArtifactDecls(jobName string, i int, step Step) error {
+	label := fmt.Sprintf("job %q step %d", jobName, i)
+
+	if c.Workspace == nil && declaresArtifacts(step.Inputs, step.Outputs) {
+		return fmt.Errorf("%s: inputs/outputs require a top-level workspace: block", label)
+	}
+
+	switch {
+	case step.Get != "":
+		if declaresArtifacts(step.Inputs, step.Outputs) {
+			return fmt.Errorf("%s (get %q): inputs/outputs are not valid on get steps", label, step.Get)
+		}
+
+		return nil
+	case step.Put != "":
+		if step.Outputs != nil {
+			return fmt.Errorf("%s (put %q): outputs are not valid on put steps", label, step.Put)
+		}
+
+		return validateArtifactNames(fmt.Sprintf("%s (put %q)", label, step.Put), step.Inputs, nil)
+	default:
+		return validateArtifactNames(label, step.Inputs, step.Outputs)
+	}
+}
+
+// validateArtifactNames checks every name in inputs/outputs against
+// artifactNamePattern (see workspace.go) and rejects duplicates within a
+// list or a name appearing in both — in-place propagation (an output
+// shadowing one of the same step's own inputs) isn't supported.
+func validateArtifactNames(context string, inputs, outputs []string) error {
+	seen := map[string]string{}
+
+	check := func(names []string, kind string) error {
+		for _, name := range names {
+			err := validateArtifactName(name)
+			if err != nil {
+				return fmt.Errorf("%s: %w", context, err)
+			}
+
+			prevKind, ok := seen[name]
+			if ok {
+				if prevKind == kind {
+					return fmt.Errorf("%s: duplicate %s %q", context, kind, name)
+				}
+
+				return fmt.Errorf("%s: %q cannot be both an input and an output of the same step", context, name)
+			}
+
+			seen[name] = kind
+		}
+
+		return nil
+	}
+
+	err := check(inputs, "input")
+	if err != nil {
+		return err
+	}
+
+	return check(outputs, "output")
 }
 
 // FindResource returns the resource with the given name, or an error if not found.

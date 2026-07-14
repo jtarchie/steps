@@ -649,7 +649,9 @@ func resolveAgentInvocation(cfg *Config, step Step) (resolvedInvocation, error) 
 // persona, dials, and the effective tool set). Attempts is excluded (a pure
 // retry policy doesn't change the intended result); the API key and its env
 // var name are excluded (nothing secret-adjacent belongs in hashed content).
-func agentContentMap(step Step, ri resolvedInvocation) map[string]any {
+// inputs/outputs are folded in only when ws is non-nil (workspace:
+// configured) — see taskNodeContent's doc comment in merkle.go for why.
+func agentContentMap(step Step, ri resolvedInvocation, ws *WorkspaceConfig) map[string]any {
 	toolsContent := make([]map[string]any, len(ri.toolSpecs))
 	for i, t := range ri.toolSpecs {
 		toolsContent[i] = map[string]any{
@@ -660,7 +662,7 @@ func agentContentMap(step Step, ri resolvedInvocation) map[string]any {
 		}
 	}
 
-	return map[string]any{
+	content := map[string]any{
 		"agent":            step.Agent,
 		"prompt":           step.Prompt,
 		"dir":              step.Dir,
@@ -674,6 +676,13 @@ func agentContentMap(step Step, ri resolvedInvocation) map[string]any {
 		"max_turns":        ri.maxTurns,
 		"tools":            toolsContent,
 	}
+
+	if ws != nil {
+		content["inputs"] = stableStrings(step.Inputs)
+		content["outputs"] = stableStrings(step.Outputs)
+	}
+
+	return content
 }
 
 // agentConversation is one runnable attempt's inputs.
@@ -980,32 +989,77 @@ func recordAgentFailure(ctx context.Context, store *Store, node Node, jobName st
 	_ = store.RecordJobRun(ctx, jobName, node.Hash, "failed", runErr)
 }
 
-// runAgentStep hashes step against parentHash (agent steps are never
-// skippable — see runSteps) and runs it, retrying the whole conversation up
-// to the resolved attempt count. It returns the hash to use as parentHash
-// for the next step.
-func runAgentStep(ctx context.Context, cfg *Config, jobName string, i int, step Step, workspaceDir string, store *Store, parentHash string) (string, error) {
+// preparedAgentStep is runAgentStep's resolved-and-materialized preamble:
+// everything needed to run the conversation, split out so runAgentStep
+// itself only sequences hash/run/capture/record and stays within the
+// linter's complexity budget.
+type preparedAgentStep struct {
+	ri    resolvedInvocation
+	space StepSpace
+	conv  agentConversation
+	llm   model.LLM
+}
+
+// prepareAgentStep resolves step's agent, materializes its (isolated or
+// shared) working directory, and builds the tools/LLM client it'll run
+// with. On error, any StepSpace already created is closed before returning
+// so the caller never has to.
+func prepareAgentStep(ctx context.Context, cfg *Config, step Step, bw BuildWorkspace) (preparedAgentStep, error) {
 	ri, err := resolveAgentInvocation(cfg, step)
 	if err != nil {
-		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		return preparedAgentStep{}, err
 	}
 
-	dir, err := resolveAgentDir(workspaceDir, step.Dir)
+	space, err := bw.TaskSpace(ctx, step.Agent, step.Inputs, step.Outputs)
 	if err != nil {
-		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		return preparedAgentStep{}, fmt.Errorf("workspace: %w", err)
+	}
+
+	dir, err := resolveAgentDir(space.Dir(), step.Dir)
+	if err != nil {
+		closeSpace(space, step.Agent)
+
+		return preparedAgentStep{}, err
 	}
 
 	decls, registry, err := buildAgentTools(ri.toolSpecs)
 	if err != nil {
-		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		closeSpace(space, step.Agent)
+
+		return preparedAgentStep{}, err
 	}
 
 	apiKey, err := lookupAPIKey(ri.apiKeyEnv, ri.requiresKey)
 	if err != nil {
-		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		closeSpace(space, step.Agent)
+
+		return preparedAgentStep{}, err
 	}
 
-	content := agentContentMap(step, ri)
+	conv := agentConversation{
+		system:   buildSystemMessage(ri.persona, dir),
+		prompt:   step.Prompt,
+		dir:      dir,
+		tools:    agentTools{decls: decls, registry: registry, required: requiredToolNames(ri.toolSpecs)},
+		params:   ri.genParams,
+		maxTurns: ri.maxTurns,
+	}
+
+	return preparedAgentStep{ri: ri, space: space, conv: conv, llm: newAgentLLM(ri.baseURL, ri.modelName, apiKey)}, nil
+}
+
+// runAgentStep hashes step against parentHash (agent steps are never
+// skippable — see runSteps) and runs it, retrying the whole conversation up
+// to the resolved attempt count. It returns the hash to use as parentHash
+// for the next step.
+func runAgentStep(ctx context.Context, cfg *Config, jobName string, i int, step Step, bw BuildWorkspace, store *Store, parentHash string) (string, error) {
+	prepared, err := prepareAgentStep(ctx, cfg, step, bw)
+	if err != nil {
+		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+	}
+	defer closeSpace(prepared.space, step.Agent)
+
+	content := agentContentMap(step, prepared.ri, cfg.Workspace)
 
 	hash, err := hashNode(NodeKindAgent, content, parentHash)
 	if err != nil {
@@ -1016,17 +1070,7 @@ func runAgentStep(ctx context.Context, cfg *Config, jobName string, i int, step 
 
 	fmt.Printf("agent: %s\n", step.Agent)
 
-	node := Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindAgent, StepIndex: i, Resource: ri.agentName, Content: content}
-
-	conv := agentConversation{
-		system:   buildSystemMessage(ri.persona, dir),
-		prompt:   step.Prompt,
-		dir:      dir,
-		tools:    agentTools{decls: decls, registry: registry, required: requiredToolNames(ri.toolSpecs)},
-		params:   ri.genParams,
-		maxTurns: ri.maxTurns,
-	}
-	llm := newAgentLLM(ri.baseURL, ri.modelName, apiKey)
+	node := Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindAgent, StepIndex: i, Resource: prepared.ri.agentName, Content: content}
 
 	agentCtx, cancel := context.WithTimeout(ctx, agentStepTimeout)
 	defer cancel()
@@ -1036,8 +1080,8 @@ func runAgentStep(ctx context.Context, cfg *Config, jobName string, i int, step 
 		turnsUsed    int
 	)
 
-	err = withRetry(agentCtx, ri.attempts, func(_ int) error {
-		answer, turns, runErr := runAgentConversation(agentCtx, llm, conv)
+	err = withRetry(agentCtx, prepared.ri.attempts, func(_ int) error {
+		answer, turns, runErr := runAgentConversation(agentCtx, prepared.llm, prepared.conv)
 		turnsUsed = turns
 
 		if runErr != nil {
@@ -1052,6 +1096,14 @@ func runAgentStep(ctx context.Context, cfg *Config, jobName string, i int, step 
 		recordAgentFailure(ctx, store, node, jobName, err)
 
 		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+	}
+
+	err = prepared.space.Capture(ctx)
+	if err != nil {
+		wrapped := fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		recordAgentFailure(ctx, store, node, jobName, wrapped)
+
+		return "", wrapped
 	}
 
 	result := map[string]any{"response": finalContent, "turns": turnsUsed}

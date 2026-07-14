@@ -96,3 +96,90 @@ func TestPlanChainsVersionEveryFansOut(t *testing.T) {
 		t.Error("distinct versions produced the same root hash")
 	}
 }
+
+// TestTaskNodeContentOmitsInputsOutputsWithoutWorkspace guards the
+// cache-stability guarantee workspace.go's taskNodeContent doc comment
+// promises: a pipeline that never sets workspace: must hash exactly as it
+// did before inputs:/outputs: existed, so this feature can never silently
+// invalidate anyone's existing cache.
+func TestTaskNodeContentOmitsInputsOutputsWithoutWorkspace(t *testing.T) {
+	t.Parallel()
+
+	rt := resolvedTask{name: "build", run: "echo hi", inputs: []string{"repo"}, outputs: []string{"built"}}
+
+	content := taskNodeContent(rt, nil)
+	if len(content) != 1 {
+		t.Fatalf(`taskNodeContent(rt, nil) = %#v, want exactly {"run": ...}, no inputs/outputs keys`, content)
+	}
+
+	if content["run"] != rt.run {
+		t.Errorf(`content["run"] = %v, want %v`, content["run"], rt.run)
+	}
+}
+
+// TestTaskNodeContentInputsOutputsOnlyAffectHashWhenWorkspaceConfigured is
+// the golden-hash-style regression: declaring inputs/outputs must be inert
+// for the hash when no workspace: block is configured, and load-bearing
+// once one is.
+func TestTaskNodeContentInputsOutputsOnlyAffectHashWhenWorkspaceConfigured(t *testing.T) {
+	t.Parallel()
+
+	base := resolvedTask{name: "build", run: "echo hi"}
+	withIO := resolvedTask{name: "build", run: "echo hi", inputs: []string{"repo"}, outputs: []string{"built"}}
+
+	mustHash := func(t *testing.T, rt resolvedTask, ws *WorkspaceConfig) string {
+		t.Helper()
+
+		hash, err := hashNode(NodeKindTask, taskNodeContent(rt, ws), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return hash
+	}
+
+	withoutWorkspaceBase := mustHash(t, base, nil)
+	withoutWorkspaceIO := mustHash(t, withIO, nil)
+
+	if withoutWorkspaceBase != withoutWorkspaceIO {
+		t.Error("declaring inputs/outputs changed the hash even though no workspace: block is configured")
+	}
+
+	ws := &WorkspaceConfig{Strategy: "copy"}
+
+	withWorkspaceBase := mustHash(t, base, ws)
+	withWorkspaceIO := mustHash(t, withIO, ws)
+
+	if withWorkspaceBase == withWorkspaceIO {
+		t.Error("declaring inputs/outputs did not change the hash when a workspace: block is configured")
+	}
+}
+
+// TestPutNodeContentInputsOnlyAffectHashWhenWorkspaceConfigured mirrors the
+// task case above for put steps.
+func TestPutNodeContentInputsOnlyAffectHashWhenWorkspaceConfigured(t *testing.T) {
+	t.Parallel()
+
+	rt := ResourceType{Config: ResourceTypeConfig{Out: "true"}}
+	source := map[string]any{"key": "v"}
+
+	mustHash := func(t *testing.T, inputs []string, ws *WorkspaceConfig) string {
+		t.Helper()
+
+		hash, err := hashNode(NodeKindPut, putNodeContent(rt, source, nil, inputs, ws), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return hash
+	}
+
+	if mustHash(t, nil, nil) != mustHash(t, []string{"built"}, nil) {
+		t.Error("declaring inputs changed a put node's hash even though no workspace: block is configured")
+	}
+
+	ws := &WorkspaceConfig{Strategy: "copy"}
+	if mustHash(t, nil, ws) == mustHash(t, []string{"built"}, ws) {
+		t.Error("declaring inputs did not change a put node's hash when a workspace: block is configured")
+	}
+}

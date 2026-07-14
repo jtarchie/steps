@@ -82,16 +82,27 @@ func run(args []string) error {
 		}
 	}()
 
-	workspaceDir, cleanup, err := setupWorkspace()
+	provider, err := newWorkspaceProvider(cfg.Workspace)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+
+	err = provider.Validate()
+	if err != nil {
+		return fmt.Errorf("workspace: %w", err)
+	}
+
+	defer func() {
+		closeErr := provider.Close()
+		if closeErr != nil {
+			slog.Error("workspace.close", "error", closeErr)
+		}
+	}()
 
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	return RunJob(ctx, cfg, job, cli.Version, workspaceDir, store, cli.Force)
+	return RunJob(ctx, cfg, job, cli.Version, provider, store, cli.Force)
 }
 
 // statePath returns the sqlite database path for pipeline's persisted job
@@ -114,28 +125,6 @@ func selectJob(cfg *Config, name string) (*Job, error) {
 	}
 
 	return cfg.FindJob(name)
-}
-
-// setupWorkspace creates the job's top-level temp workspace directory and
-// returns a cleanup func to remove it, which the caller should defer.
-func setupWorkspace() (string, func(), error) {
-	workspaceDir, err := os.MkdirTemp("", "steps-*")
-	if err != nil {
-		return "", nil, fmt.Errorf("could not create workspace: %w", err)
-	}
-
-	slog.Debug("workspace.create", "dir", workspaceDir)
-
-	cleanup := func() {
-		slog.Debug("workspace.remove", "dir", workspaceDir)
-
-		err := os.RemoveAll(workspaceDir)
-		if err != nil {
-			slog.Error("workspace.remove", "dir", workspaceDir, "error", err)
-		}
-	}
-
-	return workspaceDir, cleanup, nil
 }
 
 // withSignalCancel derives a context from parent that is canceled on

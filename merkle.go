@@ -56,16 +56,34 @@ func getNodeContent(resourceType ResourceType, source, version map[string]any) m
 	}
 }
 
-func taskNodeContent(run string) map[string]any {
-	return map[string]any{"run": run}
+// taskNodeContent and putNodeContent fold in inputs/outputs only when ws is
+// non-nil (workspace: configured), so a pipeline that never opts in hashes
+// byte-identically to before this field existed — switching a task between
+// shared and isolated execution of the same run: must invalidate its cache,
+// but the mere existence of the feature must not invalidate anyone else's.
+func taskNodeContent(rt resolvedTask, ws *WorkspaceConfig) map[string]any {
+	content := map[string]any{"run": rt.run}
+
+	if ws != nil {
+		content["inputs"] = stableStrings(rt.inputs)
+		content["outputs"] = stableStrings(rt.outputs)
+	}
+
+	return content
 }
 
-func putNodeContent(resourceType ResourceType, source, params map[string]any) map[string]any {
-	return map[string]any{
+func putNodeContent(resourceType ResourceType, source, params map[string]any, inputs []string, ws *WorkspaceConfig) map[string]any {
+	content := map[string]any{
 		"out_template": resourceType.Config.Out,
 		"source":       source,
 		"params":       params,
 	}
+
+	if ws != nil {
+		content["inputs"] = stableStrings(inputs)
+	}
+
+	return content
 }
 
 // hashNode computes a Node's content-addressed hash: sha256 hex of the
@@ -144,7 +162,7 @@ func planNonGetNode(cfg *Config, step Step, i int, parentHash string) (Node, boo
 			return Node{}, false, fmt.Errorf("step %d: %w", i, err)
 		}
 
-		node, err := taskNode(rt, i, parentHash)
+		node, err := taskNode(rt, i, parentHash, cfg.Workspace)
 
 		return node, rt.fix != nil, err
 	case step.Put != "":
@@ -192,8 +210,8 @@ func planGetStep(ctx context.Context, cfg *Config, steps []Step, i int, step Ste
 	return chains, nil
 }
 
-func taskNode(rt resolvedTask, i int, parentHash string) (Node, error) {
-	content := taskNodeContent(rt.run)
+func taskNode(rt resolvedTask, i int, parentHash string, ws *WorkspaceConfig) (Node, error) {
+	content := taskNodeContent(rt, ws)
 
 	hash, err := hashNode(NodeKindTask, content, parentHash)
 	if err != nil {
@@ -214,7 +232,7 @@ func putNode(cfg *Config, step Step, i int, parentHash string) (Node, error) {
 		return Node{}, fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
 
-	content := putNodeContent(*resourceType, resource.Source, step.Params)
+	content := putNodeContent(*resourceType, resource.Source, step.Params, step.Inputs, cfg.Workspace)
 
 	hash, err := hashNode(NodeKindPut, content, parentHash)
 	if err != nil {
@@ -230,7 +248,7 @@ func agentNode(cfg *Config, step Step, i int, parentHash string) (Node, error) {
 		return Node{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
-	content := agentContentMap(step, ri)
+	content := agentContentMap(step, ri, cfg.Workspace)
 
 	hash, err := hashNode(NodeKindAgent, content, parentHash)
 	if err != nil {

@@ -5,21 +5,35 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
-// RunJob executes job's plan steps in order inside workspaceDir (a fresh
-// temp directory). pinned applies to any `get` step's version selection.
+// RunJob executes job's plan steps in order. pinned applies to any `get`
+// step's version selection. provider materializes every build/step
+// workspace the run needs — see WorkspaceProvider; when cfg.Workspace is
+// nil, provider is the shared, single-mutable-directory implementation.
 //
-// Before executing anything, it plans every chain the job's steps could
-// resolve to (resolving get versions but running nothing) and checks store
-// for chains that already succeeded with identical content, so that
-// already-run get/task work can be skipped entirely. put steps are never
-// skipped — see runSteps. skipCache (--force) bypasses this and re-runs
-// everything, though results are still recorded as usual.
-func RunJob(ctx context.Context, cfg *Config, job *Job, pinned map[string]string, workspaceDir string, store *Store, skipCache bool) error {
-	slog.Info("job.run", "job", job.Name, "steps", len(job.Plan), "workspace_dir", workspaceDir)
+// Before executing anything, it statically validates every task/agent/put
+// step's declared inputs (see validateArtifactFlow — always runs, even
+// under --force) and plans every chain the job's steps could resolve to
+// (resolving get versions but running nothing), checking store for chains
+// that already succeeded with identical content so that already-run
+// get/task work can be skipped entirely. put steps are never skipped — see
+// runSteps. skipCache (--force) bypasses only the chain-skip planning and
+// re-runs everything, though results are still recorded as usual.
+func RunJob(ctx context.Context, cfg *Config, job *Job, pinned map[string]string, provider WorkspaceProvider, store *Store, skipCache bool) error {
+	slog.Info("job.run", "job", job.Name, "steps", len(job.Plan))
+
+	err := validateArtifactFlow(cfg, job)
+	if err != nil {
+		return fmt.Errorf("job %q: %w", job.Name, err)
+	}
+
+	bw, err := provider.NewBuild(ctx, job.Name)
+	if err != nil {
+		return fmt.Errorf("job %q: %w", job.Name, err)
+	}
+	defer closeBuild(bw, job.Name)
 
 	skippable := map[string]bool{}
 
@@ -35,7 +49,7 @@ func RunJob(ctx context.Context, cfg *Config, job *Job, pinned map[string]string
 		}
 	}
 
-	err := runSteps(ctx, cfg, job.Name, job.Plan, pinned, workspaceDir, store, skippable, "", false)
+	err = runSteps(ctx, cfg, job.Name, job.Plan, pinned, provider, bw, store, skippable, "", false)
 	if err != nil {
 		return err
 	}
@@ -105,13 +119,13 @@ func buildSkippableIndex(ctx context.Context, store *Store, jobName string, chai
 // triggered build(s). A `task`/`put`/`agent` step is handled by
 // runNonGetStep; `put`/`agent` steps are never looked up in skippable and
 // always execute.
-func runSteps(ctx context.Context, cfg *Config, jobName string, steps []Step, pinned map[string]string, workspaceDir string, store *Store, skippable map[string]bool, parentHash string, chainUnskippable bool) error {
+func runSteps(ctx context.Context, cfg *Config, jobName string, steps []Step, pinned map[string]string, provider WorkspaceProvider, bw BuildWorkspace, store *Store, skippable map[string]bool, parentHash string, chainUnskippable bool) error {
 	for i, step := range steps {
 		if step.Get != "" {
-			return runGetStep(ctx, cfg, jobName, i, step, steps[i+1:], pinned, store, skippable, parentHash, chainUnskippable)
+			return runGetStep(ctx, cfg, jobName, i, step, steps[i+1:], pinned, provider, store, skippable, parentHash, chainUnskippable)
 		}
 
-		newParentHash, skipped, err := runNonGetStep(ctx, cfg, jobName, i, step, workspaceDir, store, skippable, parentHash)
+		newParentHash, skipped, err := runNonGetStep(ctx, cfg, jobName, i, step, bw, store, skippable, parentHash)
 		if err != nil {
 			return err
 		}
@@ -133,16 +147,16 @@ func runSteps(ctx context.Context, cfg *Config, jobName string, steps []Step, pi
 // unlike get, run in place and return a single new parentHash rather than
 // fanning out or delegating the remainder of the plan. skipped is only ever
 // true for a skipped task step; put/agent steps are never skippable.
-func runNonGetStep(ctx context.Context, cfg *Config, jobName string, i int, step Step, workspaceDir string, store *Store, skippable map[string]bool, parentHash string) (string, bool, error) {
+func runNonGetStep(ctx context.Context, cfg *Config, jobName string, i int, step Step, bw BuildWorkspace, store *Store, skippable map[string]bool, parentHash string) (string, bool, error) {
 	switch {
 	case step.Task != "":
-		return runTaskStep(ctx, cfg, jobName, i, step, workspaceDir, store, skippable, parentHash)
+		return runTaskStep(ctx, cfg, jobName, i, step, bw, store, skippable, parentHash)
 	case step.Put != "":
-		hash, err := runPutStep(ctx, cfg, jobName, i, step, workspaceDir, store, parentHash)
+		hash, err := runPutStep(ctx, cfg, jobName, i, step, bw, store, parentHash)
 
 		return hash, false, err
 	case step.Agent != "":
-		hash, err := runAgentStep(ctx, cfg, jobName, i, step, workspaceDir, store, parentHash)
+		hash, err := runAgentStep(ctx, cfg, jobName, i, step, bw, store, parentHash)
 
 		return hash, false, err
 	default:
@@ -170,7 +184,7 @@ func recordChainSucceeded(ctx context.Context, store *Store, jobName, rootHash s
 // version(s), then runs the remainder of the plan for each — see
 // runTriggeredBuild. It always terminates the calling runSteps loop, since
 // a get step delegates the rest of the plan to its triggered build(s).
-func runGetStep(ctx context.Context, cfg *Config, jobName string, i int, step Step, remainder []Step, pinned map[string]string, store *Store, skippable map[string]bool, parentHash string, chainUnskippable bool) error {
+func runGetStep(ctx context.Context, cfg *Config, jobName string, i int, step Step, remainder []Step, pinned map[string]string, provider WorkspaceProvider, store *Store, skippable map[string]bool, parentHash string, chainUnskippable bool) error {
 	resource, resourceType, versions, err := resolveGetVersions(ctx, cfg, step, pinned)
 	if err != nil {
 		return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
@@ -195,7 +209,7 @@ func runGetStep(ctx context.Context, cfg *Config, jobName string, i int, step St
 
 		node := Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindGet, StepIndex: i, Resource: resource.Name, Content: content}
 
-		err = runTriggeredBuild(ctx, cfg, jobName, *resource, *resourceType, version, remainder, pinned, store, skippable, node, chainUnskippable)
+		err = runTriggeredBuild(ctx, cfg, jobName, *resource, *resourceType, version, remainder, pinned, provider, store, skippable, node, chainUnskippable)
 		if err != nil {
 			return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 		}
@@ -209,18 +223,21 @@ func runGetStep(ctx context.Context, cfg *Config, jobName string, i int, step St
 // planner (planNonGetNode/taskNode) and the executor (runTaskStep) call
 // resolveTask so plan-time hashing and run-time execution stay in lockstep.
 type resolvedTask struct {
-	name string
-	run  string
-	fix  *FixSpec
+	name    string
+	run     string
+	fix     *FixSpec
+	inputs  []string
+	outputs []string
 }
 
 // resolveTask resolves step into a resolvedTask: a step carrying its own
 // run: is inline and used as-is; otherwise step.Task names a tasks: entry,
-// whose run/fix are used, except the step's own fix:, if set, overrides the
-// referenced task's fix: for this step only.
+// whose run/fix/inputs/outputs are used, except the step's own fix:,
+// inputs:, and outputs:, if set (non-nil), which override the referenced
+// task's for this step only — the same override idiom for all three.
 func resolveTask(cfg *Config, step Step) (resolvedTask, error) {
 	if step.Run != "" {
-		return resolvedTask{name: step.Task, run: step.Run, fix: step.Fix}, nil
+		return resolvedTask{name: step.Task, run: step.Run, fix: step.Fix, inputs: step.Inputs, outputs: step.Outputs}, nil
 	}
 
 	task, err := cfg.FindTask(step.Task)
@@ -233,19 +250,29 @@ func resolveTask(cfg *Config, step Step) (resolvedTask, error) {
 		fix = step.Fix
 	}
 
-	return resolvedTask{name: step.Task, run: task.Run, fix: fix}, nil
+	inputs := task.Inputs
+	if step.Inputs != nil {
+		inputs = step.Inputs
+	}
+
+	outputs := task.Outputs
+	if step.Outputs != nil {
+		outputs = step.Outputs
+	}
+
+	return resolvedTask{name: step.Task, run: task.Run, fix: fix, inputs: inputs, outputs: outputs}, nil
 }
 
 // runTaskStep hashes step against parentHash and, unless that hash is
 // skippable, runs it. It returns the hash to use as parentHash for the
 // next step (unchanged, along with skipped=true, when skipped).
-func runTaskStep(ctx context.Context, cfg *Config, jobName string, i int, step Step, workspaceDir string, store *Store, skippable map[string]bool, parentHash string) (string, bool, error) {
+func runTaskStep(ctx context.Context, cfg *Config, jobName string, i int, step Step, bw BuildWorkspace, store *Store, skippable map[string]bool, parentHash string) (string, bool, error) {
 	rt, err := resolveTask(cfg, step)
 	if err != nil {
 		return "", false, fmt.Errorf("step %d: %w", i, err)
 	}
 
-	content := taskNodeContent(rt.run)
+	content := taskNodeContent(rt, cfg.Workspace)
 
 	hash, err := hashNode(NodeKindTask, content, parentHash)
 	if err != nil {
@@ -265,12 +292,31 @@ func runTaskStep(ctx context.Context, cfg *Config, jobName string, i int, step S
 
 	node := Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindTask, StepIndex: i, Resource: rt.name, Content: content}
 
-	err = runTaskCommand(ctx, cfg, rt, workspaceDir)
+	space, err := bw.TaskSpace(ctx, rt.name, rt.inputs, rt.outputs)
+	if err != nil {
+		wrapped := fmt.Errorf("step %d (task %q): %w", i, rt.name, err)
+		_ = store.RecordNode(ctx, node, jobName, "failed", nil, wrapped)
+		_ = store.RecordJobRun(ctx, jobName, hash, "failed", wrapped)
+
+		return "", false, wrapped
+	}
+	defer closeSpace(space, rt.name)
+
+	err = runTaskCommand(ctx, cfg, rt, space.Dir())
 	if err != nil {
 		_ = store.RecordNode(ctx, node, jobName, "failed", nil, err)
 		_ = store.RecordJobRun(ctx, jobName, hash, "failed", err)
 
 		return "", false, fmt.Errorf("step %d (task %q): %w", i, rt.name, err)
+	}
+
+	err = space.Capture(ctx)
+	if err != nil {
+		wrapped := fmt.Errorf("step %d (task %q): %w", i, rt.name, err)
+		_ = store.RecordNode(ctx, node, jobName, "failed", nil, wrapped)
+		_ = store.RecordJobRun(ctx, jobName, hash, "failed", wrapped)
+
+		return "", false, wrapped
 	}
 
 	err = store.RecordNode(ctx, node, jobName, "succeeded", nil, nil)
@@ -362,7 +408,7 @@ func taskFailureOutput(stdout, stderr string, exitCode int) string {
 
 // runPutStep hashes and always runs step (put steps are never skipped),
 // returning the hash to use as parentHash for the next step.
-func runPutStep(ctx context.Context, cfg *Config, jobName string, i int, step Step, workspaceDir string, store *Store, parentHash string) (string, error) {
+func runPutStep(ctx context.Context, cfg *Config, jobName string, i int, step Step, bw BuildWorkspace, store *Store, parentHash string) (string, error) {
 	resource, err := cfg.FindResource(step.Put)
 	if err != nil {
 		return "", fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
@@ -373,7 +419,7 @@ func runPutStep(ctx context.Context, cfg *Config, jobName string, i int, step St
 		return "", fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
 
-	content := putNodeContent(*resourceType, resource.Source, step.Params)
+	content := putNodeContent(*resourceType, resource.Source, step.Params, step.Inputs, cfg.Workspace)
 
 	hash, err := hashNode(NodeKindPut, content, parentHash)
 	if err != nil {
@@ -386,7 +432,17 @@ func runPutStep(ctx context.Context, cfg *Config, jobName string, i int, step St
 
 	node := Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindPut, StepIndex: i, Resource: resource.Name, Content: content}
 
-	result, err := RunOut(ctx, *resourceType, resource.Source, step.Params, workspaceDir)
+	space, err := bw.PutSpace(ctx, step.Put, step.Inputs)
+	if err != nil {
+		wrapped := fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
+		_ = store.RecordNode(ctx, node, jobName, "failed", nil, wrapped)
+		_ = store.RecordJobRun(ctx, jobName, hash, "failed", wrapped)
+
+		return "", wrapped
+	}
+	defer closeSpace(space, step.Put)
+
+	result, err := RunOut(ctx, *resourceType, resource.Source, step.Params, space.Dir())
 	if err != nil {
 		_ = store.RecordNode(ctx, node, jobName, "failed", nil, err)
 		_ = store.RecordJobRun(ctx, jobName, hash, "failed", err)
@@ -454,26 +510,15 @@ func resolveGetVersions(ctx context.Context, cfg *Config, step Step, cliPinned m
 // into it, runs the remainder of the plan inside it, and tears the
 // workspace down afterward — never sharing it with any other triggered
 // build, including sibling versions fanned out by version:every.
-func runTriggeredBuild(ctx context.Context, cfg *Config, jobName string, resource Resource, resourceType ResourceType, version map[string]any, remainder []Step, pinned map[string]string, store *Store, skippable map[string]bool, node Node, chainUnskippable bool) error {
-	buildWorkspace, err := os.MkdirTemp("", "steps-*")
+func runTriggeredBuild(ctx context.Context, cfg *Config, jobName string, resource Resource, resourceType ResourceType, version map[string]any, remainder []Step, pinned map[string]string, provider WorkspaceProvider, store *Store, skippable map[string]bool, node Node, chainUnskippable bool) error {
+	bw, err := provider.NewBuild(ctx, resource.Name)
 	if err != nil {
 		return fmt.Errorf("could not create workspace for %q: %w", resource.Name, err)
 	}
 
-	slog.Debug("workspace.create", "dir", buildWorkspace, "resource", resource.Name, "version", version)
+	defer closeBuild(bw, resource.Name)
 
-	defer func() {
-		removeErr := os.RemoveAll(buildWorkspace)
-		if removeErr != nil {
-			slog.Error("workspace.remove", "dir", buildWorkspace, "error", removeErr)
-
-			return
-		}
-
-		slog.Debug("workspace.remove", "dir", buildWorkspace)
-	}()
-
-	err = fetchGetStep(ctx, resource, resourceType, version, buildWorkspace)
+	err = fetchGetStep(ctx, resource, resourceType, version, bw)
 	if err != nil {
 		_ = store.RecordNode(ctx, node, jobName, "failed", nil, err)
 		_ = store.RecordJobRun(ctx, jobName, node.Hash, "failed", err)
@@ -486,18 +531,17 @@ func runTriggeredBuild(ctx context.Context, cfg *Config, jobName string, resourc
 		return err
 	}
 
-	return runSteps(ctx, cfg, jobName, remainder, pinned, buildWorkspace, store, skippable, node.Hash, chainUnskippable)
+	return runSteps(ctx, cfg, jobName, remainder, pinned, provider, bw, store, skippable, node.Hash, chainUnskippable)
 }
 
-// fetchGetStep places one version of a resource into workspaceDir/<name>.
-func fetchGetStep(ctx context.Context, resource Resource, resourceType ResourceType, version map[string]any, workspaceDir string) error {
+// fetchGetStep places one version of a resource into bw's resource
+// directory for resource.Name.
+func fetchGetStep(ctx context.Context, resource Resource, resourceType ResourceType, version map[string]any, bw BuildWorkspace) error {
 	fmt.Printf("get: %s (version: %v)\n", resource.Name, version)
 
-	destDir := filepath.Join(workspaceDir, resource.Name)
-
-	err := os.MkdirAll(destDir, 0o750)
+	destDir, err := bw.ResourceDir(ctx, resource.Name)
 	if err != nil {
-		return fmt.Errorf("could not create resource dir %q: %w", destDir, err)
+		return fmt.Errorf("could not create resource dir for %q: %w", resource.Name, err)
 	}
 
 	return RunIn(ctx, resourceType, resource.Source, version, destDir)
