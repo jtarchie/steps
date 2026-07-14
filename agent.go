@@ -833,9 +833,7 @@ const defaultFixPrompt = `A command that must pass has just failed; its output i
 // conversation with the captured failure output. It does no merkle/store
 // recording: the enclosing task step records the overall outcome, and the
 // task's re-run (not the model's word) is the verdict.
-func runFixAgent(ctx context.Context, cfg *Config, task Step, failureOutput, workspaceDir string) error {
-	fix := task.Fix
-
+func runFixAgent(ctx context.Context, cfg *Config, taskName, taskRun string, fix *FixSpec, failureOutput, workspaceDir string) error {
 	// Project the fix spec onto an agent Step so resolveAgentInvocation can
 	// resolve grants/dials/limits exactly as it does for a real agent step.
 	ri, err := resolveAgentInvocation(cfg, Step{
@@ -862,9 +860,9 @@ func runFixAgent(ctx context.Context, cfg *Config, task Step, failureOutput, wor
 	}
 
 	taskTool := ToolSpec{
-		Name:        task.Task,
-		Description: fmt.Sprintf("Re-run the %q task's command. Returns exit_code, stdout, stderr.", task.Task),
-		Run:         task.Run,
+		Name:        taskName,
+		Description: fmt.Sprintf("Re-run the %q task's command. Returns exit_code, stdout, stderr.", taskName),
+		Run:         taskRun,
 	}
 	toolSpecs := append(append([]ToolSpec{}, baseTools...), taskTool)
 
@@ -880,7 +878,7 @@ func runFixAgent(ctx context.Context, cfg *Config, task Step, failureOutput, wor
 
 	prompt := fix.Prompt
 	if prompt == "" {
-		prompt = fmt.Sprintf(defaultFixPrompt, task.Task)
+		prompt = fmt.Sprintf(defaultFixPrompt, taskName)
 	}
 
 	prompt += "\n\n--- failure output ---\n" + truncateToolOutput(failureOutput)

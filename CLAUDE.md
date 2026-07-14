@@ -52,7 +52,7 @@ Under high CPU contention (many tests in parallel), some shell/storage tests fla
 
 ### Core Files
 - **main.go** — CLI entry point; parses args, calls `run()` → `LoadConfig()` → `RunJob()`
-- **config.go** — YAML parsing; defines `Config`, `ResourceType`, `Resource`, `Agent`, `Job`
+- **config.go** — YAML parsing; defines `Config`, `ResourceType`, `Resource`, `Agent`, `Task`, `Job`
 - **job.go** — Job execution; `RunJob()` orchestrates resource discovery, fetch, agent steps, and persistence
 - **agent.go** — Agent step execution; LLM invocation, tool-calling loop, context management, system message building
 - **store.go** — SQLite state persistence; merkle-tree-based caching to skip unchanged work
@@ -92,6 +92,13 @@ golangci-lint run && go test ./... -p 1 && go build -v
 
 ### Custom Tool `required:` Semantics
 A custom tool (a `tools:` entry with `name`/`description`/`run`) may set `required: true` (see `examples/review.yml`'s `post_review`). This marks it as an action that must *succeed* before the step can complete — but **no tool failure, required or not, ever aborts or restarts the conversation.** A failed call (nonzero exit, or the command failing to run at all) always comes back to the model as ordinary data (`{exit_code, stdout, stderr}` or `{"error": ...}`), exactly like `run_shell`, so the model sees what went wrong and can recover in the same session — no cold restart, no wasted turns re-reading files or re-running exploration.
+
+### Top-level `tasks:` Reuse
+A top-level `tasks:` list (mirroring `resources:`/`agents:`) lets a `run:`/`fix:` pair be defined once and reused across jobs (see `examples/self-heal.yml`). A job's `task:` step is disambiguated by whether it carries its own `run:`:
+- **`run:` present** → the step is inline, exactly as before; `tasks:` is never consulted, even if a same-named entry exists there.
+- **`run:` absent** → `task:` instead names a `tasks:` entry, and its `run`/`fix` are used. The step's own `fix:`, if set, overrides the referenced task's `fix:` for that step only — everything else comes from the top-level definition.
+
+This resolution (`resolveTask` in `job.go`) runs identically at plan time (`merkle.go`'s `planNonGetNode`/`taskNode`) and run time (`runTaskStep`/`runTaskCommand`), so a task's merkle hash is always computed from its *resolved* `run:` string — an inline task's hash is unaffected by this feature. An undefined reference surfaces as an ordinary `FindTask` error at plan time, the same as an unknown `get`/`put`/`agent` name.
 
 `required: true` is enforced entirely in `runAgentConversation` by tracking **success** (`exit_code == 0`), not mere invocation:
 - **The model tries to stop while a required tool hasn't yet succeeded** → its next turn is constrained via the provider's `tool_choice` (`forceRequiredTool`, mapped by `genaiopenai` to OpenAI's named `tool_choice`) to a function call for that specific tool — a hard API-level constraint, not a text reminder the model could ignore.

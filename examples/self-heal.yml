@@ -32,6 +32,13 @@ agents:
   - list_dir
   - run_shell
 
+# Reusable task: defined once, referenced below by name (task: unit, no run:)
+# instead of every job re-typing the command and its fix:.
+tasks:
+- name: unit
+  run: cd repo && go test ./...
+  fix: fixer
+
 jobs:
 # The task is the honest primary step: on a green run it is a plain shell
 # command and no model is ever invoked ($0). Only a nonzero exit summons the
@@ -47,11 +54,10 @@ jobs:
   plan:
   - get: repo
     trigger: true
+  # References the top-level tasks: unit entry (no run: here) — its run: and
+  # fix: come from there. A step's own fix:, if set, would override the
+  # referenced task's fix: for this step only; unset here, so fixer applies.
   - task: unit
-    run: cd repo && go test ./...
-    # one word — everything else (prompt, the injected rerun tool, the
-    # re-run verdict) is the definition of fix:.
-    fix: fixer
 
 # The mapping form, for the rare case that needs overrides. attempts here is
 # the (amnesiac) whole-conversation restart count; day-to-day iteration rides

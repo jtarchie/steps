@@ -17,6 +17,7 @@ type Config struct {
 	ResourceTypes []ResourceType `yaml:"resource_types"`
 	Resources     []Resource     `yaml:"resources"`
 	Agents        []Agent        `yaml:"agents"`
+	Tasks         []Task         `yaml:"tasks"`
 	Jobs          []Job          `yaml:"jobs"`
 }
 
@@ -122,6 +123,18 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 	}
 }
 
+// Task is a named, reusable command a `task` step can invoke by name instead
+// of carrying its own `run:` inline. A step with `task: <name>` and no `run:`
+// resolves against this list; a step's own `fix:`, if set, overrides the
+// referenced task's Fix for that step. A step that does supply `run:` is
+// always inline and never consults this list, even if a same-named entry
+// exists here.
+type Task struct {
+	Name string   `yaml:"name"`
+	Run  string   `yaml:"run"`
+	Fix  *FixSpec `yaml:"fix,omitempty"`
+}
+
 // FixSpec is a task step's fix: — the agent to invoke when the task's run:
 // command exits nonzero. A bare scalar names the agent (all other fields
 // derived); a mapping allows per-task overrides. It implements
@@ -183,9 +196,13 @@ type Step struct {
 	// (default) picks the single latest version; "every" runs the rest of
 	// the plan once per version returned by check; a map pins to a specific
 	// version. Mirrors Concourse's get.version field.
-	Version any    `yaml:"version,omitempty"`
-	Task    string `yaml:"task,omitempty"`
-	Run     string `yaml:"run,omitempty"`
+	Version any `yaml:"version,omitempty"`
+	// Task labels a task step. If Run is also set, the step is inline and
+	// Run/Fix below are used as-is. If Run is empty, Task instead names a
+	// tasks: entry (see Task) to resolve run/fix from; this step's own Fix,
+	// if set, overrides the referenced task's Fix for this step only.
+	Task string `yaml:"task,omitempty"`
+	Run  string `yaml:"run,omitempty"`
 	// Fix, on a task step, names an agent to invoke when run: exits nonzero:
 	// the agent is seeded with the captured output and given the task itself
 	// as a rerun tool, then the command is re-run to decide the step. A green
@@ -281,6 +298,21 @@ func (c *Config) FindAgent(name string) (*Agent, error) {
 	}
 
 	return nil, fmt.Errorf("no agent named %q", name)
+}
+
+// FindTask returns the task with the given name, or an error if not found.
+func (c *Config) FindTask(name string) (*Task, error) {
+	slog.Debug("task.find", "name", name)
+
+	for i := range c.Tasks {
+		if c.Tasks[i].Name == name {
+			slog.Debug("task.find", "name", name, "found", true)
+
+			return &c.Tasks[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("no task named %q", name)
 }
 
 // FindJob returns the job with the given name, or an error if not found.

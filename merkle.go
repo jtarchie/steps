@@ -134,13 +134,19 @@ func planSteps(ctx context.Context, cfg *Config, steps []Step, pinned map[string
 // planNonGetNode builds the plan node for a task/put/agent step and reports
 // whether that step makes its chain unskippable: put/agent always do (side
 // effects, non-determinism), and a task does when it has a fix: (its success
-// may depend on non-deterministic agent work).
+// may depend on non-deterministic agent work) — including one inherited from
+// a referenced tasks: entry.
 func planNonGetNode(cfg *Config, step Step, i int, parentHash string) (Node, bool, error) {
 	switch {
 	case step.Task != "":
-		node, err := taskNode(step, i, parentHash)
+		rt, err := resolveTask(cfg, step)
+		if err != nil {
+			return Node{}, false, fmt.Errorf("step %d: %w", i, err)
+		}
 
-		return node, step.Fix != nil, err
+		node, err := taskNode(rt, i, parentHash)
+
+		return node, rt.fix != nil, err
 	case step.Put != "":
 		node, err := putNode(cfg, step, i, parentHash)
 
@@ -186,15 +192,15 @@ func planGetStep(ctx context.Context, cfg *Config, steps []Step, i int, step Ste
 	return chains, nil
 }
 
-func taskNode(step Step, i int, parentHash string) (Node, error) {
-	content := taskNodeContent(step.Run)
+func taskNode(rt resolvedTask, i int, parentHash string) (Node, error) {
+	content := taskNodeContent(rt.run)
 
 	hash, err := hashNode(NodeKindTask, content, parentHash)
 	if err != nil {
-		return Node{}, fmt.Errorf("step %d (task %q): %w", i, step.Task, err)
+		return Node{}, fmt.Errorf("step %d (task %q): %w", i, rt.name, err)
 	}
 
-	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindTask, StepIndex: i, Resource: step.Task, Content: content}, nil
+	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindTask, StepIndex: i, Resource: rt.name, Content: content}, nil
 }
 
 func putNode(cfg *Config, step Step, i int, parentHash string) (Node, error) {

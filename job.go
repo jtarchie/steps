@@ -204,41 +204,78 @@ func runGetStep(ctx context.Context, cfg *Config, jobName string, i int, step St
 	return nil
 }
 
+// resolvedTask is a task step's run/fix, resolved against either the step's
+// own inline fields or a tasks: entry it references by name. Both the merkle
+// planner (planNonGetNode/taskNode) and the executor (runTaskStep) call
+// resolveTask so plan-time hashing and run-time execution stay in lockstep.
+type resolvedTask struct {
+	name string
+	run  string
+	fix  *FixSpec
+}
+
+// resolveTask resolves step into a resolvedTask: a step carrying its own
+// run: is inline and used as-is; otherwise step.Task names a tasks: entry,
+// whose run/fix are used, except the step's own fix:, if set, overrides the
+// referenced task's fix: for this step only.
+func resolveTask(cfg *Config, step Step) (resolvedTask, error) {
+	if step.Run != "" {
+		return resolvedTask{name: step.Task, run: step.Run, fix: step.Fix}, nil
+	}
+
+	task, err := cfg.FindTask(step.Task)
+	if err != nil {
+		return resolvedTask{}, fmt.Errorf("task %q: %w", step.Task, err)
+	}
+
+	fix := task.Fix
+	if step.Fix != nil {
+		fix = step.Fix
+	}
+
+	return resolvedTask{name: step.Task, run: task.Run, fix: fix}, nil
+}
+
 // runTaskStep hashes step against parentHash and, unless that hash is
 // skippable, runs it. It returns the hash to use as parentHash for the
 // next step (unchanged, along with skipped=true, when skipped).
 func runTaskStep(ctx context.Context, cfg *Config, jobName string, i int, step Step, workspaceDir string, store *Store, skippable map[string]bool, parentHash string) (string, bool, error) {
-	content := taskNodeContent(step.Run)
+	rt, err := resolveTask(cfg, step)
+	if err != nil {
+		return "", false, fmt.Errorf("step %d: %w", i, err)
+	}
+
+	content := taskNodeContent(rt.run)
 
 	hash, err := hashNode(NodeKindTask, content, parentHash)
 	if err != nil {
-		return "", false, fmt.Errorf("step %d (task %q): %w", i, step.Task, err)
+		return "", false, fmt.Errorf("step %d (task %q): %w", i, rt.name, err)
 	}
 
 	if skippable[hash] {
-		fmt.Printf("skip: %s\n", step.Task)
-		slog.Info("job.skip", "job", jobName, "index", i, "kind", "task", "task", step.Task, "hash", hash)
+		fmt.Printf("skip: %s\n", rt.name)
+		slog.Info("job.skip", "job", jobName, "index", i, "kind", "task", "task", rt.name, "hash", hash)
 
 		return parentHash, true, nil
 	}
 
-	slog.Debug("job.step", "job", jobName, "index", i, "kind", "task", "task", step.Task, "run", step.Run)
+	slog.Debug("job.step", "job", jobName, "index", i, "kind", "task", "task", rt.name, "run", rt.run)
 
-	fmt.Printf("task: %s\n", step.Task)
+	fmt.Printf("task: %s\n", rt.name)
 
-	node := Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindTask, StepIndex: i, Resource: step.Task, Content: content}
+	node := Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindTask, StepIndex: i, Resource: rt.name, Content: content}
 
-	err = runTaskCommand(ctx, cfg, step, workspaceDir)
+	err = runTaskCommand(ctx, cfg, rt, workspaceDir)
 	if err != nil {
 		_ = store.RecordNode(ctx, node, jobName, "failed", nil, err)
 		_ = store.RecordJobRun(ctx, jobName, hash, "failed", err)
 
-		return "", false, fmt.Errorf("step %d (task %q): %w", i, step.Task, err)
+		return "", false, fmt.Errorf("step %d (task %q): %w", i, rt.name, err)
 	}
 
 	err = store.RecordNode(ctx, node, jobName, "succeeded", nil, nil)
 	if err != nil {
-		return "", false, fmt.Errorf("step %d (task %q): %w", i, step.Task, err)
+		return "", false, fmt.Errorf("step %d (task %q): %w", i, rt.name, err)
 	}
 
 	return hash, false, nil
@@ -250,12 +287,12 @@ func runTaskStep(ctx context.Context, cfg *Config, jobName string, i int, step S
 // fix agent — seeded with that output and given the task itself as a rerun
 // tool — then re-runs the command once; that re-run's exit code is the
 // verdict. A green run never constructs the agent.
-func runTaskCommand(ctx context.Context, cfg *Config, step Step, workspaceDir string) error {
-	if step.Fix == nil {
-		return RunShell(ctx, step.Run, workspaceDir)
+func runTaskCommand(ctx context.Context, cfg *Config, rt resolvedTask, workspaceDir string) error {
+	if rt.fix == nil {
+		return RunShell(ctx, rt.run, workspaceDir)
 	}
 
-	stdout, stderr, exitCode, err := RunShellCaptureFull(ctx, step.Run, workspaceDir)
+	stdout, stderr, exitCode, err := RunShellCaptureFull(ctx, rt.run, workspaceDir)
 	if err != nil {
 		return err
 	}
@@ -266,15 +303,15 @@ func runTaskCommand(ctx context.Context, cfg *Config, step Step, workspaceDir st
 		return nil
 	}
 
-	fmt.Printf("task %q failed (exit %d); invoking fix agent %q\n", step.Task, exitCode, step.Fix.Agent)
+	fmt.Printf("task %q failed (exit %d); invoking fix agent %q\n", rt.name, exitCode, rt.fix.Agent)
 
-	err = runFixAgent(ctx, cfg, step, taskFailureOutput(stdout, stderr, exitCode), workspaceDir)
+	err = runFixAgent(ctx, cfg, rt.name, rt.run, rt.fix, taskFailureOutput(stdout, stderr, exitCode), workspaceDir)
 	if err != nil {
-		return fmt.Errorf("fix agent %q: %w", step.Fix.Agent, err)
+		return fmt.Errorf("fix agent %q: %w", rt.fix.Agent, err)
 	}
 
 	// Verdict: re-run the command (its run:, not its fix:) and gate on it.
-	stdout, stderr, exitCode, err = RunShellCaptureFull(ctx, step.Run, workspaceDir)
+	stdout, stderr, exitCode, err = RunShellCaptureFull(ctx, rt.run, workspaceDir)
 	if err != nil {
 		return err
 	}
@@ -282,7 +319,7 @@ func runTaskCommand(ctx context.Context, cfg *Config, step Step, workspaceDir st
 	printTaskOutput(stdout, stderr)
 
 	if exitCode != 0 {
-		return fmt.Errorf("still failing after fix agent %q (exit %d)", step.Fix.Agent, exitCode)
+		return fmt.Errorf("still failing after fix agent %q (exit %d)", rt.fix.Agent, exitCode)
 	}
 
 	return nil
