@@ -90,6 +90,12 @@ golangci-lint run && go test ./... -p 1 && go build -v
 4. Exit loop when model stops requesting tools or max_turns exceeded
 5. Record output and return
 
+### Custom Tool `required:` Semantics
+A custom tool (a `tools:` entry with `name`/`description`/`run`) may set `required: true` (see `examples/review.yml`'s `post_review`). This marks it as a resource-like action whose failure must fail the pipeline, not just get reported to the model as data it can react to (or ignore):
+- **Nonzero exit, or the command failing to run at all** → the tool call returns a Go error, which aborts the conversation attempt (retried per `attempts:`, then fails the step/job — same as a `put` step's failure).
+- **The model never calls it** → the step also fails, once the conversation ends without every required tool having been successfully invoked (`runAgentConversation` tracks invocations via `agentTools.required`/`requiredToolNames`). This closes the silent-success gap where a model could just claim success without acting.
+- Built-in tools (`read_file`, `list_dir`, `run_shell`) and the fix-agent's injected task-rerun tool are never required — they're intentionally exploratory/iterative, and a failing `run_shell` call reporting `{exit_code, stdout, stderr}` as data for the model to react to is the normal, expected flow.
+
 ### State Caching via Merkle Tree
 - Each resource `get` and `agent` step is content-addressed (merkle tree) with its inputs (pinned versions, source config)
 - After successful execution, the merkle root is stored in SQLite
