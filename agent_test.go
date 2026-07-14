@@ -840,6 +840,33 @@ func TestTruncateToolOutput(t *testing.T) {
 	})
 }
 
+func TestErrorDetail(t *testing.T) {
+	t.Parallel()
+
+	t.Run("short text is trimmed but otherwise unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		if got := errorDetail("  boom  "); got != "boom" {
+			t.Errorf("got %q, want %q", got, "boom")
+		}
+	})
+
+	t.Run("oversized text keeps only the tail, capped at maxErrorDetailBytes", func(t *testing.T) {
+		t.Parallel()
+
+		big := strings.Repeat("a", maxErrorDetailBytes) + "TAIL"
+
+		got := errorDetail(big)
+		if !strings.HasSuffix(got, "TAIL") {
+			t.Errorf("expected the tail to be preserved, got suffix %q", got[len(got)-10:])
+		}
+
+		if len(got) > maxErrorDetailBytes+len("...(truncated)... ") {
+			t.Errorf("errorDetail did not cap length: got %d bytes", len(got))
+		}
+	})
+}
+
 func TestToolSpecUnmarshalYAML(t *testing.T) {
 	t.Parallel()
 

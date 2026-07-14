@@ -403,6 +403,25 @@ func truncateToolOutput(s string) string {
 	return s[:maxToolOutputBytes] + fmt.Sprintf("\n... [truncated %d bytes]", len(s)-maxToolOutputBytes)
 }
 
+// maxErrorDetailBytes caps how much of a failed required tool's stderr gets
+// embedded in the Go error returned up through withRetry, job failure, and
+// the top-level log — a much tighter cap than maxToolOutputBytes, since that
+// text (unlike a tool's response to the model) ends up in a single log line
+// rather than the model's own context.
+const maxErrorDetailBytes = 2_000
+
+// errorDetail returns the tail of s (trimmed), capped at maxErrorDetailBytes
+// — the end of stderr is usually where the actual failure is reported, so
+// keeping the tail rather than the head favors the most useful part.
+func errorDetail(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= maxErrorDetailBytes {
+		return s
+	}
+
+	return "...(truncated)... " + s[len(s)-maxErrorDetailBytes:]
+}
+
 // shellToolResult builds the FunctionResponse map for a shell-backed tool
 // (run_shell and every custom tool), truncating the captured streams.
 func shellToolResult(ctx context.Context, command, dir string) map[string]any {
@@ -501,11 +520,11 @@ func execCustomTool(spec ToolSpec) toolImpl {
 			// required tool that fails to run is silently treated as
 			// optional.
 			if errMsg, ok := result["error"].(string); ok {
-				return result, fmt.Errorf("required tool %q failed to run: %s", spec.Name, errMsg)
+				return result, fmt.Errorf("required tool %q failed to run: %s", spec.Name, errorDetail(errMsg))
 			}
 
 			if exitCode, ok := result["exit_code"].(int); ok && exitCode != 0 {
-				return result, fmt.Errorf("required tool %q exited %d: %s", spec.Name, exitCode, strings.TrimSpace(fmt.Sprint(result["stderr"])))
+				return result, fmt.Errorf("required tool %q exited %d: %s", spec.Name, exitCode, errorDetail(fmt.Sprint(result["stderr"])))
 			}
 		}
 
