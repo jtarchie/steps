@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -34,7 +35,18 @@ func (f *fakeLLM) GenerateContent(_ context.Context, req *model.LLMRequest, _ bo
 	return func(yield func(*model.LLMResponse, error) bool) {
 		i := f.calls
 		f.calls++
-		f.requests = append(f.requests, req)
+		// runAgentConversation reuses and mutates the same *LLMRequest across
+		// turns (e.g. Config.ToolConfig is set then cleared) — record a
+		// shallow copy of req and req.Config so a later turn's mutation
+		// doesn't retroactively change what an earlier recorded request
+		// looked like at call time.
+		snapshot := *req
+		if req.Config != nil {
+			cfg := *req.Config
+			snapshot.Config = &cfg
+		}
+
+		f.requests = append(f.requests, &snapshot)
 
 		if i < len(f.errs) && f.errs[i] != nil {
 			yield(nil, f.errs[i])
@@ -177,22 +189,74 @@ func requiredToolConversation(t *testing.T, dir string) agentConversation {
 	}
 }
 
-func TestRunAgentConversationRequiredToolNeverCalled(t *testing.T) {
+// TestRunAgentConversationForcesRequiredToolCall drives a model that tries
+// to stop without calling the required tool, then (once forced) complies —
+// simulating a provider that honors tool_choice, which real OpenAI-compatible
+// backends do (see genaiopenai's ToolConfig mapping). It also asserts the
+// forcing request itself was actually sent, not just that things worked out.
+func TestRunAgentConversationForcesRequiredToolCall(t *testing.T) {
 	t.Parallel()
 
 	fake := &fakeLLM{
 		responses: []*model.LLMResponse{
 			{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "looks fine, done"}}}},
+			{Content: &genai.Content{
+				Role:  genai.RoleModel,
+				Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "call1", Name: "post_review", Args: map[string]any{}}}},
+			}},
+			{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "posted"}}}},
 		},
 	}
 
-	_, _, err := runAgentConversation(context.Background(), fake, requiredToolConversation(t, t.TempDir()))
-	if err == nil {
-		t.Fatal("expected an error: the model finished without calling the required tool")
+	content, _, err := runAgentConversation(context.Background(), fake, requiredToolConversation(t, t.TempDir()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !strings.Contains(err.Error(), "post_review") {
-		t.Errorf("expected the error to name the missing tool, got: %v", err)
+	if content != "posted" {
+		t.Errorf("content = %q, want %q", content, "posted")
+	}
+
+	if len(fake.requests) < 2 {
+		t.Fatalf("expected at least 2 requests, got %d", len(fake.requests))
+	}
+
+	forcedCfg := fake.requests[1].Config.ToolConfig
+	if forcedCfg == nil || forcedCfg.FunctionCallingConfig == nil {
+		t.Fatal("expected the second request to force a tool call via ToolConfig")
+	}
+
+	fcc := forcedCfg.FunctionCallingConfig
+	if fcc.Mode != genai.FunctionCallingConfigModeAny || !slices.Contains(fcc.AllowedFunctionNames, "post_review") {
+		t.Errorf("expected ToolConfig to force post_review specifically, got mode=%v names=%v", fcc.Mode, fcc.AllowedFunctionNames)
+	}
+}
+
+// TestRunAgentConversationRequiredToolNeverCalled covers the safety bound: a
+// model that keeps trying to stop without calling the required tool even
+// after being forced (our fakeLLM doesn't actually honor tool_choice, unlike
+// a real provider) must still hit maxTurns rather than loop forever.
+func TestRunAgentConversationRequiredToolNeverCalled(t *testing.T) {
+	t.Parallel()
+
+	stopResp := &model.LLMResponse{
+		Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "looks fine, done"}}},
+	}
+
+	responses := make([]*model.LLMResponse, maxAgentTurns)
+	for i := range responses {
+		responses[i] = stopResp
+	}
+
+	fake := &fakeLLM{responses: responses}
+
+	_, turns, err := runAgentConversation(context.Background(), fake, requiredToolConversation(t, t.TempDir()))
+	if err == nil {
+		t.Fatal("expected an error: the required tool was never called even after being forced")
+	}
+
+	if turns != maxAgentTurns {
+		t.Errorf("turns = %d, want %d", turns, maxAgentTurns)
 	}
 }
 

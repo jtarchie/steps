@@ -745,13 +745,23 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 
 // runAgentConversation runs one full attempt: an initial system+user
 // message, then up to conv.maxTurns request/tool-execute/append round trips,
-// terminating when the model responds with no tool calls. There is no
-// turn-level checkpointing — a retry (see withRetry in runAgentStep) restarts
-// the whole conversation from scratch. If a tool call already had a side
-// effect (e.g. posting a PR review) before a later turn failed, a retry may
-// re-invoke it again; pipeline prompts should tell the model to check current
-// state before acting, the same caveat Concourse's own task.attempts carries
-// for non-idempotent tasks.
+// terminating when the model responds with no tool calls while every
+// required tool has been called. There is no turn-level checkpointing — a
+// retry (see withRetry in runAgentStep) restarts the whole conversation from
+// scratch. If a tool call already had a side effect (e.g. posting a PR
+// review) before a later turn failed, a retry may re-invoke it again;
+// pipeline prompts should tell the model to check current state before
+// acting, the same caveat Concourse's own task.attempts carries for
+// non-idempotent tasks.
+//
+// If the model tries to stop without having called every required tool, its
+// next turn is constrained via the provider's tool_choice (see
+// forceRequiredTool) to a function call for one missing tool — a hard
+// API-level constraint the model cannot decline, not a text reminder it
+// could still ignore. One missing tool is forced per turn (repeated as
+// needed for more than one), still bounded by maxTurns: a provider that
+// doesn't honor tool_choice, or a model that errors out anyway, still hits
+// the turn cap rather than looping forever.
 func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversation) (string, int, error) {
 	req := buildAgentRequest(conv)
 	invoked := make(map[string]bool, len(conv.tools.required))
@@ -766,12 +776,17 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 
 		calls, text := collectParts(resp.Content)
 		if len(calls) == 0 {
-			if missing := missingRequiredTools(conv.tools.required, invoked); missing != "" {
-				return "", turn + 1, fmt.Errorf("agent finished without calling required tool(s): %s", missing)
+			missing := missingRequiredTools(conv.tools.required, invoked)
+			if len(missing) == 0 {
+				return text, turn + 1, nil
 			}
 
-			return text, turn + 1, nil
+			forceRequiredTool(req, missing[0])
+
+			continue
 		}
+
+		req.Config.ToolConfig = nil // clear any forcing from the prior turn — a satisfied or voluntary call, either way the model chooses freely again
 
 		for _, call := range calls {
 			invoked[call.Name] = true
@@ -791,12 +806,27 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 	return "", conv.maxTurns, fmt.Errorf("agent exceeded %d turns without a final response", conv.maxTurns)
 }
 
-// missingRequiredTools returns a comma-joined, sorted list of names present
-// in required but not in invoked, or "" if none are missing. A required
-// tool's own failure already aborts the attempt (see execCustomTool), so by
-// the time this runs, every name in invoked was called successfully — this
-// only needs to catch the case where the model never called it at all.
-func missingRequiredTools(required, invoked map[string]bool) string {
+// forceRequiredTool constrains req's next generateOnce call to a function
+// call for exactly name, via the provider's tool_choice mechanism (see
+// genaiopenai's ToolConfig → tool_choice mapping) — the model cannot decline
+// or reply with plain text on that turn. Cleared once any tool call comes
+// back (see runAgentConversation) so later turns aren't stuck forced to the
+// same name.
+func forceRequiredTool(req *model.LLMRequest, name string) {
+	req.Config.ToolConfig = &genai.ToolConfig{
+		FunctionCallingConfig: &genai.FunctionCallingConfig{
+			Mode:                 genai.FunctionCallingConfigModeAny,
+			AllowedFunctionNames: []string{name},
+		},
+	}
+}
+
+// missingRequiredTools returns a sorted list of names present in required
+// but not in invoked, or nil if none are missing. A required tool's own
+// failure already aborts the attempt (see execCustomTool), so by the time
+// this runs, every name in invoked was called successfully — this only
+// needs to catch the case where the model never called it at all.
+func missingRequiredTools(required, invoked map[string]bool) []string {
 	missing := make([]string, 0, len(required))
 
 	for name := range required {
@@ -807,7 +837,7 @@ func missingRequiredTools(required, invoked map[string]bool) string {
 
 	sort.Strings(missing)
 
-	return strings.Join(missing, ", ")
+	return missing
 }
 
 // defaultFixPrompt is used when a task's fix: supplies no prompt of its own.
