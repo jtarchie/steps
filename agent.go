@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	genaiopenai "github.com/achetronic/adk-utils-go/genai/openai"
 	"google.golang.org/adk/v2/model"
@@ -435,14 +436,21 @@ const maxErrorDetailBytes = 2_000
 
 // errorDetail returns the tail of s (trimmed), capped at maxErrorDetailBytes
 // — the end of stderr is usually where the actual failure is reported, so
-// keeping the tail rather than the head favors the most useful part.
+// keeping the tail rather than the head favors the most useful part. The cut
+// point is advanced to the next UTF-8 rune boundary so a multi-byte
+// character straddling the byte cap isn't split into invalid UTF-8.
 func errorDetail(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) <= maxErrorDetailBytes {
 		return s
 	}
 
-	return "...(truncated)... " + s[len(s)-maxErrorDetailBytes:]
+	start := len(s) - maxErrorDetailBytes
+	for start < len(s) && !utf8.RuneStart(s[start]) {
+		start++
+	}
+
+	return "...(truncated)... " + s[start:]
 }
 
 // shellToolResult builds the FunctionResponse map for a shell-backed tool

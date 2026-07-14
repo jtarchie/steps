@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
@@ -962,6 +963,20 @@ func TestErrorDetail(t *testing.T) {
 
 		if len(got) > maxErrorDetailBytes+len("...(truncated)... ") {
 			t.Errorf("errorDetail did not cap length: got %d bytes", len(got))
+		}
+	})
+
+	t.Run("the cut point never splits a multi-byte rune", func(t *testing.T) {
+		t.Parallel()
+
+		// "a" + "é" (2 bytes) + suffixLen-1 "b"s positions the naive cut
+		// point (len(s) - maxErrorDetailBytes) exactly on é's second byte —
+		// a UTF-8 continuation byte, not a valid slice-and-keep boundary.
+		big := "a" + "é" + strings.Repeat("b", maxErrorDetailBytes-1)
+
+		got := errorDetail(big)
+		if !utf8.ValidString(got) {
+			t.Fatalf("errorDetail produced invalid UTF-8: %q", got)
 		}
 	})
 }
