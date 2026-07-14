@@ -154,6 +154,41 @@ func TestRunAgentConversationExceedsMaxTurns(t *testing.T) {
 	}
 }
 
+func TestToolResponseParts(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	_, registry, err := buildAgentTools([]ToolSpec{
+		{Name: "fail_a", Run: "exit 1", Required: true},
+		{Name: "fail_b", Run: "exit 1", Required: true},
+		{Name: "ok", Run: "true"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	calls := []*genai.FunctionCall{
+		{ID: "1", Name: "fail_a"},
+		{ID: "2", Name: "fail_b"},
+		{ID: "3", Name: "ok"},
+	}
+
+	parts, err := toolResponseParts(context.Background(), calls, dir, registry)
+
+	if len(parts) != 3 {
+		t.Fatalf("expected a response part for every call, even after a fatal one, got %d", len(parts))
+	}
+
+	if err == nil {
+		t.Fatal("expected a joined error from the two required tool failures")
+	}
+
+	if !strings.Contains(err.Error(), "fail_a") || !strings.Contains(err.Error(), "fail_b") {
+		t.Errorf("expected both required failures in the joined error, got: %v", err)
+	}
+}
+
 func TestWithRetryRetriesAgentConversationOnFailure(t *testing.T) {
 	t.Parallel()
 

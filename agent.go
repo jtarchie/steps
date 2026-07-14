@@ -873,18 +873,19 @@ func collectParts(content *genai.Content) (calls []*genai.FunctionCall, text str
 
 // toolResponseParts executes each requested tool and packages the results as
 // FunctionResponse parts to feed back on the next turn. Every call in the
-// turn still runs (a fatal tool call doesn't short-circuit its siblings),
-// but the first fatal error is returned alongside the parts so the caller
-// can abort the conversation instead of feeding it back to the model.
+// turn still runs (a fatal tool call doesn't short-circuit its siblings);
+// every fatal error encountered is joined and returned alongside the parts,
+// so the caller can abort the conversation with the full picture instead of
+// just the first of several required tools that failed in the same turn.
 func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, dir string, registry map[string]toolImpl) ([]*genai.Part, error) {
 	parts := make([]*genai.Part, 0, len(calls))
 
-	var firstErr error
+	var errs []error
 
 	for _, call := range calls {
 		response, err := executeAgentTool(ctx, call, dir, registry)
-		if err != nil && firstErr == nil {
-			firstErr = err
+		if err != nil {
+			errs = append(errs, err)
 		}
 
 		parts = append(parts, &genai.Part{
@@ -892,7 +893,7 @@ func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, dir str
 		})
 	}
 
-	return parts, firstErr
+	return parts, errors.Join(errs...)
 }
 
 // resolveAgentDir joins and validates a step's working directory.
