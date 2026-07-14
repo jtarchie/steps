@@ -1,16 +1,17 @@
 resource_types:
-- name: git
+- name: github
   config:
     check: |
-      git ls-remote {{ .source.uri }} {{ .source.branch }} | cut -f1 | jq -R '{ref: .}' | jq -s .
+      gh api repos/{{ .source.owner }}/{{ .source.repo }}/branches/{{ .source.branch }} -q '.commit.sha' | jq -R '{ref: .}' | jq -s .
     in: |
-      git clone --branch {{ .source.branch }} {{ .source.uri }} . && git checkout {{ .version.ref }}
+      gh repo clone {{ .source.owner }}/{{ .source.repo }} . && git -C . checkout {{ .version.ref }}
 
 resources:
 - name: repo
-  type: git
+  type: github
   source:
-    uri: https://github.com/jtarchie/ci
+    owner: jtarchie
+    repo: ci
     branch: main
 
 # A reusable worker: model connection, persona, and the tool grant. A fix
