@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -167,10 +168,32 @@ func newAgentLLM(baseURL, modelName, apiKey string) model.LLM {
 type toolImpl func(ctx context.Context, args map[string]any, dir string) (map[string]any, error)
 
 // agentTools bundles what buildAgentTools produced: the declarations sent
-// to the model and the registry used to execute the calls it makes.
+// to the model, the registry used to execute the calls it makes, and the
+// subset of tool names marked required: true — see requiredToolNames.
 type agentTools struct {
 	decls    *genai.Tool
 	registry map[string]toolImpl
+	required map[string]bool
+}
+
+// requiredToolNames returns the set of tool names in specs marked
+// required: true. A required tool's failure already aborts the attempt (see
+// execCustomTool), but that alone doesn't guarantee the model ever called it
+// — it could just as easily finish the conversation without calling it at
+// all and still have the step report success. runAgentConversation uses
+// this set to reject that case: every required tool must be invoked (and,
+// since a failed call already aborts the attempt, therefore succeed) at
+// least once before an attempt can end successfully.
+func requiredToolNames(specs []ToolSpec) map[string]bool {
+	required := make(map[string]bool, len(specs))
+
+	for _, spec := range specs {
+		if spec.Required {
+			required[toolSpecName(spec)] = true
+		}
+	}
+
+	return required
 }
 
 type builtinTool struct {
@@ -723,6 +746,7 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 // for non-idempotent tasks.
 func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversation) (string, int, error) {
 	req := buildAgentRequest(conv)
+	invoked := make(map[string]bool, len(conv.tools.required))
 
 	for turn := range conv.maxTurns {
 		resp, err := generateOnce(ctx, llm, req)
@@ -734,7 +758,15 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 
 		calls, text := collectParts(resp.Content)
 		if len(calls) == 0 {
+			if missing := missingRequiredTools(conv.tools.required, invoked); missing != "" {
+				return "", turn + 1, fmt.Errorf("agent finished without calling required tool(s): %s", missing)
+			}
+
 			return text, turn + 1, nil
+		}
+
+		for _, call := range calls {
+			invoked[call.Name] = true
 		}
 
 		parts, toolErr := toolResponseParts(ctx, calls, conv.dir, conv.tools.registry)
@@ -749,6 +781,25 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 	}
 
 	return "", conv.maxTurns, fmt.Errorf("agent exceeded %d turns without a final response", conv.maxTurns)
+}
+
+// missingRequiredTools returns a comma-joined, sorted list of names present
+// in required but not in invoked, or "" if none are missing. A required
+// tool's own failure already aborts the attempt (see execCustomTool), so by
+// the time this runs, every name in invoked was called successfully — this
+// only needs to catch the case where the model never called it at all.
+func missingRequiredTools(required, invoked map[string]bool) string {
+	missing := make([]string, 0, len(required))
+
+	for name := range required {
+		if !invoked[name] {
+			missing = append(missing, name)
+		}
+	}
+
+	sort.Strings(missing)
+
+	return strings.Join(missing, ", ")
 }
 
 // defaultFixPrompt is used when a task's fix: supplies no prompt of its own.
@@ -820,7 +871,7 @@ func runFixAgent(ctx context.Context, cfg *Config, task Step, failureOutput, wor
 		system:   buildSystemMessage(ri.persona, dir),
 		prompt:   prompt,
 		dir:      dir,
-		tools:    agentTools{decls: decls, registry: registry},
+		tools:    agentTools{decls: decls, registry: registry, required: requiredToolNames(toolSpecs)},
 		params:   ri.genParams,
 		maxTurns: ri.maxTurns,
 	}
@@ -961,7 +1012,7 @@ func runAgentStep(ctx context.Context, cfg *Config, jobName string, i int, step 
 		system:   buildSystemMessage(ri.persona, dir),
 		prompt:   step.Prompt,
 		dir:      dir,
-		tools:    agentTools{decls: decls, registry: registry},
+		tools:    agentTools{decls: decls, registry: registry, required: requiredToolNames(ri.toolSpecs)},
 		params:   ri.genParams,
 		maxTurns: ri.maxTurns,
 	}

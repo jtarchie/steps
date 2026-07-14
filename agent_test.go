@@ -154,6 +154,70 @@ func TestRunAgentConversationExceedsMaxTurns(t *testing.T) {
 	}
 }
 
+// requiredToolConversation builds an agentConversation with a single
+// required: true custom tool ("post_review", always succeeds if called), so
+// tests can drive a fakeLLM that either calls it or skips straight to a
+// final answer.
+func requiredToolConversation(t *testing.T, dir string) agentConversation {
+	t.Helper()
+
+	specs := []ToolSpec{{Name: "post_review", Run: "true", Required: true}}
+
+	decls, registry, err := buildAgentTools(specs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return agentConversation{
+		prompt:   "review it",
+		dir:      dir,
+		tools:    agentTools{decls: decls, registry: registry, required: requiredToolNames(specs)},
+		maxTurns: maxAgentTurns,
+	}
+}
+
+func TestRunAgentConversationRequiredToolNeverCalled(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeLLM{
+		responses: []*model.LLMResponse{
+			{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "looks fine, done"}}}},
+		},
+	}
+
+	_, _, err := runAgentConversation(context.Background(), fake, requiredToolConversation(t, t.TempDir()))
+	if err == nil {
+		t.Fatal("expected an error: the model finished without calling the required tool")
+	}
+
+	if !strings.Contains(err.Error(), "post_review") {
+		t.Errorf("expected the error to name the missing tool, got: %v", err)
+	}
+}
+
+func TestRunAgentConversationRequiredToolCalled(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeLLM{
+		responses: []*model.LLMResponse{
+			{Content: &genai.Content{
+				Role:  genai.RoleModel,
+				Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "call1", Name: "post_review", Args: map[string]any{}}}},
+			}},
+			{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "posted"}}}},
+		},
+	}
+
+	content, _, err := runAgentConversation(context.Background(), fake, requiredToolConversation(t, t.TempDir()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if content != "posted" {
+		t.Errorf("content = %q, want %q", content, "posted")
+	}
+}
+
 func TestToolResponseParts(t *testing.T) {
 	t.Parallel()
 
