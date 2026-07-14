@@ -62,6 +62,12 @@ jobs:
     trigger: true
   - agent: reviewer
     dir: prs
+    # attempts: 3 retries the whole conversation if a required tool (like
+    # post_review) fails partway through. post_review isn't idempotent —
+    # gh doesn't stop you posting the same review twice — so a retry after
+    # a partial success (post succeeded, a later turn errored) could double
+    # post. The prompt's "check gh pr view first" instruction is what
+    # prevents that; if you change this prompt, keep that check.
     attempts: 3
     # tools omitted -> inherits all of the agent's granted tools
     prompt: |
