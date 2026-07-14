@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestRunShellCaptureFull(t *testing.T) {
@@ -63,6 +64,35 @@ func TestRunShellCaptureFull(t *testing.T) {
 			t.Error("expected an error when cwd doesn't exist")
 		}
 	})
+}
+
+// TestRunShellCaptureFullSignalKilled guards against exitCodeOf's -1
+// sentinel being ambiguous between "never started" and "ran, then
+// signal-killed" — both produce ExitCode() == -1, so a naive check
+// misclassifies a context-timeout kill as a start failure and drops its
+// captured output.
+func TestRunShellCaptureFullSignalKilled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	// exec replaces the shell with sleep (same PID), so the context's
+	// SIGKILL lands directly on it instead of orphaning a grandchild that
+	// would keep the output pipe open until it exits on its own — keeps
+	// this test fast instead of blocking for the full sleep duration.
+	stdout, _, exitCode, err := RunShellCaptureFull(ctx, "echo partial; exec sleep 5", t.TempDir())
+	if err != nil {
+		t.Fatalf("a signal-killed process must be reported as data, not a Go error (regression: it was misclassified as \"failed to start\"): %v", err)
+	}
+
+	if stdout != "partial\n" {
+		t.Errorf("stdout = %q, want the output captured before the kill", stdout)
+	}
+
+	if exitCode != -1 {
+		t.Errorf("exitCode = %d, want -1 for a signal-killed process", exitCode)
+	}
 }
 
 func TestRunShellCapture(t *testing.T) {

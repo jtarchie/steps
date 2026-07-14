@@ -12,9 +12,11 @@ import (
 )
 
 // exitCodeOf extracts a process's exit code from cmd.Run's error (0 for a
-// nil error). -1 means the process never started at all (e.g. a bad cwd or
-// permission error) rather than exiting nonzero — callers that care about
-// that distinction check for it explicitly.
+// nil error). A signal-killed process (e.g. one cut off by a context
+// timeout) is also an *exec.ExitError, and Go reports its ExitCode() as -1 —
+// the same sentinel a never-started process would need. So -1 here is
+// ambiguous by itself; callers that must tell "ran but was killed" apart
+// from "never started at all" use processStarted, not this return value.
 func exitCodeOf(err error) int {
 	if err == nil {
 		return 0
@@ -26,6 +28,21 @@ func exitCodeOf(err error) int {
 	}
 
 	return -1
+}
+
+// processStarted reports whether cmd.Run's error indicates the process
+// actually started — and then exited nonzero or was killed by a signal — as
+// opposed to never starting at all (bad cwd, permission error, missing
+// interpreter). Both cases can produce exitCodeOf(err) == -1, so this is the
+// only reliable way to distinguish them.
+func processStarted(err error) bool {
+	if err == nil {
+		return true
+	}
+
+	var exitErr *exec.ExitError
+
+	return errors.As(err, &exitErr)
 }
 
 // RunShell runs command via `sh -c command` with cwd as its working
@@ -107,10 +124,11 @@ func RunShellCaptureFull(ctx context.Context, command, cwd string) (stdout, stde
 
 	runErr := cmd.Run()
 
-	code := exitCodeOf(runErr)
-	if runErr != nil && code == -1 {
+	if !processStarted(runErr) {
 		return "", "", -1, fmt.Errorf("command %q failed to start: %w", command, runErr)
 	}
+
+	code := exitCodeOf(runErr)
 
 	slog.Debug("shell.capture_full", "command", command, "cwd", cwd, "exit_code", code)
 
