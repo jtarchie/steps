@@ -64,3 +64,33 @@ func TestRunShellCaptureFull(t *testing.T) {
 		}
 	})
 }
+
+func TestRunShellCapture(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns captured stdout on success", func(t *testing.T) {
+		t.Parallel()
+
+		out, err := RunShellCapture(context.Background(), "echo hello", t.TempDir())
+		if err != nil {
+			t.Fatalf("RunShellCapture: %v", err)
+		}
+
+		if string(out) != "hello\n" {
+			t.Errorf("out = %q, want %q", out, "hello\n")
+		}
+	})
+
+	t.Run("a nonzero exit is a Go error, unlike RunShellCaptureFull", func(t *testing.T) {
+		t.Parallel()
+
+		out, err := RunShellCapture(context.Background(), "echo partial; exit 1", t.TempDir())
+		if err == nil {
+			t.Fatal("expected an error for a nonzero exit")
+		}
+
+		if out != nil {
+			t.Errorf("out = %q, want nil on error", out)
+		}
+	})
+}

@@ -88,10 +88,15 @@ type ToolSpec struct {
 	Name        string // custom tool: function name exposed to the model
 	Description string // custom tool: description shown to the model
 	Run         string // custom tool: sh -c template, {{ .args.X }} interpolated
+	// Required marks a custom tool's command as a resource-like action that
+	// must succeed: a nonzero exit aborts the agent step (and, once attempts
+	// are exhausted, the job) instead of being reported to the model as
+	// {"error": ...} data for it to react to. Ignored on builtins.
+	Required bool
 }
 
 // UnmarshalYAML decodes a ToolSpec from either a scalar (builtin name) or a
-// mapping ({name, description, run}) YAML node.
+// mapping ({name, description, run, required}) YAML node.
 func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias kinds that can't appear in a decoded sequence element
 	case yaml.ScalarNode:
@@ -101,6 +106,7 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 			Name        string `yaml:"name"`
 			Description string `yaml:"description"`
 			Run         string `yaml:"run"`
+			Required    bool   `yaml:"required"`
 		}
 
 		err := value.Decode(&m)
@@ -108,7 +114,7 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 			return fmt.Errorf("agent tool: %w", err)
 		}
 
-		t.Name, t.Description, t.Run = m.Name, m.Description, m.Run
+		t.Name, t.Description, t.Run, t.Required = m.Name, m.Description, m.Run, m.Required
 
 		return nil
 	default:

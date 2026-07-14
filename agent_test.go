@@ -727,7 +727,11 @@ func TestExecCustomTool(t *testing.T) {
 	t.Run("renders args and shells out", func(t *testing.T) {
 		t.Parallel()
 
-		result := impl(context.Background(), map[string]any{"name": "world"}, dir)
+		result, err := impl(context.Background(), map[string]any{"name": "world"}, dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
 		if result["error"] != nil {
 			t.Fatalf("unexpected error: %v", result["error"])
 		}
@@ -740,9 +744,43 @@ func TestExecCustomTool(t *testing.T) {
 	t.Run("missing required arg yields an error map, not a Go error", func(t *testing.T) {
 		t.Parallel()
 
-		result := impl(context.Background(), map[string]any{}, dir)
+		result, err := impl(context.Background(), map[string]any{}, dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
 		if result["error"] == nil {
 			t.Error("expected an \"error\" key in the result map")
+		}
+	})
+
+	t.Run("required tool returns a Go error on nonzero exit", func(t *testing.T) {
+		t.Parallel()
+
+		requiredImpl := execCustomTool(ToolSpec{Name: "fail", Run: "exit 1", Required: true})
+
+		result, err := requiredImpl(context.Background(), map[string]any{}, dir)
+		if err == nil {
+			t.Fatal("expected a fatal error for a required tool's nonzero exit")
+		}
+
+		if result["exit_code"] != 1 {
+			t.Errorf("exit_code = %v, want 1", result["exit_code"])
+		}
+	})
+
+	t.Run("non-required tool reports nonzero exit as data, not an error", func(t *testing.T) {
+		t.Parallel()
+
+		optionalImpl := execCustomTool(ToolSpec{Name: "fail", Run: "exit 1"})
+
+		result, err := optionalImpl(context.Background(), map[string]any{}, dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if result["exit_code"] != 1 {
+			t.Errorf("exit_code = %v, want 1", result["exit_code"])
 		}
 	})
 }
@@ -866,7 +904,7 @@ func TestResolveAgentPath(t *testing.T) {
 	})
 }
 
-func TestExecReadFileAndListDir(t *testing.T) {
+func TestExecReadFile(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -879,7 +917,11 @@ func TestExecReadFileAndListDir(t *testing.T) {
 	t.Run("read_file returns content", func(t *testing.T) {
 		t.Parallel()
 
-		result := execReadFile(context.Background(), map[string]any{"path": "a.txt"}, dir)
+		result, err := execReadFile(context.Background(), map[string]any{"path": "a.txt"}, dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
 		if result["content"] != "hello" {
 			t.Errorf("content = %v, want %q", result["content"], "hello")
 		}
@@ -888,7 +930,11 @@ func TestExecReadFileAndListDir(t *testing.T) {
 	t.Run("read_file rejects traversal", func(t *testing.T) {
 		t.Parallel()
 
-		result := execReadFile(context.Background(), map[string]any{"path": "../../etc/passwd"}, dir)
+		result, err := execReadFile(context.Background(), map[string]any{"path": "../../etc/passwd"}, dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
 		if result["error"] == nil {
 			t.Error("expected an error for a traversal path")
 		}
@@ -897,16 +943,34 @@ func TestExecReadFileAndListDir(t *testing.T) {
 	t.Run("read_file requires path", func(t *testing.T) {
 		t.Parallel()
 
-		result := execReadFile(context.Background(), map[string]any{}, dir)
+		result, err := execReadFile(context.Background(), map[string]any{}, dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
 		if result["error"] == nil {
 			t.Error("expected an error for a missing path argument")
 		}
 	})
+}
+
+func TestExecListDir(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	t.Run("list_dir defaults to the working directory", func(t *testing.T) {
 		t.Parallel()
 
-		result := execListDir(context.Background(), map[string]any{}, dir)
+		result, err := execListDir(context.Background(), map[string]any{}, dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		entries, ok := result["entries"].([]map[string]any)
 		if !ok || len(entries) != 1 {

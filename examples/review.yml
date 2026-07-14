@@ -1,7 +1,7 @@
 resource_types:
 - name: pull-request
   config:
-    check: gh pr list --json id,title,number,createdAt,updatedAt --repo {{ .source.repo }} --state open -q 'sort_by(.updatedAt)'
+    check: gh pr list --json id,title,number,createdAt,updatedAt,headRefOid --repo {{ .source.repo }} --state open -q 'sort_by(.updatedAt)'
     in: gh repo clone {{ .source.repo }} . && gh pr checkout {{ .version.number }}
     out:  gh pr update-branch --repo {{ .source.repo }} {{ .version.number }}
 
@@ -17,7 +17,7 @@ resources:
 agents:
 - name: reviewer
   source:
-    model: openrouter/anthropic/claude-3.5-sonnet
+    model: lmstudio/google/gemma-4-e4b
     # endpoint: derived from the "openrouter/" prefix (openrouter.ai/api/v1/)
     # api_key_env: defaults to OPENROUTER_API_KEY
     #
@@ -47,8 +47,12 @@ agents:
   - list_dir
   - run_shell
   - name: post_review
-    description: Post a review verdict on the current PR. action is --approve or --comment.
-    run: gh pr review {{ .args.action }} -b "{{ .args.body }}"
+    description: Post a review verdict on the current PR. action is approve or comment.
+    run: gh pr review --{{ .args.action }} -b "{{ .args.body }}"
+    # required: true makes a nonzero exit (e.g. a malformed gh invocation)
+    # fail the step/job outright, instead of being handed back to the model
+    # as data it can silently shrug off in its final summary.
+    required: true
 
 jobs:
 # Full review: can read, run read-only git/gh, and post a verdict.
@@ -74,7 +78,6 @@ jobs:
 - name: triage
   plan:
   - get: prs
-    trigger: true
   - agent: reviewer
     dir: prs
     attempts: 1

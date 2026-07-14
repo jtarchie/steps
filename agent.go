@@ -157,10 +157,14 @@ func newAgentLLM(baseURL, modelName, apiKey string) model.LLM {
 }
 
 // toolImpl executes one resolved tool against dir, given the model's args.
-// It returns the map sent back as the FunctionResponse — never a Go error;
-// failures are reported to the model as {"error": ...} data so it can react
-// on its next turn instead of aborting the whole attempt.
-type toolImpl func(ctx context.Context, args map[string]any, dir string) map[string]any
+// It returns the map sent back as the FunctionResponse, plus an error. Most
+// failures are reported to the model as {"error": ...} data (err is nil) so
+// it can react on its next turn instead of aborting the whole attempt; a
+// non-nil err means the failure is fatal to the whole agent step — currently
+// only a required: true custom tool's nonzero exit does this, mirroring how
+// a put step's failure always aborts the job rather than being handed to
+// anything for a decision.
+type toolImpl func(ctx context.Context, args map[string]any, dir string) (map[string]any, error)
 
 // agentTools bundles what buildAgentTools produced: the declarations sent
 // to the model and the registry used to execute the calls it makes.
@@ -414,26 +418,26 @@ func shellToolResult(ctx context.Context, command, dir string) map[string]any {
 	}
 }
 
-func execReadFile(_ context.Context, args map[string]any, dir string) map[string]any {
+func execReadFile(_ context.Context, args map[string]any, dir string) (map[string]any, error) {
 	rel := stringArg(args, "path")
 	if rel == "" {
-		return map[string]any{"error": `read_file: missing required argument "path"`}
+		return map[string]any{"error": `read_file: missing required argument "path"`}, nil
 	}
 
 	resolved, err := resolveAgentPath(dir, rel)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return map[string]any{"error": err.Error()}, nil //nolint:nilerr // read_file failures are always reported as data, never fatal
 	}
 
 	data, err := os.ReadFile(resolved) //nolint:gosec // resolveAgentPath rejects paths escaping dir, the step's own workspace
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return map[string]any{"error": err.Error()}, nil //nolint:nilerr // read_file failures are always reported as data, never fatal
 	}
 
-	return map[string]any{"content": truncateToolOutput(string(data))}
+	return map[string]any{"content": truncateToolOutput(string(data))}, nil
 }
 
-func execListDir(_ context.Context, args map[string]any, dir string) map[string]any {
+func execListDir(_ context.Context, args map[string]any, dir string) (map[string]any, error) {
 	rel := stringArg(args, "path")
 	if rel == "" {
 		rel = "."
@@ -441,12 +445,12 @@ func execListDir(_ context.Context, args map[string]any, dir string) map[string]
 
 	resolved, err := resolveAgentPath(dir, rel)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return map[string]any{"error": err.Error()}, nil //nolint:nilerr // list_dir failures are always reported as data, never fatal
 	}
 
 	entries, err := os.ReadDir(resolved)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return map[string]any{"error": err.Error()}, nil //nolint:nilerr // list_dir failures are always reported as data, never fatal
 	}
 
 	items := make([]map[string]any, 0, len(entries))
@@ -462,37 +466,47 @@ func execListDir(_ context.Context, args map[string]any, dir string) map[string]
 		items = append(items, map[string]any{"name": e.Name(), "is_dir": e.IsDir(), "size": size})
 	}
 
-	return map[string]any{"entries": items}
+	return map[string]any{"entries": items}, nil
 }
 
-func execRunShell(ctx context.Context, args map[string]any, dir string) map[string]any {
+func execRunShell(ctx context.Context, args map[string]any, dir string) (map[string]any, error) {
 	command := stringArg(args, "command")
 	if command == "" {
-		return map[string]any{"error": `run_shell: missing required argument "command"`}
+		return map[string]any{"error": `run_shell: missing required argument "command"`}, nil
 	}
 
-	return shellToolResult(ctx, command, dir)
+	return shellToolResult(ctx, command, dir), nil
 }
 
 // execCustomTool renders spec.Run against the model's args and shells it
 // out. Model-supplied arg values are interpolated into the sh -c string, so
 // a custom tool is a capability-curation convenience, not a hard sandbox —
-// the same trust boundary as run_shell itself.
+// the same trust boundary as run_shell itself. When spec.Required is set, a
+// nonzero exit is returned as a Go error (fatal to the step) rather than
+// just {"exit_code": ...} data left for the model to interpret.
 func execCustomTool(spec ToolSpec) toolImpl {
-	return func(ctx context.Context, args map[string]any, dir string) map[string]any {
+	return func(ctx context.Context, args map[string]any, dir string) (map[string]any, error) {
 		rendered, err := Render(spec.Run, map[string]any{"args": args})
 		if err != nil {
-			return map[string]any{"error": err.Error()}
+			return map[string]any{"error": err.Error()}, nil //nolint:nilerr // a bad template is a data error the model sees, not a fatal one — required: only gates the command's own exit code
 		}
 
-		return shellToolResult(ctx, rendered, dir)
+		result := shellToolResult(ctx, rendered, dir)
+
+		if spec.Required {
+			if exitCode, ok := result["exit_code"].(int); ok && exitCode != 0 {
+				return result, fmt.Errorf("required tool %q exited %d: %s", spec.Name, exitCode, strings.TrimSpace(fmt.Sprint(result["stderr"])))
+			}
+		}
+
+		return result, nil
 	}
 }
 
-func executeAgentTool(ctx context.Context, call *genai.FunctionCall, dir string, registry map[string]toolImpl) map[string]any {
+func executeAgentTool(ctx context.Context, call *genai.FunctionCall, dir string, registry map[string]toolImpl) (map[string]any, error) {
 	impl, ok := registry[call.Name]
 	if !ok {
-		return map[string]any{"error": fmt.Sprintf("unknown tool %q", call.Name)}
+		return map[string]any{"error": fmt.Sprintf("unknown tool %q", call.Name)}, nil
 	}
 
 	return impl(ctx, call.Args, dir)
@@ -694,9 +708,14 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 			return text, turn + 1, nil
 		}
 
+		parts, toolErr := toolResponseParts(ctx, calls, conv.dir, conv.tools.registry)
+		if toolErr != nil {
+			return "", turn + 1, toolErr
+		}
+
 		req.Contents = append(req.Contents, &genai.Content{
 			Role:  genai.RoleUser,
-			Parts: toolResponseParts(ctx, calls, conv.dir, conv.tools.registry),
+			Parts: parts,
 		})
 	}
 
@@ -823,18 +842,28 @@ func collectParts(content *genai.Content) (calls []*genai.FunctionCall, text str
 	return calls, b.String()
 }
 
-// toolResponseParts executes each requested tool and packages the results
-// as FunctionResponse parts to feed back on the next turn.
-func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, dir string, registry map[string]toolImpl) []*genai.Part {
+// toolResponseParts executes each requested tool and packages the results as
+// FunctionResponse parts to feed back on the next turn. Every call in the
+// turn still runs (a fatal tool call doesn't short-circuit its siblings),
+// but the first fatal error is returned alongside the parts so the caller
+// can abort the conversation instead of feeding it back to the model.
+func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, dir string, registry map[string]toolImpl) ([]*genai.Part, error) {
 	parts := make([]*genai.Part, 0, len(calls))
 
+	var firstErr error
+
 	for _, call := range calls {
+		response, err := executeAgentTool(ctx, call, dir, registry)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+
 		parts = append(parts, &genai.Part{
-			FunctionResponse: &genai.FunctionResponse{ID: call.ID, Name: call.Name, Response: executeAgentTool(ctx, call, dir, registry)},
+			FunctionResponse: &genai.FunctionResponse{ID: call.ID, Name: call.Name, Response: response},
 		})
 	}
 
-	return parts
+	return parts, firstErr
 }
 
 // resolveAgentDir joins and validates a step's working directory.

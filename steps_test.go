@@ -266,6 +266,60 @@ jobs:
 	}
 }
 
+func TestLoadConfigAgentToolRequired(t *testing.T) {
+	t.Parallel()
+
+	const pipeline = `
+agents:
+- name: reviewer
+  source:
+    model: lmstudio/qwen2.5-coder
+  tools:
+  - name: post_review
+    description: Post a review.
+    run: gh pr review --{{ .args.action }}
+    required: true
+  - name: notify
+    description: Not required.
+    run: echo hi
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    prompt: go
+`
+
+	path := filepath.Join(t.TempDir(), "pipeline.yml")
+
+	err := os.WriteFile(path, []byte(pipeline), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	agent, err := cfg.FindAgent("reviewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	required := make(map[string]bool, len(agent.Tools))
+	for _, tool := range agent.Tools {
+		required[tool.Name] = tool.Required
+	}
+
+	if !required["post_review"] {
+		t.Error("post_review.Required = false, want true")
+	}
+
+	if required["notify"] {
+		t.Error("notify.Required = true, want false")
+	}
+}
+
 func TestLoadConfigErrors(t *testing.T) {
 	t.Parallel()
 
