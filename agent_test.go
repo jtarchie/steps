@@ -753,6 +753,12 @@ func TestExecCustomTool(t *testing.T) {
 			t.Error("expected an \"error\" key in the result map")
 		}
 	})
+}
+
+func TestExecCustomToolRequired(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
 
 	t.Run("required tool returns a Go error on nonzero exit", func(t *testing.T) {
 		t.Parallel()
@@ -781,6 +787,24 @@ func TestExecCustomTool(t *testing.T) {
 
 		if result["exit_code"] != 1 {
 			t.Errorf("exit_code = %v, want 1", result["exit_code"])
+		}
+	})
+
+	t.Run("required tool is fatal even when the command never runs at all", func(t *testing.T) {
+		t.Parallel()
+
+		requiredImpl := execCustomTool(ToolSpec{Name: "fail", Run: "true", Required: true})
+
+		// A nonexistent cwd makes the command fail to start rather than run
+		// and exit nonzero — shellToolResult reports that as {"error": ...}
+		// with no exit_code key, which the required check must catch too.
+		result, err := requiredImpl(context.Background(), map[string]any{}, "/nonexistent/dir/for/sure")
+		if err == nil {
+			t.Fatal("expected a fatal error when a required tool's command never runs")
+		}
+
+		if result["error"] == nil {
+			t.Errorf(`result["error"] = nil, want the underlying failure`)
 		}
 	})
 }

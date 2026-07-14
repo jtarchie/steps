@@ -482,18 +482,28 @@ func execRunShell(ctx context.Context, args map[string]any, dir string) (map[str
 // out. Model-supplied arg values are interpolated into the sh -c string, so
 // a custom tool is a capability-curation convenience, not a hard sandbox —
 // the same trust boundary as run_shell itself. When spec.Required is set, a
-// nonzero exit is returned as a Go error (fatal to the step) rather than
-// just {"exit_code": ...} data left for the model to interpret.
+// nonzero exit — or the command failing to run at all — is returned as a Go
+// error (fatal to the step) rather than just data left for the model to
+// interpret.
 func execCustomTool(spec ToolSpec) toolImpl {
 	return func(ctx context.Context, args map[string]any, dir string) (map[string]any, error) {
 		rendered, err := Render(spec.Run, map[string]any{"args": args})
 		if err != nil {
-			return map[string]any{"error": err.Error()}, nil //nolint:nilerr // a bad template is a data error the model sees, not a fatal one — required: only gates the command's own exit code
+			return map[string]any{"error": err.Error()}, nil //nolint:nilerr // a bad template is a data error the model sees, not a fatal one — required: only gates the command's own execution
 		}
 
 		result := shellToolResult(ctx, rendered, dir)
 
 		if spec.Required {
+			// shellToolResult reports a command that never ran at all (e.g. a
+			// missing working directory) as {"error": ...} with no exit_code
+			// key — that must be just as fatal as a nonzero exit, or a
+			// required tool that fails to run is silently treated as
+			// optional.
+			if errMsg, ok := result["error"].(string); ok {
+				return result, fmt.Errorf("required tool %q failed to run: %s", spec.Name, errMsg)
+			}
+
 			if exitCode, ok := result["exit_code"].(int); ok && exitCode != 0 {
 				return result, fmt.Errorf("required tool %q exited %d: %s", spec.Name, exitCode, strings.TrimSpace(fmt.Sprint(result["stderr"])))
 			}
