@@ -8,74 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"gopkg.in/yaml.v3"
 )
-
-func TestFixSpecUnmarshalScalar(t *testing.T) {
-	t.Parallel()
-
-	var v struct {
-		Fix *FixSpec `yaml:"fix"`
-	}
-
-	err := yaml.Unmarshal([]byte("fix: fixer\n"), &v)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if v.Fix == nil || v.Fix.Agent != "fixer" {
-		t.Fatalf("Fix = %+v, want agent=fixer", v.Fix)
-	}
-}
-
-func TestFixSpecUnmarshalMapping(t *testing.T) {
-	t.Parallel()
-
-	const doc = `
-fix:
-  agent: fixer
-  prompt: only touch parser.go
-  dir: repo
-  attempts: 2
-  tools: [read_file, run_shell]
-`
-
-	var v struct {
-		Fix *FixSpec `yaml:"fix"`
-	}
-
-	err := yaml.Unmarshal([]byte(doc), &v)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	got := v.Fix
-	if got == nil {
-		t.Fatal("Fix is nil")
-	}
-
-	if got.Agent != "fixer" || got.Prompt != "only touch parser.go" || got.Dir != "repo" || got.Attempts != 2 {
-		t.Errorf("Fix = %+v, want the mapping's values", got)
-	}
-
-	if len(got.Tools) != 2 || got.Tools[0].Builtin != "read_file" || got.Tools[1].Builtin != "run_shell" {
-		t.Errorf("Fix.Tools = %+v, want [read_file run_shell]", got.Tools)
-	}
-}
-
-func TestFixSpecUnmarshalSequenceErrors(t *testing.T) {
-	t.Parallel()
-
-	var v struct {
-		Fix *FixSpec `yaml:"fix"`
-	}
-
-	err := yaml.Unmarshal([]byte("fix: [a, b]\n"), &v)
-	if err == nil {
-		t.Error("expected an error for a sequence-node fix entry")
-	}
-}
 
 // fixAgentServer returns an httptest server that answers every chat
 // completion with a plain "done" (no tool calls), counting how many times it

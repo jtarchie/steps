@@ -67,15 +67,106 @@ linters:
   settings:
     depguard:
       rules:
+        # Root (package main): a thin CLI entrypoint — parse flags, wire up
+        # config/store/workspace, and hand off to internal/pipeline. It must
+        # not reach past internal/pipeline into the packages pipeline itself
+        # orchestrates (merkle/resource/agent/shell/template/retry).
         Main:
           files:
             - "$all"
+            - "!**/internal/**"
+          allow:
+            - "$gostd"
+            - "github.com/alecthomas/kong"
+            - "github.com/lmittmann/tint"
+            - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/pipeline"
+            - "github.com/jtarchie/steps/internal/store"
+            - "github.com/jtarchie/steps/internal/workspace"
+        # Leaves: no internal deps, stdlib only.
+        Shell:
+          files:
+            - "**/internal/shell/**"
+          allow:
+            - "$gostd"
+        Template:
+          files:
+            - "**/internal/template/**"
+          allow:
+            - "$gostd"
+        Retry:
+          files:
+            - "**/internal/retry/**"
+          allow:
+            - "$gostd"
+        Store:
+          files:
+            - "**/internal/store/**"
+          allow:
+            - "$gostd"
+            - "modernc.org/sqlite"
+        # config is the shared data-model root: it must not depend on any
+        # other internal package (see CLAUDE.md's package-seam plan).
+        Config:
+          files:
+            - "**/internal/config/**"
           allow:
             - "$gostd"
             - "gopkg.in/yaml.v3"
-            - "github.com/alecthomas/kong"
-            - "modernc.org/sqlite"
-            - "github.com/lmittmann/tint"
+        Resource:
+          files:
+            - "**/internal/resource/**"
+          allow:
+            - "$gostd"
+            - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/shell"
+            - "github.com/jtarchie/steps/internal/template"
+        Workspace:
+          files:
+            - "**/internal/workspace/**"
+          allow:
+            - "$gostd"
+            - "golang.org/x/sys/unix"
+            - "github.com/jtarchie/steps/internal/config"
+        # merkle plans/hashes steps; it depends on resource (to resolve get
+        # versions the same way at plan time and run time) and config, but
+        # nothing execution-specific (store, workspace, agent).
+        Merkle:
+          files:
+            - "**/internal/merkle/**"
+          allow:
+            - "$gostd"
+            - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/resource"
+        # agent runs an agent step's LLM tool-calling conversation. It needs
+        # store/workspace/merkle for step-level hash/materialize/record
+        # sequencing (RunStep), but not resource or pipeline.
+        Agent:
+          files:
+            - "**/internal/agent/**"
+          allow:
+            - "$gostd"
             - "google.golang.org/adk/v2"
             - "google.golang.org/genai"
             - "github.com/achetronic/adk-utils-go"
+            - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/merkle"
+            - "github.com/jtarchie/steps/internal/retry"
+            - "github.com/jtarchie/steps/internal/shell"
+            - "github.com/jtarchie/steps/internal/store"
+            - "github.com/jtarchie/steps/internal/template"
+            - "github.com/jtarchie/steps/internal/workspace"
+        # pipeline is the top-level orchestrator: it composes every other
+        # internal package to run a job's plan.
+        Pipeline:
+          files:
+            - "**/internal/pipeline/**"
+          allow:
+            - "$gostd"
+            - "github.com/jtarchie/steps/internal/agent"
+            - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/merkle"
+            - "github.com/jtarchie/steps/internal/resource"
+            - "github.com/jtarchie/steps/internal/shell"
+            - "github.com/jtarchie/steps/internal/store"
+            - "github.com/jtarchie/steps/internal/workspace"

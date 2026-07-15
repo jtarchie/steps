@@ -1,0 +1,334 @@
+package agent
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+
+	"google.golang.org/genai"
+
+	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/template"
+)
+
+// maxToolOutputBytes caps how much of a tool's textual output (file
+// contents, command stdout/stderr) is handed back to the model. A runaway
+// command (cat a huge file, find /) would otherwise buffer megabytes into
+// memory and flood the model's context window (cost, and possible
+// context-limit failures). Anything beyond this is truncated with a
+// trailing marker so the model knows output was cut.
+const maxToolOutputBytes = 100_000
+
+// toolImpl executes one resolved tool against dir, given the model's args.
+// It returns the map sent back as the FunctionResponse — never a Go error;
+// every failure (including a required: true tool's) is reported to the
+// model as data ({"error": ...} or a nonzero "exit_code") so it can react on
+// its next turn instead of the whole attempt being aborted and restarted.
+// See runAgentConversation for how required: true is actually enforced —
+// by tracking success and, if the model tries to stop early, forcing
+// another call via forceRequiredTool — rather than by a tool ever failing
+// the step directly.
+type toolImpl func(ctx context.Context, args map[string]any, dir string) map[string]any
+
+// agentTools bundles what buildAgentTools produced: the declarations sent
+// to the model, the registry used to execute the calls it makes, and the
+// subset of tool names marked required: true — see requiredToolNames.
+type agentTools struct {
+	decls    *genai.Tool
+	registry map[string]toolImpl
+	required map[string]bool
+}
+
+// requiredToolNames returns the set of tool names in specs marked
+// required: true. A required tool's failure already aborts the attempt (see
+// execCustomTool), but that alone doesn't guarantee the model ever called it
+// — it could just as easily finish the conversation without calling it at
+// all and still have the step report success. runAgentConversation uses
+// this set to reject that case: every required tool must be invoked (and,
+// since a failed call already aborts the attempt, therefore succeed) at
+// least once before an attempt can end successfully.
+func requiredToolNames(specs []config.ToolSpec) map[string]bool {
+	required := make(map[string]bool, len(specs))
+
+	for _, spec := range specs {
+		if spec.Required {
+			required[config.ToolSpecName(spec)] = true
+		}
+	}
+
+	return required
+}
+
+type builtinTool struct {
+	decl *genai.FunctionDeclaration
+	impl toolImpl
+}
+
+func builtinAgentTools() map[string]builtinTool {
+	return map[string]builtinTool{
+		"read_file": {
+			decl: &genai.FunctionDeclaration{
+				Name:        "read_file",
+				Description: "Read a UTF-8 text file's contents, given a path relative to the step's working directory.",
+				Parameters: &genai.Schema{
+					Type:       genai.TypeObject,
+					Properties: map[string]*genai.Schema{"path": {Type: genai.TypeString, Description: "File path, relative to the working directory."}},
+					Required:   []string{"path"},
+				},
+			},
+			impl: execReadFile,
+		},
+		"list_dir": {
+			decl: &genai.FunctionDeclaration{
+				Name:        "list_dir",
+				Description: `List entries (name, is_dir, size) in a directory, given a path relative to the working directory. Defaults to "." if omitted.`,
+				Parameters: &genai.Schema{
+					Type:       genai.TypeObject,
+					Properties: map[string]*genai.Schema{"path": {Type: genai.TypeString, Description: "Directory path, relative to the working directory."}},
+				},
+			},
+			impl: execListDir,
+		},
+		"run_shell": {
+			decl: &genai.FunctionDeclaration{
+				Name:        "run_shell",
+				Description: "Run a shell command via `sh -c`, with cwd set to the step's working directory. Returns stdout, stderr, and exit_code.",
+				Parameters: &genai.Schema{
+					Type:       genai.TypeObject,
+					Properties: map[string]*genai.Schema{"command": {Type: genai.TypeString, Description: "Command to run via sh -c."}},
+					Required:   []string{"command"},
+				},
+			},
+			impl: execRunShell,
+		},
+	}
+}
+
+// buildAgentTools turns a step's resolved tools: list into the genai
+// declarations sent to the model and a name -> toolImpl execution registry.
+// An empty specs enables every built-in. A duplicate tool name (built-in vs
+// custom, or two customs) is an error, so the model never sees an
+// ambiguous function set.
+func buildAgentTools(specs []config.ToolSpec) (*genai.Tool, map[string]toolImpl, error) {
+	if len(specs) == 0 {
+		specs = config.DefaultAgentToolSpecs()
+	}
+
+	builtins := builtinAgentTools()
+	decls := make([]*genai.FunctionDeclaration, 0, len(specs))
+	registry := make(map[string]toolImpl, len(specs))
+
+	for _, spec := range specs {
+		decl, impl, err := resolveToolSpec(spec, builtins)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if _, exists := registry[decl.Name]; exists {
+			return nil, nil, fmt.Errorf("duplicate tool name %q", decl.Name)
+		}
+
+		decls = append(decls, decl)
+		registry[decl.Name] = impl
+	}
+
+	return &genai.Tool{FunctionDeclarations: decls}, registry, nil
+}
+
+func resolveToolSpec(spec config.ToolSpec, builtins map[string]builtinTool) (*genai.FunctionDeclaration, toolImpl, error) {
+	if spec.Builtin != "" {
+		bt, ok := builtins[spec.Builtin]
+		if !ok {
+			return nil, nil, fmt.Errorf("unknown builtin tool %q", spec.Builtin)
+		}
+
+		return bt.decl, bt.impl, nil
+	}
+
+	if spec.Name == "" || spec.Run == "" {
+		return nil, nil, errors.New("agent tool: custom tool requires both name and run")
+	}
+
+	params := inferToolParams(spec.Run)
+	properties := make(map[string]*genai.Schema, len(params))
+
+	for _, p := range params {
+		properties[p] = &genai.Schema{Type: genai.TypeString}
+	}
+
+	decl := &genai.FunctionDeclaration{
+		Name:        spec.Name,
+		Description: spec.Description,
+		Parameters:  &genai.Schema{Type: genai.TypeObject, Properties: properties, Required: params},
+	}
+
+	return decl, execCustomTool(spec), nil
+}
+
+//nolint:gochecknoglobals // compiled once, read-only
+var agentToolArgPattern = regexp.MustCompile(`\{\{-?\s*\.args\.([A-Za-z_]\w*)\s*-?\}\}`)
+
+// inferToolParams scans a custom tool's run template for {{ .args.NAME }}
+// references, returning each distinct NAME once, in first-seen order.
+func inferToolParams(run string) []string {
+	matches := agentToolArgPattern.FindAllStringSubmatch(run, -1)
+
+	seen := make(map[string]bool, len(matches))
+	params := make([]string, 0, len(matches))
+
+	for _, m := range matches {
+		name := m[1]
+		if seen[name] {
+			continue
+		}
+
+		seen[name] = true
+
+		params = append(params, name)
+	}
+
+	return params
+}
+
+// resolveAgentPath resolves rel (as given by the model) against dir and
+// rejects any result that escapes dir, so a crafted "../../etc/passwd"
+// style path can't read outside the step's working directory.
+func resolveAgentPath(dir, rel string) (string, error) {
+	if filepath.IsAbs(rel) {
+		return "", fmt.Errorf("path %q must be relative", rel)
+	}
+
+	resolved := filepath.Clean(filepath.Join(dir, rel))
+	base := filepath.Clean(dir)
+
+	if resolved != base && !strings.HasPrefix(resolved, base+string(os.PathSeparator)) {
+		return "", fmt.Errorf("path %q escapes the working directory", rel)
+	}
+
+	return resolved, nil
+}
+
+func stringArg(args map[string]any, key string) string {
+	v, _ := args[key].(string)
+
+	return v
+}
+
+// truncateToolOutput caps s at maxToolOutputBytes, appending a marker when
+// it cuts, so a runaway command can't flood the model's context.
+func truncateToolOutput(s string) string {
+	if len(s) <= maxToolOutputBytes {
+		return s
+	}
+
+	return s[:maxToolOutputBytes] + fmt.Sprintf("\n... [truncated %d bytes]", len(s)-maxToolOutputBytes)
+}
+
+// shellToolResult builds the FunctionResponse map for a shell-backed tool
+// (run_shell and every custom tool), truncating the captured streams.
+func shellToolResult(ctx context.Context, command, dir string) map[string]any {
+	stdout, stderr, exitCode, err := shell.RunShellCaptureFull(ctx, command, dir)
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+
+	return map[string]any{
+		"stdout":    truncateToolOutput(stdout),
+		"stderr":    truncateToolOutput(stderr),
+		"exit_code": exitCode,
+	}
+}
+
+func execReadFile(_ context.Context, args map[string]any, dir string) map[string]any {
+	rel := stringArg(args, "path")
+	if rel == "" {
+		return map[string]any{"error": `read_file: missing required argument "path"`}
+	}
+
+	resolved, err := resolveAgentPath(dir, rel)
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+
+	data, err := os.ReadFile(resolved) //nolint:gosec // resolveAgentPath rejects paths escaping dir, the step's own workspace
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+
+	return map[string]any{"content": truncateToolOutput(string(data))}
+}
+
+func execListDir(_ context.Context, args map[string]any, dir string) map[string]any {
+	rel := stringArg(args, "path")
+	if rel == "" {
+		rel = "."
+	}
+
+	resolved, err := resolveAgentPath(dir, rel)
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+
+	entries, err := os.ReadDir(resolved)
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+
+	items := make([]map[string]any, 0, len(entries))
+
+	for _, e := range entries {
+		size := int64(0)
+
+		info, infoErr := e.Info()
+		if infoErr == nil {
+			size = info.Size()
+		}
+
+		items = append(items, map[string]any{"name": e.Name(), "is_dir": e.IsDir(), "size": size})
+	}
+
+	return map[string]any{"entries": items}
+}
+
+func execRunShell(ctx context.Context, args map[string]any, dir string) map[string]any {
+	command := stringArg(args, "command")
+	if command == "" {
+		return map[string]any{"error": `run_shell: missing required argument "command"`}
+	}
+
+	return shellToolResult(ctx, command, dir)
+}
+
+// execCustomTool renders spec.Run against the model's args and shells it
+// out. Model-supplied arg values are interpolated into the sh -c string, so
+// a custom tool is a capability-curation convenience, not a hard sandbox —
+// the same trust boundary as run_shell itself. A required: true tool is not
+// special-cased here: its nonzero exit is reported as ordinary data, same as
+// any other tool, so the model can see what went wrong and recover on its
+// next turn. required: is enforced by runAgentConversation tracking success
+// and forcing another call if the model tries to stop early — never by a
+// tool failing the step directly.
+func execCustomTool(spec config.ToolSpec) toolImpl {
+	return func(ctx context.Context, args map[string]any, dir string) map[string]any {
+		rendered, err := template.Render(spec.Run, map[string]any{"args": args})
+		if err != nil {
+			return map[string]any{"error": err.Error()}
+		}
+
+		return shellToolResult(ctx, rendered, dir)
+	}
+}
+
+func executeAgentTool(ctx context.Context, call *genai.FunctionCall, dir string, registry map[string]toolImpl) map[string]any {
+	impl, ok := registry[call.Name]
+	if !ok {
+		return map[string]any{"error": fmt.Sprintf("unknown tool %q", call.Name)}
+	}
+
+	return impl(ctx, call.Args, dir)
+}

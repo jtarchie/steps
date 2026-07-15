@@ -43,35 +43,55 @@ go build -v                  # Final binary
 ## Known Constraints
 
 ### SQLite WAL Mode
-The state database (`.steps/state.db`) uses SQLite's WAL (Write-Ahead Logging) mode. **Do not** rely solely on `busy_timeout` or `MaxOpenConns(1)`—WAL requires explicit retry loops in concurrent scenarios. See `store.go` for the pattern. Recent modernc.org/sqlite versions handle this correctly; if a test flakes with "database is locked," ensure retries are in place, not just timeout config.
+The state database (`.steps/state.db`) uses SQLite's WAL (Write-Ahead Logging) mode. **Do not** rely solely on `busy_timeout` or `MaxOpenConns(1)`—WAL requires explicit retry loops in concurrent scenarios. See `internal/store/store.go` for the pattern. Recent modernc.org/sqlite versions handle this correctly; if a test flakes with "database is locked," ensure retries are in place, not just timeout config.
 
 ### Test Parallelism
 Under high CPU contention (many tests in parallel), some shell/storage tests flake intermittently. Always run `go test ./... -p 1` in CI or when validating changes. Standard `go test` may pass locally but fail under load. This is **not** a bug; it's a known interaction between test timing and SQLite's internal locking.
 
 ## Project Layout
 
-### Core Files
-- **main.go** — CLI entry point; parses args, calls `run()` → `LoadConfig()` → `RunJob()`
-- **config.go** — YAML parsing; defines `Config`, `ResourceType`, `Resource`, `Agent`, `Task`, `Job`
-- **job.go** — Job execution; `RunJob()` orchestrates resource discovery, fetch, agent steps, and persistence
-- **agent.go** — Agent step execution; LLM invocation, tool-calling loop, context management, system message building
-- **store.go** — SQLite state persistence; merkle-tree-based caching to skip unchanged work
-- **shell.go** — Shell command execution with context, logging, output truncation
-- **resource.go** — Resource discovery and version management (check/in/out commands)
-- **merkle.go** — Content-addressed caching; detects when get/agent work can be skipped
-- **template.go** — YAML template rendering (e.g., `{{ .source.repo }}`)
-- **retry.go** — Exponential backoff retry logic
-- **workspace.go** — `WorkspaceProvider`/`BuildWorkspace`/`StepSpace` interfaces; the default shared (single-directory) implementation; static `inputs:`/`outputs:` plan validation
-- **workspace_copy\*.go** — `strategy: copy` backend (portable; copy-on-write via platform-specific `cp` flags) and its per-platform candidate command lists
-- **workspace_btrfs\*.go** — `strategy: btrfs` backend (Linux only; subvolume create/snapshot/delete) and the non-Linux stub
+The module is a thin `main.go` entrypoint over a set of single-responsibility `internal/` packages, forming an acyclic dependency graph (each line below depends only on what's listed after `->`):
+
+```
+internal/shell, internal/template, internal/retry, internal/store, internal/config   (leaves)
+internal/resource, internal/workspace, internal/merkle                                -> config (+ shell/template for resource; merkle -> resource too)
+internal/agent                                                                        -> config, store, merkle, workspace, retry, shell, template
+internal/pipeline                                                                     -> config, merkle, resource, store, workspace, agent
+main.go                                                                               -> config, store, workspace, pipeline
+```
+
+### `internal/config` — the shared data model
+YAML parsing (`LoadConfig`) and every config type: `Config`, `ResourceType`, `Resource`, `Agent`, `AgentSource`, `ToolSpec`, `Task`, `FixSpec`, `Job`, `Step`, `WorkspaceConfig`. Also owns the config-merge logic that both plan-time hashing and run-time execution call, so both stay in lockstep: `Config.ResolveTask` (a task step's `run:`/`fix:`, resolved against a top-level `tasks:` entry) and `Config.ResolveAgentInvocation` (an agent step's connection/dials/tool-grant, resolved against the named `agents:` entry). Depends on nothing but the standard library and `yaml.v3`.
+
+### `internal/pipeline` — the orchestrator
+`RunJob()` walks a job's plan in order: resolves/fetches `get` steps, runs `task`/`put`/`agent` steps, and records each step's outcome. It composes every other internal package; nothing depends on it.
+
+### `internal/agent` — agent step execution
+Split by responsibility: `provider.go` (LLM client construction, persona/system-message building), `tools.go` (built-in + custom tool declarations and execution), `conversation.go` (the tool-calling request/execute/append loop), `step.go` (`RunStep` — the exported entrypoint an agent step in the plan runs through), `fix.go` (`RunFix` — a task's `fix:` agent, built on the same conversation machinery). Only `RunStep`/`RunFix` are exported; everything else is package-private.
+
+### `internal/merkle` — content-addressed planning
+`Node`/`Chain`/`PlanChains` plus the content-map builders (`GetNodeContent`/`TaskNodeContent`/`PutNodeContent`/`AgentContentMap`) shared between planning and real execution, so both compute identical hashes for identical steps. Depends on `config` and `resource` (to resolve a `get` step's version the same way at plan time and run time) — nothing execution-specific.
+
+### `internal/resource` — resource type commands
+Runs a resource type's `check`/`in`/`out` shell commands and selects among the versions a check returns (`ResolveVersions`, `SelectVersion`, `VersionMode`).
+
+### `internal/workspace` — per-step/per-build filesystem views
+`Provider`/`BuildWorkspace`/`StepSpace` interfaces; the default shared (single-directory) implementation; the `strategy: copy` backend (`workspace_copy*.go`, portable, copy-on-write via platform-specific `cp` flags) and `strategy: btrfs` backend (`workspace_btrfs*.go`, Linux only; subvolume create/snapshot/delete, with a non-Linux stub); static `inputs:`/`outputs:` plan validation (`ValidateArtifactFlow`).
+
+### Leaves
+- **`internal/store`** — SQLite state persistence (`Store`), WAL setup, `NodeRecord` (a persistence-shape copy of `merkle.Node`, so this package doesn't need to depend on `merkle`)
+- **`internal/shell`** — shell command execution with context, logging, output truncation
+- **`internal/template`** — YAML template rendering (e.g., `{{ .source.repo }}`)
+- **`internal/retry`** — linear-backoff retry loop (`retry.Do`)
 
 ### Configuration & Examples
-- **.golangci.yml** — Linter config; 40+ rules including security (gosec), correctness, concurrency, and complexity checks
+- **.golangci.yml** — Linter config; 40+ rules including security (gosec), correctness, concurrency, complexity checks, and a `depguard` rule per package enforcing the dependency graph above
 - **examples/review.yml** — Example pipeline: PR review job using an agent with `read_file`, `list_dir`, `run_shell`, and a custom `post_review` tool
 - **examples/isolated.yml** — Example pipeline demonstrating opt-in `workspace:` isolation: a reusable task with `inputs:`/`outputs:`, an isolated agent step, and a `put` step scoped to a declared input
 
 ### Root Files
-- **go.mod / go.sum** — Dependencies: yaml.v3, kong (CLI), tint (structured logging), modernc.org/sqlite, google.golang.org/genai, openai-go
+- **main.go** — CLI entry point; parses args, calls `run()` → `config.LoadConfig()` → `pipeline.RunJob()`
+- **go.mod / go.sum** — Dependencies: yaml.v3, kong (CLI), tint (structured logging), modernc.org/sqlite, google.golang.org/genai, openai-go, golang.org/x/sys (btrfs backend)
 - **.steps/** — State cache directory (created at runtime for each pipeline's working dir)
 
 ## CI & Validation
@@ -102,13 +122,13 @@ A top-level `tasks:` list (mirroring `resources:`/`agents:`) lets a `run:`/`fix:
 - **`run:` present** → the step is inline, exactly as before; `tasks:` is never consulted, even if a same-named entry exists there.
 - **`run:` absent** → `task:` instead names a `tasks:` entry, and its `run`/`fix` are used. The step's own `fix:`, if set, overrides the referenced task's `fix:` for that step only — everything else comes from the top-level definition.
 
-This resolution (`resolveTask` in `job.go`) runs identically at plan time (`merkle.go`'s `planNonGetNode`/`taskNode`) and run time (`runTaskStep`/`runTaskCommand`), so a task's merkle hash is always computed from its *resolved* `run:` string — an inline task's hash is unaffected by this feature. An undefined reference surfaces as an ordinary `FindTask` error at plan time, the same as an unknown `get`/`put`/`agent` name.
+This resolution (`Config.ResolveTask` in `internal/config`) runs identically at plan time (`internal/merkle`'s `planNonGetNode`/`taskNode`) and run time (`internal/pipeline`'s `runTaskStep`/`runTaskCommand`), so a task's merkle hash is always computed from its *resolved* `run:` string — an inline task's hash is unaffected by this feature. An undefined reference surfaces as an ordinary `FindTask` error at plan time, the same as an unknown `get`/`put`/`agent` name. An agent step's connection/dials/tool-grant are resolved the same way, by `Config.ResolveAgentInvocation`, called from `internal/merkle`'s `agentNode` and `internal/agent`'s `prepareAgentStep`/`RunFix`.
 
-`required: true` is enforced entirely in `runAgentConversation` by tracking **success** (`exit_code == 0`), not mere invocation:
+`required: true` is enforced entirely in `internal/agent`'s `runAgentConversation` (conversation.go) by tracking **success** (`exit_code == 0`), not mere invocation:
 - **The model tries to stop while a required tool hasn't yet succeeded** → its next turn is constrained via the provider's `tool_choice` (`forceRequiredTool`, mapped by `genaiopenai` to OpenAI's named `tool_choice`) to a function call for that specific tool — a hard API-level constraint, not a text reminder the model could ignore.
 - **A forced (or voluntary) call still fails** → that failure is appended to the conversation like any other tool result. The model gets another turn to fix it and try again — no attempt is aborted for this.
 - **The safety bound**: if a provider doesn't honor `tool_choice`, or the model just can't get the required tool to succeed, `max_turns` still caps the loop and the step fails, naming the tool(s) that never succeeded.
-- `withRetry`/`attempts:` (a full conversation restart from the original prompt) still exists, but only fires for *non-tool* failures — `generateOnce` erroring (LLM/transport issue) or `max_turns` exhaustion — never for a tool's own failure.
+- `retry.Do`/`attempts:` (a full conversation restart from the original prompt) still exists, but only fires for *non-tool* failures — `generateOnce` erroring (LLM/transport issue) or `max_turns` exhaustion — never for a tool's own failure.
 - Only custom tools can be marked `required:`; built-ins (`read_file`, `list_dir`, `run_shell`) and the fix-agent's injected task-rerun tool are never required — they're intentionally exploratory/iterative regardless.
 
 ### Workspace Isolation (opt-in)
@@ -125,10 +145,10 @@ workspace:
 
 - **`inputs:`/`outputs:`** on a `task`/`agent`/`put` step (and on a top-level `tasks:` entry, overridable per step the same way `fix:` is) name artifacts — a resource an earlier `get` fetched, or an output an earlier `task`/`agent` produced. A step sees *only* what it declares: an isolated task/agent's working directory contains an `<input>/` copy (or, on btrfs, an instant CoW snapshot) of each named input plus an empty `<output>/` dir per declared output, captured back into the build's artifact store after the step succeeds. `put` steps compose a read view the same way, from their own `inputs:`; there is no implicit "all artifacts so far" view.
 - This is corruption hygiene, not a sandbox: shell commands can still reach outside the materialized directory via absolute paths, same as today.
-- `WorkspaceProvider`/`BuildWorkspace`/`StepSpace` (`workspace.go`) are the abstraction: a `WorkspaceProvider` is built once per CLI invocation and validated at startup (`Validate()` — wrong platform, wrong filesystem, missing binaries all fail fast, before any step runs); `NewBuild` creates one triggered build's artifact store; `TaskSpace`/`PutSpace` materialize a step's directory; `Capture` persists declared outputs back into the store. The shared (no-`workspace:`) implementation makes every method a no-op/passthrough to the single directory.
+- `Provider`/`BuildWorkspace`/`StepSpace` (`internal/workspace/workspace.go`) are the abstraction: a `Provider` is built once per CLI invocation (`workspace.NewProvider`) and validated at startup (`Validate()` — wrong platform, wrong filesystem, missing binaries all fail fast, before any step runs); `NewBuild` creates one triggered build's artifact store; `TaskSpace`/`PutSpace` materialize a step's directory; `Capture` persists declared outputs back into the store. The shared (no-`workspace:`) implementation makes every method a no-op/passthrough to the single directory.
 - Fix agents (`fix:`) run inside the failing task's own already-materialized `StepSpace`, not a fresh one — they need to see the exact state the task failed in, and the enclosing task's `Capture` (after the fix loop's final green verdict) is what actually persists outputs downstream.
-- Declaring `inputs:`/`outputs:` without a `workspace:` block is a `LoadConfig`-time error; an `inputs:` naming an artifact nothing earlier in the plan fetched/produced is a `RunJob`-time error (`validateArtifactFlow`) that runs unconditionally, even under `--force` (which otherwise skips merkle planning).
-- Merkle hashes (`taskNodeContent`/`putNodeContent`/`agentContentMap` in `merkle.go`/`agent.go`) fold in `inputs:`/`outputs:` **only when `cfg.Workspace != nil`** — so switching a pipeline into isolated mode invalidates its cache (correctly: the executed step's inputs changed), but a pipeline that never opts in hashes exactly as it always has. The workspace `strategy`/`root`/`options` themselves are never hashed — copy and btrfs produce the same logical view, so switching backends must not invalidate anyone's cache.
+- Declaring `inputs:`/`outputs:` without a `workspace:` block is a `LoadConfig`-time error; an `inputs:` naming an artifact nothing earlier in the plan fetched/produced is a `RunJob`-time error (`workspace.ValidateArtifactFlow`) that runs unconditionally, even under `--force` (which otherwise skips merkle planning).
+- Merkle hashes (`TaskNodeContent`/`PutNodeContent`/`AgentContentMap`, all in `internal/merkle/merkle.go`) fold in `inputs:`/`outputs:` **only when `cfg.Workspace != nil`** — so switching a pipeline into isolated mode invalidates its cache (correctly: the executed step's inputs changed), but a pipeline that never opts in hashes exactly as it always has. The workspace `strategy`/`root`/`options` themselves are never hashed — copy and btrfs produce the same logical view, so switching backends must not invalidate anyone's cache.
 
 ### State Caching via Merkle Tree
 - Each resource `get` and `agent` step is content-addressed (merkle tree) with its inputs (pinned versions, source config)
@@ -146,5 +166,6 @@ When making changes:
 2. **Test with `-p 1`.** All tests must pass serially; parallel flakes are expected and not a sign of correctness issues.
 3. **Golangci-lint first.** If linting fails, the build is rejected; fix linter errors before logic changes.
 4. **Run the full sequence** before committing: `go fmt ./... && go mod tidy && golangci-lint run && go test ./... -p 1 && go build -v`.
-5. **Check WAL constraints** if touching `store.go`: ensure retries are explicit, not just timeout config.
-6. **Keep agent.go module-level.** Agent step execution is tightly coupled to context, logging, and tool-calling infrastructure; refactors must preserve the flow.
+5. **Check WAL constraints** if touching `internal/store/store.go`: ensure retries are explicit, not just timeout config.
+6. **Keep `internal/agent`'s conversation loop's behavior stable.** The tool-calling loop (`conversation.go`'s `runAgentConversation`) is tightly coupled to context propagation, logging, and `required:` enforcement via `tool_choice` forcing; file-organization changes within the package are fine, but refactors must preserve the loop's exact semantics — see "Custom Tool `required:` Semantics" above.
+7. **Respect the package dependency graph** (see Project Layout above and `.golangci.yml`'s `depguard` rules): `internal/config` depends on nothing internal; `internal/pipeline` is the only package that depends on `internal/agent`; nothing depends on `internal/pipeline`. A new import that isn't in a package's `depguard` allow-list is a signal the change belongs in a different package, not a rule to route around.

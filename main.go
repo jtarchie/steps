@@ -1,3 +1,7 @@
+// Package main implements steps, a small CLI that interprets a
+// Concourse-style pipeline YAML file (resource_types/resources/jobs):
+// check discovers resource versions, get fetches one via a rendered
+// shell command, and task runs a plan step's command.
 package main
 
 import (
@@ -11,6 +15,11 @@ import (
 
 	"github.com/alecthomas/kong"
 	"github.com/lmittmann/tint"
+
+	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/pipeline"
+	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // CLI is the pipeline runner's command-line grammar, parsed by kong.
@@ -61,9 +70,9 @@ func run(args []string) error {
 
 	slog.Debug("cli.parsed", "pipeline", cli.Pipeline, "job", cli.Job, "pinned", cli.Version)
 
-	cfg, err := LoadConfig(cli.Pipeline)
+	cfg, err := config.LoadConfig(cli.Pipeline)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not load pipeline: %w", err)
 	}
 
 	job, err := selectJob(cfg, cli.Job)
@@ -71,20 +80,20 @@ func run(args []string) error {
 		return err
 	}
 
-	store, err := OpenStore(statePath(cli.Pipeline))
+	st, err := store.OpenStore(statePath(cli.Pipeline))
 	if err != nil {
-		return err
+		return fmt.Errorf("could not open state store: %w", err)
 	}
 	defer func() {
-		closeErr := store.Close()
+		closeErr := st.Close()
 		if closeErr != nil {
 			slog.Error("store.close", "error", closeErr)
 		}
 	}()
 
-	provider, err := newWorkspaceProvider(cfg.Workspace)
+	provider, err := workspace.NewProvider(cfg.Workspace)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not build workspace provider: %w", err)
 	}
 
 	err = provider.Validate()
@@ -102,7 +111,17 @@ func run(args []string) error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	return RunJob(ctx, cfg, job, cli.Version, provider, store, cli.Force)
+	return wrapRunErr(pipeline.RunJob(ctx, cfg, job, cli.Version, provider, st, cli.Force))
+}
+
+// wrapRunErr adds context to a RunJob error without adding another branch to
+// run() itself, which is already at cyclop's per-function complexity budget.
+func wrapRunErr(err error) error {
+	if err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+
+	return nil
 }
 
 // statePath returns the sqlite database path for pipeline's persisted job
@@ -114,7 +133,7 @@ func statePath(pipeline string) string {
 
 // selectJob resolves which job to run: the explicit name if given, or the
 // pipeline's only job if there's exactly one and none was given.
-func selectJob(cfg *Config, name string) (*Job, error) {
+func selectJob(cfg *config.Config, name string) (*config.Job, error) {
 	if name == "" {
 		if len(cfg.Jobs) != 1 {
 			return nil, fmt.Errorf("--job is required when the pipeline has more than one job (available: %v)", cfg.JobNames())
@@ -124,7 +143,12 @@ func selectJob(cfg *Config, name string) (*Job, error) {
 		slog.Debug("cli.select_job", "job", name, "reason", "only job in pipeline")
 	}
 
-	return cfg.FindJob(name)
+	job, err := cfg.FindJob(name)
+	if err != nil {
+		return nil, fmt.Errorf("could not select job: %w", err)
+	}
+
+	return job, nil
 }
 
 // withSignalCancel derives a context from parent that is canceled on
