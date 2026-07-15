@@ -35,19 +35,47 @@ type DockerRunner struct {
 	resolvedCwd string
 }
 
+// dockerExec is the shared plumbing behind Run/RunCapture/RunCaptureFull:
+// it always captures both stdout and stderr into buffers — even for Run,
+// which never exposes them, trading a little memory for one less code path
+// to keep in sync across three near-identical methods — additionally
+// streaming either live (to os.Stdout/os.Stderr) when streamStdout/
+// streamStderr is set. stdin wires the host's stdin through only when set;
+// otherwise cmd.Stdin stays nil (/dev/null), matching RunCaptureFull's
+// non-interactive semantics for model-generated commands.
+func (d DockerRunner) dockerExec(ctx context.Context, command string, stdin, streamStdout, streamStderr bool) (stdout, stderr string, runErr error) {
+	args := dockerRunArgs(d.Image, command, d.resolvedCwd, stdin)
+
+	cmd := dockerCommand(ctx, args)
+	if stdin {
+		cmd.Stdin = os.Stdin
+	}
+
+	var outBuf, errBuf bytes.Buffer
+
+	if streamStdout {
+		cmd.Stdout = io.MultiWriter(os.Stdout, &outBuf)
+	} else {
+		cmd.Stdout = &outBuf
+	}
+
+	if streamStderr {
+		cmd.Stderr = io.MultiWriter(os.Stderr, &errBuf)
+	} else {
+		cmd.Stderr = &errBuf
+	}
+
+	runErr = cmd.Run()
+
+	return outBuf.String(), errBuf.String(), runErr
+}
+
 // Run runs command in a container, streaming stdout/stderr live and wiring
 // the host's stdin through (-i). Any nonzero exit is a Go error.
 func (d DockerRunner) Run(ctx context.Context, command string) error {
-	args := dockerRunArgs(d.Image, command, d.resolvedCwd, true)
-
 	slog.Debug("shell.docker.run", "image", d.Image, "command", command, "cwd", d.resolvedCwd)
 
-	cmd := dockerCommand(ctx, args)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	runErr := cmd.Run()
+	_, _, runErr := d.dockerExec(ctx, command, true, true, true)
 
 	slog.Debug("shell.docker.run", "image", d.Image, "command", command, "cwd", d.resolvedCwd, "exit_code", exitCodeOf(runErr))
 
@@ -64,28 +92,18 @@ func (d DockerRunner) Run(ctx context.Context, command string) error {
 // failing containerized check/out command's output is available for
 // debugging. Any nonzero exit is a Go error.
 func (d DockerRunner) RunCapture(ctx context.Context, command string) ([]byte, error) {
-	args := dockerRunArgs(d.Image, command, d.resolvedCwd, true)
-
 	slog.Debug("shell.docker.capture", "image", d.Image, "command", command, "cwd", d.resolvedCwd)
 
-	cmd := dockerCommand(ctx, args)
-	cmd.Stdin = os.Stdin
-
-	var outBuf, errBuf bytes.Buffer
-
-	cmd.Stdout = &outBuf
-	cmd.Stderr = io.MultiWriter(os.Stderr, &errBuf)
-
-	runErr := cmd.Run()
+	stdout, stderr, runErr := d.dockerExec(ctx, command, true, false, true)
 
 	slog.Debug("shell.docker.capture", "image", d.Image, "command", command, "cwd", d.resolvedCwd,
-		"exit_code", exitCodeOf(runErr), "output_bytes", outBuf.Len(), "output", outBuf.String(), "stderr", errBuf.String())
+		"exit_code", exitCodeOf(runErr), "output_bytes", len(stdout), "output", stdout, "stderr", stderr)
 
 	if runErr != nil {
 		return nil, fmt.Errorf("command %q failed in image %q: %w", command, d.Image, runErr)
 	}
 
-	return outBuf.Bytes(), nil
+	return []byte(stdout), nil
 }
 
 // RunCaptureFull runs command in a container, capturing stdout/stderr
@@ -96,19 +114,9 @@ func (d DockerRunner) RunCapture(ctx context.Context, command string) ([]byte, e
 // a Go error. Only a failure to start the docker CLI client itself returns a
 // non-nil error.
 func (d DockerRunner) RunCaptureFull(ctx context.Context, command string) (stdout, stderr string, exitCode int, err error) {
-	args := dockerRunArgs(d.Image, command, d.resolvedCwd, false)
-
 	slog.Debug("shell.docker.capture_full", "image", d.Image, "command", command, "cwd", d.resolvedCwd)
 
-	cmd := dockerCommand(ctx, args)
-	cmd.Stdin = nil
-
-	var outBuf, errBuf bytes.Buffer
-
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-
-	runErr := cmd.Run()
+	stdout, stderr, runErr := d.dockerExec(ctx, command, false, false, false)
 
 	if !processStarted(runErr) {
 		return "", "", -1, fmt.Errorf("docker run failed to start for image %q: %w", d.Image, runErr)
@@ -118,7 +126,7 @@ func (d DockerRunner) RunCaptureFull(ctx context.Context, command string) (stdou
 
 	slog.Debug("shell.docker.capture_full", "image", d.Image, "command", command, "cwd", d.resolvedCwd, "exit_code", code)
 
-	return outBuf.String(), errBuf.String(), code, nil
+	return stdout, stderr, code, nil
 }
 
 // dockerCommand builds the exec.Cmd for `docker <args...>`, wired so a
