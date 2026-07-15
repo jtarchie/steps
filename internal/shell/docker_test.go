@@ -91,6 +91,27 @@ func TestDockerRunArgsEmptyCwdMountsNothing(t *testing.T) {
 	}
 }
 
+// TestDockerRunArgsRejectsColonInPath guards against docker's `-v
+// host:container` volume spec silently misparsing a host path that itself
+// contains a ':' (a valid POSIX path character) — dockerRunArgs must fail
+// loudly instead of building an argument docker would misinterpret.
+func TestDockerRunArgsRejectsColonInPath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cwd := filepath.Join(dir, "weird:name")
+
+	err := os.Mkdir(cwd, 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = dockerRunArgs("alpine", "echo hi", cwd, false)
+	if err == nil {
+		t.Error("expected an error for a working directory containing ':'")
+	}
+}
+
 func TestDockerRunArgsCommandOrdering(t *testing.T) {
 	t.Parallel()
 

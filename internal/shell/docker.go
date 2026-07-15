@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -173,7 +174,11 @@ func dockerRunArgs(image, command, cwd string, stdin bool) (args []string, resol
 
 // resolveMountPath returns cwd as an absolute path with symlinks resolved,
 // so the host path handed to `docker run -v` matches the real filesystem
-// location Docker Desktop (or the daemon) actually shares.
+// location Docker Desktop (or the daemon) actually shares. Rejects a
+// resolved path containing ':' — docker's own `-v host:container` volume
+// spec splits on that character, so a path containing one would be silently
+// misparsed into the wrong mount (or rejected by docker with a confusing
+// error) rather than failing clearly here.
 func resolveMountPath(cwd string) (string, error) {
 	abs, err := filepath.Abs(cwd)
 	if err != nil {
@@ -183,6 +188,10 @@ func resolveMountPath(cwd string) (string, error) {
 	resolved, err := filepath.EvalSymlinks(abs)
 	if err != nil {
 		return "", fmt.Errorf("%w", err)
+	}
+
+	if strings.Contains(resolved, ":") {
+		return "", fmt.Errorf("path %q contains ':', which is not supported for a docker bind mount", resolved)
 	}
 
 	return resolved, nil
