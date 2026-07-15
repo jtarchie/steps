@@ -55,7 +55,7 @@ func (p agentGenParams) applyTo(cfg *genai.GenerateContentConfig) {
 type agentConversation struct {
 	system   string
 	prompt   string
-	dir      string
+	env      toolEnv
 	tools    agentTools
 	params   agentGenParams
 	maxTurns int
@@ -138,7 +138,7 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 
 		req.Config.ToolConfig = nil // clear any forcing from the prior turn — the model chooses freely again next time it tries to stop
 
-		parts := toolResponseParts(ctx, calls, conv.dir, conv.tools.registry)
+		parts := toolResponseParts(ctx, calls, conv.env, conv.tools.registry)
 
 		for _, part := range parts {
 			name := part.FunctionResponse.Name
@@ -252,11 +252,11 @@ func collectParts(content *genai.Content) (calls []*genai.FunctionCall, text str
 // (a nonzero exit_code, or an {"error": ...} result) stops any other call in
 // the turn, or the conversation — every failure is just data the model sees
 // on its next turn and can react to.
-func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, dir string, registry map[string]toolImpl) []*genai.Part {
+func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, env toolEnv, registry map[string]toolImpl) []*genai.Part {
 	parts := make([]*genai.Part, 0, len(calls))
 
 	for _, call := range calls {
-		response := executeAgentTool(ctx, call, dir, registry)
+		response := executeAgentTool(ctx, call, env, registry)
 
 		parts = append(parts, &genai.Part{
 			FunctionResponse: &genai.FunctionResponse{ID: call.ID, Name: call.Name, Response: response},

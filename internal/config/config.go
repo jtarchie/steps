@@ -77,7 +77,11 @@ type WorkspaceOptions struct {
 
 // ResourceType defines a resource kind as a set of shell command templates.
 type ResourceType struct {
-	Name   string             `yaml:"name"`
+	Name string `yaml:"name"`
+	// Image, when set, runs check/in/out in a fresh `docker run --rm`
+	// container from this image instead of on the host. Empty (the default)
+	// keeps host execution, byte-identical to before this field existed.
+	Image  string             `yaml:"image,omitempty"`
 	Config ResourceTypeConfig `yaml:"config"`
 }
 
@@ -103,6 +107,11 @@ type Resource struct {
 type Agent struct {
 	Name   string      `yaml:"name"`
 	Source AgentSource `yaml:"source"`
+	// Image, when set, runs this agent's run_shell/custom-tool commands in a
+	// fresh `docker run --rm` container from this image instead of on the
+	// host. A step's own Image, if set, overrides this for that step only
+	// (see Step.Image). Empty (the default) keeps host execution.
+	Image string `yaml:"image,omitempty"`
 	// System is the persona/system message given to the model. Empty falls
 	// back to a generic CI-agent persona.
 	System string `yaml:"system,omitempty"`
@@ -197,6 +206,12 @@ type Task struct {
 	Name string   `yaml:"name"`
 	Run  string   `yaml:"run"`
 	Fix  *FixSpec `yaml:"fix,omitempty"`
+	// Image, when set, runs this task's run: (and its verdict re-run) in a
+	// fresh `docker run --rm` container from this image instead of on the
+	// host. A referencing step's own Image, if non-empty, overrides this for
+	// that step only — mirroring how Fix works. Empty (the default) keeps
+	// host execution, byte-identical to before this field existed.
+	Image string `yaml:"image,omitempty"`
 	// Inputs/Outputs are consulted only when a pipeline sets workspace: (see
 	// WorkspaceConfig); a referencing step's own Inputs/Outputs, if
 	// non-nil, override these for that step only — mirroring how Fix works.
@@ -307,6 +322,13 @@ type Step struct {
 	// invalid on put steps.
 	Inputs  []string `yaml:"inputs,omitempty"`
 	Outputs []string `yaml:"outputs,omitempty"`
+	// Image, on a task or agent step, overrides the referenced task's/
+	// agent's Image for this step only (inherit-only: a non-empty step Image
+	// always wins, there is no way to force host execution from a step when
+	// the task/agent sets one). Invalid on get/put steps — a put's execution
+	// image comes from its resource type, and a get has no task/agent to
+	// override.
+	Image string `yaml:"image,omitempty"`
 }
 
 // LoadConfig reads and parses a pipeline YAML file at path.
@@ -349,7 +371,69 @@ func (c *Config) validate() error {
 		return err
 	}
 
-	return c.validateArtifactDecls()
+	err = c.validateArtifactDecls()
+	if err != nil {
+		return err
+	}
+
+	return c.validateImages()
+}
+
+// validateImages rejects image: on get/put steps: a put's execution image
+// comes from its resource type (ResourceType.Image), and a get step has no
+// task/agent to scope.
+func (c *Config) validateImages() error {
+	for _, job := range c.Jobs {
+		for i, step := range job.Plan {
+			if step.Image == "" {
+				continue
+			}
+
+			label := fmt.Sprintf("job %q step %d", job.Name, i)
+
+			switch {
+			case step.Get != "":
+				return fmt.Errorf("%s (get %q): image is not valid on get steps", label, step.Get)
+			case step.Put != "":
+				return fmt.Errorf("%s (put %q): image is not valid on put steps; set it on the resource_type instead", label, step.Put)
+			}
+		}
+	}
+
+	return nil
+}
+
+// UsesImages reports whether any resource_type, agent, task, or step sets
+// image: — used to fail fast (before any step runs) when docker isn't
+// available but the pipeline needs it.
+func (c *Config) UsesImages() bool {
+	for _, rt := range c.ResourceTypes {
+		if rt.Image != "" {
+			return true
+		}
+	}
+
+	for _, a := range c.Agents {
+		if a.Image != "" {
+			return true
+		}
+	}
+
+	for _, t := range c.Tasks {
+		if t.Image != "" {
+			return true
+		}
+	}
+
+	for _, job := range c.Jobs {
+		for _, step := range job.Plan {
+			if step.Image != "" {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 var (
@@ -573,16 +657,24 @@ type ResolvedTask struct {
 	Fix     *FixSpec
 	Inputs  []string
 	Outputs []string
+	// Image, when non-empty, runs this task's run: (and any fix-loop
+	// re-runs) in a container from this image instead of on the host. See
+	// Task.Image/Step.Image.
+	Image string
 }
 
 // ResolveTask resolves step into a ResolvedTask: a step carrying its own
 // run: is inline and used as-is; otherwise step.Task names a tasks: entry,
-// whose run/fix/inputs/outputs are used, except the step's own fix:,
-// inputs:, and outputs:, if set (non-nil), which override the referenced
-// task's for this step only — the same override idiom for all three.
+// whose run/fix/inputs/outputs/image are used, except the step's own fix:,
+// inputs:, outputs:, and image:, if set (non-nil/non-empty), which override
+// the referenced task's for this step only — the same override idiom for
+// all four.
 func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 	if step.Run != "" {
-		return ResolvedTask{Name: step.Task, Run: step.Run, Fix: step.Fix, Inputs: step.Inputs, Outputs: step.Outputs}, nil
+		return ResolvedTask{
+			Name: step.Task, Run: step.Run, Fix: step.Fix,
+			Inputs: step.Inputs, Outputs: step.Outputs, Image: step.Image,
+		}, nil
 	}
 
 	task, err := c.FindTask(step.Task)
@@ -605,7 +697,12 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 		outputs = step.Outputs
 	}
 
-	return ResolvedTask{Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs}, nil
+	image := task.Image
+	if step.Image != "" {
+		image = step.Image
+	}
+
+	return ResolvedTask{Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs, Image: image}, nil
 }
 
 // defaultMaxAgentTurns is the default cap on one attempt's tool-calling loop
@@ -788,6 +885,10 @@ type ResolvedInvocation struct {
 	// instead of a named function object — for providers whose
 	// OpenAI-compat server rejects the object form. See resolveAgentTarget.
 	StringOnlyToolChoice bool
+	// Image, when non-empty, runs this step's run_shell/custom-tool commands
+	// in a container from this image instead of on the host. See
+	// Agent.Image/Step.Image.
+	Image string
 }
 
 // ResolveAgentInvocation resolves the agent named by step against c,
@@ -825,6 +926,11 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		attempts = 1
 	}
 
+	image := agent.Image
+	if step.Image != "" {
+		image = step.Image
+	}
+
 	return ResolvedInvocation{
 		AgentName:            agent.Name,
 		BaseURL:              baseURL,
@@ -840,6 +946,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		Attempts:             attempts,
 		ToolSpecs:            toolSpecs,
 		StringOnlyToolChoice: stringOnlyToolChoice,
+		Image:                image,
 	}, nil
 }
 

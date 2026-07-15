@@ -185,3 +185,120 @@ func TestPutNodeContentInputsOnlyAffectHashWhenWorkspaceConfigured(t *testing.T)
 		t.Error("declaring inputs did not change a put node's hash when a workspace: block is configured")
 	}
 }
+
+// TestImageOmittedFromHashWhenEmpty guards the same cache-stability
+// guarantee as the inputs/outputs tests above, but for image: — unlike
+// inputs/outputs, image is gated on its own value rather than on ws != nil
+// (see TaskNodeContent's doc comment), so this checks the no-workspace case
+// specifically: a pipeline that never sets image: must hash exactly as it
+// did before this field existed.
+func TestImageOmittedFromHashWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	rt := config.ResolvedTask{Name: "build", Run: "echo hi"}
+
+	content := TaskNodeContent(rt, nil)
+	if len(content) != 1 {
+		t.Fatalf(`TaskNodeContent(rt, nil) = %#v, want exactly {"run": ...}, no image key`, content)
+	}
+
+	if _, ok := content["image"]; ok {
+		t.Error(`TaskNodeContent with no image set should not have an "image" key`)
+	}
+}
+
+// TestTaskImageAffectsHashRegardlessOfWorkspace checks that (unlike
+// inputs/outputs) a task's image changes its hash whether or not a
+// workspace: block is configured, since image alters what the run: command
+// actually executes against no matter which workspace mode is active.
+func TestTaskImageAffectsHashRegardlessOfWorkspace(t *testing.T) {
+	t.Parallel()
+
+	base := config.ResolvedTask{Name: "build", Run: "echo hi"}
+	withImage := config.ResolvedTask{Name: "build", Run: "echo hi", Image: "alpine"}
+	withOtherImage := config.ResolvedTask{Name: "build", Run: "echo hi", Image: "golang:1.26"}
+
+	mustHash := func(t *testing.T, rt config.ResolvedTask, ws *config.WorkspaceConfig) string {
+		t.Helper()
+
+		hash, err := HashNode(NodeKindTask, TaskNodeContent(rt, ws), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return hash
+	}
+
+	for _, ws := range []*config.WorkspaceConfig{nil, {Strategy: "copy"}} {
+		if mustHash(t, base, ws) == mustHash(t, withImage, ws) {
+			t.Errorf("setting image did not change the task hash (ws=%v)", ws)
+		}
+
+		if mustHash(t, withImage, ws) == mustHash(t, withOtherImage, ws) {
+			t.Errorf("two different images produced the same task hash (ws=%v)", ws)
+		}
+	}
+}
+
+// TestAgentImageAffectsHash mirrors the task case for AgentContentMap.
+func TestAgentImageAffectsHash(t *testing.T) {
+	t.Parallel()
+
+	step := config.Step{Agent: "reviewer"}
+	base := config.ResolvedInvocation{AgentName: "reviewer"}
+	withImage := config.ResolvedInvocation{AgentName: "reviewer", Image: "python:3.12"}
+
+	baseHash, err := HashNode(NodeKindAgent, AgentContentMap(step, base, nil), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	imageHash, err := HashNode(NodeKindAgent, AgentContentMap(step, withImage, nil), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if baseHash == imageHash {
+		t.Error("setting an agent's resolved image did not change the agent node hash")
+	}
+}
+
+// TestGetPutImageAffectsHash mirrors the task case for GetNodeContent and
+// PutNodeContent, whose image comes from the resource type.
+func TestGetPutImageAffectsHash(t *testing.T) {
+	t.Parallel()
+
+	base := config.ResourceType{Config: config.ResourceTypeConfig{In: "true", Out: "true"}}
+	withImage := config.ResourceType{Config: config.ResourceTypeConfig{In: "true", Out: "true"}, Image: "alpine/git"}
+
+	source := map[string]any{"key": "v"}
+	version := map[string]any{"ref": "v1"}
+
+	baseGetHash, err := HashNode(NodeKindGet, GetNodeContent(base, source, version), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	imageGetHash, err := HashNode(NodeKindGet, GetNodeContent(withImage, source, version), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if baseGetHash == imageGetHash {
+		t.Error("setting a resource type's image did not change the get node hash")
+	}
+
+	basePutHash, err := HashNode(NodeKindPut, PutNodeContent(base, source, nil, nil, nil), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	imagePutHash, err := HashNode(NodeKindPut, PutNodeContent(withImage, source, nil, nil, nil), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if basePutHash == imagePutHash {
+		t.Error("setting a resource type's image did not change the put node hash")
+	}
+}

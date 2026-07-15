@@ -13,6 +13,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/retry"
+	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
@@ -114,7 +115,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	conv := agentConversation{
 		system: buildSystemMessage(ri.Persona, dir),
 		prompt: step.Prompt,
-		dir:    dir,
+		env:    toolEnv{dir: dir, runner: shell.NewRunner(ri.Image)},
 		tools:  agentTools{decls: decls, registry: registry, required: requiredToolNames(ri.ToolSpecs)},
 		params: agentGenParams{
 			temperature: ri.Temperature,

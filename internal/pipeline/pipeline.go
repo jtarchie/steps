@@ -54,6 +54,13 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
+	if cfg.UsesImages() {
+		err = shell.ValidateDocker(ctx)
+		if err != nil {
+			return fmt.Errorf("job %q: image: configured but docker is unavailable: %w", job.Name, err)
+		}
+	}
+
 	bw, err := provider.NewBuild(ctx, job.Name)
 	if err != nil {
 		return fmt.Errorf("job %q: %w", job.Name, err)
@@ -317,8 +324,10 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 // tool — then re-runs the command once; that re-run's exit code is the
 // verdict. A green run never constructs the agent.
 func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, workspaceDir string) error {
+	runner := shell.NewRunner(rt.Image)
+
 	if rt.Fix == nil {
-		err := shell.RunShell(ctx, rt.Run, workspaceDir)
+		err := runner.Run(ctx, rt.Run, workspaceDir)
 		if err != nil {
 			return fmt.Errorf("task %q: %w", rt.Name, err)
 		}
@@ -326,7 +335,7 @@ func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedT
 		return nil
 	}
 
-	stdout, stderr, exitCode, err := shell.RunShellCaptureFull(ctx, rt.Run, workspaceDir)
+	stdout, stderr, exitCode, err := runner.RunCaptureFull(ctx, rt.Run, workspaceDir)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
@@ -339,13 +348,13 @@ func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedT
 
 	fmt.Printf("task %q failed (exit %d); invoking fix agent %q\n", rt.Name, exitCode, rt.Fix.Agent)
 
-	err = agent.RunFix(ctx, cfg, rt.Name, rt.Run, rt.Fix, taskFailureOutput(stdout, stderr, exitCode), workspaceDir)
+	err = agent.RunFix(ctx, cfg, rt, taskFailureOutput(stdout, stderr, exitCode), workspaceDir)
 	if err != nil {
 		return fmt.Errorf("fix agent %q: %w", rt.Fix.Agent, err)
 	}
 
 	// Verdict: re-run the command (its run:, not its fix:) and gate on it.
-	stdout, stderr, exitCode, err = shell.RunShellCaptureFull(ctx, rt.Run, workspaceDir)
+	stdout, stderr, exitCode, err = runner.RunCaptureFull(ctx, rt.Run, workspaceDir)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}

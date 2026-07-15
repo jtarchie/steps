@@ -11,7 +11,14 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/shell"
 )
+
+// testEnv builds a toolEnv over dir using the host runner — the shape every
+// tool impl test needs for its third argument.
+func testEnv(dir string) toolEnv {
+	return toolEnv{dir: dir, runner: shell.HostRunner{}}
+}
 
 func TestBuildAgentToolsBuiltins(t *testing.T) {
 	t.Parallel()
@@ -131,7 +138,7 @@ func TestExecCustomTool(t *testing.T) {
 	t.Run("renders args and shells out", func(t *testing.T) {
 		t.Parallel()
 
-		result := impl(context.Background(), map[string]any{"name": "world"}, dir)
+		result := impl(context.Background(), map[string]any{"name": "world"}, testEnv(dir))
 		if result["error"] != nil {
 			t.Fatalf("unexpected error: %v", result["error"])
 		}
@@ -144,7 +151,7 @@ func TestExecCustomTool(t *testing.T) {
 	t.Run("missing required arg yields an error map, not a Go error", func(t *testing.T) {
 		t.Parallel()
 
-		result := impl(context.Background(), map[string]any{}, dir)
+		result := impl(context.Background(), map[string]any{}, testEnv(dir))
 		if result["error"] == nil {
 			t.Error("expected an \"error\" key in the result map")
 		}
@@ -153,7 +160,7 @@ func TestExecCustomTool(t *testing.T) {
 	t.Run("missing arg is caught before rendering, naming the tool and arg", func(t *testing.T) {
 		t.Parallel()
 
-		result := impl(context.Background(), map[string]any{}, dir)
+		result := impl(context.Background(), map[string]any{}, testEnv(dir))
 
 		msg, _ := result["error"].(string)
 		if want := `greet: missing required argument(s): "name"`; msg != want {
@@ -170,7 +177,7 @@ func TestExecCustomTool(t *testing.T) {
 
 		multiImpl := execCustomTool(config.ToolSpec{Name: "post", Run: `echo {{ .args.action }} {{ .args.body }}`}, []string{"action", "body"})
 
-		result := multiImpl(context.Background(), map[string]any{}, dir)
+		result := multiImpl(context.Background(), map[string]any{}, testEnv(dir))
 
 		msg, _ := result["error"].(string)
 		if want := `post: missing required argument(s): "action", "body"`; msg != want {
@@ -181,7 +188,7 @@ func TestExecCustomTool(t *testing.T) {
 	t.Run("empty string arg is treated as missing", func(t *testing.T) {
 		t.Parallel()
 
-		result := impl(context.Background(), map[string]any{"name": ""}, dir)
+		result := impl(context.Background(), map[string]any{"name": ""}, testEnv(dir))
 		if result["error"] == nil {
 			t.Error("expected an \"error\" key for an empty-string arg")
 		}
@@ -192,7 +199,7 @@ func TestExecCustomTool(t *testing.T) {
 
 		requiredImpl := execCustomTool(config.ToolSpec{Name: "fail", Run: "exit 1", Required: true}, nil)
 
-		result := requiredImpl(context.Background(), map[string]any{}, dir)
+		result := requiredImpl(context.Background(), map[string]any{}, testEnv(dir))
 		if result["exit_code"] != 1 {
 			t.Errorf("exit_code = %v, want 1", result["exit_code"])
 		}
@@ -280,7 +287,7 @@ func TestExecReadFile(t *testing.T) {
 	t.Run("read_file returns content", func(t *testing.T) {
 		t.Parallel()
 
-		result := execReadFile(context.Background(), map[string]any{"path": "a.txt"}, dir)
+		result := execReadFile(context.Background(), map[string]any{"path": "a.txt"}, testEnv(dir))
 		if result["content"] != "hello" {
 			t.Errorf("content = %v, want %q", result["content"], "hello")
 		}
@@ -289,7 +296,7 @@ func TestExecReadFile(t *testing.T) {
 	t.Run("read_file rejects traversal", func(t *testing.T) {
 		t.Parallel()
 
-		result := execReadFile(context.Background(), map[string]any{"path": "../../etc/passwd"}, dir)
+		result := execReadFile(context.Background(), map[string]any{"path": "../../etc/passwd"}, testEnv(dir))
 		if result["error"] == nil {
 			t.Error("expected an error for a traversal path")
 		}
@@ -298,7 +305,7 @@ func TestExecReadFile(t *testing.T) {
 	t.Run("read_file requires path", func(t *testing.T) {
 		t.Parallel()
 
-		result := execReadFile(context.Background(), map[string]any{}, dir)
+		result := execReadFile(context.Background(), map[string]any{}, testEnv(dir))
 		if result["error"] == nil {
 			t.Error("expected an error for a missing path argument")
 		}
@@ -318,7 +325,7 @@ func TestExecListDir(t *testing.T) {
 	t.Run("list_dir defaults to the working directory", func(t *testing.T) {
 		t.Parallel()
 
-		result := execListDir(context.Background(), map[string]any{}, dir)
+		result := execListDir(context.Background(), map[string]any{}, testEnv(dir))
 
 		entries, ok := result["entries"].([]map[string]any)
 		if !ok || len(entries) != 1 {
@@ -347,7 +354,7 @@ func TestToolResponseParts(t *testing.T) {
 		{ID: "3", Name: "ok"},
 	}
 
-	parts := toolResponseParts(context.Background(), calls, dir, registry)
+	parts := toolResponseParts(context.Background(), calls, testEnv(dir), registry)
 
 	if len(parts) != 3 {
 		t.Fatalf("expected a response part for every call, even after a failed one, got %d", len(parts))

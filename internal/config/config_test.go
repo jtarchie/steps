@@ -958,3 +958,220 @@ func TestLoadConfigErrors(t *testing.T) {
 		}
 	})
 }
+
+func TestResolveTaskImageOverride(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Tasks: []Task{{Name: "build", Run: "echo hi", Image: "golang:1.26"}},
+	}
+
+	t.Run("inline step (its own run:) uses its own image, never consulting tasks:", func(t *testing.T) {
+		t.Parallel()
+
+		rt, err := cfg.ResolveTask(Step{Task: "build", Run: "echo inline", Image: "alpine"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if rt.Image != "alpine" {
+			t.Errorf("image = %q, want %q", rt.Image, "alpine")
+		}
+	})
+
+	t.Run("referenced step with no image of its own inherits the task's", func(t *testing.T) {
+		t.Parallel()
+
+		rt, err := cfg.ResolveTask(Step{Task: "build"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if rt.Image != "golang:1.26" {
+			t.Errorf("image = %q, want %q (inherited from the task)", rt.Image, "golang:1.26")
+		}
+	})
+
+	t.Run("referenced step's own image overrides the task's", func(t *testing.T) {
+		t.Parallel()
+
+		rt, err := cfg.ResolveTask(Step{Task: "build", Image: "alpine"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if rt.Image != "alpine" {
+			t.Errorf("image = %q, want %q (step override)", rt.Image, "alpine")
+		}
+	})
+
+	t.Run("no image anywhere resolves to empty (host execution)", func(t *testing.T) {
+		t.Parallel()
+
+		noImageCfg := &Config{Tasks: []Task{{Name: "plain", Run: "echo hi"}}}
+
+		rt, err := noImageCfg.ResolveTask(Step{Task: "plain"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if rt.Image != "" {
+			t.Errorf("image = %q, want empty", rt.Image)
+		}
+	})
+}
+
+func TestResolveAgentInvocationImageOverride(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Agents: []Agent{{Name: "reviewer", Source: AgentSource{Model: "openai/gpt-4o"}, Image: "python:3.12"}},
+	}
+
+	t.Run("step with no image of its own inherits the agent's", func(t *testing.T) {
+		t.Parallel()
+
+		ri, err := cfg.ResolveAgentInvocation(Step{Agent: "reviewer"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if ri.Image != "python:3.12" {
+			t.Errorf("image = %q, want %q (inherited from the agent)", ri.Image, "python:3.12")
+		}
+	})
+
+	t.Run("step's own image overrides the agent's", func(t *testing.T) {
+		t.Parallel()
+
+		ri, err := cfg.ResolveAgentInvocation(Step{Agent: "reviewer", Image: "node:22"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if ri.Image != "node:22" {
+			t.Errorf("image = %q, want %q (step override)", ri.Image, "node:22")
+		}
+	})
+
+	t.Run("no image anywhere resolves to empty (host execution)", func(t *testing.T) {
+		t.Parallel()
+
+		noImageCfg := &Config{Agents: []Agent{{Name: "a", Source: AgentSource{Model: "openai/gpt-4o"}}}}
+
+		ri, err := noImageCfg.ResolveAgentInvocation(Step{Agent: "a"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if ri.Image != "" {
+			t.Errorf("image = %q, want empty", ri.Image)
+		}
+	})
+}
+
+func TestUsesImages(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no image anywhere", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{
+			ResourceTypes: []ResourceType{{Name: "git"}},
+			Tasks:         []Task{{Name: "build", Run: "echo hi"}},
+			Jobs:          []Job{{Name: "main", Plan: []Step{{Task: "build"}}}},
+		}
+
+		if cfg.UsesImages() {
+			t.Error("UsesImages() = true, want false")
+		}
+	})
+
+	t.Run("resource_type image", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{ResourceTypes: []ResourceType{{Name: "git", Image: "alpine/git"}}}
+
+		if !cfg.UsesImages() {
+			t.Error("UsesImages() = false, want true (resource_type sets image)")
+		}
+	})
+
+	t.Run("agent image", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{Agents: []Agent{{Name: "a", Image: "python:3.12"}}}
+
+		if !cfg.UsesImages() {
+			t.Error("UsesImages() = false, want true (agent sets image)")
+		}
+	})
+
+	t.Run("top-level task image", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{Tasks: []Task{{Name: "build", Image: "golang:1.26"}}}
+
+		if !cfg.UsesImages() {
+			t.Error("UsesImages() = false, want true (task sets image)")
+		}
+	})
+
+	t.Run("step-level image only", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{Jobs: []Job{{Name: "main", Plan: []Step{{Task: "t", Run: "echo hi", Image: "alpine"}}}}}
+
+		if !cfg.UsesImages() {
+			t.Error("UsesImages() = false, want true (step sets image)")
+		}
+	})
+}
+
+func TestValidateImagesRejectsGetAndPutSteps(t *testing.T) {
+	t.Parallel()
+
+	t.Run("image on a get step is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{Jobs: []Job{{Name: "main", Plan: []Step{{Get: "repo", Image: "alpine"}}}}}
+
+		err := cfg.validateImages()
+		if err == nil {
+			t.Error("expected an error for image: on a get step")
+		}
+	})
+
+	t.Run("image on a put step is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{Jobs: []Job{{Name: "main", Plan: []Step{{Put: "repo", Image: "alpine"}}}}}
+
+		err := cfg.validateImages()
+		if err == nil {
+			t.Error("expected an error for image: on a put step")
+		}
+	})
+
+	t.Run("image on a task step is fine", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{Jobs: []Job{{Name: "main", Plan: []Step{{Task: "t", Run: "echo hi", Image: "alpine"}}}}}
+
+		err := cfg.validateImages()
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("image on an agent step is fine", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{Jobs: []Job{{Name: "main", Plan: []Step{{Agent: "a", Image: "alpine"}}}}}
+
+		err := cfg.validateImages()
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+}

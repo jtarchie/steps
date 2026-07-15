@@ -24,7 +24,17 @@ import (
 // trailing marker so the model knows output was cut.
 const maxToolOutputBytes = 100_000
 
-// toolImpl executes one resolved tool against dir, given the model's args.
+// toolEnv is the execution environment tool impls run against: the step's
+// working directory (also the bind-mount source when runner is a
+// DockerRunner, so host-side tools like read_file/list_dir keep seeing what
+// a containerized run_shell/custom tool wrote) and the runner shell-backed
+// tools execute commands through.
+type toolEnv struct {
+	dir    string
+	runner shell.Runner
+}
+
+// toolImpl executes one resolved tool against env, given the model's args.
 // It returns the map sent back as the FunctionResponse — never a Go error;
 // every failure (including a required: true tool's) is reported to the
 // model as data ({"error": ...} or a nonzero "exit_code") so it can react on
@@ -33,7 +43,7 @@ const maxToolOutputBytes = 100_000
 // by tracking success and, if the model tries to stop early, forcing
 // another call via forceRequiredTool — rather than by a tool ever failing
 // the step directly.
-type toolImpl func(ctx context.Context, args map[string]any, dir string) map[string]any
+type toolImpl func(ctx context.Context, args map[string]any, env toolEnv) map[string]any
 
 // agentTools bundles what buildAgentTools produced: the declarations sent
 // to the model, the registry used to execute the calls it makes, and the
@@ -230,9 +240,11 @@ func truncateToolOutput(s string) string {
 }
 
 // shellToolResult builds the FunctionResponse map for a shell-backed tool
-// (run_shell and every custom tool), truncating the captured streams.
-func shellToolResult(ctx context.Context, command, dir string) map[string]any {
-	stdout, stderr, exitCode, err := shell.RunShellCaptureFull(ctx, command, dir)
+// (run_shell and every custom tool), truncating the captured streams. It
+// executes command through env.runner — the host or, when the step's image:
+// is set, a fresh container — with env.dir as cwd.
+func shellToolResult(ctx context.Context, command string, env toolEnv) map[string]any {
+	stdout, stderr, exitCode, err := env.runner.RunCaptureFull(ctx, command, env.dir)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
@@ -244,13 +256,13 @@ func shellToolResult(ctx context.Context, command, dir string) map[string]any {
 	}
 }
 
-func execReadFile(_ context.Context, args map[string]any, dir string) map[string]any {
+func execReadFile(_ context.Context, args map[string]any, env toolEnv) map[string]any {
 	rel := stringArg(args, "path")
 	if rel == "" {
 		return map[string]any{"error": `read_file: missing required argument "path"`}
 	}
 
-	resolved, err := resolveAgentPath(dir, rel)
+	resolved, err := resolveAgentPath(env.dir, rel)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
@@ -263,13 +275,13 @@ func execReadFile(_ context.Context, args map[string]any, dir string) map[string
 	return map[string]any{"content": truncateToolOutput(string(data))}
 }
 
-func execListDir(_ context.Context, args map[string]any, dir string) map[string]any {
+func execListDir(_ context.Context, args map[string]any, env toolEnv) map[string]any {
 	rel := stringArg(args, "path")
 	if rel == "" {
 		rel = "."
 	}
 
-	resolved, err := resolveAgentPath(dir, rel)
+	resolved, err := resolveAgentPath(env.dir, rel)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
@@ -295,13 +307,13 @@ func execListDir(_ context.Context, args map[string]any, dir string) map[string]
 	return map[string]any{"entries": items}
 }
 
-func execRunShell(ctx context.Context, args map[string]any, dir string) map[string]any {
+func execRunShell(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
 	command := stringArg(args, "command")
 	if command == "" {
 		return map[string]any{"error": `run_shell: missing required argument "command"`}
 	}
 
-	return shellToolResult(ctx, command, dir)
+	return shellToolResult(ctx, command, env)
 }
 
 // execCustomTool renders spec.Run against the model's args and shells it
@@ -318,7 +330,7 @@ func execRunShell(ctx context.Context, args map[string]any, dir string) map[stri
 // and forcing another call if the model tries to stop early — never by a
 // tool failing the step directly.
 func execCustomTool(spec config.ToolSpec, params []string) toolImpl {
-	return func(ctx context.Context, args map[string]any, dir string) map[string]any {
+	return func(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
 		missing := missingArgs(args, params)
 		if len(missing) > 0 {
 			return map[string]any{"error": fmt.Sprintf("%s: missing required argument(s): %s", spec.Name, strings.Join(missing, ", "))}
@@ -329,7 +341,7 @@ func execCustomTool(spec config.ToolSpec, params []string) toolImpl {
 			return map[string]any{"error": err.Error()}
 		}
 
-		return shellToolResult(ctx, rendered, dir)
+		return shellToolResult(ctx, rendered, env)
 	}
 }
 
@@ -349,11 +361,11 @@ func missingArgs(args map[string]any, params []string) []string {
 	return missing
 }
 
-func executeAgentTool(ctx context.Context, call *genai.FunctionCall, dir string, registry map[string]toolImpl) map[string]any {
+func executeAgentTool(ctx context.Context, call *genai.FunctionCall, env toolEnv, registry map[string]toolImpl) map[string]any {
 	impl, ok := registry[call.Name]
 	if !ok {
 		return map[string]any{"error": fmt.Sprintf("unknown tool %q", call.Name)}
 	}
 
-	return impl(ctx, call.Args, dir)
+	return impl(ctx, call.Args, env)
 }

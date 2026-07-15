@@ -12,6 +12,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/retry"
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 // testMaxTurns bounds the tool-calling loop in these tests. It's a local
@@ -119,7 +120,7 @@ func newTestConversation(t *testing.T, prompt, dir string) agentConversation {
 
 	return agentConversation{
 		prompt:   prompt,
-		dir:      dir,
+		env:      toolEnv{dir: dir, runner: shell.HostRunner{}},
 		tools:    agentTools{decls: decls, registry: registry},
 		maxTurns: testMaxTurns,
 	}
@@ -184,7 +185,7 @@ func requiredToolConversation(t *testing.T, dir string) agentConversation {
 
 	return agentConversation{
 		prompt:   "review it",
-		dir:      dir,
+		env:      toolEnv{dir: dir, runner: shell.HostRunner{}},
 		tools:    agentTools{decls: decls, registry: registry, required: requiredToolNames(specs)},
 		maxTurns: testMaxTurns,
 	}
@@ -359,7 +360,7 @@ func TestRunAgentConversationRecoversFailedRequiredTool(t *testing.T) {
 
 	conv := agentConversation{
 		prompt:   "review it",
-		dir:      dir,
+		env:      toolEnv{dir: dir, runner: shell.HostRunner{}},
 		tools:    agentTools{decls: decls, registry: registry, required: requiredToolNames(specs)},
 		maxTurns: testMaxTurns,
 	}

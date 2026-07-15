@@ -80,7 +80,7 @@ Runs a resource type's `check`/`in`/`out` shell commands and selects among the v
 
 ### Leaves
 - **`internal/store`** — SQLite state persistence (`Store`), WAL setup, `NodeRecord` (a persistence-shape copy of `merkle.Node`, so this package doesn't need to depend on `merkle`)
-- **`internal/shell`** — shell command execution with context, logging, output truncation
+- **`internal/shell`** — shell command execution with context, logging, output truncation; `Runner` interface (`HostRunner` via `sh -c`, `DockerRunner` via a fresh `docker run --rm` per command) selected by `NewRunner(image string)` — see "Container Execution" below
 - **`internal/template`** — YAML template rendering (e.g., `{{ .source.repo }}`)
 - **`internal/retry`** — linear-backoff retry loop (`retry.Do`)
 
@@ -88,6 +88,7 @@ Runs a resource type's `check`/`in`/`out` shell commands and selects among the v
 - **.golangci.yml** — Linter config; 40+ rules including security (gosec), correctness, concurrency, complexity checks, and a `depguard` rule per package enforcing the dependency graph above
 - **examples/review.yml** — Example pipeline: PR review job using an agent with `read_file`, `list_dir`, `run_shell`, and a custom `post_review` tool
 - **examples/isolated.yml** — Example pipeline demonstrating opt-in `workspace:` isolation: a reusable task with `inputs:`/`outputs:`, an isolated agent step, and a `put` step scoped to a declared input
+- **examples/container.yml** — Example pipeline demonstrating opt-in `image:` containerized execution: a resource_type, a top-level task (plus a step-level override), and an agent
 
 ### Root Files
 - **main.go** — CLI entry point; parses args, calls `run()` → `config.LoadConfig()` → `pipeline.RunJob()`
@@ -149,6 +150,35 @@ workspace:
 - Fix agents (`fix:`) run inside the failing task's own already-materialized `StepSpace`, not a fresh one — they need to see the exact state the task failed in, and the enclosing task's `Capture` (after the fix loop's final green verdict) is what actually persists outputs downstream.
 - Declaring `inputs:`/`outputs:` without a `workspace:` block is a `LoadConfig`-time error; an `inputs:` naming an artifact nothing earlier in the plan fetched/produced is a `RunJob`-time error (`workspace.ValidateArtifactFlow`) that runs unconditionally, even under `--force` (which otherwise skips merkle planning).
 - Merkle hashes (`TaskNodeContent`/`PutNodeContent`/`AgentContentMap`, all in `internal/merkle/merkle.go`) fold in `inputs:`/`outputs:` **only when `cfg.Workspace != nil`** — so switching a pipeline into isolated mode invalidates its cache (correctly: the executed step's inputs changed), but a pipeline that never opts in hashes exactly as it always has. The workspace `strategy`/`root`/`options` themselves are never hashed — copy and btrfs produce the same logical view, so switching backends must not invalidate anyone's cache.
+
+### Container Execution (opt-in `image:`)
+
+By default every pipeline-defined command (`resource_type` `check`/`in`/`out`, a task's `run:`, an agent's `run_shell`/custom tools) runs on the host via `sh -c` (`internal/shell.HostRunner`). Setting `image:` on a `resource_types:` entry, a top-level `tasks:` entry, or an `agents:` entry runs that entity's commands in a fresh `docker run --rm --init` container from that image instead — one container per command, not a long-lived one. Absent, behavior (and merkle hashes) are byte-identical to before this feature existed.
+
+```yaml
+resource_types:
+- name: git-alpine
+  image: alpine/git       # check/in/out run in this image
+  config: { check: ..., in: ..., out: ... }
+
+tasks:
+- name: build
+  run: go build ./...
+  image: golang:1.26      # this task's run: (and fix-loop re-runs) run in this image
+
+agents:
+- name: reviewer
+  image: python:3.12      # this agent's run_shell/custom tools run in this image
+```
+
+- **Step-level override**: a `task`/`agent` step's own `image:` overrides the referenced `tasks:`/`agents:` entry's image for that step only — the same override idiom `fix:` uses. It's inherit-only: a non-empty step `image:` always wins; there's no way to force host execution from a step when the task/agent sets one. `image:` is invalid on `get`/`put` steps (a put's image comes from its resource type) — rejected at `LoadConfig` time.
+- **`internal/shell.Runner`** is the abstraction: `HostRunner` (today's `sh -c` behavior) or `DockerRunner{Image string}`, selected by `shell.NewRunner(image string)` — every shell-out call site (`internal/resource`'s check/in/out, `internal/pipeline`'s task `run:`, `internal/agent`'s `shellToolResult` behind `run_shell`/custom tools) funnels through this single decision point.
+- **Container shape**: `docker run --rm --init [-i] -v <cwd>:<cwd> -w <cwd> <image> sh -c <command>` — the working directory is bind-mounted at its own resolved (absolute, symlink-free) host path and set as the container's workdir, so host-side readers of the same directory (an agent's `read_file`/`list_dir`, which stay host-side `os.ReadFile`/`os.ReadDir`; `workspace.StepSpace.Capture`) see exactly what a containerized command wrote. `-i` is passed only where the host path wires stdin through (`Run`/`RunCapture`); `RunCaptureFull` (backing agent tool calls) never attaches stdin or a tty, matching its host counterpart's `/dev/null` semantics. No host environment variables are passed into the container — it starts from the image's own env only.
+- **Exit codes pass through unchanged**: `docker run`'s own exit code (including docker-level failures — commonly 125 for a daemon-side error, 126/127 for a command the container couldn't run/find) is treated exactly like a host command's exit code by every caller — a hard error for `Run`/`RunCapture`, ordinary `{exit_code, stdout, stderr}` data for `RunCaptureFull` (so a bad image surfaces to an agent as data it can react to, not a crash).
+- **Fix agents run under the failing task's image**, not the fix agent's own `Agent.image:` — `agent.RunFix`'s signature takes the task's `config.ResolvedTask` (carrying `Image`) precisely so its `run_shell`/custom tools and the injected task-rerun tool reproduce the exact environment that produced the failure; running the fix loop under a different image than the verdict re-run would make "fixed" meaningless.
+- **Fail-fast validation**: if any `image:` is set anywhere in the config (`Config.UsesImages()`), `pipeline.RunJob` calls `shell.ValidateDocker` (docker on `PATH` + `docker info` succeeds) before planning/executing anything — mirroring `workspace.Provider.Validate()`'s fail-fast precedent.
+- **Merkle hashing**: `image` is folded into `TaskNodeContent`/`AgentContentMap`/`GetNodeContent`/`PutNodeContent` **whenever it's non-empty** — unlike `inputs:`/`outputs:` (gated on `cfg.Workspace != nil`, since their *relevance* depends on the workspace feature existing), an image change alters what a command actually executes against regardless of workspace mode, so the gate is on the value itself. A pipeline that never sets `image:` still hashes byte-identically to before this field existed.
+- **Known caveats** (documented, not solved in v1): on Linux, a container's default (often root) user can leave root-owned files in the bind-mounted step directory, which can complicate `workspace` cleanup; a hard-killed docker CLI client (past its 10s SIGTERM grace period) can leave an orphaned container running until the daemon reaps it; there's no way to override a step back to host execution once its task/agent sets an image.
 
 ### State Caching via Merkle Tree
 - Each resource `get` and `agent` step is content-addressed (merkle tree) with its inputs (pinned versions, source config)

@@ -59,11 +59,17 @@ type Chain struct {
 // between planning (this file) and real execution (internal/pipeline,
 // internal/agent) so both compute identical hashes for identical steps.
 func GetNodeContent(resourceType config.ResourceType, source, version map[string]any) map[string]any {
-	return map[string]any{
+	content := map[string]any{
 		"in_template": resourceType.Config.In,
 		"source":      source,
 		"version":     version,
 	}
+
+	if resourceType.Image != "" {
+		content["image"] = resourceType.Image
+	}
+
+	return content
 }
 
 // TaskNodeContent and PutNodeContent fold in inputs/outputs only when ws is
@@ -71,6 +77,12 @@ func GetNodeContent(resourceType config.ResourceType, source, version map[string
 // byte-identically to before this field existed — switching a task between
 // shared and isolated execution of the same run: must invalidate its cache,
 // but the mere existence of the feature must not invalidate anyone else's.
+// image, by contrast, is folded in whenever it's non-empty, regardless of
+// ws: unlike inputs/outputs (whose relevance is gated by the workspace
+// feature existing at all), an image change alters what a run: command
+// actually executes against no matter which workspace mode is active — so
+// the gate is on the value itself. A pipeline that never sets image: still
+// hashes byte-identically to before this field existed.
 func TaskNodeContent(rt config.ResolvedTask, ws *config.WorkspaceConfig) map[string]any {
 	content := map[string]any{"run": rt.Run}
 
@@ -79,10 +91,16 @@ func TaskNodeContent(rt config.ResolvedTask, ws *config.WorkspaceConfig) map[str
 		content["outputs"] = config.StableStrings(rt.Outputs)
 	}
 
+	if rt.Image != "" {
+		content["image"] = rt.Image
+	}
+
 	return content
 }
 
-// PutNodeContent builds the content map hashed for a put node.
+// PutNodeContent builds the content map hashed for a put node. image is
+// folded in whenever non-empty — see TaskNodeContent's doc comment for why
+// this differs from the inputs/ws gating.
 func PutNodeContent(resourceType config.ResourceType, source, params map[string]any, inputs []string, ws *config.WorkspaceConfig) map[string]any {
 	content := map[string]any{
 		"out_template": resourceType.Config.Out,
@@ -92,6 +110,10 @@ func PutNodeContent(resourceType config.ResourceType, source, params map[string]
 
 	if ws != nil {
 		content["inputs"] = config.StableStrings(inputs)
+	}
+
+	if resourceType.Image != "" {
+		content["image"] = resourceType.Image
 	}
 
 	return content
@@ -133,6 +155,10 @@ func AgentContentMap(step config.Step, ri config.ResolvedInvocation, ws *config.
 	if ws != nil {
 		content["inputs"] = config.StableStrings(step.Inputs)
 		content["outputs"] = config.StableStrings(step.Outputs)
+	}
+
+	if ri.Image != "" {
+		content["image"] = ri.Image
 	}
 
 	return content
