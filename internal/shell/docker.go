@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -56,8 +57,11 @@ func (d DockerRunner) Run(ctx context.Context, command, cwd string) error {
 	return nil
 }
 
-// RunCapture runs command in a container, capturing stdout while streaming
-// stderr live. Any nonzero exit is a Go error.
+// RunCapture runs command in a container, capturing stdout and stderr while
+// also streaming stderr live. The captured output is logged (at debug
+// level) on both success and failure, matching HostRunner.RunCapture, so a
+// failing containerized check/out command's output is available for
+// debugging. Any nonzero exit is a Go error.
 func (d DockerRunner) RunCapture(ctx context.Context, command, cwd string) ([]byte, error) {
 	args, resolvedCwd, err := dockerRunArgs(d.Image, command, cwd, true)
 	if err != nil {
@@ -69,15 +73,15 @@ func (d DockerRunner) RunCapture(ctx context.Context, command, cwd string) ([]by
 	cmd := dockerCommand(ctx, args)
 	cmd.Stdin = os.Stdin
 
-	var outBuf bytes.Buffer
+	var outBuf, errBuf bytes.Buffer
 
 	cmd.Stdout = &outBuf
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = io.MultiWriter(os.Stderr, &errBuf)
 
 	runErr := cmd.Run()
 
 	slog.Debug("shell.docker.capture", "image", d.Image, "command", command, "cwd", resolvedCwd,
-		"exit_code", exitCodeOf(runErr), "output_bytes", outBuf.Len())
+		"exit_code", exitCodeOf(runErr), "output_bytes", outBuf.Len(), "output", outBuf.String(), "stderr", errBuf.String())
 
 	if runErr != nil {
 		return nil, fmt.Errorf("command %q failed in image %q: %w", command, d.Image, runErr)

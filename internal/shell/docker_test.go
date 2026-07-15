@@ -1,7 +1,9 @@
 package shell
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -207,6 +209,31 @@ func TestDockerRunnerRunCaptureReturnsStdout(t *testing.T) {
 
 	if string(out) != "captured output" {
 		t.Errorf("out = %q, want %q", out, "captured output")
+	}
+}
+
+// TestDockerRunnerRunCaptureLogsStderrOnFailure guards against a regression
+// where DockerRunner.RunCapture streamed stderr live but never captured it
+// for the debug log, unlike HostRunner.RunCapture (whose doc comment
+// explains this exists so a failing check/out command's output is available
+// for debugging, not just discarded on nonzero exit).
+func TestDockerRunnerRunCaptureLogsStderrOnFailure(t *testing.T) {
+	writeFakeDocker(t, 1, "", "boom from stderr")
+
+	var logBuf bytes.Buffer
+
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	defer slog.SetDefault(prevLogger)
+
+	_, err := DockerRunner{Image: "alpine"}.RunCapture(context.Background(), "false", t.TempDir())
+	if err == nil {
+		t.Fatal("expected an error for a nonzero exit")
+	}
+
+	if !strings.Contains(logBuf.String(), "boom from stderr") {
+		t.Errorf("debug log = %q, want it to contain the captured stderr", logBuf.String())
 	}
 }
 
