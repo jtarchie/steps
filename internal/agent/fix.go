@@ -66,7 +66,7 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 	}
 	toolSpecs := append(append([]config.ToolSpec{}, baseTools...), taskTool)
 
-	decls, registry, err := buildAgentTools(toolSpecs)
+	decls, registry, err := buildAgentTools(toolSpecs, rt.Image)
 	if err != nil {
 		return err
 	}

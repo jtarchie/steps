@@ -26,7 +26,7 @@ func TestBuildAgentToolsBuiltins(t *testing.T) {
 	t.Run("empty specs enables all built-ins", func(t *testing.T) {
 		t.Parallel()
 
-		decls, registry, err := buildAgentTools(nil)
+		decls, registry, err := buildAgentTools(nil, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -45,7 +45,7 @@ func TestBuildAgentToolsBuiltins(t *testing.T) {
 	t.Run("selecting a subset omits the rest", func(t *testing.T) {
 		t.Parallel()
 
-		decls, registry, err := buildAgentTools([]config.ToolSpec{{Builtin: "read_file"}})
+		decls, registry, err := buildAgentTools([]config.ToolSpec{{Builtin: "read_file"}}, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -62,11 +62,39 @@ func TestBuildAgentToolsBuiltins(t *testing.T) {
 	t.Run("unknown builtin errors", func(t *testing.T) {
 		t.Parallel()
 
-		_, _, err := buildAgentTools([]config.ToolSpec{{Builtin: "nope"}})
+		_, _, err := buildAgentTools([]config.ToolSpec{{Builtin: "nope"}}, "")
 		if err == nil {
 			t.Error("expected an error for an unknown builtin tool")
 		}
 	})
+}
+
+// TestRunShellDescriptionMentionsContainerIsolationOnlyWhenImageSet is split
+// out from TestBuildAgentToolsBuiltins to stay under the linter's
+// per-function cyclomatic-complexity budget.
+func TestRunShellDescriptionMentionsContainerIsolationOnlyWhenImageSet(t *testing.T) {
+	t.Parallel()
+
+	runShellDecl := func(t *testing.T, image string) *genai.FunctionDeclaration {
+		t.Helper()
+
+		decls, _, err := buildAgentTools([]config.ToolSpec{{Builtin: "run_shell"}}, image)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return decls.FunctionDeclarations[0]
+	}
+
+	hostDecl := runShellDecl(t, "")
+	if strings.Contains(hostDecl.Description, "fresh, independent container") {
+		t.Errorf("host (no image) description shouldn't mention containers: %q", hostDecl.Description)
+	}
+
+	containerDecl := runShellDecl(t, "alpine")
+	if !strings.Contains(containerDecl.Description, "fresh, independent container") {
+		t.Errorf("containerized description should mention per-call container isolation: %q", containerDecl.Description)
+	}
 }
 
 func TestBuildAgentToolsCustom(t *testing.T) {
@@ -77,7 +105,7 @@ func TestBuildAgentToolsCustom(t *testing.T) {
 
 		decls, registry, err := buildAgentTools([]config.ToolSpec{
 			{Name: "post_review", Description: "post a review", Run: `gh pr review {{ .args.action }} -b "{{ .args.body }}"`},
-		})
+		}, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -109,7 +137,7 @@ func TestBuildAgentToolsCustom(t *testing.T) {
 	t.Run("duplicate tool name errors", func(t *testing.T) {
 		t.Parallel()
 
-		_, _, err := buildAgentTools([]config.ToolSpec{{Builtin: "read_file"}, {Name: "read_file", Run: "echo hi"}})
+		_, _, err := buildAgentTools([]config.ToolSpec{{Builtin: "read_file"}, {Name: "read_file", Run: "echo hi"}}, "")
 		if err == nil {
 			t.Error("expected an error for a duplicate tool name")
 		}
@@ -118,7 +146,7 @@ func TestBuildAgentToolsCustom(t *testing.T) {
 	t.Run("custom tool missing name or run errors", func(t *testing.T) {
 		t.Parallel()
 
-		_, _, err := buildAgentTools([]config.ToolSpec{{Description: "no name or run"}})
+		_, _, err := buildAgentTools([]config.ToolSpec{{Description: "no name or run"}}, "")
 		if err == nil {
 			t.Error("expected an error for a custom tool with no name/run")
 		}
@@ -343,7 +371,7 @@ func TestToolResponseParts(t *testing.T) {
 		{Name: "fail_a", Run: "exit 1", Required: true},
 		{Name: "fail_b", Run: "exit 1", Required: true},
 		{Name: "ok", Run: "true"},
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

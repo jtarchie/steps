@@ -113,7 +113,7 @@ func TestRunAgentConversationMultiTurnToolCalling(t *testing.T) {
 func newTestConversation(t *testing.T, prompt, dir string) agentConversation {
 	t.Helper()
 
-	decls, registry, err := buildAgentTools(nil)
+	decls, registry, err := buildAgentTools(nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func requiredToolConversation(t *testing.T, dir string) agentConversation {
 
 	specs := []config.ToolSpec{{Name: "post_review", Run: "true", Required: true}}
 
-	decls, registry, err := buildAgentTools(specs)
+	decls, registry, err := buildAgentTools(specs, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +353,7 @@ func TestRunAgentConversationRecoversFailedRequiredTool(t *testing.T) {
 		Required: true,
 	}}
 
-	decls, registry, err := buildAgentTools(specs)
+	decls, registry, err := buildAgentTools(specs, "")
 	if err != nil {
 		t.Fatal(err)
 	}

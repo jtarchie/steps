@@ -79,7 +79,21 @@ type builtinTool struct {
 	impl toolImpl
 }
 
-func builtinAgentTools() map[string]builtinTool {
+// runShellDescription is run_shell's base description, extended when the
+// step is containerized (image != "") so the model knows each call is a
+// fresh, independent container: a cd/env var/installed package from one
+// run_shell call is invisible to the next, unlike host execution where
+// state persists naturally across calls in the same conversation.
+func runShellDescription(image string) string {
+	desc := "Run a shell command via `sh -c`, with cwd set to the step's working directory. Returns stdout, stderr, and exit_code."
+	if image != "" {
+		desc += " Runs in a fresh, independent container each call — nothing installed, exported, or cd'd in one call persists to the next; chain related commands with && in a single call instead of relying on state from a prior one."
+	}
+
+	return desc
+}
+
+func builtinAgentTools(image string) map[string]builtinTool {
 	return map[string]builtinTool{
 		"read_file": {
 			decl: &genai.FunctionDeclaration{
@@ -107,7 +121,7 @@ func builtinAgentTools() map[string]builtinTool {
 		"run_shell": {
 			decl: &genai.FunctionDeclaration{
 				Name:        "run_shell",
-				Description: "Run a shell command via `sh -c`, with cwd set to the step's working directory. Returns stdout, stderr, and exit_code.",
+				Description: runShellDescription(image),
 				Parameters: &genai.Schema{
 					Type:       genai.TypeObject,
 					Properties: map[string]*genai.Schema{"command": {Type: genai.TypeString, Description: "Command to run via sh -c."}},
@@ -123,13 +137,15 @@ func builtinAgentTools() map[string]builtinTool {
 // declarations sent to the model and a name -> toolImpl execution registry.
 // An empty specs enables every built-in. A duplicate tool name (built-in vs
 // custom, or two customs) is an error, so the model never sees an
-// ambiguous function set.
-func buildAgentTools(specs []config.ToolSpec) (*genai.Tool, map[string]toolImpl, error) {
+// ambiguous function set. image is the step's resolved image (empty for
+// host execution), used only to adjust run_shell's description — see
+// runShellDescription.
+func buildAgentTools(specs []config.ToolSpec, image string) (*genai.Tool, map[string]toolImpl, error) {
 	if len(specs) == 0 {
 		specs = config.DefaultAgentToolSpecs()
 	}
 
-	builtins := builtinAgentTools()
+	builtins := builtinAgentTools(image)
 	decls := make([]*genai.FunctionDeclaration, 0, len(specs))
 	registry := make(map[string]toolImpl, len(specs))
 
