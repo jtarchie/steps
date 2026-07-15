@@ -23,24 +23,24 @@ import (
 const dockerKillGrace = 10 * time.Second
 
 // DockerRunner runs commands inside a fresh `docker run --rm` container per
-// call. The working directory is bind-mounted at its own (resolved) host
-// path and set as the container's workdir, so host-side readers (agent
-// read_file/list_dir, workspace Capture) see the same files a containerized
-// command wrote. No host environment variables are passed through — the
-// container starts from the image's own env only.
+// call, all against resolvedCwd — resolved and validated once by NewRunner
+// at construction, not re-resolved on every call. The working directory is
+// bind-mounted at its own (resolved) host path and set as the container's
+// workdir, so host-side readers (agent read_file/list_dir, workspace
+// Capture) see the same files a containerized command wrote. No host
+// environment variables are passed through — the container starts from the
+// image's own env only.
 type DockerRunner struct {
-	Image string
+	Image       string
+	resolvedCwd string
 }
 
 // Run runs command in a container, streaming stdout/stderr live and wiring
 // the host's stdin through (-i). Any nonzero exit is a Go error.
-func (d DockerRunner) Run(ctx context.Context, command, cwd string) error {
-	args, resolvedCwd, err := dockerRunArgs(d.Image, command, cwd, true)
-	if err != nil {
-		return err
-	}
+func (d DockerRunner) Run(ctx context.Context, command string) error {
+	args := dockerRunArgs(d.Image, command, d.resolvedCwd, true)
 
-	slog.Debug("shell.docker.run", "image", d.Image, "command", command, "cwd", resolvedCwd)
+	slog.Debug("shell.docker.run", "image", d.Image, "command", command, "cwd", d.resolvedCwd)
 
 	cmd := dockerCommand(ctx, args)
 	cmd.Stdin = os.Stdin
@@ -49,7 +49,7 @@ func (d DockerRunner) Run(ctx context.Context, command, cwd string) error {
 
 	runErr := cmd.Run()
 
-	slog.Debug("shell.docker.run", "image", d.Image, "command", command, "cwd", resolvedCwd, "exit_code", exitCodeOf(runErr))
+	slog.Debug("shell.docker.run", "image", d.Image, "command", command, "cwd", d.resolvedCwd, "exit_code", exitCodeOf(runErr))
 
 	if runErr != nil {
 		return fmt.Errorf("command %q failed in image %q: %w", command, d.Image, runErr)
@@ -63,13 +63,10 @@ func (d DockerRunner) Run(ctx context.Context, command, cwd string) error {
 // level) on both success and failure, matching HostRunner.RunCapture, so a
 // failing containerized check/out command's output is available for
 // debugging. Any nonzero exit is a Go error.
-func (d DockerRunner) RunCapture(ctx context.Context, command, cwd string) ([]byte, error) {
-	args, resolvedCwd, err := dockerRunArgs(d.Image, command, cwd, true)
-	if err != nil {
-		return nil, err
-	}
+func (d DockerRunner) RunCapture(ctx context.Context, command string) ([]byte, error) {
+	args := dockerRunArgs(d.Image, command, d.resolvedCwd, true)
 
-	slog.Debug("shell.docker.capture", "image", d.Image, "command", command, "cwd", resolvedCwd)
+	slog.Debug("shell.docker.capture", "image", d.Image, "command", command, "cwd", d.resolvedCwd)
 
 	cmd := dockerCommand(ctx, args)
 	cmd.Stdin = os.Stdin
@@ -81,7 +78,7 @@ func (d DockerRunner) RunCapture(ctx context.Context, command, cwd string) ([]by
 
 	runErr := cmd.Run()
 
-	slog.Debug("shell.docker.capture", "image", d.Image, "command", command, "cwd", resolvedCwd,
+	slog.Debug("shell.docker.capture", "image", d.Image, "command", command, "cwd", d.resolvedCwd,
 		"exit_code", exitCodeOf(runErr), "output_bytes", outBuf.Len(), "output", outBuf.String(), "stderr", errBuf.String())
 
 	if runErr != nil {
@@ -98,13 +95,10 @@ func (d DockerRunner) RunCapture(ctx context.Context, command, cwd string) ([]by
 // run/find) exactly like any other nonzero exit — as data via exitCode, not
 // a Go error. Only a failure to start the docker CLI client itself returns a
 // non-nil error.
-func (d DockerRunner) RunCaptureFull(ctx context.Context, command, cwd string) (stdout, stderr string, exitCode int, err error) {
-	args, resolvedCwd, err := dockerRunArgs(d.Image, command, cwd, false)
-	if err != nil {
-		return "", "", -1, err
-	}
+func (d DockerRunner) RunCaptureFull(ctx context.Context, command string) (stdout, stderr string, exitCode int, err error) {
+	args := dockerRunArgs(d.Image, command, d.resolvedCwd, false)
 
-	slog.Debug("shell.docker.capture_full", "image", d.Image, "command", command, "cwd", resolvedCwd)
+	slog.Debug("shell.docker.capture_full", "image", d.Image, "command", command, "cwd", d.resolvedCwd)
 
 	cmd := dockerCommand(ctx, args)
 	cmd.Stdin = nil
@@ -122,7 +116,7 @@ func (d DockerRunner) RunCaptureFull(ctx context.Context, command, cwd string) (
 
 	code := exitCodeOf(runErr)
 
-	slog.Debug("shell.docker.capture_full", "image", d.Image, "command", command, "cwd", resolvedCwd, "exit_code", code)
+	slog.Debug("shell.docker.capture_full", "image", d.Image, "command", command, "cwd", d.resolvedCwd, "exit_code", code)
 
 	return outBuf.String(), errBuf.String(), code, nil
 }
@@ -143,33 +137,29 @@ func dockerCommand(ctx context.Context, args []string) *exec.Cmd {
 }
 
 // dockerRunArgs builds the argv (after "docker") for one containerized
-// command: `run --rm --init [-i] [-v cwd:cwd -w cwd] image sh -c command`.
-// cwd is resolved to an absolute, symlink-free path before mounting (macOS
-// temp dirs live under /var/folders, which Docker Desktop only shares via
-// its /private-prefixed real path) and mounted at that identical path so
-// host-side readers of the same directory (agent read_file/list_dir,
-// workspace Capture) stay coherent. An empty cwd (only resource check: today)
-// mounts nothing and runs in the image's default workdir. --init supplies a
-// real PID 1 so SIGTERM (see dockerCommand) actually reaches the command.
-func dockerRunArgs(image, command, cwd string, stdin bool) (args []string, resolvedCwd string, err error) {
-	args = []string{"run", "--rm", "--init"}
+// command: `run --rm --init [-i] [-v resolvedCwd:resolvedCwd -w resolvedCwd]
+// image sh -c command`. resolvedCwd is already an absolute, symlink-free
+// path (see resolveMountPath, called once by NewRunner at construction —
+// not here, so repeated calls against the same DockerRunner don't
+// re-resolve it) mounted at that identical host path so host-side readers
+// of the same directory (agent read_file/list_dir, workspace Capture) stay
+// coherent. An empty resolvedCwd (only resource check: today) mounts
+// nothing and runs in the image's default workdir. --init supplies a real
+// PID 1 so SIGTERM (see dockerCommand) actually reaches the command.
+func dockerRunArgs(image, command, resolvedCwd string, stdin bool) []string {
+	args := []string{"run", "--rm", "--init"}
 
 	if stdin {
 		args = append(args, "-i")
 	}
 
-	if cwd != "" {
-		resolvedCwd, err = resolveMountPath(cwd)
-		if err != nil {
-			return nil, "", fmt.Errorf("resolve working directory %q: %w", cwd, err)
-		}
-
+	if resolvedCwd != "" {
 		args = append(args, "-v", resolvedCwd+":"+resolvedCwd, "-w", resolvedCwd)
 	}
 
 	args = append(args, image, "sh", "-c", command)
 
-	return args, resolvedCwd, nil
+	return args
 }
 
 // resolveMountPath returns cwd as an absolute path with symlinks resolved,

@@ -36,66 +36,94 @@ func requireDocker(t *testing.T) {
 
 const testImage = "alpine:3"
 
-func TestDockerRunnerIntegration(t *testing.T) {
+// TestDockerRunnerIntegrationBindMountPersists and its siblings below are
+// split into separate top-level functions (rather than t.Run subtests of
+// one function) to stay under the linter's per-function
+// cyclomatic-complexity budget.
+func TestDockerRunnerIntegrationBindMountPersists(t *testing.T) {
 	requireDocker(t)
 
-	t.Run("a bind-mounted write persists on the host", func(t *testing.T) {
-		dir := t.TempDir()
+	dir := t.TempDir()
 
-		err := DockerRunner{Image: testImage}.Run(context.Background(), "echo hello > written.txt", dir)
-		if err != nil {
-			t.Fatalf("Run: %v", err)
-		}
+	runner, err := NewRunner(testImage, dir)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
 
-		data, readErr := os.ReadFile(filepath.Join(dir, "written.txt")) //nolint:gosec // test fixture path
-		if readErr != nil {
-			t.Fatalf("read file written inside the container: %v", readErr)
-		}
+	err = runner.Run(context.Background(), "echo hello > written.txt")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
 
-		if string(data) != "hello\n" {
-			t.Errorf("content = %q, want %q", data, "hello\n")
-		}
-	})
+	data, readErr := os.ReadFile(filepath.Join(dir, "written.txt")) //nolint:gosec // test fixture path
+	if readErr != nil {
+		t.Fatalf("read file written inside the container: %v", readErr)
+	}
 
-	t.Run("exit code round-trips through RunCaptureFull", func(t *testing.T) {
-		_, _, exitCode, err := DockerRunner{Image: testImage}.RunCaptureFull(context.Background(), "exit 7", t.TempDir())
-		if err != nil {
-			t.Fatalf("RunCaptureFull: %v", err)
-		}
+	if string(data) != "hello\n" {
+		t.Errorf("content = %q, want %q", data, "hello\n")
+	}
+}
 
-		if exitCode != 7 {
-			t.Errorf("exitCode = %d, want 7", exitCode)
-		}
-	})
+func TestDockerRunnerIntegrationExitCodeRoundTrips(t *testing.T) {
+	requireDocker(t)
 
-	t.Run("host environment variables are not visible in the container", func(t *testing.T) {
-		t.Setenv("STEPS_TEST_HOST_SECRET", "leak-me-not")
+	runner, err := NewRunner(testImage, t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
 
-		stdout, _, _, err := DockerRunner{Image: testImage}.RunCaptureFull(context.Background(), "echo \"[$STEPS_TEST_HOST_SECRET]\"", t.TempDir())
-		if err != nil {
-			t.Fatalf("RunCaptureFull: %v", err)
-		}
+	_, _, exitCode, err := runner.RunCaptureFull(context.Background(), "exit 7")
+	if err != nil {
+		t.Fatalf("RunCaptureFull: %v", err)
+	}
 
-		if stdout != "[]\n" {
-			t.Errorf("stdout = %q, want the host env var to be absent inside the container", stdout)
-		}
-	})
+	if exitCode != 7 {
+		t.Errorf("exitCode = %d, want 7", exitCode)
+	}
+}
 
-	t.Run("context cancellation terminates the container within the grace window", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		defer cancel()
+func TestDockerRunnerIntegrationHostEnvNotVisible(t *testing.T) {
+	requireDocker(t)
 
-		start := time.Now()
+	t.Setenv("STEPS_TEST_HOST_SECRET", "leak-me-not")
 
-		_, _, _, err := DockerRunner{Image: testImage}.RunCaptureFull(ctx, "sleep 30", t.TempDir())
+	runner, err := NewRunner(testImage, t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
 
-		elapsed := time.Since(start)
-		if elapsed > dockerKillGrace+5*time.Second {
-			t.Errorf("took %s to terminate after cancellation, want well under the %s grace window", elapsed, dockerKillGrace)
-		}
+	stdout, _, _, err := runner.RunCaptureFull(context.Background(), "echo \"[$STEPS_TEST_HOST_SECRET]\"")
+	if err != nil {
+		t.Fatalf("RunCaptureFull: %v", err)
+	}
 
-		_ = err // a killed docker client's own exit status varies; only timing is asserted here
-	})
+	if stdout != "[]\n" {
+		t.Errorf("stdout = %q, want the host env var to be absent inside the container", stdout)
+	}
+}
+
+func TestDockerRunnerIntegrationCancellationTerminatesWithinGrace(t *testing.T) {
+	requireDocker(t)
+
+	runner, err := NewRunner(testImage, t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+
+	_, _, _, runErr := runner.RunCaptureFull(ctx, "sleep 30")
+
+	elapsed := time.Since(start)
+	if elapsed > dockerKillGrace+5*time.Second {
+		t.Errorf("took %s to terminate after cancellation, want well under the %s grace window", elapsed, dockerKillGrace)
+	}
+
+	_ = runErr // a killed docker client's own exit status varies; only timing is asserted here
 }
 
 func TestValidateDockerIntegration(t *testing.T) {

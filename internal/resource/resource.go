@@ -26,7 +26,12 @@ func CheckVersions(ctx context.Context, rt config.ResourceType, source map[strin
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
 
-	out, err := shell.NewRunner(rt.Image).RunCapture(ctx, command, "")
+	runner, err := shell.NewRunner(rt.Image, "")
+	if err != nil {
+		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
+	}
+
+	out, err := runner.RunCapture(ctx, command)
 	if err != nil {
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
@@ -123,7 +128,12 @@ func RunIn(ctx context.Context, rt config.ResourceType, source, version map[stri
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
 
-	err = shell.NewRunner(rt.Image).Run(ctx, command, destDir)
+	runner, err := shell.NewRunner(rt.Image, destDir)
+	if err != nil {
+		return fmt.Errorf("in %q: %w", rt.Name, err)
+	}
+
+	err = runner.Run(ctx, command)
 	if err != nil {
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
@@ -146,7 +156,12 @@ func RunOut(ctx context.Context, rt config.ResourceType, source, params map[stri
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}
 
-	out, err := shell.NewRunner(rt.Image).RunCapture(ctx, command, srcDir)
+	runner, err := shell.NewRunner(rt.Image, srcDir)
+	if err != nil {
+		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
+	}
+
+	out, err := runner.RunCapture(ctx, command)
 	if err != nil {
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}

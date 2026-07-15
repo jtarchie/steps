@@ -71,6 +71,11 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 		return err
 	}
 
+	runner, err := shell.NewRunner(rt.Image, dir)
+	if err != nil {
+		return fmt.Errorf("fix agent %q: %w", fix.Agent, err)
+	}
+
 	apiKey, err := lookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
 	if err != nil {
 		return err
@@ -86,7 +91,7 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 	conv := agentConversation{
 		system: buildSystemMessage(ri.Persona, dir),
 		prompt: prompt,
-		env:    toolEnv{dir: dir, runner: shell.NewRunner(rt.Image)},
+		env:    toolEnv{dir: dir, runner: runner},
 		tools:  agentTools{decls: decls, registry: registry, required: requiredToolNames(toolSpecs)},
 		params: agentGenParams{
 			temperature: ri.Temperature,

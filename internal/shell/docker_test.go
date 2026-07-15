@@ -17,16 +17,16 @@ import (
 // TestDockerRunArgsMountsCwd and its siblings below each assert one facet of
 // dockerRunArgs' argv construction; split into separate top-level functions
 // (rather than t.Run subtests of one function) to stay under the linter's
-// per-function cyclomatic-complexity budget.
+// per-function cyclomatic-complexity budget. dockerRunArgs takes an
+// already-resolved cwd (resolution now happens once in NewRunner, not
+// here — see resolveMountPath) so these tests pass a plain absolute path
+// directly rather than exercising resolution.
 func TestDockerRunArgsMountsCwd(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
+	resolvedCwd := t.TempDir()
 
-	args, resolvedCwd, err := dockerRunArgs("alpine", "echo hi", dir, true)
-	if err != nil {
-		t.Fatalf("dockerRunArgs: %v", err)
-	}
+	args := dockerRunArgs("alpine", "echo hi", resolvedCwd, true)
 
 	want := []string{"run", "--rm", "--init", "-i", "-v", resolvedCwd + ":" + resolvedCwd, "-w", resolvedCwd, "alpine", "sh", "-c", "echo hi"}
 	if !reflect.DeepEqual(args, want) {
@@ -37,10 +37,7 @@ func TestDockerRunArgsMountsCwd(t *testing.T) {
 func TestDockerRunArgsStdinFalseOmitsDashI(t *testing.T) {
 	t.Parallel()
 
-	args, _, err := dockerRunArgs("alpine", "echo hi", t.TempDir(), false)
-	if err != nil {
-		t.Fatalf("dockerRunArgs: %v", err)
-	}
+	args := dockerRunArgs("alpine", "echo hi", t.TempDir(), false)
 
 	if slices.Contains(args, "-i") {
 		t.Errorf("args = %v, did not want -i", args)
@@ -50,10 +47,7 @@ func TestDockerRunArgsStdinFalseOmitsDashI(t *testing.T) {
 func TestDockerRunArgsNeverPassesDashTWithStdin(t *testing.T) {
 	t.Parallel()
 
-	args, _, err := dockerRunArgs("alpine", "echo hi", t.TempDir(), true)
-	if err != nil {
-		t.Fatalf("dockerRunArgs: %v", err)
-	}
+	args := dockerRunArgs("alpine", "echo hi", t.TempDir(), true)
 
 	if slices.Contains(args, "-t") {
 		t.Errorf("args = %v, did not want -t", args)
@@ -63,10 +57,7 @@ func TestDockerRunArgsNeverPassesDashTWithStdin(t *testing.T) {
 func TestDockerRunArgsNeverPassesDashTWithoutStdin(t *testing.T) {
 	t.Parallel()
 
-	args, _, err := dockerRunArgs("alpine", "echo hi", t.TempDir(), false)
-	if err != nil {
-		t.Fatalf("dockerRunArgs: %v", err)
-	}
+	args := dockerRunArgs("alpine", "echo hi", t.TempDir(), false)
 
 	if slices.Contains(args, "-t") {
 		t.Errorf("args = %v, did not want -t", args)
@@ -76,14 +67,7 @@ func TestDockerRunArgsNeverPassesDashTWithoutStdin(t *testing.T) {
 func TestDockerRunArgsEmptyCwdMountsNothing(t *testing.T) {
 	t.Parallel()
 
-	args, resolvedCwd, err := dockerRunArgs("alpine", "echo hi", "", false)
-	if err != nil {
-		t.Fatalf("dockerRunArgs: %v", err)
-	}
-
-	if resolvedCwd != "" {
-		t.Errorf("resolvedCwd = %q, want empty", resolvedCwd)
-	}
+	args := dockerRunArgs("alpine", "echo hi", "", false)
 
 	want := []string{"run", "--rm", "--init", "alpine", "sh", "-c", "echo hi"}
 	if !reflect.DeepEqual(args, want) {
@@ -91,11 +75,12 @@ func TestDockerRunArgsEmptyCwdMountsNothing(t *testing.T) {
 	}
 }
 
-// TestDockerRunArgsRejectsColonInPath guards against docker's `-v
+// TestResolveMountPathRejectsColonInPath guards against docker's `-v
 // host:container` volume spec silently misparsing a host path that itself
-// contains a ':' (a valid POSIX path character) — dockerRunArgs must fail
-// loudly instead of building an argument docker would misinterpret.
-func TestDockerRunArgsRejectsColonInPath(t *testing.T) {
+// contains a ':' (a valid POSIX path character) — resolveMountPath (called
+// once by NewRunner at construction) must fail loudly instead of letting
+// dockerRunArgs build an argument docker would misinterpret.
+func TestResolveMountPathRejectsColonInPath(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -106,7 +91,27 @@ func TestDockerRunArgsRejectsColonInPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err = dockerRunArgs("alpine", "echo hi", cwd, false)
+	_, err = resolveMountPath(cwd)
+	if err == nil {
+		t.Error("expected an error for a working directory containing ':'")
+	}
+}
+
+// TestNewRunnerRejectsColonInPath confirms the colon rejection surfaces
+// through NewRunner (where it's actually triggered in production), not just
+// the internal resolveMountPath helper.
+func TestNewRunnerRejectsColonInPath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cwd := filepath.Join(dir, "weird:name")
+
+	err := os.Mkdir(cwd, 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = NewRunner("alpine", cwd)
 	if err == nil {
 		t.Error("expected an error for a working directory containing ':'")
 	}
@@ -115,10 +120,7 @@ func TestDockerRunArgsRejectsColonInPath(t *testing.T) {
 func TestDockerRunArgsCommandOrdering(t *testing.T) {
 	t.Parallel()
 
-	args, _, err := dockerRunArgs("myimage", "do the thing", "", false)
-	if err != nil {
-		t.Fatalf("dockerRunArgs: %v", err)
-	}
+	args := dockerRunArgs("myimage", "do the thing", "", false)
 
 	if got := args[len(args)-4:]; !reflect.DeepEqual(got, []string{"myimage", "sh", "-c", "do the thing"}) {
 		t.Errorf("tail of args = %v, want [myimage sh -c \"do the thing\"]", got)
@@ -128,17 +130,57 @@ func TestDockerRunArgsCommandOrdering(t *testing.T) {
 func TestNewRunner(t *testing.T) {
 	t.Parallel()
 
-	if _, ok := NewRunner("").(HostRunner); !ok {
-		t.Error("NewRunner(\"\") should return a HostRunner")
+	hostRunner, err := NewRunner("", "somedir")
+	if err != nil {
+		t.Fatalf("NewRunner(\"\", ...): %v", err)
 	}
 
-	runner, ok := NewRunner("alpine").(DockerRunner)
+	if _, ok := hostRunner.(HostRunner); !ok {
+		t.Error("NewRunner(\"\", ...) should return a HostRunner")
+	}
+
+	dockerRunnerIface, err := NewRunner("alpine", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner(\"alpine\", ...): %v", err)
+	}
+
+	runner, ok := dockerRunnerIface.(DockerRunner)
 	if !ok {
-		t.Fatal("NewRunner(\"alpine\") should return a DockerRunner")
+		t.Fatal("NewRunner(\"alpine\", ...) should return a DockerRunner")
 	}
 
 	if runner.Image != "alpine" {
 		t.Errorf("Image = %q, want alpine", runner.Image)
+	}
+}
+
+// TestNewRunnerResolvesCwdOnce guards the whole point of construction-time
+// resolution: NewRunner's returned DockerRunner carries an already-resolved
+// cwd, so Run/RunCapture/RunCaptureFull never need to re-resolve it —
+// confirmed here by checking the resolved field directly rather than
+// exercising the syscalls indirectly.
+func TestNewRunnerResolvesCwdOnce(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	runnerIface, err := NewRunner("alpine", dir)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	runner, ok := runnerIface.(DockerRunner)
+	if !ok {
+		t.Fatal("expected a DockerRunner")
+	}
+
+	want, err := resolveMountPath(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if runner.resolvedCwd != want {
+		t.Errorf("resolvedCwd = %q, want %q", runner.resolvedCwd, want)
 	}
 }
 
@@ -183,7 +225,12 @@ func shellSingleQuote(s string) string {
 func TestDockerRunnerCaptureFull(t *testing.T) {
 	argvFile := writeFakeDocker(t, 3, "out text", "err text")
 
-	stdout, stderr, exitCode, err := DockerRunner{Image: "alpine"}.RunCaptureFull(context.Background(), "do stuff", t.TempDir())
+	runner, err := NewRunner("alpine", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	stdout, stderr, exitCode, err := runner.RunCaptureFull(context.Background(), "do stuff")
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v", err)
 	}
@@ -214,7 +261,12 @@ func TestDockerRunnerCaptureFull(t *testing.T) {
 func TestDockerRunnerRunErrorsOnNonzeroExit(t *testing.T) {
 	writeFakeDocker(t, 1, "", "boom")
 
-	err := DockerRunner{Image: "alpine"}.Run(context.Background(), "false", t.TempDir())
+	runner, err := NewRunner("alpine", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	err = runner.Run(context.Background(), "false")
 	if err == nil {
 		t.Error("expected an error for a nonzero exit from Run (unlike RunCaptureFull)")
 	}
@@ -223,7 +275,12 @@ func TestDockerRunnerRunErrorsOnNonzeroExit(t *testing.T) {
 func TestDockerRunnerRunCaptureReturnsStdout(t *testing.T) {
 	writeFakeDocker(t, 0, "captured output", "")
 
-	out, err := DockerRunner{Image: "alpine"}.RunCapture(context.Background(), "echo hi", t.TempDir())
+	runner, err := NewRunner("alpine", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	out, err := runner.RunCapture(context.Background(), "echo hi")
 	if err != nil {
 		t.Fatalf("RunCapture: %v", err)
 	}
@@ -241,6 +298,11 @@ func TestDockerRunnerRunCaptureReturnsStdout(t *testing.T) {
 func TestDockerRunnerRunCaptureLogsStderrOnFailure(t *testing.T) {
 	writeFakeDocker(t, 1, "", "boom from stderr")
 
+	runner, err := NewRunner("alpine", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
 	var logBuf bytes.Buffer
 
 	prevLogger := slog.Default()
@@ -248,7 +310,7 @@ func TestDockerRunnerRunCaptureLogsStderrOnFailure(t *testing.T) {
 
 	defer slog.SetDefault(prevLogger)
 
-	_, err := DockerRunner{Image: "alpine"}.RunCapture(context.Background(), "false", t.TempDir())
+	_, err = runner.RunCapture(context.Background(), "false")
 	if err == nil {
 		t.Fatal("expected an error for a nonzero exit")
 	}

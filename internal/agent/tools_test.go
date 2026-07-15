@@ -15,9 +15,14 @@ import (
 )
 
 // testEnv builds a toolEnv over dir using the host runner — the shape every
-// tool impl test needs for its third argument.
+// tool impl test needs for its third argument. Goes through NewRunner
+// (rather than constructing shell.HostRunner{} directly) so dir is actually
+// bound as the runner's cwd — HostRunner's cwd field is unexported, so a
+// direct zero-value literal from this package would silently default to an
+// empty cwd (the test process's own working directory) instead of dir.
 func testEnv(dir string) toolEnv {
-	return toolEnv{dir: dir, runner: shell.HostRunner{}}
+	runner, _ := shell.NewRunner("", dir) // host branch never errors
+	return toolEnv{dir: dir, runner: runner}
 }
 
 func TestBuildAgentToolsBuiltins(t *testing.T) {

@@ -105,6 +105,13 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, err
 	}
 
+	runner, err := shell.NewRunner(ri.Image, dir)
+	if err != nil {
+		workspace.CloseSpace(space, step.Agent)
+
+		return preparedAgentStep{}, fmt.Errorf("agent %q: %w", step.Agent, err)
+	}
+
 	apiKey, err := lookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
@@ -115,7 +122,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	conv := agentConversation{
 		system: buildSystemMessage(ri.Persona, dir),
 		prompt: step.Prompt,
-		env:    toolEnv{dir: dir, runner: shell.NewRunner(ri.Image)},
+		env:    toolEnv{dir: dir, runner: runner},
 		tools:  agentTools{decls: decls, registry: registry, required: requiredToolNames(ri.ToolSpecs)},
 		params: agentGenParams{
 			temperature: ri.Temperature,

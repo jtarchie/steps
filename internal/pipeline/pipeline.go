@@ -324,10 +324,13 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 // tool — then re-runs the command once; that re-run's exit code is the
 // verdict. A green run never constructs the agent.
 func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, workspaceDir string) error {
-	runner := shell.NewRunner(rt.Image)
+	runner, err := shell.NewRunner(rt.Image, workspaceDir)
+	if err != nil {
+		return fmt.Errorf("task %q: %w", rt.Name, err)
+	}
 
 	if rt.Fix == nil {
-		err := runner.Run(ctx, rt.Run, workspaceDir)
+		err := runner.Run(ctx, rt.Run)
 		if err != nil {
 			return fmt.Errorf("task %q: %w", rt.Name, err)
 		}
@@ -335,7 +338,7 @@ func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedT
 		return nil
 	}
 
-	stdout, stderr, exitCode, err := runner.RunCaptureFull(ctx, rt.Run, workspaceDir)
+	stdout, stderr, exitCode, err := runner.RunCaptureFull(ctx, rt.Run)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
@@ -354,7 +357,7 @@ func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedT
 	}
 
 	// Verdict: re-run the command (its run:, not its fix:) and gate on it.
-	stdout, stderr, exitCode, err = runner.RunCaptureFull(ctx, rt.Run, workspaceDir)
+	stdout, stderr, exitCode, err = runner.RunCaptureFull(ctx, rt.Run)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}

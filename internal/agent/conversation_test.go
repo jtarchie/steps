@@ -118,9 +118,14 @@ func newTestConversation(t *testing.T, prompt, dir string) agentConversation {
 		t.Fatal(err)
 	}
 
+	runner, err := shell.NewRunner("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	return agentConversation{
 		prompt:   prompt,
-		env:      toolEnv{dir: dir, runner: shell.HostRunner{}},
+		env:      toolEnv{dir: dir, runner: runner},
 		tools:    agentTools{decls: decls, registry: registry},
 		maxTurns: testMaxTurns,
 	}
@@ -183,9 +188,14 @@ func requiredToolConversation(t *testing.T, dir string) agentConversation {
 		t.Fatal(err)
 	}
 
+	runner, err := shell.NewRunner("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	return agentConversation{
 		prompt:   "review it",
-		env:      toolEnv{dir: dir, runner: shell.HostRunner{}},
+		env:      toolEnv{dir: dir, runner: runner},
 		tools:    agentTools{decls: decls, registry: registry, required: requiredToolNames(specs)},
 		maxTurns: testMaxTurns,
 	}
@@ -358,9 +368,14 @@ func TestRunAgentConversationRecoversFailedRequiredTool(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	runner, err := shell.NewRunner("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	conv := agentConversation{
 		prompt:   "review it",
-		env:      toolEnv{dir: dir, runner: shell.HostRunner{}},
+		env:      toolEnv{dir: dir, runner: runner},
 		tools:    agentTools{decls: decls, registry: registry, required: requiredToolNames(specs)},
 		maxTurns: testMaxTurns,
 	}

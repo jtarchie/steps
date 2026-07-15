@@ -260,7 +260,7 @@ func truncateToolOutput(s string) string {
 // executes command through env.runner — the host or, when the step's image:
 // is set, a fresh container — with env.dir as cwd.
 func shellToolResult(ctx context.Context, command string, env toolEnv) map[string]any {
-	stdout, stderr, exitCode, err := env.runner.RunCaptureFull(ctx, command, env.dir)
+	stdout, stderr, exitCode, err := env.runner.RunCaptureFull(ctx, command)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
