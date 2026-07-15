@@ -6,7 +6,7 @@ require gopkg.in/yaml.v3 v3.0.1
 
 require (
 	github.com/achetronic/adk-utils-go v0.22.0
-	github.com/alecthomas/kong v1.15.0
+	github.com/alecthomas/kong v1.16.0
 	github.com/frioux/leatherman v0.0.0-20260713130356-470ed135e587
 	github.com/go-task/slim-sprig/v3 v3.0.0
 	github.com/lmittmann/tint v1.2.0
@@ -18,7 +18,7 @@ require (
 
 require (
 	cloud.google.com/go v0.123.0 // indirect
-	cloud.google.com/go/auth v0.21.0 // indirect
+	cloud.google.com/go/auth v0.22.0 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -33,7 +33,7 @@ require (
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
-	github.com/openai/openai-go/v3 v3.42.0 // indirect
+	github.com/openai/openai-go/v3 v3.43.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/tidwall/gjson v1.19.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
@@ -48,7 +48,7 @@ require (
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	google.golang.org/api v0.288.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260715203245-bcc9394bd25e // indirect
 	google.golang.org/grpc v1.82.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	modernc.org/libc v1.74.1 // indirect
