@@ -8,6 +8,7 @@ require (
 	github.com/achetronic/adk-utils-go v0.22.0
 	github.com/alecthomas/kong v1.15.0
 	github.com/frioux/leatherman v0.0.0-20260713130356-470ed135e587
+	github.com/go-task/slim-sprig/v3 v3.0.0
 	github.com/lmittmann/tint v1.2.0
 	golang.org/x/sys v0.47.0
 	google.golang.org/adk/v2 v2.0.0

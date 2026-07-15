@@ -95,6 +95,7 @@ linters:
           allow:
             - "$gostd"
             - "github.com/frioux/leatherman/pkg/shellquote"
+            - "github.com/go-task/slim-sprig/v3"
         Retry:
           files:
             - "**/internal/retry/**"

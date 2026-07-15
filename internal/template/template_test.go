@@ -72,6 +72,14 @@ func TestRenderShellquote(t *testing.T) {
 			data: map[string]any{"action": "approve"},
 			want: "gh pr review --approve",
 		},
+		{
+			// shellquote composes with sprig pipelines: sprig transforms the
+			// value, shellquote makes the result shell-safe.
+			name: "composes with a sprig function",
+			tmpl: `msg {{ .body | trim | shellquote }}`,
+			data: map[string]any{"body": "  hi `x` there  "},
+			want: "msg 'hi `x` there'",
+		},
 	}
 
 	for _, tt := range tests {

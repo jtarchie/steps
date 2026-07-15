@@ -8,18 +8,33 @@ import (
 	"text/template"
 
 	"github.com/frioux/leatherman/pkg/shellquote"
+	sprig "github.com/go-task/slim-sprig/v3"
 )
 
 // funcMap is the set of helper functions available in every rendered
-// template. shellquote is the important one: values interpolated into a
-// command string that will run via `sh -c` (a custom tool's run:, a resource
-// command) must be quoted, or shell metacharacters in the value — backticks,
-// $(...), quotes, ; | & — are interpreted by the shell instead of passed
-// through literally. This matters most for values an LLM or an untrusted PR
-// produces (e.g. a review body), which can't be assumed shell-safe.
+// template: slim-sprig's library (string/list/default/date helpers, with no
+// external dependencies) plus our own shellquote.
+//
+// shellquote is the important local one: values interpolated into a command
+// string that will run via `sh -c` (a custom tool's run:, a resource command)
+// must be quoted, or shell metacharacters in the value — backticks, $(...),
+// quotes, ; | & — are interpreted by the shell instead of passed through
+// literally. This matters most for values an LLM or an untrusted PR produces
+// (e.g. a review body), which can't be assumed shell-safe. Note sprig's own
+// quote/squote just wrap in double/single quotes without escaping, so they
+// are NOT shell-safe — use shellquote for anything headed into sh -c.
 //
 //nolint:gochecknoglobals // compiled once, read-only
-var funcMap = template.FuncMap{"shellquote": shellQuote}
+var funcMap = newFuncMap()
+
+// newFuncMap builds funcMap: slim-sprig's text/template functions, with our
+// shellquote added (and taking precedence on any name clash).
+func newFuncMap() template.FuncMap {
+	fm := sprig.TxtFuncMap()
+	fm["shellquote"] = shellQuote
+
+	return fm
+}
 
 // shellQuote renders v as a single, safely-quoted POSIX shell word, via
 // leatherman's shellquote.Quote — which quotes only when the value contains
