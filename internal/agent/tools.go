@@ -167,7 +167,7 @@ func resolveToolSpec(spec config.ToolSpec, builtins map[string]builtinTool) (*ge
 		Parameters:  &genai.Schema{Type: genai.TypeObject, Properties: properties, Required: params},
 	}
 
-	return decl, execCustomTool(spec), nil
+	return decl, execCustomTool(spec, params), nil
 }
 
 //nolint:gochecknoglobals // compiled once, read-only
@@ -317,8 +317,13 @@ func execRunShell(ctx context.Context, args map[string]any, dir string) map[stri
 // next turn. required: is enforced by runAgentConversation tracking success
 // and forcing another call if the model tries to stop early — never by a
 // tool failing the step directly.
-func execCustomTool(spec config.ToolSpec) toolImpl {
+func execCustomTool(spec config.ToolSpec, params []string) toolImpl {
 	return func(ctx context.Context, args map[string]any, dir string) map[string]any {
+		missing := missingArgs(args, params)
+		if len(missing) > 0 {
+			return map[string]any{"error": fmt.Sprintf("%s: missing required argument(s): %s", spec.Name, strings.Join(missing, ", "))}
+		}
+
 		rendered, err := template.Render(spec.Run, map[string]any{"args": args})
 		if err != nil {
 			return map[string]any{"error": err.Error()}
@@ -326,6 +331,22 @@ func execCustomTool(spec config.ToolSpec) toolImpl {
 
 		return shellToolResult(ctx, rendered, dir)
 	}
+}
+
+// missingArgs returns the subset of params for which args holds no non-empty
+// string value, in params order — so a custom tool can report every missing
+// argument in one message instead of the model discovering them one failed
+// render at a time.
+func missingArgs(args map[string]any, params []string) []string {
+	missing := make([]string, 0, len(params))
+
+	for _, p := range params {
+		if stringArg(args, p) == "" {
+			missing = append(missing, fmt.Sprintf("%q", p))
+		}
+	}
+
+	return missing
 }
 
 func executeAgentTool(ctx context.Context, call *genai.FunctionCall, dir string, registry map[string]toolImpl) map[string]any {

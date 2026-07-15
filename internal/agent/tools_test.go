@@ -126,7 +126,7 @@ func TestExecCustomTool(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	impl := execCustomTool(config.ToolSpec{Name: "greet", Run: `echo "hello {{ .args.name }}"`})
+	impl := execCustomTool(config.ToolSpec{Name: "greet", Run: `echo "hello {{ .args.name }}"`}, []string{"name"})
 
 	t.Run("renders args and shells out", func(t *testing.T) {
 		t.Parallel()
@@ -150,10 +150,47 @@ func TestExecCustomTool(t *testing.T) {
 		}
 	})
 
+	t.Run("missing arg is caught before rendering, naming the tool and arg", func(t *testing.T) {
+		t.Parallel()
+
+		result := impl(context.Background(), map[string]any{}, dir)
+
+		msg, _ := result["error"].(string)
+		if want := `greet: missing required argument(s): "name"`; msg != want {
+			t.Errorf("error = %q, want %q", msg, want)
+		}
+
+		if result["stdout"] != nil || result["exit_code"] != nil {
+			t.Errorf("expected no shell execution, got result %v", result)
+		}
+	})
+
+	t.Run("multiple missing args are named in one error", func(t *testing.T) {
+		t.Parallel()
+
+		multiImpl := execCustomTool(config.ToolSpec{Name: "post", Run: `echo {{ .args.action }} {{ .args.body }}`}, []string{"action", "body"})
+
+		result := multiImpl(context.Background(), map[string]any{}, dir)
+
+		msg, _ := result["error"].(string)
+		if want := `post: missing required argument(s): "action", "body"`; msg != want {
+			t.Errorf("error = %q, want %q", msg, want)
+		}
+	})
+
+	t.Run("empty string arg is treated as missing", func(t *testing.T) {
+		t.Parallel()
+
+		result := impl(context.Background(), map[string]any{"name": ""}, dir)
+		if result["error"] == nil {
+			t.Error("expected an \"error\" key for an empty-string arg")
+		}
+	})
+
 	t.Run("required: true does not change a nonzero exit's shape", func(t *testing.T) {
 		t.Parallel()
 
-		requiredImpl := execCustomTool(config.ToolSpec{Name: "fail", Run: "exit 1", Required: true})
+		requiredImpl := execCustomTool(config.ToolSpec{Name: "fail", Run: "exit 1", Required: true}, nil)
 
 		result := requiredImpl(context.Background(), map[string]any{}, dir)
 		if result["exit_code"] != 1 {
