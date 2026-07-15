@@ -307,7 +307,11 @@ func execRunShell(ctx context.Context, args map[string]any, dir string) map[stri
 // execCustomTool renders spec.Run against the model's args and shells it
 // out. Model-supplied arg values are interpolated into the sh -c string, so
 // a custom tool is a capability-curation convenience, not a hard sandbox —
-// the same trust boundary as run_shell itself. A required: true tool is not
+// the same trust boundary as run_shell itself. A run: template should pipe
+// each model-supplied value through the shellquote function (see
+// internal/template) so shell metacharacters in the value are passed through
+// literally rather than interpreted; a template that doesn't is as trusting
+// of the model's output as run_shell is. A required: true tool is not
 // special-cased here: its nonzero exit is reported as ordinary data, same as
 // any other tool, so the model can see what went wrong and recover on its
 // next turn. required: is enforced by runAgentConversation tracking success

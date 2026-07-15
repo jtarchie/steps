@@ -157,7 +157,9 @@ workspace:
 - Use `--force` flag to bypass caching and re-run everything
 
 ### Template Rendering
-Resource check/in/out commands and agent custom tools support `{{ .source.* }}` and `{{ .version.* }}` templating for dynamic command construction (e.g., `gh pr list --repo {{ .source.repo }}`).
+Resource check/in/out commands and agent custom tools support `{{ .source.* }}` and `{{ .version.* }}` templating for dynamic command construction (e.g., `gh pr list --repo {{ .source.repo }}`). A custom tool's `run:` additionally sees the model's call arguments as `{{ .args.* }}` (see `inferToolParams` in `internal/agent/tools.go`, which derives the tool's parameter schema from these references).
+
+Since a rendered template runs via `sh -c`, any value interpolated into it that could contain shell metacharacters — backticks, `$(...)`, quotes, `; | &` — must be piped through the `shellquote` function (`internal/template/template.go`), which wraps it as one safely-quoted POSIX word (and supplies its own quotes, so don't add surrounding `"..."`): `-b {{ .args.body | shellquote }}`. This matters most for LLM- or PR-authored values (e.g. a review body): without it, a body containing `` `replace` `` gets command-substituted by the shell and posted with those words missing. See `examples/review.yml`'s `post_review` tool.
 
 ## Guidance for Claude Agents
 
