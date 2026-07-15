@@ -48,10 +48,11 @@ agents:
   - run_shell
   - name: post_review
     description: Post a review verdict on the current PR. action is approve or comment.
-    # shellquote wraps each model-supplied value as one safely-quoted shell
-    # word, so backticks / $(...) / quotes in the review body are posted
-    # literally instead of being interpreted by sh -c. Note: no surrounding
-    # quotes of our own — shellquote supplies them.
+    # shellquote renders each model-supplied value as one safely-quoted shell
+    # word (quoting only when needed), so backticks / $(...) / quotes in the
+    # review body are posted literally instead of being interpreted by sh -c.
+    # Note: no surrounding quotes of our own — shellquote supplies them when
+    # the value needs them.
     run: gh pr review --{{ .args.action | shellquote }} -b {{ .args.body | shellquote }}
     # required: true means the step can't finish until this tool has
     # actually succeeded (exit 0) at least once. A failure (e.g. a

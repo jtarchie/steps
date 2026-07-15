@@ -40,36 +40,52 @@ func TestRender(t *testing.T) {
 			t.Error("expected error for malformed template")
 		}
 	})
+}
 
-	t.Run("shellquote neutralizes shell metacharacters", func(t *testing.T) {
-		t.Parallel()
+func TestRenderShellquote(t *testing.T) {
+	t.Parallel()
 
-		args := map[string]any{"args": map[string]any{
-			"body": "a `replace` b $(id) c 'q' d",
-		}}
+	tests := []struct {
+		name string
+		tmpl string
+		data map[string]any
+		want string
+	}{
+		{
+			// The whole body is one single-quoted word; the embedded ' becomes '\''.
+			name: "neutralizes shell metacharacters",
+			tmpl: `gh pr review -b {{ .args.body | shellquote }}`,
+			data: map[string]any{"args": map[string]any{"body": "a `replace` b $(id) c 'q' d"}},
+			want: `gh pr review -b 'a ` + "`replace`" + ` b $(id) c '\''q'\'' d'`,
+		},
+		{
+			name: "wraps an empty value",
+			tmpl: `x {{ .empty | shellquote }} y`,
+			data: map[string]any{"empty": ""},
+			want: "x '' y",
+		},
+		{
+			// A value with no shell-special characters needs no quoting, so the
+			// rendered command stays readable (e.g. --approve, not --'approve').
+			name: "leaves an already-safe value bare",
+			tmpl: `gh pr review --{{ .action | shellquote }}`,
+			data: map[string]any{"action": "approve"},
+			want: "gh pr review --approve",
+		},
+	}
 
-		got, err := Render(`gh pr review -b {{ .args.body | shellquote }}`, args)
-		if err != nil {
-			t.Fatal(err)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-		// The whole body is one single-quoted word; the embedded ' becomes '\''.
-		want := `gh pr review -b 'a ` + "`replace`" + ` b $(id) c '\''q'\'' d'`
-		if got != want {
-			t.Errorf("got %q, want %q", got, want)
-		}
-	})
+			got, err := Render(tt.tmpl, tt.data)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	t.Run("shellquote wraps an empty value", func(t *testing.T) {
-		t.Parallel()
-
-		got, err := Render(`x {{ .empty | shellquote }} y`, map[string]any{"empty": ""})
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if want := "x '' y"; got != want {
-			t.Errorf("got %q, want %q", got, want)
-		}
-	})
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
 }

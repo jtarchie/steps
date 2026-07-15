@@ -94,6 +94,7 @@ linters:
             - "**/internal/template/**"
           allow:
             - "$gostd"
+            - "github.com/frioux/leatherman/pkg/shellquote"
         Retry:
           files:
             - "**/internal/retry/**"

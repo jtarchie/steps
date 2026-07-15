@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 	"text/template"
+
+	"github.com/frioux/leatherman/pkg/shellquote"
 )
 
 // funcMap is the set of helper functions available in every rendered
@@ -19,11 +21,19 @@ import (
 //nolint:gochecknoglobals // compiled once, read-only
 var funcMap = template.FuncMap{"shellquote": shellQuote}
 
-// shellQuote renders v as a single, safely-quoted POSIX shell word: it wraps
-// the value in single quotes (inside which the shell interprets nothing) and
-// escapes any embedded single quote as '\”. An empty value becomes ”.
-func shellQuote(v any) string {
-	return "'" + strings.ReplaceAll(fmt.Sprint(v), "'", `'\''`) + "'"
+// shellQuote renders v as a single, safely-quoted POSIX shell word, via
+// leatherman's shellquote.Quote — which quotes only when the value contains
+// characters the shell would otherwise interpret (a plain "approve" stays
+// bare; a review body with backticks / $(...) / quotes is single-quoted).
+// Returns Quote's error (e.g. a null byte in the value) so a bad value fails
+// the render rather than producing something unsafe.
+func shellQuote(v any) (string, error) {
+	quoted, err := shellquote.Quote([]string{fmt.Sprint(v)})
+	if err != nil {
+		return "", fmt.Errorf("shellquote: %w", err)
+	}
+
+	return quoted, nil
 }
 
 // Render renders a Go template against data (typically
