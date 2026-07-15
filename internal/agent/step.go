@@ -122,7 +122,8 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 			maxTokens:   ri.MaxTokens,
 			reasoning:   ri.ReasoningEffort,
 		},
-		maxTurns: ri.MaxTurns,
+		maxTurns:             ri.MaxTurns,
+		toolChoiceStringOnly: ri.StringOnlyToolChoice,
 	}
 
 	return preparedAgentStep{ri: ri, space: space, conv: conv, llm: newAgentLLM(ri.BaseURL, ri.ModelName, apiKey)}, nil

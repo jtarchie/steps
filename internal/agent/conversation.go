@@ -59,6 +59,10 @@ type agentConversation struct {
 	tools    agentTools
 	params   agentGenParams
 	maxTurns int
+	// toolChoiceStringOnly forces a required tool call via the string
+	// tool_choice: "required" instead of a named function object — see
+	// forceRequiredTool. Set from config.ResolvedInvocation.StringOnlyToolChoice.
+	toolChoiceStringOnly bool
 }
 
 // buildAgentRequest builds a fresh LLM request (system + user prompt + tools
@@ -101,6 +105,13 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 // by maxTurns: a provider that doesn't honor tool_choice, or a model that
 // keeps failing the call anyway, still hits the turn cap rather than
 // looping forever.
+//
+// conv.toolChoiceStringOnly swaps that named-function force for the generic
+// tool_choice: "required" string form — some OpenAI-compat local servers
+// (e.g. LM Studio) 400 on the named-object form entirely. The generic form
+// only guarantees *some* tool call, not the missing one specifically, so a
+// model can still stall on the wrong tool until maxTurns; that's the same
+// safety bound already documented above.
 func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversation) (string, int, error) {
 	req := buildAgentRequest(conv)
 	satisfied := make(map[string]bool, len(conv.tools.required))
@@ -120,7 +131,7 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 				return text, turn + 1, nil
 			}
 
-			forceRequiredTool(req, missing[0])
+			forceRequiredTool(req, missing[0], conv.toolChoiceStringOnly)
 
 			continue
 		}
@@ -150,19 +161,25 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 	return "", conv.maxTurns, fmt.Errorf("agent exceeded %d turns without a final response", conv.maxTurns)
 }
 
-// forceRequiredTool constrains req's next generateOnce call to a function
-// call for exactly name, via the provider's tool_choice mechanism (see
-// genaiopenai's ToolConfig → tool_choice mapping) — the model cannot decline
-// or reply with plain text on that turn. Cleared once any tool call comes
-// back (see runAgentConversation) so later turns aren't stuck forced to the
-// same name.
-func forceRequiredTool(req *model.LLMRequest, name string) {
-	req.Config.ToolConfig = &genai.ToolConfig{
-		FunctionCallingConfig: &genai.FunctionCallingConfig{
-			Mode:                 genai.FunctionCallingConfigModeAny,
-			AllowedFunctionNames: []string{name},
-		},
+// forceRequiredTool constrains req's next generateOnce call to a tool call,
+// via the provider's tool_choice mechanism (see genaiopenai's ToolConfig →
+// tool_choice mapping) — the model cannot decline or reply with plain text
+// on that turn. Cleared once any tool call comes back (see
+// runAgentConversation) so later turns aren't stuck forced to the same
+// name.
+//
+// stringOnly == false (the default) names name specifically, mapping to
+// OpenAI's named tool_choice object — the precise force. stringOnly == true
+// leaves AllowedFunctionNames empty, which genaiopenai instead maps to the
+// generic string tool_choice: "required" — some OpenAI-compat local servers
+// (e.g. LM Studio) reject the named-object form outright.
+func forceRequiredTool(req *model.LLMRequest, name string, stringOnly bool) {
+	fcc := &genai.FunctionCallingConfig{Mode: genai.FunctionCallingConfigModeAny}
+	if !stringOnly {
+		fcc.AllowedFunctionNames = []string{name}
 	}
+
+	req.Config.ToolConfig = &genai.ToolConfig{FunctionCallingConfig: fcc}
 }
 
 // requiredCallSucceeded reports whether a tool's FunctionResponse data

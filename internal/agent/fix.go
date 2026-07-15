@@ -82,7 +82,8 @@ func RunFix(ctx context.Context, cfg *config.Config, taskName, taskRun string, f
 			maxTokens:   ri.MaxTokens,
 			reasoning:   ri.ReasoningEffort,
 		},
-		maxTurns: ri.MaxTurns,
+		maxTurns:             ri.MaxTurns,
+		toolChoiceStringOnly: ri.StringOnlyToolChoice,
 	}
 	llm := newAgentLLM(ri.BaseURL, ri.ModelName, apiKey)
 

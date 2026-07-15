@@ -383,13 +383,14 @@ func TestResolveAgentTarget(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name            string
-		source          AgentSource
-		wantBaseURL     string
-		wantModel       string
-		wantAPIKeyEnv   string
-		wantRequiresKey bool
-		wantErr         bool
+		name                     string
+		source                   AgentSource
+		wantBaseURL              string
+		wantModel                string
+		wantAPIKeyEnv            string
+		wantRequiresKey          bool
+		wantStringOnlyToolChoice bool
+		wantErr                  bool
 	}{
 		{ //nolint:gosec // wantAPIKeyEnv values are env-var *names*, not credential values
 			name:            "openrouter prefix with slashed model id",
@@ -398,6 +399,8 @@ func TestResolveAgentTarget(t *testing.T) {
 			wantModel:       "anthropic/claude-3.5-sonnet",
 			wantAPIKeyEnv:   "OPENROUTER_API_KEY",
 			wantRequiresKey: true,
+			// cloud provider: default to the precise named tool_choice.
+			wantStringOnlyToolChoice: false,
 		},
 		{
 			name:            "lmstudio prefix requires no key",
@@ -406,6 +409,17 @@ func TestResolveAgentTarget(t *testing.T) {
 			wantModel:       "qwen2.5-coder",
 			wantAPIKeyEnv:   "",
 			wantRequiresKey: false,
+			// local/no-auth provider: default to the string-only fallback.
+			wantStringOnlyToolChoice: true,
+		},
+		{
+			name:                     "ollama prefix requires no key",
+			source:                   AgentSource{Model: "ollama/llama3.1"},
+			wantBaseURL:              "http://localhost:11434/v1/",
+			wantModel:                "llama3.1",
+			wantAPIKeyEnv:            "",
+			wantRequiresKey:          false,
+			wantStringOnlyToolChoice: true,
 		},
 		{
 			name:    "bare model with no endpoint errors",
@@ -413,20 +427,49 @@ func TestResolveAgentTarget(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:            "explicit endpoint and api_key_env override derived values",
-			source:          AgentSource{Model: "openrouter/anthropic/claude-3.5-sonnet", Endpoint: "https://gateway.internal/v1", APIKeyEnv: "CUSTOM_KEY"},
-			wantBaseURL:     "https://gateway.internal/v1/",
-			wantModel:       "anthropic/claude-3.5-sonnet",
-			wantAPIKeyEnv:   "CUSTOM_KEY",
-			wantRequiresKey: true,
+			name:                     "explicit endpoint and api_key_env override derived values",
+			source:                   AgentSource{Model: "openrouter/anthropic/claude-3.5-sonnet", Endpoint: "https://gateway.internal/v1", APIKeyEnv: "CUSTOM_KEY"},
+			wantBaseURL:              "https://gateway.internal/v1/",
+			wantModel:                "anthropic/claude-3.5-sonnet",
+			wantAPIKeyEnv:            "CUSTOM_KEY",
+			wantRequiresKey:          true,
+			wantStringOnlyToolChoice: false,
 		},
 		{
-			name:            "unrecognized prefix requires explicit endpoint",
-			source:          AgentSource{Model: "foo/bar", Endpoint: "https://foo.example/v1/"},
-			wantBaseURL:     "https://foo.example/v1/",
-			wantModel:       "foo/bar",
-			wantAPIKeyEnv:   "",
-			wantRequiresKey: false,
+			name:                     "unrecognized prefix requires explicit endpoint",
+			source:                   AgentSource{Model: "foo/bar", Endpoint: "https://foo.example/v1/"},
+			wantBaseURL:              "https://foo.example/v1/",
+			wantModel:                "foo/bar",
+			wantAPIKeyEnv:            "",
+			wantRequiresKey:          false,
+			wantStringOnlyToolChoice: false,
+		},
+		{ //nolint:gosec // wantAPIKeyEnv values are env-var *names*, not credential values
+			name:                     "explicit string_tool_choice true overrides cloud default",
+			source:                   AgentSource{Model: "openrouter/anthropic/claude-3.5-sonnet", StringToolChoice: boolPtr(true)},
+			wantBaseURL:              "https://openrouter.ai/api/v1/",
+			wantModel:                "anthropic/claude-3.5-sonnet",
+			wantAPIKeyEnv:            "OPENROUTER_API_KEY",
+			wantRequiresKey:          true,
+			wantStringOnlyToolChoice: true,
+		},
+		{
+			name:                     "explicit string_tool_choice false overrides local default",
+			source:                   AgentSource{Model: "lmstudio/qwen2.5-coder", StringToolChoice: boolPtr(false)},
+			wantBaseURL:              "http://localhost:1234/v1/",
+			wantModel:                "qwen2.5-coder",
+			wantAPIKeyEnv:            "",
+			wantRequiresKey:          false,
+			wantStringOnlyToolChoice: false,
+		},
+		{
+			name:                     "explicit string_tool_choice true on an unrecognized prefix",
+			source:                   AgentSource{Model: "foo/bar", Endpoint: "https://foo.example/v1/", StringToolChoice: boolPtr(true)},
+			wantBaseURL:              "https://foo.example/v1/",
+			wantModel:                "foo/bar",
+			wantAPIKeyEnv:            "",
+			wantRequiresKey:          false,
+			wantStringOnlyToolChoice: true,
 		},
 	}
 
@@ -434,7 +477,7 @@ func TestResolveAgentTarget(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			baseURL, modelName, apiKeyEnv, requiresKey, err := resolveAgentTarget(tt.source)
+			baseURL, modelName, apiKeyEnv, requiresKey, stringOnlyToolChoice, err := resolveAgentTarget(tt.source)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected an error")
@@ -462,9 +505,17 @@ func TestResolveAgentTarget(t *testing.T) {
 			if requiresKey != tt.wantRequiresKey {
 				t.Errorf("requiresKey = %v, want %v", requiresKey, tt.wantRequiresKey)
 			}
+
+			if stringOnlyToolChoice != tt.wantStringOnlyToolChoice {
+				t.Errorf("stringOnlyToolChoice = %v, want %v", stringOnlyToolChoice, tt.wantStringOnlyToolChoice)
+			}
 		})
 	}
 }
+
+// boolPtr returns a pointer to b, for AgentSource.StringToolChoice test
+// fixtures that need to distinguish "unset" from an explicit false.
+func boolPtr(b bool) *bool { return &b }
 
 //nolint:gochecknoglobals // shared read-only fixture for the effective-tools tests
 var effectiveToolsAgentGrant = []ToolSpec{

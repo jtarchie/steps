@@ -233,6 +233,53 @@ func TestRunAgentConversationForcesRequiredToolCall(t *testing.T) {
 	}
 }
 
+// TestRunAgentConversationForcesRequiredToolCallStringOnly covers the
+// toolChoiceStringOnly fallback (config.ResolvedInvocation.StringOnlyToolChoice)
+// for providers whose OpenAI-compat server rejects the named-function
+// tool_choice object (e.g. LM Studio) — genaiopenai maps an empty
+// AllowedFunctionNames under ModeAny to the generic string tool_choice:
+// "required" instead.
+func TestRunAgentConversationForcesRequiredToolCallStringOnly(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeLLM{
+		responses: []*model.LLMResponse{
+			{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "looks fine, done"}}}},
+			{Content: &genai.Content{
+				Role:  genai.RoleModel,
+				Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "call1", Name: "post_review", Args: map[string]any{}}}},
+			}},
+			{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "posted"}}}},
+		},
+	}
+
+	conv := requiredToolConversation(t, t.TempDir())
+	conv.toolChoiceStringOnly = true
+
+	content, _, err := runAgentConversation(context.Background(), fake, conv)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if content != "posted" {
+		t.Errorf("content = %q, want %q", content, "posted")
+	}
+
+	if len(fake.requests) < 2 {
+		t.Fatalf("expected at least 2 requests, got %d", len(fake.requests))
+	}
+
+	forcedCfg := fake.requests[1].Config.ToolConfig
+	if forcedCfg == nil || forcedCfg.FunctionCallingConfig == nil {
+		t.Fatal("expected the second request to force a tool call via ToolConfig")
+	}
+
+	fcc := forcedCfg.FunctionCallingConfig
+	if fcc.Mode != genai.FunctionCallingConfigModeAny || len(fcc.AllowedFunctionNames) != 0 {
+		t.Errorf("expected ToolConfig to force any tool call generically (no AllowedFunctionNames), got mode=%v names=%v", fcc.Mode, fcc.AllowedFunctionNames)
+	}
+}
+
 // TestRunAgentConversationRequiredToolNeverCalled covers the safety bound: a
 // model that keeps trying to stop without calling the required tool even
 // after being forced (our fakeLLM doesn't actually honor tool_choice, unlike

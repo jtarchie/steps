@@ -128,10 +128,20 @@ type Agent struct {
 // set, is the API base URL (e.g. "https://api.openai.com/v1/") and overrides
 // the derived one. APIKeyEnv names an OS environment variable read at run
 // time — the key is never stored in YAML.
+//
+// StringToolChoice overrides whether forcing a required tool (see
+// forceRequiredTool in internal/agent/conversation.go) uses OpenAI's named
+// tool_choice object or the string "required" fallback. Left unset, it
+// defaults to the resolved provider's requiresKey (cloud providers get the
+// precise named form; local/no-auth providers like lmstudio/ollama, whose
+// OpenAI-compat servers often don't support the object form, get the
+// fallback) or false for an explicit endpoint: with no recognized provider
+// prefix. A pointer so "unset" is distinguishable from an explicit false.
 type AgentSource struct {
-	Endpoint  string `yaml:"endpoint,omitempty"`
-	Model     string `yaml:"model"`
-	APIKeyEnv string `yaml:"api_key_env,omitempty"`
+	Endpoint         string `yaml:"endpoint,omitempty"`
+	Model            string `yaml:"model"`
+	APIKeyEnv        string `yaml:"api_key_env,omitempty"`
+	StringToolChoice *bool  `yaml:"string_tool_choice,omitempty"`
 }
 
 // ToolSpec is one entry in an agent step's tools: list — either a built-in
@@ -635,7 +645,12 @@ var agentProviders = map[string]agentProvider{
 // model IDs survive intact. source.Endpoint/APIKeyEnv, when set, always
 // override the derived values. A model with no recognized provider prefix
 // requires an explicit source.Endpoint.
-func resolveAgentTarget(source AgentSource) (baseURL, modelName, apiKeyEnv string, requiresKey bool, err error) {
+//
+// stringOnlyToolChoice defaults to !provider.requiresKey for a recognized
+// provider prefix (local/no-auth providers get the string-only tool_choice
+// fallback; cloud providers get the precise named form) or false for an
+// explicit endpoint:, and source.StringToolChoice, when set, always wins.
+func resolveAgentTarget(source AgentSource) (baseURL, modelName, apiKeyEnv string, requiresKey, stringOnlyToolChoice bool, err error) {
 	prefix, rest, hasPrefix := strings.Cut(source.Model, "/")
 
 	provider, known := agentProviders[prefix]
@@ -650,14 +665,24 @@ func resolveAgentTarget(source AgentSource) (baseURL, modelName, apiKeyEnv strin
 			apiKeyEnv = provider.keyEnv
 		}
 
-		return ensureTrailingSlash(baseURL), rest, apiKeyEnv, provider.requiresKey || source.APIKeyEnv != "", nil
+		stringOnlyToolChoice = !provider.requiresKey
+		if source.StringToolChoice != nil {
+			stringOnlyToolChoice = *source.StringToolChoice
+		}
+
+		return ensureTrailingSlash(baseURL), rest, apiKeyEnv, provider.requiresKey || source.APIKeyEnv != "", stringOnlyToolChoice, nil
 	}
 
 	if source.Endpoint == "" {
-		return "", "", "", false, fmt.Errorf("model %q has no known provider prefix; set source.endpoint", source.Model)
+		return "", "", "", false, false, fmt.Errorf("model %q has no known provider prefix; set source.endpoint", source.Model)
 	}
 
-	return ensureTrailingSlash(source.Endpoint), source.Model, source.APIKeyEnv, source.APIKeyEnv != "", nil
+	stringOnlyToolChoice = false
+	if source.StringToolChoice != nil {
+		stringOnlyToolChoice = *source.StringToolChoice
+	}
+
+	return ensureTrailingSlash(source.Endpoint), source.Model, source.APIKeyEnv, source.APIKeyEnv != "", stringOnlyToolChoice, nil
 }
 
 // ensureTrailingSlash normalizes a base URL to end in "/", since the
@@ -758,6 +783,11 @@ type ResolvedInvocation struct {
 	MaxTurns        int
 	Attempts        int
 	ToolSpecs       []ToolSpec
+	// StringOnlyToolChoice, when true, forces a required tool call (see
+	// forceRequiredTool in internal/agent) via tool_choice: "required"
+	// instead of a named function object — for providers whose
+	// OpenAI-compat server rejects the object form. See resolveAgentTarget.
+	StringOnlyToolChoice bool
 }
 
 // ResolveAgentInvocation resolves the agent named by step against c,
@@ -770,7 +800,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		return ResolvedInvocation{}, err
 	}
 
-	baseURL, modelName, apiKeyEnv, requiresKey, err := resolveAgentTarget(agent.Source)
+	baseURL, modelName, apiKeyEnv, requiresKey, stringOnlyToolChoice, err := resolveAgentTarget(agent.Source)
 	if err != nil {
 		return ResolvedInvocation{}, err
 	}
@@ -796,19 +826,20 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 	}
 
 	return ResolvedInvocation{
-		AgentName:       agent.Name,
-		BaseURL:         baseURL,
-		ModelName:       modelName,
-		APIKeyEnv:       apiKeyEnv,
-		RequiresKey:     requiresKey,
-		Persona:         agent.System,
-		Temperature:     agent.Temperature,
-		TopP:            agent.TopP,
-		MaxTokens:       agent.MaxTokens,
-		ReasoningEffort: reasoning,
-		MaxTurns:        maxTurns,
-		Attempts:        attempts,
-		ToolSpecs:       toolSpecs,
+		AgentName:            agent.Name,
+		BaseURL:              baseURL,
+		ModelName:            modelName,
+		APIKeyEnv:            apiKeyEnv,
+		RequiresKey:          requiresKey,
+		Persona:              agent.System,
+		Temperature:          agent.Temperature,
+		TopP:                 agent.TopP,
+		MaxTokens:            agent.MaxTokens,
+		ReasoningEffort:      reasoning,
+		MaxTurns:             maxTurns,
+		Attempts:             attempts,
+		ToolSpecs:            toolSpecs,
+		StringOnlyToolChoice: stringOnlyToolChoice,
 	}, nil
 }
 
