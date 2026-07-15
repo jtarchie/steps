@@ -189,7 +189,11 @@ func TestNewRunnerResolvesCwdOnce(t *testing.T) {
 // its argv to argvFile and exits with exitCode — a hermetic stand-in so
 // DockerRunner's process-plumbing (argv construction, exit code
 // propagation, stdout/stderr capture) can be exercised without a real
-// docker daemon.
+// docker daemon. stdout/stderr/exitCode are passed to the script via env
+// vars (FAKE_DOCKER_*) rather than interpolated into the script's source
+// text, so no shell-quoting of arbitrary content is needed at all — os/exec
+// passes env values through verbatim, unlike command-line text that a
+// shell re-parses.
 func writeFakeDocker(t *testing.T, exitCode int, stdout, stderr string) (argvFile string) {
 	t.Helper()
 
@@ -202,9 +206,9 @@ func writeFakeDocker(t *testing.T, exitCode int, stdout, stderr string) (argvFil
 
 	script := "#!/bin/sh\n" +
 		"printf '%s\\n' \"$*\" > " + argvFile + "\n" +
-		"printf '%s' " + shellSingleQuote(stdout) + "\n" +
-		"printf '%s' " + shellSingleQuote(stderr) + " >&2\n" +
-		"exit " + strconv.Itoa(exitCode) + "\n"
+		"printf '%s' \"$FAKE_DOCKER_STDOUT\"\n" +
+		"printf '%s' \"$FAKE_DOCKER_STDERR\" >&2\n" +
+		"exit \"$FAKE_DOCKER_EXIT\"\n"
 
 	scriptPath := filepath.Join(dir, "docker")
 
@@ -214,12 +218,11 @@ func writeFakeDocker(t *testing.T, exitCode int, stdout, stderr string) (argvFil
 	}
 
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_DOCKER_STDOUT", stdout)
+	t.Setenv("FAKE_DOCKER_STDERR", stderr)
+	t.Setenv("FAKE_DOCKER_EXIT", strconv.Itoa(exitCode))
 
 	return argvFile
-}
-
-func shellSingleQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func TestDockerRunnerCaptureFull(t *testing.T) {
@@ -255,6 +258,31 @@ func TestDockerRunnerCaptureFull(t *testing.T) {
 	fields := strings.Fields(string(recorded))
 	if !strings.Contains(string(recorded), "do stuff") || !strings.Contains(string(recorded), "alpine") || slices.Contains(fields, "-i") {
 		t.Errorf("recorded argv = %q, want it to contain the image/command and omit the -i token (RunCaptureFull is non-interactive)", recorded)
+	}
+}
+
+// TestDockerRunnerCaptureFullHandlesAdversarialOutput guards writeFakeDocker
+// itself: stdout/stderr containing shell metacharacters (single quotes,
+// backslashes, a trailing unescaped quote) must round-trip byte-for-byte,
+// since they're passed through env vars rather than interpolated into the
+// fake script's source text.
+func TestDockerRunnerCaptureFullHandlesAdversarialOutput(t *testing.T) {
+	const adversarialStdout = `it's a "test" with \backslashes\ and 'quotes'`
+
+	writeFakeDocker(t, 0, adversarialStdout, "")
+
+	runner, err := NewRunner("alpine", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	stdout, _, _, err := runner.RunCaptureFull(context.Background(), "do stuff")
+	if err != nil {
+		t.Fatalf("RunCaptureFull: %v", err)
+	}
+
+	if stdout != adversarialStdout {
+		t.Errorf("stdout = %q, want %q", stdout, adversarialStdout)
 	}
 }
 
