@@ -47,7 +47,7 @@ resources:
 agents:
 - name: reviewer
   source:
-    model: openrouter/anthropic/claude-3.5-sonnet
+    model: lmstudio/google/gemma-4-26b-a4b
     # api_key_env defaults to OPENROUTER_API_KEY
   system: |
     You review a build's release notes for obvious mistakes. The build's

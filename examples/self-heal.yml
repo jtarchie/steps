@@ -20,7 +20,7 @@ resources:
 agents:
 - name: fixer
   source:
-    model: openrouter/anthropic/claude-3.5-sonnet
+    model: lmstudio/google/gemma-4-26b-a4b
     # api_key_env defaults to OPENROUTER_API_KEY
   system: |
     You fix failing checks in a CI pipeline. The get resource is checked out
