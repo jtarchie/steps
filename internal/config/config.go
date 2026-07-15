@@ -376,7 +376,12 @@ func (c *Config) validate() error {
 		return err
 	}
 
-	return c.validateImages()
+	err = c.validateImages()
+	if err != nil {
+		return err
+	}
+
+	return c.validateFixAgentImages()
 }
 
 // validateImages rejects image: on get/put steps: a put's execution image
@@ -396,6 +401,51 @@ func (c *Config) validateImages() error {
 				return fmt.Errorf("%s (get %q): image is not valid on get steps", label, step.Get)
 			case step.Put != "":
 				return fmt.Errorf("%s (put %q): image is not valid on put steps; set it on the resource_type instead", label, step.Put)
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateFixAgentImages rejects a fix: agent that sets its own image: —
+// agent.RunFix always executes under the failing task's image (rt.Image),
+// never the fix agent's own, so a fix agent's image: can never take effect.
+// An unresolvable fix: agent name is left for FindAgent to catch at run
+// time, same as everywhere else agent/task names aren't cross-checked at
+// load time.
+func (c *Config) validateFixAgentImages() error {
+	check := func(context string, fix *FixSpec) error {
+		if fix == nil {
+			return nil
+		}
+
+		agent, err := c.FindAgent(fix.Agent)
+		if err != nil {
+			return nil //nolint:nilerr // unresolvable agent name is caught at run time, not here
+		}
+
+		if agent.Image != "" {
+			return fmt.Errorf("%s: fix agent %q sets image: %q, but a fix loop always runs under the failing task's image, not the fix agent's own", context, fix.Agent, agent.Image)
+		}
+
+		return nil
+	}
+
+	for i := range c.Tasks {
+		task := c.Tasks[i]
+
+		err := check(fmt.Sprintf("task %q", task.Name), task.Fix)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, job := range c.Jobs {
+		for i, step := range job.Plan {
+			err := check(fmt.Sprintf("job %q step %d", job.Name, i), step.Fix)
+			if err != nil {
+				return err
 			}
 		}
 	}

@@ -24,12 +24,13 @@ const defaultFixPrompt = `A command that must pass has just failed; its output i
 // task's re-run (not the model's word) is the verdict.
 //
 // The fix conversation's run_shell/custom tools and the injected rerun tool
-// all execute under rt.Image — the failing task's own image, not the fix
-// agent's own Agent.Image (a fix step: is invalid on config, so there's
-// nothing to prefer there anyway). The premise of the fix loop is
-// reproducing and resolving the exact failure the task hit; running under a
-// different image than the one that produced (and re-verifies) the failure
-// would make the loop incoherent.
+// all execute under rt.Image — the failing task's own image, never the fix
+// agent's own Agent.Image (config.validateFixAgentImages rejects a fix
+// agent that sets one, at LoadConfig time, precisely because it can never
+// take effect here). The premise of the fix loop is reproducing and
+// resolving the exact failure the task hit; running under a different image
+// than the one that produced (and re-verifies) the failure would make the
+// loop incoherent.
 func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, failureOutput, workspaceDir string) error {
 	fix := rt.Fix
 

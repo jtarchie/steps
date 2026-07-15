@@ -1175,3 +1175,73 @@ func TestValidateImagesRejectsGetAndPutSteps(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateFixAgentImages(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a fix agent with its own image is rejected, from a top-level task", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{
+			Agents: []Agent{{Name: "fixer", Image: "python:3.12"}},
+			Tasks:  []Task{{Name: "build", Run: "echo hi", Fix: &FixSpec{Agent: "fixer"}}},
+		}
+
+		err := cfg.validateFixAgentImages()
+		if err == nil {
+			t.Error("expected an error for a fix agent with its own image:")
+		}
+	})
+
+	t.Run("a fix agent with its own image is rejected, from a step-level fix override", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{
+			Agents: []Agent{{Name: "fixer", Image: "python:3.12"}},
+			Jobs: []Job{{Name: "main", Plan: []Step{
+				{Task: "t", Run: "echo hi", Fix: &FixSpec{Agent: "fixer"}},
+			}}},
+		}
+
+		err := cfg.validateFixAgentImages()
+		if err == nil {
+			t.Error("expected an error for a fix agent with its own image:")
+		}
+	})
+
+	t.Run("a fix agent with no image of its own is fine", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{
+			Agents: []Agent{{Name: "fixer"}},
+			Tasks:  []Task{{Name: "build", Run: "echo hi", Fix: &FixSpec{Agent: "fixer"}}},
+		}
+
+		err := cfg.validateFixAgentImages()
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("no fix: anywhere is fine", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{Tasks: []Task{{Name: "build", Run: "echo hi"}}}
+
+		err := cfg.validateFixAgentImages()
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("a fix: agent name that doesn't resolve is left for run-time FindAgent, not rejected here", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{Tasks: []Task{{Name: "build", Run: "echo hi", Fix: &FixSpec{Agent: "nonexistent"}}}}
+
+		err := cfg.validateFixAgentImages()
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+}
