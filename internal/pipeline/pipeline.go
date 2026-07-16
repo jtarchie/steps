@@ -13,6 +13,7 @@ import (
 	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
+	"github.com/jtarchie/steps/internal/outcome"
 	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
@@ -67,6 +68,30 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	}
 	defer workspace.CloseBuild(bw, job.Name)
 
+	// Everything from here on has a workspace to run job-level hooks in, so
+	// funnel planning and execution into one outcome and dispatch the job's
+	// hooks around it. Pre-workspace failures above fire no hooks — the build
+	// never started (matching Concourse). Job hooks fire on every invocation,
+	// cached or not; they are never hashed or skipped.
+	runErr := runJobPlan(ctx, cfg, job, pinned, provider, bw, st, skipCache)
+
+	scope := hookScope{cfg: cfg, jobName: job.Name, label: fmt.Sprintf("job %q", job.Name), bw: bw}
+
+	finalErr := runHooks(ctx, scope, job.Hooks, runErr)
+	if finalErr != nil {
+		return finalErr
+	}
+
+	slog.Info("job.done", "job", job.Name)
+
+	return nil
+}
+
+// runJobPlan plans (unless skipCache) and runs a job's steps, returning the
+// aggregate outcome that job-level hooks dispatch on. A planning failure
+// classifies as errored (job on_error); a step failure carries whatever
+// classification its producing site marked it with.
+func runJobPlan(ctx context.Context, cfg *config.Config, job *config.Job, pinned map[string]string, provider workspace.Provider, bw workspace.BuildWorkspace, st *store.Store, skipCache bool) error {
 	skippable := map[string]bool{}
 
 	if !skipCache {
@@ -81,14 +106,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 		}
 	}
 
-	err = runSteps(ctx, cfg, job.Name, job.Plan, pinned, provider, bw, st, skippable, "", false)
-	if err != nil {
-		return err
-	}
-
-	slog.Info("job.done", "job", job.Name)
-
-	return nil
+	return runSteps(ctx, cfg, job.Name, job.Plan, pinned, provider, bw, st, skippable, "", false)
 }
 
 // buildSkippableIndex returns, for every node hash reachable across chains,
@@ -175,11 +193,35 @@ func runSteps(ctx context.Context, cfg *config.Config, jobName string, steps []c
 	return recordChainSucceeded(ctx, st, jobName, parentHash, chainUnskippable)
 }
 
-// runNonGetStep dispatches a task/put/agent step — the three kinds that,
+// runNonGetStep runs a task/put/agent step and dispatches its hooks around the
+// outcome. A skipped (merkle-cached) step fires no hooks — it did not run, so
+// there is nothing for its observers to react to. When a green step is failed
+// by its own on_success/ensure hook, the true (failed) outcome is recorded so
+// the store and skip-cache reflect it.
+func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string) (string, bool, error) {
+	hash, skipped, err := dispatchNonGetStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash)
+	if skipped || step.Hooks.Empty() {
+		return hash, skipped, err
+	}
+
+	scope := hookScope{cfg: cfg, jobName: jobName, label: stepLabel(i, step), bw: bw}
+
+	final := runHooks(ctx, scope, step.Hooks, err)
+	if err == nil && final != nil {
+		recCtx := context.WithoutCancel(ctx)
+		_ = st.RecordJobRun(recCtx, jobName, hash, string(outcome.Failed), final)
+
+		return "", false, final
+	}
+
+	return hash, skipped, final
+}
+
+// dispatchNonGetStep dispatches a task/put/agent step — the three kinds that,
 // unlike get, run in place and return a single new parentHash rather than
 // fanning out or delegating the remainder of the plan. skipped is only ever
 // true for a skipped task step; put/agent steps are never skippable.
-func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string) (string, bool, error) {
+func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string) (string, bool, error) {
 	switch {
 	case step.Task != "":
 		return runTaskStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash)
@@ -228,7 +270,10 @@ func runGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, 
 	slog.Debug("job.step", "job", jobName, "index", i, "kind", "get", "resource", step.Get, "versions", len(versions))
 
 	for _, version := range versions {
-		content := merkle.GetNodeContent(*resourceType, resource.Source, version)
+		content, err := merkle.GetNodeContent(cfg, step, *resourceType, resource.Source, version)
+		if err != nil {
+			return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
+		}
 
 		hash, err := merkle.HashNode(merkle.NodeKindGet, content, parentHash)
 		if err != nil {
@@ -244,7 +289,7 @@ func runGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, 
 
 		node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindGet, StepIndex: i, Resource: resource.Name, Content: content}
 
-		err = runTriggeredBuild(ctx, cfg, jobName, *resource, *resourceType, version, remainder, pinned, provider, st, skippable, node, chainUnskippable)
+		err = runTriggeredBuild(ctx, cfg, jobName, i, step, *resource, *resourceType, version, remainder, pinned, provider, st, skippable, node, chainUnskippable)
 		if err != nil {
 			return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 		}
@@ -262,7 +307,10 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 		return "", false, fmt.Errorf("step %d: %w", i, err)
 	}
 
-	content := merkle.TaskNodeContent(rt, cfg.Workspace)
+	content, err := merkle.TaskNodeContent(cfg, step, rt)
+	if err != nil {
+		return "", false, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
+	}
 
 	hash, err := merkle.HashNode(merkle.NodeKindTask, content, parentHash)
 	if err != nil {
@@ -282,29 +330,10 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindTask, StepIndex: i, Resource: rt.Name, Content: content}
 
-	space, err := bw.TaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs)
+	err = executeTask(ctx, cfg, rt, bw)
 	if err != nil {
 		wrapped := fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
-		_ = st.RecordNode(ctx, nodeRecord(node), jobName, "failed", nil, wrapped)
-		_ = st.RecordJobRun(ctx, jobName, hash, "failed", wrapped)
-
-		return "", false, wrapped
-	}
-	defer workspace.CloseSpace(space, rt.Name)
-
-	err = runTaskCommand(ctx, cfg, rt, space.Dir())
-	if err != nil {
-		_ = st.RecordNode(ctx, nodeRecord(node), jobName, "failed", nil, err)
-		_ = st.RecordJobRun(ctx, jobName, hash, "failed", err)
-
-		return "", false, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
-	}
-
-	err = space.Capture(ctx)
-	if err != nil {
-		wrapped := fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
-		_ = st.RecordNode(ctx, nodeRecord(node), jobName, "failed", nil, wrapped)
-		_ = st.RecordJobRun(ctx, jobName, hash, "failed", wrapped)
+		recordStepFailure(ctx, st, node, jobName, wrapped)
 
 		return "", false, wrapped
 	}
@@ -315,6 +344,42 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 	}
 
 	return hash, false, nil
+}
+
+// executeTask materializes a task's (isolated or shared) working directory,
+// runs its command, and captures its declared outputs — with no merkle/store
+// recording. Shared by runTaskStep (which records the aggregate outcome) and
+// hook execution (where the enclosing step/job records it).
+func executeTask(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, bw workspace.BuildWorkspace) error {
+	space, err := bw.TaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs)
+	if err != nil {
+		return fmt.Errorf("task %q: %w", rt.Name, err)
+	}
+	defer workspace.CloseSpace(space, rt.Name)
+
+	err = runTaskCommand(ctx, cfg, rt, space.Dir())
+	if err != nil {
+		return err
+	}
+
+	err = space.Capture(ctx)
+	if err != nil {
+		return fmt.Errorf("task %q: %w", rt.Name, err)
+	}
+
+	return nil
+}
+
+// recordStepFailure records a step's failed node and job_run, classifying the
+// outcome (failed vs errored vs aborted) and writing under a detached context
+// so an aborted step's outcome still persists rather than being dropped by the
+// canceled context. Best-effort: recording errors are ignored so they can't
+// mask the original error returned to the caller.
+func recordStepFailure(ctx context.Context, st *store.Store, node merkle.Node, jobName string, err error) {
+	status := string(outcome.Classify(ctx, err))
+	recCtx := context.WithoutCancel(ctx)
+	_ = st.RecordNode(recCtx, nodeRecord(node), jobName, status, nil, err)
+	_ = st.RecordJobRun(recCtx, jobName, node.Hash, status, err)
 }
 
 // runTaskCommand runs a task's run: command. Without a fix:, it streams
@@ -332,6 +397,10 @@ func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedT
 	if rt.Fix == nil {
 		err := runner.Run(ctx, rt.Run)
 		if err != nil {
+			if shell.IsExitError(err) {
+				err = outcome.Fail(err)
+			}
+
 			return fmt.Errorf("task %q: %w", rt.Name, err)
 		}
 
@@ -365,7 +434,7 @@ func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedT
 	printTaskOutput(stdout, stderr)
 
 	if exitCode != 0 {
-		return fmt.Errorf("still failing after fix agent %q (exit %d)", rt.Fix.Agent, exitCode)
+		return fmt.Errorf("task %q: %w", rt.Name, outcome.Fail(fmt.Errorf("still failing after fix agent %q (exit %d)", rt.Fix.Agent, exitCode)))
 	}
 
 	return nil
@@ -419,7 +488,10 @@ func runPutStep(ctx context.Context, cfg *config.Config, jobName string, i int, 
 		return "", fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
 
-	content := merkle.PutNodeContent(*resourceType, resource.Source, step.Params, step.Inputs, cfg.Workspace)
+	content, err := merkle.PutNodeContent(cfg, step, *resourceType, resource.Source, step.Params, step.Inputs)
+	if err != nil {
+		return "", fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
+	}
 
 	hash, err := merkle.HashNode(merkle.NodeKindPut, content, parentHash)
 	if err != nil {
@@ -432,22 +504,12 @@ func runPutStep(ctx context.Context, cfg *config.Config, jobName string, i int, 
 
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindPut, StepIndex: i, Resource: resource.Name, Content: content}
 
-	space, err := bw.PutSpace(ctx, step.Put, step.Inputs)
+	result, err := executePut(ctx, cfg, step, bw)
 	if err != nil {
 		wrapped := fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
-		_ = st.RecordNode(ctx, nodeRecord(node), jobName, "failed", nil, wrapped)
-		_ = st.RecordJobRun(ctx, jobName, hash, "failed", wrapped)
+		recordStepFailure(ctx, st, node, jobName, wrapped)
 
 		return "", wrapped
-	}
-	defer workspace.CloseSpace(space, step.Put)
-
-	result, err := rsrc.RunOut(ctx, *resourceType, resource.Source, step.Params, space.Dir())
-	if err != nil {
-		_ = st.RecordNode(ctx, nodeRecord(node), jobName, "failed", nil, err)
-		_ = st.RecordJobRun(ctx, jobName, hash, "failed", err)
-
-		return "", fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
 
 	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", result, nil)
@@ -458,6 +520,41 @@ func runPutStep(ctx context.Context, cfg *config.Config, jobName string, i int, 
 	return hash, nil
 }
 
+// executePut materializes a put step's input view, runs its resource's out:
+// command, and returns the produced version — with no merkle/store recording.
+// Shared by runPutStep (which records) and hook execution (which does not; a
+// put hook's result version is discarded). A nonzero out: exit is marked as a
+// task-level failure so hook dispatch classifies it as failed; a resource
+// lookup or workspace error stays unmarked → errored.
+func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) (map[string]any, error) {
+	resource, err := cfg.FindResource(step.Put)
+	if err != nil {
+		return nil, fmt.Errorf("put %q: %w", step.Put, err)
+	}
+
+	resourceType, err := cfg.FindResourceType(resource.Type)
+	if err != nil {
+		return nil, fmt.Errorf("put %q: %w", step.Put, err)
+	}
+
+	space, err := bw.PutSpace(ctx, step.Put, step.Inputs)
+	if err != nil {
+		return nil, fmt.Errorf("put %q: %w", step.Put, err)
+	}
+	defer workspace.CloseSpace(space, step.Put)
+
+	result, err := rsrc.RunOut(ctx, *resourceType, resource.Source, step.Params, space.Dir())
+	if err != nil {
+		if shell.IsExitError(err) {
+			err = outcome.Fail(err)
+		}
+
+		return nil, fmt.Errorf("put %q: %w", step.Put, err)
+	}
+
+	return result, nil
+}
+
 // runTriggeredBuild runs the build that a single resource version triggers:
 // per Concourse's model, the version triggering a get is what starts a
 // build, and every build gets its own isolated working directory. So this
@@ -465,7 +562,7 @@ func runPutStep(ctx context.Context, cfg *config.Config, jobName string, i int, 
 // into it, runs the remainder of the plan inside it, and tears the
 // workspace down afterward — never sharing it with any other triggered
 // build, including sibling versions fanned out by version:every.
-func runTriggeredBuild(ctx context.Context, cfg *config.Config, jobName string, resource config.Resource, resourceType config.ResourceType, version map[string]any, remainder []config.Step, pinned map[string]string, provider workspace.Provider, st *store.Store, skippable map[string]bool, node merkle.Node, chainUnskippable bool) error {
+func runTriggeredBuild(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, resource config.Resource, resourceType config.ResourceType, version map[string]any, remainder []config.Step, pinned map[string]string, provider workspace.Provider, st *store.Store, skippable map[string]bool, node merkle.Node, chainUnskippable bool) error {
 	bw, err := provider.NewBuild(ctx, resource.Name)
 	if err != nil {
 		return fmt.Errorf("could not create workspace for %q: %w", resource.Name, err)
@@ -474,9 +571,17 @@ func runTriggeredBuild(ctx context.Context, cfg *config.Config, jobName string, 
 	defer workspace.CloseBuild(bw, resource.Name)
 
 	err = fetchGetStep(ctx, resource, resourceType, version, bw)
+
+	// Get-step hooks fire once per triggered build, in that build's own
+	// workspace, observing the fetch outcome. A fetch failure (or a hook that
+	// fails an otherwise-green fetch) fails this build.
+	if !step.Hooks.Empty() {
+		scope := hookScope{cfg: cfg, jobName: jobName, label: stepLabel(i, step), bw: bw}
+		err = runHooks(ctx, scope, step.Hooks, err)
+	}
+
 	if err != nil {
-		_ = st.RecordNode(ctx, nodeRecord(node), jobName, "failed", nil, err)
-		_ = st.RecordJobRun(ctx, jobName, node.Hash, "failed", err)
+		recordStepFailure(ctx, st, node, jobName, err)
 
 		return err
 	}
@@ -501,6 +606,10 @@ func fetchGetStep(ctx context.Context, resource config.Resource, resourceType co
 
 	err = rsrc.RunIn(ctx, resourceType, resource.Source, version, destDir)
 	if err != nil {
+		if shell.IsExitError(err) {
+			err = outcome.Fail(err)
+		}
+
 		return fmt.Errorf("could not fetch resource %q: %w", resource.Name, err)
 	}
 

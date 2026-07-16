@@ -57,10 +57,10 @@ No reproducible flakes were found under `go test ./... -race -count=10` and `-co
 The module is a thin `main.go` entrypoint over a set of single-responsibility `internal/` packages, forming an acyclic dependency graph (each line below depends only on what's listed after `->`):
 
 ```
-internal/shell, internal/template, internal/retry, internal/store, internal/config   (leaves)
+internal/shell, internal/template, internal/retry, internal/store, internal/config, internal/outcome   (leaves)
 internal/resource, internal/workspace, internal/merkle                                -> config (+ shell/template for resource; merkle -> resource too)
-internal/agent                                                                        -> config, store, merkle, workspace, retry, shell, template
-internal/pipeline                                                                     -> config, merkle, resource, store, workspace, agent
+internal/agent                                                                        -> config, store, merkle, workspace, outcome, retry, shell, template
+internal/pipeline                                                                     -> config, merkle, outcome, resource, store, workspace, agent
 internal/trigger                                                                      -> config, resource, store, workspace, pipeline
 main.go                                                                               -> config, store, workspace, pipeline, trigger
 ```
@@ -69,7 +69,7 @@ main.go                                                                         
 YAML parsing (`LoadConfig`) and every config type: `Config`, `ResourceType`, `Resource`, `Agent`, `AgentSource`, `ToolSpec`, `Task`, `FixSpec`, `Job`, `Step`, `WorkspaceConfig`. Also owns the config-merge logic that both plan-time hashing and run-time execution call, so both stay in lockstep: `Config.ResolveTask` (a task step's `run:`/`fix:`, resolved against a top-level `tasks:` entry) and `Config.ResolveAgentInvocation` (an agent step's connection/dials/tool-grant, resolved against the named `agents:` entry). Depends on nothing but the standard library and `yaml.v3`.
 
 ### `internal/pipeline` — the orchestrator
-`RunJob()` walks a job's plan in order: resolves/fetches `get` steps, runs `task`/`put`/`agent` steps, and records each step's outcome. It composes every other internal package; `internal/trigger` is the only package that depends on it, and only to call `RunJob` itself once per triggered job — the single-job semantics `RunJob` implements are otherwise untouched by that feature.
+`RunJob()` walks a job's plan in order: resolves/fetches `get` steps, runs `task`/`put`/`agent` steps, and records each step's outcome. It composes every other internal package; `internal/trigger` is the only package that depends on it, and only to call `RunJob` itself once per triggered job — the single-job semantics `RunJob` implements are otherwise untouched by that feature. `hooks.go` holds the step/job hook dispatch (`runHooks`/`runOneHook`/`runHookStep`) — see "Hooks" below.
 
 ### `internal/trigger` — cross-job downstream triggers
 The cross-job counterpart to `internal/pipeline`'s single-job orchestration — see "Downstream Triggers" below for the full model. `Resources`/`AffectedJobs` read a `Config`'s `trigger: true` get steps; `Watch` runs two independent loops (a poller that diffs a resource's latest `check` version against `internal/store`'s `resource_checks` table and enqueues affected jobs into its `trigger_queue` table, and a worker pool that drains that queue via `pipeline.RunJob`) so a crash or a `--max-concurrent` > 1 pool doesn't lose track of pending work. `pollOnce`/`drainOne` are the unit-testable seams the loops are built from.
@@ -91,6 +91,7 @@ Runs a resource type's `check`/`in`/`out` shell commands and selects among the v
 - **`internal/shell`** — shell command execution with context, logging, output truncation; `Runner` interface (`HostRunner` via `sh -c`, `DockerRunner` via a fresh `docker run --rm` per command) selected by `NewRunner(image string)` — see "Container Execution" below
 - **`internal/template`** — YAML template rendering (e.g., `{{ .source.repo }}`)
 - **`internal/retry`** — linear-backoff retry loop (`retry.Do`)
+- **`internal/outcome`** — classifies a step/job error into `failed`/`errored`/`aborted` for hook dispatch (`Fail` marks a task-level failure; `Classify` buckets against the job ctx) — see "Hooks" below
 
 ### Configuration & Examples
 - **.golangci.yml** — Linter config; 40+ rules including security (gosec), correctness, concurrency, complexity checks, and a `depguard` rule per package enforcing the dependency graph above
@@ -98,6 +99,7 @@ Runs a resource type's `check`/`in`/`out` shell commands and selects among the v
 - **examples/isolated.yml** — Example pipeline demonstrating opt-in `workspace:` isolation: a reusable task with `inputs:`/`outputs:`, an isolated agent step, and a `put` step scoped to a declared input
 - **examples/container.yml** — Example pipeline demonstrating opt-in `image:` containerized execution: a resource_type, a top-level task (plus a step-level override), and an agent
 - **examples/trigger.yml** — Example pipeline demonstrating downstream (cross-job) triggers: a self-contained (no network/credentials) `counter` resource type, a `publish` job that `put`s it, and a `notify` job whose `get ..., trigger: true` fires automatically under `steps watch` whenever `publish` lands a new version
+- **examples/hooks.yml** — Example pipeline demonstrating step and job hooks (`on_success`/`on_failure`/`ensure`, incl. a nested hook): a `passing` job (green, exits 0) and a `failing` job whose `on_failure`/`ensure` hooks run while the failure still propagates (exits nonzero). Self-contained, no network/credentials
 
 ### Root Files
 - **main.go** — CLI entry point; parses args into `run`/`watch` subcommands (`RunCmd`/`WatchCmd`, see "Downstream Triggers" below) — `run` calls `config.LoadConfig()` → `pipeline.RunJob()` exactly as before this feature existed; `watch` calls `config.LoadConfig()` → `trigger.Watch()`
@@ -218,6 +220,34 @@ See `examples/trigger.yml` for a runnable, self-contained (no network/credential
 - **Graceful-shutdown carve-out**: a job *interrupted* by `ctx` cancellation (SIGINT/SIGTERM mid-run — a nonzero `RunJob` return with `ctx` already canceled) is *not* marked `failed` — that would silently drop it forever, since only a new version change would otherwise ever re-trigger it. Its row is left `running`; `ResetStaleRunning` (called once at every `watch` startup) flips any such stranded row back to `pending`, recovering both a hard crash and an interrupted graceful shutdown the same way. A job that instead *reached a terminal state* — `done`, or a genuine failure with `ctx` still live — is finalized with `context.WithoutCancel(ctx)`, so a SIGINT racing the completion still records the true outcome instead of stranding the row `running` and causing a spurious re-run. A genuine failure is not retried until the next real version change re-enqueues it — the same non-retry semantics `job_runs`/merkle skip-caching already gives `steps run`.
 - **No `passed:`-style version-set gating across jobs** — that Concourse concept doesn't exist anywhere in this codebase's model, so there's no "only trigger B with the exact version set that passed through A" to preserve; any dirty resource simply enqueues every job with a matching `trigger: true` get step.
 - **CLI**: `steps run <pipeline.yml> [--job x] [--force]` (today's behavior, unchanged) and `steps watch <pipeline.yml> [--interval 30s] [--max-concurrent 1] [--force]` are Kong subcommands (`RunCmd`/`WatchCmd` in `main.go`); `run` is `default:"withargs"`, so the pre-existing flat invocation (`steps pipeline.yml --job x`, flags before or after the positional path) keeps parsing identically with no call-site changes required.
+
+### Hooks (opt-in `on_success`/`on_failure`/`on_error`/`on_abort`/`ensure`)
+
+Any plan step or whole job can carry Concourse-style hooks that react to its outcome. A hook is itself a full step (task/put/agent — never `get`, rejected at `LoadConfig`), so it can `run:` a command, `put:` a resource, or invoke an `agent:`, and may recursively carry its own hooks. Absent, behavior (and merkle hashes) are byte-identical to before this feature existed. See `examples/hooks.yml`.
+
+```yaml
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: ./build.sh
+    on_failure:                # step-level hook
+      task: notify
+      run: ./notify.sh failed
+    ensure:
+      task: cleanup
+      run: ./cleanup.sh
+  on_success:                  # job-level hook (inline alongside plan:)
+    put: status
+```
+
+- **Observer semantics, never consumers.** A failing step's `on_failure` runs, then the failure **still propagates** — the job fails, `steps run` exits nonzero, `steps watch` records the run `failed`. This is the opposite of the pocketci prior art (where a hook consumed the error); steps has no `assert:` block to make consumption safe, so a consumed failure would look green to skip-caching/watch. The one way a hook changes an outcome is upward: a failing `on_success` or `ensure` hook fails an otherwise-green step/job (a broken notification/cleanup shouldn't read as success). A failing `on_failure`/`on_error`/`on_abort` hook is only logged — the outcome was already failing.
+- **Classification** (`internal/outcome`): every step error is bucketed against the *job* context — **failed** (a task-level failure: a nonzero command exit, a fix verdict still red, or an agent's required tool never succeeding — marked via `outcome.Fail`/`shell.IsExitError` at the producing site), **errored** (everything unmarked: workspace setup, docker, LLM transport, template, store, a resource `check`/planning failure), or **aborted** (`ctx.Err() != nil` — a SIGINT/SIGTERM mid-run). Classification keys on `ctx.Err()` **first**, so an agent step's own internal `WithTimeout` never misreads as an abort while the job ctx is live. Caveat: a docker-level exit (125/126/127) classifies as *failed*, since `docker run`'s exit code is indistinguishable from the command's.
+- **Ordering**: the single matching `on_*` hook runs, then `ensure` always runs last, regardless of outcome. `on_abort`/`ensure` reached after cancellation run under `context.WithTimeout(context.WithoutCancel(ctx), 60s)` (the `hookGracePeriod` in `internal/pipeline/hooks.go`) so they complete detached from the canceled context but not forever — the same `WithoutCancel` idiom `internal/trigger` uses to finalize an interrupted job.
+- **No merkle/store identity of their own.** A hook step executes with **no** merkle node and **no** `job_run`/node recording — the same no-record contract as a task's `fix:` agent (`agent.RunFix`). The enclosing step/job records the aggregate outcome. `runHooks`/`runOneHook`/`runHookStep` (`internal/pipeline/hooks.go`) are the dispatch seam; task/put/agent hook bodies reuse `executeTask`/`executePut`/`agent.RunHook`, extracted from the recording step runners.
+- **Step hooks fold into the step's content hash** (`merkle.withHooks`, value-gated exactly like `image:`): a step with no hooks hashes byte-identically to before, but editing a hook — or the top-level `tasks:`/`agents:` entry it references, since the hook's content is its *resolved* form — busts the parent step's cache. A **skipped (cached) step fires no hooks** (it didn't run). `Chain.Unskippable` is unchanged: hooks don't make a task unskippable, because a non-run step has no observers to fire.
+- **Job hooks are never hashed** and fire on **every** `RunJob` invocation (even a fully-cached run), since they don't alter what any step executes. They run in the `RunJob`-level build workspace — which for a get-leading plan is empty (each triggered build has its own) — so a **job-level hook may not declare `inputs:`/`outputs:`** (rejected at `LoadConfig`). Step-level hooks keep full `inputs:`/`outputs:` support: an `on_success` hook validates its inputs against the step's post-outputs view, failure-path hooks against the pre-outputs view, and a hook's own outputs are captured but never satisfy a later plan step (`workspace.validateStepHooks`).
+- **`steps watch` needs no changes**: job hooks live inside `RunJob`, so `trigger.drainOne` gets them for free; an aborted job still returns the original ctx-canceled error after its grace-period hooks, preserving the graceful-shutdown carve-out.
 
 ### State Caching via Merkle Tree
 - Each resource `get` and `agent` step is content-addressed (merkle tree) with its inputs (pinned versions, source config)

@@ -109,7 +109,11 @@ func TestTaskNodeContentOmitsInputsOutputsWithoutWorkspace(t *testing.T) {
 
 	rt := config.ResolvedTask{Name: "build", Run: "echo hi", Inputs: []string{"repo"}, Outputs: []string{"built"}}
 
-	content := TaskNodeContent(rt, nil)
+	content, err := TaskNodeContent(&config.Config{}, config.Step{}, rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	if len(content) != 1 {
 		t.Fatalf(`TaskNodeContent(rt, nil) = %#v, want exactly {"run": ...}, no inputs/outputs keys`, content)
 	}
@@ -132,7 +136,12 @@ func TestTaskNodeContentInputsOutputsOnlyAffectHashWhenWorkspaceConfigured(t *te
 	mustHash := func(t *testing.T, rt config.ResolvedTask, ws *config.WorkspaceConfig) string {
 		t.Helper()
 
-		hash, err := HashNode(NodeKindTask, TaskNodeContent(rt, ws), "")
+		content, err := TaskNodeContent(&config.Config{Workspace: ws}, config.Step{}, rt)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		hash, err := HashNode(NodeKindTask, content, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -168,7 +177,12 @@ func TestPutNodeContentInputsOnlyAffectHashWhenWorkspaceConfigured(t *testing.T)
 	mustHash := func(t *testing.T, inputs []string, ws *config.WorkspaceConfig) string {
 		t.Helper()
 
-		hash, err := HashNode(NodeKindPut, PutNodeContent(rt, source, nil, inputs, ws), "")
+		content, err := PutNodeContent(&config.Config{Workspace: ws}, config.Step{}, rt, source, nil, inputs)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		hash, err := HashNode(NodeKindPut, content, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -197,7 +211,11 @@ func TestImageOmittedFromHashWhenEmpty(t *testing.T) {
 
 	rt := config.ResolvedTask{Name: "build", Run: "echo hi"}
 
-	content := TaskNodeContent(rt, nil)
+	content, err := TaskNodeContent(&config.Config{}, config.Step{}, rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	if len(content) != 1 {
 		t.Fatalf(`TaskNodeContent(rt, nil) = %#v, want exactly {"run": ...}, no image key`, content)
 	}
@@ -221,7 +239,12 @@ func TestTaskImageAffectsHashRegardlessOfWorkspace(t *testing.T) {
 	mustHash := func(t *testing.T, rt config.ResolvedTask, ws *config.WorkspaceConfig) string {
 		t.Helper()
 
-		hash, err := HashNode(NodeKindTask, TaskNodeContent(rt, ws), "")
+		content, err := TaskNodeContent(&config.Config{Workspace: ws}, config.Step{}, rt)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		hash, err := HashNode(NodeKindTask, content, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -248,12 +271,22 @@ func TestAgentImageAffectsHash(t *testing.T) {
 	base := config.ResolvedInvocation{AgentName: "reviewer"}
 	withImage := config.ResolvedInvocation{AgentName: "reviewer", Image: "python:3.12"}
 
-	baseHash, err := HashNode(NodeKindAgent, AgentContentMap(step, base, nil), "")
+	baseContent, err := AgentContentMap(&config.Config{}, step, base)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	imageHash, err := HashNode(NodeKindAgent, AgentContentMap(step, withImage, nil), "")
+	baseHash, err := HashNode(NodeKindAgent, baseContent, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	imageContent, err := AgentContentMap(&config.Config{}, step, withImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	imageHash, err := HashNode(NodeKindAgent, imageContent, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,6 +298,8 @@ func TestAgentImageAffectsHash(t *testing.T) {
 
 // TestGetPutImageAffectsHash mirrors the task case for GetNodeContent and
 // PutNodeContent, whose image comes from the resource type.
+//
+//nolint:cyclop // straight-line build/hash pairs for get and put in one test
 func TestGetPutImageAffectsHash(t *testing.T) {
 	t.Parallel()
 
@@ -274,12 +309,22 @@ func TestGetPutImageAffectsHash(t *testing.T) {
 	source := map[string]any{"key": "v"}
 	version := map[string]any{"ref": "v1"}
 
-	baseGetHash, err := HashNode(NodeKindGet, GetNodeContent(base, source, version), "")
+	baseGetContent, err := GetNodeContent(&config.Config{}, config.Step{}, base, source, version)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	imageGetHash, err := HashNode(NodeKindGet, GetNodeContent(withImage, source, version), "")
+	baseGetHash, err := HashNode(NodeKindGet, baseGetContent, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	imageGetContent, err := GetNodeContent(&config.Config{}, config.Step{}, withImage, source, version)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	imageGetHash, err := HashNode(NodeKindGet, imageGetContent, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,17 +333,113 @@ func TestGetPutImageAffectsHash(t *testing.T) {
 		t.Error("setting a resource type's image did not change the get node hash")
 	}
 
-	basePutHash, err := HashNode(NodeKindPut, PutNodeContent(base, source, nil, nil, nil), "")
+	basePutContent, err := PutNodeContent(&config.Config{}, config.Step{}, base, source, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	imagePutHash, err := HashNode(NodeKindPut, PutNodeContent(withImage, source, nil, nil, nil), "")
+	basePutHash, err := HashNode(NodeKindPut, basePutContent, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	imagePutContent, err := PutNodeContent(&config.Config{}, config.Step{}, withImage, source, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	imagePutHash, err := HashNode(NodeKindPut, imagePutContent, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if basePutHash == imagePutHash {
 		t.Error("setting a resource type's image did not change the put node hash")
+	}
+}
+
+// hookCfg builds a config with one reusable task the hooks can reference.
+func hookCfg() *config.Config {
+	return &config.Config{
+		Tasks: []config.Task{{Name: "notify", Run: "echo notified"}},
+	}
+}
+
+// TestHooksOmittedFromHashWhenAbsent guards the same cache-stability guarantee
+// the image tests do: a step with no hooks must hash exactly as it did before
+// hooks existed — no "hooks" key in the content map.
+func TestHooksOmittedFromHashWhenAbsent(t *testing.T) {
+	t.Parallel()
+
+	content, err := TaskNodeContent(hookCfg(), config.Step{Task: "build", Run: "echo hi"}, config.ResolvedTask{Name: "build", Run: "echo hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := content["hooks"]; ok {
+		t.Error(`a step with no hooks should not have a "hooks" content key`)
+	}
+
+	if len(content) != 1 {
+		t.Fatalf(`content = %#v, want exactly {"run": ...}`, content)
+	}
+}
+
+// TestHooksAffectHash checks that adding a hook, and changing a hook, both
+// change a step's hash — and that editing the tasks: entry a hook references
+// (resolved hashing) changes it too.
+func TestHooksAffectHash(t *testing.T) {
+	t.Parallel()
+
+	rt := config.ResolvedTask{Name: "build", Run: "echo hi"}
+
+	mustHash := func(t *testing.T, cfg *config.Config, step config.Step) string {
+		t.Helper()
+
+		content, err := TaskNodeContent(cfg, step, rt)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		hash, err := HashNode(NodeKindTask, content, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return hash
+	}
+
+	noHook := mustHash(t, hookCfg(), config.Step{Task: "build", Run: "echo hi"})
+
+	withHook := config.Step{Task: "build", Run: "echo hi", Hooks: config.Hooks{OnFailure: &config.Step{Task: "notify"}}}
+	withHookHash := mustHash(t, hookCfg(), withHook)
+
+	if noHook == withHookHash {
+		t.Error("adding an on_failure hook did not change the step hash")
+	}
+
+	// Same hook wired to on_success instead of on_failure must differ.
+	movedHook := config.Step{Task: "build", Run: "echo hi", Hooks: config.Hooks{OnSuccess: &config.Step{Task: "notify"}}}
+	if mustHash(t, hookCfg(), movedHook) == withHookHash {
+		t.Error("moving a hook from on_failure to on_success did not change the step hash")
+	}
+
+	// Editing the referenced tasks: entry the hook resolves to must change it.
+	editedCfg := &config.Config{Tasks: []config.Task{{Name: "notify", Run: "echo CHANGED"}}}
+	if mustHash(t, editedCfg, withHook) == withHookHash {
+		t.Error("editing the tasks: entry a hook references did not change the step hash")
+	}
+}
+
+// TestHookUnknownTaskErrors checks that a hook naming an undefined tasks:
+// entry surfaces as an error at content-build (plan) time.
+func TestHookUnknownTaskErrors(t *testing.T) {
+	t.Parallel()
+
+	step := config.Step{Task: "build", Run: "echo hi", Hooks: config.Hooks{Ensure: &config.Step{Task: "does-not-exist"}}}
+
+	_, err := TaskNodeContent(&config.Config{}, step, config.ResolvedTask{Name: "build", Run: "echo hi"})
+	if err == nil {
+		t.Error("expected an error for a hook referencing an unknown task, got nil")
 	}
 }

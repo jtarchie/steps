@@ -473,6 +473,76 @@ func TestValidateArtifactFlowGetResetsAvailableArtifacts(t *testing.T) {
 	})
 }
 
+// TestValidateArtifactFlowStepHooks checks that a step hook's declared inputs
+// are validated against the artifact view it will actually see: on_success
+// sees the step's own outputs, failure-path hooks do not.
+func TestValidateArtifactFlowStepHooks(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{Workspace: &config.WorkspaceConfig{Strategy: "copy"}}
+
+	t.Run("on_success hook may consume the step's own output", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{
+			Name: "build",
+			Plan: []config.Step{
+				{Get: "repo"},
+				{
+					Task: "build", Run: "true", Inputs: []string{"repo"}, Outputs: []string{"built"},
+					Hooks: config.Hooks{OnSuccess: &config.Step{Put: "results", Inputs: []string{"built"}}},
+				},
+			},
+		}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err != nil {
+			t.Errorf("on_success hook consuming the step's output should validate, got %v", err)
+		}
+	})
+
+	t.Run("ensure hook may not consume the step's own output", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{
+			Name: "build",
+			Plan: []config.Step{
+				{Get: "repo"},
+				{
+					Task: "build", Run: "true", Inputs: []string{"repo"}, Outputs: []string{"built"},
+					Hooks: config.Hooks{Ensure: &config.Step{Put: "results", Inputs: []string{"built"}}},
+				},
+			},
+		}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err == nil {
+			t.Fatal("expected an error: ensure runs on the failure path, before `built` is guaranteed to exist")
+		}
+	})
+
+	t.Run("a hook output is not visible to a later plan step", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{
+			Name: "build",
+			Plan: []config.Step{
+				{Get: "repo"},
+				{
+					Task: "build", Run: "true", Inputs: []string{"repo"},
+					Hooks: config.Hooks{OnSuccess: &config.Step{Task: "gen", Run: "true", Outputs: []string{"extra"}}},
+				},
+				{Task: "consume", Run: "true", Inputs: []string{"extra"}},
+			},
+		}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err == nil {
+			t.Fatal("expected an error: a conditional hook's output must not satisfy a later plan step's input")
+		}
+	})
+}
+
 func TestValidateArtifactFlowNoOpWithoutWorkspace(t *testing.T) {
 	t.Parallel()
 

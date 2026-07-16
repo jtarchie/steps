@@ -511,6 +511,79 @@ jobs:
 	}
 }
 
+// TestDrainOneFailingJobWithOnFailureHookStillMarksFailed confirms hooks are
+// observers even through the trigger worker: a job whose task fails and whose
+// on_failure hook runs successfully is still recorded failed (drainOne returns
+// a non-nil error and leaves no claimable row), not silently consumed.
+func TestDrainOneFailingJobWithOnFailureHookStillMarksFailed(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	versionsPath := filepath.Join(dir, "versions.json")
+	writeVersions(t, versionsPath, `[{"ref":"v1"}]`)
+
+	marker := filepath.Join(dir, "notified.txt")
+
+	cfg := loadConfig(t, dir, fmt.Sprintf(`
+resource_types:
+- name: dummy
+  config:
+    check: cat %s
+    in: "true"
+resources:
+- name: thing
+  type: dummy
+  source: {}
+jobs:
+- name: build
+  plan:
+  - get: thing
+    trigger: true
+  - task: work
+    run: exit 1
+    on_failure:
+      task: notify
+      run: echo notified >> %s
+`, versionsPath, marker))
+
+	st := mustOpenStore(t, dir)
+
+	provider, err := workspace.NewProvider(cfg.Workspace)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+
+	defer func() { _ = provider.Close() }()
+
+	ctx := context.Background()
+
+	err = st.EnqueueJob(ctx, "build", "thing")
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+
+	ran, err := drainOne(ctx, cfg, provider, st, nil, false)
+	if !ran || err == nil {
+		t.Fatalf("drainOne: expected ran=true and a non-nil error despite the on_failure hook, got ran=%v err=%v", ran, err)
+	}
+
+	// The on_failure hook must have fired.
+	_, statErr := os.Stat(marker)
+	if statErr != nil {
+		t.Errorf("expected the on_failure hook to run and write %q, got %v", marker, statErr)
+	}
+
+	// The row must be completed (failed), not left claimable.
+	_, _, found, claimErr := st.ClaimNextJob(ctx)
+	if claimErr != nil {
+		t.Fatalf("ClaimNextJob: %v", claimErr)
+	}
+
+	if found {
+		t.Fatal("expected no claimable row after a genuine failure, even with an on_failure hook")
+	}
+}
+
 // TestDrainOneLeavesCanceledJobReRunnableAfterSimulatedRestart is the
 // graceful-shutdown carve-out: a job interrupted by ctx cancellation
 // (SIGINT/SIGTERM mid-run) must not be marked failed — that would silently

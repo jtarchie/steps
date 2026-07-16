@@ -12,6 +12,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
+	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/retry"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
@@ -59,10 +60,14 @@ func resolveAgentDir(workspaceDir, stepDir string) (string, error) {
 // recordAgentFailure records a failed agent step the same way the
 // pipeline's task/put steps do — best-effort, errors ignored, since a
 // failure to record must not mask the original error being returned to the
-// caller.
+// caller. The recorded status reflects the classified outcome (failed vs
+// errored vs aborted), and the write uses a detached context so an aborted
+// step's outcome still persists rather than being dropped by the canceled ctx.
 func recordAgentFailure(ctx context.Context, st *store.Store, node merkle.Node, jobName string, runErr error) {
-	_ = st.RecordNode(ctx, nodeRecord(node), jobName, "failed", nil, runErr)
-	_ = st.RecordJobRun(ctx, jobName, node.Hash, "failed", runErr)
+	status := string(outcome.Classify(ctx, runErr))
+	recCtx := context.WithoutCancel(ctx)
+	_ = st.RecordNode(recCtx, nodeRecord(node), jobName, status, nil, runErr)
+	_ = st.RecordJobRun(recCtx, jobName, node.Hash, status, runErr)
 }
 
 // preparedAgentStep is RunStep's resolved-and-materialized preamble:
@@ -148,7 +153,10 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	}
 	defer workspace.CloseSpace(prepared.space, step.Agent)
 
-	content := merkle.AgentContentMap(step, prepared.ri, cfg.Workspace)
+	content, err := merkle.AgentContentMap(cfg, step, prepared.ri)
+	if err != nil {
+		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+	}
 
 	hash, err := merkle.HashNode(merkle.NodeKindAgent, content, parentHash)
 	if err != nil {
@@ -161,26 +169,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindAgent, StepIndex: i, Resource: prepared.ri.AgentName, Content: content}
 
-	agentCtx, cancel := context.WithTimeout(ctx, agentStepTimeout)
-	defer cancel()
-
-	var (
-		finalContent string
-		turnsUsed    int
-	)
-
-	err = retry.Do(agentCtx, prepared.ri.Attempts, func(_ int) error {
-		answer, turns, runErr := runAgentConversation(agentCtx, prepared.llm, prepared.conv)
-		turnsUsed = turns
-
-		if runErr != nil {
-			return runErr
-		}
-
-		finalContent = answer
-
-		return nil
-	})
+	finalContent, turnsUsed, err := runPrepared(ctx, prepared)
 	if err != nil {
 		recordAgentFailure(ctx, st, node, jobName, err)
 
@@ -203,4 +192,61 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	}
 
 	return hash, nil
+}
+
+// runPrepared runs the (already resolved and materialized) conversation under
+// the agent step timeout, retrying the whole conversation up to the resolved
+// attempt count. Shared by RunStep and RunHook so a hook agent runs the exact
+// same conversation machinery, minus the merkle/store recording RunStep does.
+func runPrepared(ctx context.Context, prepared preparedAgentStep) (string, int, error) {
+	agentCtx, cancel := context.WithTimeout(ctx, agentStepTimeout)
+	defer cancel()
+
+	var (
+		finalContent string
+		turnsUsed    int
+	)
+
+	err := retry.Do(agentCtx, prepared.ri.Attempts, func(_ int) error {
+		answer, turns, runErr := runAgentConversation(agentCtx, prepared.llm, prepared.conv)
+		turnsUsed = turns
+
+		if runErr != nil {
+			return runErr
+		}
+
+		finalContent = answer
+
+		return nil
+	})
+
+	return finalContent, turnsUsed, err //nolint:wrapcheck // callers (RunStep/RunHook) wrap with step context
+}
+
+// RunHook runs an agent step as a hook: it resolves, materializes, runs the
+// conversation, and captures declared outputs exactly like RunStep, but
+// records no merkle node or job_run — the enclosing step/job records the
+// aggregate outcome (the same no-record contract as RunFix). A returned error
+// is already outcome-marked where appropriate (see runAgentConversation), so
+// the caller's hook classification works unchanged.
+func RunHook(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) error {
+	prepared, err := prepareAgentStep(ctx, cfg, step, bw)
+	if err != nil {
+		return fmt.Errorf("agent %q: %w", step.Agent, err)
+	}
+	defer workspace.CloseSpace(prepared.space, step.Agent)
+
+	fmt.Printf("agent: %s\n", step.Agent)
+
+	_, _, err = runPrepared(ctx, prepared)
+	if err != nil {
+		return fmt.Errorf("agent %q: %w", step.Agent, err)
+	}
+
+	err = prepared.space.Capture(ctx)
+	if err != nil {
+		return fmt.Errorf("agent %q: %w", step.Agent, err)
+	}
+
+	return nil
 }

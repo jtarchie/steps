@@ -1,0 +1,60 @@
+# Demonstrates Concourse-style hooks on both steps and jobs. A hook is a full
+# step (task/put/agent) that runs in reaction to an outcome:
+#
+#   on_success  — the guarded work succeeded
+#   on_failure  — a task-level failure (a command exited nonzero)
+#   on_error    — an infrastructure error (docker, workspace, LLM transport)
+#   on_abort    — the run was canceled (SIGINT/SIGTERM)
+#   ensure      — always, after any of the above
+#
+# Hooks are observers: a failed step's on_failure runs, then the failure still
+# propagates — the job fails and `steps run` exits nonzero. A failing
+# on_success or ensure hook, conversely, fails an otherwise-green step.
+#
+# Self-contained (no network or credentials). Run either job to watch its
+# hooks fire:
+#   steps run examples/hooks.yml --job passing   # on_success + ensure, exit 0
+#   steps run examples/hooks.yml --job failing   # on_failure + ensure, exit 1
+jobs:
+# The task succeeds, so its on_success and ensure hooks run (not on_failure),
+# and the job's own on_success fires. The whole job exits 0.
+- name: passing
+  plan:
+  - task: work
+    run: echo "doing the work"
+    on_success:
+      task: celebrate
+      run: echo "step succeeded"
+    on_failure:
+      task: apologize
+      run: echo "step failed"
+    ensure:
+      task: cleanup
+      run: echo "always cleaning up"
+  on_success:
+    task: announce
+    run: echo "job succeeded"
+
+# The task exits nonzero, so its on_failure and ensure hooks run (not
+# on_success). The failure still propagates: the job's on_failure fires and
+# `steps run` exits nonzero. The on_failure hook here itself carries a nested
+# ensure, showing hooks can recurse.
+- name: failing
+  plan:
+  - task: work
+    run: echo "about to fail"; exit 1
+    on_success:
+      task: celebrate
+      run: echo "step succeeded"
+    on_failure:
+      task: apologize
+      run: echo "step failed — notifying"
+      ensure:
+        task: log
+        run: echo "notification attempt finished"
+    ensure:
+      task: cleanup
+      run: echo "always cleaning up"
+  on_failure:
+    task: alert
+    run: echo "job failed"

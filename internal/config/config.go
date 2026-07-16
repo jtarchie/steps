@@ -265,10 +265,57 @@ func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 	}
 }
 
+// Hooks is the Concourse-style hook set a Step or a Job can carry. Each hook
+// is itself a full Step restricted to task/put/agent kinds (get is rejected at
+// LoadConfig time); a hook may recursively carry its own Hooks. on_success
+// runs after a green outcome, on_failure/on_error/on_abort after the matching
+// failure classification, and ensure always runs last regardless of outcome.
+type Hooks struct {
+	OnSuccess *Step `yaml:"on_success,omitempty"`
+	OnFailure *Step `yaml:"on_failure,omitempty"`
+	OnError   *Step `yaml:"on_error,omitempty"`
+	OnAbort   *Step `yaml:"on_abort,omitempty"`
+	Ensure    *Step `yaml:"ensure,omitempty"`
+}
+
+// Empty reports whether no hook is set.
+func (h Hooks) Empty() bool {
+	return h.OnSuccess == nil && h.OnFailure == nil && h.OnError == nil && h.OnAbort == nil && h.Ensure == nil
+}
+
+// Each calls fn for every non-nil hook, in a fixed order (on_success,
+// on_failure, on_error, on_abort, ensure), passing the hook's YAML name.
+func (h Hooks) Each(fn func(name string, step *Step) error) error {
+	pairs := []struct {
+		name string
+		step *Step
+	}{
+		{"on_success", h.OnSuccess},
+		{"on_failure", h.OnFailure},
+		{"on_error", h.OnError},
+		{"on_abort", h.OnAbort},
+		{"ensure", h.Ensure},
+	}
+
+	for _, p := range pairs {
+		if p.step == nil {
+			continue
+		}
+
+		err := fn(p.name, p.step)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // Job is a named sequence of steps to run.
 type Job struct {
-	Name string `yaml:"name"`
-	Plan []Step `yaml:"plan"`
+	Name  string `yaml:"name"`
+	Plan  []Step `yaml:"plan"`
+	Hooks Hooks  `yaml:",inline"`
 }
 
 // Step is a flat union of the step kinds this interpreter supports: get,
@@ -329,6 +376,10 @@ type Step struct {
 	// image comes from its resource type, and a get has no task/agent to
 	// override.
 	Image string `yaml:"image,omitempty"`
+	// Hooks are the step's on_success/on_failure/on_error/on_abort/ensure
+	// reaction steps (see Hooks). Inlined so they sit alongside the step's
+	// own fields in YAML.
+	Hooks Hooks `yaml:",inline"`
 }
 
 // LoadConfig reads and parses a pipeline YAML file at path.
@@ -381,7 +432,98 @@ func (c *Config) validate() error {
 		return err
 	}
 
-	return c.validateFixAgentImages()
+	err = c.validateFixAgentImages()
+	if err != nil {
+		return err
+	}
+
+	return c.validateHooks()
+}
+
+// visitSteps calls fn for every step reachable from a job: each plan step,
+// each job-level hook, and recursively every hook carried by any of those
+// steps. label is a human-readable path such as
+// `job "deploy" step 2 (on_failure hook)`, so a validator's error message
+// points at the exact step. Used to give hook steps identical treatment to
+// plan steps in the image/artifact/fix validators below.
+func (j Job) visitSteps(fn func(label string, step *Step) error) error {
+	jobLabel := fmt.Sprintf("job %q", j.Name)
+
+	for i := range j.Plan {
+		err := visitStepTree(fmt.Sprintf("%s step %d", jobLabel, i), &j.Plan[i], fn)
+		if err != nil {
+			return err
+		}
+	}
+
+	return j.Hooks.Each(func(name string, step *Step) error {
+		return visitStepTree(fmt.Sprintf("%s %s hook", jobLabel, name), step, fn)
+	})
+}
+
+func visitStepTree(label string, step *Step, fn func(label string, step *Step) error) error {
+	err := fn(label, step)
+	if err != nil {
+		return err
+	}
+
+	return step.Hooks.Each(func(name string, hook *Step) error {
+		return visitStepTree(fmt.Sprintf("%s (%s hook)", label, name), hook, fn)
+	})
+}
+
+// validateHooks enforces the hook-body restrictions: a hook must be a
+// task/put/agent step (get is rejected — a get step fans the remainder of the
+// plan out per version, which has no meaning inside a hook), and a job-level
+// hook may not declare inputs:/outputs: (a job-level hook runs in the job's
+// build workspace, which for a get-leading plan holds no artifacts). Nested
+// hooks recurse.
+func (c *Config) validateHooks() error {
+	for _, job := range c.Jobs {
+		for i := range job.Plan {
+			err := validateHookTree(fmt.Sprintf("job %q step %d", job.Name, i), job.Plan[i].Hooks)
+			if err != nil {
+				return err
+			}
+		}
+
+		err := job.Hooks.Each(func(name string, step *Step) error {
+			if step.Inputs != nil || step.Outputs != nil {
+				return fmt.Errorf("job %q %s hook: inputs/outputs are not valid on job-level hooks", job.Name, name)
+			}
+
+			return validateHookStep(fmt.Sprintf("job %q %s hook", job.Name, name), step)
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateHookTree(parentLabel string, hooks Hooks) error {
+	return hooks.Each(func(name string, step *Step) error {
+		label := fmt.Sprintf("%s (%s hook)", parentLabel, name)
+
+		err := validateHookStep(label, step)
+		if err != nil {
+			return err
+		}
+
+		return validateHookTree(label, step.Hooks)
+	})
+}
+
+func validateHookStep(label string, step *Step) error {
+	switch {
+	case step.Get != "":
+		return fmt.Errorf("%s: get is not valid in a hook; hooks must be task, put, or agent steps", label)
+	case step.Task != "" || step.Put != "" || step.Agent != "":
+		return nil
+	default:
+		return fmt.Errorf("%s: unrecognized hook step (must be task, put, or agent)", label)
+	}
 }
 
 // validateImages rejects image: on get/put steps: a put's execution image
@@ -389,12 +531,10 @@ func (c *Config) validate() error {
 // task/agent to scope.
 func (c *Config) validateImages() error {
 	for _, job := range c.Jobs {
-		for i, step := range job.Plan {
+		err := job.visitSteps(func(label string, step *Step) error {
 			if step.Image == "" {
-				continue
+				return nil
 			}
-
-			label := fmt.Sprintf("job %q step %d", job.Name, i)
 
 			switch {
 			case step.Get != "":
@@ -402,6 +542,11 @@ func (c *Config) validateImages() error {
 			case step.Put != "":
 				return fmt.Errorf("%s (put %q): image is not valid on put steps; set it on the resource_type instead", label, step.Put)
 			}
+
+			return nil
+		})
+		if err != nil {
+			return err
 		}
 	}
 
@@ -442,11 +587,11 @@ func (c *Config) validateFixAgentImages() error {
 	}
 
 	for _, job := range c.Jobs {
-		for i, step := range job.Plan {
-			err := check(fmt.Sprintf("job %q step %d", job.Name, i), step.Fix)
-			if err != nil {
-				return err
-			}
+		err := job.visitSteps(func(label string, step *Step) error {
+			return check(label, step.Fix)
+		})
+		if err != nil {
+			return err
 		}
 	}
 
@@ -476,10 +621,18 @@ func (c *Config) UsesImages() bool {
 	}
 
 	for _, job := range c.Jobs {
-		for _, step := range job.Plan {
+		found := false
+
+		_ = job.visitSteps(func(_ string, step *Step) error {
 			if step.Image != "" {
-				return true
+				found = true
 			}
+
+			return nil
+		})
+
+		if found {
+			return true
 		}
 	}
 
@@ -538,20 +691,18 @@ func (c *Config) validateArtifactDecls() error {
 	}
 
 	for _, job := range c.Jobs {
-		for i, step := range job.Plan {
-			err := c.validateStepArtifactDecls(job.Name, i, step)
-			if err != nil {
-				return err
-			}
+		err := job.visitSteps(func(label string, step *Step) error {
+			return c.validateStepArtifactDecls(label, *step)
+		})
+		if err != nil {
+			return err
 		}
 	}
 
 	return nil
 }
 
-func (c *Config) validateStepArtifactDecls(jobName string, i int, step Step) error {
-	label := fmt.Sprintf("job %q step %d", jobName, i)
-
+func (c *Config) validateStepArtifactDecls(label string, step Step) error {
 	if c.Workspace == nil && declaresArtifacts(step.Inputs, step.Outputs) {
 		return fmt.Errorf("%s: inputs/outputs require a top-level workspace: block", label)
 	}

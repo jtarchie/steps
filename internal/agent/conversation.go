@@ -10,6 +10,8 @@ import (
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
+
+	"github.com/jtarchie/steps/internal/outcome"
 )
 
 // agentGenParams holds the generation dials an agent configures. Unset
@@ -153,12 +155,18 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 		})
 	}
 
+	// Both terminal outcomes here are task-level failures (the conversation
+	// ran but didn't finish its task), not infrastructure errors — mark them
+	// so hook dispatch classifies them as failed rather than errored. A
+	// transport error from generateOnce above stays unwrapped → errored.
 	missing := unsatisfiedRequiredTools(conv.tools.required, satisfied)
 	if len(missing) > 0 {
-		return "", conv.maxTurns, fmt.Errorf("agent exceeded %d turns; required tool(s) never succeeded: %s", conv.maxTurns, strings.Join(missing, ", "))
+		//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
+		return "", conv.maxTurns, outcome.Fail(fmt.Errorf("agent exceeded %d turns; required tool(s) never succeeded: %s", conv.maxTurns, strings.Join(missing, ", ")))
 	}
 
-	return "", conv.maxTurns, fmt.Errorf("agent exceeded %d turns without a final response", conv.maxTurns)
+	//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
+	return "", conv.maxTurns, outcome.Fail(fmt.Errorf("agent exceeded %d turns without a final response", conv.maxTurns))
 }
 
 // forceRequiredTool constrains req's next generateOnce call to a tool call,

@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -58,7 +59,7 @@ type Chain struct {
 // with TaskNodeContent, PutNodeContent, and AgentContentMap below, is shared
 // between planning (this file) and real execution (internal/pipeline,
 // internal/agent) so both compute identical hashes for identical steps.
-func GetNodeContent(resourceType config.ResourceType, source, version map[string]any) map[string]any {
+func GetNodeContent(cfg *config.Config, step config.Step, resourceType config.ResourceType, source, version map[string]any) (map[string]any, error) {
 	content := map[string]any{
 		"in_template": resourceType.Config.In,
 		"source":      source,
@@ -69,7 +70,85 @@ func GetNodeContent(resourceType config.ResourceType, source, version map[string
 		content["image"] = resourceType.Image
 	}
 
-	return content
+	return withHooks(cfg, step, content)
+}
+
+// withHooks folds a step's resolved hook content into content, but only when
+// the step actually carries hooks — so a step with no hooks hashes
+// byte-identically to before this field existed (the same value-gating as
+// image:). Each hook's content is its own resolved content map, so editing a
+// hook, or the tasks:/agents: entry it references, invalidates the enclosing
+// step's hash. Nested hooks recurse through the same builders.
+func withHooks(cfg *config.Config, step config.Step, content map[string]any) (map[string]any, error) {
+	if step.Hooks.Empty() {
+		return content, nil
+	}
+
+	hooks, err := hooksContent(cfg, step.Hooks)
+	if err != nil {
+		return nil, err
+	}
+
+	content["hooks"] = hooks
+
+	return content, nil
+}
+
+func hooksContent(cfg *config.Config, hooks config.Hooks) (map[string]any, error) {
+	out := map[string]any{}
+
+	err := hooks.Each(func(name string, step *config.Step) error {
+		hc, err := hookContentMap(cfg, *step)
+		if err != nil {
+			return fmt.Errorf("%s hook: %w", name, err)
+		}
+
+		out[name] = hc
+
+		return nil
+	})
+	if err != nil {
+		return nil, err //nolint:wrapcheck // already wrapped with the hook name above
+	}
+
+	return out, nil
+}
+
+// hookContentMap builds the hashed content for one hook step, dispatching on
+// its kind through the same builders a plan step uses (which recurse into the
+// hook's own hooks). get is never a valid hook (rejected at LoadConfig), so it
+// is not handled here.
+func hookContentMap(cfg *config.Config, step config.Step) (map[string]any, error) {
+	switch {
+	case step.Task != "":
+		rt, err := cfg.ResolveTask(step)
+		if err != nil {
+			return nil, fmt.Errorf("resolve task: %w", err)
+		}
+
+		return TaskNodeContent(cfg, step, rt)
+	case step.Put != "":
+		res, err := cfg.FindResource(step.Put)
+		if err != nil {
+			return nil, fmt.Errorf("resolve put: %w", err)
+		}
+
+		resourceType, err := cfg.FindResourceType(res.Type)
+		if err != nil {
+			return nil, fmt.Errorf("resolve put: %w", err)
+		}
+
+		return PutNodeContent(cfg, step, *resourceType, res.Source, step.Params, step.Inputs)
+	case step.Agent != "":
+		ri, err := cfg.ResolveAgentInvocation(step)
+		if err != nil {
+			return nil, fmt.Errorf("resolve agent: %w", err)
+		}
+
+		return AgentContentMap(cfg, step, ri)
+	default:
+		return nil, errors.New("unrecognized hook step (must be task, put, or agent)")
+	}
 }
 
 // TaskNodeContent and PutNodeContent fold in inputs/outputs only when ws is
@@ -83,10 +162,10 @@ func GetNodeContent(resourceType config.ResourceType, source, version map[string
 // actually executes against no matter which workspace mode is active — so
 // the gate is on the value itself. A pipeline that never sets image: still
 // hashes byte-identically to before this field existed.
-func TaskNodeContent(rt config.ResolvedTask, ws *config.WorkspaceConfig) map[string]any {
+func TaskNodeContent(cfg *config.Config, step config.Step, rt config.ResolvedTask) (map[string]any, error) {
 	content := map[string]any{"run": rt.Run}
 
-	if ws != nil {
+	if cfg.Workspace != nil {
 		content["inputs"] = config.StableStrings(rt.Inputs)
 		content["outputs"] = config.StableStrings(rt.Outputs)
 	}
@@ -95,20 +174,20 @@ func TaskNodeContent(rt config.ResolvedTask, ws *config.WorkspaceConfig) map[str
 		content["image"] = rt.Image
 	}
 
-	return content
+	return withHooks(cfg, step, content)
 }
 
 // PutNodeContent builds the content map hashed for a put node. image is
 // folded in whenever non-empty — see TaskNodeContent's doc comment for why
 // this differs from the inputs/ws gating.
-func PutNodeContent(resourceType config.ResourceType, source, params map[string]any, inputs []string, ws *config.WorkspaceConfig) map[string]any {
+func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.ResourceType, source, params map[string]any, inputs []string) (map[string]any, error) {
 	content := map[string]any{
 		"out_template": resourceType.Config.Out,
 		"source":       source,
 		"params":       params,
 	}
 
-	if ws != nil {
+	if cfg.Workspace != nil {
 		content["inputs"] = config.StableStrings(inputs)
 	}
 
@@ -116,7 +195,7 @@ func PutNodeContent(resourceType config.ResourceType, source, params map[string]
 		content["image"] = resourceType.Image
 	}
 
-	return content
+	return withHooks(cfg, step, content)
 }
 
 // AgentContentMap is the content hashed for an agent node: everything that
@@ -126,7 +205,7 @@ func PutNodeContent(resourceType config.ResourceType, source, params map[string]
 // var name are excluded (nothing secret-adjacent belongs in hashed content).
 // inputs/outputs are folded in only when ws is non-nil (workspace:
 // configured) — see TaskNodeContent's doc comment for why.
-func AgentContentMap(step config.Step, ri config.ResolvedInvocation, ws *config.WorkspaceConfig) map[string]any {
+func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInvocation) (map[string]any, error) {
 	toolsContent := make([]map[string]any, len(ri.ToolSpecs))
 	for i, t := range ri.ToolSpecs {
 		toolsContent[i] = map[string]any{
@@ -152,7 +231,7 @@ func AgentContentMap(step config.Step, ri config.ResolvedInvocation, ws *config.
 		"tools":            toolsContent,
 	}
 
-	if ws != nil {
+	if cfg.Workspace != nil {
 		content["inputs"] = config.StableStrings(step.Inputs)
 		content["outputs"] = config.StableStrings(step.Outputs)
 	}
@@ -161,7 +240,7 @@ func AgentContentMap(step config.Step, ri config.ResolvedInvocation, ws *config.
 		content["image"] = ri.Image
 	}
 
-	return content
+	return withHooks(cfg, step, content)
 }
 
 // HashNode computes a Node's content-addressed hash: sha256 hex of the
@@ -240,7 +319,7 @@ func planNonGetNode(cfg *config.Config, step config.Step, i int, parentHash stri
 			return Node{}, false, fmt.Errorf("step %d: %w", i, err)
 		}
 
-		node, err := taskNode(rt, i, parentHash, cfg.Workspace)
+		node, err := taskNode(cfg, step, rt, i, parentHash)
 
 		return node, rt.Fix != nil, err
 	case step.Put != "":
@@ -269,7 +348,10 @@ func planGetStep(ctx context.Context, cfg *config.Config, steps []config.Step, i
 	chains := make([]Chain, 0, len(versions))
 
 	for _, version := range versions {
-		content := GetNodeContent(*resourceType, res.Source, version)
+		content, err := GetNodeContent(cfg, step, *resourceType, res.Source, version)
+		if err != nil {
+			return nil, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
+		}
 
 		hash, err := HashNode(NodeKindGet, content, parentHash)
 		if err != nil {
@@ -289,8 +371,11 @@ func planGetStep(ctx context.Context, cfg *config.Config, steps []config.Step, i
 	return chains, nil
 }
 
-func taskNode(rt config.ResolvedTask, i int, parentHash string, ws *config.WorkspaceConfig) (Node, error) {
-	content := TaskNodeContent(rt, ws)
+func taskNode(cfg *config.Config, step config.Step, rt config.ResolvedTask, i int, parentHash string) (Node, error) {
+	content, err := TaskNodeContent(cfg, step, rt)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
+	}
 
 	hash, err := HashNode(NodeKindTask, content, parentHash)
 	if err != nil {
@@ -311,7 +396,10 @@ func putNode(cfg *config.Config, step config.Step, i int, parentHash string) (No
 		return Node{}, fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
 
-	content := PutNodeContent(*resourceType, res.Source, step.Params, step.Inputs, cfg.Workspace)
+	content, err := PutNodeContent(cfg, step, *resourceType, res.Source, step.Params, step.Inputs)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
+	}
 
 	hash, err := HashNode(NodeKindPut, content, parentHash)
 	if err != nil {
@@ -327,7 +415,10 @@ func agentNode(cfg *config.Config, step config.Step, i int, parentHash string) (
 		return Node{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
-	content := AgentContentMap(step, ri, cfg.Workspace)
+	content, err := AgentContentMap(cfg, step, ri)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+	}
 
 	hash, err := HashNode(NodeKindAgent, content, parentHash)
 	if err != nil {

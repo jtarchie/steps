@@ -186,6 +186,18 @@ func (h HostRunner) RunCaptureFull(ctx context.Context, command string) (stdout,
 	return outBuf.String(), errBuf.String(), code, nil
 }
 
+// IsExitError reports whether err (however wrapped) stems from a process that
+// started and then exited nonzero or was killed by a signal — as opposed to an
+// infrastructure failure to run it at all. Callers use it to tell a task-level
+// failure (a command's own nonzero exit) apart from an errored one so hooks
+// dispatch correctly; a resource check's failure, by contrast, is left
+// unwrapped so it classifies as errored.
+func IsExitError(err error) bool {
+	var exitErr *exec.ExitError
+
+	return errors.As(err, &exitErr)
+}
+
 // RunShell runs command on the host via `sh -c command` with cwd as its
 // working directory, streaming stdout/stderr live. Equivalent to
 // HostRunner{cwd: cwd}.Run; kept as a package-level function for callers

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -494,21 +495,39 @@ func ValidateArtifactFlow(cfg *config.Config, job *config.Job) error {
 // validateStepArtifactFlow checks one step's declared inputs against
 // available (the artifact names produced by earlier steps in the same
 // walk) and, for task/agent steps, adds this step's own declared outputs to
-// available for steps after it.
+// available for steps after it. It also validates the step's hooks: an
+// on_success hook sees the step's post-outputs view (the step ran and captured
+// its outputs), while failure-path hooks (on_failure/on_error/on_abort/ensure)
+// see only the pre-outputs view, since the step may have failed before
+// producing anything.
 func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
 	switch {
 	case step.Get != "":
 		// A get triggers a fresh build whose store starts empty, so drop
 		// everything from prior builds and keep only this get's resource.
+		// Failure-path hooks run before the fetch has landed anything, so
+		// their pre view is empty.
 		clear(available)
+		pre := map[string]bool{}
 		available[step.Get] = true
 
-		return nil
+		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
 	case step.Put != "":
-		return checkInputsAvailable(jobName, i, "put", step.Put, step.Inputs, available)
+		err := checkInputsAvailable(jobName, i, "put", step.Put, step.Inputs, available)
+		if err != nil {
+			return err
+		}
+
+		// A put produces no artifacts into the build store, so pre and post
+		// are the same view.
+		snap := maps.Clone(available)
+
+		return validateStepHooks(cfg, jobName, i, step, snap, snap)
 	case step.Task != "":
 		return validateTaskArtifactFlow(cfg, jobName, i, step, available)
 	case step.Agent != "":
+		pre := maps.Clone(available)
+
 		err := checkInputsAvailable(jobName, i, "agent", step.Agent, step.Inputs, available)
 		if err != nil {
 			return err
@@ -518,7 +537,7 @@ func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step co
 			available[out] = true
 		}
 
-		return nil
+		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
 	default:
 		return nil
 	}
@@ -530,6 +549,8 @@ func validateTaskArtifactFlow(cfg *config.Config, jobName string, i int, step co
 		return fmt.Errorf("job %q step %d: %w", jobName, i, err)
 	}
 
+	pre := maps.Clone(available)
+
 	err = checkInputsAvailable(jobName, i, "task", rt.Name, rt.Inputs, available)
 	if err != nil {
 		return err
@@ -539,7 +560,59 @@ func validateTaskArtifactFlow(cfg *config.Config, jobName string, i int, step co
 		available[out] = true
 	}
 
-	return nil
+	return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
+}
+
+// validateStepHooks validates each of a step's hooks against the artifact view
+// it will actually see at runtime: on_success against post (the step succeeded
+// and captured its outputs), every failure-path hook against pre. A hook's own
+// declared outputs are captured into the build store but never added to the
+// plan's available set — a later plan step must not depend on a
+// conditionally-run hook's output.
+func validateStepHooks(cfg *config.Config, jobName string, i int, step config.Step, pre, post map[string]bool) error {
+	return step.Hooks.Each(func(name string, hook *config.Step) error { //nolint:wrapcheck // callback errors carry full job/step/hook context
+		view := pre
+		if name == "on_success" {
+			view = post
+		}
+
+		return validateHookArtifactFlow(cfg, jobName, i, name, *hook, view)
+	})
+}
+
+// validateHookArtifactFlow checks one hook step's resolved inputs against the
+// view available to it, then recurses into the hook's own nested hooks (which
+// see the same view). Hook outputs are intentionally not folded into the view.
+func validateHookArtifactFlow(cfg *config.Config, jobName string, i int, hookName string, hook config.Step, view map[string]bool) error {
+	var (
+		inputs     []string
+		kind, name string
+	)
+
+	switch {
+	case hook.Task != "":
+		rt, err := cfg.ResolveTask(hook)
+		if err != nil {
+			return fmt.Errorf("job %q step %d %s hook: %w", jobName, i, hookName, err)
+		}
+
+		inputs, kind, name = rt.Inputs, "task", rt.Name
+	case hook.Put != "":
+		inputs, kind, name = hook.Inputs, "put", hook.Put
+	case hook.Agent != "":
+		inputs, kind, name = hook.Inputs, "agent", hook.Agent
+	}
+
+	for _, in := range inputs {
+		if !view[in] {
+			return fmt.Errorf("job %q step %d %s hook (%s %q): input %q is not available to this hook",
+				jobName, i, hookName, kind, name, in)
+		}
+	}
+
+	return hook.Hooks.Each(func(nestedName string, nested *config.Step) error { //nolint:wrapcheck // callback errors carry full job/step/hook context
+		return validateHookArtifactFlow(cfg, jobName, i, hookName+"."+nestedName, *nested, view)
+	})
 }
 
 func checkInputsAvailable(jobName string, i int, kind, name string, inputs []string, available map[string]bool) error {
