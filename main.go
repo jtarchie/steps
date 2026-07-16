@@ -1,7 +1,9 @@
 // Package main implements steps, a small CLI that interprets a
 // Concourse-style pipeline YAML file (resource_types/resources/jobs):
 // check discovers resource versions, get fetches one via a rendered
-// shell command, and task runs a plan step's command.
+// shell command, and task runs a plan step's command. `run` executes one
+// job once; `watch` polls trigger: true resources and auto-runs every job
+// a changed resource affects.
 package main
 
 import (
@@ -12,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/alecthomas/kong"
 	"github.com/lmittmann/tint"
@@ -19,15 +22,80 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/trigger"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
-// CLI is the pipeline runner's command-line grammar, parsed by kong.
+// CLI is the pipeline runner's command-line grammar, parsed by kong. Run is
+// default:"withargs" so today's flat invocation (steps pipeline.yml --job x)
+// keeps working unchanged, routed to it implicitly.
 type CLI struct {
+	Run   RunCmd   `cmd:"" default:"withargs"                                             help:"run a single job once"`
+	Watch WatchCmd `cmd:"" help:"poll trigger: true resources and auto-run affected jobs"`
+}
+
+// RunCmd runs a single job's plan once, exactly as steps has always done.
+type RunCmd struct {
 	Pipeline string            `arg:""                                                                 help:"path to the pipeline YAML file"`
 	Job      string            `help:"job name to run (defaults to the pipeline's only job)"`
 	Version  map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"`
 	Force    bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
+}
+
+// Run loads the pipeline, selects a job, and runs it once via
+// pipeline.RunJob.
+func (r *RunCmd) Run() error {
+	cfg, err := config.LoadConfig(r.Pipeline)
+	if err != nil {
+		return fmt.Errorf("could not load pipeline: %w", err)
+	}
+
+	job, err := selectJob(cfg, r.Job)
+	if err != nil {
+		return err
+	}
+
+	st, provider, cleanup, err := setup(cfg, r.Pipeline)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	ctx, cancel := withSignalCancel(context.Background())
+	defer cancel()
+
+	return wrapRunErr(pipeline.RunJob(ctx, cfg, job, r.Version, provider, st, r.Force))
+}
+
+// WatchCmd polls every resource named by a trigger:true get step, across
+// every job in the pipeline, and runs whichever jobs a version change
+// affects — see internal/trigger.
+type WatchCmd struct {
+	Pipeline      string            `arg:""                                                                 help:"path to the pipeline YAML file"`
+	Interval      time.Duration     `default:"30s"                                                          help:"how often to check trigger: true resources"`
+	MaxConcurrent int               `default:"1"                                                            help:"maximum number of triggered jobs running at once"`
+	Version       map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"`
+	Force         bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
+}
+
+// Run loads the pipeline and blocks in trigger.Watch until canceled
+// (SIGINT/SIGTERM).
+func (w *WatchCmd) Run() error {
+	cfg, err := config.LoadConfig(w.Pipeline)
+	if err != nil {
+		return fmt.Errorf("could not load pipeline: %w", err)
+	}
+
+	st, provider, cleanup, err := setup(cfg, w.Pipeline)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	ctx, cancel := withSignalCancel(context.Background())
+	defer cancel()
+
+	return wrapRunErr(trigger.Watch(ctx, cfg, provider, st, w.Version, w.Interval, w.MaxConcurrent, w.Force))
 }
 
 // initLogging installs a debug-level slog handler on stderr as the default
@@ -58,64 +126,62 @@ func run(args []string) error {
 
 	var cli CLI
 
-	parser, err := kong.New(&cli, kong.Name("steps"), kong.Description("run a single job from a pipeline YAML file"))
+	parser, err := kong.New(&cli, kong.Name("steps"), kong.Description("run pipeline jobs, or watch for trigger: true resource changes"))
 	if err != nil {
 		return fmt.Errorf("could not build CLI parser: %w", err)
 	}
 
-	_, err = parser.Parse(args)
+	kctx, err := parser.Parse(args)
 	if err != nil {
 		return fmt.Errorf("could not parse flags: %w", err)
 	}
 
-	slog.Debug("cli.parsed", "pipeline", cli.Pipeline, "job", cli.Job, "pinned", cli.Version)
+	return kctx.Run() //nolint:wrapcheck // the Run methods above already wrap their own errors via wrapRunErr
+}
 
-	cfg, err := config.LoadConfig(cli.Pipeline)
+// setup opens the state store and builds/validates the workspace provider
+// shared by RunCmd and WatchCmd, returning a cleanup func that closes both
+// (logging, not returning, any close error — mirroring the deferred
+// close-error handling both commands used inline before this helper
+// existed).
+func setup(cfg *config.Config, pipelinePath string) (*store.Store, workspace.Provider, func(), error) {
+	st, err := store.OpenStore(statePath(pipelinePath))
 	if err != nil {
-		return fmt.Errorf("could not load pipeline: %w", err)
+		return nil, nil, nil, fmt.Errorf("could not open state store: %w", err)
 	}
-
-	job, err := selectJob(cfg, cli.Job)
-	if err != nil {
-		return err
-	}
-
-	st, err := store.OpenStore(statePath(cli.Pipeline))
-	if err != nil {
-		return fmt.Errorf("could not open state store: %w", err)
-	}
-	defer func() {
-		closeErr := st.Close()
-		if closeErr != nil {
-			slog.Error("store.close", "error", closeErr)
-		}
-	}()
 
 	provider, err := workspace.NewProvider(cfg.Workspace)
 	if err != nil {
-		return fmt.Errorf("could not build workspace provider: %w", err)
+		_ = st.Close()
+
+		return nil, nil, nil, fmt.Errorf("could not build workspace provider: %w", err)
 	}
 
 	err = provider.Validate()
 	if err != nil {
-		return fmt.Errorf("workspace: %w", err)
+		_ = st.Close()
+
+		return nil, nil, nil, fmt.Errorf("workspace: %w", err)
 	}
 
-	defer func() {
+	cleanup := func() {
 		closeErr := provider.Close()
 		if closeErr != nil {
 			slog.Error("workspace.close", "error", closeErr)
 		}
-	}()
 
-	ctx, cancel := withSignalCancel(context.Background())
-	defer cancel()
+		closeErr = st.Close()
+		if closeErr != nil {
+			slog.Error("store.close", "error", closeErr)
+		}
+	}
 
-	return wrapRunErr(pipeline.RunJob(ctx, cfg, job, cli.Version, provider, st, cli.Force))
+	return st, provider, cleanup, nil
 }
 
-// wrapRunErr adds context to a RunJob error without adding another branch to
-// run() itself, which is already at cyclop's per-function complexity budget.
+// wrapRunErr adds context to a RunJob/Watch error without adding another
+// branch to the caller, which is already at cyclop's per-function
+// complexity budget.
 func wrapRunErr(err error) error {
 	if err != nil {
 		return fmt.Errorf("run: %w", err)

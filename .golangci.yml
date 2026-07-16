@@ -82,6 +82,7 @@ linters:
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/pipeline"
             - "github.com/jtarchie/steps/internal/store"
+            - "github.com/jtarchie/steps/internal/trigger"
             - "github.com/jtarchie/steps/internal/workspace"
         # Leaves: no internal deps, stdlib only.
         Shell:
@@ -170,5 +171,20 @@ linters:
             - "github.com/jtarchie/steps/internal/merkle"
             - "github.com/jtarchie/steps/internal/resource"
             - "github.com/jtarchie/steps/internal/shell"
+            - "github.com/jtarchie/steps/internal/store"
+            - "github.com/jtarchie/steps/internal/workspace"
+        # trigger polls resources with any get/trigger:true step and runs
+        # affected jobs via pipeline.RunJob — the cross-job counterpart to
+        # pipeline's single-job orchestration. It's the only package besides
+        # pipeline itself that main is allowed to route through into
+        # resource/store/workspace territory.
+        Trigger:
+          files:
+            - "**/internal/trigger/**"
+          allow:
+            - "$gostd"
+            - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/pipeline"
+            - "github.com/jtarchie/steps/internal/resource"
             - "github.com/jtarchie/steps/internal/store"
             - "github.com/jtarchie/steps/internal/workspace"

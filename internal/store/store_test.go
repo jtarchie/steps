@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -132,4 +134,307 @@ func TestStoreRecordNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecordNode (upsert): %v", err)
 	}
+}
+
+func mustEnqueueJob(t *testing.T, store *Store, jobName, reason string) {
+	t.Helper()
+
+	err := store.EnqueueJob(context.Background(), jobName, reason)
+	if err != nil {
+		t.Fatalf("EnqueueJob(%q, %q): %v", jobName, reason, err)
+	}
+}
+
+// mustClaimJob claims the next pending job and fails the test if the queue
+// was empty or the claimed job doesn't match want (when want != "").
+func mustClaimJob(t *testing.T, store *Store, want string) (id int64, jobName string) {
+	t.Helper()
+
+	id, jobName, found, err := store.ClaimNextJob(context.Background())
+	if err != nil {
+		t.Fatalf("ClaimNextJob: %v", err)
+	}
+
+	if !found {
+		t.Fatal("ClaimNextJob: expected a pending job, queue was empty")
+	}
+
+	if want != "" && jobName != want {
+		t.Fatalf("ClaimNextJob = %q, want %q", jobName, want)
+	}
+
+	return id, jobName
+}
+
+func assertQueueEmpty(t *testing.T, store *Store) {
+	t.Helper()
+
+	_, _, found, err := store.ClaimNextJob(context.Background())
+	if err != nil {
+		t.Fatalf("ClaimNextJob: %v", err)
+	}
+
+	if found {
+		t.Fatal("expected the queue to be empty")
+	}
+}
+
+func assertLastCheckedVersion(t *testing.T, store *Store, resourceName string, wantFound bool, wantVersion string) {
+	t.Helper()
+
+	version, found, err := store.LastCheckedVersion(context.Background(), resourceName)
+	if err != nil {
+		t.Fatalf("LastCheckedVersion(%q): %v", resourceName, err)
+	}
+
+	if found != wantFound || (found && version != wantVersion) {
+		t.Fatalf("LastCheckedVersion(%q) = (%q, %v), want (%q, %v)", resourceName, version, found, wantVersion, wantFound)
+	}
+}
+
+func TestStoreCheckedVersionRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+
+	assertLastCheckedVersion(t, store, "thing", false, "")
+
+	err := store.RecordCheckedVersion(ctx, "thing", `{"ref":"v1"}`)
+	if err != nil {
+		t.Fatalf("RecordCheckedVersion: %v", err)
+	}
+
+	assertLastCheckedVersion(t, store, "thing", true, `{"ref":"v1"}`)
+
+	// Upsert: recording a new version for the same resource replaces it.
+	err = store.RecordCheckedVersion(ctx, "thing", `{"ref":"v2"}`)
+	if err != nil {
+		t.Fatalf("RecordCheckedVersion (upsert): %v", err)
+	}
+
+	assertLastCheckedVersion(t, store, "thing", true, `{"ref":"v2"}`)
+}
+
+func TestStoreEnqueueJobDedupsOnlyWhilePending(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	// Two enqueues while nothing has claimed the row yet: one pending row.
+	mustEnqueueJob(t, store, "build", "resource-a")
+	mustEnqueueJob(t, store, "build", "resource-b")
+
+	mustClaimJob(t, store, "build")
+	assertQueueEmpty(t, store)
+
+	// Enqueuing again while the job is running (not pending) creates a fresh
+	// pending row — the partial unique index only covers status='pending'.
+	mustEnqueueJob(t, store, "build", "resource-c")
+}
+
+// TestStoreClaimSerializesSameJob asserts a pending row for a job that is
+// already running is not claimable until the running build finishes — builds
+// of one job never run concurrently, even with multiple workers.
+func TestStoreClaimSerializesSameJob(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	mustEnqueueJob(t, store, "build", "resource-a")
+
+	id, _ := mustClaimJob(t, store, "build")
+
+	// A change enqueued mid-run: a pending row exists, but it must not be
+	// claimable while "build" is still running.
+	mustEnqueueJob(t, store, "build", "resource-b")
+	assertQueueEmpty(t, store)
+
+	// Once the running build completes, the queued change becomes claimable.
+	err := store.CompleteJob(context.Background(), id, "done", nil)
+	if err != nil {
+		t.Fatalf("CompleteJob: %v", err)
+	}
+
+	mustClaimJob(t, store, "build")
+}
+
+// TestStoreResetStaleRunningWithPendingSuccessor covers the case a running
+// row and a pending row for the same job coexist at crash time: flipping the
+// running row to pending would violate idx_trigger_queue_pending_job, so it
+// is dropped in favor of the pending successor instead of erroring.
+func TestStoreResetStaleRunningWithPendingSuccessor(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	mustEnqueueJob(t, store, "build", "resource-a")
+	mustClaimJob(t, store, "build")                 // now running
+	mustEnqueueJob(t, store, "build", "resource-b") // pending successor
+
+	err := store.ResetStaleRunning(context.Background())
+	if err != nil {
+		t.Fatalf("ResetStaleRunning: %v", err)
+	}
+
+	// Exactly one claimable build remains (the pending successor); no
+	// duplicate, no unique-constraint error.
+	mustClaimJob(t, store, "build")
+	assertQueueEmpty(t, store)
+}
+
+func TestStoreClaimNextJobOrdering(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	jobNames := []string{"job-a", "job-b", "job-c", "job-d", "job-e"}
+
+	for _, name := range jobNames {
+		mustEnqueueJob(t, store, name, "resource")
+	}
+
+	// Claims must come back oldest-enqueued-first.
+	for _, want := range jobNames {
+		mustClaimJob(t, store, want)
+	}
+}
+
+func TestStoreClaimNextJobAtomicity(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	const jobCount = 5
+
+	for i := range jobCount {
+		mustEnqueueJob(t, store, fmt.Sprintf("job-%d", i), "resource")
+	}
+
+	// Concurrent claimers must never both come back with the same job.
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		claimed = map[string]int{}
+	)
+
+	for range jobCount {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			_, jobName, found, err := store.ClaimNextJob(context.Background())
+			if err != nil {
+				t.Errorf("ClaimNextJob: %v", err)
+
+				return
+			}
+
+			if !found {
+				t.Error("expected a job to be claimable")
+
+				return
+			}
+
+			mu.Lock()
+			claimed[jobName]++
+			mu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+	assertClaimedExactlyOnce(t, claimed, jobCount)
+}
+
+func assertClaimedExactlyOnce(t *testing.T, claimed map[string]int, wantDistinct int) {
+	t.Helper()
+
+	for name, count := range claimed {
+		if count != 1 {
+			t.Errorf("job %q claimed %d times, want exactly 1", name, count)
+		}
+	}
+
+	if len(claimed) != wantDistinct {
+		t.Errorf("claimed %d distinct jobs, want %d", len(claimed), wantDistinct)
+	}
+}
+
+func TestStoreCompleteJob(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+
+	mustEnqueueJob(t, store, "build", "resource")
+
+	id, _ := mustClaimJob(t, store, "build")
+
+	err := store.CompleteJob(ctx, id, "failed", errors.New("boom"))
+	if err != nil {
+		t.Fatalf("CompleteJob: %v", err)
+	}
+
+	var (
+		status  string
+		errText *string
+	)
+
+	scanErr := store.db.QueryRowContext(ctx, "SELECT status, error FROM trigger_queue WHERE id = ?", id).Scan(&status, &errText)
+	if scanErr != nil {
+		t.Fatalf("scan trigger_queue row: %v", scanErr)
+	}
+
+	if status != "failed" {
+		t.Errorf("status = %q, want %q", status, "failed")
+	}
+
+	if errText == nil || *errText != "boom" {
+		t.Errorf("error = %v, want %q", errText, "boom")
+	}
+}
+
+func TestStoreResetStaleRunning(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	mustEnqueueJob(t, store, "build", "resource")
+	mustClaimJob(t, store, "build")
+
+	// Simulate a crash/interrupted run: the row is stuck "running". A fresh
+	// watch startup must recover it, not leave it stranded forever.
+	err := store.ResetStaleRunning(context.Background())
+	if err != nil {
+		t.Fatalf("ResetStaleRunning: %v", err)
+	}
+
+	mustClaimJob(t, store, "build")
 }

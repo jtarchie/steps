@@ -2,7 +2,7 @@
 
 ## Overview
 
-**steps** is a Go CLI that executes Concourse-style YAML pipelines with LLM agent integration. It discovers resources via templated shell commands, fetches versions, and runs jobs containing resource `get`/`put` steps and `agent` steps that invoke LLM models with tool-calling support (read_file, list_dir, run_shell, custom tools). State is persisted in SQLite with WAL mode.
+**steps** is a Go CLI that executes Concourse-style YAML pipelines with LLM agent integration. It discovers resources via templated shell commands, fetches versions, and runs jobs containing resource `get`/`put` steps and `agent` steps that invoke LLM models with tool-calling support (read_file, list_dir, run_shell, custom tools). State is persisted in SQLite with WAL mode. `steps run` executes one job once; `steps watch` polls `trigger: true` resources and automatically runs whichever jobs a version change affects, including versions produced by another job's own `put` — see "Downstream Triggers" below.
 
 **Type:** CLI tool | **Language:** Go 1.26.5+ | **Size:** ~15K LOC | **Module:** `github.com/jtarchie/steps`
 
@@ -47,6 +47,8 @@ The state database (`.steps/state.db`) is opened exactly once per process, at st
 
 This is safe specifically *because* of the one-process-at-a-time model: converting a brand-new database file to WAL under **concurrent first access** can return `SQLITE_BUSY` that `busy_timeout` does not cover (confirmed empirically — ~15% failure rate over repeated concurrent-open trials against real SQLite, not a modernc.org/sqlite bug), but that only happens when multiple processes race to create the same file simultaneously, which never occurs here — `OpenStore` runs single-threaded before any step or agent work starts. If `steps` ever needs to support concurrent processes racing to create the same `.steps/state.db` (as opposed to concurrent steps *within* one already-running process, which is fine), the WAL conversion will need an explicit retry loop again — don't assume the DSN pragma alone is sufficient in that scenario.
 
+`steps watch --max-concurrent N` (N > 1; see "Downstream Triggers" below) is the first case where this process actually does run concurrent goroutines against that single `*store.Store` handle — each triggered job's own `RecordNode`/`RecordJobRun`/queue writes, interleaved across workers. This is still safe with **no store change**: `OpenStore` calls `db.SetMaxOpenConns(1)`, so `database/sql` hands the one connection to a single goroutine at a time — a mutex, not a second `SQLITE_BUSY`-prone connection racing the WAL conversion above (that conversion already happened, once, at this same startup, before any worker exists). Don't add a connection pool or a second `OpenStore` path to "improve" concurrency here — that would reintroduce the exact concurrent-writer hazard the single-open model exists to avoid.
+
 ### Test Parallelism
 No reproducible flakes were found under `go test ./... -race -count=10` and `-count=50`, both without `-p 1` and under artificial CPU saturation (verified 2026-07-15). `-p 1` remains a fine choice for deterministic CI output, but is not required to avoid failures.
 
@@ -59,14 +61,18 @@ internal/shell, internal/template, internal/retry, internal/store, internal/conf
 internal/resource, internal/workspace, internal/merkle                                -> config (+ shell/template for resource; merkle -> resource too)
 internal/agent                                                                        -> config, store, merkle, workspace, retry, shell, template
 internal/pipeline                                                                     -> config, merkle, resource, store, workspace, agent
-main.go                                                                               -> config, store, workspace, pipeline
+internal/trigger                                                                      -> config, resource, store, workspace, pipeline
+main.go                                                                               -> config, store, workspace, pipeline, trigger
 ```
 
 ### `internal/config` — the shared data model
 YAML parsing (`LoadConfig`) and every config type: `Config`, `ResourceType`, `Resource`, `Agent`, `AgentSource`, `ToolSpec`, `Task`, `FixSpec`, `Job`, `Step`, `WorkspaceConfig`. Also owns the config-merge logic that both plan-time hashing and run-time execution call, so both stay in lockstep: `Config.ResolveTask` (a task step's `run:`/`fix:`, resolved against a top-level `tasks:` entry) and `Config.ResolveAgentInvocation` (an agent step's connection/dials/tool-grant, resolved against the named `agents:` entry). Depends on nothing but the standard library and `yaml.v3`.
 
 ### `internal/pipeline` — the orchestrator
-`RunJob()` walks a job's plan in order: resolves/fetches `get` steps, runs `task`/`put`/`agent` steps, and records each step's outcome. It composes every other internal package; nothing depends on it.
+`RunJob()` walks a job's plan in order: resolves/fetches `get` steps, runs `task`/`put`/`agent` steps, and records each step's outcome. It composes every other internal package; `internal/trigger` is the only package that depends on it, and only to call `RunJob` itself once per triggered job — the single-job semantics `RunJob` implements are otherwise untouched by that feature.
+
+### `internal/trigger` — cross-job downstream triggers
+The cross-job counterpart to `internal/pipeline`'s single-job orchestration — see "Downstream Triggers" below for the full model. `Resources`/`AffectedJobs` read a `Config`'s `trigger: true` get steps; `Watch` runs two independent loops (a poller that diffs a resource's latest `check` version against `internal/store`'s `resource_checks` table and enqueues affected jobs into its `trigger_queue` table, and a worker pool that drains that queue via `pipeline.RunJob`) so a crash or a `--max-concurrent` > 1 pool doesn't lose track of pending work. `pollOnce`/`drainOne` are the unit-testable seams the loops are built from.
 
 ### `internal/agent` — agent step execution
 Split by responsibility: `provider.go` (LLM client construction, persona/system-message building), `tools.go` (built-in + custom tool declarations and execution), `conversation.go` (the tool-calling request/execute/append loop), `step.go` (`RunStep` — the exported entrypoint an agent step in the plan runs through), `fix.go` (`RunFix` — a task's `fix:` agent, built on the same conversation machinery). Only `RunStep`/`RunFix` are exported; everything else is package-private.
@@ -81,7 +87,7 @@ Runs a resource type's `check`/`in`/`out` shell commands and selects among the v
 `Provider`/`BuildWorkspace`/`StepSpace` interfaces; the default shared (single-directory) implementation; the `strategy: copy` backend (`workspace_copy*.go`, portable, copy-on-write via platform-specific `cp` flags) and `strategy: btrfs` backend (`workspace_btrfs*.go`, Linux only; subvolume create/snapshot/delete, with a non-Linux stub); static `inputs:`/`outputs:` plan validation (`ValidateArtifactFlow`).
 
 ### Leaves
-- **`internal/store`** — SQLite state persistence (`Store`), WAL setup, `NodeRecord` (a persistence-shape copy of `merkle.Node`, so this package doesn't need to depend on `merkle`)
+- **`internal/store`** — SQLite state persistence (`Store`), WAL setup, `NodeRecord` (a persistence-shape copy of `merkle.Node`, so this package doesn't need to depend on `merkle`); also owns the downstream-trigger tables (`resource_checks`, `trigger_queue`) `internal/trigger` reads/writes through `Store` methods — see "Downstream Triggers" below
 - **`internal/shell`** — shell command execution with context, logging, output truncation; `Runner` interface (`HostRunner` via `sh -c`, `DockerRunner` via a fresh `docker run --rm` per command) selected by `NewRunner(image string)` — see "Container Execution" below
 - **`internal/template`** — YAML template rendering (e.g., `{{ .source.repo }}`)
 - **`internal/retry`** — linear-backoff retry loop (`retry.Do`)
@@ -91,9 +97,10 @@ Runs a resource type's `check`/`in`/`out` shell commands and selects among the v
 - **examples/review.yml** — Example pipeline: PR review job using an agent with `read_file`, `list_dir`, `run_shell`, and a custom `post_review` tool
 - **examples/isolated.yml** — Example pipeline demonstrating opt-in `workspace:` isolation: a reusable task with `inputs:`/`outputs:`, an isolated agent step, and a `put` step scoped to a declared input
 - **examples/container.yml** — Example pipeline demonstrating opt-in `image:` containerized execution: a resource_type, a top-level task (plus a step-level override), and an agent
+- **examples/trigger.yml** — Example pipeline demonstrating downstream (cross-job) triggers: a self-contained (no network/credentials) `counter` resource type, a `publish` job that `put`s it, and a `notify` job whose `get ..., trigger: true` fires automatically under `steps watch` whenever `publish` lands a new version
 
 ### Root Files
-- **main.go** — CLI entry point; parses args, calls `run()` → `config.LoadConfig()` → `pipeline.RunJob()`
+- **main.go** — CLI entry point; parses args into `run`/`watch` subcommands (`RunCmd`/`WatchCmd`, see "Downstream Triggers" below) — `run` calls `config.LoadConfig()` → `pipeline.RunJob()` exactly as before this feature existed; `watch` calls `config.LoadConfig()` → `trigger.Watch()`
 - **go.mod / go.sum** — Dependencies: yaml.v3, kong (CLI), tint (structured logging), modernc.org/sqlite, google.golang.org/genai, openai-go, golang.org/x/sys (btrfs backend)
 - **.steps/** — State cache directory (created at runtime for each pipeline's working dir)
 
@@ -182,6 +189,36 @@ agents:
 - **Merkle hashing**: `image` is folded into `TaskNodeContent`/`AgentContentMap`/`GetNodeContent`/`PutNodeContent` **whenever it's non-empty** — unlike `inputs:`/`outputs:` (gated on `cfg.Workspace != nil`, since their *relevance* depends on the workspace feature existing), an image change alters what a command actually executes against regardless of workspace mode, so the gate is on the value itself. A pipeline that never sets `image:` still hashes byte-identically to before this field existed.
 - **Known caveats** (documented, not solved in v1): on Linux, a container's default (often root) user can leave root-owned files in the bind-mounted step directory, which can complicate `workspace` cleanup; a hard-killed docker CLI client (past its 10s SIGTERM grace period) can leave an orphaned container running until the daemon reaps it; there's no way to override a step back to host execution once its task/agent sets an image.
 
+### Downstream Triggers (opt-in `trigger: true` + `steps watch`)
+
+By default `steps` is a one-shot, single-job CLI (`steps run pipeline.yml --job x`): a `get` step's `trigger: true` is parsed but had no runtime effect before this feature, and there was no way for one job's `put` to cause a different job to run. `steps watch pipeline.yml` adds a long-running mode that polls every resource named by any `get ..., trigger: true` step, across every job in the pipeline, and automatically runs whichever jobs are affected when that resource's latest version changes — including a version produced by another job's own `put`, not just an externally-discovered one. Absent (i.e. under `steps run`), behavior is byte-identical to before this feature existed.
+
+```yaml
+jobs:
+- name: publish
+  plan:
+  - put: some-resource
+- name: notify
+  plan:
+  - get: some-resource
+    trigger: true   # steps watch runs this job automatically when publish's put lands a new version
+  - task: announce
+    run: ...
+```
+```bash
+steps watch pipeline.yml --interval 30s --max-concurrent 1
+```
+
+See `examples/trigger.yml` for a runnable, self-contained (no network/credentials) demonstration.
+
+- **Two independent loops, connected only through `internal/store`'s durable queue** (`internal/trigger.Watch`): a **poller** calls `resource.CheckVersions` (the same check every `get` step already uses) for every trigger resource on `--interval`, diffs the latest version's JSON against `resource_checks` (a new table, one row per resource), and — on a change — enqueues every affected job (`AffectedJobs`) into `trigger_queue`. A **worker pool** (`--max-concurrent`, default 1) drains that queue by calling `pipeline.RunJob` exactly as `steps run` would. Splitting these into a durable, SQL-backed queue (rather than an in-memory dedup set) is what makes a crash mid-run not lose track of pending work, and gives `--max-concurrent` a real meaning — see `pollOnce`/`drainOne` in `internal/trigger/trigger.go`, the unit-testable seams the two loops are built from.
+- **At-least-once, never at-most-once**: `pollOnce` advances a resource's recorded version (`RecordCheckedVersion`) **only after** every job that version's change affects has been durably enqueued. So if a later resource's check errors, or an `EnqueueJob` fails, or the process crashes mid-poll, the resource stays "dirty" and the trigger is retried on the next poll rather than silently consumed. `checkResource` is deliberately side-effect-free (it does not record) for exactly this ordering.
+- **Cold start seeds a baseline, never triggers.** A resource checked for the first time ever (no `resource_checks` row) just records its current version — it is never itself considered "dirty" on that first check. This keeps a fresh (or freshly lost) `.steps/state.db` from mass-re-running every job the moment `watch` starts; only a *subsequent* change triggers anything.
+- **`trigger_queue` dedup, ordering, and per-job serialization**: a partial unique index (`WHERE status = 'pending'`) means a resource going dirty twice before a worker claims the row enqueues its affected job once, not twice — but a job already `running` can still get a fresh `pending` row queued behind it, so a version change mid-run isn't dropped. `ClaimNextJob` (a single `UPDATE ... RETURNING`, oldest `pending` first) additionally **won't claim a pending row whose job already has a `running` row**, so builds of the same job never overlap even with `--max-concurrent > 1` — a mid-run change runs *after* the in-flight build finishes, not concurrently. Two workers can never claim the same row, and no additional locking is needed, riding `Store`'s existing `SetMaxOpenConns(1)` (see "SQLite WAL Mode" above). `ResetStaleRunning` accounts for a `running` + `pending` pair for one job at crash time (it drops the superseded `running` row rather than creating a second `pending` one, which would violate that unique index).
+- **Graceful-shutdown carve-out**: a job *interrupted* by `ctx` cancellation (SIGINT/SIGTERM mid-run — a nonzero `RunJob` return with `ctx` already canceled) is *not* marked `failed` — that would silently drop it forever, since only a new version change would otherwise ever re-trigger it. Its row is left `running`; `ResetStaleRunning` (called once at every `watch` startup) flips any such stranded row back to `pending`, recovering both a hard crash and an interrupted graceful shutdown the same way. A job that instead *reached a terminal state* — `done`, or a genuine failure with `ctx` still live — is finalized with `context.WithoutCancel(ctx)`, so a SIGINT racing the completion still records the true outcome instead of stranding the row `running` and causing a spurious re-run. A genuine failure is not retried until the next real version change re-enqueues it — the same non-retry semantics `job_runs`/merkle skip-caching already gives `steps run`.
+- **No `passed:`-style version-set gating across jobs** — that Concourse concept doesn't exist anywhere in this codebase's model, so there's no "only trigger B with the exact version set that passed through A" to preserve; any dirty resource simply enqueues every job with a matching `trigger: true` get step.
+- **CLI**: `steps run <pipeline.yml> [--job x] [--force]` (today's behavior, unchanged) and `steps watch <pipeline.yml> [--interval 30s] [--max-concurrent 1] [--force]` are Kong subcommands (`RunCmd`/`WatchCmd` in `main.go`); `run` is `default:"withargs"`, so the pre-existing flat invocation (`steps pipeline.yml --job x`, flags before or after the positional path) keeps parsing identically with no call-site changes required.
+
 ### State Caching via Merkle Tree
 - Each resource `get` and `agent` step is content-addressed (merkle tree) with its inputs (pinned versions, source config)
 - After successful execution, the merkle root is stored in SQLite
@@ -201,6 +238,6 @@ When making changes:
 1. **Trust the instructions.** Verify a command only if the docs are incomplete or proven wrong in testing.
 2. **Golangci-lint first.** If linting fails, the build is rejected; fix linter errors before logic changes.
 3. **Run the full sequence** before committing: `go fmt ./... && go mod tidy && golangci-lint run && go test ./... && go build -v`.
-4. **If touching `internal/store/store.go`**: `OpenStore` is called exactly once per process and that single handle is threaded everywhere — don't add a second `OpenStore` call path or a per-object pool. WAL is set via DSN pragma with no retry loop, which is only safe because of that single-open-at-startup model; see the SQLite WAL Mode section above before changing this.
+4. **If touching `internal/store/store.go`**: `OpenStore` is called exactly once per process and that single handle is threaded everywhere — don't add a second `OpenStore` call path or a per-object pool, even to "help" `steps watch --max-concurrent`'s worker pool (it's already safe via `SetMaxOpenConns(1)`; see "SQLite WAL Mode" above). WAL is set via DSN pragma with no retry loop, which is only safe because of that single-open-at-startup model.
 5. **Keep `internal/agent`'s conversation loop's behavior stable.** The tool-calling loop (`conversation.go`'s `runAgentConversation`) is tightly coupled to context propagation, logging, and `required:` enforcement via `tool_choice` forcing; file-organization changes within the package are fine, but refactors must preserve the loop's exact semantics — see "Custom Tool `required:` Semantics" above.
-6. **Respect the package dependency graph** (see Project Layout above and `.golangci.yml`'s `depguard` rules): `internal/config` depends on nothing internal; `internal/pipeline` is the only package that depends on `internal/agent`; nothing depends on `internal/pipeline`. A new import that isn't in a package's `depguard` allow-list is a signal the change belongs in a different package, not a rule to route around.
+6. **Respect the package dependency graph** (see Project Layout above and `.golangci.yml`'s `depguard` rules): `internal/config` depends on nothing internal; `internal/pipeline` is the only package that depends on `internal/agent`; `internal/trigger` is the only package (besides `main`) that depends on `internal/pipeline`, and only to call `RunJob` per triggered job. A new import that isn't in a package's `depguard` allow-list is a signal the change belongs in a different package, not a rule to route around.
