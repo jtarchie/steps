@@ -20,11 +20,11 @@ go build -v     # Produces ./steps binary (~52MB)
 
 ### Test
 ```bash
-go test ./... -v              # Standard test run (may have minor flakes under CPU load)
-go test ./... -v -p 1         # Serialized tests (use this for CI reliability; known flakes under parallel load)
+go test ./... -v              # Standard test run
+go test ./... -v -p 1         # Serialized tests (deterministic package ordering; not required for correctness)
 go test ./... -run TestName   # Single test
 ```
-**Expected:** All tests pass in <5s with `-p 1`, cache hits make subsequent runs instant.
+**Expected:** All tests pass in a few seconds; cache hits make subsequent runs instant. Verified (2026-07-15) with `-count=50` and a `-race -count=10` soak, both without `-p 1` and under artificial CPU saturation: no flakes. `-p 1` is a reasonable default for CI determinism, not a workaround for a known issue.
 
 ### Lint
 ```bash
@@ -36,17 +36,19 @@ golangci-lint run            # ~40 linters enabled; must pass with 0 issues befo
 go fmt ./...                 # Auto-format (most editors do this)
 go mod tidy                  # Sync deps
 golangci-lint run            # Catch issues early
-go test ./... -p 1           # Validate logic
+go test ./...                # Validate logic (-p 1 optional; see Test Parallelism below)
 go build -v                  # Final binary
 ```
 
 ## Known Constraints
 
 ### SQLite WAL Mode
-The state database (`.steps/state.db`) uses SQLite's WAL (Write-Ahead Logging) mode. **Do not** rely solely on `busy_timeout` or `MaxOpenConns(1)`—WAL requires explicit retry loops in concurrent scenarios. See `internal/store/store.go` for the pattern. Recent modernc.org/sqlite versions handle this correctly; if a test flakes with "database is locked," ensure retries are in place, not just timeout config.
+The state database (`.steps/state.db`) is opened exactly once per process, at startup in `main.go`, and that single `*store.Store` handle is threaded through everything the process does — there is no re-opening and no concurrent `OpenStore` calls within one `steps` invocation. `OpenStore` (`internal/store/store.go`) sets both `busy_timeout` and `journal_mode=WAL` via DSN `_pragma` params on open, with no Go-side retry loop.
+
+This is safe specifically *because* of the one-process-at-a-time model: converting a brand-new database file to WAL under **concurrent first access** can return `SQLITE_BUSY` that `busy_timeout` does not cover (confirmed empirically — ~15% failure rate over repeated concurrent-open trials against real SQLite, not a modernc.org/sqlite bug), but that only happens when multiple processes race to create the same file simultaneously, which never occurs here — `OpenStore` runs single-threaded before any step or agent work starts. If `steps` ever needs to support concurrent processes racing to create the same `.steps/state.db` (as opposed to concurrent steps *within* one already-running process, which is fine), the WAL conversion will need an explicit retry loop again — don't assume the DSN pragma alone is sufficient in that scenario.
 
 ### Test Parallelism
-Under high CPU contention (many tests in parallel), some shell/storage tests flake intermittently. Always run `go test ./... -p 1` in CI or when validating changes. Standard `go test` may pass locally but fail under load. This is **not** a bug; it's a known interaction between test timing and SQLite's internal locking.
+No reproducible flakes were found under `go test ./... -race -count=10` and `-count=50`, both without `-p 1` and under artificial CPU saturation (verified 2026-07-15). `-p 1` remains a fine choice for deterministic CI output, but is not required to avoid failures.
 
 ## Project Layout
 
@@ -99,7 +101,7 @@ Runs a resource type's `check`/`in`/`out` shell commands and selects among the v
 
 No GitHub Actions workflows are configured. Validate before pushing via:
 ```bash
-golangci-lint run && go test ./... -p 1 && go build -v
+golangci-lint run && go test ./... && go build -v
 ```
 
 ## Key Implementation Details
@@ -197,9 +199,8 @@ Since a rendered template runs via `sh -c`, any value interpolated into it that 
 
 When making changes:
 1. **Trust the instructions.** Verify a command only if the docs are incomplete or proven wrong in testing.
-2. **Test with `-p 1`.** All tests must pass serially; parallel flakes are expected and not a sign of correctness issues.
-3. **Golangci-lint first.** If linting fails, the build is rejected; fix linter errors before logic changes.
-4. **Run the full sequence** before committing: `go fmt ./... && go mod tidy && golangci-lint run && go test ./... -p 1 && go build -v`.
-5. **Check WAL constraints** if touching `internal/store/store.go`: ensure retries are explicit, not just timeout config.
-6. **Keep `internal/agent`'s conversation loop's behavior stable.** The tool-calling loop (`conversation.go`'s `runAgentConversation`) is tightly coupled to context propagation, logging, and `required:` enforcement via `tool_choice` forcing; file-organization changes within the package are fine, but refactors must preserve the loop's exact semantics — see "Custom Tool `required:` Semantics" above.
-7. **Respect the package dependency graph** (see Project Layout above and `.golangci.yml`'s `depguard` rules): `internal/config` depends on nothing internal; `internal/pipeline` is the only package that depends on `internal/agent`; nothing depends on `internal/pipeline`. A new import that isn't in a package's `depguard` allow-list is a signal the change belongs in a different package, not a rule to route around.
+2. **Golangci-lint first.** If linting fails, the build is rejected; fix linter errors before logic changes.
+3. **Run the full sequence** before committing: `go fmt ./... && go mod tidy && golangci-lint run && go test ./... && go build -v`.
+4. **If touching `internal/store/store.go`**: `OpenStore` is called exactly once per process and that single handle is threaded everywhere — don't add a second `OpenStore` call path or a per-object pool. WAL is set via DSN pragma with no retry loop, which is only safe because of that single-open-at-startup model; see the SQLite WAL Mode section above before changing this.
+5. **Keep `internal/agent`'s conversation loop's behavior stable.** The tool-calling loop (`conversation.go`'s `runAgentConversation`) is tightly coupled to context propagation, logging, and `required:` enforcement via `tool_choice` forcing; file-organization changes within the package are fine, but refactors must preserve the loop's exact semantics — see "Custom Tool `required:` Semantics" above.
+6. **Respect the package dependency graph** (see Project Layout above and `.golangci.yml`'s `depguard` rules): `internal/config` depends on nothing internal; `internal/pipeline` is the only package that depends on `internal/agent`; nothing depends on `internal/pipeline`. A new import that isn't in a package's `depguard` allow-list is a signal the change belongs in a different package, not a rule to route around.

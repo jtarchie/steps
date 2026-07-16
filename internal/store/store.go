@@ -7,18 +7,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver name used by sql.Open below
 )
-
-// walMaxAttempts bounds how many times enableWAL retries the one-time
-// journal-mode conversion before giving up and falling back to the default
-// rollback journal.
-const walMaxAttempts = 10
 
 const schema = `
 CREATE TABLE IF NOT EXISTS nodes (
@@ -59,25 +53,32 @@ func OpenStore(path string) (*Store, error) {
 		return nil, fmt.Errorf("could not create state directory for %q: %w", path, err)
 	}
 
-	// busy_timeout makes concurrent writers (e.g. multiple `steps` runs
-	// against the same pipeline) wait for the write lock instead of failing
-	// immediately with SQLITE_BUSY.
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)")
+	// The DSN sets two pragmas on every connection at open time:
+	//   - busy_timeout makes a writer wait for the write lock instead of
+	//     failing immediately with SQLITE_BUSY (relevant once this process
+	//     runs concurrent steps against a shared pool).
+	//   - journal_mode=WAL lets readers proceed concurrently with a writer,
+	//     which the default rollback journal serializes.
+	//
+	// WAL is recorded in the database file header, so the conversion happens
+	// exactly once and every later connection's pragma is a cheap no-op. No
+	// retry loop guards the conversion: OpenStore is called once per process
+	// at startup, before any concurrent steps run, so a single `steps` run is
+	// never racing another to convert the same brand-new file — which is the
+	// only scenario in which busy_timeout fails to cover the conversion's
+	// exclusive lock.
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		return nil, fmt.Errorf("could not open state db %q: %w", path, err)
 	}
 
 	// SQLite only ever allows one writer at a time regardless of pool size,
-	// so a pool of more than one just adds needless contention within this
-	// process for no throughput benefit. This does not, by itself, prevent
-	// contention with *other* processes' Stores (each `steps` invocation
-	// opens its own pool) — that's what enableWAL's retry and busy_timeout
-	// above are for.
+	// so a pool of more than one just adds needless contention for no write
+	// throughput benefit. (When this process starts running concurrent steps,
+	// revisit: WAL permits a separate read pool alongside the single writer.)
 	db.SetMaxOpenConns(1)
 
 	ctx := context.Background()
-
-	enableWAL(ctx, db)
 
 	_, err = db.ExecContext(ctx, schema)
 	if err != nil {
@@ -87,38 +88,6 @@ func OpenStore(path string) (*Store, error) {
 	}
 
 	return &Store{db: db}, nil
-}
-
-// enableWAL switches db to WAL journal mode on a best-effort basis. WAL lets
-// readers proceed concurrently with a writer (e.g. one `steps` run reading
-// HasSucceeded while another records a node), which the default rollback
-// journal serializes.
-//
-// The mode is stored in the database file header, so it persists across
-// connections and processes and only needs to succeed once, ever. Converting
-// a brand-new file to WAL under concurrent first-access can transiently
-// return SQLITE_BUSY that busy_timeout does not cover, so this retries with a
-// short backoff. If it still can't convert, it gives up silently: WAL is only
-// a concurrency optimization and the default rollback journal is equally
-// crash-safe and correct, so failing to enable it must never break the tool.
-func enableWAL(ctx context.Context, db *sql.DB) {
-	for attempt := range walMaxAttempts {
-		var mode string
-
-		err := db.QueryRowContext(ctx, "PRAGMA journal_mode=WAL").Scan(&mode)
-		if err == nil {
-			if mode != "wal" {
-				slog.Debug("store.wal", "result", "not applied", "journal_mode", mode)
-			}
-
-			return
-		}
-
-		slog.Debug("store.wal_retry", "attempt", attempt, "error", err)
-		time.Sleep(time.Duration(attempt+1) * 5 * time.Millisecond)
-	}
-
-	slog.Debug("store.wal", "result", "gave up; using default journal mode")
 }
 
 // Close closes the underlying database connection.

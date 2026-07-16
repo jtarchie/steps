@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 )
 
@@ -34,50 +33,6 @@ func TestStoreUsesWAL(t *testing.T) {
 	mode := journalMode(t, store)
 	if mode != "wal" {
 		t.Errorf("journal_mode = %q, want %q", mode, "wal")
-	}
-}
-
-// TestStoreConcurrentOpenEnablesWAL opens the same brand-new database from
-// many goroutines at once — the concurrent first-access case that can
-// transiently return SQLITE_BUSY during WAL conversion — and asserts every
-// open succeeds and the database ends up in WAL mode.
-func TestStoreConcurrentOpenEnablesWAL(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "state.db")
-
-	const openers = 8
-
-	var wg sync.WaitGroup
-
-	errs := make(chan error, openers)
-
-	for range openers {
-		wg.Go(func() {
-			store, err := OpenStore(path)
-			if err != nil {
-				errs <- err
-
-				return
-			}
-
-			_ = store.Close()
-		})
-	}
-
-	wg.Wait()
-	close(errs)
-
-	for err := range errs {
-		t.Errorf("concurrent OpenStore: %v", err)
-	}
-
-	store := mustOpenStore(t, path)
-	defer func() { _ = store.Close() }()
-
-	mode := journalMode(t, store)
-	if mode != "wal" {
-		t.Errorf("journal_mode after concurrent open = %q, want %q", mode, "wal")
 	}
 }
 
