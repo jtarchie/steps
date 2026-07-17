@@ -174,7 +174,29 @@ func TaskNodeContent(cfg *config.Config, step config.Step, rt config.ResolvedTas
 		content["image"] = rt.Image
 	}
 
+	if rt.Assert != nil {
+		content["assert"] = assertContent(rt.Assert)
+	}
+
 	return withHooks(cfg, step, content)
+}
+
+// assertContent builds the stable content map for a task/agent step's assert
+// (see config.Assert), folded into the node hash whenever set — an assert
+// changes the step's success criteria, so it must invalidate the cache. Only
+// the fields that are set appear, so absent-field hashes stay stable.
+func assertContent(a *config.Assert) map[string]any {
+	content := map[string]any{}
+
+	if a.Stdout != nil {
+		content["stdout"] = *a.Stdout
+	}
+
+	if a.Code != nil {
+		content["code"] = *a.Code
+	}
+
+	return content
 }
 
 // PutNodeContent builds the content map hashed for a put node. image is
@@ -238,6 +260,10 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 
 	if ri.Image != "" {
 		content["image"] = ri.Image
+	}
+
+	if step.Assert != nil {
+		content["assert"] = assertContent(step.Assert)
 	}
 
 	return withHooks(cfg, step, content)

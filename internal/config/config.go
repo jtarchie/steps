@@ -45,6 +45,27 @@ type Config struct {
 	// mutable directory, exactly as before this field existed. See
 	// WorkspaceConfig.
 	Workspace *WorkspaceConfig `yaml:"workspace,omitempty"`
+	// Assert, at the top level, names the ordered set of job names that
+	// `steps test` must have run (see Assert). It's a self-verification
+	// meta-check, never hashed.
+	Assert *Assert `yaml:"assert,omitempty"`
+}
+
+// Assert is a self-verification directive, in one of two shapes depending on
+// where it's attached:
+//   - On a Config (top level) or a Job, only Execution is valid: an ordered
+//     list of the names that must have run — job names for a Config, task/
+//     agent/hook names for a Job. By omission it also asserts what must NOT
+//     run. A matching Job assert clears the plan's failure, so one green
+//     fixture can contain deliberately-failing tasks.
+//   - On a task/agent Step, only Stdout/Code are valid: Stdout is a substring
+//     the step's captured output must contain, Code the exact expected exit
+//     code (task only). A matching assert makes a non-zero-exit task a
+//     success.
+type Assert struct {
+	Execution []string `yaml:"execution,omitempty"`
+	Stdout    *string  `yaml:"stdout,omitempty"`
+	Code      *int     `yaml:"code,omitempty"`
 }
 
 // WorkspaceConfig opts a pipeline into Concourse-style per-step workspace
@@ -316,6 +337,10 @@ type Job struct {
 	Name  string `yaml:"name"`
 	Plan  []Step `yaml:"plan"`
 	Hooks Hooks  `yaml:",inline"`
+	// Assert, on a job, names the ordered set of task/agent/hook names the
+	// job's run must have produced (see Assert). A match clears the plan's
+	// failure; a mismatch fails the job. Never hashed.
+	Assert *Assert `yaml:"assert,omitempty"`
 }
 
 // Step is a flat union of the step kinds this interpreter supports: get,
@@ -380,6 +405,10 @@ type Step struct {
 	// reaction steps (see Hooks). Inlined so they sit alongside the step's
 	// own fields in YAML.
 	Hooks Hooks `yaml:",inline"`
+	// Assert, on a task/agent step, checks the step's captured output/exit
+	// code (see Assert). A matching assert makes a non-zero-exit task a
+	// success; a mismatch fails the step. Invalid on get/put steps.
+	Assert *Assert `yaml:"assert,omitempty"`
 }
 
 // LoadConfig reads and parses a pipeline YAML file at path.
@@ -437,7 +466,79 @@ func (c *Config) validate() error {
 		return err
 	}
 
-	return c.validateHooks()
+	err = c.validateHooks()
+	if err != nil {
+		return err
+	}
+
+	return c.validateAsserts()
+}
+
+// validateAsserts enforces which Assert fields are valid where: a Config- or
+// Job-level assert may only set execution:; a task/agent step's assert may
+// only set stdout:/code: (and code: only on tasks). A step assert is rejected
+// on get/put steps. Hook steps are walked too (via visitSteps), so an assert
+// on a hook task/agent gets the same treatment.
+func (c *Config) validateAsserts() error {
+	if c.Assert != nil {
+		err := requireExecutionOnly("pipeline assert", c.Assert)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, job := range c.Jobs {
+		if job.Assert != nil {
+			err := requireExecutionOnly(fmt.Sprintf("job %q assert", job.Name), job.Assert)
+			if err != nil {
+				return err
+			}
+		}
+
+		err := job.visitSteps(validateStepAssert)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// requireExecutionOnly rejects an execution-level assert (Config/Job) that
+// carries the step-only stdout:/code: fields.
+func requireExecutionOnly(label string, assert *Assert) error {
+	if assert.Stdout != nil || assert.Code != nil {
+		return fmt.Errorf("%s: stdout/code are only valid on task/agent step asserts, not an execution assert", label)
+	}
+
+	return nil
+}
+
+// validateStepAssert rejects a step assert that's misplaced (get/put) or
+// carries the wrong fields for its step kind.
+func validateStepAssert(label string, step *Step) error {
+	if step.Assert == nil {
+		return nil
+	}
+
+	if len(step.Assert.Execution) > 0 {
+		return fmt.Errorf("%s: execution is only valid on job/pipeline asserts, not a step assert", label)
+	}
+
+	switch {
+	case step.Get != "":
+		return fmt.Errorf("%s (get %q): assert is not valid on get steps", label, step.Get)
+	case step.Put != "":
+		return fmt.Errorf("%s (put %q): assert is not valid on put steps", label, step.Put)
+	case step.Agent != "":
+		if step.Assert.Code != nil {
+			return fmt.Errorf("%s (agent %q): assert.code is not valid on agent steps (no exit code); use assert.stdout", label, step.Agent)
+		}
+
+		return nil
+	default:
+		return nil
+	}
 }
 
 // visitSteps calls fn for every step reachable from a job: each plan step,
@@ -862,6 +963,10 @@ type ResolvedTask struct {
 	// re-runs) in a container from this image instead of on the host. See
 	// Task.Image/Step.Image.
 	Image string
+	// Assert, when set, checks the task's captured stdout/exit code (see
+	// Assert). It always comes from the step (top-level tasks: entries carry
+	// no assert), so a matching assert makes a non-zero-exit task a success.
+	Assert *Assert
 }
 
 // ResolveTask resolves step into a ResolvedTask: a step carrying its own
@@ -875,6 +980,7 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 		return ResolvedTask{
 			Name: step.Task, Run: step.Run, Fix: step.Fix,
 			Inputs: step.Inputs, Outputs: step.Outputs, Image: step.Image,
+			Assert: step.Assert,
 		}, nil
 	}
 
@@ -903,7 +1009,7 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 		image = step.Image
 	}
 
-	return ResolvedTask{Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs, Image: image}, nil
+	return ResolvedTask{Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs, Image: image, Assert: step.Assert}, nil
 }
 
 // defaultMaxAgentTurns is the default cap on one attempt's tool-calling loop

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"google.golang.org/adk/v2/model"
@@ -176,6 +177,13 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
+	err = assertAgentResponse(step.Assert, finalContent)
+	if err != nil {
+		recordAgentFailure(ctx, st, node, jobName, err)
+
+		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+	}
+
 	err = prepared.space.Capture(ctx)
 	if err != nil {
 		wrapped := fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
@@ -192,6 +200,23 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	}
 
 	return hash, nil
+}
+
+// assertAgentResponse checks an agent step's assert (stdout only — an agent
+// has no exit code) against the model's final response: a match requires the
+// response to contain assert.stdout. A mismatch is a task-level failure so the
+// step fails and its on_failure hook fires. nil assert / nil Stdout is a no-op.
+func assertAgentResponse(assert *config.Assert, response string) error {
+	if assert == nil || assert.Stdout == nil {
+		return nil
+	}
+
+	if !strings.Contains(response, *assert.Stdout) {
+		//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
+		return outcome.Fail(fmt.Errorf("assert.stdout: response does not contain %q", *assert.Stdout))
+	}
+
+	return nil
 }
 
 // runPrepared runs the (already resolved and materialized) conversation under

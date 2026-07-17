@@ -431,6 +431,58 @@ func TestHooksAffectHash(t *testing.T) {
 	}
 }
 
+// TestAssertOmittedFromHashWhenAbsent guards cache stability: a task with no
+// assert hashes exactly as before assert existed.
+func TestAssertOmittedFromHashWhenAbsent(t *testing.T) {
+	t.Parallel()
+
+	content, err := TaskNodeContent(&config.Config{}, config.Step{Task: "build", Run: "echo hi"}, config.ResolvedTask{Name: "build", Run: "echo hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := content["assert"]; ok {
+		t.Error(`a task with no assert should not have an "assert" content key`)
+	}
+}
+
+// TestAssertAffectsHash checks that adding/changing a task assert changes its
+// hash (assert alters the step's success criteria, so it must bust the cache).
+func TestAssertAffectsHash(t *testing.T) {
+	t.Parallel()
+
+	code0, code1 := 0, 1
+
+	mustHash := func(t *testing.T, assert *config.Assert) string {
+		t.Helper()
+
+		rt := config.ResolvedTask{Name: "build", Run: "echo hi", Assert: assert}
+
+		content, err := TaskNodeContent(&config.Config{}, config.Step{Task: "build", Run: "echo hi", Assert: assert}, rt)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		hash, err := HashNode(NodeKindTask, content, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return hash
+	}
+
+	none := mustHash(t, nil)
+	withCode0 := mustHash(t, &config.Assert{Code: &code0})
+
+	if none == withCode0 {
+		t.Error("adding an assert did not change the task hash")
+	}
+
+	if withCode0 == mustHash(t, &config.Assert{Code: &code1}) {
+		t.Error("changing assert.code did not change the task hash")
+	}
+}
+
 // TestHookUnknownTaskErrors checks that a hook naming an undefined tasks:
 // entry surfaces as an error at content-build (plan) time.
 func TestHookUnknownTaskErrors(t *testing.T) {

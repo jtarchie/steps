@@ -114,6 +114,8 @@ func runMatchedHook(ctx context.Context, scope hookScope, name string, step *con
 // task's fix: agent): the enclosing step or job records the aggregate outcome.
 // get is never a valid hook (rejected at LoadConfig), so it is not handled.
 func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
+	recordExecution(ctx, executedStepName(step))
+
 	switch {
 	case step.Task != "":
 		rt, err := scope.cfg.ResolveTask(step)
@@ -141,6 +143,22 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 func logIfHookFailed(scope hookScope, name string, err error) {
 	if err != nil {
 		slog.Warn("job.hook.failed", "scope", scope.label, "hook", name, "error", err.Error())
+	}
+}
+
+// executedStepName is the bare name of whatever a task/agent/put step ran,
+// recorded into the execution log for a job's assert.execution. get steps
+// record their resource name separately (see runTriggeredBuild).
+func executedStepName(step config.Step) string {
+	switch {
+	case step.Task != "":
+		return step.Task
+	case step.Agent != "":
+		return step.Agent
+	case step.Put != "":
+		return step.Put
+	default:
+		return ""
 	}
 }
 

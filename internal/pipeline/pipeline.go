@@ -68,6 +68,12 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	}
 	defer workspace.CloseBuild(bw, job.Name)
 
+	// Carry an execution log through this invocation so a job's assert.execution
+	// can self-verify what ran (plan steps and hooks). The dispatch points and
+	// runHookStep append to it; nothing outside pipeline touches it.
+	log := &execLog{}
+	ctx = withExecLog(ctx, log)
+
 	// Everything from here on has a workspace to run job-level hooks in, so
 	// funnel planning and execution into one outcome and dispatch the job's
 	// hooks around it. Pre-workspace failures above fire no hooks — the build
@@ -78,6 +84,20 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	scope := hookScope{cfg: cfg, jobName: job.Name, label: fmt.Sprintf("job %q", job.Name), bw: bw}
 
 	finalErr := runHooks(ctx, scope, job.Hooks, runErr)
+
+	// A job assert.execution is the final word: it runs after hooks so the log
+	// includes them. A match clears whatever the plan/hooks produced (so a
+	// fixture of deliberately-failing tasks can be green); a mismatch fails the
+	// job regardless, and is never itself cleared.
+	if job.Assert != nil && len(job.Assert.Execution) > 0 {
+		assertErr := checkExecution(fmt.Sprintf("job %q", job.Name), job.Assert.Execution, log.snapshot())
+		if assertErr != nil {
+			return assertErr
+		}
+
+		finalErr = nil
+	}
+
 	if finalErr != nil {
 		return finalErr
 	}
@@ -200,6 +220,13 @@ func runSteps(ctx context.Context, cfg *config.Config, jobName string, steps []c
 // the store and skip-cache reflect it.
 func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string) (string, bool, error) {
 	hash, skipped, err := dispatchNonGetStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash)
+
+	// Record what ran (not a skipped/cached step) for a job's assert.execution,
+	// before hooks so the order reads [step, its hooks...].
+	if !skipped {
+		recordExecution(ctx, executedStepName(step))
+	}
+
 	if skipped || step.Hooks.Empty() {
 		return hash, skipped, err
 	}
@@ -394,7 +421,12 @@ func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedT
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 
-	if rt.Fix == nil {
+	switch {
+	case rt.Assert != nil:
+		return runAssertedTask(ctx, runner, rt)
+	case rt.Fix != nil:
+		return runFixTask(ctx, cfg, runner, rt, workspaceDir)
+	default:
 		err := runner.Run(ctx, rt.Run)
 		if err != nil {
 			if shell.IsExitError(err) {
@@ -406,7 +438,13 @@ func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedT
 
 		return nil
 	}
+}
 
+// runFixTask runs a task with a fix: agent: capture the output, and on a
+// nonzero exit invoke the fix agent (seeded with that output and given the
+// task itself as a rerun tool), then re-run the command once — that re-run's
+// exit code is the verdict. A green first run never constructs the agent.
+func runFixTask(ctx context.Context, cfg *config.Config, runner shell.Runner, rt config.ResolvedTask, workspaceDir string) error {
 	stdout, stderr, exitCode, err := runner.RunCaptureFull(ctx, rt.Run)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
@@ -435,6 +473,41 @@ func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedT
 
 	if exitCode != 0 {
 		return fmt.Errorf("task %q: %w", rt.Name, outcome.Fail(fmt.Errorf("still failing after fix agent %q (exit %d)", rt.Fix.Agent, exitCode)))
+	}
+
+	return nil
+}
+
+// runAssertedTask runs rt.Run capturing its output, then evaluates rt.Assert:
+// a matching stdout substring and exit code make the task a success even on a
+// non-zero exit; a mismatch is a task-level failure with a got-vs-want reason.
+// assert takes over the success determination, so a task's fix: is not
+// consulted when an assert is present.
+func runAssertedTask(ctx context.Context, runner shell.Runner, rt config.ResolvedTask) error {
+	stdout, stderr, exitCode, err := runner.RunCaptureFull(ctx, rt.Run)
+	if err != nil {
+		return fmt.Errorf("task %q: %w", rt.Name, err)
+	}
+
+	printTaskOutput(stdout, stderr)
+
+	mismatch := assertMismatch(rt.Assert, stdout, exitCode)
+	if mismatch != nil {
+		return fmt.Errorf("task %q: %w", rt.Name, outcome.Fail(mismatch))
+	}
+
+	return nil
+}
+
+// assertMismatch returns a reason when captured stdout/exit code don't satisfy
+// assert, or nil when they match. Code is exact; Stdout is a substring test.
+func assertMismatch(assert *config.Assert, stdout string, exitCode int) error {
+	if assert.Code != nil && *assert.Code != exitCode {
+		return fmt.Errorf("assert.code: want %d, got %d", *assert.Code, exitCode)
+	}
+
+	if assert.Stdout != nil && !strings.Contains(stdout, *assert.Stdout) {
+		return fmt.Errorf("assert.stdout: output does not contain %q", *assert.Stdout)
 	}
 
 	return nil
@@ -569,6 +642,8 @@ func runTriggeredBuild(ctx context.Context, cfg *config.Config, jobName string, 
 	}
 
 	defer workspace.CloseBuild(bw, resource.Name)
+
+	recordExecution(ctx, resource.Name)
 
 	err = fetchGetStep(ctx, resource, resourceType, version, bw)
 

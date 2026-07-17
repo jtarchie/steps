@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 type CLI struct {
 	Run   RunCmd   `cmd:"" default:"withargs"                                             help:"run a single job once"`
 	Watch WatchCmd `cmd:"" help:"poll trigger: true resources and auto-run affected jobs"`
+	Test  TestCmd  `cmd:"" help:"run every job (force) and verify assert directives"`
 }
 
 // RunCmd runs a single job's plan once, exactly as steps has always done.
@@ -96,6 +98,66 @@ func (w *WatchCmd) Run() error {
 	defer cancel()
 
 	return wrapRunErr(trigger.Watch(ctx, cfg, provider, st, w.Version, w.Interval, w.MaxConcurrent, w.Force))
+}
+
+// TestCmd runs every job in the pipeline (force, so nothing is skipped and the
+// recorded execution order is deterministic) and verifies its assert:
+// directives — each job's own assert.execution is checked inside RunJob, and a
+// top-level assert.execution of job names is checked here. It's the entry
+// point for a self-verifying fixture (see examples/hooks.yml).
+type TestCmd struct {
+	Pipeline string `arg:"" help:"path to the pipeline YAML file"`
+}
+
+// Run loads the pipeline, runs every job (force), and reports pass/fail per
+// job plus the pipeline-level assert.execution. It returns a non-nil error if
+// any job failed or the pipeline assert mismatched, so the process exits
+// non-zero.
+func (t *TestCmd) Run() error {
+	cfg, err := config.LoadConfig(t.Pipeline)
+	if err != nil {
+		return fmt.Errorf("could not load pipeline: %w", err)
+	}
+
+	st, provider, cleanup, err := setup(cfg, t.Pipeline)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	ctx, cancel := withSignalCancel(context.Background())
+	defer cancel()
+
+	var (
+		executed []string
+		failures []string
+	)
+
+	for i := range cfg.Jobs {
+		job := &cfg.Jobs[i]
+		executed = append(executed, job.Name)
+
+		jobErr := pipeline.RunJob(ctx, cfg, job, nil, provider, st, true)
+		if jobErr != nil {
+			fmt.Printf("FAIL %s: %v\n", job.Name, jobErr)
+
+			failures = append(failures, job.Name)
+
+			continue
+		}
+
+		fmt.Printf("PASS %s\n", job.Name)
+	}
+
+	if cfg.Assert != nil && len(cfg.Assert.Execution) > 0 && !slices.Equal(cfg.Assert.Execution, executed) {
+		return fmt.Errorf("pipeline assert.execution mismatch:\n  want: %v\n  got:  %v", cfg.Assert.Execution, executed)
+	}
+
+	if len(failures) > 0 {
+		return fmt.Errorf("test: %d job(s) failed: %v", len(failures), failures)
+	}
+
+	return nil
 }
 
 // initLogging installs a debug-level slog handler on stderr as the default
