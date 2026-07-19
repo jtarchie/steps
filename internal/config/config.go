@@ -199,22 +199,43 @@ type ToolSpec struct {
 	// {"error": ...} data for it to react to. Ignored on builtins; invalid on
 	// sub-agent tools.
 	Required bool
+	// MaxCalls caps how many times this custom tool may be invoked within one
+	// attempt's conversation (0/unset = unlimited). The (N+1)th call is
+	// rejected as ordinary tool-result data ({"error": "... call budget
+	// exhausted ..."}), never an aborted attempt. The counter resets on an
+	// attempts: restart (a fresh conversation is a fresh budget). Invalid on
+	// builtins and sub-agent tools.
+	MaxCalls int
+	// Args pins argument values a custom tool's run: template may reference:
+	// merged OVER the model's own arguments at call time (pinned always
+	// wins), and excluded from the parameter schema shown to the model, so
+	// the model can neither see nor override them — "the model chooses when,
+	// the machine chooses where." Values are plain strings; not templated.
+	// Invalid on builtins and sub-agent tools.
+	Args map[string]string
 }
 
 // UnmarshalYAML decodes a ToolSpec from either a scalar (builtin name) or a
-// mapping ({name, description, run, required} for a custom tool, or
-// {agent, description} for a sub-agent tool) YAML node.
+// mapping YAML node: {name, description, run, required, max_calls, args} for
+// a custom tool, {agent, description} for a sub-agent tool, or {builtin,
+// description} to reference a builtin by mapping instead of a bare scalar —
+// the only reason to do so is to hit a validation error like max_calls/args
+// on a builtin explicitly (validateToolCallGuardShape), since a bare scalar
+// entry has no room for those fields at all.
 func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias kinds that can't appear in a decoded sequence element
 	case yaml.ScalarNode:
 		return value.Decode(&t.Builtin) //nolint:wrapcheck // yaml.v3 error is already descriptive
 	case yaml.MappingNode:
 		var m struct {
-			Name        string `yaml:"name"`
-			Description string `yaml:"description"`
-			Run         string `yaml:"run"`
-			Agent       string `yaml:"agent"`
-			Required    bool   `yaml:"required"`
+			Builtin     string            `yaml:"builtin"`
+			Name        string            `yaml:"name"`
+			Description string            `yaml:"description"`
+			Run         string            `yaml:"run"`
+			Agent       string            `yaml:"agent"`
+			Required    bool              `yaml:"required"`
+			MaxCalls    int               `yaml:"max_calls"`
+			Args        map[string]string `yaml:"args"`
 		}
 
 		err := value.Decode(&m)
@@ -222,7 +243,8 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 			return fmt.Errorf("agent tool: %w", err)
 		}
 
-		t.Name, t.Description, t.Run, t.Agent, t.Required = m.Name, m.Description, m.Run, m.Agent, m.Required
+		t.Builtin, t.Name, t.Description, t.Run, t.Agent, t.Required = m.Builtin, m.Name, m.Description, m.Run, m.Agent, m.Required
+		t.MaxCalls, t.Args = m.MaxCalls, m.Args
 
 		return nil
 	default:
@@ -489,7 +511,125 @@ func (c *Config) validate() error {
 		return err
 	}
 
+	err = c.validateToolCallGuards()
+	if err != nil {
+		return err
+	}
+
 	return c.validateAsserts()
+}
+
+// validateToolCallGuards rejects max_calls:/args: set on anything but a
+// custom tool: both fields change what a custom tool's run: command executes
+// with, and neither has meaning on a builtin (whose implementation is fixed
+// Go code) or a sub-agent tool (whose only argument is the model-authored
+// request string — pinning or budgeting that is not the shape this feature
+// targets; revisit if a real need shows up).
+func (c *Config) validateToolCallGuards() error {
+	err := c.validateAgentToolCallGuards()
+	if err != nil {
+		return err
+	}
+
+	err = c.validateTaskFixToolCallGuards()
+	if err != nil {
+		return err
+	}
+
+	return c.validateStepToolCallGuards()
+}
+
+func (c *Config) validateAgentToolCallGuards() error {
+	for i := range c.Agents {
+		agent := c.Agents[i]
+
+		err := checkToolCallGuardSpecs(fmt.Sprintf("agent %q", agent.Name), agent.Tools)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *Config) validateTaskFixToolCallGuards() error {
+	for i := range c.Tasks {
+		fix := c.Tasks[i].Fix
+		if fix == nil {
+			continue
+		}
+
+		err := checkToolCallGuardSpecs(fmt.Sprintf("task %q fix", c.Tasks[i].Name), fix.Tools)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *Config) validateStepToolCallGuards() error {
+	for _, job := range c.Jobs {
+		err := job.visitSteps(func(label string, step *Step) error {
+			err := checkToolCallGuardSpecs(label, step.Tools)
+			if err != nil {
+				return err
+			}
+
+			if step.Fix == nil {
+				return nil
+			}
+
+			return checkToolCallGuardSpecs(label+" fix", step.Fix.Tools)
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkToolCallGuardSpecs runs validateToolCallGuardShape over every spec in
+// specs, stopping at the first error.
+func checkToolCallGuardSpecs(context string, specs []ToolSpec) error {
+	for _, spec := range specs {
+		err := validateToolCallGuardShape(context, spec)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateToolCallGuardShape rejects max_calls:/args: on a builtin or
+// sub-agent tool, a negative max_calls: on any tool, and (since a mapping-
+// form builtin — {builtin: name, ...} — is otherwise indistinguishable from a
+// custom tool once other fields are present) a builtin mixed with name:/run:.
+func validateToolCallGuardShape(context string, spec ToolSpec) error {
+	if spec.Builtin != "" && (spec.Name != "" || spec.Run != "") {
+		return fmt.Errorf("%s: builtin tool %q must not also set name/run", context, spec.Builtin)
+	}
+
+	if spec.MaxCalls < 0 {
+		return fmt.Errorf("%s: tool %q: max_calls must be >= 0", context, ToolSpecName(spec))
+	}
+
+	guarded := spec.MaxCalls != 0 || spec.Args != nil
+	if !guarded {
+		return nil
+	}
+
+	if spec.Builtin != "" {
+		return fmt.Errorf("%s: builtin tool %q: max_calls/args are only valid on custom tools", context, spec.Builtin)
+	}
+
+	if spec.Agent != "" {
+		return fmt.Errorf("%s: sub-agent tool %q: max_calls/args are only valid on custom tools", context, spec.Agent)
+	}
+
+	return nil
 }
 
 // maxSubAgentDepth bounds how deeply sub-agent tools (see ToolSpec.Agent) may

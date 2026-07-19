@@ -247,12 +247,27 @@ func toolSpecsContent(cfg *config.Config, specs []config.ToolSpec) ([]map[string
 			continue
 		}
 
-		out[i] = map[string]any{
+		content := map[string]any{
 			"builtin":     t.Builtin,
 			"name":        t.Name,
 			"description": t.Description,
 			"run":         t.Run,
 		}
+
+		// max_calls/args fold in only when set — a tool with neither hashes
+		// byte-identically to before this feature existed. Both change what a
+		// call actually executes with (a budget bounds it; pinned args alter
+		// its arguments), the same argument TaskNodeContent's doc comment
+		// makes for image: over the workspace-gated inputs/outputs.
+		if t.MaxCalls != 0 {
+			content["max_calls"] = t.MaxCalls
+		}
+
+		if len(t.Args) != 0 {
+			content["args"] = t.Args
+		}
+
+		out[i] = content
 	}
 
 	return out, nil

@@ -53,7 +53,9 @@ agents:
     # review body are posted literally instead of being interpreted by sh -c.
     # Note: no surrounding quotes of our own — shellquote supplies them when
     # the value needs them.
-    run: gh pr review --{{ .args.action | shellquote }} -b {{ .args.body | shellquote }}
+    #
+    # {{ .args.repo }} is machine-pinned below, not model-authored — see args:.
+    run: gh pr review --repo {{ .args.repo | shellquote }} --{{ .args.action | shellquote }} -b {{ .args.body | shellquote }}
     # required: true means the step can't finish until this tool has
     # actually succeeded (exit 0) at least once. A failure (e.g. a
     # malformed gh invocation) is handed back to the model as normal data
@@ -61,6 +63,18 @@ agents:
     # tries to wrap up without a successful call, it's forced to call this
     # tool again rather than being allowed to just summarize and stop.
     required: true
+    # max_calls: 1 bounds the double-post hazard the comment below used to
+    # only narrate: gh doesn't stop you posting the same review twice, and a
+    # model recovering from an earlier failed attempt (see attempts: on the
+    # review job) could otherwise call this again in the same session. A
+    # rejected (N+1)th call comes back as ordinary data ("call budget (1)
+    # exhausted"), same as any other tool failure — never an aborted attempt.
+    max_calls: 1
+    # args: pins repo so the model can neither see nor override it — "the
+    # model chooses when, the machine chooses where." Excluded entirely from
+    # the schema the model receives (only action/body are offered).
+    args:
+      repo: jtarchie/ci
 
 jobs:
 # Full review: can read, run read-only git/gh, and post a verdict.
@@ -75,10 +89,10 @@ jobs:
     # while post_review still hasn't succeeded) — a required tool's own
     # failure is recovered within the same conversation, not by this.
     # post_review isn't idempotent — gh doesn't stop you posting the same
-    # review twice — and the model may end up calling it more than once
-    # while recovering from an earlier failed attempt in-session, so the
-    # prompt's "check gh pr view first" instruction still matters; if you
-    # change this prompt, keep that check.
+    # review twice — so the agent's max_calls: 1 on post_review bounds a
+    # double-post mechanically; the prompt's "check gh pr view first"
+    # instruction is still worth keeping so the model doesn't waste a turn
+    # hitting that budget wall on a rerun.
     attempts: 3
     # tools omitted -> inherits all of the agent's granted tools
     prompt: |

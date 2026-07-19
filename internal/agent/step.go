@@ -129,7 +129,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		system: buildSystemMessage(ri.Persona, dir),
 		prompt: step.Prompt,
 		env:    toolEnv{dir: dir, runner: runner},
-		tools:  agentTools{decls: decls, registry: registry, required: requiredToolNames(ri.ToolSpecs)},
+		tools:  agentTools{decls: decls, registry: registry, required: requiredToolNames(ri.ToolSpecs), maxCalls: maxCallsByName(ri.ToolSpecs)},
 		params: agentGenParams{
 			temperature: ri.Temperature,
 			topP:        ri.TopP,

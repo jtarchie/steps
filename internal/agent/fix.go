@@ -95,7 +95,7 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 		system: buildSystemMessage(ri.Persona, dir),
 		prompt: prompt,
 		env:    toolEnv{dir: dir, runner: runner},
-		tools:  agentTools{decls: decls, registry: registry, required: requiredToolNames(toolSpecs)},
+		tools:  agentTools{decls: decls, registry: registry, required: requiredToolNames(toolSpecs), maxCalls: maxCallsByName(toolSpecs)},
 		params: agentGenParams{
 			temperature: ri.Temperature,
 			topP:        ri.TopP,

@@ -144,6 +144,26 @@ This resolution (`Config.ResolveTask` in `internal/config`) runs identically at 
 - `retry.Do`/`attempts:` (a full conversation restart from the original prompt) still exists, but only fires for *non-tool* failures — `generateOnce` erroring (LLM/transport issue) or `max_turns` exhaustion — never for a tool's own failure.
 - Only custom tools can be marked `required:`; built-ins (`read_file`, `list_dir`, `run_shell`) and the fix-agent's injected task-rerun tool are never required — they're intentionally exploratory/iterative regardless.
 
+### Custom Tool Call Guards (opt-in `max_calls:`/`args:`)
+
+A custom tool may additionally set `max_calls:` (an int) and/or `args:` (a `map[string]string`) — both value-gated, so a tool with neither hashes byte-identically to before this feature existed. Both are rejected at `LoadConfig` on a builtin or a sub-agent tool (`Config.validateToolCallGuards`/`validateToolCallGuardShape`): they only make sense on a custom `run:` command, whose arguments are template-rendered, unlike a builtin's fixed Go implementation or a sub-agent's single opaque `request` string. A negative `max_calls:` is also a load error. See `examples/review.yml`'s `post_review`.
+
+```yaml
+tools:
+- name: post_review
+  description: Post a review verdict. action is approve or comment.
+  run: gh pr review --repo {{ .args.repo | shellquote }} --{{ .args.action | shellquote }} -b {{ .args.body | shellquote }}
+  required: true
+  max_calls: 1          # the model can call this at most once per attempt
+  args:
+    repo: jtarchie/ci    # pinned — the model neither sees nor can override this
+```
+
+- **`args:` pinning** (`internal/agent/tools.go`, `visibleParams`/`mergePinnedArgs`): a pinned key is excluded entirely from the schema/parameter list the model receives (`visibleParams` subtracts it from `inferToolParams`'s template-derived param list before building the `genai.FunctionDeclaration`) — the model cannot see it, let alone author a value for it. At execution, `mergePinnedArgs` merges the pinned values *over* whatever the model supplied at the same key before rendering `run:` and before the tool's own missing-argument check, so a pinned key always counts as present regardless of what (if anything) the model sent. Values are plain strings, not templated — "the model chooses when, the machine chooses where."
+- **`max_calls:` budget** (`internal/agent/conversation.go`, `executeBudgetedTool`): a per-tool call counter local to one `runAgentConversation` invocation — so it resets on an `attempts:` restart, since a fresh conversation is a fresh budget. Once a tool's `max_calls:` is reached, the next call is **rejected without ever reaching the tool's implementation** (no side effect executes) and comes back to the model as ordinary tool-result data (`{"error": "<tool>: call budget (<n>) exhausted for this attempt"}`) — the same failure-is-data contract as every other tool outcome, never an aborted attempt. A budget-rejected call is never `requiredCallSucceeded`, so it doesn't satisfy a `required: true` tool; if the budget is exhausted before a required tool ever succeeds, the existing `max_turns` bound and "step fails naming the tool" path handle it — no new failure mode.
+- **Merkle** (`toolSpecsContent` in `internal/merkle/merkle.go`): `max_calls`/`args` fold into a custom tool's hashed content only when set, following the same value-gating `image:` uses elsewhere — both change what a call actually executes with, so a pipeline that sets either must invalidate its cache, but a pipeline that sets neither is unaffected.
+- **Grammar note**: a builtin can now optionally be written as a mapping (`{builtin: read_file}`) instead of only a bare scalar — purely so `max_calls:`/`args:` have somewhere to attach for the load-time rejection to be reachable at all; a bare-scalar builtin entry has no room for extra fields in the first place. Mixing `builtin:` with `name:`/`run:` in the same entry is itself a load error.
+
 ### Agent Sub-Delegation (opt-in `agent:` tools)
 
 A `tools:` entry may be a **sub-agent tool** — `{ agent: <name>, description: <text> }` — instead of a builtin name or a custom `{name, run}` tool. It exposes another `agents:` entry to the parent model as a callable tool named for that agent, taking a single `request` string. Each call runs the child's *own* fresh tool-calling conversation (its own model, persona, dials, `max_turns`, tool grant) and returns its final text as the tool result. This is "delegate and get an answer back" — categorically distinct from a job/resource handoff — and it touches only `internal/config` + `internal/agent` + `internal/merkle`; the plan, `trigger_queue`, and `RunJob` are untouched. Absent, behavior (and merkle hashes) are byte-identical to before this feature existed. See `examples/subagent.yml`.

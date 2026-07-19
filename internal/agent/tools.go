@@ -46,12 +46,14 @@ type toolEnv struct {
 type toolImpl func(ctx context.Context, args map[string]any, env toolEnv) map[string]any
 
 // agentTools bundles what buildAgentTools produced: the declarations sent
-// to the model, the registry used to execute the calls it makes, and the
-// subset of tool names marked required: true — see requiredToolNames.
+// to the model, the registry used to execute the calls it makes, the subset
+// of tool names marked required: true (see requiredToolNames), and any
+// per-tool max_calls: budgets (see maxCallsByName).
 type agentTools struct {
 	decls    *genai.Tool
 	registry map[string]toolImpl
 	required map[string]bool
+	maxCalls map[string]int
 }
 
 // requiredToolNames returns the set of tool names in specs marked
@@ -72,6 +74,22 @@ func requiredToolNames(specs []config.ToolSpec) map[string]bool {
 	}
 
 	return required
+}
+
+// maxCallsByName returns, for every custom tool spec carrying a max_calls: >
+// 0 budget, that budget keyed by the tool's name. A tool absent from the
+// result has no budget (unlimited) — see the per-attempt call counter in
+// runAgentConversation, which enforces this before a call reaches toolImpl.
+func maxCallsByName(specs []config.ToolSpec) map[string]int {
+	budgets := make(map[string]int, len(specs))
+
+	for _, spec := range specs {
+		if spec.MaxCalls > 0 {
+			budgets[config.ToolSpecName(spec)] = spec.MaxCalls
+		}
+	}
+
+	return budgets
 }
 
 type builtinTool struct {
@@ -188,19 +206,42 @@ func resolveToolSpec(cfg *config.Config, spec config.ToolSpec, builtins map[stri
 	}
 
 	params := inferToolParams(spec.Run)
-	properties := make(map[string]*genai.Schema, len(params))
+	schemaParams := visibleParams(params, spec.Args)
+	properties := make(map[string]*genai.Schema, len(schemaParams))
 
-	for _, p := range params {
+	for _, p := range schemaParams {
 		properties[p] = &genai.Schema{Type: genai.TypeString}
 	}
 
 	decl := &genai.FunctionDeclaration{
 		Name:        spec.Name,
 		Description: spec.Description,
-		Parameters:  &genai.Schema{Type: genai.TypeObject, Properties: properties, Required: params},
+		Parameters:  &genai.Schema{Type: genai.TypeObject, Properties: properties, Required: schemaParams},
 	}
 
 	return decl, execCustomTool(spec, params), nil
+}
+
+// visibleParams returns params minus any key pinned by spec.Args: a pinned
+// key is excluded from the schema shown to the model entirely (not merely
+// optional), since the model can neither see nor override it — see
+// mergePinnedArgs. Template rendering still needs the full params list
+// (passed separately to execCustomTool), since a pinned value is always
+// present at execution regardless of what the model supplied.
+func visibleParams(params []string, pinned map[string]string) []string {
+	if len(pinned) == 0 {
+		return params
+	}
+
+	visible := make([]string, 0, len(params))
+
+	for _, p := range params {
+		if _, isPinned := pinned[p]; !isPinned {
+			visible = append(visible, p)
+		}
+	}
+
+	return visible
 }
 
 //nolint:gochecknoglobals // compiled once, read-only
@@ -339,11 +380,12 @@ func execRunShell(ctx context.Context, args map[string]any, env toolEnv) map[str
 	return shellToolResult(ctx, command, env)
 }
 
-// execCustomTool renders spec.Run against the model's args and shells it
-// out. Model-supplied arg values are interpolated into the sh -c string, so
-// a custom tool is a capability-curation convenience, not a hard sandbox —
-// the same trust boundary as run_shell itself. A run: template should pipe
-// each model-supplied value through the shellquote function (see
+// execCustomTool renders spec.Run against the model's args (with spec.Args
+// pinned values merged over them — see mergePinnedArgs) and shells it out.
+// Model-supplied arg values are interpolated into the sh -c string, so a
+// custom tool is a capability-curation convenience, not a hard sandbox — the
+// same trust boundary as run_shell itself. A run: template should pipe each
+// model-supplied value through the shellquote function (see
 // internal/template) so shell metacharacters in the value are passed through
 // literally rather than interpreted; a template that doesn't is as trusting
 // of the model's output as run_shell is. A required: true tool is not
@@ -351,21 +393,48 @@ func execRunShell(ctx context.Context, args map[string]any, env toolEnv) map[str
 // any other tool, so the model can see what went wrong and recover on its
 // next turn. required: is enforced by runAgentConversation tracking success
 // and forcing another call if the model tries to stop early — never by a
-// tool failing the step directly.
+// tool failing the step directly. A max_calls: budget is enforced one layer
+// up, in the conversation loop (see maxCallsByName), before this impl is
+// ever invoked — a rejected call never reaches here.
 func execCustomTool(spec config.ToolSpec, params []string) toolImpl {
 	return func(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
-		missing := missingArgs(args, params)
+		merged := mergePinnedArgs(args, spec.Args)
+
+		missing := missingArgs(merged, params)
 		if len(missing) > 0 {
 			return map[string]any{"error": fmt.Sprintf("%s: missing required argument(s): %s", spec.Name, strings.Join(missing, ", "))}
 		}
 
-		rendered, err := template.Render(spec.Run, map[string]any{"args": args})
+		rendered, err := template.Render(spec.Run, map[string]any{"args": merged})
 		if err != nil {
 			return map[string]any{"error": err.Error()}
 		}
 
 		return shellToolResult(ctx, rendered, env)
 	}
+}
+
+// mergePinnedArgs returns a copy of args with spec's pinned values merged
+// OVER any model-supplied value at the same key — pinned always wins, and
+// (per visibleParams) the model never even sees a pinned key in its schema,
+// so this only ever overrides a value the model couldn't have legitimately
+// supplied. A nil/empty pinned map returns args unchanged (no copy).
+func mergePinnedArgs(args map[string]any, pinned map[string]string) map[string]any {
+	if len(pinned) == 0 {
+		return args
+	}
+
+	merged := make(map[string]any, len(args)+len(pinned))
+
+	for k, v := range args {
+		merged[k] = v
+	}
+
+	for k, v := range pinned {
+		merged[k] = v
+	}
+
+	return merged
 }
 
 // missingArgs returns the subset of params for which args holds no non-empty

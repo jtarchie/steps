@@ -65,6 +65,7 @@ func buildSubAgentTool(cfg *config.Config, spec config.ToolSpec) (*genai.Functio
 		decls:    childDecls,
 		registry: childRegistry,
 		required: requiredToolNames(ri.ToolSpecs),
+		maxCalls: maxCallsByName(ri.ToolSpecs),
 	}
 
 	decl := &genai.FunctionDeclaration{
@@ -91,6 +92,7 @@ type preparedSubAgent struct {
 	decls    *genai.Tool
 	registry map[string]toolImpl
 	required map[string]bool
+	maxCalls map[string]int
 }
 
 // run executes one child conversation for a parent tool call. env.dir is the
@@ -113,7 +115,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		system: buildSystemMessage(c.ri.Persona, env.dir),
 		prompt: request,
 		env:    toolEnv{dir: env.dir, runner: runner},
-		tools:  agentTools{decls: c.decls, registry: c.registry, required: c.required},
+		tools:  agentTools{decls: c.decls, registry: c.registry, required: c.required, maxCalls: c.maxCalls},
 		params: agentGenParams{
 			temperature: c.ri.Temperature,
 			topP:        c.ri.TopP,

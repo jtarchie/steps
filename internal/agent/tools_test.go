@@ -387,7 +387,7 @@ func TestToolResponseParts(t *testing.T) {
 		{ID: "3", Name: "ok"},
 	}
 
-	parts := toolResponseParts(context.Background(), calls, testEnv(dir), registry)
+	parts := toolResponseParts(context.Background(), calls, testEnv(dir), registry, nil, map[string]int{})
 
 	if len(parts) != 3 {
 		t.Fatalf("expected a response part for every call, even after a failed one, got %d", len(parts))

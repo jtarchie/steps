@@ -117,6 +117,10 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversation) (string, int, error) {
 	req := buildAgentRequest(conv)
 	satisfied := make(map[string]bool, len(conv.tools.required))
+	// callCounts is local to this call, so a fresh attempt (retry.Do calling
+	// runAgentConversation again) always starts every tool's budget over —
+	// "a fresh conversation is a fresh budget."
+	callCounts := make(map[string]int, len(conv.tools.maxCalls))
 
 	for turn := range conv.maxTurns {
 		resp, err := generateOnce(ctx, llm, req)
@@ -140,7 +144,7 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 
 		req.Config.ToolConfig = nil // clear any forcing from the prior turn — the model chooses freely again next time it tries to stop
 
-		parts := toolResponseParts(ctx, calls, conv.env, conv.tools.registry)
+		parts := toolResponseParts(ctx, calls, conv.env, conv.tools.registry, conv.tools.maxCalls, callCounts)
 
 		for _, part := range parts {
 			name := part.FunctionResponse.Name
@@ -259,12 +263,13 @@ func collectParts(content *genai.Content) (calls []*genai.FunctionCall, text str
 // FunctionResponse parts to feed back on the next turn. No call's failure
 // (a nonzero exit_code, or an {"error": ...} result) stops any other call in
 // the turn, or the conversation — every failure is just data the model sees
-// on its next turn and can react to.
-func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, env toolEnv, registry map[string]toolImpl) []*genai.Part {
+// on its next turn and can react to. maxCalls/callCounts enforce each
+// budgeted tool's max_calls: — see executeBudgetedTool.
+func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, env toolEnv, registry map[string]toolImpl, maxCalls, callCounts map[string]int) []*genai.Part {
 	parts := make([]*genai.Part, 0, len(calls))
 
 	for _, call := range calls {
-		response := executeAgentTool(ctx, call, env, registry)
+		response := executeBudgetedTool(ctx, call, env, registry, maxCalls, callCounts)
 
 		parts = append(parts, &genai.Part{
 			FunctionResponse: &genai.FunctionResponse{ID: call.ID, Name: call.Name, Response: response},
@@ -272,4 +277,23 @@ func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, env too
 	}
 
 	return parts
+}
+
+// executeBudgetedTool enforces call.Name's max_calls: budget (if any) before
+// dispatching to executeAgentTool: once callCounts[call.Name] has reached its
+// budget, the call is rejected as ordinary tool-result data — never executed,
+// since the budget's whole point is bounding side effects — so the model sees
+// the rejection and can react on its next turn instead of the attempt
+// aborting. A successful dispatch increments the counter; a rejected one does
+// not (it's already at the ceiling). Tools absent from maxCalls are
+// unlimited.
+func executeBudgetedTool(ctx context.Context, call *genai.FunctionCall, env toolEnv, registry map[string]toolImpl, maxCalls, callCounts map[string]int) map[string]any {
+	if budget, ok := maxCalls[call.Name]; ok && callCounts[call.Name] >= budget {
+		return map[string]any{"error": fmt.Sprintf("%s: call budget (%d) exhausted for this attempt", call.Name, budget)}
+	}
+
+	response := executeAgentTool(ctx, call, env, registry)
+	callCounts[call.Name]++
+
+	return response
 }
