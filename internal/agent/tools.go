@@ -136,11 +136,14 @@ func builtinAgentTools(image string) map[string]builtinTool {
 // buildAgentTools turns a step's resolved tools: list into the genai
 // declarations sent to the model and a name -> toolImpl execution registry.
 // An empty specs enables every built-in. A duplicate tool name (built-in vs
-// custom, or two customs) is an error, so the model never sees an
-// ambiguous function set. image is the step's resolved image (empty for
-// host execution), used only to adjust run_shell's description — see
-// runShellDescription.
-func buildAgentTools(specs []config.ToolSpec, image string) (*genai.Tool, map[string]toolImpl, error) {
+// custom vs sub-agent) is an error, so the model never sees an ambiguous
+// function set. image is the step's resolved image (empty for host
+// execution), used only to adjust run_shell's description — see
+// runShellDescription. cfg is needed to resolve any sub-agent tools (see
+// ToolSpec.Agent / buildSubAgentTool); it may be nil only where the caller
+// guarantees no sub-agent tools are present (e.g. RunFix, since a fix agent's
+// grant may not include sub-agents — validateFixAgentSubAgents).
+func buildAgentTools(cfg *config.Config, specs []config.ToolSpec, image string) (*genai.Tool, map[string]toolImpl, error) {
 	if len(specs) == 0 {
 		specs = config.DefaultAgentToolSpecs()
 	}
@@ -150,7 +153,7 @@ func buildAgentTools(specs []config.ToolSpec, image string) (*genai.Tool, map[st
 	registry := make(map[string]toolImpl, len(specs))
 
 	for _, spec := range specs {
-		decl, impl, err := resolveToolSpec(spec, builtins)
+		decl, impl, err := resolveToolSpec(cfg, spec, builtins)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -166,7 +169,11 @@ func buildAgentTools(specs []config.ToolSpec, image string) (*genai.Tool, map[st
 	return &genai.Tool{FunctionDeclarations: decls}, registry, nil
 }
 
-func resolveToolSpec(spec config.ToolSpec, builtins map[string]builtinTool) (*genai.FunctionDeclaration, toolImpl, error) {
+func resolveToolSpec(cfg *config.Config, spec config.ToolSpec, builtins map[string]builtinTool) (*genai.FunctionDeclaration, toolImpl, error) {
+	if spec.Agent != "" {
+		return buildSubAgentTool(cfg, spec)
+	}
+
 	if spec.Builtin != "" {
 		bt, ok := builtins[spec.Builtin]
 		if !ok {

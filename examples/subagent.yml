@@ -1,0 +1,64 @@
+# Agent-as-tool sub-delegation: an expensive parent agent offloads a narrow,
+# high-context job (summarizing a long file) to a cheap specialist child. The
+# child is exposed to the parent model as an ordinary callable tool named
+# after its agents: entry; each call runs the child's OWN fresh tool-calling
+# conversation (its own model, persona, tool grant) in the parent step's
+# working directory, and its final text answer is handed back to the parent.
+#
+# Both agents point at local models (lmstudio/…, no API key) so the shape is
+# runnable offline; swap in openrouter/… etc. as needed.
+
+resource_types:
+- name: repo
+  config:
+    # Self-contained: fabricate a checkout with one long file to summarize,
+    # no network or credentials.
+    check: echo '[{"ref":"v1"}]'
+    in: |
+      mkdir -p . && seq 1 400 | sed 's/^/line /' > NOTES.txt
+
+resources:
+- name: notes
+  type: repo
+  source: {}
+
+agents:
+# The cheap specialist. Narrow job, small model. It only needs to read files.
+- name: summarizer
+  source:
+    model: lmstudio/qwen2.5-coder
+  system: |
+    You compress files and logs. Given a path, read it and return only the
+    essentials in a few lines. No preamble.
+  tools:
+  - read_file
+
+# The expensive generalist. It grants `summarizer` as a sub-agent tool, so it
+# can delegate "read this 400-line file and tell me the gist" instead of
+# pulling the whole file into its own context.
+- name: lead
+  source:
+    model: lmstudio/qwen2.5-coder
+  system: |
+    You are a lead reviewer. Prefer to delegate bulk reading to the
+    `summarizer` tool (pass the file path in `request`) rather than reading
+    large files yourself, then reason over the gist it returns.
+  tools:
+  - read_file
+  - list_dir
+  # A sub-agent tool: no run:, no builtin — just the agent name + a
+  # description the parent model sees. It can never be required:.
+  - agent: summarizer
+    description: >
+      Summarize a file. Pass the file path (relative to the working
+      directory) in `request`; returns the gist as text.
+
+jobs:
+- name: review
+  plan:
+  - get: notes
+  - agent: lead
+    dir: notes
+    prompt: |
+      Summarize what NOTES.txt contains by delegating to the summarizer tool,
+      then reply with one sentence describing the file.

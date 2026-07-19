@@ -66,7 +66,10 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 	}
 	toolSpecs := append(append([]config.ToolSpec{}, baseTools...), taskTool)
 
-	decls, registry, err := buildAgentTools(toolSpecs, rt.Image)
+	// A fix agent's grant may not include sub-agent tools
+	// (validateFixAgentSubAgents), so passing cfg here is only for signature
+	// parity — buildAgentTools will never resolve one.
+	decls, registry, err := buildAgentTools(cfg, toolSpecs, rt.Image)
 	if err != nil {
 		return err
 	}

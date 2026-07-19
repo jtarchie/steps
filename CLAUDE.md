@@ -100,6 +100,7 @@ Runs a resource type's `check`/`in`/`out` shell commands and selects among the v
 - **examples/container.yml** — Example pipeline demonstrating opt-in `image:` containerized execution: a resource_type, a top-level task (plus a step-level override), and an agent
 - **examples/trigger.yml** — Example pipeline demonstrating downstream (cross-job) triggers: a self-contained (no network/credentials) `counter` resource type, a `publish` job that `put`s it, and a `notify` job whose `get ..., trigger: true` fires automatically under `steps watch` whenever `publish` lands a new version
 - **examples/hooks.yml** — Example pipeline demonstrating step and job hooks (`on_success`/`on_failure`/`ensure`, incl. a nested hook) that doubles as a self-verifying fixture via `assert.execution`: a `passing` job (green, exits 0 under `steps run`) and a `failing` job whose `on_failure`/`ensure` hooks run and whose matching job `assert.execution` clears the failure. Run via `steps run examples/hooks.yml --job <name>` or `steps test examples/hooks.yml` (runs both jobs, checks every assert). Self-contained, no network/credentials
+- **examples/subagent.yml** — Example pipeline demonstrating opt-in agent sub-delegation (`agent:` tools): an expensive `lead` agent grants a cheap `summarizer` agent as a callable tool and delegates bulk file-reading to it. Both point at local models so the shape is runnable offline. See "Agent Sub-Delegation" below
 
 ### Root Files
 - **main.go** — CLI entry point; parses args into `run`/`watch`/`test` subcommands (`RunCmd`/`WatchCmd`/`TestCmd`) — `run` calls `config.LoadConfig()` → `pipeline.RunJob()`; `watch` → `trigger.Watch()` (see "Downstream Triggers"); `test` runs every job (force) and verifies `assert:` directives (see "Assert")
@@ -142,6 +143,30 @@ This resolution (`Config.ResolveTask` in `internal/config`) runs identically at 
 - **The safety bound**: if a provider doesn't honor `tool_choice`, or the model just can't get the required tool to succeed, `max_turns` still caps the loop and the step fails, naming the tool(s) that never succeeded.
 - `retry.Do`/`attempts:` (a full conversation restart from the original prompt) still exists, but only fires for *non-tool* failures — `generateOnce` erroring (LLM/transport issue) or `max_turns` exhaustion — never for a tool's own failure.
 - Only custom tools can be marked `required:`; built-ins (`read_file`, `list_dir`, `run_shell`) and the fix-agent's injected task-rerun tool are never required — they're intentionally exploratory/iterative regardless.
+
+### Agent Sub-Delegation (opt-in `agent:` tools)
+
+A `tools:` entry may be a **sub-agent tool** — `{ agent: <name>, description: <text> }` — instead of a builtin name or a custom `{name, run}` tool. It exposes another `agents:` entry to the parent model as a callable tool named for that agent, taking a single `request` string. Each call runs the child's *own* fresh tool-calling conversation (its own model, persona, dials, `max_turns`, tool grant) and returns its final text as the tool result. This is "delegate and get an answer back" — categorically distinct from a job/resource handoff — and it touches only `internal/config` + `internal/agent` + `internal/merkle`; the plan, `trigger_queue`, and `RunJob` are untouched. Absent, behavior (and merkle hashes) are byte-identical to before this feature existed. See `examples/subagent.yml`.
+
+```yaml
+agents:
+- name: summarizer
+  source: { model: lmstudio/qwen2.5-coder }
+  tools: [read_file]
+- name: lead
+  source: { model: openrouter/anthropic/claude-3.5-sonnet }
+  tools:
+  - read_file
+  - agent: summarizer            # a sub-agent, exposed as a callable tool
+    description: Summarize a file; pass the path in `request`.
+```
+
+- **Execution** (`internal/agent/subagent.go`, `buildSubAgentTool`/`preparedSubAgent.run`): the child runs in the **caller's** working directory (`env.dir`) but under the **child's own** resolved image (its `Agent.image:`), not the parent's — a sub-agent is a different worker, unlike a fix agent (which must reproduce the *failing task's* image, see Container Execution). `read_file`/`list_dir` stay host-side as always. The child's LLM client and (recursively) its own tool tree are built **eagerly** during the parent step's `prepareAgentStep`, so a missing credential or bad grant for a granted sub-agent fails preparation, not first-call.
+- **No recording.** A child conversation gets no merkle node, no `job_run`, no execution-log entry — the same no-record contract as `fix:` agents (`RunFix`) and hook steps. The enclosing agent step records the aggregate outcome; the parent's own *call* of the sub-agent tool is what appears in its trajectory.
+- **Failure is data.** A child failure (transport error, `max_turns` exhausted, a child required tool never succeeding) comes back to the parent as `{"error": ...}` — exactly like any other tool failure (see Custom Tool `required:` Semantics), never a Go error that aborts the parent conversation.
+- **Selection & grant.** A sub-agent is a capability grant, like `run_shell`: a step selects a *granted* one by bare name (`tools: [summarizer]`, resolved through `resolveEffectiveTools` — the bare name substitutes the granted spec) and **cannot introduce one inline** on a step (rejected at `LoadConfig`). `ToolSpecName` returns the agent name for a sub-agent spec, so `grantedToolIndex` keys it correctly.
+- **Load-time graph checks** (`Config.validateAgentGraph`): a sub-agent tool must set no `builtin`/`name`/`run`, can never be `required:`, and must reference an existing agent (unlike step-level agent refs, this one *is* cross-checked at load — the DFS needs it). The agent graph is walked depth-first for **cycles** (`reviewer → summarizer → reviewer` fails naming the path) and a **nesting-depth cap** (`maxSubAgentDepth = 8`), mirroring secret-agent's model. A **fix agent may not grant sub-agents** (`validateFixAgentSubAgents`) — nested delegation inside the fix loop is out of scope for v1.
+- **Merkle** (`toolSpecsContent`/`subAgentInvocationContent` in `internal/merkle/merkle.go`): a sub-agent tool folds in the child's **resolved invocation content** (model/endpoint/persona/dials/max_turns/image + its own tools, recursively) so editing a child — or a grandchild — busts the parent step's hash. Value-gated exactly like the tool content it replaces: a non-sub-agent tool hashes as `{builtin, name, description, run}` byte-for-byte as before, so a pipeline with no sub-agent tools is unaffected. The child's prompt/dir/inputs/outputs/assert/hooks are *not* part of its identity (a sub-agent has no step), and the API key/env var are excluded (nothing secret-adjacent in hashed content), matching `AgentContentMap`.
 
 ### Workspace Isolation (opt-in)
 

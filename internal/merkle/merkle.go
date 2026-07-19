@@ -220,22 +220,94 @@ func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 	return withHooks(cfg, step, content)
 }
 
-// AgentContentMap is the content hashed for an agent node: everything that
-// determines the model's output (agent, prompt, dir, resolved model/endpoint,
-// persona, dials, and the effective tool set). Attempts is excluded (a pure
-// retry policy doesn't change the intended result); the API key and its env
-// var name are excluded (nothing secret-adjacent belongs in hashed content).
-// inputs/outputs are folded in only when ws is non-nil (workspace:
-// configured) — see TaskNodeContent's doc comment for why.
-func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInvocation) (map[string]any, error) {
-	toolsContent := make([]map[string]any, len(ri.ToolSpecs))
-	for i, t := range ri.ToolSpecs {
-		toolsContent[i] = map[string]any{
+// toolSpecsContent builds the hashed content for an agent's effective tool
+// list. A builtin/custom tool hashes exactly as before this helper existed
+// ({builtin, name, description, run}) — so an agent with no sub-agent tools
+// hashes byte-identically. A sub-agent tool (see config.ToolSpec.Agent) folds
+// in the child agent's own resolved invocation content
+// (subAgentInvocationContent), recursively, so editing a child — or a
+// grandchild — busts the parent step's hash. Recursion terminates because
+// LoadConfig's validateAgentGraph rejects cycles and caps nesting depth.
+func toolSpecsContent(cfg *config.Config, specs []config.ToolSpec) ([]map[string]any, error) {
+	out := make([]map[string]any, len(specs))
+
+	for i, t := range specs {
+		if t.Agent != "" {
+			invocation, err := subAgentInvocationContent(cfg, t.Agent)
+			if err != nil {
+				return nil, err
+			}
+
+			out[i] = map[string]any{
+				"agent":       t.Agent,
+				"description": t.Description,
+				"invocation":  invocation,
+			}
+
+			continue
+		}
+
+		out[i] = map[string]any{
 			"builtin":     t.Builtin,
 			"name":        t.Name,
 			"description": t.Description,
 			"run":         t.Run,
 		}
+	}
+
+	return out, nil
+}
+
+// subAgentInvocationContent builds the hashed identity of a sub-agent as
+// invoked through a tool: everything that determines its output regardless of
+// the per-call request — resolved model/endpoint, persona, dials, max_turns,
+// image, and its own tool set (recursively). Prompt/dir/inputs/outputs/assert/
+// hooks are deliberately excluded: a sub-agent has no step, so those are not
+// part of its identity. The API key and its env var name are excluded for the
+// same reason AgentContentMap excludes them.
+func subAgentInvocationContent(cfg *config.Config, name string) (map[string]any, error) {
+	ri, err := cfg.ResolveAgentInvocation(config.Step{Agent: name})
+	if err != nil {
+		return nil, fmt.Errorf("sub-agent %q: %w", name, err)
+	}
+
+	tools, err := toolSpecsContent(cfg, ri.ToolSpecs)
+	if err != nil {
+		return nil, err
+	}
+
+	content := map[string]any{
+		"agent":            name,
+		"model":            ri.ModelName,
+		"endpoint":         ri.BaseURL,
+		"system":           ri.Persona,
+		"temperature":      ri.Temperature,
+		"top_p":            ri.TopP,
+		"max_tokens":       ri.MaxTokens,
+		"reasoning_effort": ri.ReasoningEffort,
+		"max_turns":        ri.MaxTurns,
+		"tools":            tools,
+	}
+
+	if ri.Image != "" {
+		content["image"] = ri.Image
+	}
+
+	return content, nil
+}
+
+// AgentContentMap is the content hashed for an agent node: everything that
+// determines the model's output (agent, prompt, dir, resolved model/endpoint,
+// persona, dials, and the effective tool set — including any sub-agent tools,
+// folded in via toolSpecsContent). Attempts is excluded (a pure retry policy
+// doesn't change the intended result); the API key and its env var name are
+// excluded (nothing secret-adjacent belongs in hashed content). inputs/outputs
+// are folded in only when ws is non-nil (workspace: configured) — see
+// TaskNodeContent's doc comment for why.
+func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInvocation) (map[string]any, error) {
+	toolsContent, err := toolSpecsContent(cfg, ri.ToolSpecs)
+	if err != nil {
+		return nil, err
 	}
 
 	content := map[string]any{

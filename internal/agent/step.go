@@ -104,7 +104,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, err
 	}
 
-	decls, registry, err := buildAgentTools(ri.ToolSpecs, ri.Image)
+	decls, registry, err := buildAgentTools(cfg, ri.ToolSpecs, ri.Image)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 

@@ -174,24 +174,36 @@ type AgentSource struct {
 	StringToolChoice *bool  `yaml:"string_tool_choice,omitempty"`
 }
 
-// ToolSpec is one entry in an agent step's tools: list — either a built-in
-// tool referenced by name, or a custom command-backed tool. It implements
-// yaml.Unmarshaler because a tools: list mixes bare scalar entries (builtin
-// names) with mapping entries (custom tool definitions).
+// ToolSpec is one entry in an agent step's tools: list — a built-in tool
+// referenced by name, a custom command-backed tool, or a sub-agent tool (an
+// agents: entry exposed to the model as a callable tool, see Agent below). It
+// implements yaml.Unmarshaler because a tools: list mixes bare scalar entries
+// (builtin names) with mapping entries (custom tool / sub-agent definitions).
 type ToolSpec struct {
 	Builtin     string // set when the entry is a bare builtin name
 	Name        string // custom tool: function name exposed to the model
-	Description string // custom tool: description shown to the model
+	Description string // custom tool (and sub-agent tool): description shown to the model
 	Run         string // custom tool: sh -c template, {{ .args.X }} interpolated
+	// Agent, when set, makes this tool a sub-agent delegation: the named
+	// agents: entry is exposed to the model as a callable tool taking a single
+	// `request` string; each call runs that agent's own fresh tool-calling
+	// conversation (its own model/persona/dials/tool grant) in the caller's
+	// working directory, and its final text answer is the tool result. A
+	// sub-agent tool sets no builtin/name/run and can never be required:
+	// (enforced at LoadConfig by validateAgentGraph). Sub-agents may
+	// themselves grant sub-agents, up to maxSubAgentDepth, with no cycles.
+	Agent string
 	// Required marks a custom tool's command as a resource-like action that
 	// must succeed: a nonzero exit aborts the agent step (and, once attempts
 	// are exhausted, the job) instead of being reported to the model as
-	// {"error": ...} data for it to react to. Ignored on builtins.
+	// {"error": ...} data for it to react to. Ignored on builtins; invalid on
+	// sub-agent tools.
 	Required bool
 }
 
 // UnmarshalYAML decodes a ToolSpec from either a scalar (builtin name) or a
-// mapping ({name, description, run, required}) YAML node.
+// mapping ({name, description, run, required} for a custom tool, or
+// {agent, description} for a sub-agent tool) YAML node.
 func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias kinds that can't appear in a decoded sequence element
 	case yaml.ScalarNode:
@@ -201,6 +213,7 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 			Name        string `yaml:"name"`
 			Description string `yaml:"description"`
 			Run         string `yaml:"run"`
+			Agent       string `yaml:"agent"`
 			Required    bool   `yaml:"required"`
 		}
 
@@ -209,11 +222,11 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 			return fmt.Errorf("agent tool: %w", err)
 		}
 
-		t.Name, t.Description, t.Run, t.Required = m.Name, m.Description, m.Run, m.Required
+		t.Name, t.Description, t.Run, t.Agent, t.Required = m.Name, m.Description, m.Run, m.Agent, m.Required
 
 		return nil
 	default:
-		return fmt.Errorf("agent tool at line %d must be a builtin name or a {name, description, run} mapping", value.Line)
+		return fmt.Errorf("agent tool at line %d must be a builtin name or a {name, description, run} / {agent, description} mapping", value.Line)
 	}
 }
 
@@ -471,7 +484,194 @@ func (c *Config) validate() error {
 		return err
 	}
 
+	err = c.validateAgentGraph()
+	if err != nil {
+		return err
+	}
+
 	return c.validateAsserts()
+}
+
+// maxSubAgentDepth bounds how deeply sub-agent tools (see ToolSpec.Agent) may
+// nest — a chain of at most this many agents. The bound plus the cycle check
+// in walkAgentGraph guarantee sub-agent construction (and merkle recursion)
+// terminates. Mirrors secret-agent's agent nesting cap.
+const maxSubAgentDepth = 8
+
+// validateAgentGraph enforces the sub-agent tool rules at load time: a
+// sub-agent tool's shape (no builtin/name/run, never required:, references an
+// existing agent), that sub-agents are granted on agents rather than added
+// inline on a step, that fix agents grant no sub-agents, and that the agent
+// graph has no cycles and does not nest past maxSubAgentDepth.
+func (c *Config) validateAgentGraph() error {
+	for i := range c.Agents {
+		agent := c.Agents[i]
+
+		for _, tool := range agent.Tools {
+			if tool.Agent == "" {
+				continue
+			}
+
+			err := c.validateSubAgentToolShape(fmt.Sprintf("agent %q", agent.Name), tool)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	err := c.rejectInlineSubAgentTools()
+	if err != nil {
+		return err
+	}
+
+	err = c.validateFixAgentSubAgents()
+	if err != nil {
+		return err
+	}
+
+	for i := range c.Agents {
+		err := c.walkAgentGraph(c.Agents[i].Name, nil)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateSubAgentToolShape checks one sub-agent tool entry: it must set no
+// custom-tool fields, must not be required:, and must reference an agent that
+// exists (unlike step-level agent refs, a sub-agent grant is cross-checked at
+// load — the graph walk needs the target to exist anyway).
+func (c *Config) validateSubAgentToolShape(context string, tool ToolSpec) error {
+	if tool.Builtin != "" || tool.Name != "" || tool.Run != "" {
+		return fmt.Errorf("%s: sub-agent tool %q must not also set builtin/name/run", context, tool.Agent)
+	}
+
+	if tool.Required {
+		return fmt.Errorf("%s: sub-agent tool %q may not set required: true", context, tool.Agent)
+	}
+
+	_, err := c.FindAgent(tool.Agent)
+	if err != nil {
+		return fmt.Errorf("%s: sub-agent tool: %w", context, err)
+	}
+
+	return nil
+}
+
+// rejectInlineSubAgentTools rejects a sub-agent tool added inline on a step
+// (or a step hook). A sub-agent is a capability grant, like run_shell: it must
+// be declared on the agents: entry and selected by bare name, not introduced
+// on the step — otherwise a step could reach an agent the worker never
+// granted, and the load-time graph walk (which only sees agents:) couldn't
+// bound it.
+func (c *Config) rejectInlineSubAgentTools() error {
+	for _, job := range c.Jobs {
+		err := job.visitSteps(func(label string, step *Step) error {
+			for _, tool := range step.Tools {
+				if tool.Agent != "" {
+					return fmt.Errorf("%s: sub-agent tool %q must be granted on an agent, not added inline on a step", label, tool.Agent)
+				}
+			}
+
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateFixAgentSubAgents rejects a fix agent whose grant (or fix: tool
+// override) includes a sub-agent tool. A fix loop reproduces and resolves the
+// exact failure a task hit; nested delegation inside that loop is out of scope
+// for v1, so it's rejected at load rather than silently allowed.
+func (c *Config) validateFixAgentSubAgents() error {
+	for i := range c.Tasks {
+		err := c.checkFixNoSubAgents(fmt.Sprintf("task %q", c.Tasks[i].Name), c.Tasks[i].Fix)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, job := range c.Jobs {
+		err := job.visitSteps(func(label string, step *Step) error {
+			return c.checkFixNoSubAgents(label, step.Fix)
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkFixNoSubAgents rejects a fix spec whose own tool override, or whose
+// referenced agent's grant, includes a sub-agent tool.
+func (c *Config) checkFixNoSubAgents(context string, fix *FixSpec) error {
+	if fix == nil {
+		return nil
+	}
+
+	for _, tool := range fix.Tools {
+		if tool.Agent != "" {
+			return fmt.Errorf("%s: a fix agent may not use sub-agent tools (tool %q)", context, tool.Agent)
+		}
+	}
+
+	agent, err := c.FindAgent(fix.Agent)
+	if err != nil {
+		return nil //nolint:nilerr // unresolvable fix agent is caught at run time, same as validateFixAgentImages
+	}
+
+	for _, tool := range agent.Tools {
+		if tool.Agent != "" {
+			return fmt.Errorf("%s: fix agent %q grants sub-agent tool %q, which a fix agent may not use", context, fix.Agent, tool.Agent)
+		}
+	}
+
+	return nil
+}
+
+// walkAgentGraph does a depth-first walk of the sub-agent graph rooted at
+// name, with path holding the ancestor chain (not including name). It reports
+// a cycle if name is already an ancestor, and a depth-limit breach once the
+// chain would exceed maxSubAgentDepth. An unresolvable name is not a graph
+// node — existence of granted sub-agents is checked in
+// validateSubAgentToolShape; a bad top-level agents: ref is caught elsewhere.
+func (c *Config) walkAgentGraph(name string, path []string) error {
+	for _, ancestor := range path {
+		if ancestor == name {
+			return fmt.Errorf("agent cycle detected: %s -> %s", strings.Join(path, " -> "), name)
+		}
+	}
+
+	if len(path) >= maxSubAgentDepth {
+		return fmt.Errorf("agent nesting depth exceeded (max %d): %s", maxSubAgentDepth, strings.Join(append(append([]string{}, path...), name), " -> "))
+	}
+
+	agent, err := c.FindAgent(name)
+	if err != nil {
+		return nil //nolint:nilerr // an unresolvable ref is not a graph node; existence of grants is checked separately
+	}
+
+	path = append(path, name)
+
+	for _, tool := range agent.Tools {
+		if tool.Agent == "" {
+			continue
+		}
+
+		err := c.walkAgentGraph(tool.Agent, path)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // validateAsserts enforces which Assert fields are valid where: a Config- or
@@ -1107,10 +1307,15 @@ func DefaultAgentToolSpecs() []ToolSpec {
 }
 
 // ToolSpecName is the name a ToolSpec is referenced by: the builtin name for
-// a builtin, or the custom tool's name.
+// a builtin, the sub-agent's name for a sub-agent tool, or the custom tool's
+// name.
 func ToolSpecName(spec ToolSpec) string {
 	if spec.Builtin != "" {
 		return spec.Builtin
+	}
+
+	if spec.Agent != "" {
+		return spec.Agent
 	}
 
 	return spec.Name
@@ -1157,6 +1362,14 @@ func resolveEffectiveTools(agentTools, stepTools []ToolSpec) ([]ToolSpec, error)
 			effective = append(effective, grantedSpec)
 
 			continue
+		}
+
+		// A sub-agent is a capability grant, like run_shell: a step selects a
+		// granted one by bare name (handled above), it may not introduce one
+		// inline. validateAgentGraph rejects this at load; guard here too so
+		// the invariant holds regardless of call path.
+		if spec.Agent != "" {
+			return nil, fmt.Errorf("sub-agent tool %q must be granted on the agent, not added inline on a step", spec.Agent)
 		}
 
 		effective = append(effective, spec)
