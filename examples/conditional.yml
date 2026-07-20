@@ -1,0 +1,78 @@
+# Explicit conditional steps: `when:` gates a step on a shell command's EXIT
+# CODE — 0 runs it, nonzero skips it. The predicate is a plain command you can
+# read at the point of use: no expression language, no typed step outputs, no
+# variable interpolation.
+#
+# This is the cheap-scout / expensive-specialist shape: a cheap step decides,
+# and an expensive step only runs when it should. Self-contained (no network,
+# no credentials, no model) and self-verifying — the assert.execution blocks
+# below prove which steps ran and which were skipped.
+#
+#   steps test examples/conditional.yml
+#
+# A skipped step behaves exactly like a merkle-cached skip: it fires no hooks,
+# records nothing, and never appears in the execution log — which is what makes
+# assert.execution able to prove it was skipped.
+
+jobs:
+# The guard is TRUE, so the gated step runs.
+- name: gate-open
+  plan:
+  - task: scout
+    run: echo high > risk.txt
+
+  - task: deep-review
+    run: echo "running the expensive review"
+    # Reads what the previous step wrote, in the same working directory.
+    when: grep -q high risk.txt
+
+  - task: report
+    run: echo done
+
+  assert:
+    execution: [scout, deep-review, report]
+
+# The guard is FALSE, so the gated step is skipped — and, crucially, the plan
+# CONTINUES: `report` still runs. A false guard skips one step, not the rest of
+# the job (that is what a merkle cache hit does, which is a different thing).
+- name: gate-closed
+  plan:
+  - task: scout
+    run: echo low > risk.txt
+
+  - task: deep-review
+    run: echo "THIS MUST NOT RUN"
+    when: grep -q high risk.txt
+    # A skipped step fires no hooks: it never ran, so it has no outcome for an
+    # observer to react to. If this hook fired, the assert below would fail.
+    on_failure:
+      task: notify
+      run: echo "THIS MUST NOT RUN EITHER"
+
+  - task: report
+    run: echo done
+
+  # deep-review is absent: it was skipped, so it is not in the execution log.
+  assert:
+    execution: [scout, report]
+
+# Any nonzero exit is a legitimate "false", not a failure — `grep -q` finding
+# nothing, `test -f` on a missing file, or an explicit `exit 3`.
+- name: nonzero-is-false
+  plan:
+  - task: gated-by-explicit-exit
+    run: echo "THIS MUST NOT RUN"
+    when: exit 3
+
+  - task: gated-by-missing-file
+    run: echo "THIS MUST NOT RUN"
+    when: test -f no-such-file
+
+  - task: survivor
+    run: echo still here
+
+  assert:
+    execution: [survivor]
+
+assert:
+  execution: [gate-open, gate-closed, nonzero-is-false]

@@ -181,6 +181,23 @@ func buildSkippableIndex(ctx context.Context, st *store.Store, jobName string, c
 	return skippable, nil
 }
 
+// stepDisposition is what happened to one non-get step, distinguishing the
+// two very different reasons a step might not have executed.
+type stepDisposition int
+
+const (
+	// stepRan: the step executed; advance parentHash to its node.
+	stepRan stepDisposition = iota
+	// stepGuardSkipped: the step's when: guard was false. Only THIS step is
+	// skipped — the plan continues with the next one, and parentHash does not
+	// advance (no node was produced).
+	stepGuardSkipped
+	// stepChainSkipped: the step's hash matched an already-succeeded chain, so
+	// everything downstream of it also already succeeded. The whole remaining
+	// plan is skipped.
+	stepChainSkipped
+)
+
 // runSteps executes steps in order. A `get` step fans out: for each version
 // it selects (a single version normally, or every version returned by
 // check when version:every is set), that version triggers its own build
@@ -195,19 +212,31 @@ func runSteps(ctx context.Context, cfg *config.Config, jobName string, steps []c
 			return runGetStep(ctx, cfg, jobName, i, step, steps[i+1:], pinned, provider, st, skippable, parentHash, chainUnskippable)
 		}
 
-		newParentHash, skipped, err := runNonGetStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash)
+		newParentHash, disposition, err := runNonGetStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash)
 		if err != nil {
 			return err
 		}
 
-		if skipped {
+		if disposition == stepChainSkipped {
 			return nil
 		}
 
-		parentHash = newParentHash
-		if step.Put != "" || step.Agent != "" || step.Fix != nil {
+		// A when: guard makes the chain unskippable whether or not it fired:
+		// the planner hashes the guard command but cannot know its run-time
+		// outcome, so a chain containing one must never be recorded as a
+		// reusable "this whole chain succeeded" hash — the guard may decide
+		// differently on the next run.
+		if step.Put != "" || step.Agent != "" || step.Fix != nil || step.When != nil {
 			chainUnskippable = true
 		}
+
+		// A guard-skipped step produced no node, so parentHash stays put and
+		// the plan simply continues with the next step.
+		if disposition == stepGuardSkipped {
+			continue
+		}
+
+		parentHash = newParentHash
 	}
 
 	return recordChainSucceeded(ctx, st, jobName, parentHash, chainUnskippable)
@@ -218,17 +247,20 @@ func runSteps(ctx context.Context, cfg *config.Config, jobName string, steps []c
 // there is nothing for its observers to react to. When a green step is failed
 // by its own on_success/ensure hook, the true (failed) outcome is recorded so
 // the store and skip-cache reflect it.
-func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string) (string, bool, error) {
-	hash, skipped, err := dispatchNonGetStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash)
+func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string) (string, stepDisposition, error) {
+	hash, disposition, err := dispatchNonGetStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash)
 
-	// Record what ran (not a skipped/cached step) for a job's assert.execution,
-	// before hooks so the order reads [step, its hooks...].
-	if !skipped {
+	// Record what ran (not a cached chain, not a guard-skipped step) for a
+	// job's assert.execution, before hooks so the order reads
+	// [step, its hooks...].
+	if disposition == stepRan {
 		recordExecution(ctx, executedStepName(step))
 	}
 
-	if skipped || step.Hooks.Empty() {
-		return hash, skipped, err
+	// Neither kind of skip fires hooks: the step did not run, so it has no
+	// outcome for its observers to react to.
+	if disposition != stepRan || step.Hooks.Empty() {
+		return hash, disposition, err
 	}
 
 	scope := hookScope{cfg: cfg, jobName: jobName, label: stepLabel(i, step), bw: bw}
@@ -238,33 +270,47 @@ func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i in
 		recCtx := context.WithoutCancel(ctx)
 		_ = st.RecordJobRun(recCtx, jobName, hash, string(outcome.Failed), final)
 
-		return "", false, final
+		return "", stepRan, final
 	}
 
-	return hash, skipped, final
+	return hash, disposition, final
 }
 
 // dispatchNonGetStep dispatches a task/put/agent step — the three kinds that,
 // unlike get, run in place and return a single new parentHash rather than
-// fanning out or delegating the remainder of the plan. skipped is only ever
-// true for a skipped task step; put/agent steps are never skippable.
-func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string) (string, bool, error) {
+// fanning out or delegating the remainder of the plan. It first evaluates the
+// step's when: guard (see evaluateStepGuard): a false guard skips only this
+// step. stepChainSkipped is only ever returned for a cache-matched task step;
+// put/agent steps are never chain-skippable.
+func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string) (string, stepDisposition, error) {
+	shouldRun, err := evaluateStepGuard(ctx, cfg, step, bw)
+	if err != nil {
+		return "", stepRan, fmt.Errorf("step %d (when): %w", i, err)
+	}
+
+	if !shouldRun {
+		fmt.Printf("skip: %s (when)\n", executedStepName(step))
+		slog.Info("job.skip", "job", jobName, "index", i, "reason", "when", "step", executedStepName(step))
+
+		return parentHash, stepGuardSkipped, nil
+	}
+
 	switch {
 	case step.Task != "":
 		return runTaskStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash)
 	case step.Put != "":
 		hash, err := runPutStep(ctx, cfg, jobName, i, step, bw, st, parentHash)
 
-		return hash, false, err
+		return hash, stepRan, err
 	case step.Agent != "":
 		hash, err := agent.RunStep(ctx, cfg, jobName, i, step, bw, st, parentHash)
 		if err != nil {
-			return "", false, fmt.Errorf("agent step: %w", err)
+			return "", stepRan, fmt.Errorf("agent step: %w", err)
 		}
 
-		return hash, false, nil
+		return hash, stepRan, nil
 	default:
-		return "", false, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
+		return "", stepRan, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}
 }
 
@@ -328,27 +374,27 @@ func runGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, 
 // runTaskStep hashes step against parentHash and, unless that hash is
 // skippable, runs it. It returns the hash to use as parentHash for the
 // next step (unchanged, along with skipped=true, when skipped).
-func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string) (string, bool, error) {
+func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string) (string, stepDisposition, error) {
 	rt, err := cfg.ResolveTask(step)
 	if err != nil {
-		return "", false, fmt.Errorf("step %d: %w", i, err)
+		return "", stepRan, fmt.Errorf("step %d: %w", i, err)
 	}
 
 	content, err := merkle.TaskNodeContent(cfg, step, rt)
 	if err != nil {
-		return "", false, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
+		return "", stepRan, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 	}
 
 	hash, err := merkle.HashNode(merkle.NodeKindTask, content, parentHash)
 	if err != nil {
-		return "", false, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
+		return "", stepRan, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 	}
 
 	if skippable[hash] {
 		fmt.Printf("skip: %s\n", rt.Name)
 		slog.Info("job.skip", "job", jobName, "index", i, "kind", "task", "task", rt.Name, "hash", hash)
 
-		return parentHash, true, nil
+		return parentHash, stepChainSkipped, nil
 	}
 
 	slog.Debug("job.step", "job", jobName, "index", i, "kind", "task", "task", rt.Name, "run", rt.Run)
@@ -362,15 +408,15 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 		wrapped := fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 		recordStepFailure(ctx, st, node, jobName, wrapped)
 
-		return "", false, wrapped
+		return "", stepRan, wrapped
 	}
 
 	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", nil, nil)
 	if err != nil {
-		return "", false, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
+		return "", stepRan, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 	}
 
-	return hash, false, nil
+	return hash, stepRan, nil
 }
 
 // executeTask materializes a task's (isolated or shared) working directory,

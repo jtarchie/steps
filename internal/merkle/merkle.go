@@ -70,7 +70,22 @@ func GetNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 		content["image"] = resourceType.Image
 	}
 
-	return withHooks(cfg, step, content)
+	return withHooks(cfg, step, withWhen(step, content))
+}
+
+// withWhen folds a step's when: guard command into content, but only when the
+// step carries one — so a step without a guard hashes byte-identically to
+// before this field existed (the same value-gating as image:). The guard
+// decides whether the step executes at all, so changing it must invalidate the
+// cache. Only the command is hashed: its *outcome* is a run-time fact the
+// planner cannot know, and a cached node was by definition produced by a run
+// the guard already allowed.
+func withWhen(step config.Step, content map[string]any) map[string]any {
+	if step.When != nil && step.When.Run != "" {
+		content["when"] = step.When.Run
+	}
+
+	return content
 }
 
 // withHooks folds a step's resolved hook content into content, but only when
@@ -178,7 +193,7 @@ func TaskNodeContent(cfg *config.Config, step config.Step, rt config.ResolvedTas
 		content["assert"] = assertContent(rt.Assert)
 	}
 
-	return withHooks(cfg, step, content)
+	return withHooks(cfg, step, withWhen(step, content))
 }
 
 // assertContent builds the stable content map for a task/agent step's assert
@@ -237,7 +252,7 @@ func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 		content["image"] = resourceType.Image
 	}
 
-	return withHooks(cfg, step, content)
+	return withHooks(cfg, step, withWhen(step, content))
 }
 
 // toolSpecsContent builds the hashed content for an agent's effective tool
@@ -373,7 +388,7 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 		content["assert"] = assertContent(step.Assert)
 	}
 
-	return withHooks(cfg, step, content)
+	return withHooks(cfg, step, withWhen(step, content))
 }
 
 // HashNode computes a Node's content-addressed hash: sha256 hex of the

@@ -100,6 +100,7 @@ Runs a resource type's `check`/`in`/`out` shell commands and selects among the v
 - **examples/container.yml** — Example pipeline demonstrating opt-in `image:` containerized execution: a resource_type, a top-level task (plus a step-level override), and an agent
 - **examples/trigger.yml** — Example pipeline demonstrating downstream (cross-job) triggers: a self-contained (no network/credentials) `counter` resource type, a `publish` job that `put`s it, and a `notify` job whose `get ..., trigger: true` fires automatically under `steps watch` whenever `publish` lands a new version
 - **examples/hooks.yml** — Example pipeline demonstrating step and job hooks (`on_success`/`on_failure`/`ensure`, incl. a nested hook) that doubles as a self-verifying fixture via `assert.execution`: a `passing` job (green, exits 0 under `steps run`) and a `failing` job whose `on_failure`/`ensure` hooks run and whose matching job `assert.execution` clears the failure. Run via `steps run examples/hooks.yml --job <name>` or `steps test examples/hooks.yml` (runs both jobs, checks every assert). Self-contained, no network/credentials
+- **examples/conditional.yml** — Example pipeline demonstrating opt-in conditional steps (`when:`): a guard-true job, a guard-false job proving the plan continues and the skipped step's hooks never fire, and a job proving any nonzero exit is a legitimate "false". Self-contained and self-verifying via `assert.execution` — run `steps test examples/conditional.yml`. No network, credentials, or model
 - **examples/subagent.yml** — Example pipeline demonstrating opt-in agent sub-delegation (`agent:` tools): an expensive `lead` agent grants a cheap `summarizer` agent as a callable tool and delegates bulk file-reading to it. Both point at local models so the shape is runnable offline. See "Agent Sub-Delegation" below
 
 ### Root Files
@@ -293,6 +294,28 @@ jobs:
 - **Step hooks fold into the step's content hash** (`merkle.withHooks`, value-gated exactly like `image:`): a step with no hooks hashes byte-identically to before, but editing a hook — or the top-level `tasks:`/`agents:` entry it references, since the hook's content is its *resolved* form — busts the parent step's cache. A **skipped (cached) step fires no hooks** (it didn't run). `Chain.Unskippable` is unchanged: hooks don't make a task unskippable, because a non-run step has no observers to fire.
 - **Job hooks are never hashed** and fire on **every** `RunJob` invocation (even a fully-cached run), since they don't alter what any step executes. They run in the `RunJob`-level build workspace — which for a get-leading plan is empty (each triggered build has its own) — so a **job-level hook may not declare `inputs:`/`outputs:`** (rejected at `LoadConfig`). Step-level hooks keep full `inputs:`/`outputs:` support: an `on_success` hook validates its inputs against the step's post-outputs view, failure-path hooks against the pre-outputs view, and a hook's own outputs are captured but never satisfy a later plan step (`workspace.validateStepHooks`).
 - **`steps watch` needs no changes**: job hooks live inside `RunJob`, so `trigger.drainOne` gets them for free; an aborted job still returns the original ctx-canceled error after its grace-period hooks, preserving the graceful-shutdown carve-out.
+
+### Conditional Steps (opt-in `when:`)
+
+A `task`/`put`/`agent` step (including a hook step) may carry `when:` — an explicit shell command whose **exit code** decides whether the step runs: **0 runs it, nonzero skips it**. Absent, behavior (and merkle hashes) are byte-identical to before this feature existed. See `examples/conditional.yml`, which is self-contained and self-verifying (`steps test examples/conditional.yml`).
+
+```yaml
+- task: scout
+  run: ./scout.sh > risk.txt
+- task: deep-review          # only runs when the cheap step says so
+  run: ./review.sh
+  when: grep -q high risk.txt          # scalar shorthand
+- put: report
+  when: { run: test -s findings.txt }  # mapping form
+```
+
+- **The exit code is the whole contract.** A nonzero exit is a legitimate *false* (a `grep -q` that matches nothing, a `test -f` on a missing file, an explicit `exit 3`) and is never a failure. Only a **runner-level** error — the command could not be started at all (`shell.NewRunner`/`RunCaptureFull` returning a Go error: an unusable cwd, a bad image, a dead docker daemon) — fails the step. Note a shell "command not found" is exit 127, i.e. a *false guard*, not an error. Getting this distinction wrong would turn an infrastructure outage into a silently-skipped pipeline.
+- **A guard-skipped step skips only itself; the plan continues.** This is deliberately different from a merkle cache hit, which stops the whole remaining chain (everything downstream already succeeded). `internal/pipeline`'s `stepDisposition` (`stepRan`/`stepGuardSkipped`/`stepChainSkipped`) makes the two meanings explicit — they were previously one overloaded bool, and conflating them is the bug this type exists to prevent.
+- **A skipped step fires no hooks, records no merkle node or `job_run`, and is absent from the `execLog`** — the same contract as a cached skip (it did not run, so it has no outcome for observers to react to). That absence is what lets a job's `assert.execution` *prove* a step was skipped.
+- **Where the guard runs**: under the step's own resolved image (`resolveStepImage` — a task's through `ResolveTask`, an agent's through `ResolveAgentInvocation`, a put's from its resource type) in a `TaskSpace` materialized from the step's declared `inputs:`, closed **without** `Capture` so a guard can never publish artifacts. In the default (no `workspace:`) mode `TaskSpace` is a passthrough to the build root, so this costs nothing.
+- **Caching**: the guard command is folded into the step's content hash (`merkle.withWhen`, value-gated like `image:`), but its *outcome* is a run-time fact the planner cannot know — so any chain containing a `when:` step is marked **unskippable**, exactly like `put`/`agent`/`fix:`. A guarded chain is never recorded as a reusable "this whole chain succeeded" hash, since the guard may decide differently next run.
+- **Invalid on `get` steps** (rejected at `LoadConfig` by `validateStepGuards`, alongside an empty command): a get fans the remainder of the plan out per version, so a conditional get has no coherent meaning — the same reasoning that rejects `image:`/`assert:` there.
+- **This is how an agent decides routing.** "Agent proposes, guards dispose" is expressible without events or typed outputs: an `agent` step writes a verdict into a declared output artifact, and the next step's `when:` tests that file. The model proposes; a deterministic command disposes; both are visible in the YAML.
 
 ### Assert (opt-in self-verification) + `steps test`
 
