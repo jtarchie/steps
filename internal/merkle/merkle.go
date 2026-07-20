@@ -196,6 +196,26 @@ func assertContent(a *config.Assert) map[string]any {
 		content["code"] = *a.Code
 	}
 
+	// tool_calls folds in only when set, like every other assert field: it
+	// changes the step's success criteria, so it must bust the cache, but an
+	// assert without it hashes exactly as before this field existed. Each
+	// entry is flattened to plain maps/scalars so json.Marshal's key sorting
+	// still makes the hash deterministic (see HashNode).
+	if len(a.ToolCalls) > 0 {
+		calls := make([]map[string]any, len(a.ToolCalls))
+
+		for i, call := range a.ToolCalls {
+			entry := map[string]any{"name": call.Name}
+			if len(call.Args) > 0 {
+				entry["args"] = call.Args
+			}
+
+			calls[i] = entry
+		}
+
+		content["tool_calls"] = calls
+	}
+
 	return content
 }
 

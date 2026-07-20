@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -170,14 +171,14 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindAgent, StepIndex: i, Resource: prepared.ri.AgentName, Content: content}
 
-	finalContent, turnsUsed, err := runPrepared(ctx, prepared)
+	res, err := runPrepared(ctx, prepared)
 	if err != nil {
 		recordAgentFailure(ctx, st, node, jobName, err)
 
 		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
-	err = assertAgentResponse(step.Assert, finalContent)
+	err = assertAgentResponse(step.Assert, res)
 	if err != nil {
 		recordAgentFailure(ctx, st, node, jobName, err)
 
@@ -192,7 +193,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 		return "", wrapped
 	}
 
-	result := map[string]any{"response": finalContent, "turns": turnsUsed}
+	result := map[string]any{"response": res.text, "turns": res.turns}
 
 	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", result, nil)
 	if err != nil {
@@ -202,50 +203,145 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	return hash, nil
 }
 
-// assertAgentResponse checks an agent step's assert (stdout only — an agent
-// has no exit code) against the model's final response: a match requires the
-// response to contain assert.stdout. A mismatch is a task-level failure so the
-// step fails and its on_failure hook fires. nil assert / nil Stdout is a no-op.
-func assertAgentResponse(assert *config.Assert, response string) error {
-	if assert == nil || assert.Stdout == nil {
+// assertAgentResponse checks an agent step's assert (stdout and/or
+// tool_calls — an agent has no exit code) against what the conversation
+// produced. Every field that is set must pass; a mismatch on any is a
+// task-level failure so the step fails and its on_failure hook fires. A nil
+// assert, or one with neither field set, is a no-op.
+func assertAgentResponse(assert *config.Assert, res conversationResult) error {
+	if assert == nil {
 		return nil
 	}
 
-	if !strings.Contains(response, *assert.Stdout) {
+	if assert.Stdout != nil && !strings.Contains(res.text, *assert.Stdout) {
 		//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
 		return outcome.Fail(fmt.Errorf("assert.stdout: response does not contain %q", *assert.Stdout))
 	}
 
+	if len(assert.ToolCalls) > 0 {
+		err := matchToolCallTrajectory(assert.ToolCalls, res.trajectory)
+		if err != nil {
+			//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
+			return outcome.Fail(err)
+		}
+	}
+
 	return nil
+}
+
+// matchToolCallTrajectory reports whether want appears, in order, as a
+// SUBSEQUENCE of got: every expected call must be matched, in the given
+// order, but any number of unexpected calls may appear before, between, or
+// after them. Each expected entry matches a call with the same name whose
+// arguments are a SUPERSET of the entry's args — every listed key must be
+// present with an equal value, extra actual arguments ignored. Both rules are
+// ported from secret-agent's eval matcher (internal/eval), which this
+// feature's semantics deliberately mirror.
+//
+// On failure the error names the first expected call that could not be
+// matched and prints the observed trajectory, so a fixture failure is
+// debuggable without re-running with verbose logging.
+func matchToolCallTrajectory(want []config.ExpectedToolCall, got []recordedToolCall) error {
+	next := 0
+
+	for _, expected := range want {
+		matched := false
+
+		for ; next < len(got); next++ {
+			if toolCallMatches(expected, got[next]) {
+				next++
+				matched = true
+
+				break
+			}
+		}
+
+		if !matched {
+			return fmt.Errorf("assert.tool_calls: no call matching %s after the previously matched calls; got %s",
+				describeExpectedCall(expected), describeTrajectory(got))
+		}
+	}
+
+	return nil
+}
+
+// toolCallMatches reports whether one observed call satisfies one expected
+// entry: same name, and every expected argument present with an equal value.
+// Values compare as strings via fmt.Sprint, since a tool's arguments are
+// rendered into its run: template as strings regardless of the JSON type the
+// model emitted.
+func toolCallMatches(want config.ExpectedToolCall, got recordedToolCall) bool {
+	if want.Name != got.name {
+		return false
+	}
+
+	for key, wantValue := range want.Args {
+		actual, present := got.args[key]
+		if !present || fmt.Sprint(actual) != wantValue {
+			return false
+		}
+	}
+
+	return true
+}
+
+func describeExpectedCall(want config.ExpectedToolCall) string {
+	if len(want.Args) == 0 {
+		return fmt.Sprintf("%q", want.Name)
+	}
+
+	keys := make([]string, 0, len(want.Args))
+	for key := range want.Args {
+		keys = append(keys, key)
+	}
+
+	sort.Strings(keys)
+
+	pairs := make([]string, 0, len(keys))
+	for _, key := range keys {
+		pairs = append(pairs, fmt.Sprintf("%s=%q", key, want.Args[key]))
+	}
+
+	return fmt.Sprintf("%q with %s", want.Name, strings.Join(pairs, " "))
+}
+
+// describeTrajectory renders the observed calls for a mismatch message, names
+// only — argument values can be large (a whole review body) and the name
+// sequence is what makes an ordering mismatch legible.
+func describeTrajectory(got []recordedToolCall) string {
+	if len(got) == 0 {
+		return "(no tool calls)"
+	}
+
+	names := make([]string, len(got))
+	for i, call := range got {
+		names[i] = call.name
+	}
+
+	return "[" + strings.Join(names, ", ") + "]"
 }
 
 // runPrepared runs the (already resolved and materialized) conversation under
 // the agent step timeout, retrying the whole conversation up to the resolved
 // attempt count. Shared by RunStep and RunHook so a hook agent runs the exact
 // same conversation machinery, minus the merkle/store recording RunStep does.
-func runPrepared(ctx context.Context, prepared preparedAgentStep) (string, int, error) {
+func runPrepared(ctx context.Context, prepared preparedAgentStep) (conversationResult, error) {
 	agentCtx, cancel := context.WithTimeout(ctx, agentStepTimeout)
 	defer cancel()
 
-	var (
-		finalContent string
-		turnsUsed    int
-	)
+	var result conversationResult
 
 	err := retry.Do(agentCtx, prepared.ri.Attempts, func(_ int) error {
-		answer, turns, runErr := runAgentConversation(agentCtx, prepared.llm, prepared.conv)
-		turnsUsed = turns
+		res, runErr := runAgentConversation(agentCtx, prepared.llm, prepared.conv)
+		// Keep the latest attempt's result either way: on success it's the
+		// answer, and on failure its turns/trajectory describe the attempt
+		// that actually failed.
+		result = res
 
-		if runErr != nil {
-			return runErr
-		}
-
-		finalContent = answer
-
-		return nil
+		return runErr
 	})
 
-	return finalContent, turnsUsed, err //nolint:wrapcheck // callers (RunStep/RunHook) wrap with step context
+	return result, err //nolint:wrapcheck // callers (RunStep/RunHook) wrap with step context
 }
 
 // RunHook runs an agent step as a hook: it resolves, materializes, runs the
@@ -263,7 +359,7 @@ func RunHook(ctx context.Context, cfg *config.Config, step config.Step, bw works
 
 	fmt.Printf("agent: %s\n", step.Agent)
 
-	_, _, err = runPrepared(ctx, prepared)
+	_, err = runPrepared(ctx, prepared)
 	if err != nil {
 		return fmt.Errorf("agent %q: %w", step.Agent, err)
 	}

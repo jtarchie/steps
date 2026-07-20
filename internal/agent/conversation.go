@@ -53,6 +53,31 @@ func (p agentGenParams) applyTo(cfg *genai.GenerateContentConfig) {
 	}
 }
 
+// recordedToolCall is one tool invocation the model requested during a
+// conversation, captured in the order it was requested. args holds the
+// MODEL-authored arguments as they arrived, before any max_calls: budget
+// check or args: pinning (see mergePinnedArgs) — so an assert.tool_calls
+// check judges what the model actually chose, and a machine-pinned value is
+// deliberately not matchable.
+//
+// Every requested call is recorded, including one later rejected by a
+// max_calls: budget: the model did make that call (and saw the rejection as
+// data), so it is part of the trajectory its behavior should be judged on.
+type recordedToolCall struct {
+	name string
+	args map[string]any
+}
+
+// conversationResult is one completed attempt's output: the model's final
+// text, the number of turns it took, and the ordered trajectory of tool calls
+// it made. Returned (rather than accumulated in the caller) so each attempt of
+// a retry reports only its own calls.
+type conversationResult struct {
+	text       string
+	turns      int
+	trajectory []recordedToolCall
+}
+
 // agentConversation is one runnable attempt's inputs.
 type agentConversation struct {
 	system   string
@@ -114,18 +139,23 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 // only guarantees *some* tool call, not the missing one specifically, so a
 // model can still stall on the wrong tool until maxTurns; that's the same
 // safety bound already documented above.
-func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversation) (string, int, error) {
+func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversation) (conversationResult, error) {
 	req := buildAgentRequest(conv)
 	satisfied := make(map[string]bool, len(conv.tools.required))
 	// callCounts is local to this call, so a fresh attempt (retry.Do calling
 	// runAgentConversation again) always starts every tool's budget over —
 	// "a fresh conversation is a fresh budget."
 	callCounts := make(map[string]int, len(conv.tools.maxCalls))
+	// trajectory is likewise per-attempt: a retry reports only its own calls,
+	// which is what an assert.tool_calls check should see (the run that
+	// actually produced the step's outcome), not an accumulation across
+	// abandoned attempts.
+	var trajectory []recordedToolCall
 
 	for turn := range conv.maxTurns {
 		resp, err := generateOnce(ctx, llm, req)
 		if err != nil {
-			return "", turn, err
+			return conversationResult{turns: turn, trajectory: trajectory}, err
 		}
 
 		req.Contents = append(req.Contents, resp.Content)
@@ -134,7 +164,7 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 		if len(calls) == 0 {
 			missing := unsatisfiedRequiredTools(conv.tools.required, satisfied)
 			if len(missing) == 0 {
-				return text, turn + 1, nil
+				return conversationResult{text: text, turns: turn + 1, trajectory: trajectory}, nil
 			}
 
 			forceRequiredTool(req, missing[0], conv.toolChoiceStringOnly)
@@ -143,6 +173,10 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 		}
 
 		req.Config.ToolConfig = nil // clear any forcing from the prior turn — the model chooses freely again next time it tries to stop
+
+		for _, call := range calls {
+			trajectory = append(trajectory, recordedToolCall{name: call.Name, args: call.Args})
+		}
 
 		parts := toolResponseParts(ctx, calls, conv.env, conv.tools.registry, conv.tools.maxCalls, callCounts)
 
@@ -163,14 +197,16 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 	// ran but didn't finish its task), not infrastructure errors — mark them
 	// so hook dispatch classifies them as failed rather than errored. A
 	// transport error from generateOnce above stays unwrapped → errored.
+	exhausted := conversationResult{turns: conv.maxTurns, trajectory: trajectory}
+
 	missing := unsatisfiedRequiredTools(conv.tools.required, satisfied)
 	if len(missing) > 0 {
 		//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
-		return "", conv.maxTurns, outcome.Fail(fmt.Errorf("agent exceeded %d turns; required tool(s) never succeeded: %s", conv.maxTurns, strings.Join(missing, ", ")))
+		return exhausted, outcome.Fail(fmt.Errorf("agent exceeded %d turns; required tool(s) never succeeded: %s", conv.maxTurns, strings.Join(missing, ", ")))
 	}
 
 	//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
-	return "", conv.maxTurns, outcome.Fail(fmt.Errorf("agent exceeded %d turns without a final response", conv.maxTurns))
+	return exhausted, outcome.Fail(fmt.Errorf("agent exceeded %d turns without a final response", conv.maxTurns))
 }
 
 // forceRequiredTool constrains req's next generateOnce call to a tool call,

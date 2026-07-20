@@ -86,17 +86,17 @@ func TestRunAgentConversationMultiTurnToolCalling(t *testing.T) {
 		},
 	}
 
-	content, turns, err := runAgentConversation(context.Background(), fake, newTestConversation(t, "do the thing", dir))
+	res, err := runAgentConversation(context.Background(), fake, newTestConversation(t, "do the thing", dir))
 	if err != nil {
 		t.Fatalf("runAgentConversation: %v", err)
 	}
 
-	if content != "done" {
-		t.Errorf("content = %q, want %q", content, "done")
+	if res.text != "done" {
+		t.Errorf("content = %q, want %q", res.text, "done")
 	}
 
-	if turns != 2 {
-		t.Errorf("turns = %d, want 2", turns)
+	if res.turns != 2 {
+		t.Errorf("turns = %d, want 2", res.turns)
 	}
 
 	if len(fake.requests) != 2 {
@@ -164,13 +164,13 @@ func TestRunAgentConversationExceedsMaxTurns(t *testing.T) {
 
 	fake := &fakeLLM{responses: responses}
 
-	_, turns, err := runAgentConversation(context.Background(), fake, newTestConversation(t, "loop forever", dir))
+	res, err := runAgentConversation(context.Background(), fake, newTestConversation(t, "loop forever", dir))
 	if err == nil {
 		t.Fatal("expected an error when the model never stops calling tools")
 	}
 
-	if turns != testMaxTurns {
-		t.Errorf("turns = %d, want %d", turns, testMaxTurns)
+	if res.turns != testMaxTurns {
+		t.Errorf("turns = %d, want %d", res.turns, testMaxTurns)
 	}
 }
 
@@ -220,13 +220,13 @@ func TestRunAgentConversationForcesRequiredToolCall(t *testing.T) {
 		},
 	}
 
-	content, _, err := runAgentConversation(context.Background(), fake, requiredToolConversation(t, t.TempDir()))
+	res, err := runAgentConversation(context.Background(), fake, requiredToolConversation(t, t.TempDir()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if content != "posted" {
-		t.Errorf("content = %q, want %q", content, "posted")
+	if res.text != "posted" {
+		t.Errorf("content = %q, want %q", res.text, "posted")
 	}
 
 	if len(fake.requests) < 2 {
@@ -267,13 +267,13 @@ func TestRunAgentConversationForcesRequiredToolCallStringOnly(t *testing.T) {
 	conv := requiredToolConversation(t, t.TempDir())
 	conv.toolChoiceStringOnly = true
 
-	content, _, err := runAgentConversation(context.Background(), fake, conv)
+	res, err := runAgentConversation(context.Background(), fake, conv)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if content != "posted" {
-		t.Errorf("content = %q, want %q", content, "posted")
+	if res.text != "posted" {
+		t.Errorf("content = %q, want %q", res.text, "posted")
 	}
 
 	if len(fake.requests) < 2 {
@@ -309,13 +309,13 @@ func TestRunAgentConversationRequiredToolNeverCalled(t *testing.T) {
 
 	fake := &fakeLLM{responses: responses}
 
-	_, turns, err := runAgentConversation(context.Background(), fake, requiredToolConversation(t, t.TempDir()))
+	res, err := runAgentConversation(context.Background(), fake, requiredToolConversation(t, t.TempDir()))
 	if err == nil {
 		t.Fatal("expected an error: the required tool was never called even after being forced")
 	}
 
-	if turns != testMaxTurns {
-		t.Errorf("turns = %d, want %d", turns, testMaxTurns)
+	if res.turns != testMaxTurns {
+		t.Errorf("turns = %d, want %d", res.turns, testMaxTurns)
 	}
 }
 
@@ -332,13 +332,13 @@ func TestRunAgentConversationRequiredToolCalled(t *testing.T) {
 		},
 	}
 
-	content, _, err := runAgentConversation(context.Background(), fake, requiredToolConversation(t, t.TempDir()))
+	res, err := runAgentConversation(context.Background(), fake, requiredToolConversation(t, t.TempDir()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if content != "posted" {
-		t.Errorf("content = %q, want %q", content, "posted")
+	if res.text != "posted" {
+		t.Errorf("content = %q, want %q", res.text, "posted")
 	}
 }
 
@@ -390,13 +390,13 @@ func TestRunAgentConversationRecoversFailedRequiredTool(t *testing.T) {
 		},
 	}
 
-	content, _, err := runAgentConversation(context.Background(), fake, conv)
+	res, err := runAgentConversation(context.Background(), fake, conv)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if content != "posted" {
-		t.Errorf("content = %q, want %q", content, "posted")
+	if res.text != "posted" {
+		t.Errorf("content = %q, want %q", res.text, "posted")
 	}
 
 	if len(fake.requests) != 3 {
@@ -442,12 +442,12 @@ func TestWithRetryRetriesAgentConversationOnFailure(t *testing.T) {
 	var finalContent string
 
 	err := retry.Do(context.Background(), 3, func(_ int) error {
-		content, _, runErr := runAgentConversation(context.Background(), fake, conv)
+		res, runErr := runAgentConversation(context.Background(), fake, conv)
 		if runErr != nil {
 			return runErr
 		}
 
-		finalContent = content
+		finalContent = res.text
 
 		return nil
 	})

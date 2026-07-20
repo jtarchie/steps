@@ -102,6 +102,22 @@ jobs:
       already posted, do not post again.
 
       Reply with a final short plain-text summary of the review you posted.
+    # assert.tool_calls verifies the model's TRAJECTORY, not just its prose:
+    # the listed calls must appear in this order (extra calls in between are
+    # fine), and each args: entry is a subset check on that call. Left
+    # commented because this job needs a live model and a real PR to run;
+    # uncomment when pointing it at one.
+    #
+    # Note: `repo` is pinned via the tool's args: above, so it is
+    # machine-supplied and can never be asserted on here (that's a load-time
+    # error) — assert on what the MODEL chose, like action.
+    #
+    # assert:
+    #   tool_calls:
+    #   - name: run_shell            # it actually looked at the diff
+    #   - name: post_review          # ...before posting
+    #     args:
+    #       action: comment
 
 # Same worker, locked to read-only for a different task: it selects a subset
 # of the agent's tools (so it *cannot* run_shell or post_review, which it

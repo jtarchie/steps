@@ -126,10 +126,10 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		toolChoiceStringOnly: c.ri.StringOnlyToolChoice,
 	}
 
-	answer, _, runErr := runAgentConversation(ctx, c.llm, conv)
+	res, runErr := runAgentConversation(ctx, c.llm, conv)
 	if runErr != nil {
 		return map[string]any{"error": runErr.Error()}
 	}
 
-	return map[string]any{"result": answer}
+	return map[string]any{"result": res.text}
 }

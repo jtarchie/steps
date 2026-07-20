@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -66,6 +67,23 @@ type Assert struct {
 	Execution []string `yaml:"execution,omitempty"`
 	Stdout    *string  `yaml:"stdout,omitempty"`
 	Code      *int     `yaml:"code,omitempty"`
+	// ToolCalls, on an agent step, asserts the ordered trajectory of tool
+	// calls the model made (see ExpectedToolCall). Agent-only: a task step
+	// runs no tools. Every entry must appear, in order, as a subsequence of
+	// the observed calls.
+	ToolCalls []ExpectedToolCall `yaml:"tool_calls,omitempty"`
+}
+
+// ExpectedToolCall is one entry in an agent step's assert.tool_calls: the
+// tool's name, plus (optionally) a subset of the arguments the model must
+// have called it with. Args is a subset match — every listed key must be
+// present with an equal value, and any extra actual argument is ignored.
+// Values compare as strings, since every argument reaching a tool's run:
+// template is rendered as one (this is a deliberate divergence from
+// secret-agent's eval matcher, which coerces across int/float).
+type ExpectedToolCall struct {
+	Name string            `yaml:"name"`
+	Args map[string]string `yaml:"args,omitempty"`
 }
 
 // WorkspaceConfig opts a pipeline into Concourse-style per-step workspace
@@ -835,13 +853,88 @@ func (c *Config) validateAsserts() error {
 			}
 		}
 
-		err := job.visitSteps(validateStepAssert)
+		err := job.visitSteps(func(label string, step *Step) error {
+			stepErr := validateStepAssert(label, step)
+			if stepErr != nil {
+				return stepErr
+			}
+
+			return c.validateAssertPinnedArgs(label, step)
+		})
 		if err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// validateAssertPinnedArgs rejects an assert.tool_calls entry that asserts on
+// an argument the pipeline pins via a custom tool's args: (see ToolSpec.Args).
+// A pinned value is machine-supplied and never appears among the
+// model-authored arguments a trajectory records, so such an assert could never
+// match — failing the load is far clearer than a step that always fails.
+//
+// Best-effort by design: it fires only when the agent resolves here. An
+// unresolvable agent name is left to run time, matching how every other
+// agent/task reference in this package is treated.
+func (c *Config) validateAssertPinnedArgs(label string, step *Step) error {
+	if step.Assert == nil || len(step.Assert.ToolCalls) == 0 || step.Agent == "" {
+		return nil
+	}
+
+	agent, err := c.FindAgent(step.Agent)
+	if err != nil {
+		return nil //nolint:nilerr // an unresolvable agent is caught at run time, same as everywhere else
+	}
+
+	pinned := pinnedArgsByTool(agent.Tools, step.Tools)
+
+	for i, want := range step.Assert.ToolCalls {
+		keys := make([]string, 0, len(want.Args))
+		for key := range want.Args {
+			keys = append(keys, key)
+		}
+
+		sort.Strings(keys) // deterministic message when several keys are pinned
+
+		for _, key := range keys {
+			if pinned[want.Name][key] {
+				return fmt.Errorf("%s: assert.tool_calls[%d]: tool %q pins argument %q via args:, so it never appears in the model-authored call and can never match", label, i, want.Name, key)
+			}
+		}
+	}
+
+	return nil
+}
+
+// pinnedArgsByTool indexes which argument keys each named tool pins, across an
+// agent's grant and a step's own inline tools.
+func pinnedArgsByTool(agentTools, stepTools []ToolSpec) map[string]map[string]bool {
+	index := map[string]map[string]bool{}
+
+	add := func(specs []ToolSpec) {
+		for _, spec := range specs {
+			if len(spec.Args) == 0 {
+				continue
+			}
+
+			name := ToolSpecName(spec)
+
+			if index[name] == nil {
+				index[name] = map[string]bool{}
+			}
+
+			for key := range spec.Args {
+				index[name][key] = true
+			}
+		}
+	}
+
+	add(agentTools)
+	add(stepTools)
+
+	return index
 }
 
 // requireExecutionOnly rejects an execution-level assert (Config/Job) that
@@ -875,10 +968,27 @@ func validateStepAssert(label string, step *Step) error {
 			return fmt.Errorf("%s (agent %q): assert.code is not valid on agent steps (no exit code); use assert.stdout", label, step.Agent)
 		}
 
-		return nil
+		return validateExpectedToolCalls(fmt.Sprintf("%s (agent %q)", label, step.Agent), step.Assert.ToolCalls)
 	default:
+		if len(step.Assert.ToolCalls) > 0 {
+			return fmt.Errorf("%s: assert.tool_calls is only valid on agent steps (a task runs no tools)", label)
+		}
+
 		return nil
 	}
+}
+
+// validateExpectedToolCalls rejects an assert.tool_calls entry with no name —
+// there is nothing to match against, and an empty name would silently match
+// the first call of any tool.
+func validateExpectedToolCalls(context string, expected []ExpectedToolCall) error {
+	for i, want := range expected {
+		if want.Name == "" {
+			return fmt.Errorf("%s: assert.tool_calls[%d]: name is required", context, i)
+		}
+	}
+
+	return nil
 }
 
 // visitSteps calls fn for every step reachable from a job: each plan step,

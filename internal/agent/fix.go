@@ -111,7 +111,7 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 	defer cancel()
 
 	err = retry.Do(agentCtx, ri.Attempts, func(_ int) error {
-		_, _, runErr := runAgentConversation(agentCtx, llm, conv)
+		_, runErr := runAgentConversation(agentCtx, llm, conv)
 
 		return runErr
 	})

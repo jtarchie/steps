@@ -272,13 +272,13 @@ func TestRunAgentConversationCallBudgetResetsAcrossAttempts(t *testing.T) {
 	for attempt := range 2 {
 		fake := &fakeLLM{responses: []*model.LLMResponse{toolCallResp, doneResp}}
 
-		content, _, err := runAgentConversation(context.Background(), fake, conv)
+		res, err := runAgentConversation(context.Background(), fake, conv)
 		if err != nil {
 			t.Fatalf("attempt %d: runAgentConversation: %v", attempt, err)
 		}
 
-		if content != "done" {
-			t.Errorf("attempt %d: content = %q, want %q", attempt, content, "done")
+		if res.text != "done" {
+			t.Errorf("attempt %d: content = %q, want %q", attempt, res.text, "done")
 		}
 	}
 }
