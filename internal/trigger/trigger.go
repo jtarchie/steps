@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
@@ -310,6 +311,42 @@ func checkResource(ctx context.Context, cfg *config.Config, st *store.Store, res
 	return observedResource{latest: string(latest), dirty: found && previous != string(latest)}, true, nil
 }
 
+// recoverDrainPanic turns a value recovered from a panic in drainOne into the
+// error it should report, finalizing the claimed job (if any) as "failed" via
+// CompleteJob first — the same outcome as any other failure — so a panic
+// doesn't leave a claimed row stuck running forever with nothing to finalize
+// it. claimed is false when the panic happened before ClaimNextJob returned a
+// row (or ClaimNextJob itself panicked), in which case there's no row to
+// finalize.
+func recoverDrainPanic(ctx context.Context, st *store.Store, jobName string, id int64, claimed bool, r any) error {
+	slog.Error("trigger.panic", "job", jobName, "recovered", r, "stack", string(debug.Stack()))
+
+	panicErr := fmt.Errorf("recovered from panic running job %q: %v", jobName, r)
+
+	if !claimed {
+		return panicErr
+	}
+
+	completeErr := st.CompleteJob(context.WithoutCancel(ctx), id, "failed", panicErr)
+	if completeErr != nil {
+		return fmt.Errorf("%w (and could not record failure: %w)", panicErr, completeErr)
+	}
+
+	return panicErr
+}
+
+// finalizeMissingJob records a terminal failure for a queued job whose name
+// no longer resolves in cfg (removed from the pipeline between enqueue and
+// claim), returning the error drainOne should report.
+func finalizeMissingJob(ctx context.Context, st *store.Store, jobName string, id int64, findErr error) error {
+	completeErr := st.CompleteJob(context.WithoutCancel(ctx), id, "failed", findErr)
+	if completeErr != nil {
+		return fmt.Errorf("triggered job %q: %w (and could not record failure: %w)", jobName, findErr, completeErr)
+	}
+
+	return fmt.Errorf("triggered job %q: %w", jobName, findErr)
+}
+
 // drainOne claims one queued job (if any) and runs it via pipeline.RunJob.
 // ran is false only when the queue was empty. A non-nil err is always
 // worth logging but never a reason for the caller to stop draining — a
@@ -322,8 +359,33 @@ func drainOne(
 	st *store.Store,
 	pinned map[string]string,
 	force bool,
-) (bool, error) {
-	id, jobName, found, err := st.ClaimNextJob(ctx)
+) (ran bool, err error) {
+	var (
+		id      int64
+		jobName string
+		found   bool
+		claimed bool
+	)
+
+	// A panic anywhere below — including three layers deep inside
+	// pipeline.RunJob's resource/task/agent code — must not crash the whole
+	// watch process and silently take every other in-flight worker down with
+	// it. Recover around the entire claim-run-complete sequence, not just the
+	// RunJob call, so a panic in ClaimNextJob/CompleteJob itself is covered
+	// too, and so a panic after a successful claim still gets a best-effort
+	// CompleteJob("failed", ...) — the same outcome as any other failure —
+	// instead of leaving the row claimed but never finalized.
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+
+		ran = true
+		err = recoverDrainPanic(ctx, st, jobName, id, claimed, r)
+	}()
+
+	id, jobName, found, err = st.ClaimNextJob(ctx)
 	if err != nil {
 		return false, fmt.Errorf("claim next job: %w", err)
 	}
@@ -332,17 +394,14 @@ func drainOne(
 		return false, nil
 	}
 
+	claimed = true
+
 	job, err := cfg.FindJob(jobName)
 	if err != nil {
 		// A queued job that no longer resolves (removed from config between
 		// enqueue and claim) is a genuine, terminal failure — finalize it with
 		// a detached context so a racing cancellation can't strand the row.
-		completeErr := st.CompleteJob(context.WithoutCancel(ctx), id, "failed", err)
-		if completeErr != nil {
-			return true, fmt.Errorf("triggered job %q: %w (and could not record failure: %w)", jobName, err, completeErr)
-		}
-
-		return true, fmt.Errorf("triggered job %q: %w", jobName, err)
+		return true, finalizeMissingJob(ctx, st, jobName, id, err)
 	}
 
 	fmt.Printf("trigger: running %s\n", jobName)

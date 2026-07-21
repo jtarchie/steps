@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -390,6 +391,72 @@ func TestDrainOneRunsClaimedJobAndReportsEmptyQueue(t *testing.T) {
 
 	if ran {
 		t.Fatal("drainOne: expected ran=false on an empty queue")
+	}
+}
+
+// panicProvider is a workspace.Provider whose NewBuild always panics —
+// used to prove drainOne recovers from a panic reached deep inside
+// pipeline.RunJob instead of crashing the whole watch process.
+type panicProvider struct{}
+
+func (panicProvider) Validate() error { return nil }
+
+func (panicProvider) NewBuild(context.Context, string) (workspace.BuildWorkspace, error) {
+	panic("boom: simulated panic in workspace provider")
+}
+
+func (panicProvider) Close() error { return nil }
+
+// TestDrainOneRecoversFromPanic confirms a panic inside pipeline.RunJob (here,
+// forced via panicProvider.NewBuild) is recovered by drainOne rather than
+// crashing the test process, the claimed job is finalized "failed" (not left
+// stuck running/pending forever), and the returned error names the panic.
+func TestDrainOneRecoversFromPanic(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	versionsPath := filepath.Join(dir, "versions.json")
+	writeVersions(t, versionsPath, `[{"ref":"v1"}]`)
+
+	cfg := loadConfig(t, dir, dummyPipeline(versionsPath, filepath.Join(dir, "task-counter.txt")))
+
+	st := mustOpenStore(t, dir)
+
+	ctx := context.Background()
+
+	err := st.EnqueueJob(ctx, "build", "thing")
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+
+	ran, err := drainOne(ctx, cfg, panicProvider{}, st, nil, false)
+	if !ran {
+		t.Fatal("drainOne: expected ran=true after recovering from a panic on a claimed job")
+	}
+
+	if err == nil {
+		t.Fatal("drainOne: expected a non-nil error after recovering from a panic")
+	}
+
+	if !strings.Contains(err.Error(), "recovered from panic") {
+		t.Errorf("drainOne error = %v, want it to mention the recovered panic", err)
+	}
+
+	// The row must be completed (failed), not left claimed forever.
+	_, _, found, claimErr := st.ClaimNextJob(ctx)
+	if claimErr != nil {
+		t.Fatalf("ClaimNextJob: %v", claimErr)
+	}
+
+	if found {
+		t.Fatal("expected no claimable row after a recovered panic")
+	}
+
+	// A second drainOne call must proceed normally — the worker loop isn't
+	// wedged by the earlier panic.
+	ran, err = drainOne(ctx, cfg, panicProvider{}, st, nil, false)
+	if ran || err != nil {
+		t.Fatalf("drainOne (empty queue after recovery): ran=%v err=%v, want ran=false err=nil", ran, err)
 	}
 }
 
