@@ -2,7 +2,9 @@ package trigger
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +16,35 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
+
+// captureStdout runs fn with os.Stdout redirected to a pipe, returning
+// everything fn wrote via fmt.Printf and friends. Not safe alongside other
+// tests running in parallel that also touch os.Stdout — callers must not use
+// t.Parallel().
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+
+	orig := os.Stdout
+	os.Stdout = w
+
+	fn()
+
+	_ = w.Close()
+
+	os.Stdout = orig
+
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read captured stdout: %v", err)
+	}
+
+	return string(data)
+}
 
 // loadConfig writes yaml to a pipeline.yml under dir and parses it.
 func loadConfig(t *testing.T, dir, yaml string) *config.Config {
@@ -734,6 +765,111 @@ jobs:
 	}
 
 	assertTaskCounter(t, taskCounter, "ran\n")
+}
+
+// TestDrainOneFixTaskInterruptedNeverInvokesFixAgent proves the accurate
+// cancellation detection added to runFixTask end to end: a task with fix:
+// interrupted mid-initial-run must be classified the same way a plain task
+// is (drainOne returns an error satisfying errors.Is(_,
+// context.DeadlineExceeded), and the row stays re-runnable, not "failed") —
+// and, critically, must never invoke the fix agent, since the interrupted
+// run was never a genuine failure verdict. The agent's endpoint points at an
+// address nothing listens on, so if runFixTask incorrectly proceeded to
+// invoke it, this test would fail with a connection error (or hang) instead
+// of cleanly observing the interruption. Not parallel: uses t.Setenv.
+func TestDrainOneFixTaskInterruptedNeverInvokesFixAgent(t *testing.T) {
+	dir := t.TempDir()
+	versionsPath := filepath.Join(dir, "versions.json")
+	writeVersions(t, versionsPath, `[{"ref":"v1"}]`)
+
+	cfg := loadConfig(t, dir, fmt.Sprintf(`
+agents:
+- name: fixer
+  source:
+    endpoint: http://127.0.0.1:1/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+
+resource_types:
+- name: dummy
+  config:
+    check: cat %s
+    in: "true"
+resources:
+- name: thing
+  type: dummy
+  source: {}
+jobs:
+- name: build
+  plan:
+  - get: thing
+    trigger: true
+  - task: work
+    run: sleep 1
+    fix: fixer
+`, versionsPath))
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	st := mustOpenStore(t, dir)
+
+	provider, err := workspace.NewProvider(cfg.Workspace)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+
+	defer func() { _ = provider.Close() }()
+
+	bgCtx := context.Background()
+
+	err = st.EnqueueJob(bgCtx, "build", "thing")
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+
+	shortCtx, cancel := context.WithTimeout(bgCtx, 200*time.Millisecond)
+	defer cancel()
+
+	// pipeline.go prints "invoking fix agent" via fmt.Printf to os.Stdout
+	// immediately before calling agent.RunFix — capture it so the test proves
+	// the fix agent was never reached, not merely that the final error happens
+	// to satisfy errors.Is(_, DeadlineExceeded) (which an already-expired ctx
+	// would also produce from deep inside a wrongly-attempted agent.RunFix
+	// call, since its own HTTP client respects the same ctx — a weaker check
+	// that wouldn't actually catch runFixTask skipping its cancellation guard).
+	var ran bool
+
+	stdout := captureStdout(t, func() {
+		ran, err = drainOne(shortCtx, cfg, provider, st, nil, false)
+	})
+
+	if !ran || err == nil {
+		t.Fatalf("drainOne (interrupted mid-run): expected ran=true and a non-nil error, got ran=%v err=%v", ran, err)
+	}
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("drainOne error = %v, want it to satisfy errors.Is(_, context.DeadlineExceeded)", err)
+	}
+
+	if strings.Contains(stdout, "invoking fix agent") {
+		t.Errorf("drainOne invoked the fix agent for an interrupted run: stdout = %q", stdout)
+	}
+
+	// The row must still be recoverable as running (not "failed") — the same
+	// contract a plain task's interruption gets.
+	err = st.ResetStaleRunning(bgCtx)
+	if err != nil {
+		t.Fatalf("ResetStaleRunning: %v", err)
+	}
+
+	_, _, found, claimErr := st.ClaimNextJob(bgCtx)
+	if claimErr != nil {
+		t.Fatalf("ClaimNextJob: %v", claimErr)
+	}
+
+	if !found {
+		t.Fatal("expected a re-queued row after ResetStaleRunning")
+	}
 }
 
 // assertTaskCounter reads path (a test-owned temp file that may not exist

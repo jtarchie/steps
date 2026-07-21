@@ -566,6 +566,15 @@ func runFixTask(ctx context.Context, cfg *config.Config, runner shell.Runner, rt
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 
+	// RunCaptureFull reports even a signal-killed process (e.g. from a
+	// canceled ctx) as data, not err — checked before treating exitCode as a
+	// genuine verdict, so a run interrupted by shutdown isn't misread as a
+	// real failure worth invoking the fix agent over.
+	cancelErr := shell.CanceledError(ctx)
+	if cancelErr != nil {
+		return fmt.Errorf("task %q: %w", rt.Name, cancelErr)
+	}
+
 	printTaskOutput(stdout, stderr)
 
 	if exitCode == 0 {
@@ -583,6 +592,11 @@ func runFixTask(ctx context.Context, cfg *config.Config, runner shell.Runner, rt
 	stdout, stderr, exitCode, err = runner.RunCaptureFull(ctx, rt.Run)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
+	}
+
+	cancelErr = shell.CanceledError(ctx)
+	if cancelErr != nil {
+		return fmt.Errorf("task %q: %w", rt.Name, cancelErr)
 	}
 
 	printTaskOutput(stdout, stderr)
@@ -603,6 +617,14 @@ func runAssertedTask(ctx context.Context, runner shell.Runner, rt config.Resolve
 	stdout, stderr, exitCode, err := runner.RunCaptureFull(ctx, rt.Run)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
+	}
+
+	// RunCaptureFull reports even a signal-killed process (e.g. from a
+	// canceled ctx) as data, not err — checked before evaluating the assert,
+	// so a run interrupted by shutdown isn't misread as a genuine mismatch.
+	cancelErr := shell.CanceledError(ctx)
+	if cancelErr != nil {
+		return fmt.Errorf("task %q: %w", rt.Name, cancelErr)
 	}
 
 	printTaskOutput(stdout, stderr)

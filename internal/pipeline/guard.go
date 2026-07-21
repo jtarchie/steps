@@ -56,6 +56,15 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 		return false, fmt.Errorf("guard command %q could not run: %w", step.When.Run, err)
 	}
 
+	// RunCaptureFull reports even a signal-killed process (e.g. from a
+	// canceled ctx) as data, not err — so a guard interrupted by shutdown
+	// must check ctx itself, rather than reading its exit code as a genuine
+	// true/false answer the guard never actually got to give.
+	cancelErr := shell.CanceledError(ctx)
+	if cancelErr != nil {
+		return false, fmt.Errorf("guard command %q: %w", step.When.Run, cancelErr)
+	}
+
 	slog.Debug("step.when",
 		"step", executedStepName(step),
 		"command", step.When.Run,

@@ -85,7 +85,7 @@ func (d DockerRunner) Run(ctx context.Context, command string) error {
 	slog.Debug("shell.docker.run", "image", d.Image, "command", command, "cwd", d.resolvedCwd, "exit_code", exitCodeOf(runErr))
 
 	if runErr != nil {
-		return fmt.Errorf("command %q failed in image %q: %w", command, d.Image, runErr)
+		return fmt.Errorf("command %q failed in image %q: %w", command, d.Image, wrapIfCanceled(ctx, runErr))
 	}
 
 	return nil
@@ -105,7 +105,7 @@ func (d DockerRunner) RunCapture(ctx context.Context, command string) ([]byte, e
 		"exit_code", exitCodeOf(runErr), "output_bytes", len(stdout), "output", stdout, "stderr", stderr)
 
 	if runErr != nil {
-		return nil, fmt.Errorf("command %q failed in image %q: %w", command, d.Image, runErr)
+		return nil, fmt.Errorf("command %q failed in image %q: %w", command, d.Image, wrapIfCanceled(ctx, runErr))
 	}
 
 	return []byte(stdout), nil
@@ -116,8 +116,12 @@ func (d DockerRunner) RunCapture(ctx context.Context, command string) ([]byte, e
 // daemon unreachable) surface via docker run's own exit codes (commonly 125
 // for daemon-side errors, 126/127 for a command the container couldn't
 // run/find) exactly like any other nonzero exit — as data via exitCode, not
-// a Go error. Only a failure to start the docker CLI client itself returns a
-// non-nil error.
+// a Go error, even a signal-killed one (e.g. from a canceled ctx). Only a
+// failure to start the docker CLI client itself returns a non-nil error. A
+// caller that needs to tell "this result may be incomplete because ctx was
+// canceled while the command ran" apart from an ordinary exit code checks
+// ctx.Err() itself (or CanceledError) after this returns, rather than
+// relying on err.
 func (d DockerRunner) RunCaptureFull(ctx context.Context, command string) (stdout, stderr string, exitCode int, err error) {
 	return d.runCaptureFull(ctx, command, 0)
 }

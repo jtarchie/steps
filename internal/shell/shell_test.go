@@ -2,6 +2,7 @@ package shell
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -121,6 +122,143 @@ func TestRunShellCapture(t *testing.T) {
 
 		if out != nil {
 			t.Errorf("out = %q, want nil on error", out)
+		}
+	})
+}
+
+func TestWrapIfCanceled(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ctx not canceled returns err unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		original := errors.New("boom")
+
+		got := wrapIfCanceled(context.Background(), original)
+		if !errors.Is(got, original) {
+			t.Errorf("wrapIfCanceled = %v, want it to still be (or wrap) %v", got, original)
+		}
+
+		if errors.Is(got, context.Canceled) {
+			t.Error("wrapIfCanceled claimed cancellation for a live context")
+		}
+	})
+
+	t.Run("ctx canceled wraps both the original error and ctx.Err()", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		original := errors.New("boom")
+
+		got := wrapIfCanceled(ctx, original)
+		if !errors.Is(got, context.Canceled) {
+			t.Errorf("wrapIfCanceled = %v, want it to satisfy errors.Is(_, context.Canceled)", got)
+		}
+
+		if !errors.Is(got, original) {
+			t.Errorf("wrapIfCanceled = %v, want it to still wrap the original error %v", got, original)
+		}
+	})
+}
+
+func TestCanceledError(t *testing.T) {
+	t.Parallel()
+
+	t.Run("live context returns nil", func(t *testing.T) {
+		t.Parallel()
+
+		err := CanceledError(context.Background())
+		if err != nil {
+			t.Errorf("CanceledError = %v, want nil", err)
+		}
+	})
+
+	t.Run("canceled context returns an error satisfying errors.Is", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := CanceledError(ctx)
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("CanceledError = %v, want it to satisfy errors.Is(_, context.Canceled)", err)
+		}
+	})
+
+	t.Run("deadline-exceeded context is distinguishable via errors.Is", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+		defer cancel()
+
+		time.Sleep(time.Millisecond)
+
+		err := CanceledError(ctx)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("CanceledError = %v, want it to satisfy errors.Is(_, context.DeadlineExceeded)", err)
+		}
+	})
+}
+
+// TestHostRunnerCancellationIsDetectable confirms Run/RunCapture (which
+// already error on any nonzero exit) make that error's chain satisfy
+// errors.Is against context.Canceled/DeadlineExceeded when the command was
+// killed because ctx was canceled — the mechanism internal/pipeline and
+// internal/trigger rely on to tell a shutdown-interrupted step apart from a
+// step that genuinely failed on its own.
+func TestHostRunnerCancellationIsDetectable(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Run", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+
+		runner := HostRunner{cwd: t.TempDir()}
+
+		err := runner.Run(ctx, "exec sleep 5")
+		if err == nil {
+			t.Fatal("expected an error for a command killed by a canceled context")
+		}
+
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("Run error = %v, want it to satisfy errors.Is(_, context.DeadlineExceeded)", err)
+		}
+	})
+
+	t.Run("RunCapture", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+
+		runner := HostRunner{cwd: t.TempDir()}
+
+		_, err := runner.RunCapture(ctx, "exec sleep 5")
+		if err == nil {
+			t.Fatal("expected an error for a command killed by a canceled context")
+		}
+
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("RunCapture error = %v, want it to satisfy errors.Is(_, context.DeadlineExceeded)", err)
+		}
+	})
+
+	t.Run("a genuine failure with a live context does not falsely claim cancellation", func(t *testing.T) {
+		t.Parallel()
+
+		runner := HostRunner{cwd: t.TempDir()}
+
+		err := runner.Run(context.Background(), "exit 1")
+		if err == nil {
+			t.Fatal("expected an error for a nonzero exit")
+		}
+
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("Run error = %v, want it to NOT satisfy errors.Is against context.Canceled/DeadlineExceeded for an ordinary failure", err)
 		}
 	})
 }

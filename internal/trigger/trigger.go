@@ -347,6 +347,18 @@ func finalizeMissingJob(ctx context.Context, st *store.Store, jobName string, id
 	return fmt.Errorf("triggered job %q: %w", jobName, findErr)
 }
 
+// wasInterruptedByCancellation reports whether runErr stems from ctx being
+// canceled during the command that produced it (internal/shell's
+// wrapIfCanceled/CanceledError ensure such an error's chain wraps ctx.Err()),
+// as opposed to "is ctx canceled right now" — the latter would also be true
+// for a genuine failure that merely happens to coincide with an unrelated
+// cancellation (an operator restarting the daemon at the same moment a task
+// fails on its own), which must still be recorded failed, not silently
+// dropped as if it were the cancellation's doing.
+func wasInterruptedByCancellation(runErr error) bool {
+	return errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded)
+}
+
 // drainOne claims one queued job (if any) and runs it via pipeline.RunJob.
 // ran is false only when the queue was empty. A non-nil err is always
 // worth logging but never a reason for the caller to stop draining — a
@@ -412,10 +424,10 @@ func drainOne(
 	// real failure: leave its row running so the next watch startup's
 	// ResetStaleRunning re-queues it, rather than marking it failed and
 	// silently dropping it (only a new version change would otherwise ever
-	// re-trigger it). This is specifically the *interrupted* case — a nonzero
-	// return with ctx already canceled; a job that reached a terminal state
+	// re-trigger it). This is specifically the *interrupted* case — see
+	// wasInterruptedByCancellation. A job that reached a terminal state
 	// (below) is finalized even if cancellation is racing it.
-	if runErr != nil && ctx.Err() != nil {
+	if runErr != nil && wasInterruptedByCancellation(runErr) {
 		return true, fmt.Errorf("triggered job %q: %w", jobName, runErr)
 	}
 

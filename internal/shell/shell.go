@@ -133,6 +133,44 @@ type HostRunner struct {
 	cwd string
 }
 
+// wrapIfCanceled ensures err's chain satisfies errors.Is(_, ctx.Err()) when
+// ctx was canceled by the time the command producing err finished. Go's
+// os/exec only reliably surfaces a canceled context in cmd.Run's own
+// returned error when the process happened to exit 0 despite cancellation
+// (see exec.Cmd.Wait's watchCtx handling) — the far more common case (the
+// process dies non-zero, or is killed by the cancellation itself) leaves no
+// trace of *why* in Go's own error. Callers that need to tell "this command
+// was interrupted by shutdown" apart from "this command just failed on its
+// own" must go through this rather than trusting err alone. Only call this
+// when err is already non-nil — it must never turn a successful command into
+// a failure just because ctx happens to be canceled by the time it returns.
+func wrapIfCanceled(ctx context.Context, err error) error {
+	ctxErr := ctx.Err()
+	if ctxErr == nil {
+		return err
+	}
+
+	return fmt.Errorf("%w: %w", ctxErr, err)
+}
+
+// CanceledError returns a non-nil error wrapping ctx.Err() when ctx is
+// canceled, or nil otherwise. RunCaptureFull/RunCaptureFullLimited
+// deliberately report even a signal-killed process as data (a normal
+// nonzero exit), not a Go error, so their own err return can't be used to
+// detect "this result may be incomplete/unreliable because ctx was
+// canceled while the command ran." A caller that needs that distinction —
+// to tell a shutdown-interrupted step apart from a step that genuinely
+// failed on its own — calls CanceledError immediately after such a call
+// returns, instead.
+func CanceledError(ctx context.Context) error {
+	ctxErr := ctx.Err()
+	if ctxErr == nil {
+		return nil
+	}
+
+	return fmt.Errorf("context canceled: %w", ctxErr)
+}
+
 // exitCodeOf extracts a process's exit code from cmd.Run's error (0 for a
 // nil error). A signal-killed process (e.g. one cut off by a context
 // timeout) is also an *exec.ExitError, and Go reports its ExitCode() as -1 —
@@ -183,7 +221,7 @@ func (h HostRunner) Run(ctx context.Context, command string) error {
 	slog.Debug("shell.run", "command", command, "cwd", h.cwd, "exit_code", exitCodeOf(err))
 
 	if err != nil {
-		return fmt.Errorf("command %q failed: %w", command, err)
+		return fmt.Errorf("command %q failed: %w", command, wrapIfCanceled(ctx, err))
 	}
 
 	return nil
@@ -213,7 +251,7 @@ func (h HostRunner) RunCapture(ctx context.Context, command string) ([]byte, err
 		"output_bytes", outBuf.Len(), "output", outBuf.String(), "stderr", errBuf.String())
 
 	if err != nil {
-		return nil, fmt.Errorf("command %q failed: %w", command, err)
+		return nil, fmt.Errorf("command %q failed: %w", command, wrapIfCanceled(ctx, err))
 	}
 
 	return outBuf.Bytes(), nil
@@ -225,8 +263,12 @@ func (h HostRunner) RunCapture(ctx context.Context, command string) ([]byte, err
 // as data via exitCode rather than a Go error — callers that need a
 // command's failure to be observable data (e.g. an agent step's tool
 // results) rather than a hard abort use this instead. Only a failure to
-// start the process (not the process's own exit code) returns a non-nil
-// error.
+// start the process (not the process's own exit code, even a signal-killed
+// one — e.g. from a canceled ctx) returns a non-nil error. A caller that
+// needs to tell "this result may be incomplete because ctx was canceled
+// while the command ran" apart from an ordinary exit code checks ctx.Err()
+// itself (or CanceledError) after this returns, rather than relying on err —
+// see runFixTask/runAssertedTask/evaluateStepGuard.
 //
 // Unlike Run/RunCapture, stdin is /dev/null, not the parent's: this runs
 // non-interactive, model-generated commands, and inheriting an interactive
