@@ -116,26 +116,31 @@ func runMatchedHook(ctx context.Context, scope hookScope, name string, step *con
 func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 	recordExecution(ctx, executedStepName(step))
 
-	switch {
-	case step.Task != "":
+	kind, ok := step.Kind()
+	if !ok {
+		return errors.New("unrecognized hook step (must be task, put, or agent)")
+	}
+
+	switch kind { //nolint:exhaustive // default covers config.StepKindGet, not a valid hook body
+	case config.StepKindTask:
 		rt, err := scope.cfg.ResolveTask(step)
 		if err != nil {
 			return fmt.Errorf("task %q: %w", step.Task, err)
 		}
 
 		return executeTask(ctx, scope.cfg, rt, scope.bw)
-	case step.Put != "":
+	case config.StepKindPut:
 		_, err := executePut(ctx, scope.cfg, step, scope.bw)
 
 		return err
-	case step.Agent != "":
+	case config.StepKindAgent:
 		err := agent.RunHook(ctx, scope.cfg, step, scope.bw)
 		if err != nil {
 			return fmt.Errorf("agent hook: %w", err)
 		}
 
 		return nil
-	default:
+	default: // config.StepKindGet — not a valid hook body
 		return errors.New("unrecognized hook step (must be task, put, or agent)")
 	}
 }
@@ -150,12 +155,17 @@ func logIfHookFailed(scope hookScope, name string, err error) {
 // recorded into the execution log for a job's assert.execution. get steps
 // record their resource name separately (see runTriggeredBuild).
 func executedStepName(step config.Step) string {
-	switch {
-	case step.Task != "":
+	kind, ok := step.Kind()
+	if !ok {
+		return ""
+	}
+
+	switch kind { //nolint:exhaustive // default covers config.StepKindGet, which records its resource name separately
+	case config.StepKindTask:
 		return step.Task
-	case step.Agent != "":
+	case config.StepKindAgent:
 		return step.Agent
-	case step.Put != "":
+	case config.StepKindPut:
 		return step.Put
 	default:
 		return ""
@@ -164,14 +174,16 @@ func executedStepName(step config.Step) string {
 
 // stepLabel builds a hook scope's label for a plan step.
 func stepLabel(i int, step config.Step) string {
-	switch {
-	case step.Get != "":
+	kind, _ := step.Kind()
+
+	switch kind { //nolint:exhaustive // default covers config.StepKindTask and a malformed step alike, both labeled as a task as before
+	case config.StepKindGet:
 		return fmt.Sprintf("step %d (get %q)", i, step.Get)
-	case step.Put != "":
+	case config.StepKindPut:
 		return fmt.Sprintf("step %d (put %q)", i, step.Put)
-	case step.Agent != "":
+	case config.StepKindAgent:
 		return fmt.Sprintf("step %d (agent %q)", i, step.Agent)
-	default:
+	default: // config.StepKindTask, or a malformed step — label as a task, as before
 		return fmt.Sprintf("step %d (task %q)", i, step.Task)
 	}
 }

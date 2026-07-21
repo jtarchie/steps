@@ -533,6 +533,45 @@ type Step struct {
 	Assert *Assert `yaml:"assert,omitempty"`
 }
 
+// StepKind is which of Get/Task/Put/Agent a Step is. See Step.Kind.
+type StepKind string
+
+// The StepKind values, one per Step field Kind can resolve to.
+const (
+	StepKindGet   StepKind = "get"
+	StepKindTask  StepKind = "task"
+	StepKindPut   StepKind = "put"
+	StepKindAgent StepKind = "agent"
+)
+
+// Kind reports which single kind of step s is. ok is false when zero, or
+// more than one, of Get/Task/Put/Agent is set — a malformed step every call
+// site should reject the same way, rather than each silently picking
+// whichever field its own historical check order happened to test first.
+func (s Step) Kind() (kind StepKind, ok bool) {
+	for _, candidate := range [...]struct {
+		kind StepKind
+		set  bool
+	}{
+		{StepKindGet, s.Get != ""},
+		{StepKindTask, s.Task != ""},
+		{StepKindPut, s.Put != ""},
+		{StepKindAgent, s.Agent != ""},
+	} {
+		if !candidate.set {
+			continue
+		}
+
+		if ok {
+			return "", false // a second kind field was set — reject, don't silently keep the first
+		}
+
+		kind, ok = candidate.kind, true
+	}
+
+	return kind, ok
+}
+
 // LoadConfig reads and parses a pipeline YAML file at path.
 func LoadConfig(path string) (*Config, error) {
 	slog.Debug("config.load", "path", path)
@@ -628,12 +667,17 @@ var reservedRouteKeys = map[string]bool{"success": true, "failure": true}
 // of task/put/agent is set. Duplicated (not shared with internal/pipeline's
 // executedStepName) because internal/config depends on nothing internal.
 func stepName(step Step) string {
-	switch {
-	case step.Task != "":
+	kind, ok := step.Kind()
+	if !ok {
+		return ""
+	}
+
+	switch kind { //nolint:exhaustive // default covers StepKindGet, which is not a valid to: target
+	case StepKindTask:
 		return step.Task
-	case step.Agent != "":
+	case StepKindAgent:
 		return step.Agent
-	case step.Put != "":
+	case StepKindPut:
 		return step.Put
 	default:
 		return ""
@@ -1359,18 +1403,23 @@ func validateStepAssert(label string, step *Step) error {
 		return fmt.Errorf("%s: execution is only valid on job/pipeline asserts, not a step assert", label)
 	}
 
-	switch {
-	case step.Get != "":
+	kind, ok := step.Kind()
+	if !ok {
+		return fmt.Errorf("%s: unrecognized step (must be get, task, put, or agent)", label)
+	}
+
+	switch kind { //nolint:exhaustive // default covers StepKindTask
+	case StepKindGet:
 		return fmt.Errorf("%s (get %q): assert is not valid on get steps", label, step.Get)
-	case step.Put != "":
+	case StepKindPut:
 		return fmt.Errorf("%s (put %q): assert is not valid on put steps", label, step.Put)
-	case step.Agent != "":
+	case StepKindAgent:
 		if step.Assert.Code != nil {
 			return fmt.Errorf("%s (agent %q): assert.code is not valid on agent steps (no exit code); use assert.stdout", label, step.Agent)
 		}
 
 		return validateExpectedToolCalls(fmt.Sprintf("%s (agent %q)", label, step.Agent), step.Assert.ToolCalls)
-	default:
+	default: // StepKindTask
 		if len(step.Assert.ToolCalls) > 0 {
 			return fmt.Errorf("%s: assert.tool_calls is only valid on agent steps (a task runs no tools)", label)
 		}
@@ -1470,14 +1519,16 @@ func validateHookTree(parentLabel string, hooks Hooks, noArtifacts bool) error {
 }
 
 func validateHookStep(label string, step *Step) error {
-	switch {
-	case step.Get != "":
-		return fmt.Errorf("%s: get is not valid in a hook; hooks must be task, put, or agent steps", label)
-	case step.Task != "" || step.Put != "" || step.Agent != "":
-		return nil
-	default:
+	kind, ok := step.Kind()
+	if !ok {
 		return fmt.Errorf("%s: unrecognized hook step (must be task, put, or agent)", label)
 	}
+
+	if kind == StepKindGet {
+		return fmt.Errorf("%s: get is not valid in a hook; hooks must be task, put, or agent steps", label)
+	}
+
+	return nil
 }
 
 // validateImages rejects image: on get/put steps: a put's execution image

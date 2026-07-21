@@ -74,22 +74,24 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 // entry), an agent through ResolveAgentInvocation, and a put from its resource
 // type (a put step may not set image: itself).
 func resolveStepImage(cfg *config.Config, step config.Step) (string, error) {
-	switch {
-	case step.Task != "":
+	kind, _ := step.Kind()
+
+	switch kind { //nolint:exhaustive // default covers config.StepKindGet and a malformed step alike — no image to resolve here
+	case config.StepKindTask:
 		rt, err := cfg.ResolveTask(step)
 		if err != nil {
 			return "", fmt.Errorf("resolve task: %w", err)
 		}
 
 		return rt.Image, nil
-	case step.Agent != "":
+	case config.StepKindAgent:
 		ri, err := cfg.ResolveAgentInvocation(step)
 		if err != nil {
 			return "", fmt.Errorf("resolve agent: %w", err)
 		}
 
 		return ri.Image, nil
-	case step.Put != "":
+	case config.StepKindPut:
 		resource, err := cfg.FindResource(step.Put)
 		if err != nil {
 			return "", fmt.Errorf("resolve put: %w", err)
@@ -101,7 +103,7 @@ func resolveStepImage(cfg *config.Config, step config.Step) (string, error) {
 		}
 
 		return resourceType.Image, nil
-	default:
+	default: // config.StepKindGet, or a malformed step — no image to resolve here
 		return "", nil
 	}
 }

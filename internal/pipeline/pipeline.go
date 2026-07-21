@@ -323,23 +323,28 @@ func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string,
 		return parentHash, stepGuardSkipped, "", nil
 	}
 
-	switch {
-	case step.Task != "":
+	kind, ok := step.Kind()
+	if !ok {
+		return "", stepRan, "", fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
+	}
+
+	switch kind { //nolint:exhaustive // default covers config.StepKindGet — dispatchNonGetStep is only called for non-get steps
+	case config.StepKindTask:
 		hash, disposition, err := runTaskStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash)
 
 		return hash, disposition, "", err
-	case step.Put != "":
+	case config.StepKindPut:
 		hash, err := runPutStep(ctx, cfg, jobName, i, step, bw, st, parentHash)
 
 		return hash, stepRan, "", err
-	case step.Agent != "":
+	case config.StepKindAgent:
 		hash, verdict, err := agent.RunStep(ctx, cfg, jobName, i, step, bw, st, parentHash)
 		if err != nil {
 			return "", stepRan, "", fmt.Errorf("agent step: %w", err)
 		}
 
 		return hash, stepRan, verdict, nil
-	default:
+	default: // config.StepKindGet — dispatchNonGetStep is only called for non-get steps
 		return "", stepRan, "", fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}
 }

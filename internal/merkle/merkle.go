@@ -158,15 +158,20 @@ func hooksContent(cfg *config.Config, hooks config.Hooks) (map[string]any, error
 // hook's own hooks). get is never a valid hook (rejected at LoadConfig), so it
 // is not handled here.
 func hookContentMap(cfg *config.Config, step config.Step) (map[string]any, error) {
-	switch {
-	case step.Task != "":
+	kind, ok := step.Kind()
+	if !ok {
+		return nil, errors.New("unrecognized hook step (must be task, put, or agent)")
+	}
+
+	switch kind { //nolint:exhaustive // default covers config.StepKindGet, not a valid hook body
+	case config.StepKindTask:
 		rt, err := cfg.ResolveTask(step)
 		if err != nil {
 			return nil, fmt.Errorf("resolve task: %w", err)
 		}
 
 		return TaskNodeContent(cfg, step, rt)
-	case step.Put != "":
+	case config.StepKindPut:
 		res, err := cfg.FindResource(step.Put)
 		if err != nil {
 			return nil, fmt.Errorf("resolve put: %w", err)
@@ -178,14 +183,14 @@ func hookContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 		}
 
 		return PutNodeContent(cfg, step, *resourceType, res.Source, step.Params, step.Inputs)
-	case step.Agent != "":
+	case config.StepKindAgent:
 		ri, err := cfg.ResolveAgentInvocation(step)
 		if err != nil {
 			return nil, fmt.Errorf("resolve agent: %w", err)
 		}
 
 		return AgentContentMap(cfg, step, ri)
-	default:
+	default: // config.StepKindGet — not a valid hook body
 		return nil, errors.New("unrecognized hook step (must be task, put, or agent)")
 	}
 }
@@ -484,8 +489,13 @@ func planSteps(ctx context.Context, cfg *config.Config, steps []config.Step, pin
 // may depend on non-deterministic agent work) — including one inherited from
 // a referenced tasks: entry.
 func planNonGetNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, bool, error) {
-	switch {
-	case step.Task != "":
+	kind, ok := step.Kind()
+	if !ok {
+		return Node{}, false, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
+	}
+
+	switch kind { //nolint:exhaustive // default covers config.StepKindGet — planNonGetNode is only ever called for non-get steps
+	case config.StepKindTask:
 		rt, err := cfg.ResolveTask(step)
 		if err != nil {
 			return Node{}, false, fmt.Errorf("step %d: %w", i, err)
@@ -501,15 +511,15 @@ func planNonGetNode(cfg *config.Config, step config.Step, i int, parentHash stri
 		// relying on that runtime flag alone (Unskippable is not hashed, so this
 		// only ever makes the cache more conservative).
 		return node, rt.Fix != nil || step.When != nil || step.To != nil, err
-	case step.Put != "":
+	case config.StepKindPut:
 		node, err := putNode(cfg, step, i, parentHash)
 
 		return node, true, err
-	case step.Agent != "":
+	case config.StepKindAgent:
 		node, err := agentNode(cfg, step, i, parentHash)
 
 		return node, true, err
-	default:
+	default: // config.StepKindGet — planNonGetNode is only ever called for non-get steps
 		return Node{}, false, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}
 }
