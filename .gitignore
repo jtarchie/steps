@@ -3,3 +3,4 @@
 
 # Persisted job-run state (sqlite)
 .steps/
+.scratch/
