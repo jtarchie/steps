@@ -52,6 +52,35 @@ func TestSubAgentRunReturnsResult(t *testing.T) {
 	}
 }
 
+// TestSubAgentRunTruncatesResult proves a child's oversized final text is
+// capped like every other tool result, so it can't flood the parent's context
+// past maxToolOutputBytes.
+func TestSubAgentRunTruncatesResult(t *testing.T) {
+	t.Parallel()
+
+	huge := strings.Repeat("x", maxToolOutputBytes+5_000)
+	fake := &fakeLLM{responses: []*model.LLMResponse{
+		{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: huge}}}},
+	}}
+
+	child := newTestSubAgent(t, fake)
+
+	got := child.run(context.Background(), map[string]any{"request": "dump everything"}, toolEnv{dir: t.TempDir()})
+
+	result, ok := got["result"].(string)
+	if !ok {
+		t.Fatalf("result = %#v, want a string", got["result"])
+	}
+
+	if len(result) >= len(huge) {
+		t.Errorf("result was not truncated: len %d, child emitted %d", len(result), len(huge))
+	}
+
+	if !strings.Contains(result, "truncated") {
+		t.Errorf("truncated result should carry the truncation marker, got tail %q", result[max(0, len(result)-40):])
+	}
+}
+
 func TestSubAgentRunMissingRequest(t *testing.T) {
 	t.Parallel()
 

@@ -131,5 +131,8 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		return map[string]any{"error": runErr.Error()}
 	}
 
-	return map[string]any{"result": res.text}
+	// Cap the child's answer like every other tool result — a chatty child with
+	// no max_tokens must not flood the parent's context past maxToolOutputBytes,
+	// the same bound shellToolResult/read_file already honor.
+	return map[string]any{"result": truncateToolOutput(res.text)}
 }
