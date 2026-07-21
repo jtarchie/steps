@@ -95,15 +95,11 @@ Runs a resource type's `check`/`in`/`out` shell commands and selects among the v
 
 ### Configuration & Examples
 - **.golangci.yml** — Linter config; 40+ rules including security (gosec), correctness, concurrency, complexity checks, and a `depguard` rule per package enforcing the dependency graph above
-- **examples/review.yml** — Example pipeline: PR review job using an agent with `read_file`, `list_dir`, `run_shell`, and a custom `post_review` tool
-- **examples/isolated.yml** — Example pipeline demonstrating opt-in `workspace:` isolation: a reusable task with `inputs:`/`outputs:`, an isolated agent step, and a `put` step scoped to a declared input
-- **examples/container.yml** — Example pipeline demonstrating opt-in `image:` containerized execution: a resource_type, a top-level task (plus a step-level override), and an agent
-- **examples/trigger.yml** — Example pipeline demonstrating downstream (cross-job) triggers: a self-contained (no network/credentials) `counter` resource type, a `publish` job that `put`s it, and a `notify` job whose `get ..., trigger: true` fires automatically under `steps watch` whenever `publish` lands a new version
-- **examples/hooks.yml** — Example pipeline demonstrating step and job hooks (`on_success`/`on_failure`/`ensure`, incl. a nested hook) that doubles as a self-verifying fixture via `assert.execution`: a `passing` job (green, exits 0 under `steps run`) and a `failing` job whose `on_failure`/`ensure` hooks run and whose matching job `assert.execution` clears the failure. Run via `steps run examples/hooks.yml --job <name>` or `steps test examples/hooks.yml` (runs both jobs, checks every assert). Self-contained, no network/credentials
-- **examples/conditional.yml** — Example pipeline demonstrating opt-in conditional steps (`when:`): a guard-true job, a guard-false job proving the plan continues and the skipped step's hooks never fire, and a job proving any nonzero exit is a legitimate "false". Self-contained and self-verifying via `assert.execution` — run `steps test examples/conditional.yml`. No network, credentials, or model
-- **examples/subagent.yml** — Example pipeline demonstrating opt-in agent sub-delegation (`agent:` tools): an expensive `lead` agent grants a cheap `summarizer` agent as a callable tool and delegates bulk file-reading to it. Both point at local models so the shape is runnable offline. See "Agent Sub-Delegation" below
-- **examples/loop.yml** — Example pipeline demonstrating opt-in bounded step transitions (`to:`/`max_visits:`): a converging task revise-loop (critique routes back to draft until it passes) and an exhausting self-loop whose job-level `on_failure` fires on exhaustion. Self-contained and self-verifying via `assert.execution` — run `steps test examples/loop.yml`. No network, credentials, or model. See "Step Transitions" below
-- **examples/judge.yml** — Illustrative (not `steps test`-runnable — needs a model) example of N-way agent verdict routing (`verdicts:`): a `critic` agent emits approve/revise/escalate via the synthesized required `verdict` tool, and `to:` routes on it (revise loops back to the writer, bounded by `max_visits:`). Covered by unit tests; see "Step Transitions" below
+There are four example pipelines, grouped by theme + runtime (consolidated from ten single-feature files):
+- **examples/flow.yml** — **Control flow, self-verifying, modelless.** Every job is a `steps test` regression fixture verified by `assert.execution`. Covers `when:` (conditional steps — `gate-open`/`gate-closed`/`nonzero-is-false`), `to:`/`max_visits:` (bounded step transitions — `converge` revise-loop, `exhaust` self-loop firing the job hook), and hooks (`on_success`/`on_failure`/`ensure`, incl. nesting — `passing`/`failing`, whose matching asserts clear a deliberate failure). Run `steps test examples/flow.yml` or `steps run examples/flow.yml --job <name>`. No network, credentials, or model.
+- **examples/agents.yml** — **Agent features (each job needs a live LLM, so it's a read-only reference, not a `steps test` fixture — no CLI mock seam).** Jobs: `review` (a custom tool with the `required:`/`max_calls:`/`args:` guards + a commented `assert.tool_calls`; needs gh), `self-heal`/`self-heal-lint` (`fix:` agent loop, simple and mapping form; needs gh), `delegate` (a `lead` agent granting a `summarizer` sub-agent via an `agent:` tool; offline but needs a local model), `judge` (N-way `verdicts:` routing with a bounded revise loop).
+- **examples/infra.yml** — Two pipeline-infrastructure features: **downstream triggers** (`publish`/`notify`, a self-contained `counter` resource + `trigger: true` under `steps watch`; no network) and **containerized execution** (`containerized`, `image:` on a resource_type/task/agent + a step-level override; needs docker + a local model).
+- **examples/workspace.yml** — Opt-in `workspace:` isolation: a reusable task with `inputs:`/`outputs:`, an isolated agent step, and a `put` scoped to a declared input. On its own because `workspace:` is a pipeline-global block that would force isolation on every job in a file (needs gh + a model).
 
 ### Root Files
 - **main.go** — CLI entry point; parses args into `run`/`watch`/`test` subcommands (`RunCmd`/`WatchCmd`/`TestCmd`) — `run` calls `config.LoadConfig()` → `pipeline.RunJob()`; `watch` → `trigger.Watch()` (see "Downstream Triggers"); `test` runs every job (force) and verifies `assert:` directives (see "Assert")
@@ -131,10 +127,10 @@ golangci-lint run && go test ./... && go build -v
 5. Record output and return
 
 ### Custom Tool `required:` Semantics
-A custom tool (a `tools:` entry with `name`/`description`/`run`) may set `required: true` (see `examples/review.yml`'s `post_review`). This marks it as an action that must *succeed* before the step can complete — but **no tool failure, required or not, ever aborts or restarts the conversation.** A failed call (nonzero exit, or the command failing to run at all) always comes back to the model as ordinary data (`{exit_code, stdout, stderr}` or `{"error": ...}`), exactly like `run_shell`, so the model sees what went wrong and can recover in the same session — no cold restart, no wasted turns re-reading files or re-running exploration.
+A custom tool (a `tools:` entry with `name`/`description`/`run`) may set `required: true` (see `examples/agents.yml`'s `post_review`). This marks it as an action that must *succeed* before the step can complete — but **no tool failure, required or not, ever aborts or restarts the conversation.** A failed call (nonzero exit, or the command failing to run at all) always comes back to the model as ordinary data (`{exit_code, stdout, stderr}` or `{"error": ...}`), exactly like `run_shell`, so the model sees what went wrong and can recover in the same session — no cold restart, no wasted turns re-reading files or re-running exploration.
 
 ### Top-level `tasks:` Reuse
-A top-level `tasks:` list (mirroring `resources:`/`agents:`) lets a `run:`/`fix:` pair be defined once and reused across jobs (see `examples/self-heal.yml`). A job's `task:` step is disambiguated by whether it carries its own `run:`:
+A top-level `tasks:` list (mirroring `resources:`/`agents:`) lets a `run:`/`fix:` pair be defined once and reused across jobs (see `examples/agents.yml`). A job's `task:` step is disambiguated by whether it carries its own `run:`:
 - **`run:` present** → the step is inline, exactly as before; `tasks:` is never consulted, even if a same-named entry exists there.
 - **`run:` absent** → `task:` instead names a `tasks:` entry, and its `run`/`fix` are used. The step's own `fix:`, if set, overrides the referenced task's `fix:` for that step only — everything else comes from the top-level definition.
 
@@ -149,7 +145,7 @@ This resolution (`Config.ResolveTask` in `internal/config`) runs identically at 
 
 ### Custom Tool Call Guards (opt-in `max_calls:`/`args:`)
 
-A custom tool may additionally set `max_calls:` (an int) and/or `args:` (a `map[string]string`) — both value-gated, so a tool with neither hashes byte-identically to before this feature existed. Both are rejected at `LoadConfig` on a builtin or a sub-agent tool (`Config.validateToolCallGuards`/`validateToolCallGuardShape`): they only make sense on a custom `run:` command, whose arguments are template-rendered, unlike a builtin's fixed Go implementation or a sub-agent's single opaque `request` string. A negative `max_calls:` is also a load error. See `examples/review.yml`'s `post_review`.
+A custom tool may additionally set `max_calls:` (an int) and/or `args:` (a `map[string]string`) — both value-gated, so a tool with neither hashes byte-identically to before this feature existed. Both are rejected at `LoadConfig` on a builtin or a sub-agent tool (`Config.validateToolCallGuards`/`validateToolCallGuardShape`): they only make sense on a custom `run:` command, whose arguments are template-rendered, unlike a builtin's fixed Go implementation or a sub-agent's single opaque `request` string. A negative `max_calls:` is also a load error. See `examples/agents.yml`'s `post_review`.
 
 ```yaml
 tools:
@@ -169,7 +165,7 @@ tools:
 
 ### Agent Sub-Delegation (opt-in `agent:` tools)
 
-A `tools:` entry may be a **sub-agent tool** — `{ agent: <name>, description: <text> }` — instead of a builtin name or a custom `{name, run}` tool. It exposes another `agents:` entry to the parent model as a callable tool named for that agent, taking a single `request` string. Each call runs the child's *own* fresh tool-calling conversation (its own model, persona, dials, `max_turns`, tool grant) and returns its final text as the tool result. This is "delegate and get an answer back" — categorically distinct from a job/resource handoff — and it touches only `internal/config` + `internal/agent` + `internal/merkle`; the plan, `trigger_queue`, and `RunJob` are untouched. Absent, behavior (and merkle hashes) are byte-identical to before this feature existed. See `examples/subagent.yml`.
+A `tools:` entry may be a **sub-agent tool** — `{ agent: <name>, description: <text> }` — instead of a builtin name or a custom `{name, run}` tool. It exposes another `agents:` entry to the parent model as a callable tool named for that agent, taking a single `request` string. Each call runs the child's *own* fresh tool-calling conversation (its own model, persona, dials, `max_turns`, tool grant) and returns its final text as the tool result. This is "delegate and get an answer back" — categorically distinct from a job/resource handoff — and it touches only `internal/config` + `internal/agent` + `internal/merkle`; the plan, `trigger_queue`, and `RunJob` are untouched. Absent, behavior (and merkle hashes) are byte-identical to before this feature existed. See `examples/agents.yml`.
 
 ```yaml
 agents:
@@ -259,7 +255,7 @@ jobs:
 steps watch pipeline.yml --interval 30s --max-concurrent 1
 ```
 
-See `examples/trigger.yml` for a runnable, self-contained (no network/credentials) demonstration.
+See `examples/infra.yml` for a runnable, self-contained (no network/credentials) demonstration.
 
 - **Two independent loops, connected only through `internal/store`'s durable queue** (`internal/trigger.Watch`): a **poller** calls `resource.CheckVersions` (the same check every `get` step already uses) for every trigger resource on `--interval`, diffs the latest version's JSON against `resource_checks` (a new table, one row per resource), and — on a change — enqueues every affected job (`AffectedJobs`) into `trigger_queue`. A **worker pool** (`--max-concurrent`, default 1) drains that queue by calling `pipeline.RunJob` exactly as `steps run` would. Splitting these into a durable, SQL-backed queue (rather than an in-memory dedup set) is what makes a crash mid-run not lose track of pending work, and gives `--max-concurrent` a real meaning — see `pollOnce`/`drainOne` in `internal/trigger/trigger.go`, the unit-testable seams the two loops are built from.
 - **At-least-once, never at-most-once**: `pollOnce` advances a resource's recorded version (`RecordCheckedVersion`) **only after** every job that version's change affects has been durably enqueued. So if a later resource's check errors, or an `EnqueueJob` fails, or the process crashes mid-poll, the resource stays "dirty" and the trigger is retried on the next poll rather than silently consumed. `checkResource` is deliberately side-effect-free (it does not record) for exactly this ordering.
@@ -271,7 +267,7 @@ See `examples/trigger.yml` for a runnable, self-contained (no network/credential
 
 ### Hooks (opt-in `on_success`/`on_failure`/`on_error`/`on_abort`/`ensure`)
 
-Any plan step or whole job can carry Concourse-style hooks that react to its outcome. A hook is itself a full step (task/put/agent — never `get`, rejected at `LoadConfig`), so it can `run:` a command, `put:` a resource, or invoke an `agent:`, and may recursively carry its own hooks. Absent, behavior (and merkle hashes) are byte-identical to before this feature existed. See `examples/hooks.yml`.
+Any plan step or whole job can carry Concourse-style hooks that react to its outcome. A hook is itself a full step (task/put/agent — never `get`, rejected at `LoadConfig`), so it can `run:` a command, `put:` a resource, or invoke an `agent:`, and may recursively carry its own hooks. Absent, behavior (and merkle hashes) are byte-identical to before this feature existed. See `examples/flow.yml`.
 
 ```yaml
 jobs:
@@ -299,7 +295,7 @@ jobs:
 
 ### Conditional Steps (opt-in `when:`)
 
-A `task`/`put`/`agent` step (including a hook step) may carry `when:` — an explicit shell command whose **exit code** decides whether the step runs: **0 runs it, nonzero skips it**. Absent, behavior (and merkle hashes) are byte-identical to before this feature existed. See `examples/conditional.yml`, which is self-contained and self-verifying (`steps test examples/conditional.yml`).
+A `task`/`put`/`agent` step (including a hook step) may carry `when:` — an explicit shell command whose **exit code** decides whether the step runs: **0 runs it, nonzero skips it**. Absent, behavior (and merkle hashes) are byte-identical to before this feature existed. See `examples/flow.yml`, which is self-contained and self-verifying (`steps test examples/flow.yml`).
 
 ```yaml
 - task: scout
@@ -321,7 +317,7 @@ A `task`/`put`/`agent` step (including a hook step) may carry `when:` — an exp
 
 ### Step Transitions (opt-in `to:`/`max_visits:`/`verdicts:`)
 
-A `task`/`put`/`agent` step may carry `to:` — a map that routes to another step **in the same get-segment** based on this step's outcome, including jumping **backward** to form a bounded loop (the FSM predecessor's judge/revise cycle). Absent, behavior (and merkle hashes) are byte-identical. Task loops are self-verifying offline via `examples/loop.yml` (`steps test`); verdict routing is illustrated in `examples/judge.yml` (needs a model).
+A `task`/`put`/`agent` step may carry `to:` — a map that routes to another step **in the same get-segment** based on this step's outcome, including jumping **backward** to form a bounded loop (the FSM predecessor's judge/revise cycle). Absent, behavior (and merkle hashes) are byte-identical. Task loops are self-verifying offline via `examples/flow.yml` (`steps test`); verdict routing is illustrated in `examples/agents.yml` (needs a model).
 
 - **`when:` (guard) vs `to:` (route) vs hooks (react)** — three distinct things, easy to conflate, document accordingly. `when:` runs *before* a step and decides whether it runs at all. `to:` runs *after* and decides *which step is next*. Hooks (`on_success`/`on_failure`) *react* with a nested side-step and **never change control flow** — you cannot build a loop with a hook, which is the whole reason `to:` exists. On a failing step with both, the step's `on_failure` fires first (react), then `to.failure` reroutes (route).
 - **Routing keys** come from an "outcome key" (`internal/pipeline/route.go`'s `outcomeKey`): `success`/`failure` for a task/put/verdict-less agent (`outcome.Classify == Succeeded`/`Failed`); a **verdict name** for a verdict agent (below). An **`Errored`** (docker/transport) or **`Aborted`** (SIGINT/ctx-cancel) step produces no key and **never routes** — it propagates, so a loop can't spin during shutdown or mask an outage. A `to.failure` route **consumes** the failure (the job doesn't also fail); the raw exit-code key space is reserved for a future task extension.
@@ -333,7 +329,7 @@ A `task`/`put`/`agent` step may carry `to:` — a map that routes to another ste
 
 ### Assert (opt-in self-verification) + `steps test`
 
-`assert:` lets a pipeline verify its own behavior — the mechanism that makes a hooks fixture a runnable test (steps' analog of pocketci's `all.yml`). Two shapes of a single `Assert` type (`internal/config`), context-validated by `validateAsserts`, absent = byte-identical to before. See `examples/hooks.yml`, run via `steps test examples/hooks.yml`.
+`assert:` lets a pipeline verify its own behavior — the mechanism that makes a hooks fixture a runnable test (steps' analog of pocketci's `all.yml`). Two shapes of a single `Assert` type (`internal/config`), context-validated by `validateAsserts`, absent = byte-identical to before. See `examples/flow.yml`, run via `steps test examples/flow.yml`.
 
 - **`assert.execution`** on a **job** (ordered task/agent/hook names that must have run) or the **pipeline top level** (ordered job names). A job's execution is recorded into an in-memory `execLog` (`internal/pipeline/execlog.go`) carried through the invocation via a package-local `context.WithValue` — no signature churn, and recording happens only at pipeline dispatch points (`dispatchNonGetStep`, `runHookStep`, `runTriggeredBuild`), never inside `internal/agent`. **A matching job `assert.execution` clears the plan's failure** (evaluated in `RunJob` *after* hooks, so the log includes them): a fixture of deliberately-failing tasks stays green as long as the recorded order matches. A **mismatch fails the job** with a `want`/`got` diff and is never itself cleared. Execution asserts are **never hashed** (meta-checks, like job hooks).
 - **`assert: {stdout, code}`** on a **task/agent step** (`code` task-only — agents have no exit code). The task runs through the capture path (like `fix:`), and a matching `stdout` substring + exact `code` make a **non-zero-exit task a success** (`assertMismatch` in `pipeline.go`); a mismatch is a task-level failure so `on_failure` fires. Evaluated before step hooks. Assert takes over success determination, so a task's `fix:` is not consulted when an assert is present. A step assert **is** folded into the node's content hash (value-gated like `image:`, via `merkle.assertContent`) — it changes the success criteria, so it must bust the cache.
@@ -353,7 +349,7 @@ Resource check/in/out commands and agent custom tools support `{{ .source.* }}` 
 
 Templates have the full [slim-sprig](https://github.com/go-task/slim-sprig) function library available (`sprig.TxtFuncMap()`, merged in `internal/template/template.go`'s `newFuncMap`) — string/list/default/date helpers, dependency-free — plus our own `shellquote`. Two non-stdlib imports are allowed into `internal/template` by `.golangci.yml`'s depguard: `slim-sprig/v3` and `leatherman/pkg/shellquote`.
 
-Since a rendered template runs via `sh -c`, any value interpolated into it that could contain shell metacharacters — backticks, `$(...)`, quotes, `; | &` — must be piped through the `shellquote` function (`internal/template/template.go`, backed by `github.com/frioux/leatherman/pkg/shellquote`), which renders it as one safely-quoted POSIX word, quoting only when the value needs it and supplying its own quotes — so don't add surrounding `"..."`: `-b {{ .args.body | shellquote }}`. This matters most for LLM- or PR-authored values (e.g. a review body): without it, a body containing `` `replace` `` gets command-substituted by the shell and posted with those words missing. See `examples/review.yml`'s `post_review` tool.
+Since a rendered template runs via `sh -c`, any value interpolated into it that could contain shell metacharacters — backticks, `$(...)`, quotes, `; | &` — must be piped through the `shellquote` function (`internal/template/template.go`, backed by `github.com/frioux/leatherman/pkg/shellquote`), which renders it as one safely-quoted POSIX word, quoting only when the value needs it and supplying its own quotes — so don't add surrounding `"..."`: `-b {{ .args.body | shellquote }}`. This matters most for LLM- or PR-authored values (e.g. a review body): without it, a body containing `` `replace` `` gets command-substituted by the shell and posted with those words missing. See `examples/agents.yml`'s `post_review` tool.
 
 ## Guidance for Claude Agents
 

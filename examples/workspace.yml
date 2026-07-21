@@ -1,9 +1,11 @@
 # Demonstrates opt-in Concourse-style workspace isolation. Without a
 # workspace: block, every step in a triggered build shares one mutable
 # directory and any task/agent can corrupt state for a later step — that's
-# still the default (examples/self-heal.yml, examples/review.yml use it).
-# This pipeline opts in: each task/agent step below only sees the named
-# inputs:/outputs: it declares, materialized as a fresh copy.
+# still the default (every other example uses it). This pipeline opts in:
+# each task/agent step below only sees the named inputs:/outputs: it declares,
+# materialized as a fresh copy. It lives on its own because `workspace:` is a
+# pipeline-global block — it would force isolation on every job in a file, so
+# it can't be mixed into the multi-feature examples.
 workspace:
   strategy: copy
   # For strategy: btrfs (Linux only; instant copy-on-write via subvolume

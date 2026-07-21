@@ -1,0 +1,93 @@
+# Two pipeline-infrastructure features that don't fit the control-flow or agent
+# files: cross-job triggering and containerized execution. They share no state;
+# read the jobs for the one you want. (Workspace isolation is a third such
+# feature but lives in examples/workspace.yml — its `workspace:` block is
+# pipeline-global and would force isolation on these jobs too.)
+
+resource_types:
+# ── Downstream triggers ──────────────────────────────────────────────────────
+# A self-contained counter backed by a file, so the trigger flow runs with no
+# network or credentials.
+- name: counter
+  config:
+    check: |
+      printf '[{"ref": "%s"}]' "$(cat {{ .source.path }})"
+    in: |
+      echo {{ .version.ref | shellquote }} > ./ref
+    out: |
+      next=$(( $(cat {{ .source.path }}) + 1 ))
+      echo "$next" > {{ .source.path }}
+      printf '{"ref": "%s"}' "$next"
+
+# ── Containerized execution ──────────────────────────────────────────────────
+# check/in/out run inside plain alpine instead of needing git on the host.
+# DockerRunner wraps every command as `sh -c`, so pick images with a shell
+# entrypoint (alpine's default), not ones like alpine/git that exec git.
+- name: git-alpine
+  image: alpine:3
+  config:
+    check: |
+      apk add --no-cache -q git && git ls-remote {{ .source.uri }} {{ .source.branch }} | cut -f1 | sed 's/.*/[{"ref":"&"}]/'
+    in: |
+      apk add --no-cache -q git && git clone --branch {{ .source.branch }} --depth 1 {{ .source.uri }} . && git checkout {{ .version.ref }}
+    out: "true"
+
+resources:
+- name: counter
+  type: counter
+  source: { path: /tmp/steps-trigger-example-counter }
+- name: repo
+  type: git-alpine
+  source: { uri: https://github.com/jtarchie/ci, branch: main }
+
+agents:
+- name: reviewer
+  source: { model: lmstudio/google/gemma-4-26b-a4b }
+  image: python:3.12          # run_shell/custom tools execute in python:3.12
+  system: You inspect a checked-out repo and report anything unusual.
+  tools: [read_file, list_dir, run_shell]
+
+# A top-level task's image: applies to every step referencing it, unless a step
+# overrides it (mirroring how fix: overrides work).
+tasks:
+- name: inspect
+  run: mkdir -p built && (cd repo && wc -l $(find . -name '*.go')) > built/LINE_COUNTS.txt && cat /etc/os-release > built/BUILD_IMAGE.txt
+  image: golang:1.26
+
+jobs:
+# ─── Downstream triggers — `steps watch` runs `notify` when `publish` puts ────
+# Self-contained, no network. Seed the counter first:
+#   echo 0 > /tmp/steps-trigger-example-counter
+# Then, in one terminal:  steps watch examples/infra.yml --interval 5s
+# and in another:         steps run examples/infra.yml --job publish
+# `notify` fires on its own within one --interval tick of publish's put landing.
+
+# The producer — run this one directly; its put bumps the counter file.
+- name: publish
+  plan:
+  - put: counter
+
+# Never run directly in the demo: trigger: true is what makes `steps watch` run
+# it automatically whenever publish's put lands a counter value it hasn't seen.
+- name: notify
+  plan:
+  - get: counter
+    trigger: true
+  - task: announce
+    run: echo "counter is now $(cat counter/ref)"
+
+# ─── Containerized execution (needs docker + a local model) ──────────────────
+- name: containerized
+  plan:
+  - get: repo
+    trigger: true
+  # Runs in golang:1.26 (inherited from the tasks: entry).
+  - task: inspect
+  # Same task again, but overriding its image for just this step: the identical
+  # run: re-executes under alpine (mkdir/find/wc/cat are all in busybox), which
+  # proves the step-level image: override takes effect.
+  - task: inspect
+    image: alpine
+  # run_shell/custom-tool calls below execute in python:3.12.
+  - agent: reviewer
+    prompt: does the checked-out repo look like a normal Go project?

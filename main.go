@@ -104,7 +104,7 @@ func (w *WatchCmd) Run() error {
 // recorded execution order is deterministic) and verifies its assert:
 // directives — each job's own assert.execution is checked inside RunJob, and a
 // top-level assert.execution of job names is checked here. It's the entry
-// point for a self-verifying fixture (see examples/hooks.yml).
+// point for a self-verifying fixture (see examples/flow.yml).
 type TestCmd struct {
 	Pipeline string `arg:"" help:"path to the pipeline YAML file"`
 }

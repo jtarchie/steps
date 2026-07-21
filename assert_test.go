@@ -105,9 +105,9 @@ jobs:
 // TestStepsTestFixturePasses runs the shipped self-verifying fixture through
 // the `test` subcommand end-to-end.
 func TestStepsTestFixturePasses(t *testing.T) {
-	err := run([]string{"test", filepath.Join("examples", "hooks.yml")})
+	err := run([]string{"test", filepath.Join("examples", "flow.yml")})
 	if err != nil {
-		t.Fatalf("steps test examples/hooks.yml: %v", err)
+		t.Fatalf("steps test examples/flow.yml: %v", err)
 	}
 }
 

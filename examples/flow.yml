@@ -1,0 +1,179 @@
+# Control flow, all in one self-verifying pipeline. Three opt-in features that
+# shape which steps run and in what order — each modelless, so the whole file
+# runs offline as a regression fixture:
+#
+#   when:              gate whether a step runs at all (exit code: 0 run, nonzero skip)
+#   to: / max_visits:  route to another step by outcome, incl. bounded backward loops
+#   hooks              on_success / on_failure / ensure reactions (observers)
+#
+# All verification is `assert.execution`: each job names the exact ordered set
+# of task/hook names it must run, and the top-level assert names the jobs. A
+# MATCHING job assert clears that job's failure — which is what lets the
+# deliberately-failing jobs (`exhaust`, `failing`) still report success. Run:
+#
+#   steps test examples/flow.yml            # runs every job, checks every assert
+#   steps run examples/flow.yml --job <name>
+#
+# No network, credentials, or model.
+assert:
+  execution:
+    # when: jobs
+    - gate-open
+    - gate-closed
+    - nonzero-is-false
+    # to:/max_visits: jobs
+    - converge
+    - exhaust
+    # hooks jobs
+    - passing
+    - failing
+
+jobs:
+# ─── when: (conditional steps) ──────────────────────────────────────────────
+# A when: guard runs BEFORE the step and decides whether it runs: exit 0 runs
+# it, nonzero skips it. A skipped step behaves like a merkle-cached skip — no
+# hooks fire, nothing records, and it's absent from the execution log (which is
+# how assert.execution can prove it was skipped).
+
+# Guard TRUE → the gated step runs.
+- name: gate-open
+  plan:
+  - task: scout
+    run: echo high > risk.txt
+  - task: deep-review
+    run: echo "running the expensive review"
+    when: grep -q high risk.txt      # reads what scout wrote, same working dir
+  - task: report
+    run: echo done
+  assert:
+    execution: [scout, deep-review, report]
+
+# Guard FALSE → the gated step is skipped, and the plan CONTINUES (report still
+# runs). A false guard skips one step, not the rest of the job. The skipped
+# step's on_failure hook must NOT fire (it never ran).
+- name: gate-closed
+  plan:
+  - task: scout
+    run: echo low > risk.txt
+  - task: deep-review
+    run: echo "THIS MUST NOT RUN"
+    when: grep -q high risk.txt
+    on_failure:
+      task: notify
+      run: echo "THIS MUST NOT RUN EITHER"
+  - task: report
+    run: echo done
+  assert:
+    execution: [scout, report]        # deep-review absent: it was skipped
+
+# Any nonzero exit is a legitimate "false", not a failure — an explicit exit,
+# a missing file, etc.
+- name: nonzero-is-false
+  plan:
+  - task: gated-by-explicit-exit
+    run: echo "THIS MUST NOT RUN"
+    when: exit 3
+  - task: gated-by-missing-file
+    run: echo "THIS MUST NOT RUN"
+    when: test -f no-such-file
+  - task: survivor
+    run: echo still here
+  assert:
+    execution: [survivor]
+
+# ─── to: / max_visits: (bounded step transitions) ───────────────────────────
+# to: routes to another step in the same segment based on this step's outcome,
+# AFTER it runs. A backward target forms a loop, bounded by max_visits: (the
+# max times the routing step may execute). Exhausting the bound is a job-level
+# failure that reaches the job's on_failure hook.
+
+# A converging revise loop: critique fails twice (routing back to draft), then
+# succeeds on its third run and falls through to publish.
+- name: converge
+  plan:
+  - task: draft
+    run: echo drafting
+  - task: critique
+    run: |
+      n=$(cat .attempts 2>/dev/null || echo 0)
+      n=$((n + 1)); echo "$n" > .attempts
+      echo "critique attempt $n"
+      test "$n" -ge 3                 # exit 0 only on the 3rd attempt
+    to:
+      success: publish                # forward: done
+      failure: draft                  # backward: revise
+    max_visits: 3
+  - task: publish
+    run: echo published
+  assert:
+    execution: [draft, critique, draft, critique, draft, critique, publish]
+
+# Exhaustion: flaky always fails and self-loops, hitting max_visits (2
+# executions). The loop exhausts → job fails → the JOB's on_failure fires. A
+# matching job assert clears the failure so the job still passes `steps test`.
+- name: exhaust
+  plan:
+  - task: flaky
+    run: exit 1
+    to:
+      failure: flaky                  # self-loop
+    max_visits: 2
+  on_failure:                         # fires once, on exhaustion
+    task: escalate
+    run: echo escalated
+  assert:
+    execution: [flaky, flaky, escalate]
+
+# ─── hooks (reactions) ──────────────────────────────────────────────────────
+# A hook is a full step (task/put/agent) that runs in reaction to an outcome:
+# on_success, on_failure, on_error, on_abort, ensure. Hooks are OBSERVERS — a
+# failed step's on_failure runs, then the failure still propagates (unless a
+# job assert clears it); a failing on_success/ensure fails an otherwise-green
+# step. Hooks can nest.
+
+# Success path: on_success + ensure fire (not on_failure), and the job's own
+# on_success fires. Exits 0.
+- name: passing
+  plan:
+  - task: work
+    run: echo "doing the work"
+    on_success:
+      task: celebrate
+      run: echo "step succeeded"
+    on_failure:
+      task: apologize
+      run: echo "step failed"
+    ensure:
+      task: cleanup
+      run: echo "always cleaning up"
+  on_success:
+    task: announce
+    run: echo "job succeeded"
+  assert:
+    execution: [work, celebrate, cleanup, announce]
+
+# Failure path: work exits nonzero, so on_failure + ensure fire; the on_failure
+# hook carries its OWN nested ensure (hooks recurse), then the job's on_failure
+# fires. Without the assert this job would exit nonzero — the matching assert
+# clears the failure.
+- name: failing
+  plan:
+  - task: work
+    run: echo "about to fail"; exit 1
+    on_success:
+      task: celebrate
+      run: echo "step succeeded"
+    on_failure:
+      task: apologize
+      run: echo "step failed — notifying"
+      ensure:
+        task: log
+        run: echo "notification attempt finished"
+    ensure:
+      task: cleanup
+      run: echo "always cleaning up"
+  on_failure:
+    task: alert
+    run: echo "job failed"
+  assert:
+    execution: [work, apologize, log, cleanup, alert]

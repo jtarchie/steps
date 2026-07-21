@@ -6,13 +6,14 @@ import (
 	"testing"
 )
 
-// TestExampleHooksLoadsCleanly guards examples/hooks.yml against schema drift.
-func TestExampleHooksLoadsCleanly(t *testing.T) {
+// TestExampleFlowLoadsCleanly guards examples/flow.yml (hooks, when:, and to:,
+// consolidated) against schema drift.
+func TestExampleFlowLoadsCleanly(t *testing.T) {
 	t.Parallel()
 
-	_, err := LoadConfig(filepath.Join("..", "..", "examples", "hooks.yml"))
+	_, err := LoadConfig(filepath.Join("..", "..", "examples", "flow.yml"))
 	if err != nil {
-		t.Fatalf("LoadConfig(examples/hooks.yml): %v", err)
+		t.Fatalf("LoadConfig(examples/flow.yml): %v", err)
 	}
 }
 
