@@ -105,6 +105,76 @@ func TestStoreHasSucceededAndRecordJobRun(t *testing.T) {
 	assertHasSucceeded(t, reopened, "job", "hash1", true)
 }
 
+func TestStoreHasSucceededBatch(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	mustRecordJobRun(t, store, "job", "hash1", "succeeded", nil)
+	mustRecordJobRun(t, store, "job", "hash2", "failed", errors.New("boom"))
+	mustRecordJobRun(t, store, "other-job", "hash1", "succeeded", nil)
+
+	got, err := store.HasSucceededBatch(context.Background(), "job", []string{"hash1", "hash2", "hash3"})
+	if err != nil {
+		t.Fatalf("HasSucceededBatch: %v", err)
+	}
+
+	want := map[string]bool{"hash1": true}
+	if len(got) != len(want) || got["hash1"] != want["hash1"] {
+		t.Errorf("HasSucceededBatch = %v, want a map with only hash1=true (hash2 failed, hash3 unknown, other-job's hash1 is a different job)", got)
+	}
+
+	got, err = store.HasSucceededBatch(context.Background(), "job", nil)
+	if err != nil {
+		t.Fatalf("HasSucceededBatch(nil): %v", err)
+	}
+
+	if len(got) != 0 {
+		t.Errorf("HasSucceededBatch(nil) = %v, want an empty map", got)
+	}
+}
+
+// TestStoreHasSucceededBatchManyHashes exercises the chunked IN (...) query
+// path with more root hashes than fit in a single chunk, confirming it
+// neither errors nor drops any of the seeded succeeded rows.
+func TestStoreHasSucceededBatchManyHashes(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	const n = 1500
+
+	hashes := make([]string, n)
+
+	for i := range n {
+		hash := fmt.Sprintf("hash-%d", i)
+		hashes[i] = hash
+
+		mustRecordJobRun(t, store, "job", hash, "succeeded", nil)
+	}
+
+	got, err := store.HasSucceededBatch(context.Background(), "job", hashes)
+	if err != nil {
+		t.Fatalf("HasSucceededBatch: %v", err)
+	}
+
+	if len(got) != n {
+		t.Fatalf("HasSucceededBatch returned %d entries, want %d", len(got), n)
+	}
+
+	for _, hash := range hashes {
+		if !got[hash] {
+			t.Errorf("HasSucceededBatch[%q] = false, want true", hash)
+		}
+	}
+}
+
 func TestStoreRecordNode(t *testing.T) {
 	t.Parallel()
 

@@ -129,6 +129,35 @@ func runJobPlan(ctx context.Context, cfg *config.Config, job *config.Job, pinned
 	return runSteps(ctx, cfg, job.Name, job.Plan, pinned, provider, bw, st, skippable, "", false)
 }
 
+// computeChainSkippable reports, per chain, whether it's already covered by a
+// prior succeeded job_runs row — batched into one query (per
+// Store.HasSucceededBatch) instead of one per chain. An Unskippable chain is
+// never even asked about; it stays false.
+func computeChainSkippable(ctx context.Context, st *store.Store, jobName string, chains []merkle.Chain) ([]bool, error) {
+	chainSkippable := make([]bool, len(chains))
+
+	toCheck := make([]string, 0, len(chains))
+
+	for _, chain := range chains {
+		if !chain.Unskippable {
+			toCheck = append(toCheck, chain.RootHash)
+		}
+	}
+
+	succeeded, err := st.HasSucceededBatch(ctx, jobName, toCheck)
+	if err != nil {
+		return nil, fmt.Errorf("has succeeded batch: %w", err)
+	}
+
+	for i, chain := range chains {
+		if !chain.Unskippable {
+			chainSkippable[i] = succeeded[chain.RootHash]
+		}
+	}
+
+	return chainSkippable, nil
+}
+
 // buildSkippableIndex returns, for every node hash reachable across chains,
 // whether every leaf merkle.Chain passing through it is already covered by a
 // prior succeeded job_runs row. Any Unskippable chain (contains a put or
@@ -139,19 +168,9 @@ func runJobPlan(ctx context.Context, cfg *config.Config, job *config.Job, pinned
 // unskippable branch to execute even if a sibling branch is independently
 // skippable.
 func buildSkippableIndex(ctx context.Context, st *store.Store, jobName string, chains []merkle.Chain) (map[string]bool, error) {
-	chainSkippable := make([]bool, len(chains))
-
-	for i, chain := range chains {
-		if chain.Unskippable {
-			continue
-		}
-
-		ok, err := st.HasSucceeded(ctx, jobName, chain.RootHash)
-		if err != nil {
-			return nil, fmt.Errorf("job %q: %w", jobName, err)
-		}
-
-		chainSkippable[i] = ok
+	chainSkippable, err := computeChainSkippable(ctx, st, jobName, chains)
+	if err != nil {
+		return nil, fmt.Errorf("job %q: %w", jobName, err)
 	}
 
 	nodeChains := map[string][]int{}

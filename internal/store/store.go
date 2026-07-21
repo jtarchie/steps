@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver name used by sql.Open below
@@ -143,6 +144,77 @@ func (s *Store) HasSucceeded(ctx context.Context, jobName, rootHash string) (boo
 	}
 
 	return status == "succeeded", nil
+}
+
+// hasSucceededBatchChunkSize bounds how many root hashes go into a single
+// IN (...) query, well under sqlite's compiled-in bind-variable limit
+// regardless of how many chains a version: every fanout produces.
+const hasSucceededBatchChunkSize = 500
+
+// HasSucceededBatch reports which of rootHashes have a prior succeeded run
+// recorded for jobName, in one (or a few chunked) round trip instead of one
+// query per hash.
+func (s *Store) HasSucceededBatch(ctx context.Context, jobName string, rootHashes []string) (map[string]bool, error) {
+	result := make(map[string]bool, len(rootHashes))
+
+	for start := 0; start < len(rootHashes); start += hasSucceededBatchChunkSize {
+		end := min(start+hasSucceededBatchChunkSize, len(rootHashes))
+
+		err := s.queryHasSucceededChunk(ctx, jobName, rootHashes[start:end], result)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return result, nil
+}
+
+// queryHasSucceededChunk runs one IN (...) query for a chunk of root hashes,
+// setting result[hash] = true for each one found with a succeeded status.
+func (s *Store) queryHasSucceededChunk(ctx context.Context, jobName string, chunk []string, result map[string]bool) error {
+	if len(chunk) == 0 {
+		return nil
+	}
+
+	placeholders := strings.Repeat("?,", len(chunk))
+	placeholders = placeholders[:len(placeholders)-1]
+
+	args := make([]any, 0, len(chunk)+1)
+	args = append(args, jobName)
+
+	for _, hash := range chunk {
+		args = append(args, hash)
+	}
+
+	//nolint:gosec // G201: placeholders is a repeated, fixed "?," string (one per chunk element), never interpolated data — every actual value is still a bound arg below
+	query := fmt.Sprintf(
+		`SELECT root_hash FROM job_runs WHERE job_name = ? AND status = 'succeeded' AND root_hash IN (%s)`,
+		placeholders,
+	)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("could not query job_runs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var hash string
+
+		err := rows.Scan(&hash)
+		if err != nil {
+			return fmt.Errorf("could not scan job_runs row: %w", err)
+		}
+
+		result[hash] = true
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return fmt.Errorf("could not read job_runs rows: %w", err)
+	}
+
+	return nil
 }
 
 // CountJobRuns returns how many job_runs rows exist for jobName, regardless
