@@ -106,6 +106,21 @@ jobs:
 			want: "max_visits must be set",
 		},
 		{
+			name: "backward max_visits exceeds ceiling",
+			pipeline: `
+jobs:
+- name: j
+  plan:
+  - task: a
+    run: "true"
+  - task: b
+    run: "true"
+    to: { failure: a }
+    max_visits: 1001
+`,
+			want: "exceeds the maximum",
+		},
+		{
 			name: "to on a get step",
 			pipeline: `
 resource_types:

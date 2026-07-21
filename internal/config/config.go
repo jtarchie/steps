@@ -892,6 +892,10 @@ func validateRouteTargets(label string, segPos int, step Step, pos map[string]in
 		return fmt.Errorf("%s: to: routes backward, so max_visits must be set (> 0)", label)
 	}
 
+	if backward && step.MaxVisits > maxVisitsLimit {
+		return fmt.Errorf("%s: max_visits %d exceeds the maximum of %d", label, step.MaxVisits, maxVisitsLimit)
+	}
+
 	return nil
 }
 
@@ -1043,6 +1047,15 @@ func validateToolCallGuardShape(context string, spec ToolSpec) error {
 // in walkAgentGraph guarantee sub-agent construction (and merkle recursion)
 // terminates. Mirrors secret-agent's agent nesting cap.
 const maxSubAgentDepth = 8
+
+// maxVisitsLimit caps how many times a single to:-routed step may execute in
+// one run, catching a config mistake (or hostile pipeline) before it burns
+// large runtime/cost on a runaway loop — the upper bound paired with the
+// existing > 0 lower bound. Loop executions are additive (each backward-
+// routing step's runtime visits counter is independent and cumulative for the
+// whole segment, never reset by an outer loop re-entering it), so bounding
+// each step's max_visits bounds the whole segment's total possible executions.
+const maxVisitsLimit = 1000
 
 // validateAgentGraph enforces the sub-agent tool rules at load time: a
 // sub-agent tool's shape (no builtin/name/run, never required:, references an
