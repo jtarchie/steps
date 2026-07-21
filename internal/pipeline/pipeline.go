@@ -244,8 +244,9 @@ func runSteps(ctx context.Context, cfg *config.Config, jobName string, steps []c
 			return nil
 		}
 
-		if stepForcesUnskippable(step) {
-			chainUnskippable = true
+		chainUnskippable, err = foldStepUnskippable(cfg, step, chainUnskippable)
+		if err != nil {
+			return err
 		}
 
 		if disposition == stepGuardSkipped {

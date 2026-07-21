@@ -99,11 +99,37 @@ func applyRouting(ctx context.Context, steps []config.Step, i int, step config.S
 }
 
 // stepForcesUnskippable reports whether a step makes its chain unskippable: a
-// put/agent/fix: (side effects / non-determinism) or a when:/to: whose runtime
-// outcome the planner cannot know. Such a chain is never recorded as a reusable
-// "this whole chain succeeded" hash.
-func stepForcesUnskippable(step config.Step) bool {
-	return step.Put != "" || step.Agent != "" || step.Fix != nil || step.When != nil || step.To != nil
+// put/agent (side effects / non-determinism), a task with a fix: — including
+// one inherited from a referenced tasks: entry, resolved the same way
+// merkle.planNonGetNode resolves it at plan time, so the two can't disagree —
+// or a when:/to: whose runtime outcome the planner cannot know. Such a chain
+// is never recorded as a reusable "this whole chain succeeded" hash.
+func stepForcesUnskippable(cfg *config.Config, step config.Step) (bool, error) {
+	if step.Put != "" || step.Agent != "" || step.When != nil || step.To != nil {
+		return true, nil
+	}
+
+	if step.Task == "" {
+		return false, nil
+	}
+
+	rt, err := cfg.ResolveTask(step)
+	if err != nil {
+		return false, fmt.Errorf("resolve task: %w", err)
+	}
+
+	return rt.Fix != nil, nil
+}
+
+// foldStepUnskippable ORs step's own unskippability into chainUnskippable in
+// one call, keeping runSteps's own branch count down.
+func foldStepUnskippable(cfg *config.Config, step config.Step, chainUnskippable bool) (bool, error) {
+	unskippable, err := stepForcesUnskippable(cfg, step)
+	if err != nil {
+		return chainUnskippable, err
+	}
+
+	return chainUnskippable || unskippable, nil
 }
 
 // indexOfStep returns the position of the step named name (its task/put/agent
