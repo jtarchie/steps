@@ -112,6 +112,15 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, err
 	}
 
+	required := requiredToolNames(ri.ToolSpecs)
+
+	verdictTool, err := injectVerdictTool(step.Verdicts, decls, registry, required)
+	if err != nil {
+		workspace.CloseSpace(space, step.Agent)
+
+		return preparedAgentStep{}, fmt.Errorf("agent %q: %w", step.Agent, err)
+	}
+
 	runner, err := shell.NewRunner(ri.Image, dir)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
@@ -130,7 +139,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		system: buildSystemMessage(ri.Persona, dir),
 		prompt: step.Prompt,
 		env:    toolEnv{dir: dir, runner: runner},
-		tools:  agentTools{decls: decls, registry: registry, required: requiredToolNames(ri.ToolSpecs), maxCalls: maxCallsByName(ri.ToolSpecs)},
+		tools:  agentTools{decls: decls, registry: registry, required: required, maxCalls: maxCallsByName(ri.ToolSpecs)},
 		params: agentGenParams{
 			temperature: ri.Temperature,
 			topP:        ri.TopP,
@@ -139,6 +148,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		},
 		maxTurns:             ri.MaxTurns,
 		toolChoiceStringOnly: ri.StringOnlyToolChoice,
+		verdictTool:          verdictTool,
 	}
 
 	return preparedAgentStep{ri: ri, space: space, conv: conv, llm: newAgentLLM(ri.BaseURL, ri.ModelName, apiKey)}, nil
@@ -148,21 +158,24 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 // skippable) and runs it, retrying the whole conversation up to the
 // resolved attempt count. It returns the hash to use as parentHash for the
 // next step.
-func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, parentHash string) (string, error) {
+// It also returns the verdict the agent emitted (see verdicts:/buildVerdictTool);
+// "" for a verdict-less agent, or when the run failed before emitting one.
+// internal/pipeline routes the plan on it.
+func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, parentHash string) (string, string, error) {
 	prepared, err := prepareAgentStep(ctx, cfg, step, bw)
 	if err != nil {
-		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		return "", "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 	defer workspace.CloseSpace(prepared.space, step.Agent)
 
 	content, err := merkle.AgentContentMap(cfg, step, prepared.ri)
 	if err != nil {
-		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		return "", "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
 	hash, err := merkle.HashNode(merkle.NodeKindAgent, content, parentHash)
 	if err != nil {
-		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		return "", "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
 	slog.Debug("job.step", "job", jobName, "index", i, "kind", "agent", "agent", step.Agent)
@@ -175,14 +188,16 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	if err != nil {
 		recordAgentFailure(ctx, st, node, jobName, err)
 
-		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		// A failed run emitted no clean verdict; the pipeline routes it via
+		// to["failure"] (or fails the job).
+		return "", "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
 	err = assertAgentResponse(step.Assert, res)
 	if err != nil {
 		recordAgentFailure(ctx, st, node, jobName, err)
 
-		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		return "", "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
 	err = prepared.space.Capture(ctx)
@@ -190,17 +205,20 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 		wrapped := fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 		recordAgentFailure(ctx, st, node, jobName, wrapped)
 
-		return "", wrapped
+		return "", "", wrapped
 	}
 
 	result := map[string]any{"response": res.text, "turns": res.turns}
+	if res.verdict != "" {
+		result["verdict"] = res.verdict
+	}
 
 	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", result, nil)
 	if err != nil {
-		return "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		return "", "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
-	return hash, nil
+	return hash, res.verdict, nil
 }
 
 // assertAgentResponse checks an agent step's assert (stdout and/or

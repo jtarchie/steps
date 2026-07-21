@@ -1,0 +1,188 @@
+package pipeline
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/outcome"
+)
+
+func routeSteps() []config.Step {
+	return []config.Step{
+		{Task: "a"},
+		{Task: "b"},
+		{Task: "c"},
+	}
+}
+
+func TestIndexOfStep(t *testing.T) {
+	t.Parallel()
+
+	steps := routeSteps()
+
+	idx, ok := indexOfStep(steps, "b")
+	if !ok || idx != 1 {
+		t.Errorf("indexOfStep(b) = %d,%v, want 1,true", idx, ok)
+	}
+
+	_, ok = indexOfStep(steps, "missing")
+	if ok {
+		t.Error("indexOfStep(missing) should not be found")
+	}
+}
+
+func TestResolveTransitionSuccessRoutesForward(t *testing.T) {
+	t.Parallel()
+
+	steps := routeSteps()
+	step := config.Step{Task: "a", To: map[string]string{"success": "c"}}
+
+	next, routed, exhausted := resolveTransition(context.Background(), steps, 0, step, nil, "", map[int]int{0: 1})
+	if exhausted != nil {
+		t.Fatalf("unexpected exhaustion: %v", exhausted)
+	}
+
+	if !routed || next != 2 {
+		t.Errorf("got next=%d routed=%v, want 2,true (forward to c)", next, routed)
+	}
+}
+
+func TestResolveTransitionNoMatchingKey(t *testing.T) {
+	t.Parallel()
+
+	steps := routeSteps()
+	// success outcome but only a failure edge → no route, fall through.
+	step := config.Step{Task: "a", To: map[string]string{"failure": "a"}, MaxVisits: 3}
+
+	_, routed, exhausted := resolveTransition(context.Background(), steps, 0, step, nil, "", map[int]int{0: 1})
+	if exhausted != nil || routed {
+		t.Errorf("a success with no success edge should not route: routed=%v exhausted=%v", routed, exhausted)
+	}
+}
+
+func TestResolveTransitionFailureRoutesBackwardAndExhausts(t *testing.T) {
+	t.Parallel()
+
+	steps := routeSteps()
+	step := config.Step{Task: "b", To: map[string]string{"failure": "a"}, MaxVisits: 2}
+	failErr := outcome.Fail(errors.New("nonzero exit"))
+
+	// visits[1] == 1 (< max_visits 2): routes backward to a.
+	next, routed, exhausted := resolveTransition(context.Background(), steps, 1, step, failErr, "", map[int]int{1: 1})
+	if exhausted != nil {
+		t.Fatalf("should route, not exhaust yet: %v", exhausted)
+	}
+
+	if !routed || next != 0 {
+		t.Errorf("got next=%d routed=%v, want 0,true (backward to a)", next, routed)
+	}
+
+	// visits[1] == 2 (>= max_visits 2): exhausts.
+	_, routed, exhausted = resolveTransition(context.Background(), steps, 1, step, failErr, "", map[int]int{1: 2})
+	if exhausted == nil {
+		t.Fatal("expected exhaustion at the visit cap")
+	}
+
+	if routed {
+		t.Error("must not route when exhausted")
+	}
+
+	if outcome.Classify(context.Background(), exhausted) != outcome.Failed {
+		t.Error("exhaustion must classify as Failed (routes to the job's on_failure)")
+	}
+}
+
+// TestResolveTransitionOutcomeClass proves to.failure fires only on a
+// task-level Failed error — never on an errored (plain) or aborted (canceled
+// ctx) step.
+func TestResolveTransitionOutcomeClass(t *testing.T) {
+	t.Parallel()
+
+	steps := routeSteps()
+	step := config.Step{Task: "b", To: map[string]string{"failure": "a"}, MaxVisits: 3}
+
+	t.Run("Failed routes", func(t *testing.T) {
+		t.Parallel()
+
+		_, routed, _ := resolveTransition(context.Background(), steps, 1, step, outcome.Fail(errors.New("x")), "", map[int]int{1: 1})
+		if !routed {
+			t.Error("a Failed step should route on to.failure")
+		}
+	})
+
+	t.Run("Errored propagates", func(t *testing.T) {
+		t.Parallel()
+
+		_, routed, _ := resolveTransition(context.Background(), steps, 1, step, errors.New("docker down"), "", map[int]int{1: 1})
+		if routed {
+			t.Error("an errored (non-Fail) step must NOT route — it propagates")
+		}
+	})
+
+	t.Run("Aborted propagates", func(t *testing.T) {
+		t.Parallel()
+
+		canceled, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, routed, _ := resolveTransition(canceled, steps, 1, step, outcome.Fail(errors.New("x")), "", map[int]int{1: 1})
+		if routed {
+			t.Error("an aborted step (canceled ctx) must NOT route — it stays aborted")
+		}
+	})
+}
+
+func TestResolveTransitionVerdictRoutes(t *testing.T) {
+	t.Parallel()
+
+	steps := []config.Step{{Agent: "writer"}, {Agent: "critic"}, {Agent: "publish"}}
+	step := config.Step{
+		Agent:     "critic",
+		Verdicts:  []string{"approve", "revise"},
+		To:        map[string]string{"approve": "publish", "revise": "writer"},
+		MaxVisits: 3,
+	}
+
+	t.Run("approve routes forward", func(t *testing.T) {
+		t.Parallel()
+
+		next, routed, _ := resolveTransition(context.Background(), steps, 1, step, nil, "approve", map[int]int{1: 1})
+		if !routed || next != 2 {
+			t.Errorf("got next=%d routed=%v, want 2,true (publish)", next, routed)
+		}
+	})
+
+	t.Run("revise routes backward", func(t *testing.T) {
+		t.Parallel()
+
+		next, routed, _ := resolveTransition(context.Background(), steps, 1, step, nil, "revise", map[int]int{1: 1})
+		if !routed || next != 0 {
+			t.Errorf("got next=%d routed=%v, want 0,true (writer)", next, routed)
+		}
+	})
+
+	t.Run("failure key on a failed verdict agent", func(t *testing.T) {
+		t.Parallel()
+
+		withFailure := step
+		withFailure.To = map[string]string{"approve": "publish", "revise": "writer", "failure": "publish"}
+
+		next, routed, _ := resolveTransition(context.Background(), steps, 1, withFailure, outcome.Fail(errors.New("no verdict")), "", map[int]int{1: 1})
+		if !routed || next != 2 {
+			t.Errorf("a failed verdict agent should route on to.failure: next=%d routed=%v", next, routed)
+		}
+	})
+}
+
+func TestResolveTransitionNoTo(t *testing.T) {
+	t.Parallel()
+
+	steps := routeSteps()
+
+	_, routed, exhausted := resolveTransition(context.Background(), steps, 0, config.Step{Task: "a"}, nil, "", map[int]int{})
+	if routed || exhausted != nil {
+		t.Error("a step with no to: never routes")
+	}
+}

@@ -1,0 +1,65 @@
+# Bounded step transitions: `to:` routes to another step in the same segment
+# based on this step's outcome, including jumping BACKWARD to form a loop,
+# bounded by `max_visits:`. This is the FSM predecessor's judge/revise loop,
+# re-expressed in Concourse-style YAML with no expression language.
+#
+# `to:` (route: where next) is complementary to `when:` (guard: run at all?)
+# and to hooks (react: run a side step, don't change flow). See the "Step
+# Transitions" section of CLAUDE.md for the full contrast.
+#
+# Self-contained and self-verifying (no network/model): the two task-based
+# jobs below are runnable via `steps test examples/loop.yml`. Verdict-based
+# N-way agent routing (an agent emitting approve/revise/escalate) needs a live
+# model, so it can't be a runnable fixture — see examples/judge.yml for that
+# shape and internal/agent/verdict_test.go for its coverage.
+
+jobs:
+# A converging revise loop. `critique` counts its own invocations in a file
+# and fails the first two times, succeeding the third. On failure it routes
+# BACK to `draft` (a bounded loop); on success it falls through to `publish`.
+# max_visits caps `critique` at 3 executions.
+- name: converge
+  plan:
+  - task: draft
+    run: echo drafting
+
+  - task: critique
+    # Deterministic "retry" trick: fail until the third attempt.
+    run: |
+      n=$(cat .attempts 2>/dev/null || echo 0)
+      n=$((n + 1)); echo "$n" > .attempts
+      echo "critique attempt $n"
+      test "$n" -ge 3       # exit 0 (success) only on the 3rd attempt
+    to:
+      success: publish      # forward: done
+      failure: draft        # BACKWARD: revise
+    max_visits: 3
+
+  - task: publish
+    run: echo published
+
+  # The exact executed order, spelled out — draft/critique twice more, then
+  # publish. assert.execution is order-sensitive and does not collapse repeats.
+  assert:
+    execution: [draft, critique, draft, critique, draft, critique, publish]
+
+# Exhaustion. `flaky` always fails and routes back to itself, so it hits its
+# max_visits cap (2 executions) and the loop EXHAUSTS — a job-level failure.
+# The JOB's on_failure hook fires (the step's own on_failure fires each
+# iteration; the job's fires once, on exhaustion). The job-level
+# assert.execution matches the full sequence, clearing the failure so this
+# deliberately-exhausting job passes `steps test` (the hooks.yml pattern).
+- name: exhaust
+  plan:
+  - task: flaky
+    run: exit 1
+    to:
+      failure: flaky        # self-loop
+    max_visits: 2
+
+  on_failure:               # JOB-level: fires once, on exhaustion
+    task: escalate
+    run: echo escalated
+
+  assert:
+    execution: [flaky, flaky, escalate]

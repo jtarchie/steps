@@ -70,7 +70,7 @@ func GetNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 		content["image"] = resourceType.Image
 	}
 
-	return withHooks(cfg, step, withWhen(step, content))
+	return withHooks(cfg, step, withWhen(step, withRouting(step, content)))
 }
 
 // withWhen folds a step's when: guard command into content, but only when the
@@ -83,6 +83,30 @@ func GetNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 func withWhen(step config.Step, content map[string]any) map[string]any {
 	if step.When != nil && step.When.Run != "" {
 		content["when"] = step.When.Run
+	}
+
+	return content
+}
+
+// withRouting folds a step's routing surface — to:, max_visits:, and (for a
+// verdict agent) verdicts: — into content, but only when set, so a step with
+// no routing hashes byte-identically to before these fields existed (the same
+// value-gating as image:/when:). The chain containing a routing step is already
+// unconditionally unskippable (see internal/pipeline's chainUnskippable and
+// planNonGetNode below), so this isn't needed for skip-decision correctness —
+// it's so a node hash shared across chains (e.g. via get: version: every fan-
+// out) still changes when the routing changes, instead of colliding with a
+// stale cached success from before the edit. verdicts: matters because it
+// changes the synthesized required verdict tool set (internal/agent), so it
+// genuinely alters what the step executes.
+func withRouting(step config.Step, content map[string]any) map[string]any {
+	if step.To != nil {
+		content["to"] = step.To // map[string]string — json.Marshal sorts keys, so the hash stays deterministic
+		content["max_visits"] = step.MaxVisits
+	}
+
+	if len(step.Verdicts) != 0 {
+		content["verdicts"] = step.Verdicts // order-significant: it is the emitted enum
 	}
 
 	return content
@@ -193,7 +217,7 @@ func TaskNodeContent(cfg *config.Config, step config.Step, rt config.ResolvedTas
 		content["assert"] = assertContent(rt.Assert)
 	}
 
-	return withHooks(cfg, step, withWhen(step, content))
+	return withHooks(cfg, step, withWhen(step, withRouting(step, content)))
 }
 
 // assertContent builds the stable content map for a task/agent step's assert
@@ -252,7 +276,7 @@ func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 		content["image"] = resourceType.Image
 	}
 
-	return withHooks(cfg, step, withWhen(step, content))
+	return withHooks(cfg, step, withWhen(step, withRouting(step, content)))
 }
 
 // toolSpecsContent builds the hashed content for an agent's effective tool
@@ -388,7 +412,7 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 		content["assert"] = assertContent(step.Assert)
 	}
 
-	return withHooks(cfg, step, withWhen(step, content))
+	return withHooks(cfg, step, withWhen(step, withRouting(step, content)))
 }
 
 // HashNode computes a Node's content-addressed hash: sha256 hex of the
@@ -469,7 +493,14 @@ func planNonGetNode(cfg *config.Config, step config.Step, i int, parentHash stri
 
 		node, err := taskNode(cfg, step, rt, i, parentHash)
 
-		return node, rt.Fix != nil, err
+		// A task is unskippable if it has a fix:, or carries a when: guard or
+		// to: routing — the latter two have run-time-only outcomes the planner
+		// can't know, so a chain through them must never be recorded as a
+		// reusable success. This mirrors internal/pipeline's runtime
+		// chainUnskippable and makes the plan-time flag accurate rather than
+		// relying on that runtime flag alone (Unskippable is not hashed, so this
+		// only ever makes the cache more conservative).
+		return node, rt.Fix != nil || step.When != nil || step.To != nil, err
 	case step.Put != "":
 		node, err := putNode(cfg, step, i, parentHash)
 

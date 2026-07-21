@@ -69,13 +69,19 @@ type recordedToolCall struct {
 }
 
 // conversationResult is one completed attempt's output: the model's final
-// text, the number of turns it took, and the ordered trajectory of tool calls
-// it made. Returned (rather than accumulated in the caller) so each attempt of
-// a retry reports only its own calls.
+// text, the number of turns it took, the ordered trajectory of tool calls it
+// made, and — for a verdict agent — the verdict it emitted. Returned (rather
+// than accumulated in the caller) so each attempt of a retry reports only its
+// own calls.
 type conversationResult struct {
 	text       string
 	turns      int
 	trajectory []recordedToolCall
+	// verdict is the choice from the last SUCCESSFUL call to the synthesized
+	// verdict tool (see agentConversation.verdictTool); "" when the step
+	// declares no verdicts or the model never emitted one. internal/pipeline
+	// routes on it.
+	verdict string
 }
 
 // agentConversation is one runnable attempt's inputs.
@@ -90,6 +96,10 @@ type agentConversation struct {
 	// tool_choice: "required" instead of a named function object — see
 	// forceRequiredTool. Set from config.ResolvedInvocation.StringOnlyToolChoice.
 	toolChoiceStringOnly bool
+	// verdictTool is the name of the synthesized required verdict tool when the
+	// step declares verdicts:, else "". A successful call to it records the
+	// chosen verdict into conversationResult.verdict.
+	verdictTool string
 }
 
 // buildAgentRequest builds a fresh LLM request (system + user prompt + tools
@@ -151,11 +161,14 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 	// actually produced the step's outcome), not an accumulation across
 	// abandoned attempts.
 	var trajectory []recordedToolCall
+	// verdict is the last successful verdict-tool choice; per-attempt like the
+	// rest. A model that revises its own verdict ends on its final one.
+	var verdict string
 
 	for turn := range conv.maxTurns {
 		resp, err := generateOnce(ctx, llm, req)
 		if err != nil {
-			return conversationResult{turns: turn, trajectory: trajectory}, err
+			return conversationResult{turns: turn, trajectory: trajectory, verdict: verdict}, err
 		}
 
 		req.Contents = append(req.Contents, resp.Content)
@@ -164,7 +177,7 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 		if len(calls) == 0 {
 			missing := unsatisfiedRequiredTools(conv.tools.required, satisfied)
 			if len(missing) == 0 {
-				return conversationResult{text: text, turns: turn + 1, trajectory: trajectory}, nil
+				return conversationResult{text: text, turns: turn + 1, trajectory: trajectory, verdict: verdict}, nil
 			}
 
 			forceRequiredTool(req, missing[0], conv.toolChoiceStringOnly)
@@ -180,11 +193,8 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 
 		parts := toolResponseParts(ctx, calls, conv.env, conv.tools.registry, conv.tools.maxCalls, callCounts)
 
-		for _, part := range parts {
-			name := part.FunctionResponse.Name
-			if conv.tools.required[name] && requiredCallSucceeded(part.FunctionResponse.Response) {
-				satisfied[name] = true
-			}
+		if choice := conv.trackToolResults(parts, satisfied); choice != "" {
+			verdict = choice // last successful verdict wins across turns
 		}
 
 		req.Contents = append(req.Contents, &genai.Content{
@@ -197,7 +207,7 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 	// ran but didn't finish its task), not infrastructure errors — mark them
 	// so hook dispatch classifies them as failed rather than errored. A
 	// transport error from generateOnce above stays unwrapped → errored.
-	exhausted := conversationResult{turns: conv.maxTurns, trajectory: trajectory}
+	exhausted := conversationResult{turns: conv.maxTurns, trajectory: trajectory, verdict: verdict}
 
 	missing := unsatisfiedRequiredTools(conv.tools.required, satisfied)
 	if len(missing) > 0 {
@@ -207,6 +217,30 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 
 	//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
 	return exhausted, outcome.Fail(fmt.Errorf("agent exceeded %d turns without a final response", conv.maxTurns))
+}
+
+// trackToolResults marks required tools satisfied for this turn's results and
+// returns the verdict a successful verdict-tool call carried (or "" if none
+// this turn). satisfied is mutated in place; the returned verdict lets the
+// caller keep "last successful verdict wins" across turns.
+func (conv agentConversation) trackToolResults(parts []*genai.Part, satisfied map[string]bool) string {
+	verdict := ""
+
+	for _, part := range parts {
+		name := part.FunctionResponse.Name
+
+		if conv.tools.required[name] && requiredCallSucceeded(part.FunctionResponse.Response) {
+			satisfied[name] = true
+		}
+
+		if conv.verdictTool != "" && name == conv.verdictTool {
+			if choice, ok := part.FunctionResponse.Response["verdict"].(string); ok && choice != "" {
+				verdict = choice
+			}
+		}
+	}
+
+	return verdict
 }
 
 // forceRequiredTool constrains req's next generateOnce call to a tool call,
