@@ -8,17 +8,16 @@ import (
 )
 
 // agentRetryBackoffUnit is the linear-backoff step between attempts. It's
-// much coarser than enableWAL's 5ms unit (store.go) because these attempts
-// wrap a network round trip to an LLM endpoint, not a local sqlite pragma —
-// a short pause is more likely to matter (rate limiting, transient 5xx)
-// than to just waste time.
+// deliberately coarse: these attempts wrap a network round trip to an LLM
+// endpoint (rate limiting, transient 5xx), where a short pause is more
+// likely to help than to waste time.
 const agentRetryBackoffUnit = 500 * time.Millisecond
 
 // Do calls fn up to attempts times (attempts < 1 is treated as 1),
 // stopping at the first success. Between attempts it sleeps
-// attempt*agentRetryBackoffUnit, mirroring enableWAL's backoff shape. ctx
-// cancellation aborts immediately. The last error is returned if every
-// attempt fails.
+// attempt*agentRetryBackoffUnit, growing the pause linearly with each
+// retry. ctx cancellation aborts immediately. The last error is returned if
+// every attempt fails.
 func Do(ctx context.Context, attempts int, fn func(attempt int) error) error {
 	if attempts < 1 {
 		attempts = 1
