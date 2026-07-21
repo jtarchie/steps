@@ -134,6 +134,43 @@ jobs:
 			want: "inputs/outputs are not valid on job-level hooks",
 		},
 		{
+			name: "get nested inside a job-level hook's own hook",
+			pipeline: `
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: "true"
+  on_failure:
+    task: notify
+    run: "true"
+    ensure:
+      get: thing
+`,
+			want: "get is not valid in a hook",
+		},
+		{
+			name: "job-level hook's own nested hook with inputs",
+			pipeline: `
+workspace:
+  strategy: copy
+
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: "true"
+  on_failure:
+    task: notify
+    run: "true"
+    ensure:
+      task: cleanup
+      run: "true"
+      inputs: [repo]
+`,
+			want: "inputs/outputs are not valid on job-level hooks",
+		},
+		{
 			name: "image on a put-kind hook",
 			pipeline: `
 jobs:

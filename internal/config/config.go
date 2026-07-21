@@ -1427,25 +1427,21 @@ func visitStepTree(label string, step *Step, fn func(label string, step *Step) e
 // validateHooks enforces the hook-body restrictions: a hook must be a
 // task/put/agent step (get is rejected — a get step fans the remainder of the
 // plan out per version, which has no meaning inside a hook), and a job-level
-// hook may not declare inputs:/outputs: (a job-level hook runs in the job's
-// build workspace, which for a get-leading plan holds no artifacts). Nested
-// hooks recurse.
+// hook — and everything nested under it, recursively — may not declare
+// inputs:/outputs: (a job-level hook runs in the job's own build workspace,
+// which for a get-leading plan holds no artifacts; a nested hook runs in that
+// exact same workspace, not a fresh one, so it has no more claim to a
+// coherent artifact scope than its parent). Nested hooks recurse throughout.
 func (c *Config) validateHooks() error {
 	for _, job := range c.Jobs {
 		for i := range job.Plan {
-			err := validateHookTree(fmt.Sprintf("job %q step %d", job.Name, i), job.Plan[i].Hooks)
+			err := validateHookTree(fmt.Sprintf("job %q step %d", job.Name, i), job.Plan[i].Hooks, false)
 			if err != nil {
 				return err
 			}
 		}
 
-		err := job.Hooks.Each(func(name string, step *Step) error {
-			if step.Inputs != nil || step.Outputs != nil {
-				return fmt.Errorf("job %q %s hook: inputs/outputs are not valid on job-level hooks", job.Name, name)
-			}
-
-			return validateHookStep(fmt.Sprintf("job %q %s hook", job.Name, name), step)
-		})
+		err := validateHookTree(fmt.Sprintf("job %q", job.Name), job.Hooks, true)
 		if err != nil {
 			return err
 		}
@@ -1454,16 +1450,22 @@ func (c *Config) validateHooks() error {
 	return nil
 }
 
-func validateHookTree(parentLabel string, hooks Hooks) error {
+// noArtifacts is true for a job-level hook and everything nested under it —
+// see validateHooks.
+func validateHookTree(parentLabel string, hooks Hooks, noArtifacts bool) error {
 	return hooks.Each(func(name string, step *Step) error {
 		label := fmt.Sprintf("%s (%s hook)", parentLabel, name)
+
+		if noArtifacts && (step.Inputs != nil || step.Outputs != nil) {
+			return fmt.Errorf("%s: inputs/outputs are not valid on job-level hooks", label)
+		}
 
 		err := validateHookStep(label, step)
 		if err != nil {
 			return err
 		}
 
-		return validateHookTree(label, step.Hooks)
+		return validateHookTree(label, step.Hooks, noArtifacts)
 	})
 }
 
