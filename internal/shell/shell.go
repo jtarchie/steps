@@ -29,6 +29,13 @@ type Runner interface {
 	// a normal nonzero exit is reported as data (exitCode), not an error —
 	// only a failure to start the command returns a non-nil error.
 	RunCaptureFull(ctx context.Context, command string) (stdout, stderr string, exitCode int, err error)
+	// RunCaptureFullLimited behaves exactly like RunCaptureFull, except each
+	// of stdout/stderr is capped at maxBytes while the command is running —
+	// not just truncated afterward — so a runaway command's output never
+	// fully buffers into memory before being discarded. A capped stream gets
+	// a trailing "... [truncated N bytes]" marker, matching
+	// internal/agent's truncateToolOutput format.
+	RunCaptureFullLimited(ctx context.Context, command string, maxBytes int) (stdout, stderr string, exitCode int, err error)
 }
 
 // NewRunner returns a DockerRunner scoped to image and cwd, or a HostRunner
@@ -54,6 +61,70 @@ func NewRunner(image, cwd string) (Runner, error) {
 	}
 
 	return DockerRunner{Image: image, resolvedCwd: resolvedCwd}, nil
+}
+
+// captureWriter accumulates one stdout/stderr stream from a running command
+// into a final string — used as cmd.Stdout/cmd.Stderr directly, so bytes are
+// bounded (or not) as they arrive, never after the fact.
+type captureWriter interface {
+	io.Writer
+	result() string
+}
+
+// newCaptureWriter returns an unboundedWriter when maxBytes <= 0 (matching
+// every Run/RunCapture/RunCaptureFull caller's historical unbounded-buffer
+// behavior exactly), or a boundedWriter otherwise (RunCaptureFullLimited).
+func newCaptureWriter(maxBytes int) captureWriter {
+	if maxBytes <= 0 {
+		return &unboundedWriter{}
+	}
+
+	return &boundedWriter{max: maxBytes}
+}
+
+// unboundedWriter is a plain, uncapped capture.
+type unboundedWriter struct {
+	buf bytes.Buffer
+}
+
+func (w *unboundedWriter) Write(p []byte) (int, error) { return w.buf.Write(p) } //nolint:wrapcheck // bytes.Buffer.Write never errors
+
+func (w *unboundedWriter) result() string { return w.buf.String() }
+
+// boundedWriter caps retained bytes at max while still tracking every byte
+// offered, so result can report the true overflow via a trailing marker
+// matching internal/agent's truncateToolOutput format. It never errors or
+// short-writes (io.Writer's contract, and what exec.Cmd's output copiers
+// require): overflow bytes are silently discarded, not rejected.
+type boundedWriter struct {
+	buf   bytes.Buffer
+	max   int
+	total int
+}
+
+func (w *boundedWriter) Write(p []byte) (int, error) {
+	n := len(p) // the real input length: io.Writer requires this back even when we retain less
+	w.total += n
+
+	if remaining := w.max - w.buf.Len(); remaining > 0 {
+		if remaining < len(p) {
+			p = p[:remaining]
+		}
+
+		w.buf.Write(p)
+	}
+
+	return n, nil
+}
+
+func (w *boundedWriter) result() string {
+	s := w.buf.String()
+
+	if overflow := w.total - w.buf.Len(); overflow > 0 {
+		s += fmt.Sprintf("\n... [truncated %d bytes]", overflow)
+	}
+
+	return s
 }
 
 // HostRunner runs commands directly on the host via `sh -c`, with cwd as
@@ -162,16 +233,30 @@ func (h HostRunner) RunCapture(ctx context.Context, command string) ([]byte, err
 // stdin risks a command (cat with no args, a tool prompting for input)
 // blocking until the step's timeout instead of getting EOF.
 func (h HostRunner) RunCaptureFull(ctx context.Context, command string) (stdout, stderr string, exitCode int, err error) {
+	return h.runCaptureFull(ctx, command, 0)
+}
+
+// RunCaptureFullLimited is RunCaptureFull with each stream capped at
+// maxBytes while the command runs — see the Runner interface doc.
+func (h HostRunner) RunCaptureFullLimited(ctx context.Context, command string, maxBytes int) (stdout, stderr string, exitCode int, err error) {
+	return h.runCaptureFull(ctx, command, maxBytes)
+}
+
+// runCaptureFull is the shared implementation behind RunCaptureFull (maxBytes
+// 0, meaning unbounded — byte-identical to before RunCaptureFullLimited
+// existed) and RunCaptureFullLimited (maxBytes > 0).
+func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes int) (stdout, stderr string, exitCode int, err error) {
 	slog.Debug("shell.capture_full", "command", command, "cwd", h.cwd)
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.Dir = h.cwd
 	cmd.Stdin = nil
 
-	var outBuf, errBuf bytes.Buffer
+	outWriter := newCaptureWriter(maxBytes)
+	errWriter := newCaptureWriter(maxBytes)
 
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
+	cmd.Stdout = outWriter
+	cmd.Stderr = errWriter
 
 	runErr := cmd.Run()
 
@@ -183,7 +268,7 @@ func (h HostRunner) RunCaptureFull(ctx context.Context, command string) (stdout,
 
 	slog.Debug("shell.capture_full", "command", command, "cwd", h.cwd, "exit_code", code)
 
-	return outBuf.String(), errBuf.String(), code, nil
+	return outWriter.result(), errWriter.result(), code, nil
 }
 
 // IsExitError reports whether err (however wrapped) stems from a process that

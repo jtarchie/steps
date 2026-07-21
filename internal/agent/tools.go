@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -304,18 +305,20 @@ func truncateToolOutput(s string) string {
 }
 
 // shellToolResult builds the FunctionResponse map for a shell-backed tool
-// (run_shell and every custom tool), truncating the captured streams. It
-// executes command through env.runner — the host or, when the step's image:
-// is set, a fresh container — with env.dir as cwd.
+// (run_shell and every custom tool). It executes command through env.runner
+// — the host or, when the step's image: is set, a fresh container — with
+// env.dir as cwd, via RunCaptureFullLimited so a runaway command's output is
+// capped as it's captured rather than fully buffered and truncated
+// afterward.
 func shellToolResult(ctx context.Context, command string, env toolEnv) map[string]any {
-	stdout, stderr, exitCode, err := env.runner.RunCaptureFull(ctx, command)
+	stdout, stderr, exitCode, err := env.runner.RunCaptureFullLimited(ctx, command, maxToolOutputBytes)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
 
 	return map[string]any{
-		"stdout":    truncateToolOutput(stdout),
-		"stderr":    truncateToolOutput(stderr),
+		"stdout":    stdout,
+		"stderr":    stderr,
 		"exit_code": exitCode,
 	}
 }
@@ -331,12 +334,34 @@ func execReadFile(_ context.Context, args map[string]any, env toolEnv) map[strin
 		return map[string]any{"error": err.Error()}
 	}
 
-	data, err := os.ReadFile(resolved) //nolint:gosec // resolveAgentPath rejects paths escaping dir, the step's own workspace
+	f, err := os.Open(resolved) //nolint:gosec // resolveAgentPath rejects paths escaping dir, the step's own workspace
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	defer func() { _ = f.Close() }()
+
+	stat, err := f.Stat()
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
 
-	return map[string]any{"content": truncateToolOutput(string(data))}
+	// Read at most maxToolOutputBytes regardless of the file's real size, so a
+	// huge file (a multi-GB log accidentally left in the working tree) doesn't
+	// pay full allocation and I/O cost before truncateToolOutput would have
+	// discarded most of it anyway. stat.Size() (not the read length) drives the
+	// truncation marker, so the reported byte count matches what
+	// truncateToolOutput would have said had it read the whole file itself.
+	data, err := io.ReadAll(io.LimitReader(f, maxToolOutputBytes))
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+
+	content := string(data)
+	if stat.Size() > maxToolOutputBytes {
+		content += fmt.Sprintf("\n... [truncated %d bytes]", stat.Size()-maxToolOutputBytes)
+	}
+
+	return map[string]any{"content": content}
 }
 
 func execListDir(_ context.Context, args map[string]any, env toolEnv) map[string]any {

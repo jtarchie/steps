@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -307,6 +309,40 @@ func TestResolveAgentPath(t *testing.T) {
 	})
 }
 
+func TestShellToolResult(t *testing.T) {
+	t.Parallel()
+
+	t.Run("output under the cap is returned untouched", func(t *testing.T) {
+		t.Parallel()
+
+		result := shellToolResult(context.Background(), "echo hi", testEnv(t.TempDir()))
+		if result["stdout"] != "hi\n" {
+			t.Errorf("stdout = %v, want %q", result["stdout"], "hi\n")
+		}
+	})
+
+	t.Run("output over maxToolOutputBytes is capped, not just truncated after full buffering", func(t *testing.T) {
+		t.Parallel()
+
+		command := "yes x | head -c " + strconv.Itoa(maxToolOutputBytes+500)
+		result := shellToolResult(context.Background(), command, testEnv(t.TempDir()))
+
+		stdout, ok := result["stdout"].(string)
+		if !ok {
+			t.Fatalf("stdout = %v (%T), want a string", result["stdout"], result["stdout"])
+		}
+
+		if !strings.Contains(stdout, "truncated 500 bytes") {
+			t.Errorf("stdout does not contain the expected truncation marker; got suffix %q", stdout[max(0, len(stdout)-60):])
+		}
+
+		body := strings.SplitN(stdout, "\n... [truncated", 2)[0]
+		if len(body) != maxToolOutputBytes {
+			t.Errorf("retained body length = %d, want %d", len(body), maxToolOutputBytes)
+		}
+	})
+}
+
 func TestExecReadFile(t *testing.T) {
 	t.Parallel()
 
@@ -341,6 +377,36 @@ func TestExecReadFile(t *testing.T) {
 		result := execReadFile(context.Background(), map[string]any{}, testEnv(dir))
 		if result["error"] == nil {
 			t.Error("expected an error for a missing path argument")
+		}
+	})
+
+	t.Run("a file over maxToolOutputBytes is truncated with an accurate marker", func(t *testing.T) {
+		t.Parallel()
+
+		bigDir := t.TempDir()
+		extra := 1234
+		big := strings.Repeat("x", maxToolOutputBytes+extra)
+
+		err := os.WriteFile(filepath.Join(bigDir, "big.txt"), []byte(big), 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		result := execReadFile(context.Background(), map[string]any{"path": "big.txt"}, testEnv(bigDir))
+
+		content, ok := result["content"].(string)
+		if !ok {
+			t.Fatalf("content = %v (%T), want a string", result["content"], result["content"])
+		}
+
+		wantMarker := fmt.Sprintf("\n... [truncated %d bytes]", extra)
+		if !strings.HasSuffix(content, wantMarker) {
+			t.Errorf("content does not end with the expected marker %q; got suffix %q", wantMarker, content[max(0, len(content)-60):])
+		}
+
+		gotBody := strings.TrimSuffix(content, wantMarker)
+		if len(gotBody) != maxToolOutputBytes {
+			t.Errorf("truncated body length = %d, want %d", len(gotBody), maxToolOutputBytes)
 		}
 	})
 }

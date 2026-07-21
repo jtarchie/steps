@@ -35,15 +35,19 @@ type DockerRunner struct {
 	resolvedCwd string
 }
 
-// dockerExec is the shared plumbing behind Run/RunCapture/RunCaptureFull:
-// it always captures both stdout and stderr into buffers — even for Run,
-// which never exposes them, trading a little memory for one less code path
-// to keep in sync across three near-identical methods — additionally
-// streaming either live (to os.Stdout/os.Stderr) when streamStdout/
-// streamStderr is set. stdin wires the host's stdin through only when set;
-// otherwise cmd.Stdin stays nil (/dev/null), matching RunCaptureFull's
-// non-interactive semantics for model-generated commands.
-func (d DockerRunner) dockerExec(ctx context.Context, command string, stdin, streamStdout, streamStderr bool) (stdout, stderr string, runErr error) {
+// dockerExec is the shared plumbing behind Run/RunCapture/RunCaptureFull/
+// RunCaptureFullLimited: it always captures both stdout and stderr — even
+// for Run, which never exposes them, trading a little memory for one less
+// code path to keep in sync across four near-identical methods —
+// additionally streaming either live (to os.Stdout/os.Stderr) when
+// streamStdout/streamStderr is set. stdin wires the host's stdin through
+// only when set; otherwise cmd.Stdin stays nil (/dev/null), matching
+// RunCaptureFull's non-interactive semantics for model-generated commands.
+// maxBytes caps each captured stream (0 means unbounded — every caller but
+// RunCaptureFullLimited passes 0, reproducing today's behavior exactly).
+func (d DockerRunner) dockerExec(
+	ctx context.Context, command string, stdin, streamStdout, streamStderr bool, maxBytes int,
+) (stdout, stderr string, runErr error) {
 	args := dockerRunArgs(d.Image, command, d.resolvedCwd, stdin)
 
 	cmd := dockerCommand(ctx, args)
@@ -51,23 +55,24 @@ func (d DockerRunner) dockerExec(ctx context.Context, command string, stdin, str
 		cmd.Stdin = os.Stdin
 	}
 
-	var outBuf, errBuf bytes.Buffer
+	outWriter := newCaptureWriter(maxBytes)
+	errWriter := newCaptureWriter(maxBytes)
 
 	if streamStdout {
-		cmd.Stdout = io.MultiWriter(os.Stdout, &outBuf)
+		cmd.Stdout = io.MultiWriter(os.Stdout, outWriter)
 	} else {
-		cmd.Stdout = &outBuf
+		cmd.Stdout = outWriter
 	}
 
 	if streamStderr {
-		cmd.Stderr = io.MultiWriter(os.Stderr, &errBuf)
+		cmd.Stderr = io.MultiWriter(os.Stderr, errWriter)
 	} else {
-		cmd.Stderr = &errBuf
+		cmd.Stderr = errWriter
 	}
 
 	runErr = cmd.Run()
 
-	return outBuf.String(), errBuf.String(), runErr
+	return outWriter.result(), errWriter.result(), runErr
 }
 
 // Run runs command in a container, streaming stdout/stderr live and wiring
@@ -75,7 +80,7 @@ func (d DockerRunner) dockerExec(ctx context.Context, command string, stdin, str
 func (d DockerRunner) Run(ctx context.Context, command string) error {
 	slog.Debug("shell.docker.run", "image", d.Image, "command", command, "cwd", d.resolvedCwd)
 
-	_, _, runErr := d.dockerExec(ctx, command, true, true, true)
+	_, _, runErr := d.dockerExec(ctx, command, true, true, true, 0)
 
 	slog.Debug("shell.docker.run", "image", d.Image, "command", command, "cwd", d.resolvedCwd, "exit_code", exitCodeOf(runErr))
 
@@ -94,7 +99,7 @@ func (d DockerRunner) Run(ctx context.Context, command string) error {
 func (d DockerRunner) RunCapture(ctx context.Context, command string) ([]byte, error) {
 	slog.Debug("shell.docker.capture", "image", d.Image, "command", command, "cwd", d.resolvedCwd)
 
-	stdout, stderr, runErr := d.dockerExec(ctx, command, true, false, true)
+	stdout, stderr, runErr := d.dockerExec(ctx, command, true, false, true, 0)
 
 	slog.Debug("shell.docker.capture", "image", d.Image, "command", command, "cwd", d.resolvedCwd,
 		"exit_code", exitCodeOf(runErr), "output_bytes", len(stdout), "output", stdout, "stderr", stderr)
@@ -114,9 +119,22 @@ func (d DockerRunner) RunCapture(ctx context.Context, command string) ([]byte, e
 // a Go error. Only a failure to start the docker CLI client itself returns a
 // non-nil error.
 func (d DockerRunner) RunCaptureFull(ctx context.Context, command string) (stdout, stderr string, exitCode int, err error) {
+	return d.runCaptureFull(ctx, command, 0)
+}
+
+// RunCaptureFullLimited is RunCaptureFull with each stream capped at
+// maxBytes while the command runs — see the Runner interface doc.
+func (d DockerRunner) RunCaptureFullLimited(ctx context.Context, command string, maxBytes int) (stdout, stderr string, exitCode int, err error) {
+	return d.runCaptureFull(ctx, command, maxBytes)
+}
+
+// runCaptureFull is the shared implementation behind RunCaptureFull (maxBytes
+// 0, meaning unbounded — byte-identical to before RunCaptureFullLimited
+// existed) and RunCaptureFullLimited (maxBytes > 0).
+func (d DockerRunner) runCaptureFull(ctx context.Context, command string, maxBytes int) (stdout, stderr string, exitCode int, err error) {
 	slog.Debug("shell.docker.capture_full", "image", d.Image, "command", command, "cwd", d.resolvedCwd)
 
-	stdout, stderr, runErr := d.dockerExec(ctx, command, false, false, false)
+	stdout, stderr, runErr := d.dockerExec(ctx, command, false, false, false, maxBytes)
 
 	if !processStarted(runErr) {
 		return "", "", -1, fmt.Errorf("docker run failed to start for image %q: %w", d.Image, runErr)
