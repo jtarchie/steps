@@ -148,3 +148,46 @@ jobs:
 	assertLineCount(t, getCounter, 2)
 	assertLineCount(t, putCounter, 2)
 }
+
+// TestRunJobCheckCommandRunsOnceNotTwice: a get step's check: command must
+// run at most once per RunJob invocation. Before the resource.Cache fix, it
+// ran once during merkle.PlanChains (to hash the step) and again during
+// runGetStep (to actually fetch it) — this counts every invocation of check:
+// itself, independent of whether the step ends up skipped.
+func TestRunJobCheckCommandRunsOnceNotTwice(t *testing.T) {
+	dir := t.TempDir()
+	checkCounter := filepath.Join(dir, "check-counter.txt")
+	path := filepath.Join(dir, "pipeline.yml")
+
+	pipeline := fmt.Sprintf(`
+resource_types:
+- name: dummy
+  config:
+    check: echo ran >> %s; echo '[{"ref":"v1"}]'
+    in: "true"
+
+resources:
+- name: thing
+  type: dummy
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: thing
+`, checkCounter)
+
+	err := os.WriteFile(path, []byte(pipeline), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustRun(t, path)
+	assertLineCount(t, checkCounter, 1)
+
+	// A changed --force run also re-executes check: exactly once, not twice
+	// (force skips planning entirely, so the cache would just go unused —
+	// this confirms that path still calls check: exactly once, not zero).
+	mustRun(t, "--force", path)
+	assertLineCount(t, checkCounter, 2)
+}

@@ -447,14 +447,16 @@ func HashNode(kind NodeKind, content map[string]any, parentHash string) (string,
 // anything — no RunIn, RunShell, or RunOut. It returns one Chain per leaf
 // reached, which is more than one only when a get step uses version: every.
 //
-// CheckVersions therefore runs here as well as later during real execution
-// for any branch that ends up running — an accepted cost, since check
-// commands are expected to be read-only/idempotent within one synchronous
-// CLI invocation.
-func PlanChains(ctx context.Context, cfg *config.Config, jobName string, steps []config.Step, pinned map[string]string) ([]Chain, error) {
+// cache, when non-nil, memoizes each get step's resolved versions so that a
+// later run-time call through the same cache (see resource.Cache) reuses
+// this plan-time check result instead of re-running the check command — pass
+// the same *resource.Cache instance runSteps will use for this same job run.
+// A nil cache reproduces today's behavior exactly (CheckVersions runs again
+// during real execution for any branch that ends up running).
+func PlanChains(ctx context.Context, cfg *config.Config, jobName string, steps []config.Step, pinned map[string]string, cache *rsrc.Cache) ([]Chain, error) {
 	slog.Debug("job.plan", "job", jobName, "steps", len(steps))
 
-	chains, err := planSteps(ctx, cfg, steps, pinned, nil, "", false)
+	chains, err := planSteps(ctx, cfg, steps, pinned, nil, "", false, cache)
 	if err != nil {
 		return nil, err
 	}
@@ -464,10 +466,13 @@ func PlanChains(ctx context.Context, cfg *config.Config, jobName string, steps [
 	return chains, nil
 }
 
-func planSteps(ctx context.Context, cfg *config.Config, steps []config.Step, pinned map[string]string, prefix []Node, parentHash string, unskippable bool) ([]Chain, error) {
+func planSteps(
+	ctx context.Context, cfg *config.Config, steps []config.Step, pinned map[string]string,
+	prefix []Node, parentHash string, unskippable bool, cache *rsrc.Cache,
+) ([]Chain, error) {
 	for i, step := range steps {
 		if step.Get != "" {
-			return planGetStep(ctx, cfg, steps, i, step, pinned, prefix, parentHash, unskippable)
+			return planGetStep(ctx, cfg, steps, i, step, pinned, prefix, parentHash, unskippable, cache)
 		}
 
 		node, stepUnskippable, err := planNonGetNode(cfg, step, i, parentHash)
@@ -528,8 +533,11 @@ func planNonGetNode(cfg *config.Config, step config.Step, i int, parentHash stri
 // steps once per version, returning one Chain per leaf reached. It always
 // terminates the calling planSteps loop, mirroring the pipeline's
 // runGetStep control flow.
-func planGetStep(ctx context.Context, cfg *config.Config, steps []config.Step, i int, step config.Step, pinned map[string]string, prefix []Node, parentHash string, unskippable bool) ([]Chain, error) {
-	res, resourceType, versions, err := rsrc.ResolveVersions(ctx, cfg, step, pinned)
+func planGetStep(
+	ctx context.Context, cfg *config.Config, steps []config.Step, i int, step config.Step, pinned map[string]string,
+	prefix []Node, parentHash string, unskippable bool, cache *rsrc.Cache,
+) ([]Chain, error) {
+	res, resourceType, versions, err := cache.ResolveVersionsCached(ctx, cfg, step, pinned)
 	if err != nil {
 		return nil, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 	}
@@ -549,7 +557,7 @@ func planGetStep(ctx context.Context, cfg *config.Config, steps []config.Step, i
 
 		node := Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindGet, StepIndex: i, Resource: res.Name, Content: content}
 
-		sub, err := planSteps(ctx, cfg, steps[i+1:], pinned, append(append([]Node{}, prefix...), node), hash, unskippable)
+		sub, err := planSteps(ctx, cfg, steps[i+1:], pinned, append(append([]Node{}, prefix...), node), hash, unskippable, cache)
 		if err != nil {
 			return nil, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 		}

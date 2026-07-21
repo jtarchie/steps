@@ -114,8 +114,15 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 func runJobPlan(ctx context.Context, cfg *config.Config, job *config.Job, pinned map[string]string, provider workspace.Provider, bw workspace.BuildWorkspace, st *store.Store, skipCache bool) error {
 	skippable := map[string]bool{}
 
+	// cache is scoped to this one RunJob invocation (never shared across
+	// concurrent invocations — see resource.NewCache) and threaded into both
+	// the plan-time and run-time get-step resolution below, so a get step's
+	// check command runs at most once per job run instead of once during
+	// planning and again during execution.
+	cache := rsrc.NewCache()
+
 	if !skipCache {
-		chains, err := merkle.PlanChains(ctx, cfg, job.Name, job.Plan, pinned)
+		chains, err := merkle.PlanChains(ctx, cfg, job.Name, job.Plan, pinned, cache)
 		if err != nil {
 			return fmt.Errorf("job %q: planning: %w", job.Name, err)
 		}
@@ -126,7 +133,7 @@ func runJobPlan(ctx context.Context, cfg *config.Config, job *config.Job, pinned
 		}
 	}
 
-	return runSteps(ctx, cfg, job.Name, job.Plan, pinned, provider, bw, st, skippable, "", false)
+	return runSteps(ctx, cfg, job.Name, job.Plan, pinned, provider, bw, st, skippable, "", false, cache)
 }
 
 // computeChainSkippable reports, per chain, whether it's already covered by a
@@ -225,7 +232,11 @@ const (
 // triggered build(s). A `task`/`put`/`agent` step is handled by
 // runNonGetStep; `put`/`agent` steps are never looked up in skippable and
 // always execute.
-func runSteps(ctx context.Context, cfg *config.Config, jobName string, steps []config.Step, pinned map[string]string, provider workspace.Provider, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string, chainUnskippable bool) error {
+func runSteps(
+	ctx context.Context, cfg *config.Config, jobName string, steps []config.Step, pinned map[string]string,
+	provider workspace.Provider, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool,
+	parentHash string, chainUnskippable bool, cache *rsrc.Cache,
+) error {
 	// visits counts how many times each step index has executed this
 	// invocation, bounding a to:-driven backward loop. It's per-runSteps-call,
 	// so each triggered build (and each version under get: version: every, which
@@ -239,7 +250,7 @@ func runSteps(ctx context.Context, cfg *config.Config, jobName string, steps []c
 		step := steps[i]
 
 		if step.Get != "" {
-			return runGetStep(ctx, cfg, jobName, i, step, steps[i+1:], pinned, provider, st, skippable, parentHash, chainUnskippable)
+			return runGetStep(ctx, cfg, jobName, i, step, steps[i+1:], pinned, provider, st, skippable, parentHash, chainUnskippable, cache)
 		}
 
 		newParentHash, disposition, verdict, err := runNonGetStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash)
@@ -389,8 +400,12 @@ func recordChainSucceeded(ctx context.Context, st *store.Store, jobName, rootHas
 // version(s), then runs the remainder of the plan for each — see
 // runTriggeredBuild. It always terminates the calling runSteps loop, since
 // a get step delegates the rest of the plan to its triggered build(s).
-func runGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, remainder []config.Step, pinned map[string]string, provider workspace.Provider, st *store.Store, skippable map[string]bool, parentHash string, chainUnskippable bool) error {
-	resource, resourceType, versions, err := rsrc.ResolveVersions(ctx, cfg, step, pinned)
+func runGetStep(
+	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, remainder []config.Step,
+	pinned map[string]string, provider workspace.Provider, st *store.Store, skippable map[string]bool,
+	parentHash string, chainUnskippable bool, cache *rsrc.Cache,
+) error {
+	resource, resourceType, versions, err := cache.ResolveVersionsCached(ctx, cfg, step, pinned)
 	if err != nil {
 		return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 	}
@@ -417,7 +432,7 @@ func runGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, 
 
 		node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindGet, StepIndex: i, Resource: resource.Name, Content: content}
 
-		err = runTriggeredBuild(ctx, cfg, jobName, i, step, *resource, *resourceType, version, remainder, pinned, provider, st, skippable, node, chainUnskippable)
+		err = runTriggeredBuild(ctx, cfg, jobName, i, step, *resource, *resourceType, version, remainder, pinned, provider, st, skippable, node, chainUnskippable, cache)
 		if err != nil {
 			return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 		}
@@ -736,7 +751,12 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 // into it, runs the remainder of the plan inside it, and tears the
 // workspace down afterward — never sharing it with any other triggered
 // build, including sibling versions fanned out by version:every.
-func runTriggeredBuild(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, resource config.Resource, resourceType config.ResourceType, version map[string]any, remainder []config.Step, pinned map[string]string, provider workspace.Provider, st *store.Store, skippable map[string]bool, node merkle.Node, chainUnskippable bool) error {
+func runTriggeredBuild(
+	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, resource config.Resource,
+	resourceType config.ResourceType, version map[string]any, remainder []config.Step, pinned map[string]string,
+	provider workspace.Provider, st *store.Store, skippable map[string]bool, node merkle.Node,
+	chainUnskippable bool, cache *rsrc.Cache,
+) error {
 	bw, err := provider.NewBuild(ctx, resource.Name)
 	if err != nil {
 		return fmt.Errorf("could not create workspace for %q: %w", resource.Name, err)
@@ -767,7 +787,7 @@ func runTriggeredBuild(ctx context.Context, cfg *config.Config, jobName string, 
 		return fmt.Errorf("could not record node %q: %w", node.Hash, err)
 	}
 
-	return runSteps(ctx, cfg, jobName, remainder, pinned, provider, bw, st, skippable, node.Hash, chainUnskippable)
+	return runSteps(ctx, cfg, jobName, remainder, pinned, provider, bw, st, skippable, node.Hash, chainUnskippable, cache)
 }
 
 // fetchGetStep places one version of a resource into bw's resource
