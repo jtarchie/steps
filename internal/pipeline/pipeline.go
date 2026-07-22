@@ -291,6 +291,8 @@ func runSteps(
 		}
 
 		if disposition == stepChainSkipped {
+			reportChainSkipped(jobName, steps[i+1:])
+
 			return nil
 		}
 
@@ -325,6 +327,30 @@ func runSteps(
 	}
 
 	return recordChainSucceeded(ctx, st, jobName, parentHash, chainUnskippable)
+}
+
+// reportChainSkipped prints one "skip: <name> (chain)" line per step after a
+// chain-skip point, matching the "skip: <name> (when)"/"skip: <name>
+// (version: ...)" convention used elsewhere, so a cached rerun's transcript
+// still names every downstream step instead of going silent after the
+// triggering task's own "skip:" line. It only names steps from their config
+// — it never resolves a get step's version or does any of the work runSteps
+// is skipping, so it can't reintroduce the resource checks caching exists to
+// avoid.
+func reportChainSkipped(jobName string, steps []config.Step) {
+	for _, step := range steps {
+		name := executedStepName(step)
+		if name == "" {
+			name = step.Get // executedStepName covers task/put/agent only
+		}
+
+		if name == "" {
+			continue
+		}
+
+		fmt.Printf("skip: %s (chain)\n", name)
+		slog.Info("job.skip", "job", jobName, "step", name, "reason", "chain")
+	}
 }
 
 // handoffFor returns pending when step's own handoff: enables something —

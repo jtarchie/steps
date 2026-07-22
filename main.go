@@ -40,18 +40,24 @@ import (
 // default logger before any subcommand's Run method executes — see
 // initLogging.
 type CLI struct {
-	LogLevel string   `default:"info" enum:"debug,info,warn,error"                                   env:"STEPS_LOG_LEVEL"        help:"log verbosity: debug, info, warn, or error"`
-	Run      RunCmd   `cmd:""         default:"withargs"                                             help:"run a single job once"`
-	Watch    WatchCmd `cmd:""         help:"poll trigger: true resources and auto-run affected jobs"`
-	Test     TestCmd  `cmd:""         help:"run every job (force) and verify assert directives"`
-	MCP      MCPCmd   `cmd:""         help:"inspect or authorize a pipeline's mcp_servers: entries"`
+	LogLevel string           `default:"info"                          enum:"debug,info,warn,error"                                   env:"STEPS_LOG_LEVEL"        help:"log verbosity: debug, info, warn, or error"`
+	Version  kong.VersionFlag `help:"print the steps version and exit" name:"version"`
+	Run      RunCmd           `cmd:""                                  default:"withargs"                                             help:"run a single job once"`
+	Watch    WatchCmd         `cmd:""                                  help:"poll trigger: true resources and auto-run affected jobs"`
+	Test     TestCmd          `cmd:""                                  help:"run every job (force) and verify assert directives"`
+	MCP      MCPCmd           `cmd:""                                  help:"inspect or authorize a pipeline's mcp_servers: entries"`
 }
+
+// buildVersion is the version string steps --version prints. Overridden at
+// build time via -ldflags "-X main.buildVersion=...";  "dev" covers `go run`/
+// unversioned `go build` invocations.
+var buildVersion = "dev"
 
 // RunCmd runs a single job's plan once, exactly as steps has always done.
 type RunCmd struct {
 	Pipeline string            `arg:""                                                                 help:"path to the pipeline YAML file"`
 	Job      string            `help:"job name to run (defaults to the pipeline's only job)"`
-	Version  map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"`
+	Pin      map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                name:"pin"`
 	Force    bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
 }
 
@@ -77,7 +83,7 @@ func (r *RunCmd) Run() error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	return wrapRunErr(pipeline.RunJob(ctx, cfg, job, r.Version, provider, st, r.Force))
+	return wrapRunErr(pipeline.RunJob(ctx, cfg, job, r.Pin, provider, st, r.Force))
 }
 
 // WatchCmd polls every resource named by a trigger:true get step, across
@@ -87,7 +93,7 @@ type WatchCmd struct {
 	Pipeline      string            `arg:""                                                                 help:"path to the pipeline YAML file"`
 	Interval      time.Duration     `default:"30s"                                                          help:"how often to check trigger: true resources"`
 	MaxConcurrent int               `default:"1"                                                            help:"maximum number of triggered jobs running at once"`
-	Version       map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"`
+	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                name:"pin"`
 	Force         bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
 }
 
@@ -108,7 +114,7 @@ func (w *WatchCmd) Run() error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	return wrapRunErr(trigger.Watch(ctx, cfg, provider, st, w.Version, w.Interval, w.MaxConcurrent, w.Force))
+	return wrapRunErr(trigger.Watch(ctx, cfg, provider, st, w.Pin, w.Interval, w.MaxConcurrent, w.Force))
 }
 
 // TestCmd runs every job in the pipeline (force, so nothing is skipped and the
@@ -167,6 +173,8 @@ func (t *TestCmd) Run() error {
 	if len(failures) > 0 {
 		return fmt.Errorf("test: %d job(s) failed: %v", len(failures), failures)
 	}
+
+	fmt.Printf("%d/%d passed\n", len(executed), len(executed))
 
 	return nil
 }
@@ -365,7 +373,30 @@ func initLogging(level string) {
 	slog.SetDefault(slog.New(tint.NewTextHandler(os.Stderr, &tint.Options{
 		Level:     parseLogLevel(level),
 		AddSource: true,
+		NoColor:   wantNoColor(),
 	})))
+}
+
+// wantNoColor reports whether log output should skip ANSI color: either
+// stderr isn't a terminal (piped, redirected to a file, captured by a
+// screen reader or log tool) or the operator opted out via NO_COLOR
+// (https://no-color.org). Terminal detection is a stdlib character-device
+// check (no isatty dependency needed) rather than an internal/shell-style
+// pattern, since this is the one place in the process that cares whether
+// its own stderr is a live terminal. Checked at every initLogging call
+// rather than cached, since tests re-invoke it against different stderr
+// targets.
+func wantNoColor() bool {
+	if os.Getenv("NO_COLOR") != "" {
+		return true
+	}
+
+	info, err := os.Stderr.Stat()
+	if err != nil {
+		return true
+	}
+
+	return info.Mode()&os.ModeCharDevice == 0
 }
 
 func main() {
@@ -373,7 +404,7 @@ func main() {
 
 	err := run(os.Args[1:])
 	if err != nil {
-		slog.Error("main.run", "error", err)
+		slog.Debug("main.run", "error", err)
 		fmt.Fprintf(os.Stderr, "steps: error: %v\n", err)
 		os.Exit(1)
 	}
@@ -384,7 +415,7 @@ func main() {
 func run(args []string) error {
 	var cli CLI
 
-	parser, err := kong.New(&cli, kong.Name("steps"), kong.Description("run pipeline jobs, or watch for trigger: true resource changes"))
+	parser, err := kong.New(&cli, kong.Name("steps"), kong.Description("run pipeline jobs, or watch for trigger: true resource changes"), kong.Vars{"version": buildVersion})
 	if err != nil {
 		return fmt.Errorf("could not build CLI parser: %w", err)
 	}
