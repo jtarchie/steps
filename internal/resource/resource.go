@@ -18,7 +18,16 @@ import (
 // and parses stdout as a JSON array into []map[string]any. Ordering
 // (oldest-first) is entirely the check command's responsibility, per
 // Concourse convention — no sorting happens here.
-func CheckVersions(ctx context.Context, rt config.ResourceType, source map[string]any) ([]map[string]any, error) {
+//
+// When rt.Config.MCP is set, this calls its check: tool instead (see
+// mcpCheckVersions) — cfg is needed only for that path, to resolve the
+// referenced mcp_servers: entry; the shell path below ignores it, so a nil
+// cfg is fine whenever the caller knows rt isn't mcp-backed.
+func CheckVersions(ctx context.Context, cfg *config.Config, rt config.ResourceType, source map[string]any) ([]map[string]any, error) {
+	if rt.Config.MCP != nil {
+		return mcpCheckVersions(ctx, cfg, rt, source)
+	}
+
 	slog.Debug("resource.check", "resource_type", rt.Name, "source", source)
 
 	command, err := template.Render(rt.Config.Check, map[string]any{"source": source})
@@ -120,7 +129,15 @@ func matchesPin(version map[string]any, pinned map[string]string) bool {
 
 // RunIn renders rt.Config.In against {"source": source, "version": version}
 // and executes it with cwd = destDir (caller ensures destDir exists).
-func RunIn(ctx context.Context, rt config.ResourceType, source, version map[string]any, destDir string) error {
+//
+// When rt.Config.MCP is set, this calls mcpRunIn instead — see its doc
+// comment for the in:-omitted default (writing version.json) and the
+// materialization convention when in: is set.
+func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, source, version map[string]any, destDir string) error {
+	if rt.Config.MCP != nil {
+		return mcpRunIn(ctx, cfg, rt, source, version, destDir)
+	}
+
 	slog.Debug("resource.in", "resource_type", rt.Name, "source", source, "version", version, "dest_dir", destDir)
 
 	command, err := template.Render(rt.Config.In, map[string]any{"source": source, "version": version})
@@ -148,7 +165,16 @@ func RunIn(ctx context.Context, rt config.ResourceType, source, version map[stri
 // returned as result (loosely mirroring check's convention of emitting the
 // version produced); unparsable or empty stdout is not an error — result
 // is simply nil, since many out scripts won't emit anything.
-func RunOut(ctx context.Context, rt config.ResourceType, source, params map[string]any, srcDir string) (map[string]any, error) {
+//
+// When rt.Config.MCP is set, this calls mcpRunOut instead. rt.Config.MCP.Out
+// is itself optional (see validateMCPResourcePuts, which rejects a put step
+// targeting an mcp-backed type with no out: at load time), so this is only
+// ever reached with it set.
+func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, source, params map[string]any, srcDir string) (map[string]any, error) {
+	if rt.Config.MCP != nil {
+		return mcpRunOut(ctx, cfg, rt, source, params)
+	}
+
 	slog.Debug("resource.out", "resource_type", rt.Name, "source", source, "params", params, "src_dir", srcDir)
 
 	command, err := template.Render(rt.Config.Out, map[string]any{"source": source, "params": params})
@@ -197,7 +223,7 @@ func ResolveVersions(ctx context.Context, cfg *config.Config, step config.Step, 
 		return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
 	}
 
-	versions, err := CheckVersions(ctx, *resourceType, res.Source)
+	versions, err := CheckVersions(ctx, cfg, *resourceType, res.Source)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
 	}

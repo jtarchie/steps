@@ -754,7 +754,7 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 	}
 	defer workspace.CloseSpace(space, step.Put)
 
-	result, err := rsrc.RunOut(ctx, *resourceType, resource.Source, step.Params, space.Dir())
+	result, err := rsrc.RunOut(ctx, cfg, *resourceType, resource.Source, step.Params, space.Dir())
 	if err != nil {
 		if shell.IsExitError(err) {
 			err = outcome.Fail(err)
@@ -788,7 +788,7 @@ func runTriggeredBuild(
 
 	recordExecution(ctx, resource.Name)
 
-	err = fetchGetStep(ctx, resource, resourceType, version, bw)
+	err = fetchGetStep(ctx, cfg, resource, resourceType, version, bw)
 
 	// Get-step hooks fire once per triggered build, in that build's own
 	// workspace, observing the fetch outcome. A fetch failure (or a hook that
@@ -814,7 +814,7 @@ func runTriggeredBuild(
 
 // fetchGetStep places one version of a resource into bw's resource
 // directory for resource.Name.
-func fetchGetStep(ctx context.Context, resource config.Resource, resourceType config.ResourceType, version map[string]any, bw workspace.BuildWorkspace) error {
+func fetchGetStep(ctx context.Context, cfg *config.Config, resource config.Resource, resourceType config.ResourceType, version map[string]any, bw workspace.BuildWorkspace) error {
 	fmt.Printf("get: %s (version: %v)\n", resource.Name, version)
 
 	destDir, err := bw.ResourceDir(ctx, resource.Name)
@@ -822,7 +822,7 @@ func fetchGetStep(ctx context.Context, resource config.Resource, resourceType co
 		return fmt.Errorf("could not create resource dir for %q: %w", resource.Name, err)
 	}
 
-	err = rsrc.RunIn(ctx, resourceType, resource.Source, version, destDir)
+	err = rsrc.RunIn(ctx, cfg, resourceType, resource.Source, version, destDir)
 	if err != nil {
 		if shell.IsExitError(err) {
 			err = outcome.Fail(err)

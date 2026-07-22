@@ -128,7 +128,9 @@ linters:
             - "**/internal/resource/**"
           allow:
             - "$gostd"
+            - "github.com/modelcontextprotocol/go-sdk/mcp"
             - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/mcp"
             - "github.com/jtarchie/steps/internal/shell"
             - "github.com/jtarchie/steps/internal/template"
         Workspace:
@@ -208,6 +210,11 @@ linters:
             - "**/internal/trigger/**"
           allow:
             - "$gostd"
+            # go-sdk/mcp is test-only here (mcp_test.go builds a fake MCP
+            # server to prove the trigger loop needs no changes for an
+            # mcp-backed resource type) — trigger's own non-test code never
+            # imports it, reaching MCP only indirectly via resource.CheckVersions.
+            - "github.com/modelcontextprotocol/go-sdk/mcp"
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/pipeline"
             - "github.com/jtarchie/steps/internal/resource"

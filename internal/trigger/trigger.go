@@ -289,7 +289,7 @@ func checkResource(ctx context.Context, cfg *config.Config, st *store.Store, res
 		return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}
 
-	versions, err := rsrc.CheckVersions(ctx, *resourceType, resource.Source)
+	versions, err := rsrc.CheckVersions(ctx, cfg, *resourceType, resource.Source)
 	if err != nil {
 		return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}
