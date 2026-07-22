@@ -171,7 +171,7 @@ func TestMCPToolGrantFormSingleTool(t *testing.T) {
 		t.Fatalf("spec = %+v", spec)
 	}
 
-	if got, want := ToolSpecName(spec), "github.search_issues"; got != want {
+	if got, want := ToolSpecName(spec), "github__search_issues"; got != want {
 		t.Errorf("ToolSpecName = %q, want %q", got, want)
 	}
 }

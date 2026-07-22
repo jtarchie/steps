@@ -2293,11 +2293,18 @@ func DefaultAgentToolSpecs() []ToolSpec {
 	return []ToolSpec{{Builtin: "read_file"}, {Builtin: "list_dir"}, {Builtin: "run_shell"}}
 }
 
+// mcpToolNameSep separates the server and tool names in a single-tool MCP
+// grant's reference name (ToolSpecName). Deliberately "__", not ".": the
+// result is sent to the model as a function name, and OpenAI's (and most
+// OpenAI-compatible providers') function-calling API restricts that to
+// [a-zA-Z0-9_-] — a dot would be rejected outright.
+const mcpToolNameSep = "__"
+
 // ToolSpecName is the name a ToolSpec is referenced by: the builtin name for
-// a builtin, the sub-agent's name for a sub-agent tool, "server.tool" for a
-// single-tool MCP grant, the bare server name for a multi/all-tool MCP grant
-// (selectable by a step as a unit — see resolveEffectiveTools), or the
-// custom tool's name.
+// a builtin, the sub-agent's name for a sub-agent tool, "server__tool" (see
+// mcpToolNameSep) for a single-tool MCP grant, the bare server name for a
+// multi/all-tool MCP grant (selectable by a step as a unit — see
+// resolveEffectiveTools), or the custom tool's name.
 func ToolSpecName(spec ToolSpec) string {
 	if spec.Builtin != "" {
 		return spec.Builtin
@@ -2309,7 +2316,7 @@ func ToolSpecName(spec ToolSpec) string {
 
 	if spec.MCP != "" {
 		if spec.MCPTool != "" {
-			return spec.MCP + "." + spec.MCPTool
+			return spec.MCP + mcpToolNameSep + spec.MCPTool
 		}
 
 		return spec.MCP
