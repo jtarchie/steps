@@ -138,6 +138,20 @@ linters:
             - "$gostd"
             - "golang.org/x/sys/unix"
             - "github.com/jtarchie/steps/internal/config"
+        # mcp is the shared MCP client layer (internal/agent's tool source and
+        # internal/resource's mcp: backend both build on it), sitting at the
+        # same tier as resource/workspace: depends on config, nothing
+        # execution-specific.
+        MCP:
+          files:
+            - "**/internal/mcp/**"
+          allow:
+            - "$gostd"
+            - "github.com/modelcontextprotocol/go-sdk/auth"
+            - "github.com/modelcontextprotocol/go-sdk/mcp"
+            - "github.com/modelcontextprotocol/go-sdk/oauthex"
+            - "golang.org/x/oauth2"
+            - "github.com/jtarchie/steps/internal/config"
         # merkle plans/hashes steps; it depends on resource (to resolve get
         # versions the same way at plan time and run time) and config, but
         # nothing execution-specific (store, workspace, agent).
