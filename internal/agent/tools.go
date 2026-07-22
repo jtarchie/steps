@@ -271,8 +271,10 @@ func inferToolParams(run string) []string {
 }
 
 // resolveAgentPath resolves rel (as given by the model) against dir and
-// rejects any result that escapes dir, so a crafted "../../etc/passwd"
-// style path can't read outside the step's working directory.
+// rejects any result that escapes dir — lexically (a crafted
+// "../../etc/passwd" style path) and, once a target actually exists, by
+// symlink (see rejectSymlinkEscape) — so it can't be used to read/list
+// outside the step's working directory.
 func resolveAgentPath(dir, rel string) (string, error) {
 	if filepath.IsAbs(rel) {
 		return "", fmt.Errorf("path %q must be relative", rel)
@@ -285,7 +287,49 @@ func resolveAgentPath(dir, rel string) (string, error) {
 		return "", fmt.Errorf("path %q escapes the working directory", rel)
 	}
 
+	err := rejectSymlinkEscape(base, resolved, rel)
+	if err != nil {
+		return "", err
+	}
+
 	return resolved, nil
+}
+
+// rejectSymlinkEscape re-validates resolved (already confined lexically by
+// resolveAgentPath) against every symlink actually present on disk: the
+// lexical check is a pure string comparison (filepath.Clean + HasPrefix), so
+// it's satisfied by "dir/leak" even when leak is a symlink pointing anywhere
+// on the host — planted, for instance, via run_shell (which has no path
+// confinement of its own) running `ln -s /etc/passwd leak` before a
+// read_file("leak") call. EvalSymlinks resolves every symlink in resolved
+// (mirroring shell/docker.go's resolveMountPath for the docker bind-mount
+// path) and the result is re-checked against dir's own resolved form, so a
+// symlink escaping dir is rejected instead of silently followed.
+//
+// A resolved path that does not yet exist is not treated as an escape:
+// read_file/list_dir will fail with their own "not found" error when they
+// try to open it, exactly as before this check existed, and there is
+// nothing to leak from a path with no target.
+func rejectSymlinkEscape(base, resolved, rel string) error {
+	realResolved, err := filepath.EvalSymlinks(resolved)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+
+		return fmt.Errorf("%w", err)
+	}
+
+	realBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	if realResolved != realBase && !strings.HasPrefix(realResolved, realBase+string(os.PathSeparator)) {
+		return fmt.Errorf("path %q escapes the working directory (resolves to %q via a symlink)", rel, realResolved)
+	}
+
+	return nil
 }
 
 func stringArg(args map[string]any, key string) string {

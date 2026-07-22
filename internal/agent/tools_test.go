@@ -307,6 +307,48 @@ func TestResolveAgentPath(t *testing.T) {
 			t.Error("expected an error for a path escaping dir")
 		}
 	})
+
+	t.Run("nonexistent path is not treated as an escape", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := resolveAgentPath(dir, "does/not/exist.txt")
+		if err != nil {
+			t.Fatalf("unexpected error for a merely-nonexistent path: %v", err)
+		}
+
+		if want := filepath.Join(dir, "does/not/exist.txt"); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	// TestResolveAgentPathRejectsSymlinkEscape guards the security finding
+	// that the lexical confinement check alone doesn't stop a symlink: a
+	// crafted "dir/leak" string satisfies filepath.Clean + HasPrefix even
+	// when leak is a symlink pointing anywhere on the host (planted, e.g.,
+	// via run_shell, which has no path confinement of its own).
+	t.Run("symlink escaping dir is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		symlinkDir := t.TempDir()
+		outside := t.TempDir()
+
+		secret := filepath.Join(outside, "secret.txt")
+
+		err := os.WriteFile(secret, []byte("should not leak"), 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = os.Symlink(outside, filepath.Join(symlinkDir, "leak"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = resolveAgentPath(symlinkDir, "leak/secret.txt")
+		if err == nil {
+			t.Error("expected an error for a path resolving outside dir via a symlink")
+		}
+	})
 }
 
 func TestShellToolResult(t *testing.T) {
@@ -409,6 +451,38 @@ func TestExecReadFile(t *testing.T) {
 			t.Errorf("truncated body length = %d, want %d", len(gotBody), maxToolOutputBytes)
 		}
 	})
+}
+
+// TestExecReadFileRejectsSymlinkEscape reproduces the security finding's
+// exact scenario: a model calls run_shell("ln -s /some/secret leak")
+// (run_shell has no path confinement at all), then read_file("leak"). The
+// lexical check in resolveAgentPath alone would pass ("dir/leak" stays
+// inside dir as a string), but os.ReadFile dereferences the symlink at the
+// OS level — so this must be caught before execReadFile ever calls
+// os.Open. Split into its own top-level test (rather than a t.Run under
+// TestExecReadFile) to stay under the linter's per-function cyclomatic-
+// complexity budget, matching this file's existing convention for that.
+func TestExecReadFileRejectsSymlinkEscape(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "passwd")
+
+	err := os.WriteFile(secret, []byte("root:x:0:0"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.Symlink(secret, filepath.Join(dir, "leak"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := execReadFile(context.Background(), map[string]any{"path": "leak"}, testEnv(dir))
+	if result["error"] == nil {
+		t.Errorf("expected an error for read_file(\"leak\") through a symlink escaping dir, got content %v", result["content"])
+	}
 }
 
 func TestExecListDir(t *testing.T) {
