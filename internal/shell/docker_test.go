@@ -28,7 +28,7 @@ func TestDockerRunArgsMountsCwd(t *testing.T) {
 
 	args := dockerRunArgs("alpine", "echo hi", resolvedCwd, true)
 
-	want := []string{"run", "--rm", "--init", "-i", "-v", resolvedCwd + ":" + resolvedCwd, "-w", resolvedCwd, "alpine", "sh", "-c", "echo hi"}
+	want := []string{"run", "--rm", "--init", "-i", "-v", resolvedCwd + ":" + resolvedCwd, "-w", resolvedCwd, "--", "alpine", "sh", "-c", "echo hi"}
 	if !reflect.DeepEqual(args, want) {
 		t.Errorf("args = %v, want %v", args, want)
 	}
@@ -69,7 +69,7 @@ func TestDockerRunArgsEmptyCwdMountsNothing(t *testing.T) {
 
 	args := dockerRunArgs("alpine", "echo hi", "", false)
 
-	want := []string{"run", "--rm", "--init", "alpine", "sh", "-c", "echo hi"}
+	want := []string{"run", "--rm", "--init", "--", "alpine", "sh", "-c", "echo hi"}
 	if !reflect.DeepEqual(args, want) {
 		t.Errorf("args = %v, want %v", args, want)
 	}

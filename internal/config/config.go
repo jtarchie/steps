@@ -617,12 +617,7 @@ func (c *Config) validate() error {
 		return err
 	}
 
-	err = c.validateImages()
-	if err != nil {
-		return err
-	}
-
-	err = c.validateFixAgentImages()
+	err = c.validateImageRules()
 	if err != nil {
 		return err
 	}
@@ -1531,6 +1526,25 @@ func validateHookStep(label string, step *Step) error {
 	return nil
 }
 
+// validateImageRules groups the three image:-related load-time checks
+// (grouped into one call so config.validate's own branch count doesn't grow
+// with every image: rule added — see cyclop): image: is invalid on get/put
+// steps, an image: value must not look like a docker flag, and a fix: agent
+// may not set its own image:.
+func (c *Config) validateImageRules() error {
+	err := c.validateImages()
+	if err != nil {
+		return err
+	}
+
+	err = c.validateImageValues()
+	if err != nil {
+		return err
+	}
+
+	return c.validateFixAgentImages()
+}
+
 // validateImages rejects image: on get/put steps: a put's execution image
 // comes from its resource type (ResourceType.Image), and a get step has no
 // task/agent to scope.
@@ -1553,6 +1567,65 @@ func (c *Config) validateImages() error {
 		if err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+// validateImageValues rejects an image: value that could be misread as a
+// docker flag rather than an image reference: anything starting with '-'
+// (e.g. "--privileged", "-v", "--network=host"). shell.dockerRunArgs also
+// inserts a literal "--" before the image argument as defense in depth, but
+// this check is what turns a mistyped or supply-chain-tainted image string
+// into a clear LoadConfig error instead of docker silently granting whatever
+// the flag means (privileged mode, an arbitrary bind mount, host
+// networking). Checked wherever image: can be set: resource_types, agents,
+// tasks, and steps (a step's own image: override).
+func (c *Config) validateImageValues() error {
+	for i := range c.ResourceTypes {
+		rt := c.ResourceTypes[i]
+
+		err := checkImageValue(fmt.Sprintf("resource_type %q", rt.Name), rt.Image)
+		if err != nil {
+			return err
+		}
+	}
+
+	for i := range c.Agents {
+		agent := c.Agents[i]
+
+		err := checkImageValue(fmt.Sprintf("agent %q", agent.Name), agent.Image)
+		if err != nil {
+			return err
+		}
+	}
+
+	for i := range c.Tasks {
+		task := c.Tasks[i]
+
+		err := checkImageValue(fmt.Sprintf("task %q", task.Name), task.Image)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, job := range c.Jobs {
+		err := job.visitSteps(func(label string, step *Step) error {
+			return checkImageValue(label, step.Image)
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkImageValue rejects an image value beginning with '-', which docker's
+// argument parser would read as a flag rather than an image reference.
+func checkImageValue(context, image string) error {
+	if strings.HasPrefix(image, "-") {
+		return fmt.Errorf("%s: image %q must not start with '-' (docker would parse it as a flag, not an image reference)", context, image)
 	}
 
 	return nil

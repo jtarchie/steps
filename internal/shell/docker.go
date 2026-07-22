@@ -168,14 +168,22 @@ func dockerCommand(ctx context.Context, args []string) *exec.Cmd {
 
 // dockerRunArgs builds the argv (after "docker") for one containerized
 // command: `run --rm --init [-i] [-v resolvedCwd:resolvedCwd -w resolvedCwd]
-// image sh -c command`. resolvedCwd is already an absolute, symlink-free
+// -- image sh -c command`. resolvedCwd is already an absolute, symlink-free
 // path (see resolveMountPath, called once by NewRunner at construction —
 // not here, so repeated calls against the same DockerRunner don't
 // re-resolve it) mounted at that identical host path so host-side readers
 // of the same directory (agent read_file/list_dir, workspace Capture) stay
 // coherent. An empty resolvedCwd (only resource check: today) mounts
 // nothing and runs in the image's default workdir. --init supplies a real
-// PID 1 so SIGTERM (see dockerCommand) actually reaches the command.
+// PID 1 so SIGTERM (see dockerCommand) actually reaches the command. The
+// literal "--" immediately before image is load-bearing, not decorative: it
+// tells docker's flag parser that everything after it is positional, so an
+// image value docker's parser would otherwise read as a flag (e.g.
+// "--privileged", "-v /:/host") can't be smuggled into the docker run
+// invocation itself — it can only ever be looked up as an (invalid) image
+// name. config.validateImageValues rejects such a value at LoadConfig time
+// too; this is defense in depth for any image string that reaches here by
+// another path.
 func dockerRunArgs(image, command, resolvedCwd string, stdin bool) []string {
 	args := []string{"run", "--rm", "--init"}
 
@@ -187,7 +195,7 @@ func dockerRunArgs(image, command, resolvedCwd string, stdin bool) []string {
 		args = append(args, "-v", resolvedCwd+":"+resolvedCwd, "-w", resolvedCwd)
 	}
 
-	args = append(args, image, "sh", "-c", command)
+	args = append(args, "--", image, "sh", "-c", command)
 
 	return args
 }

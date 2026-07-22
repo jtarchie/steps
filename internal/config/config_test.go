@@ -1176,6 +1176,70 @@ func TestValidateImagesRejectsGetAndPutSteps(t *testing.T) {
 	})
 }
 
+// TestValidateImageValuesRejectsLeadingDash guards against an image: value
+// that docker's argument parser would read as a flag rather than an image
+// reference (e.g. "--privileged"), which could grant container-escape
+// primitives (privileged mode, an arbitrary bind mount, host networking) if
+// it reached `docker run` unrejected. Covers every place image: can be set.
+func TestValidateImageValuesRejectsLeadingDash(t *testing.T) {
+	t.Parallel()
+
+	t.Run("resource_type image", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{ResourceTypes: []ResourceType{{Name: "git", Image: "--privileged"}}}
+
+		err := cfg.validateImageValues()
+		if err == nil {
+			t.Error("expected an error for a resource_type image starting with '-'")
+		}
+	})
+
+	t.Run("agent image", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{Agents: []Agent{{Name: "a", Image: "-v /:/host"}}}
+
+		err := cfg.validateImageValues()
+		if err == nil {
+			t.Error("expected an error for an agent image starting with '-'")
+		}
+	})
+
+	t.Run("top-level task image", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{Tasks: []Task{{Name: "build", Image: "--network=host"}}}
+
+		err := cfg.validateImageValues()
+		if err == nil {
+			t.Error("expected an error for a task image starting with '-'")
+		}
+	})
+
+	t.Run("step image", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{Jobs: []Job{{Name: "main", Plan: []Step{{Task: "t", Run: "echo hi", Image: "--entrypoint=sh"}}}}}
+
+		err := cfg.validateImageValues()
+		if err == nil {
+			t.Error("expected an error for a step image starting with '-'")
+		}
+	})
+
+	t.Run("ordinary image is fine", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{ResourceTypes: []ResourceType{{Name: "git", Image: "alpine/git"}}}
+
+		err := cfg.validateImageValues()
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+}
+
 func TestValidateFixAgentImages(t *testing.T) {
 	t.Parallel()
 
