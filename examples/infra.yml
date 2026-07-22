@@ -19,6 +19,18 @@ resource_types:
       echo "$next" > {{ .source.path }}
       printf '{"ref": "%s"}' "$next"
 
+# ── MCP-backed downstream trigger (needs a real Linear account) ─────────────
+# check: calls Linear's MCP server instead of a shell command — see
+# docs/mcp.md. `in:` is omitted, so `get` just writes the selected issue's
+# version.json; no second MCP call for this "detect and notify" case.
+- name: linear-issues
+  config:
+    mcp:
+      server: linear
+      check:
+        tool: list_issues   # verify against `steps mcp tools examples/infra.yml linear`
+                             # before relying on this name — see docs/mcp.md
+
 # ── Containerized execution ──────────────────────────────────────────────────
 # check/in/out run inside plain alpine instead of needing git on the host.
 # DockerRunner wraps every command as `sh -c`, so pick images with a shell
@@ -32,6 +44,11 @@ resource_types:
       apk add --no-cache -q git && git clone --branch {{ .source.branch }} --depth 1 {{ .source.uri }} . && git checkout {{ .version.ref }}
     out: "true"
 
+mcp_servers:
+- name: linear
+  endpoint: https://mcp.linear.app/mcp
+  auth: { type: oauth }   # one-time: steps mcp login examples/infra.yml linear
+
 resources:
 - name: counter
   type: counter
@@ -39,6 +56,12 @@ resources:
 - name: repo
   type: git-alpine
   source: { uri: https://github.com/jtarchie/ci, branch: main }
+- name: eng-bugs
+  type: linear-issues
+  source:                  # passed directly as list_issues' arguments — the
+    team: ENG               # "criteria config" for detecting new issues
+    label: bug
+    state: Backlog
 
 agents:
 - name: reviewer
@@ -75,6 +98,23 @@ jobs:
     trigger: true
   - task: announce
     run: echo "counter is now $(cat counter/ref)"
+
+# ─── MCP-backed downstream trigger (needs a real Linear account) ─────────────
+# The mcp: equivalent of publish/notify above: check: calls Linear's MCP
+# server instead of reading a file. One-time setup:
+#   steps mcp tools examples/infra.yml linear   # confirm the real tool name
+#   steps mcp login examples/infra.yml linear   # authorize (oauth)
+# Then:                steps watch examples/infra.yml --interval 30s
+# `notify-linear` fires automatically whenever a new issue matching
+# eng-bugs' source: criteria (team/label/state) appears.
+- name: notify-linear
+  plan:
+  - get: eng-bugs
+    trigger: true
+  - task: announce-issue
+    run: |
+      echo "New Linear issue:"
+      cat eng-bugs/version.json
 
 # ─── Containerized execution (needs docker + a local model) ──────────────────
 - name: containerized

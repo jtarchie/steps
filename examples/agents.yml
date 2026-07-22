@@ -26,6 +26,15 @@ resource_types:
     check: echo '[{"ref":"v1"}]'
     in: seq 1 400 | sed 's/^/line /' > NOTES.txt
 
+# For the `mcp-tools` job: GitHub's own MCP server, bearer-authenticated —
+# see docs/mcp.md. No interactive login needed to read/run this job, unlike
+# an oauth-configured server (examples/infra.yml's `linear` demonstrates
+# that half).
+mcp_servers:
+- name: github-mcp
+  endpoint: https://api.githubcopilot.com/mcp/
+  auth: { type: bearer, api_key_env: GITHUB_PAT }
+
 resources:
 - name: prs
   type: pull-request
@@ -86,6 +95,17 @@ agents:
   - list_dir
   - agent: summarizer          # a sub-agent, exposed as a callable tool
     description: Summarize a file. Pass the path in `request`; returns the gist.
+
+# MCP tool grant: `triager` is granted a named subset of github-mcp's tools
+# (see docs/mcp.md for the three grant forms — single tool / named subset /
+# every tool). No sub-delegation here, just tools sourced from a remote MCP
+# server instead of a shell command.
+- name: triager
+  source: { model: lmstudio/google/gemma-4-26b-a4b }
+  system: You triage GitHub issues, finding ones needing attention and summarizing them.
+  tools:
+  - mcp: github-mcp
+    tools: [search_issues, get_issue]
 
 # Verdict routing: `critic` declares a verdict vocabulary and emits one via a
 # synthesized required `verdict` tool; the step's to: routes N-way on it.
@@ -169,6 +189,14 @@ jobs:
     prompt: |
       Summarize what NOTES.txt contains by delegating to the summarizer tool,
       then reply with one sentence describing the file.
+
+# ─── MCP tool grant (needs a model + a real GITHUB_PAT) ──────────────────────
+- name: mcp-tools
+  plan:
+  - agent: triager
+    prompt: |
+      Search for open issues labeled "bug" in this repository and summarize
+      the two most recently updated ones.
 
 # ─── verdict routing / bounded agent loop (needs a model) ────────────────────
 - name: judge
