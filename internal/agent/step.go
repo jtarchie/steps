@@ -78,20 +78,27 @@ func recordAgentFailure(ctx context.Context, st *store.Store, node merkle.Node, 
 // only sequences hash/run/capture/record and stays within the linter's
 // complexity budget.
 type preparedAgentStep struct {
-	ri      config.ResolvedInvocation
-	space   workspace.StepSpace
-	conv    agentConversation
-	llm     model.LLM
-	closers []io.Closer // MCP connections opened for this step's granted tools — see buildAgentTools
+	ri       config.ResolvedInvocation
+	space    workspace.StepSpace
+	conv     agentConversation
+	llm      model.LLM
+	closers  []io.Closer // MCP connections opened for this step's granted tools — see buildAgentTools
+	spillDir string      // run_shell/custom tool output spill dir — see toolEnv.spillDir; "" if it couldn't be created
 }
 
 // close releases everything prepareAgentStep opened for this step: its
-// workspace space and any tool connections (MCP). Ignores errors — this is
-// always deferred right after a successful prepareAgentStep, with the
-// step's real outcome already determined by the time it runs.
+// workspace space, any tool connections (MCP), and its spill dir (removed,
+// not just closed — it may hold files a large run_shell/custom tool output
+// spilled to; see toolEnv.spillDir). Ignores errors — this is always
+// deferred right after a successful prepareAgentStep, with the step's real
+// outcome already determined by the time it runs.
 func (p preparedAgentStep) close(stepLabel string) {
 	workspace.CloseSpace(p.space, stepLabel)
 	closeAll(p.closers)
+
+	if p.spillDir != "" {
+		_ = os.RemoveAll(p.spillDir)
+	}
 }
 
 // prepareAgentStep resolves step's agent, materializes its (isolated or
@@ -149,10 +156,12 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, err
 	}
 
+	spillDir := newToolOutputSpillDir(dir, step.Agent)
+
 	conv := agentConversation{
 		system: buildSystemMessage(ri.Persona, dir),
 		prompt: step.Prompt,
-		env:    toolEnv{dir: dir, runner: runner},
+		env:    toolEnv{dir: dir, runner: runner, spillDir: spillDir},
 		tools:  agentTools{decls: decls, registry: registry, required: required, maxCalls: maxCallsByName(ri.ToolSpecs)},
 		params: agentGenParams{
 			temperature: ri.Temperature,
@@ -165,7 +174,46 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		verdictTool:          verdictTool,
 	}
 
-	return preparedAgentStep{ri: ri, space: space, conv: conv, llm: newAgentLLM(ri.BaseURL, ri.ModelName, apiKey), closers: closers}, nil
+	return preparedAgentStep{
+		ri: ri, space: space, conv: conv, llm: newAgentLLM(ri.BaseURL, ri.ModelName, apiKey),
+		closers: closers, spillDir: spillDir,
+	}, nil
+}
+
+// toolOutputSpillDirName is the fixed name of the subdirectory a
+// run_shell/custom tool's oversized output is spilled into (see
+// newToolOutputSpillDir). config.artifactNamePattern requires a declared
+// input/output name to start with a letter or digit, so this leading '.'
+// can never collide with a real one.
+const toolOutputSpillDirName = ".steps-agent-out"
+
+// newToolOutputSpillDir creates a fresh subdirectory of dir — the step's
+// working directory — that a run_shell/custom tool's oversized output can be
+// spilled to for this one step (see toolEnv.spillDir), removed by
+// preparedAgentStep.close when the step ends.
+//
+// It must live inside dir, rather than a top-level os.MkdirTemp: read_file
+// and list_dir are confined to dir (resolveAgentPath), so a spill directory
+// outside it would be reachable only via run_shell (the one tool with no
+// path confinement of its own) — defeating the point of spilling large
+// output to a file the model can then read back in slices.
+//
+// Creation failure degrades to "" rather than failing the step — spilling is
+// a usability improvement over the shell layer's older truncate-and-drop
+// behavior, not something a step should abort over (e.g. a read-only
+// workspace would otherwise turn an unrelated pipeline failure into an agent
+// step failure).
+func newToolOutputSpillDir(dir, stepLabel string) string {
+	spillDir := filepath.Join(dir, toolOutputSpillDirName)
+
+	err := os.MkdirAll(spillDir, 0o750)
+	if err != nil {
+		slog.Warn("agent.spill_dir", "agent", stepLabel, "error", err)
+
+		return ""
+	}
+
+	return spillDir
 }
 
 // RunStep hashes step against parentHash (agent steps are never

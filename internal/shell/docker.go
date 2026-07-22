@@ -45,8 +45,12 @@ type DockerRunner struct {
 // RunCaptureFull's non-interactive semantics for model-generated commands.
 // maxBytes caps each captured stream (0 means unbounded — every caller but
 // RunCaptureFullLimited passes 0, reproducing today's behavior exactly).
+// spillDir, when set alongside a positive maxBytes, streams overflow to a
+// file under that (host) directory instead of dropping it — see
+// newCaptureWriter/spillWriter. The writer runs host-side regardless of
+// where command executes, so the resulting spill file is always a host path.
 func (d DockerRunner) dockerExec(
-	ctx context.Context, command string, stdin, streamStdout, streamStderr bool, maxBytes int,
+	ctx context.Context, command string, stdin, streamStdout, streamStderr bool, maxBytes int, spillDir string,
 ) (stdout, stderr string, runErr error) {
 	args := dockerRunArgs(d.Image, command, d.resolvedCwd, stdin)
 
@@ -55,8 +59,8 @@ func (d DockerRunner) dockerExec(
 		cmd.Stdin = os.Stdin
 	}
 
-	outWriter := newCaptureWriter(maxBytes)
-	errWriter := newCaptureWriter(maxBytes)
+	outWriter := newCaptureWriter(maxBytes, spillDir)
+	errWriter := newCaptureWriter(maxBytes, spillDir)
 
 	if streamStdout {
 		cmd.Stdout = io.MultiWriter(os.Stdout, outWriter)
@@ -80,7 +84,7 @@ func (d DockerRunner) dockerExec(
 func (d DockerRunner) Run(ctx context.Context, command string) error {
 	slog.Debug("shell.docker.run", "image", d.Image, "command", command, "cwd", d.resolvedCwd)
 
-	_, _, runErr := d.dockerExec(ctx, command, true, true, true, 0)
+	_, _, runErr := d.dockerExec(ctx, command, true, true, true, 0, "")
 
 	slog.Debug("shell.docker.run", "image", d.Image, "command", command, "cwd", d.resolvedCwd, "exit_code", exitCodeOf(runErr))
 
@@ -99,7 +103,7 @@ func (d DockerRunner) Run(ctx context.Context, command string) error {
 func (d DockerRunner) RunCapture(ctx context.Context, command string) ([]byte, error) {
 	slog.Debug("shell.docker.capture", "image", d.Image, "command", command, "cwd", d.resolvedCwd)
 
-	stdout, stderr, runErr := d.dockerExec(ctx, command, true, false, true, 0)
+	stdout, stderr, runErr := d.dockerExec(ctx, command, true, false, true, 0, "")
 
 	slog.Debug("shell.docker.capture", "image", d.Image, "command", command, "cwd", d.resolvedCwd,
 		"exit_code", exitCodeOf(runErr), "output_bytes", len(stdout), "output", stdout, "stderr", stderr)
@@ -123,22 +127,23 @@ func (d DockerRunner) RunCapture(ctx context.Context, command string) ([]byte, e
 // ctx.Err() itself (or CanceledError) after this returns, rather than
 // relying on err.
 func (d DockerRunner) RunCaptureFull(ctx context.Context, command string) (stdout, stderr string, exitCode int, err error) {
-	return d.runCaptureFull(ctx, command, 0)
+	return d.runCaptureFull(ctx, command, 0, "")
 }
 
 // RunCaptureFullLimited is RunCaptureFull with each stream capped at
-// maxBytes while the command runs — see the Runner interface doc.
-func (d DockerRunner) RunCaptureFullLimited(ctx context.Context, command string, maxBytes int) (stdout, stderr string, exitCode int, err error) {
-	return d.runCaptureFull(ctx, command, maxBytes)
+// maxBytes (and, with spillDir set, overflow streamed to disk instead of
+// dropped) while the command runs — see the Runner interface doc.
+func (d DockerRunner) RunCaptureFullLimited(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error) {
+	return d.runCaptureFull(ctx, command, maxBytes, spillDir)
 }
 
 // runCaptureFull is the shared implementation behind RunCaptureFull (maxBytes
 // 0, meaning unbounded — byte-identical to before RunCaptureFullLimited
 // existed) and RunCaptureFullLimited (maxBytes > 0).
-func (d DockerRunner) runCaptureFull(ctx context.Context, command string, maxBytes int) (stdout, stderr string, exitCode int, err error) {
+func (d DockerRunner) runCaptureFull(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error) {
 	slog.Debug("shell.docker.capture_full", "image", d.Image, "command", command, "cwd", d.resolvedCwd)
 
-	stdout, stderr, runErr := d.dockerExec(ctx, command, false, false, false, maxBytes)
+	stdout, stderr, runErr := d.dockerExec(ctx, command, false, false, false, maxBytes, spillDir)
 
 	if !processStarted(runErr) {
 		return "", "", -1, fmt.Errorf("docker run failed to start for image %q: %w", d.Image, runErr)

@@ -424,6 +424,47 @@ func TestShellToolResult(t *testing.T) {
 	})
 }
 
+// TestShellToolResultSpillDir is split out from TestShellToolResult to keep
+// that function's cyclomatic complexity under the linter's cap.
+func TestShellToolResultSpillDir(t *testing.T) {
+	t.Parallel()
+
+	spillDir := t.TempDir()
+	env := testEnv(t.TempDir())
+	env.spillDir = spillDir
+
+	command := "yes x | head -c " + strconv.Itoa(maxToolOutputBytes+500)
+	result := shellToolResult(context.Background(), command, env)
+
+	stdout, ok := result["stdout"].(string)
+	if !ok {
+		t.Fatalf("stdout = %v (%T), want a string", result["stdout"], result["stdout"])
+	}
+
+	if !strings.Contains(stdout, "output too large") {
+		t.Errorf("stdout does not mention \"output too large\"; got %q", stdout)
+	}
+
+	entries, err := os.ReadDir(spillDir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("ReadDir(%q) = (%v entries, %v), want exactly one spill file", spillDir, entries, err)
+	}
+
+	spillPath := filepath.Join(spillDir, entries[0].Name())
+	if !strings.Contains(stdout, spillPath) {
+		t.Errorf("stdout does not name the spill file path %q; got %q", spillPath, stdout)
+	}
+
+	data, err := os.ReadFile(spillPath) //nolint:gosec // test-owned path under t.TempDir()
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", spillPath, err)
+	}
+
+	if len(data) != maxToolOutputBytes+500 {
+		t.Errorf("spill file length = %d, want the full %d bytes", len(data), maxToolOutputBytes+500)
+	}
+}
+
 func TestExecReadFile(t *testing.T) {
 	t.Parallel()
 
@@ -490,6 +531,283 @@ func TestExecReadFile(t *testing.T) {
 			t.Errorf("truncated body length = %d, want %d", len(gotBody), maxToolOutputBytes)
 		}
 	})
+}
+
+// writeLines writes n newline-joined "line N" records to path.
+func writeLines(t *testing.T, path string, n int) {
+	t.Helper()
+
+	lines := make([]string, n)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i+1)
+	}
+
+	err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecReadFileLineRange(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeLines(t, filepath.Join(dir, "lines.txt"), 10)
+
+	result := execReadFile(context.Background(), map[string]any{"path": "lines.txt", "start_line": float64(3), "end_line": float64(5)}, testEnv(dir))
+
+	if result["content"] != "line 3\nline 4\nline 5" {
+		t.Errorf("content = %v, want %q", result["content"], "line 3\nline 4\nline 5")
+	}
+
+	if result["start_line"] != 3 {
+		t.Errorf("start_line = %v, want 3", result["start_line"])
+	}
+
+	if result["end_line"] != 5 {
+		t.Errorf("end_line = %v, want 5", result["end_line"])
+	}
+
+	if result["truncated"] != false {
+		t.Errorf("truncated = %v, want false", result["truncated"])
+	}
+}
+
+func TestExecReadFileLineRangeOnlyStart(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeLines(t, filepath.Join(dir, "lines.txt"), 5)
+
+	result := execReadFile(context.Background(), map[string]any{"path": "lines.txt", "start_line": float64(4)}, testEnv(dir))
+
+	if result["content"] != "line 4\nline 5" {
+		t.Errorf("content = %v, want %q (start_line with no end_line reads to EOF)", result["content"], "line 4\nline 5")
+	}
+
+	if result["end_line"] != 5 {
+		t.Errorf("end_line = %v, want 5", result["end_line"])
+	}
+}
+
+func TestExecReadFileLineRangeOnlyEnd(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeLines(t, filepath.Join(dir, "lines.txt"), 5)
+
+	result := execReadFile(context.Background(), map[string]any{"path": "lines.txt", "end_line": float64(2)}, testEnv(dir))
+
+	if result["content"] != "line 1\nline 2" {
+		t.Errorf("content = %v, want %q (end_line with no start_line defaults start_line to 1)", result["content"], "line 1\nline 2")
+	}
+
+	if result["start_line"] != 1 {
+		t.Errorf("start_line = %v, want 1", result["start_line"])
+	}
+}
+
+func TestExecReadFileLineRangeBeyondEOF(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeLines(t, filepath.Join(dir, "lines.txt"), 3)
+
+	result := execReadFile(context.Background(), map[string]any{"path": "lines.txt", "start_line": float64(100)}, testEnv(dir))
+
+	if result["content"] != "" {
+		t.Errorf("content = %v, want \"\" (start_line beyond EOF)", result["content"])
+	}
+
+	if result["end_line"] != 99 {
+		t.Errorf("end_line = %v, want 99 (start_line - 1, signaling no lines matched)", result["end_line"])
+	}
+}
+
+func TestExecReadFileLineRangeInvalid(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeLines(t, filepath.Join(dir, "lines.txt"), 5)
+
+	t.Run("start_line < 1 is an error", func(t *testing.T) {
+		t.Parallel()
+
+		result := execReadFile(context.Background(), map[string]any{"path": "lines.txt", "start_line": float64(0)}, testEnv(dir))
+		if result["error"] == nil {
+			t.Error("expected an error for start_line < 1")
+		}
+	})
+
+	t.Run("end_line < start_line is an error", func(t *testing.T) {
+		t.Parallel()
+
+		result := execReadFile(context.Background(), map[string]any{"path": "lines.txt", "start_line": float64(3), "end_line": float64(2)}, testEnv(dir))
+		if result["error"] == nil {
+			t.Error("expected an error for end_line < start_line")
+		}
+	})
+}
+
+func TestExecReadFileLineRangeTruncatesAtByteCap(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// One line per byte budget slot: 3 lines of ~maxToolOutputBytes/2 each
+	// guarantees the second line alone doesn't fit alongside the first,
+	// forcing the cap to trip mid-range rather than at EOF.
+	longLine := strings.Repeat("x", maxToolOutputBytes/2)
+	content := strings.Join([]string{longLine, longLine, longLine}, "\n")
+
+	err := os.WriteFile(filepath.Join(dir, "big.txt"), []byte(content), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := execReadFile(context.Background(), map[string]any{"path": "big.txt", "start_line": float64(1)}, testEnv(dir))
+
+	if result["truncated"] != true {
+		t.Errorf("truncated = %v, want true", result["truncated"])
+	}
+
+	endLine, ok := result["end_line"].(int)
+	if !ok || endLine >= 3 {
+		t.Errorf("end_line = %v, want < 3 (the byte cap should stop the range before EOF)", result["end_line"])
+	}
+}
+
+// TestExecReadFileLineRangeSingleLongLine covers the shape spilled command
+// output most often takes — a single line longer than the return budget with
+// no newlines (base64, minified JSON, `jq -c`). A plain bufio.Scanner would
+// return bufio.ErrTooLong and surface a cryptic error; read_file must instead
+// hand back a byte-truncated prefix with truncated=true, matching the capped
+// prefix a no-range read gives, so the documented spill-recovery path works.
+func TestExecReadFileLineRangeSingleLongLine(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// One line, no trailing newline, larger than the return budget but under
+	// the scan buffer bound — the common spilled-output shape.
+	oneLongLine := strings.Repeat("y", maxToolOutputBytes+5000)
+
+	err := os.WriteFile(filepath.Join(dir, "blob.txt"), []byte(oneLongLine), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := execReadFile(context.Background(), map[string]any{"path": "blob.txt", "start_line": float64(1)}, testEnv(dir))
+
+	if result["error"] != nil {
+		t.Fatalf("read_file returned an error for a long single line: %v", result["error"])
+	}
+
+	content, ok := result["content"].(string)
+	if !ok {
+		t.Fatalf("content = %v (%T), want a string", result["content"], result["content"])
+	}
+
+	if len(content) != maxToolOutputBytes {
+		t.Errorf("content length = %d, want a %d-byte prefix of the long line", len(content), maxToolOutputBytes)
+	}
+
+	if result["truncated"] != true {
+		t.Errorf("truncated = %v, want true", result["truncated"])
+	}
+}
+
+// TestExecReadFileLineRangeLineOverScanBound covers a line so large it exceeds
+// even the scan buffer bound: rather than a hard bufio.ErrTooLong, read_file
+// degrades to truncated=true (with readFileFull still available as a fallback).
+func TestExecReadFileLineRangeLineOverScanBound(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	huge := strings.Repeat("z", maxReadFileScanBytes+1)
+
+	err := os.WriteFile(filepath.Join(dir, "huge.txt"), []byte(huge), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := execReadFile(context.Background(), map[string]any{"path": "huge.txt", "start_line": float64(1)}, testEnv(dir))
+
+	if result["error"] != nil {
+		t.Fatalf("read_file returned a hard error for a line over the scan bound: %v", result["error"])
+	}
+
+	if result["truncated"] != true {
+		t.Errorf("truncated = %v, want true", result["truncated"])
+	}
+}
+
+// TestExecReadFileCanReadSpilledRunShellOutput is an end-to-end check of the
+// fix this feature exists for: read_file was confined to the step's working
+// directory (resolveAgentPath), but a run_shell/custom tool's spilled output
+// used to live in a top-level os.MkdirTemp dir outside it — reachable only
+// via run_shell itself. newToolOutputSpillDir now nests the spill directory
+// under the working directory instead, so the same path run_shell's pointer
+// message names (once made relative to the working directory, which the
+// model already knows from its system message — see buildSystemMessage) is
+// one read_file can open.
+func TestExecReadFileCanReadSpilledRunShellOutput(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	env := testEnv(dir)
+	env.spillDir = newToolOutputSpillDir(dir, "test-agent")
+
+	if env.spillDir == "" {
+		t.Fatal("newToolOutputSpillDir returned \"\"")
+	}
+
+	command := "yes x | head -c " + strconv.Itoa(maxToolOutputBytes+500)
+	shellResult := shellToolResult(context.Background(), command, env)
+
+	stdout, ok := shellResult["stdout"].(string)
+	if !ok {
+		t.Fatalf("stdout = %v (%T), want a string", shellResult["stdout"], shellResult["stdout"])
+	}
+
+	absPath := extractSpillPath(t, stdout)
+
+	relPath, err := filepath.Rel(dir, absPath)
+	if err != nil || strings.HasPrefix(relPath, "..") {
+		t.Fatalf("spill path %q is not inside the working directory %q (rel = %q, err = %v)", absPath, dir, relPath, err)
+	}
+
+	readResult := execReadFile(context.Background(), map[string]any{"path": relPath, "start_line": float64(1), "end_line": float64(1)}, env)
+	if readResult["error"] != nil {
+		t.Fatalf("read_file(%q) = error: %v, want the spilled file to be readable", relPath, readResult["error"])
+	}
+
+	if readResult["content"] != "x" {
+		t.Errorf("content = %v, want %q", readResult["content"], "x")
+	}
+}
+
+// extractSpillPath pulls the absolute path out of a spillWriter pointer
+// message ("output too large (...); full output saved to <path>\n\n...").
+func extractSpillPath(t *testing.T, message string) string {
+	t.Helper()
+
+	const marker = "full output saved to "
+
+	idx := strings.Index(message, marker)
+	if idx < 0 {
+		t.Fatalf("message does not contain %q; got %q", marker, message)
+	}
+
+	rest := message[idx+len(marker):]
+
+	end := strings.IndexByte(rest, '\n')
+	if end < 0 {
+		end = len(rest)
+	}
+
+	return rest[:end]
 }
 
 // TestExecReadFileRejectsSymlinkEscape reproduces the security finding's

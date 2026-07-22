@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -28,11 +29,17 @@ const maxToolOutputBytes = 100_000
 // toolEnv is the execution environment tool impls run against: the step's
 // working directory (also the bind-mount source when runner is a
 // DockerRunner, so host-side tools like read_file/list_dir keep seeing what
-// a containerized run_shell/custom tool wrote) and the runner shell-backed
-// tools execute commands through.
+// a containerized run_shell/custom tool wrote), the runner shell-backed
+// tools execute commands through, and spillDir — a per-step temp directory
+// (created and cleaned up by prepareAgentStep/RunFix) that run_shell/custom
+// tool output too large to return inline is streamed to instead of being
+// dropped. A zero-value spillDir (test toolEnvs, MCP/read_file/subagent
+// tools, which don't use it) falls back to the shell layer's older
+// truncate-and-drop behavior — see shellToolResult.
 type toolEnv struct {
-	dir    string
-	runner shell.Runner
+	dir      string
+	runner   shell.Runner
+	spillDir string
 }
 
 // toolImpl executes one resolved tool against env, given the model's args.
@@ -104,7 +111,11 @@ type builtinTool struct {
 // run_shell call is invisible to the next, unlike host execution where
 // state persists naturally across calls in the same conversation.
 func runShellDescription(image string) string {
-	desc := "Run a shell command via `sh -c`, with cwd set to the step's working directory. Returns stdout, stderr, and exit_code."
+	desc := "Run a shell command via `sh -c`, with cwd set to the step's working directory. Returns stdout, stderr, and exit_code." +
+		" If a stream's output is too large to return inline, it's instead saved to a file under the working directory and a" +
+		" pointer message (an absolute path, size, and a preview) is returned in its place — read that file back with" +
+		" run_shell (e.g. grep/sed on the absolute path), or with read_file after converting the path to one relative to the" +
+		" working directory (read_file rejects absolute paths), using start_line/end_line to page through it."
 	if image != "" {
 		desc += " Runs in a fresh, independent container each call — nothing installed, exported, or cd'd in one call persists to the next; chain related commands with && in a single call instead of relying on state from a prior one."
 	}
@@ -112,16 +123,29 @@ func runShellDescription(image string) string {
 	return desc
 }
 
+// readFileDescription documents read_file's two modes: a plain call (no
+// start_line/end_line) reads from the top of the file, capped at ~100KB
+// exactly as before line ranges existed; passing either turns it into a
+// line-based slice instead — see execReadFile.
+const readFileDescription = "Read a UTF-8 text file's contents, given a path relative to the step's working directory." +
+	" Optionally pass start_line and/or end_line (1-indexed, inclusive) to read only a slice of a large file instead of" +
+	" its capped prefix — useful both for a file too big to read in one call and for output run_shell spilled to a file" +
+	" (see run_shell's description)."
+
 func builtinAgentTools(image string) map[string]builtinTool {
 	return map[string]builtinTool{
 		"read_file": {
 			decl: &genai.FunctionDeclaration{
 				Name:        "read_file",
-				Description: "Read a UTF-8 text file's contents, given a path relative to the step's working directory.",
+				Description: readFileDescription,
 				Parameters: &genai.Schema{
-					Type:       genai.TypeObject,
-					Properties: map[string]*genai.Schema{"path": {Type: genai.TypeString, Description: "File path, relative to the working directory."}},
-					Required:   []string{"path"},
+					Type: genai.TypeObject,
+					Properties: map[string]*genai.Schema{
+						"path":       {Type: genai.TypeString, Description: "File path, relative to the working directory."},
+						"start_line": {Type: genai.TypeInteger, Description: "First line to return, 1-indexed and inclusive. Defaults to 1."},
+						"end_line":   {Type: genai.TypeInteger, Description: "Last line to return, 1-indexed and inclusive. Defaults to the end of the file."},
+					},
+					Required: []string{"path"},
 				},
 			},
 			impl: execReadFile,
@@ -421,6 +445,24 @@ func stringArg(args map[string]any, key string) string {
 	return v
 }
 
+// intArg reads an integer tool argument. The genai/JSON path decodes a
+// model-supplied number as float64; the int case exists only so
+// Go-constructed args (tests, sub-agent/verdict plumbing) can pass a plain
+// int without going through JSON first. The bool return distinguishes "not
+// supplied" from "supplied as 0", which read_file's start_line/end_line
+// both need (0 is not a valid line number, but its absence and its
+// explicit-zero are different requests).
+func intArg(args map[string]any, key string) (int, bool) {
+	switch v := args[key].(type) {
+	case float64:
+		return int(v), true
+	case int:
+		return v, true
+	default:
+		return 0, false
+	}
+}
+
 // truncateToolOutput caps s at maxToolOutputBytes, appending a marker when
 // it cuts, so a runaway command can't flood the model's context.
 func truncateToolOutput(s string) string {
@@ -435,10 +477,11 @@ func truncateToolOutput(s string) string {
 // (run_shell and every custom tool). It executes command through env.runner
 // — the host or, when the step's image: is set, a fresh container — with
 // env.dir as cwd, via RunCaptureFullLimited so a runaway command's output is
-// capped as it's captured rather than fully buffered and truncated
-// afterward.
+// capped as it's captured rather than fully buffered. When env.spillDir is
+// set, output beyond the cap is streamed to a file under it and the model
+// gets a pointer message instead of losing the overflow.
 func shellToolResult(ctx context.Context, command string, env toolEnv) map[string]any {
-	stdout, stderr, exitCode, err := env.runner.RunCaptureFullLimited(ctx, command, maxToolOutputBytes)
+	stdout, stderr, exitCode, err := env.runner.RunCaptureFullLimited(ctx, command, maxToolOutputBytes, env.spillDir)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
@@ -450,6 +493,12 @@ func shellToolResult(ctx context.Context, command string, env toolEnv) map[strin
 	}
 }
 
+// execReadFile resolves path and dispatches to readFileFull (the original
+// behavior: read from the top, capped at maxToolOutputBytes) or, when either
+// start_line or end_line is supplied, readFileRange — a line-based slice so
+// a large file (or a run_shell/custom tool's spilled output, always under
+// env.dir — see toolOutputSpillDirName) can be paged through instead of only
+// ever showing a capped prefix.
 func execReadFile(_ context.Context, args map[string]any, env toolEnv) map[string]any {
 	rel := stringArg(args, "path")
 	if rel == "" {
@@ -461,6 +510,31 @@ func execReadFile(_ context.Context, args map[string]any, env toolEnv) map[strin
 		return map[string]any{"error": err.Error()}
 	}
 
+	startLine, hasStart := intArg(args, "start_line")
+	endLine, hasEnd := intArg(args, "end_line")
+
+	if !hasStart && !hasEnd {
+		return readFileFull(resolved)
+	}
+
+	if !hasStart {
+		startLine = 1
+	}
+
+	if startLine < 1 {
+		return map[string]any{"error": "read_file: start_line must be >= 1"}
+	}
+
+	if hasEnd && endLine < startLine {
+		return map[string]any{"error": "read_file: end_line must be >= start_line"}
+	}
+
+	return readFileRange(resolved, startLine, endLine, hasEnd)
+}
+
+// readFileFull is read_file with no start_line/end_line: the original
+// behavior, unchanged.
+func readFileFull(resolved string) map[string]any {
 	f, err := os.Open(resolved) //nolint:gosec // resolveAgentPath rejects paths escaping dir, the step's own workspace
 	if err != nil {
 		return map[string]any{"error": err.Error()}
@@ -489,6 +563,142 @@ func execReadFile(_ context.Context, args map[string]any, env toolEnv) map[strin
 	}
 
 	return map[string]any{"content": content}
+}
+
+// maxReadFileScanBytes bounds the largest single line readFileRange will pull
+// into memory before deciding what to keep. It's well above maxToolOutputBytes
+// (the return budget) so a spilled file's long line — base64/minified/`jq -c`
+// output, which frequently has no newlines at all — is still readable
+// (byte-truncated to the budget) rather than failing the scan with a cryptic
+// "token too long"; a line even larger than this degrades to truncated=true,
+// still not a hard error. Matches internal/shell's spillMaxBytes, the largest
+// a spilled stream can be.
+const maxReadFileScanBytes = 10 << 20 // 10 MiB
+
+// appendRangeLine adds one line's text to buf under the maxToolOutputBytes
+// return budget. It reports whether any of the line was included (so the
+// caller can advance the last-line counter), whether to stop scanning (the
+// budget is exhausted), and whether anything was cut (truncation occurred).
+// An over-budget first line keeps a byte-truncated prefix rather than nothing,
+// so a single-long-line file (a common shape for spilled command output) is
+// still partially readable, matching readFileFull's capped prefix; an
+// over-budget later line is dropped whole, leaving the last full line as the
+// paging cursor.
+func appendRangeLine(buf *strings.Builder, text []byte) (included, stop, cut bool) {
+	if buf.Len() == 0 {
+		if len(text) > maxToolOutputBytes {
+			buf.Write(text[:maxToolOutputBytes])
+
+			return true, true, true
+		}
+
+		buf.Write(text)
+
+		return true, false, false
+	}
+
+	if buf.Len()+len(text)+1 > maxToolOutputBytes {
+		return false, true, true
+	}
+
+	buf.WriteByte('\n')
+	buf.Write(text)
+
+	return true, false, false
+}
+
+// readFileRange reads resolved line by line, returning only lines
+// [startLine, endLine] (1-indexed, inclusive; hasEnd false means "to EOF").
+// The result is still capped at maxToolOutputBytes — an unreasonably wide
+// range on a huge file degrades the same way a full read does (a
+// truncated=true flag instead of a trailing marker, since content here is
+// whole lines, not an arbitrary byte prefix), rather than buffering the
+// whole slice unbounded.
+func readFileRange(resolved string, startLine, endLine int, hasEnd bool) map[string]any {
+	f, err := os.Open(resolved) //nolint:gosec // resolveAgentPath rejects paths escaping dir, the step's own workspace
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	defer func() { _ = f.Close() }()
+
+	content, lastLine, truncated, err := scanLineRange(f, startLine, endLine, hasEnd)
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+
+	if lastLine == 0 {
+		lastLine = startLine - 1
+	}
+
+	return map[string]any{
+		"content":    content,
+		"start_line": startLine,
+		"end_line":   lastLine,
+		"truncated":  truncated,
+	}
+}
+
+// scanLineRange walks r line by line, accumulating lines [startLine, endLine]
+// (hasEnd false means "to EOF") under the maxToolOutputBytes budget via
+// appendRangeLine. It returns the accumulated content, the last line actually
+// included (0 if none), and whether anything was truncated. A line longer than
+// the scan buffer degrades to truncated=true rather than a hard error — the
+// spilled-long-line case this paging path exists to serve; only a genuine read
+// error is returned.
+func scanLineRange(r io.Reader, startLine, endLine int, hasEnd bool) (content string, lastLine int, truncated bool, err error) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxReadFileScanBytes)
+
+	content, lastLine, truncated = accumulateLineRange(scanner, startLine, endLine, hasEnd)
+
+	scanErr := scanner.Err()
+	if scanErr != nil && !errors.Is(scanErr, bufio.ErrTooLong) {
+		return "", 0, false, fmt.Errorf("read_file: %w", scanErr)
+	}
+
+	if scanErr != nil {
+		truncated = true // a line over the scan buffer bound: degrade, don't hard-error
+	}
+
+	return content, lastLine, truncated, nil
+}
+
+// accumulateLineRange drains scanner, collecting lines [startLine, endLine]
+// (hasEnd false means "to EOF") under the maxToolOutputBytes budget. The
+// caller inspects scanner.Err() afterward — a too-long line is left for
+// scanLineRange to classify.
+func accumulateLineRange(scanner *bufio.Scanner, startLine, endLine int, hasEnd bool) (content string, lastLine int, truncated bool) {
+	var (
+		buf  strings.Builder
+		line int
+	)
+
+	for scanner.Scan() {
+		line++
+
+		if line < startLine {
+			continue
+		}
+
+		if hasEnd && line > endLine {
+			break
+		}
+
+		included, stop, cut := appendRangeLine(&buf, scanner.Bytes())
+		if cut {
+			truncated = true
+		}
+
+		if included {
+			lastLine = line
+		}
+
+		if stop {
+			break
+		}
+	}
+
+	return buf.String(), lastLine, truncated
 }
 
 func execListDir(_ context.Context, args map[string]any, env toolEnv) map[string]any {

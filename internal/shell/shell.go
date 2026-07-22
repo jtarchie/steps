@@ -33,10 +33,16 @@ type Runner interface {
 	// RunCaptureFullLimited behaves exactly like RunCaptureFull, except each
 	// of stdout/stderr is capped at maxBytes while the command is running —
 	// not just truncated afterward — so a runaway command's output never
-	// fully buffers into memory before being discarded. A capped stream gets
-	// a trailing "... [truncated N bytes]" marker, matching
-	// internal/agent's truncateToolOutput format.
-	RunCaptureFullLimited(ctx context.Context, command string, maxBytes int) (stdout, stderr string, exitCode int, err error)
+	// fully buffers into memory before being discarded (or, with spillDir
+	// set, before being streamed to disk). When spillDir is "", a stream that
+	// exceeds maxBytes gets a trailing "... [truncated N bytes]" marker,
+	// matching internal/agent's truncateToolOutput format, and the overflow
+	// is dropped. When spillDir is a directory path, a stream that exceeds
+	// maxBytes is instead written in full to a new file under spillDir (up
+	// to spillMaxBytes, beyond which the file itself is marked truncated the
+	// same way), and the returned string is a short pointer message naming
+	// the file, its size, and a head preview — see spillWriter.
+	RunCaptureFullLimited(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error)
 }
 
 // NewRunner returns a DockerRunner scoped to image and cwd, or a HostRunner
@@ -72,15 +78,34 @@ type captureWriter interface {
 	result() string
 }
 
+// spillMaxBytes bounds how much of an overflowing stream spillWriter will
+// write to disk — a disk-exhaustion guard against a runaway model-directed
+// command, the same reason boundedWriter caps memory. A file that hits this
+// cap gets the same trailing "... [truncated N bytes]" marker a dropped
+// boundedWriter overflow gets, just applied to the file instead of memory.
+const spillMaxBytes = 10 << 20 // 10 MiB
+
+// spillPreviewBytes is how much of a spilled stream's head is echoed inline
+// in the pointer message, so the model has some immediate signal without
+// having to open the file first.
+const spillPreviewBytes = 2000
+
 // newCaptureWriter returns an unboundedWriter when maxBytes <= 0 (matching
 // every Run/RunCapture/RunCaptureFull caller's historical unbounded-buffer
-// behavior exactly), or a boundedWriter otherwise (RunCaptureFullLimited).
-func newCaptureWriter(maxBytes int) captureWriter {
+// behavior exactly). Otherwise it returns a boundedWriter (truncate and
+// drop the overflow) when spillDir is "", or a spillWriter (stream the
+// overflow to a file under spillDir) when spillDir is set — both used only
+// by RunCaptureFullLimited.
+func newCaptureWriter(maxBytes int, spillDir string) captureWriter {
 	if maxBytes <= 0 {
 		return &unboundedWriter{}
 	}
 
-	return &boundedWriter{max: maxBytes}
+	if spillDir == "" {
+		return &boundedWriter{max: maxBytes}
+	}
+
+	return &spillWriter{max: maxBytes, dir: spillDir}
 }
 
 // unboundedWriter is a plain, uncapped capture.
@@ -126,6 +151,206 @@ func (w *boundedWriter) result() string {
 	}
 
 	return s
+}
+
+// spillWriter buffers up to max bytes in head, exactly like boundedWriter,
+// but on overflow streams the FULL stream (head plus everything after,
+// itself capped at spillMaxBytes to bound disk use) to a new file under dir
+// instead of dropping it. result() then returns a short pointer message —
+// the file's path, the stream's true total size, and a head preview —
+// rather than the raw content, so a caller (an agent's run_shell/custom
+// tool) can hand the model something it can act on (grep/read the file)
+// instead of silently losing whatever was truncated.
+//
+// It never errors or short-writes, matching boundedWriter's io.Writer
+// contract; if creating or writing the spill file fails partway through, it
+// degrades to boundedWriter's drop-the-overflow behavior and notes the
+// failure in result().
+type spillWriter struct {
+	max       int
+	dir       string
+	total     int
+	head      bytes.Buffer
+	file      *os.File
+	filePath  string
+	fileBytes int
+	spillErr  error
+}
+
+func (w *spillWriter) Write(p []byte) (int, error) {
+	n := len(p) // the real input length: io.Writer requires this back even when we retain/write less
+	w.total += n
+
+	p = w.bufferHead(p)
+
+	if w.file == nil && w.spillErr == nil && w.total > w.max {
+		w.beginSpill()
+	}
+
+	if w.file != nil && len(p) > 0 {
+		w.writeToFile(p)
+	}
+
+	return n, nil
+}
+
+// bufferHead appends as much of p as still fits within max bytes of head
+// (a no-op once head is already full or spilling has begun/failed) and
+// returns whatever of p didn't fit, for the caller to spill instead.
+func (w *spillWriter) bufferHead(p []byte) []byte {
+	if w.file != nil || w.spillErr != nil {
+		return p
+	}
+
+	remaining := w.max - w.head.Len()
+	if remaining <= 0 {
+		return p
+	}
+
+	toBuffer := p
+	if remaining < len(toBuffer) {
+		toBuffer = toBuffer[:remaining]
+	}
+
+	w.head.Write(toBuffer)
+
+	return p[len(toBuffer):]
+}
+
+// beginSpill creates the spill file and flushes the already-buffered head
+// (the first max bytes of the stream) to it, called exactly once per
+// spillWriter, the first time a Write pushes total past max. A failure here
+// (can't create/write the file — a full or read-only spill dir) is recorded
+// in spillErr rather than returned: spillWriter, like boundedWriter, must
+// never turn an io.Writer failure into a broken command capture — it just
+// degrades to boundedWriter's drop-the-overflow behavior instead.
+func (w *spillWriter) beginSpill() {
+	f, err := os.CreateTemp(w.dir, "output-*.txt")
+	if err != nil {
+		w.spillErr = fmt.Errorf("create spill file: %w", err)
+
+		return
+	}
+
+	_, err = f.Write(w.head.Bytes())
+	if err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name()) // don't leave a half-created spill file behind on the degrade path
+
+		w.spillErr = fmt.Errorf("write spill file: %w", err)
+
+		return
+	}
+
+	w.file = f
+	w.filePath = f.Name()
+	w.fileBytes = w.head.Len()
+}
+
+// writeToFile appends p to the already-open spill file, capping the file's
+// total size at spillMaxBytes — a disk-exhaustion guard, mirroring why
+// boundedWriter caps memory. Bytes beyond the cap are silently dropped, like
+// boundedWriter's overflow; result reports that drop via the trailing marker.
+func (w *spillWriter) writeToFile(p []byte) {
+	if w.spillErr != nil || w.fileBytes >= spillMaxBytes {
+		return
+	}
+
+	remaining := spillMaxBytes - w.fileBytes
+	if remaining < len(p) {
+		p = p[:remaining]
+	}
+
+	if len(p) == 0 {
+		return
+	}
+
+	_, err := w.file.Write(p)
+	if err != nil {
+		w.spillErr = err
+
+		return
+	}
+
+	w.fileBytes += len(p)
+}
+
+func (w *spillWriter) result() string {
+	if w.file == nil {
+		return w.resultFromHead()
+	}
+
+	return w.resultFromFile()
+}
+
+// resultFromHead is result() when Write never crossed max (nothing spilled)
+// or spilling itself failed (spillErr set) — the exact same shape
+// boundedWriter.result returns, plus a note when a spill was attempted and
+// failed.
+func (w *spillWriter) resultFromHead() string {
+	s := w.head.String()
+
+	overflow := w.total - w.head.Len()
+	if overflow <= 0 {
+		return s
+	}
+
+	s += fmt.Sprintf("\n... [truncated %d bytes]", overflow)
+
+	if w.spillErr != nil {
+		s += fmt.Sprintf(" (could not save full output: %s)", w.spillErr)
+	}
+
+	return s
+}
+
+// resultFromFile is result() once spilling succeeded: it appends a
+// truncation marker to the file if spillMaxBytes cut it short, closes it,
+// and returns the pointer message the model actually sees in place of the
+// raw content.
+func (w *spillWriter) resultFromFile() string {
+	overflow := w.total - w.fileBytes
+	if overflow > 0 {
+		_, err := fmt.Fprintf(w.file, "\n... [truncated %d bytes]", overflow)
+		if err != nil {
+			w.spillErr = err
+		}
+	}
+
+	path := w.filePath
+
+	_ = w.file.Close()
+
+	msg := fmt.Sprintf("output too large (%s); full output saved to %s", formatBytes(w.total), path)
+
+	preview := w.head.Bytes()
+	if len(preview) > spillPreviewBytes {
+		preview = preview[:spillPreviewBytes]
+	}
+
+	if len(preview) > 0 {
+		msg += fmt.Sprintf("\n\nfirst %s:\n%s", formatBytes(len(preview)), preview)
+	}
+
+	return msg
+}
+
+// formatBytes renders n as a human-readable size (bytes, KB, or MB with one
+// decimal place) for the spill pointer message.
+func formatBytes(n int) string {
+	const (
+		kb = 1024
+		mb = kb * 1024
+	)
+
+	switch {
+	case n >= mb:
+		return fmt.Sprintf("%.1f MB", float64(n)/float64(mb))
+	case n >= kb:
+		return fmt.Sprintf("%.1f KB", float64(n)/float64(kb))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
 }
 
 // HostRunner runs commands directly on the host via `sh -c`, with cwd as
@@ -333,19 +558,20 @@ func (h HostRunner) RunCapture(ctx context.Context, command string) ([]byte, err
 // stdin risks a command (cat with no args, a tool prompting for input)
 // blocking until the step's timeout instead of getting EOF.
 func (h HostRunner) RunCaptureFull(ctx context.Context, command string) (stdout, stderr string, exitCode int, err error) {
-	return h.runCaptureFull(ctx, command, 0)
+	return h.runCaptureFull(ctx, command, 0, "")
 }
 
 // RunCaptureFullLimited is RunCaptureFull with each stream capped at
-// maxBytes while the command runs — see the Runner interface doc.
-func (h HostRunner) RunCaptureFullLimited(ctx context.Context, command string, maxBytes int) (stdout, stderr string, exitCode int, err error) {
-	return h.runCaptureFull(ctx, command, maxBytes)
+// maxBytes (and, with spillDir set, overflow streamed to disk instead of
+// dropped) while the command runs — see the Runner interface doc.
+func (h HostRunner) RunCaptureFullLimited(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error) {
+	return h.runCaptureFull(ctx, command, maxBytes, spillDir)
 }
 
 // runCaptureFull is the shared implementation behind RunCaptureFull (maxBytes
 // 0, meaning unbounded — byte-identical to before RunCaptureFullLimited
 // existed) and RunCaptureFullLimited (maxBytes > 0).
-func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes int) (stdout, stderr string, exitCode int, err error) {
+func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error) {
 	slog.Debug("shell.capture_full", "command", command, "cwd", h.cwd)
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
@@ -353,8 +579,8 @@ func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes
 	cmd.Env = hostEnv()
 	cmd.Stdin = nil
 
-	outWriter := newCaptureWriter(maxBytes)
-	errWriter := newCaptureWriter(maxBytes)
+	outWriter := newCaptureWriter(maxBytes, spillDir)
+	errWriter := newCaptureWriter(maxBytes, spillDir)
 
 	cmd.Stdout = outWriter
 	cmd.Stderr = errWriter

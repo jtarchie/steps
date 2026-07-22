@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/retry"
@@ -85,6 +86,11 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 		return err
 	}
 
+	spillDir := newToolOutputSpillDir(dir, fix.Agent)
+	if spillDir != "" {
+		defer func() { _ = os.RemoveAll(spillDir) }()
+	}
+
 	prompt := fix.Prompt
 	if prompt == "" {
 		prompt = fmt.Sprintf(defaultFixPrompt, rt.Name)
@@ -95,7 +101,7 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 	conv := agentConversation{
 		system: buildSystemMessage(ri.Persona, dir),
 		prompt: prompt,
-		env:    toolEnv{dir: dir, runner: runner},
+		env:    toolEnv{dir: dir, runner: runner, spillDir: spillDir},
 		tools:  agentTools{decls: decls, registry: registry, required: requiredToolNames(toolSpecs), maxCalls: maxCallsByName(toolSpecs)},
 		params: agentGenParams{
 			temperature: ri.Temperature,

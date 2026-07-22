@@ -122,7 +122,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	conv := agentConversation{
 		system: buildSystemMessage(c.ri.Persona, env.dir),
 		prompt: request,
-		env:    toolEnv{dir: env.dir, runner: runner},
+		env:    toolEnv{dir: env.dir, runner: runner, spillDir: env.spillDir},
 		tools:  agentTools{decls: c.decls, registry: c.registry, required: c.required, maxCalls: c.maxCalls},
 		params: agentGenParams{
 			temperature: c.ri.Temperature,
