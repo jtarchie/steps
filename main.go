@@ -8,19 +8,24 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"syscall"
 	"time"
 
 	"github.com/alecthomas/kong"
 	"github.com/lmittmann/tint"
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/jtarchie/steps/internal/config"
+	stepsmcp "github.com/jtarchie/steps/internal/mcp"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/trigger"
@@ -39,6 +44,7 @@ type CLI struct {
 	Run      RunCmd   `cmd:""         default:"withargs"                                             help:"run a single job once"`
 	Watch    WatchCmd `cmd:""         help:"poll trigger: true resources and auto-run affected jobs"`
 	Test     TestCmd  `cmd:""         help:"run every job (force) and verify assert directives"`
+	MCP      MCPCmd   `cmd:""         help:"inspect or authorize a pipeline's mcp_servers: entries"`
 }
 
 // RunCmd runs a single job's plan once, exactly as steps has always done.
@@ -160,6 +166,156 @@ func (t *TestCmd) Run() error {
 
 	if len(failures) > 0 {
 		return fmt.Errorf("test: %d job(s) failed: %v", len(failures), failures)
+	}
+
+	return nil
+}
+
+// MCPCmd groups the two mcp_servers:-related subcommands: `tools` (list a
+// server's tools — works for any auth type, and is the discovery/preflight
+// step a pipeline author runs before writing a tool reference or a
+// resource type's mcp: block) and `login` (the only interactive,
+// state-writing command in this group — see internal/mcp/login.go). Neither
+// `run` nor `watch` ever prompts; a headless process that hits an
+// unauthorized oauth server just surfaces the actionable error naming this
+// login command.
+type MCPCmd struct {
+	Tools MCPToolsCmd `cmd:"" help:"list an mcp server's tools and their argument schemas"`
+	Login MCPLoginCmd `cmd:"" help:"interactively authorize an oauth-configured mcp server"`
+}
+
+// MCPToolsCmd lists the tools a configured mcp_servers: entry exposes.
+type MCPToolsCmd struct {
+	Pipeline string `arg:"" help:"path to the pipeline YAML file"`
+	Server   string `arg:"" help:"mcp_servers: entry name"`
+}
+
+// Run loads the pipeline, resolves the named server, connects (per its
+// configured auth), and prints each of its tools' name, description, and
+// argument schema. An unauthorized oauth server surfaces
+// oauthTokenSource's own actionable "run steps mcp login" error, unchanged.
+func (m *MCPToolsCmd) Run() error {
+	cfg, err := config.LoadConfig(m.Pipeline)
+	if err != nil {
+		return fmt.Errorf("could not load pipeline: %w", err)
+	}
+
+	srv, err := cfg.FindMCPServer(m.Server)
+	if err != nil {
+		return fmt.Errorf("could not find mcp server: %w", err)
+	}
+
+	ctx, cancel := withSignalCancel(context.Background())
+	defer cancel()
+
+	tools, err := stepsmcp.ListServerTools(ctx, *srv)
+	if err != nil {
+		return fmt.Errorf("could not list tools: %w", err)
+	}
+
+	printMCPTools(tools)
+
+	return nil
+}
+
+// printMCPTools writes each tool's name, description, and argument schema
+// to stdout in a simple, human-readable form.
+func printMCPTools(tools []*sdkmcp.Tool) {
+	if len(tools) == 0 {
+		fmt.Println("(no tools)")
+
+		return
+	}
+
+	for _, tool := range tools {
+		fmt.Printf("%s\n", tool.Name)
+
+		if tool.Description != "" {
+			fmt.Printf("  %s\n", tool.Description)
+		}
+
+		schema, err := json.MarshalIndent(tool.InputSchema, "  ", "  ")
+		if err == nil && len(schema) > 0 {
+			fmt.Printf("  arguments: %s\n", schema)
+		}
+
+		fmt.Println()
+	}
+}
+
+// MCPLoginCmd interactively authorizes an auth: {type: oauth} mcp_servers:
+// entry — the only command in this CLI that opens a browser or blocks on
+// user interaction outside a pipeline run.
+type MCPLoginCmd struct {
+	Pipeline string `arg:"" help:"path to the pipeline YAML file"`
+	Server   string `arg:"" help:"mcp_servers: entry name to authorize"`
+}
+
+// Run resolves the named server (rejecting anything but auth: {type:
+// oauth} — there is nothing to log in to otherwise) and runs the
+// interactive authorization-code + PKCE flow, printing progress a human can
+// follow.
+func (m *MCPLoginCmd) Run() error {
+	cfg, err := config.LoadConfig(m.Pipeline)
+	if err != nil {
+		return fmt.Errorf("could not load pipeline: %w", err)
+	}
+
+	srv, err := cfg.FindMCPServer(m.Server)
+	if err != nil {
+		return fmt.Errorf("could not find mcp server: %w", err)
+	}
+
+	if srv.Auth.Type != "oauth" {
+		return fmt.Errorf("mcp server %q is not auth: {type: oauth}; nothing to log in to", m.Server)
+	}
+
+	ctx, cancel := withSignalCancel(context.Background())
+	defer cancel()
+
+	fmt.Printf("→ opening browser to authorize %q…\n", m.Server)
+
+	err = stepsmcp.Login(ctx, *srv, openBrowser)
+	if err != nil {
+		return fmt.Errorf("mcp login: %w", err)
+	}
+
+	path, err := stepsmcp.TokenPath(m.Server)
+	if err != nil {
+		return fmt.Errorf("mcp login: %w", err)
+	}
+
+	fmt.Printf("✓ authorized %q (token saved to %s)\n", m.Server, path)
+
+	return nil
+}
+
+// openBrowser launches the OS's default browser at url. Its caller
+// (internal/mcp's loopbackCallback.fetch) already falls back to printing
+// url to stdout on any error this returns, so this only needs to cover the
+// happy path per OS — a nil case (no known opener for GOOS) fails closed
+// into that same print-the-URL fallback rather than guessing.
+func openBrowser(url string) error {
+	// A fire-and-forget subprocess launch (handing off to the OS's default-
+	// app opener, which returns almost immediately) with nothing meaningful
+	// to cancel — context.Background() rather than threading a caller ctx
+	// through internal/mcp's open func(string) error callback type.
+	ctx := context.Background()
+
+	var cmd *exec.Cmd
+
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.CommandContext(ctx, "open", url) //nolint:gosec // url is the authorization URL steps itself just built via oauth2.Config.AuthCodeURL, not attacker-influenced input
+	case "linux":
+		cmd = exec.CommandContext(ctx, "xdg-open", url) //nolint:gosec // same as above
+	default:
+		return fmt.Errorf("no known browser-open command for GOOS %q", runtime.GOOS)
+	}
+
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf("%w", err)
 	}
 
 	return nil

@@ -79,8 +79,18 @@ linters:
             - "$gostd"
             - "github.com/alecthomas/kong"
             - "github.com/lmittmann/tint"
+            - "github.com/modelcontextprotocol/go-sdk/mcp"
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/pipeline"
+            # internal/mcp is a setup/tooling dependency here, not an
+            # execution-path one: `steps mcp login`/`steps mcp tools` are
+            # standalone auth bootstrap/discovery commands with no
+            # relationship to pipeline.RunJob, the same way main already
+            # reaches internal/workspace directly for provider setup rather
+            # than through pipeline. It is NOT a precedent for main reaching
+            # into resource/agent territory, which pipeline.RunJob still
+            # exclusively orchestrates.
+            - "github.com/jtarchie/steps/internal/mcp"
             - "github.com/jtarchie/steps/internal/store"
             - "github.com/jtarchie/steps/internal/trigger"
             - "github.com/jtarchie/steps/internal/workspace"
