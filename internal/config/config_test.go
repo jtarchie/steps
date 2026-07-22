@@ -1240,6 +1240,51 @@ func TestValidateImageValuesRejectsLeadingDash(t *testing.T) {
 	})
 }
 
+// TestValidateAgentEndpointsRejectsUserinfo guards the security finding that
+// an agent's source.endpoint: with an embedded credential (e.g.
+// "https://user:token@proxy/") was hashed verbatim into every agent step's
+// merkle content and persisted through store.RecordNode, cleartext, in
+// .steps/state.db -- despite this codebase's own documented claim that
+// hashed content excludes anything "secret-adjacent". That exclusion only
+// ever covered api_key_env's name/value; a credential living directly in
+// endpoint was never scrubbed.
+func TestValidateAgentEndpointsRejectsUserinfo(t *testing.T) {
+	t.Parallel()
+
+	t.Run("endpoint with userinfo is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{Agents: []Agent{{Name: "a", Source: AgentSource{Model: "x", Endpoint: "https://user:token@proxy.internal/v1/"}}}} //nolint:gosec // test fixture: the literal this validator must reject, not a real credential
+
+		err := cfg.validateAgentEndpoints()
+		if err == nil {
+			t.Error("expected an error for an endpoint embedding userinfo")
+		}
+	})
+
+	t.Run("ordinary endpoint is fine", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{Agents: []Agent{{Name: "a", Source: AgentSource{Model: "x", Endpoint: "https://proxy.internal/v1/"}}}}
+
+		err := cfg.validateAgentEndpoints()
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("no endpoint set is fine", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{Agents: []Agent{{Name: "a", Source: AgentSource{Model: "openai/gpt-4"}}}}
+
+		err := cfg.validateAgentEndpoints()
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+}
+
 func TestValidateFixAgentImages(t *testing.T) {
 	t.Parallel()
 

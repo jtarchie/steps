@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -647,7 +648,12 @@ func (c *Config) validate() error {
 		return err
 	}
 
-	return c.validateAsserts()
+	err = c.validateAsserts()
+	if err != nil {
+		return err
+	}
+
+	return c.validateAgentEndpoints()
 }
 
 // reservedRouteKeys are the outcome keys with fixed meaning in a step's to:
@@ -2018,6 +2024,41 @@ var agentProviders = map[string]agentProvider{
 	"together":   {"https://api.together.xyz/v1/", "TOGETHER_API_KEY", true},
 	"lmstudio":   {"http://localhost:1234/v1/", "", false},
 	"ollama":     {"http://localhost:11434/v1/", "", false},
+}
+
+// validateAgentEndpoints rejects an agents: entry whose source.endpoint:
+// embeds userinfo (a "https://user:token@host/" style credential). Nothing
+// in resolveAgentTarget/ResolveAgentInvocation scrubs it: the resolved
+// BaseURL — endpoint included — is folded verbatim into AgentContentMap /
+// subAgentInvocationContent (internal/merkle) and persisted through
+// store.RecordNode, contradicting this codebase's own documented claim that
+// hashed content excludes anything "secret-adjacent" (that exclusion only
+// actually covers api_key_env's name/value, never a credential living in
+// endpoint itself). Rejecting at load, rather than silently stripping the
+// credential before hashing, surfaces the mistake immediately and points the
+// operator at api_key_env — the mechanism this project already has for
+// exactly this purpose — instead of a config that "works" while quietly
+// leaking a credential into .steps/state.db on every run.
+func (c *Config) validateAgentEndpoints() error {
+	for i := range c.Agents {
+		agent := c.Agents[i]
+
+		endpoint := agent.Source.Endpoint
+		if endpoint == "" {
+			continue
+		}
+
+		parsed, err := url.Parse(endpoint)
+		if err != nil {
+			continue // an unparsable endpoint is left for resolveAgentTarget/the HTTP client to reject at run time
+		}
+
+		if parsed.User != nil {
+			return fmt.Errorf("agent %q: source.endpoint must not embed credentials (userinfo); use source.api_key_env instead", agent.Name)
+		}
+	}
+
+	return nil
 }
 
 // resolveAgentTarget interprets an optional "provider/" prefix on
