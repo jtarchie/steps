@@ -16,6 +16,8 @@ An agent step runs a tool-calling conversation loop:
 4. Exit when the model stops requesting tools, or `max_turns` is exceeded.
 5. Record the step's output.
 
+Two tools can be synthesized onto a step's grant beyond what `tools:` lists: a required `verdict` tool (`verdicts:` on the step) and a read-only `previous_run` tool (`handoff: {tool: true}`) — both documented in [control-flow.md](control-flow.md)'s "Step transitions" and "Handoff context" sections, since both exist to serve `to:` routing rather than the tool-calling loop itself.
+
 ## Custom tool `required:` semantics
 
 A custom tool (a `tools:` entry with `name`/`description`/`run`) can be marked `required: true` (see `examples/agents.yml`'s `post_review`). This means the step can't complete until that tool has *succeeded* — but no tool failure, required or not, ever aborts or restarts the conversation. A failed call always comes back to the model as ordinary data (`{exit_code, stdout, stderr}` or `{"error": ...}`), exactly like `run_shell`, so the model sees what went wrong and can recover in the same session.

@@ -599,6 +599,70 @@ type Step struct {
 	// code (see Assert). A matching assert makes a non-zero-exit task a
 	// success; a mismatch fails the step. Invalid on get/put steps.
 	Assert *Assert `yaml:"assert,omitempty"`
+	// Handoff, on an agent step, opts into transition context: when this step
+	// is entered via a to:/verdicts: transition, it receives a machine-
+	// assembled <transition_context> block (see HandoffSpec.Context) appended
+	// to its prompt and/or a synthesized previous_run tool (see
+	// HandoffSpec.Tool) it can call to pull the routed-from agent's recorded
+	// run on demand. Agent-only, and only valid on a step that is the target
+	// of at least one to: route within its own get-segment — see
+	// validateHandoffSteps. On the step's first/unrouted execution, no
+	// context block is appended and previous_run (if granted) answers "no
+	// previous run" as data.
+	Handoff *HandoffSpec `yaml:"handoff,omitempty"`
+}
+
+// HandoffSpec is a step's handoff: (see Step.Handoff). Context enables the
+// pushed <transition_context> prompt block; Tool enables the pulled
+// previous_run tool. A scalar `handoff: true` is shorthand for {context:
+// true}; a mapping's context defaults to true unless explicitly set false,
+// so `handoff: {tool: true}` enables both.
+type HandoffSpec struct {
+	Context bool
+	Tool    bool
+}
+
+// UnmarshalYAML decodes a HandoffSpec from either a scalar (handoff: true/
+// false, context only) or a mapping ({context, tool}) YAML node — the same
+// scalar-or-mapping idiom as WhenSpec/FixSpec.
+func (h *HandoffSpec) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias kinds that can't appear here
+	case yaml.ScalarNode:
+		var enabled bool
+
+		err := value.Decode(&enabled)
+		if err != nil {
+			return fmt.Errorf("step handoff: %w", err)
+		}
+
+		h.Context = enabled
+
+		return nil
+	case yaml.MappingNode:
+		var m struct {
+			Context *bool `yaml:"context"`
+			Tool    bool  `yaml:"tool"`
+		}
+
+		err := value.Decode(&m)
+		if err != nil {
+			return fmt.Errorf("step handoff: %w", err)
+		}
+
+		h.Context = m.Context == nil || *m.Context
+		h.Tool = m.Tool
+
+		return nil
+	default:
+		return fmt.Errorf("step handoff at line %d must be a boolean or a {context, tool} mapping", value.Line)
+	}
+}
+
+// Enabled reports whether h turns on anything. A non-nil but all-false
+// HandoffSpec (handoff: false, or handoff: {context: false}) is rejected at
+// LoadConfig (validateHandoffSteps) rather than silently accepted as a no-op.
+func (h *HandoffSpec) Enabled() bool {
+	return h.Context || h.Tool
 }
 
 // StepKind is which of Get/Task/Put/Agent a Step is. See Step.Kind.
@@ -781,7 +845,8 @@ func stepName(step Step) string {
 // segment (bounded by get steps) that uses routing, step names must be unique,
 // every to: target must resolve within the segment, a backward target requires
 // max_visits, and an agent's verdict vocabulary must be complete and
-// consistent with its to: keys.
+// consistent with its to: keys. Also validates handoff: (validateHandoffSteps),
+// since it's meaningless without a to: route targeting the step it's set on.
 func (c *Config) validateStepTransitions() error {
 	for i := range c.Jobs {
 		job := c.Jobs[i]
@@ -802,7 +867,7 @@ func (c *Config) validateStepTransitions() error {
 		}
 	}
 
-	return nil
+	return c.validateHandoffSteps()
 }
 
 // rejectRoutingOnGet rejects to:/max_visits:/verdicts: on a get step (a get
@@ -1030,6 +1095,107 @@ func validateRouteTargets(label string, segPos int, step Step, pos map[string]in
 
 	if backward && step.MaxVisits > maxVisitsLimit {
 		return fmt.Errorf("%s: max_visits %d exceeds the maximum of %d", label, step.MaxVisits, maxVisitsLimit)
+	}
+
+	return nil
+}
+
+// validateHandoffSteps enforces the handoff: rules at load time: it is never
+// valid on a hook step (a hook is a reaction, not a positioned step with
+// predecessors), and on a plan step it is agent-only, must enable at least
+// one of context/tool, and must be the target of at least one to: route
+// within its own get-segment — otherwise the field is dead config.
+func (c *Config) validateHandoffSteps() error {
+	for i := range c.Jobs {
+		job := c.Jobs[i]
+
+		err := job.visitHookSteps(rejectHandoffOnHook)
+		if err != nil {
+			return err
+		}
+
+		err = c.validateHandoffSegments(job)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// rejectHandoffOnHook rejects handoff: on a hook step.
+func rejectHandoffOnHook(label string, step *Step) error {
+	if step.Handoff != nil {
+		return fmt.Errorf("%s: handoff is not valid on hook steps", label)
+	}
+
+	return nil
+}
+
+// validateHandoffSegments splits job's plan into get-bounded segments (the
+// same split validatePlanSegments uses) and validates each segment's
+// handoff: steps against it.
+func (c *Config) validateHandoffSegments(job Job) error {
+	var segment []int
+
+	flush := func() error {
+		if len(segment) == 0 {
+			return nil
+		}
+
+		err := validateHandoffSegment(job, segment)
+		segment = nil
+
+		return err
+	}
+
+	for i := range job.Plan {
+		if job.Plan[i].Get != "" {
+			err := flush()
+			if err != nil {
+				return err
+			}
+
+			continue
+		}
+
+		segment = append(segment, i)
+	}
+
+	return flush()
+}
+
+// validateHandoffSegment checks every handoff: step in segment (plan indices
+// in declaration order) is an agent step, enables something, and is named by
+// at least one to: target anywhere in the segment.
+func validateHandoffSegment(job Job, segment []int) error {
+	targeted := map[string]bool{}
+
+	for _, idx := range segment {
+		for _, target := range job.Plan[idx].To {
+			targeted[target] = true
+		}
+	}
+
+	for _, idx := range segment {
+		step := job.Plan[idx]
+		if step.Handoff == nil {
+			continue
+		}
+
+		label := fmt.Sprintf("job %q step %d", job.Name, idx)
+
+		if step.Agent == "" {
+			return fmt.Errorf("%s: handoff is only valid on agent steps", label)
+		}
+
+		if !step.Handoff.Enabled() {
+			return fmt.Errorf("%s: handoff enables nothing (set context and/or tool)", label)
+		}
+
+		if !targeted[stepName(step)] {
+			return fmt.Errorf("%s: handoff is set but no to: route in this segment targets step %q", label, stepName(step))
+		}
 	}
 
 	return nil

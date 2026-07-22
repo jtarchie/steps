@@ -40,24 +40,27 @@ func outcomeKey(ctx context.Context, stepErr error, verdict string) (key string,
 // stepRan disposition before calling this, so a backward route that would push
 // executions past step.MaxVisits exhausts instead.
 //
-// It returns routed=false (nextIndex unused) when the step has no to:, or its
-// outcome isn't routable, or no to: key matches — in every such case the caller
-// keeps today's behavior (fall through on success, fail the job on failure).
-// When it routes on a failure, the caller must CONSUME the error (set it nil)
-// so the job doesn't also fail — see runSteps.
-func resolveTransition(ctx context.Context, steps []config.Step, i int, step config.Step, stepErr error, verdict string, visits map[int]int) (nextIndex int, routed bool, exhaustedErr error) {
+// It returns routed=false (nextIndex/key unused) when the step has no to:, or
+// its outcome isn't routable, or no to: key matches — in every such case the
+// caller keeps today's behavior (fall through on success, fail the job on
+// failure). When it routes on a failure, the caller must CONSUME the error
+// (set it nil) so the job doesn't also fail — see runSteps. key is the
+// outcome key the transition actually matched (a verdict, or "success"/
+// "failure"); runSteps surfaces it into the routed-to step's Handoff (see
+// internal/agent's Handoff.RouteKey) rather than discarding it as before.
+func resolveTransition(ctx context.Context, steps []config.Step, i int, step config.Step, stepErr error, verdict string, visits map[int]int) (nextIndex int, routed bool, key string, exhaustedErr error) {
 	if step.To == nil {
-		return 0, false, nil
+		return 0, false, "", nil
 	}
 
-	key, routable := outcomeKey(ctx, stepErr, verdict)
+	matchedKey, routable := outcomeKey(ctx, stepErr, verdict)
 	if !routable {
-		return 0, false, nil
+		return 0, false, "", nil
 	}
 
-	target, ok := step.To[key]
+	target, ok := step.To[matchedKey]
 	if !ok {
-		return 0, false, nil
+		return 0, false, "", nil
 	}
 
 	targetIndex, found := indexOfStep(steps, target)
@@ -65,37 +68,39 @@ func resolveTransition(ctx context.Context, steps []config.Step, i int, step con
 		// Load-time validation guarantees the target resolves within the
 		// segment, so this is a defensive belt — treat an unresolvable target
 		// as "don't route" rather than crash.
-		return 0, false, nil
+		return 0, false, "", nil
 	}
 
 	if targetIndex <= i && visits[i] >= step.MaxVisits {
 		//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
-		return 0, false, outcome.Fail(fmt.Errorf("step %q exceeded max_visits %d", executedStepName(step), step.MaxVisits))
+		return 0, false, "", outcome.Fail(fmt.Errorf("step %q exceeded max_visits %d", executedStepName(step), step.MaxVisits))
 	}
 
-	return targetIndex, true, nil
+	return targetIndex, true, matchedKey, nil
 }
 
 // applyRouting computes the index of the next step after step i executed with
 // outcome stepErr (and verdict), and consumes the error when the step routes
-// on it. It returns the default i+1 when the step has no to: or didn't run, so
-// a routing-free plan behaves exactly as a straight line. A backward route past
-// max_visits yields exhaustedErr (a job-level failure) instead of routing.
-func applyRouting(ctx context.Context, steps []config.Step, i int, step config.Step, disposition stepDisposition, verdict string, stepErr error, visits map[int]int) (nextIndex int, consumedErr, exhaustedErr error) {
+// on it. It returns the default i+1 (and routedKey="") when the step has no
+// to: or didn't run, so a routing-free plan behaves exactly as a straight
+// line. A backward route past max_visits yields exhaustedErr (a job-level
+// failure) instead of routing. routedKey, non-empty only when the step
+// actually routed, is what runSteps uses to build the next step's Handoff.
+func applyRouting(ctx context.Context, steps []config.Step, i int, step config.Step, disposition stepDisposition, verdict string, stepErr error, visits map[int]int) (nextIndex int, routedKey string, consumedErr, exhaustedErr error) {
 	if step.To == nil || disposition != stepRan {
-		return i + 1, stepErr, nil
+		return i + 1, "", stepErr, nil
 	}
 
-	target, routed, exhausted := resolveTransition(ctx, steps, i, step, stepErr, verdict, visits)
+	target, routed, key, exhausted := resolveTransition(ctx, steps, i, step, stepErr, verdict, visits)
 	if exhausted != nil {
-		return 0, stepErr, exhausted
+		return 0, "", stepErr, exhausted
 	}
 
 	if routed {
-		return target, nil, nil // consume the outcome — the job does not also fail
+		return target, key, nil, nil // consume the outcome — the job does not also fail
 	}
 
-	return i + 1, stepErr, nil
+	return i + 1, "", stepErr, nil
 }
 
 // stepForcesUnskippable reports whether a step makes its chain unskippable: a

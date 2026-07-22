@@ -224,6 +224,18 @@ const (
 	stepChainSkipped
 )
 
+// nonGetOutcome is what dispatchNonGetStep/runNonGetStep report about a
+// step's routing-relevant outcome, beyond its hash/disposition/error: the
+// verdict applyRouting keys on, and — for an agent step only — the verdict's
+// note and this step's own run (see agent.PreviousRun), both of which
+// runSteps threads into a routed-to successor's Handoff. Its zero value is
+// exactly right for task/put steps and any non-stepRan disposition.
+type nonGetOutcome struct {
+	verdict  string
+	note     string
+	previous *agent.PreviousRun
+}
+
 // runSteps executes steps in order. A `get` step fans out: for each version
 // it selects (a single version normally, or every version returned by
 // check when version:every is set), that version triggers its own build
@@ -243,6 +255,14 @@ func runSteps(
 	// re-enters via a fresh runSteps) gets its own independent max_visits budget.
 	visits := map[int]int{}
 
+	// pending is the Handoff a routed transition builds for whichever step
+	// index it targets — consumed (and cleared) the moment that step is next
+	// dispatched, whether or not its handoff: actually uses it. nil means "no
+	// pending transition into the next step" (a straight fall-through, or the
+	// very first step), which is the overwhelmingly common case and costs
+	// nothing extra.
+	var pending *agent.Handoff
+
 	// A manual index loop (not range) so a to: transition can set the next
 	// index — forward to skip ahead, or backward to loop. Without any to:, the
 	// default nextIndex of i+1 reproduces today's straight-line behavior exactly.
@@ -253,7 +273,7 @@ func runSteps(
 			return runGetStep(ctx, cfg, jobName, i, step, steps[i+1:], pinned, provider, st, skippable, parentHash, chainUnskippable, cache)
 		}
 
-		newParentHash, disposition, verdict, err := runNonGetStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash)
+		newParentHash, disposition, no, err := runNonGetStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash, handoffFor(step, pending))
 
 		if disposition == stepRan {
 			visits[i]++ // count executions before resolveTransition reads visits[i]
@@ -261,7 +281,7 @@ func runSteps(
 
 		// A routed transition consumes err (a to.failure route means the job
 		// doesn't also fail); exhaustion of a backward loop is a job failure.
-		nextIndex, err, exhaustedErr := applyRouting(ctx, steps, i, step, disposition, verdict, err, visits)
+		nextIndex, routedKey, err, exhaustedErr := applyRouting(ctx, steps, i, step, disposition, no.verdict, err, visits)
 		if exhaustedErr != nil {
 			return exhaustedErr // routed to the job's on_failure hook
 		}
@@ -280,6 +300,10 @@ func runSteps(
 		}
 
 		if disposition == stepGuardSkipped {
+			// The transition that landed here (if any) already happened; the
+			// guard merely declined to run the step it targeted. Consume it
+			// rather than letting a stale pending leak into whatever runs next.
+			pending = nil
 			i = nextIndex // a guard-skip never routes; nextIndex is still i+1
 
 			continue
@@ -295,10 +319,49 @@ func runSteps(
 			parentHash = newParentHash
 		}
 
+		pending = nextPendingHandoff(jobName, step, steps, routedKey, no, visits, nextIndex)
+
 		i = nextIndex
 	}
 
 	return recordChainSucceeded(ctx, st, jobName, parentHash, chainUnskippable)
+}
+
+// handoffFor returns pending when step's own handoff: enables something —
+// the step is what actually consumes carried transition context — and nil
+// otherwise, so a step without handoff: never sees a pending value even when
+// one exists. Split out of runSteps to keep its cyclomatic complexity down.
+func handoffFor(step config.Step, pending *agent.Handoff) *agent.Handoff {
+	if step.Handoff != nil && step.Handoff.Enabled() {
+		return pending
+	}
+
+	return nil
+}
+
+// nextPendingHandoff builds the Handoff a just-routed step hands to whichever
+// step index it targeted, or nil when the step didn't route (routedKey ==
+// ""). Split out of runSteps as a pure function so the carry's construction —
+// which fields come from where — is unit-testable without a live agent.
+// visits[nextIndex] is read BEFORE runSteps' next iteration would increment
+// it, so Visit correctly previews "this will be the Nth execution of
+// nextIndex".
+func nextPendingHandoff(jobName string, step config.Step, steps []config.Step, routedKey string, no nonGetOutcome, visits map[int]int, nextIndex int) *agent.Handoff {
+	if routedKey == "" {
+		return nil
+	}
+
+	return &agent.Handoff{
+		JobName:   jobName,
+		FromStep:  executedStepName(step),
+		RouteKey:  routedKey,
+		Note:      no.note,
+		Visit:     visits[nextIndex] + 1,
+		MaxVisits: steps[nextIndex].MaxVisits,
+		StepIndex: nextIndex,
+		PlanLen:   len(steps),
+		Previous:  no.previous,
+	}
 }
 
 // runNonGetStep runs a task/put/agent step and dispatches its hooks around the
@@ -306,8 +369,8 @@ func runSteps(
 // there is nothing for its observers to react to. When a green step is failed
 // by its own on_success/ensure hook, the true (failed) outcome is recorded so
 // the store and skip-cache reflect it.
-func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string) (string, stepDisposition, string, error) {
-	hash, disposition, verdict, err := dispatchNonGetStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash)
+func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string, handoff *agent.Handoff) (string, stepDisposition, nonGetOutcome, error) {
+	hash, disposition, no, err := dispatchNonGetStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash, handoff)
 
 	// Record what ran (not a cached chain, not a guard-skipped step) for a
 	// job's assert.execution, before hooks so the order reads
@@ -319,7 +382,7 @@ func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i in
 	// Neither kind of skip fires hooks: the step did not run, so it has no
 	// outcome for its observers to react to.
 	if disposition != stepRan || step.Hooks.Empty() {
-		return hash, disposition, verdict, err
+		return hash, disposition, no, err
 	}
 
 	scope := hookScope{cfg: cfg, jobName: jobName, label: stepLabel(i, step), bw: bw}
@@ -329,10 +392,10 @@ func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i in
 		recCtx := context.WithoutCancel(ctx)
 		_ = st.RecordJobRun(recCtx, jobName, hash, string(outcome.Failed), final)
 
-		return "", stepRan, verdict, final
+		return "", stepRan, no, final
 	}
 
-	return hash, disposition, verdict, final
+	return hash, disposition, no, final
 }
 
 // dispatchNonGetStep dispatches a task/put/agent step — the three kinds that,
@@ -340,43 +403,46 @@ func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i in
 // fanning out or delegating the remainder of the plan. It first evaluates the
 // step's when: guard (see evaluateStepGuard): a false guard skips only this
 // step. stepChainSkipped is only ever returned for a cache-matched task step;
-// put/agent steps are never chain-skippable.
-func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string) (string, stepDisposition, string, error) {
+// put/agent steps are never chain-skippable. handoff is threaded straight
+// into agent.RunStep — see runSteps' pending carry — and ignored by task/put.
+func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string, handoff *agent.Handoff) (string, stepDisposition, nonGetOutcome, error) {
 	shouldRun, err := evaluateStepGuard(ctx, cfg, step, bw)
 	if err != nil {
-		return "", stepRan, "", fmt.Errorf("step %d (when): %w", i, err)
+		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (when): %w", i, err)
 	}
 
 	if !shouldRun {
 		fmt.Printf("skip: %s (when)\n", executedStepName(step))
 		slog.Info("job.skip", "job", jobName, "index", i, "reason", "when", "step", executedStepName(step))
 
-		return parentHash, stepGuardSkipped, "", nil
+		return parentHash, stepGuardSkipped, nonGetOutcome{}, nil
 	}
 
 	kind, ok := step.Kind()
 	if !ok {
-		return "", stepRan, "", fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
+		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}
 
 	switch kind { //nolint:exhaustive // default covers config.StepKindGet — dispatchNonGetStep is only called for non-get steps
 	case config.StepKindTask:
 		hash, disposition, err := runTaskStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash)
 
-		return hash, disposition, "", err
+		return hash, disposition, nonGetOutcome{}, err
 	case config.StepKindPut:
 		hash, err := runPutStep(ctx, cfg, jobName, i, step, bw, st, parentHash)
 
-		return hash, stepRan, "", err
+		return hash, stepRan, nonGetOutcome{}, err
 	case config.StepKindAgent:
-		hash, verdict, err := agent.RunStep(ctx, cfg, jobName, i, step, bw, st, parentHash)
+		stepOut, err := agent.RunStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
+		no := nonGetOutcome{verdict: stepOut.Verdict, note: stepOut.Note, previous: stepOut.Previous}
+
 		if err != nil {
-			return "", stepRan, "", fmt.Errorf("agent step: %w", err)
+			return "", stepRan, no, fmt.Errorf("agent step: %w", err)
 		}
 
-		return hash, stepRan, verdict, nil
+		return stepOut.Hash, stepRan, no, nil
 	default: // config.StepKindGet — dispatchNonGetStep is only called for non-get steps
-		return "", stepRan, "", fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
+		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}
 }
 

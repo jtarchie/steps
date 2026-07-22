@@ -67,6 +67,40 @@ A `task`/`put`/`agent` step can carry `to:` — a map that routes to another ste
 - **Get-segment restriction**: a `to:` target must be within the same segment (the run of non-get steps between gets) — a jump can't cross a `get` anyway, since the plan re-enters over a truncated slice per version. `to:`/`verdicts:` are invalid on `get` steps and hook steps. Step names must be unique within a `to:`-using segment.
 - **Merkle**: `to:`/`max_visits:`/`verdicts:` fold into the step's content hash; `verdicts:` matters because it changes the synthesized tool set. There's no structural merkle change — the planner walks declaration order ignoring `to:` targets, because any routing step's chain is already unskippable, so its plan-time hash is never used for a skip.
 
+## Handoff context (`handoff:`)
+
+Every agent step is otherwise a fresh, hermetic conversation — a step reached via `to:`/`verdicts:` learns nothing about why it was invoked. `handoff:` opts an agent step into transition context on **routed entry only**: the step's first/unrouted execution is unaffected. Illustrated in `examples/agents.yml`'s `judge` job (needs a model).
+
+```yaml
+- agent: writer
+  prompt: Draft a two-sentence summary...
+  handoff: true              # scalar shorthand: context block only
+# or
+  handoff: { tool: true }             # + a previous_run tool
+  handoff: { context: false, tool: true }  # tool only, no pushed block
+```
+
+- **Push (`context`, default `true` in the mapping form)**: when a `to:` transition lands on the step, a machine-assembled block is appended to its prompt (never mutating `prompt:` itself, in the same spirit as the fix agent's captured-failure-output idiom — see [agents.md](agents.md)):
+
+  ```
+  <transition_context>
+  entered via: revise (from step "critic")
+  visit: 2 of 3 for this step
+  position: step 1 of 4 in job "judge"
+  <note from="critic">
+  The second sentence overstates test coverage; tighten it.
+  </note>
+  </transition_context>
+  ```
+
+  The `<note>` element is present only when the routing step was a verdict agent that gave one (see `verdicts:`'s optional `note` arg in [agents.md](agents.md)) — a deliberate, authored "why," not a summary. `visit:` reads `(unbounded)` when the target has no `max_visits:` (an all-forward route). A note's content is truncated and sanitized (a literal `</note>` can't close the element early) — the same trust domain as any other upstream model-authored text.
+- **Pull (`tool`)**: synthesizes a read-only, non-required `previous_run` tool the model can call on demand, returning the routed-from **agent** step's recorded run — final response, verdict + note, turn count, and tool-call trajectory (optionally filtered to `section: response` or `section: trajectory`) — without any of it entering context unrequested. When there's nothing to report (first execution, or the routing step wasn't an agent), it answers `"no previous run: ..."` as data, never an error.
+- **Routed-entry only.** A step reached by falling through in declaration order (no `to:` involved) gets no block and no report from `previous_run` — `handoff:` is meaningless there and is rejected at load unless the step is the target of at least one `to:` route within its own get-segment.
+- **Agent-only**, and invalid on hook steps (a hook is a reaction, not a positioned step with predecessors).
+- A `to.failure` route from a **failed** agent still carries its partial response/trajectory into `previous_run` — the run is packaged from the last attempt's result regardless of outcome. A `to.failure` route from a task/put carries the from-step/key in the block, but `previous_run` reports "no previous run" (there's no agent run to describe).
+- A `when:` guard that skips the routed-to step still **consumes** the pending handoff — the transition happened; the guard just declined to run it. The next step to actually execute gets nothing from it.
+- **Merkle**: only the *declaration* (`context`/`tool` booleans) folds into the step's content hash, value-gated like `image:`/`when:`/`to:` — a step without `handoff:` hashes byte-identically to before this feature existed. The runtime facts a block/tool report (which step routed here, the note, the visit count) are deliberately **excluded** from identity, the same treatment `attempts:` gets — they can't be known at plan time, and agent steps are already unconditionally unskippable, so this never causes a wrong cache hit.
+
 ## Assert (self-verification) + `steps test`
 
 `assert:` lets a pipeline verify its own behavior — the mechanism that turns a hooks/control-flow fixture into a runnable regression test. See `examples/flow.yml`, run via `steps test examples/flow.yml`.

@@ -82,6 +82,12 @@ type conversationResult struct {
 	// declares no verdicts or the model never emitted one. internal/pipeline
 	// routes on it.
 	verdict string
+	// note is the optional free-text note attached to that same successful
+	// verdict call (see buildVerdictTool); "" when there was none. It travels
+	// with the verdict it accompanied — internal/pipeline threads it into a
+	// routed-to step's Handoff (see handoff.go) as the sender's deliberate,
+	// authored "why".
+	note string
 }
 
 // agentConversation is one runnable attempt's inputs.
@@ -161,14 +167,16 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 	// actually produced the step's outcome), not an accumulation across
 	// abandoned attempts.
 	var trajectory []recordedToolCall
-	// verdict is the last successful verdict-tool choice; per-attempt like the
-	// rest. A model that revises its own verdict ends on its final one.
-	var verdict string
+	// verdict/note are the last successful verdict-tool choice and the note
+	// that accompanied it; per-attempt like the rest. A model that revises its
+	// own verdict ends on its final one, and note travels with whichever
+	// choice won.
+	var verdict, note string
 
 	for turn := range conv.maxTurns {
 		resp, err := generateOnce(ctx, llm, req)
 		if err != nil {
-			return conversationResult{turns: turn, trajectory: trajectory, verdict: verdict}, err
+			return conversationResult{turns: turn, trajectory: trajectory, verdict: verdict, note: note}, err
 		}
 
 		req.Contents = append(req.Contents, resp.Content)
@@ -177,7 +185,7 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 		if len(calls) == 0 {
 			missing := unsatisfiedRequiredTools(conv.tools.required, satisfied)
 			if len(missing) == 0 {
-				return conversationResult{text: text, turns: turn + 1, trajectory: trajectory, verdict: verdict}, nil
+				return conversationResult{text: text, turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note}, nil
 			}
 
 			forceRequiredTool(req, missing[0], conv.toolChoiceStringOnly)
@@ -193,8 +201,8 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 
 		parts := toolResponseParts(ctx, calls, conv.env, conv.tools.registry, conv.tools.maxCalls, callCounts)
 
-		if choice := conv.trackToolResults(parts, satisfied); choice != "" {
-			verdict = choice // last successful verdict wins across turns
+		if choice, n := conv.trackToolResults(parts, satisfied); choice != "" {
+			verdict, note = choice, n // last successful verdict (and its note) wins across turns
 		}
 
 		req.Contents = append(req.Contents, &genai.Content{
@@ -207,7 +215,7 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 	// ran but didn't finish its task), not infrastructure errors — mark them
 	// so hook dispatch classifies them as failed rather than errored. A
 	// transport error from generateOnce above stays unwrapped → errored.
-	exhausted := conversationResult{turns: conv.maxTurns, trajectory: trajectory, verdict: verdict}
+	exhausted := conversationResult{turns: conv.maxTurns, trajectory: trajectory, verdict: verdict, note: note}
 
 	missing := unsatisfiedRequiredTools(conv.tools.required, satisfied)
 	if len(missing) > 0 {
@@ -220,12 +228,11 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 }
 
 // trackToolResults marks required tools satisfied for this turn's results and
-// returns the verdict a successful verdict-tool call carried (or "" if none
-// this turn). satisfied is mutated in place; the returned verdict lets the
-// caller keep "last successful verdict wins" across turns.
-func (conv agentConversation) trackToolResults(parts []*genai.Part, satisfied map[string]bool) string {
-	verdict := ""
-
+// returns the verdict (and its accompanying note, if any) a successful
+// verdict-tool call carried — both "" if none this turn. satisfied is
+// mutated in place; the returned verdict/note let the caller keep "last
+// successful verdict wins" across turns.
+func (conv agentConversation) trackToolResults(parts []*genai.Part, satisfied map[string]bool) (verdict, note string) {
 	for _, part := range parts {
 		name := part.FunctionResponse.Name
 
@@ -236,11 +243,12 @@ func (conv agentConversation) trackToolResults(parts []*genai.Part, satisfied ma
 		if conv.verdictTool != "" && name == conv.verdictTool {
 			if choice, ok := part.FunctionResponse.Response["verdict"].(string); ok && choice != "" {
 				verdict = choice
+				note, _ = part.FunctionResponse.Response["note"].(string)
 			}
 		}
 	}
 
-	return verdict
+	return verdict, note
 }
 
 // forceRequiredTool constrains req's next generateOnce call to a tool call,

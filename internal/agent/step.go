@@ -104,8 +104,11 @@ func (p preparedAgentStep) close(stepLabel string) {
 // prepareAgentStep resolves step's agent, materializes its (isolated or
 // shared) working directory, and builds the tools/LLM client it'll run
 // with. On error, any workspace.StepSpace already created is closed before
-// returning so the caller never has to.
-func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) (preparedAgentStep, error) {
+// returning so the caller never has to. handoff is the transition context
+// (see Handoff) to seed the conversation with when step.Handoff enables it —
+// nil on a step's first/unrouted execution, or when the caller (RunHook)
+// never participates in routing at all.
+func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace, handoff *Handoff) (preparedAgentStep, error) {
 	ri, err := cfg.ResolveAgentInvocation(step)
 	if err != nil {
 		return preparedAgentStep{}, fmt.Errorf("agent %q: %w", step.Agent, err)
@@ -132,7 +135,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	required := requiredToolNames(ri.ToolSpecs)
 
-	verdictTool, err := injectVerdictTool(step.Verdicts, decls, registry, required)
+	verdictTool, err := injectSynthesizedTools(step, handoff, decls, registry, required)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 		closeAll(closers)
@@ -160,7 +163,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	conv := agentConversation{
 		system: buildSystemMessage(ri.Persona, dir),
-		prompt: step.Prompt,
+		prompt: promptWithHandoff(step.Prompt, step.Handoff, handoff),
 		env:    toolEnv{dir: dir, runner: runner, spillDir: spillDir},
 		tools:  agentTools{decls: decls, registry: registry, required: required, maxCalls: maxCallsByName(ri.ToolSpecs)},
 		params: agentGenParams{
@@ -216,28 +219,45 @@ func newToolOutputSpillDir(dir, stepLabel string) string {
 	return spillDir
 }
 
+// StepOutcome is what RunStep reports about a completed agent step, beyond
+// any error: the merkle hash to use as the next step's parentHash, the
+// verdict (if any) internal/pipeline routes on, that verdict's note, and
+// this step's own run packaged as a PreviousRun for a possible routed-to
+// successor to pull via its previous_run tool. Previous is populated
+// whenever the conversation produced a result at all — including on a
+// failure/assert-failure path, so a to.failure-routed successor can still
+// pull a failed run's partial text/trajectory; it stays nil only when the
+// step never got as far as running a conversation (e.g. workspace
+// materialization failed).
+type StepOutcome struct {
+	Hash     string
+	Verdict  string
+	Note     string
+	Previous *PreviousRun
+}
+
 // RunStep hashes step against parentHash (agent steps are never
 // skippable) and runs it, retrying the whole conversation up to the
-// resolved attempt count. It returns the hash to use as parentHash for the
-// next step.
-// It also returns the verdict the agent emitted (see verdicts:/buildVerdictTool);
-// "" for a verdict-less agent, or when the run failed before emitting one.
-// internal/pipeline routes the plan on it.
-func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, parentHash string) (string, string, error) {
-	prepared, err := prepareAgentStep(ctx, cfg, step, bw)
+// resolved attempt count. handoff carries the transition context (see
+// Handoff) when step was entered via a to:/verdicts: route into a
+// handoff:-enabled step; nil otherwise. internal/pipeline routes the plan
+// on the returned StepOutcome.Verdict and threads StepOutcome.Previous/Note
+// into the next step's Handoff when this step itself routes somewhere.
+func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, parentHash string, handoff *Handoff) (StepOutcome, error) {
+	prepared, err := prepareAgentStep(ctx, cfg, step, bw, handoff)
 	if err != nil {
-		return "", "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		return StepOutcome{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 	defer prepared.close(step.Agent)
 
 	content, err := merkle.AgentContentMap(cfg, step, prepared.ri)
 	if err != nil {
-		return "", "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		return StepOutcome{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
 	hash, err := merkle.HashNode(merkle.NodeKindAgent, content, parentHash)
 	if err != nil {
-		return "", "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		return StepOutcome{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
 	slog.Debug("job.step", "job", jobName, "index", i, "kind", "agent", "agent", step.Agent)
@@ -247,19 +267,24 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindAgent, StepIndex: i, Resource: prepared.ri.AgentName, Content: content}
 
 	res, err := runPrepared(ctx, prepared)
+	previous := &PreviousRun{
+		Agent: step.Agent, Response: res.text, Verdict: res.verdict, Note: res.note,
+		Turns: res.turns, Trajectory: exportTrajectory(res.trajectory),
+	}
+
 	if err != nil {
 		recordAgentFailure(ctx, st, node, jobName, err)
 
 		// A failed run emitted no clean verdict; the pipeline routes it via
 		// to["failure"] (or fails the job).
-		return "", "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		return StepOutcome{Previous: previous}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
 	err = assertAgentResponse(step.Assert, res)
 	if err != nil {
 		recordAgentFailure(ctx, st, node, jobName, err)
 
-		return "", "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		return StepOutcome{Previous: previous}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
 	err = prepared.space.Capture(ctx)
@@ -267,7 +292,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 		wrapped := fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 		recordAgentFailure(ctx, st, node, jobName, wrapped)
 
-		return "", "", wrapped
+		return StepOutcome{Previous: previous}, wrapped
 	}
 
 	result := map[string]any{"response": res.text, "turns": res.turns}
@@ -275,12 +300,16 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 		result["verdict"] = res.verdict
 	}
 
-	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", result, nil)
-	if err != nil {
-		return "", "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+	if res.note != "" {
+		result["note"] = res.note
 	}
 
-	return hash, res.verdict, nil
+	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", result, nil)
+	if err != nil {
+		return StepOutcome{Previous: previous}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+	}
+
+	return StepOutcome{Hash: hash, Verdict: res.verdict, Note: res.note, Previous: previous}, nil
 }
 
 // assertAgentResponse checks an agent step's assert (stdout and/or
@@ -431,7 +460,7 @@ func runPrepared(ctx context.Context, prepared preparedAgentStep) (conversationR
 // is already outcome-marked where appropriate (see runAgentConversation), so
 // the caller's hook classification works unchanged.
 func RunHook(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) error {
-	prepared, err := prepareAgentStep(ctx, cfg, step, bw)
+	prepared, err := prepareAgentStep(ctx, cfg, step, bw, nil)
 	if err != nil {
 		return fmt.Errorf("agent %q: %w", step.Agent, err)
 	}

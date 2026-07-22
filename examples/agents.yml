@@ -201,11 +201,24 @@ jobs:
 # ─── verdict routing / bounded agent loop (needs a model) ────────────────────
 - name: judge
   plan:
+  # handoff: {tool: true} — writer is the target of critic's `revise:` route,
+  # so on a revise loop it gets a <transition_context> block (which step/
+  # verdict sent it here, which visit this is) appended to its prompt, plus a
+  # previous_run tool to pull critic's full response/note on demand. Neither
+  # fires on the FIRST execution (nothing routed here yet) — see docs/control-
+  # flow.md's "Handoff context" section.
   - agent: writer
-    prompt: Draft a two-sentence summary of the repository.
+    prompt: >
+      Draft a two-sentence summary of the repository. If a transition context
+      block is present below, you are revising after a critique — call
+      previous_run to see the critic's full reasoning and note before you
+      rewrite.
+    handoff: { tool: true }
   - agent: critic
     prompt: >
-      Review the draft. Call verdict with approve, revise, or escalate.
+      Review the draft. Call verdict with approve, revise, or escalate — pass
+      a short `note` explaining your reasoning; it's what the writer sees if
+      you send it back for revision.
     verdicts: [approve, revise, escalate]
     # Targets are step NAMES (an agent step's name is its agent: value).
     to:

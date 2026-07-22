@@ -156,6 +156,24 @@ func withRouting(step config.Step, content map[string]any) map[string]any {
 	return content
 }
 
+// withHandoff folds a step's handoff: declaration into content, but only
+// when set — so a step with no handoff: hashes byte-identically to before
+// this field existed (the same value-gating as image:/when:/to:). Only the
+// declaration itself (whether context/tool are enabled) is part of a step's
+// identity: it changes what prompt suffix and tool set the step executes
+// with. The actual routed-from step/key/note/visit — runtime facts the
+// planner cannot know at plan time — are deliberately excluded from
+// identity, the same treatment Attempts gets; agent steps are already
+// unconditionally Unskippable (see planNonGetNode), so excluding them from
+// identity never causes a wrong skip.
+func withHandoff(step config.Step, content map[string]any) map[string]any {
+	if step.Handoff != nil {
+		content["handoff"] = map[string]any{"context": step.Handoff.Context, "tool": step.Handoff.Tool}
+	}
+
+	return content
+}
+
 // withHooks folds a step's resolved hook content into content, but only when
 // the step actually carries hooks — so a step with no hooks hashes
 // byte-identically to before this field existed (the same value-gating as
@@ -545,7 +563,7 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 		content["assert"] = assertContent(step.Assert)
 	}
 
-	return withHooks(cfg, step, withWhen(step, withRouting(step, content)))
+	return withHooks(cfg, step, withWhen(step, withHandoff(step, withRouting(step, content))))
 }
 
 // HashNode computes a Node's content-addressed hash: sha256 hex of the
