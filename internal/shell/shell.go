@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // Runner runs pipeline-defined commands, either on the host or inside a
@@ -133,6 +134,61 @@ type HostRunner struct {
 	cwd string
 }
 
+// hostEnvAllowlist is the fixed set of environment variable names a
+// host-executed command (resource check/in/out, task run:, an agent's
+// run_shell/custom tools) is allowed to see. Everything else the steps
+// process itself was started with — most importantly every configured
+// agent's api_key_env secret and any other credential an operator happens
+// to have exported (cloud credentials, tokens, etc.) — is deliberately not
+// passed through: DockerRunner already starts every containerized command
+// from the image's own env with no host variables at all (see docker.go),
+// and this brings the default host path to the same trust boundary instead
+// of silently handing every pipeline-defined command, and by extension any
+// LLM directing run_shell/a custom tool, read access to the operator's full
+// environment.
+//
+// This is a real (if narrow) behavior change: a host-executed command that
+// previously relied on some other exported variable (GOFLAGS, an assumed
+// GOPATH override, a custom cache directory, ...) for legitimate,
+// non-secret configuration will no longer see it. There is currently no
+// pass-through mechanism for a pipeline to opt a specific variable back in;
+// that would need its own config surface (and merkle-hash implications)
+// rather than belonging to this fix.
+//
+//nolint:gochecknoglobals // static, read-only allowlist
+var hostEnvAllowlist = map[string]bool{
+	"PATH": true,
+	"HOME": true,
+	// Locale/terminal — affect command output formatting, not secrets.
+	"LANG": true, "LC_ALL": true, "LC_CTYPE": true, "LC_MESSAGES": true, "TERM": true,
+	// Temp/user identity — needed by common CLI tools (mktemp, git, ssh).
+	"TMPDIR": true, "TMP": true, "TEMP": true, "USER": true, "LOGNAME": true, "SHELL": true,
+	// SSH agent forwarding — needed for git-over-ssh, not a secret itself
+	// (it's a socket path; the actual key material never touches env).
+	"SSH_AUTH_SOCK": true,
+	// Proxy configuration — operational routing, not credentials, and
+	// commonly required in restricted network environments.
+	"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true,
+	"http_proxy": true, "https_proxy": true, "no_proxy": true,
+}
+
+// hostEnv returns the subset of the current process's environment allowed
+// to reach a host-executed command (see hostEnvAllowlist), in os.Environ's
+// "KEY=VALUE" form so it can be assigned directly to exec.Cmd.Env.
+func hostEnv() []string {
+	full := os.Environ()
+	allowed := make([]string, 0, len(full))
+
+	for _, kv := range full {
+		key, _, ok := strings.Cut(kv, "=")
+		if ok && hostEnvAllowlist[key] {
+			allowed = append(allowed, kv)
+		}
+	}
+
+	return allowed
+}
+
 // wrapIfCanceled ensures err's chain satisfies errors.Is(_, ctx.Err()) when
 // ctx was canceled by the time the command producing err finished. Go's
 // os/exec only reliably surfaces a canceled context in cmd.Run's own
@@ -212,6 +268,7 @@ func (h HostRunner) Run(ctx context.Context, command string) error {
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.Dir = h.cwd
+	cmd.Env = hostEnv()
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -238,6 +295,7 @@ func (h HostRunner) RunCapture(ctx context.Context, command string) ([]byte, err
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.Dir = h.cwd
+	cmd.Env = hostEnv()
 	cmd.Stdin = os.Stdin
 
 	var outBuf, errBuf bytes.Buffer
@@ -292,6 +350,7 @@ func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.Dir = h.cwd
+	cmd.Env = hostEnv()
 	cmd.Stdin = nil
 
 	outWriter := newCaptureWriter(maxBytes)

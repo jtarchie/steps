@@ -126,6 +126,40 @@ func TestRunShellCapture(t *testing.T) {
 	})
 }
 
+// TestHostRunnerScrubsNonAllowlistedEnv guards the fix for the security
+// finding that every host-executed command inherited the full steps process
+// environment, including any secret an operator happened to have exported
+// (e.g. a configured agent's api_key_env). A host-executed command must see
+// only the fixed allowlist (hostEnvAllowlist) — PATH included, so ordinary
+// tooling still resolves — and nothing else, even a variable set on this
+// very test process immediately before the command runs. Not run in
+// parallel: t.Setenv forbids it.
+func TestHostRunnerScrubsNonAllowlistedEnv(t *testing.T) {
+	t.Setenv("STEPS_TEST_SECRET", "leaked-if-visible")
+
+	stdout, _, exitCode, err := RunShellCaptureFull(context.Background(), `echo "[$STEPS_TEST_SECRET]"`, t.TempDir())
+	if err != nil {
+		t.Fatalf("RunShellCaptureFull: %v", err)
+	}
+
+	if exitCode != 0 {
+		t.Fatalf("exitCode = %d, want 0", exitCode)
+	}
+
+	if stdout != "[]\n" {
+		t.Errorf("stdout = %q, want %q (STEPS_TEST_SECRET must not reach a host-executed command)", stdout, "[]\n")
+	}
+
+	pathOut, _, _, err := RunShellCaptureFull(context.Background(), `echo "[$PATH]"`, t.TempDir())
+	if err != nil {
+		t.Fatalf("RunShellCaptureFull: %v", err)
+	}
+
+	if pathOut == "[]\n" {
+		t.Error("PATH was scrubbed too; allowlisted variables must still reach the command")
+	}
+}
+
 func TestWrapIfCanceled(t *testing.T) {
 	t.Parallel()
 
