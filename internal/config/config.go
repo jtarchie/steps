@@ -40,6 +40,7 @@ type Config struct {
 	ResourceTypes []ResourceType `yaml:"resource_types"`
 	Resources     []Resource     `yaml:"resources"`
 	Agents        []Agent        `yaml:"agents"`
+	MCPServers    []MCPServer    `yaml:"mcp_servers,omitempty"`
 	Tasks         []Task         `yaml:"tasks"`
 	Jobs          []Job          `yaml:"jobs"`
 	// Workspace opts the pipeline into Concourse-style per-step isolation.
@@ -127,10 +128,55 @@ type ResourceType struct {
 
 // ResourceTypeConfig holds the check/in/out shell command templates.
 // Templates may reference {{ source.x }} and (for in/out) {{ version.y }}.
+//
+// MCP, when set, is mutually exclusive with Check/In/Out: this resource
+// type's check/in/out are calls to a configured mcp_servers: entry instead
+// of shell commands (see MCPResourceConfig, validateResourceTypeConfig).
 type ResourceTypeConfig struct {
-	Check string `yaml:"check"`
-	In    string `yaml:"in"`
-	Out   string `yaml:"out"`
+	Check string             `yaml:"check,omitempty"`
+	In    string             `yaml:"in,omitempty"`
+	Out   string             `yaml:"out,omitempty"`
+	MCP   *MCPResourceConfig `yaml:"mcp,omitempty"`
+}
+
+// MCPResourceConfig backs a resource type's check/in/out with calls to a
+// named mcp_servers: entry instead of shell commands. Check is required (a
+// type with no way to discover versions is useless); In and Out are
+// optional — see resource.CheckVersions/RunIn/RunOut's mcp*/ branches for
+// exactly what arguments each call receives and how its result is used.
+type MCPResourceConfig struct {
+	Server string       `yaml:"server"`
+	Check  *MCPToolCall `yaml:"check,omitempty"`
+	In     *MCPToolCall `yaml:"in,omitempty"`
+	Out    *MCPToolCall `yaml:"out,omitempty"`
+}
+
+// MCPToolCall names the remote tool a resource-type lifecycle stage calls.
+type MCPToolCall struct {
+	Tool string `yaml:"tool"`
+}
+
+// MCPServer is a reusable, named MCP server connection: configured once
+// under mcp_servers: and shared across any number of agents: tool grants
+// and resource_types: mcp: backends — the same once-configured/many-
+// consumers idiom as Agent/Resource. HTTP (Streamable HTTP) transport only
+// in v1; stdio is a possible additive future extension.
+type MCPServer struct {
+	Name     string        `yaml:"name"`
+	Endpoint string        `yaml:"endpoint"`
+	Auth     MCPServerAuth `yaml:"auth,omitempty"`
+}
+
+// MCPServerAuth selects how steps authenticates to an MCP server. Type is
+// "none" (default, when Auth is omitted entirely), "bearer" (a static token
+// read from an OS environment variable named by APIKeyEnv — mirrors
+// AgentSource.APIKeyEnv exactly: the credential is never stored in YAML),
+// or "oauth" (interactive authorization-code + PKCE via `steps mcp login`,
+// with silent refresh at run/watch time — see internal/mcp).
+type MCPServerAuth struct {
+	Type      string   `yaml:"type"`
+	APIKeyEnv string   `yaml:"api_key_env,omitempty"`
+	Scopes    []string `yaml:"scopes,omitempty"`
 }
 
 // Resource is a named instance of a resource type, configured with a source.
@@ -212,6 +258,21 @@ type ToolSpec struct {
 	// (enforced at LoadConfig by validateAgentGraph). Sub-agents may
 	// themselves grant sub-agents, up to maxSubAgentDepth, with no cycles.
 	Agent string
+	// MCP, when set, makes this a passthrough to one or more tools on a
+	// configured mcp_servers: entry (MCP names the server). Three forms:
+	//   - MCPTool set ({mcp, tool} in YAML): grants that one remote tool;
+	//     only this form may also set Description/Required/MaxCalls.
+	//   - MCPTools set ({mcp, tools: [...]} in YAML): grants that named
+	//     subset, each keeping its own server-advertised description.
+	//   - neither set ({mcp} alone): grants every tool the server exposes.
+	// Like a sub-agent tool, an MCP grant must live on the agents: entry
+	// (or a fix:'s own tools:), never introduced inline on a step
+	// (enforced by validateMCPToolGrants/resolveEffectiveTools), and Args
+	// is invalid on any form — arguments are schema-shaped by the remote
+	// server, not a flat string template.
+	MCP      string
+	MCPTool  string
+	MCPTools []string
 	// Required marks a custom tool's command as a resource-like action that
 	// must succeed: a nonzero exit aborts the agent step (and, once attempts
 	// are exhausted, the job) instead of being reported to the model as
@@ -236,11 +297,13 @@ type ToolSpec struct {
 
 // UnmarshalYAML decodes a ToolSpec from either a scalar (builtin name) or a
 // mapping YAML node: {name, description, run, required, max_calls, args} for
-// a custom tool, {agent, description} for a sub-agent tool, or {builtin,
-// description} to reference a builtin by mapping instead of a bare scalar —
-// the only reason to do so is to hit a validation error like max_calls/args
-// on a builtin explicitly (validateToolCallGuardShape), since a bare scalar
-// entry has no room for those fields at all.
+// a custom tool, {agent, description} for a sub-agent tool, {mcp, tool,
+// description, required, max_calls} / {mcp, tools: [...]} / {mcp} for an MCP
+// tool grant (see ToolSpec.MCP), or {builtin, description} to reference a
+// builtin by mapping instead of a bare scalar — the only reason to do so is
+// to hit a validation error like max_calls/args on a builtin explicitly
+// (validateToolCallGuardShape), since a bare scalar entry has no room for
+// those fields at all.
 func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias kinds that can't appear in a decoded sequence element
 	case yaml.ScalarNode:
@@ -252,6 +315,9 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 			Description string            `yaml:"description"`
 			Run         string            `yaml:"run"`
 			Agent       string            `yaml:"agent"`
+			MCP         string            `yaml:"mcp"`
+			Tool        string            `yaml:"tool"`
+			Tools       []string          `yaml:"tools"`
 			Required    bool              `yaml:"required"`
 			MaxCalls    int               `yaml:"max_calls"`
 			Args        map[string]string `yaml:"args"`
@@ -264,6 +330,7 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 
 		t.Builtin, t.Name, t.Description, t.Run, t.Agent, t.Required = m.Builtin, m.Name, m.Description, m.Run, m.Agent, m.Required
 		t.MaxCalls, t.Args = m.MaxCalls, m.Args
+		t.MCP, t.MCPTool, t.MCPTools = m.MCP, m.Tool, m.Tools
 
 		return nil
 	default:
@@ -653,7 +720,31 @@ func (c *Config) validate() error {
 		return err
 	}
 
-	return c.validateAgentEndpoints()
+	return c.validateCredentialHandling()
+}
+
+// validateCredentialHandling groups validateAgentEndpoints and every
+// mcp_servers:-related check — split out of validate() itself to keep that
+// function's branch count down (cyclop); all of it is trust-boundary
+// validation around how a config references an external system's endpoint
+// and credentials (see CLAUDE.md's Trust Boundaries section).
+func (c *Config) validateCredentialHandling() error {
+	err := c.validateAgentEndpoints()
+	if err != nil {
+		return err
+	}
+
+	err = c.validateMCPServers()
+	if err != nil {
+		return err
+	}
+
+	err = c.validateMCPToolGrants()
+	if err != nil {
+		return err
+	}
+
+	return c.validateResourceTypeConfig()
 }
 
 // reservedRouteKeys are the outcome keys with fixed meaning in a step's to:
@@ -1891,6 +1982,22 @@ func (c *Config) FindAgent(name string) (*Agent, error) {
 	return nil, fmt.Errorf("no agent named %q", name)
 }
 
+// FindMCPServer returns the mcp_servers: entry with the given name, or an
+// error if not found.
+func (c *Config) FindMCPServer(name string) (*MCPServer, error) {
+	slog.Debug("mcp_server.find", "name", name)
+
+	for i := range c.MCPServers {
+		if c.MCPServers[i].Name == name {
+			slog.Debug("mcp_server.find", "name", name, "found", true)
+
+			return &c.MCPServers[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("no mcp_servers entry named %q", name)
+}
+
 // FindTask returns the task with the given name, or an error if not found.
 func (c *Config) FindTask(name string) (*Task, error) {
 	slog.Debug("task.find", "name", name)
@@ -2061,6 +2168,68 @@ func (c *Config) validateAgentEndpoints() error {
 	return nil
 }
 
+// validateMCPServers checks every mcp_servers: entry at load time: a
+// non-empty, unique name; a non-empty endpoint that doesn't embed userinfo
+// (same check and reasoning as validateAgentEndpoints — the endpoint is
+// merkle-hashed, so it must not carry a credential); and an auth block shape
+// consistent with its type ("" / "none" / "bearer" / "oauth" — "bearer"
+// requires api_key_env, any other type must not set it).
+func (c *Config) validateMCPServers() error {
+	seen := make(map[string]bool, len(c.MCPServers))
+
+	for i := range c.MCPServers {
+		srv := c.MCPServers[i]
+
+		if srv.Name == "" {
+			return fmt.Errorf("mcp_servers[%d]: name is required", i)
+		}
+
+		if seen[srv.Name] {
+			return fmt.Errorf("mcp_servers: name %q is declared more than once", srv.Name)
+		}
+
+		seen[srv.Name] = true
+
+		if srv.Endpoint == "" {
+			return fmt.Errorf("mcp server %q: endpoint is required", srv.Name)
+		}
+
+		parsed, err := url.Parse(srv.Endpoint)
+		if err == nil && parsed.User != nil {
+			return fmt.Errorf("mcp server %q: endpoint must not embed credentials (userinfo); use auth.api_key_env instead", srv.Name)
+		}
+
+		err = validateMCPServerAuth(srv)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateMCPServerAuth checks one server's auth: block shape.
+func validateMCPServerAuth(srv MCPServer) error {
+	switch srv.Auth.Type {
+	case "", "none":
+		if srv.Auth.APIKeyEnv != "" {
+			return fmt.Errorf("mcp server %q: api_key_env is only valid with auth.type: bearer", srv.Name)
+		}
+	case "bearer":
+		if srv.Auth.APIKeyEnv == "" {
+			return fmt.Errorf("mcp server %q: auth.type: bearer requires api_key_env", srv.Name)
+		}
+	case "oauth":
+		if srv.Auth.APIKeyEnv != "" {
+			return fmt.Errorf("mcp server %q: api_key_env is only valid with auth.type: bearer", srv.Name)
+		}
+	default:
+		return fmt.Errorf("mcp server %q: auth.type must be one of none, bearer, oauth (got %q)", srv.Name, srv.Auth.Type)
+	}
+
+	return nil
+}
+
 // resolveAgentTarget interprets an optional "provider/" prefix on
 // source.Model (e.g. "openrouter/anthropic/claude-3.5-sonnet") against
 // agentProviders, splitting on the first "/" so a provider's own slashed
@@ -2125,8 +2294,10 @@ func DefaultAgentToolSpecs() []ToolSpec {
 }
 
 // ToolSpecName is the name a ToolSpec is referenced by: the builtin name for
-// a builtin, the sub-agent's name for a sub-agent tool, or the custom tool's
-// name.
+// a builtin, the sub-agent's name for a sub-agent tool, "server.tool" for a
+// single-tool MCP grant, the bare server name for a multi/all-tool MCP grant
+// (selectable by a step as a unit — see resolveEffectiveTools), or the
+// custom tool's name.
 func ToolSpecName(spec ToolSpec) string {
 	if spec.Builtin != "" {
 		return spec.Builtin
@@ -2134,6 +2305,14 @@ func ToolSpecName(spec ToolSpec) string {
 
 	if spec.Agent != "" {
 		return spec.Agent
+	}
+
+	if spec.MCP != "" {
+		if spec.MCPTool != "" {
+			return spec.MCP + "." + spec.MCPTool
+		}
+
+		return spec.MCP
 	}
 
 	return spec.Name
@@ -2188,6 +2367,14 @@ func resolveEffectiveTools(agentTools, stepTools []ToolSpec) ([]ToolSpec, error)
 		// the invariant holds regardless of call path.
 		if spec.Agent != "" {
 			return nil, fmt.Errorf("sub-agent tool %q must be granted on the agent, not added inline on a step", spec.Agent)
+		}
+
+		// An MCP grant is a capability grant too, for the same reason —
+		// validateMCPToolGrants rejects this at load; guard here too so the
+		// invariant holds for the fix: path as well (RunFix funnels fix.Tools
+		// through this same function, which has no separate load-time walk).
+		if spec.MCP != "" {
+			return nil, fmt.Errorf("mcp tool %q must be granted on the agent, not added inline on a step", spec.MCP)
 		}
 
 		effective = append(effective, spec)
