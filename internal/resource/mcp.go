@@ -72,28 +72,49 @@ func mcpCheckVersions(ctx context.Context, cfg *config.Config, rt config.Resourc
 	return versions, nil
 }
 
-// parseVersionArray extracts an oldest-first []map[string]any from result,
-// preferring StructuredContent (round-tripped through JSON to normalize it
-// into plain maps regardless of its concrete Go shape) and falling back to
-// parsing the first text content block as the same JSON array shape.
+// parseVersionArray extracts an oldest-first []map[string]any from result:
+// StructuredContent when it round-trips into that shape (normalizing plain
+// maps regardless of its concrete Go shape), else the first text content
+// block that parses as one — trying each block in turn, since a tool may
+// emit a human-readable block before (or after) the JSON one, not just a
+// single block. Returns an error only when neither source yields a usable
+// array — e.g. StructuredContent is present but object-shaped (not an
+// array) and no text block parses as one either.
 func parseVersionArray(result *sdkmcp.CallToolResult) ([]map[string]any, error) {
 	if result.StructuredContent != nil {
-		return convertToMapSlice(result.StructuredContent)
+		versions, err := convertToMapSlice(result.StructuredContent)
+		if err == nil {
+			return versions, nil
+		}
 	}
 
-	text := firstTextContent(result.Content)
-	if text == "" {
-		return nil, errors.New("mcp tool returned no structured content and no text content to parse as a JSON array")
-	}
-
-	var versions []map[string]any
-
-	err := json.Unmarshal([]byte(text), &versions)
-	if err != nil {
-		return nil, fmt.Errorf("could not parse JSON output: %w", err)
+	versions, ok := firstParsableArray(result.Content)
+	if !ok {
+		return nil, errors.New("mcp tool returned no structured content and no text content block that parses as a JSON array")
 	}
 
 	return versions, nil
+}
+
+// firstParsableArray scans content in order and returns the first text
+// block that parses as a []map[string]any, so a check/out tool can freely
+// interleave prose with its JSON payload.
+func firstParsableArray(content []sdkmcp.Content) ([]map[string]any, bool) {
+	for _, c := range content {
+		tc, ok := c.(*sdkmcp.TextContent)
+		if !ok {
+			continue
+		}
+
+		var versions []map[string]any
+
+		err := json.Unmarshal([]byte(tc.Text), &versions)
+		if err == nil {
+			return versions, true
+		}
+	}
+
+	return nil, false
 }
 
 // convertToMapSlice round-trips sc through JSON to normalize it into
@@ -268,7 +289,9 @@ func mcpRunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, 
 // parseVersionObject extracts the produced version object from an out:
 // tool's result, mirroring RunOut's own shell-path convention: unparsable
 // or absent content is not an error, just a nil result (many out tools
-// won't produce a version-shaped response).
+// won't produce a version-shaped response). Like parseVersionArray, it
+// tries StructuredContent first, then scans every text block (not just the
+// first) for one that parses as an object.
 func parseVersionObject(result *sdkmcp.CallToolResult) map[string]any {
 	if result.StructuredContent != nil {
 		converted, err := convertToMap(result.StructuredContent)
@@ -277,19 +300,29 @@ func parseVersionObject(result *sdkmcp.CallToolResult) map[string]any {
 		}
 	}
 
-	text := firstTextContent(result.Content)
-	if text == "" {
-		return nil
-	}
-
-	var obj map[string]any
-
-	err := json.Unmarshal([]byte(text), &obj)
-	if err != nil {
-		return nil
-	}
+	obj, _ := firstParsableObject(result.Content)
 
 	return obj
+}
+
+// firstParsableObject scans content in order and returns the first text
+// block that parses as a map[string]any.
+func firstParsableObject(content []sdkmcp.Content) (map[string]any, bool) {
+	for _, c := range content {
+		tc, ok := c.(*sdkmcp.TextContent)
+		if !ok {
+			continue
+		}
+
+		var obj map[string]any
+
+		err := json.Unmarshal([]byte(tc.Text), &obj)
+		if err == nil {
+			return obj, true
+		}
+	}
+
+	return nil, false
 }
 
 func convertToMap(v any) (map[string]any, error) {

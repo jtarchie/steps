@@ -265,14 +265,22 @@ func forceRequiredTool(req *model.LLMRequest, name string, stringOnly bool) {
 }
 
 // requiredCallSucceeded reports whether a tool's FunctionResponse data
-// represents success: exit_code 0. Only shell-backed tools (run_shell,
-// custom tools) can be marked required:, and shellToolResult always sets
-// exit_code on anything that actually ran, so its absence means the command
-// never ran at all — also not success.
+// represents success, per toolResponseParts' own documented failure shapes
+// (a nonzero exit_code, or an {"error": ...} result): shell-backed tools
+// (run_shell, custom tools) succeed iff exit_code == 0 — shellToolResult
+// always sets exit_code on anything that actually ran, so its absence means
+// the command never ran at all, also not success. MCP tools (the other
+// required:-capable kind — see config.validateMCPToolFields) carry no
+// exit_code at all; for those, absence of an "error" key is success (see
+// mcpToolImpl's {"structured_content", "content"} vs {"error"} shapes).
 func requiredCallSucceeded(resp map[string]any) bool {
-	code, ok := resp["exit_code"].(int)
+	if code, ok := resp["exit_code"].(int); ok {
+		return code == 0
+	}
 
-	return ok && code == 0
+	_, hasError := resp["error"]
+
+	return !hasError
 }
 
 // unsatisfiedRequiredTools returns a sorted list of names present in

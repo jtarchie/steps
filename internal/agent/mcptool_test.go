@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -246,6 +247,56 @@ func TestMCPToolImplSuccess(t *testing.T) {
 
 	if client.gotArgs["query"] != "bug" {
 		t.Errorf("CallTool args = %+v, want query=bug forwarded", client.gotArgs)
+	}
+}
+
+// TestMCPToolImplCapsOversizedStructuredContent proves structured_content
+// is bounded the same way content already is: previously it was returned
+// raw, unbounded, bypassing maxToolOutputBytes and potentially sending the
+// same large payload twice (once truncated in content, once whole in
+// structured_content).
+func TestMCPToolImplCapsOversizedStructuredContent(t *testing.T) {
+	t.Parallel()
+
+	huge := strings.Repeat("x", maxToolOutputBytes+1)
+
+	client := &fakeMCPClient{result: &sdkmcp.CallToolResult{
+		Content:           []sdkmcp.Content{&sdkmcp.TextContent{Text: "summary"}},
+		StructuredContent: map[string]any{"blob": huge},
+	}}
+
+	impl := mcpToolImpl(client, "search_issues")
+	result := impl(context.Background(), map[string]any{}, toolEnv{})
+
+	sc, ok := result["structured_content"].(string)
+	if !ok {
+		t.Fatalf("structured_content = %#v (%T), want a marker string once oversized", result["structured_content"], result["structured_content"])
+	}
+
+	if strings.Contains(sc, huge) {
+		t.Error("structured_content still contains the oversized raw payload")
+	}
+
+	if !strings.Contains(sc, "omitted") {
+		t.Errorf("structured_content = %q, want an 'omitted' marker", sc)
+	}
+}
+
+// TestMCPToolImplPassesThroughSmallStructuredContent confirms the cap is
+// value-gated: content under maxToolOutputBytes is unaffected.
+func TestMCPToolImplPassesThroughSmallStructuredContent(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeMCPClient{result: &sdkmcp.CallToolResult{
+		StructuredContent: map[string]any{"id": "42"},
+	}}
+
+	impl := mcpToolImpl(client, "get_issue")
+	result := impl(context.Background(), map[string]any{}, toolEnv{})
+
+	sc, ok := result["structured_content"].(map[string]any)
+	if !ok || sc["id"] != "42" {
+		t.Errorf("structured_content = %#v, want the original map passed through unchanged", result["structured_content"])
 	}
 }
 

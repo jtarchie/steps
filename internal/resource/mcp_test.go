@@ -46,6 +46,32 @@ func mcpFixtureServer(t *testing.T) *httptest.Server {
 			}, nil
 		})
 
+	// StructuredContent is object-shaped (spec-compliant tool output, per
+	// the MCP spec: structured output must marshal to a JSON *object*), not
+	// the array parseVersionArray wants — but the SDK also mirrors it into
+	// a text block, which IS the array. Regression fixture for the
+	// StructuredContent-present-but-wrong-shape fallback.
+	srv.AddTool(&sdkmcp.Tool{Name: "list_issues_object_structured", InputSchema: map[string]any{"type": "object"}},
+		func(_ context.Context, _ *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+			return &sdkmcp.CallToolResult{
+				StructuredContent: map[string]any{"issues": []map[string]any{{"id": "1"}, {"id": "2"}}},
+				Content:           []sdkmcp.Content{&sdkmcp.TextContent{Text: `[{"id":"1"},{"id":"2"}]`}},
+			}, nil
+		})
+
+	// No structured content; a human-readable block precedes the JSON
+	// block. Regression fixture for scanning every text block, not just
+	// the first.
+	srv.AddTool(&sdkmcp.Tool{Name: "list_issues_prose_then_json", InputSchema: map[string]any{"type": "object"}},
+		func(_ context.Context, _ *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+			return &sdkmcp.CallToolResult{
+				Content: []sdkmcp.Content{
+					&sdkmcp.TextContent{Text: "Found 2 issues:"},
+					&sdkmcp.TextContent{Text: `[{"id":"1"},{"id":"2"}]`},
+				},
+			}, nil
+		})
+
 	srv.AddTool(&sdkmcp.Tool{Name: "get_issue", InputSchema: map[string]any{"type": "object"}},
 		func(_ context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
 			var args map[string]any
@@ -124,6 +150,48 @@ func TestCheckVersionsMCPTextContentFallback(t *testing.T) {
 
 	cfg := mcpFixtureConfig(t)
 	rt := mcpResourceType("list_issues_text")
+
+	versions, err := CheckVersions(context.Background(), cfg, rt, map[string]any{})
+	if err != nil {
+		t.Fatalf("CheckVersions: %v", err)
+	}
+
+	if len(versions) != 2 || versions[0]["id"] != "1" {
+		t.Fatalf("versions = %+v", versions)
+	}
+}
+
+// TestCheckVersionsMCPObjectStructuredContentFallsBackToText covers a
+// spec-compliant tool whose StructuredContent is object-shaped (not the
+// array parseVersionArray wants) but whose mirrored text content IS the
+// array — previously this errored outright instead of trying the text
+// block, breaking any server (e.g. Linear's) that returns structured
+// output this way.
+func TestCheckVersionsMCPObjectStructuredContentFallsBackToText(t *testing.T) {
+	t.Parallel()
+
+	cfg := mcpFixtureConfig(t)
+	rt := mcpResourceType("list_issues_object_structured")
+
+	versions, err := CheckVersions(context.Background(), cfg, rt, map[string]any{})
+	if err != nil {
+		t.Fatalf("CheckVersions: %v", err)
+	}
+
+	if len(versions) != 2 || versions[1]["id"] != "2" {
+		t.Fatalf("versions = %+v", versions)
+	}
+}
+
+// TestCheckVersionsMCPScansEveryTextBlock covers a tool that emits a
+// human-readable block before the JSON block — previously only the first
+// text block was ever tried, so this failed to parse even though a usable
+// array was present later in Content.
+func TestCheckVersionsMCPScansEveryTextBlock(t *testing.T) {
+	t.Parallel()
+
+	cfg := mcpFixtureConfig(t)
+	rt := mcpResourceType("list_issues_prose_then_json")
 
 	versions, err := CheckVersions(context.Background(), cfg, rt, map[string]any{})
 	if err != nil {

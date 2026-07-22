@@ -509,3 +509,125 @@ func floatPtrVal(p *float32) float32 {
 
 	return *p
 }
+
+// TestRequiredCallSucceeded covers every FunctionResponse shape a
+// required:-capable toolImpl can actually produce: shell-backed tools
+// (exit_code), MCP tools ({structured_content, content} on success,
+// {error} on failure — see mcpToolImpl), and the absent-both-keys case
+// (e.g. a builtin's own success shape), which is success by the same
+// "no error key present" rule.
+func TestRequiredCallSucceeded(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		resp map[string]any
+		want bool
+	}{
+		{"exit_code 0 succeeds", map[string]any{"exit_code": 0, "stdout": "", "stderr": ""}, true},
+		{"exit_code nonzero fails", map[string]any{"exit_code": 1, "stdout": "", "stderr": ""}, false},
+		{"mcp success shape (no error key) succeeds", map[string]any{"structured_content": nil, "content": "ok"}, true},
+		{"mcp error shape fails", map[string]any{"error": "boom"}, false},
+		{"neither exit_code nor error present succeeds", map[string]any{"entries": []any{}}, true},
+		{"empty map succeeds (no error key)", map[string]any{}, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := requiredCallSucceeded(tc.resp)
+			if got != tc.want {
+				t.Errorf("requiredCallSucceeded(%+v) = %v, want %v", tc.resp, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRunAgentConversationRequiredMCPToolCalled proves the regression this
+// design exists to prevent: before requiredCallSucceeded was made
+// shape-aware, an MCP tool's success shape ({structured_content, content},
+// no exit_code) was never recognized as satisfying required: true, so the
+// conversation would force-call it every turn and exhaust max_turns even
+// though every call actually succeeded. This test registers a hand-built
+// toolImpl matching mcpToolImpl's exact success shape (rather than a real
+// MCP connection, which this package doesn't have — the fix is entirely in
+// requiredCallSucceeded's interpretation of the response map) and confirms
+// the conversation completes normally within one call.
+func TestRunAgentConversationRequiredMCPToolCalled(t *testing.T) {
+	t.Parallel()
+
+	const toolName = "github__search_issues"
+
+	registry := map[string]toolImpl{
+		toolName: func(context.Context, map[string]any, toolEnv) map[string]any {
+			return map[string]any{"structured_content": map[string]any{"count": 2}, "content": "found 2 issues"}
+		},
+	}
+
+	conv := agentConversation{
+		prompt:   "search for bugs",
+		env:      toolEnv{dir: t.TempDir()},
+		tools:    agentTools{registry: registry, required: map[string]bool{toolName: true}},
+		maxTurns: testMaxTurns,
+	}
+
+	fake := &fakeLLM{
+		responses: []*model.LLMResponse{
+			{Content: &genai.Content{
+				Role:  genai.RoleModel,
+				Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "call1", Name: toolName, Args: map[string]any{}}}},
+			}},
+			{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "done"}}}},
+		},
+	}
+
+	res, err := runAgentConversation(context.Background(), fake, conv)
+	if err != nil {
+		t.Fatalf("unexpected error (required MCP tool should have been satisfied on its one successful call): %v", err)
+	}
+
+	if res.text != "done" {
+		t.Errorf("content = %q, want %q", res.text, "done")
+	}
+
+	if res.turns != 2 {
+		t.Errorf("turns = %d, want 2 (no forced re-call needed once satisfied)", res.turns)
+	}
+}
+
+// TestRunAgentConversationRequiredMCPToolErrorNotSatisfied confirms the
+// other half: an MCP tool's IsError shape ({"error": ...}) must NOT be
+// treated as satisfying required:, the same as a nonzero exit_code isn't.
+func TestRunAgentConversationRequiredMCPToolErrorNotSatisfied(t *testing.T) {
+	t.Parallel()
+
+	const toolName = "github__search_issues"
+
+	registry := map[string]toolImpl{
+		toolName: func(context.Context, map[string]any, toolEnv) map[string]any {
+			return map[string]any{"error": "upstream rate limited"}
+		},
+	}
+
+	conv := agentConversation{
+		prompt:   "search for bugs",
+		env:      toolEnv{dir: t.TempDir()},
+		tools:    agentTools{registry: registry, required: map[string]bool{toolName: true}},
+		maxTurns: testMaxTurns,
+	}
+
+	call := &genai.Part{FunctionCall: &genai.FunctionCall{ID: "call", Name: toolName, Args: map[string]any{}}}
+
+	responses := make([]*model.LLMResponse, testMaxTurns)
+	for i := range responses {
+		responses[i] = &model.LLMResponse{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{call}}}
+	}
+
+	fake := &fakeLLM{responses: responses}
+
+	_, err := runAgentConversation(context.Background(), fake, conv)
+	if err == nil {
+		t.Fatal("expected an error: the required tool only ever returned an error shape, so it never succeeded")
+	}
+}

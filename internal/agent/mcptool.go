@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -147,10 +148,35 @@ func mcpToolImpl(client stepsmcp.Client, name string) toolImpl {
 		}
 
 		return map[string]any{
-			"structured_content": result.StructuredContent,
+			"structured_content": boundedStructuredContent(result.StructuredContent),
 			"content":            truncateToolOutput(text),
 		}
 	}
+}
+
+// boundedStructuredContent caps a tool result's structured content at
+// maxToolOutputBytes, the same bound truncateToolOutput enforces on text —
+// without this, a large structured payload would flood the model's context
+// window unbounded, bypassing the cap every other tool's output already
+// honors (and the SDK often mirrors the same payload into text content too,
+// so an uncapped structured_content is frequently a second, unbounded copy
+// of data content already carries a truncated copy of). nil input (the
+// common "this tool has no structured output" case) passes through as nil.
+func boundedStructuredContent(sc any) any {
+	if sc == nil {
+		return nil
+	}
+
+	data, err := json.Marshal(sc)
+	if err != nil {
+		return fmt.Sprintf("[structured content omitted: could not marshal: %s]", err.Error())
+	}
+
+	if len(data) > maxToolOutputBytes {
+		return fmt.Sprintf("[structured content omitted: %d bytes exceeds the %d-byte cap; see content]", len(data), maxToolOutputBytes)
+	}
+
+	return sc
 }
 
 // joinTextContent concatenates every TextContent block in content,

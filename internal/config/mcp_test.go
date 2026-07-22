@@ -483,4 +483,38 @@ jobs:
 			t.Fatalf("LoadConfig: %v", err)
 		}
 	})
+
+	t.Run("empty in tool rejected", func(t *testing.T) {
+		t.Parallel()
+
+		pipeline := mcpServerBlock + `
+resource_types:
+- name: linear-issues
+  config:
+    mcp:
+      server: github
+      check: { tool: list_issues }
+      in: {}
+jobs: [{ name: j, plan: [] }]
+`
+		path := writeConfig(t, pipeline)
+		wantLoadError(t, path, "mcp.in.tool must not be empty")
+	})
+
+	t.Run("empty out tool rejected", func(t *testing.T) {
+		t.Parallel()
+
+		pipeline := mcpServerBlock + `
+resource_types:
+- name: linear-issues
+  config:
+    mcp:
+      server: github
+      check: { tool: list_issues }
+      out: {}
+jobs: [{ name: j, plan: [] }]
+`
+		path := writeConfig(t, pipeline)
+		wantLoadError(t, path, "mcp.out.tool must not be empty")
+	})
 }

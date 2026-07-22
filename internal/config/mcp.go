@@ -159,32 +159,55 @@ func (c *Config) rejectInlineMCPTools() error {
 // failing confusingly at run time).
 func (c *Config) validateResourceTypeConfig() error {
 	for i := range c.ResourceTypes {
-		rt := c.ResourceTypes[i]
-
-		hasShell := rt.Config.Check != "" || rt.Config.In != "" || rt.Config.Out != ""
-		hasMCP := rt.Config.MCP != nil
-
-		if hasShell && hasMCP {
-			return fmt.Errorf("resource_type %q: check/in/out and mcp: are mutually exclusive", rt.Name)
-		}
-
-		if !hasMCP {
-			continue
-		}
-
-		mcp := rt.Config.MCP
-
-		if mcp.Check == nil || mcp.Check.Tool == "" {
-			return fmt.Errorf("resource_type %q: mcp.check.tool is required", rt.Name)
-		}
-
-		_, err := c.FindMCPServer(mcp.Server)
+		err := c.validateOneResourceTypeConfig(c.ResourceTypes[i])
 		if err != nil {
-			return fmt.Errorf("resource_type %q: %w", rt.Name, err)
+			return err
 		}
 	}
 
 	return c.validateMCPResourcePuts()
+}
+
+// validateOneResourceTypeConfig checks a single resource_types: entry's
+// config: shape — split out of validateResourceTypeConfig to keep that
+// function's branch count down (cyclop).
+func (c *Config) validateOneResourceTypeConfig(rt ResourceType) error {
+	hasShell := rt.Config.Check != "" || rt.Config.In != "" || rt.Config.Out != ""
+	hasMCP := rt.Config.MCP != nil
+
+	if hasShell && hasMCP {
+		return fmt.Errorf("resource_type %q: check/in/out and mcp: are mutually exclusive", rt.Name)
+	}
+
+	if !hasMCP {
+		return nil
+	}
+
+	return c.validateMCPResourceConfig(rt.Name, rt.Config.MCP)
+}
+
+// validateMCPResourceConfig checks one resource type's mcp: block — split
+// out of validateOneResourceTypeConfig to keep that function's branch count
+// down (cyclop).
+func (c *Config) validateMCPResourceConfig(rtName string, mcp *MCPResourceConfig) error {
+	if mcp.Check == nil || mcp.Check.Tool == "" {
+		return fmt.Errorf("resource_type %q: mcp.check.tool is required", rtName)
+	}
+
+	if mcp.In != nil && mcp.In.Tool == "" {
+		return fmt.Errorf("resource_type %q: mcp.in.tool must not be empty when mcp.in is set", rtName)
+	}
+
+	if mcp.Out != nil && mcp.Out.Tool == "" {
+		return fmt.Errorf("resource_type %q: mcp.out.tool must not be empty when mcp.out is set", rtName)
+	}
+
+	_, err := c.FindMCPServer(mcp.Server)
+	if err != nil {
+		return fmt.Errorf("resource_type %q: %w", rtName, err)
+	}
+
+	return nil
 }
 
 // validateMCPResourcePuts rejects a put step targeting an mcp-backed
