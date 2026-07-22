@@ -4,3 +4,6 @@
 # Persisted job-run state (sqlite)
 .steps/
 .scratch/
+
+# Impeccable per-developer overrides (hook consent, local ignores)
+.impeccable/config.local.json
