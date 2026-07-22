@@ -2,12 +2,44 @@ package agent
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/workspace"
 )
+
+// captureStdout runs fn with os.Stdout redirected to a pipe, returning
+// everything fn wrote via fmt.Printf and friends. Not safe alongside other
+// tests running in parallel that also touch os.Stdout — callers must not use
+// t.Parallel(). Duplicated from internal/trigger/trigger_test.go rather than
+// exported cross-package, matching this repo's convention of small
+// duplicated test helpers over new cross-package edges.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+
+	orig := os.Stdout
+	os.Stdout = w
+
+	fn()
+
+	_ = w.Close()
+
+	os.Stdout = orig
+
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read captured stdout: %v", err)
+	}
+
+	return string(data)
+}
 
 func TestNewToolOutputSpillDir(t *testing.T) {
 	t.Parallel()
@@ -91,4 +123,48 @@ func TestPreparedAgentStepCloseToleratesEmptySpillDir(t *testing.T) {
 
 	prepared := preparedAgentStep{space: testStepSpace(t)}
 	prepared.close("test-agent") // must not panic on a zero-value spillDir
+}
+
+func TestPrintAgentResponse(t *testing.T) {
+	// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
+	cases := []struct {
+		name string
+		res  conversationResult
+		want string
+	}{
+		{
+			name: "text only",
+			res:  conversationResult{text: "hello"},
+			want: "hello\n",
+		},
+		{
+			name: "verdict and note, no text (the critic case: only a verdict tool call)",
+			res:  conversationResult{verdict: "approve", note: "looks good"},
+			want: "verdict: approve\nnote: looks good\n",
+		},
+		{
+			name: "text, verdict, and note all present",
+			res:  conversationResult{text: "hello", verdict: "approve", note: "looks good"},
+			want: "hello\nverdict: approve\nnote: looks good\n",
+		},
+		{
+			name: "empty result prints nothing",
+			res:  conversationResult{},
+			want: "",
+		},
+		{
+			name: "surrounding whitespace in text is trimmed",
+			res:  conversationResult{text: "  padded  \n"},
+			want: "padded\n",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := captureStdout(t, func() { printAgentResponse(tc.res) })
+			if got != tc.want {
+				t.Errorf("printAgentResponse(%+v) printed %q, want %q", tc.res, got, tc.want)
+			}
+		})
+	}
 }

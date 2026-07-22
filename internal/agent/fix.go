@@ -117,11 +117,23 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 	agentCtx, cancel := context.WithTimeout(ctx, agentStepTimeout)
 	defer cancel()
 
+	// Keep the latest attempt's result either way, same as runPrepared: on
+	// success it's the fix agent's own account of what it did (the
+	// defaultFixPrompt asks it to "reply with a brief summary and stop");
+	// on a turn-exhausted/failed attempt it's still the most useful partial
+	// answer available. The caller (runFixTask, internal/pipeline/pipeline.go)
+	// already printed "task %q failed ...; invoking fix agent %q" before this
+	// call, so this only needs the response body, not another "agent:" banner.
+	var result conversationResult
+
 	err = retry.Do(agentCtx, ri.Attempts, func(_ int) error {
-		_, runErr := runAgentConversation(agentCtx, llm, conv)
+		res, runErr := runAgentConversation(agentCtx, llm, conv)
+		result = res
 
 		return runErr
 	})
+	printAgentResponse(result)
+
 	if err != nil {
 		return fmt.Errorf("fix agent conversation: %w", err)
 	}

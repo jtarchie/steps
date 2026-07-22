@@ -28,7 +28,10 @@ const subAgentRequestParam = "request"
 // must reproduce the failing task's exact environment. The child conversation
 // is not recorded (no merkle node, no job_run): the enclosing agent step
 // records the aggregate outcome, and the parent's own call of this tool is
-// what shows in its trajectory.
+// what shows in its trajectory. Its response is still echoed to the
+// terminal, labeled "agent: <name> (sub-agent)", the same as any other
+// agent conversation (see printAgentResponse) — otherwise a human watching
+// the run only ever sees the parent's own summary of what the child said.
 //
 // A child failure (transport error, max_turns exhausted, a child required
 // tool never succeeding) is returned to the PARENT as {"error": ...} data —
@@ -134,7 +137,11 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		toolChoiceStringOnly: c.ri.StringOnlyToolChoice,
 	}
 
+	fmt.Printf("agent: %s (sub-agent)\n", c.ri.AgentName)
+
 	res, runErr := runAgentConversation(ctx, c.llm, conv)
+	printAgentResponse(res)
+
 	if runErr != nil {
 		return map[string]any{"error": runErr.Error()}
 	}

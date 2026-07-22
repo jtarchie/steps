@@ -236,6 +236,29 @@ type StepOutcome struct {
 	Previous *PreviousRun
 }
 
+// printAgentResponse echoes an agent step's conversation result to the
+// terminal — the model's final text, then its verdict and note (if the step
+// declares verdicts:) — matching printTaskOutput's precedent of always
+// echoing a step's real output (internal/pipeline/pipeline.go's
+// printTaskOutput). Called for both a successful run and a turn-exhausted/
+// failed one, since runPrepared populates res either way (see runPrepared's
+// own doc comment) and a failed attempt's partial text/note is exactly what
+// a human needs to see to know what to do next.
+func printAgentResponse(res conversationResult) {
+	text := strings.TrimSpace(res.text)
+	if text != "" {
+		fmt.Println(text)
+	}
+
+	if res.verdict != "" {
+		fmt.Printf("verdict: %s\n", res.verdict)
+	}
+
+	if res.note != "" {
+		fmt.Printf("note: %s\n", res.note)
+	}
+}
+
 // RunStep hashes step against parentHash (agent steps are never
 // skippable) and runs it, retrying the whole conversation up to the
 // resolved attempt count. handoff carries the transition context (see
@@ -267,6 +290,8 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindAgent, StepIndex: i, Resource: prepared.ri.AgentName, Content: content}
 
 	res, err := runPrepared(ctx, prepared)
+	printAgentResponse(res)
+
 	previous := &PreviousRun{
 		Agent: step.Agent, Response: res.text, Verdict: res.verdict, Note: res.note,
 		Turns: res.turns, Trajectory: exportTrajectory(res.trajectory),
@@ -468,7 +493,9 @@ func RunHook(ctx context.Context, cfg *config.Config, step config.Step, bw works
 
 	fmt.Printf("agent: %s\n", step.Agent)
 
-	_, err = runPrepared(ctx, prepared)
+	res, err := runPrepared(ctx, prepared)
+	printAgentResponse(res)
+
 	if err != nil {
 		return fmt.Errorf("agent %q: %w", step.Agent, err)
 	}

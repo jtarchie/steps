@@ -52,6 +52,33 @@ func TestSubAgentRunReturnsResult(t *testing.T) {
 	}
 }
 
+// TestSubAgentRunPrintsResponse: a sub-agent's own final text must reach the
+// terminal (labeled as a sub-agent), not just come back as an opaque tool
+// result the parent model consumes — previously the child conversation's
+// output was never echoed anywhere a human could see it directly. Not
+// t.Parallel(): captureStdout (internal/agent/step_test.go) swaps the
+// package-global os.Stdout.
+func TestSubAgentRunPrintsResponse(t *testing.T) {
+	fake := &fakeLLM{responses: []*model.LLMResponse{
+		{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "the gist"}}}},
+	}}
+
+	child := newTestSubAgent(t, fake)
+	env := toolEnv{dir: t.TempDir()}
+
+	output := captureStdout(t, func() {
+		child.run(context.Background(), map[string]any{"request": "summarize this"}, env)
+	})
+
+	if !strings.Contains(output, "agent: extra (sub-agent)") {
+		t.Errorf("stdout = %q, want it to contain %q", output, "agent: extra (sub-agent)")
+	}
+
+	if !strings.Contains(output, "the gist") {
+		t.Errorf("stdout = %q, want it to contain the child's response %q", output, "the gist")
+	}
+}
+
 // TestSubAgentRunTruncatesResult proves a child's oversized final text is
 // capped like every other tool result, so it can't flood the parent's context
 // past maxToolOutputBytes.

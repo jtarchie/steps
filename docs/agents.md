@@ -14,7 +14,8 @@ An agent step runs a tool-calling conversation loop:
    - Truncate any tool output to 100KB before it goes back to the model, so a noisy command can't blow out the context window.
    - Append the tool results and continue.
 4. Exit when the model stops requesting tools, or `max_turns` is exceeded.
-5. Record the step's output.
+5. Print the model's final response text to the terminal, followed by its verdict and note if the step declares `verdicts:` — this happens whether the run succeeded or hit its turn budget, since a turn-exhausted attempt's partial response is still available.
+6. Record the step's output.
 
 Two tools can be synthesized onto a step's grant beyond what `tools:` lists: a required `verdict` tool (`verdicts:` on the step) and a read-only `previous_run` tool (`handoff: {tool: true}`) — both documented in [control-flow.md](control-flow.md)'s "Step transitions" and "Handoff context" sections, since both exist to serve `to:` routing rather than the tool-calling loop itself.
 

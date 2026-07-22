@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +10,36 @@ import (
 	"strings"
 	"testing"
 )
+
+// captureStdout runs fn with os.Stdout redirected to a pipe, returning
+// everything fn wrote via fmt.Printf and friends. Not safe alongside other
+// tests running in parallel that also touch os.Stdout — callers must not use
+// t.Parallel(). Duplicated per-package (see internal/agent/step_test.go,
+// internal/trigger/trigger_test.go) rather than exported cross-package.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+
+	orig := os.Stdout
+	os.Stdout = w
+
+	fn()
+
+	_ = w.Close()
+
+	os.Stdout = orig
+
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read captured stdout: %v", err)
+	}
+
+	return string(data)
+}
 
 // fixAgentServer returns an httptest server that answers every chat
 // completion with a plain "done" (no tool calls), counting how many times it
@@ -88,6 +119,39 @@ func TestRunJobTaskFixRecovers(t *testing.T) {
 
 	if got := strings.TrimSpace(readFile(t, counter)); got != "2" {
 		t.Errorf("counter = %q, want 2 (command should have run twice: initial + verdict re-run)", got)
+	}
+}
+
+// TestRunJobTaskFixPrintsResponse: the fix agent's final response ("done",
+// per fixAgentServer) must reach the terminal, not just the retry/error log —
+// previously RunFix discarded runAgentConversation's result entirely. Not
+// t.Parallel(): captureStdout swaps the package-global os.Stdout.
+func TestRunJobTaskFixPrintsResponse(t *testing.T) {
+	var calls int
+
+	server := fixAgentServer(t, &calls)
+
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "counter.txt")
+	runCmd := fmt.Sprintf(`c=%s; n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$c"; test $n -ge 2`, counter)
+	path := writeFixPipeline(t, dir, server.URL, runCmd)
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	// Not mustRun: captureStdout's os.Stdout restore only runs if fn returns
+	// normally, and t.Fatalf inside fn would Goexit past it, leaving stdout
+	// swapped for every later test in this package (see the same caution in
+	// internal/trigger/trigger_test.go's captureStdout usage).
+	var runErr error
+
+	output := captureStdout(t, func() { runErr = run([]string{path}) })
+
+	if runErr != nil {
+		t.Fatalf("run(%v): %v", []string{path}, runErr)
+	}
+
+	if !strings.Contains(output, "done") {
+		t.Errorf("stdout = %q, want it to contain the fix agent's response %q", output, "done")
 	}
 }
 
