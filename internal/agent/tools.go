@@ -245,11 +245,25 @@ func visibleParams(params []string, pinned map[string]string) []string {
 	return visible
 }
 
+// agentToolArgPattern matches a {{ .args.NAME }} reference and everything up
+// to the closing "}}", so it also matches the project's own documented safe
+// idiom for passing a model-supplied value through a pipeline function —
+// {{ .args.repo | shellquote }} (see CLAUDE.md's Template Rendering
+// section and examples/agents.yml's post_review tool) — not just the bare
+// form. [^}]* deliberately doesn't try to parse the pipeline itself (a
+// function name, further pipe stages, quoted literal arguments); it only
+// needs to not stop matching before the "}}" that ends the reference. A tool
+// written the documented safe way must still have its argument inferred
+// (and therefore checked as present/schema'd for the model), or the
+// project's own recommended mitigation for missing-argument validation is
+// silently defeated for exactly the tools that follow it.
+//
 //nolint:gochecknoglobals // compiled once, read-only
-var agentToolArgPattern = regexp.MustCompile(`\{\{-?\s*\.args\.([A-Za-z_]\w*)\s*-?\}\}`)
+var agentToolArgPattern = regexp.MustCompile(`\{\{-?\s*\.args\.([A-Za-z_]\w*)[^}]*\}\}`)
 
 // inferToolParams scans a custom tool's run template for {{ .args.NAME }}
-// references, returning each distinct NAME once, in first-seen order.
+// references (including {{ .args.NAME | shellquote }} and similar piped
+// forms), returning each distinct NAME once, in first-seen order.
 func inferToolParams(run string) []string {
 	matches := agentToolArgPattern.FindAllStringSubmatch(run, -1)
 

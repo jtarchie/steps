@@ -160,6 +160,45 @@ func TestBuildAgentToolsCustom(t *testing.T) {
 	})
 }
 
+// TestBuildAgentToolsCustomShellquotePiped guards the security finding that
+// agentToolArgPattern only matched a bare {{ .args.NAME }}, missing
+// CLAUDE.md's own documented safe idiom for a model-supplied value
+// ({{ .args.repo | shellquote }}) — a tool written the recommended way got
+// an empty inferred parameter list, so the model's schema never advertised
+// the argument, and execCustomTool's missing-argument check (built from the
+// same list) never flagged it as missing either. Split into its own
+// top-level test (rather than a t.Run under TestBuildAgentToolsCustom) to
+// stay under the linter's per-function cognitive-complexity budget.
+func TestBuildAgentToolsCustomShellquotePiped(t *testing.T) {
+	t.Parallel()
+
+	decls, _, err := buildAgentTools(nil, []config.ToolSpec{
+		{Name: "post_review", Description: "post a review", Run: `gh pr review --{{ .args.action }} -b {{ .args.body | shellquote }}`},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decl := decls.FunctionDeclarations[0]
+	for _, name := range []string{"action", "body"} {
+		if _, ok := decl.Parameters.Properties[name]; !ok {
+			t.Errorf("missing inferred param %q for a piped {{ .args.%s | shellquote }} reference", name, name)
+		}
+	}
+
+	found := false
+
+	for _, req := range decl.Parameters.Required {
+		if req == "body" {
+			found = true
+		}
+	}
+
+	if !found {
+		t.Error("body (piped through shellquote) should be required, same as any other inferred param")
+	}
+}
+
 // TestExecCustomTool confirms a custom tool's failure — required or not —
 // is reported as ordinary data, never a Go error; required: is enforced
 // entirely by runAgentConversation (see TestRunAgentConversationForces*
