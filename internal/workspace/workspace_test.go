@@ -283,6 +283,52 @@ func testProviderCaptureMissingOutputErrors(t *testing.T, newProvider func(t *te
 	}
 }
 
+// testProviderCaptureSwappedOutputSymlinkRejected reproduces the
+// container-escape-adjacent scenario from the security review: a step
+// deletes its declared output directory and replaces it with a symlink to
+// an arbitrary host path (here, a directory outside the step space
+// entirely). Capture must refuse to follow it instead of copying the real
+// target's contents into the pipeline's artifact store as if they were the
+// legitimate output.
+func testProviderCaptureSwappedOutputSymlinkRejected(t *testing.T, newProvider func(t *testing.T) Provider) {
+	t.Helper()
+
+	p := newProvider(t)
+
+	bw, err := p.NewBuild(ctxT(), "b1")
+	if err != nil {
+		t.Fatalf("NewBuild: %v", err)
+	}
+	defer CloseBuild(bw, "b1")
+
+	space, err := bw.TaskSpace(ctxT(), "01-build", nil, []string{"built"})
+	if err != nil {
+		t.Fatalf("TaskSpace: %v", err)
+	}
+
+	secret := t.TempDir()
+	writeFile(t, filepath.Join(secret, "secret.txt"), "should not leak")
+
+	// Simulate a step that deleted its own declared output directory and
+	// replaced it with a symlink to a host path outside the step space.
+	outPath := filepath.Join(space.Dir(), "built")
+
+	err = os.RemoveAll(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.Symlink(secret, outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = space.Capture(ctxT())
+	if err == nil {
+		t.Fatal("Capture through a swapped output symlink should be rejected, not silently followed")
+	}
+}
+
 func testProviderUnknownInputErrors(t *testing.T, newProvider func(t *testing.T) Provider) {
 	t.Helper()
 
@@ -358,6 +404,11 @@ func TestCopyProviderCaptureAndDownstreamVisibility(t *testing.T) {
 func TestCopyProviderCaptureMissingOutputErrors(t *testing.T) {
 	t.Parallel()
 	testProviderCaptureMissingOutputErrors(t, newTestCopyProvider)
+}
+
+func TestCopyProviderCaptureSwappedOutputSymlinkRejected(t *testing.T) {
+	t.Parallel()
+	testProviderCaptureSwappedOutputSymlinkRejected(t, newTestCopyProvider)
 }
 
 func TestCopyProviderUnknownInputErrors(t *testing.T) {

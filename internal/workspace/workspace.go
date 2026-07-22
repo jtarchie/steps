@@ -181,6 +181,33 @@ func (sharedSpace) Close() error                    { return nil }
 
 // --- isolatingProvider: shared lifecycle over a pluggable treeBackend ---
 
+// rejectSymlinkSrc enforces treeBackend.materialize's implicit precondition
+// that src is a real directory, not a symlink. This matters specifically
+// because the copy backend's `cp -R -P -p src/. dst` (and its Linux/other
+// variants) dereferences a symlink AT src itself despite -P: the trailing
+// "/." (needed to copy src's *contents* into an already-existing dst rather
+// than creating dst as a copy of src) forces path resolution through the
+// link before -P's never-follow guarantee can apply to it. -P still protects
+// symlinks nested *inside* src's tree — only the top-level src argument is
+// at risk, which is exactly the case a step (or an attacker-influenced task/
+// agent) can trigger by deleting its materialized directory and replacing it
+// with a symlink to an arbitrary host path. Checked with os.Lstat (which,
+// unlike os.Stat, reports the link itself rather than resolving it) so a
+// legitimate missing path still fails with the same "does not exist" shape
+// callers already handle.
+func rejectSymlinkSrc(src string) error {
+	info, err := os.Lstat(src)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%q is a symlink, not a directory — refusing to copy/snapshot through it", src)
+	}
+
+	return nil
+}
+
 // treeBackend abstracts the one thing that actually differs between the
 // copy and btrfs strategies: how a directory is created empty, how one
 // directory's contents are materialized into a fresh one (a recursive copy,
@@ -344,9 +371,9 @@ func (b *isolatingBuild) materializeSpace(ctx context.Context, dir string, input
 
 		src := filepath.Join(b.artifacts, in)
 
-		_, statErr := os.Stat(src)
-		if statErr != nil {
-			return fmt.Errorf("input %q: %w", in, statErr)
+		err = rejectSymlinkSrc(src)
+		if err != nil {
+			return fmt.Errorf("input %q: %w", in, err)
 		}
 
 		err = b.backend.materialize(ctx, src, filepath.Join(dir, in))
@@ -400,14 +427,20 @@ func (s *isolatingSpace) Dir() string { return s.dir }
 // store, replacing any artifact already there under that name (deterministic
 // since steps run sequentially — there is no concurrent writer to race). A
 // declared output directory that no longer exists when the step finished is
-// an error: the step promised to produce it.
+// an error: the step promised to produce it. rejectSymlinkSrc additionally
+// refuses a declared output that is itself a symlink: the step's own run:/
+// tool commands could otherwise delete the materialized output directory
+// and replace it with a symlink to an arbitrary host path (e.g. /etc, a
+// home directory), which the copy backend's `cp ... src/. dst` would then
+// silently dereference, exfiltrating the real target's contents into the
+// pipeline's artifact store as if it were the legitimate output.
 func (s *isolatingSpace) Capture(ctx context.Context) error {
 	for _, out := range s.outputs {
 		src := filepath.Join(s.dir, out)
 
-		_, err := os.Stat(src)
+		err := rejectSymlinkSrc(src)
 		if err != nil {
-			return fmt.Errorf("step declared output %q but it does not exist: %w", out, err)
+			return fmt.Errorf("step declared output %q: %w", out, err)
 		}
 
 		dst := filepath.Join(s.artifacts, out)

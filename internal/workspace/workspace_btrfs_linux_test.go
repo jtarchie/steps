@@ -118,6 +118,11 @@ func TestBtrfsProviderCaptureMissingOutputErrors(t *testing.T) {
 	testProviderCaptureMissingOutputErrors(t, newTestBtrfsProvider)
 }
 
+func TestBtrfsProviderCaptureSwappedOutputSymlinkRejected(t *testing.T) {
+	t.Parallel()
+	testProviderCaptureSwappedOutputSymlinkRejected(t, newTestBtrfsProvider)
+}
+
 func TestBtrfsProviderUnknownInputErrors(t *testing.T) {
 	t.Parallel()
 	testProviderUnknownInputErrors(t, newTestBtrfsProvider)
