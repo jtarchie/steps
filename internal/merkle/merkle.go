@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/jtarchie/steps/internal/config"
 	rsrc "github.com/jtarchie/steps/internal/resource"
@@ -70,7 +71,50 @@ func GetNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 		content["image"] = resourceType.Image
 	}
 
+	err := withMCPResourceStage(cfg, resourceType, "in", content)
+	if err != nil {
+		return nil, err
+	}
+
 	return withHooks(cfg, step, withWhen(step, withRouting(step, content)))
+}
+
+// withMCPResourceStage folds an mcp-backed resource type's server identity
+// and the named lifecycle stage's tool name into content, mirroring
+// in_template/out_template's role for the shell backend — but only when
+// that stage's *MCPToolCall is actually set (In and Out are both optional;
+// an unset In means get falls back to writing version.json, with nothing
+// template-shaped to hash, exactly like check: is never hashed for the
+// shell backend either). A resource type with no mcp: block is unaffected
+// (byte-identical to before this field existed), same as every other
+// value-gated field in this file.
+func withMCPResourceStage(cfg *config.Config, resourceType config.ResourceType, stage string, content map[string]any) error {
+	if resourceType.Config.MCP == nil {
+		return nil
+	}
+
+	var call *config.MCPToolCall
+
+	switch stage {
+	case "in":
+		call = resourceType.Config.MCP.In
+	case "out":
+		call = resourceType.Config.MCP.Out
+	}
+
+	if call == nil {
+		return nil
+	}
+
+	server, err := mcpServerContent(cfg, resourceType.Config.MCP.Server)
+	if err != nil {
+		return err
+	}
+
+	content["mcp_"+stage+"_tool"] = call.Tool
+	content["mcp_server"] = server
+
+	return nil
 }
 
 // withWhen folds a step's when: guard command into content, but only when the
@@ -281,6 +325,11 @@ func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 		content["image"] = resourceType.Image
 	}
 
+	err := withMCPResourceStage(cfg, resourceType, "out", content)
+	if err != nil {
+		return nil, err
+	}
+
 	return withHooks(cfg, step, withWhen(step, withRouting(step, content)))
 }
 
@@ -311,6 +360,17 @@ func toolSpecsContent(cfg *config.Config, specs []config.ToolSpec) ([]map[string
 			continue
 		}
 
+		if t.MCP != "" {
+			content, err := mcpToolSpecContent(cfg, t)
+			if err != nil {
+				return nil, err
+			}
+
+			out[i] = content
+
+			continue
+		}
+
 		content := map[string]any{
 			"builtin":     t.Builtin,
 			"name":        t.Name,
@@ -335,6 +395,74 @@ func toolSpecsContent(cfg *config.Config, specs []config.ToolSpec) ([]map[string
 	}
 
 	return out, nil
+}
+
+// mcpToolSpecContent builds the hashed content for one of the three MCP
+// tool-grant forms (see config.ToolSpec.MCP/MCPTool/MCPTools): mcp_tool for
+// the single-tool form, mcp_tools (sorted, for hash determinism regardless
+// of declaration order) for the named-subset form, or neither for the bare
+// "grant everything" form — which is a deliberate, documented limitation:
+// this package depends on config/resource only (never internal/mcp), so it
+// cannot list a live server's tools at plan time, and the bare form's hash
+// is therefore a static marker that a server's own tool list changing does
+// not, by itself, bust. description/max_calls fold in only when set, the
+// same value-gating every other tool kind here uses.
+func mcpToolSpecContent(cfg *config.Config, t config.ToolSpec) (map[string]any, error) {
+	server, err := mcpServerContent(cfg, t.MCP)
+	if err != nil {
+		return nil, err
+	}
+
+	content := map[string]any{"mcp": t.MCP, "server": server}
+
+	if t.MCPTool != "" {
+		content["mcp_tool"] = t.MCPTool
+	}
+
+	if len(t.MCPTools) != 0 {
+		sorted := slices.Clone(t.MCPTools)
+		slices.Sort(sorted)
+		content["mcp_tools"] = sorted
+	}
+
+	if t.Description != "" {
+		content["description"] = t.Description
+	}
+
+	if t.MaxCalls != 0 {
+		content["max_calls"] = t.MaxCalls
+	}
+
+	return content, nil
+}
+
+// mcpServerContent builds the hashed identity of a configured mcp_servers:
+// entry, folded into any tool grant or resource-type stage that references
+// it. Endpoint/auth type/the api_key_env *name* (never its value, mirroring
+// AgentSource's api_key_env exclusion exactly)/scopes determine behavior
+// and are hashed; nothing token-shaped is ever computed here, since this
+// package never imports internal/mcp.
+func mcpServerContent(cfg *config.Config, name string) (map[string]any, error) {
+	srv, err := cfg.FindMCPServer(name)
+	if err != nil {
+		return nil, fmt.Errorf("mcp server %q: %w", name, err)
+	}
+
+	content := map[string]any{
+		"name":      srv.Name,
+		"endpoint":  srv.Endpoint,
+		"auth_type": srv.Auth.Type,
+	}
+
+	if srv.Auth.APIKeyEnv != "" {
+		content["api_key_env"] = srv.Auth.APIKeyEnv
+	}
+
+	if len(srv.Auth.Scopes) != 0 {
+		content["scopes"] = srv.Auth.Scopes
+	}
+
+	return content, nil
 }
 
 // subAgentInvocationContent builds the hashed identity of a sub-agent as
