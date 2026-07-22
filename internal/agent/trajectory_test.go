@@ -283,7 +283,7 @@ func TestTrajectoryRecordsBudgetRejectedCall(t *testing.T) {
 
 	specs := []config.ToolSpec{{Name: "post_review", Run: "true", MaxCalls: 1}}
 
-	decls, registry, err := buildAgentTools(nil, specs, "")
+	decls, registry, _, err := buildAgentTools(context.Background(), nil, specs, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -77,10 +78,20 @@ func recordAgentFailure(ctx context.Context, st *store.Store, node merkle.Node, 
 // only sequences hash/run/capture/record and stays within the linter's
 // complexity budget.
 type preparedAgentStep struct {
-	ri    config.ResolvedInvocation
-	space workspace.StepSpace
-	conv  agentConversation
-	llm   model.LLM
+	ri      config.ResolvedInvocation
+	space   workspace.StepSpace
+	conv    agentConversation
+	llm     model.LLM
+	closers []io.Closer // MCP connections opened for this step's granted tools — see buildAgentTools
+}
+
+// close releases everything prepareAgentStep opened for this step: its
+// workspace space and any tool connections (MCP). Ignores errors — this is
+// always deferred right after a successful prepareAgentStep, with the
+// step's real outcome already determined by the time it runs.
+func (p preparedAgentStep) close(stepLabel string) {
+	workspace.CloseSpace(p.space, stepLabel)
+	closeAll(p.closers)
 }
 
 // prepareAgentStep resolves step's agent, materializes its (isolated or
@@ -105,7 +116,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, err
 	}
 
-	decls, registry, err := buildAgentTools(cfg, ri.ToolSpecs, ri.Image)
+	decls, registry, closers, err := buildAgentTools(ctx, cfg, ri.ToolSpecs, ri.Image)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 
@@ -117,6 +128,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	verdictTool, err := injectVerdictTool(step.Verdicts, decls, registry, required)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
+		closeAll(closers)
 
 		return preparedAgentStep{}, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
@@ -124,6 +136,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	runner, err := shell.NewRunner(ri.Image, dir)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
+		closeAll(closers)
 
 		return preparedAgentStep{}, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
@@ -131,6 +144,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	apiKey, err := lookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
+		closeAll(closers)
 
 		return preparedAgentStep{}, err
 	}
@@ -151,7 +165,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		verdictTool:          verdictTool,
 	}
 
-	return preparedAgentStep{ri: ri, space: space, conv: conv, llm: newAgentLLM(ri.BaseURL, ri.ModelName, apiKey)}, nil
+	return preparedAgentStep{ri: ri, space: space, conv: conv, llm: newAgentLLM(ri.BaseURL, ri.ModelName, apiKey), closers: closers}, nil
 }
 
 // RunStep hashes step against parentHash (agent steps are never
@@ -166,7 +180,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	if err != nil {
 		return "", "", fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
-	defer workspace.CloseSpace(prepared.space, step.Agent)
+	defer prepared.close(step.Agent)
 
 	content, err := merkle.AgentContentMap(cfg, step, prepared.ri)
 	if err != nil {
@@ -373,7 +387,7 @@ func RunHook(ctx context.Context, cfg *config.Config, step config.Step, bw works
 	if err != nil {
 		return fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
-	defer workspace.CloseSpace(prepared.space, step.Agent)
+	defer prepared.close(step.Agent)
 
 	fmt.Printf("agent: %s\n", step.Agent)
 

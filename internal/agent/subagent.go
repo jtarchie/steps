@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
@@ -39,24 +40,26 @@ const subAgentRequestParam = "request"
 // the parent step's preparation rather than surfacing only on first call.
 // Recursion terminates because LoadConfig's validateAgentGraph rejects cycles
 // and caps nesting depth.
-func buildSubAgentTool(cfg *config.Config, spec config.ToolSpec) (*genai.FunctionDeclaration, toolImpl, error) {
+func buildSubAgentTool(ctx context.Context, cfg *config.Config, spec config.ToolSpec) (*genai.FunctionDeclaration, toolImpl, io.Closer, error) {
 	if cfg == nil {
-		return nil, nil, errors.New("sub-agent tool requires config to resolve the child agent")
+		return nil, nil, nil, errors.New("sub-agent tool requires config to resolve the child agent")
 	}
 
 	ri, err := cfg.ResolveAgentInvocation(config.Step{Agent: spec.Agent})
 	if err != nil {
-		return nil, nil, fmt.Errorf("sub-agent %q: %w", spec.Agent, err)
+		return nil, nil, nil, fmt.Errorf("sub-agent %q: %w", spec.Agent, err)
 	}
 
-	childDecls, childRegistry, err := buildAgentTools(cfg, ri.ToolSpecs, ri.Image)
+	childDecls, childRegistry, childClosers, err := buildAgentTools(ctx, cfg, ri.ToolSpecs, ri.Image)
 	if err != nil {
-		return nil, nil, fmt.Errorf("sub-agent %q: %w", spec.Agent, err)
+		return nil, nil, nil, fmt.Errorf("sub-agent %q: %w", spec.Agent, err)
 	}
 
 	apiKey, err := lookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
 	if err != nil {
-		return nil, nil, fmt.Errorf("sub-agent %q: %w", spec.Agent, err)
+		closeAll(childClosers)
+
+		return nil, nil, nil, fmt.Errorf("sub-agent %q: %w", spec.Agent, err)
 	}
 
 	child := preparedSubAgent{
@@ -80,7 +83,12 @@ func buildSubAgentTool(cfg *config.Config, spec config.ToolSpec) (*genai.Functio
 		},
 	}
 
-	return decl, child.run, nil
+	var closer io.Closer
+	if len(childClosers) > 0 {
+		closer = multiCloser(childClosers)
+	}
+
+	return decl, child.run, closer, nil
 }
 
 // preparedSubAgent holds a child agent's resolved, reusable machinery — built

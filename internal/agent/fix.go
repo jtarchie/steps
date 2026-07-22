@@ -67,12 +67,13 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 	toolSpecs := append(append([]config.ToolSpec{}, baseTools...), taskTool)
 
 	// A fix agent's grant may not include sub-agent tools
-	// (validateFixAgentSubAgents), so passing cfg here is only for signature
-	// parity — buildAgentTools will never resolve one.
-	decls, registry, err := buildAgentTools(cfg, toolSpecs, rt.Image)
+	// (validateFixAgentSubAgents), but it may include MCP tools — cfg is
+	// required whenever that's possible, not just for signature parity.
+	decls, registry, closers, err := buildAgentTools(ctx, cfg, toolSpecs, rt.Image)
 	if err != nil {
 		return err
 	}
+	defer closeAll(closers)
 
 	runner, err := shell.NewRunner(rt.Image, dir)
 	if err != nil {

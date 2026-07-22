@@ -18,7 +18,7 @@ import (
 func newTestSubAgent(t *testing.T, fake model.LLM) preparedSubAgent {
 	t.Helper()
 
-	decls, registry, err := buildAgentTools(nil, nil, "")
+	decls, registry, _, err := buildAgentTools(context.Background(), nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestSubAgentRunChildFailureBecomesData(t *testing.T) {
 func TestBuildSubAgentToolNilConfig(t *testing.T) {
 	t.Parallel()
 
-	_, _, err := buildSubAgentTool(nil, config.ToolSpec{Agent: "extra"})
+	_, _, _, err := buildSubAgentTool(context.Background(), nil, config.ToolSpec{Agent: "extra"})
 	if err == nil {
 		t.Fatal("expected an error when cfg is nil")
 	}
@@ -141,7 +141,7 @@ func TestBuildAgentToolsWithSubAgent(t *testing.T) {
 
 	specs := []config.ToolSpec{{Builtin: "read_file"}, {Agent: "extra", Description: "delegate a subtask"}}
 
-	decls, registry, err := buildAgentTools(cfg, specs, "")
+	decls, registry, _, err := buildAgentTools(context.Background(), cfg, specs, "")
 	if err != nil {
 		t.Fatalf("buildAgentTools: %v", err)
 	}

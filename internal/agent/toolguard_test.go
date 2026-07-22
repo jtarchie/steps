@@ -24,7 +24,7 @@ func TestResolveToolSpecPinnedArgsExcludedFromSchema(t *testing.T) {
 		Args: map[string]string{"repo": "jtarchie/ci"},
 	}
 
-	decl, _, err := resolveToolSpec(nil, spec, builtinAgentTools(""))
+	decl, _, _, err := resolveToolSpec(context.Background(), nil, spec, builtinAgentTools(""))
 	if err != nil {
 		t.Fatalf("resolveToolSpec: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestRunAgentConversationCallBudgetResetsAcrossAttempts(t *testing.T) {
 
 	specs := []config.ToolSpec{{Name: "post_review", Run: "true", Required: true, MaxCalls: 1}}
 
-	decls, registry, err := buildAgentTools(nil, specs, "")
+	decls, registry, _, err := buildAgentTools(context.Background(), nil, specs, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -153,16 +153,22 @@ func builtinAgentTools(image string) map[string]builtinTool {
 }
 
 // buildAgentTools turns a step's resolved tools: list into the genai
-// declarations sent to the model and a name -> toolImpl execution registry.
-// An empty specs enables every built-in. A duplicate tool name (built-in vs
-// custom vs sub-agent) is an error, so the model never sees an ambiguous
-// function set. image is the step's resolved image (empty for host
-// execution), used only to adjust run_shell's description — see
-// runShellDescription. cfg is needed to resolve any sub-agent tools (see
-// ToolSpec.Agent / buildSubAgentTool); it may be nil only where the caller
-// guarantees no sub-agent tools are present (e.g. RunFix, since a fix agent's
-// grant may not include sub-agents — validateFixAgentSubAgents).
-func buildAgentTools(cfg *config.Config, specs []config.ToolSpec, image string) (*genai.Tool, map[string]toolImpl, error) {
+// declarations sent to the model, a name -> toolImpl execution registry,
+// and the connections (currently: MCP servers, one per granted server —
+// see buildMCPTools) that must be closed once the step ends. An empty
+// specs enables every built-in. A duplicate tool name (built-in vs custom
+// vs sub-agent vs MCP) is an error, so the model never sees an ambiguous
+// function set — and, since resolving a later spec might still fail after
+// an earlier MCP spec already opened a connection, every closer collected
+// so far is closed before returning any error, so a failed step
+// preparation never leaks a connection. image is the step's resolved image
+// (empty for host execution), used only to adjust run_shell's description
+// — see runShellDescription. cfg is needed to resolve any sub-agent or MCP
+// tools; it may be nil only where the caller guarantees neither is present
+// (e.g. RunFix, since a fix agent's grant may not include sub-agents —
+// validateFixAgentSubAgents — though it may include MCP tools, so cfg must
+// be non-nil whenever an MCP grant is possible).
+func buildAgentTools(ctx context.Context, cfg *config.Config, specs []config.ToolSpec, image string) (*genai.Tool, map[string]toolImpl, []io.Closer, error) {
 	if len(specs) == 0 {
 		specs = config.DefaultAgentToolSpecs()
 	}
@@ -171,39 +177,102 @@ func buildAgentTools(cfg *config.Config, specs []config.ToolSpec, image string) 
 	decls := make([]*genai.FunctionDeclaration, 0, len(specs))
 	registry := make(map[string]toolImpl, len(specs))
 
+	var closers []io.Closer
+
 	for _, spec := range specs {
-		decl, impl, err := resolveToolSpec(cfg, spec, builtins)
+		if spec.MCP != "" {
+			mcpDecls, mcpImpls, closer, err := buildMCPTools(ctx, cfg, spec)
+			if err != nil {
+				closeAll(closers)
+
+				return nil, nil, nil, err
+			}
+
+			closers = append(closers, closer)
+
+			for _, decl := range mcpDecls {
+				if _, exists := registry[decl.Name]; exists {
+					closeAll(closers)
+
+					return nil, nil, nil, fmt.Errorf("duplicate tool name %q", decl.Name)
+				}
+
+				decls = append(decls, decl)
+				registry[decl.Name] = mcpImpls[decl.Name]
+			}
+
+			continue
+		}
+
+		decl, impl, closer, err := resolveToolSpec(ctx, cfg, spec, builtins)
 		if err != nil {
-			return nil, nil, err
+			closeAll(closers)
+
+			return nil, nil, nil, err
+		}
+
+		if closer != nil {
+			closers = append(closers, closer)
 		}
 
 		if _, exists := registry[decl.Name]; exists {
-			return nil, nil, fmt.Errorf("duplicate tool name %q", decl.Name)
+			closeAll(closers)
+
+			return nil, nil, nil, fmt.Errorf("duplicate tool name %q", decl.Name)
 		}
 
 		decls = append(decls, decl)
 		registry[decl.Name] = impl
 	}
 
-	return &genai.Tool{FunctionDeclarations: decls}, registry, nil
+	return &genai.Tool{FunctionDeclarations: decls}, registry, closers, nil
 }
 
-func resolveToolSpec(cfg *config.Config, spec config.ToolSpec, builtins map[string]builtinTool) (*genai.FunctionDeclaration, toolImpl, error) {
+// closeAll closes every closer, ignoring individual errors — used only on
+// an error path where step preparation is already failing and a close
+// failure has nothing useful to add.
+func closeAll(closers []io.Closer) {
+	for _, c := range closers {
+		_ = c.Close()
+	}
+}
+
+// multiCloser closes every closer it holds, joining any errors — the single
+// io.Closer a sub-agent tool returns for its (possibly several, if the
+// child itself grants multiple MCP servers) own closers, so the parent's
+// closers list stays flat (one entry per top-level spec) regardless of how
+// many connections a given spec transitively opened.
+type multiCloser []io.Closer
+
+func (m multiCloser) Close() error {
+	var errs []error
+
+	for _, c := range m {
+		err := c.Close()
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+func resolveToolSpec(ctx context.Context, cfg *config.Config, spec config.ToolSpec, builtins map[string]builtinTool) (*genai.FunctionDeclaration, toolImpl, io.Closer, error) {
 	if spec.Agent != "" {
-		return buildSubAgentTool(cfg, spec)
+		return buildSubAgentTool(ctx, cfg, spec)
 	}
 
 	if spec.Builtin != "" {
 		bt, ok := builtins[spec.Builtin]
 		if !ok {
-			return nil, nil, fmt.Errorf("unknown builtin tool %q", spec.Builtin)
+			return nil, nil, nil, fmt.Errorf("unknown builtin tool %q", spec.Builtin)
 		}
 
-		return bt.decl, bt.impl, nil
+		return bt.decl, bt.impl, nil, nil
 	}
 
 	if spec.Name == "" || spec.Run == "" {
-		return nil, nil, errors.New("agent tool: custom tool requires both name and run")
+		return nil, nil, nil, errors.New("agent tool: custom tool requires both name and run")
 	}
 
 	params := inferToolParams(spec.Run)
@@ -220,7 +289,7 @@ func resolveToolSpec(cfg *config.Config, spec config.ToolSpec, builtins map[stri
 		Parameters:  &genai.Schema{Type: genai.TypeObject, Properties: properties, Required: schemaParams},
 	}
 
-	return decl, execCustomTool(spec, params), nil
+	return decl, execCustomTool(spec, params), nil, nil
 }
 
 // visibleParams returns params minus any key pinned by spec.Args: a pinned

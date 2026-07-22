@@ -33,7 +33,7 @@ func TestBuildAgentToolsBuiltins(t *testing.T) {
 	t.Run("empty specs enables all built-ins", func(t *testing.T) {
 		t.Parallel()
 
-		decls, registry, err := buildAgentTools(nil, nil, "")
+		decls, registry, _, err := buildAgentTools(context.Background(), nil, nil, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -52,7 +52,7 @@ func TestBuildAgentToolsBuiltins(t *testing.T) {
 	t.Run("selecting a subset omits the rest", func(t *testing.T) {
 		t.Parallel()
 
-		decls, registry, err := buildAgentTools(nil, []config.ToolSpec{{Builtin: "read_file"}}, "")
+		decls, registry, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{{Builtin: "read_file"}}, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -69,7 +69,7 @@ func TestBuildAgentToolsBuiltins(t *testing.T) {
 	t.Run("unknown builtin errors", func(t *testing.T) {
 		t.Parallel()
 
-		_, _, err := buildAgentTools(nil, []config.ToolSpec{{Builtin: "nope"}}, "")
+		_, _, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{{Builtin: "nope"}}, "")
 		if err == nil {
 			t.Error("expected an error for an unknown builtin tool")
 		}
@@ -85,7 +85,7 @@ func TestRunShellDescriptionMentionsContainerIsolationOnlyWhenImageSet(t *testin
 	runShellDecl := func(t *testing.T, image string) *genai.FunctionDeclaration {
 		t.Helper()
 
-		decls, _, err := buildAgentTools(nil, []config.ToolSpec{{Builtin: "run_shell"}}, image)
+		decls, _, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{{Builtin: "run_shell"}}, image)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -110,7 +110,7 @@ func TestBuildAgentToolsCustom(t *testing.T) {
 	t.Run("custom tool infers params from its run template", func(t *testing.T) {
 		t.Parallel()
 
-		decls, registry, err := buildAgentTools(nil, []config.ToolSpec{
+		decls, registry, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{
 			{Name: "post_review", Description: "post a review", Run: `gh pr review {{ .args.action }} -b "{{ .args.body }}"`},
 		}, "")
 		if err != nil {
@@ -144,7 +144,7 @@ func TestBuildAgentToolsCustom(t *testing.T) {
 	t.Run("duplicate tool name errors", func(t *testing.T) {
 		t.Parallel()
 
-		_, _, err := buildAgentTools(nil, []config.ToolSpec{{Builtin: "read_file"}, {Name: "read_file", Run: "echo hi"}}, "")
+		_, _, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{{Builtin: "read_file"}, {Name: "read_file", Run: "echo hi"}}, "")
 		if err == nil {
 			t.Error("expected an error for a duplicate tool name")
 		}
@@ -153,7 +153,7 @@ func TestBuildAgentToolsCustom(t *testing.T) {
 	t.Run("custom tool missing name or run errors", func(t *testing.T) {
 		t.Parallel()
 
-		_, _, err := buildAgentTools(nil, []config.ToolSpec{{Description: "no name or run"}}, "")
+		_, _, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{{Description: "no name or run"}}, "")
 		if err == nil {
 			t.Error("expected an error for a custom tool with no name/run")
 		}
@@ -172,7 +172,7 @@ func TestBuildAgentToolsCustom(t *testing.T) {
 func TestBuildAgentToolsCustomShellquotePiped(t *testing.T) {
 	t.Parallel()
 
-	decls, _, err := buildAgentTools(nil, []config.ToolSpec{
+	decls, _, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{
 		{Name: "post_review", Description: "post a review", Run: `gh pr review --{{ .args.action }} -b {{ .args.body | shellquote }}`},
 	}, "")
 	if err != nil {
@@ -551,7 +551,7 @@ func TestToolResponseParts(t *testing.T) {
 
 	dir := t.TempDir()
 
-	_, registry, err := buildAgentTools(nil, []config.ToolSpec{
+	_, registry, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{
 		{Name: "fail_a", Run: "exit 1", Required: true},
 		{Name: "fail_b", Run: "exit 1", Required: true},
 		{Name: "ok", Run: "true"},

@@ -15,7 +15,7 @@ import (
 func verdictConversation(t *testing.T, dir string, verdicts []string) agentConversation {
 	t.Helper()
 
-	decls, registry, err := buildAgentTools(nil, nil, "")
+	decls, registry, _, err := buildAgentTools(context.Background(), nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
