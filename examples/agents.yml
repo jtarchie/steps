@@ -81,11 +81,11 @@ agents:
 # Sub-agent delegation: `lead` grants `summarizer` as a callable tool, so it can
 # offload bulk reading to a cheaper model instead of pulling a whole file in.
 - name: summarizer
-  source: { model: lmstudio/qwen2.5-coder }
+  source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: You compress files. Given a path, read it and return only the gist.
   tools: [read_file]
 - name: lead
-  source: { model: lmstudio/qwen2.5-coder }
+  source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: |
     You are a lead reviewer. Prefer to delegate bulk reading to the
     `summarizer` tool (pass the path in `request`) rather than reading large
@@ -110,16 +110,16 @@ agents:
 # Verdict routing: `critic` declares a verdict vocabulary and emits one via a
 # synthesized required `verdict` tool; the step's to: routes N-way on it.
 - name: writer
-  source: { model: lmstudio/qwen2.5-coder }
+  source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: You draft short summaries.
 - name: critic
-  source: { model: lmstudio/qwen2.5-coder }
+  source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: You review a draft and decide whether it ships, needs revision, or must escalate.
 - name: publisher
-  source: { model: lmstudio/qwen2.5-coder }
+  source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: You publish the approved draft.
 - name: escalator
-  source: { model: lmstudio/qwen2.5-coder }
+  source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: You write a note handing the draft to a human.
 
 # Reusable task: defined once, referenced by name (task: unit, no run:). On a
