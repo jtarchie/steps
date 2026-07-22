@@ -29,11 +29,16 @@ import (
 
 // CLI is the pipeline runner's command-line grammar, parsed by kong. Run is
 // default:"withargs" so today's flat invocation (steps pipeline.yml --job x)
-// keeps working unchanged, routed to it implicitly.
+// keeps working unchanged, routed to it implicitly. LogLevel is a global flag
+// (available to every subcommand, not just Run) rather than living on RunCmd/
+// WatchCmd/TestCmd individually, since it configures the process-wide slog
+// default logger before any subcommand's Run method executes — see
+// initLogging.
 type CLI struct {
-	Run   RunCmd   `cmd:"" default:"withargs"                                             help:"run a single job once"`
-	Watch WatchCmd `cmd:"" help:"poll trigger: true resources and auto-run affected jobs"`
-	Test  TestCmd  `cmd:"" help:"run every job (force) and verify assert directives"`
+	LogLevel string   `default:"info" enum:"debug,info,warn,error"                                   env:"STEPS_LOG_LEVEL"        help:"log verbosity: debug, info, warn, or error"`
+	Run      RunCmd   `cmd:""         default:"withargs"                                             help:"run a single job once"`
+	Watch    WatchCmd `cmd:""         help:"poll trigger: true resources and auto-run affected jobs"`
+	Test     TestCmd  `cmd:""         help:"run every job (force) and verify assert directives"`
 }
 
 // RunCmd runs a single job's plan once, exactly as steps has always done.
@@ -160,18 +165,55 @@ func (t *TestCmd) Run() error {
 	return nil
 }
 
-// initLogging installs a debug-level slog handler on stderr as the default
-// logger, separate from this tool's plain stdout progress lines
-// ("get: prs (version: ...)", "task: review").
-func initLogging() {
+// defaultLogLevel is what initLogging runs at before the CLI's own
+// --log-level/STEPS_LOG_LEVEL has been parsed (during kong construction
+// itself, and as CLI.LogLevel's own default) — never debug, so a parse
+// failure (or any other pre-parse code path) can't fall back to printing
+// every subsequent command/output dump by accident.
+const defaultLogLevel = "info"
+
+// parseLogLevel maps a --log-level/STEPS_LOG_LEVEL string to a slog.Level,
+// falling back to slog.LevelInfo for anything unrecognized — reachable only
+// if called before kong's own enum: validation on CLI.LogLevel runs (e.g.
+// defaultLogLevel's own value, or a hypothetical future caller), never from
+// a successfully parsed CLI. A standalone function (rather than inlined
+// into initLogging) so it can be unit-tested without touching the global
+// slog default logger, which every run() call in this package's test suite
+// also mutates — asserting on slog.Default() itself would race against
+// whichever other test's run() call happens to finish last.
+func parseLogLevel(level string) slog.Level {
+	parsed, ok := map[string]slog.Level{
+		"debug": slog.LevelDebug,
+		"info":  slog.LevelInfo,
+		"warn":  slog.LevelWarn,
+		"error": slog.LevelError,
+	}[level]
+	if !ok {
+		return slog.LevelInfo
+	}
+
+	return parsed
+}
+
+// initLogging installs a slog handler on stderr as the default logger,
+// separate from this tool's plain stdout progress lines ("get: prs
+// (version: ...)", "task: review"), at the given level (see parseLogLevel).
+// Debug is what previously ran unconditionally on every invocation: shell.go/
+// docker.go log the full rendered command and complete captured stdout/
+// stderr at that level, so any resource check/in/out command whose
+// templated source: or output embeds a credential was written to stderr on
+// every ordinary run, with no way to suppress it. Defaulting to info (see
+// CLI.LogLevel) makes that opt-in, via --log-level debug or
+// STEPS_LOG_LEVEL=debug, rather than the permanent default.
+func initLogging(level string) {
 	slog.SetDefault(slog.New(tint.NewTextHandler(os.Stderr, &tint.Options{
-		Level:     slog.LevelDebug,
+		Level:     parseLogLevel(level),
 		AddSource: true,
 	})))
 }
 
 func main() {
-	initLogging()
+	initLogging(defaultLogLevel)
 
 	err := run(os.Args[1:])
 	if err != nil {
@@ -184,8 +226,6 @@ func main() {
 }
 
 func run(args []string) error {
-	slog.Debug("cli.parse", "args", args)
-
 	var cli CLI
 
 	parser, err := kong.New(&cli, kong.Name("steps"), kong.Description("run pipeline jobs, or watch for trigger: true resource changes"))
@@ -197,6 +237,10 @@ func run(args []string) error {
 	if err != nil {
 		return fmt.Errorf("could not parse flags: %w", err)
 	}
+
+	initLogging(cli.LogLevel)
+
+	slog.Debug("cli.parse", "args", args)
 
 	return kctx.Run() //nolint:wrapcheck // the Run methods above already wrap their own errors via wrapRunErr
 }
