@@ -132,6 +132,16 @@ const readFileDescription = "Read a UTF-8 text file's contents, given a path rel
 	" its capped prefix — useful both for a file too big to read in one call and for output run_shell spilled to a file" +
 	" (see run_shell's description)."
 
+// writeFileDescription documents write_file's contract: it writes (or, with
+// append: true, appends to) a UTF-8 text file at a path relative to the
+// step's working directory. It does not create missing parent directories —
+// see resolveWritePath — so a path under a directory that doesn't exist yet
+// fails with a clear error rather than silently creating one; run_shell's
+// mkdir -p is the escape hatch for that.
+const writeFileDescription = "Write text content to a file, given a path relative to the step's working directory." +
+	" Creates the file if it doesn't exist, overwriting any existing content unless append is true." +
+	" The immediate parent directory must already exist — use run_shell (e.g. mkdir -p) first if it doesn't."
+
 func builtinAgentTools(image string) map[string]builtinTool {
 	return map[string]builtinTool{
 		"read_file": {
@@ -172,6 +182,22 @@ func builtinAgentTools(image string) map[string]builtinTool {
 				},
 			},
 			impl: execRunShell,
+		},
+		"write_file": {
+			decl: &genai.FunctionDeclaration{
+				Name:        "write_file",
+				Description: writeFileDescription,
+				Parameters: &genai.Schema{
+					Type: genai.TypeObject,
+					Properties: map[string]*genai.Schema{
+						"path":    {Type: genai.TypeString, Description: "File path, relative to the working directory."},
+						"content": {Type: genai.TypeString, Description: "The text content to write."},
+						"append":  {Type: genai.TypeBoolean, Description: "If true, append to the file instead of overwriting it. Defaults to false."},
+					},
+					Required: []string{"path", "content"},
+				},
+			},
+			impl: execWriteFile,
 		},
 	}
 }
@@ -437,6 +463,54 @@ func rejectSymlinkEscape(base, resolved, rel string) error {
 	}
 
 	return nil
+}
+
+// resolveWritePath resolves rel like resolveAgentPath (lexical confinement,
+// plus a symlink-escape check for whatever already exists on disk), then
+// closes a gap resolveAgentPath alone leaves open for a brand-new file:
+// filepath.EvalSymlinks fails with ENOENT on a nonexistent leaf regardless of
+// whether an ancestor directory is a symlink (rejectSymlinkEscape then treats
+// that as "nothing to leak" and lets it through), so a target file that
+// doesn't exist yet would otherwise skip the escape check entirely even when
+// its parent directory is a symlink planted (e.g. via run_shell, which has no
+// path confinement of its own) to point outside dir.
+//
+// write_file requires the immediate parent directory to already exist —
+// deliberately no auto-mkdir, mirroring read_file/list_dir's no-side-effect
+// posture — and when it does, re-validates that existing parent's real path
+// the same way resolveAgentPath validates an existing target.
+func resolveWritePath(dir, rel string) (string, error) {
+	resolved, err := resolveAgentPath(dir, rel)
+	if err != nil {
+		return "", err
+	}
+
+	_, err = os.Lstat(resolved)
+	if err == nil {
+		return resolved, nil // target already exists; resolveAgentPath's own check already covered it
+	}
+
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("%w", err)
+	}
+
+	parent := filepath.Dir(resolved)
+
+	parentInfo, err := os.Stat(parent)
+	if err != nil {
+		return "", fmt.Errorf("write_file: parent directory %q does not exist", filepath.Dir(rel))
+	}
+
+	if !parentInfo.IsDir() {
+		return "", fmt.Errorf("write_file: %q is not a directory", filepath.Dir(rel))
+	}
+
+	err = rejectSymlinkEscape(filepath.Clean(dir), parent, rel)
+	if err != nil {
+		return "", err
+	}
+
+	return resolved, nil
 }
 
 func stringArg(args map[string]any, key string) string {
@@ -740,6 +814,48 @@ func execRunShell(ctx context.Context, args map[string]any, env toolEnv) map[str
 	}
 
 	return shellToolResult(ctx, command, env)
+}
+
+// execWriteFile writes (or appends to, if append: true) a UTF-8 text file at
+// a path relative to env.dir. content is required but may legitimately be
+// ""; distinguishing "" from "not supplied" is why this checks args["content"]
+// directly rather than going through stringArg (which collapses both to the
+// same empty string).
+func execWriteFile(_ context.Context, args map[string]any, env toolEnv) map[string]any {
+	rel := stringArg(args, "path")
+	if rel == "" {
+		return map[string]any{"error": `write_file: missing required argument "path"`}
+	}
+
+	content, ok := args["content"].(string)
+	if !ok {
+		return map[string]any{"error": `write_file: missing required argument "content"`}
+	}
+
+	resolved, err := resolveWritePath(env.dir, rel)
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+
+	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+
+	appendArg, _ := args["append"].(bool)
+	if appendArg {
+		flags = os.O_WRONLY | os.O_CREATE | os.O_APPEND
+	}
+
+	f, err := os.OpenFile(resolved, flags, 0o644) //nolint:gosec,mnd // resolveWritePath rejects paths escaping dir; 0644 is an ordinary file, not a secret
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	defer func() { _ = f.Close() }()
+
+	n, err := f.WriteString(content)
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+
+	return map[string]any{"bytes_written": n, "path": rel}
 }
 
 // execCustomTool renders spec.Run against the model's args (with spec.Args

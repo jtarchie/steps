@@ -213,7 +213,7 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, sou
 // version. Both the merkle planner and the executor call ResolveVersions so
 // plan-time hashing and run-time execution stay in lockstep.
 func ResolveVersions(ctx context.Context, cfg *config.Config, step config.Step, cliPinned map[string]string) (*config.Resource, *config.ResourceType, []map[string]any, error) {
-	res, err := cfg.FindResource(step.Get)
+	res, err := cfg.FindResource(step.GetResourceName())
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
 	}

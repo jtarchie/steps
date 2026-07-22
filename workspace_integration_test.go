@@ -54,6 +54,60 @@ jobs:
 	mustRun(t, path)
 }
 
+// TestRunJobIsolatedGetAliasMappingAndPutAll runs a real isolated pipeline
+// exercising all three Concourse-parity pieces at once: a get: aliasing its
+// resource (artifact "source", resource "repo"), a task whose input_mapping/
+// output_mapping feed its declared repo/built names from/to the plan artifacts
+// source/bits, and a put with inputs: all whose out: command asserts it sees
+// exactly source/ and bits/.
+func TestRunJobIsolatedGetAliasMappingAndPutAll(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+
+	pipeline := `
+workspace:
+  strategy: copy
+
+resource_types:
+- name: dummy
+  config:
+    check: echo '[{"ref":"v1"}]'
+    in: echo hello > file.txt
+    out: test -d source && test -d bits && test ! -e repo && test ! -e built
+
+resources:
+- name: repo
+  type: dummy
+  source: {}
+
+tasks:
+- name: build
+  run: test -f repo/file.txt && mkdir -p built && echo built > built/output.txt
+  inputs: [repo]
+  outputs: [built]
+
+jobs:
+- name: build
+  plan:
+  - get: source
+    resource: repo
+  - task: build
+    input_mapping:  { repo: source }
+    output_mapping: { built: bits }
+  - put: repo
+    inputs: all
+`
+
+	err := os.WriteFile(path, []byte(pipeline), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustRun(t, path)
+}
+
 // TestRunJobIsolatedPutSeesOnlyDeclaredInputs checks a put step's out:
 // command only sees the artifacts named in its own inputs: — here, exactly
 // one directory (the declared "built"), not the "repo" get also fetched

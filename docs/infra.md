@@ -57,3 +57,18 @@ steps watch pipeline.yml --interval 30s --max-concurrent 1
 - **Graceful-shutdown carve-out**: a job interrupted by SIGINT/SIGTERM mid-run is *not* marked failed (that would drop it forever, since only a new version change re-triggers it) — its row is left "running" and gets reset to "pending" on the next `watch` startup, recovering both a hard crash and an interrupted shutdown the same way. A job that reaches a genuine terminal state (done, or a real failure with the context still live) is finalized even if a SIGINT races the completion.
 - **No `passed:`-style version-set gating across jobs** — that Concourse concept doesn't exist here; any dirty resource simply enqueues every job with a matching `trigger: true` get step.
 - **CLI**: `steps run <pipeline.yml> [--job x] [--force]` (unchanged) and `steps watch <pipeline.yml> [--interval 30s] [--max-concurrent 1] [--force]`. The pre-existing flat invocation (`steps pipeline.yml --job x`) keeps parsing identically.
+
+## Get renaming (`resource:`)
+
+A `get` step's `resource:` names the resource to fetch when it should differ from the step's own name — mirroring Concourse's `get.resource`:
+
+```yaml
+- get: source          # the fetched artifact (and directory, step name, to: target) is "source"
+  resource: repo       # the resource whose check/in runs is "repo"
+```
+
+The **artifact name is the `get:` value** (`source` here); the **resource fetched is `resource:`** (`repo`), defaulting to the `get:` value when omitted. This lets one resource appear under a task-friendly name, or twice in a plan under two names (each `get` starts a fresh triggered build, so two aliases don't share a working directory). Downstream steps name the artifact by its `get:` value — pair it with a task's `input_mapping:` (see [workspace.md](workspace.md)) to feed a reusable task's pinned input name from an aliased get.
+
+- **Triggers resolve by the underlying resource**: `steps watch` polls the *resolved* resource once no matter how many aliases reference it, and a version change enqueues every job whose `trigger: true` get resolves to it. `resource_checks` stays keyed by resource name.
+- **Load-time**: `resource:` is valid only on `get` steps and must name an existing resource.
+- **Caching**: an unaliased `get` hashes byte-identically to before this feature; an aliased `get` folds the artifact name into its hash so two aliases of the same resource (identical source/version) stay distinct.

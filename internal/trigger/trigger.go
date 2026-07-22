@@ -32,6 +32,9 @@ const workerIdleBackoff = 500 * time.Millisecond
 
 // Resources returns the distinct resource names referenced by any get
 // step with trigger: true, anywhere in any job's plan, in first-seen order.
+// A get step's resource: alias is resolved to the underlying resource name
+// (see config.Step.GetResourceName), so two gets aliasing the same resource
+// poll it once and a version change affects every job that references it.
 func Resources(cfg *config.Config) []string {
 	seen := map[string]bool{}
 
@@ -39,22 +42,28 @@ func Resources(cfg *config.Config) []string {
 
 	for _, job := range cfg.Jobs {
 		for _, step := range job.Plan {
-			if step.Get == "" || !step.Trigger || seen[step.Get] {
+			if step.Get == "" || !step.Trigger {
 				continue
 			}
 
-			seen[step.Get] = true
+			name := step.GetResourceName()
+			if seen[name] {
+				continue
+			}
 
-			names = append(names, step.Get)
+			seen[name] = true
+
+			names = append(names, name)
 		}
 	}
 
 	return names
 }
 
-// AffectedJobs returns every job that has a trigger:true get step on
+// AffectedJobs returns every job that has a trigger:true get step resolving to
 // resourceName, in declaration order. A job with more than one such step on
-// the same resource is returned once.
+// the same resource is returned once. Matching is on the resolved resource
+// name (get: aliases included), matching Resources.
 func AffectedJobs(cfg *config.Config, resourceName string) []*config.Job {
 	jobs := make([]*config.Job, 0)
 
@@ -62,7 +71,7 @@ func AffectedJobs(cfg *config.Config, resourceName string) []*config.Job {
 		job := &cfg.Jobs[i]
 
 		for _, step := range job.Plan {
-			if step.Get == resourceName && step.Trigger {
+			if step.GetResourceName() == resourceName && step.Trigger {
 				jobs = append(jobs, job)
 
 				break

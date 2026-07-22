@@ -19,6 +19,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: "true"
     assert:
       stdout: hello
@@ -64,6 +65,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: "true"
 `,
 			want: "stdout/code are only valid on task/agent step asserts",
@@ -75,6 +77,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: "true"
   assert:
     code: 0
@@ -88,6 +91,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: "true"
     assert:
       execution: [work]
@@ -125,6 +129,7 @@ jobs:
 - name: build
   plan:
   - agent: reviewer
+    inputs: []
     assert:
       code: 0
 `,
@@ -137,6 +142,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: "true"
     on_failure:
       task: notify

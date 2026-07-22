@@ -62,7 +62,7 @@ func TestSharedProviderReturnsBuildRootForEveryStep(t *testing.T) {
 		t.Fatalf("ResourceDir: %v", err)
 	}
 
-	taskSpace, err := bw.TaskSpace(ctxT(), "01-build", []string{"repo"}, []string{"built"})
+	taskSpace, err := bw.TaskSpace(ctxT(), "01-build", []string{"repo"}, []string{"built"}, nil, nil)
 	if err != nil {
 		t.Fatalf("TaskSpace: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestSharedProviderReturnsBuildRootForEveryStep(t *testing.T) {
 		t.Errorf("shared StepSpace.Close should be a no-op, got %v", err)
 	}
 
-	putSpace, err := bw.PutSpace(ctxT(), "02-put", nil)
+	putSpace, err := bw.PutSpace(ctxT(), "02-put", nil, false)
 	if err != nil {
 		t.Fatalf("PutSpace: %v", err)
 	}
@@ -147,7 +147,7 @@ func testProviderMaterializesDeclaredInputsAndOutputs(t *testing.T, newProvider 
 
 	writeFile(t, filepath.Join(repoDir, "file.txt"), "original")
 
-	space, err := bw.TaskSpace(ctxT(), "01-build", []string{"repo"}, []string{"built"})
+	space, err := bw.TaskSpace(ctxT(), "01-build", []string{"repo"}, []string{"built"}, nil, nil)
 	if err != nil {
 		t.Fatalf("TaskSpace: %v", err)
 	}
@@ -199,7 +199,7 @@ func testProviderMutatingInputDoesNotAffectArtifact(t *testing.T, newProvider fu
 
 	writeFile(t, filepath.Join(repoDir, "file.txt"), "original")
 
-	space, err := bw.TaskSpace(ctxT(), "01-build", []string{"repo"}, nil)
+	space, err := bw.TaskSpace(ctxT(), "01-build", []string{"repo"}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("TaskSpace: %v", err)
 	}
@@ -222,7 +222,7 @@ func testProviderCaptureAndDownstreamVisibility(t *testing.T, newProvider func(t
 	}
 	defer CloseBuild(bw, "b1")
 
-	space, err := bw.TaskSpace(ctxT(), "01-build", nil, []string{"built"})
+	space, err := bw.TaskSpace(ctxT(), "01-build", nil, []string{"built"}, nil, nil)
 	if err != nil {
 		t.Fatalf("TaskSpace: %v", err)
 	}
@@ -245,7 +245,7 @@ func testProviderCaptureAndDownstreamVisibility(t *testing.T, newProvider func(t
 	}
 
 	// A later step naming "built" as an input sees the captured output.
-	downstream, err := bw.TaskSpace(ctxT(), "02-use", []string{"built"}, nil)
+	downstream, err := bw.TaskSpace(ctxT(), "02-use", []string{"built"}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("TaskSpace (downstream): %v", err)
 	}
@@ -266,7 +266,7 @@ func testProviderCaptureMissingOutputErrors(t *testing.T, newProvider func(t *te
 	}
 	defer CloseBuild(bw, "b1")
 
-	space, err := bw.TaskSpace(ctxT(), "01-build", nil, []string{"built"})
+	space, err := bw.TaskSpace(ctxT(), "01-build", nil, []string{"built"}, nil, nil)
 	if err != nil {
 		t.Fatalf("TaskSpace: %v", err)
 	}
@@ -301,7 +301,7 @@ func testProviderCaptureSwappedOutputSymlinkRejected(t *testing.T, newProvider f
 	}
 	defer CloseBuild(bw, "b1")
 
-	space, err := bw.TaskSpace(ctxT(), "01-build", nil, []string{"built"})
+	space, err := bw.TaskSpace(ctxT(), "01-build", nil, []string{"built"}, nil, nil)
 	if err != nil {
 		t.Fatalf("TaskSpace: %v", err)
 	}
@@ -340,7 +340,7 @@ func testProviderUnknownInputErrors(t *testing.T, newProvider func(t *testing.T)
 	}
 	defer CloseBuild(bw, "b1")
 
-	_, err = bw.TaskSpace(ctxT(), "01-build", []string{"nonexistent"}, nil)
+	_, err = bw.TaskSpace(ctxT(), "01-build", []string{"nonexistent"}, nil, nil, nil)
 	if err == nil {
 		t.Error("TaskSpace with an unmaterialized input should error")
 	}
@@ -369,7 +369,7 @@ func testProviderSymlinkCopiedNotFollowed(t *testing.T, newProvider func(t *test
 		t.Fatal(err)
 	}
 
-	space, err := bw.TaskSpace(ctxT(), "01-build", []string{"repo"}, nil)
+	space, err := bw.TaskSpace(ctxT(), "01-build", []string{"repo"}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("TaskSpace: %v", err)
 	}
@@ -428,7 +428,7 @@ func TestValidateArtifactFlowUnknownInputErrors(t *testing.T) {
 	job := &config.Job{
 		Name: "build",
 		Plan: []config.Step{
-			{Task: "unit", Run: "true", Inputs: []string{"repo"}},
+			{Task: "unit", Run: "true", Inputs: config.Inputs("repo")},
 		},
 	}
 
@@ -446,9 +446,9 @@ func TestValidateArtifactFlowChainedOutputsResolve(t *testing.T) {
 		Name: "build",
 		Plan: []config.Step{
 			{Get: "repo"},
-			{Task: "build", Run: "true", Inputs: []string{"repo"}, Outputs: []string{"built"}},
-			{Task: "publish", Run: "true", Inputs: []string{"built"}},
-			{Put: "results", Inputs: []string{"built"}},
+			{Task: "build", Run: "true", Inputs: config.Inputs("repo"), Outputs: []string{"built"}},
+			{Task: "publish", Run: "true", Inputs: config.Inputs("built")},
+			{Put: "results", Inputs: config.Inputs("built")},
 		},
 	}
 
@@ -475,9 +475,9 @@ func TestValidateArtifactFlowGetResetsAvailableArtifacts(t *testing.T) {
 			Name: "build",
 			Plan: []config.Step{
 				{Get: "repo"},
-				{Task: "build", Run: "true", Inputs: []string{"repo"}, Outputs: []string{"built"}},
+				{Task: "build", Run: "true", Inputs: config.Inputs("repo"), Outputs: []string{"built"}},
 				{Get: "other"},
-				{Task: "test", Run: "true", Inputs: []string{"built"}},
+				{Task: "test", Run: "true", Inputs: config.Inputs("built")},
 			},
 		}
 
@@ -495,7 +495,7 @@ func TestValidateArtifactFlowGetResetsAvailableArtifacts(t *testing.T) {
 			Plan: []config.Step{
 				{Get: "repo"},
 				{Get: "other"},
-				{Task: "test", Run: "true", Inputs: []string{"repo"}},
+				{Task: "test", Run: "true", Inputs: config.Inputs("repo")},
 			},
 		}
 
@@ -513,7 +513,7 @@ func TestValidateArtifactFlowGetResetsAvailableArtifacts(t *testing.T) {
 			Plan: []config.Step{
 				{Get: "repo"},
 				{Get: "other"},
-				{Task: "test", Run: "true", Inputs: []string{"other"}},
+				{Task: "test", Run: "true", Inputs: config.Inputs("other")},
 			},
 		}
 
@@ -540,8 +540,8 @@ func TestValidateArtifactFlowStepHooks(t *testing.T) {
 			Plan: []config.Step{
 				{Get: "repo"},
 				{
-					Task: "build", Run: "true", Inputs: []string{"repo"}, Outputs: []string{"built"},
-					Hooks: config.Hooks{OnSuccess: &config.Step{Put: "results", Inputs: []string{"built"}}},
+					Task: "build", Run: "true", Inputs: config.Inputs("repo"), Outputs: []string{"built"},
+					Hooks: config.Hooks{OnSuccess: &config.Step{Put: "results", Inputs: config.Inputs("built")}},
 				},
 			},
 		}
@@ -560,8 +560,8 @@ func TestValidateArtifactFlowStepHooks(t *testing.T) {
 			Plan: []config.Step{
 				{Get: "repo"},
 				{
-					Task: "build", Run: "true", Inputs: []string{"repo"}, Outputs: []string{"built"},
-					Hooks: config.Hooks{Ensure: &config.Step{Put: "results", Inputs: []string{"built"}}},
+					Task: "build", Run: "true", Inputs: config.Inputs("repo"), Outputs: []string{"built"},
+					Hooks: config.Hooks{Ensure: &config.Step{Put: "results", Inputs: config.Inputs("built")}},
 				},
 			},
 		}
@@ -580,10 +580,10 @@ func TestValidateArtifactFlowStepHooks(t *testing.T) {
 			Plan: []config.Step{
 				{Get: "repo"},
 				{
-					Task: "build", Run: "true", Inputs: []string{"repo"},
+					Task: "build", Run: "true", Inputs: config.Inputs("repo"),
 					Hooks: config.Hooks{OnSuccess: &config.Step{Task: "gen", Run: "true", Outputs: []string{"extra"}}},
 				},
-				{Task: "consume", Run: "true", Inputs: []string{"extra"}},
+				{Task: "consume", Run: "true", Inputs: config.Inputs("extra")},
 			},
 		}
 

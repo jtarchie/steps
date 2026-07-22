@@ -14,10 +14,12 @@ jobs:
 - name: build
   plan:
   - task: build
+    inputs: []
     run: echo hi
 - name: test
   plan:
   - task: test
+    inputs: []
     run: echo hi
 `
 

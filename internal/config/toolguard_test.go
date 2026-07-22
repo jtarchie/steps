@@ -21,6 +21,7 @@ jobs:
 - name: review
   plan:
   - agent: reviewer
+    inputs: []
     prompt: do it
 `
 	path := writeConfig(t, pipeline)
@@ -68,7 +69,7 @@ agents:
     max_calls: 2
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: x }]
+  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
 `,
 			want: "max_calls/args are only valid on custom tools",
 		},
@@ -80,13 +81,14 @@ agents:
   source: { model: lmstudio/qwen }
   tools:
   - agent: extra
+    inputs: []
     description: d
     args: { x: "1" }
 - name: extra
   source: { model: lmstudio/qwen }
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: x }]
+  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
 `,
 			want: "max_calls/args are only valid on custom tools",
 		},
@@ -103,7 +105,7 @@ agents:
     max_calls: -1
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: x }]
+  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
 `,
 			want: "max_calls must be >= 0",
 		},
@@ -140,6 +142,7 @@ jobs:
 - name: j
   plan:
   - agent: reviewer
+    inputs: []
     prompt: x
     tools:
     - builtin: read_file
@@ -164,7 +167,7 @@ tasks:
       max_calls: 1
 jobs:
 - name: j
-  plan: [{ task: unit }]
+  plan: [{ task: unit, inputs: [] }]
 `,
 			want: "max_calls/args are only valid on custom tools",
 		},

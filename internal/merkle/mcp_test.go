@@ -228,7 +228,7 @@ func TestMCPPutNodeContentFoldsInTool(t *testing.T) {
 		t.Fatalf("FindResourceType: %v", err)
 	}
 
-	contentWithOut, err := PutNodeContent(cfg, step, *rt, map[string]any{"team": "ENG"}, map[string]any{"title": "x"}, nil)
+	contentWithOut, err := PutNodeContent(cfg, step, *rt, map[string]any{"team": "ENG"}, map[string]any{"title": "x"}, nil, false)
 	if err != nil {
 		t.Fatalf("PutNodeContent: %v", err)
 	}

@@ -24,6 +24,7 @@ jobs:
 - name: build
   plan:
   - task: unit
+    inputs: []
 `, counter)
 
 	err := os.WriteFile(path, []byte(pipeline), 0o600)
@@ -57,6 +58,7 @@ jobs:
 - name: build
   plan:
   - task: unit
+    inputs: []
     run: echo inline >> %s
 `, topLevelCounter, inlineCounter)
 
@@ -81,6 +83,7 @@ jobs:
 - name: build
   plan:
   - task: missing
+    inputs: []
 `
 
 	err := os.WriteFile(path, []byte(pipeline), 0o600)
@@ -131,6 +134,7 @@ jobs:
 - name: build
   plan:
   - task: unit
+    inputs: []
 %s`, endpointA, endpointB, run, taskFix, stepFixLine)
 
 	err := os.WriteFile(path, []byte(pipeline), 0o600)

@@ -72,6 +72,7 @@ jobs:
   plan:
   - get: thing
   - task: work
+    inputs: []
     run: echo ran >> %s
 `, getCounter, source, taskCounter)
 

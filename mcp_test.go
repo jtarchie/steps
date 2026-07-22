@@ -42,7 +42,7 @@ mcp_servers:
   endpoint: ` + endpoint + `
 jobs:
 - name: build
-  plan: [{ task: noop, run: "true" }]
+  plan: [{ task: noop, run: "true", inputs: [] }]
 `
 
 	err := os.WriteFile(path, []byte(yaml), 0o600)

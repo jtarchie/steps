@@ -152,6 +152,7 @@ jobs:
   - get: thing
     trigger: true
   - task: extra
+    inputs: []
     run: echo hi
 `)
 
@@ -165,6 +166,51 @@ jobs:
 	want := []string{"build", "also-build"}
 	if !reflect.DeepEqual(names, want) {
 		t.Errorf("AffectedJobs names = %v, want %v", names, want)
+	}
+}
+
+// TestResourcesAndAffectedJobsResolveGetAlias confirms a get: aliasing its
+// resource is polled and matched by the RESOLVED resource name, not the alias
+// — so two aliases of one resource poll it once and both jobs are affected.
+func TestResourcesAndAffectedJobsResolveGetAlias(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := loadConfig(t, dir, `
+resource_types:
+- name: dummy
+  config: {check: "echo []", in: "true", out: "true"}
+resources:
+- name: repo
+  type: dummy
+  source: {}
+jobs:
+- name: build
+  plan:
+  - get: source
+    resource: repo
+    trigger: true
+- name: other
+  plan:
+  - get: mirror
+    resource: repo
+    trigger: true
+`)
+
+	got := Resources(cfg)
+	if !reflect.DeepEqual(got, []string{"repo"}) {
+		t.Errorf("Resources = %v, want [repo] (both aliases resolve to repo, deduped)", got)
+	}
+
+	jobs := AffectedJobs(cfg, "repo")
+
+	names := make([]string, len(jobs))
+	for i, j := range jobs {
+		names[i] = j.Name
+	}
+
+	if !reflect.DeepEqual(names, []string{"build", "other"}) {
+		t.Errorf("AffectedJobs(repo) = %v, want [build other]", names)
 	}
 }
 
@@ -188,6 +234,7 @@ jobs:
   - get: thing
     trigger: true
   - task: work
+    inputs: []
     run: echo ran >> %s
 `, versionsPath, taskCounterPath)
 }
@@ -573,6 +620,7 @@ jobs:
   - get: thing
     trigger: true
   - task: work
+    inputs: []
     run: exit 1
 `, versionsPath))
 
@@ -638,6 +686,7 @@ jobs:
   - get: thing
     trigger: true
   - task: work
+    inputs: []
     run: exit 1
     on_failure:
       task: notify
@@ -718,6 +767,7 @@ jobs:
   - get: thing
     trigger: true
   - task: work
+    inputs: []
     run: sleep 1 && echo ran >> %s
 `, versionsPath, taskCounter))
 
@@ -805,6 +855,7 @@ jobs:
   - get: thing
     trigger: true
   - task: work
+    inputs: []
     run: sleep 1
     fix: fixer
 `, versionsPath))

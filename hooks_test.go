@@ -61,6 +61,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: echo ran >> %s
     on_success:
       task: ok
@@ -93,6 +94,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: echo ran >> %s; exit 1
     on_success:
       task: ok
@@ -124,6 +126,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: echo ran >> %s
     on_success:
       task: ok
@@ -151,6 +154,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: echo ran >> %s
     on_success:
       task: ok
@@ -185,6 +189,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: exit 1
   on_failure:
     task: alert
@@ -215,6 +220,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: echo ran >> %s
     on_success:
       task: ok

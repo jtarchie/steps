@@ -76,6 +76,47 @@ func TestBuildAgentToolsBuiltins(t *testing.T) {
 	})
 }
 
+// TestBuildAgentToolsWriteFile is split out from TestBuildAgentToolsBuiltins
+// to stay under the linter's per-function complexity budget. write_file is
+// deliberately not part of the default grant (see
+// config.DefaultAgentToolSpecs): folding a new builtin into "no tools: block
+// means every built-in" would change the resolved tool set — and therefore the
+// merkle hash — of every existing zero-config agent step. It must be selected
+// explicitly, like any other opt-in feature.
+func TestBuildAgentToolsWriteFile(t *testing.T) {
+	t.Parallel()
+
+	t.Run("not granted by default", func(t *testing.T) {
+		t.Parallel()
+
+		_, registry, _, err := buildAgentTools(context.Background(), nil, nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if _, ok := registry["write_file"]; ok {
+			t.Error("write_file should not be granted by default — it must be selected explicitly")
+		}
+	})
+
+	t.Run("can be selected explicitly", func(t *testing.T) {
+		t.Parallel()
+
+		decls, registry, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{{Builtin: "write_file"}}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(decls.FunctionDeclarations) != 1 {
+			t.Errorf("got %d declarations, want 1", len(decls.FunctionDeclarations))
+		}
+
+		if _, ok := registry["write_file"]; !ok {
+			t.Error("registry missing write_file")
+		}
+	})
+}
+
 // TestRunShellDescriptionMentionsContainerIsolationOnlyWhenImageSet is split
 // out from TestBuildAgentToolsBuiltins to stay under the linter's
 // per-function cyclomatic-complexity budget.
@@ -860,6 +901,170 @@ func TestExecListDir(t *testing.T) {
 		entries, ok := result["entries"].([]map[string]any)
 		if !ok || len(entries) != 1 {
 			t.Fatalf("entries = %v", result["entries"])
+		}
+	})
+}
+
+// mustExecWriteFileOK runs write_file against dir and fails the test if it
+// reports an error — the shared success assertion every TestExecWriteFile
+// case needs, factored out so the table of cases below stays a flat list of
+// branches instead of a repeated if-err block per case (which is what was
+// tripping the linter's per-function complexity budget).
+func mustExecWriteFileOK(t *testing.T, dir string, args map[string]any) {
+	t.Helper()
+
+	result := execWriteFile(context.Background(), args, testEnv(dir))
+	if result["error"] != nil {
+		t.Fatalf("unexpected error: %v", result["error"])
+	}
+}
+
+// readTestFile reads back a.txt under dir — every case here writes to the
+// same fixed name, and dir is always t.TempDir()-owned, so this is never
+// attacker-influenced despite the dynamic path.
+func readTestFile(t *testing.T, dir string) string {
+	t.Helper()
+
+	got, err := os.ReadFile(filepath.Join(dir, "a.txt")) //nolint:gosec // test-owned path under t.TempDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(got)
+}
+
+func TestExecWriteFile(t *testing.T) {
+	t.Parallel()
+
+	t.Run("writes a new file", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+
+		mustExecWriteFileOK(t, dir, map[string]any{"path": "a.txt", "content": "hello"})
+
+		if got := readTestFile(t, dir); got != "hello" {
+			t.Errorf("got %q, want %q", got, "hello")
+		}
+	})
+
+	t.Run("overwrites an existing file by default", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+
+		err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("old"), 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		mustExecWriteFileOK(t, dir, map[string]any{"path": "a.txt", "content": "new"})
+
+		if got := readTestFile(t, dir); got != "new" {
+			t.Errorf("got %q, want %q", got, "new")
+		}
+	})
+
+	t.Run("append: true appends instead of overwriting", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+
+		err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("old"), 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		mustExecWriteFileOK(t, dir, map[string]any{"path": "a.txt", "content": "new", "append": true})
+
+		if got := readTestFile(t, dir); got != "oldnew" {
+			t.Errorf("got %q, want %q", got, "oldnew")
+		}
+	})
+
+	t.Run("empty content is a valid write, not a missing-argument error", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+
+		mustExecWriteFileOK(t, dir, map[string]any{"path": "a.txt", "content": ""})
+
+		if got := readTestFile(t, dir); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+}
+
+// TestExecWriteFileRejectsBadPaths covers write_file's argument validation
+// and path-confinement errors — split from TestExecWriteFile (which covers
+// the successful-write shapes) to stay under the linter's per-function
+// complexity budget.
+func TestExecWriteFileRejectsBadPaths(t *testing.T) {
+	t.Parallel()
+
+	t.Run("missing path is an error", func(t *testing.T) {
+		t.Parallel()
+
+		result := execWriteFile(context.Background(), map[string]any{"content": "hello"}, testEnv(t.TempDir()))
+		if result["error"] == nil {
+			t.Error("expected an error for a missing path")
+		}
+	})
+
+	t.Run("missing content is an error", func(t *testing.T) {
+		t.Parallel()
+
+		result := execWriteFile(context.Background(), map[string]any{"path": "a.txt"}, testEnv(t.TempDir()))
+		if result["error"] == nil {
+			t.Error("expected an error for missing content")
+		}
+	})
+
+	t.Run("rejects traversal outside dir", func(t *testing.T) {
+		t.Parallel()
+
+		result := execWriteFile(context.Background(), map[string]any{"path": "../../etc/passwd", "content": "x"}, testEnv(t.TempDir()))
+		if result["error"] == nil {
+			t.Error("expected an error for a path escaping dir")
+		}
+	})
+
+	t.Run("missing parent directory is an error, not auto-created", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+
+		result := execWriteFile(context.Background(), map[string]any{"path": "sub/a.txt", "content": "hello"}, testEnv(dir))
+		if result["error"] == nil {
+			t.Error("expected an error for a nonexistent parent directory")
+		}
+	})
+
+	// This case guards the gap resolveAgentPath alone leaves open for a
+	// brand-new file: EvalSymlinks fails with ENOENT on a nonexistent leaf
+	// regardless of whether an ancestor directory is a symlink, so without
+	// resolveWritePath's extra parent-directory check, a write through a
+	// symlinked parent (planted, e.g., via run_shell) would silently write
+	// outside dir.
+	t.Run("rejects a write through a symlinked parent directory", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		outside := t.TempDir()
+
+		err := os.Symlink(outside, filepath.Join(dir, "leak"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		result := execWriteFile(context.Background(), map[string]any{"path": "leak/newfile.txt", "content": "x"}, testEnv(dir))
+		if result["error"] == nil {
+			t.Error("expected an error for a write through a symlinked parent directory escaping dir")
+		}
+
+		_, statErr := os.Stat(filepath.Join(outside, "newfile.txt"))
+		if statErr == nil {
+			t.Error("write escaped dir via the symlinked parent")
 		}
 	})
 }

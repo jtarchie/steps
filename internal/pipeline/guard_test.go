@@ -27,7 +27,7 @@ func guardTestBuild(t *testing.T) (workspace.BuildWorkspace, string) {
 
 	t.Cleanup(func() { workspace.CloseBuild(bw, "guard-test") })
 
-	space, err := bw.TaskSpace(context.Background(), "probe", nil, nil)
+	space, err := bw.TaskSpace(context.Background(), "probe", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

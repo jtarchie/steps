@@ -586,7 +586,7 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 // recording. Shared by runTaskStep (which records the aggregate outcome) and
 // hook execution (where the enclosing step/job records it).
 func executeTask(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, bw workspace.BuildWorkspace) error {
-	space, err := bw.TaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs)
+	space, err := bw.TaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs, rt.InputMapping, rt.OutputMapping)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
@@ -791,7 +791,7 @@ func runPutStep(ctx context.Context, cfg *config.Config, jobName string, i int, 
 		return "", fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
 
-	content, err := merkle.PutNodeContent(cfg, step, *resourceType, resource.Source, step.Params, step.Inputs)
+	content, err := merkle.PutNodeContent(cfg, step, *resourceType, resource.Source, step.Params, step.InputNames(), step.InputsAll())
 	if err != nil {
 		return "", fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
@@ -840,7 +840,7 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 		return nil, fmt.Errorf("put %q: %w", step.Put, err)
 	}
 
-	space, err := bw.PutSpace(ctx, step.Put, step.Inputs)
+	space, err := bw.PutSpace(ctx, step.Put, step.InputNames(), step.InputsAll())
 	if err != nil {
 		return nil, fmt.Errorf("put %q: %w", step.Put, err)
 	}
@@ -880,7 +880,7 @@ func runTriggeredBuild(
 
 	recordExecution(ctx, resource.Name)
 
-	err = fetchGetStep(ctx, cfg, resource, resourceType, version, bw)
+	err = fetchGetStep(ctx, cfg, step.Get, resource, resourceType, version, bw)
 
 	// Get-step hooks fire once per triggered build, in that build's own
 	// workspace, observing the fetch outcome. A fetch failure (or a hook that
@@ -904,14 +904,17 @@ func runTriggeredBuild(
 	return runSteps(ctx, cfg, jobName, remainder, pinned, provider, bw, st, skippable, node.Hash, chainUnskippable, cache)
 }
 
-// fetchGetStep places one version of a resource into bw's resource
-// directory for resource.Name.
-func fetchGetStep(ctx context.Context, cfg *config.Config, resource config.Resource, resourceType config.ResourceType, version map[string]any, bw workspace.BuildWorkspace) error {
-	fmt.Printf("get: %s (version: %v)\n", resource.Name, version)
+// fetchGetStep places one version of a resource into bw's resource directory,
+// named for the get step's artifact name (its get: value) rather than the
+// resource — they differ when the get aliases the resource via resource:. The
+// directory, and thus the artifact downstream steps name as an input, is
+// always the artifact name; only the fetched content comes from resource.
+func fetchGetStep(ctx context.Context, cfg *config.Config, artifact string, resource config.Resource, resourceType config.ResourceType, version map[string]any, bw workspace.BuildWorkspace) error {
+	fmt.Printf("get: %s (version: %v)\n", artifact, version)
 
-	destDir, err := bw.ResourceDir(ctx, resource.Name)
+	destDir, err := bw.ResourceDir(ctx, artifact)
 	if err != nil {
-		return fmt.Errorf("could not create resource dir for %q: %w", resource.Name, err)
+		return fmt.Errorf("could not create resource dir for %q: %w", artifact, err)
 	}
 
 	err = rsrc.RunIn(ctx, cfg, resourceType, resource.Source, version, destDir)

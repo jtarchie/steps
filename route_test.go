@@ -38,6 +38,7 @@ jobs:
 - name: build
   plan:
   - task: unit
+    inputs: []
 `
 
 	err := os.WriteFile(path, []byte(pipeline), 0o600)

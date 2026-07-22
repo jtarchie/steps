@@ -51,6 +51,7 @@ jobs:
 - name: build
   plan:
   - task: build
+    inputs: []
     run: echo hi
 `)
 		wantLoadError(t, path, `workspace.strategy "rsync" must be one of copy, btrfs`)
@@ -66,6 +67,7 @@ jobs:
 - name: build
   plan:
   - task: build
+    inputs: []
     run: echo hi
 `)
 		wantLoadError(t, path, "workspace.root is required for strategy: btrfs")
@@ -83,6 +85,7 @@ jobs:
 - name: build
   plan:
   - task: build
+    inputs: []
     run: echo hi
 `)
 		wantLoadError(t, path, "workspace.options.compression is only valid for strategy: btrfs")
@@ -101,6 +104,7 @@ jobs:
 - name: build
   plan:
   - task: build
+    inputs: []
     run: echo hi
 `)
 		wantLoadError(t, path, `workspace.options.compression "gzip" must be one of zstd, lzo, zlib, none`)
@@ -116,6 +120,7 @@ jobs:
 - name: build
   plan:
   - task: build
+    inputs: []
     run: echo hi
 `)
 
@@ -126,10 +131,15 @@ jobs:
 	})
 }
 
-func TestConfigValidateArtifactDeclsRequireWorkspace(t *testing.T) {
+// TestConfigArtifactDeclsWithoutWorkspaceLoad confirms inputs:/outputs: are a
+// validated contract that loads WITHOUT a workspace: block (they used to be a
+// load-time error there). Without isolation they don't change what a step
+// physically sees, but they still document and gate the plan's data flow — an
+// undeclared-producer mistake is caught by ValidateArtifactFlow at run time.
+func TestConfigArtifactDeclsWithoutWorkspaceLoad(t *testing.T) {
 	t.Parallel()
 
-	t.Run("step inputs without a workspace: block errors", func(t *testing.T) {
+	t.Run("step inputs without a workspace: block loads", func(t *testing.T) {
 		t.Parallel()
 
 		path := writeConfig(t, `
@@ -140,10 +150,13 @@ jobs:
     run: echo hi
     inputs: [repo]
 `)
-		wantLoadError(t, path, "inputs/outputs require a top-level workspace: block")
+		_, err := LoadConfig(path)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
 	})
 
-	t.Run("top-level task outputs without a workspace: block errors", func(t *testing.T) {
+	t.Run("top-level task outputs without a workspace: block load", func(t *testing.T) {
 		t.Parallel()
 
 		path := writeConfig(t, `
@@ -156,8 +169,12 @@ jobs:
 - name: build
   plan:
   - task: build
+    inputs: []
 `)
-		wantLoadError(t, path, `task "build": inputs/outputs require a top-level workspace: block`)
+		_, err := LoadConfig(path)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
 	})
 }
 
@@ -343,7 +360,7 @@ func TestResolveTaskInputsOutputsOverride(t *testing.T) {
 	t.Run("step's own explicit empty inputs overrides the task's", func(t *testing.T) {
 		t.Parallel()
 
-		rt, err := cfg.ResolveTask(Step{Task: "build", Inputs: []string{}})
+		rt, err := cfg.ResolveTask(Step{Task: "build", Inputs: Inputs()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -829,6 +846,7 @@ jobs:
   plan:
   - get: prs
   - task: review
+    inputs: []
     run: echo hi
 `
 
@@ -896,6 +914,7 @@ jobs:
 - name: review
   plan:
   - agent: reviewer
+    inputs: []
     prompt: go
 `
 

@@ -40,7 +40,7 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 
 	label := executedStepName(step) + "-when"
 
-	space, err := bw.TaskSpace(ctx, label, step.Inputs, nil)
+	space, err := bw.TaskSpace(ctx, label, step.InputNames(), nil, nil, nil)
 	if err != nil {
 		return false, fmt.Errorf("workspace: %w", err)
 	}

@@ -18,6 +18,7 @@ agents:
   tools:
   - read_file
   - agent: extra
+    inputs: []
     description: Delegate a narrow subtask.
 - name: extra
   source: { model: lmstudio/qwen }
@@ -26,6 +27,7 @@ jobs:
 - name: review
   plan:
   - agent: reviewer
+    inputs: []
     prompt: do it
 `
 }
@@ -73,6 +75,7 @@ agents:
   tools:
   - read_file
   - agent: extra
+    inputs: []
     description: Delegate.
 - name: extra
   source: { model: lmstudio/qwen }
@@ -80,6 +83,7 @@ jobs:
 - name: review
   plan:
   - agent: reviewer
+    inputs: []
     prompt: do it
     tools: [extra]
 `
@@ -116,10 +120,11 @@ agents:
   source: { model: lmstudio/qwen }
   tools:
   - agent: ghost
+    inputs: []
     description: nope
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: x }]
+  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
 `,
 			want: `no agent named "ghost"`,
 		},
@@ -131,13 +136,14 @@ agents:
   source: { model: lmstudio/qwen }
   tools:
   - agent: extra
+    inputs: []
     description: d
     required: true
 - name: extra
   source: { model: lmstudio/qwen }
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: x }]
+  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
 `,
 			want: "may not set required",
 		},
@@ -149,13 +155,14 @@ agents:
   source: { model: lmstudio/qwen }
   tools:
   - agent: extra
+    inputs: []
     description: d
     run: echo hi
 - name: extra
   source: { model: lmstudio/qwen }
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: x }]
+  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
 `,
 			want: "must not also set builtin/name/run",
 		},
@@ -171,9 +178,11 @@ jobs:
 - name: j
   plan:
   - agent: reviewer
+    inputs: []
     prompt: x
     tools:
     - agent: extra
+      inputs: []
       description: d
 `,
 			want: "must be granted on an agent, not added inline on a step",
@@ -186,10 +195,11 @@ agents:
   source: { model: lmstudio/qwen }
   tools:
   - agent: reviewer
+    inputs: []
     description: d
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: x }]
+  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
 `,
 			want: "agent cycle detected",
 		},
@@ -205,7 +215,7 @@ agents:
   tools: [{ agent: a, description: d }]
 jobs:
 - name: j
-  plan: [{ agent: a, prompt: x }]
+  plan: [{ agent: a, prompt: x, inputs: [] }]
 `,
 			want: "agent cycle detected",
 		},
@@ -218,6 +228,7 @@ agents:
   tools:
   - run_shell
   - agent: extra
+    inputs: []
     description: d
 - name: extra
   source: { model: lmstudio/qwen }
@@ -227,7 +238,7 @@ tasks:
   fix: fixer
 jobs:
 - name: j
-  plan: [{ task: unit }]
+  plan: [{ task: unit, inputs: [] }]
 `,
 			want: "which a fix agent may not use",
 		},
@@ -259,7 +270,7 @@ func TestSubAgentDepthLimit(t *testing.T) {
 		}
 	}
 
-	b.WriteString("jobs:\n- name: j\n  plan: [{ agent: a0, prompt: x }]\n")
+	b.WriteString("jobs:\n- name: j\n  plan: [{ agent: a0, prompt: x, inputs: [] }]\n")
 
 	path := writeConfig(t, b.String())
 	wantLoadError(t, path, "nesting depth exceeded")

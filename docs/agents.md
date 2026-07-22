@@ -10,7 +10,7 @@ An agent step runs a tool-calling conversation loop:
 2. Build a system message combining the agent's persona with working-directory context.
 3. Loop, up to `max_turns`:
    - Send the conversation + tool definitions to the model.
-   - If the model requests tools, execute them (`read_file`, `list_dir`, `run_shell`, or a custom/sub-agent tool).
+   - If the model requests tools, execute them (`read_file`, `list_dir`, `run_shell`, `write_file`, or a custom/sub-agent tool).
    - Truncate any tool output to 100KB before it goes back to the model, so a noisy command can't blow out the context window.
    - Append the tool results and continue.
 4. Exit when the model stops requesting tools, or `max_turns` is exceeded.
@@ -18,6 +18,20 @@ An agent step runs a tool-calling conversation loop:
 6. Record the step's output.
 
 Two tools can be synthesized onto a step's grant beyond what `tools:` lists: a required `verdict` tool (`verdicts:` on the step) and a read-only `previous_run` tool (`handoff: {tool: true}`) — both documented in [control-flow.md](control-flow.md)'s "Step transitions" and "Handoff context" sections, since both exist to serve `to:` routing rather than the tool-calling loop itself.
+
+## Built-in tools
+
+`read_file`, `list_dir`, and `run_shell` are granted automatically whenever a step's `tools:` is absent (`config.DefaultAgentToolSpecs`) — this is the zero-config default every existing pipeline already gets. `write_file` (write, or with `append: true` append, a UTF-8 text file at a path relative to the working directory) is a fourth built-in, but is deliberately **not** part of that default set — folding it in would change the resolved tool grant, and therefore the merkle hash, of every agent step that declares no `tools:` block. To grant it, list it explicitly alongside whichever others you still want:
+
+```yaml
+tools: [read_file, list_dir, run_shell, write_file]
+```
+
+`write_file` requires the file's immediate parent directory to already exist — it does not create missing directories, matching `read_file`/`list_dir`'s own no-side-effect posture. Use `run_shell` (e.g. `mkdir -p`) first if the directory doesn't exist yet. Like `read_file`/`list_dir`, its path is confined to the working directory and re-validated against a symlink escape (see `resolveWritePath` in `internal/agent/tools.go`), including the case of a symlinked parent directory for a file that doesn't exist yet.
+
+## Working directory, inputs, and dir:
+
+An agent step's `dir:` sets its working directory *and* names the artifact it operates in (its first path component — `dir: repo/cmd` names `repo`), so it's flow-validated for availability like an input. Declaring `inputs:` (a resource an earlier `get` fetched or an output an earlier step produced) does the same. Both are optional, but when you declare one it's checked: an agent pointed at a directory nothing fetched — e.g. "summarize the repository" with no `get` — fails at plan time, before the model is ever called, rather than after burning a turn budget. See [workspace.md](workspace.md) for the full inputs/outputs model.
 
 ## Custom tool `required:` semantics
 
@@ -30,7 +44,7 @@ This is enforced in `internal/agent/conversation.go`'s `runAgentConversation`, t
 - A forced (or voluntary) call that still fails is appended to the conversation like any other tool result — the model gets another turn to fix it.
 - The safety bound is `max_turns`: if a provider ignores `tool_choice`, or the model just can't get it right, the loop still terminates and the step fails, naming the tool(s) that never succeeded.
 - `retry.Do`/`attempts:` (a full conversation restart) only fires for *non-tool* failures — a transport error or `max_turns` exhaustion — never for a tool's own failure.
-- Only custom tools can be `required:`. Built-ins (`read_file`, `list_dir`, `run_shell`) and the fix-agent's injected task-rerun tool are always exploratory/iterative.
+- Only custom tools can be `required:`. Built-ins (`read_file`, `list_dir`, `run_shell`, `write_file`) and the fix-agent's injected task-rerun tool are always exploratory/iterative.
 
 ## Call guards: `max_calls:` and `args:`
 

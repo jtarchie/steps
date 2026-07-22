@@ -177,7 +177,7 @@ func TestPutNodeContentInputsOnlyAffectHashWhenWorkspaceConfigured(t *testing.T)
 	mustHash := func(t *testing.T, inputs []string, ws *config.WorkspaceConfig) string {
 		t.Helper()
 
-		content, err := PutNodeContent(&config.Config{Workspace: ws}, config.Step{}, rt, source, nil, inputs)
+		content, err := PutNodeContent(&config.Config{Workspace: ws}, config.Step{}, rt, source, nil, inputs, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -333,7 +333,7 @@ func TestGetPutImageAffectsHash(t *testing.T) {
 		t.Error("setting a resource type's image did not change the get node hash")
 	}
 
-	basePutContent, err := PutNodeContent(&config.Config{}, config.Step{}, base, source, nil, nil)
+	basePutContent, err := PutNodeContent(&config.Config{}, config.Step{}, base, source, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,7 @@ func TestGetPutImageAffectsHash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	imagePutContent, err := PutNodeContent(&config.Config{}, config.Step{}, withImage, source, nil, nil)
+	imagePutContent, err := PutNodeContent(&config.Config{}, config.Step{}, withImage, source, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

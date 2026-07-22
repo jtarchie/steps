@@ -18,6 +18,7 @@ jobs:
 - name: review
   plan:
   - agent: reviewer
+    inputs: []
     prompt: do it
     assert:
       stdout: posted
@@ -67,6 +68,7 @@ jobs:
 - name: j
   plan:
   - task: unit
+    inputs: []
     run: "true"
     assert:
       tool_calls:
@@ -104,6 +106,7 @@ jobs:
 - name: j
   plan:
   - agent: reviewer
+    inputs: []
     prompt: x
     assert:
       tool_calls:
@@ -127,6 +130,7 @@ jobs:
 - name: j
   plan:
   - agent: reviewer
+    inputs: []
     prompt: x
     assert:
       tool_calls:
@@ -168,6 +172,7 @@ jobs:
 - name: j
   plan:
   - agent: reviewer
+    inputs: []
     prompt: x
     assert:
       tool_calls:

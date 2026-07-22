@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sync/atomic"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -48,11 +49,15 @@ type BuildWorkspace interface {
 	// shared implementation always returns the build root regardless of
 	// inputs/outputs (today's behavior); an isolating implementation returns
 	// a directory containing only an <input>/ copy or snapshot of each named
-	// input plus an empty <output>/ directory for each named output.
-	TaskSpace(ctx context.Context, label string, inputs, outputs []string) (StepSpace, error)
-	// PutSpace composes a put step's read view from its declared inputs.
+	// input plus an empty <output>/ directory for each named output. inputMapping/
+	// outputMapping rename a declared name to the plan-artifact name it draws
+	// from / is captured as (see config.Step.InputMapping); nil leaves names
+	// unmapped. Agent steps never map, so they pass nil.
+	TaskSpace(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string) (StepSpace, error)
+	// PutSpace composes a put step's read view from its declared inputs, or —
+	// when all is true (inputs: all) — from every artifact in the build store.
 	// Unlike TaskSpace/agent steps, a put step never has outputs of its own.
-	PutSpace(ctx context.Context, label string, inputs []string) (StepSpace, error)
+	PutSpace(ctx context.Context, label string, inputs []string, all bool) (StepSpace, error)
 	Close() error
 }
 
@@ -154,11 +159,11 @@ func (b *sharedBuild) ResourceDir(_ context.Context, name string) (string, error
 	return dir, nil
 }
 
-func (b *sharedBuild) TaskSpace(_ context.Context, _ string, _, _ []string) (StepSpace, error) {
+func (b *sharedBuild) TaskSpace(_ context.Context, _ string, _, _ []string, _, _ map[string]string) (StepSpace, error) {
 	return sharedSpace{dir: b.root}, nil
 }
 
-func (b *sharedBuild) PutSpace(_ context.Context, _ string, _ []string) (StepSpace, error) {
+func (b *sharedBuild) PutSpace(_ context.Context, _ string, _ []string, _ bool) (StepSpace, error) {
 	return sharedSpace{dir: b.root}, nil
 }
 
@@ -323,15 +328,48 @@ func (b *isolatingBuild) ResourceDir(ctx context.Context, name string) (string, 
 	return dir, nil
 }
 
-func (b *isolatingBuild) TaskSpace(ctx context.Context, label string, inputs, outputs []string) (StepSpace, error) {
-	return b.newSpace(ctx, label, inputs, outputs)
+func (b *isolatingBuild) TaskSpace(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string) (StepSpace, error) {
+	return b.newSpace(ctx, label, inputs, outputs, inputMapping, outputMapping)
 }
 
-func (b *isolatingBuild) PutSpace(ctx context.Context, label string, inputs []string) (StepSpace, error) {
-	return b.newSpace(ctx, label, inputs, nil)
+func (b *isolatingBuild) PutSpace(ctx context.Context, label string, inputs []string, all bool) (StepSpace, error) {
+	if all {
+		names, err := b.allArtifacts()
+		if err != nil {
+			return nil, err
+		}
+
+		inputs = names
+	}
+
+	return b.newSpace(ctx, label, inputs, nil, nil, nil)
 }
 
-func (b *isolatingBuild) newSpace(ctx context.Context, label string, inputs, outputs []string) (StepSpace, error) {
+// allArtifacts lists every artifact name currently in the build store, for a
+// put step's inputs: all. Order is sorted so the materialized view is stable.
+func (b *isolatingBuild) allArtifacts() ([]string, error) {
+	entries, err := os.ReadDir(b.artifacts)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // nothing has been produced yet
+		}
+
+		return nil, fmt.Errorf("could not list build artifacts: %w", err)
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+
+	slices.Sort(names)
+
+	return names, nil
+}
+
+func (b *isolatingBuild) newSpace(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string) (StepSpace, error) {
 	// The build-global counter (not the plan index) numbers the directory, so
 	// uniqueness never depends on the caller passing a distinct label.
 	n := b.stepCounter.Add(1)
@@ -342,7 +380,7 @@ func (b *isolatingBuild) newSpace(ctx context.Context, label string, inputs, out
 		return nil, fmt.Errorf("could not create step workspace %q: %w", dir, err)
 	}
 
-	err = b.materializeSpace(ctx, dir, inputs, outputs)
+	err = b.materializeSpace(ctx, dir, inputs, outputs, inputMapping, outputMapping)
 	if err != nil {
 		// Tear down whatever was already materialized under dir, so a
 		// mid-loop failure doesn't leak input copies/subvolumes until the
@@ -356,20 +394,26 @@ func (b *isolatingBuild) newSpace(ctx context.Context, label string, inputs, out
 		return nil, err
 	}
 
-	return &isolatingSpace{backend: b.backend, artifacts: b.artifacts, dir: dir, outputs: outputs}, nil
+	return &isolatingSpace{backend: b.backend, artifacts: b.artifacts, dir: dir, outputs: outputs, outputMapping: outputMapping}, nil
 }
 
 // materializeSpace populates an already-created step directory with a copy or
-// snapshot of each input and an empty directory for each output. On any
-// error the caller (newSpace) removes dir.
-func (b *isolatingBuild) materializeSpace(ctx context.Context, dir string, inputs, outputs []string) error {
+// snapshot of each input under its declared name and an empty directory for
+// each output. inputMapping/outputMapping rename a declared name to the plan-
+// artifact name it draws from / captures to: the directory on disk keeps the
+// declared name (what the task's run: expects), while the artifact copied in /
+// captured out uses the mapped name. On any error the caller (newSpace)
+// removes dir.
+func (b *isolatingBuild) materializeSpace(ctx context.Context, dir string, inputs, outputs []string, inputMapping, outputMapping map[string]string) error {
 	for _, in := range inputs {
 		err := config.ValidateArtifactName(in)
 		if err != nil {
 			return fmt.Errorf("input %q: %w", in, err)
 		}
 
-		src := filepath.Join(b.artifacts, in)
+		artifact := mappedName(in, inputMapping)
+
+		src := filepath.Join(b.artifacts, artifact)
 
 		err = rejectSymlinkSrc(src)
 		if err != nil {
@@ -388,6 +432,15 @@ func (b *isolatingBuild) materializeSpace(ctx context.Context, dir string, input
 			return fmt.Errorf("output %q: %w", out, err)
 		}
 
+		// output_mapping is validated against the artifact name too, so a
+		// mapped output can't smuggle a bad name into the store on Capture.
+		if mapped := mappedName(out, outputMapping); mapped != out {
+			err = config.ValidateArtifactName(mapped)
+			if err != nil {
+				return fmt.Errorf("output %q (mapped to %q): %w", out, mapped, err)
+			}
+		}
+
 		err = b.backend.createEmpty(ctx, filepath.Join(dir, out))
 		if err != nil {
 			return fmt.Errorf("creating output %q: %w", out, err)
@@ -395,6 +448,16 @@ func (b *isolatingBuild) materializeSpace(ctx context.Context, dir string, input
 	}
 
 	return nil
+}
+
+// mappedName renames name through mapping (declared name -> plan-artifact
+// name), returning name unchanged when unmapped.
+func mappedName(name string, mapping map[string]string) string {
+	if mapped, ok := mapping[name]; ok {
+		return mapped
+	}
+
+	return name
 }
 
 // Close removes the build's root directory. b.root itself is a plain
@@ -415,10 +478,11 @@ func (b *isolatingBuild) Close() error {
 // provider: an <input>/ copy or snapshot of each declared input, plus an
 // empty <output>/ directory for each declared output.
 type isolatingSpace struct {
-	backend   treeBackend
-	artifacts string
-	dir       string
-	outputs   []string
+	backend       treeBackend
+	artifacts     string
+	dir           string
+	outputs       []string
+	outputMapping map[string]string
 }
 
 func (s *isolatingSpace) Dir() string { return s.dir }
@@ -443,11 +507,14 @@ func (s *isolatingSpace) Capture(ctx context.Context) error {
 			return fmt.Errorf("step declared output %q: %w", out, err)
 		}
 
-		dst := filepath.Join(s.artifacts, out)
+		// The directory on disk carries the declared name; output_mapping
+		// captures it back into the store under the plan-artifact name.
+		artifact := mappedName(out, s.outputMapping)
+		dst := filepath.Join(s.artifacts, artifact)
 
 		err = s.backend.remove(dst)
 		if err != nil {
-			return fmt.Errorf("replacing existing artifact %q: %w", out, err)
+			return fmt.Errorf("replacing existing artifact %q: %w", artifact, err)
 		}
 
 		err = s.backend.materialize(ctx, src, dst)
@@ -496,11 +563,16 @@ func newIsolatingRoot(configuredRoot string) (root string, ownsRoot bool, err er
 // ValidateArtifactFlow statically checks that every task/agent/put step's
 // declared inputs name an artifact available by that point in the plan (a
 // resource an earlier get fetches, or an output an earlier task/agent
-// produces). It runs no check/in/out command — unlike PlanChains, it is
-// always safe to run, even under --force, which skips PlanChains entirely.
-// get's version:every fans out per resolved version but never changes which
-// artifact *names* exist, so a single linear walk over the plan covers
-// every branch that fan-out could produce.
+// produces), plus an agent step's dir: (which names the artifact it works in).
+// It runs for every job, isolated or not: without a workspace: block
+// declarations don't change what a step physically sees, but they remain a
+// validated contract, so a step that declares inputs: [x] where nothing
+// produces x — the classic "this job never fetched anything" mistake — fails
+// here rather than obscurely at run time. It runs no check/in/out command —
+// unlike PlanChains, it is always safe to run, even under --force, which skips
+// PlanChains entirely. get's version:every fans out per resolved version but
+// never changes which artifact *names* exist, so a single linear walk over the
+// plan covers every branch that fan-out could produce.
 //
 // Crucially, a get starts a *fresh* triggered build (see runTriggeredBuild)
 // whose artifact store is empty except for the resource it fetches — it does
@@ -509,10 +581,6 @@ func newIsolatingRoot(configuredRoot string) (root string, ownsRoot bool, err er
 // check would pass an input referencing a pre-get artifact that the runtime
 // can't actually see, exactly the late failure it exists to prevent.
 func ValidateArtifactFlow(cfg *config.Config, job *config.Job) error {
-	if cfg.Workspace == nil {
-		return nil
-	}
-
 	available := map[string]bool{}
 
 	for i, step := range job.Plan {
@@ -546,9 +614,12 @@ func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step co
 
 		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
 	case step.Put != "":
-		err := checkInputsAvailable(jobName, i, "put", step.Put, step.Inputs, available)
-		if err != nil {
-			return err
+		// inputs: all draws on whatever exists, so there is nothing to check.
+		if !step.InputsAll() {
+			err := checkInputsAvailable(jobName, i, "put", step.Put, step.InputNames(), available)
+			if err != nil {
+				return err
+			}
 		}
 
 		// A put produces no artifacts into the build store, so pre and post
@@ -559,21 +630,33 @@ func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step co
 	case step.Task != "":
 		return validateTaskArtifactFlow(cfg, jobName, i, step, available)
 	case step.Agent != "":
-		pre := maps.Clone(available)
-
-		err := checkInputsAvailable(jobName, i, "agent", step.Agent, step.Inputs, available)
-		if err != nil {
-			return err
-		}
-
-		for _, out := range step.Outputs {
-			available[out] = true
-		}
-
-		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
+		return validateAgentArtifactFlow(cfg, jobName, i, step, available)
 	default:
 		return nil
 	}
+}
+
+func validateAgentArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+	pre := maps.Clone(available)
+
+	err := checkInputsAvailable(jobName, i, "agent", step.Agent, step.InputNames(), available)
+	if err != nil {
+		return err
+	}
+
+	// dir: names the artifact the step works in (its first path component),
+	// so it must be available too — this is what catches an agent pointed
+	// at a directory nothing fetched.
+	err = checkDirAvailable(jobName, i, "agent", step.Agent, step.Dir, available)
+	if err != nil {
+		return err
+	}
+
+	for _, out := range step.Outputs {
+		available[out] = true
+	}
+
+	return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
 }
 
 func validateTaskArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
@@ -584,12 +667,16 @@ func validateTaskArtifactFlow(cfg *config.Config, jobName string, i int, step co
 
 	pre := maps.Clone(available)
 
-	err = checkInputsAvailable(jobName, i, "task", rt.Name, rt.Inputs, available)
+	// input_mapping/output_mapping rename a declared input/output onto the
+	// plan-artifact name, so availability is checked — and outputs registered —
+	// against the mapped name (the declared name is only what the task sees on
+	// disk).
+	err = checkInputsAvailable(jobName, i, "task", rt.Name, mapArtifacts(rt.Inputs, rt.InputMapping), available)
 	if err != nil {
 		return err
 	}
 
-	for _, out := range rt.Outputs {
+	for _, out := range mapArtifacts(rt.Outputs, rt.OutputMapping) {
 		available[out] = true
 	}
 
@@ -631,9 +718,9 @@ func validateHookArtifactFlow(cfg *config.Config, jobName string, i int, hookNam
 
 		inputs, kind, name = rt.Inputs, "task", rt.Name
 	case hook.Put != "":
-		inputs, kind, name = hook.Inputs, "put", hook.Put
+		inputs, kind, name = hook.InputNames(), "put", hook.Put
 	case hook.Agent != "":
-		inputs, kind, name = hook.Inputs, "agent", hook.Agent
+		inputs, kind, name = hook.InputNames(), "agent", hook.Agent
 	}
 
 	for _, in := range inputs {
@@ -657,6 +744,64 @@ func checkInputsAvailable(jobName string, i int, kind, name string, inputs []str
 	}
 
 	return nil
+}
+
+// checkDirAvailable validates that an agent step's dir:, when set, names an
+// available artifact by its first path component (so dir: repo/cmd requires
+// repo). An empty or "." dir is the workspace root and names nothing.
+func checkDirAvailable(jobName string, i int, kind, name, dir string, available map[string]bool) error {
+	if dir == "" {
+		return nil
+	}
+
+	root := firstPathComponent(dir)
+	if root == "" || root == "." {
+		return nil
+	}
+
+	if !available[root] {
+		return fmt.Errorf("job %q step %d (%s %q): dir %q names %q, which is not a resource fetched or an output produced earlier in the plan",
+			jobName, i, kind, name, dir, root)
+	}
+
+	return nil
+}
+
+// mapArtifacts renames each declared name through mapping (task-config name ->
+// plan-artifact name), leaving unmapped names untouched. Used to resolve a
+// task step's inputs/outputs onto the plan-artifact names its input_mapping/
+// output_mapping point at.
+func mapArtifacts(names []string, mapping map[string]string) []string {
+	if len(mapping) == 0 {
+		return names
+	}
+
+	out := make([]string, len(names))
+
+	for i, name := range names {
+		if mapped, ok := mapping[name]; ok {
+			out[i] = mapped
+		} else {
+			out[i] = name
+		}
+	}
+
+	return out
+}
+
+// firstPathComponent returns the first path segment of a cleaned relative
+// path (e.g. "repo" for "repo/cmd", "repo" for "repo").
+func firstPathComponent(dir string) string {
+	cleaned := filepath.Clean(dir)
+
+	for {
+		parent := filepath.Dir(cleaned)
+		if parent == "." || parent == cleaned {
+			return cleaned
+		}
+
+		cleaned = parent
+	}
 }
 
 var errUnsupportedPlatform = errors.New("unsupported platform")

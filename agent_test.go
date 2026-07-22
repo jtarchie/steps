@@ -47,6 +47,7 @@ jobs:
 - name: build
   plan:
   - agent: reviewer
+    inputs: []
     prompt: hello
 `, server.URL)
 

@@ -13,8 +13,10 @@ jobs:
 - name: j
   plan:
   - task: draft
+    inputs: []
     run: "true"
   - agent: critic
+    inputs: []
     prompt: judge it
     verdicts: [approve, revise, escalate]
     to:
@@ -24,6 +26,7 @@ jobs:
       failure: publish
     max_visits: 3
   - task: publish
+    inputs: []
     run: "true"
 `
 	path := writeConfig(t, pipeline)
@@ -55,12 +58,14 @@ jobs:
 - name: j
   plan:
   - task: work
+    inputs: []
     run: "true"
     to:
       success: publish
       failure: work
     max_visits: 2
   - task: publish
+    inputs: []
     run: "true"
 `
 	path := writeConfig(t, pipeline)
@@ -86,6 +91,7 @@ jobs:
 - name: j
   plan:
   - task: work
+    inputs: []
     run: "true"
     to: { success: nowhere }
 `,
@@ -98,8 +104,10 @@ jobs:
 - name: j
   plan:
   - task: a
+    inputs: []
     run: "true"
   - task: b
+    inputs: []
     run: "true"
     to: { failure: a }
 `,
@@ -112,8 +120,10 @@ jobs:
 - name: j
   plan:
   - task: a
+    inputs: []
     run: "true"
   - task: b
+    inputs: []
     run: "true"
     to: { failure: a }
     max_visits: 1001
@@ -145,6 +155,7 @@ jobs:
 - name: j
   plan:
   - task: work
+    inputs: []
     run: "true"
     on_failure:
       task: notify
@@ -160,9 +171,11 @@ jobs:
 - name: j
   plan:
   - task: work
+    inputs: []
     run: "true"
     to: { done: publish }
   - task: publish
+    inputs: []
     run: "true"
 `,
 			want: `key "done" is not valid`,
@@ -174,9 +187,11 @@ jobs:
 - name: j
   plan:
   - task: work
+    inputs: []
     run: "true"
     to: { success: work }
   - task: work
+    inputs: []
     run: "true"
 `,
 			want: "duplicated within a to:-using segment",
@@ -188,6 +203,7 @@ jobs:
 - name: j
   plan:
   - task: work
+    inputs: []
     run: "true"
     verdicts: [a, b]
     to: { a: work, b: work }
@@ -205,6 +221,7 @@ jobs:
 - name: j
   plan:
   - agent: c
+    inputs: []
     prompt: x
     verdicts: [success]
     to: { success: c }
@@ -221,10 +238,12 @@ jobs:
 - name: j
   plan:
   - agent: c
+    inputs: []
     prompt: x
     verdicts: [approve, revise]
     to: { approve: done }
   - task: done
+    inputs: []
     run: "true"
 `,
 			want: `verdict "revise" has no to: target`,
@@ -239,10 +258,12 @@ jobs:
 - name: j
   plan:
   - agent: c
+    inputs: []
     prompt: x
     verdicts: [approve]
     to: { approve: done, bogus: done }
   - task: done
+    inputs: []
     run: "true"
 `,
 			want: `key "bogus" is not a declared verdict`,
@@ -257,10 +278,12 @@ jobs:
 - name: j
   plan:
   - agent: c
+    inputs: []
     prompt: x
     verdicts: [approve]
     to: { approve: done, success: done }
   - task: done
+    inputs: []
     run: "true"
 `,
 			want: "success is not valid in verdict mode",
@@ -287,8 +310,10 @@ jobs:
 - name: j
   plan:
   - task: work
+    inputs: []
     run: "true"
   - task: work
+    inputs: []
     run: "true"
 `
 	path := writeConfig(t, pipeline)
@@ -309,11 +334,14 @@ jobs:
 - name: j
   plan:
   - task: a
+    inputs: []
     run: "true"
     to: { success: c }
   - task: b
+    inputs: []
     run: "true"
   - task: c
+    inputs: []
     run: "true"
 `
 	path := writeConfig(t, pipeline)

@@ -93,7 +93,7 @@ func testStepSpace(t *testing.T) workspace.StepSpace {
 	}
 	t.Cleanup(func() { workspace.CloseBuild(build, "test-build") })
 
-	space, err := build.TaskSpace(context.Background(), "test-step", nil, nil)
+	space, err := build.TaskSpace(context.Background(), "test-step", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("TaskSpace: %v", err)
 	}

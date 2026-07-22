@@ -114,7 +114,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
-	space, err := bw.TaskSpace(ctx, step.Agent, step.Inputs, step.Outputs)
+	space, err := bw.TaskSpace(ctx, step.Agent, step.InputNames(), step.Outputs, nil, nil)
 	if err != nil {
 		return preparedAgentStep{}, fmt.Errorf("workspace: %w", err)
 	}

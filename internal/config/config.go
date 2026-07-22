@@ -549,16 +549,23 @@ type Step struct {
 	Tools    []ToolSpec `yaml:"tools,omitempty"`
 	Attempts int        `yaml:"attempts,omitempty"`
 	// Inputs/Outputs declare which named artifacts a task/agent/put step
-	// draws from and (task/agent only) produces, when the pipeline sets
-	// workspace: (see WorkspaceConfig). Each name is either a resource
-	// fetched by an earlier get step or an output produced by an earlier
-	// task/agent step. Omitted/nil means "none" for every step kind — put
-	// steps have no implicit "all artifacts" view; declare inputs: for
-	// whatever the out: command needs to see. Invalid without a top-level
-	// workspace: block, and invalid on get steps; Outputs is additionally
-	// invalid on put steps.
-	Inputs  []string `yaml:"inputs,omitempty"`
-	Outputs []string `yaml:"outputs,omitempty"`
+	// draws from and (task/agent only) produces. Each name is either a
+	// resource fetched by an earlier get step or an output produced by an
+	// earlier task/agent step. Both are optional and default to empty: an
+	// absent inputs: means "sees nothing declared" (there is no requirement to
+	// declare them). When present, an inputs: naming an artifact nothing
+	// produces is caught by workspace.ValidateArtifactFlow. Declarations only
+	// change what a step physically sees under a top-level workspace: block
+	// (see WorkspaceConfig); without one they are a validated contract, not
+	// isolation, and are never folded into a node's hash (see internal/merkle).
+	// Inputs is a *InputSpec so an absent key (nil) is distinguishable from an
+	// explicit empty list — which matters for ResolveTask's override rule (a
+	// step's inputs: override its tasks: entry only when declared) — and so put
+	// steps can accept the scalar `inputs: all` (every available artifact) in
+	// addition to a sequence of names. Invalid on get steps; Outputs is
+	// additionally invalid on put steps.
+	Inputs  *InputSpec `yaml:"inputs,omitempty"`
+	Outputs []string   `yaml:"outputs,omitempty"`
 	// Image, on a task or agent step, overrides the referenced task's/
 	// agent's Image for this step only (inherit-only: a non-empty step Image
 	// always wins, there is no way to force host execution from a step when
@@ -610,6 +617,107 @@ type Step struct {
 	// context block is appended and previous_run (if granted) answers "no
 	// previous run" as data.
 	Handoff *HandoffSpec `yaml:"handoff,omitempty"`
+	// InputMapping/OutputMapping rename a task step's declared inputs/outputs
+	// onto plan-artifact names, mirroring Concourse's input_mapping/
+	// output_mapping: each entry is {task-config-name: plan-artifact-name}, so
+	// a reusable tasks: entry with pinned input names can be pointed at
+	// whatever a job actually fetched/produced without editing the task. Keys
+	// must be a subset of the resolved task's declared inputs:/outputs:. Task
+	// steps only, and only meaningful under a workspace: block (mapping renames
+	// a materialized directory, which the shared single directory can't do) —
+	// both are load-time errors otherwise. Absent/empty leaves names unmapped.
+	InputMapping  map[string]string `yaml:"input_mapping,omitempty"`
+	OutputMapping map[string]string `yaml:"output_mapping,omitempty"`
+	// Resource, on a get step, names the resource to fetch when it differs from
+	// the step's own name: the fetched artifact (and the directory, step name,
+	// and to: target) is Get, while the resource whose check/in runs is
+	// Resource — mirroring Concourse's get.resource. This lets one resource
+	// appear under a task-friendly name, or twice in a plan under two names.
+	// Empty (the default) means the resource name equals Get. Get steps only.
+	Resource string `yaml:"resource,omitempty"`
+}
+
+// InputSpec is a step's inputs: declaration. It is a distinct type rather than
+// a plain []string for two reasons: an absent inputs: key (nil *InputSpec)
+// must be distinguishable from an explicit empty list (so ResolveTask can apply
+// a step's inputs: over its tasks: entry only when the step actually declared
+// one), and put steps accept the scalar `inputs: all` — every available
+// artifact — in addition to a sequence of names. Names holds the explicit
+// list; All is set only by the scalar form and is valid on put steps only.
+type InputSpec struct {
+	Names []string
+	All   bool
+}
+
+// UnmarshalYAML decodes an InputSpec from either the scalar `all` or a
+// sequence of artifact names. Any other scalar is rejected here so a typo like
+// `inputs: repo` (meaning `inputs: [repo]`) fails loudly rather than silently
+// parsing as a zero-name declaration.
+func (in *InputSpec) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias/mapping kinds that can't appear here
+	case yaml.ScalarNode:
+		var s string
+
+		err := node.Decode(&s)
+		if err != nil {
+			return fmt.Errorf("inputs: %w", err)
+		}
+
+		if s != "all" {
+			return fmt.Errorf("inputs: scalar value must be \"all\" (or use a sequence of names), got %q", s)
+		}
+
+		in.All = true
+
+		return nil
+	case yaml.SequenceNode:
+		return node.Decode(&in.Names) //nolint:wrapcheck // yaml.v3 error is already descriptive
+	default:
+		return fmt.Errorf("inputs at line %d must be a sequence of names or the scalar \"all\"", node.Line)
+	}
+}
+
+// Inputs constructs a declared *InputSpec from an explicit name list —
+// Inputs() declares the empty "starts from nothing" form, Inputs("a", "b") a
+// named list. It exists so callers building a Step programmatically (tests,
+// and any future config synthesis) get the same declared-vs-absent distinction
+// yaml.v3 gives a decoded pipeline.
+func Inputs(names ...string) *InputSpec {
+	if names == nil {
+		names = []string{}
+	}
+
+	return &InputSpec{Names: names}
+}
+
+// InputsDeclared reports whether the step carried an inputs: key at all
+// (nil vs present, including inputs: []). ResolveTask reads this so a step's
+// inputs: override its tasks: entry only when the step actually declared one.
+func (s Step) InputsDeclared() bool { return s.Inputs != nil }
+
+// InputNames returns the explicit input names (nil for an absent or all-form
+// inputs:). It is the []string every existing input consumer expects.
+func (s Step) InputNames() []string {
+	if s.Inputs == nil {
+		return nil
+	}
+
+	return s.Inputs.Names
+}
+
+// InputsAll reports whether the step declared `inputs: all` (put steps only).
+func (s Step) InputsAll() bool { return s.Inputs != nil && s.Inputs.All }
+
+// GetResourceName is the name of the resource a get step fetches: Resource
+// when set (get: aliases the resource under a different name), else Get itself.
+// The fetched artifact, its directory, and the step's routing name are always
+// Get; only the resource whose check/in runs is GetResourceName.
+func (s Step) GetResourceName() string {
+	if s.Resource != "" {
+		return s.Resource
+	}
+
+	return s.Get
 }
 
 // HandoffSpec is a step's handoff: (see Step.Handoff). Context enables the
@@ -739,52 +847,29 @@ func LoadConfig(path string) (*Config, error) {
 // on its own — in particular everything around workspace:/inputs:/outputs:,
 // so a misconfigured pipeline fails at load time rather than mid-build.
 func (c *Config) validate() error {
-	err := c.validateWorkspace()
-	if err != nil {
-		return err
+	checks := []func() error{
+		c.validateWorkspace,
+		c.validateArtifactDecls,
+		c.validateGetResource,
+		c.validateArtifactMappings,
+		c.validateImageRules,
+		c.validateHooks,
+		c.validateAgentGraph,
+		c.validateToolCallGuards,
+		c.validateStepGuards,
+		c.validateStepTransitions,
+		c.validateAsserts,
+		c.validateCredentialHandling,
 	}
 
-	err = c.validateArtifactDecls()
-	if err != nil {
-		return err
+	for _, check := range checks {
+		err := check()
+		if err != nil {
+			return err
+		}
 	}
 
-	err = c.validateImageRules()
-	if err != nil {
-		return err
-	}
-
-	err = c.validateHooks()
-	if err != nil {
-		return err
-	}
-
-	err = c.validateAgentGraph()
-	if err != nil {
-		return err
-	}
-
-	err = c.validateToolCallGuards()
-	if err != nil {
-		return err
-	}
-
-	err = c.validateStepGuards()
-	if err != nil {
-		return err
-	}
-
-	err = c.validateStepTransitions()
-	if err != nil {
-		return err
-	}
-
-	err = c.validateAsserts()
-	if err != nil {
-		return err
-	}
-
-	return c.validateCredentialHandling()
+	return nil
 }
 
 // validateCredentialHandling groups validateAgentEndpoints and every
@@ -1763,7 +1848,7 @@ func validateHookTree(parentLabel string, hooks Hooks, noArtifacts bool) error {
 	return hooks.Each(func(name string, step *Step) error {
 		label := fmt.Sprintf("%s (%s hook)", parentLabel, name)
 
-		if noArtifacts && (step.Inputs != nil || step.Outputs != nil) {
+		if noArtifacts && (step.InputsDeclared() || step.Outputs != nil) {
 			return fmt.Errorf("%s: inputs/outputs are not valid on job-level hooks", label)
 		}
 
@@ -2010,20 +2095,9 @@ func (c *Config) validateWorkspace() error {
 	return nil
 }
 
-// declaresArtifacts reports whether a step or task carries any inputs:/
-// outputs: at all — used to reject them outright when no workspace: block
-// is configured.
-func declaresArtifacts(inputs, outputs []string) bool {
-	return inputs != nil || outputs != nil
-}
-
 func (c *Config) validateArtifactDecls() error {
 	for i := range c.Tasks {
 		task := c.Tasks[i]
-
-		if c.Workspace == nil && declaresArtifacts(task.Inputs, task.Outputs) {
-			return fmt.Errorf("task %q: inputs/outputs require a top-level workspace: block", task.Name)
-		}
 
 		err := validateArtifactNames(fmt.Sprintf("task %q", task.Name), task.Inputs, task.Outputs)
 		if err != nil {
@@ -2044,13 +2118,14 @@ func (c *Config) validateArtifactDecls() error {
 }
 
 func (c *Config) validateStepArtifactDecls(label string, step Step) error {
-	if c.Workspace == nil && declaresArtifacts(step.Inputs, step.Outputs) {
-		return fmt.Errorf("%s: inputs/outputs require a top-level workspace: block", label)
+	err := c.validateMappingPlacement(label, step)
+	if err != nil {
+		return err
 	}
 
 	switch {
 	case step.Get != "":
-		if declaresArtifacts(step.Inputs, step.Outputs) {
+		if step.InputsDeclared() || step.Outputs != nil {
 			return fmt.Errorf("%s (get %q): inputs/outputs are not valid on get steps", label, step.Get)
 		}
 
@@ -2060,10 +2135,122 @@ func (c *Config) validateStepArtifactDecls(label string, step Step) error {
 			return fmt.Errorf("%s (put %q): outputs are not valid on put steps", label, step.Put)
 		}
 
-		return validateArtifactNames(fmt.Sprintf("%s (put %q)", label, step.Put), step.Inputs, nil)
+		// inputs: all is a put-only escape hatch; it names no artifacts, so
+		// skip name validation for it.
+		if step.InputsAll() {
+			return nil
+		}
+
+		return validateArtifactNames(fmt.Sprintf("%s (put %q)", label, step.Put), step.InputNames(), nil)
 	default:
-		return validateArtifactNames(label, step.Inputs, step.Outputs)
+		if step.InputsAll() {
+			return fmt.Errorf("%s: inputs: all is only valid on put steps", label)
+		}
+
+		return validateArtifactNames(label, step.InputNames(), step.Outputs)
 	}
+}
+
+// validateMappingPlacement enforces that input_mapping/output_mapping — which
+// physically rename a materialized directory — appear only on task steps and
+// only under a workspace: block.
+func (c *Config) validateMappingPlacement(label string, step Step) error {
+	if len(step.InputMapping) == 0 && len(step.OutputMapping) == 0 {
+		return nil
+	}
+
+	if step.Task == "" {
+		return fmt.Errorf("%s: input_mapping/output_mapping are only valid on task steps", label)
+	}
+
+	if c.Workspace == nil {
+		return fmt.Errorf("%s: input_mapping/output_mapping require a top-level workspace: block", label)
+	}
+
+	return nil
+}
+
+// validateGetResource enforces that a step's resource: is only set on get
+// steps and names an existing resource. The fetched resource is Resource when
+// set, else Get (see Step.Resource); two get steps may alias the same resource
+// under different names.
+func (c *Config) validateGetResource() error {
+	for _, job := range c.Jobs {
+		err := job.visitSteps(func(label string, step *Step) error {
+			if step.Resource == "" {
+				return nil
+			}
+
+			if step.Get == "" {
+				return fmt.Errorf("%s: resource: is only valid on get steps", label)
+			}
+
+			_, err := c.FindResource(step.Resource)
+			if err != nil {
+				return fmt.Errorf("%s (get %q): %w", label, step.Get, err)
+			}
+
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateArtifactMappings enforces that a task step's input_mapping/
+// output_mapping keys are a subset of the resolved task's declared inputs/
+// outputs — a mapping key that names no declared input/output is a typo that
+// would otherwise silently do nothing. Placement rules (task-step-only,
+// workspace-only) are enforced in validateStepArtifactDecls.
+func (c *Config) validateArtifactMappings() error {
+	for _, job := range c.Jobs {
+		err := job.visitSteps(func(label string, step *Step) error {
+			if len(step.InputMapping) == 0 && len(step.OutputMapping) == 0 {
+				return nil
+			}
+
+			rt, err := c.ResolveTask(*step)
+			if err != nil {
+				return fmt.Errorf("%s: %w", label, err)
+			}
+
+			err = checkMappingKeys(label, "input_mapping", step.InputMapping, rt.Inputs)
+			if err != nil {
+				return err
+			}
+
+			return checkMappingKeys(label, "output_mapping", step.OutputMapping, rt.Outputs)
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkMappingKeys rejects a mapping key that names no declared artifact.
+func checkMappingKeys(label, field string, mapping map[string]string, declared []string) error {
+	if len(mapping) == 0 {
+		return nil
+	}
+
+	declaredSet := make(map[string]bool, len(declared))
+	for _, name := range declared {
+		declaredSet[name] = true
+	}
+
+	for key := range mapping {
+		if !declaredSet[key] {
+			return fmt.Errorf("%s: %s key %q is not a declared %s", label, field, key,
+				map[string]string{"input_mapping": "input", "output_mapping": "output"}[field])
+		}
+	}
+
+	return nil
 }
 
 // validateArtifactNames checks every name in inputs/outputs against
@@ -2215,6 +2402,12 @@ type ResolvedTask struct {
 	Fix     *FixSpec
 	Inputs  []string
 	Outputs []string
+	// InputMapping/OutputMapping rename declared inputs/outputs onto plan-
+	// artifact names under workspace: isolation (see Step.InputMapping). Always
+	// from the step (tasks: entries carry no mapping); empty leaves names
+	// unmapped.
+	InputMapping  map[string]string
+	OutputMapping map[string]string
 	// Image, when non-empty, runs this task's run: (and any fix-loop
 	// re-runs) in a container from this image instead of on the host. See
 	// Task.Image/Step.Image.
@@ -2235,7 +2428,8 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 	if step.Run != "" {
 		return ResolvedTask{
 			Name: step.Task, Run: step.Run, Fix: step.Fix,
-			Inputs: step.Inputs, Outputs: step.Outputs, Image: step.Image,
+			Inputs: step.InputNames(), Outputs: step.Outputs, Image: step.Image,
+			InputMapping: step.InputMapping, OutputMapping: step.OutputMapping,
 			Assert: step.Assert,
 		}, nil
 	}
@@ -2251,8 +2445,8 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 	}
 
 	inputs := task.Inputs
-	if step.Inputs != nil {
-		inputs = step.Inputs
+	if step.InputsDeclared() {
+		inputs = step.InputNames()
 	}
 
 	outputs := task.Outputs
@@ -2265,7 +2459,10 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 		image = step.Image
 	}
 
-	return ResolvedTask{Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs, Image: image, Assert: step.Assert}, nil
+	return ResolvedTask{
+		Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs, Image: image,
+		InputMapping: step.InputMapping, OutputMapping: step.OutputMapping, Assert: step.Assert,
+	}, nil
 }
 
 // defaultMaxAgentTurns is the default cap on one attempt's tool-calling loop

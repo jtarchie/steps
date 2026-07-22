@@ -17,9 +17,11 @@ jobs:
 - name: j
   plan:
   - task: scalar-form
+    inputs: []
     run: "true"
     when: test -f marker
   - task: mapping-form
+    inputs: []
     run: "true"
     when:
       run: grep -q x file
@@ -81,6 +83,7 @@ jobs:
 - name: j
   plan:
   - task: t
+    inputs: []
     run: "true"
     when: "   "
 `,
@@ -93,6 +96,7 @@ jobs:
 - name: j
   plan:
   - task: t
+    inputs: []
     run: "true"
     on_failure:
       task: notify
@@ -123,6 +127,7 @@ jobs:
 - name: j
   plan:
   - task: t
+    inputs: []
     run: "true"
     on_failure:
       task: notify

@@ -20,6 +20,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: exit 3
     assert:
       code: 3
@@ -49,6 +50,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: echo actual-output
     assert:
       stdout: expected-output
@@ -72,6 +74,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: exit 1
   on_failure:
     task: notify
@@ -94,6 +97,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: "true"
   assert:
     execution: [work, something-that-never-ran]
@@ -125,6 +129,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: "true"
   assert:
     execution: [work, wrong-name]
@@ -150,6 +155,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: "true"
 `)
 

@@ -82,6 +82,7 @@ jobs:
 - name: build
   plan:
   - task: check
+    inputs: []
     run: %s
     fix: fixer
 `, endpoint, run)

@@ -27,6 +27,8 @@ jobs:
 ./steps run pipeline.yml --job hello
 ```
 
+A `task`/`agent` step may declare `inputs:` — the resources/outputs it reads — and (under `workspace:` isolation) `outputs:`. Both are optional and default to empty. When you declare an input, it's validated against producers, so a step pointed at an artifact nobody fetched fails at plan time. See [`docs/workspace.md`](docs/workspace.md).
+
 ## Commands
 
 - `steps run <pipeline.yml> --job <name>` — run one job once.

@@ -67,6 +67,16 @@ func GetNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 		"version":     version,
 	}
 
+	// When a get aliases its resource (get: differs from resource:), fold the
+	// artifact name in so two aliases of the same resource — identical source/
+	// version — still hash distinctly, since they fetch into different
+	// directories that different downstream steps name as inputs. Value-gated:
+	// an unaliased get (the common case) omits this and hashes byte-identically
+	// to before this field existed.
+	if step.Resource != "" {
+		content["artifact"] = step.Get
+	}
+
 	if resourceType.Image != "" {
 		content["image"] = resourceType.Image
 	}
@@ -244,7 +254,7 @@ func hookContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 			return nil, fmt.Errorf("resolve put: %w", err)
 		}
 
-		return PutNodeContent(cfg, step, *resourceType, res.Source, step.Params, step.Inputs)
+		return PutNodeContent(cfg, step, *resourceType, res.Source, step.Params, step.InputNames(), step.InputsAll())
 	case config.StepKindAgent:
 		ri, err := cfg.ResolveAgentInvocation(step)
 		if err != nil {
@@ -274,6 +284,18 @@ func TaskNodeContent(cfg *config.Config, step config.Step, rt config.ResolvedTas
 	if cfg.Workspace != nil {
 		content["inputs"] = config.StableStrings(rt.Inputs)
 		content["outputs"] = config.StableStrings(rt.Outputs)
+
+		// input_mapping/output_mapping rename what gets materialized where, so
+		// they change the step's view and must bust its cache — but, like
+		// inputs/outputs, only under a workspace: block, and value-gated so an
+		// unmapped task hashes exactly as before this field existed.
+		if len(rt.InputMapping) > 0 {
+			content["input_mapping"] = rt.InputMapping // map[string]string — json.Marshal sorts keys, so the hash stays deterministic
+		}
+
+		if len(rt.OutputMapping) > 0 {
+			content["output_mapping"] = rt.OutputMapping
+		}
 	}
 
 	if rt.Image != "" {
@@ -327,8 +349,11 @@ func assertContent(a *config.Assert) map[string]any {
 
 // PutNodeContent builds the content map hashed for a put node. image is
 // folded in whenever non-empty — see TaskNodeContent's doc comment for why
-// this differs from the inputs/ws gating.
-func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.ResourceType, source, params map[string]any, inputs []string) (map[string]any, error) {
+// this differs from the inputs/ws gating. inputsAll folds the `inputs: all`
+// escape hatch as a distinct sentinel, but — like the name list — only under a
+// workspace: block, since without one declarations don't change what the step
+// sees and so must not affect its hash.
+func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.ResourceType, source, params map[string]any, inputs []string, inputsAll bool) (map[string]any, error) {
 	content := map[string]any{
 		"out_template": resourceType.Config.Out,
 		"source":       source,
@@ -336,7 +361,11 @@ func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 	}
 
 	if cfg.Workspace != nil {
-		content["inputs"] = config.StableStrings(inputs)
+		if inputsAll {
+			content["inputs"] = "all"
+		} else {
+			content["inputs"] = config.StableStrings(inputs)
+		}
 	}
 
 	if resourceType.Image != "" {
@@ -551,7 +580,7 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 	}
 
 	if cfg.Workspace != nil {
-		content["inputs"] = config.StableStrings(step.Inputs)
+		content["inputs"] = config.StableStrings(step.InputNames())
 		content["outputs"] = config.StableStrings(step.Outputs)
 	}
 
@@ -739,7 +768,7 @@ func putNode(cfg *config.Config, step config.Step, i int, parentHash string) (No
 		return Node{}, fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
 
-	content, err := PutNodeContent(cfg, step, *resourceType, res.Source, step.Params, step.Inputs)
+	content, err := PutNodeContent(cfg, step, *resourceType, res.Source, step.Params, step.InputNames(), step.InputsAll())
 	if err != nil {
 		return Node{}, fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}

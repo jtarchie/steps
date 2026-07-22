@@ -25,6 +25,30 @@ resource_types:
   config:
     check: echo '[{"ref":"v1"}]'
     in: seq 1 400 | sed 's/^/line /' > NOTES.txt
+# For the `judge` job: fabricate a small fake project (README + a source file +
+# a changelog), fully offline, so the writer has real material to summarize and
+# the critic real material to check it against.
+- name: project-fixture
+  config:
+    check: echo '[{"ref":"v1"}]'
+    in: |
+      cat > README.md <<'EOF'
+      # widgetd
+
+      widgetd is a tiny daemon that serves widgets over HTTP. It keeps an
+      in-memory catalog, exposes GET /widgets and POST /widgets, and persists
+      nothing across restarts — the catalog is seeded from widgets.json on boot.
+      EOF
+      cat > main.go <<'EOF'
+      package main
+
+      // widgetd serves an in-memory widget catalog over HTTP.
+      func main() { serve(":8080") }
+      EOF
+      cat > CHANGELOG.md <<'EOF'
+      # Changelog
+      - v1: initial release — in-memory catalog, GET/POST /widgets.
+      EOF
 
 # For the `mcp-tools` job: GitHub's own MCP server, bearer-authenticated —
 # see docs/mcp.md. No interactive login needed to read/run this job, unlike
@@ -44,6 +68,9 @@ resources:
   source: { owner: jtarchie, repo: ci, branch: main }
 - name: notes
   type: fixture
+  source: {}
+- name: project
+  type: project-fixture
   source: {}
 
 agents:
@@ -108,19 +135,26 @@ agents:
     tools: [search_issues, get_issue]
 
 # Verdict routing: `critic` declares a verdict vocabulary and emits one via a
-# synthesized required `verdict` tool; the step's to: routes N-way on it.
+# synthesized required `verdict` tool; the step's to: routes N-way on it. The
+# draft flows between these agents as a real artifact (the `draft` output the
+# writer produces), so every agent that touches it is granted the tools to read
+# it — and the judge job below declares that flow with inputs:/outputs:.
 - name: writer
   source: { model: lmstudio/google/gemma-4-26b-a4b }
-  system: You draft short summaries.
+  system: You draft short summaries. You read files and write your draft to disk.
+  tools: [read_file, list_dir, run_shell]
 - name: critic
   source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: You review a draft and decide whether it ships, needs revision, or must escalate.
+  tools: [read_file, list_dir]
 - name: publisher
   source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: You publish the approved draft.
+  tools: [read_file]
 - name: escalator
   source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: You write a note handing the draft to a human.
+  tools: [read_file]
 
 # Reusable task: defined once, referenced by name (task: unit, no run:). On a
 # green run it's a plain shell command and NO model is invoked ($0); only a
@@ -129,6 +163,7 @@ tasks:
 - name: unit
   run: cd repo && go test ./...
   fix: fixer
+  inputs: [repo]         # the task operates on the repo an earlier get fetched
 
 jobs:
 # ─── custom tools: required / max_calls / args (needs a model + gh + network) ─
@@ -173,6 +208,7 @@ jobs:
     trigger: true
   - task: vet
     run: cd repo && go vet ./...
+    inputs: [repo]
     fix:
       agent: fixer
       attempts: 2
@@ -199,8 +235,15 @@ jobs:
       the two most recently updated ones.
 
 # ─── verdict routing / bounded agent loop (needs a model) ────────────────────
+# The draft is a real artifact that flows writer -> critic -> publisher/
+# escalator: writer reads the fetched `project` and writes draft/summary.md;
+# every later agent declares inputs: [draft] (or [project, draft]) so it sees
+# exactly what it needs. Without the get: project and these declarations the
+# writer would have nothing to summarize — the mistake this required-inputs
+# design turns into a load/plan-time error instead of a wasted model run.
 - name: judge
   plan:
+  - get: project
   # handoff: {tool: true} — writer is the target of critic's `revise:` route,
   # so on a revise loop it gets a <transition_context> block (which step/
   # verdict sent it here, which visit this is) appended to its prompt, plus a
@@ -208,17 +251,23 @@ jobs:
   # fires on the FIRST execution (nothing routed here yet) — see docs/control-
   # flow.md's "Handoff context" section.
   - agent: writer
+    inputs: [project]
+    outputs: [draft]
     prompt: >
-      Draft a two-sentence summary of the repository. If a transition context
-      block is present below, you are revising after a critique — call
-      previous_run to see the critic's full reasoning and note before you
-      rewrite.
+      Read the files under project/ (README.md, main.go, CHANGELOG.md), then
+      write a two-sentence summary of what this project does to
+      draft/summary.md (create the draft directory first with run_shell). If a
+      transition context block is present below, you are revising after a
+      critique — call previous_run to see the critic's full reasoning and note
+      before you rewrite.
     handoff: { tool: true }
   - agent: critic
+    inputs: [project, draft]
     prompt: >
-      Review the draft. Call verdict with approve, revise, or escalate — pass
-      a short `note` explaining your reasoning; it's what the writer sees if
-      you send it back for revision.
+      Read draft/summary.md and spot-check it against the files under project/.
+      Call verdict with approve, revise, or escalate — pass a short `note`
+      explaining your reasoning; it's what the writer sees if you send it back
+      for revision.
     verdicts: [approve, revise, escalate]
     # Targets are step NAMES (an agent step's name is its agent: value).
     to:
@@ -228,6 +277,8 @@ jobs:
       failure:  escalator     # reserved: critic never decided
     max_visits: 3
   - agent: publisher
-    prompt: Publish the approved draft.
+    inputs: [draft]
+    prompt: Read draft/summary.md and publish the approved draft.
   - agent: escalator
-    prompt: Write a short note explaining why this draft needs a human.
+    inputs: [draft]
+    prompt: Read draft/summary.md and write a short note explaining why this draft needs a human.

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"sort"
 	"strings"
+	"time"
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
@@ -373,13 +375,31 @@ func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, env too
 // aborting. A successful dispatch increments the counter; a rejected one does
 // not (it's already at the ceiling). Tools absent from maxCalls are
 // unlimited.
+//
+// Every call (budget-rejected or dispatched) is bracketed by a debug-level
+// "agent.tool_call"/"agent.tool_result" log pair — the args a call was made
+// with, and how it finished (duration, plus whatever error/exit_code the
+// result carries). Debug logging is opt-in (see CLAUDE.md's Trust Boundaries
+// section), so this is silent unless an operator has already asked to see
+// command/output content at that level; call.Args can hold a model-authored
+// value (e.g. a custom tool's args, or write_file's content), no different
+// from the full command/output internal/shell already logs at this level.
 func executeBudgetedTool(ctx context.Context, call *genai.FunctionCall, env toolEnv, registry map[string]toolImpl, maxCalls, callCounts map[string]int) map[string]any {
+	slog.Debug("agent.tool_call", "tool", call.Name, "id", call.ID, "args", call.Args)
+
+	start := time.Now()
+
+	var response map[string]any
+
 	if budget, ok := maxCalls[call.Name]; ok && callCounts[call.Name] >= budget {
-		return map[string]any{"error": fmt.Sprintf("%s: call budget (%d) exhausted for this attempt", call.Name, budget)}
+		response = map[string]any{"error": fmt.Sprintf("%s: call budget (%d) exhausted for this attempt", call.Name, budget)}
+	} else {
+		response = executeAgentTool(ctx, call, env, registry)
+		callCounts[call.Name]++
 	}
 
-	response := executeAgentTool(ctx, call, env, registry)
-	callCounts[call.Name]++
+	slog.Debug("agent.tool_result", "tool", call.Name, "id", call.ID,
+		"duration", time.Since(start), "error", response["error"], "exit_code", response["exit_code"])
 
 	return response
 }

@@ -85,7 +85,7 @@ func TestWhenHashedOnEveryStepKind(t *testing.T) {
 		cfg := &config.Config{}
 		rt := config.ResourceType{Name: "rt"}
 
-		with, err := PutNodeContent(cfg, config.Step{Put: "r", When: when}, rt, nil, nil, nil)
+		with, err := PutNodeContent(cfg, config.Step{Put: "r", When: when}, rt, nil, nil, nil, false)
 		if err != nil {
 			t.Fatal(err)
 		}

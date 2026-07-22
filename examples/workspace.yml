@@ -100,3 +100,28 @@ jobs:
   # declare whatever the out: command actually needs.
   - put: results
     inputs: [built]
+
+# The same build, wired with Concourse-style name mapping and a get alias — so
+# a reusable task with pinned input/output names can be pointed at whatever a
+# job actually fetched/produced without editing the task.
+- name: release-mapped
+  plan:
+  # get: aliases the resource — the fetched artifact is named "source" (the
+  # get:), while the resource whose check/in runs is "repo" (the resource:).
+  - get: source
+    resource: repo
+    trigger: true
+
+  # The reusable `build` task declares inputs: [repo], outputs: [built].
+  # input_mapping feeds its "repo" input from the plan artifact "source";
+  # output_mapping captures its "built" output under the name "release-bits".
+  # The task itself is untouched — it still cd's into repo/ and writes built/.
+  - task: build
+    input_mapping:  { repo: source }
+    output_mapping: { built: release-bits }
+
+  # inputs: all composes the read view from every artifact produced so far
+  # (here "source" and "release-bits") — the escape hatch for a put that needs
+  # everything, versus naming each input explicitly as the release job does.
+  - put: results
+    inputs: all

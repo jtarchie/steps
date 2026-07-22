@@ -2,7 +2,6 @@ package config
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -33,6 +32,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: "true"
     on_failure:
       task: notify
@@ -80,6 +80,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: "true"
     on_failure:
       get: thing
@@ -93,6 +94,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: "true"
     on_failure:
       task: notify
@@ -109,6 +111,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: "true"
     ensure:
       run: echo orphan
@@ -125,6 +128,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: "true"
   on_failure:
     task: notify
@@ -140,6 +144,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: "true"
   on_failure:
     task: notify
@@ -159,6 +164,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: "true"
   on_failure:
     task: notify
@@ -177,6 +183,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: "true"
     on_success:
       put: thing
@@ -206,6 +213,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: "true"
     on_failure:
       task: notify
@@ -223,9 +231,10 @@ jobs:
 	}
 }
 
-// TestHookInputsWithoutWorkspaceRejected checks that a hook declaring inputs:
-// with no workspace: block fails at load time, the same as a plan step.
-func TestHookInputsWithoutWorkspaceRejected(t *testing.T) {
+// TestStepHookInputsWithoutWorkspaceLoad checks that a step-level hook may
+// declare inputs: without a workspace: block — a validated contract, not an
+// error (unlike a job-level hook, which may not declare artifacts at all).
+func TestStepHookInputsWithoutWorkspaceLoad(t *testing.T) {
 	t.Parallel()
 
 	path := writeConfig(t, `
@@ -233,6 +242,7 @@ jobs:
 - name: build
   plan:
   - task: work
+    inputs: []
     run: "true"
     on_success:
       task: notify
@@ -241,7 +251,7 @@ jobs:
 `)
 
 	_, err := LoadConfig(path)
-	if err == nil || !strings.Contains(err.Error(), "workspace:") {
-		t.Fatalf("LoadConfig error = %v, want it to mention workspace:", err)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
 	}
 }

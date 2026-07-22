@@ -20,7 +20,20 @@ func TestExampleAgentsLoadsCleanly(t *testing.T) {
 			continue
 		}
 
-		writer := job.Plan[0]
+		var writer *Step
+
+		for i := range job.Plan {
+			if job.Plan[i].Agent == "writer" {
+				writer = &job.Plan[i]
+
+				break
+			}
+		}
+
+		if writer == nil {
+			t.Fatal("judge job has no writer agent step")
+		}
+
 		if writer.Handoff == nil || !writer.Handoff.Tool {
 			t.Errorf("judge job's writer step: Handoff = %+v, want {Tool: true}", writer.Handoff)
 		}
@@ -41,12 +54,14 @@ jobs:
 - name: j
   plan:
   - agent: writer
+    inputs: []
     prompt: revise it
     handoff: true
     verdicts: [approve, revise]
     to: { approve: done, revise: writer }
     max_visits: 3
   - task: done
+    inputs: []
     run: "true"
 `
 	path := writeConfig(t, pipeline)
@@ -88,12 +103,14 @@ jobs:
 - name: j
   plan:
   - agent: writer
+    inputs: []
     prompt: revise it
     handoff: ` + tc.yaml + `
     verdicts: [approve, revise]
     to: { approve: done, revise: writer }
     max_visits: 3
   - task: done
+    inputs: []
     run: "true"
 `
 			path := writeConfig(t, pipeline)
@@ -126,9 +143,11 @@ jobs:
 - name: j
   plan:
   - task: a
+    inputs: []
     run: "true"
     to: { success: b }
   - task: b
+    inputs: []
     run: "true"
     handoff: true
 `,
@@ -144,12 +163,14 @@ jobs:
 - name: j
   plan:
   - agent: writer
+    inputs: []
     prompt: revise it
     handoff: false
     verdicts: [approve, revise]
     to: { approve: done, revise: writer }
     max_visits: 2
   - task: done
+    inputs: []
     run: "true"
 `,
 			want: "handoff enables nothing",
@@ -164,12 +185,14 @@ jobs:
 - name: j
   plan:
   - agent: writer
+    inputs: []
     prompt: revise it
     handoff: { context: false }
     verdicts: [approve, revise]
     to: { approve: done, revise: writer }
     max_visits: 2
   - task: done
+    inputs: []
     run: "true"
 `,
 			want: "handoff enables nothing",
@@ -184,6 +207,7 @@ jobs:
 - name: j
   plan:
   - agent: writer
+    inputs: []
     prompt: draft it
     handoff: true
 `,
@@ -199,6 +223,7 @@ jobs:
 - name: j
   plan:
   - task: work
+    inputs: []
     run: "true"
     on_failure:
       agent: writer
@@ -236,14 +261,17 @@ jobs:
 - name: j
   plan:
   - agent: writer
+    inputs: []
     prompt: draft it
     handoff: true
   - agent: critic
+    inputs: []
     prompt: judge it
     verdicts: [approve, revise]
     to: { approve: done, revise: writer }
     max_visits: 3
   - task: done
+    inputs: []
     run: "true"
 `
 	path := writeConfig(t, full)
