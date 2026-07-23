@@ -64,10 +64,21 @@ func lookupAPIKey(envVar string, required bool) (string, error) {
 // already-resolved base URL/model/key (see config.ResolveAgentInvocation).
 // Returning the model.LLM interface (not the concrete *openai.Model) keeps
 // runAgentConversation testable against an in-process fake.
+//
+// An OpenRouter base URL additionally gets a caching HTTP client (see
+// openrouter.go); every other provider is left with a zero HTTPOptions, so
+// openai-go builds its own client exactly as it did before that file existed.
 func newAgentLLM(baseURL, modelName, apiKey string) model.LLM {
-	return genaiopenai.New(genaiopenai.Config{
+	cfg := genaiopenai.Config{
 		APIKey:    apiKey,
 		BaseURL:   baseURL,
 		ModelName: modelName,
-	})
+	}
+
+	client := newOpenRouterHTTPClient(baseURL)
+	if client != nil {
+		cfg.HTTPOptions = genaiopenai.HTTPOptions{Client: client}
+	}
+
+	return genaiopenai.New(cfg)
 }
