@@ -71,6 +71,14 @@ func allHooks() config.Hooks {
 	}
 }
 
+// TestConformance note: verifies on_success/on_failure/on_error firing
+// conditions against Concourse's own doc (concourse-ci.org/docs/steps/):
+// on_success on a nil error, on_failure on a task-level Failure (outcome.Fail
+// — Concourse: "the parent step fails" but "does not recover the failure"),
+// on_error on any other error (Concourse: "terminates abnormally in any way
+// other than those handled by on_abort or on_failure" — matches
+// outcome.Errored's "infrastructure error" bucket exactly). See
+// docs/conformance.md.
 func TestRunHooksRouting(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -109,6 +117,11 @@ func TestRunHooksRouting(t *testing.T) {
 // TestRunHooksAbortGracePeriod verifies on_abort and ensure both run to
 // completion even when the job context is already canceled — they run detached
 // under the grace period.
+//
+// TestConformance note: verifies on_abort fires on a canceled context and
+// ensure fires "regardless of whether the parent step succeeds, fails, or
+// errors... also executed if the build was aborted," per
+// concourse-ci.org/docs/steps/. See docs/conformance.md.
 func TestRunHooksAbortGracePeriod(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "markers.txt")
 	scope := hookTestScope(t, marker)

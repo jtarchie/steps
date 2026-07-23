@@ -30,7 +30,12 @@ type hookScope struct {
 	bw      workspace.BuildWorkspace
 }
 
-// runHooks dispatches the Concourse-style hooks around a guarded outcome.
+// runHooks dispatches the Concourse-style hooks around a guarded outcome:
+// on_success/on_failure/on_error/on_abort/ensure, matching Concourse's five
+// hook step modifiers and their firing conditions exactly — see
+// docs/conformance.md, TestRunHooksRouting and TestRunHooksAbortGracePeriod
+// in hooks_test.go, and concourse-ci.org/docs/steps/ ("Hooks"/modifier
+// pages).
 // baseErr is the guarded work's own result (nil = success). It classifies
 // baseErr once (against the job context), runs the single matching on_* hook,
 // then always runs ensure last. Hooks are observers: a non-nil baseErr is

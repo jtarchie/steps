@@ -17,7 +17,10 @@ import (
 // CheckVersions renders rt.Config.Check against {"source": source}, runs it,
 // and parses stdout as a JSON array into []map[string]any. Ordering
 // (oldest-first) is entirely the check command's responsibility, per
-// Concourse convention — no sorting happens here.
+// Concourse convention — no sorting happens here (see docs/conformance.md
+// and internal/resource/resource_test.go's TestSelectVersion/"latest when
+// unpinned"; Concourse doc: concourse-ci.org/docs/resource-types/
+// implementing/, "check" section).
 //
 // When rt.Config.MCP is set, this calls its check: tool instead (see
 // mcpCheckVersions) — cfg is needed only for that path, to resolve the
@@ -164,7 +167,9 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, sour
 // and executes it with cwd = srcDir. If stdout parses as a JSON object it's
 // returned as result (loosely mirroring check's convention of emitting the
 // version produced); unparsable or empty stdout is not an error — result
-// is simply nil, since many out scripts won't emit anything.
+// is simply nil, since many out scripts won't emit anything (see
+// docs/conformance.md and TestConformanceRunOutUnparsableStdoutIsNilNotError
+// in resource_test.go).
 //
 // When rt.Config.MCP is set, this calls mcpRunOut instead. rt.Config.MCP.Out
 // is itself optional (see validateMCPResourcePuts, which rejects a put step

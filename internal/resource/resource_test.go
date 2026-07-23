@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
@@ -48,6 +49,13 @@ func TestSelectVersion(t *testing.T) {
 		{"number": 3},
 	}
 
+	// TestConformance note: "latest when unpinned" verifies steps's claim
+	// (CheckVersions's doc comment, "Concourse convention — no sorting
+	// happens here") that a check script must return versions oldest-first
+	// with the latest last, and steps trusts that order rather than
+	// re-sorting. Concourse doc: concourse-ci.org/docs/resource-types/
+	// implementing/ ("check" section) — versions are returned "in
+	// chronological order (oldest first)".
 	t.Run("latest when unpinned", func(t *testing.T) {
 		t.Parallel()
 
@@ -91,4 +99,35 @@ func TestSelectVersion(t *testing.T) {
 			t.Error("expected error for unmatched pin")
 		}
 	})
+}
+
+// TestConformanceRunOutUnparsableStdoutIsNilNotError verifies RunOut's shell
+// backend against the same claim internal/resource/mcp_test.go's
+// TestRunOutMCPUnparsableResultIsNilNotError already verifies for the MCP
+// backend (its own comment says "mirrors the shell backend's own
+// convention" — this was previously asserted only in that comment, with no
+// test of the shell path itself).
+//
+// Concourse doc: concourse-ci.org/docs/resource-types/implementing/ ("out"
+// section) — an out script's stdout is a JSON object with version/metadata;
+// nothing in the documented contract requires a script to emit one.
+//
+// steps claim under test: internal/resource/resource.go's RunOut doc
+// comment ("unparsable or empty stdout is not an error").
+func TestConformanceRunOutUnparsableStdoutIsNilNotError(t *testing.T) {
+	t.Parallel()
+
+	rt := config.ResourceType{
+		Name:   "dummy",
+		Config: config.ResourceTypeConfig{Out: "echo not-json"},
+	}
+
+	result, err := RunOut(context.Background(), nil, rt, map[string]any{}, map[string]any{}, t.TempDir())
+	if err != nil {
+		t.Fatalf("RunOut: %v, want nil error for unparsable stdout", err)
+	}
+
+	if result != nil {
+		t.Errorf("RunOut result = %v, want nil", result)
+	}
 }

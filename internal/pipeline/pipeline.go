@@ -5,6 +5,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -76,9 +77,14 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 
 	// Everything from here on has a workspace to run job-level hooks in, so
 	// funnel planning and execution into one outcome and dispatch the job's
-	// hooks around it. Pre-workspace failures above fire no hooks — the build
-	// never started (matching Concourse). Job hooks fire on every invocation,
-	// cached or not; they are never hashed or skipped.
+	// hooks around it. Pre-workspace failures above fire no hooks — there's
+	// nowhere for a job-level hook to run yet. This is steps's own design
+	// choice, not a Concourse parity claim: Concourse has no literal
+	// job-level hook construct to compare against (its hooks are step
+	// modifiers), so "matching Concourse" was unverifiable and has been
+	// dropped from this comment — see docs/conformance.md. Job hooks fire on
+	// every invocation past this point, cached or not; they are never hashed
+	// or skipped.
 	runErr := runJobPlan(ctx, cfg, job, pinned, provider, bw, st, skipCache)
 
 	scope := hookScope{cfg: cfg, jobName: job.Name, label: fmt.Sprintf("job %q", job.Name), bw: bw}
@@ -492,6 +498,18 @@ func recordChainSucceeded(ctx context.Context, st *store.Store, jobName, rootHas
 // version(s), then runs the remainder of the plan for each — see
 // runTriggeredBuild. It always terminates the calling runSteps loop, since
 // a get step delegates the rest of the plan to its triggered build(s).
+//
+// A version whose triggered build fails does NOT stop the remaining
+// versions from being attempted (see TestConformanceGetVersionEveryContinuesPastFailure
+// in conformance_test.go): Concourse's own version-selection cursor
+// (atc/db/versions_db.go's NextEveryVersion) advances regardless of a prior
+// build's status, and every version here already gets its own isolated
+// workspace/hooks/store-recording via runTriggeredBuild — nothing about
+// stopping early was ever load-bearing for correctness, only an accident of
+// the loop giving up on the first error. Structural errors (bad template,
+// unmarshalable version — GetNodeContent/HashNode) are the one exception:
+// those depend only on static step/version content, so they'll recur
+// identically for every version, and aborting immediately is still right.
 func runGetStep(
 	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, remainder []config.Step,
 	pinned map[string]string, provider workspace.Provider, st *store.Store, skippable map[string]bool,
@@ -504,7 +522,19 @@ func runGetStep(
 
 	slog.Debug("job.step", "job", jobName, "index", i, "kind", "get", "resource", step.Get, "versions", len(versions))
 
+	var buildErrs []error
+
 	for _, version := range versions {
+		// Concourse's scheduler has no equivalent of "the whole CLI process is
+		// shutting down" mid-cursor-advance to compare against — this is
+		// steps's own judgment, not a Concourse claim. It mirrors the
+		// ctx.Err() check in internal/trigger/trigger.go's worker loop: stop
+		// starting NEW triggered builds on cancellation, don't let one abandon
+		// itself mid-flight.
+		if ctx.Err() != nil {
+			break
+		}
+
 		content, err := merkle.GetNodeContent(cfg, step, *resourceType, resource.Source, version)
 		if err != nil {
 			return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
@@ -526,11 +556,13 @@ func runGetStep(
 
 		err = runTriggeredBuild(ctx, cfg, jobName, i, step, *resource, *resourceType, version, remainder, pinned, provider, st, skippable, node, chainUnskippable, cache)
 		if err != nil {
-			return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
+			buildErrs = append(buildErrs, fmt.Errorf("step %d (get %q) version %v: %w", i, step.Get, version, err))
+
+			continue
 		}
 	}
 
-	return nil
+	return errors.Join(buildErrs...)
 }
 
 // runTaskStep hashes step against parentHash and, unless that hash is

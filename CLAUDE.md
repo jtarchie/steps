@@ -129,6 +129,7 @@ Human-friendly deep-dives for each opt-in feature area, split along the same bou
 - **[docs/workspace.md](docs/workspace.md)** — per-step filesystem isolation (`workspace:`, `inputs:`/`outputs:`).
 - **[docs/templating.md](docs/templating.md)** — the templating functions available and the `shellquote` safety idiom.
 - **[docs/mcp.md](docs/mcp.md)** — `mcp_servers:`, the three agent tool-grant forms, the resource-type `mcp:` backend, `steps mcp tools`/`steps mcp login`, and where an OAuth token is (and isn't) persisted.
+- **[docs/conformance.md](docs/conformance.md)** — the living inventory of every "mirrors Concourse" claim in this codebase, which ones have a `TestConformance...` test or annotation checking them against real Concourse behavior, and how to add one.
 
 ## CI & Validation
 
@@ -158,3 +159,4 @@ When making changes:
 4. **If touching `internal/store/store.go`**: `OpenStore` is called exactly once per process and that single handle is threaded everywhere — don't add a second `OpenStore` call path or a per-object pool, even to "help" `steps watch --max-concurrent`'s worker pool (it's already safe via `SetMaxOpenConns(1)`; see "SQLite WAL Mode" above). WAL is set via DSN pragma with no retry loop, which is only safe because of that single-open-at-startup model.
 5. **Keep `internal/agent`'s conversation loop's behavior stable.** The tool-calling loop (`conversation.go`'s `runAgentConversation`) is tightly coupled to context propagation, logging, and `required:` enforcement via `tool_choice` forcing; file-organization changes within the package are fine, but refactors must preserve the loop's exact semantics — see [docs/agents.md](docs/agents.md).
 6. **Respect the package dependency graph** (see Project Layout above and `.golangci.yml`'s `depguard` rules): `internal/config` depends on nothing internal; `internal/pipeline` is the only package that depends on `internal/agent`; `internal/trigger` is the only package (besides `main`) that depends on `internal/pipeline`, and only to call `RunJob` per triggered job. A new import that isn't in a package's `depguard` allow-list is a signal the change belongs in a different package, not a rule to route around.
+7. **If you touch code carrying a `mirrors Concourse`/`per Concourse's model` comment**, check [docs/conformance.md](docs/conformance.md) for whether a `TestConformance...` test already covers the claim, and add one (or correct the comment) if you're changing the behavior it describes. One such claim was already found to be false — see that doc's opening paragraph.

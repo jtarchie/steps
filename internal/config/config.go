@@ -516,7 +516,11 @@ type Step struct {
 	// Version selects which version(s) a get step fetches: unset/"latest"
 	// (default) picks the single latest version; "every" runs the rest of
 	// the plan once per version returned by check; a map pins to a specific
-	// version. Mirrors Concourse's get.version field.
+	// version. Mirrors Concourse's get.version field, including that a
+	// failed version's build does not stop "every" from attempting the
+	// remaining versions — see docs/conformance.md and
+	// internal/pipeline/conformance_test.go's
+	// TestConformanceGetVersionEveryContinuesPastFailure.
 	Version any `yaml:"version,omitempty"`
 	// Task labels a task step. If Run is also set, the step is inline and
 	// Run/Fix below are used as-is. If Run is empty, Task instead names a
@@ -619,7 +623,10 @@ type Step struct {
 	Handoff *HandoffSpec `yaml:"handoff,omitempty"`
 	// InputMapping/OutputMapping rename a task step's declared inputs/outputs
 	// onto plan-artifact names, mirroring Concourse's input_mapping/
-	// output_mapping: each entry is {task-config-name: plan-artifact-name}, so
+	// output_mapping (see docs/conformance.md;
+	// TestRunJobIsolatedGetAliasMappingAndPutAll in
+	// workspace_integration_test.go; Concourse doc: concourse-ci.org/docs/
+	// steps/task/): each entry is {task-config-name: plan-artifact-name}, so
 	// a reusable tasks: entry with pinned input names can be pointed at
 	// whatever a job actually fetched/produced without editing the task. Keys
 	// must be a subset of the resolved task's declared inputs:/outputs:. Task
@@ -631,9 +638,14 @@ type Step struct {
 	// Resource, on a get step, names the resource to fetch when it differs from
 	// the step's own name: the fetched artifact (and the directory, step name,
 	// and to: target) is Get, while the resource whose check/in runs is
-	// Resource — mirroring Concourse's get.resource. This lets one resource
-	// appear under a task-friendly name, or twice in a plan under two names.
-	// Empty (the default) means the resource name equals Get. Get steps only.
+	// Resource — mirroring Concourse's get.resource, including that two
+	// aliased get steps for the same underlying resource share one version
+	// history rather than tracking separately (see docs/conformance.md;
+	// TestResourcesAndAffectedJobsResolveGetAlias in
+	// internal/trigger/trigger_test.go; Concourse doc: concourse-ci.org/docs/
+	// steps/get/). This lets one resource appear under a task-friendly name,
+	// or twice in a plan under two names. Empty (the default) means the
+	// resource name equals Get. Get steps only.
 	Resource string `yaml:"resource,omitempty"`
 }
 
