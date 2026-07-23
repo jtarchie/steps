@@ -5,7 +5,6 @@ package pipeline
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -34,40 +33,6 @@ func nodeRecord(n merkle.Node) store.NodeRecord {
 		Resource:   n.Resource,
 		Content:    n.Content,
 	}
-}
-
-// maxSessionLabelLen bounds the job-name portion of a session ID. The random
-// suffix is what makes the value unique; the job name is there only so a
-// session is recognizable in an OpenRouter activity log, and truncating it
-// keeps the whole value well inside the 256-character cap agent.WithSessionID
-// enforces.
-const maxSessionLabelLen = 64
-
-// newSessionID builds the OpenRouter session identifier for one job run:
-// a sanitized, truncated job name plus enough randomness that two runs of the
-// same job — including two concurrent ones under `steps watch
-// --max-concurrent` — never collide and so never share a provider pin.
-//
-// Characters outside an unreserved ASCII set are dropped rather than escaped:
-// the value becomes an HTTP header, and a job name is free-form YAML that may
-// well contain spaces or non-ASCII.
-func newSessionID(jobName string) string {
-	var label strings.Builder
-
-	for _, r := range jobName {
-		if label.Len() >= maxSessionLabelLen {
-			break
-		}
-
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
-			label.WriteRune(r)
-		default:
-			label.WriteByte('-')
-		}
-	}
-
-	return label.String() + "-" + rand.Text()
 }
 
 // RunJob executes job's plan steps in order. pinned applies to any `get`
@@ -110,13 +75,13 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	log := &execLog{}
 	ctx = withExecLog(ctx, log)
 
-	// Pin every LLM call this run makes to one OpenRouter session, so its
-	// prompt cache stays warm across an agent step's conversation turns and
-	// across the job's agent steps (see agent.WithSessionID). Scoped to this
-	// invocation rather than the process so concurrent jobs under
-	// `steps watch --max-concurrent` don't share a session; ignored outright
-	// by every non-OpenRouter provider.
-	ctx = agent.WithSessionID(ctx, newSessionID(job.Name))
+	// Identify this run so each agent's OpenRouter calls share a session and
+	// keep its prompt cache warm across conversation turns, revise loops, and
+	// repeated sub-agent calls (see agent.WithNewRun — the session is per
+	// agent within the run, not run-wide). Scoped to this invocation so
+	// concurrent jobs under `steps watch --max-concurrent` never share a
+	// provider pin; ignored outright by every non-OpenRouter provider.
+	ctx = agent.WithNewRun(ctx, job.Name)
 
 	// Everything from here on has a workspace to run job-level hooks in, so
 	// funnel planning and execution into one outcome and dispatch the job's

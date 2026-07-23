@@ -104,10 +104,27 @@ This resolution (`Config.ResolveTask`) runs identically at plan time and run tim
 
 An agent whose `model:` resolves to OpenRouter (the `openrouter/` prefix, or a `source.endpoint:` pointing at `openrouter.ai`) gets two request mutations automatically. Neither is on by default in a stock OpenAI-compatible client, and without them a conversation pays full input price on every turn — exactly where caching is worth the most, since the whole prior history is re-sent each time.
 
-- **`x-session-id`** — one identifier per job run, so OpenRouter pins the run to a single provider instance and its prompt cache stays warm. Without it, sticky routing only engages *after* a cache hit is observed, which is too late for a short job. The scope is the whole `RunJob` invocation, so every agent step, every turn of each step's conversation loop, and any `fix:` agent or sub-agent nested inside them share it. Concurrent jobs under `steps watch --max-concurrent` each get their own — the ID rides on the context, not the client.
+- **`x-session-id`** — **one identifier per agent, per job run**, so OpenRouter pins that agent's calls to a single provider instance and its prompt cache stays warm. Without it, sticky routing only engages *after* a cache hit is observed, which is too late for a short job.
 - **`cache_control: {type: ephemeral}`** — a top-level body field, OpenRouter's "automatic" caching form: it caches through the last cacheable block and advances the boundary as the conversation grows, rather than spending one of the four explicit per-message breakpoints. Injected **only** for Anthropic-routed models (`anthropic/…` or `~anthropic/…`), the family that needs an explicit marker. Providers with implicit caching (OpenAI, Gemini, DeepSeek, Groq, …) are left alone; sending them a marker risks a 400 for no gain.
 
-Both are transport-level only:
+### Why the session is scoped per agent
+
+OpenRouter tracks sticky routing "at the account level, per model, and per conversation" — and an `agents:` entry *is* the (model, persona, dials) bundle, so two different agents share no cacheable prefix and are not one conversation. The session key is therefore the job run **plus the agent name**:
+
+| | Same session? | Why |
+|---|---|---|
+| Turns of one step's conversation loop | yes | the whole prior history is re-sent each turn — the big win |
+| A `to:`/`verdicts:` revise loop re-entering a step | yes | same agent, same prefix, across separate visits |
+| A sub-agent called repeatedly by its parent | yes | same persona every call |
+| A `fix:` agent retrying | yes | same persona every attempt |
+| Two different agents in one job | **no** | different model and persona — nothing to reuse |
+| The same agent in two runs (incl. concurrent) | **no** | no cross-run provider pin |
+
+The per-agent split is not merely tidy. With a **router model** (`openrouter/auto` and friends) a session pins the *resolved model*, not just the provider — so under a run-wide session whichever agent ran first would silently choose the concrete model for every later agent in the job.
+
+Keying on the agent **name** rather than the step index is equally deliberate: scoping per step *invocation* would fragment exactly the revise-loop and repeated-sub-agent cases where caching pays off most.
+
+Both mutations are transport-level only:
 
 - **No config surface.** There is nothing to opt into and nothing to set — pointing an agent at OpenRouter is the whole trigger.
 - **No merkle impact.** The session ID and cache marker never enter a step's hashed content, so enabling caching cannot invalidate a cached step, and the same pipeline hashes identically before and after.

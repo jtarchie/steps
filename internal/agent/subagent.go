@@ -67,7 +67,7 @@ func buildSubAgentTool(ctx context.Context, cfg *config.Config, spec config.Tool
 
 	child := preparedSubAgent{
 		ri:       ri,
-		llm:      newAgentLLM(ri.BaseURL, ri.ModelName, apiKey),
+		llm:      newAgentLLM(ri.BaseURL, ri.ModelName, apiKey, ri.AgentName),
 		decls:    childDecls,
 		registry: childRegistry,
 		required: requiredToolNames(ri.ToolSpecs),

@@ -66,16 +66,17 @@ func lookupAPIKey(envVar string, required bool) (string, error) {
 // runAgentConversation testable against an in-process fake.
 //
 // An OpenRouter base URL additionally gets a caching HTTP client (see
-// openrouter.go); every other provider is left with a zero HTTPOptions, so
-// openai-go builds its own client exactly as it did before that file existed.
-func newAgentLLM(baseURL, modelName, apiKey string) model.LLM {
+// openrouter.go), scoped to agentName so each agent keeps its own session;
+// every other provider is left with a zero HTTPOptions, so openai-go builds
+// its own client exactly as it did before that file existed.
+func newAgentLLM(baseURL, modelName, apiKey, agentName string) model.LLM {
 	cfg := genaiopenai.Config{
 		APIKey:    apiKey,
 		BaseURL:   baseURL,
 		ModelName: modelName,
 	}
 
-	client := newOpenRouterHTTPClient(baseURL)
+	client := newOpenRouterHTTPClient(baseURL, agentName)
 	if client != nil {
 		cfg.HTTPOptions = genaiopenai.HTTPOptions{Client: client}
 	}

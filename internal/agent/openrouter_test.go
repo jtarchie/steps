@@ -11,57 +11,154 @@ import (
 	"testing"
 )
 
-func TestWithSessionID(t *testing.T) {
+func TestWithNewRun(t *testing.T) {
 	t.Parallel()
 
-	t.Run("round-trips a valid id", func(t *testing.T) {
+	t.Run("carries the job name and a unique token", func(t *testing.T) {
 		t.Parallel()
 
-		ctx := WithSessionID(t.Context(), "job-abc123")
+		first := runIDFromContext(WithNewRun(t.Context(), "build"))
+		if !strings.HasPrefix(first, "build-") {
+			t.Errorf("got %q, want a %q prefix", first, "build-")
+		}
 
-		got := sessionIDFromContext(ctx)
-		if got != "job-abc123" {
-			t.Errorf("got %q, want %q", got, "job-abc123")
+		second := runIDFromContext(WithNewRun(t.Context(), "build"))
+		if first == second {
+			t.Errorf("two runs of the same job produced the same run id %q", first)
 		}
 	})
 
-	t.Run("empty id leaves the context unchanged", func(t *testing.T) {
+	t.Run("a context with no run reads empty", func(t *testing.T) {
 		t.Parallel()
 
-		got := sessionIDFromContext(WithSessionID(t.Context(), ""))
+		got := runIDFromContext(t.Context())
 		if got != "" {
 			t.Errorf("got %q, want empty", got)
 		}
 	})
 
-	t.Run("over-long id is dropped rather than truncated", func(t *testing.T) {
+	t.Run("an empty job name still yields a usable run id", func(t *testing.T) {
 		t.Parallel()
 
-		// OpenRouter rejects a session_id past 256 chars; sending an invalid
-		// one is worse than sending none at all.
-		got := sessionIDFromContext(WithSessionID(t.Context(), strings.Repeat("x", maxSessionIDLen+1)))
-		if got != "" {
-			t.Errorf("got %q, want empty", got)
+		got := runIDFromContext(WithNewRun(t.Context(), ""))
+		if strings.TrimPrefix(got, "-") == "" {
+			t.Errorf("got %q, want a non-empty random token", got)
+		}
+	})
+}
+
+// isHeaderSafeRune mirrors the unreserved set sanitizeLabel is allowed to
+// emit, so a composed session id is always a legal HTTP header value.
+func isHeaderSafeRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
+	case r == '.', r == '_', r == '-':
+		return true
+	default:
+		return false
+	}
+}
+
+func TestSanitizeLabel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("drops characters illegal in an HTTP header", func(t *testing.T) {
+		t.Parallel()
+
+		// Job and agent names are free-form YAML: spaces and non-ASCII are
+		// legal there but not in a header value.
+		got := sanitizeLabel("deploy to staging ✨")
+
+		for _, r := range got {
+			if !isHeaderSafeRune(r) {
+				t.Errorf("sanitized label %q still contains %q", got, r)
+			}
 		}
 	})
 
-	t.Run("id at exactly the cap is kept", func(t *testing.T) {
+	t.Run("bounds length", func(t *testing.T) {
 		t.Parallel()
 
-		id := strings.Repeat("x", maxSessionIDLen)
+		got := sanitizeLabel(strings.Repeat("a", maxLabelLen*3))
+		if len(got) > maxLabelLen {
+			t.Errorf("label is %d chars, over the %d bound", len(got), maxLabelLen)
+		}
+	})
+}
 
-		got := sessionIDFromContext(WithSessionID(t.Context(), id))
-		if got != id {
-			t.Errorf("id of exactly %d chars was dropped", maxSessionIDLen)
+func TestComposeSessionID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("scopes a run to the agent", func(t *testing.T) {
+		t.Parallel()
+
+		got := composeSessionID("build-TOKEN", "reviewer")
+		if got != "build-TOKEN-reviewer" {
+			t.Errorf("got %q, want %q", got, "build-TOKEN-reviewer")
 		}
 	})
 
-	t.Run("a context with no session id reads empty", func(t *testing.T) {
+	t.Run("two agents in one run get different sessions", func(t *testing.T) {
 		t.Parallel()
 
-		got := sessionIDFromContext(t.Context())
+		// Different agents: entries mean different models and personas, so
+		// they share no cacheable prefix and must not share a provider pin —
+		// a router model would otherwise resolve once and stick for the job.
+		first := composeSessionID("build-TOKEN", "writer")
+		second := composeSessionID("build-TOKEN", "critic")
+
+		if first == second {
+			t.Errorf("two agents shared session %q", first)
+		}
+	})
+
+	t.Run("one agent re-entered in a run keeps its session", func(t *testing.T) {
+		t.Parallel()
+
+		// A to:/verdicts: revise loop, a repeatedly-called sub-agent, and a
+		// retrying fix: agent all reuse one prefix; per-invocation scoping
+		// would fragment exactly the case caching pays off in.
+		first := composeSessionID("build-TOKEN", "writer")
+		second := composeSessionID("build-TOKEN", "writer")
+
+		if first != second {
+			t.Errorf("same agent got %q then %q", first, second)
+		}
+	})
+
+	t.Run("two runs of one agent get different sessions", func(t *testing.T) {
+		t.Parallel()
+
+		first := composeSessionID("build-TOKEN1", "writer")
+		second := composeSessionID("build-TOKEN2", "writer")
+
+		if first == second {
+			t.Errorf("two runs shared session %q", first)
+		}
+	})
+
+	t.Run("no run id disables the session entirely", func(t *testing.T) {
+		t.Parallel()
+
+		got := composeSessionID("", "reviewer")
 		if got != "" {
-			t.Errorf("got %q, want empty", got)
+			t.Errorf("got %q, want empty for an agent run outside a job", got)
+		}
+	})
+
+	t.Run("stays within OpenRouter's cap for absurd names", func(t *testing.T) {
+		t.Parallel()
+
+		// Over the cap the header is rejected outright, silently disabling
+		// caching — no pipeline may be able to name its way there.
+		got := composeSessionID(
+			sanitizeLabel(strings.Repeat("job", 500))+"-TOKEN",
+			strings.Repeat("agent", 500),
+		)
+
+		if len(got) > maxSessionIDLen {
+			t.Errorf("session id is %d chars, over the %d cap", len(got), maxSessionIDLen)
 		}
 	})
 }
@@ -222,9 +319,83 @@ func serveCapturing(t *testing.T) (*http.Client, string, *capturedRequest) {
 	}))
 	t.Cleanup(server.Close)
 
-	client := &http.Client{Transport: &openRouterTransport{base: http.DefaultTransport}}
+	client := &http.Client{Transport: &openRouterTransport{base: http.DefaultTransport, agent: "reviewer"}}
 
 	return client, server.URL, captured
+}
+
+// clientFor builds a second client against the same fake server, standing in
+// for another agents: entry in the same job run.
+func clientFor(agentName string) *http.Client {
+	return &http.Client{Transport: &openRouterTransport{base: http.DefaultTransport, agent: agentName}}
+}
+
+func TestOpenRouterSessionScope(t *testing.T) {
+	t.Parallel()
+
+	t.Run("two agents in one run send different sessions", func(t *testing.T) {
+		t.Parallel()
+
+		// The case that makes per-agent scoping matter rather than merely be
+		// tidy: a router model pins the resolved model per session, so a
+		// run-wide session would let whichever agent ran first choose the
+		// model for every other agent in the job.
+		_, base, captured := serveCapturing(t)
+		ctx := WithNewRun(t.Context(), "job")
+		url := base + "/api/v1/chat/completions"
+		body := `{"model":"anthropic/claude-3.5-sonnet","messages":[]}`
+
+		postJSON(ctx, t, clientFor("writer"), url, body)
+		writerSession := captured.sessionID
+
+		postJSON(ctx, t, clientFor("critic"), url, body)
+		criticSession := captured.sessionID
+
+		if writerSession == criticSession {
+			t.Errorf("writer and critic shared session %q", writerSession)
+		}
+	})
+
+	t.Run("one agent called twice in a run keeps its session", func(t *testing.T) {
+		t.Parallel()
+
+		// The revise-loop / repeated-sub-agent case: same agent, same prefix,
+		// so the pin must survive across separate calls.
+		_, base, captured := serveCapturing(t)
+		ctx := WithNewRun(t.Context(), "job")
+		url := base + "/api/v1/chat/completions"
+		body := `{"model":"anthropic/claude-3.5-sonnet","messages":[]}`
+
+		postJSON(ctx, t, clientFor("writer"), url, body)
+		first := captured.sessionID
+
+		postJSON(ctx, t, clientFor("writer"), url, body)
+		second := captured.sessionID
+
+		if first != second {
+			t.Errorf("same agent got %q then %q", first, second)
+		}
+	})
+
+	t.Run("the same agent in two runs sends different sessions", func(t *testing.T) {
+		t.Parallel()
+
+		// Concurrent jobs under `steps watch --max-concurrent` must not share
+		// a provider pin.
+		_, base, captured := serveCapturing(t)
+		url := base + "/api/v1/chat/completions"
+		body := `{"model":"anthropic/claude-3.5-sonnet","messages":[]}`
+
+		postJSON(WithNewRun(t.Context(), "job"), t, clientFor("writer"), url, body)
+		first := captured.sessionID
+
+		postJSON(WithNewRun(t.Context(), "job"), t, clientFor("writer"), url, body)
+		second := captured.sessionID
+
+		if first == second {
+			t.Errorf("two runs shared session %q", first)
+		}
+	})
 }
 
 // postJSON issues a POST through client and closes the response body.
@@ -248,6 +419,21 @@ func postJSON(ctx context.Context, t *testing.T, client *http.Client, url, body 
 	_, _ = io.Copy(io.Discard, resp.Body)
 }
 
+// assertSessionShape checks a captured x-session-id without pinning the random
+// run token: it must name the job the run was opened with and the agent the
+// client was built for.
+func assertSessionShape(t *testing.T, got, jobName, agentName string) {
+	t.Helper()
+
+	if !strings.HasPrefix(got, jobName+"-") {
+		t.Errorf("x-session-id = %q, want it to start with %q", got, jobName+"-")
+	}
+
+	if !strings.HasSuffix(got, "-"+agentName) {
+		t.Errorf("x-session-id = %q, want it to end with %q", got, "-"+agentName)
+	}
+}
+
 func TestOpenRouterTransportWireMutations(t *testing.T) {
 	t.Parallel()
 
@@ -255,14 +441,12 @@ func TestOpenRouterTransportWireMutations(t *testing.T) {
 		t.Parallel()
 
 		client, base, captured := serveCapturing(t)
-		ctx := WithSessionID(t.Context(), "job-xyz")
+		ctx := WithNewRun(t.Context(), "job")
 
 		postJSON(ctx, t, client, base+"/api/v1/chat/completions",
 			`{"model":"anthropic/claude-3.5-sonnet","messages":[]}`)
 
-		if captured.sessionID != "job-xyz" {
-			t.Errorf("x-session-id = %q, want %q", captured.sessionID, "job-xyz")
-		}
+		assertSessionShape(t, captured.sessionID, "job", "reviewer")
 
 		marker, ok := captured.body["cache_control"].(map[string]any)
 		if !ok {
@@ -291,14 +475,12 @@ func TestOpenRouterTransportWireMutations(t *testing.T) {
 		t.Parallel()
 
 		client, base, captured := serveCapturing(t)
-		ctx := WithSessionID(t.Context(), "job-xyz")
+		ctx := WithNewRun(t.Context(), "job")
 
 		postJSON(ctx, t, client, base+"/api/v1/chat/completions",
 			`{"model":"openai/gpt-4o","messages":[]}`)
 
-		if captured.sessionID != "job-xyz" {
-			t.Errorf("x-session-id = %q, want %q", captured.sessionID, "job-xyz")
-		}
+		assertSessionShape(t, captured.sessionID, "job", "reviewer")
 
 		_, present := captured.body["cache_control"]
 		if present {
@@ -310,7 +492,7 @@ func TestOpenRouterTransportWireMutations(t *testing.T) {
 		t.Parallel()
 
 		client, base, captured := serveCapturing(t)
-		ctx := WithSessionID(t.Context(), "job-xyz")
+		ctx := WithNewRun(t.Context(), "job")
 
 		postJSON(ctx, t, client, base+"/api/v1/models",
 			`{"model":"anthropic/claude-3.5-sonnet"}`)
@@ -333,7 +515,7 @@ func TestOpenRouterTransportRequestHandling(t *testing.T) {
 		t.Parallel()
 
 		client, base, _ := serveCapturing(t)
-		ctx := WithSessionID(t.Context(), "job-xyz")
+		ctx := WithNewRun(t.Context(), "job")
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 			base+"/api/v1/chat/completions",
@@ -415,7 +597,7 @@ func TestNewOpenRouterHTTPClient(t *testing.T) {
 	t.Run("openrouter base url gets a caching client", func(t *testing.T) {
 		t.Parallel()
 
-		got := newOpenRouterHTTPClient("https://openrouter.ai/api/v1/")
+		got := newOpenRouterHTTPClient("https://openrouter.ai/api/v1/", "reviewer")
 		if got == nil {
 			t.Fatal("got nil, want a client")
 		}
@@ -438,7 +620,7 @@ func TestNewOpenRouterHTTPClient(t *testing.T) {
 			"https://api.groq.com/openai/v1/",
 			"",
 		} {
-			got := newOpenRouterHTTPClient(baseURL)
+			got := newOpenRouterHTTPClient(baseURL, "reviewer")
 			if got != nil {
 				t.Errorf("newOpenRouterHTTPClient(%q) = %v, want nil", baseURL, got)
 			}

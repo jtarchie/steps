@@ -4,11 +4,13 @@
 // turn of its tool-calling conversation — the case where the whole prior
 // history is re-sent each turn and caching is worth the most.
 //
-//  1. x-session-id header. Read from the request context (see WithSessionID,
-//     set once per job run by internal/pipeline). OpenRouter pins a session to
-//     one provider instance so the prompt cache stays warm; without it, sticky
-//     routing only engages *after* a cache hit is observed, which is too late
-//     for a short pipeline job.
+//  1. x-session-id header, scoped to one agent within one job run: the run
+//     token comes from the request context (see WithNewRun, set once per job
+//     run by internal/pipeline) and the agent name from the client the call
+//     was made through (see composeSessionID for why that split). OpenRouter
+//     pins a session to one provider instance so the prompt cache stays warm;
+//     without it, sticky routing only engages *after* a cache hit is observed,
+//     which is too late for a short pipeline job.
 //
 //  2. Top-level cache_control: {type: ephemeral} body field, injected only
 //     when the request's model routes to Anthropic. This is OpenRouter's
@@ -39,6 +41,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -66,36 +69,100 @@ const chatCompletionsPath = "/chat/completions"
 // dropping stuck-connection protection for OpenRouter agents specifically.
 const openRouterResponseHeaderTimeout = 10 * time.Minute
 
-// sessionIDKey types the context value holding an OpenRouter session ID.
-type sessionIDKey struct{}
+// maxLabelLen bounds each human-readable component of a session ID (the job
+// name and the agent name). Two of them plus the random run token stay well
+// inside maxSessionIDLen, so no pipeline can name its way past the cap.
+const maxLabelLen = 64
 
-// WithSessionID returns a derived context carrying an OpenRouter session
-// identifier, which openRouterTransport sends as the x-session-id header on
-// every OpenRouter chat completion made under that context.
-//
-// internal/pipeline sets this once per job run, so every LLM call the job
-// makes — each agent step, each turn of its conversation loop, any fix: agent
-// or sub-agent nested inside it — pins to the same provider instance. It is
-// carried in the context rather than baked into the client so that concurrent
-// jobs under `steps watch --max-concurrent` stay separated: the transport is
-// shared, the session ID is per-request.
-//
-// An empty or over-long id leaves ctx unchanged — OpenRouter caps session_id
-// at 256 characters, and sending an invalid one is worse than sending none.
-// The session ID is transport-level only: it never enters a step's merkle
-// content (see internal/merkle), so it cannot invalidate a cached step.
-func WithSessionID(ctx context.Context, id string) context.Context {
-	if id == "" || len(id) > maxSessionIDLen {
-		return ctx
-	}
+// runIDKey types the context value holding one job run's identifier.
+type runIDKey struct{}
 
-	return context.WithValue(ctx, sessionIDKey{}, id)
+// WithNewRun returns a derived context identifying a fresh run of jobName,
+// which openRouterTransport combines with the calling agent's name to form the
+// x-session-id header on OpenRouter chat completions (see composeSessionID).
+//
+// internal/pipeline calls this once per job run. The run token is random, so
+// two runs of the same job — including two concurrent ones under `steps watch
+// --max-concurrent` — never share a session and so never share a provider pin.
+// It rides on the context rather than the client precisely so those concurrent
+// runs stay separated while sharing everything else.
+//
+// The session is transport-level only: it never enters a step's merkle content
+// (see internal/merkle), so it cannot invalidate a cached step.
+func WithNewRun(ctx context.Context, jobName string) context.Context {
+	return context.WithValue(ctx, runIDKey{}, sanitizeLabel(jobName)+"-"+rand.Text())
 }
 
-// sessionIDFromContext reads back what WithSessionID stored, or "" when the
-// context carries no session ID.
-func sessionIDFromContext(ctx context.Context) string {
-	id, _ := ctx.Value(sessionIDKey{}).(string)
+// runIDFromContext reads back what WithNewRun stored, or "" when the context
+// carries no run (every non-pipeline caller, and every test that doesn't set
+// one).
+func runIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(runIDKey{}).(string)
+
+	return id
+}
+
+// sanitizeLabel reduces a free-form name to characters legal in an HTTP header
+// value and bounds its length. Job and agent names are arbitrary YAML strings
+// that may contain spaces or non-ASCII; dropping to an unreserved ASCII subset
+// is simpler than escaping and keeps the truncation below rune-safe.
+func sanitizeLabel(name string) string {
+	var out strings.Builder
+
+	for _, r := range name {
+		if out.Len() >= maxLabelLen {
+			break
+		}
+
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			out.WriteRune(r)
+		default:
+			out.WriteByte('-')
+		}
+	}
+
+	return out.String()
+}
+
+// composeSessionID builds the session identifier for one agent within one job
+// run: the run token plus the agent's name.
+//
+// Scoping to the agent, rather than to the whole run, is deliberate. OpenRouter
+// tracks sticky routing "per model, and per conversation", and a session is
+// meant to be one conversation — but two different agents: entries have
+// different models and different personas, so they share no cacheable prefix
+// and are not one conversation. Two cases make the distinction matter rather
+// than merely tidy:
+//
+//   - A router model (openrouter/auto and friends) pins the *resolved model*,
+//     not just the provider, for the life of a session. Under a run-wide
+//     session the first agent to run would decide the concrete model for every
+//     later agent in the job.
+//   - Distinct agents would otherwise be reported to OpenRouter as one
+//     conversation whose prefix changes completely on every request.
+//
+// Keying on the agent name (not the step index) is what keeps the cases that
+// *do* share a prefix together: a to:/verdicts: revise loop re-entering the
+// same step, a sub-agent the parent calls repeatedly, and a fix: agent
+// retrying all reuse one session, which per-step-invocation scoping would
+// fragment.
+//
+// An empty runID disables the header entirely — an agent run outside a job
+// (tests, any future non-pipeline caller) sends no session.
+func composeSessionID(runID, agentName string) string {
+	if runID == "" {
+		return ""
+	}
+
+	id := runID
+	if agentName != "" {
+		id += "-" + sanitizeLabel(agentName)
+	}
+
+	if len(id) > maxSessionIDLen {
+		id = id[:maxSessionIDLen]
+	}
 
 	return id
 }
@@ -132,8 +199,16 @@ func isAnthropicModel(name string) bool {
 // openRouterTransport applies the session-ID header and cache_control body
 // field to OpenRouter chat completions. Anything else — a non-chat path — is
 // passed through to base untouched.
+//
+// agent is the name of the agents: entry this client was built for; it is
+// fixed for the life of the client (one client per resolved invocation) and
+// combines with the per-request run ID to form the session. Holding it here
+// rather than in the context is what makes the session per-agent: a sub-agent
+// or fix: agent gets its own client, and so its own session, without having to
+// thread a second context value through the conversation loop.
 type openRouterTransport struct {
-	base http.RoundTripper
+	base  http.RoundTripper
+	agent string
 }
 
 // RoundTrip implements http.RoundTripper.
@@ -153,7 +228,7 @@ func (t *openRouterTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	ctx := req.Context()
 	req = req.Clone(ctx)
 
-	sessionID := sessionIDFromContext(ctx)
+	sessionID := composeSessionID(runIDFromContext(ctx), t.agent)
 	if sessionID != "" {
 		req.Header.Set("x-session-id", sessionID)
 	}
@@ -233,8 +308,8 @@ func withCacheControl(body []byte) []byte {
 // should use, or nil when baseURL isn't OpenRouter — in which case the caller
 // supplies no client at all and openai-go builds its own as before, keeping
 // every non-OpenRouter provider byte-identical to how it behaved before this
-// file existed.
-func newOpenRouterHTTPClient(baseURL string) *http.Client {
+// file existed. agentName scopes the session (see composeSessionID).
+func newOpenRouterHTTPClient(baseURL, agentName string) *http.Client {
 	if !isOpenRouterBaseURL(baseURL) {
 		return nil
 	}
@@ -252,5 +327,5 @@ func newOpenRouterHTTPClient(baseURL string) *http.Client {
 		base = transport
 	}
 
-	return &http.Client{Transport: &openRouterTransport{base: base}}
+	return &http.Client{Transport: &openRouterTransport{base: base, agent: agentName}}
 }
