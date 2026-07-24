@@ -550,12 +550,16 @@ func truncateToolOutput(s string) string {
 // shellToolResult builds the FunctionResponse map for a shell-backed tool
 // (run_shell and every custom tool). It executes command through env.runner
 // — the host or, when the step's image: is set, a fresh container — with
-// env.dir as cwd, via RunCaptureFullLimited so a runaway command's output is
-// capped as it's captured rather than fully buffered. When env.spillDir is
-// set, output beyond the cap is streamed to a file under it and the model
-// gets a pointer message instead of losing the overflow.
+// env.dir as cwd, via RunCaptureFullLimitedStreamed so a runaway command's
+// output is capped as it's captured rather than fully buffered, AND streamed
+// live (prefixed with the agent's name, when the runner was built with
+// WithLabel) — a model-directed shell command was previously invisible until
+// the agent's final text response; this makes it watchable as it runs, the
+// same way a task's run: step already is. When env.spillDir is set, output
+// beyond the cap is streamed to a file under it and the model gets a pointer
+// message instead of losing the overflow.
 func shellToolResult(ctx context.Context, command string, env toolEnv) map[string]any {
-	stdout, stderr, exitCode, err := env.runner.RunCaptureFullLimited(ctx, command, maxToolOutputBytes, env.spillDir)
+	stdout, stderr, exitCode, err := env.runner.RunCaptureFullLimitedStreamed(ctx, command, maxToolOutputBytes, env.spillDir)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}

@@ -81,6 +81,8 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 		return fmt.Errorf("fix agent %q: %w", fix.Agent, err)
 	}
 
+	runner = runner.WithLabel(fix.Agent)
+
 	apiKey, err := lookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
 	if err != nil {
 		return err

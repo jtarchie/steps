@@ -122,6 +122,8 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		return map[string]any{"error": err.Error()}
 	}
 
+	runner = runner.WithLabel(c.ri.AgentName)
+
 	conv := agentConversation{
 		system: buildSystemMessage(c.ri.Persona, env.dir),
 		prompt: request,

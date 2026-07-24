@@ -669,6 +669,8 @@ func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedT
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 
+	runner = runner.WithLabel(rt.Name)
+
 	switch {
 	case rt.Assert != nil:
 		return runAssertedTask(ctx, runner, rt)
@@ -707,7 +709,7 @@ func runFixTask(ctx context.Context, cfg *config.Config, runner shell.Runner, rt
 		return fmt.Errorf("task %q: %w", rt.Name, cancelErr)
 	}
 
-	printTaskOutput(stdout, stderr)
+	printTaskOutput(rt.Name, stdout, stderr)
 
 	if exitCode == 0 {
 		return nil
@@ -731,7 +733,7 @@ func runFixTask(ctx context.Context, cfg *config.Config, runner shell.Runner, rt
 		return fmt.Errorf("task %q: %w", rt.Name, cancelErr)
 	}
 
-	printTaskOutput(stdout, stderr)
+	printTaskOutput(rt.Name, stdout, stderr)
 
 	if exitCode != 0 {
 		return fmt.Errorf("task %q: %w", rt.Name, outcome.Fail(fmt.Errorf("still failing after fix agent %q (exit %d)", rt.Fix.Agent, exitCode)))
@@ -759,7 +761,7 @@ func runAssertedTask(ctx context.Context, runner shell.Runner, rt config.Resolve
 		return fmt.Errorf("task %q: %w", rt.Name, cancelErr)
 	}
 
-	printTaskOutput(stdout, stderr)
+	printTaskOutput(rt.Name, stdout, stderr)
 
 	mismatch := assertMismatch(rt.Assert, stdout, exitCode)
 	if mismatch != nil {
@@ -783,16 +785,17 @@ func assertMismatch(assert *config.Assert, stdout string, exitCode int) error {
 	return nil
 }
 
-// printTaskOutput echoes a captured task run's streams to the terminal, so a
-// fix-enabled task's output is still visible (RunShellCaptureFull buffers
-// rather than streaming live the way RunShell does).
-func printTaskOutput(stdout, stderr string) {
+// printTaskOutput echoes a captured task run's streams to the terminal,
+// prefixed with label (rt.Name), so a fix/assert-enabled task's output is
+// still visible (RunCaptureFull buffers rather than streaming live the way
+// Run does) and attributable to the task that produced it.
+func printTaskOutput(label, stdout, stderr string) {
 	if stdout != "" {
-		fmt.Print(stdout)
+		fmt.Print(shell.PrefixLines(label, stdout))
 	}
 
 	if stderr != "" {
-		fmt.Fprint(os.Stderr, stderr)
+		fmt.Fprint(os.Stderr, shell.PrefixLines(label, stderr))
 	}
 }
 

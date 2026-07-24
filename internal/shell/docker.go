@@ -33,22 +33,33 @@ const dockerKillGrace = 10 * time.Second
 type DockerRunner struct {
 	Image       string
 	resolvedCwd string
+	label       string
+}
+
+// WithLabel returns a copy of d that prefixes its live-streamed output —
+// see the Runner interface doc.
+func (d DockerRunner) WithLabel(label string) Runner {
+	d.label = label
+
+	return d
 }
 
 // dockerExec is the shared plumbing behind Run/RunCapture/RunCaptureFull/
-// RunCaptureFullLimited: it always captures both stdout and stderr — even
-// for Run, which never exposes them, trading a little memory for one less
-// code path to keep in sync across four near-identical methods —
-// additionally streaming either live (to os.Stdout/os.Stderr) when
+// RunCaptureFullLimited/RunCaptureFullLimitedStreamed: it always captures
+// both stdout and stderr — even for Run, which never exposes them, trading a
+// little memory for one less code path to keep in sync across five
+// near-identical methods — additionally streaming either live (to
+// os.Stdout/os.Stderr, prefixed when WithLabel was used) when
 // streamStdout/streamStderr is set. stdin wires the host's stdin through
 // only when set; otherwise cmd.Stdin stays nil (/dev/null), matching
 // RunCaptureFull's non-interactive semantics for model-generated commands.
 // maxBytes caps each captured stream (0 means unbounded — every caller but
-// RunCaptureFullLimited passes 0, reproducing today's behavior exactly).
-// spillDir, when set alongside a positive maxBytes, streams overflow to a
-// file under that (host) directory instead of dropping it — see
-// newCaptureWriter/spillWriter. The writer runs host-side regardless of
-// where command executes, so the resulting spill file is always a host path.
+// RunCaptureFullLimited/RunCaptureFullLimitedStreamed passes 0, reproducing
+// today's behavior exactly). spillDir, when set alongside a positive
+// maxBytes, streams overflow to a file under that (host) directory instead
+// of dropping it — see newCaptureWriter/spillWriter. The writer runs
+// host-side regardless of where command executes, so the resulting spill
+// file is always a host path.
 func (d DockerRunner) dockerExec(
 	ctx context.Context, command string, stdin, streamStdout, streamStderr bool, maxBytes int, spillDir string,
 ) (stdout, stderr string, runErr error) {
@@ -62,19 +73,29 @@ func (d DockerRunner) dockerExec(
 	outWriter := newCaptureWriter(maxBytes, spillDir)
 	errWriter := newCaptureWriter(maxBytes, spillDir)
 
+	flushStdout, flushStderr := func() {}, func() {}
+
 	if streamStdout {
-		cmd.Stdout = io.MultiWriter(os.Stdout, outWriter)
+		var stdoutW io.Writer
+
+		stdoutW, flushStdout = prefixedStream(d.label, os.Stdout)
+		cmd.Stdout = io.MultiWriter(stdoutW, outWriter)
 	} else {
 		cmd.Stdout = outWriter
 	}
 
 	if streamStderr {
-		cmd.Stderr = io.MultiWriter(os.Stderr, errWriter)
+		var stderrW io.Writer
+
+		stderrW, flushStderr = prefixedStream(d.label, os.Stderr)
+		cmd.Stderr = io.MultiWriter(stderrW, errWriter)
 	} else {
 		cmd.Stderr = errWriter
 	}
 
 	runErr = cmd.Run()
+	flushStdout()
+	flushStderr()
 
 	return outWriter.result(), errWriter.result(), runErr
 }
@@ -127,23 +148,31 @@ func (d DockerRunner) RunCapture(ctx context.Context, command string) ([]byte, e
 // ctx.Err() itself (or CanceledError) after this returns, rather than
 // relying on err.
 func (d DockerRunner) RunCaptureFull(ctx context.Context, command string) (stdout, stderr string, exitCode int, err error) {
-	return d.runCaptureFull(ctx, command, 0, "")
+	return d.runCaptureFull(ctx, command, 0, "", false)
 }
 
 // RunCaptureFullLimited is RunCaptureFull with each stream capped at
 // maxBytes (and, with spillDir set, overflow streamed to disk instead of
 // dropped) while the command runs — see the Runner interface doc.
 func (d DockerRunner) RunCaptureFullLimited(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error) {
-	return d.runCaptureFull(ctx, command, maxBytes, spillDir)
+	return d.runCaptureFull(ctx, command, maxBytes, spillDir, false)
+}
+
+// RunCaptureFullLimitedStreamed is RunCaptureFullLimited, additionally
+// streaming both stdout/stderr live (prefixed, when WithLabel was used) —
+// see the Runner interface doc.
+func (d DockerRunner) RunCaptureFullLimitedStreamed(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error) {
+	return d.runCaptureFull(ctx, command, maxBytes, spillDir, true)
 }
 
 // runCaptureFull is the shared implementation behind RunCaptureFull (maxBytes
 // 0, meaning unbounded — byte-identical to before RunCaptureFullLimited
-// existed) and RunCaptureFullLimited (maxBytes > 0).
-func (d DockerRunner) runCaptureFull(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error) {
+// existed), RunCaptureFullLimited (maxBytes > 0), and
+// RunCaptureFullLimitedStreamed (stream true).
+func (d DockerRunner) runCaptureFull(ctx context.Context, command string, maxBytes int, spillDir string, stream bool) (stdout, stderr string, exitCode int, err error) {
 	slog.Debug("shell.docker.capture_full", "image", d.Image, "command", command, "cwd", d.resolvedCwd)
 
-	stdout, stderr, runErr := d.dockerExec(ctx, command, false, false, false, maxBytes, spillDir)
+	stdout, stderr, runErr := d.dockerExec(ctx, command, false, stream, stream, maxBytes, spillDir)
 
 	if !processStarted(runErr) {
 		return "", "", -1, fmt.Errorf("docker run failed to start for image %q: %w", d.Image, runErr)

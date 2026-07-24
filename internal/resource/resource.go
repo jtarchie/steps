@@ -43,6 +43,8 @@ func CheckVersions(ctx context.Context, cfg *config.Config, rt config.ResourceTy
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
 
+	runner = runner.WithLabel(rt.Name + " check")
+
 	out, err := runner.RunCapture(ctx, command)
 	if err != nil {
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
@@ -153,6 +155,8 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, sour
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
 
+	runner = runner.WithLabel(rt.Name + " in")
+
 	err = runner.Run(ctx, command)
 	if err != nil {
 		return fmt.Errorf("in %q: %w", rt.Name, err)
@@ -191,6 +195,8 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, sou
 	if err != nil {
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}
+
+	runner = runner.WithLabel(rt.Name + " out")
 
 	out, err := runner.RunCapture(ctx, command)
 	if err != nil {

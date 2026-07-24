@@ -43,6 +43,22 @@ type Runner interface {
 	// same way), and the returned string is a short pointer message naming
 	// the file, its size, and a head preview — see spillWriter.
 	RunCaptureFullLimited(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error)
+	// RunCaptureFullLimitedStreamed behaves exactly like RunCaptureFullLimited,
+	// except stdout/stderr are ALSO streamed live (prefixed, when WithLabel
+	// was used) while being captured — unlike every other RunCaptureFull*
+	// variant, which never streams. Used only by run_shell/custom tools
+	// (internal/agent's shellToolResult): a model-directed command was
+	// previously invisible until the agent's final text response, which this
+	// fixes. RunCaptureFull/RunCaptureFullLimited stay silent for their other
+	// callers (a when: guard, an assert-mode task's own command) where the
+	// command's output isn't meant to be user-facing on its own.
+	RunCaptureFullLimitedStreamed(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error)
+	// WithLabel returns a copy of the runner that prefixes every line of
+	// whatever it streams live (Run, RunCapture's stderr,
+	// RunCaptureFullLimitedStreamed) with "[label] ". A zero-value/unset
+	// label (the default from NewRunner) streams unprefixed, byte-identical
+	// to before this method existed.
+	WithLabel(label string) Runner
 }
 
 // NewRunner returns a DockerRunner scoped to image and cwd, or a HostRunner
@@ -50,7 +66,9 @@ type Runner interface {
 // (task, agent, resource) funnels through. For a DockerRunner, cwd is
 // resolved and validated once here (see resolveMountPath); an empty cwd is
 // valid (resource check: has none) and mounts nothing. HostRunner never
-// errors — cwd needs no resolution for host execution.
+// errors — cwd needs no resolution for host execution. The returned runner
+// has no label (see WithLabel) until a caller that wants prefixed output
+// opts in explicitly.
 func NewRunner(image, cwd string) (Runner, error) {
 	if image == "" {
 		return HostRunner{cwd: cwd}, nil
@@ -356,7 +374,16 @@ func formatBytes(n int) string {
 // HostRunner runs commands directly on the host via `sh -c`, with cwd as
 // its working directory.
 type HostRunner struct {
-	cwd string
+	cwd   string
+	label string
+}
+
+// WithLabel returns a copy of h that prefixes its live-streamed output —
+// see the Runner interface doc.
+func (h HostRunner) WithLabel(label string) Runner {
+	h.label = label
+
+	return h
 }
 
 // hostEnvAllowlist is the fixed set of environment variable names a
@@ -487,7 +514,8 @@ func processStarted(err error) bool {
 }
 
 // Run runs command via `sh -c command` with h.cwd as its working directory,
-// streaming stdout/stderr live to the terminal.
+// streaming stdout/stderr live to the terminal, prefixed per line when
+// WithLabel was used.
 func (h HostRunner) Run(ctx context.Context, command string) error {
 	slog.Debug("shell.run", "command", command, "cwd", h.cwd)
 
@@ -495,10 +523,15 @@ func (h HostRunner) Run(ctx context.Context, command string) error {
 	cmd.Dir = h.cwd
 	cmd.Env = hostEnv()
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+
+	stdoutW, flushStdout := prefixedStream(h.label, os.Stdout)
+	stderrW, flushStderr := prefixedStream(h.label, os.Stderr)
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
 
 	err := cmd.Run()
+	flushStdout()
+	flushStderr()
 
 	slog.Debug("shell.run", "command", command, "cwd", h.cwd, "exit_code", exitCodeOf(err))
 
@@ -510,11 +543,12 @@ func (h HostRunner) Run(ctx context.Context, command string) error {
 }
 
 // RunCapture runs command via `sh -c command` with h.cwd as its working
-// directory, capturing stdout and stderr while also streaming stderr live.
-// The captured output is logged (at debug level) on both success and
-// failure, so a failing check/out command's output is available for
-// debugging — previously it was discarded the moment the command exited
-// nonzero, leaving only the terse "exit status N" from the wrapped error.
+// directory, capturing stdout and stderr while also streaming stderr live,
+// prefixed per line when WithLabel was used. The captured output is logged
+// (at debug level) on both success and failure, so a failing check/out
+// command's output is available for debugging — previously it was discarded
+// the moment the command exited nonzero, leaving only the terse "exit status
+// N" from the wrapped error.
 func (h HostRunner) RunCapture(ctx context.Context, command string) ([]byte, error) {
 	slog.Debug("shell.capture", "command", command, "cwd", h.cwd)
 
@@ -525,10 +559,12 @@ func (h HostRunner) RunCapture(ctx context.Context, command string) ([]byte, err
 
 	var outBuf, errBuf bytes.Buffer
 
+	stderrW, flushStderr := prefixedStream(h.label, os.Stderr)
 	cmd.Stdout = &outBuf
-	cmd.Stderr = io.MultiWriter(os.Stderr, &errBuf)
+	cmd.Stderr = io.MultiWriter(stderrW, &errBuf)
 
 	err := cmd.Run()
+	flushStderr()
 
 	slog.Debug("shell.capture", "command", command, "cwd", h.cwd, "exit_code", exitCodeOf(err),
 		"output_bytes", outBuf.Len(), "output", outBuf.String(), "stderr", errBuf.String())
@@ -558,20 +594,29 @@ func (h HostRunner) RunCapture(ctx context.Context, command string) ([]byte, err
 // stdin risks a command (cat with no args, a tool prompting for input)
 // blocking until the step's timeout instead of getting EOF.
 func (h HostRunner) RunCaptureFull(ctx context.Context, command string) (stdout, stderr string, exitCode int, err error) {
-	return h.runCaptureFull(ctx, command, 0, "")
+	return h.runCaptureFull(ctx, command, 0, "", false)
 }
 
 // RunCaptureFullLimited is RunCaptureFull with each stream capped at
 // maxBytes (and, with spillDir set, overflow streamed to disk instead of
 // dropped) while the command runs — see the Runner interface doc.
 func (h HostRunner) RunCaptureFullLimited(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error) {
-	return h.runCaptureFull(ctx, command, maxBytes, spillDir)
+	return h.runCaptureFull(ctx, command, maxBytes, spillDir, false)
+}
+
+// RunCaptureFullLimitedStreamed is RunCaptureFullLimited, additionally
+// streaming both stdout/stderr live (prefixed, when WithLabel was used) —
+// see the Runner interface doc.
+func (h HostRunner) RunCaptureFullLimitedStreamed(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error) {
+	return h.runCaptureFull(ctx, command, maxBytes, spillDir, true)
 }
 
 // runCaptureFull is the shared implementation behind RunCaptureFull (maxBytes
 // 0, meaning unbounded — byte-identical to before RunCaptureFullLimited
-// existed) and RunCaptureFullLimited (maxBytes > 0).
-func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error) {
+// existed), RunCaptureFullLimited (maxBytes > 0), and
+// RunCaptureFullLimitedStreamed (stream true, tees both captured streams to
+// os.Stdout/os.Stderr live).
+func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes int, spillDir string, stream bool) (stdout, stderr string, exitCode int, err error) {
 	slog.Debug("shell.capture_full", "command", command, "cwd", h.cwd)
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
@@ -582,10 +627,23 @@ func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes
 	outWriter := newCaptureWriter(maxBytes, spillDir)
 	errWriter := newCaptureWriter(maxBytes, spillDir)
 
-	cmd.Stdout = outWriter
-	cmd.Stderr = errWriter
+	flushStdout, flushStderr := func() {}, func() {}
+
+	if stream {
+		var stdoutW, stderrW io.Writer
+
+		stdoutW, flushStdout = prefixedStream(h.label, os.Stdout)
+		stderrW, flushStderr = prefixedStream(h.label, os.Stderr)
+		cmd.Stdout = io.MultiWriter(stdoutW, outWriter)
+		cmd.Stderr = io.MultiWriter(stderrW, errWriter)
+	} else {
+		cmd.Stdout = outWriter
+		cmd.Stderr = errWriter
+	}
 
 	runErr := cmd.Run()
+	flushStdout()
+	flushStderr()
 
 	if !processStarted(runErr) {
 		return "", "", -1, fmt.Errorf("command %q failed to start: %w", command, runErr)
