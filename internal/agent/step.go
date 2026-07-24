@@ -178,7 +178,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	}
 
 	return preparedAgentStep{
-		ri: ri, space: space, conv: conv, llm: newAgentLLM(ri.BaseURL, ri.ModelName, apiKey, ri.AgentName),
+		ri: ri, space: space, conv: conv, llm: newAgentLLM(ri, apiKey),
 		closers: closers, spillDir: spillDir,
 	}, nil
 }

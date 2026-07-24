@@ -67,7 +67,7 @@ func buildSubAgentTool(ctx context.Context, cfg *config.Config, spec config.Tool
 
 	child := preparedSubAgent{
 		ri:       ri,
-		llm:      newAgentLLM(ri.BaseURL, ri.ModelName, apiKey, ri.AgentName),
+		llm:      newAgentLLM(ri, apiKey),
 		decls:    childDecls,
 		registry: childRegistry,
 		required: requiredToolNames(ri.ToolSpecs),
@@ -139,7 +139,13 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 
 	fmt.Printf("agent: %s (sub-agent)\n", c.ri.AgentName)
 
-	res, runErr := runAgentConversation(ctx, c.llm, conv)
+	// Reset the attempt scope: a sub-agent runs its conversation exactly once
+	// (there is no retry.Do here), so it must not inherit the *parent's*
+	// attempt index. Without this a parent retry would move the child onto a
+	// fresh session and throw away the child's warm cache, even though the
+	// child is replaying the identical prompt it already ran (see
+	// composeSessionID).
+	res, runErr := runAgentConversation(withAttempt(ctx, 0), c.llm, conv)
 	printAgentResponse(res)
 
 	if runErr != nil {

@@ -112,7 +112,7 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 		maxTurns:             ri.MaxTurns,
 		toolChoiceStringOnly: ri.StringOnlyToolChoice,
 	}
-	llm := newAgentLLM(ri.BaseURL, ri.ModelName, apiKey, ri.AgentName)
+	llm := newAgentLLM(ri, apiKey)
 
 	agentCtx, cancel := context.WithTimeout(ctx, agentStepTimeout)
 	defer cancel()

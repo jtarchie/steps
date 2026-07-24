@@ -49,6 +49,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -207,13 +208,18 @@ func composeSessionID(runID, agentName string, attempt int) string {
 // whether the caching mutations apply at all. An unparsable URL, or any other
 // provider (including a self-hosted gateway set via source.endpoint), reports
 // false and gets a stock client.
+//
+// The host is lowercased first: url.Parse preserves whatever case the operator
+// wrote, but DNS is case-insensitive, so a perfectly working
+// `endpoint: https://OpenRouter.ai/api/v1/` would otherwise fail the match and
+// silently disable caching for that agent with nothing to indicate why.
 func isOpenRouterBaseURL(baseURL string) bool {
 	parsed, err := url.Parse(baseURL)
 	if err != nil {
 		return false
 	}
 
-	host := parsed.Hostname()
+	host := strings.ToLower(parsed.Hostname())
 
 	return host == openRouterHost || strings.HasSuffix(host, "."+openRouterHost)
 }
@@ -245,6 +251,17 @@ func isAnthropicModel(name string) bool {
 type openRouterTransport struct {
 	base  http.RoundTripper
 	agent string
+}
+
+// CloseIdleConnections forwards to the wrapped transport, so an
+// http.Client holding this wrapper can still release its sockets.
+// http.Client.CloseIdleConnections type-asserts its Transport to an interface
+// carrying this method; without it the call silently does nothing.
+func (t *openRouterTransport) CloseIdleConnections() {
+	closer, ok := t.base.(interface{ CloseIdleConnections() })
+	if ok {
+		closer.CloseIdleConnections()
+	}
 }
 
 // RoundTrip implements http.RoundTripper.
@@ -310,34 +327,57 @@ func injectCacheControl(req *http.Request) error {
 	return nil
 }
 
+// ephemeralCacheControl is the marker value spliced in as-is, so the injected
+// bytes are fixed rather than re-derived from a map on every request.
+var ephemeralCacheControl = json.RawMessage(`{"type":"ephemeral"}`) //nolint:gochecknoglobals // immutable literal; never mutated after init
+
 // withCacheControl returns body with a top-level cache_control marker added
 // when its model field routes to Anthropic, and body unchanged otherwise.
+//
+// Decoding into map[string]json.RawMessage rather than map[string]any is what
+// makes this a splice instead of a rewrite. The body is the whole conversation
+// history — the large payload this feature exists to make cheaper — and every
+// field other than the one we add is carried through as its original bytes:
+// no deep decode of the message array, no numbers laundered through float64,
+// no HTML-escaping of the <transition_context> blocks this codebase sends.
 //
 // A body that doesn't parse as a JSON object, or that re-marshals to an
 // error, is passed through untouched rather than failing the request: this is
 // an opportunistic cost optimization, and a caching tweak should never be the
 // reason an agent step dies.
 func withCacheControl(body []byte) []byte {
-	var doc map[string]any
+	var doc map[string]json.RawMessage
 
 	err := json.Unmarshal(body, &doc)
 	if err != nil {
 		return body
 	}
 
-	name, _ := doc["model"].(string)
-	if !isAnthropicModel(name) {
+	var name string
+
+	err = json.Unmarshal(doc["model"], &name)
+	if err != nil || !isAnthropicModel(name) {
 		return body
 	}
 
-	doc["cache_control"] = map[string]string{"type": "ephemeral"}
+	doc["cache_control"] = ephemeralCacheControl
 
-	rewritten, err := json.Marshal(doc)
+	// json.Marshal would HTML-escape < > & even inside a json.RawMessage (it
+	// compacts a custom marshaler's output with escaping on), which rewrites
+	// every <transition_context> block this codebase sends. An encoder with
+	// escaping disabled leaves the spliced-through bytes alone.
+	var buf bytes.Buffer
+
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+
+	err = encoder.Encode(doc)
 	if err != nil {
 		return body
 	}
 
-	return rewritten
+	// Encode appends a newline; the request body should not carry one.
+	return bytes.TrimRight(buf.Bytes(), "\n")
 }
 
 // newOpenRouterHTTPClient returns the *http.Client an OpenRouter-backed agent
@@ -350,18 +390,30 @@ func newOpenRouterHTTPClient(baseURL, agentName string) *http.Client {
 		return nil
 	}
 
-	// Reproduce openai-go's defaultHTTPClient: clone the shared transport and
-	// bound the wait for response headers. Cloning also means the connection
-	// pool is this client's own, so nothing here perturbs other HTTP users in
-	// the process (internal/mcp, resource types shelling out, ...).
-	base := http.DefaultTransport
+	return &http.Client{Transport: &openRouterTransport{base: openRouterBase(), agent: agentName}}
+}
 
-	transport, ok := base.(*http.Transport)
-	if ok {
-		transport = transport.Clone()
-		transport.ResponseHeaderTimeout = openRouterResponseHeaderTimeout
-		base = transport
+// openRouterBase is the transport every OpenRouter client shares, built once.
+//
+// It reproduces openai-go's defaultHTTPClient (clone http.DefaultTransport,
+// bound the wait for response headers) but is deliberately process-wide rather
+// than per-client: only the thin openRouterTransport wrapper needs to differ
+// per agent, and cloning the real transport per agent would give every agent
+// step, sub-agent, and fix agent its own connection pool — so a job with
+// several agents would pay a fresh TLS handshake per agent and hold that many
+// pools of idle connections open, instead of reusing one.
+//
+// Cloning once (rather than using http.DefaultTransport directly) still keeps
+// the response-header bound off every other HTTP user in the process
+// (internal/mcp, resource types shelling out, ...).
+var openRouterBase = sync.OnceValue(func() http.RoundTripper { //nolint:gochecknoglobals // process-wide connection pool, built lazily on first OpenRouter agent
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return http.DefaultTransport
 	}
 
-	return &http.Client{Transport: &openRouterTransport{base: base, agent: agentName}}
-}
+	transport = transport.Clone()
+	transport.ResponseHeaderTimeout = openRouterResponseHeaderTimeout
+
+	return transport
+})

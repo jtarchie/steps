@@ -123,7 +123,7 @@ There are four example pipelines, grouped by theme + runtime (consolidated from 
 
 ### `docs/` — feature reference
 Human-friendly deep-dives for each opt-in feature area, split along the same boundaries as the `examples/*.yml` grouping above. Not force-loaded into every agent context — read the relevant one when a task touches that area:
-- **[docs/agents.md](docs/agents.md)** — the agent tool-calling loop, custom tool `required:`/`max_calls:`/`args:` semantics, sub-agent delegation (`agent:` tools), top-level `tasks:` reuse.
+- **[docs/agents.md](docs/agents.md)** — the agent tool-calling loop, custom tool `required:`/`max_calls:`/`args:` semantics, sub-agent delegation (`agent:` tools), top-level `tasks:` reuse, OpenRouter prompt caching (the automatic `x-session-id`/`cache_control` mutations and why the session is scoped per agent, per run, per attempt).
 - **[docs/control-flow.md](docs/control-flow.md)** — hooks (`on_success`/`on_failure`/`ensure`), conditional steps (`when:`), step transitions/verdict routing (`to:`/`max_visits:`/`verdicts:`), transition context on routed entry (`handoff:` — a pushed `<transition_context>` prompt block and/or a pulled `previous_run` tool), and self-verification (`assert:` + `steps test`).
 - **[docs/infra.md](docs/infra.md)** — containerized execution (`image:`) and cross-job downstream triggers (`trigger: true` + `steps watch`).
 - **[docs/workspace.md](docs/workspace.md)** — per-step filesystem isolation (`workspace:`, `inputs:`/`outputs:`).

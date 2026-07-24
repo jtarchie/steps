@@ -8,10 +8,13 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 
 	genaiopenai "github.com/achetronic/adk-utils-go/genai/openai"
 	"google.golang.org/adk/v2/model"
+
+	"github.com/jtarchie/steps/internal/config"
 )
 
 // defaultAgentPersona is the system persona used when an agent doesn't set
@@ -66,20 +69,33 @@ func lookupAPIKey(envVar string, required bool) (string, error) {
 // runAgentConversation testable against an in-process fake.
 //
 // An OpenRouter base URL additionally gets a caching HTTP client (see
-// openrouter.go), scoped to agentName so each agent keeps its own session;
-// every other provider is left with a zero HTTPOptions, so openai-go builds
-// its own client exactly as it did before that file existed.
-func newAgentLLM(baseURL, modelName, apiKey, agentName string) model.LLM {
+// agentHTTPClient/openrouter.go); every other provider is left with a zero
+// HTTPOptions, so openai-go builds its own client exactly as it did before
+// that file existed.
+//
+// It takes the whole ResolvedInvocation rather than loose strings so the
+// mapping from invocation fields to client settings lives in exactly one
+// place — the three call sites (RunStep, RunFix, buildSubAgentTool) can't
+// individually mix up which field feeds which parameter.
+func newAgentLLM(ri config.ResolvedInvocation, apiKey string) model.LLM {
 	cfg := genaiopenai.Config{
 		APIKey:    apiKey,
-		BaseURL:   baseURL,
-		ModelName: modelName,
+		BaseURL:   ri.BaseURL,
+		ModelName: ri.ModelName,
 	}
 
-	client := newOpenRouterHTTPClient(baseURL, agentName)
+	client := agentHTTPClient(ri)
 	if client != nil {
 		cfg.HTTPOptions = genaiopenai.HTTPOptions{Client: client}
 	}
 
 	return genaiopenai.New(cfg)
+}
+
+// agentHTTPClient returns the HTTP client an invocation's LLM should use, or
+// nil to let openai-go build its own. Split out from newAgentLLM so the
+// field mapping it performs — the session is scoped by AgentName, not
+// ModelName — is directly assertable in a test.
+func agentHTTPClient(ri config.ResolvedInvocation) *http.Client {
+	return newOpenRouterHTTPClient(ri.BaseURL, ri.AgentName)
 }

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -326,6 +327,27 @@ func TestWithCacheControl(t *testing.T) {
 		}
 	})
 
+	t.Run("other fields keep their original bytes", func(t *testing.T) {
+		t.Parallel()
+
+		// The splice must not launder the rest of the payload: a big integer
+		// must not go through float64, and the < > in a transition-context
+		// block must not be HTML-escaped into </>. Both happen if
+		// the body is round-tripped through map[string]any.
+		got := withCacheControl([]byte(
+			`{"model":"anthropic/claude-3.5-sonnet","seed":12345678901234567,` +
+				`"messages":[{"role":"user","content":"<transition_context>x & y</transition_context>"}]}`))
+
+		for _, want := range []string{
+			`12345678901234567`,
+			`<transition_context>x & y</transition_context>`,
+		} {
+			if !strings.Contains(string(got), want) {
+				t.Errorf("spliced body lost %q:\n%s", want, got)
+			}
+		}
+	})
+
 	t.Run("body with no model field passes through untouched", func(t *testing.T) {
 		t.Parallel()
 
@@ -339,11 +361,39 @@ func TestWithCacheControl(t *testing.T) {
 }
 
 // capturedRequest is what the fake OpenRouter records about the request the
-// transport actually put on the wire.
+// transport actually put on the wire. The handler writes it on the server's
+// goroutine while the test reads it on its own, so the fields are guarded
+// rather than left to net/http's internals to order.
 type capturedRequest struct {
+	mu        sync.Mutex
 	sessionID string
 	body      map[string]any
 	path      string
+}
+
+func (c *capturedRequest) record(sessionID, path string, body map[string]any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.sessionID, c.path, c.body = sessionID, path, body
+}
+
+// session returns the last captured x-session-id.
+func (c *capturedRequest) session() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.sessionID
+}
+
+// field returns the last captured body's top-level value for key.
+func (c *capturedRequest) field(key string) (any, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	v, ok := c.body[key]
+
+	return v, ok
 }
 
 // serveCapturing stands up a fake OpenRouter and returns a client wired
@@ -359,11 +409,11 @@ func serveCapturing(t *testing.T) (*http.Client, string, *capturedRequest) {
 			t.Errorf("reading request body: %v", err)
 		}
 
-		captured.sessionID = r.Header.Get("x-session-id")
-		captured.path = r.URL.Path
-		captured.body = nil
+		var decoded map[string]any
 
-		_ = json.Unmarshal(body, &captured.body)
+		_ = json.Unmarshal(body, &decoded)
+
+		captured.record(r.Header.Get("x-session-id"), r.URL.Path, decoded)
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true}`))
@@ -397,10 +447,10 @@ func TestOpenRouterSessionScope(t *testing.T) {
 		body := `{"model":"anthropic/claude-3.5-sonnet","messages":[]}`
 
 		postJSON(ctx, t, clientFor("writer"), url, body)
-		writerSession := captured.sessionID
+		writerSession := captured.session()
 
 		postJSON(ctx, t, clientFor("critic"), url, body)
-		criticSession := captured.sessionID
+		criticSession := captured.session()
 
 		if writerSession == criticSession {
 			t.Errorf("writer and critic shared session %q", writerSession)
@@ -418,10 +468,10 @@ func TestOpenRouterSessionScope(t *testing.T) {
 		body := `{"model":"anthropic/claude-3.5-sonnet","messages":[]}`
 
 		postJSON(ctx, t, clientFor("writer"), url, body)
-		first := captured.sessionID
+		first := captured.session()
 
 		postJSON(ctx, t, clientFor("writer"), url, body)
-		second := captured.sessionID
+		second := captured.session()
 
 		if first != second {
 			t.Errorf("same agent got %q then %q", first, second)
@@ -438,10 +488,10 @@ func TestOpenRouterSessionScope(t *testing.T) {
 		body := `{"model":"anthropic/claude-3.5-sonnet","messages":[]}`
 
 		postJSON(WithNewRun(t.Context(), "job"), t, clientFor("writer"), url, body)
-		first := captured.sessionID
+		first := captured.session()
 
 		postJSON(WithNewRun(t.Context(), "job"), t, clientFor("writer"), url, body)
-		second := captured.sessionID
+		second := captured.session()
 
 		if first == second {
 			t.Errorf("two runs shared session %q", first)
@@ -497,11 +547,13 @@ func TestOpenRouterTransportWireMutations(t *testing.T) {
 		postJSON(ctx, t, client, base+"/api/v1/chat/completions",
 			`{"model":"anthropic/claude-3.5-sonnet","messages":[]}`)
 
-		assertSessionShape(t, captured.sessionID, "job", "reviewer")
+		assertSessionShape(t, captured.session(), "job", "reviewer")
 
-		marker, ok := captured.body["cache_control"].(map[string]any)
+		value, _ := captured.field("cache_control")
+
+		marker, ok := value.(map[string]any)
 		if !ok {
-			t.Fatalf("cache_control missing from the wire body: %v", captured.body)
+			t.Fatalf("cache_control missing from the wire body: %v", value)
 		}
 
 		if marker["type"] != "ephemeral" {
@@ -517,8 +569,8 @@ func TestOpenRouterTransportWireMutations(t *testing.T) {
 		postJSON(t.Context(), t, client, base+"/api/v1/chat/completions",
 			`{"model":"anthropic/claude-3.5-sonnet","messages":[]}`)
 
-		if captured.sessionID != "" {
-			t.Errorf("x-session-id = %q, want no header", captured.sessionID)
+		if captured.session() != "" {
+			t.Errorf("x-session-id = %q, want no header", captured.session())
 		}
 	})
 
@@ -531,11 +583,11 @@ func TestOpenRouterTransportWireMutations(t *testing.T) {
 		postJSON(ctx, t, client, base+"/api/v1/chat/completions",
 			`{"model":"openai/gpt-4o","messages":[]}`)
 
-		assertSessionShape(t, captured.sessionID, "job", "reviewer")
+		assertSessionShape(t, captured.session(), "job", "reviewer")
 
-		_, present := captured.body["cache_control"]
+		value, present := captured.field("cache_control")
 		if present {
-			t.Errorf("cache_control was sent to a non-anthropic model: %v", captured.body)
+			t.Errorf("cache_control was sent to a non-anthropic model: %v", value)
 		}
 	})
 
@@ -548,13 +600,13 @@ func TestOpenRouterTransportWireMutations(t *testing.T) {
 		postJSON(ctx, t, client, base+"/api/v1/models",
 			`{"model":"anthropic/claude-3.5-sonnet"}`)
 
-		if captured.sessionID != "" {
-			t.Errorf("x-session-id was stamped on a non-chat request: %q", captured.sessionID)
+		if captured.session() != "" {
+			t.Errorf("x-session-id was stamped on a non-chat request: %q", captured.session())
 		}
 
-		_, present := captured.body["cache_control"]
+		value, present := captured.field("cache_control")
 		if present {
-			t.Errorf("cache_control was stamped on a non-chat request: %v", captured.body)
+			t.Errorf("cache_control was stamped on a non-chat request: %v", value)
 		}
 	})
 }
