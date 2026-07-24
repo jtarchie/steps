@@ -171,13 +171,38 @@ jobs:
       fi
 
       # Qualitative gate: did the diff actually satisfy the story, not just
-      # compile.
+      # compile -- and is it actually correct, not just plausible. A prior
+      # run of this pipeline shipped a story where lint/test/build were all
+      # green and this gate said PASS, but a separate human-triggered code
+      # review of the same diff found 9 real bugs, none of which lint/test
+      # could have caught: a guard added to one of several structurally
+      # similar code paths (get/task/put/agent step handling) but not to its
+      # siblings, an added config field that was validated but never wired
+      # into the code path it configures, and a doc comment that contradicted
+      # the implementation next to it. This prompt now asks explicitly for
+      # that class of bug -- see CLAUDE.md's "Guidance for Claude Agents" #8.
       claude -p "Read $story, then read the uncommitted working-tree changes
         (git diff, git status) against main. Judge whether this story is
-        fully and correctly implemented: the feature described, tests that
-        exercise it, and docs/examples updated if the story called for them.
-        Reply with a single line starting with exactly PASS or FAIL, then a
-        short explanation of what, if anything, is missing." \
+        fully AND CORRECTLY implemented, not merely plausible-looking:
+        1) the feature described is present, with tests that exercise it;
+        2) docs/examples are updated if the story called for them, and every
+           claim those docs make about behavior is actually true of the code
+           next to it (a comment or doc line that contradicts what the code
+           does is a FAIL, not a nitpick);
+        3) if this story adds a behavior, guard, or field to one of several
+           structurally similar code paths (e.g. get/task/put/agent step
+           handling, or host/docker runners), grep for the sibling call
+           sites and confirm the SAME treatment landed on all of them it
+           claims to cover -- a fix applied to only one sibling is a FAIL;
+        4) any new config field or option is actually read and applied at
+           runtime somewhere, not just parsed and validated;
+        5) edge cases implied by the story (empty, zero, negative, malformed
+           input) are handled deliberately, not silently accepted.
+        Passing lint/test/build is necessary but not sufficient -- judge the
+        diff the way a careful human reviewer would, not by whether it
+        compiles. Reply with a single line starting with exactly PASS or
+        FAIL, then a short explanation of what, if anything, is missing or
+        wrong." \
         --model haiku \
         --permission-mode default \
         --allowedTools "Read Grep Glob Bash(git diff*) Bash(git status*)" \
