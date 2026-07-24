@@ -1,0 +1,82 @@
+# Example: attempts and timeout on all step types
+#
+# Run with: steps test examples/attempts.yml
+# Or: steps run examples/attempts.yml --job <name>
+#
+# These jobs demonstrate retry and timeout behavior. They are self-verifying
+# fixtures: each job's assert.execution clause validates what actually ran.
+# Attempts are evident in the logged output ("attempt 1/N", "attempt 2/N", etc.).
+#
+# No external resources or network calls are needed.
+
+tasks:
+  - name: always-fails
+    run: |
+      echo "This task always fails"
+      exit 1
+
+  - name: quick-success
+    run: echo "success"
+
+jobs:
+  # Task with attempts exhausts retries, logs multiple attempts.
+  # Look in output for "task: always-fails (attempt 1/3)",
+  # "task: always-fails (attempt 2/3)", etc.
+  - name: task-with-multiple-attempts
+    plan:
+      - task: always-fails
+        attempts: 3
+    assert:
+      execution:
+        - always-fails
+
+  # Task with timeout succeeds within the deadline.
+  - name: task-within-timeout
+    plan:
+      - task: quick-success
+        timeout: 10s
+        assert:
+          code: 0
+          stdout: success
+    assert:
+      execution:
+        - quick-success
+
+  # Inline task with attempts: first attempt fails, second succeeds.
+  # Multiple attempts are logged in output. Each attempt uses the same
+  # working directory, so shared state (like files) is preserved across
+  # retries—allowing the second attempt to detect the marker from the first.
+  - name: inline-with-retries
+    plan:
+      - task: flaky
+        run: |
+          MARKER="/tmp/marker.$$"
+          if [ ! -f "$MARKER" ]; then
+            touch "$MARKER"
+            exit 1
+          fi
+          rm "$MARKER"
+          echo "success"
+        attempts: 3
+        assert:
+          code: 0
+          stdout: success
+    assert:
+      execution:
+        - flaky
+
+  # Inline task with attempts and timeout.
+  # Both limits apply: the task retries up to 3 times, each attempt
+  # must complete within 5 seconds.
+  - name: inline-with-attempts-and-timeout
+    plan:
+      - task: inline-task
+        run: echo "completed within timeout"
+        attempts: 2
+        timeout: 5s
+        assert:
+          code: 0
+          stdout: "completed within timeout"
+    assert:
+      execution:
+        - inline-task

@@ -1373,3 +1373,40 @@ func TestValidateFixAgentImages(t *testing.T) {
 		}
 	})
 }
+
+// TestParseTimeout verifies that timeout strings parse correctly into durations.
+func TestParseTimeout(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+		want    string // string representation to verify
+	}{
+		{"empty string is zero", "", false, "0s"},
+		{"1 second", "1s", false, "1s"},
+		{"30 seconds", "30s", false, "30s"},
+		{"2 minutes", "2m", false, "2m0s"},
+		{"1 hour", "1h", false, "1h0m0s"},
+		{"combined", "1h30m45s", false, "1h30m45s"},
+		{"milliseconds", "100ms", false, "100ms"},
+		{"invalid format", "invalid", true, ""},
+		{"missing unit", "123", true, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			d, err := ParseTimeout(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseTimeout(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+
+			if !tt.wantErr && d.String() != tt.want {
+				t.Errorf("ParseTimeout(%q) = %v, want %v", tt.input, d.String(), tt.want)
+			}
+		})
+	}
+}

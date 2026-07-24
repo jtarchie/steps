@@ -1,0 +1,166 @@
+# Attempts and Timeout Guide
+
+This guide covers two operational limits available on all step types (get/task/put/agent):
+- **`attempts:`** — retry count for retrying unmodified commands
+- **`timeout:`** — wall-clock deadline per attempt
+
+## When to Use Attempts
+
+Use `attempts:` to retry transient failures:
+- Flaky network calls (e.g., GitHub API rate limits)
+- Temporary service unavailability
+- Resource contention
+
+Do NOT use `attempts:` for:
+- Internal bugs (retrying won't fix them)
+- Permanent failures (wrong credentials, missing resources)
+- Issues that need investigation (retrying hides the problem)
+
+If a step fails reliably, fix the underlying issue instead of adding retries.
+
+## When to Use Timeout
+
+Use `timeout:` to prevent hung commands:
+- Long-running integration tests: `timeout: 30m`
+- Network requests: `timeout: 2m`
+- Resource fetches: `timeout: 5m`
+
+Do NOT set timeouts too aggressively — a legitimate long-running operation should not be cut short:
+```yaml
+# DON'T: this will fail a 25-minute test
+- task: integration-test
+  timeout: 10m
+
+# DO: allow the test its reasonable time
+- task: integration-test
+  timeout: 1h
+```
+
+## Timeout Semantics
+
+**Timeout is per-attempt**, not per-step total. With `attempts: 3` and `timeout: 30s`:
+- Each attempt gets 30 seconds
+- Total possible time: ~90 seconds (plus backoff between retries)
+- Total is not capped at 30 seconds
+
+To implement a total timeout across all attempts, set a longer task-level timeout and a short step-level timeout — but this is rarely needed.
+
+## Interaction with `fix:`
+
+When a task step has both `attempts:` and `fix:`, the fix agent runs **once per exhausted attempt**:
+
+```yaml
+- task: flaky-test
+  run: ./test.sh
+  attempts: 3
+  fix: fixer-agent
+```
+
+If the task fails on all 3 attempts:
+1. First attempt fails → fix agent invoked → task re-run
+2. Second attempt fails → fix agent invoked → task re-run
+3. Third attempt fails → fix agent invoked → task re-run
+4. Job fails with the error from attempt 3
+
+Each invocation of the fix agent gets its own `attempts:` budget (default 1; overridable with `fix: {attempts: ...}`).
+
+## Interaction with `assert:`
+
+Only the **final attempt's output** is evaluated by `assert:`:
+
+```yaml
+- task: build
+  run: ./build.sh
+  attempts: 3
+  assert:
+    stdout: "Build successful"
+```
+
+If attempt 1 prints "Build successful" but then fails with exit 1, the assert does not match — the task retries. Only attempt 3's output is checked.
+
+## Hook Firing
+
+Hooks (`on_failure`, `on_error`, `ensure`) fire **once per exhausted step**, not per attempt:
+
+```yaml
+- task: deploy
+  run: ./deploy.sh
+  attempts: 3
+  on_failure:
+    - task: rollback
+```
+
+If the deploy fails on all 3 attempts, `on_failure` runs **once** with the error from attempt 3.
+
+## Logging
+
+The steps CLI logs "attempt N/M" markers for each retry:
+
+```
+task: build
+task: build (attempt 2/3)
+task: build (attempt 3/3)
+```
+
+These markers appear in both CLI output and structured logs (`job.task.attempt`).
+
+## Timeout Classification
+
+Timeouts classify as **errored**, not **failed**:
+- Failed: task exit code nonzero (recoverable, possibly fixable)
+- Errored: timeout, infrastructure error, etc. (usually not fixable, abort immediately)
+
+This distinction affects hook dispatch: `on_error` fires for timeouts, `on_failure` does not.
+
+## Examples
+
+### Get Step with Retries
+
+```yaml
+- get: flaky-resource
+  attempts: 3
+  timeout: 2m
+```
+
+Retries version checking (check command) and fetching (in command) up to 3 times, with a 2-minute deadline per attempt.
+
+### Task Step with Timeout and Fix
+
+```yaml
+- task: integration-test
+  run: ./ci/integration.sh
+  attempts: 2
+  timeout: 30m
+  fix: test-fixer
+```
+
+Runs the integration test with a 30-minute deadline per attempt. If it fails, invokes the fix agent once (with its own 1-attempt budget). Then re-runs the test. The final exit code is the step's verdict.
+
+### Put Step with Retries
+
+```yaml
+- put: publish-artifact
+  attempts: 3
+  timeout: 5m
+```
+
+Retries the resource's out command up to 3 times, with a 5-minute deadline per attempt.
+
+### Agent Step with Timeout
+
+```yaml
+- agent: reviewer
+  prompt: "Review the PR for safety issues"
+  timeout: 10m
+```
+
+Bounds the agent's entire conversation (including all tool calls) to 10 minutes. If the agent hasn't finished by then, the step times out and is classified as errored.
+
+## Why No Global Default?
+
+The proposal recommends starting with **explicit-only** timeouts (no job-level or pipeline-level default):
+- A missing timeout doesn't fail silently (a timeout without explicit config is a surprise)
+- Pipeline authors are forced to think about reasonable limits for each step
+- No surprise timeouts from a global setting they forgot about
+
+Future versions could add a `timeout:` field to the `job:` block or `pipeline:` level if needed, without hashing impact (timeout is an operational limit, not content).

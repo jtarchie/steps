@@ -1,0 +1,218 @@
+# Walks docs/proposals/stories/*.md in order, using the `claude` CLI (not
+# steps' own agent: step type) as the plan/execute/critique worker for each
+# one. See README.md before running this against a real checkout.
+#
+# The story sequence is modeled as a resource: `stories`' check lists every
+# 000-*.md..013-*.md file in source.dir as a version, and `get: stories
+# version: every` fans the rest of the plan out once per version --
+# already exactly the repeat-per-story behavior this experiment needs, each
+# with its own independent max_visits budget (see docs/control-flow.md).
+# No generator, no per-story duplication: plan/execute/critique are written
+# once below.
+#
+# Every claude -p call pipes through a small Ruby filter reading
+# --output-format stream-json --include-partial-messages (--verbose is
+# required alongside stream-json under --print, or claude exits 1). Without
+# this, --output-format text (the default) buffers the ENTIRE turn and
+# prints nothing until the whole response is ready -- confirmed by actually
+# running this pipeline: several minutes of silence, then everything at
+# once. stream_event/content_block_delta/text_delta events carry the same
+# text incrementally instead. Verified empirically (not just read from
+# docs) that intermediate tool-narration text streams as text_delta
+# identically to a final answer, indistinguishable without tracking
+# message_start/message_stop boundaries -- irrelevant for plan/execute
+# (nothing downstream reads their output), but critique's filter is a
+# stricter, two-stream version for exactly that reason: live text to
+# stderr (so it's watchable, prefixed like everything else), but only the
+# LAST message's text to stdout, since that's what gets captured to $out
+# and grepped for a leading PASS/FAIL.
+resource_types:
+- name: stories
+  config:
+    # JSON array building is the one part of this resource type that's real
+    # data manipulation rather than shelling out to another CLI, so it's
+    # Ruby (stdlib json, explicit .sort -- Dir.glob order isn't guaranteed)
+    # rather than bash's printf/comma-tracking. `.source.dir` is passed as a
+    # process argument (shellquote's actual job) rather than interpolated
+    # into the Ruby source, so it needs no Ruby-side escaping.
+    check: |
+      ruby -e '
+        require "json"
+        dir = ARGV[0]
+        # versions = Dir.glob(File.join(dir, "[0-9][0-9][0-9]-*.md")).sort.map do |path|
+        versions = Dir.glob(File.join(dir, "000-*.md")).sort.map do |path|
+          name = File.basename(path)
+          { num: name[0, 3], file: name }
+        end
+        puts versions.to_json
+      ' -- {{ .source.dir | shellquote }}
+    in: |
+      echo {{ .version.num | shellquote }} > ./num
+      echo {{ .version.file | shellquote }} > ./file
+      echo {{ .source.repo | shellquote }} > ./repo
+
+resources:
+- name: stories
+  type: stories
+  source:
+    dir: docs/proposals/stories
+    # steps always runs task steps inside a fresh, disposable temp
+    # workspace -- never the directory `steps` was invoked from, and
+    # version:every gives EACH story's own fresh one, with no memory of
+    # what an earlier story committed. plan/execute/critique below cd into
+    # this absolute path instead of relying on the ephemeral workspace, so
+    # the real, persistent checkout (and its git history) is what actually
+    # gets read/edited/committed across all 14 stories. Point this at a
+    # dedicated worktree before a real run -- see README.md.
+    repo: /Users/jtarchie/workspace/steps
+
+jobs:
+- name: self-build
+  plan:
+  - get: stories
+    version: every
+  - task: plan
+    run: |
+      num=$(cat stories/num)
+      file=$(cat stories/file)
+      repo=$(cat stories/repo)
+      cd "$repo"
+
+      mkdir -p experiments/self-build/plans
+      story="docs/proposals/stories/$file"
+      claude -p "Read $story and CLAUDE.md. Research the current codebase
+        (internal/config, internal/pipeline, internal/merkle, internal/store,
+        internal/trigger, internal/agent as relevant to this story) to find
+        every place this feature touches. Write a concrete, file-by-file
+        implementation plan -- what changes, what new tests are needed, what
+        docs/*.md and examples/*.yml need updating -- to
+        experiments/self-build/plans/$num.md. Do not write or edit any other
+        file." \
+        --model haiku \
+        --permission-mode acceptEdits \
+        --allowedTools "Read Grep Glob Write Bash(go doc*)" \
+        --output-format stream-json --include-partial-messages --verbose \
+        | ruby -e '
+            require "json"
+            STDOUT.sync = true
+            STDIN.each_line do |line|
+              event = JSON.parse(line) rescue next
+              next unless event["type"] == "stream_event"
+              delta = event.dig("event", "delta")
+              print delta["text"] if delta && delta["type"] == "text_delta"
+            end
+            puts
+          '
+  - task: execute
+    run: |
+      num=$(cat stories/num)
+      file=$(cat stories/file)
+      repo=$(cat stories/repo)
+      cd "$repo"
+
+      plan="experiments/self-build/plans/$num.md"
+      story="docs/proposals/stories/$file"
+      critique="experiments/self-build/critiques/$num.md"
+
+      # On a redo (routed here by critique's to: {failure: execute}), that
+      # file already exists and starts with FAIL -- read it back in as
+      # directed feedback instead of retrying blind. A stale PASS file left
+      # over from an earlier, separate run of this pipeline is deliberately
+      # ignored (grep anchors on FAIL, not just file existence).
+      feedback=""
+      if [ -f "$critique" ] && grep -q '^FAIL' "$critique"; then
+        feedback="
+
+        A previous attempt at this story was critiqued and found incomplete.
+        Address every point in this critique before you finish:
+
+        $(cat "$critique")"
+      fi
+
+      claude -p "Read $plan (the implementation plan for $story) and
+        implement it end to end: code, tests, and doc/example updates.
+        Follow CLAUDE.md's standing rules (package dependency graph, merkle
+        value-gating, trust-boundary notes) exactly. Before you consider
+        yourself done, run: go fmt ./... && go mod tidy && golangci-lint run
+        && go test ./... && go build -v -- and keep fixing until all four
+        are clean. Do not commit.$feedback" \
+        --model haiku \
+        --permission-mode bypassPermissions \
+        --allowedTools "Read Write Edit Grep Glob Bash" \
+        --output-format stream-json --include-partial-messages --verbose \
+        | ruby -e '
+            require "json"
+            STDOUT.sync = true
+            STDIN.each_line do |line|
+              event = JSON.parse(line) rescue next
+              next unless event["type"] == "stream_event"
+              delta = event.dig("event", "delta")
+              print delta["text"] if delta && delta["type"] == "text_delta"
+            end
+            puts
+          '
+  - task: critique
+    run: |
+      set -o pipefail
+      num=$(cat stories/num)
+      file=$(cat stories/file)
+      repo=$(cat stories/repo)
+      cd "$repo"
+
+      story="docs/proposals/stories/$file"
+      out="experiments/self-build/critiques/$num.md"
+      mkdir -p experiments/self-build/critiques
+
+      # Objective gate first: cheap, deterministic, no model call needed to
+      # reject an obviously-broken attempt.
+      if ! { golangci-lint run && go test ./... && go build -v; }; then
+        echo "FAIL: lint/test/build did not pass" | tee "$out"
+        exit 1
+      fi
+
+      # Qualitative gate: did the diff actually satisfy the story, not just
+      # compile.
+      claude -p "Read $story, then read the uncommitted working-tree changes
+        (git diff, git status) against main. Judge whether this story is
+        fully and correctly implemented: the feature described, tests that
+        exercise it, and docs/examples updated if the story called for them.
+        Reply with a single line starting with exactly PASS or FAIL, then a
+        short explanation of what, if anything, is missing." \
+        --model haiku \
+        --permission-mode default \
+        --allowedTools "Read Grep Glob Bash(git diff*) Bash(git status*)" \
+        --output-format stream-json --include-partial-messages --verbose \
+        | ruby -e '
+            require "json"
+            STDOUT.sync = true
+            STDERR.sync = true
+            current = ""
+            final = ""
+            STDIN.each_line do |line|
+              event = JSON.parse(line) rescue next
+              next unless event["type"] == "stream_event"
+              ev = event["event"]
+              case ev["type"]
+              when "message_start"
+                current = ""
+              when "content_block_delta"
+                delta = ev["delta"]
+                if delta && delta["type"] == "text_delta"
+                  $stderr.print delta["text"]
+                  current += delta["text"]
+                end
+              when "message_stop"
+                final = current unless current.empty?
+              end
+            end
+            $stderr.puts
+            print final
+          ' \
+        > "$out"
+
+      grep -q '^PASS' "$out" || exit 1
+      git add -A
+      git commit -m "self-build: story $num ($(basename "$file" .md))"
+    to:
+      failure: execute
+    max_visits: 4

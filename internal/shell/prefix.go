@@ -6,59 +6,80 @@ import (
 	"strings"
 )
 
-// prefixedWriter wraps dst, prepending prefix to every complete line written
-// through it — so output from several shell-backed steps sharing one
+// prefixedWriter wraps dst, prepending prefix at the start of every line
+// written through it — so output from several shell-backed steps sharing one
 // terminal (task run:, resource check/in/out, an agent's run_shell/custom
 // tools) stays attributable to whichever step produced it, the same idea as
-// onsi/gomega/gexec's PrefixedWriter. A partial (not yet newline-terminated)
-// line is buffered across Write calls rather than prefixed mid-line; flush
-// emits whatever's left buffered once the command producing it exits, so a
-// stream whose last line never ends in \n isn't silently dropped.
+// onsi/gomega/gexec's PrefixedWriter.
+//
+// Crucially it does NOT buffer to line boundaries: every byte is forwarded to
+// dst as it arrives, with the prefix inserted only when a new line begins.
+// This matters because the streamed content it's used for — an agent's
+// live token-by-token model output, run_shell command output — often arrives
+// as long, newline-sparse chunks; an earlier line-buffering version held all
+// of it until a \n (or the final flush), so nothing appeared to stream at all
+// until a line completed. atLineStart tracks whether the next byte begins a
+// line (true initially, and immediately after each \n written), which is the
+// only state needed to prefix correctly while streaming.
 type prefixedWriter struct {
-	prefix string
-	dst    io.Writer
-	buf    bytes.Buffer
+	prefix      string
+	dst         io.Writer
+	atLineStart bool
 }
 
 func newPrefixedWriter(prefix string, dst io.Writer) *prefixedWriter {
-	return &prefixedWriter{prefix: prefix, dst: dst}
+	return &prefixedWriter{prefix: prefix, dst: dst, atLineStart: true}
 }
 
 func (p *prefixedWriter) Write(b []byte) (int, error) {
 	n := len(b)
 
-	p.buf.Write(b)
+	for len(b) > 0 {
+		if p.atLineStart {
+			_, err := io.WriteString(p.dst, p.prefix)
+			if err != nil {
+				return n, err //nolint:wrapcheck // passes the underlying writer's own error through unchanged
+			}
 
-	for {
-		idx := bytes.IndexByte(p.buf.Bytes(), '\n')
+			p.atLineStart = false
+		}
+
+		idx := bytes.IndexByte(b, '\n')
 		if idx < 0 {
+			// No newline in what's left: stream it all now, stay mid-line.
+			_, err := p.dst.Write(b)
+			if err != nil {
+				return n, err //nolint:wrapcheck // passes the underlying writer's own error through unchanged
+			}
+
 			break
 		}
 
-		_, werr := io.WriteString(p.dst, p.prefix)
-		if werr != nil {
-			return n, werr //nolint:wrapcheck // passes the underlying writer's own error through unchanged
+		// Stream through the newline; the next byte begins a fresh line.
+		_, err := p.dst.Write(b[:idx+1])
+		if err != nil {
+			return n, err //nolint:wrapcheck // passes the underlying writer's own error through unchanged
 		}
 
-		_, werr = p.dst.Write(p.buf.Next(idx + 1))
-		if werr != nil {
-			return n, werr //nolint:wrapcheck // passes the underlying writer's own error through unchanged
-		}
+		p.atLineStart = true
+		b = b[idx+1:]
 	}
 
 	return n, nil
 }
 
-// flush emits any buffered partial line, with a trailing newline added for
-// terminal readability. A no-op when nothing is buffered (the overwhelmingly
-// common case: well-behaved command output ends every line in \n).
+// flush terminates a trailing, un-newline-terminated line so whatever prints
+// next (the next task's header, a job.done log line) starts cleanly on its
+// own line. The line's content has already been streamed to dst; this only
+// adds the missing \n. A no-op when the last byte written was already a
+// newline (the overwhelmingly common case) or nothing was written at all.
 func (p *prefixedWriter) flush() {
-	if p.buf.Len() == 0 {
+	if p.atLineStart {
 		return
 	}
 
-	_, _ = io.WriteString(p.dst, p.prefix+p.buf.String()+"\n")
-	p.buf.Reset()
+	_, _ = io.WriteString(p.dst, "\n")
+	p.atLineStart = true
 }
 
 // prefixedStream returns dst unchanged and a no-op flush when label is ""

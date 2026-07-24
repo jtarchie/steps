@@ -207,6 +207,7 @@ linters:
             - "github.com/jtarchie/steps/internal/merkle"
             - "github.com/jtarchie/steps/internal/outcome"
             - "github.com/jtarchie/steps/internal/resource"
+            - "github.com/jtarchie/steps/internal/retry"
             - "github.com/jtarchie/steps/internal/shell"
             - "github.com/jtarchie/steps/internal/store"
             - "github.com/jtarchie/steps/internal/workspace"

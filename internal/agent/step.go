@@ -458,11 +458,20 @@ func describeTrajectory(got []recordedToolCall) string {
 }
 
 // runPrepared runs the (already resolved and materialized) conversation under
-// the agent step timeout, retrying the whole conversation up to the resolved
+// the agent step timeout (step.Timeout if set, otherwise the default
+// agentStepTimeout), retrying the whole conversation up to the resolved
 // attempt count. Shared by RunStep and RunHook so a hook agent runs the exact
 // same conversation machinery, minus the merkle/store recording RunStep does.
 func runPrepared(ctx context.Context, prepared preparedAgentStep) (conversationResult, error) {
-	agentCtx, cancel := context.WithTimeout(ctx, agentStepTimeout)
+	timeout := agentStepTimeout
+	if prepared.ri.Timeout != "" {
+		parsedTimeout, err := config.ParseTimeout(prepared.ri.Timeout)
+		if err == nil && parsedTimeout > 0 {
+			timeout = parsedTimeout
+		}
+	}
+
+	agentCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	var result conversationResult

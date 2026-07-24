@@ -495,3 +495,150 @@ func TestHookUnknownTaskErrors(t *testing.T) {
 		t.Error("expected an error for a hook referencing an unknown task, got nil")
 	}
 }
+
+// TestTaskNodeContentOmitsTimeout guards cache stability: a task with no
+// timeout: or a different timeout: must hash identically, since timeout is
+// an operational limit (like attempts), not content. This is the load-bearing
+// guarantee that lets a pipeline operator add/change timeouts without
+// invalidating existing cached runs.
+func TestTaskNodeContentOmitsTimeout(t *testing.T) {
+	t.Parallel()
+
+	mustHash := func(t *testing.T, timeout string) string {
+		t.Helper()
+
+		rt := config.ResolvedTask{Name: "build", Run: "echo hi", Timeout: timeout}
+
+		content, err := TaskNodeContent(&config.Config{}, config.Step{Task: "build", Run: "echo hi", Timeout: timeout}, rt)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		hash, err := HashNode(NodeKindTask, content, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return hash
+	}
+
+	noTimeout := mustHash(t, "")
+	shortTimeout := mustHash(t, "30s")
+	longTimeout := mustHash(t, "10m")
+
+	if noTimeout != shortTimeout {
+		t.Error("adding a timeout changed the task hash (timeout should not be hashed)")
+	}
+
+	if noTimeout != longTimeout {
+		t.Error("changing timeout value changed the task hash (timeout should not be hashed)")
+	}
+
+	if _, ok := func() (string, bool) {
+		rt := config.ResolvedTask{Name: "build", Run: "echo hi", Timeout: "30s"}
+		content, _ := TaskNodeContent(&config.Config{}, config.Step{}, rt)
+		return "timeout", content["timeout"] != nil
+	}(); ok {
+		t.Error(`a task with timeout should not have a "timeout" content key`)
+	}
+}
+
+// TestPutNodeContentOmitsTimeout mirrors TestTaskNodeContentOmitsTimeout:
+// put timeouts must not affect the hash.
+func TestPutNodeContentOmitsTimeout(t *testing.T) {
+	t.Parallel()
+
+	mustHash := func(t *testing.T, timeout string) string {
+		t.Helper()
+
+		rt := config.ResourceType{
+			Name:   "git",
+			Config: config.ResourceTypeConfig{Out: "echo out"},
+		}
+
+		content, err := PutNodeContent(&config.Config{}, config.Step{Put: "repo", Timeout: timeout}, rt, map[string]any{}, map[string]any{}, []string{}, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		hash, err := HashNode(NodeKindPut, content, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return hash
+	}
+
+	noTimeout := mustHash(t, "")
+	withTimeout := mustHash(t, "5m")
+
+	if noTimeout != withTimeout {
+		t.Error("adding a timeout changed the put hash (timeout should not be hashed)")
+	}
+
+	rt := config.ResourceType{Name: "git", Config: config.ResourceTypeConfig{Out: "echo out"}}
+	content, _ := PutNodeContent(&config.Config{}, config.Step{Put: "repo", Timeout: "5m"}, rt, map[string]any{}, map[string]any{}, []string{}, false)
+	if _, ok := content["timeout"]; ok {
+		t.Error(`a put with timeout should not have a "timeout" content key`)
+	}
+}
+
+// TestAgentContentMapOmitsTimeout mirrors the task/put timeout tests:
+// agent timeouts must not affect the hash.
+func TestAgentContentMapOmitsTimeout(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Agents: []config.Agent{
+			{
+				Name:   "reviewer",
+				Source: config.AgentSource{Model: "lmstudio/model"},
+			},
+		},
+	}
+
+	mustHash := func(t *testing.T, timeout string) string {
+		t.Helper()
+
+		ri := config.ResolvedInvocation{
+			AgentName: "reviewer",
+			ModelName: "lmstudio/model",
+			Timeout:   timeout,
+			MaxTurns:  8,
+			Attempts:  1,
+			ToolSpecs: []config.ToolSpec{},
+		}
+
+		content, err := AgentContentMap(cfg, config.Step{Agent: "reviewer", Timeout: timeout}, ri)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		hash, err := HashNode(NodeKindAgent, content, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return hash
+	}
+
+	noTimeout := mustHash(t, "")
+	withTimeout := mustHash(t, "10m")
+
+	if noTimeout != withTimeout {
+		t.Error("adding a timeout changed the agent hash (timeout should not be hashed)")
+	}
+
+	ri := config.ResolvedInvocation{
+		AgentName: "reviewer",
+		ModelName: "lmstudio/model",
+		Timeout:   "10m",
+		MaxTurns:  8,
+		Attempts:  1,
+		ToolSpecs: []config.ToolSpec{},
+	}
+	content, _ := AgentContentMap(cfg, config.Step{Agent: "reviewer"}, ri)
+	if _, ok := content["timeout"]; ok {
+		t.Error(`an agent with timeout should not have a "timeout" content key`)
+	}
+}

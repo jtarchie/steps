@@ -134,3 +134,33 @@ Both mutations are transport-level only:
 - **No effect on other providers.** A non-OpenRouter base URL gets no custom HTTP client at all, leaving `openai-go` to build its own exactly as it did before this existed.
 
 Cached-token accounting is deliberately not surfaced: `steps` tracks no token usage anywhere, so there is nowhere to report a hit rate. Check the OpenRouter activity dashboard to confirm caching is landing.
+
+## Timeout and Attempts on Agent Steps
+
+Agent steps can set `timeout:` and `attempts:` to bound their execution:
+
+```yaml
+- agent: reviewer
+  prompt: "Review the PR"
+  timeout: 10m
+  attempts: 2
+```
+
+**Timeout** bounds the **entire conversation** (all turns, all tool calls) to a wall-clock deadline. The built-in `agentStepTimeout` is 10 minutes; `timeout:` (if set) overrides it. A timeout mid-conversation classifies as **errored**, not failed.
+
+**Attempts** retries the **whole conversation** on failure (LLM transport error, `max_turns` exhaustion, a tool error in required-tool mode). Each attempt gets its own fresh conversation with the model — prior turns are discarded, the session pin is broken (see OpenRouter section above), and the `max_turns` budget resets. Intermediate tool failures *within* one conversation never trigger a retry; they come back to the model as data. Only after all `attempts:` retries are exhausted does a failure become the step's final outcome.
+
+A task step's `fix:` agent can also set `attempts:` and `timeout:` independently:
+
+```yaml
+- task: test.sh
+  attempts: 3
+  fix:
+    agent: fixer
+    timeout: 5m
+    attempts: 2
+```
+
+The fix agent's timeout/attempts are separate budgets — they don't consume or conflict with the task's retry count or timeout.
+
+See [attempts-timeout.md](attempts-timeout.md) for a detailed guide covering the interaction with `assert:`, hook firing, and other step types.

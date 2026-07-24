@@ -133,7 +133,7 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 			return fmt.Errorf("task %q: %w", step.Task, err)
 		}
 
-		return executeTask(ctx, scope.cfg, rt, scope.bw)
+		return executeTask(ctx, scope.cfg, step, rt, scope.bw)
 	case config.StepKindPut:
 		_, err := executePut(ctx, scope.cfg, step, scope.bw)
 

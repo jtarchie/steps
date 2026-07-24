@@ -43,34 +43,65 @@ func TestPrefixedWriter(t *testing.T) {
 		}
 	})
 
-	t.Run("a line split across writes is not prefixed until it completes", func(t *testing.T) {
+	t.Run("a line split across writes streams each piece immediately, one prefix", func(t *testing.T) {
 		t.Parallel()
 
 		var dst bytes.Buffer
 
 		pw := newPrefixedWriter("[x] ", &dst)
 
+		// The whole point of the streaming rewrite: a partial (newline-less)
+		// write must appear at dst NOW, not be held until a newline arrives.
+		// This is what made an agent's token-by-token output actually stream.
 		_, _ = pw.Write([]byte("hel"))
 
-		if got := dst.String(); got != "" {
-			t.Errorf("dst = %q after partial write, want empty (no newline yet)", got)
+		if got := dst.String(); got != "[x] hel" {
+			t.Errorf("dst = %q after partial write, want %q (must stream, not buffer)", got, "[x] hel")
 		}
 
 		_, _ = pw.Write([]byte("lo\n"))
 
+		// The continuation gets no second prefix — it's the same line.
 		if got := dst.String(); got != "[x] hello\n" {
 			t.Errorf("dst = %q, want %q", got, "[x] hello\n")
 		}
 	})
 
-	t.Run("flush emits a buffered partial line with an added trailing newline", func(t *testing.T) {
+	t.Run("a chunk with an interior newline splits into two prefixed lines", func(t *testing.T) {
 		t.Parallel()
 
 		var dst bytes.Buffer
 
 		pw := newPrefixedWriter("[x] ", &dst)
 
+		// A single delta straddling a line break (common in streamed model
+		// output) must prefix the line that starts after the newline.
+		_, _ = pw.Write([]byte("end of one\nstart of two"))
+
+		if got := dst.String(); got != "[x] end of one\n[x] start of two" {
+			t.Errorf("dst = %q, want %q", got, "[x] end of one\n[x] start of two")
+		}
+	})
+}
+
+func TestPrefixedWriterFlush(t *testing.T) {
+	t.Parallel()
+
+	t.Run("flush terminates a streamed partial line with a trailing newline", func(t *testing.T) {
+		t.Parallel()
+
+		var dst bytes.Buffer
+
+		pw := newPrefixedWriter("[x] ", &dst)
+
+		// The content is already streamed on the partial write; flush only
+		// adds the missing newline so the next output starts on its own line.
 		_, _ = pw.Write([]byte("no newline at all"))
+
+		if got := dst.String(); got != "[x] no newline at all" {
+			t.Errorf("dst = %q before flush, want the streamed partial %q", got, "[x] no newline at all")
+		}
+
 		pw.flush()
 
 		if got := dst.String(); got != "[x] no newline at all\n" {
@@ -78,7 +109,7 @@ func TestPrefixedWriter(t *testing.T) {
 		}
 	})
 
-	t.Run("flush is a no-op when nothing is buffered", func(t *testing.T) {
+	t.Run("flush is a no-op after a newline-terminated line", func(t *testing.T) {
 		t.Parallel()
 
 		var dst bytes.Buffer

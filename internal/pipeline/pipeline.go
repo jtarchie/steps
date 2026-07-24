@@ -16,6 +16,7 @@ import (
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
 	rsrc "github.com/jtarchie/steps/internal/resource"
+	"github.com/jtarchie/steps/internal/retry"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
@@ -523,7 +524,7 @@ func runGetStep(
 	pinned map[string]string, provider workspace.Provider, st *store.Store, skippable map[string]bool,
 	parentHash string, chainUnskippable bool, cache *rsrc.Cache,
 ) error {
-	resource, resourceType, versions, err := cache.ResolveVersionsCached(ctx, cfg, step, pinned)
+	resource, resourceType, versions, err := fetchGetVersions(ctx, cfg, step, pinned, cache)
 	if err != nil {
 		return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 	}
@@ -605,7 +606,7 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindTask, StepIndex: i, Resource: rt.Name, Content: content}
 
-	err = executeTask(ctx, cfg, rt, bw)
+	err = executeTask(ctx, cfg, step, rt, bw)
 	if err != nil {
 		wrapped := fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 		recordStepFailure(ctx, st, node, jobName, wrapped)
@@ -622,27 +623,63 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 }
 
 // executeTask materializes a task's (isolated or shared) working directory,
-// runs its command, and captures its declared outputs — with no merkle/store
-// recording. Shared by runTaskStep (which records the aggregate outcome) and
-// hook execution (where the enclosing step/job records it).
-func executeTask(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, bw workspace.BuildWorkspace) error {
+// runs its command with retries and timeout, and captures its declared outputs
+// — with no merkle/store recording. Shared by runTaskStep (which records the
+// aggregate outcome) and hook execution (where the enclosing step/job records it).
+func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt config.ResolvedTask, bw workspace.BuildWorkspace) error {
 	space, err := bw.TaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs, rt.InputMapping, rt.OutputMapping)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 	defer workspace.CloseSpace(space, rt.Name)
 
-	err = runTaskCommand(ctx, cfg, rt, space.Dir())
-	if err != nil {
-		return err
+	attempts := 1 // default if not specified
+	if step.Attempts > 0 {
+		attempts = step.Attempts
 	}
 
-	err = space.Capture(ctx)
+	timeout, err := config.ParseTimeout(rt.Timeout)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 
-	return nil
+	err = retry.Do(ctx, attempts, func(attempt int) error {
+		if attempt > 0 {
+			fmt.Printf("task: %s (attempt %d/%d)\n", rt.Name, attempt+1, attempts)
+			slog.Info("job.task.attempt", "task", rt.Name, "attempt", attempt+1, "total_attempts", attempts)
+		}
+
+		// Create a timeout context for this attempt
+		attemptCtx := ctx
+		if timeout > 0 {
+			var cancel context.CancelFunc
+			attemptCtx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		}
+
+		err := runTaskCommand(attemptCtx, cfg, rt, space.Dir())
+
+		return err
+	})
+
+	// If retry.Do succeeded, capture outputs
+	if err == nil {
+		err = space.Capture(ctx)
+		if err != nil {
+			return fmt.Errorf("task %q: %w", rt.Name, err)
+		}
+
+		return nil
+	}
+
+	// If all attempts failed, still try to capture for the last attempt
+	// (so assert can evaluate the final output), then return the error
+	captureErr := space.Capture(ctx)
+	if captureErr != nil {
+		slog.Debug("task.capture_after_failure", "task", rt.Name, "error", captureErr)
+	}
+
+	return fmt.Errorf("task %q: %w", rt.Name, err)
 }
 
 // recordStepFailure records a step's failed node and job_run, classifying the
@@ -679,6 +716,14 @@ func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedT
 	default:
 		err := runner.Run(ctx, rt.Run)
 		if err != nil {
+			// Check for context cancellation/timeout first, before classifying
+			// as a task failure. A canceled context (job abort) or timeout should
+			// propagate as-is rather than being wrapped as a task failure.
+			cancelErr := shell.CanceledError(ctx)
+			if cancelErr != nil {
+				return fmt.Errorf("task %q: %w", rt.Name, cancelErr)
+			}
+
 			if shell.IsExitError(err) {
 				err = outcome.Fail(err)
 			}
@@ -799,6 +844,58 @@ func printTaskOutput(label, stdout, stderr string) {
 	}
 }
 
+// fetchGetVersions resolves a get step's versions with retries and timeout support.
+// It returns the resource, resource type, and versions to fetch.
+func fetchGetVersions(ctx context.Context, cfg *config.Config, step config.Step, pinned map[string]string, cache *rsrc.Cache) (*config.Resource, *config.ResourceType, []map[string]any, error) {
+	attempts := 1 // default if not specified
+	if step.Attempts > 0 {
+		attempts = step.Attempts
+	}
+
+	timeout, err := config.ParseTimeout(step.Timeout)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
+	}
+
+	var (
+		resource     *config.Resource
+		resourceType *config.ResourceType
+		versions     []map[string]any
+	)
+
+	err = retry.Do(ctx, attempts, func(attempt int) error {
+		if attempt > 0 {
+			fmt.Printf("get: %s (attempt %d/%d)\n", step.Get, attempt+1, attempts)
+			slog.Info("job.get.attempt", "get", step.Get, "attempt", attempt+1, "total_attempts", attempts)
+		}
+
+		// Create a timeout context for this attempt
+		attemptCtx := ctx
+		if timeout > 0 {
+			var cancel context.CancelFunc
+			attemptCtx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		}
+
+		res, resType, vers, fetchErr := cache.ResolveVersionsCached(attemptCtx, cfg, step, pinned)
+		if fetchErr != nil {
+			return fmt.Errorf("%w", fetchErr)
+		}
+
+		resource = res
+		resourceType = resType
+		versions = vers
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
+	}
+
+	return resource, resourceType, versions, nil
+}
+
 // taskFailureOutput formats a failed run's exit code and streams into the
 // text seeded into the fix agent's prompt.
 func taskFailureOutput(stdout, stderr string, exitCode int) string {
@@ -867,11 +964,12 @@ func runPutStep(ctx context.Context, cfg *config.Config, jobName string, i int, 
 }
 
 // executePut materializes a put step's input view, runs its resource's out:
-// command, and returns the produced version — with no merkle/store recording.
-// Shared by runPutStep (which records) and hook execution (which does not; a
-// put hook's result version is discarded). A nonzero out: exit is marked as a
-// task-level failure so hook dispatch classifies it as failed; a resource
-// lookup or workspace error stays unmarked → errored.
+// command with retries and timeout, and returns the produced version — with
+// no merkle/store recording. Shared by runPutStep (which records) and hook
+// execution (which does not; a put hook's result version is discarded). A
+// nonzero out: exit is marked as a task-level failure so hook dispatch
+// classifies it as failed; a resource lookup or workspace error stays
+// unmarked → errored.
 func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) (map[string]any, error) {
 	resource, err := cfg.FindResource(step.Put)
 	if err != nil {
@@ -889,13 +987,53 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 	}
 	defer workspace.CloseSpace(space, step.Put)
 
-	result, err := rsrc.RunOut(ctx, cfg, *resourceType, resource.Source, step.Params, space.Dir())
+	return runPutWithRetry(ctx, cfg, step, *resourceType, resource.Source, space.Dir())
+}
+
+// runPutWithRetry executes a put step's out: command with retry/timeout support.
+func runPutWithRetry(ctx context.Context, cfg *config.Config, step config.Step, resourceType config.ResourceType, source map[string]any, workspaceDir string) (map[string]any, error) {
+	attempts := 1 // default if not specified
+	if step.Attempts > 0 {
+		attempts = step.Attempts
+	}
+
+	timeout, err := config.ParseTimeout(step.Timeout)
 	if err != nil {
-		if shell.IsExitError(err) {
-			err = outcome.Fail(err)
+		return nil, fmt.Errorf("put %q: %w", step.Put, err)
+	}
+
+	var result map[string]any
+
+	retryErr := retry.Do(ctx, attempts, func(attempt int) error {
+		if attempt > 0 {
+			fmt.Printf("put: %s (attempt %d/%d)\n", step.Put, attempt+1, attempts)
+			slog.Info("job.put.attempt", "put", step.Put, "attempt", attempt+1, "total_attempts", attempts)
 		}
 
-		return nil, fmt.Errorf("put %q: %w", step.Put, err)
+		// Create a timeout context for this attempt
+		attemptCtx := ctx
+		if timeout > 0 {
+			var cancel context.CancelFunc
+			attemptCtx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		}
+
+		runResult, runErr := rsrc.RunOut(attemptCtx, cfg, resourceType, source, step.Params, workspaceDir)
+		if runErr != nil {
+			if shell.IsExitError(runErr) {
+				runErr = fmt.Errorf("%w", outcome.Fail(runErr))
+			}
+
+			return runErr
+		}
+
+		result = runResult
+
+		return nil
+	})
+
+	if retryErr != nil {
+		return nil, fmt.Errorf("put %q: %w", step.Put, retryErr)
 	}
 
 	return result, nil
@@ -923,7 +1061,7 @@ func runTriggeredBuild(
 
 	recordExecution(ctx, resource.Name)
 
-	err = fetchGetStep(ctx, cfg, step.Get, resource, resourceType, version, bw)
+	err = fetchGetStepWithStep(ctx, cfg, step, step.Get, resource, resourceType, version, bw)
 
 	// Get-step hooks fire once per triggered build, in that build's own
 	// workspace, observing the fetch outcome. A fetch failure (or a hook that
@@ -952,6 +1090,41 @@ func runTriggeredBuild(
 // resource — they differ when the get aliases the resource via resource:. The
 // directory, and thus the artifact downstream steps name as an input, is
 // always the artifact name; only the fetched content comes from resource.
+// fetchGetStepWithStep wraps fetchGetStep with retry/timeout support from the step.
+func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, step config.Step, artifact string, resource config.Resource, resourceType config.ResourceType, version map[string]any, bw workspace.BuildWorkspace) error {
+	attempts := 1 // default if not specified
+	if step.Attempts > 0 {
+		attempts = step.Attempts
+	}
+
+	timeout, err := config.ParseTimeout(step.Timeout)
+	if err != nil {
+		return fmt.Errorf("get %q: %w", artifact, err)
+	}
+
+	err = retry.Do(ctx, attempts, func(attempt int) error {
+		if attempt > 0 {
+			fmt.Printf("get: %s (version: %v, attempt %d/%d)\n", artifact, version, attempt+1, attempts)
+			slog.Info("job.get.in.attempt", "artifact", artifact, "attempt", attempt+1, "total_attempts", attempts)
+		}
+
+		// Create a timeout context for this attempt
+		attemptCtx := ctx
+		if timeout > 0 {
+			var cancel context.CancelFunc
+			attemptCtx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		}
+
+		return fetchGetStep(attemptCtx, cfg, artifact, resource, resourceType, version, bw)
+	})
+	if err != nil {
+		return fmt.Errorf("get %q: %w", artifact, err)
+	}
+
+	return nil
+}
+
 func fetchGetStep(ctx context.Context, cfg *config.Config, artifact string, resource config.Resource, resourceType config.ResourceType, version map[string]any, bw workspace.BuildWorkspace) error {
 	fmt.Printf("get: %s (version: %v)\n", artifact, version)
 

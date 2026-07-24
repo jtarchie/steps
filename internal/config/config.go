@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -354,6 +355,9 @@ type Task struct {
 	// that step only — mirroring how Fix works. Empty (the default) keeps
 	// host execution, byte-identical to before this field existed.
 	Image string `yaml:"image,omitempty"`
+	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
+	// (default) means no timeout. Inherited by task steps unless overridden.
+	Timeout string `yaml:"timeout,omitempty"`
 	// Inputs/Outputs are consulted only when a pipeline sets workspace: (see
 	// WorkspaceConfig); a referencing step's own Inputs/Outputs, if
 	// non-nil, override these for that step only — mirroring how Fix works.
@@ -377,10 +381,11 @@ type FixSpec struct {
 	Dir      string     // optional working dir, relative to the workspace
 	Tools    []ToolSpec // optional subset/addition to the agent's tool grant
 	Attempts int        // optional whole-conversation retry count (default 1)
+	Timeout  string     // optional wall-clock deadline per fix-agent attempt
 }
 
 // UnmarshalYAML decodes a FixSpec from either a scalar (agent name) or a
-// mapping ({agent, prompt, dir, tools, attempts}) YAML node.
+// mapping ({agent, prompt, dir, tools, attempts, timeout}) YAML node.
 func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias kinds that can't appear here
 	case yaml.ScalarNode:
@@ -392,6 +397,7 @@ func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 			Dir      string     `yaml:"dir"`
 			Tools    []ToolSpec `yaml:"tools"`
 			Attempts int        `yaml:"attempts"`
+			Timeout  string     `yaml:"timeout"`
 		}
 
 		err := value.Decode(&m)
@@ -399,7 +405,7 @@ func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 			return fmt.Errorf("task fix: %w", err)
 		}
 
-		f.Agent, f.Prompt, f.Dir, f.Tools, f.Attempts = m.Agent, m.Prompt, m.Dir, m.Tools, m.Attempts
+		f.Agent, f.Prompt, f.Dir, f.Tools, f.Attempts, f.Timeout = m.Agent, m.Prompt, m.Dir, m.Tools, m.Attempts, m.Timeout
 
 		return nil
 	default:
@@ -552,6 +558,10 @@ type Step struct {
 	Dir      string     `yaml:"dir,omitempty"`
 	Tools    []ToolSpec `yaml:"tools,omitempty"`
 	Attempts int        `yaml:"attempts,omitempty"`
+	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
+	// (default) means no timeout. For task/put steps, step.Timeout overrides
+	// the referenced task/agent's Timeout. Invalid on get steps.
+	Timeout string `yaml:"timeout,omitempty"`
 	// Inputs/Outputs declare which named artifacts a task/agent/put step
 	// draws from and (task/agent only) produces. Each name is either a
 	// resource fetched by an earlier get step or an output produced by an
@@ -865,6 +875,7 @@ func (c *Config) validate() error {
 		c.validateGetResource,
 		c.validateArtifactMappings,
 		c.validateImageRules,
+		c.validateTimeouts,
 		c.validateHooks,
 		c.validateAgentGraph,
 		c.validateToolCallGuards,
@@ -2036,6 +2047,66 @@ func (c *Config) validateFixAgentImages() error {
 	return nil
 }
 
+// validateTimeouts checks that all timeout: fields contain valid Go duration
+// strings (e.g., "2m", "30s", "1h30m"). Empty timeout is valid (no timeout).
+func (c *Config) validateTimeouts() error {
+	err := c.validateTaskTimeouts()
+	if err != nil {
+		return err
+	}
+
+	return c.validateStepTimeouts()
+}
+
+// validateTaskTimeouts checks all tasks: entries for valid timeout values.
+func (c *Config) validateTaskTimeouts() error {
+	for _, task := range c.Tasks {
+		if task.Timeout != "" {
+			_, err := ParseTimeout(task.Timeout)
+			if err != nil {
+				return fmt.Errorf("task %q: %w", task.Name, err)
+			}
+		}
+
+		if task.Fix != nil && task.Fix.Timeout != "" {
+			_, err := ParseTimeout(task.Fix.Timeout)
+			if err != nil {
+				return fmt.Errorf("task %q fix: %w", task.Name, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateStepTimeouts checks all step timeout: fields for valid values.
+func (c *Config) validateStepTimeouts() error {
+	for _, job := range c.Jobs {
+		err := job.visitSteps(func(label string, step *Step) error {
+			if step.Timeout != "" {
+				_, err := ParseTimeout(step.Timeout)
+				if err != nil {
+					return fmt.Errorf("%s: %w", label, err)
+				}
+			}
+
+			if step.Fix != nil && step.Fix.Timeout != "" {
+				_, err := ParseTimeout(step.Fix.Timeout)
+				if err != nil {
+					return fmt.Errorf("%s fix: %w", label, err)
+				}
+			}
+
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // UsesImages reports whether any resource_type, agent, task, or step sets
 // image: — used to fail fast (before any step runs) when docker isn't
 // available but the pipeline needs it.
@@ -2424,6 +2495,9 @@ type ResolvedTask struct {
 	// re-runs) in a container from this image instead of on the host. See
 	// Task.Image/Step.Image.
 	Image string
+	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
+	// means no timeout. Step.Timeout overrides Task.Timeout when set.
+	Timeout string
 	// Assert, when set, checks the task's captured stdout/exit code (see
 	// Assert). It always comes from the step (top-level tasks: entries carry
 	// no assert), so a matching assert makes a non-zero-exit task a success.
@@ -2432,15 +2506,15 @@ type ResolvedTask struct {
 
 // ResolveTask resolves step into a ResolvedTask: a step carrying its own
 // run: is inline and used as-is; otherwise step.Task names a tasks: entry,
-// whose run/fix/inputs/outputs/image are used, except the step's own fix:,
-// inputs:, outputs:, and image:, if set (non-nil/non-empty), which override
-// the referenced task's for this step only — the same override idiom for
-// all four.
+// whose run/fix/inputs/outputs/image/timeout are used, except the step's own
+// fix:, inputs:, outputs:, image:, and timeout:, if set (non-nil/non-empty),
+// which override the referenced task's for this step only — the same override
+// idiom for all five.
 func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 	if step.Run != "" {
 		return ResolvedTask{
 			Name: step.Task, Run: step.Run, Fix: step.Fix,
-			Inputs: step.InputNames(), Outputs: step.Outputs, Image: step.Image,
+			Inputs: step.InputNames(), Outputs: step.Outputs, Image: step.Image, Timeout: step.Timeout,
 			InputMapping: step.InputMapping, OutputMapping: step.OutputMapping,
 			Assert: step.Assert,
 		}, nil
@@ -2471,8 +2545,13 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 		image = step.Image
 	}
 
+	timeout := task.Timeout
+	if step.Timeout != "" {
+		timeout = step.Timeout
+	}
+
 	return ResolvedTask{
-		Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs, Image: image,
+		Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs, Image: image, Timeout: timeout,
 		InputMapping: step.InputMapping, OutputMapping: step.OutputMapping, Assert: step.Assert,
 	}, nil
 }
@@ -2786,6 +2865,7 @@ type ResolvedInvocation struct {
 	ReasoningEffort string // "", "low", "medium", or "high"
 	MaxTurns        int
 	Attempts        int
+	Timeout         string // wall-clock deadline per attempt; empty means no timeout
 	ToolSpecs       []ToolSpec
 	// StringOnlyToolChoice, when true, forces a required tool call (see
 	// forceRequiredTool in internal/agent) via tool_choice: "required"
@@ -2851,6 +2931,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		ReasoningEffort:      reasoning,
 		MaxTurns:             maxTurns,
 		Attempts:             attempts,
+		Timeout:              step.Timeout,
 		ToolSpecs:            toolSpecs,
 		StringOnlyToolChoice: stringOnlyToolChoice,
 		Image:                image,
@@ -2867,4 +2948,20 @@ func StableStrings(names []string) []string {
 	copy(out, names)
 
 	return out
+}
+
+// ParseTimeout parses a timeout string into a time.Duration. Empty string
+// is valid and returns 0 (no timeout). Returns an error for invalid Go
+// duration format (e.g., "2m", "30s", "1h30m" are valid; "2 minutes" is not).
+func ParseTimeout(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, nil
+	}
+
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid timeout %q: %w", s, err)
+	}
+
+	return d, nil
 }
