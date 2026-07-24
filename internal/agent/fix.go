@@ -43,6 +43,7 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 		Dir:      fix.Dir,
 		Tools:    fix.Tools,
 		Attempts: fix.Attempts,
+		Timeout:  fix.Timeout,
 	})
 	if err != nil {
 		return fmt.Errorf("fix agent %q: %w", fix.Agent, err)
@@ -116,8 +117,7 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 	}
 	llm := newAgentLLM(ri, apiKey)
 
-	agentCtx, cancel := context.WithTimeout(ctx, agentStepTimeout)
-	defer cancel()
+	timeout := agentTimeout(ri.Timeout)
 
 	// Keep the latest attempt's result either way, same as runPrepared: on
 	// success it's the fix agent's own account of what it did (the
@@ -128,10 +128,13 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 	// call, so this only needs the response body, not another "agent:" banner.
 	var result conversationResult
 
-	err = retry.Do(agentCtx, ri.Attempts, func(attempt int) error {
+	err = retry.Do(ctx, ri.Attempts, func(attempt int) error {
+		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
 		// withAttempt keeps a retry off the provider instance the previous
 		// attempt may have just failed against (see composeSessionID).
-		res, runErr := runAgentConversation(withAttempt(agentCtx, attempt), llm, conv)
+		res, runErr := runAgentConversation(withAttempt(attemptCtx, attempt), llm, conv)
 		result = res
 
 		return runErr

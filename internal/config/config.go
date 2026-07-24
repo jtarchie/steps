@@ -559,8 +559,9 @@ type Step struct {
 	Tools    []ToolSpec `yaml:"tools,omitempty"`
 	Attempts int        `yaml:"attempts,omitempty"`
 	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
-	// (default) means no timeout. For task/put steps, step.Timeout overrides
-	// the referenced task/agent's Timeout. Invalid on get steps.
+	// (default) means no timeout. Valid on all step kinds (a get step's
+	// timeout bounds both its check and in commands); for task/put steps it
+	// overrides the referenced task/agent's Timeout.
 	Timeout string `yaml:"timeout,omitempty"`
 	// Inputs/Outputs declare which named artifacts a task/agent/put step
 	// draws from and (task/agent only) produces. Each name is either a
@@ -2961,6 +2962,10 @@ func ParseTimeout(s string) (time.Duration, error) {
 	d, err := time.ParseDuration(s)
 	if err != nil {
 		return 0, fmt.Errorf("invalid timeout %q: %w", s, err)
+	}
+
+	if d < 0 {
+		return 0, fmt.Errorf("invalid timeout %q: must not be negative", s)
 	}
 
 	return d, nil

@@ -29,6 +29,22 @@ import (
 // relies entirely on ctx.
 const agentStepTimeout = 10 * time.Minute
 
+// agentTimeout resolves the per-attempt conversation deadline: the
+// invocation's timeout: when it parses to a positive duration, otherwise the
+// default agentStepTimeout. A parse error can't happen for a validated config
+// (config.validateTimeouts rejects it at LoadConfig), so an unexpected one
+// falls back to the default rather than failing the run.
+func agentTimeout(riTimeout string) time.Duration {
+	if riTimeout != "" {
+		parsed, err := config.ParseTimeout(riTimeout)
+		if err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+
+	return agentStepTimeout
+}
+
 // nodeRecord converts a plan merkle.Node into the shape store.RecordNode
 // persists, keeping the store package free of a dependency on merkle's Node
 // type. Mirrors internal/pipeline's own nodeRecord — both are small enough
@@ -457,29 +473,25 @@ func describeTrajectory(got []recordedToolCall) string {
 	return "[" + strings.Join(names, ", ") + "]"
 }
 
-// runPrepared runs the (already resolved and materialized) conversation under
-// the agent step timeout (step.Timeout if set, otherwise the default
-// agentStepTimeout), retrying the whole conversation up to the resolved
-// attempt count. Shared by RunStep and RunHook so a hook agent runs the exact
-// same conversation machinery, minus the merkle/store recording RunStep does.
+// runPrepared runs the (already resolved and materialized) conversation,
+// retrying the whole conversation up to the resolved attempt count with a
+// per-attempt timeout (step.Timeout if set, otherwise the default
+// agentStepTimeout) — per-attempt, not shared across attempts, matching the
+// get/task/put semantics documented in docs/attempts-timeout.md. Shared by
+// RunStep and RunHook so a hook agent runs the exact same conversation
+// machinery, minus the merkle/store recording RunStep does.
 func runPrepared(ctx context.Context, prepared preparedAgentStep) (conversationResult, error) {
-	timeout := agentStepTimeout
-	if prepared.ri.Timeout != "" {
-		parsedTimeout, err := config.ParseTimeout(prepared.ri.Timeout)
-		if err == nil && parsedTimeout > 0 {
-			timeout = parsedTimeout
-		}
-	}
-
-	agentCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	timeout := agentTimeout(prepared.ri.Timeout)
 
 	var result conversationResult
 
-	err := retry.Do(agentCtx, prepared.ri.Attempts, func(attempt int) error {
+	err := retry.Do(ctx, prepared.ri.Attempts, func(attempt int) error {
+		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
 		// withAttempt keeps a retry off the provider instance the previous
 		// attempt may have just failed against (see composeSessionID).
-		res, runErr := runAgentConversation(withAttempt(agentCtx, attempt), prepared.llm, prepared.conv)
+		res, runErr := runAgentConversation(withAttempt(attemptCtx, attempt), prepared.llm, prepared.conv)
 		// Keep the latest attempt's result either way: on success it's the
 		// answer, and on failure its turns/trajectory describe the attempt
 		// that actually failed.
