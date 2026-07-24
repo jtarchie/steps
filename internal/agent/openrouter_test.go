@@ -93,7 +93,7 @@ func TestComposeSessionID(t *testing.T) {
 	t.Run("scopes a run to the agent", func(t *testing.T) {
 		t.Parallel()
 
-		got := composeSessionID("build-TOKEN", "reviewer")
+		got := composeSessionID("build-TOKEN", "reviewer", 0)
 		if got != "build-TOKEN-reviewer" {
 			t.Errorf("got %q, want %q", got, "build-TOKEN-reviewer")
 		}
@@ -105,8 +105,8 @@ func TestComposeSessionID(t *testing.T) {
 		// Different agents: entries mean different models and personas, so
 		// they share no cacheable prefix and must not share a provider pin —
 		// a router model would otherwise resolve once and stick for the job.
-		first := composeSessionID("build-TOKEN", "writer")
-		second := composeSessionID("build-TOKEN", "critic")
+		first := composeSessionID("build-TOKEN", "writer", 0)
+		second := composeSessionID("build-TOKEN", "critic", 0)
 
 		if first == second {
 			t.Errorf("two agents shared session %q", first)
@@ -119,8 +119,8 @@ func TestComposeSessionID(t *testing.T) {
 		// A to:/verdicts: revise loop, a repeatedly-called sub-agent, and a
 		// retrying fix: agent all reuse one prefix; per-invocation scoping
 		// would fragment exactly the case caching pays off in.
-		first := composeSessionID("build-TOKEN", "writer")
-		second := composeSessionID("build-TOKEN", "writer")
+		first := composeSessionID("build-TOKEN", "writer", 0)
+		second := composeSessionID("build-TOKEN", "writer", 0)
 
 		if first != second {
 			t.Errorf("same agent got %q then %q", first, second)
@@ -130,8 +130,8 @@ func TestComposeSessionID(t *testing.T) {
 	t.Run("two runs of one agent get different sessions", func(t *testing.T) {
 		t.Parallel()
 
-		first := composeSessionID("build-TOKEN1", "writer")
-		second := composeSessionID("build-TOKEN2", "writer")
+		first := composeSessionID("build-TOKEN1", "writer", 0)
+		second := composeSessionID("build-TOKEN2", "writer", 0)
 
 		if first == second {
 			t.Errorf("two runs shared session %q", first)
@@ -141,7 +141,7 @@ func TestComposeSessionID(t *testing.T) {
 	t.Run("no run id disables the session entirely", func(t *testing.T) {
 		t.Parallel()
 
-		got := composeSessionID("", "reviewer")
+		got := composeSessionID("", "reviewer", 0)
 		if got != "" {
 			t.Errorf("got %q, want empty for an agent run outside a job", got)
 		}
@@ -155,10 +155,61 @@ func TestComposeSessionID(t *testing.T) {
 		got := composeSessionID(
 			sanitizeLabel(strings.Repeat("job", 500))+"-TOKEN",
 			strings.Repeat("agent", 500),
+			0,
 		)
 
 		if len(got) > maxSessionIDLen {
 			t.Errorf("session id is %d chars, over the %d cap", len(got), maxSessionIDLen)
+		}
+	})
+}
+
+func TestComposeSessionIDAttempts(t *testing.T) {
+	t.Parallel()
+
+	t.Run("each retry attempt gets its own session", func(t *testing.T) {
+		t.Parallel()
+
+		// retry.Do wraps a network round trip and retries on any error, so the
+		// failure being retried may be the pinned provider's. Reusing the
+		// session would send the retry back to the instance that just failed.
+		seen := map[string]bool{}
+
+		for attempt := range 3 {
+			id := composeSessionID("build-TOKEN", "writer", attempt)
+			if seen[id] {
+				t.Errorf("attempt %d reused session %q", attempt+1, id)
+			}
+
+			seen[id] = true
+		}
+	})
+
+	t.Run("the first attempt carries no attempt marker", func(t *testing.T) {
+		t.Parallel()
+
+		// attempts: 1 is the default, so the overwhelmingly common case stays
+		// the clean run-plus-agent form.
+		got := composeSessionID("build-TOKEN", "writer", 0)
+		if got != "build-TOKEN-writer" {
+			t.Errorf("got %q, want %q", got, "build-TOKEN-writer")
+		}
+	})
+
+	t.Run("the attempt marker survives truncation", func(t *testing.T) {
+		t.Parallel()
+
+		// Clamping must eat the base, never the suffix — a truncated marker
+		// would silently collapse retries back onto one session.
+		first := composeSessionID(strings.Repeat("x", maxSessionIDLen*2), "writer", 1)
+		second := composeSessionID(strings.Repeat("x", maxSessionIDLen*2), "writer", 2)
+
+		if first == second {
+			t.Errorf("truncation collapsed two attempts onto %q", first)
+		}
+
+		if len(first) > maxSessionIDLen {
+			t.Errorf("session id is %d chars, over the %d cap", len(first), maxSessionIDLen)
 		}
 	})
 }

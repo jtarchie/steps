@@ -47,6 +47,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -102,6 +103,25 @@ func runIDFromContext(ctx context.Context) string {
 	return id
 }
 
+// attemptKey types the context value holding a retry attempt index.
+type attemptKey struct{}
+
+// withAttempt marks ctx as belonging to a zero-based retry attempt of an
+// agent conversation, which composeSessionID folds into the session so a retry
+// is not pinned to the provider instance that just failed. Set by the
+// retry.Do callbacks in RunStep and RunFix.
+func withAttempt(ctx context.Context, attempt int) context.Context {
+	return context.WithValue(ctx, attemptKey{}, attempt)
+}
+
+// attemptFromContext reads back what withAttempt stored, or 0 (the first
+// attempt) when the context carries none.
+func attemptFromContext(ctx context.Context) int {
+	attempt, _ := ctx.Value(attemptKey{}).(int)
+
+	return attempt
+}
+
 // sanitizeLabel reduces a free-form name to characters legal in an HTTP header
 // value and bounds its length. Job and agent names are arbitrary YAML strings
 // that may contain spaces or non-ASCII; dropping to an unreserved ASCII subset
@@ -148,23 +168,39 @@ func sanitizeLabel(name string) string {
 // retrying all reuse one session, which per-step-invocation scoping would
 // fragment.
 //
+// A retry (attempt > 0) deliberately breaks the pin instead of extending it.
+// retry.Do wraps "a network round trip to an LLM endpoint (rate limiting,
+// transient 5xx)" — its own words — and retries on any error, so the failure
+// being retried may well be the pinned provider's fault; reusing the session
+// would send the retry straight back to the instance that just failed. What
+// is given up is small: a retry starts a *fresh* conversation, so a shared
+// session would only have reused the short system+tools+prompt prefix, never
+// the accumulated history, which is discarded either way.
+//
 // An empty runID disables the header entirely — an agent run outside a job
 // (tests, any future non-pipeline caller) sends no session.
-func composeSessionID(runID, agentName string) string {
+func composeSessionID(runID, agentName string, attempt int) string {
 	if runID == "" {
 		return ""
 	}
 
-	id := runID
+	base := runID
 	if agentName != "" {
-		id += "-" + sanitizeLabel(agentName)
+		base += "-" + sanitizeLabel(agentName)
 	}
 
-	if len(id) > maxSessionIDLen {
-		id = id[:maxSessionIDLen]
+	suffix := ""
+	if attempt > 0 {
+		suffix = "-a" + strconv.Itoa(attempt+1)
 	}
 
-	return id
+	// Clamp the base, never the suffix: truncating the attempt marker away
+	// would silently collapse retries back onto one session.
+	if len(base)+len(suffix) > maxSessionIDLen {
+		base = base[:max(0, maxSessionIDLen-len(suffix))]
+	}
+
+	return base + suffix
 }
 
 // isOpenRouterBaseURL reports whether baseURL points at OpenRouter, and so
@@ -228,7 +264,7 @@ func (t *openRouterTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	ctx := req.Context()
 	req = req.Clone(ctx)
 
-	sessionID := composeSessionID(runIDFromContext(ctx), t.agent)
+	sessionID := composeSessionID(runIDFromContext(ctx), t.agent, attemptFromContext(ctx))
 	if sessionID != "" {
 		req.Header.Set("x-session-id", sessionID)
 	}

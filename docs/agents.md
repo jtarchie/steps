@@ -119,6 +119,9 @@ OpenRouter tracks sticky routing "at the account level, per model, and per conve
 | A `fix:` agent retrying | yes | same persona every attempt |
 | Two different agents in one job | **no** | different model and persona — nothing to reuse |
 | The same agent in two runs (incl. concurrent) | **no** | no cross-run provider pin |
+| A second/third `attempts:` retry | **no** | see below |
+
+A retry deliberately **breaks** the pin instead of extending it. `retry.Do` wraps "a network round trip to an LLM endpoint (rate limiting, transient 5xx)" and retries on any error, so the failure being retried may well be the pinned provider's — reusing the session would send the retry straight back to the instance that just failed. What that gives up is small: a retry starts a *fresh* conversation, so a shared session would only have reused the short system+tools+prompt prefix, never the accumulated history, which is discarded either way.
 
 The per-agent split is not merely tidy. With a **router model** (`openrouter/auto` and friends) a session pins the *resolved model*, not just the provider — so under a run-wide session whichever agent ran first would silently choose the concrete model for every later agent in the job.
 

@@ -465,8 +465,10 @@ func runPrepared(ctx context.Context, prepared preparedAgentStep) (conversationR
 
 	var result conversationResult
 
-	err := retry.Do(agentCtx, prepared.ri.Attempts, func(_ int) error {
-		res, runErr := runAgentConversation(agentCtx, prepared.llm, prepared.conv)
+	err := retry.Do(agentCtx, prepared.ri.Attempts, func(attempt int) error {
+		// withAttempt keeps a retry off the provider instance the previous
+		// attempt may have just failed against (see composeSessionID).
+		res, runErr := runAgentConversation(withAttempt(agentCtx, attempt), prepared.llm, prepared.conv)
 		// Keep the latest attempt's result either way: on success it's the
 		// answer, and on failure its turns/trajectory describe the attempt
 		// that actually failed.
