@@ -1,0 +1,345 @@
+# Same idea as pipeline.yml (see there for the resource/fan-out design, which
+# is copied byte-for-byte below) but plan/execute/critique's qualitative gate
+# are steps' own `agent:` step type instead of shelling out to the `claude`
+# CLI -- for trying this experiment against a local model (LM Studio/Ollama)
+# instead of Claude. See README.md's "agent: vs claude CLI" section for the
+# full rationale; this header only covers what a reader needs to make sense
+# of the tool grants below.
+#
+# The `claude` CLI version gets three things for free that internal/agent
+# does not, and this file has to compensate for each one explicitly:
+#
+# 1. CLAUDE.md is not auto-injected. Every persona/prompt below tells the
+#    model to `repo_shell: cat CLAUDE.md` itself, including the specific
+#    rule this experiment most needs (CLAUDE.md's "Guidance for Claude
+#    Agents" #8: a behavior/guard added to one of several structurally
+#    similar code paths -- e.g. get/task/put/agent step handling -- must be
+#    verified on all of them it claims to cover). #8 exists BECAUSE a real
+#    code review of this pipeline's own first story found exactly that bug
+#    class slipping through a `claude`-CLI-driven run; the reviewer persona
+#    below checks for it explicitly rather than trusting the story prompt
+#    alone to catch it a second time.
+#
+# 2. Built-in read_file/list_dir/write_file are confined to the agent step's
+#    own (ephemeral, per-story) working directory, symlink-escape checked
+#    (see CLAUDE.md's trust-boundary notes) -- there is no dir: value that
+#    can point them at stories/repo's absolute path, which is what makes
+#    pipeline.yml's "cd $repo" trick work for a task's run: but NOT for an
+#    agent step's own file tools. run_shell has no such confinement (by
+#    design -- it's the escape hatch), so every agent below is granted a
+#    custom `repo_shell` tool instead of the plain run_shell/read_file/
+#    list_dir/write_file builtins: it always runs
+#    `cd "$(cat stories/repo)" && <model's command>`, so the model never has
+#    to remember (or get right) the cd itself. read_file is still granted,
+#    narrowly, for the three small files the stories resource's in: writes
+#    into the agent's OWN workspace (stories/num, stories/file,
+#    stories/repo) -- those really are reachable without a shell.
+#
+# 3. There is no persistent shell session or dedicated file-edit tool.
+#    Every repo_shell call is a fresh `sh -c`, so related commands must be
+#    chained with && in one call. Local models also tend to mis-escape large
+#    multi-line heredocs assembled inside a JSON tool-call string, so coder
+#    additionally gets `write_repo_file`, a whole-file write where content is
+#    an ordinary string argument -- the tool-calling protocol handles its
+#    escaping, not the model's own shell quoting.
+#
+# What steps' agent: step type gives back in return, used below instead of
+# hand-rolled equivalents: `verdicts:`/`to:` for PASS/FAIL routing (no
+# grep '^PASS' on captured text), and `handoff:` for feeding a redo attempt
+# the previous round's outcome (no hand-rolled critique-file re-read --
+# though the reviewer still writes one, as a human-readable record).
+#
+# Swap `lmstudio/google/gemma-4-26b-a4b` below for whatever you have loaded
+# (matches the model name already used by every other example in this repo);
+# a coding-tuned model (e.g. a Qwen2.5-Coder build) will likely do
+# meaningfully better on `coder` specifically than a general chat model.
+resource_types:
+- name: stories
+  config:
+    # JSON array building is the one part of this resource type that's real
+    # data manipulation rather than shelling out to another CLI, so it's
+    # Ruby (stdlib json, explicit .sort -- Dir.glob order isn't guaranteed)
+    # rather than bash's printf/comma-tracking. `.source.dir` is passed as a
+    # process argument (shellquote's actual job) rather than interpolated
+    # into the Ruby source, so it needs no Ruby-side escaping.
+    check: |
+      ruby -e '
+        require "json"
+        dir = ARGV[0]
+        # versions = Dir.glob(File.join(dir, "[0-9][0-9][0-9]-*.md")).sort.map do |path|
+        versions = Dir.glob(File.join(dir, "000-*.md")).sort.map do |path|
+          name = File.basename(path)
+          { num: name[0, 3], file: name }
+        end
+        puts versions.to_json
+      ' -- {{ .source.dir | shellquote }}
+    in: |
+      echo {{ .version.num | shellquote }} > ./num
+      echo {{ .version.file | shellquote }} > ./file
+      echo {{ .source.repo | shellquote }} > ./repo
+
+resources:
+- name: stories
+  type: stories
+  source:
+    dir: docs/proposals/stories
+    # See pipeline.yml's identical comment: steps always runs steps inside a
+    # fresh, disposable temp workspace, never the directory `steps` was
+    # invoked from -- point this at a dedicated worktree before a real run,
+    # same as pipeline.yml (see README.md).
+    repo: /Users/jtarchie/workspace/steps
+
+agents:
+# Research only: read the story and the current codebase, write a
+# file-by-file plan. No write access to the real repo -- planning shouldn't
+# be able to touch source, only describe what should change.
+- name: planner
+  source: { model: lmstudio/google/gemma-4-26b-a4b }
+  temperature: 0.3
+  max_turns: 25
+  system: |
+    You are a careful staff engineer planning ONE change to the `steps` Go
+    codebase (a Concourse-style pipeline runner). You research before you
+    write, cite exact files/functions you found, and never propose a change
+    to a file you haven't actually read this session.
+  tools:
+  - read_file    # only ever needed for stories/num, stories/file, stories/repo
+  - name: repo_shell
+    description: >
+      Run a shell command with the real project checkout as the working
+      directory (not your own disposable workspace, which only has
+      stories/num, stories/file, stories/repo). Read-only use expected here:
+      cat, grep -rn, go doc, find. Every call is a fresh shell with no
+      memory of earlier calls -- chain related commands with && in one call.
+    run: |
+      cd "$(cat stories/repo)" && {{ .args.command }}
+  - name: write_repo_file
+    description: >
+      Write (overwriting) a file in the real project checkout. path is
+      relative to the repo root. Used here only to write the plan file
+      itself -- experiments/self-build/plans/<num>.md.
+    run: |
+      cd "$(cat stories/repo)" && mkdir -p "$(dirname {{ .args.path | shellquote }})" && cat > {{ .args.path | shellquote }} <<'STEPS_AGENT_FILE_EOF'
+      {{ .args.content }}
+      STEPS_AGENT_FILE_EOF
+
+# Implements the plan end to end: code, tests, docs/examples. The only agent
+# below with real write access to the repo.
+- name: coder
+  source: { model: lmstudio/google/gemma-4-26b-a4b }
+  temperature: 0.2
+  max_turns: 60         # implement + iterate lint/test/build fixes needs headroom
+  system: |
+    You are a careful Go engineer implementing an already-written plan
+    against the `steps` codebase. You follow CLAUDE.md's standing rules
+    exactly (package dependency graph, merkle value-gating, trust-boundary
+    notes) and never consider a change done until it passes
+    `go fmt ./... && go mod tidy && golangci-lint run && go test ./... && go
+    build -v`. When a story's change applies to more than one structurally
+    similar code path (get/task/put/agent step handling is the most common
+    case in this repo), you apply the SAME treatment to every one of them,
+    not just the first one you find -- CLAUDE.md's "Guidance for Claude
+    Agents" #8 exists because a past attempt got this wrong.
+  tools:
+  - read_file
+  - name: repo_shell
+    description: >
+      Run a shell command with the real project checkout as the working
+      directory (not your own disposable workspace, which only has
+      stories/num, stories/file, stories/repo). Use this for reading,
+      editing (sed/patch/git), running tests, and git status/diff. Every
+      call is a fresh shell with no memory of earlier calls -- chain related
+      commands with && in one call.
+    run: |
+      cd "$(cat stories/repo)" && {{ .args.command }}
+  - name: write_repo_file
+    description: >
+      Write (overwriting) a whole file in the real project checkout. path is
+      relative to the repo root. Prefer this over a repo_shell heredoc for
+      any nontrivial file write -- content is an ordinary argument, so you
+      don't have to hand-escape it into a shell command yourself. This
+      REPLACES the entire file; read it first with repo_shell if you only
+      want to change part of it.
+    run: |
+      cd "$(cat stories/repo)" && mkdir -p "$(dirname {{ .args.path | shellquote }})" && cat > {{ .args.path | shellquote }} <<'STEPS_AGENT_FILE_EOF'
+      {{ .args.content }}
+      STEPS_AGENT_FILE_EOF
+
+# Quality gate before a commit happens. Read access only -- reviewing is not
+# editing, even though nothing at the framework level enforces that (see
+# repo_shell's own description: it's exactly as unconfined here as it is for
+# coder, the same "no path confinement by design" trade CLAUDE.md documents
+# for run_shell itself; the boundary is the persona's instructions, not a
+# hard guarantee).
+- name: reviewer
+  source: { model: lmstudio/google/gemma-4-26b-a4b }
+  temperature: 0.2
+  max_turns: 25
+  system: |
+    You are a skeptical code reviewer for the `steps` Go codebase. Lint,
+    tests, and build already passed before you were called -- your job is
+    judging correctness a compiler can't: does the diff actually do what the
+    story asked, do the docs it touched still match the code, and -- the
+    most common miss in this codebase -- if it changes one of several
+    structurally similar code paths (get/task/put/agent step handling is the
+    usual case), did the SAME change land on all the siblings it claims to
+    cover, not just one. You do not edit files. You cite file:line for every
+    concern.
+  tools:
+  - read_file
+  - name: repo_shell
+    description: >
+      Run a shell command with the real project checkout as the working
+      directory (not your own disposable workspace, which only has
+      stories/num, stories/file, stories/repo). Expected here: cat,
+      git diff main...HEAD, git status, grep -rn. Every call is a fresh
+      shell with no memory of earlier calls -- chain related commands with
+      && in one call.
+    run: |
+      cd "$(cat stories/repo)" && {{ .args.command }}
+
+jobs:
+- name: self-build
+  plan:
+  - get: stories
+    version: every
+  - agent: planner
+    inputs: [stories]
+    attempts: 2       # whole-conversation restart on a transport/max_turns failure
+    timeout: 8m        # per attempt, not total -- see docs/attempts-timeout.md
+    prompt: |
+      This is a story-by-story self-build loop: you plan ONE implementation
+      step for ONE story file in the real steps repository.
+
+      First, read three small files with read_file to learn which story
+      this run is for and where the real checkout lives:
+        stories/num   -- the story's 3-digit number, e.g. "000"
+        stories/file  -- the story file's name, e.g. "000-attempts-and-timeout.md"
+        stories/repo  -- the ABSOLUTE path of the real, persistent checkout
+
+      Everything else -- CLAUDE.md, the story itself, the current source --
+      lives in that real checkout, not in your own working directory (which
+      only has those three files). Reach it only through repo_shell.
+
+      1. repo_shell: `cat CLAUDE.md` and
+         `cat docs/proposals/stories/<file>` (using the file you just read).
+      2. Research the current codebase (internal/config, internal/pipeline,
+         internal/merkle, internal/store, internal/trigger, internal/agent,
+         as relevant to this story) with repo_shell (cat, grep -rn, go doc)
+         to find every place this feature touches.
+      3. Write a concrete, file-by-file implementation plan -- what changes,
+         what new tests are needed (call out explicitly whether this story's
+         change applies to more than one similar code path, e.g. get/task/
+         put/agent step handling, and if so require a test that checks all
+         of them, not just one), and what docs/*.md and examples/*.yml need
+         updating -- with write_repo_file to
+         experiments/self-build/plans/<num>.md, where <num> is exactly what
+         you read from stories/num. Do not write or edit any other file.
+  - agent: coder
+    inputs: [stories]
+    attempts: 2
+    timeout: 25m
+    handoff: { tool: true }   # a redo round gets a previous_run tool over the reviewer's last verdict/note
+    prompt: |
+      This is a story-by-story self-build loop: you implement ONE story's
+      already-written plan in the real steps repository.
+
+      First, read stories/num, stories/file, and stories/repo with
+      read_file (same three files the planning pass used). Everything you
+      touch lives under stories/repo (the ABSOLUTE path of the real
+      checkout), reached only through repo_shell (every call is a fresh
+      shell -- chain with && when order matters) and write_repo_file (whole-
+      file writes; read a file first if you only want to change part of it).
+
+      1. repo_shell: `cat CLAUDE.md` and
+         `cat experiments/self-build/plans/<num>.md` (the plan a separate
+         planning pass already wrote for this story; <num> is what you read
+         from stories/num).
+      2. Implement it end to end: code, tests, and doc/example updates.
+         Follow CLAUDE.md's standing rules exactly -- the package dependency
+         graph, merkle value-gating, trust-boundary notes, and "Guidance for
+         Claude Agents" #8: if this story adds a behavior/guard to one of
+         several similar code paths (e.g. get/task/put/agent step
+         handling), grep for the sibling call sites and apply the SAME
+         treatment to all of them, not just the one you looked at first.
+      3. Before you consider yourself done, repo_shell:
+         `go fmt ./... && go mod tidy && golangci-lint run && go test ./...
+         && go build -v` -- and keep fixing until all four are clean.
+         Re-run this after every further edit; do not stop on a stale pass
+         from before your last change.
+      4. Do not commit -- a later step in this pipeline only commits if a
+         review actually passes.
+
+      If a `<transition_context>` block appears below, you were sent back
+      here after a previous attempt. If it mentions a failed build/lint/test
+      gate, just re-run step 3 -- the repo already has your last attempt's
+      changes, so you'll see the same errors directly. If it mentions a
+      failed review, call previous_run to see the reviewer's full note, and
+      also repo_shell `cat experiments/self-build/critiques/<num>.md` if it
+      exists.
+  - task: build-check
+    run: |
+      set -o pipefail
+      repo=$(cat stories/repo)
+      cd "$repo"
+
+      # Objective gate: cheap, deterministic, no model call needed to reject
+      # an obviously-broken attempt before spending reviewer turns on it.
+      golangci-lint run && go test ./... && go build -v
+    to:
+      failure: coder
+    max_visits: 4
+  - agent: reviewer
+    inputs: [stories]
+    attempts: 2
+    timeout: 10m
+    prompt: |
+      This is a story-by-story self-build loop: you are the quality gate
+      before a story's changes get committed to the real steps repository.
+
+      First, read stories/num, stories/file, and stories/repo with
+      read_file. Everything else lives under stories/repo (the ABSOLUTE path
+      of the real checkout), reached through repo_shell.
+
+      1. repo_shell: `cat docs/proposals/stories/<file>` (the story this
+         attempt claims to implement; <file> is what you read from
+         stories/file), then `git diff main...HEAD` and `git status` to see
+         the uncommitted changes.
+      2. Judge whether the story is fully AND CORRECTLY implemented, not
+         merely plausible-looking:
+         a. the feature described is present, with tests that exercise it;
+         b. docs/examples are updated if the story called for them, and
+            every claim those docs make about behavior is actually true of
+            the code next to it -- a comment or doc line contradicting the
+            code is a fail, not a nitpick;
+         c. if this story adds a behavior/guard to one of several similar
+            code paths (e.g. get/task/put/agent step handling), grep for
+            the sibling call sites and confirm the SAME treatment landed on
+            all of them it claims to cover -- a fix applied to only one
+            sibling is a fail (CLAUDE.md's "Guidance for Claude Agents" #8);
+         d. edge cases the story implies (empty, zero, negative, malformed
+            input) are handled deliberately, not silently accepted.
+         Lint/test/build already passed before you were called -- your job
+         is the correctness a compiler can't check.
+      3. repo_shell: write a short human-readable record to
+         experiments/self-build/critiques/<num>.md (<num> from stories/num)
+         starting with exactly PASS or FAIL on its own first line, then your
+         reasoning. This file is a record only -- it does not drive routing.
+      4. Call the verdict tool with exactly "pass" or "fail", and a short
+         `note` explaining your reasoning -- THIS is what actually routes
+         the pipeline and what the implementer sees on a redo.
+    verdicts: [pass, fail]
+    to:
+      pass: commit
+      fail: coder
+      failure: coder   # reviewer errored or never called verdict
+    max_visits: 3
+  - task: commit
+    run: |
+      num=$(cat stories/num)
+      file=$(cat stories/file)
+      repo=$(cat stories/repo)
+      cd "$repo"
+
+      git add -A
+      git commit -m "self-build: story $num ($(basename "$file" .md))"

@@ -5,6 +5,44 @@ order, using the `claude` CLI as the plan/execute/critique worker for each
 story. [pipeline.yml](pipeline.yml) is the whole thing — no generator, no
 per-story duplication.
 
+There is a second variant, [pipeline-agent.yml](pipeline-agent.yml), that
+does the same walk using `steps`' own `agent:` step type instead of the
+`claude` CLI — for trying this against a local model (LM Studio/Ollama)
+rather than Claude. See its own header comment for the full rationale; the
+short version:
+
+- **No free CLAUDE.md pickup.** `claude` reads it from the checkout's cwd
+  automatically; an `agent:` step doesn't, so every persona/prompt in
+  `pipeline-agent.yml` tells the model to `cat` it itself, including the
+  specific lesson (`CLAUDE.md`'s "Guidance for Claude Agents" #8) a real
+  code review found the *first* self-build run needed and didn't get: a
+  behavior added to one of several similar code paths (get/task/put/agent
+  step handling) but not the others.
+- **No `dir:` that reaches the real checkout.** `read_file`/`list_dir`/
+  `write_file` are confined to the agent step's own ephemeral workspace
+  (symlink-escape checked), unlike a task's `run:`, which can `cd` anywhere.
+  Every agent below is granted a custom `repo_shell` tool instead — it
+  always runs `cd "$(cat stories/repo)" && <command>` for you, since
+  `run_shell` itself has no such confinement (by design, the same trade
+  `internal/shell.HostRunner` makes). `coder` also gets `write_repo_file`, a
+  whole-file write where content is an ordinary tool argument, since local
+  models tend to mis-escape large multi-line heredocs assembled inside a
+  JSON tool-call string.
+- **`verdicts:`/`to:`/`handoff:` replace the hand-rolled PASS/FAIL grep and
+  critique-file re-read** `pipeline.yml`'s `critique` task needed, because
+  those are agent-only mechanisms `claude -p` (a plain shell command from
+  `steps`' point of view) can't participate in. The reviewer still writes a
+  human-readable `experiments/self-build/critiques/<num>.md`, but routing is
+  driven by the `verdict` tool call, not by grepping that file.
+
+Same "before running this for real" cautions apply as `pipeline.yml`
+(`source.repo` needs to point at a dedicated worktree, it makes up to 14 real
+commits, etc. — see below) plus one more: nothing in `steps`' tool-grant
+system can restrict what a granted `repo_shell`/`write_repo_file` call
+actually does, the way `claude`'s `--allowedTools "Bash(git diff*)"` scopes
+`critique` to read-only commands — the boundary here is the reviewer
+persona's instructions, not a hard guarantee.
+
 ## How it's wired
 
 - **`stories` resource** (`resource_types:`/`resources:` in pipeline.yml):
