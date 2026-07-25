@@ -65,13 +65,15 @@ type agentTools struct {
 }
 
 // requiredToolNames returns the set of tool names in specs marked
-// required: true. A required tool's failure already aborts the attempt (see
-// execCustomTool), but that alone doesn't guarantee the model ever called it
-// — it could just as easily finish the conversation without calling it at
-// all and still have the step report success. runAgentConversation uses
-// this set to reject that case: every required tool must be invoked (and,
-// since a failed call already aborts the attempt, therefore succeed) at
-// least once before an attempt can end successfully.
+// required: true. A required tool's failure does NOT abort the attempt —
+// it comes back as ordinary data, same as any other tool, and the model may
+// keep retrying it in-session (see execCustomTool) — but nothing stops the
+// model from finishing the conversation without ever having called it, and
+// still having the step report success. runAgentConversation uses this set
+// to reject that case: it forces an unsatisfied required tool via the next
+// turn's tool_choice (see forceRequiredTool) whenever the model tries to
+// stop early, and fails the step only if the tool still never succeeds by
+// max_turns.
 func requiredToolNames(specs []config.ToolSpec) map[string]bool {
 	required := make(map[string]bool, len(specs))
 
@@ -884,7 +886,13 @@ func execCustomTool(spec config.ToolSpec, params []string) toolImpl {
 
 		missing := missingArgs(merged, params)
 		if len(missing) > 0 {
-			return map[string]any{"error": fmt.Sprintf("%s: missing required argument(s): %s", spec.Name, strings.Join(missing, ", "))}
+			msg := fmt.Sprintf("%s: missing required argument(s): %s", spec.Name, quoteJoin(missing))
+
+			if expected := visibleParams(params, spec.Args); len(expected) > 0 {
+				msg += fmt.Sprintf(" (expected: %s)", quoteJoin(expected))
+			}
+
+			return map[string]any{"error": msg}
 		}
 
 		rendered, err := template.Render(spec.Run, map[string]any{"args": merged})
@@ -919,20 +927,33 @@ func mergePinnedArgs(args map[string]any, pinned map[string]string) map[string]a
 	return merged
 }
 
-// missingArgs returns the subset of params for which args holds no non-empty
-// string value, in params order — so a custom tool can report every missing
-// argument in one message instead of the model discovering them one failed
-// render at a time.
+// missingArgs returns the subset of params (raw names, not quoted — see
+// quoteJoin) for which args holds no non-empty string value, in params
+// order — so a custom tool can report every missing argument in one message
+// instead of the model discovering them one failed render at a time.
 func missingArgs(args map[string]any, params []string) []string {
 	missing := make([]string, 0, len(params))
 
 	for _, p := range params {
 		if stringArg(args, p) == "" {
-			missing = append(missing, fmt.Sprintf("%q", p))
+			missing = append(missing, p)
 		}
 	}
 
 	return missing
+}
+
+// quoteJoin renders names as a comma-separated list of quoted names, e.g.
+// `"a", "b"` — the shared formatting for both halves of a missing-argument
+// error (see execCustomTool).
+func quoteJoin(names []string) string {
+	quoted := make([]string, 0, len(names))
+
+	for _, n := range names {
+		quoted = append(quoted, fmt.Sprintf("%q", n))
+	}
+
+	return strings.Join(quoted, ", ")
 }
 
 func executeAgentTool(ctx context.Context, call *genai.FunctionCall, env toolEnv, registry map[string]toolImpl) map[string]any {

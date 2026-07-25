@@ -278,7 +278,7 @@ func TestExecCustomTool(t *testing.T) {
 		result := impl(context.Background(), map[string]any{}, testEnv(dir))
 
 		msg, _ := result["error"].(string)
-		if want := `greet: missing required argument(s): "name"`; msg != want {
+		if want := `greet: missing required argument(s): "name" (expected: "name")`; msg != want {
 			t.Errorf("error = %q, want %q", msg, want)
 		}
 
@@ -295,7 +295,7 @@ func TestExecCustomTool(t *testing.T) {
 		result := multiImpl(context.Background(), map[string]any{}, testEnv(dir))
 
 		msg, _ := result["error"].(string)
-		if want := `post: missing required argument(s): "action", "body"`; msg != want {
+		if want := `post: missing required argument(s): "action", "body" (expected: "action", "body")`; msg != want {
 			t.Errorf("error = %q, want %q", msg, want)
 		}
 	})
@@ -319,6 +319,29 @@ func TestExecCustomTool(t *testing.T) {
 			t.Errorf("exit_code = %v, want 1", result["exit_code"])
 		}
 	})
+}
+
+// TestExecCustomToolPinnedArgExcludedFromExpectedHint proves the missing-
+// argument error's "(expected: ...)" hint (see execCustomTool) uses
+// visibleParams, not the full params list — a pinned arg the model can
+// neither see nor supply must never appear in either the missing or the
+// expected list.
+func TestExecCustomToolPinnedArgExcludedFromExpectedHint(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	impl := execCustomTool(config.ToolSpec{
+		Name: "post_review",
+		Run:  `echo {{ .args.repo }} {{ .args.action }}`,
+		Args: map[string]string{"repo": "jtarchie/ci"},
+	}, []string{"repo", "action"})
+
+	result := impl(context.Background(), map[string]any{}, testEnv(dir))
+
+	msg, _ := result["error"].(string)
+	if want := `post_review: missing required argument(s): "action" (expected: "action")`; msg != want {
+		t.Errorf("error = %q, want %q — a pinned arg must not appear in either list", msg, want)
+	}
 }
 
 func TestTruncateToolOutput(t *testing.T) {

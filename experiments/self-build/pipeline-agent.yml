@@ -135,6 +135,10 @@ agents:
       Write (overwriting) a file in the real project checkout. path is
       relative to the repo root. Used here only to write the plan file
       itself -- experiments/self-build/plans/<num>.md.
+    required: true   # planner's entire output is this file: if it never
+                     # succeeds, fail the step rather than let coder start
+                     # with no plan (a real run had the model emit the plan
+                     # as chat text after a missing-`path` error and stop)
     run: |
       cd "$(cat stories/repo)" && mkdir -p "$(dirname {{ .args.path | shellquote }})" && cat > {{ .args.path | shellquote }} <<'STEPS_AGENT_FILE_EOF'
       {{ .args.content }}
