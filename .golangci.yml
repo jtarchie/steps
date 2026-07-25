@@ -164,6 +164,14 @@ linters:
             - "github.com/modelcontextprotocol/go-sdk/oauthex"
             - "golang.org/x/oauth2"
             - "github.com/jtarchie/steps/internal/config"
+            # shell is imported only for HostEnv: a stdio (command:) mcp
+            # server is a host-executed subprocess and must see exactly the
+            # same filtered environment every other host-executed command
+            # does, rather than a second, drifting copy of the allowlist
+            # (see CLAUDE.md's Trust Boundaries + "Guidance for Claude
+            # Agents" #8). shell is a stdlib-only leaf, so this adds no
+            # cycle — the same edge internal/resource already has.
+            - "github.com/jtarchie/steps/internal/shell"
         # merkle plans/hashes steps; it depends on resource (to resolve get
         # versions the same way at plan time and run time) and config, but
         # nothing execution-specific (store, workspace, agent).

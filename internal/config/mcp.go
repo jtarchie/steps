@@ -244,3 +244,41 @@ func (c *Config) validateMCPResourcePuts() error {
 
 	return nil
 }
+
+// validateMCPServerTransport checks that srv sets exactly one of
+// endpoint (http)/command (stdio) and that the fields belonging to the
+// other transport are unset.
+func validateMCPServerTransport(srv MCPServer) error {
+	switch {
+	case srv.Endpoint == "" && srv.Command == "":
+		return fmt.Errorf("mcp server %q: one of endpoint (http) or command (stdio) is required", srv.Name)
+	case srv.Endpoint != "" && srv.Command != "":
+		return fmt.Errorf("mcp server %q: endpoint and command are mutually exclusive (http vs stdio transport)", srv.Name)
+	case srv.Command == "":
+		return validateMCPServerHTTPOnlyFields(srv)
+	default:
+		return validateMCPServerStdioAuth(srv)
+	}
+}
+
+// validateMCPServerHTTPOnlyFields rejects args/cwd (stdio-only fields) on
+// an http server.
+func validateMCPServerHTTPOnlyFields(srv MCPServer) error {
+	if len(srv.Args) != 0 || srv.Cwd != "" {
+		return fmt.Errorf("mcp server %q: args/cwd are only valid with command (stdio transport)", srv.Name)
+	}
+
+	return nil
+}
+
+// validateMCPServerStdioAuth rejects any auth: on a stdio server — it has
+// no HTTP request to attach a bearer token to, and oauthTokenSource pins a
+// persisted token to srv.Endpoint, which an empty endpoint would make
+// vacuous.
+func validateMCPServerStdioAuth(srv MCPServer) error {
+	if srv.Auth.Type != "" && srv.Auth.Type != "none" {
+		return fmt.Errorf("mcp server %q: auth.type %q requires an http endpoint; a stdio server has no request to authenticate", srv.Name, srv.Auth.Type)
+	}
+
+	return nil
+}

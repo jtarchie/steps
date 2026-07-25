@@ -28,13 +28,13 @@ jobs: [{ name: j, plan: [] }]
 			want: "name is required",
 		},
 		{
-			name: "missing endpoint",
+			name: "missing endpoint and command",
 			pipeline: `
 mcp_servers:
 - name: github
 jobs: [{ name: j, plan: [] }]
 `,
-			want: "endpoint is required",
+			want: "one of endpoint (http) or command (stdio) is required",
 		},
 		{ //nolint:gosec // test fixture: the literal this validator must reject, not a real credential
 			name: "userinfo in endpoint",
@@ -91,6 +91,63 @@ jobs: [{ name: j, plan: [] }]
 `,
 			want: "declared more than once",
 		},
+		{
+			name: "endpoint and command both set",
+			pipeline: `
+mcp_servers:
+- name: gopls
+  endpoint: https://example.com/mcp
+  command: gopls
+jobs: [{ name: j, plan: [] }]
+`,
+			want: "mutually exclusive",
+		},
+		{
+			name: "args without command",
+			pipeline: `
+mcp_servers:
+- name: gopls
+  endpoint: https://example.com/mcp
+  args: [mcp]
+jobs: [{ name: j, plan: [] }]
+`,
+			want: "only valid with command",
+		},
+		{
+			name: "cwd without command",
+			pipeline: `
+mcp_servers:
+- name: gopls
+  endpoint: https://example.com/mcp
+  cwd: /tmp
+jobs: [{ name: j, plan: [] }]
+`,
+			want: "only valid with command",
+		},
+		{
+			name: "command with bearer auth",
+			pipeline: `
+mcp_servers:
+- name: gopls
+  command: gopls
+  args: [mcp]
+  auth: { type: bearer, api_key_env: GOPLS_TOKEN }
+jobs: [{ name: j, plan: [] }]
+`,
+			want: "requires an http endpoint",
+		},
+		{
+			name: "command with oauth auth",
+			pipeline: `
+mcp_servers:
+- name: gopls
+  command: gopls
+  args: [mcp]
+  auth: { type: oauth }
+jobs: [{ name: j, plan: [] }]
+`,
+			want: "requires an http endpoint",
+		},
 	}
 
 	for _, tc := range cases {
@@ -125,6 +182,60 @@ func TestFindMCPServer(t *testing.T) {
 	_, err = cfg.FindMCPServer("ghost")
 	if err == nil {
 		t.Fatal("FindMCPServer(ghost): expected an error")
+	}
+}
+
+func TestLoadStdioMCPServer(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+mcp_servers:
+- name: gopls
+  command: gopls
+  args: [mcp]
+  cwd: /tmp/checkout
+jobs: [{ name: j, plan: [] }]
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	srv, err := cfg.FindMCPServer("gopls")
+	if err != nil {
+		t.Fatalf("FindMCPServer: %v", err)
+	}
+
+	if !srv.IsStdio() {
+		t.Error("IsStdio() = false, want true")
+	}
+
+	if srv.Command != "gopls" || len(srv.Args) != 1 || srv.Args[0] != "mcp" || srv.Cwd != "/tmp/checkout" {
+		t.Errorf("srv = %+v, want Command=gopls Args=[mcp] Cwd=/tmp/checkout", srv)
+	}
+}
+
+func TestStdioMCPServerAgentGrantLoads(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+mcp_servers:
+- name: gopls
+  command: gopls
+  args: [mcp]
+agents:
+- name: triager
+  source: { model: lmstudio/qwen }
+  tools:
+  - mcp: gopls
+    tools: [go_search]
+jobs: [{ name: j, plan: [] }]
+`)
+
+	_, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
 	}
 }
 

@@ -160,12 +160,25 @@ type MCPToolCall struct {
 // MCPServer is a reusable, named MCP server connection: configured once
 // under mcp_servers: and shared across any number of agents: tool grants
 // and resource_types: mcp: backends — the same once-configured/many-
-// consumers idiom as Agent/Resource. HTTP (Streamable HTTP) transport only
-// in v1; stdio is a possible additive future extension.
+// consumers idiom as Agent/Resource. Two transports are supported: HTTP
+// (Streamable HTTP, via Endpoint) or stdio (a local subprocess, via Command/
+// Args/Cwd) — exactly one of Endpoint/Command is set (see
+// validateMCPServerTransport). A stdio server has no request to attach
+// credentials to, so Auth must be unset ("none") when Command is set.
 type MCPServer struct {
 	Name     string        `yaml:"name"`
-	Endpoint string        `yaml:"endpoint"`
+	Endpoint string        `yaml:"endpoint,omitempty"`
+	Command  string        `yaml:"command,omitempty"`
+	Args     []string      `yaml:"args,omitempty"`
+	Cwd      string        `yaml:"cwd,omitempty"`
 	Auth     MCPServerAuth `yaml:"auth,omitempty"`
+}
+
+// IsStdio reports whether srv is a stdio (local subprocess) server rather
+// than an HTTP one. Exactly one of Endpoint/Command is set — see
+// validateMCPServerTransport.
+func (s MCPServer) IsStdio() bool {
+	return s.Command != ""
 }
 
 // MCPServerAuth selects how steps authenticates to an MCP server. Type is
@@ -2667,11 +2680,13 @@ func (c *Config) validateAgentEndpoints() error {
 }
 
 // validateMCPServers checks every mcp_servers: entry at load time: a
-// non-empty, unique name; a non-empty endpoint that doesn't embed userinfo
-// (same check and reasoning as validateAgentEndpoints — the endpoint is
-// merkle-hashed, so it must not carry a credential); and an auth block shape
-// consistent with its type ("" / "none" / "bearer" / "oauth" — "bearer"
-// requires api_key_env, any other type must not set it).
+// non-empty, unique name; a transport shape consistent with exactly one of
+// endpoint (http)/command (stdio) — see validateMCPServerTransport; for an
+// http server, an endpoint that doesn't embed userinfo (same check and
+// reasoning as validateAgentEndpoints — the endpoint is merkle-hashed, so it
+// must not carry a credential); and an auth block shape consistent with its
+// type ("" / "none" / "bearer" / "oauth" — "bearer" requires api_key_env,
+// any other type must not set it).
 func (c *Config) validateMCPServers() error {
 	seen := make(map[string]bool, len(c.MCPServers))
 
@@ -2688,13 +2703,16 @@ func (c *Config) validateMCPServers() error {
 
 		seen[srv.Name] = true
 
-		if srv.Endpoint == "" {
-			return fmt.Errorf("mcp server %q: endpoint is required", srv.Name)
+		err := validateMCPServerTransport(srv)
+		if err != nil {
+			return err
 		}
 
-		parsed, err := url.Parse(srv.Endpoint)
-		if err == nil && parsed.User != nil {
-			return fmt.Errorf("mcp server %q: endpoint must not embed credentials (userinfo); use auth.api_key_env instead", srv.Name)
+		if srv.Endpoint != "" {
+			parsed, parseErr := url.Parse(srv.Endpoint)
+			if parseErr == nil && parsed.User != nil {
+				return fmt.Errorf("mcp server %q: endpoint must not embed credentials (userinfo); use auth.api_key_env instead", srv.Name)
+			}
 		}
 
 		err = validateMCPServerAuth(srv)

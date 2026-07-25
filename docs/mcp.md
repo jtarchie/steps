@@ -2,7 +2,7 @@
 
 MCP (Model Context Protocol) servers are a third kind of external system, alongside LLM providers (`agents:`) and shell-backed resource types (`resource_types:`): a reusable, named connection (`mcp_servers:`) that an agent's `tools:` grant can draw tools from, and/or a resource type's `check`/`in`/`out` can call instead of shelling out. See `examples/agents.yml`'s `triager` job for the agent-tool-grant half and `examples/infra.yml`'s `notify-linear` job for the resource-type half.
 
-**Scope for v1**: HTTP (Streamable HTTP) transport only — stdio is a documented future extension, not yet supported. A resource type's `out:` is optional and, when set, receives only `{source, params}` — it cannot read step working-directory files the way a shell `out:` can.
+**Two transports**: Streamable HTTP (`endpoint:`) or a local subprocess over stdio (`command:`, see "Local (stdio) servers" below). A resource type's `out:` is optional and, when set, receives only `{source, params}` — it cannot read step working-directory files the way a shell `out:` can.
 
 ## Declaring a server
 
@@ -20,6 +20,28 @@ mcp_servers:
 - `name` is how `agents:` tool grants and `resource_types:` `mcp:` blocks reference this server — declared once, shared by any number of consumers, the same "reusable top-level block" idiom as `agents:`/`resources:`.
 - `endpoint` is validated at `LoadConfig` the same way `AgentSource.Endpoint` is (`validateMCPServers`, mirroring `validateAgentEndpoints`): it must not embed userinfo (`https://user:token@host/`), since it's folded into merkle-hashed content — use `auth.api_key_env` for a credential, never the endpoint itself.
 - `auth.type` is `"none"` (default, when `auth:` is omitted entirely), `"bearer"`, or `"oauth"`. `"bearer"` requires `api_key_env` — a static token read from that OS environment variable at run time, exactly like an LLM `agents:` entry's `api_key_env` (the value is never stored in YAML or hashed; only the env var *name* is).
+
+## Local (stdio) servers
+
+```yaml
+mcp_servers:
+- name: gopls
+  command: gopls          # looked up on PATH; argv, never `sh -c`
+  args: [mcp]             # optional
+  cwd: /path/to/checkout  # optional; unset inherits the directory steps was invoked from
+                          # no auth: — a stdio server has no request to authenticate
+```
+
+A `command:` server is a local subprocess `steps` spawns and speaks newline-delimited JSON to over stdin/stdout, instead of connecting over HTTP.
+
+- **Exactly one of `endpoint:`/`command:`.** Setting both, or neither, is a `LoadConfig` error. `args:`/`cwd:` are only valid alongside `command:`.
+- **`command:`/`args:` is explicit argv, never a shell.** `command: gopls mcp` is wrong — the whole string is looked up as one executable name; use `args: [mcp]`. There is no globbing, piping, or `&&`.
+- **`cwd:` unset inherits the directory `steps` was invoked from** — not a step's own workspace. `mcp_servers:` is resolved once, before any step runs, so it has no access to a step's working directory or a resource's fetched version; prefer an absolute path.
+- **Auth is `none` only.** `auth:` set to anything but `""`/`none` alongside `command:` is a load-time error: a stdio server has no HTTP request to attach a bearer token to, and the oauth token file (see below) is keyed on `endpoint:`, which a stdio server doesn't have. `steps mcp login` therefore never applies to a stdio server.
+- **Environment is filtered, not inherited.** The subprocess sees only the same host-command allowlist every other host-executed command in this codebase gets (`PATH`, `HOME`, locale, `TMPDIR`/`USER`/`SHELL`, `SSH_AUTH_SOCK`, proxy vars — see the root `CLAUDE.md`'s Trust Boundaries section) — **not** the operator's full environment, and specifically not any configured agent's `api_key_env` secret. There is currently no pass-through mechanism, so **a stdio server that needs a credential or any other ambient variable (e.g. `GOFLAGS`, `GOPRIVATE`) is not supported yet** — that would need its own `env_from:`-style config surface.
+- **Lifecycle**: for an agent tool grant, one subprocess is spawned per agent step per grant and reaped when the step ends (stdin closed, then a grace period, then `SIGTERM`, then `SIGKILL` — handled by the underlying SDK transport, not a custom process manager). For a resource-type `mcp:` backend, a fresh subprocess is spawned **per** `check`/`in`/`out` call — including every `steps watch` poll interval — since this package never pools connections; fine for a fast-starting binary, a poor fit for one that's slow to start.
+- **Diagnostics**: the subprocess's stderr is logged at debug level (`--log-level=debug` / `STEPS_LOG_LEVEL=debug`), under the key `mcp.stdio.stderr` with the server's name attached — the only way to see why a stdio server failed to start.
+- `steps mcp tools <pipeline> <server>` (below) works identically for a stdio server and is the recommended first smoke test after declaring one.
 
 ## Discovering a server's tools: `steps mcp tools`
 
@@ -53,7 +75,7 @@ agents:
 - **Bare form** (neither set): every tool the server currently exposes, discovered via `steps mcp tools` at your own pace — not something `steps` re-checks automatically (see the merkle caveat below).
 - **`args:` is invalid on every MCP form** — an MCP tool's arguments are schema-shaped by the remote server, not a flat string template, so there's nothing to pin the way a custom tool's `run:` template arguments can be.
 - **Grant, not inline**: like a sub-agent tool, an MCP grant must live on the `agents:` entry (or a `fix:`'s own `tools:` override — MCP tools *are* allowed in a fix agent's grant, unlike sub-agents) and be selected by bare name (`tools: [github]` on a step) — a step cannot introduce `{mcp: ..., tool: ...}` inline. This is enforced at `LoadConfig` and again at the tool-grant merge point.
-- **Merkle hashing**: a server's endpoint/auth type/`api_key_env` name (never a value) and the granted tool name(s) fold into the step's hash — editing either busts the cache. The bare "all tools" form hashes as a static marker, since merkle-time planning has no live connection to the server to enumerate its current tools; use the explicit `tools: [...]` form if you want a server's tool list changing to bust the cache on its own.
+- **Merkle hashing**: a server's endpoint/auth type/`api_key_env` name (never a value) — or, for a stdio server, its `command`/`args`/`cwd` (note `args` is hashed in order, since argv order is semantic, unlike the sorted `tools: [...]` list below) — and the granted tool name(s) fold into the step's hash — editing any of these busts the cache. The bare "all tools" form hashes as a static marker, since merkle-time planning has no live connection to the server to enumerate its current tools; use the explicit `tools: [...]` form if you want a server's tool list changing to bust the cache on its own.
 - **Tool results**: translated to the same map shape every other tool returns — a transport failure or a tool result with `isError: true` becomes `{"error": ...}`; a successful call becomes `{"structured_content": ..., "content": ...}` (the joined text content).
 
 ## Backing a resource type with MCP

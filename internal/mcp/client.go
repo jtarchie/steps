@@ -1,8 +1,9 @@
 // Package mcp is the shared MCP (Model Context Protocol) client layer: it
-// connects to a configured mcp_servers: entry (config.MCPServer) over HTTP
-// (Streamable HTTP; stdio is not supported in v1 — see docs/mcp.md), lists
-// its tools, and calls one. internal/agent (a tool source for agent steps)
-// and internal/resource (a check/in/out backend) both build on this package
+// connects to a configured mcp_servers: entry (config.MCPServer) over either
+// Streamable HTTP (endpoint:) or a local subprocess speaking newline-
+// delimited JSON on stdin/stdout (command:, see stdio.go), lists its tools,
+// and calls one. internal/agent (a tool source for agent steps) and
+// internal/resource (a check/in/out backend) both build on this package
 // rather than importing the vendored SDK directly, so both share one
 // transport/auth implementation.
 //
@@ -84,19 +85,21 @@ func (c *sessionClient) Close() error {
 	return nil
 }
 
-// Connect opens a session to srv, per its configured auth (see
-// config.MCPServerAuth): "bearer" reads a static token from the named env
-// var (mirroring internal/agent's lookupAPIKey exactly); "oauth" loads a
-// persisted, self-refreshing token from the per-user token store (see
-// oauth.go) — never an interactive flow here, that's `steps mcp login`
-// (login.go) alone. "" / "none" connects unauthenticated.
+// Connect opens a session to srv, over whichever transport it's configured
+// for (see config.MCPServer.IsStdio/newTransport). For an HTTP server, per
+// its configured auth (see config.MCPServerAuth): "bearer" reads a static
+// token from the named env var (mirroring internal/agent's lookupAPIKey
+// exactly); "oauth" loads a persisted, self-refreshing token from the
+// per-user token store (see oauth.go) — never an interactive flow here,
+// that's `steps mcp login` (login.go) alone. "" / "none" connects
+// unauthenticated. A stdio server is always unauthenticated by construction
+// (config.validateMCPServerTransport rejects any other auth.type at load
+// time), since there is no HTTP request to attach a token to.
 func Connect(ctx context.Context, srv config.MCPServer) (Client, error) {
-	httpClient, err := authorizedHTTPClient(ctx, srv)
+	transport, err := newTransport(ctx, srv)
 	if err != nil {
 		return nil, err
 	}
-
-	transport := &sdkmcp.StreamableClientTransport{Endpoint: srv.Endpoint, HTTPClient: httpClient}
 
 	client := sdkmcp.NewClient(clientImplementation, nil)
 
@@ -106,6 +109,24 @@ func Connect(ctx context.Context, srv config.MCPServer) (Client, error) {
 	}
 
 	return &sessionClient{session: session}, nil
+}
+
+// newTransport selects the transport srv is configured for.
+// config.validateMCPServerTransport guarantees exactly one of
+// Command/Endpoint is set, so the stdio branch (stdio.go) is the whole
+// stdio case; the fallthrough is the original Streamable HTTP path,
+// unchanged.
+func newTransport(ctx context.Context, srv config.MCPServer) (sdkmcp.Transport, error) {
+	if srv.IsStdio() {
+		return commandTransport(ctx, srv), nil
+	}
+
+	httpClient, err := authorizedHTTPClient(ctx, srv)
+	if err != nil {
+		return nil, err
+	}
+
+	return &sdkmcp.StreamableClientTransport{Endpoint: srv.Endpoint, HTTPClient: httpClient}, nil
 }
 
 // authorizedHTTPClient builds the *http.Client Connect's transport uses,

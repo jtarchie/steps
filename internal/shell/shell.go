@@ -388,16 +388,16 @@ func (h HostRunner) WithLabel(label string) Runner {
 
 // hostEnvAllowlist is the fixed set of environment variable names a
 // host-executed command (resource check/in/out, task run:, an agent's
-// run_shell/custom tools) is allowed to see. Everything else the steps
-// process itself was started with — most importantly every configured
-// agent's api_key_env secret and any other credential an operator happens
-// to have exported (cloud credentials, tokens, etc.) — is deliberately not
-// passed through: DockerRunner already starts every containerized command
-// from the image's own env with no host variables at all (see docker.go),
-// and this brings the default host path to the same trust boundary instead
-// of silently handing every pipeline-defined command, and by extension any
-// LLM directing run_shell/a custom tool, read access to the operator's full
-// environment.
+// run_shell/custom tools, an mcp_servers: stdio server's subprocess) is
+// allowed to see. Everything else the steps process itself was started with
+// — most importantly every configured agent's api_key_env secret and any
+// other credential an operator happens to have exported (cloud credentials,
+// tokens, etc.) — is deliberately not passed through: DockerRunner already
+// starts every containerized command from the image's own env with no host
+// variables at all (see docker.go), and this brings the default host path to
+// the same trust boundary instead of silently handing every pipeline-defined
+// command, and by extension any LLM directing run_shell/a custom tool/a
+// stdio MCP server, read access to the operator's full environment.
 //
 // This is a real (if narrow) behavior change: a host-executed command that
 // previously relied on some other exported variable (GOFLAGS, an assumed
@@ -424,10 +424,12 @@ var hostEnvAllowlist = map[string]bool{
 	"http_proxy": true, "https_proxy": true, "no_proxy": true,
 }
 
-// hostEnv returns the subset of the current process's environment allowed
+// HostEnv returns the subset of the current process's environment allowed
 // to reach a host-executed command (see hostEnvAllowlist), in os.Environ's
-// "KEY=VALUE" form so it can be assigned directly to exec.Cmd.Env.
-func hostEnv() []string {
+// "KEY=VALUE" form so it can be assigned directly to exec.Cmd.Env. Exported
+// so internal/mcp's stdio transport can apply the same trust boundary to an
+// mcp_servers: subprocess.
+func HostEnv() []string {
 	full := os.Environ()
 	allowed := make([]string, 0, len(full))
 
@@ -521,7 +523,7 @@ func (h HostRunner) Run(ctx context.Context, command string) error {
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.Dir = h.cwd
-	cmd.Env = hostEnv()
+	cmd.Env = HostEnv()
 	cmd.Stdin = os.Stdin
 
 	stdoutW, flushStdout := prefixedStream(h.label, os.Stdout)
@@ -554,7 +556,7 @@ func (h HostRunner) RunCapture(ctx context.Context, command string) ([]byte, err
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.Dir = h.cwd
-	cmd.Env = hostEnv()
+	cmd.Env = HostEnv()
 	cmd.Stdin = os.Stdin
 
 	var outBuf, errBuf bytes.Buffer
@@ -621,7 +623,7 @@ func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.Dir = h.cwd
-	cmd.Env = hostEnv()
+	cmd.Env = HostEnv()
 	cmd.Stdin = nil
 
 	outWriter := newCaptureWriter(maxBytes, spillDir)

@@ -488,7 +488,12 @@ func mcpToolSpecContent(cfg *config.Config, t config.ToolSpec) (map[string]any, 
 // it. Endpoint/auth type/the api_key_env *name* (never its value, mirroring
 // AgentSource's api_key_env exclusion exactly)/scopes determine behavior
 // and are hashed; nothing token-shaped is ever computed here, since this
-// package never imports internal/mcp.
+// package never imports internal/mcp. For a stdio server, command/args/cwd
+// are its equivalent spawn identity and are value-gated the same way —
+// note args is NOT sorted (unlike mcp_tools below): argv order is
+// semantic, so reordering it must bust the hash. endpoint/auth_type stay
+// unconditional so an existing HTTP server's hash is unaffected by this
+// field set existing.
 func mcpServerContent(cfg *config.Config, name string) (map[string]any, error) {
 	srv, err := cfg.FindMCPServer(name)
 	if err != nil {
@@ -507,6 +512,18 @@ func mcpServerContent(cfg *config.Config, name string) (map[string]any, error) {
 
 	if len(srv.Auth.Scopes) != 0 {
 		content["scopes"] = srv.Auth.Scopes
+	}
+
+	if srv.Command != "" {
+		content["command"] = srv.Command
+	}
+
+	if len(srv.Args) != 0 {
+		content["args"] = srv.Args
+	}
+
+	if srv.Cwd != "" {
+		content["cwd"] = srv.Cwd
 	}
 
 	return content, nil

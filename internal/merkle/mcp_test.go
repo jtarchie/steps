@@ -97,6 +97,88 @@ func TestMCPGrantFormsHashDifferently(t *testing.T) {
 	}
 }
 
+// mcpStdioAgentCfg builds a Config with a stdio (command:) mcp_servers:
+// entry named "gopls", plus a `reviewer` agent granting the tools in
+// reviewerTools.
+func mcpStdioAgentCfg(reviewerTools []config.ToolSpec, command string, args []string, cwd string) *config.Config {
+	return &config.Config{
+		MCPServers: []config.MCPServer{{Name: "gopls", Command: command, Args: args, Cwd: cwd}},
+		Agents: []config.Agent{
+			{Name: "reviewer", Source: config.AgentSource{Model: "lmstudio/qwen"}, Tools: reviewerTools},
+		},
+	}
+}
+
+func TestMCPStdioCommandChangeBustsHash(t *testing.T) {
+	t.Parallel()
+
+	tools := []config.ToolSpec{{MCP: "gopls", MCPTool: "go_search"}}
+	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+
+	before := mustAgentHash(t, mcpStdioAgentCfg(tools, "gopls", []string{"mcp"}, ""), step)
+	after := mustAgentHash(t, mcpStdioAgentCfg(tools, "gopls-fork", []string{"mcp"}, ""), step)
+
+	if before == after {
+		t.Error("editing the mcp server's command should bust the hash, but hashes matched")
+	}
+}
+
+// TestMCPStdioArgsOrderBustsHash is the deliberate contrast with
+// TestMCPSubsetGrantHashOrderIndependent: unlike a named-subset tool grant
+// (a set, sorted for hash stability), a server's args is argv — reordering
+// it changes what actually runs, so it must NOT be sorted and must bust the
+// hash.
+func TestMCPStdioArgsOrderBustsHash(t *testing.T) {
+	t.Parallel()
+
+	tools := []config.ToolSpec{{MCP: "gopls", MCPTool: "go_search"}}
+	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+
+	before := mustAgentHash(t, mcpStdioAgentCfg(tools, "gopls", []string{"mcp", "-rpc.trace"}, ""), step)
+	after := mustAgentHash(t, mcpStdioAgentCfg(tools, "gopls", []string{"-rpc.trace", "mcp"}, ""), step)
+
+	if before == after {
+		t.Error("reordering the mcp server's args should bust the hash (argv order is semantic), but hashes matched")
+	}
+}
+
+func TestMCPStdioCwdChangeBustsHash(t *testing.T) {
+	t.Parallel()
+
+	tools := []config.ToolSpec{{MCP: "gopls", MCPTool: "go_search"}}
+	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+
+	before := mustAgentHash(t, mcpStdioAgentCfg(tools, "gopls", []string{"mcp"}, "/repo/a"), step)
+	after := mustAgentHash(t, mcpStdioAgentCfg(tools, "gopls", []string{"mcp"}, "/repo/b"), step)
+
+	if before == after {
+		t.Error("editing the mcp server's cwd should bust the hash, but hashes matched")
+	}
+}
+
+// TestMCPHTTPServerHashUnaffectedByStdioFields is the value-gating guard:
+// an HTTP server's hash must be identical whether or not the zero-valued
+// stdio fields (Command/Args/Cwd) exist on the struct, so a pipeline that
+// never uses stdio hashes byte-identically to before this feature existed.
+func TestMCPHTTPServerHashUnaffectedByStdioFields(t *testing.T) {
+	t.Parallel()
+
+	tools := []config.ToolSpec{{MCP: "github", MCPTool: "search_issues"}}
+	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+
+	withoutStdioFields := mustAgentHash(t, mcpAgentCfg(tools, "https://api.github.com/mcp/"), step)
+
+	cfg := mcpAgentCfg(tools, "https://api.github.com/mcp/")
+	cfg.MCPServers[0].Command = ""
+	cfg.MCPServers[0].Args = nil
+	cfg.MCPServers[0].Cwd = ""
+	explicitlyZeroed := mustAgentHash(t, cfg, step)
+
+	if withoutStdioFields != explicitlyZeroed {
+		t.Error("an http server's hash must be unaffected by the (zero-valued) stdio fields existing")
+	}
+}
+
 // mcpResourceCfg builds a Config with an mcp-backed resource type ("linear-
 // issues") whose check/in/out tool names are as given, plus a resource
 // instance and a job with a get (and, when withPut, a put) step.

@@ -47,7 +47,13 @@
 # hand-rolled equivalents: `verdicts:`/`to:` for PASS/FAIL routing (no
 # grep '^PASS' on captured text), and `handoff:` for feeding a redo attempt
 # the previous round's outcome (no hand-rolled critique-file re-read --
-# though the reviewer still writes one, as a human-readable record).
+# though the reviewer still writes one, as a human-readable record). It also
+# gives planner/coder real Go semantics via gopls' own MCP server (`gopls
+# mcp`, run as a local stdio subprocess -- see mcp_servers: below), covering
+# the Go-semantics half of what the claude CLI got from its own tooling:
+# go_search/go_symbol_references/go_package_api instead of grep -rn for
+# finding where a feature lives and every call site of a symbol. Needs
+# `gopls` on PATH (`go install golang.org/x/tools/gopls@latest`).
 #
 # Swap `lmstudio/google/gemma-4-26b-a4b` below for whatever you have loaded
 # (matches the model name already used by every other example in this repo);
@@ -78,6 +84,18 @@ resource_types:
       echo {{ .version.file | shellquote }} > ./file
       echo {{ .source.repo | shellquote }} > ./repo
 
+# gopls' own MCP server, run as a local subprocess (stdio) rather than over
+# HTTP -- `gopls mcp` speaks MCP on stdin/stdout. cwd: is what tells gopls
+# WHICH Go workspace to index, so it must point at the same absolute checkout
+# resources: stories hands the agents below as stories/repo -- mcp_servers:
+# is resolved before any step runs, so there is nothing to template it
+# against; keep this in sync with resources[0].source.repo below by hand.
+mcp_servers:
+- name: gopls
+  command: gopls
+  args: [mcp]
+  cwd: /Users/jtarchie/workspace/steps
+
 resources:
 - name: stories
   type: stories
@@ -95,8 +113,7 @@ agents:
 # be able to touch source, only describe what should change.
 - name: planner
   source: { model: lmstudio/google/gemma-4-26b-a4b }
-  temperature: 0.3
-  max_turns: 60
+  max_turns: 200
   system: |
     You are a careful staff engineer planning ONE change to the `steps` Go
     codebase (a Concourse-style pipeline runner). You research before you
@@ -122,13 +139,24 @@ agents:
       cd "$(cat stories/repo)" && mkdir -p "$(dirname {{ .args.path | shellquote }})" && cat > {{ .args.path | shellquote }} <<'STEPS_AGENT_FILE_EOF'
       {{ .args.content }}
       STEPS_AGENT_FILE_EOF
+  # gopls' MCP server, scoped to the read half of gopls' own documented
+  # workflow: real Go semantics (definitions, references, package APIs)
+  # instead of grepping. Paths in these tools' arguments and results are
+  # ABSOLUTE -- they live under stories/repo, the same checkout cwd: points
+  # the server at.
+  - mcp: gopls
+    tools:
+    - go_workspace          # gopls asks to be called first, to learn the module layout
+    - go_search             # fuzzy symbol search -- replaces `grep -rn` for finding a type/func
+    - go_file_context       # a file's intra-package dependencies
+    - go_package_api        # a package's exported API
+    - go_symbol_references  # every reference to a symbol -- the sibling-call-site check
 
 # Implements the plan end to end: code, tests, docs/examples. The only agent
 # below with real write access to the repo.
 - name: coder
   source: { model: lmstudio/google/gemma-4-26b-a4b }
-  temperature: 0.2
-  max_turns: 60
+  max_turns: 200
   system: |
     You are a careful Go engineer implementing an already-written plan
     against the `steps` codebase. You follow CLAUDE.md's standing rules
@@ -164,6 +192,18 @@ agents:
       cd "$(cat stories/repo)" && mkdir -p "$(dirname {{ .args.path | shellquote }})" && cat > {{ .args.path | shellquote }} <<'STEPS_AGENT_FILE_EOF'
       {{ .args.content }}
       STEPS_AGENT_FILE_EOF
+  # Same gopls grant as planner, plus go_diagnostics -- coder is the only
+  # agent here that edits, and go_diagnostics (build/analysis errors, with
+  # suggested fixes) is gopls' own edit-workflow tool, expected after every
+  # modification.
+  - mcp: gopls
+    tools:
+    - go_workspace
+    - go_search
+    - go_file_context
+    - go_package_api
+    - go_symbol_references
+    - go_diagnostics
 
 # Quality gate before a commit happens. Read access only -- reviewing is not
 # editing, even though nothing at the framework level enforces that (see
@@ -173,8 +213,7 @@ agents:
 # hard guarantee).
 - name: reviewer
   source: { model: lmstudio/google/gemma-4-26b-a4b }
-  temperature: 0.2
-  max_turns: 60
+  max_turns: 200
   system: |
     You are a skeptical code reviewer for the `steps` Go codebase. Lint,
     tests, and build already passed before you were called -- your job is
@@ -226,7 +265,13 @@ jobs:
       2. Research the current codebase (internal/config, internal/pipeline,
          internal/merkle, internal/store, internal/trigger, internal/agent,
          as relevant to this story) with repo_shell (cat, grep -rn, go doc)
-         to find every place this feature touches.
+         to find every place this feature touches. Call go_workspace first,
+         then prefer go_search / go_symbol_references / go_package_api over
+         grep -rn for finding where a feature lives -- these understand Go,
+         and go_symbol_references is how you find EVERY call site of a
+         symbol rather than every textual match. They take ABSOLUTE paths --
+         join the contents of stories/repo with the relative path before
+         calling them.
       3. Write a concrete, file-by-file implementation plan -- what changes,
          what new tests are needed (call out explicitly whether this story's
          change applies to more than one similar code path, e.g. get/task/
@@ -260,9 +305,16 @@ jobs:
          graph, merkle value-gating, trust-boundary notes, and "Guidance for
          Claude Agents" #8: if this story adds a behavior/guard to one of
          several similar code paths (e.g. get/task/put/agent step
-         handling), grep for the sibling call sites and apply the SAME
-         treatment to all of them, not just the one you looked at first.
-      3. Before you consider yourself done, repo_shell:
+         handling), use go_symbol_references to enumerate the sibling call
+         sites, not grep -- a textual search misses a sibling that spells
+         the call differently -- and apply the SAME treatment to all of
+         them, not just the one you looked at first. gopls tools take
+         ABSOLUTE paths, same as repo_shell's cwd (stories/repo).
+      3. After each edit, call go_diagnostics on the files you touched
+         before re-running the full gate below -- but note gopls has no
+         LSP client sending it live edits here, so its view can go stale;
+         `go build`/`go test` remain the real gate, not go_diagnostics.
+         Before you consider yourself done, repo_shell:
          `go fmt ./... && go mod tidy && golangci-lint run && go test ./...
          && go build -v` -- and keep fixing until all four are clean.
          Re-run this after every further edit; do not stop on a stale pass
