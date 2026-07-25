@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -222,6 +224,71 @@ func TestExecuteBudgetedToolUnlimitedWhenAbsent(t *testing.T) {
 		if _, hasErr := got["error"]; hasErr {
 			t.Fatalf("call %d: unbudgeted tool should never be rejected, got %#v", i, got)
 		}
+	}
+}
+
+// TestDebugToolResultPreviewTruncatesLargeContent proves the preview passes
+// small results through untouched, truncates an oversized one with the
+// standard "... [truncated N bytes]" marker, and excludes error/exit_code
+// (already their own log fields on the caller's log line) even when present.
+func TestDebugToolResultPreviewTruncatesLargeContent(t *testing.T) {
+	t.Parallel()
+
+	small := debugToolResultPreview(map[string]any{"content": "hello"})
+	if small != `{"content":"hello"}` {
+		t.Errorf("small result should pass through untruncated, got %q", small)
+	}
+
+	big := debugToolResultPreview(map[string]any{"content": strings.Repeat("x", debugToolResultPreviewBytes*2)})
+	if !strings.Contains(big, "... [truncated") {
+		t.Errorf("oversized result should carry a truncation marker, got %q", big)
+	}
+
+	if len(big) > debugToolResultPreviewBytes+40 {
+		t.Errorf("truncated preview is longer than expected: %d bytes", len(big))
+	}
+
+	withErr := debugToolResultPreview(map[string]any{"error": "boom", "exit_code": 1, "stdout": "ok"})
+	if strings.Contains(withErr, "boom") || strings.Contains(withErr, "exit_code") {
+		t.Errorf("preview must exclude error/exit_code (already logged separately), got %q", withErr)
+	}
+}
+
+// TestExecuteBudgetedToolLogsResultPreviewAtDebug proves the result preview
+// only reaches the log at debug level (matching this codebase's "debug
+// logging is opt-in" contract — see CLAUDE.md's Trust Boundaries section)
+// and, when it does, carries the truncation marker for an oversized result
+// without duplicating error/exit_code inside it.
+func TestExecuteBudgetedToolLogsResultPreviewAtDebug(t *testing.T) {
+	// Not t.Parallel(): mutates slog's default logger.
+	dir := t.TempDir()
+
+	registry := map[string]toolImpl{
+		"big_tool": func(_ context.Context, _ map[string]any, _ toolEnv) map[string]any {
+			return map[string]any{"content": strings.Repeat("x", debugToolResultPreviewBytes*2)}
+		},
+	}
+	call := &genai.FunctionCall{Name: "big_tool"}
+
+	var buf bytes.Buffer
+
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	executeBudgetedTool(context.Background(), call, testEnv(dir), registry, nil, map[string]int{})
+
+	if !strings.Contains(buf.String(), "... [truncated") {
+		t.Errorf("expected the debug log to carry a truncated result preview, got: %s", buf.String())
+	}
+
+	buf.Reset()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	executeBudgetedTool(context.Background(), call, testEnv(dir), registry, nil, map[string]int{})
+
+	if buf.Len() != 0 {
+		t.Errorf("expected no output at info level, got: %s", buf.String())
 	}
 }
 

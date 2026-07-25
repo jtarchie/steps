@@ -245,7 +245,7 @@ jobs:
   - agent: planner
     inputs: [stories]
     attempts: 2       # whole-conversation restart on a transport/max_turns failure
-    timeout: 8m        # per attempt, not total -- see docs/attempts-timeout.md
+    timeout: 20m        # per attempt, not total -- see docs/attempts-timeout.md
     prompt: |
       This is a story-by-story self-build loop: you plan ONE implementation
       step for ONE story file in the real steps repository.
@@ -267,11 +267,23 @@ jobs:
          as relevant to this story) with repo_shell (cat, grep -rn, go doc)
          to find every place this feature touches. Call go_workspace first,
          then prefer go_search / go_symbol_references / go_package_api over
-         grep -rn for finding where a feature lives -- these understand Go,
-         and go_symbol_references is how you find EVERY call site of a
-         symbol rather than every textual match. They take ABSOLUTE paths --
-         join the contents of stories/repo with the relative path before
-         calling them.
+         grep -rn -- these understand Go. They take ABSOLUTE paths -- join
+         the contents of stories/repo with the relative path before calling
+         them.
+
+         go_search's query is a BARE identifier or package.Identifier ONLY --
+         e.g. "Step" or "internal/config.Step". Do NOT type a phrase or Go
+         keyword: "type Step struct" or "func RunJob" returns unrelated noise
+         from every dependency in the module cache, not your target. If a
+         go_search call returns nothing relevant, retype it as a bare name --
+         don't give up on gopls and fall back to grep.
+
+         To find every call site of a symbol (not just where it's defined):
+         first go_search its bare name to get the file that defines it, then
+         call go_symbol_references with that exact file and the same bare
+         name. This returns real call sites with file/line/snippet -- unlike
+         grep, it can't false-positive on a comment or string literal that
+         merely contains the same text.
       3. Write a concrete, file-by-file implementation plan -- what changes,
          what new tests are needed (call out explicitly whether this story's
          change applies to more than one similar code path, e.g. get/task/
@@ -305,11 +317,15 @@ jobs:
          graph, merkle value-gating, trust-boundary notes, and "Guidance for
          Claude Agents" #8: if this story adds a behavior/guard to one of
          several similar code paths (e.g. get/task/put/agent step
-         handling), use go_symbol_references to enumerate the sibling call
-         sites, not grep -- a textual search misses a sibling that spells
-         the call differently -- and apply the SAME treatment to all of
-         them, not just the one you looked at first. gopls tools take
-         ABSOLUTE paths, same as repo_shell's cwd (stories/repo).
+         handling), find every sibling call site with go_search (a BARE
+         identifier or package.Identifier ONLY -- e.g. "RunJob", not "func
+         RunJob" or a descriptive phrase, which returns noise instead of
+         your target) to locate the defining file, then go_symbol_references
+         on that exact file + bare name -- not grep, which misses a sibling
+         that spells the call differently and can false-positive on a
+         comment. Apply the SAME treatment to all of them, not just the one
+         you looked at first. gopls tools take ABSOLUTE paths, same as
+         repo_shell's cwd (stories/repo).
       3. After each edit, call go_diagnostics on the files you touched
          before re-running the full gate below -- but note gopls has no
          LSP client sending it live edits here, so its view can go stale;
@@ -344,7 +360,7 @@ jobs:
   - agent: reviewer
     inputs: [stories]
     attempts: 2
-    timeout: 10m
+    timeout: 20m
     prompt: |
       This is a story-by-story self-build loop: you are the quality gate
       before a story's changes get committed to the real steps repository.

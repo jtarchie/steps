@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -408,12 +409,15 @@ func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, env too
 //
 // Every call (budget-rejected or dispatched) is bracketed by a debug-level
 // "agent.tool_call"/"agent.tool_result" log pair — the args a call was made
-// with, and how it finished (duration, plus whatever error/exit_code the
-// result carries). Debug logging is opt-in (see CLAUDE.md's Trust Boundaries
-// section), so this is silent unless an operator has already asked to see
-// command/output content at that level; call.Args can hold a model-authored
-// value (e.g. a custom tool's args, or write_file's content), no different
-// from the full command/output internal/shell already logs at this level.
+// with, and how it finished (duration, error/exit_code, plus a size-capped
+// preview of the rest of the result via debugToolResultPreview — the gap
+// that once made a model silently abandoning a granted tool for a worse
+// fallback undiagnosable without an out-of-band probe). Debug logging is
+// opt-in (see CLAUDE.md's Trust Boundaries section), so this is silent
+// unless an operator has already asked to see command/output content at
+// that level; call.Args/the result can hold a model-authored value (e.g. a
+// custom tool's args, or write_file's content), no different from the full
+// command/output internal/shell already logs at this level.
 func executeBudgetedTool(ctx context.Context, call *genai.FunctionCall, env toolEnv, registry map[string]toolImpl, maxCalls, callCounts map[string]int) map[string]any {
 	slog.Debug("agent.tool_call", "tool", call.Name, "id", call.ID, "args", call.Args)
 
@@ -429,7 +433,45 @@ func executeBudgetedTool(ctx context.Context, call *genai.FunctionCall, env tool
 	}
 
 	slog.Debug("agent.tool_result", "tool", call.Name, "id", call.ID,
-		"duration", time.Since(start), "error", response["error"], "exit_code", response["exit_code"])
+		"duration", time.Since(start), "error", response["error"], "exit_code", response["exit_code"],
+		"result", debugToolResultPreview(response))
 
 	return response
+}
+
+// debugToolResultPreviewBytes caps how much of a tool's result content
+// appears in the agent.tool_result debug log line: large enough to see
+// what a tool actually returned, small enough that a big read_file/
+// go_search result doesn't flood --log-level debug output. Independent of
+// maxToolOutputBytes (internal/agent/tools.go), which caps what the MODEL
+// sees, not what an operator's log line shows.
+const debugToolResultPreviewBytes = 500
+
+// debugToolResultPreview renders response as a size-capped preview for the
+// agent.tool_result debug log, mirroring truncateToolOutput's
+// "... [truncated N bytes]" marker (internal/agent/tools.go). error/
+// exit_code are already their own log fields (see executeBudgetedTool), so
+// they're excluded here to avoid duplicating them in the preview.
+func debugToolResultPreview(response map[string]any) string {
+	preview := make(map[string]any, len(response))
+
+	for k, v := range response {
+		if k == "error" || k == "exit_code" {
+			continue
+		}
+
+		preview[k] = v
+	}
+
+	b, err := json.Marshal(preview)
+	if err != nil {
+		return fmt.Sprintf("<unrenderable: %v>", err)
+	}
+
+	s := string(b)
+	if len(s) <= debugToolResultPreviewBytes {
+		return s
+	}
+
+	return s[:debugToolResultPreviewBytes] + fmt.Sprintf("... [truncated %d bytes]", len(s)-debugToolResultPreviewBytes)
 }
