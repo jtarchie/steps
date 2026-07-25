@@ -164,3 +164,36 @@ A task step's `fix:` agent can also set `attempts:` and `timeout:` independently
 The fix agent's timeout/attempts are separate budgets — they don't consume or conflict with the task's retry count or timeout.
 
 See [attempts-timeout.md](attempts-timeout.md) for a detailed guide covering the interaction with `assert:`, hook firing, and other step types.
+
+## Compacting long conversations
+
+Every model response and every tool result is normally appended to an agent step's conversation forever, for up to `max_turns` turns. A long-running agent — many tool calls, large file reads — can grow past the model's real context window well before hitting that turn cap; the provider call then errors out, and if `attempts:` allows a retry, the *whole* conversation restarts from scratch rather than degrading gracefully.
+
+`compact_after_tokens:` bounds this, on an `agents:` entry:
+
+```yaml
+agents:
+- name: coder
+  source: { model: openrouter/anthropic/claude-3.5-sonnet }
+  max_turns: 60
+  compact_after_tokens: 40000    # smaller than the 102,400 default -- see below
+```
+
+Once a conversation's estimated size crosses the budget, the agent's own model is asked to summarize everything older than a recent window (roughly the most recent 30% of the budget), and the conversation continues from `[summary] + [recent turns]` instead of the full history. This can happen more than once in a very long conversation — each pass folds the previous summary into the new one. A summarization failure is logged and the turn proceeds uncompacted; it never aborts the attempt, the same failure-is-data treatment a tool failure gets.
+
+**On by default, at 102,400 tokens (80% of an assumed 128K context window) — unlike every other feature on this page.** An agent that sets no `compact_after_tokens:` still gets compaction; `compact_after_tokens: 0` is what disables it. This is a deliberate exception to the value-gating contract in [CLAUDE.md](../CLAUDE.md) ("absent, its behavior ... byte-identical to before it existed") — merkle hashes are unaffected either way (see below), but the conversation's *behavior* differs for any pipeline whose agent crosses the budget. The 20% headroom below a full 128K window is load-bearing, not padding: the size estimate covers the conversation alone, never the system prompt or the tool schemas resent with every request, so a budget set at the full window would only ever fire after a request had already overflowed.
+
+**Small-context and local models must lower it.** 102,400 tokens is close to an entire typical context window — a 32K-token local model (LM Studio, Ollama) will overflow long before the default ever triggers. Set a budget comfortably under the model's real window, e.g. `compact_after_tokens: 20000` for a 32K model:
+
+```yaml
+- name: reviewer
+  source: { model: lmstudio/qwen2.5-coder }
+  max_turns: 60
+  compact_after_tokens: 20000     # the 32K default would never fire in time
+```
+
+**The count is a local estimate, not accounting.** It's the same `len(text)/4` heuristic used elsewhere, applied to the conversation's own content — never the provider's real token-usage data. "`steps` tracks no token usage anywhere" (see the OpenRouter section above) still holds; this is a size heuristic that decides *when to compact*, not a usage figure anything reports.
+
+**Compaction is lossy.** Tool results are truncated to 4000 bytes apiece in the summarization prompt, and everything older than the retained window survives only as prose in the summary — not verbatim. A `run_shell`/custom-tool result too large to return inline is instead streamed to a file, with a short pointer message (path, size, a preview) taking its place in the conversation; that pointer message is well under 4000 bytes, so it survives compaction's truncation intact — a compacted agent can still `read_file` whatever it had already gathered before compaction, even though the raw conversation turn that produced it is gone.
+
+**Not part of the merkle hash.** Like `timeout:`/`attempts:`, `compact_after_tokens:` is operational — it changes how a conversation manages its own context budget, not the result it's aiming for — so it never enters a step's hashed content and cannot invalidate a cached step, in either direction.

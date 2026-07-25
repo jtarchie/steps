@@ -642,3 +642,67 @@ func TestAgentContentMapOmitsTimeout(t *testing.T) {
 		t.Error(`an agent with timeout should not have a "timeout" content key`)
 	}
 }
+
+// TestAgentContentMapOmitsCompaction mirrors TestAgentContentMapOmitsTimeout:
+// CompactAfterTokens is operational (how a conversation manages its own
+// context budget), the same category Attempts is already excluded for, not a
+// determinant of the intended result — so it must not affect the hash even
+// though its own default is on (unlike every other value-gated field here).
+func TestAgentContentMapOmitsCompaction(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Agents: []config.Agent{
+			{
+				Name:   "reviewer",
+				Source: config.AgentSource{Model: "lmstudio/model"},
+			},
+		},
+	}
+
+	mustHash := func(t *testing.T, compactAfterTokens int) string {
+		t.Helper()
+
+		ri := config.ResolvedInvocation{
+			AgentName:          "reviewer",
+			ModelName:          "lmstudio/model",
+			MaxTurns:           8,
+			Attempts:           1,
+			CompactAfterTokens: compactAfterTokens,
+			ToolSpecs:          []config.ToolSpec{},
+		}
+
+		content, err := AgentContentMap(cfg, config.Step{Agent: "reviewer"}, ri)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		hash, err := HashNode(NodeKindAgent, content, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return hash
+	}
+
+	disabled := mustHash(t, 0)
+	defaultBudget := mustHash(t, 102_400)
+	custom := mustHash(t, 5_000)
+
+	if disabled != defaultBudget || disabled != custom {
+		t.Error("changing compact_after_tokens changed the agent hash (it should not be hashed)")
+	}
+
+	ri := config.ResolvedInvocation{
+		AgentName:          "reviewer",
+		ModelName:          "lmstudio/model",
+		MaxTurns:           8,
+		Attempts:           1,
+		CompactAfterTokens: 102_400,
+		ToolSpecs:          []config.ToolSpec{},
+	}
+	content, _ := AgentContentMap(cfg, config.Step{Agent: "reviewer"}, ri)
+	if _, ok := content["compact_after_tokens"]; ok {
+		t.Error(`an agent with compact_after_tokens should not have a "compact_after_tokens" content key`)
+	}
+}

@@ -211,6 +211,16 @@ type Agent struct {
 	// MaxTurns caps the tool-calling loop (default maxAgentTurns). Retries
 	// (attempts:) are a per-task concern and live on the step, not here.
 	MaxTurns int `yaml:"max_turns,omitempty"`
+	// CompactAfterTokens caps how large a conversation's estimated token
+	// count grows before older turns are summarized away and replaced by a
+	// running summary (see internal/agent/compaction.go and docs/agents.md's
+	// "Compacting long conversations" section). A pointer, not a plain int,
+	// because unset and explicit 0 mean different things: unset resolves to
+	// defaultCompactAfterTokens (compaction ON by default), while 0 disables
+	// compaction entirely — the same distinction Temperature/TopP already
+	// need a pointer for. Like MaxTurns, this is agent-only: no per-step
+	// override.
+	CompactAfterTokens *int `yaml:"compact_after_tokens,omitempty"`
 	// Tools is the grant: the built-in tools this agent may use plus any
 	// reusable custom tool definitions. A step selects a subset by name and
 	// may add its own inline custom tools. Empty grants all built-ins.
@@ -877,6 +887,7 @@ func (c *Config) validate() error {
 		c.validateArtifactMappings,
 		c.validateImageRules,
 		c.validateTimeouts,
+		c.validateAgentCompaction,
 		c.validateHooks,
 		c.validateAgentGraph,
 		c.validateToolCallGuards,
@@ -2059,6 +2070,22 @@ func (c *Config) validateTimeouts() error {
 	return c.validateStepTimeouts()
 }
 
+// validateAgentCompaction checks every agents: entry's compact_after_tokens:
+// is not negative. Nil (unset) and 0 (explicitly disabled) are both valid;
+// only a negative value has no meaning — mirrors ParseTimeout's own "reject
+// negative, don't second-guess otherwise" precedent.
+func (c *Config) validateAgentCompaction() error {
+	for i := range c.Agents {
+		agent := c.Agents[i]
+
+		if agent.CompactAfterTokens != nil && *agent.CompactAfterTokens < 0 {
+			return fmt.Errorf("agent %q: compact_after_tokens must not be negative", agent.Name)
+		}
+	}
+
+	return nil
+}
+
 // validateTaskTimeouts checks all tasks: entries for valid timeout values.
 func (c *Config) validateTaskTimeouts() error {
 	for _, task := range c.Tasks {
@@ -2564,6 +2591,22 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 // requesting tools) to a small, predictable number of calls.
 const defaultMaxAgentTurns = 8
 
+// defaultCompactAfterTokens is the conversation-size budget (in estimated
+// tokens — see estimateContentTokens in internal/agent/compaction.go) an
+// agent that sets no compact_after_tokens: gets: 80% of a 128K context
+// window, the common size for current models.
+//
+// The 20% headroom is load-bearing, not padding. estimateContentTokens
+// measures req.Contents alone — it never counts the system prompt, the tool
+// schemas re-sent on every request, or the output the model still has to
+// fit. A budget set at the full window would only ever fire after the
+// request had already overflowed.
+//
+// This suits a 128K-or-larger model. A small local model (32K and under)
+// overflows well before this and must set compact_after_tokens: lower;
+// compact_after_tokens: 0 disables compaction entirely.
+const defaultCompactAfterTokens = 128_000 * 80 / 100 // 102,400
+
 // validReasoningEfforts are the only accepted values for an agent's
 // reasoning_effort. The corresponding genai.ThinkingLevel mapping lives in
 // internal/agent, which is the only package that needs the LLM-specific
@@ -2867,7 +2910,11 @@ type ResolvedInvocation struct {
 	MaxTurns        int
 	Attempts        int
 	Timeout         string // wall-clock deadline per attempt; empty means no timeout
-	ToolSpecs       []ToolSpec
+	// CompactAfterTokens is the already-resolved conversation-size budget (see
+	// Agent.CompactAfterTokens); 0 means compaction is disabled for this
+	// invocation.
+	CompactAfterTokens int
+	ToolSpecs          []ToolSpec
 	// StringOnlyToolChoice, when true, forces a required tool call (see
 	// forceRequiredTool in internal/agent) via tool_choice: "required"
 	// instead of a named function object — for providers whose
@@ -2882,7 +2929,10 @@ type ResolvedInvocation struct {
 // ResolveAgentInvocation resolves the agent named by step against c,
 // applying provider-prefix resolution, tool-grant merging, and defaulting
 // (step.Attempts defaults to 1 — retries are a per-task concern, not part of
-// the agent's config; agent.MaxTurns defaults to defaultMaxAgentTurns).
+// the agent's config; agent.MaxTurns defaults to defaultMaxAgentTurns;
+// agent.CompactAfterTokens, when nil, defaults to defaultCompactAfterTokens —
+// unlike every other field resolved here, an explicit zero value is
+// meaningfully different from "unset" and is preserved as 0, not defaulted).
 func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 	agent, err := c.FindAgent(step.Agent)
 	if err != nil {
@@ -2914,6 +2964,11 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		attempts = 1
 	}
 
+	compactAfterTokens := defaultCompactAfterTokens
+	if agent.CompactAfterTokens != nil {
+		compactAfterTokens = *agent.CompactAfterTokens
+	}
+
 	image := agent.Image
 	if step.Image != "" {
 		image = step.Image
@@ -2933,6 +2988,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		MaxTurns:             maxTurns,
 		Attempts:             attempts,
 		Timeout:              step.Timeout,
+		CompactAfterTokens:   compactAfterTokens,
 		ToolSpecs:            toolSpecs,
 		StringOnlyToolChoice: stringOnlyToolChoice,
 		Image:                image,

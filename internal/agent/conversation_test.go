@@ -5,6 +5,7 @@ import (
 	"errors"
 	"iter"
 	"slices"
+	"strings"
 	"testing"
 
 	"google.golang.org/adk/v2/model"
@@ -106,6 +107,27 @@ func TestRunAgentConversationMultiTurnToolCalling(t *testing.T) {
 	if !hasFunctionResponseNamed(fake.requests[1].Contents, "run_shell") {
 		t.Error("expected the second request to include a FunctionResponse for run_shell")
 	}
+}
+
+// paddedShellCall returns a model turn requesting run_shell with a harmless
+// command whose trailing comment is padded to approximately tokenChars/4
+// estimated tokens (via compaction.go's len/4 heuristic) — a deterministic
+// way to inflate a turn's estimated size without depending on real command
+// output, which would make the exact call count these tests assert on
+// fragile (cat's byte count, trailing newlines, etc.).
+func paddedShellCall(id string, tokenChars int) *model.LLMResponse {
+	return &model.LLMResponse{Content: &genai.Content{
+		Role: genai.RoleModel,
+		Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{
+			ID:   id,
+			Name: "run_shell",
+			Args: map[string]any{"command": "true # " + strings.Repeat("x", tokenChars)},
+		}}},
+	}}
+}
+
+func textResponse(text string) *model.LLMResponse {
+	return &model.LLMResponse{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: text}}}}
 }
 
 // newTestConversation builds an agentConversation with all built-in tools
@@ -630,4 +652,234 @@ func TestRunAgentConversationRequiredMCPToolErrorNotSatisfied(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error: the required tool only ever returned an error shape, so it never succeeded")
 	}
+}
+
+// TestRunAgentConversationCompactsWhenOverBudget confirms compaction is
+// actually wired into the live loop, not just correct in isolation
+// (compaction_test.go covers the algorithm itself). One padded tool call
+// pushes req.Contents comfortably past a small compactAfterTokens budget;
+// the next turn's maybeCompact check must fire before that turn's own
+// generateOnce call, consuming an extra, interleaved LLM call for the
+// summarization itself.
+func TestRunAgentConversationCompactsWhenOverBudget(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	fake := &fakeLLM{responses: []*model.LLMResponse{
+		paddedShellCall("call1", 4000),                         // turn 0's own generateOnce (index 0)
+		textResponse("Summary: ran one shell command so far."), // the interleaved summarization call (index 1)
+		textResponse("done"),                                   // turn 1's own generateOnce, now compacted (index 2)
+	}}
+
+	conv := newTestConversation(t, "read some things", dir)
+	conv.compactAfterTokens = 500 // well under the ~1000-token padded call
+
+	res, err := runAgentConversation(context.Background(), fake, conv)
+	if err != nil {
+		t.Fatalf("runAgentConversation: %v", err)
+	}
+
+	if res.text != "done" {
+		t.Errorf("text = %q, want %q", res.text, "done")
+	}
+
+	if len(fake.requests) != 3 {
+		t.Fatalf("got %d LLM calls, want 3 (turn 0, the summarization call, turn 1)", len(fake.requests))
+	}
+
+	summarizeReq := fake.requests[1]
+	if !hasTextContaining(summarizeReq.Contents, "Provide a detailed summary") {
+		t.Error("the second LLM call does not look like the summarization request")
+	}
+
+	finalReq := fake.requests[2]
+	if !hasTextContaining(finalReq.Contents, "[Previous conversation summary]") {
+		t.Error("the post-compaction request does not carry the summary")
+	}
+
+	if hasFunctionCallWithArgContaining(finalReq.Contents, "command", "xxxx") {
+		t.Error("the post-compaction request still contains the original padded tool call -- compaction did not shrink it")
+	}
+}
+
+// TestRunAgentConversationCompactionPreservesToolPairBoundary drives three
+// padded tool-call turns whose natural (pre-pair-adjustment) split point
+// lands exactly on a FunctionCall entry -- the case walkBackToPairBoundary
+// treats conservatively: since call+response always occupy adjacent Content
+// entries in this codebase (see toolResponseParts), a call at the split
+// point already has its response safely on the recent side, but the walk
+// doesn't know that locally and retreats past every earlier pair anyway,
+// landing (via the forward-walk fallback) at len(contents) -- everything
+// summarized, nothing left "recent." That's conservative rather than
+// precise, and this test's real point: confirm it's conservative-SAFE, not
+// conservative-buggy -- every request captured across the run, pre- and
+// post-compaction, keeps every FunctionCall paired with its
+// FunctionResponse.
+func TestRunAgentConversationCompactionPreservesToolPairBoundary(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	fake := &fakeLLM{responses: []*model.LLMResponse{
+		paddedShellCall("call1", 400),                      // turn 0 (index 0)
+		paddedShellCall("call2", 400),                      // turn 1 (index 1)
+		paddedShellCall("call3", 400),                      // turn 2 (index 2) -- pushes over budget
+		textResponse("Summary: ran three shell commands."), // interleaved summarization (index 3)
+		textResponse("done"),                               // turn 3, now compacted (index 4)
+	}}
+
+	conv := newTestConversation(t, "read three things", dir)
+	conv.compactAfterTokens = 250 // triggers partway through the third call/response pair
+
+	_, err := runAgentConversation(context.Background(), fake, conv)
+	if err != nil {
+		t.Fatalf("runAgentConversation: %v", err)
+	}
+
+	for i, req := range fake.requests {
+		if hasDanglingFunctionCall(req.Contents) {
+			t.Errorf("request %d has a FunctionCall with no matching FunctionResponse", i)
+		}
+	}
+}
+
+// TestRunAgentConversationCompactionFailurePassesThrough confirms a failed
+// summarization call is logged and passed through -- the conversation keeps
+// going to a normal completion, exactly like any other tool/data failure in
+// this loop, never an aborted attempt.
+func TestRunAgentConversationCompactionFailurePassesThrough(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	fake := &fakeLLM{
+		responses: []*model.LLMResponse{
+			paddedShellCall("call1", 4000), // turn 0 (index 0)
+			nil,                            // the summarization call (index 1) -- errs[1] fires instead
+			textResponse("done"),           // turn 1, uncompacted (index 2)
+		},
+		errs: []error{nil, errors.New("summarizer unavailable")},
+	}
+
+	conv := newTestConversation(t, "read some things", dir)
+	conv.compactAfterTokens = 500
+
+	res, err := runAgentConversation(context.Background(), fake, conv)
+	if err != nil {
+		t.Fatalf("runAgentConversation: %v", err)
+	}
+
+	if res.text != "done" {
+		t.Errorf("text = %q, want %q -- a failed compaction must not abort the attempt", res.text, "done")
+	}
+
+	if len(fake.requests) != 3 {
+		t.Fatalf("got %d LLM calls, want 3 (turn 0, the failed summarization attempt, turn 1)", len(fake.requests))
+	}
+
+	if hasTextContaining(fake.requests[2].Contents, "[Previous conversation summary]") {
+		t.Error("req.Contents was rewritten despite the summarization call failing")
+	}
+}
+
+// TestRunAgentConversationCompactionDisabledWhenZero is the value-gating
+// regression test: compactAfterTokens at its zero value (an agent that set
+// compact_after_tokens: 0) must behave exactly as the loop did before
+// compaction existed -- req.Contents grows monotonically, no summary marker
+// ever appears, and the LLM is called exactly once per turn.
+func TestRunAgentConversationCompactionDisabledWhenZero(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	fake := &fakeLLM{responses: []*model.LLMResponse{
+		paddedShellCall("call1", 4000),
+		paddedShellCall("call2", 4000),
+		textResponse("done"),
+	}}
+
+	conv := newTestConversation(t, "read some things", dir)
+	conv.compactAfterTokens = 0 // explicit disable, not just "small"
+
+	res, err := runAgentConversation(context.Background(), fake, conv)
+	if err != nil {
+		t.Fatalf("runAgentConversation: %v", err)
+	}
+
+	if res.text != "done" {
+		t.Errorf("text = %q, want %q", res.text, "done")
+	}
+
+	if len(fake.requests) != 3 {
+		t.Fatalf("got %d LLM calls, want exactly 3 (one per turn, no interleaved summarization)", len(fake.requests))
+	}
+
+	prevLen := 0
+
+	for i, req := range fake.requests {
+		if hasTextContaining(req.Contents, "[Previous conversation summary]") {
+			t.Errorf("request %d carries a summary marker despite compaction being disabled", i)
+		}
+
+		if len(req.Contents) < prevLen {
+			t.Errorf("request %d has fewer Contents (%d) than the previous request (%d) -- history was not supposed to shrink", i, len(req.Contents), prevLen)
+		}
+
+		prevLen = len(req.Contents)
+	}
+}
+
+func hasTextContaining(contents []*genai.Content, substr string) bool {
+	for _, c := range contents {
+		for _, p := range c.Parts {
+			if p.Text != "" && strings.Contains(p.Text, substr) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func hasFunctionCallWithArgContaining(contents []*genai.Content, argKey, substr string) bool {
+	for _, c := range contents {
+		for _, p := range c.Parts {
+			if p.FunctionCall == nil {
+				continue
+			}
+
+			v, ok := p.FunctionCall.Args[argKey].(string)
+			if ok && strings.Contains(v, substr) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// hasDanglingFunctionCall reports whether contents contains a FunctionCall
+// with no matching FunctionResponse (by call ID) anywhere in the same slice
+// -- the malformed-request shape a strict OpenAI-compatible API rejects.
+func hasDanglingFunctionCall(contents []*genai.Content) bool {
+	responseIDs := make(map[string]bool)
+
+	for _, c := range contents {
+		for _, p := range c.Parts {
+			if p.FunctionResponse != nil {
+				responseIDs[p.FunctionResponse.ID] = true
+			}
+		}
+	}
+
+	for _, c := range contents {
+		for _, p := range c.Parts {
+			if p.FunctionCall != nil && !responseIDs[p.FunctionCall.ID] {
+				return true
+			}
+		}
+	}
+
+	return false
 }

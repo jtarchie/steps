@@ -193,6 +193,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		maxTurns:             ri.MaxTurns,
 		toolChoiceStringOnly: ri.StringOnlyToolChoice,
 		verdictTool:          verdictTool,
+		compactAfterTokens:   ri.CompactAfterTokens,
 	}
 
 	return preparedAgentStep{

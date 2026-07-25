@@ -675,6 +675,97 @@ func TestResolveAgentInvocation(t *testing.T) {
 	})
 }
 
+// TestResolveAgentInvocationCompaction covers CompactAfterTokens' resolution
+// specifically — split out from TestResolveAgentInvocation (mirroring how
+// TestResolveAgentInvocationImageOverride is its own function) to keep each
+// under the linter's complexity budget.
+func TestResolveAgentInvocationCompaction(t *testing.T) {
+	t.Parallel()
+
+	baseCfg := func(agent Agent) *Config {
+		return &Config{Agents: []Agent{agent}}
+	}
+
+	t.Run("defaults to defaultCompactAfterTokens when unset", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := baseCfg(Agent{Name: "a", Source: AgentSource{Model: "openai/gpt-4o"}})
+
+		ri, err := cfg.ResolveAgentInvocation(Step{Agent: "a"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if ri.CompactAfterTokens != defaultCompactAfterTokens {
+			t.Errorf("compactAfterTokens = %d, want %d (the default)", ri.CompactAfterTokens, defaultCompactAfterTokens)
+		}
+	})
+
+	t.Run("explicit 0 stays 0, not re-defaulted", func(t *testing.T) {
+		t.Parallel()
+
+		zero := 0
+		cfg := baseCfg(Agent{Name: "a", Source: AgentSource{Model: "openai/gpt-4o"}, CompactAfterTokens: &zero})
+
+		ri, err := cfg.ResolveAgentInvocation(Step{Agent: "a"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if ri.CompactAfterTokens != 0 {
+			t.Errorf("compactAfterTokens = %d, want 0 (explicitly disabled, not defaulted)", ri.CompactAfterTokens)
+		}
+	})
+
+	t.Run("explicit non-zero value resolves through", func(t *testing.T) {
+		t.Parallel()
+
+		n := 5000
+		cfg := baseCfg(Agent{Name: "a", Source: AgentSource{Model: "openai/gpt-4o"}, CompactAfterTokens: &n})
+
+		ri, err := cfg.ResolveAgentInvocation(Step{Agent: "a"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if ri.CompactAfterTokens != 5000 {
+			t.Errorf("compactAfterTokens = %d, want 5000", ri.CompactAfterTokens)
+		}
+	})
+}
+
+func TestValidateAgentCompactionRejectsNegative(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		value   *int
+		wantErr bool
+	}{
+		{"unset is valid", nil, false},
+		{"zero is valid", intPtr(0), false},
+		{"a positive value is valid", intPtr(102_400), false},
+		{"negative is rejected", intPtr(-1), true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Config{Agents: []Agent{
+				{Name: "a", Source: AgentSource{Model: "openai/gpt-4o"}, CompactAfterTokens: tt.value},
+			}}
+
+			err := cfg.validateAgentCompaction()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateAgentCompaction() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func intPtr(n int) *int { return &n }
+
 func TestToolSpecUnmarshalYAML(t *testing.T) {
 	t.Parallel()
 

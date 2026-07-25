@@ -108,6 +108,11 @@ type agentConversation struct {
 	// step declares verdicts:, else "". A successful call to it records the
 	// chosen verdict into conversationResult.verdict.
 	verdictTool string
+	// compactAfterTokens caps req.Contents' estimated size before older turns
+	// are summarized away and replaced by a running summary — see maybeCompact
+	// in compaction.go. 0 disables compaction entirely: the turn loop then
+	// behaves exactly as it did before this field existed.
+	compactAfterTokens int
 }
 
 // buildAgentRequest builds a fresh LLM request (system + user prompt + tools
@@ -157,6 +162,20 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 // only guarantees *some* tool call, not the missing one specifically, so a
 // model can still stall on the wrong tool until maxTurns; that's the same
 // safety bound already documented above.
+//
+// When conv.compactAfterTokens > 0, maybeCompact (compaction.go) runs at the
+// start of every turn, before generateOnce: once req.Contents' estimated size
+// crosses that budget, older turns are summarized via the agent's own model
+// and replaced by the summary, so a long conversation doesn't grow without
+// bound or overflow the model's real context window. A summarization failure
+// is logged and the turn proceeds with req.Contents unchanged — the same
+// failure-is-data treatment every other tool/transport failure in this loop
+// gets, never a reason to abort the attempt. compactAfterTokens == 0 skips
+// this entirely — an agent reaches that only via an explicit
+// compact_after_tokens: 0, since config.ResolveAgentInvocation otherwise
+// resolves an unset field to a nonzero default (see
+// defaultCompactAfterTokens), unlike every other value-gated field in this
+// package.
 func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversation) (conversationResult, error) {
 	req := buildAgentRequest(conv)
 	satisfied := make(map[string]bool, len(conv.tools.required))
@@ -174,8 +193,19 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 	// own verdict ends on its final one, and note travels with whichever
 	// choice won.
 	var verdict, note string
+	// compactionSummary/compactionStalled are maybeCompact's running state —
+	// per-attempt like trajectory/verdict/note above, since a retry.Do restart
+	// gets a fresh buildAgentRequest (and therefore a fresh, uncompacted
+	// req.Contents) and should start compaction fresh too.
+	var compactionSummary string
+
+	var compactionStalled bool
 
 	for turn := range conv.maxTurns {
+		if conv.compactAfterTokens > 0 {
+			compactionSummary, compactionStalled = maybeCompact(ctx, llm, req, conv, compactionSummary, compactionStalled)
+		}
+
 		resp, err := generateOnce(ctx, llm, req)
 		if err != nil {
 			return conversationResult{turns: turn, trajectory: trajectory, verdict: verdict, note: note}, err

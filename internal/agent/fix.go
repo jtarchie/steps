@@ -114,6 +114,7 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 		},
 		maxTurns:             ri.MaxTurns,
 		toolChoiceStringOnly: ri.StringOnlyToolChoice,
+		compactAfterTokens:   ri.CompactAfterTokens,
 	}
 	llm := newAgentLLM(ri, apiKey)
 

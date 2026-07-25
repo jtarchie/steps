@@ -554,10 +554,14 @@ func subAgentInvocationContent(cfg *config.Config, name string) (map[string]any,
 // determines the model's output (agent, prompt, dir, resolved model/endpoint,
 // persona, dials, and the effective tool set — including any sub-agent tools,
 // folded in via toolSpecsContent). Attempts is excluded (a pure retry policy
-// doesn't change the intended result); the API key and its env var name are
-// excluded (nothing secret-adjacent belongs in hashed content). inputs/outputs
-// are folded in only when ws is non-nil (workspace: configured) — see
-// TaskNodeContent's doc comment for why.
+// doesn't change the intended result); CompactAfterTokens is excluded for the
+// same reason — it's an operational context-budget knob governing how a
+// conversation manages its own history, not a determinant of the intended
+// result, so a pipeline gains or loses compaction without invalidating any
+// cached step; the API key and its env var name are excluded (nothing
+// secret-adjacent belongs in hashed content). inputs/outputs are folded in
+// only when ws is non-nil (workspace: configured) — see TaskNodeContent's
+// doc comment for why.
 func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInvocation) (map[string]any, error) {
 	toolsContent, err := toolSpecsContent(cfg, ri.ToolSpecs)
 	if err != nil {
