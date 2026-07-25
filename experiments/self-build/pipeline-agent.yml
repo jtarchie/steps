@@ -67,7 +67,7 @@ resource_types:
         require "json"
         dir = ARGV[0]
         # versions = Dir.glob(File.join(dir, "[0-9][0-9][0-9]-*.md")).sort.map do |path|
-        versions = Dir.glob(File.join(dir, "000-*.md")).sort.map do |path|
+        versions = Dir.glob(File.join(dir, "001-*.md")).sort.map do |path|
           name = File.basename(path)
           { num: name[0, 3], file: name }
         end
@@ -96,7 +96,7 @@ agents:
 - name: planner
   source: { model: lmstudio/google/gemma-4-26b-a4b }
   temperature: 0.3
-  max_turns: 25
+  max_turns: 60
   system: |
     You are a careful staff engineer planning ONE change to the `steps` Go
     codebase (a Concourse-style pipeline runner). You research before you
@@ -128,7 +128,7 @@ agents:
 - name: coder
   source: { model: lmstudio/google/gemma-4-26b-a4b }
   temperature: 0.2
-  max_turns: 60         # implement + iterate lint/test/build fixes needs headroom
+  max_turns: 60
   system: |
     You are a careful Go engineer implementing an already-written plan
     against the `steps` codebase. You follow CLAUDE.md's standing rules
@@ -174,7 +174,7 @@ agents:
 - name: reviewer
   source: { model: lmstudio/google/gemma-4-26b-a4b }
   temperature: 0.2
-  max_turns: 25
+  max_turns: 60
   system: |
     You are a skeptical code reviewer for the `steps` Go codebase. Lint,
     tests, and build already passed before you were called -- your job is
