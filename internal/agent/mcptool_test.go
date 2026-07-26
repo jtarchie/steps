@@ -250,35 +250,84 @@ func TestMCPToolImplSuccess(t *testing.T) {
 	}
 }
 
-// TestMCPToolImplCapsOversizedStructuredContent proves structured_content
+// TestMCPToolImplSpillsOversizedStructuredContent proves structured_content
 // is bounded the same way content already is: previously it was returned
 // raw, unbounded, bypassing maxToolOutputBytes and potentially sending the
-// same large payload twice (once truncated in content, once whole in
-// structured_content).
-func TestMCPToolImplCapsOversizedStructuredContent(t *testing.T) {
+// same large payload twice (once capped in content, once whole in
+// structured_content). It's now spilled to a file (its marshaled JSON) when
+// a spillDir is available, and degrades to the old "omitted" marker only
+// when it isn't.
+func TestMCPToolImplSpillsOversizedStructuredContent(t *testing.T) {
 	t.Parallel()
 
 	huge := strings.Repeat("x", maxToolOutputBytes+1)
 
+	newClient := func() *fakeMCPClient {
+		return &fakeMCPClient{result: &sdkmcp.CallToolResult{
+			Content:           []sdkmcp.Content{&sdkmcp.TextContent{Text: "summary"}},
+			StructuredContent: map[string]any{"blob": huge},
+		}}
+	}
+
+	t.Run("with spillDir, it is spilled to a file", func(t *testing.T) {
+		t.Parallel()
+
+		impl := mcpToolImpl(newClient(), "search_issues")
+		result := impl(context.Background(), map[string]any{}, toolEnv{spillDir: t.TempDir()})
+
+		sc, ok := result["structured_content"].(string)
+		if !ok {
+			t.Fatalf("structured_content = %#v (%T), want a spill pointer string once oversized", result["structured_content"], result["structured_content"])
+		}
+
+		if strings.Contains(sc, huge) {
+			t.Error("structured_content still contains the oversized raw payload")
+		}
+
+		if !strings.Contains(sc, "<persistent_file>") {
+			t.Errorf("structured_content = %q, want a spill pointer message", sc)
+		}
+	})
+
+	t.Run("without spillDir, it degrades to a truncation marker", func(t *testing.T) {
+		t.Parallel()
+
+		impl := mcpToolImpl(newClient(), "search_issues")
+		result := impl(context.Background(), map[string]any{}, toolEnv{})
+
+		sc, ok := result["structured_content"].(string)
+		if !ok {
+			t.Fatalf("structured_content = %#v (%T), want a marker string once oversized", result["structured_content"], result["structured_content"])
+		}
+
+		if strings.Contains(sc, huge) {
+			t.Error("structured_content still contains the oversized raw payload")
+		}
+
+		if !strings.Contains(sc, "truncated") {
+			t.Errorf("structured_content = %q, want a truncation marker", sc)
+		}
+	})
+}
+
+// TestMCPToolImplSpillsOversizedTextContent proves the "content" field
+// (joined TextContent blocks) is spilled to a file rather than dropped when
+// it exceeds maxToolOutputBytes and a spillDir is available.
+func TestMCPToolImplSpillsOversizedTextContent(t *testing.T) {
+	t.Parallel()
+
+	huge := strings.Repeat("y", maxToolOutputBytes+500)
+
 	client := &fakeMCPClient{result: &sdkmcp.CallToolResult{
-		Content:           []sdkmcp.Content{&sdkmcp.TextContent{Text: "summary"}},
-		StructuredContent: map[string]any{"blob": huge},
+		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: huge}},
 	}}
 
 	impl := mcpToolImpl(client, "search_issues")
-	result := impl(context.Background(), map[string]any{}, toolEnv{})
+	result := impl(context.Background(), map[string]any{}, toolEnv{spillDir: t.TempDir()})
 
-	sc, ok := result["structured_content"].(string)
-	if !ok {
-		t.Fatalf("structured_content = %#v (%T), want a marker string once oversized", result["structured_content"], result["structured_content"])
-	}
-
-	if strings.Contains(sc, huge) {
-		t.Error("structured_content still contains the oversized raw payload")
-	}
-
-	if !strings.Contains(sc, "omitted") {
-		t.Errorf("structured_content = %q, want an 'omitted' marker", sc)
+	content, ok := result["content"].(string)
+	if !ok || !strings.Contains(content, "<persistent_file>") {
+		t.Errorf("content = %#v, want a spill pointer message", result["content"])
 	}
 }
 

@@ -375,6 +375,93 @@ func TestTruncateToolOutput(t *testing.T) {
 	})
 }
 
+func TestSpillOrTruncate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("content at or under the cap passes through unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		if got := spillOrTruncate("hello", t.TempDir()); got != "hello" {
+			t.Errorf("got %q, want %q", got, "hello")
+		}
+	})
+
+	t.Run("oversized content with no spillDir degrades to truncateToolOutput", func(t *testing.T) {
+		t.Parallel()
+
+		big := strings.Repeat("x", maxToolOutputBytes+500)
+
+		got := spillOrTruncate(big, "")
+		want := truncateToolOutput(big)
+
+		if got != want {
+			t.Errorf("spillOrTruncate with no spillDir = %q, want it to match truncateToolOutput exactly", got)
+		}
+	})
+}
+
+// TestSpillOrTruncateWritesFile is split out from TestSpillOrTruncate to keep
+// that function's cyclomatic complexity under the linter's cap.
+func TestSpillOrTruncateWritesFile(t *testing.T) {
+	t.Parallel()
+
+	big := strings.Repeat("x", maxToolOutputBytes+500)
+	spillDir := t.TempDir()
+
+	got := spillOrTruncate(big, spillDir)
+
+	if !strings.Contains(got, "<persistent_file>") {
+		t.Fatalf("got %q, want a <persistent_file> pointer message", got)
+	}
+
+	if !strings.Contains(got, fmt.Sprintf("The requested content was %d bytes.", len(big))) {
+		t.Errorf("got %q, want it to report the true size", got)
+	}
+
+	entries, err := os.ReadDir(spillDir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("ReadDir(%q) = (%v entries, %v), want exactly one spill file", spillDir, entries, err)
+	}
+
+	spillPath := filepath.Join(spillDir, entries[0].Name())
+	if !strings.Contains(got, spillPath) {
+		t.Errorf("got %q, want it to name the spill file path %q", got, spillPath)
+	}
+
+	data, err := os.ReadFile(spillPath) //nolint:gosec // test-owned path under t.TempDir()
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", spillPath, err)
+	}
+
+	if string(data) != big {
+		t.Errorf("spill file content length = %d, want the full %d bytes", len(data), len(big))
+	}
+}
+
+// TestSpillOrTruncateDegradesOnWriteFailure is split out from
+// TestSpillOrTruncate to keep that function's cyclomatic complexity under
+// the linter's cap.
+func TestSpillOrTruncateDegradesOnWriteFailure(t *testing.T) {
+	t.Parallel()
+
+	big := strings.Repeat("x", maxToolOutputBytes+500)
+
+	// A file (not a directory) as spillDir: os.CreateTemp inside it fails.
+	notADir := filepath.Join(t.TempDir(), "not-a-dir")
+
+	err := os.WriteFile(notADir, []byte("x"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := spillOrTruncate(big, notADir)
+	want := truncateToolOutput(big)
+
+	if got != want {
+		t.Errorf("spillOrTruncate with an unusable spillDir = %q, want it to degrade to truncateToolOutput exactly", got)
+	}
+}
+
 func TestResolveAgentPath(t *testing.T) {
 	t.Parallel()
 
@@ -505,8 +592,8 @@ func TestShellToolResultSpillDir(t *testing.T) {
 		t.Fatalf("stdout = %v (%T), want a string", result["stdout"], result["stdout"])
 	}
 
-	if !strings.Contains(stdout, "output too large") {
-		t.Errorf("stdout does not mention \"output too large\"; got %q", stdout)
+	if !strings.Contains(stdout, "<persistent_file>") {
+		t.Errorf("stdout does not contain the <persistent_file> pointer tag; got %q", stdout)
 	}
 
 	entries, err := os.ReadDir(spillDir)
@@ -566,7 +653,7 @@ func TestExecReadFile(t *testing.T) {
 		}
 	})
 
-	t.Run("a file over maxToolOutputBytes is truncated with an accurate marker", func(t *testing.T) {
+	t.Run("a file over maxToolOutputBytes is truncated with a leading tag and an accurate body", func(t *testing.T) {
 		t.Parallel()
 
 		bigDir := t.TempDir()
@@ -585,14 +672,13 @@ func TestExecReadFile(t *testing.T) {
 			t.Fatalf("content = %v (%T), want a string", result["content"], result["content"])
 		}
 
-		wantMarker := fmt.Sprintf("\n... [truncated %d bytes]", extra)
-		if !strings.HasSuffix(content, wantMarker) {
-			t.Errorf("content does not end with the expected marker %q; got suffix %q", wantMarker, content[max(0, len(content)-60):])
+		if !strings.HasPrefix(content, "<file_truncated>") {
+			t.Errorf("content does not start with the <file_truncated> tag; got prefix %q", content[:min(60, len(content))])
 		}
 
-		gotBody := strings.TrimSuffix(content, wantMarker)
-		if len(gotBody) != maxToolOutputBytes {
-			t.Errorf("truncated body length = %d, want %d", len(gotBody), maxToolOutputBytes)
+		wantTail := "</file_truncated>\n\n" + strings.Repeat("x", maxToolOutputBytes)
+		if !strings.HasSuffix(content, wantTail) {
+			t.Errorf("content does not end with the closing tag followed by exactly %d bytes of body", maxToolOutputBytes)
 		}
 	})
 }
@@ -852,23 +938,29 @@ func TestExecReadFileCanReadSpilledRunShellOutput(t *testing.T) {
 	}
 }
 
-// extractSpillPath pulls the absolute path out of a spillWriter pointer
-// message ("output too large (...); full output saved to <path>\n\n...").
+// extractSpillPath pulls the absolute path out of a spillWriter/spillOrTruncate
+// pointer message ("<persistent_file>\nThe requested content was N bytes.
+// The content was saved to <path>. Please read from it directly..."). Ends
+// at the ". Please" that always follows the path (not the first '.', since
+// the spill filename itself contains one — "output-*.txt").
 func extractSpillPath(t *testing.T, message string) string {
 	t.Helper()
 
-	const marker = "full output saved to "
+	const (
+		startMarker = "The content was saved to "
+		endMarker   = ". Please read from it directly"
+	)
 
-	idx := strings.Index(message, marker)
-	if idx < 0 {
-		t.Fatalf("message does not contain %q; got %q", marker, message)
+	start := strings.Index(message, startMarker)
+	if start < 0 {
+		t.Fatalf("message does not contain %q; got %q", startMarker, message)
 	}
 
-	rest := message[idx+len(marker):]
+	rest := message[start+len(startMarker):]
 
-	end := strings.IndexByte(rest, '\n')
+	end := strings.Index(rest, endMarker)
 	if end < 0 {
-		end = len(rest)
+		t.Fatalf("message does not contain %q after the path; got %q", endMarker, message)
 	}
 
 	return rest[:end]
@@ -925,7 +1017,55 @@ func TestExecListDir(t *testing.T) {
 		if !ok || len(entries) != 1 {
 			t.Fatalf("entries = %v", result["entries"])
 		}
+
+		if result["total"] != 1 {
+			t.Errorf("total = %v, want 1", result["total"])
+		}
+
+		if result["truncated"] != false {
+			t.Errorf("truncated = %v, want false", result["truncated"])
+		}
+
+		if _, present := result["message"]; present {
+			t.Errorf("message = %v, want absent when not truncated", result["message"])
+		}
 	})
+}
+
+// TestExecListDirCapsEntryCount proves a directory with more than
+// maxListDirEntries entries is capped rather than returned in full, with
+// total/truncated/message fields telling the model more exist.
+func TestExecListDirCapsEntryCount(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	want := maxListDirEntries + 10
+	for i := range want {
+		err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("file-%05d.txt", i)), nil, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result := execListDir(context.Background(), map[string]any{}, testEnv(dir))
+
+	entries, ok := result["entries"].([]map[string]any)
+	if !ok || len(entries) != maxListDirEntries {
+		t.Fatalf("entries = %d, want exactly %d", len(entries), maxListDirEntries)
+	}
+
+	if result["total"] != want {
+		t.Errorf("total = %v, want %d", result["total"], want)
+	}
+
+	if result["truncated"] != true {
+		t.Errorf("truncated = %v, want true", result["truncated"])
+	}
+
+	if _, present := result["message"]; !present {
+		t.Error("message absent, want a note that more entries exist")
+	}
 }
 
 // mustExecWriteFileOK runs write_file against dir and fails the test if it

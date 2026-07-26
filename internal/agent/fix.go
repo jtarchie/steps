@@ -99,7 +99,7 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 		prompt = fmt.Sprintf(defaultFixPrompt, rt.Name)
 	}
 
-	prompt += "\n\n--- failure output ---\n" + truncateToolOutput(failureOutput)
+	prompt += "\n\n--- failure output ---\n" + spillOrTruncate(failureOutput, spillDir)
 
 	conv := agentConversation{
 		system: buildSystemMessage(ri.Persona, dir),

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,12 +20,28 @@ import (
 )
 
 // maxToolOutputBytes caps how much of a tool's textual output (file
-// contents, command stdout/stderr) is handed back to the model. A runaway
-// command (cat a huge file, find /) would otherwise buffer megabytes into
-// memory and flood the model's context window (cost, and possible
-// context-limit failures). Anything beyond this is truncated with a
-// trailing marker so the model knows output was cut.
-const maxToolOutputBytes = 100_000
+// contents, command stdout/stderr, an MCP tool's response, a sub-agent's
+// final answer, a previous_run field, a fix loop's failure output) is
+// returned to the model inline. A runaway command (cat a huge file, find /)
+// or a chatty MCP server/sub-agent would otherwise flood the model's context
+// window (cost, and possible context-limit failures). Anything beyond this
+// is spilled to a file under the step's spill directory instead of being
+// dropped — see spillOrTruncate — except read_file, which degrades to a
+// plain truncation marker (spilling a file read back out to another file
+// would be a pointless, confusing loop); its own start_line/end_line paging
+// is the way to read further into a large file.
+const maxToolOutputBytes = 4_000
+
+// maxListDirEntries caps how many entries list_dir returns inline — a
+// directory with tens of thousands of entries would otherwise flood the
+// model's context the same way an uncapped file read would. Unlike text
+// output, a directory listing is structured data with no natural byte
+// preview, so it's bounded by entry count instead of being spilled to a
+// file: past this many entries, execListDir returns the first
+// maxListDirEntries plus the true total and a truncated flag, pointing the
+// model at a narrower path or run_shell (e.g. `ls | grep`) instead. A
+// judgment-call default, not derived from any hard constraint — tune freely.
+const maxListDirEntries = 1_000
 
 // toolEnv is the execution environment tool impls run against: the step's
 // working directory (also the bind-mount source when runner is a
@@ -125,14 +142,25 @@ func runShellDescription(image string) string {
 	return desc
 }
 
+// listDirDescription documents list_dir's entry cap, built with
+// fmt.Sprintf (rather than a hardcoded number in a string literal) so the
+// description can never silently drift from maxListDirEntries itself.
+//
+//nolint:gochecknoglobals // computed once from a const; not a mutable global
+var listDirDescription = fmt.Sprintf(
+	`List entries (name, is_dir, size) in a directory, given a path relative to the working directory. Defaults to "." if omitted. Capped at the first %d entries for a very large directory — the result's "total"/"truncated" fields say whether more exist.`,
+	maxListDirEntries,
+)
+
 // readFileDescription documents read_file's two modes: a plain call (no
-// start_line/end_line) reads from the top of the file, capped at ~100KB
-// exactly as before line ranges existed; passing either turns it into a
-// line-based slice instead — see execReadFile.
+// start_line/end_line) reads from the top of the file, capped at
+// maxToolOutputBytes exactly as before line ranges existed; passing either
+// turns it into a line-based slice instead — see execReadFile.
 const readFileDescription = "Read a UTF-8 text file's contents, given a path relative to the step's working directory." +
 	" Optionally pass start_line and/or end_line (1-indexed, inclusive) to read only a slice of a large file instead of" +
-	" its capped prefix — useful both for a file too big to read in one call and for output run_shell spilled to a file" +
-	" (see run_shell's description)."
+	" its capped prefix — useful both for a file too big to read in one call and for output any tool spilled to a file" +
+	" when it exceeded the inline size limit (run_shell, an MCP tool, a sub-agent's answer, previous_run, ...) — see" +
+	" that tool's own result for the exact path."
 
 // writeFileDescription documents write_file's contract: it writes (or, with
 // append: true, appends to) a UTF-8 text file at a path relative to the
@@ -165,7 +193,7 @@ func builtinAgentTools(image string) map[string]builtinTool {
 		"list_dir": {
 			decl: &genai.FunctionDeclaration{
 				Name:        "list_dir",
-				Description: `List entries (name, is_dir, size) in a directory, given a path relative to the working directory. Defaults to "." if omitted.`,
+				Description: listDirDescription,
 				Parameters: &genai.Schema{
 					Type:       genai.TypeObject,
 					Properties: map[string]*genai.Schema{"path": {Type: genai.TypeString, Description: "Directory path, relative to the working directory."}},
@@ -540,13 +568,67 @@ func intArg(args map[string]any, key string) (int, bool) {
 }
 
 // truncateToolOutput caps s at maxToolOutputBytes, appending a marker when
-// it cuts, so a runaway command can't flood the model's context.
+// it cuts, so a runaway command can't flood the model's context. Used
+// directly only by read_file (spilling a file read back out to another file
+// would be a pointless loop); every other oversized-output site goes through
+// spillOrTruncate instead, which falls back to this exact behavior only when
+// spilling itself isn't possible.
 func truncateToolOutput(s string) string {
 	if len(s) <= maxToolOutputBytes {
 		return s
 	}
 
 	return s[:maxToolOutputBytes] + fmt.Sprintf("\n... [truncated %d bytes]", len(s)-maxToolOutputBytes)
+}
+
+// spillOrTruncate is the one-shot counterpart to shellToolResult's streaming
+// spill (RunCaptureFullLimitedStreamed/spillWriter in internal/shell): a
+// caller that already holds its full result as a string — an MCP tool's
+// text/structured content, a sub-agent's final answer, a previous_run
+// field/trajectory arg, a fix loop's failure output — uses this instead of
+// truncateToolOutput so oversized output is saved to a file the model can
+// read back, not dropped. content at or under maxToolOutputBytes passes
+// through unchanged. Over that, with spillDir set, it writes the full
+// content to a new file under spillDir (same "output-*.txt" naming
+// convention spillWriter uses, so spilled files look uniform regardless of
+// which path produced them) and returns shell.SpillPointerMessage — the same
+// wording the streaming shell-output spill path returns. spillDir == "" (the
+// spill directory couldn't be created for this step) or any create/write/
+// close error degrades to truncateToolOutput, mirroring spillWriter's own
+// degrade-on-error behavior: spilling is a usability improvement, not
+// something a tool call should fail over.
+func spillOrTruncate(content string, spillDir string) string {
+	if len(content) <= maxToolOutputBytes {
+		return content
+	}
+
+	if spillDir == "" {
+		return truncateToolOutput(content)
+	}
+
+	f, err := os.CreateTemp(spillDir, "output-*.txt")
+	if err != nil {
+		slog.Warn("agent.spill_output", "error", err)
+
+		return truncateToolOutput(content)
+	}
+
+	_, writeErr := f.WriteString(content)
+	closeErr := f.Close()
+
+	if writeErr != nil || closeErr != nil {
+		_ = os.Remove(f.Name())
+		slog.Warn("agent.spill_output", "write_error", writeErr, "close_error", closeErr)
+
+		return truncateToolOutput(content)
+	}
+
+	preview := []byte(content)
+	if len(preview) > shell.SpillPreviewBytes {
+		preview = preview[:shell.SpillPreviewBytes]
+	}
+
+	return shell.SpillPointerMessage(len(content), f.Name(), preview)
 }
 
 // shellToolResult builds the FunctionResponse map for a shell-backed tool
@@ -612,8 +694,15 @@ func execReadFile(_ context.Context, args map[string]any, env toolEnv) map[strin
 	return readFileRange(resolved, startLine, endLine, hasEnd)
 }
 
-// readFileFull is read_file with no start_line/end_line: the original
-// behavior, unchanged.
+// readFileFull is read_file with no start_line/end_line. Unlike every other
+// oversized-output site (see spillOrTruncate), an over-cap file is NOT
+// spilled to a new file — the file already exists at resolved, and spilling
+// a file read back out to another file would be a pointless, confusing loop.
+// Instead it degrades to a plain truncation, restated in wording that
+// matches shell.SpillPointerMessage's tag style (a leading block, not a
+// trailing marker) so the two "output was cut" shapes read the same way, and
+// pointing the model at start_line/end_line — the file's own paging
+// mechanism — rather than a spilled copy.
 func readFileFull(resolved string) map[string]any {
 	f, err := os.Open(resolved) //nolint:gosec // resolveAgentPath rejects paths escaping dir, the step's own workspace
 	if err != nil {
@@ -628,10 +717,10 @@ func readFileFull(resolved string) map[string]any {
 
 	// Read at most maxToolOutputBytes regardless of the file's real size, so a
 	// huge file (a multi-GB log accidentally left in the working tree) doesn't
-	// pay full allocation and I/O cost before truncateToolOutput would have
+	// pay full allocation and I/O cost before the truncation below would have
 	// discarded most of it anyway. stat.Size() (not the read length) drives the
-	// truncation marker, so the reported byte count matches what
-	// truncateToolOutput would have said had it read the whole file itself.
+	// truncation message, so the reported byte count matches what it would have
+	// said had it read the whole file itself.
 	data, err := io.ReadAll(io.LimitReader(f, maxToolOutputBytes))
 	if err != nil {
 		return map[string]any{"error": err.Error()}
@@ -639,7 +728,10 @@ func readFileFull(resolved string) map[string]any {
 
 	content := string(data)
 	if stat.Size() > maxToolOutputBytes {
-		content += fmt.Sprintf("\n... [truncated %d bytes]", stat.Size()-maxToolOutputBytes)
+		content = fmt.Sprintf(
+			"<file_truncated>\nThis file is %s, exceeding the %s inline read limit. Showing the first %s below. Use start_line/end_line to read further into the file.\n</file_truncated>\n\n%s",
+			shell.FormatBytes(int(stat.Size())), shell.FormatBytes(maxToolOutputBytes), shell.FormatBytes(len(data)), content,
+		)
 	}
 
 	return map[string]any{"content": content}
@@ -797,6 +889,11 @@ func execListDir(_ context.Context, args map[string]any, env toolEnv) map[string
 		return map[string]any{"error": err.Error()}
 	}
 
+	total := len(entries)
+	if total > maxListDirEntries {
+		entries = entries[:maxListDirEntries]
+	}
+
 	items := make([]map[string]any, 0, len(entries))
 
 	for _, e := range entries {
@@ -810,7 +907,16 @@ func execListDir(_ context.Context, args map[string]any, env toolEnv) map[string
 		items = append(items, map[string]any{"name": e.Name(), "is_dir": e.IsDir(), "size": size})
 	}
 
-	return map[string]any{"entries": items}
+	result := map[string]any{"entries": items, "total": total, "truncated": total > maxListDirEntries}
+
+	if total > maxListDirEntries {
+		result["message"] = fmt.Sprintf(
+			"showing the first %d of %d entries; narrow path or use run_shell (e.g. `ls | grep ...`) to search a large directory",
+			maxListDirEntries, total,
+		)
+	}
+
+	return result
 }
 
 func execRunShell(ctx context.Context, args map[string]any, env toolEnv) map[string]any {

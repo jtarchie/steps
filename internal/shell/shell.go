@@ -103,10 +103,14 @@ type captureWriter interface {
 // boundedWriter overflow gets, just applied to the file instead of memory.
 const spillMaxBytes = 10 << 20 // 10 MiB
 
-// spillPreviewBytes is how much of a spilled stream's head is echoed inline
+// SpillPreviewBytes is how much of a spilled stream's head is echoed inline
 // in the pointer message, so the model has some immediate signal without
-// having to open the file first.
-const spillPreviewBytes = 2000
+// having to open the file first. Exported so internal/agent's one-shot spill
+// helper (for MCP/sub-agent/handoff/fix output, which already holds its full
+// content as a string rather than streaming it) uses the same preview size as
+// spillWriter's own streaming spill path — one pointer-message shape across
+// every spilled-output site, not two that can drift apart.
+const SpillPreviewBytes = 2000
 
 // newCaptureWriter returns an unboundedWriter when maxBytes <= 0 (matching
 // every Run/RunCapture/RunCaptureFull caller's historical unbounded-buffer
@@ -325,7 +329,8 @@ func (w *spillWriter) resultFromHead() string {
 // resultFromFile is result() once spilling succeeded: it appends a
 // truncation marker to the file if spillMaxBytes cut it short, closes it,
 // and returns the pointer message the model actually sees in place of the
-// raw content.
+// raw content — via the same SpillPointerMessage format every other spilled-
+// output path (internal/agent's one-shot spillOrTruncate) uses.
 func (w *spillWriter) resultFromFile() string {
 	overflow := w.total - w.fileBytes
 	if overflow > 0 {
@@ -339,23 +344,41 @@ func (w *spillWriter) resultFromFile() string {
 
 	_ = w.file.Close()
 
-	msg := fmt.Sprintf("output too large (%s); full output saved to %s", formatBytes(w.total), path)
-
 	preview := w.head.Bytes()
-	if len(preview) > spillPreviewBytes {
-		preview = preview[:spillPreviewBytes]
+	if len(preview) > SpillPreviewBytes {
+		preview = preview[:SpillPreviewBytes]
 	}
 
+	return SpillPointerMessage(w.total, path, preview)
+}
+
+// SpillPointerMessage renders the message a spilled-to-file tool result
+// returns to the model in place of raw content: the true size, the file it
+// was saved to, and a preview of its head. Shared by spillWriter (streaming
+// command output, via resultFromFile) and internal/agent's one-shot
+// spillOrTruncate (MCP tool text/structured content, a sub-agent's final
+// answer, a previous_run response/note/trajectory arg, a fix loop's failure
+// output — all of which already hold their full content as a string rather
+// than streaming it), so every spilled-output path produces byte-identical
+// wording rather than each inventing its own.
+func SpillPointerMessage(totalBytes int, path string, preview []byte) string {
+	msg := fmt.Sprintf(
+		"<persistent_file>\nThe requested content was %d bytes. The content was saved to %s. Please read from it directly, obviously not the whole file. After this will be the first %s of the output.\n</persistent_file>",
+		totalBytes, path, FormatBytes(len(preview)),
+	)
+
 	if len(preview) > 0 {
-		msg += fmt.Sprintf("\n\nfirst %s:\n%s", formatBytes(len(preview)), preview)
+		msg += "\n\n" + string(preview)
 	}
 
 	return msg
 }
 
-// formatBytes renders n as a human-readable size (bytes, KB, or MB with one
-// decimal place) for the spill pointer message.
-func formatBytes(n int) string {
+// FormatBytes renders n as a human-readable size (bytes, KB, or MB with one
+// decimal place) for the spill pointer message. Exported so internal/agent's
+// one-shot spill helper renders the same units/precision SpillPointerMessage
+// itself uses.
+func FormatBytes(n int) string {
 	const (
 		kb = 1024
 		mb = kb * 1024

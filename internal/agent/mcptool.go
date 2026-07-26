@@ -131,7 +131,7 @@ func selectMCPTools(spec config.ToolSpec, tools []*sdkmcp.Tool) ([]*sdkmcp.Tool,
 // (nil/empty when absent) so the shape stays predictable for the model and
 // for assert.tool_calls matching.
 func mcpToolImpl(client stepsmcp.Client, name string) toolImpl {
-	return func(ctx context.Context, args map[string]any, _ toolEnv) map[string]any {
+	return func(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
 		result, err := client.CallTool(ctx, name, args)
 		if err != nil {
 			return map[string]any{"error": err.Error()}
@@ -144,25 +144,28 @@ func mcpToolImpl(client stepsmcp.Client, name string) toolImpl {
 				text = fmt.Sprintf("mcp tool %q returned an error with no text content", name)
 			}
 
-			return map[string]any{"error": truncateToolOutput(text)}
+			return map[string]any{"error": spillOrTruncate(text, env.spillDir)}
 		}
 
 		return map[string]any{
-			"structured_content": boundedStructuredContent(result.StructuredContent),
-			"content":            truncateToolOutput(text),
+			"structured_content": boundedStructuredContent(result.StructuredContent, env.spillDir),
+			"content":            spillOrTruncate(text, env.spillDir),
 		}
 	}
 }
 
 // boundedStructuredContent caps a tool result's structured content at
-// maxToolOutputBytes, the same bound truncateToolOutput enforces on text —
+// maxToolOutputBytes, the same bound spillOrTruncate enforces on text —
 // without this, a large structured payload would flood the model's context
 // window unbounded, bypassing the cap every other tool's output already
 // honors (and the SDK often mirrors the same payload into text content too,
 // so an uncapped structured_content is frequently a second, unbounded copy
-// of data content already carries a truncated copy of). nil input (the
-// common "this tool has no structured output" case) passes through as nil.
-func boundedStructuredContent(sc any) any {
+// of data content already carries a capped copy of). nil input (the common
+// "this tool has no structured output" case) passes through as nil. An
+// oversized payload is spilled to a file — via spillOrTruncate on its
+// marshaled JSON — the same as oversized text content, rather than being
+// replaced outright with an "omitted" message.
+func boundedStructuredContent(sc any, spillDir string) any {
 	if sc == nil {
 		return nil
 	}
@@ -172,11 +175,11 @@ func boundedStructuredContent(sc any) any {
 		return fmt.Sprintf("[structured content omitted: could not marshal: %s]", err.Error())
 	}
 
-	if len(data) > maxToolOutputBytes {
-		return fmt.Sprintf("[structured content omitted: %d bytes exceeds the %d-byte cap; see content]", len(data), maxToolOutputBytes)
+	if len(data) <= maxToolOutputBytes {
+		return sc
 	}
 
-	return sc
+	return spillOrTruncate(string(data), spillDir)
 }
 
 // joinTextContent concatenates every TextContent block in content,

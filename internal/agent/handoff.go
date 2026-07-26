@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -79,7 +80,11 @@ func exportTrajectory(trajectory []recordedToolCall) []ToolCall {
 // a routed-to step's prompt (see promptWithHandoff). Delimited with
 // HTML-style tags — a convention for marking where injected, machine-
 // assembled context starts and stops, distinct from the surrounding prose.
-func renderHandoffBlock(h *Handoff) string {
+// spillDir is the receiving step's own spill directory (already created by
+// prepareAgentStep by the time this is called — see step.go), used to spill
+// an oversized note to a file rather than dropping the overflow; "" degrades
+// to a plain truncation, matching spillOrTruncate's own degrade behavior.
+func renderHandoffBlock(h *Handoff, spillDir string) string {
 	var b strings.Builder
 
 	b.WriteString("<transition_context>\n")
@@ -94,7 +99,7 @@ func renderHandoffBlock(h *Handoff) string {
 	fmt.Fprintf(&b, "position: step %d of %d in job %q\n", h.StepIndex+1, h.PlanLen, h.JobName)
 
 	if h.Note != "" {
-		fmt.Fprintf(&b, "<note from=%q>\n%s\n</note>\n", h.FromStep, sanitizeHandoffNote(truncateToolOutput(h.Note)))
+		fmt.Fprintf(&b, "<note from=%q>\n%s\n</note>\n", h.FromStep, sanitizeHandoffNote(spillOrTruncate(h.Note, spillDir)))
 	}
 
 	b.WriteString("</transition_context>")
@@ -115,12 +120,13 @@ func sanitizeHandoffNote(note string) string {
 // prompt when spec enables it. handoff is nil on a step's first/unrouted
 // execution (see internal/pipeline's pending carry), in which case no block
 // is appended even when spec.Context is set — there is nothing to describe.
-func promptWithHandoff(prompt string, spec *config.HandoffSpec, handoff *Handoff) string {
+// spillDir is threaded through to renderHandoffBlock — see its doc comment.
+func promptWithHandoff(prompt string, spec *config.HandoffSpec, handoff *Handoff, spillDir string) string {
 	if spec == nil || !spec.Context || handoff == nil {
 		return prompt
 	}
 
-	return prompt + "\n\n" + renderHandoffBlock(handoff)
+	return prompt + "\n\n" + renderHandoffBlock(handoff, spillDir)
 }
 
 // injectSynthesizedTools adds the routing-related tools a step's own
@@ -190,13 +196,16 @@ func injectHandoffTool(handoff *Handoff, decls *genai.Tool, registry map[string]
 // section argument.
 var previousRunSections = map[string]bool{"all": true, "response": true, "trajectory": true} //nolint:gochecknoglobals // static, read-only lookup table
 
-// previousRunToolImpl closes over handoff (captured at prepare time — no
-// toolEnv use) and returns its Previous run as data, filtered by the
-// model-requested section. Every path returns success data, never a Go
-// error — including "no previous run", which is a legitimate answer, not a
-// failure (see the failure-as-data contract documented on toolImpl).
+// previousRunToolImpl closes over handoff (captured at prepare time) and
+// returns its Previous run as data, filtered by the model-requested section.
+// Every path returns success data, never a Go error — including "no previous
+// run", which is a legitimate answer, not a failure (see the failure-as-data
+// contract documented on toolImpl). env.spillDir (the receiving step's own
+// spill directory) is threaded into both the response half and the
+// trajectory half so an oversized field spills to a file instead of being
+// dropped.
 func previousRunToolImpl(handoff *Handoff) toolImpl {
-	return func(_ context.Context, args map[string]any, _ toolEnv) map[string]any {
+	return func(_ context.Context, args map[string]any, env toolEnv) map[string]any {
 		if handoff == nil || handoff.Previous == nil {
 			return map[string]any{"result": "no previous run: this is the first execution of this step, or the routing step was not an agent"}
 		}
@@ -213,11 +222,11 @@ func previousRunToolImpl(handoff *Handoff) toolImpl {
 		result := map[string]any{}
 
 		if section == "all" || section == "response" {
-			addPreviousRunResponse(result, handoff.Previous)
+			addPreviousRunResponse(result, handoff.Previous, env.spillDir)
 		}
 
 		if section == "all" || section == "trajectory" {
-			result["trajectory"] = previousRunTrajectory(handoff.Previous.Trajectory)
+			result["trajectory"] = previousRunTrajectory(handoff.Previous.Trajectory, env.spillDir)
 		}
 
 		return result
@@ -225,8 +234,9 @@ func previousRunToolImpl(handoff *Handoff) toolImpl {
 }
 
 // addPreviousRunResponse fills in result's response-half fields (agent,
-// turns, verdict/note when set, and the truncated response text) from prev.
-func addPreviousRunResponse(result map[string]any, prev *PreviousRun) {
+// turns, verdict/note when set, and the response text, spilled to a file
+// when oversized) from prev.
+func addPreviousRunResponse(result map[string]any, prev *PreviousRun, spillDir string) {
 	result["agent"] = prev.Agent
 	result["turns"] = prev.Turns
 
@@ -235,19 +245,53 @@ func addPreviousRunResponse(result map[string]any, prev *PreviousRun) {
 	}
 
 	if prev.Note != "" {
-		result["note"] = truncateToolOutput(prev.Note)
+		result["note"] = spillOrTruncate(prev.Note, spillDir)
 	}
 
-	result["response"] = truncateToolOutput(prev.Response)
+	result["response"] = spillOrTruncate(prev.Response, spillDir)
 }
 
 // previousRunTrajectory converts a PreviousRun's trajectory into the plain
-// map shape previous_run's result serializes.
-func previousRunTrajectory(trajectory []ToolCall) []map[string]any {
+// map shape previous_run's result serializes, capping each call's arg values
+// (see boundedTrajectoryArgs) so a single oversized arg from a prior turn —
+// e.g. a write_file call's content — can't flood this tool's own result the
+// way an uncapped trajectory would.
+func previousRunTrajectory(trajectory []ToolCall, spillDir string) []map[string]any {
 	calls := make([]map[string]any, len(trajectory))
 	for i, call := range trajectory {
-		calls[i] = map[string]any{"tool": call.Name, "args": call.Args}
+		calls[i] = map[string]any{"tool": call.Name, "args": boundedTrajectoryArgs(call.Args, spillDir)}
 	}
 
 	return calls
+}
+
+// boundedTrajectoryArgs returns a copy of args with any oversized value
+// replaced by a spilled-file pointer message (see spillOrTruncate), leaving
+// every value at or under maxToolOutputBytes untouched — same type, same
+// shape — so the common case (short args) round-trips exactly as recorded.
+// A string value is measured/spilled directly, preserving its raw text in
+// the spill file; any other value (number, bool, nested map/slice) is
+// measured/spilled via its marshaled JSON form instead, since there's no
+// other text representation to spill.
+func boundedTrajectoryArgs(args map[string]any, spillDir string) map[string]any {
+	bounded := make(map[string]any, len(args))
+
+	for k, v := range args {
+		if s, ok := v.(string); ok {
+			bounded[k] = spillOrTruncate(s, spillDir)
+
+			continue
+		}
+
+		data, err := json.Marshal(v)
+		if err != nil || len(data) <= maxToolOutputBytes {
+			bounded[k] = v
+
+			continue
+		}
+
+		bounded[k] = spillOrTruncate(string(data), spillDir)
+	}
+
+	return bounded
 }

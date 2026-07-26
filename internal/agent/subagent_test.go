@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -81,7 +82,8 @@ func TestSubAgentRunPrintsResponse(t *testing.T) {
 
 // TestSubAgentRunTruncatesResult proves a child's oversized final text is
 // capped like every other tool result, so it can't flood the parent's context
-// past maxToolOutputBytes.
+// past maxToolOutputBytes — degrading to a plain truncation marker when no
+// spillDir is available (the zero-value toolEnv here).
 func TestSubAgentRunTruncatesResult(t *testing.T) {
 	t.Parallel()
 
@@ -105,6 +107,37 @@ func TestSubAgentRunTruncatesResult(t *testing.T) {
 
 	if !strings.Contains(result, "truncated") {
 		t.Errorf("truncated result should carry the truncation marker, got tail %q", result[max(0, len(result)-40):])
+	}
+}
+
+// TestSubAgentRunSpillsOversizedResult proves a child's oversized final text
+// is spilled to a file (a <persistent_file> pointer, not a dropped-overflow
+// marker) when a spillDir is available.
+func TestSubAgentRunSpillsOversizedResult(t *testing.T) {
+	t.Parallel()
+
+	huge := strings.Repeat("x", maxToolOutputBytes+5_000)
+	fake := &fakeLLM{responses: []*model.LLMResponse{
+		{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: huge}}}},
+	}}
+
+	child := newTestSubAgent(t, fake)
+
+	spillDir := t.TempDir()
+	got := child.run(context.Background(), map[string]any{"request": "dump everything"}, toolEnv{dir: t.TempDir(), spillDir: spillDir})
+
+	result, ok := got["result"].(string)
+	if !ok {
+		t.Fatalf("result = %#v, want a string", got["result"])
+	}
+
+	if !strings.Contains(result, "<persistent_file>") {
+		t.Errorf("result = %q, want a spill pointer message", result)
+	}
+
+	entries, err := os.ReadDir(spillDir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("ReadDir(%q) = (%v entries, %v), want exactly one spill file", spillDir, entries, err)
 	}
 }
 

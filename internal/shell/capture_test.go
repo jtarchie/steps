@@ -199,12 +199,12 @@ func TestSpillWriterOverCap(t *testing.T) {
 
 	got := w.result()
 
-	if !strings.Contains(got, "output too large") {
-		t.Errorf("result() = %q, want it to mention \"output too large\"", got)
+	if !strings.Contains(got, "<persistent_file>") {
+		t.Errorf("result() = %q, want it to contain the <persistent_file> pointer tag", got)
 	}
 
-	if !strings.Contains(got, fmt.Sprintf("(%d B)", len(full))) {
-		t.Errorf("result() = %q, want it to report the true total size (%d B)", got, len(full))
+	if !strings.Contains(got, fmt.Sprintf("The requested content was %d bytes.", len(full))) {
+		t.Errorf("result() = %q, want it to report the true total size (%d bytes)", got, len(full))
 	}
 
 	if !strings.Contains(got, "hello") {
@@ -238,8 +238,8 @@ func TestSpillWriterMultipleWrites(t *testing.T) {
 	_, _ = w.Write([]byte("9999"))
 
 	got := w.result()
-	if !strings.Contains(got, "output too large") {
-		t.Errorf("result() = %q, want it to mention \"output too large\"", got)
+	if !strings.Contains(got, "<persistent_file>") {
+		t.Errorf("result() = %q, want it to contain the <persistent_file> pointer tag", got)
 	}
 
 	if data := readOneSpillFile(t, dir); data != "123456789999" {
@@ -277,7 +277,7 @@ func TestSpillWriterBeyondSpillMaxBytes(t *testing.T) {
 	_, _ = w.Write([]byte(chunk))
 
 	got := w.result()
-	if !strings.Contains(got, fmt.Sprintf("(%s)", formatBytes(total))) {
+	if !strings.Contains(got, fmt.Sprintf("The requested content was %d bytes.", total)) {
 		t.Errorf("result() = %q, want it to report the true total size", got)
 	}
 
@@ -301,8 +301,8 @@ func TestFormatBytes(t *testing.T) {
 	}
 
 	for n, want := range cases {
-		if got := formatBytes(n); got != want {
-			t.Errorf("formatBytes(%d) = %q, want %q", n, got, want)
+		if got := FormatBytes(n); got != want {
+			t.Errorf("FormatBytes(%d) = %q, want %q", n, got, want)
 		}
 	}
 }
@@ -381,8 +381,8 @@ func TestHostRunnerRunCaptureFullLimitedSpillDir(t *testing.T) {
 		t.Errorf("exitCode = %d, want 0", exitCode)
 	}
 
-	if !strings.Contains(stdout, "output too large") {
-		t.Errorf("stdout = %q, want it to mention \"output too large\"", stdout)
+	if !strings.Contains(stdout, "<persistent_file>") {
+		t.Errorf("stdout = %q, want it to contain the <persistent_file> pointer tag", stdout)
 	}
 
 	entries, err := os.ReadDir(spillDir)

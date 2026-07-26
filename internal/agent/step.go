@@ -181,7 +181,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	conv := agentConversation{
 		system: buildSystemMessage(ri.Persona, dir),
-		prompt: promptWithHandoff(step.Prompt, step.Handoff, handoff),
+		prompt: promptWithHandoff(step.Prompt, step.Handoff, handoff, spillDir),
 		env:    toolEnv{dir: dir, runner: runner, spillDir: spillDir},
 		tools:  agentTools{decls: decls, registry: registry, required: required, maxCalls: maxCallsByName(ri.ToolSpecs)},
 		params: agentGenParams{
