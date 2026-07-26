@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -207,6 +208,14 @@ type Resource struct {
 type Agent struct {
 	Name   string      `yaml:"name"`
 	Source AgentSource `yaml:"source"`
+	// File loads this agent's source/image/system/dials/tools from a YAML
+	// document at a path relative to the pipeline file's directory (see
+	// LoadConfig's resolveFileIncludes), so one agent definition can be
+	// shared across pipelines. Any field also set inline on this entry
+	// overrides the loaded document's value for that field — the same "wins
+	// when set" idiom ResolveTask already uses between a step and its tasks:
+	// entry. The loaded document may not itself use file:/system_file:.
+	File string `yaml:"file,omitempty"`
 	// Image, when set, runs this agent's run_shell/custom-tool commands in a
 	// fresh `docker run --rm` container from this image instead of on the
 	// host. A step's own Image, if set, overrides this for that step only
@@ -215,6 +224,10 @@ type Agent struct {
 	// System is the persona/system message given to the model. Empty falls
 	// back to a generic CI-agent persona.
 	System string `yaml:"system,omitempty"`
+	// SystemFile loads System's text from a file at a path relative to the
+	// pipeline file's directory, instead of writing it inline — useful since a
+	// persona is often long freeform prose. Mutually exclusive with System.
+	SystemFile string `yaml:"system_file,omitempty"`
 	// Generation dials, forwarded to the model when set. ReasoningEffort is
 	// one of "low", "medium", "high" (for reasoning-capable models).
 	Temperature     *float64 `yaml:"temperature,omitempty"`
@@ -369,9 +382,21 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 // always inline and never consults this list, even if a same-named entry
 // exists here.
 type Task struct {
-	Name string   `yaml:"name"`
-	Run  string   `yaml:"run"`
-	Fix  *FixSpec `yaml:"fix,omitempty"`
+	Name string `yaml:"name"`
+	Run  string `yaml:"run"`
+	// File loads this task's run/fix/image/timeout/inputs/outputs from a YAML
+	// document at a path relative to the pipeline file's directory (see
+	// LoadConfig's resolveFileIncludes), so one task definition can be shared
+	// across pipelines. Any field also set inline on this entry overrides the
+	// loaded document's value for that field — the same "wins when set" idiom
+	// ResolveTask already uses between a step and its tasks: entry. The
+	// loaded document may not itself use file:/run_file:.
+	File string `yaml:"file,omitempty"`
+	// RunFile loads Run's text from a file at a path relative to the pipeline
+	// file's directory, instead of writing it inline. Mutually exclusive with
+	// Run.
+	RunFile string   `yaml:"run_file,omitempty"`
+	Fix     *FixSpec `yaml:"fix,omitempty"`
 	// Image, when set, runs this task's run: (and its verdict re-run) in a
 	// fresh `docker run --rm` container from this image instead of on the
 	// host. A referencing step's own Image, if non-empty, overrides this for
@@ -399,28 +424,35 @@ type Task struct {
 // command is re-run and that exit code is the step's verdict. Fields left
 // unset fall back to the agent's own defaults (Attempts to 1).
 type FixSpec struct {
-	Agent    string     // agents: entry to invoke on failure
-	Prompt   string     // optional override; empty uses a default fix prompt
-	Dir      string     // optional working dir, relative to the workspace
-	Tools    []ToolSpec // optional subset/addition to the agent's tool grant
-	Attempts int        // optional whole-conversation retry count (default 1)
-	Timeout  string     // optional wall-clock deadline per fix-agent attempt
+	Agent  string // agents: entry to invoke on failure
+	Prompt string // optional override; empty uses a default fix prompt
+	// PromptFile loads Prompt's text from a file at a path relative to the
+	// pipeline file's directory, instead of writing it inline. Mutually
+	// exclusive with Prompt. Mapping form only (a bare scalar fix: has no
+	// room for it).
+	PromptFile string
+	Dir        string     // optional working dir, relative to the workspace
+	Tools      []ToolSpec // optional subset/addition to the agent's tool grant
+	Attempts   int        // optional whole-conversation retry count (default 1)
+	Timeout    string     // optional wall-clock deadline per fix-agent attempt
 }
 
 // UnmarshalYAML decodes a FixSpec from either a scalar (agent name) or a
-// mapping ({agent, prompt, dir, tools, attempts, timeout}) YAML node.
+// mapping ({agent, prompt, prompt_file, dir, tools, attempts, timeout}) YAML
+// node.
 func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias kinds that can't appear here
 	case yaml.ScalarNode:
 		return value.Decode(&f.Agent) //nolint:wrapcheck // yaml.v3 error is already descriptive
 	case yaml.MappingNode:
 		var m struct {
-			Agent    string     `yaml:"agent"`
-			Prompt   string     `yaml:"prompt"`
-			Dir      string     `yaml:"dir"`
-			Tools    []ToolSpec `yaml:"tools"`
-			Attempts int        `yaml:"attempts"`
-			Timeout  string     `yaml:"timeout"`
+			Agent      string     `yaml:"agent"`
+			Prompt     string     `yaml:"prompt"`
+			PromptFile string     `yaml:"prompt_file"`
+			Dir        string     `yaml:"dir"`
+			Tools      []ToolSpec `yaml:"tools"`
+			Attempts   int        `yaml:"attempts"`
+			Timeout    string     `yaml:"timeout"`
 		}
 
 		err := value.Decode(&m)
@@ -428,7 +460,8 @@ func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 			return fmt.Errorf("task fix: %w", err)
 		}
 
-		f.Agent, f.Prompt, f.Dir, f.Tools, f.Attempts, f.Timeout = m.Agent, m.Prompt, m.Dir, m.Tools, m.Attempts, m.Timeout
+		f.Agent, f.Prompt, f.PromptFile, f.Dir = m.Agent, m.Prompt, m.PromptFile, m.Dir
+		f.Tools, f.Attempts, f.Timeout = m.Tools, m.Attempts, m.Timeout
 
 		return nil
 	default:
@@ -557,6 +590,10 @@ type Step struct {
 	// if set, overrides the referenced task's Fix for this step only.
 	Task string `yaml:"task,omitempty"`
 	Run  string `yaml:"run,omitempty"`
+	// RunFile loads Run's text from a file at a path relative to the pipeline
+	// file's directory, instead of writing it inline (see LoadConfig's
+	// resolveFileIncludes). Mutually exclusive with Run. Task steps only.
+	RunFile string `yaml:"run_file,omitempty"`
 	// Fix, on a task step, names an agent to invoke when run: exits nonzero:
 	// the agent is seeded with the captured output and given the task itself
 	// as a rerun tool, then the command is re-run to decide the step. A green
@@ -576,11 +613,23 @@ type Step struct {
 	// default retry count (attempts: 3 = up to 3 total tries, including the
 	// first); 0/unset inherits the agent's default (which itself defaults
 	// to 1).
-	Agent    string     `yaml:"agent,omitempty"`
-	Prompt   string     `yaml:"prompt,omitempty"`
-	Dir      string     `yaml:"dir,omitempty"`
-	Tools    []ToolSpec `yaml:"tools,omitempty"`
-	Attempts int        `yaml:"attempts,omitempty"`
+	Agent  string `yaml:"agent,omitempty"`
+	Prompt string `yaml:"prompt,omitempty"`
+	// PromptFile supplies Prompt from a file instead of inline text, in one of
+	// two forms (see FileRef): a scalar path, relative to the pipeline file's
+	// directory, resolved at load time exactly like RunFile/SystemFile; or a
+	// {artifact, path} mapping naming a file inside an artifact this step
+	// declares in its inputs:, read at run time once that artifact is
+	// fetched. The run-time form exists only here (not for a task's run:, not
+	// for an agent's own definition/persona) — see docs/agents.md. It costs
+	// no merkle caching: an agent step's chain is already unconditionally
+	// unskippable (see internal/merkle's planNonGetNode), so there is nothing
+	// to lose by resolving this after plan time. Mutually exclusive with
+	// Prompt in the scalar form.
+	PromptFile *FileRef   `yaml:"prompt_file,omitempty"`
+	Dir        string     `yaml:"dir,omitempty"`
+	Tools      []ToolSpec `yaml:"tools,omitempty"`
+	Attempts   int        `yaml:"attempts,omitempty"`
 	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
 	// (default) means no timeout. Valid on all step kinds (a get step's
 	// timeout bounds both its check and in commands); for task/put steps it
@@ -819,6 +868,56 @@ func (h *HandoffSpec) Enabled() bool {
 	return h.Context || h.Tool
 }
 
+// FileRef is an agent step's prompt_file: — the text of the model's prompt
+// for this step, loaded from a file rather than written inline. A scalar path
+// is relative to the pipeline YAML's own directory and is resolved at load
+// time, exactly like every other *_file field (see LoadConfig's
+// resolveFileIncludes). A mapping {artifact, path} instead names a file
+// inside an artifact this step declares in its inputs: — resolved at run
+// time, once that artifact is fetched, since merkle.PlanChains hashes every
+// step before any get's `in` has run (see internal/merkle's planGetStep) and
+// so cannot see the file at plan time.
+type FileRef struct {
+	Path     string
+	Artifact string
+}
+
+// UnmarshalYAML decodes a FileRef from either a scalar (a pipeline-relative
+// path) or a mapping ({artifact, path}) YAML node — the same scalar-or-mapping
+// idiom as WhenSpec/FixSpec/HandoffSpec.
+func (f *FileRef) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias kinds that can't appear here
+	case yaml.ScalarNode:
+		return value.Decode(&f.Path) //nolint:wrapcheck // yaml.v3 error is already descriptive
+	case yaml.MappingNode:
+		var m struct {
+			Artifact string `yaml:"artifact"`
+			Path     string `yaml:"path"`
+		}
+
+		err := value.Decode(&m)
+		if err != nil {
+			return fmt.Errorf("prompt_file: %w", err)
+		}
+
+		if m.Artifact == "" || m.Path == "" {
+			return fmt.Errorf("prompt_file at line %d: an {artifact, path} mapping requires both fields", value.Line)
+		}
+
+		f.Artifact, f.Path = m.Artifact, m.Path
+
+		return nil
+	default:
+		return fmt.Errorf("prompt_file at line %d must be a path or an {artifact, path} mapping", value.Line)
+	}
+}
+
+// Deferred reports whether f names a run-time artifact file (the {artifact,
+// path} mapping form) rather than a load-time, pipeline-relative one.
+func (f *FileRef) Deferred() bool {
+	return f != nil && f.Artifact != ""
+}
+
 // StepKind is which of Get/Task/Put/Agent a Step is. See Step.Kind.
 type StepKind string
 
@@ -880,6 +979,11 @@ func LoadConfig(path string) (*Config, error) {
 		"resources", len(cfg.Resources),
 		"jobs", len(cfg.Jobs),
 	)
+
+	err = cfg.resolveFileIncludes(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
+	}
 
 	err = cfg.validate()
 	if err != nil {
