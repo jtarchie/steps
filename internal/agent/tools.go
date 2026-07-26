@@ -19,18 +19,36 @@ import (
 	"github.com/jtarchie/steps/internal/template"
 )
 
-// maxToolOutputBytes caps how much of a tool's textual output (file
-// contents, command stdout/stderr, an MCP tool's response, a sub-agent's
-// final answer, a previous_run field, a fix loop's failure output) is
-// returned to the model inline. A runaway command (cat a huge file, find /)
-// or a chatty MCP server/sub-agent would otherwise flood the model's context
-// window (cost, and possible context-limit failures). Anything beyond this
-// is spilled to a file under the step's spill directory instead of being
-// dropped — see spillOrTruncate — except read_file, which degrades to a
-// plain truncation marker (spilling a file read back out to another file
-// would be a pointless, confusing loop); its own start_line/end_line paging
-// is the way to read further into a large file.
-const maxToolOutputBytes = 4_000
+// maxToolOutputBytes caps how much of a tool's textual output (command
+// stdout/stderr, an MCP tool's response, a sub-agent's final answer, a
+// previous_run field, a fix loop's failure output) is returned to the model
+// inline. A runaway command (cat a huge file, find /) or a chatty MCP
+// server/sub-agent would otherwise flood the model's context window (cost,
+// and possible context-limit failures). Anything beyond this is spilled to a
+// file under the step's spill directory instead of being dropped — see
+// spillOrTruncate.
+//
+// This is deliberately smaller than maxReadFileBytes below: a spilled file
+// exists precisely so the model can pull it back with read_file, so the
+// read-back budget must be larger than the spill threshold, otherwise a file
+// just over this size could never be read back in one call and the model
+// loops re-reading a truncated prefix (the exact regression that motivated
+// splitting the two constants apart). Roughly mirrors the ~30K-char cap a
+// noisy command's output gets in comparable agent tooling.
+const maxToolOutputBytes = 32_000
+
+// maxReadFileBytes caps how much read_file returns in a single call — both a
+// plain read (readFileFull) and a start_line/end_line slice (readFileRange).
+// Unlike maxToolOutputBytes, read_file is never spilled to a *new* file (the
+// file already exists on disk; spilling a read back out to another file would
+// be a pointless, confusing loop), so this is a straight truncation budget,
+// with start_line/end_line paging as the way to read further into anything
+// larger. It is intentionally much larger than maxToolOutputBytes so that a
+// spilled tool output (always just over maxToolOutputBytes, up to
+// spillMaxBytes) can be read back whole in one call rather than only ever
+// yielding a truncated prefix — reading a file is an explicit, intentional
+// act by the model, unlike a command that floods output unbidden.
+const maxReadFileBytes = 100_000
 
 // maxListDirEntries caps how many entries list_dir returns inline — a
 // directory with tens of thousands of entries would otherwise flood the
@@ -154,7 +172,7 @@ var listDirDescription = fmt.Sprintf(
 
 // readFileDescription documents read_file's two modes: a plain call (no
 // start_line/end_line) reads from the top of the file, capped at
-// maxToolOutputBytes exactly as before line ranges existed; passing either
+// maxReadFileBytes exactly as before line ranges existed; passing either
 // turns it into a line-based slice instead — see execReadFile.
 const readFileDescription = "Read a UTF-8 text file's contents, given a path relative to the step's working directory." +
 	" Optionally pass start_line and/or end_line (1-indexed, inclusive) to read only a slice of a large file instead of" +
@@ -656,7 +674,7 @@ func shellToolResult(ctx context.Context, command string, env toolEnv) map[strin
 }
 
 // execReadFile resolves path and dispatches to readFileFull (the original
-// behavior: read from the top, capped at maxToolOutputBytes) or, when either
+// behavior: read from the top, capped at maxReadFileBytes) or, when either
 // start_line or end_line is supplied, readFileRange — a line-based slice so
 // a large file (or a run_shell/custom tool's spilled output, always under
 // env.dir — see toolOutputSpillDirName) can be paged through instead of only
@@ -715,22 +733,22 @@ func readFileFull(resolved string) map[string]any {
 		return map[string]any{"error": err.Error()}
 	}
 
-	// Read at most maxToolOutputBytes regardless of the file's real size, so a
+	// Read at most maxReadFileBytes regardless of the file's real size, so a
 	// huge file (a multi-GB log accidentally left in the working tree) doesn't
 	// pay full allocation and I/O cost before the truncation below would have
 	// discarded most of it anyway. stat.Size() (not the read length) drives the
 	// truncation message, so the reported byte count matches what it would have
 	// said had it read the whole file itself.
-	data, err := io.ReadAll(io.LimitReader(f, maxToolOutputBytes))
+	data, err := io.ReadAll(io.LimitReader(f, maxReadFileBytes))
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
 
 	content := string(data)
-	if stat.Size() > maxToolOutputBytes {
+	if stat.Size() > maxReadFileBytes {
 		content = fmt.Sprintf(
 			"<file_truncated>\nThis file is %s, exceeding the %s inline read limit. Showing the first %s below. Use start_line/end_line to read further into the file.\n</file_truncated>\n\n%s",
-			shell.FormatBytes(int(stat.Size())), shell.FormatBytes(maxToolOutputBytes), shell.FormatBytes(len(data)), content,
+			shell.FormatBytes(int(stat.Size())), shell.FormatBytes(maxReadFileBytes), shell.FormatBytes(len(data)), content,
 		)
 	}
 
@@ -738,7 +756,7 @@ func readFileFull(resolved string) map[string]any {
 }
 
 // maxReadFileScanBytes bounds the largest single line readFileRange will pull
-// into memory before deciding what to keep. It's well above maxToolOutputBytes
+// into memory before deciding what to keep. It's well above maxReadFileBytes
 // (the return budget) so a spilled file's long line — base64/minified/`jq -c`
 // output, which frequently has no newlines at all — is still readable
 // (byte-truncated to the budget) rather than failing the scan with a cryptic
@@ -747,7 +765,7 @@ func readFileFull(resolved string) map[string]any {
 // a spilled stream can be.
 const maxReadFileScanBytes = 10 << 20 // 10 MiB
 
-// appendRangeLine adds one line's text to buf under the maxToolOutputBytes
+// appendRangeLine adds one line's text to buf under the maxReadFileBytes
 // return budget. It reports whether any of the line was included (so the
 // caller can advance the last-line counter), whether to stop scanning (the
 // budget is exhausted), and whether anything was cut (truncation occurred).
@@ -758,8 +776,8 @@ const maxReadFileScanBytes = 10 << 20 // 10 MiB
 // paging cursor.
 func appendRangeLine(buf *strings.Builder, text []byte) (included, stop, cut bool) {
 	if buf.Len() == 0 {
-		if len(text) > maxToolOutputBytes {
-			buf.Write(text[:maxToolOutputBytes])
+		if len(text) > maxReadFileBytes {
+			buf.Write(text[:maxReadFileBytes])
 
 			return true, true, true
 		}
@@ -769,7 +787,7 @@ func appendRangeLine(buf *strings.Builder, text []byte) (included, stop, cut boo
 		return true, false, false
 	}
 
-	if buf.Len()+len(text)+1 > maxToolOutputBytes {
+	if buf.Len()+len(text)+1 > maxReadFileBytes {
 		return false, true, true
 	}
 
@@ -781,7 +799,7 @@ func appendRangeLine(buf *strings.Builder, text []byte) (included, stop, cut boo
 
 // readFileRange reads resolved line by line, returning only lines
 // [startLine, endLine] (1-indexed, inclusive; hasEnd false means "to EOF").
-// The result is still capped at maxToolOutputBytes — an unreasonably wide
+// The result is still capped at maxReadFileBytes — an unreasonably wide
 // range on a huge file degrades the same way a full read does (a
 // truncated=true flag instead of a trailing marker, since content here is
 // whole lines, not an arbitrary byte prefix), rather than buffering the
@@ -811,7 +829,7 @@ func readFileRange(resolved string, startLine, endLine int, hasEnd bool) map[str
 }
 
 // scanLineRange walks r line by line, accumulating lines [startLine, endLine]
-// (hasEnd false means "to EOF") under the maxToolOutputBytes budget via
+// (hasEnd false means "to EOF") under the maxReadFileBytes budget via
 // appendRangeLine. It returns the accumulated content, the last line actually
 // included (0 if none), and whether anything was truncated. A line longer than
 // the scan buffer degrades to truncated=true rather than a hard error — the
@@ -836,7 +854,7 @@ func scanLineRange(r io.Reader, startLine, endLine int, hasEnd bool) (content st
 }
 
 // accumulateLineRange drains scanner, collecting lines [startLine, endLine]
-// (hasEnd false means "to EOF") under the maxToolOutputBytes budget. The
+// (hasEnd false means "to EOF") under the maxReadFileBytes budget. The
 // caller inspects scanner.Err() afterward — a too-long line is left for
 // scanLineRange to classify.
 func accumulateLineRange(scanner *bufio.Scanner, startLine, endLine int, hasEnd bool) (content string, lastLine int, truncated bool) {

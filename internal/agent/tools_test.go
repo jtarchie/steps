@@ -653,12 +653,12 @@ func TestExecReadFile(t *testing.T) {
 		}
 	})
 
-	t.Run("a file over maxToolOutputBytes is truncated with a leading tag and an accurate body", func(t *testing.T) {
+	t.Run("a file over maxReadFileBytes is truncated with a leading tag and an accurate body", func(t *testing.T) {
 		t.Parallel()
 
 		bigDir := t.TempDir()
 		extra := 1234
-		big := strings.Repeat("x", maxToolOutputBytes+extra)
+		big := strings.Repeat("x", maxReadFileBytes+extra)
 
 		err := os.WriteFile(filepath.Join(bigDir, "big.txt"), []byte(big), 0o600)
 		if err != nil {
@@ -676,9 +676,9 @@ func TestExecReadFile(t *testing.T) {
 			t.Errorf("content does not start with the <file_truncated> tag; got prefix %q", content[:min(60, len(content))])
 		}
 
-		wantTail := "</file_truncated>\n\n" + strings.Repeat("x", maxToolOutputBytes)
+		wantTail := "</file_truncated>\n\n" + strings.Repeat("x", maxReadFileBytes)
 		if !strings.HasSuffix(content, wantTail) {
-			t.Errorf("content does not end with the closing tag followed by exactly %d bytes of body", maxToolOutputBytes)
+			t.Errorf("content does not end with the closing tag followed by exactly %d bytes of body", maxReadFileBytes)
 		}
 	})
 }
@@ -804,10 +804,10 @@ func TestExecReadFileLineRangeTruncatesAtByteCap(t *testing.T) {
 
 	dir := t.TempDir()
 
-	// One line per byte budget slot: 3 lines of ~maxToolOutputBytes/2 each
+	// One line per byte budget slot: 3 lines of ~maxReadFileBytes/2 each
 	// guarantees the second line alone doesn't fit alongside the first,
 	// forcing the cap to trip mid-range rather than at EOF.
-	longLine := strings.Repeat("x", maxToolOutputBytes/2)
+	longLine := strings.Repeat("x", maxReadFileBytes/2)
 	content := strings.Join([]string{longLine, longLine, longLine}, "\n")
 
 	err := os.WriteFile(filepath.Join(dir, "big.txt"), []byte(content), 0o600)
@@ -840,7 +840,7 @@ func TestExecReadFileLineRangeSingleLongLine(t *testing.T) {
 
 	// One line, no trailing newline, larger than the return budget but under
 	// the scan buffer bound — the common spilled-output shape.
-	oneLongLine := strings.Repeat("y", maxToolOutputBytes+5000)
+	oneLongLine := strings.Repeat("y", maxReadFileBytes+5000)
 
 	err := os.WriteFile(filepath.Join(dir, "blob.txt"), []byte(oneLongLine), 0o600)
 	if err != nil {
@@ -858,8 +858,8 @@ func TestExecReadFileLineRangeSingleLongLine(t *testing.T) {
 		t.Fatalf("content = %v (%T), want a string", result["content"], result["content"])
 	}
 
-	if len(content) != maxToolOutputBytes {
-		t.Errorf("content length = %d, want a %d-byte prefix of the long line", len(content), maxToolOutputBytes)
+	if len(content) != maxReadFileBytes {
+		t.Errorf("content length = %d, want a %d-byte prefix of the long line", len(content), maxReadFileBytes)
 	}
 
 	if result["truncated"] != true {
@@ -935,6 +935,62 @@ func TestExecReadFileCanReadSpilledRunShellOutput(t *testing.T) {
 
 	if readResult["content"] != "x" {
 		t.Errorf("content = %v, want %q", readResult["content"], "x")
+	}
+}
+
+// TestExecReadFileReadsSpilledFileWholeInOneCall is the regression guard for
+// the paging loop that motivated splitting maxReadFileBytes out from
+// maxToolOutputBytes: a tool output just over the spill threshold spills to a
+// file, and the model reads it back with a wide range. Because read_file's
+// budget (maxReadFileBytes) is larger than the spill threshold
+// (maxToolOutputBytes), that read must return the whole file with
+// truncated=false in a single call — not a truncated prefix the model then
+// re-reads forever from start_line 1. A file sized between the two constants
+// stands in for any spilled tool output.
+func TestExecReadFileReadsSpilledFileWholeInOneCall(t *testing.T) {
+	t.Parallel()
+
+	// Between the spill threshold and the read budget: this is exactly the
+	// size range a spilled tool output falls into when the model pulls it back.
+	if maxToolOutputBytes >= maxReadFileBytes {
+		t.Fatalf("maxToolOutputBytes (%d) must be < maxReadFileBytes (%d) for a spilled file to be readable whole",
+			maxToolOutputBytes, maxReadFileBytes)
+	}
+
+	dir := t.TempDir()
+
+	lineCount := 500
+	var b strings.Builder
+
+	for i := range lineCount {
+		// ~50 bytes/line * 500 lines ≈ 25 KB: over maxToolOutputBytes (32 KB is
+		// the threshold, so bump the line width to clear it) yet well under the
+		// read budget.
+		fmt.Fprintf(&b, "line %04d: %s\n", i, strings.Repeat("x", 60))
+	}
+
+	body := b.String()
+	if len(body) <= maxToolOutputBytes {
+		t.Fatalf("test fixture is %d bytes, want it over the %d-byte spill threshold", len(body), maxToolOutputBytes)
+	}
+
+	err := os.WriteFile(filepath.Join(dir, "spilled.txt"), []byte(body), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := execReadFile(context.Background(), map[string]any{"path": "spilled.txt", "start_line": float64(1), "end_line": float64(100000)}, testEnv(dir))
+	if result["error"] != nil {
+		t.Fatalf("read_file = error: %v", result["error"])
+	}
+
+	if result["truncated"] != false {
+		t.Errorf("truncated = %v, want false — a spilled-file-sized read must return whole, not loop the model on a prefix", result["truncated"])
+	}
+
+	content, _ := result["content"].(string)
+	if len(content) != len(strings.TrimRight(body, "\n")) {
+		t.Errorf("content length = %d, want the whole %d-byte body (minus the trailing newline)", len(content), len(body))
 	}
 }
 
