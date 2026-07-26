@@ -37,7 +37,7 @@ resources:
 ## Additional feature details
 
 - **Secret-shaped vars need the same treatment as `api_key_env`.** The repo's
-  own trust-boundary rules (see CLAUDE.md) draw a hard line: anything
+  own trust-boundary rules draw a hard line: anything
   secret-adjacent is either folded into hashed content as an *env var name*
   (never a value) or kept in a token file outside `.steps/` entirely. A
   `((var))` sourced from `--vars-file` with a literal secret value would, per

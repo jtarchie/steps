@@ -1028,7 +1028,7 @@ func (c *Config) validate() error {
 // mcp_servers:-related check — split out of validate() itself to keep that
 // function's branch count down (cyclop); all of it is trust-boundary
 // validation around how a config references an external system's endpoint
-// and credentials (see CLAUDE.md's Trust Boundaries section).
+// and credentials.
 func (c *Config) validateCredentialHandling() error {
 	err := c.validateAgentEndpoints()
 	if err != nil {

@@ -256,7 +256,7 @@ func TestDebugToolResultPreviewTruncatesLargeContent(t *testing.T) {
 
 // TestExecuteBudgetedToolLogsResultPreviewAtDebug proves the result preview
 // only reaches the log at debug level (matching this codebase's "debug
-// logging is opt-in" contract — see CLAUDE.md's Trust Boundaries section)
+// logging is opt-in" contract)
 // and, when it does, carries the truncation marker for an oversized result
 // without duplicating error/exit_code inside it.
 func TestExecuteBudgetedToolLogsResultPreviewAtDebug(t *testing.T) {

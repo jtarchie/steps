@@ -12,22 +12,32 @@ rather than Claude. See its own header comment for the full rationale; the
 short version:
 
 - **No free CLAUDE.md pickup.** `claude` reads it from the checkout's cwd
-  automatically; an `agent:` step doesn't, so every persona/prompt in
-  `pipeline-agent.yml` tells the model to `cat` it itself, including the
-  specific lesson (`CLAUDE.md`'s "Guidance for Claude Agents" #8) a real
-  code review found the *first* self-build run needed and didn't get: a
-  behavior added to one of several similar code paths (get/task/put/agent
-  step handling) but not the others.
+  automatically; an `agent:` step doesn't, so the `stories` resource's `in:`
+  materializes a copy of CLAUDE.md (and the story doc) into the artifact
+  instead, so built-in `read_file` (100,000-byte cap) reads it whole in one
+  call rather than a shell round-trip every story needs regardless. This is
+  how every persona/prompt in `pipeline-agent.yml` gets the same standing
+  rules a real code review found the *first* self-build run needed and
+  didn't get: a behavior added to one of several similar code paths
+  (get/task/put/agent step handling) but not the others.
 - **No `dir:` that reaches the real checkout.** `read_file`/`list_dir`/
   `write_file` are confined to the agent step's own ephemeral workspace
   (symlink-escape checked), unlike a task's `run:`, which can `cd` anywhere.
-  Every agent below is granted a custom `repo_shell` tool instead — it
-  always runs `cd "$(cat stories/repo)" && <command>` for you, since
-  `run_shell` itself has no such confinement (by design, the same trade
-  `internal/shell.HostRunner` makes). `coder` also gets `write_repo_file`, a
-  whole-file write where content is an ordinary tool argument, since local
+  Each agent below is granted a small set of custom, narrowly-named tools
+  instead of one do-everything shell: `story_brief` (the bootstrap, one call,
+  no arguments), `read_repo_file`/`read_repo_lines`/`list_repo_dir` (reading,
+  always `cd "$(cat stories/repo)"` first), and a role-specific write tool
+  whose output path is derived from `stories/num` in shell — never a model
+  argument. Only `coder` gets a general-purpose `repo_shell` (git, tests,
+  lint, build, edits) and `write_repo_file` (arbitrary path, content as an
+  ordinary tool argument rather than a hand-escaped heredoc, since local
   models tend to mis-escape large multi-line heredocs assembled inside a
-  JSON tool-call string.
+  JSON tool-call string); `planner` and `reviewer` each write exactly one
+  file and have no shell at all. Code *search* (finding a symbol, every call
+  site, a package's API) is pushed onto `gopls`' own MCP server
+  (`gopls mcp`, run as a local stdio subprocess) instead of `grep -rn` — see
+  `pipeline-agent.yml`'s own header comment for gopls' tool set and why it
+  covers navigation but not file reading or general edits.
 - **`verdicts:`/`to:`/`handoff:` replace the hand-rolled PASS/FAIL grep and
   critique-file re-read** `pipeline.yml`'s `critique` task needed, because
   those are agent-only mechanisms `claude -p` (a plain shell command from
@@ -37,11 +47,15 @@ short version:
 
 Same "before running this for real" cautions apply as `pipeline.yml`
 (`source.repo` needs to point at a dedicated worktree, it makes up to 14 real
-commits, etc. — see below) plus one more: nothing in `steps`' tool-grant
-system can restrict what a granted `repo_shell`/`write_repo_file` call
-actually does, the way `claude`'s `--allowedTools "Bash(git diff*)"` scopes
-`critique` to read-only commands — the boundary here is the reviewer
-persona's instructions, not a hard guarantee.
+commits, etc. — see below) plus one more: `planner` and `reviewer` are
+structurally limited to writing one fixed file each (no `repo_shell`, no
+general `write_repo_file` — see above), but `coder`'s `repo_shell` is exactly
+as unconfined as `claude`'s bare `Bash` would be, the same
+"no path/command confinement by design" trade `internal/shell.HostRunner`
+itself documents — nothing in `steps`' tool-grant system can restrict what a
+granted `repo_shell`/`write_repo_file` call actually does, the way `claude`'s
+`--allowedTools "Bash(git diff*)"` scopes `critique` to read-only commands.
+The boundary there is `coder`'s persona instructions, not a hard guarantee.
 
 ## How it's wired
 
@@ -86,13 +100,12 @@ persona's instructions, not a hard guarantee.
   build/test/fix) rather than reimplementing one against `internal/agent`'s
   simpler tool set. It also means `CLAUDE.md` is picked up automatically by
   every invocation (each `claude -p` runs with the real checkout as its cwd
-  — see "`source.repo`" below), so the package dependency graph, merkle
-  value-gating, and trust-boundary rules don't need to be restated in every
-  prompt — the plan/execute/critique prompts point back to it explicitly,
-  but the enforcement burden is only one file. No extra plumbing was needed
-  for credentials either: `internal/shell.HostRunner` allowlists `HOME` (see
-  CLAUDE.md's trust-boundary notes), and `claude` CLI reads its stored auth
-  from there.
+  — see "`source.repo`" below), so the package dependency graph and project
+  layout it covers don't need to be restated in every prompt — the
+  plan/execute/critique prompts point back to it explicitly, but the
+  enforcement burden is only one file. No extra plumbing was needed for
+  credentials either: `internal/shell.HostRunner` allowlists `HOME`, and
+  `claude` CLI reads its stored auth from there.
 - **`source.repo`**: `steps` always runs task steps in a fresh, disposable
   temp workspace — never the directory `steps` was invoked from, with or
   without a `workspace:` block — and `version: every` gives each *story* its

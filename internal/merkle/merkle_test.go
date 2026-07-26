@@ -50,7 +50,7 @@ func mustPlanRootHash(t *testing.T, cfg *config.Config, steps []config.Step) str
 	return chains[0].RootHash
 }
 
-// TestPlanChainsRunFileHashesLikeInline is the CLAUDE.md rule-1 proof for the
+// TestPlanChainsRunFileHashesLikeInline is the value-gating rule-1 proof for the
 // load-time run_file: include: a pipeline loaded through config.LoadConfig
 // with a task's run: supplied by a sibling file must hash byte-identically to
 // the same pipeline written with that text inline. resolveFileIncludes runs

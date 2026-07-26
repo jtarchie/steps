@@ -37,7 +37,7 @@ Project name is "steps," lowercase. No logo or visual identity beyond the name. 
 ## Evidence on Hand
 
 - `README.md` — quick start and command overview.
-- `CLAUDE.md` — architecture, build/test constraints, trust-boundary notes.
+- `CLAUDE.md` — lean onboarding: architecture and build/test constraints.
 - `docs/` — feature-by-feature reference (agents, control flow, infra, workspace, templating, MCP).
 - `examples/` — runnable example pipelines, several self-verifying via `assert:` + `steps test`.
 - No testimonials, published-user stories, or usage benchmarks exist yet; do not fabricate any for an open-source project still early in adoption.

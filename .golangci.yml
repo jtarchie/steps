@@ -167,9 +167,8 @@ linters:
             # shell is imported only for HostEnv: a stdio (command:) mcp
             # server is a host-executed subprocess and must see exactly the
             # same filtered environment every other host-executed command
-            # does, rather than a second, drifting copy of the allowlist
-            # (see CLAUDE.md's Trust Boundaries + "Guidance for Claude
-            # Agents" #8). shell is a stdlib-only leaf, so this adds no
+            # does, rather than a second, drifting copy of the allowlist.
+            # shell is a stdlib-only leaf, so this adds no
             # cycle — the same edge internal/resource already has.
             - "github.com/jtarchie/steps/internal/shell"
         # merkle plans/hashes steps; it depends on resource (to resolve get

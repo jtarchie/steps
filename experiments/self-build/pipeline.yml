@@ -131,8 +131,8 @@ jobs:
 
       claude -p "Read $plan (the implementation plan for $story) and
         implement it end to end: code, tests, and doc/example updates.
-        Follow CLAUDE.md's standing rules (package dependency graph, merkle
-        value-gating, trust-boundary notes) exactly. Before you consider
+        Follow CLAUDE.md's standing rules (package dependency graph, project
+        layout) exactly. Before you consider
         yourself done, run: go fmt ./... && go mod tidy && golangci-lint run
         && go test ./... && go build -v -- and keep fixing until all four
         are clean. Do not commit.$feedback" \
@@ -180,7 +180,7 @@ jobs:
       # siblings, an added config field that was validated but never wired
       # into the code path it configures, and a doc comment that contradicted
       # the implementation next to it. This prompt now asks explicitly for
-      # that class of bug -- see CLAUDE.md's "Guidance for Claude Agents" #8.
+      # that class of bug.
       claude -p "Read $story, then read the uncommitted working-tree changes
         (git diff, git status) against main. Judge whether this story is
         fully AND CORRECTLY implemented, not merely plausible-looking:

@@ -199,7 +199,7 @@ func builtinAgentTools(image string) map[string]builtinTool {
 				Parameters: &genai.Schema{
 					Type: genai.TypeObject,
 					Properties: map[string]*genai.Schema{
-						"path":       {Type: genai.TypeString, Description: "File path, relative to the working directory."},
+						"path":       {Type: genai.TypeString, Description: "File path, relative to the working directory (or an absolute path inside it, e.g. one returned by a spilled tool output's pointer message)."},
 						"start_line": {Type: genai.TypeInteger, Description: "First line to return, 1-indexed and inclusive. Defaults to 1."},
 						"end_line":   {Type: genai.TypeInteger, Description: "Last line to return, 1-indexed and inclusive. Defaults to the end of the file."},
 					},
@@ -214,7 +214,7 @@ func builtinAgentTools(image string) map[string]builtinTool {
 				Description: listDirDescription,
 				Parameters: &genai.Schema{
 					Type:       genai.TypeObject,
-					Properties: map[string]*genai.Schema{"path": {Type: genai.TypeString, Description: "Directory path, relative to the working directory."}},
+					Properties: map[string]*genai.Schema{"path": {Type: genai.TypeString, Description: "Directory path, relative to the working directory (or an absolute path inside it)."}},
 				},
 			},
 			impl: execListDir,
@@ -238,7 +238,7 @@ func builtinAgentTools(image string) map[string]builtinTool {
 				Parameters: &genai.Schema{
 					Type: genai.TypeObject,
 					Properties: map[string]*genai.Schema{
-						"path":    {Type: genai.TypeString, Description: "File path, relative to the working directory."},
+						"path":    {Type: genai.TypeString, Description: "File path, relative to the working directory (or an absolute path inside it)."},
 						"content": {Type: genai.TypeString, Description: "The text content to write."},
 						"append":  {Type: genai.TypeBoolean, Description: "If true, append to the file instead of overwriting it. Defaults to false."},
 					},
@@ -415,8 +415,8 @@ func visibleParams(params []string, pinned map[string]string) []string {
 // agentToolArgPattern matches a {{ .args.NAME }} reference and everything up
 // to the closing "}}", so it also matches the project's own documented safe
 // idiom for passing a model-supplied value through a pipeline function —
-// {{ .args.repo | shellquote }} (see CLAUDE.md's Template Rendering
-// section and examples/agents.yml's post_review tool) — not just the bare
+// {{ .args.repo | shellquote }} (see docs/templating.md's shellquote idiom
+// and examples/agents.yml's post_review tool) — not just the bare
 // form. [^}]* deliberately doesn't try to parse the pipeline itself (a
 // function name, further pipe stages, quoted literal arguments); it only
 // needs to not stop matching before the "}}" that ends the reference. A tool
@@ -456,12 +456,26 @@ func inferToolParams(run string) []string {
 // "../../etc/passwd" style path) and, once a target actually exists, by
 // symlink (see rejectSymlinkEscape) — so it can't be used to read/list
 // outside the step's working directory.
+//
+// rel may be absolute: an oversized run_shell/custom-tool output spills to a
+// file under the working directory and hands the model that file's absolute
+// path (shell.SpillPointerMessage), and the working directory itself is an
+// absolute path the model is told in its own system message
+// (agentOperatingNote) — both are spellings of a location already inside
+// dir, not an escape attempt. IsAbs used to reject both outright, which is
+// why maxReadFileBytes' stated purpose ("a spilled tool output can be read
+// back whole in one call") never actually worked: the containment check
+// below is what makes an absolute path safe, so restricting rel to a
+// relative spelling was never load-bearing for that purpose — it only
+// blocked the legitimate case along with the escaping one. An absolute path
+// outside dir is still rejected by the same containment check every
+// relative path already goes through.
 func resolveAgentPath(dir, rel string) (string, error) {
-	if filepath.IsAbs(rel) {
-		return "", fmt.Errorf("path %q must be relative", rel)
+	resolved := filepath.Clean(rel)
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Clean(filepath.Join(dir, rel))
 	}
 
-	resolved := filepath.Clean(filepath.Join(dir, rel))
 	base := filepath.Clean(dir)
 
 	if resolved != base && !strings.HasPrefix(resolved, base+string(os.PathSeparator)) {

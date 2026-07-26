@@ -413,7 +413,7 @@ func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, env too
 // preview of the rest of the result via debugToolResultPreview — the gap
 // that once made a model silently abandoning a granted tool for a worse
 // fallback undiagnosable without an out-of-band probe). Debug logging is
-// opt-in (see CLAUDE.md's Trust Boundaries section), so this is silent
+// opt-in, so this is silent
 // unless an operator has already asked to see command/output content at
 // that level; call.Args/the result can hold a model-authored value (e.g. a
 // custom tool's args, or write_file's content), no different from the full

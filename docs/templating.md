@@ -14,4 +14,4 @@ Since a rendered template runs via `sh -c`, any value interpolated into it that 
 
 Don't add surrounding `"..."` — `shellquote` already quotes only when needed. This matters most for LLM- or PR-authored values (e.g. a review body): without it, a body containing `` `replace` `` gets command-substituted by the shell and posted with those words silently missing. See `examples/agents.yml`'s `post_review` tool.
 
-This is the safe idiom CLAUDE.md's trust-boundary notes assume when reasoning about the custom-tool arg-inference regex — see that file's "Trust Boundaries" section for why the regex has to keep matching the piped form.
+This idiom is why the custom-tool arg-inference regex has to keep matching the piped form, not just a bare `{{ .args.NAME }}`.

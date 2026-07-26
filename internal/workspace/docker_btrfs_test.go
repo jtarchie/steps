@@ -23,7 +23,7 @@ const unavailableMarker = "__STEPS_DOCKER_BTRFS_UNAVAILABLE__"
 // non-hermetic — they pull a ~1GB image, apt-get packages over the network,
 // and need a --privileged container to mount a loopback btrfs image — so
 // they must NOT run as part of a plain `go test ./...` (which CLAUDE.md
-// expects to finish in <5s). Set STEPS_TEST_DOCKER=1 to run them, mirroring
+// expects to finish in well under a minute). Set STEPS_TEST_DOCKER=1 to run them, mirroring
 // how workspace_btrfs_linux_test.go gates real-btrfs tests behind
 // STEPS_TEST_BTRFS_ROOT. The btrfs backend also has fast, hermetic unit
 // coverage (workspace_test.go, via the copy backend, over the same shared

@@ -203,7 +203,7 @@ func TestBuildAgentToolsCustom(t *testing.T) {
 
 // TestBuildAgentToolsCustomShellquotePiped guards the security finding that
 // agentToolArgPattern only matched a bare {{ .args.NAME }}, missing
-// CLAUDE.md's own documented safe idiom for a model-supplied value
+// docs/templating.md's own documented safe idiom for a model-supplied value
 // ({{ .args.repo | shellquote }}) — a tool written the recommended way got
 // an empty inferred parameter list, so the model's schema never advertised
 // the argument, and execCustomTool's missing-argument check (built from the
@@ -480,12 +480,12 @@ func TestResolveAgentPath(t *testing.T) {
 		}
 	})
 
-	t.Run("absolute path rejected", func(t *testing.T) {
+	t.Run("absolute path escaping dir is rejected", func(t *testing.T) {
 		t.Parallel()
 
 		_, err := resolveAgentPath(dir, "/etc/passwd")
 		if err == nil {
-			t.Error("expected an error for an absolute path")
+			t.Error("expected an error for an absolute path outside dir")
 		}
 	})
 
@@ -537,6 +537,75 @@ func TestResolveAgentPath(t *testing.T) {
 		_, err = resolveAgentPath(symlinkDir, "leak/secret.txt")
 		if err == nil {
 			t.Error("expected an error for a path resolving outside dir via a symlink")
+		}
+	})
+}
+
+// TestResolveAgentPathAbsolute covers rel spelled as an absolute path — the
+// form a model actually receives from a spilled tool output's pointer
+// message (shell.SpillPointerMessage) or from its own system message
+// (agentOperatingNote, which states the absolute working directory).
+// resolveAgentPath used to reject every absolute path outright; it must now
+// resolve one inside dir exactly like its relative spelling would, while
+// still rejecting one outside dir — lexically or via a symlink.
+func TestResolveAgentPathAbsolute(t *testing.T) {
+	t.Parallel()
+
+	t.Run("absolute path within dir resolves", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		abs := filepath.Join(dir, "sub/file.txt")
+
+		got, err := resolveAgentPath(dir, abs)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if got != abs {
+			t.Errorf("got %q, want %q", got, abs)
+		}
+	})
+
+	t.Run("absolute path that is dir itself resolves", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+
+		got, err := resolveAgentPath(dir, dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if got != filepath.Clean(dir) {
+			t.Errorf("got %q, want %q", got, filepath.Clean(dir))
+		}
+	})
+
+	// The same escape TestResolveAgentPath's "symlink escaping dir is
+	// rejected" case covers, spelled as an absolute path: still rejected by
+	// rejectSymlinkEscape, not just the lexical check.
+	t.Run("absolute path escaping dir via a symlink is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		symlinkDir := t.TempDir()
+		outside := t.TempDir()
+
+		secret := filepath.Join(outside, "secret.txt")
+
+		err := os.WriteFile(secret, []byte("should not leak"), 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = os.Symlink(outside, filepath.Join(symlinkDir, "leak"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = resolveAgentPath(symlinkDir, filepath.Join(symlinkDir, "leak/secret.txt"))
+		if err == nil {
+			t.Error("expected an error for an absolute path resolving outside dir via a symlink")
 		}
 	})
 }
@@ -894,14 +963,16 @@ func TestExecReadFileLineRangeLineOverScanBound(t *testing.T) {
 }
 
 // TestExecReadFileCanReadSpilledRunShellOutput is an end-to-end check of the
-// fix this feature exists for: read_file was confined to the step's working
-// directory (resolveAgentPath), but a run_shell/custom tool's spilled output
-// used to live in a top-level os.MkdirTemp dir outside it — reachable only
-// via run_shell itself. newToolOutputSpillDir now nests the spill directory
-// under the working directory instead, so the same path run_shell's pointer
-// message names (once made relative to the working directory, which the
-// model already knows from its system message — see buildSystemMessage) is
-// one read_file can open.
+// round-trip read_file/spilling exists for: a run_shell/custom tool's
+// oversized output spills to a file under the step's working directory
+// (newToolOutputSpillDir), and the pointer message the model actually
+// receives (shell.SpillPointerMessage) names that file by its ABSOLUTE path
+// — not a path relative to the working directory. read_file used to reject
+// any absolute path outright (resolveAgentPath's old IsAbs check), so the
+// round-trip the 100_000-byte maxReadFileBytes budget was sized for could
+// never actually complete: the model had no relative spelling to fall back
+// to. This test feeds execReadFile the exact absolute path a model would
+// receive, unmodified, and requires it to succeed.
 func TestExecReadFileCanReadSpilledRunShellOutput(t *testing.T) {
 	t.Parallel()
 
@@ -923,14 +994,9 @@ func TestExecReadFileCanReadSpilledRunShellOutput(t *testing.T) {
 
 	absPath := extractSpillPath(t, stdout)
 
-	relPath, err := filepath.Rel(dir, absPath)
-	if err != nil || strings.HasPrefix(relPath, "..") {
-		t.Fatalf("spill path %q is not inside the working directory %q (rel = %q, err = %v)", absPath, dir, relPath, err)
-	}
-
-	readResult := execReadFile(context.Background(), map[string]any{"path": relPath, "start_line": float64(1), "end_line": float64(1)}, env)
+	readResult := execReadFile(context.Background(), map[string]any{"path": absPath, "start_line": float64(1), "end_line": float64(1)}, env)
 	if readResult["error"] != nil {
-		t.Fatalf("read_file(%q) = error: %v, want the spilled file to be readable", relPath, readResult["error"])
+		t.Fatalf("read_file(%q) = error: %v, want the spilled file to be readable by the exact absolute path in the pointer message", absPath, readResult["error"])
 	}
 
 	if readResult["content"] != "x" {

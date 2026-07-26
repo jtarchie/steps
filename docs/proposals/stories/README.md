@@ -41,7 +41,7 @@ it does.
   vars-file and a cost-budget's spend total both risk landing sensitive or
   operational data in `state.db` if not deliberately excluded from hashing —
   worth reviewing together against the existing `api_key_env`/`endpoint:`
-  precedent in CLAUDE.md's trust-boundary notes.
+  precedent this repo's trust-boundary rules already set elsewhere.
 - **007, 011, and 013 all need an outbound notification path** (webhook
   received, approval pending, breaker tripped) — likely worth designing once
   as a shared "notify" mechanism (e.g. a hook-triggered `put`) rather than

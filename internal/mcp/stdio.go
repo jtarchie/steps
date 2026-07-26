@@ -49,8 +49,8 @@ const stderrLoggerMaxLine = 8 << 10
 
 // stderrLogger turns a stdio mcp server's stderr into newline-delimited
 // slog debug records tagged with the server name. Debug level, deliberately
-// — per CLAUDE.md's Trust Boundaries note, command/output logging is
-// opt-in (--log-level=debug) and off by default — but discarding stderr
+// — command/output logging is opt-in (--log-level=debug) and off by
+// default — but discarding stderr
 // entirely, which is what the SDK does if cmd.Stderr is left unset, makes a
 // server that fails to start (e.g. a missing dependency) undiagnosable.
 //
