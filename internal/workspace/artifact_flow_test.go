@@ -84,6 +84,75 @@ func TestValidateArtifactFlowDir(t *testing.T) {
 	})
 }
 
+// TestValidateArtifactFlowPromptFileArtifact checks a run-time prompt_file:
+// {artifact, path}'s artifact against both the plan (fetched/produced
+// somewhere) and the step's own declared inputs: (materialized into its
+// working directory) — see checkPromptFileArtifactAvailable.
+func TestValidateArtifactFlowPromptFileArtifact(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Agents: []config.Agent{{Name: "reviewer"}},
+	}
+
+	t.Run("artifact fetched and declared as an input passes", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{Name: "j", Plan: []config.Step{
+			{Get: "repo"},
+			{Agent: "reviewer", Inputs: config.Inputs("repo"), PromptFile: &config.FileRef{Artifact: "repo", Path: "PROMPT.md"}},
+		}}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err != nil {
+			t.Fatalf("err = %v, want nil (repo is fetched and declared as an input)", err)
+		}
+	})
+
+	t.Run("artifact never fetched errors", func(t *testing.T) {
+		t.Parallel()
+
+		// Inputs deliberately doesn't declare "repo": if it did,
+		// checkInputsAvailable would reject it first (a plain undeclared-input
+		// error), masking the prompt_file-specific check this case targets.
+		job := &config.Job{Name: "j", Plan: []config.Step{
+			{Agent: "reviewer", Inputs: config.Inputs(), PromptFile: &config.FileRef{Artifact: "repo", Path: "PROMPT.md"}},
+		}}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err == nil || !strings.Contains(err.Error(), "prompt_file artifact") {
+			t.Fatalf("err = %v, want a prompt_file-artifact-not-available error", err)
+		}
+	})
+
+	t.Run("artifact fetched but not declared as an input errors", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{Name: "j", Plan: []config.Step{
+			{Get: "repo"},
+			{Agent: "reviewer", Inputs: config.Inputs(), PromptFile: &config.FileRef{Artifact: "repo", Path: "PROMPT.md"}},
+		}}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err == nil || !strings.Contains(err.Error(), "must also be declared in this step's inputs") {
+			t.Fatalf("err = %v, want a must-be-declared error", err)
+		}
+	})
+
+	t.Run("load-time scalar form names no artifact and is unaffected", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{Name: "j", Plan: []config.Step{
+			{Agent: "reviewer", Inputs: config.Inputs(), PromptFile: &config.FileRef{Path: "prompts/review.md"}},
+		}}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err != nil {
+			t.Fatalf("err = %v, want nil (a load-time prompt_file: names no artifact)", err)
+		}
+	})
+}
+
 func TestFirstPathComponent(t *testing.T) {
 	t.Parallel()
 

@@ -5,8 +5,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -99,6 +101,101 @@ func testStepSpace(t *testing.T) workspace.StepSpace {
 	}
 
 	return space
+}
+
+func TestResolveDeferredPrompt(t *testing.T) {
+	t.Parallel()
+
+	spaceDir := t.TempDir()
+
+	err := os.MkdirAll(filepath.Join(spaceDir, "repo"), 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(filepath.Join(spaceDir, "repo", "PROMPT.md"), []byte("Review this.\n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	step := config.Step{Agent: "reviewer", PromptFile: &config.FileRef{Artifact: "repo", Path: "PROMPT.md"}}
+
+	got, err := resolveDeferredPrompt(spaceDir, step)
+	if err != nil {
+		t.Fatalf("resolveDeferredPrompt: %v", err)
+	}
+
+	if want := "Review this.\n"; got != want {
+		t.Errorf("resolveDeferredPrompt = %q, want %q", got, want)
+	}
+}
+
+func TestResolveDeferredPromptRejectsInlinePromptAlsoSet(t *testing.T) {
+	t.Parallel()
+
+	step := config.Step{Agent: "reviewer", Prompt: "inline", PromptFile: &config.FileRef{Artifact: "repo", Path: "PROMPT.md"}}
+
+	_, err := resolveDeferredPrompt(t.TempDir(), step)
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("err = %v, want a mutually-exclusive error", err)
+	}
+}
+
+func TestResolveDeferredPromptRejectsEmptyFile(t *testing.T) {
+	t.Parallel()
+
+	spaceDir := t.TempDir()
+
+	err := os.MkdirAll(filepath.Join(spaceDir, "repo"), 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(filepath.Join(spaceDir, "repo", "PROMPT.md"), []byte("   \n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	step := config.Step{Agent: "reviewer", PromptFile: &config.FileRef{Artifact: "repo", Path: "PROMPT.md"}}
+
+	_, err = resolveDeferredPrompt(spaceDir, step)
+	if err == nil || !strings.Contains(err.Error(), "is empty") {
+		t.Fatalf("err = %v, want an empty-file error", err)
+	}
+}
+
+// TestResolveDeferredPromptRejectsSymlinkEscape proves resolveDeferredPrompt
+// inherits resolveAgentPath's symlink confinement (already exhaustively
+// tested at that level in tools_test.go) rather than re-implementing it — an
+// artifact's contents are untrusted, and a symlink planted inside it (e.g. by
+// a malicious repo) must not be followed outside the step's space.
+func TestResolveDeferredPromptRejectsSymlinkEscape(t *testing.T) {
+	t.Parallel()
+
+	spaceDir := t.TempDir()
+	outside := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("do not leak\n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.MkdirAll(filepath.Join(spaceDir, "repo"), 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.Symlink(outside, filepath.Join(spaceDir, "repo", "leak"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	step := config.Step{Agent: "reviewer", PromptFile: &config.FileRef{Artifact: "repo", Path: "leak/secret.txt"}}
+
+	_, err = resolveDeferredPrompt(spaceDir, step)
+	if err == nil || !strings.Contains(err.Error(), "escapes the working directory") {
+		t.Fatalf("err = %v, want an escape-rejected error", err)
+	}
 }
 
 func TestPreparedAgentStepCloseRemovesSpillDir(t *testing.T) {

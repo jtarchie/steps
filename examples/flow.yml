@@ -1,10 +1,11 @@
-# Control flow, all in one self-verifying pipeline. Three opt-in features that
+# Control flow, all in one self-verifying pipeline. Four opt-in features that
 # shape which steps run and in what order — each modelless, so the whole file
 # runs offline as a regression fixture:
 #
 #   when:              gate whether a step runs at all (exit code: 0 run, nonzero skip)
 #   to: / max_visits:  route to another step by outcome, incl. bounded backward loops
 #   hooks              on_success / on_failure / ensure reactions (observers)
+#   run_file:          load a task's run: from a file next to this pipeline
 #
 # All verification is `assert.execution`: each job names the exact ordered set
 # of task/hook names it must run, and the top-level assert names the jobs. A
@@ -27,6 +28,8 @@ assert:
     # hooks jobs
     - passing
     - failing
+    # run_file: job
+    - external-run-file
 
 jobs:
 # ─── when: (conditional steps) ──────────────────────────────────────────────
@@ -177,3 +180,17 @@ jobs:
     run: echo "job failed"
   assert:
     execution: [work, apologize, log, cleanup, alert]
+
+# ─── run_file: (external task config) ───────────────────────────────────────
+# A task's run: can be loaded from a file next to the pipeline instead of
+# written inline (see docs/agents.md's "External files" section) — useful for
+# a longer shell script. Resolved once, at LoadConfig time, before any
+# hashing or validation, so it behaves exactly like an inline run: from here
+# on — including merkle caching (edit tasks/hello.sh and the cache busts,
+# rename it with identical contents and it doesn't).
+- name: external-run-file
+  plan:
+  - task: hello
+    run_file: tasks/hello.sh
+  assert:
+    execution: [hello]

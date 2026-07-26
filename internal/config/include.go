@@ -164,7 +164,7 @@ func loadTaskDocument(baseDir, context, path string) (Task, error) {
 	}
 
 	if doc.File != "" || doc.RunFile != "" {
-		return Task{}, fmt.Errorf("%s: file %q: an included task document may not itself use file:/run_file:", context, path)
+		return Task{}, fmt.Errorf("%s: file %q: an included task document may not itself set file or run_file", context, path)
 	}
 
 	return doc, nil
@@ -234,7 +234,7 @@ func loadAgentDocument(baseDir, context, path string) (Agent, error) {
 	}
 
 	if doc.File != "" || doc.SystemFile != "" {
-		return Agent{}, fmt.Errorf("%s: file %q: an included agent document may not itself use file:/system_file:", context, path)
+		return Agent{}, fmt.Errorf("%s: file %q: an included agent document may not itself set file or system_file", context, path)
 	}
 
 	return doc, nil
@@ -245,8 +245,15 @@ func loadAgentDocument(baseDir, context, path string) (Agent, error) {
 // only when the entry declares no source: at all) rather than merged
 // field-by-field, since a mix of an inline model: with a document's endpoint:
 // is more likely a mistake than an intended override. a.Name is never
-// touched: the entry, not the document, names the agent.
+// touched: the entry, not the document, names the agent. Split into two
+// halves purely to stay under the linter's cyclomatic-complexity budget —
+// there is no grouping significance to the split.
 func mergeAgentDocument(a *Agent, doc Agent) {
+	mergeAgentIdentity(a, doc)
+	mergeAgentDials(a, doc)
+}
+
+func mergeAgentIdentity(a *Agent, doc Agent) {
 	if a.Source == (AgentSource{}) {
 		a.Source = doc.Source
 	}
@@ -259,6 +266,12 @@ func mergeAgentDocument(a *Agent, doc Agent) {
 		a.System = doc.System
 	}
 
+	if len(a.Tools) == 0 {
+		a.Tools = doc.Tools
+	}
+}
+
+func mergeAgentDials(a *Agent, doc Agent) {
 	if a.Temperature == nil {
 		a.Temperature = doc.Temperature
 	}
@@ -281,10 +294,6 @@ func mergeAgentDocument(a *Agent, doc Agent) {
 
 	if a.CompactAfterTokens == nil {
 		a.CompactAfterTokens = doc.CompactAfterTokens
-	}
-
-	if len(a.Tools) == 0 {
-		a.Tools = doc.Tools
 	}
 }
 

@@ -98,7 +98,65 @@ A top-level `tasks:` list (mirroring `resources:`/`agents:`) lets a `run:`/`fix:
 - **`run:` present** → the step is inline; `tasks:` is never consulted, even if a same-named entry exists there.
 - **`run:` absent** → `task:` instead names a `tasks:` entry, and its `run`/`fix` are used. The step's own `fix:`, if set, overrides the referenced task's `fix:` for that step only.
 
-This resolution (`Config.ResolveTask`) runs identically at plan time and run time, so a task's merkle hash is always computed from its *resolved* `run:` string — an inline task's hash is unaffected. An undefined reference is an ordinary `FindTask` error at plan time. An agent step's connection/dials/tool-grant resolve the same way, via `Config.ResolveAgentInvocation`.
+This resolution (`Config.ResolveTask`) runs identically at plan time and run time, so a task's merkle hash is always computed from its *resolved* `run:` string — an inline task's hash is unaffected (a `run_file:` include resolves before that hash is ever computed; see below). An undefined reference is an ordinary `FindTask` error at plan time. An agent step's connection/dials/tool-grant resolve the same way, via `Config.ResolveAgentInvocation`.
+
+## External files: `run_file:`, `system_file:`, `prompt_file:`, and `file:`
+
+A task's `run:`, an agent's `system:` persona, an agent step's `prompt:`, and a `fix:`'s `prompt:` can all be loaded from a file instead of written inline — useful since a persona or prompt is often long freeform prose, and a `run:` a full shell program:
+
+```yaml
+tasks:
+- name: unit
+  run_file: ci/tasks/unit.sh      # loads Task.Run from a file
+
+agents:
+- name: reviewer
+  source: { model: openrouter/anthropic/claude-3.5-sonnet }
+  system_file: prompts/reviewer.md  # loads Agent.System from a file
+
+jobs:
+- name: build
+  plan:
+  - agent: reviewer
+    prompt_file: prompts/review.md  # loads Step.Prompt from a file
+```
+
+Every `*_file:` path is resolved **once, at `LoadConfig` time**, relative to the pipeline YAML's own directory — before `validate()` runs and long before any merkle hashing or execution — so everything downstream (`ResolveTask`, `ResolveAgentInvocation`, `TaskNodeContent`, `AgentContentMap`, every executor) sees the resolved text and cannot tell it apart from the same value written inline. Since `TaskNodeContent`/`AgentContentMap` hash `run:`/`prompt:`/`system:` **by value**, editing an included file busts the merkle cache exactly like editing an inline value would — for free, with no special-casing anywhere else in the codebase.
+
+A path may use `..` to escape the pipeline's own directory: the pipeline file is trusted input, and a file placed beside it by the same author is at the same trust level — a shared `../tasks/` directory next to a `pipelines/` directory is a legitimate layout, not a hole to close. Setting both a field and its `*_file:` sibling (e.g. both `run:` and `run_file:`) is a load-time error, and so is an empty included file — either would silently change what the entry means (an empty `run_file:` would leave a task step's `run:` empty, making it fall through `ResolveTask`'s inline short-circuit to a `tasks:` reference instead).
+
+A top-level `tasks:`/`agents:` entry additionally accepts a whole-document `file:`, loading a complete `Task`/`Agent` definition from a separate YAML file so it can be shared across pipelines:
+
+```yaml
+tasks:
+- name: unit
+  file: ci/tasks/unit.yml   # supplies run/fix/image/timeout/inputs/outputs
+  image: golang:1.26        # any field set here overrides the document's
+```
+
+The entry's own inline fields win over the loaded document's — the same "wins when set" idiom `ResolveTask` already uses between a step and its `tasks:` entry — and the loaded document may not itself use `file:`/`run_file:` (or `file:`/`system_file:` for an agent): includes are resolved one level deep only, which is what makes cycle detection unnecessary.
+
+### The run-time form: an agent step's `prompt_file:` from a fetched artifact
+
+An agent step's `prompt_file:` additionally accepts a `{artifact, path}` mapping, naming a file inside an artifact a `get` step fetched, read at **run time** rather than load time:
+
+```yaml
+jobs:
+- name: review
+  plan:
+  - get: repo
+    trigger: true
+  - agent: reviewer
+    inputs: [repo]
+    prompt_file: { artifact: repo, path: .ci/REVIEW.md }
+```
+
+This is the one place a step's config can come from a fetched artifact, and it is deliberately narrow — task `run:` and a whole agent definition/persona cannot. Two reasons:
+
+- **A task's `run:` already reaches into a fetched artifact today.** `run: sh repo/ci/build.sh` works unchanged in both shared and isolated mode (isolated mode just needs `inputs: [repo]`), so an artifact-sourced task-config file would add nothing beyond what plain `run:` already does, while requiring the step to redeclare its own `inputs:`/`outputs:`/`image:` anyway.
+- **An agent's connection is a credential boundary a fetched repo must never cross.** An `Agent`'s `source.endpoint:`/`api_key_env:` decide where a configured API key gets sent; letting a repo supply either would let it redirect that credential to an attacker-chosen server, walking straight around the `HostEnv()` allowlist and `validateAgentEndpoints` that exist to keep exactly that from happening (see CLAUDE.md's Trust Boundaries section). A prompt is just the task text the model already reads the repo to act on — no new credential exposure.
+
+The artifact named must be declared in the step's own `inputs:` (checked at `LoadConfig`, mirroring how `dir:`'s first path component is validated) and must be read out of the artifact's contents, which are untrusted — the same symlink-aware path confinement `read_file`/`list_dir` use (`resolveAgentPath`) applies here too. This form cannot be resolved at load time: `merkle.PlanChains` hashes every step before any `get`'s `in:` has run, so the file doesn't exist yet at plan time. That costs nothing, though — an agent step's chain is already unconditionally unskippable (see "Top-level `tasks:` reuse" above and `internal/merkle`'s `planNonGetNode`), so there is no caching to lose by resolving this after plan time.
 
 ## OpenRouter prompt caching
 

@@ -94,6 +94,13 @@ func recordAgentFailure(ctx context.Context, st *store.Store, node merkle.Node, 
 // only sequences hash/run/capture/record and stays within the linter's
 // complexity budget.
 type preparedAgentStep struct {
+	// step is the resolved step: identical to RunStep's own step parameter,
+	// except a run-time prompt_file: {artifact, path} (see FileRef.Deferred)
+	// has been read and folded into Prompt (with PromptFile cleared) by the
+	// time this is returned. RunStep must hash THIS copy, not its own step
+	// param, so merkle.AgentContentMap sees the loaded prompt text rather than
+	// the file reference.
+	step     config.Step
 	ri       config.ResolvedInvocation
 	space    workspace.StepSpace
 	conv     agentConversation
@@ -140,6 +147,18 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		workspace.CloseSpace(space, step.Agent)
 
 		return preparedAgentStep{}, err
+	}
+
+	if step.PromptFile.Deferred() {
+		resolved, err := resolveDeferredPrompt(space.Dir(), step)
+		if err != nil {
+			workspace.CloseSpace(space, step.Agent)
+
+			return preparedAgentStep{}, err
+		}
+
+		step.Prompt = resolved
+		step.PromptFile = nil
 	}
 
 	decls, registry, closers, err := buildAgentTools(ctx, cfg, ri.ToolSpecs, ri.Image)
@@ -197,9 +216,50 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	}
 
 	return preparedAgentStep{
-		ri: ri, space: space, conv: conv, llm: newAgentLLM(ri, apiKey),
+		step: step, ri: ri, space: space, conv: conv, llm: newAgentLLM(ri, apiKey),
 		closers: closers, spillDir: spillDir,
 	}, nil
+}
+
+// resolveDeferredPrompt reads step's run-time prompt_file: {artifact, path}
+// (see config.FileRef.Deferred) out of the step's own materialized working
+// directory. Unlike a load-time include (resolved once, at LoadConfig, before
+// merkle.PlanChains ever runs), this file lives inside an artifact a get step
+// fetched, which does not exist until the step's own build workspace has
+// materialized it — spaceDir is that build's step space root, where a
+// declared input "repo" lands at spaceDir/repo (see workspace.StepSpace),
+// independent of step.Dir (the agent's working directory, which may be a
+// subdirectory of an input).
+//
+// The artifact's contents are untrusted — a fetched repo is whatever a PR
+// author put there — so the path is confined and symlink-checked by
+// resolveAgentPath, the same guard read_file/list_dir use against a
+// model-supplied path.
+func resolveDeferredPrompt(spaceDir string, step config.Step) (string, error) {
+	if step.Prompt != "" {
+		return "", fmt.Errorf("agent %q: prompt: and prompt_file: are mutually exclusive", step.Agent)
+	}
+
+	rel := filepath.Join(step.PromptFile.Artifact, step.PromptFile.Path)
+
+	resolved, err := resolveAgentPath(spaceDir, rel)
+	if err != nil {
+		return "", fmt.Errorf("agent %q: prompt_file {artifact: %q, path: %q}: %w",
+			step.Agent, step.PromptFile.Artifact, step.PromptFile.Path, err)
+	}
+
+	data, err := os.ReadFile(resolved) //nolint:gosec // resolved and confined by resolveAgentPath against spaceDir, the step's own materialized working directory
+	if err != nil {
+		return "", fmt.Errorf("agent %q: prompt_file {artifact: %q, path: %q}: %w",
+			step.Agent, step.PromptFile.Artifact, step.PromptFile.Path, err)
+	}
+
+	if strings.TrimSpace(string(data)) == "" {
+		return "", fmt.Errorf("agent %q: prompt_file {artifact: %q, path: %q} is empty",
+			step.Agent, step.PromptFile.Artifact, step.PromptFile.Path)
+	}
+
+	return string(data), nil
 }
 
 // toolOutputSpillDirName is the fixed name of the subdirectory a
@@ -292,7 +352,12 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	}
 	defer prepared.close(step.Agent)
 
-	content, err := merkle.AgentContentMap(cfg, step, prepared.ri)
+	// Hash prepared.step, not step: when step.PromptFile named a run-time
+	// artifact file, prepared.step.Prompt is the file's loaded text (see
+	// resolveDeferredPrompt) while step.Prompt is still empty — hashing step
+	// here would hash an empty prompt for every such pipeline, colliding all
+	// of them onto the same node regardless of what the file actually said.
+	content, err := merkle.AgentContentMap(cfg, prepared.step, prepared.ri)
 	if err != nil {
 		return StepOutcome{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}

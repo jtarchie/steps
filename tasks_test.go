@@ -72,6 +72,113 @@ jobs:
 	assertLineCount(t, inlineCounter, 1)
 }
 
+// TestRunJobTaskRunFileEditBustsCache is the load-time run_file: feature's
+// payoff test: merkle.TaskNodeContent hashes rt.Run, and after
+// resolveFileIncludes runs (at LoadConfig, well before PlanChains), rt.Run IS
+// the included file's contents — so editing that file must be indistinguishable
+// from editing an inline run: for cache purposes. steps test/--force never
+// exercise PlanChains at all (skipCache=true), so this has to go through the
+// real run() path, not a fixture.
+func TestRunJobTaskRunFileEditBustsCache(t *testing.T) {
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "counter.txt")
+	scriptPath := filepath.Join(dir, "unit.sh")
+	path := filepath.Join(dir, "pipeline.yml")
+
+	pipeline := `
+tasks:
+- name: unit
+  run_file: unit.sh
+
+jobs:
+- name: build
+  plan:
+  - task: unit
+    inputs: []
+`
+
+	err := os.WriteFile(path, []byte(pipeline), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeScript := func(body string) {
+		t.Helper()
+
+		err := os.WriteFile(scriptPath, []byte(body), 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	writeScript(fmt.Sprintf("echo ran >> %s\n", counter))
+	mustRun(t, path)
+	assertLineCount(t, counter, 1)
+
+	// Unchanged rerun: same resolved content, so the task is skipped.
+	mustRun(t, path)
+	assertLineCount(t, counter, 1)
+
+	// Editing the included script changes what rt.Run resolves to, exactly
+	// like editing an inline run: would — the cache must not treat this as
+	// the same step.
+	writeScript(fmt.Sprintf("echo ran-again >> %s\n", counter))
+	mustRun(t, path)
+	assertLineCount(t, counter, 2)
+}
+
+// TestRunJobTaskRunFileRenameDoesNotBustCache pins "contents, not paths" as
+// intentional (see internal/config's readIncludeFile doc comment): renaming
+// the included file to an identical-bytes copy at a new path, and updating
+// run_file: to match, must NOT invalidate the cache, since nothing about
+// rt.Run's resolved text changed.
+func TestRunJobTaskRunFileRenameDoesNotBustCache(t *testing.T) {
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "counter.txt")
+	path := filepath.Join(dir, "pipeline.yml")
+
+	writePipeline := func(scriptName string) {
+		t.Helper()
+
+		pipeline := fmt.Sprintf(`
+tasks:
+- name: unit
+  run_file: %s
+
+jobs:
+- name: build
+  plan:
+  - task: unit
+    inputs: []
+`, scriptName)
+
+		err := os.WriteFile(path, []byte(pipeline), 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	body := fmt.Sprintf("echo ran >> %s\n", counter)
+
+	err := os.WriteFile(filepath.Join(dir, "a.sh"), []byte(body), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writePipeline("a.sh")
+	mustRun(t, path)
+	assertLineCount(t, counter, 1)
+
+	err = os.WriteFile(filepath.Join(dir, "b.sh"), []byte(body), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writePipeline("b.sh")
+	mustRun(t, path)
+	assertLineCount(t, counter, 1)
+}
+
 // TestRunJobTaskReferenceUndefinedErrors: a task step naming an undefined
 // tasks: entry (and no run: of its own) fails clearly at plan time.
 func TestRunJobTaskReferenceUndefinedErrors(t *testing.T) {

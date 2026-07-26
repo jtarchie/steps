@@ -2,6 +2,8 @@ package merkle
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -46,6 +48,62 @@ func mustPlanRootHash(t *testing.T, cfg *config.Config, steps []config.Step) str
 	}
 
 	return chains[0].RootHash
+}
+
+// TestPlanChainsRunFileHashesLikeInline is the CLAUDE.md rule-1 proof for the
+// load-time run_file: include: a pipeline loaded through config.LoadConfig
+// with a task's run: supplied by a sibling file must hash byte-identically to
+// the same pipeline written with that text inline. resolveFileIncludes runs
+// before validate() (and long before PlanChains), so by the time PlanChains
+// sees the config, rt.Run already IS the file's contents — this test's job is
+// only to confirm that promise holds end to end through LoadConfig.
+func TestPlanChainsRunFileHashesLikeInline(t *testing.T) {
+	t.Parallel()
+
+	inlineHash := mustPlanRootHash(t, planCfg(`[{"ref":"v1"}]`, "v1"), testPlanSteps("echo hi\n"))
+
+	dir := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(dir, "unit.sh"), []byte("echo hi\n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pipelinePath := filepath.Join(dir, "pipeline.yml")
+
+	pipelineYAML := `
+resource_types:
+- name: dummy
+  config:
+    check: echo '[{"ref":"v1"}]'
+    in: "true"
+resources:
+- name: thing
+  type: dummy
+  source: { key: v1 }
+jobs:
+- name: build
+  plan:
+  - get: thing
+  - task: work
+    run_file: unit.sh
+`
+
+	err = os.WriteFile(pipelinePath, []byte(pipelineYAML), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := config.LoadConfig(pipelinePath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	fileHash := mustPlanRootHash(t, loaded, loaded.Jobs[0].Plan)
+
+	if fileHash != inlineHash {
+		t.Errorf("run_file: pipeline root hash = %q, want %q (byte-identical to the inline equivalent)", fileHash, inlineHash)
+	}
 }
 
 func TestPlanChainsHashDeterminism(t *testing.T) {
