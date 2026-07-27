@@ -616,7 +616,7 @@ func TestShellToolResult(t *testing.T) {
 	t.Run("output under the cap is returned untouched", func(t *testing.T) {
 		t.Parallel()
 
-		result := shellToolResult(context.Background(), "echo hi", testEnv(t.TempDir()))
+		result := shellToolResult(context.Background(), "echo hi", testEnv(t.TempDir()), maxToolOutputBytes)
 		if result["stdout"] != "hi\n" {
 			t.Errorf("stdout = %v, want %q", result["stdout"], "hi\n")
 		}
@@ -626,7 +626,7 @@ func TestShellToolResult(t *testing.T) {
 		t.Parallel()
 
 		command := "yes x | head -c " + strconv.Itoa(maxToolOutputBytes+500)
-		result := shellToolResult(context.Background(), command, testEnv(t.TempDir()))
+		result := shellToolResult(context.Background(), command, testEnv(t.TempDir()), maxToolOutputBytes)
 
 		stdout, ok := result["stdout"].(string)
 		if !ok {
@@ -654,7 +654,7 @@ func TestShellToolResultSpillDir(t *testing.T) {
 	env.spillDir = spillDir
 
 	command := "yes x | head -c " + strconv.Itoa(maxToolOutputBytes+500)
-	result := shellToolResult(context.Background(), command, env)
+	result := shellToolResult(context.Background(), command, env, maxToolOutputBytes)
 
 	stdout, ok := result["stdout"].(string)
 	if !ok {
@@ -985,7 +985,7 @@ func TestExecReadFileCanReadSpilledRunShellOutput(t *testing.T) {
 	}
 
 	command := "yes x | head -c " + strconv.Itoa(maxToolOutputBytes+500)
-	shellResult := shellToolResult(context.Background(), command, env)
+	shellResult := shellToolResult(context.Background(), command, env, maxToolOutputBytes)
 
 	stdout, ok := shellResult["stdout"].(string)
 	if !ok {
@@ -1561,5 +1561,67 @@ func TestExecEditFileErrors(t *testing.T) {
 				t.Errorf("error = %q, want it to mention %q", errMsg, tc.want)
 			}
 		})
+	}
+}
+
+// TestOutputLimit pins the one-way nature of max_output_bytes: a grant may
+// narrow its inline budget but can never widen it past the global cap.
+func TestOutputLimit(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		specified int
+		want      int
+	}{
+		{"unset falls back to the global cap", 0, maxToolOutputBytes},
+		{"negative falls back to the global cap", -1, maxToolOutputBytes},
+		{"a lower value narrows", 4000, 4000},
+		{"the global cap itself", maxToolOutputBytes, maxToolOutputBytes},
+		{"above the global cap is clamped, never widened", maxToolOutputBytes * 10, maxToolOutputBytes},
+	}
+
+	for _, tc := range cases {
+		if got := outputLimit(tc.specified); got != tc.want {
+			t.Errorf("%s: outputLimit(%d) = %d, want %d", tc.name, tc.specified, got, tc.want)
+		}
+	}
+}
+
+// TestExecCustomToolHonoursMaxOutputBytes proves a narrowed grant spills
+// sooner: the inline body shrinks, but the full output is still reachable
+// through the spill pointer, so narrowing costs nothing but context.
+func TestExecCustomToolHonoursMaxOutputBytes(t *testing.T) {
+	t.Parallel()
+
+	const limit = 4000
+
+	dir := t.TempDir()
+	spillDir := t.TempDir()
+
+	env := testEnv(dir)
+	env.spillDir = spillDir
+
+	spec := config.ToolSpec{
+		Name:           "noisy",
+		Run:            "printf 'x%.0s' $(seq 1 20000)",
+		MaxOutputBytes: limit,
+	}
+
+	result := execCustomTool(spec, nil)(context.Background(), map[string]any{}, env)
+
+	stdout, ok := result["stdout"].(string)
+	if !ok {
+		t.Fatalf("stdout = %#v, want a string", result["stdout"])
+	}
+
+	if !strings.Contains(stdout, "<persistent_file>") {
+		t.Errorf("stdout = %.80q, want a spill pointer once past the narrowed limit", stdout)
+	}
+
+	// The same command under the global cap would have come back inline:
+	// 20,000 bytes is well under maxToolOutputBytes.
+	if len(stdout) >= maxToolOutputBytes {
+		t.Errorf("stdout is %d bytes, want the narrowed grant to have kept it small", len(stdout))
 	}
 }

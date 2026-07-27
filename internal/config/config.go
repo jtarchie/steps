@@ -385,6 +385,25 @@ type ToolSpec struct {
 	// the machine chooses where." Values are plain strings; not templated.
 	// Invalid on builtins and sub-agent tools.
 	Args map[string]string
+	// MaxOutputBytes lowers the inline output budget for this one tool
+	// (0/unset = the global maxToolOutputBytes). It can only ever NARROW the
+	// cap, never widen it — a value at or above the global cap resolves back
+	// to the global cap.
+	//
+	// It exists for a tool whose output is known to be mostly noise: a fuzzy
+	// search that returns a ranked list where the answer is the first few
+	// entries, for instance, where the tail costs context on every
+	// subsequent turn and buys nothing. Narrowing loses no data — the
+	// overflow still spills to a file the model can read back — it only
+	// shrinks what lands in the conversation.
+	//
+	// Deliberately NOT valid on a built-in: those carry their own output
+	// contract (read_file pages, list_dir counts entries, search_files is
+	// bounded by arithmetic), and a second, conflicting bound on top of a
+	// designed one is a bug surface rather than a knob. Also invalid on a
+	// sub-agent tool, whose result is another agent's considered answer, not
+	// a data dump. Valid on custom tools and on all three MCP grant forms.
+	MaxOutputBytes int
 }
 
 // UnmarshalYAML decodes a ToolSpec from either a scalar (builtin name) or a
@@ -402,17 +421,18 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 		return value.Decode(&t.Builtin) //nolint:wrapcheck // yaml.v3 error is already descriptive
 	case yaml.MappingNode:
 		var m struct {
-			Builtin     string            `yaml:"builtin"`
-			Name        string            `yaml:"name"`
-			Description string            `yaml:"description"`
-			Run         string            `yaml:"run"`
-			Agent       string            `yaml:"agent"`
-			MCP         string            `yaml:"mcp"`
-			Tool        string            `yaml:"tool"`
-			Tools       []string          `yaml:"tools"`
-			Required    bool              `yaml:"required"`
-			MaxCalls    int               `yaml:"max_calls"`
-			Args        map[string]string `yaml:"args"`
+			Builtin        string            `yaml:"builtin"`
+			Name           string            `yaml:"name"`
+			Description    string            `yaml:"description"`
+			Run            string            `yaml:"run"`
+			Agent          string            `yaml:"agent"`
+			MCP            string            `yaml:"mcp"`
+			Tool           string            `yaml:"tool"`
+			Tools          []string          `yaml:"tools"`
+			Required       bool              `yaml:"required"`
+			MaxCalls       int               `yaml:"max_calls"`
+			MaxOutputBytes int               `yaml:"max_output_bytes"`
+			Args           map[string]string `yaml:"args"`
 		}
 
 		err := value.Decode(&m)
@@ -421,7 +441,7 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 		}
 
 		t.Builtin, t.Name, t.Description, t.Run, t.Agent, t.Required = m.Builtin, m.Name, m.Description, m.Run, m.Agent, m.Required
-		t.MaxCalls, t.Args = m.MaxCalls, m.Args
+		t.MaxCalls, t.Args, t.MaxOutputBytes = m.MaxCalls, m.Args, m.MaxOutputBytes
 		t.MCP, t.MCPTool, t.MCPTools = m.MCP, m.Tool, m.Tools
 
 		return nil
@@ -1620,6 +1640,11 @@ func validateToolCallGuardShape(context string, spec ToolSpec) error {
 		return fmt.Errorf("%s: tool %q: max_calls must be >= 0", context, ToolSpecName(spec))
 	}
 
+	err := validateMaxOutputBytesShape(context, spec)
+	if err != nil {
+		return err
+	}
+
 	guarded := spec.MaxCalls != 0 || spec.Args != nil
 	if !guarded {
 		return nil
@@ -1631,6 +1656,38 @@ func validateToolCallGuardShape(context string, spec ToolSpec) error {
 
 	if spec.Agent != "" {
 		return fmt.Errorf("%s: sub-agent tool %q: max_calls/args are only valid on custom tools", context, spec.Agent)
+	}
+
+	return nil
+}
+
+// validateMaxOutputBytesShape enforces where max_output_bytes: may appear.
+// It narrows a tool's inline output budget, which only makes sense for a
+// tool whose output volume is not already a designed property: a built-in
+// carries its own contract (read_file pages, list_dir counts, search_files
+// is bounded by arithmetic), and a sub-agent's result is a considered
+// answer rather than a data dump. See ToolSpec.MaxOutputBytes.
+func validateMaxOutputBytesShape(context string, spec ToolSpec) error {
+	if spec.MaxOutputBytes == 0 {
+		return nil
+	}
+
+	if spec.MaxOutputBytes < 0 {
+		return fmt.Errorf("%s: tool %q: max_output_bytes must be >= 0", context, ToolSpecName(spec))
+	}
+
+	if spec.Builtin != "" {
+		return fmt.Errorf(
+			"%s: builtin tool %q: max_output_bytes is only valid on custom tools and mcp grants; built-ins carry their own output contract",
+			context, spec.Builtin,
+		)
+	}
+
+	if spec.Agent != "" {
+		return fmt.Errorf(
+			"%s: sub-agent tool %q: max_output_bytes is only valid on custom tools and mcp grants",
+			context, spec.Agent,
+		)
 	}
 
 	return nil

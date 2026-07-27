@@ -438,6 +438,12 @@ func toolSpecsContent(cfg *config.Config, specs []config.ToolSpec) ([]map[string
 			content["args"] = t.Args
 		}
 
+		// Same value-gating: max_output_bytes narrows what a call returns to
+		// the model, so it changes the conversation the step produces.
+		if t.MaxOutputBytes != 0 {
+			content["max_output_bytes"] = t.MaxOutputBytes
+		}
+
 		out[i] = content
 	}
 
@@ -478,6 +484,10 @@ func mcpToolSpecContent(cfg *config.Config, t config.ToolSpec) (map[string]any, 
 
 	if t.MaxCalls != 0 {
 		content["max_calls"] = t.MaxCalls
+	}
+
+	if t.MaxOutputBytes != 0 {
+		content["max_output_bytes"] = t.MaxOutputBytes
 	}
 
 	return content, nil

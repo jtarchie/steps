@@ -63,7 +63,7 @@ func buildMCPTools(ctx context.Context, cfg *config.Config, spec config.ToolSpec
 			ParametersJsonSchema: tool.InputSchema,
 		})
 
-		registry[name] = mcpToolImpl(client, tool.Name)
+		registry[name] = mcpToolImpl(client, tool.Name, outputLimit(spec.MaxOutputBytes))
 	}
 
 	return decls, registry, client, nil
@@ -131,7 +131,7 @@ func selectMCPTools(spec config.ToolSpec, tools []*sdkmcp.Tool) ([]*sdkmcp.Tool,
 // {"structured_content": ..., "content": ...} — both keys always present
 // (nil/empty when absent) so the shape stays predictable for the model and
 // for assert.tool_calls matching.
-func mcpToolImpl(client stepsmcp.Client, name string) toolImpl {
+func mcpToolImpl(client stepsmcp.Client, name string, limit int) toolImpl {
 	return func(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
 		result, err := client.CallTool(ctx, name, args)
 		if err != nil {
@@ -145,18 +145,20 @@ func mcpToolImpl(client stepsmcp.Client, name string) toolImpl {
 				text = fmt.Sprintf("mcp tool %q returned an error with no text content", name)
 			}
 
-			return map[string]any{"error": spillOrTruncate(text, env.spillDir)}
+			return map[string]any{"error": spillOrTruncateLimit(text, limit, env.spillDir)}
 		}
 
 		return map[string]any{
-			"structured_content": boundedStructuredContent(result.StructuredContent, env.spillDir),
-			"content":            spillOrTruncate(text, env.spillDir),
+			"structured_content": boundedStructuredContent(result.StructuredContent, limit, env.spillDir),
+			"content":            spillOrTruncateLimit(text, limit, env.spillDir),
 		}
 	}
 }
 
-// boundedStructuredContent caps a tool result's structured content at
-// maxToolOutputBytes, the same bound spillOrTruncate enforces on text —
+// boundedStructuredContent caps a tool result's structured content at limit
+// — the grant's resolved inline budget (maxToolOutputBytes unless the grant
+// narrowed it via max_output_bytes:), the same bound spillOrTruncateLimit
+// enforces on text —
 // without this, a large structured payload would flood the model's context
 // window unbounded, bypassing the cap every other tool's output already
 // honors (and the SDK often mirrors the same payload into text content too,
@@ -174,7 +176,7 @@ func mcpToolImpl(client stepsmcp.Client, name string) toolImpl {
 // what the tool returned. So this branches on spillToFile's ok directly and
 // falls back to prose that says what happened, pointing at the text content,
 // which the SDK usually populates with the same payload anyway.
-func boundedStructuredContent(sc any, spillDir string) any {
+func boundedStructuredContent(sc any, limit int, spillDir string) any {
 	if sc == nil {
 		return nil
 	}
@@ -184,7 +186,7 @@ func boundedStructuredContent(sc any, spillDir string) any {
 		return fmt.Sprintf("[structured content omitted: could not marshal: %s]", err.Error())
 	}
 
-	if len(data) <= maxToolOutputBytes {
+	if len(data) <= limit {
 		return sc
 	}
 
@@ -193,7 +195,7 @@ func boundedStructuredContent(sc any, spillDir string) any {
 		return fmt.Sprintf(
 			"[structured content omitted: %s of JSON exceeded the %s inline limit and could not be saved to a file;"+
 				" this tool's text content carries the same payload]",
-			shell.FormatBytes(len(data)), shell.FormatBytes(maxToolOutputBytes),
+			shell.FormatBytes(len(data)), shell.FormatBytes(limit),
 		)
 	}
 

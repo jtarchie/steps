@@ -671,11 +671,17 @@ func intArg(args map[string]any, key string) (int, bool) {
 // spillOrTruncate instead, which falls back to this exact behavior only when
 // spilling itself isn't possible.
 func truncateToolOutput(s string) string {
-	if len(s) <= maxToolOutputBytes {
+	return truncateToolOutputLimit(s, maxToolOutputBytes)
+}
+
+// truncateToolOutputLimit is truncateToolOutput with an explicit budget, for
+// a grant that narrowed its own via max_output_bytes:.
+func truncateToolOutputLimit(s string, limit int) string {
+	if len(s) <= limit {
 		return s
 	}
 
-	return s[:maxToolOutputBytes] + fmt.Sprintf("\n... [truncated %d bytes]", len(s)-maxToolOutputBytes)
+	return s[:limit] + fmt.Sprintf("\n... [truncated %d bytes]", len(s)-limit)
 }
 
 // spillOrTruncate is the one-shot counterpart to shellToolResult's streaming
@@ -695,13 +701,21 @@ func truncateToolOutput(s string) string {
 // degrade-on-error behavior: spilling is a usability improvement, not
 // something a tool call should fail over.
 func spillOrTruncate(content string, spillDir string) string {
-	if len(content) <= maxToolOutputBytes {
+	return spillOrTruncateLimit(content, maxToolOutputBytes, spillDir)
+}
+
+// spillOrTruncateLimit is spillOrTruncate with an explicit inline budget, so
+// a tool grant that narrowed its own via max_output_bytes: (see outputLimit)
+// spills sooner. Nothing is lost by a lower limit — the full content still
+// reaches the spill file — only the inline share shrinks.
+func spillOrTruncateLimit(content string, limit int, spillDir string) string {
+	if len(content) <= limit {
 		return content
 	}
 
 	path, ok := spillToFile(content, spillDir)
 	if !ok {
-		return truncateToolOutput(content)
+		return truncateToolOutputLimit(content, limit)
 	}
 
 	return shell.SpillPointerMessage(len(content), path, spillPreview(content))
@@ -762,8 +776,22 @@ func spillPreview(content string) []byte {
 // same way a task's run: step already is. When env.spillDir is set, output
 // beyond the cap is streamed to a file under it and the model gets a pointer
 // message instead of losing the overflow.
-func shellToolResult(ctx context.Context, command string, env toolEnv) map[string]any {
-	stdout, stderr, exitCode, err := env.runner.RunCaptureFullLimitedStreamed(ctx, command, maxToolOutputBytes, env.spillDir)
+// outputLimit resolves a grant's max_output_bytes: against the global cap. A
+// grant may only LOWER the inline budget: an unset value, or one at or above
+// maxToolOutputBytes, resolves to the global cap, so the knob can never be
+// used to widen what floods a conversation. Lowering it loses no data —
+// overflow still spills to a file the model can read back (see
+// spillOrTruncate) — it only shrinks what lands inline.
+func outputLimit(specified int) int {
+	if specified <= 0 || specified > maxToolOutputBytes {
+		return maxToolOutputBytes
+	}
+
+	return specified
+}
+
+func shellToolResult(ctx context.Context, command string, env toolEnv, limit int) map[string]any {
+	stdout, stderr, exitCode, err := env.runner.RunCaptureFullLimitedStreamed(ctx, command, limit, env.spillDir)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
@@ -1045,7 +1073,9 @@ func execRunShell(ctx context.Context, args map[string]any, env toolEnv) map[str
 		return map[string]any{"error": `run_shell: missing required argument "command"`}
 	}
 
-	return shellToolResult(ctx, command, env)
+	// run_shell is a builtin, so it carries no max_output_bytes: of its own
+	// (validateMaxOutputBytesShape rejects one) — always the global cap.
+	return shellToolResult(ctx, command, env, maxToolOutputBytes)
 }
 
 // execWriteFile writes (or appends to, if append: true) a UTF-8 text file at
@@ -1247,7 +1277,7 @@ func execCustomTool(spec config.ToolSpec, params []string) toolImpl {
 			return map[string]any{"error": err.Error()}
 		}
 
-		return shellToolResult(ctx, rendered, env)
+		return shellToolResult(ctx, rendered, env, outputLimit(spec.MaxOutputBytes))
 	}
 }
 

@@ -229,7 +229,7 @@ func TestMCPToolImplSuccess(t *testing.T) {
 		StructuredContent: map[string]any{"id": "42"},
 	}}
 
-	impl := mcpToolImpl(client, "search_issues")
+	impl := mcpToolImpl(client, "search_issues", maxToolOutputBytes)
 	result := impl(context.Background(), map[string]any{"query": "bug"}, toolEnv{})
 
 	if result["content"] != "line one\nline two" {
@@ -272,7 +272,7 @@ func TestMCPToolImplSpillsOversizedStructuredContent(t *testing.T) {
 	t.Run("with spillDir, it is spilled to a file", func(t *testing.T) {
 		t.Parallel()
 
-		impl := mcpToolImpl(newClient(), "search_issues")
+		impl := mcpToolImpl(newClient(), "search_issues", maxToolOutputBytes)
 		result := impl(context.Background(), map[string]any{}, toolEnv{spillDir: t.TempDir()})
 
 		sc, ok := result["structured_content"].(string)
@@ -292,7 +292,7 @@ func TestMCPToolImplSpillsOversizedStructuredContent(t *testing.T) {
 	t.Run("without spillDir, it degrades to an omitted marker", func(t *testing.T) {
 		t.Parallel()
 
-		impl := mcpToolImpl(newClient(), "search_issues")
+		impl := mcpToolImpl(newClient(), "search_issues", maxToolOutputBytes)
 		result := impl(context.Background(), map[string]any{}, toolEnv{})
 
 		sc, ok := result["structured_content"].(string)
@@ -322,7 +322,7 @@ func TestMCPToolImplNeverReturnsTruncatedJSON(t *testing.T) {
 		StructuredContent: map[string]any{"blob": strings.Repeat("x", maxToolOutputBytes+1)},
 	}}
 
-	impl := mcpToolImpl(client, "search_issues")
+	impl := mcpToolImpl(client, "search_issues", maxToolOutputBytes)
 	// No spillDir: the degrade path, which is the one that used to corrupt.
 	result := impl(context.Background(), map[string]any{}, toolEnv{})
 
@@ -371,7 +371,7 @@ func TestMCPToolImplSpillsOversizedTextContent(t *testing.T) {
 		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: huge}},
 	}}
 
-	impl := mcpToolImpl(client, "search_issues")
+	impl := mcpToolImpl(client, "search_issues", maxToolOutputBytes)
 	result := impl(context.Background(), map[string]any{}, toolEnv{spillDir: t.TempDir()})
 
 	content, ok := result["content"].(string)
@@ -389,7 +389,7 @@ func TestMCPToolImplPassesThroughSmallStructuredContent(t *testing.T) {
 		StructuredContent: map[string]any{"id": "42"},
 	}}
 
-	impl := mcpToolImpl(client, "get_issue")
+	impl := mcpToolImpl(client, "get_issue", maxToolOutputBytes)
 	result := impl(context.Background(), map[string]any{}, toolEnv{})
 
 	sc, ok := result["structured_content"].(map[string]any)
@@ -406,7 +406,7 @@ func TestMCPToolImplIsError(t *testing.T) {
 		IsError: true,
 	}}
 
-	impl := mcpToolImpl(client, "get_issue")
+	impl := mcpToolImpl(client, "get_issue", maxToolOutputBytes)
 	result := impl(context.Background(), map[string]any{"id": "999"}, toolEnv{})
 
 	if result["error"] != "issue not found" {
@@ -423,7 +423,7 @@ func TestMCPToolImplTransportError(t *testing.T) {
 
 	client := &fakeMCPClient{err: errors.New("connection reset")}
 
-	impl := mcpToolImpl(client, "search_issues")
+	impl := mcpToolImpl(client, "search_issues", maxToolOutputBytes)
 	result := impl(context.Background(), map[string]any{}, toolEnv{})
 
 	if result["error"] != "connection reset" {

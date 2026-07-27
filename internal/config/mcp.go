@@ -126,6 +126,16 @@ func validateMCPToolGuards(context string, tool ToolSpec) error {
 		return fmt.Errorf("%s: mcp tool %q: max_calls must be >= 0", context, tool.MCP)
 	}
 
+	// Deliberately allowed on all three grant forms, unlike
+	// description/required/max_calls above, which are single-tool: only. The
+	// tool worth capping is typically one noisy member of a tools: [...]
+	// subset, and forcing it into its own `- mcp: server` entry to carry the
+	// cap would open a second connection to the same server (buildMCPTools
+	// connects once per spec).
+	if tool.MaxOutputBytes < 0 {
+		return fmt.Errorf("%s: mcp tool %q: max_output_bytes must be >= 0", context, tool.MCP)
+	}
+
 	return nil
 }
 
