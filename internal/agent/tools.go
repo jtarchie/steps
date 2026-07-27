@@ -290,6 +290,28 @@ func builtinAgentTools(image string) map[string]builtinTool {
 			},
 			impl: execEditFile,
 		},
+		"search_files": {
+			decl: &genai.FunctionDeclaration{
+				Name:        "search_files",
+				Description: searchFilesDescription,
+				Parameters: &genai.Schema{
+					Type: genai.TypeObject,
+					Properties: map[string]*genai.Schema{
+						"pattern":          {Type: genai.TypeString, Description: "Regular expression matched against each line of each file. Omit to search by filename only (then glob is required)."},
+						"glob":             {Type: genai.TypeString, Description: `Shell pattern a file's path must match, e.g. "**/*.go" or "*_test.go". Omit to search every file.`},
+						"path":             {Type: genai.TypeString, Description: `Directory to search, relative to the working directory (or an absolute path inside it). Defaults to ".".`},
+						"output_mode":      {Type: genai.TypeString, Description: `"files_with_matches" (default), "content", or "count".`, Enum: []string{"files_with_matches", "content", "count"}},
+						"head_limit":       {Type: genai.TypeInteger, Description: "Maximum results to return. Clamped to the tool's own ceiling."},
+						"case_insensitive": {Type: genai.TypeBoolean, Description: "Match the pattern case-insensitively. Defaults to false."},
+					},
+					// Neither pattern nor glob is individually required —
+					// execSearchFiles enforces "at least one" instead, which a
+					// JSON schema cannot express.
+					Required: nil,
+				},
+			},
+			impl: execSearchFiles,
+		},
 	}
 }
 
