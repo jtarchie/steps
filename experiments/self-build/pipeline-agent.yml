@@ -1,139 +1,103 @@
-# Same idea as pipeline.yml (see there for the resource/fan-out design, which
-# is copied byte-for-byte below) but plan/execute/critique's qualitative gate
-# are steps' own `agent:` step type instead of shelling out to the `claude`
-# CLI -- for trying this experiment against a local model (LM Studio/Ollama)
-# instead of Claude. See README.md's "agent: vs claude CLI" section for the
-# full rationale; this header only covers what a reader needs to make sense
-# of the tool grants below.
+# Same idea as pipeline.yml but plan/execute/critique are steps' own `agent:`
+# step type instead of shelling out to the `claude` CLI -- for running this
+# experiment against a local model. See README.md's "agent: vs claude CLI".
 #
-# The `claude` CLI version gets three things for free that internal/agent
-# does not, and this file has to compensate for each one explicitly:
+# The repository under development is an ORDINARY INPUT ARTIFACT (`get: repo`),
+# not a path the agents reach out to, and that is the whole shape of this
+# file. Each agent works in its own workspace where `repo/` is a real git
+# clone, so the built-in file tools reach it with no special configuration.
+# An earlier revision pointed at a checkout by absolute path, which those
+# tools cannot touch (they are confined to the step's workspace), so every
+# read/list/write/edit was re-implemented as a custom shell tool that `cd`-ed
+# there first -- and `coder` was handed a general-purpose shell just to get
+# its narrow tools within reach. Making the repo an input deleted ~190 lines
+# of that, and left the narrow tools genuinely narrow.
 #
-# 1. CLAUDE.md is not auto-injected. `steps`' agent step type has no
-#    equivalent, so `in:` below materializes a copy of it (and the story
-#    doc) into the artifact instead, so built-in `read_file` (100,000-byte
-#    cap, no shell needed) reads it whole in one call instead of a
-#    repo_shell round-trip every single story needs regardless. The
-#    reviewer persona below is written to catch a behavior/guard added to
-#    one of several structurally similar code paths -- e.g. get/task/put/
-#    agent step handling -- but not verified on all of them: a real code
-#    review of this pipeline's own first story found exactly that bug class
-#    slipping through a `claude`-CLI-driven run.
+# `put: repo` commits and pushes the workspace clone. A failed review never
+# reaches it, so the real checkout is never left dirty by an abandoned attempt.
 #
-# 2. Built-in read_file/list_dir/write_file are confined to the agent step's
-#    own (ephemeral, per-story) working directory, symlink-escape checked
-#    -- there is no dir: value that
-#    can point them at stories/repo's absolute path, which is what makes
-#    pipeline.yml's "cd $repo" trick work for a task's run: but NOT for an
-#    agent step's own file tools. So each agent below gets a small set of
-#    custom, narrowly-named tools instead of a single do-everything shell:
-#    `story_brief` (the bootstrap: story number/file/repo path/text, one
-#    call, no arguments), `read_repo_file`/`read_repo_lines`/`list_repo_dir`
-#    (reading, always `cd "$(cat stories/repo)"` first so the model never
-#    has to remember the join itself), and a role-specific write tool whose
-#    output path is derived in shell from `stories/num` -- never a model
-#    argument, so it cannot be pointed anywhere else. `coder` is the only
-#    agent with a general-purpose `repo_shell` (tests, lint, build, git,
-#    edits) and `write_repo_file` (arbitrary path); `planner` and `reviewer`
-#    each write exactly one file and have no shell at all.
+# gopls is granted ONE tool (plus go_diagnostics for coder): finding every
+# call site of a symbol without false-positiving on a comment or missing a
+# differently-spelled one is the thing a text search genuinely cannot do.
+# Finding WHERE something lives is search_files' job. MCP tools are exposed
+# with the server name prefixed ("gopls__go_symbol_references"). Needs `gopls`
+# on PATH.
 #
-# 3. There is no persistent shell session or dedicated file-edit tool. Every
-#    repo_shell/custom-tool call is a fresh `sh -c`, so related commands must
-#    be chained with && in one call. Local models also tend to mis-escape
-#    large multi-line heredocs assembled inside a JSON tool-call string, so
-#    coder's write_repo_file takes content as an ordinary string argument --
-#    the tool-calling protocol handles its escaping, not the model's own
-#    shell quoting.
+# Swap `lmstudio/google/gemma-4-26b-a4b` for whatever you have loaded; a
+# coding-tuned model will do meaningfully better on `coder` specifically.
 #
-# What steps' agent: step type gives back in return, used below instead of
-# hand-rolled equivalents: `verdicts:`/`to:` for PASS/FAIL routing (no
-# grep '^PASS' on captured text), and `handoff:` for feeding a redo attempt
-# the previous round's outcome (no hand-rolled critique-file re-read --
-# though the reviewer still writes one, as a human-readable record). It also
-# gives planner/coder/reviewer real Go semantics via gopls' own MCP server
-# (`gopls mcp`, run as a local stdio subprocess -- see mcp_servers: below),
-# covering the Go-semantics half of what the claude CLI got from its own
-# tooling: go_search/go_symbol_references/go_package_api instead of grep -rn
-# for finding where a feature lives and every call site of a symbol. gopls
-# has no tool that returns file contents or a function body and no general
-# edit tool besides rename, so it replaces SEARCH/NAVIGATION only -- reading
-# and editing stay on read_repo_file/read_repo_lines/write_repo_file/
-# repo_shell. Needs `gopls` on PATH (`go install golang.org/x/tools/gopls@latest`).
-#
-# MCP tools are exposed to the model with the server name prefixed
-# ("gopls__go_search", not "go_search") -- every persona/prompt below uses
-# the real, callable name.
-#
-# Swap `lmstudio/google/gemma-4-26b-a4b` below for whatever you have loaded
-# (matches the model name already used by every other example in this repo);
-# a coding-tuned model (e.g. a Qwen2.5-Coder build) will likely do
-# meaningfully better on `coder` specifically than a general chat model.
+# Before a real run point `repo`'s source.uri at a scratch clone, not your
+# working checkout.
 resource_types:
 - name: stories
   config:
-    # JSON array building is the one part of this resource type that's real
-    # data manipulation rather than shelling out to another CLI, so it's
-    # Ruby (stdlib json, explicit .sort -- Dir.glob order isn't guaranteed)
-    # rather than bash's printf/comma-tracking. `.source.dir` is passed as a
-    # process argument (shellquote's actual job) rather than interpolated
-    # into the Ruby source, so it needs no Ruby-side escaping.
+    # Discovering versions is the one thing that must look at the real
+    # repository, since it runs before any workspace exists.
     check: |
       ruby -e '
         require "json"
-        dir = ARGV[0]
-        # versions = Dir.glob(File.join(dir, "[0-9][0-9][0-9]-*.md")).sort.map do |path|
-        versions = Dir.glob(File.join(dir, "001-*.md")).sort.map do |path|
+        versions = Dir.glob(File.join(ARGV[0], ARGV[1], "001-*.md")).sort.map do |path|
           name = File.basename(path)
           { num: name[0, 3], file: name }
         end
         puts versions.to_json
-      ' -- {{ .source.dir | shellquote }}
-    # In addition to the three pointer files every version has always
-    # carried, this copies two more files into the artifact -- story.md and
-    # CLAUDE.md -- so the agents' built-in read_file (100,000-byte cap,
-    # never spills) can read each whole in one call instead of a repo_shell
-    # round-trip every single story needs regardless. `set -e` so a missing
-    # source file fails the get loudly rather than leaving an agent to
-    # discover an empty file at turn 3.
+      ' -- {{ .source.repo | shellquote }} {{ .source.dir | shellquote }}
+    # Only the pointers: the story TEXT lives in repo/, which the agents have.
     in: |
       set -e
-      repo={{ .source.repo | shellquote }}
-      dir={{ .source.dir | shellquote }}
-      file={{ .version.file | shellquote }}
       echo {{ .version.num | shellquote }} > ./num
-      echo "$file" > ./file
-      echo "$repo" > ./repo
-      cp "$repo/$dir/$file" ./story.md
-      cp "$repo/CLAUDE.md" ./CLAUDE.md
+      echo {{ .version.file | shellquote }} > ./file
 
-# gopls' own MCP server, run as a local subprocess (stdio) rather than over
-# HTTP -- `gopls mcp` speaks MCP on stdin/stdout. cwd: is what tells gopls
-# WHICH Go workspace to index, so it must point at the same absolute checkout
-# resources: stories hands the agents below as stories/repo -- mcp_servers:
-# is resolved before any step runs, so there is nothing to template it
-# against; keep this in sync with resources[0].source.repo below by hand.
+- name: repo
+  config:
+    check: |
+      git -C {{ .source.uri | shellquote }} rev-parse HEAD \
+        | ruby -rjson -e 'puts [{ ref: STDIN.read.strip }].to_json'
+    # A clone, not a copy: agents get a real working tree, so go test,
+    # golangci-lint and git diff all behave normally, and the origin is
+    # untouched until the put.
+    in: |
+      set -e
+      git clone --quiet {{ .source.uri | shellquote }} .
+      git checkout --quiet {{ .version.ref | shellquote }}
+    # Runs with the build workspace as cwd, so stories/ and repo/ are both
+    # visible. An unchanged tree exits cleanly rather than failing the job.
+    out: |
+      set -e
+      num="$(cat stories/num)"
+      file="$(cat stories/file)"
+      cd {{ .params.path | shellquote }}
+      git add -A
+      git diff --cached --quiet && exit 0
+      git -c user.name=steps -c user.email=steps@localhost \
+        commit --quiet -m "self-build: story $num ($(basename "$file" .md))"
+      git push --quiet origin HEAD:refs/heads/self-build
+
+# gopls' MCP server as a local subprocess. cwd: is RELATIVE, so it resolves
+# against each agent step's own working directory -- gopls indexes the same
+# materialized clone the agents read and edit, rather than some other
+# checkout whose paths they could not open.
 mcp_servers:
 - name: gopls
   command: gopls
   args: [mcp]
-  cwd: /Users/jtarchie/workspace/steps
+  cwd: repo
 
 resources:
 - name: stories
   type: stories
   source:
     dir: docs/proposals/stories
-    # See pipeline.yml's identical comment: steps always runs steps inside a
-    # fresh, disposable temp workspace, never the directory `steps` was
-    # invoked from -- point this at a dedicated worktree before a real run,
-    # same as pipeline.yml (see README.md).
     repo: /Users/jtarchie/workspace/steps
+- name: repo
+  type: repo
+  source:
+    uri: /Users/jtarchie/workspace/steps
 
 agents:
-# Research only: read the story and the current codebase, write a
-# file-by-file plan. No write access to the real repo beyond that one plan
-# file -- write_plan's output path is derived from stories/num in shell,
-# never a model argument, so there is nothing else it could write to.
+# Research only. Holds no shell and no general write tool, so "planner cannot
+# modify the repo" is structural rather than a promise: write_plan derives its
+# own output path in shell, and there is no other tool that can write.
 - name: planner
   source: { model: lmstudio/google/gemma-4-26b-a4b }
   max_turns: 200
@@ -143,306 +107,126 @@ agents:
     write, you cite file:line for everything you describe, and you never
     propose a change to a file you have not actually read this session.
 
-    TOOL POLICY. There is exactly one right tool for each job here, and
-    reaching for the wrong one is how a run can burn its entire turn budget
-    without producing a plan:
+    The repository is at repo/, the story pointers at stories/. Every tool
+    path is relative to those: "repo/internal/config/config.go".
 
-      starting up          story_brief (no arguments, call it once, first)
-      standing rules       read_file with path "stories/CLAUDE.md"
-      WHERE something is   gopls__go_search -- you have no grep and no shell
-      every call site      gopls__go_symbol_references
-      a package's API      gopls__go_package_api -- not reading every file
-      reading a file       read_repo_file / read_repo_lines
-      non-Go files         list_repo_dir (docs/, examples/)
+    TOOL POLICY, for the choices that are not obvious:
+
+      WHERE something is   search_files -- a regex over file contents.
+                           output_mode "content" returns matching lines WITH
+                           line numbers, which is how you get file:line
+      every call site      gopls__go_symbol_references -- see below
       your output          write_plan -- your only write, called once, last
 
-    You have NO shell. If your instinct is "grep for it", that instinct is
-    gopls__go_search. If it is "cat that file", it is read_repo_file.
+    You have NO shell. If your instinct is "grep for it", that is
+    search_files. If it is "cat that file", it is read_file.
 
-    TWO GOPLS ARGUMENT RULES, both easy to get wrong:
-
-      1. gopls__go_search's query is a BARE identifier or package.Identifier
-         ONLY -- "Step", "RunJob", "internal/config.Step". Never a phrase and
-         never a Go keyword: "type Step struct" or "func RunJob" returns
-         unrelated noise from every dependency in the module cache instead of
-         your target. An empty result means retype it as a bare name, not
-         that the symbol does not exist -- there is no grep to fall back to.
-
-      2. gopls__go_symbol_references takes `file` and `symbol`. The second
-         argument is `symbol`, NOT `name`. `file` must be the ABSOLUTE path of
-         the file that DEFINES the symbol -- get that from gopls__go_search
-         first. `symbol` is the bare identifier, optionally qualified as
-         "lib.Bar" or "T.M". Unlike a text search it cannot false-positive on
-         a comment or a string literal that merely contains the same text.
-
-    Every path in a gopls argument is ABSOLUTE. story_brief prints REPO_ROOT;
-    join it with the relative path yourself.
+    THE SIBLING CHECK: search_files for the file that DEFINES a symbol, then
+    gopls__go_symbol_references with `file` set to that path and `symbol` to
+    the bare identifier -- the second argument is `symbol`, NOT `name`.
+    Worth the extra step for exactly one question, "does this change touch
+    one code path or several": unlike a text search it cannot false-positive
+    on a comment or miss a call site spelled differently. Everything else is
+    search_files, which is faster and cheaper.
   tools:
-  - read_file    # only ever needed for stories/CLAUDE.md
+  - read_file
+  - list_dir
+  - search_files
   - name: story_brief
     description: >
-      Call this FIRST, before anything else. Takes no arguments. Returns, in
-      one call, everything you need to start: the story number, the story
-      file name, REPO_ROOT (the ABSOLUTE path of the real project checkout),
-      the absolute path of the story doc, the path you will write the plan
-      to, and the full text of the story itself. Every absolute path it
-      prints can be pasted straight into a gopls tool argument. The one thing
-      it does NOT return is the project standing rules -- read those
-      separately with read_file("stories/CLAUDE.md").
+      Call this FIRST. No arguments. Returns the story number and the path of
+      the story doc -- read that with read_file.
     run: |
       num="$(cat stories/num)"
-      file="$(cat stories/file)"
-      repo="$(cat stories/repo)"
-      printf 'STORY_NUM       %s\n' "$num"
-      printf 'STORY_FILE      %s\n' "$file"
-      printf 'REPO_ROOT       %s\n' "$repo"
-      printf 'STORY_ABS_PATH  %s/docs/proposals/stories/%s\n' "$repo" "$file"
-      printf 'PLAN_PATH       experiments/self-build/plans/%s.md\n' "$num"
-      printf '\n--- story %s: %s ---\n' "$num" "$file"
-      cat stories/story.md
-  - name: read_repo_file
-    description: >
-      Read one file from the real project checkout, with line numbers. path
-      is relative to the repo root ("internal/config/config.go",
-      "docs/agents.md"). This is the ONLY way to read a file -- you have no
-      shell, and gopls has no tool that returns file contents. A file over
-      28KB cannot be returned whole -- you get a header, a line count, and
-      the first 200 lines; continue with read_repo_lines, or, if you are
-      hunting for a symbol rather than reading prose, stop reading and use
-      gopls__go_search instead.
-    run: |
-      cd "$(cat stories/repo)" || exit 1
-      f={{ .args.path | shellquote }}
-      [ -f "$f" ] || { printf 'read_repo_file: %s is not a file in the repo\n' "$f"; exit 1; }
-      lines=$(wc -l < "$f" | tr -d ' ')
-      bytes=$(wc -c < "$f" | tr -d ' ')
-      printf '# %s -- %s lines, %s bytes\n' "$f" "$lines" "$bytes"
-      if [ "$bytes" -gt 28000 ]; then
-        printf '# TOO LARGE to return whole. Showing lines 1-200 of %s.\n' "$lines"
-        printf '# Continue with read_repo_lines(path, start_line, end_line), or find\n'
-        printf '# what you want by symbol with gopls__go_search instead of reading linearly.\n'
-        awk 'NR<=200 {printf "%6d\t%s\n", NR, $0}' "$f"
-      else
-        awk '{printf "%6d\t%s\n", NR, $0}' "$f"
-      fi
-  - name: read_repo_lines
-    description: >
-      Read a numbered line range from a file. All three arguments are
-      required -- there is no "rest of the file" default; use read_repo_file
-      for a whole small file. path is relative to the repo root. Use this
-      after gopls__go_symbol_references hands you a file and a line and you
-      want the surrounding context.
-    run: |
-      cd "$(cat stories/repo)" || exit 1
-      f={{ .args.path | shellquote }}
-      s={{ .args.start_line | shellquote }}
-      e={{ .args.end_line | shellquote }}
-      [ -f "$f" ] || { printf 'read_repo_lines: %s is not a file\n' "$f"; exit 1; }
-      printf '# %s lines %s-%s\n' "$f" "$s" "$e"
-      awk -v s="$s" -v e="$e" 'NR>=s && NR<=e {printf "%6d\t%s\n", NR, $0}' "$f"
-  - name: list_repo_dir
-    description: >
-      List one directory in the real project checkout. path is relative to
-      the repo root; pass "." for the root itself -- the argument is
-      required, so there is no way to call this with no path. Use it to
-      discover the files gopls does not index: docs/*.md, examples/*.yml,
-      experiments/. Do NOT use it to hunt for Go code -- gopls__go_search
-      searches the whole module by symbol name in one call and tells you the
-      exact file.
-    run: |
-      cd "$(cat stories/repo)" || exit 1
-      d={{ .args.path | shellquote }}
-      [ -d "$d" ] || { printf 'list_repo_dir: %s is not a directory in the repo\n' "$d"; exit 1; }
-      ls -lAp -- "$d"
+      printf 'STORY_NUM   %s\n' "$num"
+      printf 'STORY_PATH  repo/docs/proposals/stories/%s\n' "$(cat stories/file)"
+      printf 'PLAN_PATH   repo/experiments/self-build/plans/%s.md\n' "$num"
   - name: write_plan
     description: >
-      Write this story's implementation plan. ONE argument: content, the
-      full markdown text. You do not choose the path -- it is always
-      experiments/self-build/plans/<num>.md for the story you were given,
-      and there is no path argument to get wrong. This is the only thing you
-      can write; you have no shell and no other write tool. Call it once, at
-      the end, with the whole plan.
-    required: true   # planner's entire output is this file: required: true
-                     # does not force it FIRST -- it forces it when the model
-                     # tries to END its turn without a successful call, which
-                     # is exactly the failure a real run hit (plan emitted as
-                     # chat text after a missing-`path` error and stop).
-                     # Deriving the path in shell rather than from an
-                     # inferred arg removes that error class outright.
+      Write this story's implementation plan. ONE argument: content, the full
+      markdown text. You do not choose the path -- there is no path argument
+      to get wrong. Call it once, at the end, with the whole plan.
+    required: true   # forces the call when the model tries to END its turn
+                     # without one -- a real run emitted the plan as chat text
     run: |
       num="$(cat stories/num)"
-      repo="$(cat stories/repo)"
-      mkdir -p "$repo/experiments/self-build/plans"
-      cat > "$repo/experiments/self-build/plans/$num.md" <<'STEPS_AGENT_FILE_EOF'
+      mkdir -p repo/experiments/self-build/plans
+      cat > "repo/experiments/self-build/plans/$num.md" <<'STEPS_AGENT_FILE_EOF'
       {{ .args.content }}
       STEPS_AGENT_FILE_EOF
-      printf 'wrote experiments/self-build/plans/%s.md (%s bytes)\n' "$num" "$(wc -c < "$repo/experiments/self-build/plans/$num.md" | tr -d ' ')"
-  # gopls' MCP server, scoped to the read half of gopls' own documented
-  # workflow: real Go semantics (definitions, references, package APIs)
-  # instead of grepping. Paths in these tools' arguments and results are
-  # ABSOLUTE -- they live under stories/repo, the same checkout cwd: points
-  # the server at.
+      printf 'wrote plans/%s.md\n' "$num"
   - mcp: gopls
-    tools:
-    - go_workspace          # gopls asks to be called first, to learn the module layout
-    - go_search             # fuzzy symbol search -- replaces `grep -rn` for finding a type/func
-    - go_package_api        # a package's exported API
-    - go_symbol_references  # every reference to a symbol -- the sibling-call-site check
+    tools: [go_symbol_references]
+    max_output_bytes: 6000
 
-# Implements the plan end to end: code, tests, docs/examples. The only agent
-# below with a general-purpose shell and write access to arbitrary paths.
+# Implements the plan end to end: code, tests, docs/examples.
 - name: coder
   source: { model: lmstudio/google/gemma-4-26b-a4b }
   max_turns: 200
   system: |
     You are a careful Go engineer implementing an already-written plan
-    against the `steps` codebase. You follow the standing rules in
-    CLAUDE.md exactly (package dependency graph, merkle value-gating,
-    trust-boundary notes), and you never consider a change done until
-    verify_gate returns PASS. When a story's change applies to more than one
-    structurally similar code path (get/task/put/agent step handling is the
-    most common case in this repo), you apply the SAME treatment to every
-    one of them, not just the first one you find -- a past attempt got this
-    wrong.
+    against the `steps` codebase. You follow repo/CLAUDE.md exactly (package
+    dependency graph, merkle value-gating, trust boundaries), and a change is
+    never done until verify_gate returns PASS. When a change applies to more
+    than one structurally similar code path (get/task/put/agent step handling
+    is the usual case here), you apply the SAME treatment to every one of
+    them, not just the first you find -- a past attempt got this wrong.
 
-    TOOL POLICY. Each job has exactly one tool:
+    The repository is at repo/. Every tool path is relative to that:
+    "repo/internal/config/config.go".
 
-      starting up          story_brief (no arguments, once, first)
-      standing rules       read_file with path "stories/CLAUDE.md"
-      the plan             read_repo_file on the PLAN_PATH story_brief printed
-      WHERE something is   gopls__go_search -- prefer this over repo_shell grep
+    TOOL POLICY, for the choices that are not obvious:
+
+      WHERE something is   search_files (output_mode "content" for file:line)
       every call site      gopls__go_symbol_references -- the sibling check
-      a package's API      gopls__go_package_api
-      reading a file       read_repo_file / read_repo_lines
-      non-Go files         list_repo_dir
-      writing a file       write_repo_file (whole-file; read it first if you
-                           are only changing part of it)
-      after an edit        gopls__go_diagnostics on the files you touched
+      CHANGING a file      edit_file, NOT write_file -- see below
+      after an edit        gopls__go_diagnostics on the file you touched
       the real gate        verify_gate (no arguments)
-      anything else        repo_shell -- git, mkdir, rm, sed -i, patch, and
-                           one-off go commands. Prefer read_repo_file/
-                           read_repo_lines/list_repo_dir/gopls over reaching
-                           for cat/grep/find/ls inside repo_shell -- they give
-                           you line numbers and real Go semantics that a
-                           plain shell command doesn't.
+      anything else        run_shell -- git, mkdir, rm. Its cwd is your
+                           workspace, so repo commands need `cd repo && ...`,
+                           and each call is a fresh shell.
 
-    TWO GOPLS ARGUMENT RULES, both easy to get wrong:
+    USE edit_file, NOT write_file, to change part of an existing file. Copy
+    old_string VERBATIM out of a read_file result -- read_file returns raw
+    bytes, so what you read is byte-exact input for an edit. If it matches
+    nothing, read again and copy more carefully; if several places, include
+    more surrounding lines. write_file replaces a whole file.
 
-      1. gopls__go_search's query is a BARE identifier or package.Identifier
-         ONLY -- "Step", "RunJob", "internal/config.Step". A phrase or a Go
-         keyword ("func RunJob", "type Step struct") returns noise from the
-         module cache, not your target. Empty result means retype it, not
-         give up.
-
-      2. gopls__go_symbol_references takes `file` and `symbol` -- the second
-         argument is `symbol`, NOT `name`. `file` is the ABSOLUTE path of the
-         DEFINING file, found via gopls__go_search first. `symbol` may be
-         qualified as "lib.Bar" or "T.M". Unlike grep it cannot miss a
-         sibling that spells the call differently, and cannot false-positive
-         on a comment.
-
-    Every gopls path argument is ABSOLUTE; join REPO_ROOT yourself.
+    THE SIBLING CHECK: search_files for the file that DEFINES a symbol, then
+    gopls__go_symbol_references with that `file` and the bare `symbol` -- the
+    second argument is `symbol`, NOT `name`. Unlike a text search it cannot
+    miss a sibling spelled differently or false-positive on a comment.
   tools:
   - read_file
+  - list_dir
+  - search_files
+  - edit_file
+  - write_file
+  - run_shell
   - name: story_brief
     description: >
-      Call this FIRST, before anything else. Takes no arguments. Returns the
-      story number, the story file name, REPO_ROOT (the ABSOLUTE path of the
-      real project checkout), the absolute path of the story doc, the path
-      of the plan a separate planning pass already wrote for this story, and
-      the full text of the story itself.
+      Call this FIRST. No arguments. Returns the story number and the paths
+      of the story doc, the plan a planning pass already wrote, and the
+      critique.
     run: |
       num="$(cat stories/num)"
-      file="$(cat stories/file)"
-      repo="$(cat stories/repo)"
-      printf 'STORY_NUM       %s\n' "$num"
-      printf 'STORY_FILE      %s\n' "$file"
-      printf 'REPO_ROOT       %s\n' "$repo"
-      printf 'STORY_ABS_PATH  %s/docs/proposals/stories/%s\n' "$repo" "$file"
-      printf 'PLAN_PATH       experiments/self-build/plans/%s.md\n' "$num"
-      printf 'CRITIQUE_PATH   experiments/self-build/critiques/%s.md\n' "$num"
-      printf '\n--- story %s: %s ---\n' "$num" "$file"
-      cat stories/story.md
-  - name: read_repo_file
-    description: >
-      Read one file from the real project checkout, with line numbers. path
-      is relative to the repo root. Prefer this over repo_shell's cat -- it
-      gives you line numbers, which you need to cite. A file over 28KB
-      cannot be returned whole -- you get a header, a line count, and the
-      first 200 lines; continue with read_repo_lines, or use gopls__go_search
-      if you are hunting for a symbol rather than reading prose.
-    run: |
-      cd "$(cat stories/repo)" || exit 1
-      f={{ .args.path | shellquote }}
-      [ -f "$f" ] || { printf 'read_repo_file: %s is not a file in the repo\n' "$f"; exit 1; }
-      lines=$(wc -l < "$f" | tr -d ' ')
-      bytes=$(wc -c < "$f" | tr -d ' ')
-      printf '# %s -- %s lines, %s bytes\n' "$f" "$lines" "$bytes"
-      if [ "$bytes" -gt 28000 ]; then
-        printf '# TOO LARGE to return whole. Showing lines 1-200 of %s.\n' "$lines"
-        printf '# Continue with read_repo_lines(path, start_line, end_line), or find\n'
-        printf '# what you want by symbol with gopls__go_search instead of reading linearly.\n'
-        awk 'NR<=200 {printf "%6d\t%s\n", NR, $0}' "$f"
-      else
-        awk '{printf "%6d\t%s\n", NR, $0}' "$f"
-      fi
-  - name: read_repo_lines
-    description: >
-      Read a numbered line range from a file. All three arguments are
-      required -- there is no "rest of the file" default; use read_repo_file
-      for a whole small file. path is relative to the repo root, OR
-      absolute. The absolute form is how you read back a SPILLED tool
-      result: when a repo_shell/verify_gate output is too large you get a
-      pointer to an absolute .steps-agent-out/output-*.txt path -- pass that
-      path here with start_line 1 and end_line 400.
-    run: |
-      cd "$(cat stories/repo)" || exit 1
-      f={{ .args.path | shellquote }}
-      s={{ .args.start_line | shellquote }}
-      e={{ .args.end_line | shellquote }}
-      [ -f "$f" ] || { printf 'read_repo_lines: %s is not a file\n' "$f"; exit 1; }
-      printf '# %s lines %s-%s\n' "$f" "$s" "$e"
-      awk -v s="$s" -v e="$e" 'NR>=s && NR<=e {printf "%6d\t%s\n", NR, $0}' "$f"
-  - name: list_repo_dir
-    description: >
-      List one directory in the real project checkout. path is relative to
-      the repo root; pass "." for the root itself. Use it for docs/*.md,
-      examples/*.yml, and anything else gopls does not index.
-    run: |
-      cd "$(cat stories/repo)" || exit 1
-      d={{ .args.path | shellquote }}
-      [ -d "$d" ] || { printf 'list_repo_dir: %s is not a directory in the repo\n' "$d"; exit 1; }
-      ls -lAp -- "$d"
-  - name: repo_shell
-    description: >
-      Run a shell command with the real project checkout as the working
-      directory (not your own disposable workspace, which only has
-      stories/num, stories/file, stories/repo, stories/story.md,
-      stories/CLAUDE.md). Use this for git, mkdir, rm, sed -i, patch, and
-      one-off go commands. For reading a file, prefer read_repo_file/
-      read_repo_lines -- they number lines for you. For finding a symbol or
-      its call sites, prefer gopls__go_search/gopls__go_symbol_references --
-      grep can miss a call site that's spelled differently and false-positive
-      on a comment. Every call is a fresh shell with no memory of earlier
-      calls -- chain related commands with && in one call. Output over 32KB
-      spills to a file -- read it back with read_repo_lines using the
-      absolute path in the pointer message.
-    run: |
-      cd "$(cat stories/repo)" || exit 1
-      {{ .args.command }}
+      printf 'STORY_NUM     %s\n' "$num"
+      printf 'STORY_PATH    repo/docs/proposals/stories/%s\n' "$(cat stories/file)"
+      printf 'PLAN_PATH     repo/experiments/self-build/plans/%s.md\n' "$num"
+      printf 'CRITIQUE_PATH repo/experiments/self-build/critiques/%s.md\n' "$num"
   - name: verify_gate
     description: >
-      Run the whole objective gate in one call, in the right order, and
-      report PASS or FAIL: go fmt ./... && go mod tidy && golangci-lint run
-      && go test ./... && go build -v. Takes no arguments. Call it after
-      every edit -- a pass from before your last change is worthless. Output
-      is trimmed to the last 300 lines, which is where the failures are. Do
-      not type this chain into repo_shell yourself; getting the && order
-      wrong is how a past run reported success on a broken tree.
+      Run the whole objective gate in one call and report PASS or FAIL: go
+      fmt && go mod tidy && golangci-lint run && go test ./... && go build.
+      No arguments. Call it after every edit -- a pass from before your last
+      change is worthless. Trimmed to the last 300 lines, where the failures
+      are. Do not type this chain into run_shell yourself; getting the &&
+      order wrong is how a past run reported success on a broken tree.
     run: |
-      cd "$(cat stories/repo)" || exit 1
+      cd repo || exit 1
       rc=0
-      out=$(go fmt ./... 2>&1 && go mod tidy 2>&1 && golangci-lint run 2>&1 && go test ./... 2>&1 && go build -v 2>&1) || rc=$?
+      out=$(go fmt ./... 2>&1 && go mod tidy 2>&1 && golangci-lint run 2>&1 \
+            && go test ./... 2>&1 && go build -v 2>&1) || rc=$?
       printf '%s\n' "$out" | tail -n 300
       if [ "$rc" -eq 0 ]; then
         printf '\nGATE: PASS\n'
@@ -450,349 +234,185 @@ agents:
         printf '\nGATE: FAIL (exit %s) -- fix, then call verify_gate again\n' "$rc"
       fi
       exit "$rc"
-  - name: write_repo_file
-    description: >
-      Write (overwriting) a whole file in the real project checkout. path is
-      relative to the repo root. Prefer this over a repo_shell heredoc for
-      any nontrivial file write -- content is an ordinary argument, so you
-      don't have to hand-escape it into a shell command yourself. This
-      REPLACES the entire file; read it first with read_repo_file if you
-      only want to change part of it.
-    run: |
-      cd "$(cat stories/repo)" && mkdir -p "$(dirname {{ .args.path | shellquote }})" && cat > {{ .args.path | shellquote }} <<'STEPS_AGENT_FILE_EOF'
-      {{ .args.content }}
-      STEPS_AGENT_FILE_EOF
-  # Same gopls grant as planner, plus go_diagnostics -- coder is the only
-  # agent here that edits, and go_diagnostics (build/analysis errors, with
-  # suggested fixes) is gopls' own edit-workflow tool, expected after every
-  # modification.
   - mcp: gopls
-    tools:
-    - go_workspace
-    - go_search
-    - go_package_api
-    - go_symbol_references
-    - go_diagnostics
+    tools: [go_symbol_references, go_diagnostics]
+    max_output_bytes: 6000
 
-# Quality gate before a commit happens. No shell and no general write tool --
-# write_critique's output path is derived from stories/num in shell, never a
-# model argument, so there is nothing else it could write to.
+# Quality gate before the put. No shell and no general write tool --
+# write_critique's path is derived in shell, never a model argument.
 - name: reviewer
   source: { model: lmstudio/google/gemma-4-26b-a4b }
   max_turns: 200
   system: |
     You are a skeptical code reviewer for the `steps` Go codebase. Lint,
-    tests, and build already passed before you were called -- your job is
-    judging correctness a compiler can't: does the diff actually do what the
-    story asked, do the docs it touched still match the code, and -- the
-    most common miss in this codebase -- if it changes one of several
-    structurally similar code paths (get/task/put/agent step handling is the
-    usual case), did the SAME change land on all the siblings it claims to
-    cover, not just one. You do not edit files. You cite file:line for every
-    concern. A concern you cannot cite is not a concern.
+    tests and build already passed -- your job is the correctness a compiler
+    cannot check: does the diff do what the story asked, do the docs it
+    touched still match the code, and -- the most common miss here -- if it
+    changes one of several structurally similar code paths, did the SAME
+    change land on every sibling it claims to cover. You do not edit files.
+    A concern you cannot cite as file:line is not a concern.
 
-    You have no shell and no general write tool: your only write is
-    write_critique, which always targets one fixed path. That is structural,
-    not a promise.
+    The repository is at repo/. Every tool path is relative to that.
 
-    TOOL POLICY:
+    TOOL POLICY, for the choices that are not obvious:
 
-      starting up          story_brief (no arguments, once, first)
-      standing rules       read_file with path "stories/CLAUDE.md"
       what changed         repo_diff (no arguments)
       the sibling check    gopls__go_symbol_references -- see below, your
                            single most important tool
-      finding a symbol     gopls__go_search
-      reading a file       read_repo_file / read_repo_lines (both return
-                           numbered lines, so you can cite file:line exactly)
-      non-Go files         list_repo_dir
-      your record          write_critique(content)
-      your routing         the verdict tool
+      finding a symbol     search_files (output_mode "content" for file:line)
+      your record          write_critique, then the verdict tool, which is
+                           what actually routes
 
     THE SIBLING CHECK, spelled out because it is the whole reason you exist:
-    do not grep for sibling call sites -- you have no shell to grep with
-    anyway. Call gopls__go_search with the BARE identifier ("RunJob",
-    "internal/config.Step" -- never a phrase or a Go keyword) to find the
-    file that DEFINES the symbol, then call gopls__go_symbol_references with
-    `file` set to that ABSOLUTE path and `symbol` set to the bare identifier.
-    The second argument is `symbol`, NOT `name`. That call returns real
-    references with file/line/snippet; grep would both miss a sibling that
-    spells the call differently and false-positive on a comment. Check each
-    returned site yourself with read_repo_lines.
+    search_files for the file that DEFINES the symbol, then
+    gopls__go_symbol_references with that `file` and the bare `symbol` -- the
+    second argument is `symbol`, NOT `name`. It returns real references with
+    file/line/snippet; a text search would both miss a sibling spelled
+    differently and false-positive on a comment. Check each site yourself
+    with read_file.
   tools:
   - read_file
+  - list_dir
+  - search_files
   - name: story_brief
     description: >
-      Call this FIRST, before anything else. Takes no arguments. Returns the
-      story number, the story file name, REPO_ROOT (the ABSOLUTE path of the
-      real project checkout), the path of the critique you will write, and
-      the full text of the story this attempt claims to implement.
+      Call this FIRST. No arguments. Returns the story number and the path of
+      the story this attempt claims to implement.
     run: |
       num="$(cat stories/num)"
-      file="$(cat stories/file)"
-      repo="$(cat stories/repo)"
-      printf 'STORY_NUM       %s\n' "$num"
-      printf 'STORY_FILE      %s\n' "$file"
-      printf 'REPO_ROOT       %s\n' "$repo"
-      printf 'STORY_ABS_PATH  %s/docs/proposals/stories/%s\n' "$repo" "$file"
-      printf 'CRITIQUE_PATH   experiments/self-build/critiques/%s.md\n' "$num"
-      printf '\n--- story %s: %s ---\n' "$num" "$file"
-      cat stories/story.md
-  - name: read_repo_file
-    description: >
-      Read one file from the real project checkout, with line numbers,
-      needed to cite file:line in your critique. path is relative to the
-      repo root. A file over 28KB cannot be returned whole -- you get a
-      header, a line count, and the first 200 lines; continue with
-      read_repo_lines.
-    run: |
-      cd "$(cat stories/repo)" || exit 1
-      f={{ .args.path | shellquote }}
-      [ -f "$f" ] || { printf 'read_repo_file: %s is not a file in the repo\n' "$f"; exit 1; }
-      lines=$(wc -l < "$f" | tr -d ' ')
-      bytes=$(wc -c < "$f" | tr -d ' ')
-      printf '# %s -- %s lines, %s bytes\n' "$f" "$lines" "$bytes"
-      if [ "$bytes" -gt 28000 ]; then
-        printf '# TOO LARGE to return whole. Showing lines 1-200 of %s.\n' "$lines"
-        printf '# Continue with read_repo_lines(path, start_line, end_line).\n'
-        awk 'NR<=200 {printf "%6d\t%s\n", NR, $0}' "$f"
-      else
-        awk '{printf "%6d\t%s\n", NR, $0}' "$f"
-      fi
-  - name: read_repo_lines
-    description: >
-      Read a numbered line range from a file. All three arguments are
-      required. path is relative to the repo root, OR absolute -- the
-      absolute form reads back a SPILLED repo_diff result via the pointer
-      path in its message.
-    run: |
-      cd "$(cat stories/repo)" || exit 1
-      f={{ .args.path | shellquote }}
-      s={{ .args.start_line | shellquote }}
-      e={{ .args.end_line | shellquote }}
-      [ -f "$f" ] || { printf 'read_repo_lines: %s is not a file\n' "$f"; exit 1; }
-      printf '# %s lines %s-%s\n' "$f" "$s" "$e"
-      awk -v s="$s" -v e="$e" 'NR>=s && NR<=e {printf "%6d\t%s\n", NR, $0}' "$f"
-  - name: list_repo_dir
-    description: >
-      List one directory in the real project checkout. path is relative to
-      the repo root; pass "." for the root itself. Use it for docs/*.md and
-      examples/*.yml.
-    run: |
-      cd "$(cat stories/repo)" || exit 1
-      d={{ .args.path | shellquote }}
-      [ -d "$d" ] || { printf 'list_repo_dir: %s is not a directory in the repo\n' "$d"; exit 1; }
-      ls -lAp -- "$d"
+      printf 'STORY_NUM     %s\n' "$num"
+      printf 'STORY_PATH    repo/docs/proposals/stories/%s\n' "$(cat stories/file)"
+      printf 'CRITIQUE_PATH repo/experiments/self-build/critiques/%s.md\n' "$num"
   - name: repo_diff
     description: >
-      Show what this attempt actually changed. Takes no arguments. Returns
-      `git status --short`, then `git diff --stat HEAD`, then
-      `git diff HEAD`. It is `git diff HEAD`, NOT `main...HEAD`: the
-      implementer does not commit, so the work you are reviewing is
-      UNCOMMITTED in the working tree -- `main...HEAD` would show previously
-      committed stories and none of the change under review. A `??` line in
-      the status output is a NEW, untracked file: it will not appear in the
-      diff, so read it with read_repo_file. If the diff is too large it
-      spills to a file -- read it back with read_repo_lines using the
-      absolute path in the pointer.
+      Show what this attempt actually changed. No arguments. Returns `git
+      status --short`, `git diff --stat HEAD`, then `git diff HEAD` -- HEAD,
+      not `main...HEAD`, because the implementer does not commit, so the work
+      under review is UNCOMMITTED. A `??` line is a NEW file that will not
+      appear in the diff, so read it with read_file. An oversized diff spills
+      to a file; read_file accepts the absolute path from the pointer.
     run: |
-      cd "$(cat stories/repo)" || exit 1
-      printf '--- git status --short (a "??" line is a NEW file; read it with read_repo_file) ---\n'
+      cd repo || exit 1
+      printf -- '--- git status --short (a "??" line is a NEW file) ---\n'
       git --no-pager status --short
-      printf '\n--- git diff --stat HEAD ---\n'
+      printf -- '\n--- git diff --stat HEAD ---\n'
       git --no-pager diff --stat HEAD
-      printf '\n--- git diff HEAD (the uncommitted work under review) ---\n'
+      printf -- '\n--- git diff HEAD (the uncommitted work under review) ---\n'
       git --no-pager diff HEAD
   - name: write_critique
     description: >
       Record your review. ONE argument: content, whose FIRST LINE must be
-      exactly PASS or FAIL, followed by your reasoning with file:line
-      citations. The path is chosen for you --
-      experiments/self-build/critiques/<num>.md. This file is a
-      human-readable record and does not route the pipeline; the verdict
-      tool does that. Call this first, then call the verdict tool.
+      exactly PASS or FAIL, then your reasoning with file:line citations. The
+      path is chosen for you. A human-readable record only -- the verdict
+      tool is what routes. Call this first, then the verdict tool.
     required: true
     run: |
       num="$(cat stories/num)"
-      repo="$(cat stories/repo)"
-      mkdir -p "$repo/experiments/self-build/critiques"
-      cat > "$repo/experiments/self-build/critiques/$num.md" <<'STEPS_AGENT_FILE_EOF'
+      mkdir -p repo/experiments/self-build/critiques
+      cat > "repo/experiments/self-build/critiques/$num.md" <<'STEPS_AGENT_FILE_EOF'
       {{ .args.content }}
       STEPS_AGENT_FILE_EOF
-      printf 'wrote experiments/self-build/critiques/%s.md\n' "$num"
-  # Same gopls grant as planner minus go_package_api (the reviewer judges an
-  # existing diff rather than surveying a package's API), plus
-  # go_symbol_references -- its number-one job is confirming a fix landed on
-  # every sibling call site, and that IS the go_symbol_references call.
+      printf 'wrote critiques/%s.md\n' "$num"
   - mcp: gopls
-    tools:
-    - go_workspace
-    - go_search
-    - go_symbol_references
+    tools: [go_symbol_references]
+    max_output_bytes: 6000
 
 jobs:
 - name: self-build
   plan:
   - get: stories
     version: every
+  - get: repo
   - agent: planner
-    inputs: [stories]
-    attempts: 2       # whole-conversation restart on a transport/max_turns failure
-    timeout: 20m        # per attempt, not total -- see docs/attempts-timeout.md
+    inputs: [stories, repo]
+    attempts: 2       # whole-conversation restart on a transport failure
+    timeout: 20m      # per attempt, not total -- see docs/attempts-timeout.md
     prompt: |
-      This is a story-by-story self-build loop: you plan ONE implementation
-      step for ONE story file in the real steps repository.
+      Plan ONE implementation step for ONE story.
 
-      1. Call story_brief. No arguments. It returns the story number, the
-         story file name, REPO_ROOT (the ABSOLUTE path of the real checkout),
-         PLAN_PATH (where you will write), and the full text of the story.
-      2. Call read_file with path "stories/CLAUDE.md" -- one call returns the
-         whole file: the package dependency graph and project layout. A
-         behavior or guard added to one of several structurally similar
-         code paths (e.g. get/task/put/agent step handling) must be applied
-         to, and verified on, all of them it claims to cover -- a real
-         review of this pipeline's own first story found exactly that bug
-         slipping through.
-      3. Find where this story's feature lives. Use gopls, not text search:
-           - gopls__go_workspace once, first, for the module layout.
-           - gopls__go_search for each type/func/const the story implies --
-             a BARE identifier only.
-           - gopls__go_symbol_references(file, symbol) for every CALL SITE of
-             anything you plan to change. This is the step that tells you
-             whether the story touches one code path or several.
-           - gopls__go_package_api for a package's exported surface.
-         Relevant packages: internal/config, internal/pipeline, internal/
-         merkle, internal/store, internal/trigger, internal/agent.
-      4. Read the specific files gopls pointed you at, with read_repo_file
-         (path relative to the repo root). The big ones do not come back
-         whole -- internal/config/config.go is 112KB, internal/pipeline/
-         pipeline.go is 44KB -- you get a header plus the first 200 lines.
-         Page the parts you actually need with read_repo_lines(path,
-         start_line, end_line). Prefer one more gopls query over reading a
-         large file linearly. Use list_repo_dir for docs/ and examples/,
-         which gopls does not index.
-      5. Call write_plan(content) once, with the whole plan as markdown. Say,
-         file by file: what changes, what new tests are needed, and which
-         docs/*.md and examples/*.yml need updating. State explicitly whether
-         this story's change applies to more than one structurally similar
-         code path -- list the sibling sites gopls__go_symbol_references
-         actually returned, with file:line -- and if so require a single
-         test that covers all of them, not just one. Cite file:line for
-         every existing thing you describe. Do not describe a file you have
-         not read.
+      1. story_brief, then read_file on repo/CLAUDE.md and on STORY_PATH.
+      2. Find where the feature must integrate. The feature the story ASKS
+         FOR does not exist yet, so never search for its own name. Relevant:
+         repo/internal/{config,pipeline,merkle,store,trigger,agent}. For
+         anything you plan to CHANGE, run the sibling check -- that is what
+         tells you whether this story touches one code path or several. Do
+         not repeat a query you have already run.
+      3. Read the files you found. Page the big ones.
+      4. write_plan(content), once, with the whole plan. File by file: what
+         changes, what tests are needed, which docs/*.md and examples/*.yml
+         need updating. State explicitly whether the change applies to more
+         than one structurally similar code path -- list the sibling sites
+         gopls returned, with file:line -- and if so require a single test
+         covering all of them. Do not describe a file you have not read.
   - agent: coder
-    inputs: [stories]
+    inputs: [stories, repo]
     attempts: 2
     timeout: 25m
-    handoff: { tool: true }   # a redo round gets a previous_run tool over the reviewer's last verdict/note
+    handoff: { tool: true }   # a redo gets a previous_run tool over the last verdict
     prompt: |
-      This is a story-by-story self-build loop: you implement ONE story's
-      already-written plan in the real steps repository.
+      Implement ONE story's already-written plan. repo/ is a real git clone,
+      yours to edit.
 
-      1. Call story_brief (no arguments). Note REPO_ROOT and PLAN_PATH.
-      2. Call read_file with path "stories/CLAUDE.md" -- the standing rules,
-         whole, in one call.
-      3. Call read_repo_file on PLAN_PATH -- the plan a separate planning
-         pass already wrote for this story.
-      4. Implement it end to end: code, tests, and doc/example updates.
-         Follow CLAUDE.md exactly. In particular, if this story adds a
-         behavior or guard to one of several
-         similar code paths (get/task/put/agent step handling), find the
-         sibling call sites with gopls__go_search to locate the DEFINING file,
-         then gopls__go_symbol_references with that absolute file and the bare
-         `symbol` -- not grep, which misses a sibling that spells the call
-         differently and false-positives on comments. Apply the SAME treatment
-         to all of them, not just the one you looked at first.
-         Use write_repo_file for anything nontrivial: content is an ordinary
-         argument, so the tool-calling protocol handles the escaping instead
-         of your own shell quoting. It replaces the WHOLE file -- read it with
-         read_repo_file first if you only mean to change part of it.
-      5. After each edit, call gopls__go_diagnostics on the files you touched.
-         But note gopls has no LSP client feeding it your live edits here, so
-         its view can go stale: verify_gate is the real gate, not diagnostics.
-      6. Call verify_gate (no arguments). It runs go fmt, go mod tidy,
-         golangci-lint, go test ./... and go build -v in the right order and
-         reports PASS or FAIL. Keep fixing and re-calling until it says PASS.
-         Call it again after EVERY further edit -- a PASS from before your
-         last change proves nothing. If its output spills to a file, read the
-         file back with read_repo_lines using the absolute path in the
-         pointer message.
-      7. Do not commit. A later step in this pipeline commits only if a
-         review actually passes.
+      1. story_brief, then read_file on repo/CLAUDE.md and on PLAN_PATH.
+      2. Implement it end to end: code, tests, and doc/example updates,
+         following CLAUDE.md exactly. If the story adds a behavior or guard
+         to one of several similar code paths, run the sibling check and
+         apply the SAME treatment to all of them, not just the first.
+      3. After each edit, gopls__go_diagnostics on the file you touched.
+         gopls has no LSP client feeding it your live edits, so its view can
+         go stale: verify_gate is the real gate, not diagnostics.
+      4. verify_gate. Keep fixing and re-calling until it says PASS, and call
+         it again after EVERY further edit -- a PASS from before your last
+         change proves nothing.
+      5. Do not commit. A later step publishes only if the review passes.
 
       If a `<transition_context>` block appears below, you were sent back
-      here after a previous attempt. If it mentions a failed build/lint/test
-      gate, just call verify_gate -- the repo still has your last attempt's
-      changes, so you will see the same errors directly. If it mentions a
-      failed review, call previous_run for the reviewer's full note, and
-      read_repo_file on the CRITIQUE_PATH story_brief printed, if it exists.
+      here after a previous attempt. A failed build/lint/test gate: just call
+      verify_gate, your changes are still here so you will see the errors
+      directly. A failed review: call previous_run for the reviewer's note,
+      and read_file on CRITIQUE_PATH.
   - task: build-check
+    inputs: [repo]
     run: |
       set -o pipefail
-      repo=$(cat stories/repo)
-      cd "$repo"
-
-      # Objective gate: cheap, deterministic, no model call needed to reject
-      # an obviously-broken attempt before spending reviewer turns on it.
+      cd repo
+      # Objective gate: cheap and deterministic, so an obviously-broken
+      # attempt is rejected before spending reviewer turns on it.
       golangci-lint run && go test ./... && go build -v
     to:
       failure: coder
     max_visits: 4
   - agent: reviewer
-    inputs: [stories]
+    inputs: [stories, repo]
     attempts: 2
     timeout: 20m
     prompt: |
-      This is a story-by-story self-build loop: you are the quality gate
-      before a story's changes get committed to the real steps repository.
+      You are the quality gate before this story's changes are published.
 
-      1. Call story_brief (no arguments) -- it returns the full text of the
-         story this attempt claims to implement, plus REPO_ROOT and
-         CRITIQUE_PATH.
-      2. Call read_file with path "stories/CLAUDE.md" for the standing rules.
-      3. Call repo_diff (no arguments). It gives you `git status --short`,
-         `git diff --stat HEAD` and `git diff HEAD`. The work under review is
-         UNCOMMITTED, which is why this is `git diff HEAD` and not
-         `main...HEAD`. A `??` line in the status output is a NEW file that
-         will not appear in the diff at all -- read each of those with
-         read_repo_file.
-      4. Judge whether the story is fully AND CORRECTLY implemented, not
+      1. story_brief, then read_file on STORY_PATH and repo/CLAUDE.md.
+      2. repo_diff. A `??` line is a NEW file that does not appear in the
+         diff at all -- read each of those with read_file.
+      3. Judge whether the story is fully AND CORRECTLY implemented, not
          merely plausible-looking:
          a. the feature described is present, with tests that exercise it;
-         b. docs/examples are updated if the story called for them, and
-            every claim those docs make about behavior is actually true of
-            the code next to it -- a comment or doc line contradicting the
-            code is a fail, not a nitpick;
-         c. if this story adds a behavior/guard to one of several similar
-            code paths (e.g. get/task/put/agent step handling), run the
-            sibling check described in your instructions --
-            gopls__go_search for the defining file, then
-            gopls__go_symbol_references(file, symbol) -- and confirm the
-            SAME treatment landed on all of them it claims to cover -- a fix
-            applied to only one sibling is a fail;
-         d. edge cases the story implies (empty, zero, negative, malformed
-            input) are handled deliberately, not silently accepted.
-         Lint/test/build already passed before you were called -- your job
-         is the correctness a compiler can't check.
-      5. Call write_critique(content). The first line of content must be
-         exactly PASS or FAIL on its own, then your reasoning with file:line
-         citations. The path is chosen for you. This file is a record
-         only -- it does not drive routing.
-      6. Call the verdict tool with exactly "pass" or "fail", and a short
-         `note` explaining your reasoning -- THIS is what actually routes
-         the pipeline and what the implementer sees on a redo.
+         b. docs/examples are updated if the story called for them, and every
+            claim they make about behavior is true of the code next to it --
+            a comment contradicting the code is a fail, not a nitpick;
+         c. if the change touches one of several similar code paths, run the
+            sibling check and confirm the SAME treatment landed on all of
+            them -- a fix applied to only one is a fail;
+         d. edge cases the story implies (empty, zero, negative, malformed)
+            are handled deliberately, not silently accepted.
+      4. write_critique(content), first line exactly PASS or FAIL, then your
+         reasoning with file:line citations. A record only; it does not route.
+      5. Call the verdict tool with exactly "pass" or "fail" and a short
+         `note` -- THIS routes the pipeline and is what the implementer sees
+         on a redo.
     verdicts: [pass, fail]
     to:
-      pass: commit
+      pass: repo
       fail: coder
       failure: coder   # reviewer errored or never called verdict
     max_visits: 3
-  - task: commit
-    run: |
-      num=$(cat stories/num)
-      file=$(cat stories/file)
-      repo=$(cat stories/repo)
-      cd "$repo"
-
-      git add -A
-      git commit -m "self-build: story $num ($(basename "$file" .md))"
+  - put: repo
+    params: { path: repo }
