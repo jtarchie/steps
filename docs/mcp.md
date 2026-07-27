@@ -28,7 +28,10 @@ mcp_servers:
 - name: gopls
   command: gopls          # looked up on PATH; argv, never `sh -c`
   args: [mcp]             # optional
-  cwd: /path/to/checkout  # optional; unset inherits the directory steps was invoked from
+  cwd: repo               # optional. Relative -> resolved against the agent
+                          # step's own working directory (here, the `repo`
+                          # input). Absolute -> used verbatim. Unset ->
+                          # inherits the directory steps was invoked from.
                           # no auth: — a stdio server has no request to authenticate
 ```
 
@@ -36,7 +39,9 @@ A `command:` server is a local subprocess `steps` spawns and speaks newline-deli
 
 - **Exactly one of `endpoint:`/`command:`.** Setting both, or neither, is a `LoadConfig` error. `args:`/`cwd:` are only valid alongside `command:`.
 - **`command:`/`args:` is explicit argv, never a shell.** `command: gopls mcp` is wrong — the whole string is looked up as one executable name; use `args: [mcp]`. There is no globbing, piping, or `&&`.
-- **`cwd:` unset inherits the directory `steps` was invoked from** — not a step's own workspace. `mcp_servers:` is resolved once, before any step runs, so it has no access to a step's working directory or a resource's fetched version; prefer an absolute path.
+- **`cwd:` is relative to the agent step's working directory, or absolute.** An **absolute** path is used verbatim — a fixed location on the host, identical for every step. A **relative** path is resolved against the working directory of the agent step whose tools are being built, which is what lets a server be pointed at an input artifact: `cwd: repo` aims a language server at the same materialized tree the agent's own file tools read and edit. Without it, a pipeline that fetches its source with a `get:` would have to keep the server aimed at some other checkout, and every path the server returned would name a file the agent cannot open. **Unset** inherits the directory `steps` was invoked from.
+
+  A relative `cwd:` is rejected at load time for a server backing a **resource type's** `mcp:` config: a `check`/`in`/`out` has no agent step to resolve against, so the path would silently resolve against wherever `steps` itself was invoked from. Those need an absolute `cwd:`.
 - **Auth is `none` only.** `auth:` set to anything but `""`/`none` alongside `command:` is a load-time error: a stdio server has no HTTP request to attach a bearer token to, and the oauth token file (see below) is keyed on `endpoint:`, which a stdio server doesn't have. `steps mcp login` therefore never applies to a stdio server.
 - **Environment is filtered, not inherited.** The subprocess sees only the same host-command allowlist every other host-executed command in this codebase gets (`PATH`, `HOME`, locale, `TMPDIR`/`USER`/`SHELL`, `SSH_AUTH_SOCK`, proxy vars) — **not** the operator's full environment, and specifically not any configured agent's `api_key_env` secret. There is currently no pass-through mechanism, so **a stdio server that needs a credential or any other ambient variable (e.g. `GOFLAGS`, `GOPRIVATE`) is not supported yet** — that would need its own `env_from:`-style config surface.
 - **Lifecycle**: for an agent tool grant, one subprocess is spawned per agent step per grant and reaped when the step ends (stdin closed, then a grace period, then `SIGTERM`, then `SIGKILL` — handled by the underlying SDK transport, not a custom process manager). For a resource-type `mcp:` backend, a fresh subprocess is spawned **per** `check`/`in`/`out` call — including every `steps watch` poll interval — since this package never pools connections; fine for a fast-starting binary, a poor fit for one that's slow to start.

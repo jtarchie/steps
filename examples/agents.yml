@@ -96,14 +96,25 @@ agents:
     args:             # machine-pinned — the model never sees or sets repo
       repo: jtarchie/ci
 
-# A fix agent must be able to EDIT, and the only edit path is run_shell.
+# A fix agent must be able to EDIT. edit_file is the tool for that: it takes
+# an exact old_string/new_string, so a small change stays a small change
+# instead of re-emitting a whole file through run_shell heredoc quoting.
+# search_files finds the failure site without a shell grep flooding the
+# conversation. Neither is in the default grant (adding one would change every
+# zero-config step's merkle hash), so both are listed explicitly.
 - name: fixer
   source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: |
     You fix failing checks. The repo is under ./repo. Make the smallest change
     that makes the check pass. Never weaken assertions or delete tests.
+
+    Find the failure site with search_files (output_mode "content" gives you
+    line numbers). Change it with edit_file, copying old_string VERBATIM from
+    a read_file result — read_file returns raw bytes, so what you read is
+    byte-exact input for an edit. write_file replaces a whole file; reach for
+    it only when creating one.
   max_turns: 20       # the fix<->re-run loop budget (turns carry memory)
-  tools: [read_file, list_dir, run_shell]
+  tools: [read_file, list_dir, search_files, edit_file, write_file, run_shell]
 
 # Sub-agent delegation: `lead` grants `summarizer` as a callable tool, so it can
 # offload bulk reading to a cheaper model instead of pulling a whole file in.
@@ -133,6 +144,14 @@ agents:
   tools:
   - mcp: github-mcp
     tools: [search_issues, get_issue]
+    # Narrow THIS grant's inline output budget below the global 32,000-byte
+    # cap: a search that returns a long ranked list costs context on every
+    # later turn, and the answer is the first few entries. It can only lower
+    # the cap, never raise it, and nothing is lost — overflow still spills to
+    # a file the model can read back. Valid on all three mcp grant forms
+    # (unlike description/required/max_calls), so one noisy tool in a subset
+    # doesn't have to be split into its own grant and a second connection.
+    max_output_bytes: 8000
 
 # Verdict routing: `critic` declares a verdict vocabulary and emits one via a
 # synthesized required `verdict` tool; the step's to: routes N-way on it. The

@@ -10,7 +10,7 @@ An agent step runs a tool-calling conversation loop:
 2. Build a system message combining the agent's persona with working-directory context.
 3. Loop, up to `max_turns`:
    - Send the conversation + tool definitions to the model.
-   - If the model requests tools, execute them (`read_file`, `list_dir`, `run_shell`, `write_file`, or a custom/sub-agent tool).
+   - If the model requests tools, execute them (`read_file`, `list_dir`, `search_files`, `run_shell`, `write_file`, `edit_file`, or a custom/sub-agent tool).
    - Cap any tool output at 32,000 bytes before it goes back to the model, so a noisy command can't blow out the context window — output over that is saved to a file under the step's working directory instead of being dropped, with a short pointer message taking its place (see "Compacting long conversations" below); `read_file` is the exception on both counts — it reads up to 100,000 bytes (a spilled file exists precisely so the model can pull it back, so its read budget is deliberately larger than the spill threshold) and degrades to a plain truncation with `start_line`/`end_line` paging rather than spilling a file back out to another file.
    - Append the tool results and continue.
 4. Exit when the model stops requesting tools, or `max_turns` is exceeded.
@@ -21,11 +21,35 @@ Two tools can be synthesized onto a step's grant beyond what `tools:` lists: a r
 
 ## Built-in tools
 
-`read_file`, `list_dir`, and `run_shell` are granted automatically whenever a step's `tools:` is absent (`config.DefaultAgentToolSpecs`) — this is the zero-config default every existing pipeline already gets. `write_file` (write, or with `append: true` append, a UTF-8 text file at a path relative to the working directory) is a fourth built-in, but is deliberately **not** part of that default set — folding it in would change the resolved tool grant, and therefore the merkle hash, of every agent step that declares no `tools:` block. To grant it, list it explicitly alongside whichever others you still want:
+`read_file`, `list_dir`, and `run_shell` are granted automatically whenever a step's `tools:` is absent (`config.DefaultAgentToolSpecs`) — this is the zero-config default every existing pipeline already gets. Three more built-ins exist but are deliberately **not** in that default set, because folding any of them in would change the resolved tool grant, and therefore the merkle hash, of every agent step that declares no `tools:` block:
+
+| tool | what it does |
+|---|---|
+| `write_file` | Write (or with `append: true`, append) a UTF-8 text file. Replaces a whole file. |
+| `edit_file` | Replace an exact string in an existing file — change part of a file without re-emitting it. |
+| `search_files` | Search file contents by regex and/or paths by glob, with a hard result cap. |
+
+To grant them, list them explicitly alongside whichever others you still want:
 
 ```yaml
-tools: [read_file, list_dir, run_shell, write_file]
+tools: [read_file, list_dir, search_files, run_shell, write_file, edit_file]
 ```
+
+### `edit_file`
+
+Takes `path`, `old_string`, `new_string`, and optional `replace_all`. `old_string` must match **exactly once** unless `replace_all` is set; zero matches and ambiguous matches are both returned as errors phrased as next-turn instructions ("read the file again and copy the text exactly", "include more surrounding lines"), since both are recoverable without burning an attempt. The file's mode is preserved, so editing a checked-in script does not strip its executable bit. Returns `replacements` and `first_line`, never content.
+
+`edit_file` pairs with `read_file` by design: `read_file` returns **raw bytes**, so text copied out of one is a byte-exact `old_string`. Do not add line numbers to `read_file` — it would break every edit a model constructs this way. Line numbers come from `search_files`' `content` mode instead.
+
+### `search_files`
+
+Supply `pattern` (a regexp matched against each line), `glob` (a shell pattern matched against a file's path), or both; `glob` alone is a filename search, so there is no separate glob tool. `path` defaults to `"."`. Three `output_mode`s:
+
+- `files_with_matches` (default) — just the paths, cheapest; read the ones you want with `read_file`.
+- `content` — matching lines **with line numbers**, each capped at 200 bytes. This is where a persona gets `file:line` to cite.
+- `count` — matches per file.
+
+Unlike every other tool, `search_files` **never spills**: its bound is arithmetic rather than a truncation applied after the fact. A fully saturated `content` result is 80 matches × 200 bytes plus scaffolding — roughly 25KB against the 32,000-byte inline cap, and `TestSearchWorstCaseFitsInlineBudget` pins that so the arithmetic keeps holding if the constants are retuned. `head_limit` caps results (default 50 paths / 30 lines) and is clamped to the ceiling; `total` and `truncated` report the true scale, so the answer to a flooded result is a narrower pattern, not a second page. `.git`, `node_modules`, `vendor`, binary files, and files over 2MB are skipped. `**` is supported only as a leading glob segment (`**/*.go`) — `filepath.Match` cannot cross separators, and `**` elsewhere is rejected explicitly rather than silently matching nothing.
 
 `write_file` requires the file's immediate parent directory to already exist — it does not create missing directories, matching `read_file`/`list_dir`'s own no-side-effect posture. Use `run_shell` (e.g. `mkdir -p`) first if the directory doesn't exist yet. Like `read_file`/`list_dir`, its path is confined to the working directory and re-validated against a symlink escape (see `resolveWritePath` in `internal/agent/tools.go`), including the case of a symlinked parent directory for a file that doesn't exist yet.
 
@@ -251,6 +275,23 @@ Once a conversation's estimated size crosses the budget, the agent's own model i
 ```
 
 **The count is a local estimate, not accounting.** It's the same `len(text)/4` heuristic used elsewhere, applied to the conversation's own content — never the provider's real token-usage data. "`steps` tracks no token usage anywhere" (see the OpenRouter section above) still holds; this is a size heuristic that decides *when to compact*, not a usage figure anything reports.
+
+### Narrowing one tool's inline budget
+
+The 32,000-byte cap is global, which is the right default but has no answer for a tool whose output is mostly noise by construction — a fuzzy search returning a ranked list where the answer is the first few entries and the tail costs context on every subsequent turn. `max_output_bytes:` on a grant lowers the budget for that one tool:
+
+```yaml
+tools:
+- mcp: gopls
+  tools: [go_symbol_references]
+  max_output_bytes: 6000
+```
+
+It can only **narrow**, never widen: a value at or above the global cap resolves back to the global cap. Narrowing loses no data either — overflow still spills to a file the model can read back — it only shrinks what lands inline.
+
+It is rejected on **built-ins**, which already carry their own output contract (`read_file` pages, `list_dir` counts entries, `search_files` is bounded by arithmetic); stacking a second, conflicting bound on a designed one is a bug surface rather than a knob. It is also rejected on **sub-agent tools**, whose result is another agent's considered answer rather than a data dump. It is valid on custom tools and on all three MCP grant forms — unlike `description`/`required`/`max_calls`, which stay single-`tool:`-only, because the tool worth capping is typically one noisy member of a `tools: [...]` subset and making it carry the cap in its own grant entry would open a second connection to the same server.
+
+`max_output_bytes:` **is** part of the merkle hash (value-gated, so leaving it unset hashes byte-identically to before the field existed) — it changes what a call returns to the model, and therefore the conversation the step produces.
 
 **Compaction is lossy.** Tool results are truncated to 4000 bytes apiece in the summarization prompt, and everything older than the retained window survives only as prose in the summary — not verbatim. Separately, and independently of compaction: any tool result too large to return inline (over 32,000 bytes — `run_shell`/a custom tool, an MCP tool's text or structured content, a sub-agent's final answer, a `previous_run` field or trajectory arg, a `fix:` loop's failure output) is instead saved to a file under the step's working directory, with a short `<persistent_file>` pointer message (path, size, a preview) taking its place in the conversation. That pointer message is well under 4000 bytes, so it survives compaction's own truncation intact — a compacted agent can still `read_file` whatever it had already gathered before compaction, even though the raw conversation turn that produced it is gone. `read_file` itself is the exception to the spill-to-file treatment: it reads up to 100,000 bytes in a single call — deliberately larger than the 32,000-byte spill threshold, so a spilled file can always be pulled back whole in one read rather than looping the model on a truncated prefix — and an oversized *file* read degrades to a plain truncation (spilling a file read back out to another file would be a pointless loop) with `start_line`/`end_line` to page through the rest.
 
