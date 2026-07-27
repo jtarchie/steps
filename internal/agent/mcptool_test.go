@@ -289,7 +289,7 @@ func TestMCPToolImplSpillsOversizedStructuredContent(t *testing.T) {
 		}
 	})
 
-	t.Run("without spillDir, it degrades to a truncation marker", func(t *testing.T) {
+	t.Run("without spillDir, it degrades to an omitted marker", func(t *testing.T) {
 		t.Parallel()
 
 		impl := mcpToolImpl(newClient(), "search_issues")
@@ -304,10 +304,59 @@ func TestMCPToolImplSpillsOversizedStructuredContent(t *testing.T) {
 			t.Error("structured_content still contains the oversized raw payload")
 		}
 
-		if !strings.Contains(sc, "truncated") {
-			t.Errorf("structured_content = %q, want a truncation marker", sc)
+		if !strings.Contains(sc, "structured content omitted") {
+			t.Errorf("structured_content = %q, want an omitted marker", sc)
 		}
 	})
+}
+
+// TestMCPToolImplNeverReturnsTruncatedJSON is the regression for the degrade
+// path: boundedStructuredContent used to hand spillOrTruncate its MARSHALED
+// JSON, so when spilling wasn't possible the model got a byte prefix of that
+// JSON — a result that looks complete but parses as nothing. Whatever it
+// returns now must be prose, never a JSON fragment.
+func TestMCPToolImplNeverReturnsTruncatedJSON(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeMCPClient{result: &sdkmcp.CallToolResult{
+		StructuredContent: map[string]any{"blob": strings.Repeat("x", maxToolOutputBytes+1)},
+	}}
+
+	impl := mcpToolImpl(client, "search_issues")
+	// No spillDir: the degrade path, which is the one that used to corrupt.
+	result := impl(context.Background(), map[string]any{}, toolEnv{})
+
+	sc, ok := result["structured_content"].(string)
+	if !ok {
+		t.Fatalf("structured_content = %#v (%T), want a string", result["structured_content"], result["structured_content"])
+	}
+
+	// The substantive guarantee: whatever this is, it must not be something a
+	// model (or a downstream consumer) could mistake for the tool's data. The
+	// "[... omitted: ...]" marker convention shares a leading bracket with a
+	// JSON array, so parseability — not the first byte — is what's asserted.
+	var into any
+
+	err := json.Unmarshal([]byte(sc), &into)
+	if err == nil {
+		t.Error("structured_content parsed as JSON; it should be prose the model reads, not a structure it might trust")
+	}
+
+	if !strings.Contains(sc, "omitted") {
+		t.Errorf("structured_content = %.80q, want it to say the payload was omitted", sc)
+	}
+}
+
+// TestSpillToFileDegradesWithoutSpillDir pins the contract every caller
+// depends on to branch correctly: no spillDir means no file, reported as ok
+// == false rather than as an error or an empty-but-ok path.
+func TestSpillToFileDegradesWithoutSpillDir(t *testing.T) {
+	t.Parallel()
+
+	path, ok := spillToFile("anything", "")
+	if ok || path != "" {
+		t.Errorf("spillToFile(_, \"\") = (%q, %v), want (\"\", false)", path, ok)
+	}
 }
 
 // TestMCPToolImplSpillsOversizedTextContent proves the "content" field

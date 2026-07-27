@@ -1391,3 +1391,175 @@ func TestToolResponseParts(t *testing.T) {
 		t.Errorf("exit codes = %v, want %v", got, want)
 	}
 }
+
+// writeEditFixture creates a file under dir with the given contents and mode,
+// returning its name. Kept local to the edit_file tests since they are the
+// only ones that care about a file's mode surviving a write.
+func writeEditFixture(t *testing.T, dir, name, content string, mode os.FileMode) string {
+	t.Helper()
+
+	path := filepath.Join(dir, name)
+
+	err := os.WriteFile(path, []byte(content), mode)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return path
+}
+
+// readEditFixture reads back a file an edit_file test just modified.
+func readEditFixture(t *testing.T, path string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(path) //nolint:gosec // a t.TempDir() path this test just wrote
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(data)
+}
+
+func TestExecEditFile(t *testing.T) {
+	t.Parallel()
+
+	t.Run("replaces a unique occurrence and reports its line", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := writeEditFixture(t, dir, "a.go", "package main\n\nfunc old() {}\n", 0o644)
+
+		result := execEditFile(context.Background(), map[string]any{
+			"path": "a.go", "old_string": "func old() {}", "new_string": "func renamed() {}",
+		}, testEnv(dir))
+
+		if result["error"] != nil {
+			t.Fatalf("unexpected error: %v", result["error"])
+		}
+
+		if got := result["replacements"]; got != 1 {
+			t.Errorf("replacements = %v, want 1", got)
+		}
+
+		if got := result["first_line"]; got != 3 {
+			t.Errorf("first_line = %v, want 3", got)
+		}
+
+		if got, want := readEditFixture(t, path), "package main\n\nfunc renamed() {}\n"; got != want {
+			t.Errorf("file = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("an empty new_string deletes old_string", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := writeEditFixture(t, dir, "a.txt", "keep\nDROP\nkeep\n", 0o644)
+
+		result := execEditFile(context.Background(), map[string]any{
+			"path": "a.txt", "old_string": "DROP\n", "new_string": "",
+		}, testEnv(dir))
+
+		if result["error"] != nil {
+			t.Fatalf("unexpected error: %v", result["error"])
+		}
+
+		if got, want := readEditFixture(t, path), "keep\nkeep\n"; got != want {
+			t.Errorf("file = %q, want %q", got, want)
+		}
+	})
+}
+
+// TestExecEditFileReplaceAllAndMode covers the remaining success paths, split
+// from TestExecEditFile to stay under the linter's complexity cap.
+func TestExecEditFileReplaceAllAndMode(t *testing.T) {
+	t.Parallel()
+
+	t.Run("replace_all replaces every occurrence", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := writeEditFixture(t, dir, "a.txt", "x\nx\nx\n", 0o644)
+
+		result := execEditFile(context.Background(), map[string]any{
+			"path": "a.txt", "old_string": "x", "new_string": "y", "replace_all": true,
+		}, testEnv(dir))
+
+		if result["error"] != nil {
+			t.Fatalf("unexpected error: %v", result["error"])
+		}
+
+		if got := result["replacements"]; got != 3 {
+			t.Errorf("replacements = %v, want 3", got)
+		}
+
+		if got, want := readEditFixture(t, path), "y\ny\ny\n"; got != want {
+			t.Errorf("file = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("preserves the file's mode", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := writeEditFixture(t, dir, "run.sh", "#!/bin/sh\necho old\n", 0o755)
+
+		result := execEditFile(context.Background(), map[string]any{
+			"path": "run.sh", "old_string": "echo old", "new_string": "echo new",
+		}, testEnv(dir))
+		if result["error"] != nil {
+			t.Fatalf("unexpected error: %v", result["error"])
+		}
+
+		stat, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if got := stat.Mode().Perm(); got != 0o755 {
+			t.Errorf("mode = %v, want 0755 — an edit must not strip the executable bit", got)
+		}
+	})
+}
+
+// TestExecEditFileErrors covers the recoverable failures, split from
+// TestExecEditFile to stay under the linter's per-function complexity cap.
+func TestExecEditFileErrors(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeEditFixture(t, dir, "dup.txt", "a\na\n", 0o644)
+	writeEditFixture(t, dir, "one.txt", "hello\n", 0o644)
+
+	cases := []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{"missing path", map[string]any{"old_string": "a", "new_string": "b"}, "path"},
+		{"empty old_string", map[string]any{"path": "one.txt", "old_string": "", "new_string": "b"}, "old_string"},
+		{"missing new_string", map[string]any{"path": "one.txt", "old_string": "a"}, "new_string"},
+		{"identical strings", map[string]any{"path": "one.txt", "old_string": "a", "new_string": "a"}, "identical"},
+		{"not found", map[string]any{"path": "one.txt", "old_string": "nope", "new_string": "b"}, "not found"},
+		{"ambiguous without replace_all", map[string]any{"path": "dup.txt", "old_string": "a", "new_string": "b"}, "appears 2 times"},
+		{"nonexistent file", map[string]any{"path": "gone.txt", "old_string": "a", "new_string": "b"}, "does not exist"},
+		{"traversal outside dir", map[string]any{"path": "../../etc/passwd", "old_string": "a", "new_string": "b"}, "escapes"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := execEditFile(context.Background(), tc.args, testEnv(dir))
+
+			errMsg, ok := result["error"].(string)
+			if !ok {
+				t.Fatalf("expected an error, got %#v", result)
+			}
+
+			if !strings.Contains(errMsg, tc.want) {
+				t.Errorf("error = %q, want it to mention %q", errMsg, tc.want)
+			}
+		})
+	}
+}

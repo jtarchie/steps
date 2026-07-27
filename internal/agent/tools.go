@@ -50,6 +50,14 @@ const maxToolOutputBytes = 32_000
 // act by the model, unlike a command that floods output unbidden.
 const maxReadFileBytes = 100_000
 
+// maxEditFileBytes bounds the file edit_file will pull into memory to do an
+// exact-string replacement. It matches maxReadFileScanBytes rather than
+// maxReadFileBytes deliberately: a model can only produce a verbatim
+// old_string from text it has read, and read_file pages arbitrarily far into
+// a large file, so the edit bound has to sit above the read bound, not at
+// it. Past this the file is too big to be worth loading whole.
+const maxEditFileBytes = 10 << 20
+
 // maxListDirEntries caps how many entries list_dir returns inline — a
 // directory with tens of thousands of entries would otherwise flood the
 // model's context the same way an uncapped file read would. Unlike text
@@ -151,8 +159,8 @@ func runShellDescription(image string) string {
 	desc := "Run a shell command via `sh -c`, with cwd set to the step's working directory. Returns stdout, stderr, and exit_code." +
 		" If a stream's output is too large to return inline, it's instead saved to a file under the working directory and a" +
 		" pointer message (an absolute path, size, and a preview) is returned in its place — read that file back with" +
-		" run_shell (e.g. grep/sed on the absolute path), or with read_file after converting the path to one relative to the" +
-		" working directory (read_file rejects absolute paths), using start_line/end_line to page through it."
+		" run_shell (e.g. grep/sed on the absolute path), or with read_file, which accepts the absolute path from the" +
+		" pointer message directly, using start_line/end_line to page through it."
 	if image != "" {
 		desc += " Runs in a fresh, independent container each call — nothing installed, exported, or cd'd in one call persists to the next; chain related commands with && in a single call instead of relying on state from a prior one."
 	}
@@ -189,6 +197,24 @@ const readFileDescription = "Read a UTF-8 text file's contents, given a path rel
 const writeFileDescription = "Write text content to a file, given a path relative to the step's working directory." +
 	" Creates the file if it doesn't exist, overwriting any existing content unless append is true." +
 	" The immediate parent directory must already exist — use run_shell (e.g. mkdir -p) first if it doesn't."
+
+// editFileDescription documents edit_file's contract. Every failure mode it
+// names is recoverable on the model's next turn — "read the file again and
+// copy the text exactly", "include more surrounding lines" — matching
+// execCustomTool's missing-argument posture, since a local model recovering
+// from a bad edit in-conversation is far cheaper than a burned attempt.
+//
+// The pairing with read_file is load-bearing and deliberate: read_file
+// returns RAW bytes, so text a model copies out of one is a byte-exact
+// old_string here. Adding line numbers to read_file would break that.
+// search_files' content mode is where line numbers come from instead.
+const editFileDescription = "Replace an exact string in a text file — the way to change part of a file without" +
+	" re-emitting the whole thing. path is relative to the step's working directory (or an absolute path inside it)." +
+	" old_string must be copied VERBATIM from a read_file result, including indentation and line breaks, and must" +
+	" match exactly once: if it matches zero times, read the file again and copy the text exactly; if it matches" +
+	" several times, include more surrounding lines to make it unique, or pass replace_all: true. new_string replaces" +
+	" it — pass an empty string to delete. Returns how many replacements were made and the line the first one landed" +
+	" on, so you can read back around it. Use write_file instead to create a new file or replace one wholesale."
 
 func builtinAgentTools(image string) map[string]builtinTool {
 	return map[string]builtinTool{
@@ -246,6 +272,23 @@ func builtinAgentTools(image string) map[string]builtinTool {
 				},
 			},
 			impl: execWriteFile,
+		},
+		"edit_file": {
+			decl: &genai.FunctionDeclaration{
+				Name:        "edit_file",
+				Description: editFileDescription,
+				Parameters: &genai.Schema{
+					Type: genai.TypeObject,
+					Properties: map[string]*genai.Schema{
+						"path":        {Type: genai.TypeString, Description: "File path, relative to the working directory (or an absolute path inside it)."},
+						"old_string":  {Type: genai.TypeString, Description: "The exact text to replace, copied verbatim from a read_file result — same indentation, same line breaks."},
+						"new_string":  {Type: genai.TypeString, Description: "The text to put in its place. Pass an empty string to delete old_string."},
+						"replace_all": {Type: genai.TypeBoolean, Description: "Replace every occurrence instead of requiring exactly one. Defaults to false."},
+					},
+					Required: []string{"path", "old_string", "new_string"},
+				},
+			},
+			impl: execEditFile,
 		},
 	}
 }
@@ -634,15 +677,32 @@ func spillOrTruncate(content string, spillDir string) string {
 		return content
 	}
 
-	if spillDir == "" {
+	path, ok := spillToFile(content, spillDir)
+	if !ok {
 		return truncateToolOutput(content)
+	}
+
+	return shell.SpillPointerMessage(len(content), path, spillPreview(content))
+}
+
+// spillToFile writes content to a new "output-*.txt" file under spillDir,
+// returning the file's path. ok is false when spillDir is unset (the spill
+// directory couldn't be created for this step) or any create/write/close step
+// failed — spilling is a usability improvement, never something a tool call
+// should fail over, so every caller degrades rather than erroring. Split out
+// of spillOrTruncate so a caller that must NOT fall back to a byte-prefix of
+// its content — boundedStructuredContent, whose content is serialized JSON —
+// can branch on ok explicitly instead of inspecting the returned string.
+func spillToFile(content string, spillDir string) (string, bool) {
+	if spillDir == "" {
+		return "", false
 	}
 
 	f, err := os.CreateTemp(spillDir, "output-*.txt")
 	if err != nil {
 		slog.Warn("agent.spill_output", "error", err)
 
-		return truncateToolOutput(content)
+		return "", false
 	}
 
 	_, writeErr := f.WriteString(content)
@@ -652,15 +712,21 @@ func spillOrTruncate(content string, spillDir string) string {
 		_ = os.Remove(f.Name())
 		slog.Warn("agent.spill_output", "write_error", writeErr, "close_error", closeErr)
 
-		return truncateToolOutput(content)
+		return "", false
 	}
 
+	return f.Name(), true
+}
+
+// spillPreview returns the head of content that accompanies a spill pointer
+// message, bounded by shell.SpillPreviewBytes.
+func spillPreview(content string) []byte {
 	preview := []byte(content)
 	if len(preview) > shell.SpillPreviewBytes {
 		preview = preview[:shell.SpillPreviewBytes]
 	}
 
-	return shell.SpillPointerMessage(len(content), f.Name(), preview)
+	return preview
 }
 
 // shellToolResult builds the FunctionResponse map for a shell-backed tool
@@ -1000,6 +1066,127 @@ func execWriteFile(_ context.Context, args map[string]any, env toolEnv) map[stri
 	}
 
 	return map[string]any{"bytes_written": n, "path": rel}
+}
+
+// execEditFile replaces an exact substring in an existing file, so a model
+// can change part of a large file without re-emitting all of it (write_file's
+// only mode). It validates arguments and the target, then hands the actual
+// replacement to applyEdit — split the same way execReadFile delegates to
+// readFileFull/readFileRange, to keep each function inside the linter's
+// complexity budget.
+//
+// Every error it returns is phrased as a next-turn instruction rather than a
+// bare diagnosis, because the two common failures (a near-miss old_string, an
+// ambiguous one) are both recoverable without leaving the conversation.
+func execEditFile(_ context.Context, args map[string]any, env toolEnv) map[string]any {
+	rel := stringArg(args, "path")
+	if rel == "" {
+		return map[string]any{"error": `edit_file: missing required argument "path"`}
+	}
+
+	oldString := stringArg(args, "old_string")
+	if oldString == "" {
+		return map[string]any{"error": `edit_file: "old_string" must not be empty — use write_file to create or replace a whole file`}
+	}
+
+	// Not stringArg: "" is a legal new_string (it deletes old_string), so
+	// absent must be distinguished from empty.
+	newString, ok := args["new_string"].(string)
+	if !ok {
+		return map[string]any{"error": `edit_file: missing required argument "new_string"`}
+	}
+
+	if oldString == newString {
+		return map[string]any{"error": "edit_file: old_string and new_string are identical; nothing to do"}
+	}
+
+	resolved, err := resolveWritePath(env.dir, rel)
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+
+	replaceAll, _ := args["replace_all"].(bool)
+
+	return applyEdit(resolved, rel, oldString, newString, replaceAll)
+}
+
+// readEditTarget stats and reads the file edit_file is about to modify,
+// returning its contents and mode. A non-nil second return is the caller's
+// ready-made error result — split out of applyEdit so each stays inside the
+// linter's complexity budget.
+func readEditTarget(resolved, rel string) (string, os.FileMode, map[string]any) {
+	stat, err := os.Stat(resolved)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", 0, map[string]any{"error": fmt.Sprintf("edit_file: %q does not exist — use write_file to create it", rel)}
+		}
+
+		return "", 0, map[string]any{"error": err.Error()}
+	}
+
+	if stat.IsDir() {
+		return "", 0, map[string]any{"error": fmt.Sprintf("edit_file: %q is a directory, not a file", rel)}
+	}
+
+	if stat.Size() > maxEditFileBytes {
+		return "", 0, map[string]any{"error": fmt.Sprintf(
+			"edit_file: %q is %s, over the %s edit limit",
+			rel, shell.FormatBytes(int(stat.Size())), shell.FormatBytes(maxEditFileBytes),
+		)}
+	}
+
+	data, err := os.ReadFile(resolved) //nolint:gosec // resolveWritePath rejects paths escaping dir
+	if err != nil {
+		return "", 0, map[string]any{"error": err.Error()}
+	}
+
+	return string(data), stat.Mode().Perm(), nil
+}
+
+// applyEdit performs execEditFile's replacement against an already-resolved
+// path. It preserves the file's existing mode, so editing a checked-in shell
+// script doesn't silently strip its executable bit.
+func applyEdit(resolved, rel, oldString, newString string, replaceAll bool) map[string]any {
+	content, mode, errResult := readEditTarget(resolved, rel)
+	if errResult != nil {
+		return errResult
+	}
+
+	// Index rather than Count first: it doubles as the occurrence test (-1
+	// means none) and as the offset firstLine is derived from.
+	idx := strings.Index(content, oldString)
+	if idx < 0 {
+		return map[string]any{"error": fmt.Sprintf(
+			"edit_file: old_string was not found in %q. Read the file with read_file and copy the text exactly, including leading whitespace.",
+			rel,
+		)}
+	}
+
+	count := strings.Count(content, oldString)
+	if count > 1 && !replaceAll {
+		return map[string]any{"error": fmt.Sprintf(
+			"edit_file: old_string appears %d times in %q. Include more surrounding lines to make it unique, or pass replace_all: true.",
+			count, rel,
+		)}
+	}
+
+	limit, replacements := 1, 1
+	if replaceAll {
+		limit, replacements = -1, count
+	}
+
+	updated := strings.Replace(content, oldString, newString, limit)
+
+	err := os.WriteFile(resolved, []byte(updated), mode)
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+
+	return map[string]any{
+		"path":         rel,
+		"replacements": replacements,
+		"first_line":   1 + strings.Count(content[:idx], "\n"),
+	}
 }
 
 // execCustomTool renders spec.Run against the model's args (with spec.Args

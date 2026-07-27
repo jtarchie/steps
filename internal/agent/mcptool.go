@@ -11,6 +11,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
+	"github.com/jtarchie/steps/internal/shell"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -162,9 +163,17 @@ func mcpToolImpl(client stepsmcp.Client, name string) toolImpl {
 // so an uncapped structured_content is frequently a second, unbounded copy
 // of data content already carries a capped copy of). nil input (the common
 // "this tool has no structured output" case) passes through as nil. An
-// oversized payload is spilled to a file — via spillOrTruncate on its
-// marshaled JSON — the same as oversized text content, rather than being
-// replaced outright with an "omitted" message.
+// oversized payload is spilled to a file — the same as oversized text content
+// — and the model gets a pointer to it.
+//
+// What it deliberately never does is hand back a BYTE PREFIX of the marshaled
+// JSON. spillOrTruncate degrades to truncateToolOutput when spilling isn't
+// possible (spillDir unset, or a create/write/close failure), which is the
+// right answer for prose but produces syntactically invalid JSON here — a
+// result that looks complete, parses as nothing, and misleads the model about
+// what the tool returned. So this branches on spillToFile's ok directly and
+// falls back to prose that says what happened, pointing at the text content,
+// which the SDK usually populates with the same payload anyway.
 func boundedStructuredContent(sc any, spillDir string) any {
 	if sc == nil {
 		return nil
@@ -179,7 +188,16 @@ func boundedStructuredContent(sc any, spillDir string) any {
 		return sc
 	}
 
-	return spillOrTruncate(string(data), spillDir)
+	path, ok := spillToFile(string(data), spillDir)
+	if !ok {
+		return fmt.Sprintf(
+			"[structured content omitted: %s of JSON exceeded the %s inline limit and could not be saved to a file;"+
+				" this tool's text content carries the same payload]",
+			shell.FormatBytes(len(data)), shell.FormatBytes(maxToolOutputBytes),
+		)
+	}
+
+	return shell.SpillPointerMessage(len(data), path, spillPreview(string(data)))
 }
 
 // joinTextContent concatenates every TextContent block in content,
