@@ -167,12 +167,67 @@ type MCPToolCall struct {
 // validateMCPServerTransport). A stdio server has no request to attach
 // credentials to, so Auth must be unset ("none") when Command is set.
 type MCPServer struct {
-	Name     string        `yaml:"name"`
-	Endpoint string        `yaml:"endpoint,omitempty"`
-	Command  string        `yaml:"command,omitempty"`
-	Args     []string      `yaml:"args,omitempty"`
-	Cwd      string        `yaml:"cwd,omitempty"`
-	Auth     MCPServerAuth `yaml:"auth,omitempty"`
+	Name     string   `yaml:"name"`
+	Endpoint string   `yaml:"endpoint,omitempty"`
+	Command  string   `yaml:"command,omitempty"`
+	Args     []string `yaml:"args,omitempty"`
+	// Cwd is the working directory a stdio server's subprocess is spawned
+	// in. An ABSOLUTE path is used verbatim — a fixed location on the host,
+	// resolved identically for every step. A RELATIVE path is resolved
+	// against the agent step's own working directory (see
+	// WithResolvedMCPCwd), which is what lets a server be pointed at an
+	// input artifact — `cwd: repo` for a language server that must index the
+	// same materialized tree the agent's file tools read. Empty inherits the
+	// steps process's own cwd.
+	//
+	// Relative only makes sense where a step workspace exists, so it is
+	// rejected for a server backing a resource type's mcp: config — a
+	// check/in/out runs with no agent step to resolve against.
+	Cwd  string        `yaml:"cwd,omitempty"`
+	Auth MCPServerAuth `yaml:"auth,omitempty"`
+}
+
+// WithResolvedMCPCwd returns cfg with every stdio server's relative Cwd
+// joined against baseDir — the working directory of the agent step whose
+// tools are about to be built. cfg is returned unchanged when no server
+// needs it, so the overwhelmingly common case (no mcp_servers:, or all
+// absolute) allocates nothing and hashes identically.
+//
+// The copy is shallow but the MCPServers slice is fresh, so a step
+// resolving its own view can never mutate the shared config another step
+// (with a different working directory) will resolve later.
+func WithResolvedMCPCwd(cfg *Config, baseDir string) *Config {
+	if cfg == nil || baseDir == "" {
+		return cfg
+	}
+
+	needed := false
+
+	for _, srv := range cfg.MCPServers {
+		if srv.Cwd != "" && !filepath.IsAbs(srv.Cwd) {
+			needed = true
+
+			break
+		}
+	}
+
+	if !needed {
+		return cfg
+	}
+
+	servers := make([]MCPServer, len(cfg.MCPServers))
+	copy(servers, cfg.MCPServers)
+
+	for i, srv := range servers {
+		if srv.Cwd != "" && !filepath.IsAbs(srv.Cwd) {
+			servers[i].Cwd = filepath.Join(baseDir, srv.Cwd)
+		}
+	}
+
+	resolved := *cfg
+	resolved.MCPServers = servers
+
+	return &resolved
 }
 
 // IsStdio reports whether srv is a stdio (local subprocess) server rather

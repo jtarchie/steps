@@ -161,7 +161,11 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		step.PromptFile = nil
 	}
 
-	decls, registry, closers, err := buildAgentTools(ctx, cfg, ri.ToolSpecs, ri.Image)
+	// A stdio MCP server with a relative cwd: is pointed at this step's own
+	// working directory, so a language server can index the same
+	// materialized input the agent's file tools read. Resolved here, where
+	// dir is finally known, rather than at load time.
+	decls, registry, closers, err := buildAgentTools(ctx, config.WithResolvedMCPCwd(cfg, dir), ri.ToolSpecs, ri.Image)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 

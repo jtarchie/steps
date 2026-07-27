@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 // mcpServerBlock is a minimal mcp_servers: entry reused across tests.
 const mcpServerBlock = `
@@ -630,4 +633,80 @@ jobs: [{ name: j, plan: [] }]
 		path := writeConfig(t, pipeline)
 		wantLoadError(t, path, "mcp.out.tool must not be empty")
 	})
+}
+
+// TestWithResolvedMCPCwd covers the relative-cwd resolution an agent step
+// applies before building its tools: a relative path is joined against the
+// step's working directory so a language server can index the same
+// materialized input the agent's file tools read, while absolute and empty
+// ones are untouched and the shared config is never mutated in place.
+func TestWithResolvedMCPCwd(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a relative cwd is joined against the step directory", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{MCPServers: []MCPServer{{Name: "gopls", Command: "gopls", Cwd: "repo"}}}
+
+		got := WithResolvedMCPCwd(cfg, filepath.Join("/ws", "build-1"))
+
+		if want := filepath.Join("/ws", "build-1", "repo"); got.MCPServers[0].Cwd != want {
+			t.Errorf("cwd = %q, want %q", got.MCPServers[0].Cwd, want)
+		}
+
+		if cfg.MCPServers[0].Cwd != "repo" {
+			t.Errorf("the shared config was mutated: cwd = %q, want it left as %q", cfg.MCPServers[0].Cwd, "repo")
+		}
+	})
+
+	t.Run("an absolute or empty cwd needs no copy", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{MCPServers: []MCPServer{
+			{Name: "abs", Command: "x", Cwd: filepath.Join("/opt", "tree")},
+			{Name: "none", Command: "y"},
+		}}
+
+		// The very same pointer must come back: the overwhelmingly common
+		// case has to allocate nothing.
+		if got := WithResolvedMCPCwd(cfg, "/ws"); got != cfg {
+			t.Error("want the original config returned when no server needs resolving")
+		}
+	})
+
+	t.Run("a nil config or empty base is a no-op", func(t *testing.T) {
+		t.Parallel()
+
+		if got := WithResolvedMCPCwd(nil, "/ws"); got != nil {
+			t.Error("want nil for a nil config")
+		}
+
+		cfg := &Config{MCPServers: []MCPServer{{Name: "a", Command: "x", Cwd: "repo"}}}
+		if got := WithResolvedMCPCwd(cfg, ""); got != cfg {
+			t.Error("want the original config when there is no base directory to resolve against")
+		}
+	})
+}
+
+// TestRelativeCwdRejectedForResourceTypeBackend pins the boundary: a
+// relative cwd only means something where an agent step workspace exists,
+// and a resource type's check/in/out has none.
+func TestRelativeCwdRejectedForResourceTypeBackend(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+mcp_servers:
+- name: gopls
+  command: gopls
+  cwd: repo
+resource_types:
+- name: thing
+  config:
+    mcp:
+      server: gopls
+      check: { tool: list_versions }
+jobs: [{ name: j, plan: [] }]
+`)
+
+	wantLoadError(t, path, "absolute cwd")
 }

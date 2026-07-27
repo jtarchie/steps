@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"path/filepath"
+)
 
 // validateMCPToolGrants enforces the MCP tool grant rules at load time,
 // mirroring validateAgentGraph's sub-agent tool rules: an MCP grant's shape
@@ -202,9 +205,21 @@ func (c *Config) validateMCPResourceConfig(rtName string, mcp *MCPResourceConfig
 		return fmt.Errorf("resource_type %q: mcp.out.tool must not be empty when mcp.out is set", rtName)
 	}
 
-	_, err := c.FindMCPServer(mcp.Server)
+	srv, err := c.FindMCPServer(mcp.Server)
 	if err != nil {
 		return fmt.Errorf("resource_type %q: %w", rtName, err)
+	}
+
+	// A relative cwd: is resolved against an agent step's working directory
+	// (see MCPServer.Cwd / WithResolvedMCPCwd). A resource type's
+	// check/in/out has no such step, so the path would silently resolve
+	// against whatever directory steps itself was invoked from — reject it
+	// at load rather than let it half-work.
+	if srv.Cwd != "" && !filepath.IsAbs(srv.Cwd) {
+		return fmt.Errorf(
+			"resource_type %q: mcp server %q has a relative cwd %q, which resolves against an agent step's working directory; a resource type has no step workspace, so its server needs an absolute cwd",
+			rtName, srv.Name, srv.Cwd,
+		)
 	}
 
 	return nil
