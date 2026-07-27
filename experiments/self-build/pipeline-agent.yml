@@ -199,7 +199,7 @@ agents:
       printf 'STORY_ABS_PATH  %s/docs/proposals/stories/%s\n' "$repo" "$file"
       printf 'PLAN_PATH       experiments/self-build/plans/%s.md\n' "$num"
       printf '\n--- story %s: %s ---\n' "$num" "$file"
-      cat ./story.md
+      cat stories/story.md
   - name: read_repo_file
     description: >
       Read one file from the real project checkout, with line numbers. path
@@ -362,7 +362,7 @@ agents:
       printf 'PLAN_PATH       experiments/self-build/plans/%s.md\n' "$num"
       printf 'CRITIQUE_PATH   experiments/self-build/critiques/%s.md\n' "$num"
       printf '\n--- story %s: %s ---\n' "$num" "$file"
-      cat ./story.md
+      cat stories/story.md
   - name: read_repo_file
     description: >
       Read one file from the real project checkout, with line numbers. path
@@ -537,7 +537,7 @@ agents:
       printf 'STORY_ABS_PATH  %s/docs/proposals/stories/%s\n' "$repo" "$file"
       printf 'CRITIQUE_PATH   experiments/self-build/critiques/%s.md\n' "$num"
       printf '\n--- story %s: %s ---\n' "$num" "$file"
-      cat ./story.md
+      cat stories/story.md
   - name: read_repo_file
     description: >
       Read one file from the real project checkout, with line numbers,
