@@ -148,7 +148,7 @@ func runJobPlan(ctx context.Context, cfg *config.Config, job *config.Job, pinned
 		}
 	}
 
-	return runSteps(ctx, cfg, job.Name, job.Plan, pinned, provider, bw, st, skippable, "", false, cache)
+	return runSteps(ctx, cfg, job.Name, job.Plan, pinned, provider, bw, st, skippable, "", false, cache, true)
 }
 
 // computeChainSkippable reports, per chain, whether it's already covered by a
@@ -263,6 +263,7 @@ func runSteps(
 	ctx context.Context, cfg *config.Config, jobName string, steps []config.Step, pinned map[string]string,
 	provider workspace.Provider, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool,
 	parentHash string, chainUnskippable bool, cache *rsrc.Cache,
+	allowGetTrigger bool,
 ) error {
 	// visits counts how many times each step index has executed this
 	// invocation, bounding a to:-driven backward loop. It's per-runSteps-call,
@@ -284,64 +285,89 @@ func runSteps(
 	for i := 0; i < len(steps); {
 		step := steps[i]
 
+		if step.Get != "" && !allowGetTrigger {
+			done, err := runGetStepInPlaceResult(ctx, cfg, jobName, i, step, steps, pinned, bw, st, skippable, &parentHash, cache)
+			if done {
+				return err
+			}
+			i++
+			continue
+		}
 		if step.Get != "" {
 			return runGetStep(ctx, cfg, jobName, i, step, steps[i+1:], pinned, provider, st, skippable, parentHash, chainUnskippable, cache)
 		}
 
-		newParentHash, disposition, no, err := runNonGetStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash, handoffFor(step, pending))
-
-		if disposition == stepRan {
-			visits[i]++ // count executions before resolveTransition reads visits[i]
-		}
-
-		// A routed transition consumes err (a to.failure route means the job
-		// doesn't also fail); exhaustion of a backward loop is a job failure.
-		nextIndex, routedKey, err, exhaustedErr := applyRouting(ctx, steps, i, step, disposition, no.verdict, err, visits)
-		if exhaustedErr != nil {
-			return exhaustedErr // routed to the job's on_failure hook
-		}
-
-		if err != nil {
+		returned, err := executeNonGetStep(ctx, cfg, jobName, &i, &parentHash, &chainUnskippable, &pending, step, steps, bw, st, skippable, visits)
+		if returned {
 			return err
 		}
-
-		if disposition == stepChainSkipped {
-			reportChainSkipped(jobName, steps[i+1:])
-
-			return nil
-		}
-
-		chainUnskippable, err = foldStepUnskippable(cfg, step, chainUnskippable)
-		if err != nil {
-			return err
-		}
-
-		if disposition == stepGuardSkipped {
-			// The transition that landed here (if any) already happened; the
-			// guard merely declined to run the step it targeted. Consume it
-			// rather than letting a stale pending leak into whatever runs next.
-			pending = nil
-			i = nextIndex // a guard-skip never routes; nextIndex is still i+1
-
-			continue
-		}
-
-		// Only advance parentHash when the step produced a node hash. A FAILED
-		// step returns "" — today that never surfaces (a failure returns
-		// immediately) but a to.failure route consumes the error and continues,
-		// so without this guard the routed target and every failed loop
-		// iteration would inherit parentHash="" and collide onto one nodes row.
-		// Keeping the incoming parentHash threads each iteration distinctly.
-		if newParentHash != "" {
-			parentHash = newParentHash
-		}
-
-		pending = nextPendingHandoff(jobName, step, steps, routedKey, no, visits, nextIndex)
-
-		i = nextIndex
 	}
 
 	return recordChainSucceeded(ctx, st, jobName, parentHash, chainUnskippable)
+}
+
+// executeNonGetStep runs one iteration's non-get (task/put/agent) step through
+// execution, routing, and chain-unskippable folding, mutating its pointer
+// arguments so runSteps can continue the loop or return. It returns
+// (true, err) to return from runSteps (nil err = chain-skip),
+// (false, nil) to advance i and continue the loop.
+func executeNonGetStep(
+	ctx context.Context,
+	cfg *config.Config,
+	jobName string,
+	i *int,
+	parentHash *string,
+	chainUnskippable *bool,
+	pending **agent.Handoff,
+	step config.Step,
+	steps []config.Step,
+	bw workspace.BuildWorkspace,
+	st *store.Store,
+	skippable map[string]bool,
+	visits map[int]int,
+) (bool, error) {
+	newParentHash, disposition, no, err := runNonGetStep(ctx, cfg, jobName, *i, step, bw, st, skippable, *parentHash, handoffFor(step, *pending))
+
+	if disposition == stepRan {
+		visits[*i]++
+	}
+
+	nextIndex, routedKey, err, exhaustedErr := applyRouting(ctx, steps, *i, step, disposition, no.verdict, err, visits)
+	if exhaustedErr != nil {
+		return true, exhaustedErr
+	}
+
+	if err != nil {
+		return true, err
+	}
+
+	if disposition == stepChainSkipped {
+		reportChainSkipped(jobName, steps[*i+1:])
+
+		return true, nil
+	}
+
+	var foldErr error
+	*chainUnskippable, foldErr = foldStepUnskippable(cfg, step, *chainUnskippable)
+	if foldErr != nil {
+		return true, foldErr
+	}
+
+	if disposition == stepGuardSkipped {
+		*pending = nil
+		*i = nextIndex
+
+		return false, nil
+	}
+
+	if newParentHash != "" {
+		*parentHash = newParentHash
+	}
+
+	*pending = nextPendingHandoff(jobName, step, steps, routedKey, no, visits, nextIndex)
+	*i = nextIndex
+
+	return false, nil
 }
 
 // reportChainSkipped prints one "skip: <name> (chain)" line per step after a
@@ -572,6 +598,100 @@ func runGetStep(
 	}
 
 	return errors.Join(buildErrs...)
+}
+
+// runGetStepInPlace fetches one version of a get step's resource into an
+// existing build workspace (bw) rather than creating a new triggered build.
+// It returns the new parentHash on success, or stepChainSkipped when the
+// node's hash is already in the skippable index. Only called from runSteps
+// when allowGetTrigger is false — i.e., inside a triggered build's remainder,
+// where consecutive gets share the same workspace.
+func runGetStepInPlace(
+	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step,
+	pinned map[string]string, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool,
+	parentHash string, cache *rsrc.Cache,
+) (string, stepDisposition, error) {
+	resource, resourceType, versions, err := fetchGetVersions(ctx, cfg, step, pinned, cache)
+	if err != nil {
+		return "", stepRan, err
+	}
+
+	if len(versions) == 0 {
+		slog.Warn("job.get.no_versions", "job", jobName, "index", i, "resource", step.Get)
+
+		return parentHash, stepRan, nil
+	}
+
+	// Inside a triggered build a get resolves to a single version.
+	version := versions[0]
+
+	content, err := merkle.GetNodeContent(cfg, step, *resourceType, resource.Source, version)
+	if err != nil {
+		return "", stepRan, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
+	}
+
+	hash, err := merkle.HashNode(merkle.NodeKindGet, content, parentHash)
+	if err != nil {
+		return "", stepRan, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
+	}
+
+	if skippable[hash] {
+		fmt.Printf("skip: %s (version: %v)\n", resource.Name, version)
+		slog.Info("job.skip", "job", jobName, "index", i, "kind", "get", "resource", resource.Name, "hash", hash)
+
+		return parentHash, stepChainSkipped, nil
+	}
+
+	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindGet, StepIndex: i, Resource: resource.Name, Content: content}
+
+	err = fetchGetStepWithStep(ctx, cfg, step, step.Get, *resource, *resourceType, version, bw)
+	if err != nil {
+		recordStepFailure(ctx, st, node, jobName, err)
+
+		return "", stepRan, err
+	}
+
+	// Get-step hooks fire in the same workspace the resource was fetched into.
+	if !step.Hooks.Empty() {
+		scope := hookScope{cfg: cfg, jobName: jobName, label: stepLabel(i, step), bw: bw}
+		err = runHooks(ctx, scope, step.Hooks, err)
+		if err != nil {
+			recordStepFailure(ctx, st, node, jobName, err)
+
+			return "", stepRan, err
+		}
+	}
+
+	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", nil, nil)
+	if err != nil {
+		return "", stepRan, fmt.Errorf("could not record node %q: %w", node.Hash, err)
+	}
+
+	return hash, stepRan, nil
+}
+
+// runGetStepInPlaceResult calls runGetStepInPlace and translates its result
+// into a "done/error" pair runSteps acts on: (done=true, err=nil) means
+// "the chain was skipped — return nil"; (done=true, err!=nil) means
+// "something failed — return err"; (done=false, err=nil) means
+// "fetch succeeded — advance i and continue the loop".
+func runGetStepInPlaceResult(
+	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, steps []config.Step,
+	pinned map[string]string, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool,
+	parentHash *string, cache *rsrc.Cache,
+) (bool, error) {
+	newParentHash, disposition, err := runGetStepInPlace(ctx, cfg, jobName, i, step, pinned, bw, st, skippable, *parentHash, cache)
+	if err != nil {
+		return true, err
+	}
+	if disposition == stepChainSkipped {
+		reportChainSkipped(jobName, steps[i+1:])
+		return true, nil
+	}
+	if newParentHash != "" {
+		*parentHash = newParentHash
+	}
+	return false, nil
 }
 
 // runTaskStep hashes step against parentHash and, unless that hash is
@@ -1053,7 +1173,7 @@ func runTriggeredBuild(
 		return fmt.Errorf("could not record node %q: %w", node.Hash, err)
 	}
 
-	return runSteps(ctx, cfg, jobName, remainder, pinned, provider, bw, st, skippable, node.Hash, chainUnskippable, cache)
+	return runSteps(ctx, cfg, jobName, remainder, pinned, provider, bw, st, skippable, node.Hash, chainUnskippable, cache, false)
 }
 
 // fetchGetStep places one version of a resource into bw's resource directory,

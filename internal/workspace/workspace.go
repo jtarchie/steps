@@ -604,11 +604,10 @@ func ValidateArtifactFlow(cfg *config.Config, job *config.Job) error {
 func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
 	switch {
 	case step.Get != "":
-		// A get triggers a fresh build whose store starts empty, so drop
-		// everything from prior builds and keep only this get's resource.
+		// A get inside an existing build fetches into the same workspace,
+		// so its resource accumulates alongside earlier artifacts.
 		// Failure-path hooks run before the fetch has landed anything, so
 		// their pre view is empty.
-		clear(available)
 		pre := map[string]bool{}
 		available[step.Get] = true
 

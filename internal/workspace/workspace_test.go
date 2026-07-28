@@ -458,17 +458,17 @@ func TestValidateArtifactFlowChainedOutputsResolve(t *testing.T) {
 	}
 }
 
-// TestValidateArtifactFlowGetResetsAvailableArtifacts guards the fix for the
-// build-boundary gap: a get starts a fresh triggered build whose artifact
-// store is empty except for its own resource, so an input naming an artifact
-// produced before a *later* get can't be satisfied at runtime and must be
-// rejected at plan time, not accumulated as if all gets shared one store.
-func TestValidateArtifactFlowGetResetsAvailableArtifacts(t *testing.T) {
+// TestValidateArtifactFlowGetsAccumulateInSharedWorkspace verifies that
+// consecutive get steps accumulate their resources in the same build workspace,
+// so an earlier get's resource (or output from a task step between them) is
+// visible to later steps. This matches Concourse semantics: within a single
+// build, every get fetches into the shared artifact store.
+func TestValidateArtifactFlowGetsAccumulateInSharedWorkspace(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{Workspace: &config.WorkspaceConfig{Strategy: "copy"}}
 
-	t.Run("output produced before a later get is not visible after it", func(t *testing.T) {
+	t.Run("task output before a later get is visible", func(t *testing.T) {
 		t.Parallel()
 
 		job := &config.Job{
@@ -482,12 +482,12 @@ func TestValidateArtifactFlowGetResetsAvailableArtifacts(t *testing.T) {
 		}
 
 		err := ValidateArtifactFlow(cfg, job)
-		if err == nil {
-			t.Fatal("expected an error: `built` was produced before `get other`, whose fresh build can't see it")
+		if err != nil {
+			t.Errorf("expected `built` (produced before `get other`) to be visible in the shared workspace, got %v", err)
 		}
 	})
 
-	t.Run("an earlier get's resource is not visible after a later get", func(t *testing.T) {
+	t.Run("an earlier get's resource is visible after a later get", func(t *testing.T) {
 		t.Parallel()
 
 		job := &config.Job{
@@ -500,12 +500,12 @@ func TestValidateArtifactFlowGetResetsAvailableArtifacts(t *testing.T) {
 		}
 
 		err := ValidateArtifactFlow(cfg, job)
-		if err == nil {
-			t.Fatal("expected an error: `repo` belongs to a build superseded by `get other`")
+		if err != nil {
+			t.Errorf("expected `repo` (fetched before `get other`) to be visible in the shared workspace, got %v", err)
 		}
 	})
 
-	t.Run("the latest get's own resource is available", func(t *testing.T) {
+	t.Run("every get's resource is available after consecutive gets", func(t *testing.T) {
 		t.Parallel()
 
 		job := &config.Job{
@@ -513,13 +513,13 @@ func TestValidateArtifactFlowGetResetsAvailableArtifacts(t *testing.T) {
 			Plan: []config.Step{
 				{Get: "repo"},
 				{Get: "other"},
-				{Task: "test", Run: "true", Inputs: config.Inputs("other")},
+				{Task: "test", Run: "true", Inputs: config.Inputs("repo", "other")},
 			},
 		}
 
 		err := ValidateArtifactFlow(cfg, job)
 		if err != nil {
-			t.Errorf("expected `other` (the most recent get) to be available, got %v", err)
+			t.Errorf("expected both `repo` and `other` to be visible in the shared workspace, got %v", err)
 		}
 	})
 }
