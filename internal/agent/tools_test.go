@@ -1314,14 +1314,19 @@ func TestExecWriteFileRejectsBadPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("missing parent directory is an error, not auto-created", func(t *testing.T) {
+	t.Run("creates missing parent directories", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
 
-		result := execWriteFile(context.Background(), map[string]any{"path": "sub/a.txt", "content": "hello"}, testEnv(dir))
-		if result["error"] == nil {
-			t.Error("expected an error for a nonexistent parent directory")
+		mustExecWriteFileOK(t, dir, map[string]any{"path": "sub/a.txt", "content": "hello"})
+
+		got, err := os.ReadFile(filepath.Join(dir, "sub", "a.txt")) //nolint:gosec // test-owned path under t.TempDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != "hello" {
+			t.Errorf("got %q, want %q", string(got), "hello")
 		}
 	})
 

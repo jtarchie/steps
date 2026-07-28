@@ -95,9 +95,9 @@ resources:
     uri: /Users/jtarchie/workspace/steps
 
 agents:
-# Research only. Holds no shell and no general write tool, so "planner cannot
-# modify the repo" is structural rather than a promise: write_plan derives its
-# own output path in shell, and there is no other tool that can write.
+# Research only. Holds no shell, so "planner cannot
+# modify the repo" is structural rather than a promise: the only write
+# it can do is write_file, constrained to its workspace.
 - name: planner
   source: { model: lmstudio/google/gemma-4-26b-a4b }
   max_turns: 200
@@ -110,54 +110,18 @@ agents:
     The repository is at repo/, the story pointers at stories/. Every tool
     path is relative to those: "repo/internal/config/config.go".
 
-    TOOL POLICY, for the choices that are not obvious:
-
-      WHERE something is   search_files -- a regex over file contents.
-                           output_mode "content" returns matching lines WITH
-                           line numbers, which is how you get file:line
-      every call site      gopls__go_symbol_references -- see below
-      your output          write_plan -- your only write, called once, last
-
-    You have NO shell. If your instinct is "grep for it", that is
-    search_files. If it is "cat that file", it is read_file.
-
-    THE SIBLING CHECK: search_files for the file that DEFINES a symbol, then
-    gopls__go_symbol_references with `file` set to that path and `symbol` to
-    the bare identifier -- the second argument is `symbol`, NOT `name`.
-    Worth the extra step for exactly one question, "does this change touch
-    one code path or several": unlike a text search it cannot false-positive
-    on a comment or miss a call site spelled differently. Everything else is
-    search_files, which is faster and cheaper.
+    You have NO shell. Start by reading stories/num and stories/file — the
+    story doc is at repo/docs/proposals/stories/{file}. Write your plan to
+    repo/experiments/self-build/plans/{num}.md — that artifact must exist
+    before you finish.
   tools:
-  - read_file
-  - list_dir
-  - search_files
-  - name: story_brief
-    description: >
-      Call this FIRST. No arguments. Returns the story number and the path of
-      the story doc -- read that with read_file.
-    run: |
-      num="$(cat stories/num)"
-      printf 'STORY_NUM   %s\n' "$num"
-      printf 'STORY_PATH  repo/docs/proposals/stories/%s\n' "$(cat stories/file)"
-      printf 'PLAN_PATH   repo/experiments/self-build/plans/%s.md\n' "$num"
-  - name: write_plan
-    description: >
-      Write this story's implementation plan. ONE argument: content, the full
-      markdown text. You do not choose the path -- there is no path argument
-      to get wrong. Call it once, at the end, with the whole plan.
-    required: true   # forces the call when the model tries to END its turn
-                     # without one -- a real run emitted the plan as chat text
-    run: |
-      num="$(cat stories/num)"
-      mkdir -p repo/experiments/self-build/plans
-      cat > "repo/experiments/self-build/plans/$num.md" <<'STEPS_AGENT_FILE_EOF'
-      {{ .args.content }}
-      STEPS_AGENT_FILE_EOF
-      printf 'wrote plans/%s.md\n' "$num"
   - mcp: gopls
     tools: [go_symbol_references]
     max_output_bytes: 6000
+  - read_file
+  - list_dir
+  - search_files
+  - write_file
 
 # Implements the plan end to end: code, tests, docs/examples.
 - name: coder
@@ -175,45 +139,20 @@ agents:
     The repository is at repo/. Every tool path is relative to that:
     "repo/internal/config/config.go".
 
-    TOOL POLICY, for the choices that are not obvious:
-
-      WHERE something is   search_files (output_mode "content" for file:line)
-      every call site      gopls__go_symbol_references -- the sibling check
-      CHANGING a file      edit_file, NOT write_file -- see below
-      after an edit        gopls__go_diagnostics on the file you touched
-      the real gate        verify_gate (no arguments)
-      anything else        run_shell -- git, mkdir, rm. Its cwd is your
-                           workspace, so repo commands need `cd repo && ...`,
-                           and each call is a fresh shell.
-
-    USE edit_file, NOT write_file, to change part of an existing file. Copy
-    old_string VERBATIM out of a read_file result -- read_file returns raw
-    bytes, so what you read is byte-exact input for an edit. If it matches
-    nothing, read again and copy more carefully; if several places, include
-    more surrounding lines. write_file replaces a whole file.
-
-    THE SIBLING CHECK: search_files for the file that DEFINES a symbol, then
-    gopls__go_symbol_references with that `file` and the bare `symbol` -- the
-    second argument is `symbol`, NOT `name`. Unlike a text search it cannot
-    miss a sibling spelled differently or false-positive on a comment.
+    Story pointers are at stories/num and stories/file. The story doc is at
+    repo/docs/proposals/stories/{file}, the plan at
+    repo/experiments/self-build/plans/{num}.md, and a prior critique at
+    repo/experiments/self-build/critiques/{num}.md.
   tools:
+  - mcp: gopls
+    tools: [go_symbol_references, go_diagnostics]
+    max_output_bytes: 6000
   - read_file
   - list_dir
   - search_files
   - edit_file
   - write_file
   - run_shell
-  - name: story_brief
-    description: >
-      Call this FIRST. No arguments. Returns the story number and the paths
-      of the story doc, the plan a planning pass already wrote, and the
-      critique.
-    run: |
-      num="$(cat stories/num)"
-      printf 'STORY_NUM     %s\n' "$num"
-      printf 'STORY_PATH    repo/docs/proposals/stories/%s\n' "$(cat stories/file)"
-      printf 'PLAN_PATH     repo/experiments/self-build/plans/%s.md\n' "$num"
-      printf 'CRITIQUE_PATH repo/experiments/self-build/critiques/%s.md\n' "$num"
   - name: verify_gate
     description: >
       Run the whole objective gate in one call and report PASS or FAIL: go
@@ -234,12 +173,8 @@ agents:
         printf '\nGATE: FAIL (exit %s) -- fix, then call verify_gate again\n' "$rc"
       fi
       exit "$rc"
-  - mcp: gopls
-    tools: [go_symbol_references, go_diagnostics]
-    max_output_bytes: 6000
 
-# Quality gate before the put. No shell and no general write tool --
-# write_critique's path is derived in shell, never a model argument.
+# Quality gate before the put. No shell — read_only posture.
 - name: reviewer
   source: { model: lmstudio/google/gemma-4-26b-a4b }
   max_turns: 200
@@ -254,35 +189,19 @@ agents:
 
     The repository is at repo/. Every tool path is relative to that.
 
-    TOOL POLICY, for the choices that are not obvious:
-
-      what changed         repo_diff (no arguments)
-      the sibling check    gopls__go_symbol_references -- see below, your
-                           single most important tool
-      finding a symbol     search_files (output_mode "content" for file:line)
-      your record          write_critique, then the verdict tool, which is
-                           what actually routes
-
-    THE SIBLING CHECK, spelled out because it is the whole reason you exist:
-    search_files for the file that DEFINES the symbol, then
-    gopls__go_symbol_references with that `file` and the bare `symbol` -- the
-    second argument is `symbol`, NOT `name`. It returns real references with
-    file/line/snippet; a text search would both miss a sibling spelled
-    differently and false-positive on a comment. Check each site yourself
-    with read_file.
+    Story pointers are at stories/num and stories/file. The story doc is at
+    repo/docs/proposals/stories/{file}. Write your critique — first line
+    exactly PASS or FAIL, then your reasoning with file:line citations — to
+    repo/experiments/self-build/critiques/{num}.md. That file must exist
+    before you call the verdict tool, which is what actually routes.
   tools:
+  - mcp: gopls
+    tools: [go_symbol_references]
+    max_output_bytes: 6000
   - read_file
   - list_dir
   - search_files
-  - name: story_brief
-    description: >
-      Call this FIRST. No arguments. Returns the story number and the path of
-      the story this attempt claims to implement.
-    run: |
-      num="$(cat stories/num)"
-      printf 'STORY_NUM     %s\n' "$num"
-      printf 'STORY_PATH    repo/docs/proposals/stories/%s\n' "$(cat stories/file)"
-      printf 'CRITIQUE_PATH repo/experiments/self-build/critiques/%s.md\n' "$num"
+  - write_file
   - name: repo_diff
     description: >
       Show what this attempt actually changed. No arguments. Returns `git
@@ -299,23 +218,6 @@ agents:
       git --no-pager diff --stat HEAD
       printf -- '\n--- git diff HEAD (the uncommitted work under review) ---\n'
       git --no-pager diff HEAD
-  - name: write_critique
-    description: >
-      Record your review. ONE argument: content, whose FIRST LINE must be
-      exactly PASS or FAIL, then your reasoning with file:line citations. The
-      path is chosen for you. A human-readable record only -- the verdict
-      tool is what routes. Call this first, then the verdict tool.
-    required: true
-    run: |
-      num="$(cat stories/num)"
-      mkdir -p repo/experiments/self-build/critiques
-      cat > "repo/experiments/self-build/critiques/$num.md" <<'STEPS_AGENT_FILE_EOF'
-      {{ .args.content }}
-      STEPS_AGENT_FILE_EOF
-      printf 'wrote critiques/%s.md\n' "$num"
-  - mcp: gopls
-    tools: [go_symbol_references]
-    max_output_bytes: 6000
 
 jobs:
 - name: self-build
@@ -330,7 +232,8 @@ jobs:
     prompt: |
       Plan ONE implementation step for ONE story.
 
-      1. story_brief, then read_file on repo/CLAUDE.md and on STORY_PATH.
+      1. read_file on stories/num and stories/file, then on repo/CLAUDE.md
+         and on the story doc at repo/docs/proposals/stories/{file}.
       2. Find where the feature must integrate. The feature the story ASKS
          FOR does not exist yet, so never search for its own name. Relevant:
          repo/internal/{config,pipeline,merkle,store,trigger,agent}. For
@@ -338,9 +241,9 @@ jobs:
          tells you whether this story touches one code path or several. Do
          not repeat a query you have already run.
       3. Read the files you found. Page the big ones.
-      4. write_plan(content), once, with the whole plan. File by file: what
-         changes, what tests are needed, which docs/*.md and examples/*.yml
-         need updating. State explicitly whether the change applies to more
+      4. Write the plan to repo/experiments/self-build/plans/{num}.md. File
+         by file: what changes, what tests are needed, which docs/*.md and
+         examples/*.yml need updating. State explicitly whether the change applies to more
          than one structurally similar code path -- list the sibling sites
          gopls returned, with file:line -- and if so require a single test
          covering all of them. Do not describe a file you have not read.
@@ -353,7 +256,8 @@ jobs:
       Implement ONE story's already-written plan. repo/ is a real git clone,
       yours to edit.
 
-      1. story_brief, then read_file on repo/CLAUDE.md and on PLAN_PATH.
+      1. read_file on stories/num and stories/file, then on repo/CLAUDE.md
+         and the plan at repo/experiments/self-build/plans/{num}.md.
       2. Implement it end to end: code, tests, and doc/example updates,
          following CLAUDE.md exactly. If the story adds a behavior or guard
          to one of several similar code paths, run the sibling check and
@@ -370,7 +274,7 @@ jobs:
       here after a previous attempt. A failed build/lint/test gate: just call
       verify_gate, your changes are still here so you will see the errors
       directly. A failed review: call previous_run for the reviewer's note,
-      and read_file on CRITIQUE_PATH.
+      and read_file on repo/experiments/self-build/critiques/{num}.md.
   - task: build-check
     inputs: [repo]
     run: |
@@ -389,7 +293,8 @@ jobs:
     prompt: |
       You are the quality gate before this story's changes are published.
 
-      1. story_brief, then read_file on STORY_PATH and repo/CLAUDE.md.
+      1. read_file on stories/num and stories/file, then on
+         repo/docs/proposals/stories/{file} and repo/CLAUDE.md.
       2. repo_diff. A `??` line is a NEW file that does not appear in the
          diff at all -- read each of those with read_file.
       3. Judge whether the story is fully AND CORRECTLY implemented, not
@@ -403,10 +308,11 @@ jobs:
             them -- a fix applied to only one is a fail;
          d. edge cases the story implies (empty, zero, negative, malformed)
             are handled deliberately, not silently accepted.
-      4. write_critique(content), first line exactly PASS or FAIL, then your
-         reasoning with file:line citations. A record only; it does not route.
+      4. Write your critique to repo/experiments/self-build/critiques/{num}.md
+         — first line exactly PASS or FAIL, then your reasoning with file:line
+         citations. That file must exist before you call the verdict tool.
       5. Call the verdict tool with exactly "pass" or "fail" and a short
-         `note` -- THIS routes the pipeline and is what the implementer sees
+         `note` — THIS routes the pipeline and is what the implementer sees
          on a redo.
     verdicts: [pass, fail]
     to:

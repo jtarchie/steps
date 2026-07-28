@@ -196,7 +196,7 @@ const readFileDescription = "Read a UTF-8 text file's contents, given a path rel
 // mkdir -p is the escape hatch for that.
 const writeFileDescription = "Write text content to a file, given a path relative to the step's working directory." +
 	" Creates the file if it doesn't exist, overwriting any existing content unless append is true." +
-	" The immediate parent directory must already exist — use run_shell (e.g. mkdir -p) first if it doesn't."
+	" Missing parent directories are created automatically."
 
 // editFileDescription documents edit_file's contract. Every failure mode it
 // names is recoverable on the model's next turn — "read the file again and
@@ -602,10 +602,10 @@ func rejectSymlinkEscape(base, resolved, rel string) error {
 // its parent directory is a symlink planted (e.g. via run_shell, which has no
 // path confinement of its own) to point outside dir.
 //
-// write_file requires the immediate parent directory to already exist —
-// deliberately no auto-mkdir, mirroring read_file/list_dir's no-side-effect
-// posture — and when it does, re-validates that existing parent's real path
-// the same way resolveAgentPath validates an existing target.
+// When the target does not exist yet, resolveWritePath creates missing parent
+// directories (mkdir -p), but only after verifying the closest existing
+// ancestor is within the workspace — guarding against a symlink escape through
+// a pre-existing ancestor component.
 func resolveWritePath(dir, rel string) (string, error) {
 	resolved, err := resolveAgentPath(dir, rel)
 	if err != nil {
@@ -621,20 +621,30 @@ func resolveWritePath(dir, rel string) (string, error) {
 		return "", fmt.Errorf("%w", err)
 	}
 
-	parent := filepath.Dir(resolved)
-
-	parentInfo, err := os.Stat(parent)
-	if err != nil {
-		return "", fmt.Errorf("write_file: parent directory %q does not exist", filepath.Dir(rel))
+	// Find the closest existing ancestor so we can verify no intermediate
+	// directory is a symlink out of the workspace before creating parents.
+	ancestor := filepath.Dir(resolved)
+	for ; ancestor != resolved; ancestor = filepath.Dir(ancestor) {
+		_, statErr := os.Stat(ancestor)
+		if statErr == nil {
+			break
+		}
+	}
+	// resolved always has dir as prefix and dir exists, so ancestor will
+	// always be found. Guard the loop anyway.
+	if ancestor == resolved {
+		return "", fmt.Errorf("write_file: could not find an existing ancestor of %q", rel)
 	}
 
-	if !parentInfo.IsDir() {
-		return "", fmt.Errorf("write_file: %q is not a directory", filepath.Dir(rel))
-	}
-
-	err = rejectSymlinkEscape(filepath.Clean(dir), parent, rel)
+	err = rejectSymlinkEscape(filepath.Clean(dir), ancestor, rel)
 	if err != nil {
 		return "", err
+	}
+
+	parent := filepath.Dir(resolved)
+	mkdirErr := os.MkdirAll(parent, 0o750)
+	if mkdirErr != nil {
+		return "", fmt.Errorf("write_file: creating parent directory %q: %w", filepath.Dir(rel), mkdirErr)
 	}
 
 	return resolved, nil
