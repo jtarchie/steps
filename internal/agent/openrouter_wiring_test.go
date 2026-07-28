@@ -39,6 +39,10 @@ func TestAgentHTTPClientScopesBySessionAgentName(t *testing.T) {
 	}
 }
 
+// TestAgentHTTPClientSkipsNonOpenRouter guards the layering that is NOT
+// installed: a non-OpenRouter provider gets the every-provider repair
+// transport with no openRouterTransport on top — the session/cache levers
+// stay OpenRouter-only even though repair is universal.
 func TestAgentHTTPClientSkipsNonOpenRouter(t *testing.T) {
 	t.Parallel()
 
@@ -47,8 +51,13 @@ func TestAgentHTTPClientSkipsNonOpenRouter(t *testing.T) {
 		ModelName: "gpt-4o",
 		AgentName: "reviewer",
 	})
-	if client != nil {
-		t.Errorf("got %v, want nil so openai-go builds its own client", client)
+
+	if _, ok := client.Transport.(*openRouterTransport); ok {
+		t.Errorf("transport = %T, want no openRouterTransport for a non-OpenRouter base url", client.Transport)
+	}
+
+	if _, ok := client.Transport.(*repairTransport); !ok {
+		t.Errorf("transport = %T, want *repairTransport for a non-OpenRouter base url", client.Transport)
 	}
 }
 

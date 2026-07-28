@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"iter"
 	"slices"
 	"strings"
@@ -172,16 +173,23 @@ func TestRunAgentConversationExceedsMaxTurns(t *testing.T) {
 
 	dir := t.TempDir()
 
-	toolCallResp := &model.LLMResponse{
-		Content: &genai.Content{
-			Role:  genai.RoleModel,
-			Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "call1", Name: "run_shell", Args: map[string]any{"command": "true"}}}},
-		},
-	}
-
+	// Each turn's call must differ from the last: an IDENTICAL call with an
+	// identical result is what the loop detector (loop.go) watches for, and
+	// it would kill the conversation before maxTurns — which is what this
+	// test is for. Varying the (harmless) command keeps every interaction's
+	// signature distinct.
 	responses := make([]*model.LLMResponse, testMaxTurns)
 	for i := range responses {
-		responses[i] = toolCallResp
+		responses[i] = &model.LLMResponse{
+			Content: &genai.Content{
+				Role: genai.RoleModel,
+				Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{
+					ID:   "call1",
+					Name: "run_shell",
+					Args: map[string]any{"command": fmt.Sprintf("true # turn %d", i)},
+				}}},
+			},
+		}
 	}
 
 	fake := &fakeLLM{responses: responses}

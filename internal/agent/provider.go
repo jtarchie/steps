@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	genaiopenai "github.com/achetronic/adk-utils-go/genai/openai"
 	"google.golang.org/adk/v2/model"
@@ -26,14 +27,74 @@ const defaultAgentPersona = `You are an automated agent running as one step of a
 // resolved working directory.
 const agentOperatingNote = `Your working directory is %s. Use the tools available to you (all scoped to that directory) to complete the task described below. When finished, reply with a final plain-text message and no further tool calls.`
 
-// buildSystemMessage combines an agent's persona with the operating note for
-// a given working directory.
-func buildSystemMessage(persona, dir string) string {
+// contextBlock is one resolved context_paths: file — the path as declared
+// (shown to the model, so it can cite or re-read the file) and its full
+// contents.
+type contextBlock struct {
+	path    string
+	content string
+}
+
+// buildSystemMessage combines an agent's persona with the operating note
+// for a given working directory, then appends each declared context file in
+// an XML-ish wrapper — the shape models are trained to recognize for
+// reference material (and the same one <transition_context> already uses in
+// this codebase's handoffs).
+func buildSystemMessage(persona, dir string, contexts []contextBlock) string {
 	if persona == "" {
 		persona = defaultAgentPersona
 	}
 
-	return persona + "\n\n" + fmt.Sprintf(agentOperatingNote, dir)
+	var b strings.Builder
+
+	b.WriteString(persona + "\n\n" + fmt.Sprintf(agentOperatingNote, dir))
+
+	for _, c := range contexts {
+		fmt.Fprintf(&b, "\n\n<context path=%q>\n%s\n</context>", c.path, strings.TrimRight(c.content, "\n"))
+	}
+
+	return b.String()
+}
+
+// loadContextBlocks reads an agent's declared context_paths out of the
+// step's working directory at preparation time. Every path is confined to
+// the workspace by resolveAgentPath — the same guard the file tools use —
+// and capped at maxReadFileBytes, the size read_file already treats as the
+// largest sane in-context document. A missing, escaping, or oversized file
+// is a hard preparation error: context_paths is operator-authored config,
+// so a bad one should fail the step loudly before a token is spent, not
+// surface as a surprise mid-conversation.
+func loadContextBlocks(dir string, paths []string) ([]contextBlock, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+
+	blocks := make([]contextBlock, 0, len(paths))
+
+	for _, p := range paths {
+		resolved, err := resolveAgentPath(dir, p)
+		if err != nil {
+			return nil, fmt.Errorf("context path %q: %w", p, err)
+		}
+
+		info, err := os.Stat(resolved)
+		if err != nil {
+			return nil, fmt.Errorf("context path %q: %w", p, err)
+		}
+
+		if info.Size() > maxReadFileBytes {
+			return nil, fmt.Errorf("context path %q is %d bytes, over the %d-byte limit", p, info.Size(), maxReadFileBytes)
+		}
+
+		data, err := os.ReadFile(resolved) //nolint:gosec // resolveAgentPath confines to dir
+		if err != nil {
+			return nil, fmt.Errorf("context path %q: %w", p, err)
+		}
+
+		blocks = append(blocks, contextBlock{path: p, content: string(data)})
+	}
+
+	return blocks, nil
 }
 
 // lookupAPIKey reads the API key from the OS environment variable named by
@@ -68,10 +129,10 @@ func lookupAPIKey(envVar string, required bool) (string, error) {
 // Returning the model.LLM interface (not the concrete *openai.Model) keeps
 // runAgentConversation testable against an in-process fake.
 //
-// An OpenRouter base URL additionally gets a caching HTTP client (see
-// agentHTTPClient/openrouter.go); every other provider is left with a zero
-// HTTPOptions, so openai-go builds its own client exactly as it did before
-// that file existed.
+// Every invocation gets the package's shared HTTP client (see
+// agentHTTPClient): the tool-call argument repair transport applies to all
+// providers, and an OpenRouter base URL additionally gets the session/cache
+// transport (see openrouter.go).
 //
 // It takes the whole ResolvedInvocation rather than loose strings so the
 // mapping from invocation fields to client settings lives in exactly one
@@ -82,20 +143,27 @@ func newAgentLLM(ri config.ResolvedInvocation, apiKey string) model.LLM {
 		APIKey:    apiKey,
 		BaseURL:   ri.BaseURL,
 		ModelName: ri.ModelName,
-	}
-
-	client := agentHTTPClient(ri)
-	if client != nil {
-		cfg.HTTPOptions = genaiopenai.HTTPOptions{Client: client}
+		HTTPOptions: genaiopenai.HTTPOptions{
+			Client: agentHTTPClient(ri),
+		},
 	}
 
 	return genaiopenai.New(cfg)
 }
 
-// agentHTTPClient returns the HTTP client an invocation's LLM should use, or
-// nil to let openai-go build its own. Split out from newAgentLLM so the
-// field mapping it performs — the session is scoped by AgentName, not
-// ModelName — is directly assertable in a test.
+// agentHTTPClient returns the *http.Client an invocation's LLM uses. Its
+// transport stack is, innermost out: the shared base transport (one
+// process-wide connection pool, see agentBaseTransport), the tool-call
+// argument repair transport (all providers — see repair.go), and, only for
+// an OpenRouter base URL, the session/cache transport (see openrouter.go).
+// Split out from newAgentLLM so the field mapping it performs — the session
+// is scoped by AgentName, not ModelName — is directly assertable in a test.
 func agentHTTPClient(ri config.ResolvedInvocation) *http.Client {
-	return newOpenRouterHTTPClient(ri.BaseURL, ri.AgentName)
+	var transport http.RoundTripper = &repairTransport{base: agentBaseTransport()}
+
+	if isOpenRouterBaseURL(ri.BaseURL) {
+		transport = &openRouterTransport{base: transport, agent: ri.AgentName}
+	}
+
+	return &http.Client{Transport: transport}
 }

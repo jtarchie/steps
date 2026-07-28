@@ -283,6 +283,14 @@ type Agent struct {
 	// pipeline file's directory, instead of writing it inline — useful since a
 	// persona is often long freeform prose. Mutually exclusive with System.
 	SystemFile string `yaml:"system_file,omitempty"`
+	// ContextPaths lists files whose contents are spliced into the system
+	// message at run time (e.g. ["repo/CLAUDE.md"]), so project conventions
+	// every invocation should follow are guaranteed-present instead of
+	// costing the model a read_file turn it might skip. Paths are relative
+	// to the agent step's working directory and confined to its workspace —
+	// in practice the file lives inside a declared input. A missing or
+	// unreadable file fails the step at preparation, not mid-conversation.
+	ContextPaths []string `yaml:"context_paths,omitempty"`
 	// Generation dials, forwarded to the model when set. ReasoningEffort is
 	// one of "low", "medium", "high" (for reasoning-capable models).
 	Temperature     *float64 `yaml:"temperature,omitempty"`
@@ -3133,6 +3141,9 @@ type ResolvedInvocation struct {
 	APIKeyEnv   string
 	RequiresKey bool
 	Persona     string
+	// ContextPaths mirrors Agent.ContextPaths once resolved (agent-level
+	// only; no per-step override, same as MaxTurns/CompactAfterTokens).
+	ContextPaths []string
 	// Generation dials, mirroring Agent's own fields once resolved. Kept flat
 	// here (rather than a nested type) so this package doesn't need to depend
 	// on anything LLM-client-specific — internal/agent assembles its own
@@ -3215,6 +3226,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		APIKeyEnv:            apiKeyEnv,
 		RequiresKey:          requiresKey,
 		Persona:              agent.System,
+		ContextPaths:         agent.ContextPaths,
 		Temperature:          agent.Temperature,
 		TopP:                 agent.TopP,
 		MaxTokens:            agent.MaxTokens,

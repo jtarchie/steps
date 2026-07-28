@@ -615,6 +615,13 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 		content["outputs"] = config.StableStrings(step.Outputs)
 	}
 
+	if len(ri.ContextPaths) > 0 {
+		// Paths, not file contents: the files live inside the step's
+		// workspace (loadContextBlocks confines them), so their content is
+		// already chained through the input artifacts' own hashes.
+		content["context_paths"] = config.StableStrings(ri.ContextPaths)
+	}
+
 	if ri.Image != "" {
 		content["image"] = ri.Image
 	}

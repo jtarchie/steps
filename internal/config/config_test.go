@@ -675,6 +675,29 @@ func TestResolveAgentInvocation(t *testing.T) {
 	})
 }
 
+// TestResolveAgentInvocationContextPaths covers ContextPaths' resolution —
+// split out from TestResolveAgentInvocation (mirroring how
+// TestResolveAgentInvocationCompaction is its own function) to keep each
+// under the linter's complexity budget.
+func TestResolveAgentInvocationContextPaths(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{Agents: []Agent{{
+		Name:         "a",
+		Source:       AgentSource{Model: "openai/gpt-4o"},
+		ContextPaths: []string{"repo/CLAUDE.md"},
+	}}}
+
+	ri, err := cfg.ResolveAgentInvocation(Step{Agent: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(ri.ContextPaths) != 1 || ri.ContextPaths[0] != "repo/CLAUDE.md" {
+		t.Errorf("contextPaths = %v, want [repo/CLAUDE.md]", ri.ContextPaths)
+	}
+}
+
 // TestResolveAgentInvocationCompaction covers CompactAfterTokens' resolution
 // specifically — split out from TestResolveAgentInvocation (mirroring how
 // TestResolveAgentInvocationImageOverride is its own function) to keep each

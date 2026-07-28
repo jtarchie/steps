@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/config"
 )
 
 func TestWithNewRun(t *testing.T) {
@@ -694,38 +696,44 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
-func TestNewOpenRouterHTTPClient(t *testing.T) {
+func TestAgentHTTPClientTransportStack(t *testing.T) {
 	t.Parallel()
 
-	t.Run("openrouter base url gets a caching client", func(t *testing.T) {
+	t.Run("openrouter base url gets the session/cache transport outermost", func(t *testing.T) {
 		t.Parallel()
 
-		got := newOpenRouterHTTPClient("https://openrouter.ai/api/v1/", "reviewer")
-		if got == nil {
-			t.Fatal("got nil, want a client")
+		got := agentHTTPClient(config.ResolvedInvocation{
+			BaseURL:   "https://openrouter.ai/api/v1/",
+			ModelName: "anthropic/claude-3.5-sonnet",
+			AgentName: "reviewer",
+		})
+
+		transport, ok := got.Transport.(*openRouterTransport)
+		if !ok {
+			t.Fatalf("transport = %T, want *openRouterTransport", got.Transport)
 		}
 
-		_, ok := got.Transport.(*openRouterTransport)
-		if !ok {
-			t.Errorf("transport = %T, want *openRouterTransport", got.Transport)
+		if _, ok := transport.base.(*repairTransport); !ok {
+			t.Errorf("openRouterTransport.base = %T, want *repairTransport (repair applies to OpenRouter too)", transport.base)
 		}
 	})
 
-	t.Run("every other provider gets no client at all", func(t *testing.T) {
+	t.Run("every other provider gets the repair transport only", func(t *testing.T) {
 		t.Parallel()
 
-		// nil is what keeps non-OpenRouter agents byte-identical to their
-		// pre-caching behavior: newAgentLLM leaves HTTPOptions zero and
-		// openai-go builds its own client exactly as before.
+		// Since repair.go, every provider gets the package's client: the
+		// argument-repair transport wraps the shared base, and only the
+		// OpenRouter session/cache layer is conditional.
 		for _, baseURL := range []string{
 			"https://api.openai.com/v1/",
 			"http://localhost:1234/v1/",
 			"https://api.groq.com/openai/v1/",
 			"",
 		} {
-			got := newOpenRouterHTTPClient(baseURL, "reviewer")
-			if got != nil {
-				t.Errorf("newOpenRouterHTTPClient(%q) = %v, want nil", baseURL, got)
+			got := agentHTTPClient(config.ResolvedInvocation{BaseURL: baseURL, AgentName: "reviewer"})
+
+			if _, ok := got.Transport.(*repairTransport); !ok {
+				t.Errorf("agentHTTPClient(%q).Transport = %T, want *repairTransport", baseURL, got.Transport)
 			}
 		}
 	})

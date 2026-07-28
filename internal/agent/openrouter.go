@@ -21,9 +21,12 @@
 //     need no marker and are left alone; sending them one risks a 400 for no
 //     gain.
 //
-// Scope: the mutating transport is installed on a per-LLM *http.Client, and
-// only when the resolved base URL is actually OpenRouter (see
-// newOpenRouterHTTPClient). The reference implementation this is ported from
+// Scope: the mutating transport is installed on the agent's HTTP client only
+// when the resolved base URL is actually OpenRouter (see agentHTTPClient in
+// provider.go), layered outside the every-provider repair transport
+// (repair.go) on the shared process-wide base transport.
+//
+// The reference implementation this is ported from
 // (jtarchie/topbanana's internal/model/openrouter_cache.go) instead swaps
 // http.DefaultTransport process-wide, because the adk-utils-go version it
 // targeted exposed only an HTTPOptions.Headers seam. v0.22.0 added
@@ -49,8 +52,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 )
 
 // maxSessionIDLen is OpenRouter's documented cap on a session identifier.
@@ -64,12 +65,6 @@ const openRouterHost = "openrouter.ai"
 // (a models listing, say) from being handed a cache_control body field it
 // has no meaning for.
 const chatCompletionsPath = "/chat/completions"
-
-// openRouterResponseHeaderTimeout mirrors the bound openai-go's own
-// defaultHTTPClient applies when the caller supplies no client. Supplying one
-// opts out of that default, so it is re-applied here rather than silently
-// dropping stuck-connection protection for OpenRouter agents specifically.
-const openRouterResponseHeaderTimeout = 10 * time.Minute
 
 // maxLabelLen bounds each human-readable component of a session ID (the job
 // name and the agent name). Two of them plus the random run token stay well
@@ -379,41 +374,3 @@ func withCacheControl(body []byte) []byte {
 	// Encode appends a newline; the request body should not carry one.
 	return bytes.TrimRight(buf.Bytes(), "\n")
 }
-
-// newOpenRouterHTTPClient returns the *http.Client an OpenRouter-backed agent
-// should use, or nil when baseURL isn't OpenRouter — in which case the caller
-// supplies no client at all and openai-go builds its own as before, keeping
-// every non-OpenRouter provider byte-identical to how it behaved before this
-// file existed. agentName scopes the session (see composeSessionID).
-func newOpenRouterHTTPClient(baseURL, agentName string) *http.Client {
-	if !isOpenRouterBaseURL(baseURL) {
-		return nil
-	}
-
-	return &http.Client{Transport: &openRouterTransport{base: openRouterBase(), agent: agentName}}
-}
-
-// openRouterBase is the transport every OpenRouter client shares, built once.
-//
-// It reproduces openai-go's defaultHTTPClient (clone http.DefaultTransport,
-// bound the wait for response headers) but is deliberately process-wide rather
-// than per-client: only the thin openRouterTransport wrapper needs to differ
-// per agent, and cloning the real transport per agent would give every agent
-// step, sub-agent, and fix agent its own connection pool — so a job with
-// several agents would pay a fresh TLS handshake per agent and hold that many
-// pools of idle connections open, instead of reusing one.
-//
-// Cloning once (rather than using http.DefaultTransport directly) still keeps
-// the response-header bound off every other HTTP user in the process
-// (internal/mcp, resource types shelling out, ...).
-var openRouterBase = sync.OnceValue(func() http.RoundTripper { //nolint:gochecknoglobals // process-wide connection pool, built lazily on first OpenRouter agent
-	transport, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		return http.DefaultTransport
-	}
-
-	transport = transport.Clone()
-	transport.ResponseHeaderTimeout = openRouterResponseHeaderTimeout
-
-	return transport
-})

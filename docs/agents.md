@@ -7,13 +7,13 @@ How an `agent` step in a pipeline actually runs, and the features around custom 
 An agent step runs a tool-calling conversation loop:
 
 1. Parse the agent's config: model/endpoint, system prompt, granted tools, `max_turns` (default 8).
-2. Build a system message combining the agent's persona with working-directory context.
+2. Build a system message combining the agent's persona with working-directory context (plus any `context_paths:` files — see below).
 3. Loop, up to `max_turns`:
    - Send the conversation + tool definitions to the model.
    - If the model requests tools, execute them (`read_file`, `list_dir`, `search_files`, `run_shell`, `write_file`, `edit_file`, or a custom/sub-agent tool).
    - Cap any tool output at 32,000 bytes before it goes back to the model, so a noisy command can't blow out the context window — output over that is saved to a file under the step's working directory instead of being dropped, with a short pointer message taking its place (see "Compacting long conversations" below); `read_file` is the exception on both counts — it reads up to 100,000 bytes (a spilled file exists precisely so the model can pull it back, so its read budget is deliberately larger than the spill threshold) and degrades to a plain truncation with `start_line`/`end_line` paging rather than spilling a file back out to another file.
    - Append the tool results and continue.
-4. Exit when the model stops requesting tools, or `max_turns` is exceeded.
+4. Exit when the model stops requesting tools, `max_turns` is exceeded, or loop detection kills a stuck conversation (see "Loop detection" below).
 5. Print the model's final response text to the terminal, followed by its verdict and note if the step declares `verdicts:` — this happens whether the run succeeded or hit its turn budget, since a turn-exhausted attempt's partial response is still available.
 6. Record the step's output.
 
@@ -37,7 +37,9 @@ tools: [read_file, list_dir, search_files, run_shell, write_file, edit_file]
 
 ### `edit_file`
 
-Takes `path`, `old_string`, `new_string`, and optional `replace_all`. `old_string` must match **exactly once** unless `replace_all` is set; zero matches and ambiguous matches are both returned as errors phrased as next-turn instructions ("read the file again and copy the text exactly", "include more surrounding lines"), since both are recoverable without burning an attempt. The file's mode is preserved, so editing a checked-in script does not strip its executable bit. Returns `replacements` and `first_line`, never content.
+Takes `path`, `old_string`, `new_string`, and optional `replace_all`. `old_string` must match **exactly once** unless `replace_all` is set; zero matches and ambiguous matches are both returned as errors phrased as next-turn instructions ("read the file again and copy the text exactly", "include more surrounding lines"), since both are recoverable without burning an attempt. The file's mode is preserved, so editing a checked-in script does not strip its executable bit. Returns `replacements`, `first_line`, and `match_mode`, never content.
+
+Matching is forgiving, in three strategies tried in order of decreasing exactness (`internal/agent/editfile.go`, ported from opencode's edit tool): **exact** first; then **line-trimmed** (every line matches modulo leading/trailing whitespace — recovers the classic local-model miss of right block, wrong indentation); then **block-anchor** (for a block of 3+ lines, the first and last lines anchor and the middle is judged by per-line similarity — recovers a misquoted interior line). The matched span is always the file's *own* text, so a forgiving match never rewrites untouched lines to the model's spelling, and a span far larger than the `old_string` that produced it is refused outright. `match_mode` in the result says which strategy landed (`exact`, `line-trimmed`, `block-anchor`) — an inexact edit is visible, not silent, and the tool description tells the model to re-read around `first_line` when it isn't `exact`. A verbatim copy from `read_file` still lands as `exact` every time.
 
 `edit_file` pairs with `read_file` by design: `read_file` returns **raw bytes**, so text copied out of one is a byte-exact `old_string`. Do not add line numbers to `read_file` — it would break every edit a model constructs this way. Line numbers come from `search_files`' `content` mode instead.
 
@@ -181,6 +183,39 @@ This is the one place a step's config can come from a fetched artifact, and it i
 - **An agent's connection is a credential boundary a fetched repo must never cross.** An `Agent`'s `source.endpoint:`/`api_key_env:` decide where a configured API key gets sent; letting a repo supply either would let it redirect that credential to an attacker-chosen server, walking straight around the `HostEnv()` allowlist and `validateAgentEndpoints` that exist to keep exactly that from happening. A prompt is just the task text the model already reads the repo to act on — no new credential exposure.
 
 The artifact named must be declared in the step's own `inputs:` (checked at `LoadConfig`, mirroring how `dir:`'s first path component is validated) and must be read out of the artifact's contents, which are untrusted — the same symlink-aware path confinement `read_file`/`list_dir` use (`resolveAgentPath`) applies here too. This form cannot be resolved at load time: `merkle.PlanChains` hashes every step before any `get`'s `in:` has run, so the file doesn't exist yet at plan time. That costs nothing, though — an agent step's chain is already unconditionally unskippable (see "Top-level `tasks:` reuse" above and `internal/merkle`'s `planNonGetNode`), so there is no caching to lose by resolving this after plan time.
+
+## `context_paths:` files injected into the system prompt
+
+An `agents:` entry can declare `context_paths:` — files whose full contents are spliced into the system message at run time, each wrapped in a `<context path="...">` block after the persona:
+
+```yaml
+agents:
+- name: coder
+  source: { model: lmstudio/qwen2.5-coder }
+  context_paths: [repo/CLAUDE.md]
+```
+
+The point is not convenience but **guarantee**: conventions every invocation must follow (build/lint/test commands, package-dependency rules) are present from the first turn, instead of costing a `read_file` round trip the model might not bother with — and costing it again for every agent in a multi-agent loop that each needs the same file.
+
+Paths are relative to the step's working directory and confined to its workspace (`resolveAgentPath`, the same guard the file tools use), so in practice the file lives inside a declared input — `repo/CLAUDE.md` inside the `repo` get. They are read at **run time** (per attempt for agent steps and fix agents, per call for sub-agents), which is exactly what distinguishes them from `system_file:`: `system_file:` is the pipeline author's own persona, resolved once at `LoadConfig`; `context_paths:` is content that arrives with a fetched artifact and can change between runs. A missing, escaping, or over-100KB file fails the step at preparation, before a token is spent — it is operator-authored config, so a bad one is a loud error, not a surprise mid-conversation.
+
+**Merkle**: the *paths* (not contents) enter the step's hashed content — the files live inside the workspace, so their content is already chained through the input artifacts' own hashes.
+
+## Repairing malformed tool-call arguments
+
+An OpenAI-compatible server sends a tool call's `arguments` as a JSON *string*, and weak local models (LM Studio, Ollama class) malformed it often: truncated at `max_tokens` mid-string, trailing commas, prose or markdown fences around the object. The LLM adapter parses that string leniently — on *any* parse failure it silently substitutes an **empty map**, so the call arrived at the conversation as if the model had passed no arguments at all: the tool answered "missing required argument", the model had no idea why, and a coding agent could burn most of its turn budget rediscovering the failure.
+
+Every agent's HTTP client therefore carries a **response-repair transport** (`internal/agent/repair.go`) that inspects each chat-completion response and, for any `arguments` string that doesn't parse, attempts a minimal best-effort repair before the adapter ever sees it — the same validate → repair → re-validate shape as crush/fantasy's tool-call repair, placed at the transport because that is the last place the model's raw text exists. The rule set covers only what local models actually produce: dropping prose/fences around the object, closing an unterminated string and unclosed braces (truncation), supplying `null` for a dangling key, and stripping trailing commas. Anything else is left exactly as-is — an unrepairable call behaves precisely as it did before this existed, so repair can only recover a call, never alter a valid one (an all-valid response passes through byte-identically, and non-chat requests are never touched).
+
+Transport-level only, like the OpenRouter caching levers: no config surface, no merkle impact, and it applies to **every** provider, since malformed arguments are an OpenAI-compat-wide hazard rather than a provider-specific one.
+
+## Loop detection
+
+`max_turns` bounds how long a conversation can run, but it is a blunt backstop: an agent that re-issues the *identical* tool call and gets the *identical* result — re-reading a file it has already read, re-running a command whose output cannot change — is stuck, and before loop detection it would spin out its entire turn budget producing nothing. The conversation loop now hashes each tool **interaction** (tool name + arguments + result; `internal/agent/loop.go`, copied from crush's `loop_detection.go`) and counts repeats within a sliding window of the last 10 tool-executing turns.
+
+The result is part of the hash so that *productive* repetition never trips the detector: re-reading a file after an edit returns different bytes, and a verify command's output changes as the tree is fixed. Only call-and-result-both-identical accumulates.
+
+The reaction is two-strike. The first time one interaction exceeds 5 copies in the window, the conversation gets a warning message naming the tool and telling the model to change approach — the window is **not** reset, so the warning is the model's only chance. A second detection (i.e. it repeated the same interaction once more) fails the attempt as a task failure (`failed`, not `errored`, for hook dispatch) with "agent stuck in a loop". Unlike crush's window — which only starts counting after 10 full turns — any count over the threshold triggers, so an agent with the default 8 `max_turns` is protected exactly like one with 200. A retry (`attempts:`) starts with a clean detector, like all per-attempt state.
 
 ## OpenRouter prompt caching
 

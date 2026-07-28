@@ -149,16 +149,11 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, err
 	}
 
-	if step.PromptFile.Deferred() {
-		resolved, err := resolveDeferredPrompt(space.Dir(), step)
-		if err != nil {
-			workspace.CloseSpace(space, step.Agent)
+	step, err = prepareStepPrompt(space.Dir(), step)
+	if err != nil {
+		workspace.CloseSpace(space, step.Agent)
 
-			return preparedAgentStep{}, err
-		}
-
-		step.Prompt = resolved
-		step.PromptFile = nil
+		return preparedAgentStep{}, err
 	}
 
 	// A stdio MCP server with a relative cwd: is pointed at this step's own
@@ -202,8 +197,16 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	spillDir := newToolOutputSpillDir(dir, step.Agent)
 
+	contextBlocks, err := loadContextBlocks(dir, ri.ContextPaths)
+	if err != nil {
+		workspace.CloseSpace(space, step.Agent)
+		closeAll(closers)
+
+		return preparedAgentStep{}, fmt.Errorf("agent %q: %w", step.Agent, err)
+	}
+
 	conv := agentConversation{
-		system: buildSystemMessage(ri.Persona, dir),
+		system: buildSystemMessage(ri.Persona, dir, contextBlocks),
 		prompt: promptWithHandoff(step.Prompt, step.Handoff, handoff, spillDir),
 		env:    toolEnv{dir: dir, runner: runner, spillDir: spillDir},
 		tools:  agentTools{decls: decls, registry: registry, required: required, maxCalls: maxCallsByName(ri.ToolSpecs)},
@@ -223,6 +226,27 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		step: step, ri: ri, space: space, conv: conv, llm: newAgentLLM(ri, apiKey),
 		closers: closers, spillDir: spillDir,
 	}, nil
+}
+
+// prepareStepPrompt resolves a run-time prompt_file: {artifact, path} (see
+// resolveDeferredPrompt) out of the materialized workspace, when the step
+// declares one. Extracted from prepareAgentStep (its branches would
+// otherwise push the preparation flow over the complexity budget); behavior
+// is unchanged.
+func prepareStepPrompt(spaceDir string, step config.Step) (config.Step, error) {
+	if !step.PromptFile.Deferred() {
+		return step, nil
+	}
+
+	resolved, err := resolveDeferredPrompt(spaceDir, step)
+	if err != nil {
+		return config.Step{}, err
+	}
+
+	step.Prompt = resolved
+	step.PromptFile = nil
+
+	return step, nil
 }
 
 // resolveDeferredPrompt reads step's run-time prompt_file: {artifact, path}

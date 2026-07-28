@@ -15,6 +15,19 @@ import (
 // captured failure output is appended after this.
 const defaultFixPrompt = `A command that must pass has just failed; its output is below. Investigate the working directory, make the smallest change that resolves the failure, then call the %q tool to re-run the command and confirm it passes. Repeat until it passes, then reply with a brief summary and stop.`
 
+// buildFixPrompt assembles the fix conversation's user prompt: the fix:'s
+// own prompt: (or the default), then the captured failure output the model
+// is being asked to resolve. Split out of RunFix to keep its control flow
+// inside the complexity budget; behavior is unchanged.
+func buildFixPrompt(fix *config.FixSpec, rt config.ResolvedTask, failureOutput, spillDir string) string {
+	prompt := fix.Prompt
+	if prompt == "" {
+		prompt = fmt.Sprintf(defaultFixPrompt, rt.Name)
+	}
+
+	return prompt + "\n\n--- failure output ---\n" + spillOrTruncate(failureOutput, spillDir)
+}
+
 // RunFix invokes a failed task's fix: agent. It reuses the normal
 // agent-invocation resolution (tool grant, dials, attempts, max_turns) by
 // projecting the FixSpec onto an agent Step, then injects the parent task as
@@ -94,15 +107,15 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 		defer func() { _ = os.RemoveAll(spillDir) }()
 	}
 
-	prompt := fix.Prompt
-	if prompt == "" {
-		prompt = fmt.Sprintf(defaultFixPrompt, rt.Name)
+	prompt := buildFixPrompt(fix, rt, failureOutput, spillDir)
+
+	contextBlocks, err := loadContextBlocks(dir, ri.ContextPaths)
+	if err != nil {
+		return fmt.Errorf("fix agent %q: %w", fix.Agent, err)
 	}
 
-	prompt += "\n\n--- failure output ---\n" + spillOrTruncate(failureOutput, spillDir)
-
 	conv := agentConversation{
-		system: buildSystemMessage(ri.Persona, dir),
+		system: buildSystemMessage(ri.Persona, dir, contextBlocks),
 		prompt: prompt,
 		env:    toolEnv{dir: dir, runner: runner, spillDir: spillDir},
 		tools:  agentTools{decls: decls, registry: registry, required: requiredToolNames(toolSpecs), maxCalls: maxCallsByName(toolSpecs)},

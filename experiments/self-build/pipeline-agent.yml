@@ -101,6 +101,7 @@ agents:
 - name: planner
   source: { model: lmstudio/google/gemma-4-26b-a4b }
   max_turns: 200
+  context_paths: [repo/CLAUDE.md]   # injected into the system prompt — no read_file turn needed
   system: |
     You are a careful staff engineer planning ONE change to the `steps` Go
     codebase (a Concourse-style pipeline runner). You research before you
@@ -127,6 +128,7 @@ agents:
 - name: coder
   source: { model: lmstudio/google/gemma-4-26b-a4b }
   max_turns: 200
+  context_paths: [repo/CLAUDE.md]
   system: |
     You are a careful Go engineer implementing an already-written plan
     against the `steps` codebase. You follow repo/CLAUDE.md exactly (package
@@ -178,6 +180,7 @@ agents:
 - name: reviewer
   source: { model: lmstudio/google/gemma-4-26b-a4b }
   max_turns: 200
+  context_paths: [repo/CLAUDE.md]
   system: |
     You are a skeptical code reviewer for the `steps` Go codebase. Lint,
     tests and build already passed -- your job is the correctness a compiler
@@ -232,8 +235,9 @@ jobs:
     prompt: |
       Plan ONE implementation step for ONE story.
 
-      1. read_file on stories/num and stories/file, then on repo/CLAUDE.md
-         and on the story doc at repo/docs/proposals/stories/{file}.
+      1. read_file on stories/num and stories/file, then on the story doc at
+         repo/docs/proposals/stories/{file}. (repo/CLAUDE.md is already in
+         your system prompt — follow it.)
       2. Find where the feature must integrate. The feature the story ASKS
          FOR does not exist yet, so never search for its own name. Relevant:
          repo/internal/{config,pipeline,merkle,store,trigger,agent}. For
@@ -256,8 +260,9 @@ jobs:
       Implement ONE story's already-written plan. repo/ is a real git clone,
       yours to edit.
 
-      1. read_file on stories/num and stories/file, then on repo/CLAUDE.md
-         and the plan at repo/experiments/self-build/plans/{num}.md.
+      1. read_file on stories/num and stories/file, then on the plan at
+         repo/experiments/self-build/plans/{num}.md. (repo/CLAUDE.md is
+         already in your system prompt — follow it exactly.)
       2. Implement it end to end: code, tests, and doc/example updates,
          following CLAUDE.md exactly. If the story adds a behavior or guard
          to one of several similar code paths, run the sibling check and
@@ -294,7 +299,8 @@ jobs:
       You are the quality gate before this story's changes are published.
 
       1. read_file on stories/num and stories/file, then on
-         repo/docs/proposals/stories/{file} and repo/CLAUDE.md.
+         repo/docs/proposals/stories/{file}. (repo/CLAUDE.md is already in
+         your system prompt.)
       2. repo_diff. A `??` line is a NEW file that does not appear in the
          diff at all -- read each of those with read_file.
       3. Judge whether the story is fully AND CORRECTLY implemented, not

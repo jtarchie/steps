@@ -354,6 +354,59 @@ func TestAgentImageAffectsHash(t *testing.T) {
 	}
 }
 
+// TestAgentContextPathsAffectHash pins the value-gating of context_paths in
+// AgentContentMap: unset, the key is absent (a pipeline that never declares
+// it hashes byte-identically to before the field existed); set, the hash
+// changes. File CONTENTS are deliberately not hashed — the files live
+// inside the step's workspace, so their content is chained through the
+// input artifacts' own hashes.
+//
+//nolint:cyclop // straight-line build/hash pairs mirroring TestGetPutImageAffectsHash
+func TestAgentContextPathsAffectHash(t *testing.T) {
+	t.Parallel()
+
+	step := config.Step{Agent: "coder"}
+	base := config.ResolvedInvocation{AgentName: "coder"}
+	withPaths := config.ResolvedInvocation{AgentName: "coder", ContextPaths: []string{"repo/CLAUDE.md"}}
+
+	baseContent, err := AgentContentMap(&config.Config{}, step, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := baseContent["context_paths"]; ok {
+		t.Error("context_paths key present for an unset ContextPaths; value-gating broken")
+	}
+
+	withContent, err := AgentContentMap(&config.Config{}, step, withPaths)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	paths, ok := withContent["context_paths"]
+	if !ok {
+		t.Fatal("context_paths key absent for a set ContextPaths")
+	}
+
+	if got, ok := paths.([]string); !ok || len(got) != 1 || got[0] != "repo/CLAUDE.md" {
+		t.Errorf("context_paths = %v, want [repo/CLAUDE.md]", paths)
+	}
+
+	baseHash, err := HashNode(NodeKindAgent, baseContent, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	withHash, err := HashNode(NodeKindAgent, withContent, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if baseHash == withHash {
+		t.Error("declaring context_paths did not change the agent node hash")
+	}
+}
+
 // TestGetPutImageAffectsHash mirrors the task case for GetNodeContent and
 // PutNodeContent, whose image comes from the resource type.
 //

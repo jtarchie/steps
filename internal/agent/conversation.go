@@ -202,6 +202,11 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 
 	var compactionStalled bool
 
+	// detector is per-attempt like everything above: it watches for the model
+	// repeating one identical tool interaction (same call, same result) until
+	// it is clearly stuck, warns once, then fails the attempt — see loop.go.
+	detector := newLoopDetector()
+
 	for turn := range conv.maxTurns {
 		if conv.compactAfterTokens > 0 {
 			compactionSummary, compactionStalled = maybeCompact(ctx, llm, req, conv, compactionSummary, compactionStalled)
@@ -242,6 +247,11 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 			Role:  genai.RoleUser,
 			Parts: parts,
 		})
+
+		detectErr := detector.respond(req, calls, parts)
+		if detectErr != nil {
+			return conversationResult{turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note}, detectErr
+		}
 	}
 
 	// Both terminal outcomes here are task-level failures (the conversation

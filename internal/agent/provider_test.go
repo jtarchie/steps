@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -51,7 +53,7 @@ func TestBuildSystemMessage(t *testing.T) {
 	t.Run("custom persona is preserved and dir noted", func(t *testing.T) {
 		t.Parallel()
 
-		got := buildSystemMessage("You are a terse reviewer.", "/work/prs")
+		got := buildSystemMessage("You are a terse reviewer.", "/work/prs", nil)
 		if !strings.HasPrefix(got, "You are a terse reviewer.") {
 			t.Errorf("persona not preserved: %q", got)
 		}
@@ -64,9 +66,90 @@ func TestBuildSystemMessage(t *testing.T) {
 	t.Run("empty persona falls back to the default", func(t *testing.T) {
 		t.Parallel()
 
-		got := buildSystemMessage("", "/work")
+		got := buildSystemMessage("", "/work", nil)
 		if !strings.HasPrefix(got, defaultAgentPersona) {
 			t.Errorf("expected the default persona, got %q", got)
+		}
+	})
+
+	t.Run("context blocks are appended as wrapped reference material", func(t *testing.T) {
+		t.Parallel()
+
+		got := buildSystemMessage("persona", "/work", []contextBlock{
+			{path: "repo/CLAUDE.md", content: "rule one\nrule two\n"},
+		})
+
+		want := `<context path="repo/CLAUDE.md">` + "\nrule one\nrule two\n</context>"
+		if !strings.Contains(got, want) {
+			t.Errorf("context block missing or malformed.\nwant substring: %q\ngot: %q", want, got)
+		}
+
+		if strings.Index(got, "persona") > strings.Index(got, "<context") {
+			t.Errorf("context block should follow the persona, got %q", got)
+		}
+	})
+}
+
+func TestLoadContextBlocks(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil paths resolve to nil", func(t *testing.T) {
+		t.Parallel()
+
+		blocks, err := loadContextBlocks(t.TempDir(), nil)
+		if err != nil || blocks != nil {
+			t.Errorf("got (%v, %v), want (nil, nil)", blocks, err)
+		}
+	})
+
+	t.Run("reads declared files from the workspace", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+
+		err := os.MkdirAll(filepath.Join(dir, "repo"), 0o750)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = os.WriteFile(filepath.Join(dir, "repo", "CLAUDE.md"), []byte("follow CLAUDE.md exactly\n"), 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		blocks, err := loadContextBlocks(dir, []string{"repo/CLAUDE.md"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(blocks) != 1 || blocks[0].path != "repo/CLAUDE.md" || blocks[0].content != "follow CLAUDE.md exactly\n" {
+			t.Errorf("got %+v", blocks)
+		}
+	})
+}
+
+func TestLoadContextBlocksErrors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("missing file is a preparation error", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := loadContextBlocks(t.TempDir(), []string{"repo/MISSING.md"})
+		if err == nil {
+			t.Fatal("expected an error for a missing context file")
+		}
+
+		if !strings.Contains(err.Error(), "repo/MISSING.md") {
+			t.Errorf("error should name the declared path, got %v", err)
+		}
+	})
+
+	t.Run("paths escaping the workspace are rejected", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := loadContextBlocks(t.TempDir(), []string{"../../etc/passwd"})
+		if err == nil {
+			t.Fatal("expected an error for an escaping context path")
 		}
 	})
 }

@@ -208,13 +208,20 @@ const writeFileDescription = "Write text content to a file, given a path relativ
 // returns RAW bytes, so text a model copies out of one is a byte-exact
 // old_string here. Adding line numbers to read_file would break that.
 // search_files' content mode is where line numbers come from instead.
+//
+// The forgiving chain (editfile.go) is mentioned, but as a safety net, not
+// an invitation to paraphrase: a verbatim copy still lands as "exact",
+// which is the only match_mode the model should aim for.
 const editFileDescription = "Replace an exact string in a text file — the way to change part of a file without" +
 	" re-emitting the whole thing. path is relative to the step's working directory (or an absolute path inside it)." +
 	" old_string must be copied VERBATIM from a read_file result, including indentation and line breaks, and must" +
 	" match exactly once: if it matches zero times, read the file again and copy the text exactly; if it matches" +
 	" several times, include more surrounding lines to make it unique, or pass replace_all: true. new_string replaces" +
-	" it — pass an empty string to delete. Returns how many replacements were made and the line the first one landed" +
-	" on, so you can read back around it. Use write_file instead to create a new file or replace one wholesale."
+	" it — pass an empty string to delete. A near-miss old_string (whitespace or a line or two off) may still match" +
+	" via the forgiving fallback; when it does, match_mode in the result says so — re-read the file around" +
+	" first_line to confirm the edit landed where you intended. Returns how many replacements were made and the" +
+	" line the first one landed on, so you can read back around it. Use write_file instead to create a new file or" +
+	" replace one wholesale."
 
 func builtinAgentTools(image string) map[string]builtinTool {
 	return map[string]builtinTool{
@@ -1130,12 +1137,14 @@ func execWriteFile(_ context.Context, args map[string]any, env toolEnv) map[stri
 	return map[string]any{"bytes_written": n, "path": rel}
 }
 
-// execEditFile replaces an exact substring in an existing file, so a model
-// can change part of a large file without re-emitting all of it (write_file's
-// only mode). It validates arguments and the target, then hands the actual
-// replacement to applyEdit — split the same way execReadFile delegates to
-// readFileFull/readFileRange, to keep each function inside the linter's
-// complexity budget.
+// execEditFile replaces a string in an existing file, so a model can change
+// part of a large file without re-emitting all of it (write_file's only
+// mode). Matching is the forgiving chain in editfile.go — exact first, then
+// line-trimmed, then block-anchor — so a near-miss old_string from a local
+// model can still land instead of burning a turn. It validates arguments
+// and the target, then hands the actual replacement to applyEdit — split
+// the same way execReadFile delegates to readFileFull/readFileRange, to
+// keep each function inside the linter's complexity budget.
 //
 // Every error it returns is phrased as a next-turn instruction rather than a
 // bare diagnosis, because the two common failures (a near-miss old_string, an
@@ -1207,47 +1216,51 @@ func readEditTarget(resolved, rel string) (string, os.FileMode, map[string]any) 
 
 // applyEdit performs execEditFile's replacement against an already-resolved
 // path. It preserves the file's existing mode, so editing a checked-in shell
-// script doesn't silently strip its executable bit.
+// script doesn't silently strip its executable bit. The match itself is
+// replaceEditSpan's forgiving chain (see editfile.go) — exact first, then
+// line-trimmed, then block-anchor — with the strategy reported back to the
+// model as match_mode so an inexact edit is visible rather than silent.
 func applyEdit(resolved, rel, oldString, newString string, replaceAll bool) map[string]any {
 	content, mode, errResult := readEditTarget(resolved, rel)
 	if errResult != nil {
 		return errResult
 	}
 
-	// Index rather than Count first: it doubles as the occurrence test (-1
-	// means none) and as the offset firstLine is derived from.
-	idx := strings.Index(content, oldString)
-	if idx < 0 {
-		return map[string]any{"error": fmt.Sprintf(
-			"edit_file: old_string was not found in %q. Read the file with read_file and copy the text exactly, including leading whitespace.",
-			rel,
-		)}
+	outcome, err := replaceEditSpan(content, oldString, newString, replaceAll)
+	if err != nil {
+		var ambiguous editAmbiguousError
+
+		switch {
+		case errors.Is(err, errEditNotFound):
+			return map[string]any{"error": fmt.Sprintf(
+				"edit_file: old_string was not found in %q. Read the file with read_file and copy the text exactly, including leading whitespace.",
+				rel,
+			)}
+		case errors.As(err, &ambiguous):
+			return map[string]any{"error": fmt.Sprintf(
+				"edit_file: old_string appears %d times in %q. Include more surrounding lines to make it unique, or pass replace_all: true.",
+				ambiguous.count, rel,
+			)}
+		case errors.Is(err, errEditDisproportionate):
+			return map[string]any{"error": fmt.Sprintf(
+				"edit_file: the span matching old_string in %q is much larger than old_string itself, so the edit was refused. Re-read the file and provide the full exact text of the block you intend to replace.",
+				rel,
+			)}
+		default:
+			return map[string]any{"error": err.Error()}
+		}
 	}
 
-	count := strings.Count(content, oldString)
-	if count > 1 && !replaceAll {
-		return map[string]any{"error": fmt.Sprintf(
-			"edit_file: old_string appears %d times in %q. Include more surrounding lines to make it unique, or pass replace_all: true.",
-			count, rel,
-		)}
-	}
-
-	limit, replacements := 1, 1
-	if replaceAll {
-		limit, replacements = -1, count
-	}
-
-	updated := strings.Replace(content, oldString, newString, limit)
-
-	err := os.WriteFile(resolved, []byte(updated), mode)
+	err = os.WriteFile(resolved, []byte(outcome.updated), mode)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
 
 	return map[string]any{
 		"path":         rel,
-		"replacements": replacements,
-		"first_line":   1 + strings.Count(content[:idx], "\n"),
+		"replacements": outcome.replacements,
+		"first_line":   1 + strings.Count(content[:outcome.matchIndex], "\n"),
+		"match_mode":   outcome.mode,
 	}
 }
 

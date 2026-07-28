@@ -124,8 +124,17 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 
 	runner = runner.WithLabel(c.ri.AgentName)
 
+	// Context blocks load per call, not once at buildSubAgentTool time: the
+	// child's working dir is only known here, and a re-read sees edits the
+	// parent's conversation has already made. A bad path arrives as ordinary
+	// tool-result data, the same contract every child failure honours.
+	contextBlocks, err := loadContextBlocks(env.dir, c.ri.ContextPaths)
+	if err != nil {
+		return map[string]any{"error": fmt.Sprintf("%s: %s", c.ri.AgentName, err)}
+	}
+
 	conv := agentConversation{
-		system: buildSystemMessage(c.ri.Persona, env.dir),
+		system: buildSystemMessage(c.ri.Persona, env.dir, contextBlocks),
 		prompt: request,
 		env:    toolEnv{dir: env.dir, runner: runner, spillDir: env.spillDir},
 		tools:  agentTools{decls: c.decls, registry: c.registry, required: c.required, maxCalls: c.maxCalls},
