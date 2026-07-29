@@ -2868,6 +2868,8 @@ var agentProviders = map[string]agentProvider{
 	"together":   {"https://api.together.xyz/v1/", "TOGETHER_API_KEY", true},
 	"lmstudio":   {"http://localhost:1234/v1/", "", false},
 	"ollama":     {"http://localhost:11434/v1/", "", false},
+	"opencode":   {"https://opencode.ai/zen/go/v1/", "OPENCODE_API_KEY", true},
+	"anthropic":  {"https://api.anthropic.com/v1/", "ANTHROPIC_API_KEY", true},
 }
 
 // validateAgentEndpoints rejects an agents: entry whose source.endpoint:
