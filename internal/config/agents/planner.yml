@@ -1,0 +1,8 @@
+system_file: "@builtin/planner"
+tools:
+  - read_file
+  - list_dir
+  - search_files
+max_turns: 15
+max_tokens: 4096
+temperature: 0.2

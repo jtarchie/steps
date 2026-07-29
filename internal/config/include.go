@@ -96,11 +96,24 @@ func applyInclude(baseDir string, inc include) error {
 // author is at the same trust level — a shared ../tasks/ directory next to a
 // pipelines/ directory is a legitimate layout, not a hole to close.
 //
+// A path with the "@builtin/<name>" prefix reads from the embedded prompt
+// library instead of from disk, so pipelines can reference the curated
+// system prompts shipped with the binary without needing a sibling file.
+//
 // A not-found error carries a specific hint for the common Concourse-habit
 // mistake (run_file: repo/ci/build.sh, meaning a fetched artifact): that path
 // essentially never exists next to a pipeline YAML, so this fires in
 // practice for exactly that case.
 func readIncludeFile(baseDir, context, key, path string) ([]byte, error) {
+	if strings.HasPrefix(path, "@builtin/") {
+		name := strings.TrimPrefix(path, "@builtin/")
+		data, err := ReadBuiltinPrompt(name)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %s %q: %w", context, key, path, err)
+		}
+		return []byte(data), nil
+	}
+
 	if filepath.IsAbs(path) {
 		return nil, fmt.Errorf("%s: %s %q must be a path relative to the pipeline file's directory", context, key, path)
 	}

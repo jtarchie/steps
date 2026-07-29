@@ -1068,6 +1068,8 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
 	}
 
+	cfg.registerBuiltinAgents()
+
 	err = cfg.validate()
 	if err != nil {
 		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)

@@ -1,0 +1,1 @@
+Run a shell command via sh -c, with cwd set to the step's working directory. Returns stdout, stderr, and exit_code. If output is too large, it is saved to a file under the working directory and a pointer message is returned in its place.

@@ -1,0 +1,7 @@
+system_file: "@builtin/reviewer"
+tools:
+  - read_file
+  - list_dir
+  - search_files
+max_turns: 20
+temperature: 0.1

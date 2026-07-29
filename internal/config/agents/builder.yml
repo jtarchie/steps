@@ -1,0 +1,9 @@
+system_file: "@builtin/builder"
+tools:
+  - read_file
+  - list_dir
+  - run_shell
+  - write_file
+  - edit_file
+  - search_files
+max_turns: 25

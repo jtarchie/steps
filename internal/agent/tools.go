@@ -19,6 +19,18 @@ import (
 	"github.com/jtarchie/steps/internal/template"
 )
 
+// toolDescription returns the description text for a built-in tool, loading
+// from the embedded library when available and falling back to a Go constant.
+// The embedded files are the canonical source; this fallback ensures old
+// binaries without matching embedded files still work.
+func toolDescription(name, fallback string) string {
+	desc, err := config.ReadBuiltinToolDescription(name)
+	if err == nil && desc != "" {
+		return desc
+	}
+	return fallback
+}
+
 // maxToolOutputBytes caps how much of a tool's textual output (command
 // stdout/stderr, an MCP tool's response, a sub-agent's final answer, a
 // previous_run field, a fix loop's failure output) is returned to the model
@@ -228,7 +240,7 @@ func builtinAgentTools(image string) map[string]builtinTool {
 		"read_file": {
 			decl: &genai.FunctionDeclaration{
 				Name:        "read_file",
-				Description: readFileDescription,
+				Description: toolDescription("read_file", readFileDescription),
 				Parameters: &genai.Schema{
 					Type: genai.TypeObject,
 					Properties: map[string]*genai.Schema{
@@ -267,7 +279,7 @@ func builtinAgentTools(image string) map[string]builtinTool {
 		"write_file": {
 			decl: &genai.FunctionDeclaration{
 				Name:        "write_file",
-				Description: writeFileDescription,
+				Description: toolDescription("write_file", writeFileDescription),
 				Parameters: &genai.Schema{
 					Type: genai.TypeObject,
 					Properties: map[string]*genai.Schema{
@@ -283,7 +295,7 @@ func builtinAgentTools(image string) map[string]builtinTool {
 		"edit_file": {
 			decl: &genai.FunctionDeclaration{
 				Name:        "edit_file",
-				Description: editFileDescription,
+				Description: toolDescription("edit_file", editFileDescription),
 				Parameters: &genai.Schema{
 					Type: genai.TypeObject,
 					Properties: map[string]*genai.Schema{

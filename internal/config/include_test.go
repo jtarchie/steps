@@ -547,3 +547,131 @@ jobs:
 		})
 	}
 }
+
+func TestLoadConfigBuiltinPrompt(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+agents:
+- name: coder
+  source: { model: lmstudio/qwen }
+  system_file: "@builtin/builder"
+jobs:
+- name: build
+  plan:
+  - agent: coder
+    inputs: []
+    prompt: build it
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	ri, err := cfg.ResolveAgentInvocation(cfg.Jobs[0].Plan[0])
+	if err != nil {
+		t.Fatalf("ResolveAgentInvocation: %v", err)
+	}
+
+	if ri.Persona == "" {
+		t.Fatal("built-in prompt resolved to empty string")
+	}
+}
+
+func TestLoadConfigBuiltinAgentRegistration(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+jobs:
+- name: build
+  plan:
+  - agent: "@builtin/reviewer"
+    inputs: []
+    prompt: review the code
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	a, err := cfg.FindAgent("@builtin/reviewer")
+	if err != nil {
+		t.Fatalf("FindAgent(@builtin/reviewer): %v", err)
+	}
+
+	if a.System == "" {
+		t.Fatal("built-in agent has empty system persona")
+	}
+
+	if len(a.Tools) == 0 {
+		t.Fatal("built-in agent has no tool specs")
+	}
+}
+
+func TestLoadConfigBuiltinAgentUserOverride(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+agents:
+- name: "@builtin/reviewer"
+  source: { model: openrouter/anthropic/claude-3.5-sonnet }
+  max_turns: 42
+jobs:
+- name: build
+  plan:
+  - agent: "@builtin/reviewer"
+    inputs: []
+    prompt: review it
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	ri, err := cfg.ResolveAgentInvocation(cfg.Jobs[0].Plan[0])
+	if err != nil {
+		t.Fatalf("ResolveAgentInvocation: %v", err)
+	}
+
+	if ri.AgentName != "@builtin/reviewer" {
+		t.Errorf("AgentName = %q, want @builtin/reviewer", ri.AgentName)
+	}
+
+	if ri.MaxTurns != 42 {
+		t.Errorf("MaxTurns = %d, want 42 (user override)", ri.MaxTurns)
+	}
+
+	if ri.BaseURL == "" {
+		t.Error("BaseURL = empty, expected openrouter override")
+	}
+}
+
+func TestLoadConfigBuiltinPromptOnStep(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+agents:
+- name: coder
+  source: { model: lmstudio/qwen }
+jobs:
+- name: build
+  plan:
+  - agent: coder
+    inputs: []
+    prompt_file: "@builtin/explorer"
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	step := cfg.Jobs[0].Plan[0]
+
+	if step.Prompt == "" {
+		t.Fatal("prompt_file @builtin/explorer resolved to empty string")
+	}
+}

@@ -1,0 +1,1 @@
+Write text content to a file, given a path relative to the step's working directory. Creates the file if it doesn't exist, overwriting any existing content unless append is true. Missing parent directories are created automatically.
