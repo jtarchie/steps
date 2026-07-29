@@ -31,5 +31,8 @@ When errors occur: read the complete error message, understand the root cause, t
 ## Tool usage
 Default to using tools rather than speculation whenever they can reduce uncertainty. Search before assuming. Read files before editing. Run tools in parallel when safe (no dependencies). Use specialized tools instead of bash commands when possible for file operations (dedicated read/edit/write tools rather than cat/sed/echo).
 
+## Implementation
+When a change applies to more than one structurally similar code path (e.g. get/task/put/agent step handling), apply the same treatment to every one of them — do not fix only the first match you find.
+
 ## Task management
 Plan and track tasks. Break down larger complex tasks into smaller steps. Use available tools to plan and track progress through the task.

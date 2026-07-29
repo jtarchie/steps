@@ -191,7 +191,8 @@ jobs:
     attempts: 2       # whole-conversation restart on a transport failure
     timeout: 20m      # per attempt, not total -- see docs/attempts-timeout.md
     prompt: |
-      Plan ONE implementation step for ONE story.
+      Plan ONE implementation step for ONE story. You have NO shell.
+      The only file you write is the plan document.
 
       1. read_file on stories/num and stories/file, then on the story doc at
          repo/docs/proposals/stories/{file}. (repo/CLAUDE.md is already in
@@ -255,6 +256,9 @@ jobs:
     timeout: 20m
     prompt: |
       You are the quality gate before this story's changes are published.
+      Lint, tests and build already passed — your job is the correctness a
+      compiler cannot check. You do not edit files. A concern you cannot
+      cite as file:line is not a concern.
 
       1. read_file on stories/num and stories/file, then on
          repo/docs/proposals/stories/{file}. (repo/CLAUDE.md is already in
