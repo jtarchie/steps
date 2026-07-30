@@ -1,9 +1,206 @@
 package config
 
+// The mcp_servers: entry — transport, credentials, cwd resolution — plus the
+// two places a config can point at one: an agent's tool grant and a resource
+// type's check/in/out backend.
+
 import (
 	"fmt"
+	"log/slog"
+	"net/url"
 	"path/filepath"
 )
+
+// MCPResourceConfig backs a resource type's check/in/out with calls to a
+// named mcp_servers: entry instead of shell commands. Check is required (a
+// type with no way to discover versions is useless); In and Out are
+// optional — see resource.CheckVersions/RunIn/RunOut's mcp*/ branches for
+// exactly what arguments each call receives and how its result is used.
+type MCPResourceConfig struct {
+	Server string       `yaml:"server"`
+	Check  *MCPToolCall `yaml:"check,omitempty"`
+	In     *MCPToolCall `yaml:"in,omitempty"`
+	Out    *MCPToolCall `yaml:"out,omitempty"`
+}
+
+// MCPToolCall names the remote tool a resource-type lifecycle stage calls.
+type MCPToolCall struct {
+	Tool string `yaml:"tool"`
+}
+
+// MCPServer is a reusable, named MCP server connection: configured once
+// under mcp_servers: and shared across any number of agents: tool grants
+// and resource_types: mcp: backends — the same once-configured/many-
+// consumers idiom as Agent/Resource. Two transports are supported: HTTP
+// (Streamable HTTP, via Endpoint) or stdio (a local subprocess, via Command/
+// Args/Cwd) — exactly one of Endpoint/Command is set (see
+// validateMCPServerTransport). A stdio server has no request to attach
+// credentials to, so Auth must be unset ("none") when Command is set.
+type MCPServer struct {
+	Name     string   `yaml:"name"`
+	Endpoint string   `yaml:"endpoint,omitempty"`
+	Command  string   `yaml:"command,omitempty"`
+	Args     []string `yaml:"args,omitempty"`
+	// Cwd is the working directory a stdio server's subprocess is spawned
+	// in. An ABSOLUTE path is used verbatim — a fixed location on the host,
+	// resolved identically for every step. A RELATIVE path is resolved
+	// against the agent step's own working directory (see
+	// WithResolvedMCPCwd), which is what lets a server be pointed at an
+	// input artifact — `cwd: repo` for a language server that must index the
+	// same materialized tree the agent's file tools read. Empty inherits the
+	// steps process's own cwd.
+	//
+	// Relative only makes sense where a step workspace exists, so it is
+	// rejected for a server backing a resource type's mcp: config — a
+	// check/in/out runs with no agent step to resolve against.
+	Cwd  string        `yaml:"cwd,omitempty"`
+	Auth MCPServerAuth `yaml:"auth,omitempty"`
+}
+
+// WithResolvedMCPCwd returns cfg with every stdio server's relative Cwd
+// joined against baseDir — the working directory of the agent step whose
+// tools are about to be built. cfg is returned unchanged when no server
+// needs it, so the overwhelmingly common case (no mcp_servers:, or all
+// absolute) allocates nothing and hashes identically.
+//
+// The copy is shallow but the MCPServers slice is fresh, so a step
+// resolving its own view can never mutate the shared config another step
+// (with a different working directory) will resolve later.
+func WithResolvedMCPCwd(cfg *Config, baseDir string) *Config {
+	if cfg == nil || baseDir == "" {
+		return cfg
+	}
+
+	needed := false
+
+	for _, srv := range cfg.MCPServers {
+		if srv.Cwd != "" && !filepath.IsAbs(srv.Cwd) {
+			needed = true
+
+			break
+		}
+	}
+
+	if !needed {
+		return cfg
+	}
+
+	servers := make([]MCPServer, len(cfg.MCPServers))
+	copy(servers, cfg.MCPServers)
+
+	for i, srv := range servers {
+		if srv.Cwd != "" && !filepath.IsAbs(srv.Cwd) {
+			servers[i].Cwd = filepath.Join(baseDir, srv.Cwd)
+		}
+	}
+
+	resolved := *cfg
+	resolved.MCPServers = servers
+
+	return &resolved
+}
+
+// IsStdio reports whether srv is a stdio (local subprocess) server rather
+// than an HTTP one. Exactly one of Endpoint/Command is set — see
+// validateMCPServerTransport.
+func (s MCPServer) IsStdio() bool {
+	return s.Command != ""
+}
+
+// MCPServerAuth selects how steps authenticates to an MCP server. Type is
+// "none" (default, when Auth is omitted entirely), "bearer" (a static token
+// read from an OS environment variable named by APIKeyEnv — mirrors
+// AgentSource.APIKeyEnv exactly: the credential is never stored in YAML),
+// or "oauth" (interactive authorization-code + PKCE via `steps mcp login`,
+// with silent refresh at run/watch time — see internal/mcp).
+type MCPServerAuth struct {
+	Type      string   `yaml:"type"`
+	APIKeyEnv string   `yaml:"api_key_env,omitempty"`
+	Scopes    []string `yaml:"scopes,omitempty"`
+}
+
+// FindMCPServer returns the mcp_servers: entry with the given name, or an
+// error if not found.
+func (c *Config) FindMCPServer(name string) (*MCPServer, error) {
+	slog.Debug("mcp_server.find", "name", name)
+
+	for i := range c.MCPServers {
+		if c.MCPServers[i].Name == name {
+			slog.Debug("mcp_server.find", "name", name, "found", true)
+
+			return &c.MCPServers[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("no mcp_servers entry named %q", name)
+}
+
+// validateMCPServers checks every mcp_servers: entry at load time: a
+// non-empty, unique name; a transport shape consistent with exactly one of
+// endpoint (http)/command (stdio) — see validateMCPServerTransport; for an
+// http server, an endpoint that doesn't embed userinfo (same check and
+// reasoning as validateAgentEndpoints — the endpoint is merkle-hashed, so it
+// must not carry a credential); and an auth block shape consistent with its
+// type ("" / "none" / "bearer" / "oauth" — "bearer" requires api_key_env,
+// any other type must not set it).
+func (c *Config) validateMCPServers() error {
+	seen := make(map[string]bool, len(c.MCPServers))
+
+	for i := range c.MCPServers {
+		srv := c.MCPServers[i]
+
+		if srv.Name == "" {
+			return fmt.Errorf("mcp_servers[%d]: name is required", i)
+		}
+
+		if seen[srv.Name] {
+			return fmt.Errorf("mcp_servers: name %q is declared more than once", srv.Name)
+		}
+
+		seen[srv.Name] = true
+
+		err := validateMCPServerTransport(srv)
+		if err != nil {
+			return err
+		}
+
+		if srv.Endpoint != "" {
+			parsed, parseErr := url.Parse(srv.Endpoint)
+			if parseErr == nil && parsed.User != nil {
+				return fmt.Errorf("mcp server %q: endpoint must not embed credentials (userinfo); use auth.api_key_env instead", srv.Name)
+			}
+		}
+
+		err = validateMCPServerAuth(srv)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateMCPServerAuth checks one server's auth: block shape.
+func validateMCPServerAuth(srv MCPServer) error {
+	switch srv.Auth.Type {
+	case "", "none":
+		if srv.Auth.APIKeyEnv != "" {
+			return fmt.Errorf("mcp server %q: api_key_env is only valid with auth.type: bearer", srv.Name)
+		}
+	case "bearer":
+		if srv.Auth.APIKeyEnv == "" {
+			return fmt.Errorf("mcp server %q: auth.type: bearer requires api_key_env", srv.Name)
+		}
+	case "oauth":
+		if srv.Auth.APIKeyEnv != "" {
+			return fmt.Errorf("mcp server %q: api_key_env is only valid with auth.type: bearer", srv.Name)
+		}
+	default:
+		return fmt.Errorf("mcp server %q: auth.type must be one of none, bearer, oauth (got %q)", srv.Name, srv.Auth.Type)
+	}
+
+	return nil
+}
 
 // validateMCPToolGrants enforces the MCP tool grant rules at load time,
 // mirroring validateAgentGraph's sub-agent tool rules: an MCP grant's shape

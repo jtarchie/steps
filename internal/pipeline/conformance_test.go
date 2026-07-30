@@ -33,7 +33,7 @@ import (
 // Read directly from source, not from a written spec page; treat as a
 // source-reading finding, not an official Concourse guarantee.
 //
-// steps claim under test: internal/config/config.go's Step.Version field
+// steps claim under test: internal/config/step.go's Step.Version field
 // doc, internal/resource/resource.go's VersionMode doc.
 func TestConformanceGetVersionEveryContinuesPastFailure(t *testing.T) {
 	dir := t.TempDir()

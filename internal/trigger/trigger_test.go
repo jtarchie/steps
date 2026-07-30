@@ -173,7 +173,7 @@ jobs:
 // resource is polled and matched by the RESOLVED resource name, not the alias
 // — so two aliases of one resource poll it once and both jobs are affected.
 //
-// TestConformance note: verifies steps's claim (config.go's Step.Resource
+// TestConformance note: verifies steps's claim (internal/config/step.go's Step.Resource
 // doc) that this mirrors Concourse's get.resource — see docs/conformance.md.
 // Concourse doc: concourse-ci.org/docs/steps/get/.
 func TestResourcesAndAffectedJobsResolveGetAlias(t *testing.T) {

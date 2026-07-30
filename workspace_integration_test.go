@@ -62,7 +62,7 @@ jobs:
 // exactly source/ and bits/.
 //
 // TestConformance note: the get-alias and input_mapping/output_mapping
-// pieces verify steps's claims (config.go's Step.Resource and
+// pieces verify steps's claims (internal/config/step.go's Step.Resource and
 // InputMapping/OutputMapping doc comments) to mirror Concourse's
 // get.resource and task input_mapping/output_mapping — see
 // docs/conformance.md. Concourse docs: concourse-ci.org/docs/steps/get/,

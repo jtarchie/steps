@@ -7,7 +7,7 @@ Trust these instructions. Only search the codebase if something here is missing 
 **steps** is a terminal-only Go CLI that executes Concourse-style YAML pipelines (`resource_types`/`resources`/`jobs`), with an LLM `agent` step type built in alongside conventional `get`/`task`/`put` steps. Resources are discovered/fetched via templated shell commands (or MCP); `agent` steps call an LLM with tool-calling support (`read_file`, `list_dir`, `run_shell`, custom tools, sub-agent delegation, MCP tools). All state is cached in SQLite (WAL mode) via content-addressed (merkle) hashing, so unchanged steps are skipped on rerun. `steps run` executes one job once; `steps watch` polls `trigger: true` resources and auto-runs affected jobs; `steps test` runs every job and checks `assert:` directives.
 
 - **Language/runtime:** Go 1.26.5+ (go.mod requires 1.26.4+), single module `github.com/jtarchie/steps`, no other language toolchain needed to build or test.
-- **Size:** ~16,000 lines of non-test Go source (~37,000 incl. tests), 119 `.go` files, one `main.go` entrypoint.
+- **Size:** ~16,000 lines of non-test Go source (~37,000 incl. tests), 152 `.go` files, one `main.go` entrypoint.
 - **Output:** a single ~56MB static binary (`./steps`), no separate install step.
 - **No CI configured**: there is no `.github/`, no Makefile, no CONTRIBUTING.md. The commands below are the entire validation pipeline — run them locally exactly as documented, in this order, before considering any change done.
 
@@ -54,7 +54,7 @@ main.go                                                                         
 
 One-liner per package:
 
-- **`internal/config`** — YAML parsing (`LoadConfig`) and every config type (`Config`, `Resource`, `Agent`, `Task`, `Job`, `Step`, ...); also the config-merge logic (`ResolveTask`, `ResolveAgentInvocation`) both plan-time hashing and run-time execution share, plus `run_file:`/`system_file:`/`prompt_file:`/`file:` include resolution. Depends on nothing internal.
+- **`internal/config`** — YAML parsing (`LoadConfig`) and every config type (`Config`, `Resource`, `Agent`, `Task`, `Job`, `Step`, ...); also the config-merge logic (`ResolveTask`, `ResolveAgentInvocation`) both plan-time hashing and run-time execution share, plus `run_file:`/`system_file:`/`prompt_file:`/`file:` include resolution. Depends on nothing internal. **One file per domain:** `config.go` is only `LoadConfig` plus the `validate()` dispatcher; every check that dispatcher names lives in the file for its feature, next to the types it validates — `step.go`, `job.go`, `task.go`, `agent.go`, `resource.go`, `route.go`, `handoff.go`, `hooks.go`, `guard.go`, `assert.go`, `artifact.go`, `workspace.go`, `image.go`, `timeout.go`, `toolspec.go`, `toolguard.go`, `subagent.go`, `mcp.go`, `resolve.go` (the `Resolve*` config merge), `include.go`, `builtin.go`, `handoffnote.go`. Add a new rule to the file that owns its feature, not to `config.go`.
 - **`internal/pipeline`** — the orchestrator; `RunJob()` walks a job's plan (get/task/put/agent) and records outcomes. The *only* package that depends on `internal/agent`.
 - **`internal/trigger`** — cross-job downstream triggers (`steps watch`); the only package besides `main` that depends on `internal/pipeline`.
 - **`internal/agent`** — agent step execution: `provider.go` (LLM client/persona), `tools.go` (built-in + custom tool exec), `mcptool.go` (MCP tool exec), `conversation.go` (the tool-calling loop), `step.go` (`RunStep`, the exported entrypoint), `fix.go` (`RunFix`). Only `RunStep`/`RunFix`/`WithNewRun` are exported.
