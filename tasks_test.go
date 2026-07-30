@@ -255,51 +255,47 @@ jobs:
 // TestRunJobTaskReferenceUsesTaskFix: a referenced task's own fix: is used
 // when the step sets none of its own.
 func TestRunJobTaskReferenceUsesTaskFix(t *testing.T) {
-	var callsA, callsB int
-
-	serverA := fixAgentServer(t, &callsA)
-	serverB := fixAgentServer(t, &callsB)
+	fakeA := fixAgentServer(t)
+	fakeB := fixAgentServer(t)
 
 	dir := t.TempDir()
 	counter := filepath.Join(dir, "counter.txt")
 	run := fmt.Sprintf(`c=%s; n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$c"; test $n -ge 2`, counter)
-	path := writeTaskFixPipeline(t, dir, serverA.URL, serverB.URL, run, "fixerA", "")
+	path := writeTaskFixPipeline(t, dir, fakeA.URL, fakeB.URL, run, "fixerA", "")
 
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	mustRun(t, path)
 
-	if callsA != 1 {
-		t.Errorf("fixerA calls = %d, want 1 (the task's own fix:)", callsA)
+	if got := fakeA.requestCount(); got != 1 {
+		t.Errorf("fixerA calls = %d, want 1 (the task's own fix:)", got)
 	}
 
-	if callsB != 0 {
-		t.Errorf("fixerB calls = %d, want 0 (not referenced anywhere)", callsB)
+	if got := fakeB.requestCount(); got != 0 {
+		t.Errorf("fixerB calls = %d, want 0 (not referenced anywhere)", got)
 	}
 }
 
 // TestRunJobTaskReferenceStepFixOverridesTaskFix: a step's own fix: overrides
 // the referenced task's fix: for that step only.
 func TestRunJobTaskReferenceStepFixOverridesTaskFix(t *testing.T) {
-	var callsA, callsB int
-
-	serverA := fixAgentServer(t, &callsA)
-	serverB := fixAgentServer(t, &callsB)
+	fakeA := fixAgentServer(t)
+	fakeB := fixAgentServer(t)
 
 	dir := t.TempDir()
 	counter := filepath.Join(dir, "counter.txt")
 	run := fmt.Sprintf(`c=%s; n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$c"; test $n -ge 2`, counter)
-	path := writeTaskFixPipeline(t, dir, serverA.URL, serverB.URL, run, "fixerA", "    fix: fixerB\n")
+	path := writeTaskFixPipeline(t, dir, fakeA.URL, fakeB.URL, run, "fixerA", "    fix: fixerB\n")
 
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	mustRun(t, path)
 
-	if callsB != 1 {
-		t.Errorf("fixerB calls = %d, want 1 (the step's override)", callsB)
+	if got := fakeB.requestCount(); got != 1 {
+		t.Errorf("fixerB calls = %d, want 1 (the step's override)", got)
 	}
 
-	if callsA != 0 {
-		t.Errorf("fixerA calls = %d, want 0 (overridden by the step's fix:)", callsA)
+	if got := fakeA.requestCount(); got != 0 {
+		t.Errorf("fixerA calls = %d, want 0 (overridden by the step's fix:)", got)
 	}
 }

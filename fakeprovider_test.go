@@ -1,0 +1,530 @@
+package main
+
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+)
+
+// This file is the end-to-end test harness: a scriptable stand-in for the
+// OpenAI-compatible endpoint an agent step talks to, plus assertion helpers
+// for the layers a run passes through on the way there and back.
+//
+// It exists because agent.RunStep builds its LLM client internally (there is
+// no injectable model.LLM at the CLI boundary — a deliberate credential
+// boundary, see docs/agents.md), so the only seam for a full-stack test is
+// the HTTP endpoint itself. Pointing an agent's source.endpoint: at an
+// httptest.Server is therefore the *only* way to exercise CLI → config →
+// merkle → resource → workspace → agent-conversation → route → store as one
+// pass. The pre-existing agent tests each hand-rolled a single-response
+// server inline; this generalizes that into a scripted, recording one so a
+// multi-turn tool-calling conversation can be driven and inspected.
+//
+// Nothing here needs the network, docker, or an API key: newFakeLLM is the
+// whole provider.
+
+// scriptedCall is one tool call the fake makes the model request. args is
+// marshaled into the OpenAI `arguments` string verbatim, so a test can send
+// a deliberately wrong shape to exercise the tool layer's own validation.
+type scriptedCall struct {
+	name string
+	args map[string]any
+}
+
+// turn is one scripted provider response, popped in order — one per request
+// the run makes. Exactly one of its modes applies: a plain assistant message
+// (text), a tool-call message (calls), an HTTP error (status), or a verbatim
+// body (body, for malformed-response cases).
+type turn struct {
+	text   string
+	calls  []scriptedCall
+	status int
+	body   string
+}
+
+// says scripts a plain assistant reply — the message that ends a
+// conversation, provided every required tool has already been satisfied.
+func says(text string) turn {
+	return turn{text: text}
+}
+
+// callsTool scripts an assistant turn requesting one tool call.
+func callsTool(name string, args map[string]any) turn {
+	return turn{calls: []scriptedCall{{name: name, args: args}}}
+}
+
+// callsTools scripts an assistant turn requesting several tool calls at once
+// — the parallel-tool-call shape a real provider emits, which the
+// conversation loop must execute in order and answer with one tool-result
+// message per call.
+func callsTools(calls ...scriptedCall) turn {
+	return turn{calls: calls}
+}
+
+// call is one entry for callsTools.
+func call(name string, args map[string]any) scriptedCall {
+	return scriptedCall{name: name, args: args}
+}
+
+// failsWith scripts a transport-level failure: the endpoint answers with an
+// HTTP status instead of a completion. Used to prove an LLM outage
+// classifies as errored (infrastructure) rather than failed (task-level).
+func failsWith(status int) turn {
+	return turn{status: status}
+}
+
+// render writes this turn as an OpenAI chat-completion response. The shape
+// mirrors what a real provider sends, verified against the client in use
+// (adk-utils-go's genai/openai adapter, non-streaming): an assistant message
+// carries either content or tool_calls, and finish_reason distinguishes them.
+func (tn turn) render(w http.ResponseWriter) {
+	if tn.status != 0 {
+		http.Error(w, "scripted provider failure", tn.status)
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if tn.body != "" {
+		_, _ = io.WriteString(w, tn.body)
+
+		return
+	}
+
+	if len(tn.calls) == 0 {
+		_, _ = fmt.Fprintf(w, `{"id":"fake","object":"chat.completion","created":0,"model":"test-model",
+			"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":%s}}]}`,
+			mustJSON(tn.text))
+
+		return
+	}
+
+	calls := make([]string, 0, len(tn.calls))
+
+	for i, call := range tn.calls {
+		args, err := json.Marshal(call.args)
+		if err != nil {
+			args = []byte("{}")
+		}
+
+		calls = append(calls, fmt.Sprintf(
+			`{"id":"call_%d","type":"function","function":{"name":%s,"arguments":%s}}`,
+			i+1, mustJSON(call.name), mustJSON(string(args))))
+	}
+
+	_, _ = fmt.Fprintf(w, `{"id":"fake","object":"chat.completion","created":0,"model":"test-model",
+		"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[%s]}}]}`,
+		strings.Join(calls, ","))
+}
+
+// mustJSON renders v as a JSON literal for embedding in a response template.
+// Only ever called with strings the test itself authored, so a marshal
+// failure is impossible; it degrades to an empty string rather than panicking
+// inside an HTTP handler goroutine.
+func mustJSON(v any) string {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return `""`
+	}
+
+	return string(data)
+}
+
+// capturedToolCall is one tool call as it appeared on the wire in a request's
+// message history — i.e. what the conversation loop echoed back to the model.
+type capturedToolCall struct {
+	ID       string               `json:"id"`
+	Function capturedCallFunction `json:"function"`
+}
+
+type capturedCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// capturedMessage is one message from a captured request's history. content
+// arrives as a JSON string (or null on an assistant tool-call message, which
+// unmarshals to "").
+type capturedMessage struct {
+	Role       string             `json:"role"`
+	Content    string             `json:"content"`
+	ToolCallID string             `json:"tool_call_id"`
+	ToolCalls  []capturedToolCall `json:"tool_calls"`
+}
+
+type capturedToolFunction struct {
+	Name string `json:"name"`
+}
+
+type capturedTool struct {
+	Function capturedToolFunction `json:"function"`
+}
+
+// capturedRequest is one parsed request the run sent the provider. It is the
+// wire-layer assertion surface: which tools were compiled and offered, what
+// the system message said, what tool results were fed back, and whether a
+// required tool was being forced.
+type capturedRequest struct {
+	Model      string            `json:"model"`
+	Messages   []capturedMessage `json:"messages"`
+	Tools      []capturedTool    `json:"tools"`
+	ToolChoice json.RawMessage   `json:"tool_choice"`
+	Raw        string            `json:"-"`
+}
+
+// toolNames returns the names of every tool offered on this request, in
+// order — the compiled result of the agent's tools: grant plus anything
+// synthesized (a verdict tool, a sub-agent tool).
+func (r capturedRequest) toolNames() []string {
+	names := make([]string, 0, len(r.Tools))
+
+	for _, tool := range r.Tools {
+		names = append(names, tool.Function.Name)
+	}
+
+	return names
+}
+
+// systemMessage returns the request's system prompt, or "" if it has none.
+func (r capturedRequest) systemMessage() string {
+	for _, msg := range r.Messages {
+		if msg.Role == "system" {
+			return msg.Content
+		}
+	}
+
+	return ""
+}
+
+// toolResults returns the content of every tool-result message in the
+// request's history, in order — what the agent's tool execution actually fed
+// back to the model.
+func (r capturedRequest) toolResults() []string {
+	var results []string
+
+	for _, msg := range r.Messages {
+		if msg.Role == "tool" {
+			results = append(results, msg.Content)
+		}
+	}
+
+	return results
+}
+
+// forcedTool returns the name of the tool this request's tool_choice forces,
+// or "" when the model was left free to choose. A non-empty value is the
+// observable signal that the conversation loop caught the model trying to
+// stop with a required tool unsatisfied (see forceRequiredTool).
+func (r capturedRequest) forcedTool() string {
+	if len(r.ToolChoice) == 0 {
+		return ""
+	}
+
+	var choice struct {
+		Function capturedToolFunction `json:"function"`
+	}
+
+	err := json.Unmarshal(r.ToolChoice, &choice)
+	if err != nil {
+		return ""
+	}
+
+	return choice.Function.Name
+}
+
+// fakeLLM is a scripted, recording OpenAI-compatible endpoint. Point an
+// agent's source.endpoint: at URL + "/v1/".
+type fakeLLM struct {
+	URL string
+
+	t        *testing.T
+	mu       sync.Mutex
+	script   []turn
+	repeat   bool
+	next     int
+	requests []capturedRequest
+}
+
+// newFakeLLM starts a fake provider that answers the run's requests with
+// script, in order. A request past the end of the script fails the test
+// rather than hanging or silently looping — an agent that asks for more
+// turns than the fixture anticipated is itself a regression worth catching.
+func newFakeLLM(t *testing.T, script ...turn) *fakeLLM {
+	t.Helper()
+
+	return startFakeLLM(t, false, script)
+}
+
+// newRepeatingFakeLLM starts a fake provider that answers every request with
+// the same turn, however many the run makes. For tests whose subject is how
+// often (or whether) the agent was reached rather than what it was told —
+// there is no script to exhaust, so requestCount is the assertion.
+func newRepeatingFakeLLM(t *testing.T, only turn) *fakeLLM {
+	t.Helper()
+
+	return startFakeLLM(t, true, []turn{only})
+}
+
+func startFakeLLM(t *testing.T, repeat bool, script []turn) *fakeLLM {
+	t.Helper()
+
+	fake := &fakeLLM{t: t, script: script, repeat: repeat}
+
+	server := httptest.NewServer(http.HandlerFunc(fake.handle))
+	t.Cleanup(server.Close)
+
+	fake.URL = server.URL
+
+	return fake
+}
+
+func (f *fakeLLM) handle(w http.ResponseWriter, r *http.Request) {
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		f.t.Errorf("fake provider: read request body: %v", err)
+		http.Error(w, "unreadable body", http.StatusBadRequest)
+
+		return
+	}
+
+	req := capturedRequest{Raw: string(data)}
+
+	err = json.Unmarshal(data, &req)
+	if err != nil {
+		f.t.Errorf("fake provider: request is not valid JSON: %v\n%s", err, data)
+		http.Error(w, "unparseable body", http.StatusBadRequest)
+
+		return
+	}
+
+	f.mu.Lock()
+	f.requests = append(f.requests, req)
+	index := f.next
+	f.next++
+	f.mu.Unlock()
+
+	if index >= len(f.script) {
+		if f.repeat {
+			f.script[len(f.script)-1].render(w)
+
+			return
+		}
+
+		// t.Errorf (not Fatalf) — this runs on the server's goroutine, where
+		// FailNow would abandon the handler mid-response and leave the run
+		// blocked on a reply that never comes.
+		f.t.Errorf("fake provider: request %d has no scripted turn (script has %d)", index+1, len(f.script))
+		http.Error(w, "script exhausted", http.StatusInternalServerError)
+
+		return
+	}
+
+	f.script[index].render(w)
+}
+
+// requestCount is how many requests the run made to the provider.
+func (f *fakeLLM) requestCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return len(f.requests)
+}
+
+// request returns the 1-indexed nth captured request, failing the test if
+// the run never made it. 1-indexed to match how the scripts and assertions
+// read ("on the second turn the model...").
+func (f *fakeLLM) request(n int) capturedRequest {
+	f.t.Helper()
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if n < 1 || n > len(f.requests) {
+		f.t.Fatalf("no request %d: the run made %d provider request(s)", n, len(f.requests))
+	}
+
+	return f.requests[n-1]
+}
+
+// nodeRow is one row of the store's nodes table: a step's recorded outcome.
+type nodeRow struct {
+	Kind      string
+	Resource  string
+	StepIndex int
+	Status    string
+	Error     string
+}
+
+// jobRunRow is one row of the store's job_runs table: a chain's recorded
+// outcome, which is what a later run consults to decide whether to skip.
+type jobRunRow struct {
+	JobName string
+	Status  string
+	Error   string
+}
+
+// openStateDB opens the .steps/state.db colocated with a pipeline YAML, for
+// reading. It fails the test when the database doesn't exist — sql.Open
+// would happily create an empty one, turning "the run recorded nothing" into
+// a silently passing assertion.
+func openStateDB(t *testing.T, pipelinePath string) *sql.DB {
+	t.Helper()
+
+	dbPath := filepath.Join(filepath.Dir(pipelinePath), ".steps", "state.db")
+
+	_, err := os.Stat(dbPath)
+	if err != nil {
+		t.Fatalf("no state db at %s: %v", dbPath, err)
+	}
+
+	// The "sqlite" driver is registered transitively via internal/store,
+	// which main imports — package main may not import modernc.org/sqlite
+	// directly (see .golangci.yml's depguard Main rule).
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatalf("open state db: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	return db
+}
+
+// storeNodes returns every node the run recorded, in step order — the
+// persistence layer's view of what executed and how it ended.
+func storeNodes(t *testing.T, pipelinePath string) []nodeRow {
+	t.Helper()
+
+	db := openStateDB(t, pipelinePath)
+
+	rows, err := db.QueryContext(t.Context(), `SELECT kind, resource, step_index, status, COALESCE(error, '') FROM nodes ORDER BY step_index, created_at`)
+	if err != nil {
+		t.Fatalf("query nodes: %v", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	var nodes []nodeRow
+
+	for rows.Next() {
+		var node nodeRow
+
+		err = rows.Scan(&node.Kind, &node.Resource, &node.StepIndex, &node.Status, &node.Error)
+		if err != nil {
+			t.Fatalf("scan node: %v", err)
+		}
+
+		nodes = append(nodes, node)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		t.Fatalf("iterate nodes: %v", err)
+	}
+
+	return nodes
+}
+
+// storeJobRuns returns every recorded chain outcome.
+func storeJobRuns(t *testing.T, pipelinePath string) []jobRunRow {
+	t.Helper()
+
+	db := openStateDB(t, pipelinePath)
+
+	rows, err := db.QueryContext(t.Context(), `SELECT job_name, status, COALESCE(error, '') FROM job_runs ORDER BY created_at`)
+	if err != nil {
+		t.Fatalf("query job_runs: %v", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	var runs []jobRunRow
+
+	for rows.Next() {
+		var run jobRunRow
+
+		err = rows.Scan(&run.JobName, &run.Status, &run.Error)
+		if err != nil {
+			t.Fatalf("scan job_run: %v", err)
+		}
+
+		runs = append(runs, run)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		t.Fatalf("iterate job_runs: %v", err)
+	}
+
+	return runs
+}
+
+// findNode returns the recorded node for a given kind and resource/task
+// name. Steps are addressed by name rather than index so a fixture can grow
+// a step without renumbering every assertion.
+func findNode(t *testing.T, nodes []nodeRow, kind, resource string) nodeRow {
+	t.Helper()
+
+	for _, node := range nodes {
+		if node.Kind == kind && node.Resource == resource {
+			return node
+		}
+	}
+
+	t.Fatalf("no %s node recorded for %q; recorded: %+v", kind, resource, nodes)
+
+	return nodeRow{}
+}
+
+// writePipeline writes a pipeline YAML into dir and returns its path.
+func writePipeline(t *testing.T, dir, yaml string) string {
+	t.Helper()
+
+	path := filepath.Join(dir, "pipeline.yml")
+
+	err := os.WriteFile(path, []byte(yaml), 0o600)
+	if err != nil {
+		t.Fatalf("write pipeline: %v", err)
+	}
+
+	return path
+}
+
+// readFileString returns path's contents, failing the test if it's missing.
+// Used to assert on the side effects a pipeline's own shell commands left in
+// the test's directory — the only durable view of a run's filesystem work,
+// since step workspaces are torn down when the build closes.
+func readFileString(t *testing.T, path string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(path) //nolint:gosec // path is a t.TempDir()-scoped file the test itself arranged
+	if err != nil {
+		t.Fatalf("read %s: %v", filepath.Base(path), err)
+	}
+
+	return string(data)
+}
+
+// assertNoFile fails the test if path exists — the way to prove a step did
+// NOT run, given each step's side effect is a file it appends to.
+func assertNoFile(t *testing.T, path string) {
+	t.Helper()
+
+	_, err := os.Stat(path)
+	if err == nil {
+		t.Errorf("%s exists, but the step that writes it should not have run", filepath.Base(path))
+	}
+}
