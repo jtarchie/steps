@@ -1,3 +1,7 @@
+description: >
+  Fast read-only agent for codebase exploration. Use to find files by
+  pattern, search code for keywords, or locate where functionality is
+  implemented. Returns findings concisely in a single message.
 system_file: "@builtin/explorer"
 tools:
   - read_file

@@ -1,3 +1,6 @@
+description: >
+  Code review specialist. Use for reviewing changes for correctness,
+  security, and maintainability. Read-only: no shell, no edits.
 system_file: "@builtin/reviewer"
 tools:
   - read_file

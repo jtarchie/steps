@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -717,17 +718,96 @@ func TestReadBuiltinBuilderProfile(t *testing.T) {
 		t.Errorf("builder MaxTurns = %d, want 50", builder.MaxTurns)
 	}
 
+	if builder.Description == "" {
+		t.Error("builder agent has no description")
+	}
+
 	hasExplorer := false
 	for _, spec := range builder.Tools {
 		if spec.Agent == "@builtin/explorer" {
 			hasExplorer = true
-			if spec.Description == "" {
-				t.Error("explorer sub-agent has no description")
-			}
 			break
 		}
 	}
 	if !hasExplorer {
 		t.Error("builder agent is missing explorer sub-agent tool")
+	}
+}
+
+func TestLoadConfigSubAgentDescriptionResolvedFromChild(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+agents:
+- name: lead
+  source: { model: lmstudio/qwen }
+  description: Lead reviewer agent
+  tools:
+  - read_file
+  - agent: helper
+- name: helper
+  source: { model: lmstudio/qwen }
+  description: Helper agent for delegated work
+  tools:
+  - read_file
+jobs:
+- name: build
+  plan:
+  - agent: lead
+    inputs: []
+    prompt: review
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	lead, err := cfg.FindAgent("lead")
+	if err != nil {
+		t.Fatalf("FindAgent(lead): %v", err)
+	}
+
+	for _, spec := range lead.Tools {
+		if spec.Agent == "helper" {
+			if spec.Description == "" {
+				t.Error("sub-agent helper description was not resolved from child agent")
+			}
+			return
+		}
+	}
+
+	t.Error("lead agent is missing helper sub-agent tool")
+}
+
+func TestLoadConfigSubAgentMissingDescriptionFails(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+agents:
+- name: lead
+  source: { model: lmstudio/qwen }
+  tools:
+  - read_file
+  - agent: helper
+- name: helper
+  source: { model: lmstudio/qwen }
+  tools:
+  - read_file
+jobs:
+- name: build
+  plan:
+  - agent: lead
+    inputs: []
+    prompt: review
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("expected error for sub-agent with no description")
+	}
+
+	if !strings.Contains(err.Error(), "no description") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }

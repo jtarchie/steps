@@ -263,6 +263,12 @@ type Resource struct {
 type Agent struct {
 	Name   string      `yaml:"name"`
 	Source AgentSource `yaml:"source"`
+	// Description is the human-readable summary of what this agent does. It is
+	// shown to the model when another agent grants this one as a sub-agent tool
+	// (see ToolSpec.Agent) with no inline description. An agent referenced as a
+	// sub-agent MUST have a description — either inline on the grant or on the
+	// agent itself — or pipeline load fails with a clear error.
+	Description string `yaml:"description,omitempty"`
 	// File loads this agent's source/image/system/dials/tools from a YAML
 	// document at a path relative to the pipeline file's directory (see
 	// LoadConfig's resolveFileIncludes), so one agent definition can be
@@ -1069,6 +1075,11 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	cfg.registerBuiltinAgents()
+
+	err = cfg.resolveSubAgentDescriptions()
+	if err != nil {
+		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
+	}
 
 	err = cfg.validate()
 	if err != nil {
@@ -3140,6 +3151,7 @@ func resolveEffectiveTools(agentTools, stepTools []ToolSpec) ([]ToolSpec, error)
 // planning (merkle hashing) and execution, so both compute identical hashes.
 type ResolvedInvocation struct {
 	AgentName   string
+	Description string
 	BaseURL     string
 	ModelName   string
 	APIKeyEnv   string
@@ -3225,6 +3237,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 
 	return ResolvedInvocation{
 		AgentName:            agent.Name,
+		Description:          agent.Description,
 		BaseURL:              baseURL,
 		ModelName:            modelName,
 		APIKeyEnv:            apiKeyEnv,

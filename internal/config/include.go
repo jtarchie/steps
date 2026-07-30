@@ -271,6 +271,10 @@ func mergeAgentIdentity(a *Agent, doc Agent) {
 		a.Source = doc.Source
 	}
 
+	if a.Description == "" {
+		a.Description = doc.Description
+	}
+
 	if a.Image == "" {
 		a.Image = doc.Image
 	}

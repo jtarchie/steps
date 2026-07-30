@@ -142,3 +142,41 @@ func (c *Config) findAgentByName(name string) bool {
 	}
 	return false
 }
+
+// resolveSubAgentDescriptions walks every agent's tool spec and, for any
+// sub-agent tool (spec.Agent != "") that has no inline Description, fills it
+// from the referenced child agent's own Description. If the child agent also
+// lacks a Description, it returns an error — an agent referenced as a
+// sub-agent MUST carry a description (either inline on the grant or on the
+// agent itself), since the parent model sees it as a tool function
+// declaration and needs to know what it does.
+func (c *Config) resolveSubAgentDescriptions() error {
+	for i := range c.Agents {
+		for j := range c.Agents[i].Tools {
+			spec := &c.Agents[i].Tools[j]
+			if spec.Agent == "" {
+				continue
+			}
+
+			if spec.Description != "" {
+				continue
+			}
+
+			child, err := c.FindAgent(spec.Agent)
+			if err != nil {
+				continue
+			}
+
+			if child.Description == "" {
+				return fmt.Errorf(
+					"agent %q grants sub-agent %q with no description: add a description field to the %q agents: entry",
+					c.Agents[i].Name, spec.Agent, spec.Agent,
+				)
+			}
+
+			spec.Description = child.Description
+		}
+	}
+
+	return nil
+}
