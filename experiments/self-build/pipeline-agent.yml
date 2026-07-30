@@ -35,8 +35,14 @@ resource_types:
     # Discovering versions is the one thing that must look at the real
     # repository, since it runs before any workspace exists.
     check: |
-      gh api repos/{{ .source.repo | shellquote }}/contents/{{ .source.dir | shellquote }} \
-        --jq '[.[] | select(.name | test("^[0-9][0-9][0-9]-.*\\.md$")) | {num: .name[0:3], file: .name}]'
+      ruby -e '
+        require "json"
+        versions = Dir.glob(File.join(ARGV[0], ARGV[1], "001-*.md")).sort.map do |path|
+          name = File.basename(path)
+          { num: name[0, 3], file: name }
+        end
+        puts versions.to_json
+      ' -- {{ .source.repo | shellquote }} {{ .source.dir | shellquote }}
     # Only the pointers: the story TEXT lives in repo/, which the agents have.
     in: |
       set -e
@@ -88,7 +94,7 @@ resources:
   type: stories
   source:
     dir: docs/proposals/stories
-    repo: jtarchie/steps
+    repo: /Users/jtarchie/workspace/steps
 - name: repo
   type: repo
   source:
