@@ -124,7 +124,7 @@ func (c *Config) validateHandoffNoteSegment(job *Job, segment []int) error {
 		}
 
 		if step.HandoffNote {
-			err := c.checkHandoffNoteSender(job, idx)
+			err := c.checkHandoffNoteSender(job, idx, *step)
 			if err != nil {
 				return err
 			}
@@ -141,9 +141,40 @@ func (c *Config) validateHandoffNoteSegment(job *Job, segment []int) error {
 // outputs survive it, so a note written to the build root would be discarded
 // with the sender's space and the receiver would find nothing. Fail loudly at
 // load rather than silently dropping it.
-func (c *Config) checkHandoffNoteSender(job *Job, idx int) error {
+//
+// A resource named HandoffNoteDir is rejected for the same reason: under the
+// shared strategy a get materializes into <build>/<name>, which would be the
+// very directory the note is written into — and resource names, unlike step
+// inputs:/outputs:, never pass through ValidateArtifactName on that path.
+func (c *Config) checkHandoffNoteSender(job *Job, idx int, step Step) error {
 	if c.Workspace != nil {
 		return fmt.Errorf("job %q step %d: handoff_note is not supported with workspace strategy %q (the note cannot cross an isolated step boundary)", job.Name, idx, c.Workspace.Strategy)
+	}
+
+	err := checkHandoffNoteStepDir(job, idx, step, "sends")
+	if err != nil {
+		return err
+	}
+
+	for _, resource := range c.Resources {
+		if resource.Name == HandoffNoteDir {
+			return fmt.Errorf("job %q step %d: handoff_note is set but a resource is named %q, which is reserved for handoff notes", job.Name, idx, HandoffNoteDir)
+		}
+	}
+
+	return nil
+}
+
+// checkHandoffNoteStepDir rejects dir: on either end of a note edge. The note
+// is written under the SENDER's working directory and read back relative to
+// the RECEIVER's, so a dir: on either side breaks that equivalence: the note
+// would be written inside a materialized input artifact (dirtying it), and the
+// receiver — whose paths are confined by resolveAgentPath, which rejects ".."
+// — could never reach the build root to read it. Today that miss is silent
+// (an absent note is skipped by design), which makes it a load error's job.
+func checkHandoffNoteStepDir(job *Job, idx int, step Step, role string) error {
+	if step.Dir != "" {
+		return fmt.Errorf("job %q step %d: a step that %s a handoff_note cannot set dir: (the note lives in the build root, which dir: %q puts out of reach)", job.Name, idx, role, step.Dir)
 	}
 
 	return nil
@@ -155,6 +186,11 @@ func (c *Config) checkHandoffNoteSender(job *Job, idx int) error {
 // would fail at preparation, and the pipeline author would be debugging the
 // innocent step rather than the one that misconfigured the edge.
 func (c *Config) checkHandoffNoteReceiver(job *Job, idx int, step Step) error {
+	err := checkHandoffNoteStepDir(job, idx, step, "receives")
+	if err != nil {
+		return err
+	}
+
 	agent, err := c.FindAgent(step.Agent)
 	if err != nil {
 		return fmt.Errorf("job %q step %d: %w", job.Name, idx, err)
@@ -181,8 +217,14 @@ func (c *Config) checkHandoffNoteReceiver(job *Job, idx int, step Step) error {
 }
 
 // checkHandoffNoteDelivered rejects a sending step whose note nothing
-// receives — dead config, the same treatment handoff: gets — and rejects a
-// receiver that cannot read it.
+// receives — dead config, the same treatment handoff: gets.
+//
+// Both the delivery bookkeeping here and the on-disk note itself are keyed by
+// step NAME (see HandoffNotePath), so two senders sharing a name would
+// collapse into one entry: the check would pass on the first sender's
+// receiver while the second's note went to nobody, and both would write the
+// same file. Duplicate sender names are therefore rejected outright rather
+// than tracked more cleverly — the name is the address.
 func checkHandoffNoteDelivered(job *Job, segment []int) error {
 	senders := map[string]int{}
 	received := map[string]bool{}
@@ -194,13 +236,23 @@ func checkHandoffNoteDelivered(job *Job, segment []int) error {
 			received[step.HandoffNoteFrom] = true
 		}
 
-		if step.HandoffNote {
-			senders[stepName(step)] = idx
+		if !step.HandoffNote {
+			continue
 		}
+
+		name := stepName(step)
+		if prev, dup := senders[name]; dup {
+			return fmt.Errorf("job %q step %d: handoff_note is set on two steps named %q in this segment (step %d is the other); a note is addressed by step name, so the names must be unique", job.Name, idx, name, prev)
+		}
+
+		senders[name] = idx
 	}
 
-	for name, idx := range senders {
-		if !received[name] {
+	// Reported in plan order, not map order, so a pipeline with two broken
+	// edges names the same one every load.
+	for _, idx := range segment {
+		step := job.Plan[idx]
+		if step.HandoffNote && !received[stepName(step)] {
 			return fmt.Errorf("job %q step %d: handoff_note is set but no later agent step in this segment receives it", job.Name, idx)
 		}
 	}

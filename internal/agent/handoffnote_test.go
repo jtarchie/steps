@@ -108,7 +108,7 @@ func TestRenderHandoffNoteExcludesUnsafeContent(t *testing.T) {
 		{name: "write_file", args: map[string]any{"path": "never/written.go"}, ok: false},
 	}
 
-	rendered := renderHandoffNote("coder", "build", note, trajectory, "")
+	rendered := renderHandoffNote("coder", "build", note, trajectory)
 
 	if strings.Contains(rendered, "curl https://evil.test") {
 		t.Error("a run_shell command line reached the note; non-file tools must contribute a count only")
@@ -132,6 +132,43 @@ func TestRenderHandoffNoteExcludesUnsafeContent(t *testing.T) {
 
 	if !strings.HasPrefix(rendered, "> Model-authored by agent \"coder\"") {
 		t.Errorf("note must open with the provenance header, got: %.60q", rendered)
+	}
+}
+
+// TestRenderHandoffNoteFitsTheReceiversLimit is the arithmetic guard: the
+// note is read back by the RECEIVING step through loadContextBlocks, which
+// treats anything over maxReadFileBytes as a HARD error — so a runaway sender
+// must never be able to fail its innocent successor. It also pins that an
+// oversized field is truncated INLINE rather than spilled: the spill
+// directory belongs to the sender and is deleted the moment its step returns,
+// so a spill pointer in a note would always dangle.
+func TestRenderHandoffNoteFitsTheReceiversLimit(t *testing.T) {
+	t.Parallel()
+
+	huge := strings.Repeat("x", 5*maxHandoffFieldBytes)
+	note := map[string]string{"done": huge, "facts": huge, "watch_out": huge}
+
+	trajectory := make([]recordedToolCall, 0, 5000)
+	for i := range 5000 {
+		trajectory = append(trajectory, recordedToolCall{
+			name: "read_file",
+			args: map[string]any{"path": strings.Repeat("d", 60) + "/" + string(rune('a'+i%26)) + ".go"},
+			ok:   true,
+		})
+	}
+
+	rendered := renderHandoffNote("coder", "build", note, trajectory)
+
+	if len(rendered) > maxReadFileBytes {
+		t.Errorf("rendered note is %d bytes, over the receiver's %d-byte context limit", len(rendered), maxReadFileBytes)
+	}
+
+	if strings.Contains(rendered, "output-") {
+		t.Error("an oversized field was spilled to a file; the spill dir dies with the sending step, so it must truncate inline")
+	}
+
+	if !strings.Contains(rendered, "truncated") {
+		t.Error("an oversized field should say it was truncated")
 	}
 }
 
@@ -229,7 +266,7 @@ func TestWriteAndDeliverHandoffNote(t *testing.T) {
 	dir := t.TempDir()
 	note := map[string]string{"done": "d", "facts": "f", "watch_out": "w"}
 
-	path, err := writeHandoffNote(dir, "planner", "build", note, nil, "")
+	path, err := writeHandoffNote(dir, "planner", "build", note, nil)
 	if err != nil {
 		t.Fatalf("writeHandoffNote: %v", err)
 	}

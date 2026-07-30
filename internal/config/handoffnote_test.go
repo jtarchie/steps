@@ -135,6 +135,34 @@ func TestHandoffNoteRejections(t *testing.T) {
     handoff_note: true
   - agent: blind
 `, "does not grant read_file"},
+
+		// dir: moves a step's working directory off the build root, which is
+		// where the note lives — the sender would write it inside an input
+		// artifact and the receiver could never reach it (resolveAgentPath
+		// rejects ".."). Silent today, so it has to be a load error.
+		"sender sets dir": {`
+  - agent: writer
+    dir: sub
+    handoff_note: true
+  - agent: reader
+`, "cannot set dir:"},
+
+		"receiver sets dir": {`
+  - agent: writer
+    handoff_note: true
+  - agent: reader
+    dir: sub
+`, "cannot set dir:"},
+
+		// A note is addressed by step name, so two senders sharing one would
+		// write the same file and fool the "nothing receives it" check.
+		"two senders share a name": {`
+  - agent: writer
+    handoff_note: true
+  - agent: writer
+    handoff_note: true
+  - agent: reader
+`, "two steps named"},
 	}
 
 	for name, test := range tests {
@@ -201,5 +229,37 @@ func TestHandoffNoteDirIsReservedArtifactName(t *testing.T) {
 	err := ValidateArtifactName(HandoffNoteDir)
 	if err == nil || !strings.Contains(err.Error(), "reserved") {
 		t.Fatalf("ValidateArtifactName(%q) = %v, want a reserved-name error", HandoffNoteDir, err)
+	}
+}
+
+// TestHandoffNoteRejectsReservedResourceName covers the hole ValidateArtifactName
+// alone leaves: under the shared strategy a get materializes into
+// <build>/<resource name> without ever passing through that check, so a resource
+// named "handoff" would have the note written straight into the fetched
+// resource. Only a config that actually uses handoff_note: is rejected — the
+// name stays legal for everyone else.
+func TestHandoffNoteRejectsReservedResourceName(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+resource_types:
+- name: dummy
+  config:
+    check: echo '[{"ref":"v1"}]'
+    in: "true"
+
+resources:
+- name: handoff
+  type: dummy
+  source: {}
+`+strings.TrimPrefix(handoffNotePipeline(`
+  - agent: writer
+    handoff_note: true
+  - agent: reader
+`), "\n"))
+
+	_, err := LoadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "reserved for handoff notes") {
+		t.Fatalf("error = %v, want it to reject a resource named %q alongside handoff_note", err, HandoffNoteDir)
 	}
 }

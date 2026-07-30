@@ -152,7 +152,13 @@ func latestHandoffNote(parts []*genai.Part, current map[string]string) map[strin
 // (the tool returns {"error": ...} only on a shape it cannot happen to
 // produce, but the check keeps the contract uniform) records nothing, so the
 // required tool stays unsatisfied and the model is forced to try again.
+//
+// A provider may emit several parallel calls in one turn; the LAST successful
+// one wins, matching both latestHandoffNote's across-turn rule and how
+// trackToolResults resolves a turn with more than one verdict call.
 func handoffNoteFrom(parts []*genai.Part) map[string]string {
+	var latest map[string]string
+
 	for _, part := range parts {
 		if part.FunctionResponse == nil || part.FunctionResponse.Name != writeHandoffToolName {
 			continue
@@ -163,11 +169,11 @@ func handoffNoteFrom(parts []*genai.Part) map[string]string {
 		}
 
 		if note, ok := part.FunctionResponse.Response[handoffNoteResultKey].(map[string]string); ok {
-			return note
+			latest = note
 		}
 	}
 
-	return nil
+	return latest
 }
 
 // handoffNoteProvenance is the first line of every rendered note. The reader
@@ -182,11 +188,23 @@ const handoffNoteProvenance = "> Model-authored by agent %q (job %q) — claims 
 // renderer can produce it.
 const computedFilesHeading = "## Files touched"
 
+// maxHandoffFieldBytes caps one authored field and maxHandoffComputedBytes
+// the computed section. The budget is arithmetic, not a guess: the whole
+// rendered note is read back by the RECEIVING step through loadContextBlocks,
+// which treats anything over maxReadFileBytes (100,000) as a HARD error — so
+// a verbose sender would fail an innocent successor. Three fields plus the
+// computed section plus the provenance header must therefore fit under that
+// limit with room to spare: 3×20,000 + 20,000 + a few hundred < 100,000.
+const (
+	maxHandoffFieldBytes    = 20_000
+	maxHandoffComputedBytes = 20_000
+)
+
 // renderHandoffNote formats one note: the provenance header, the authored
 // fields in form order, then the computed files section. Authored text is
 // sanitized (headings stripped) and capped, so neither a forged section nor a
 // runaway field can reach the receiver.
-func renderHandoffNote(agentName, jobName string, note map[string]string, trajectory []recordedToolCall, spillDir string) string {
+func renderHandoffNote(agentName, jobName string, note map[string]string, trajectory []recordedToolCall) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, handoffNoteProvenance, agentName, jobName)
@@ -197,10 +215,12 @@ func renderHandoffNote(agentName, jobName string, note map[string]string, trajec
 			value = "(nothing reported)"
 		}
 
-		fmt.Fprintf(&b, "\n## %s\n\n%s\n", field.name, sanitizeNoteField(value, spillDir))
+		fmt.Fprintf(&b, "\n## %s\n\n%s\n", field.name, sanitizeNoteField(value))
 	}
 
-	fmt.Fprintf(&b, "\n%s (computed from the run, not authored)\n\n%s\n", computedFilesHeading, renderTouchedFiles(trajectory))
+	computed := truncateToolOutputLimit(renderTouchedFiles(trajectory), maxHandoffComputedBytes)
+
+	fmt.Fprintf(&b, "\n%s (computed from the run, not authored)\n\n%s\n", computedFilesHeading, computed)
 
 	return b.String()
 }
@@ -209,11 +229,14 @@ func renderHandoffNote(agentName, jobName string, note map[string]string, trajec
 // headings are demoted to bold text rather than dropped: the author may
 // legitimately want structure, but a line starting with "##" could otherwise
 // forge the computed section heading and pass model-authored text off as the
-// runner's own record. Capping reuses spillOrTruncate — an oversized field
-// must not push the note past maxReadFileBytes, which would fail the
-// RECEIVING step at preparation (loadContextBlocks treats an over-limit
-// context file as a hard error).
-func sanitizeNoteField(value, spillDir string) string {
+// runner's own record.
+//
+// An oversized field is TRUNCATED inline rather than spilled to a file: the
+// spill directory belongs to the SENDING step and is removed the moment that
+// step returns (see preparedAgentStep.close), so a spill pointer in a note
+// would always name a file the receiver cannot open. A truncated field at
+// least still carries what fits.
+func sanitizeNoteField(value string) string {
 	lines := strings.Split(value, "\n")
 	for i, line := range lines {
 		trimmed := strings.TrimLeft(line, " \t")
@@ -222,7 +245,7 @@ func sanitizeNoteField(value, spillDir string) string {
 		}
 	}
 
-	return spillOrTruncate(strings.Join(lines, "\n"), spillDir)
+	return truncateToolOutputLimit(strings.Join(lines, "\n"), maxHandoffFieldBytes)
 }
 
 // pathArgKeys are the argument names the builtin file tools use for the path
@@ -352,7 +375,7 @@ func publishHandoffNote(prepared preparedAgentStep, jobName string, res conversa
 
 	path, err := writeHandoffNote(
 		prepared.conv.env.dir, prepared.step.Agent, jobName,
-		res.handoffNote, res.trajectory, prepared.spillDir,
+		res.handoffNote, res.trajectory,
 	)
 	if err != nil {
 		slog.Warn("agent.handoff_note.write_failed", "agent", prepared.step.Agent, "error", err)
@@ -367,13 +390,14 @@ func publishHandoffNote(prepared preparedAgentStep, jobName string, res conversa
 // under HandoffNoteDir in the build workspace root. buildDir is the step's own
 // working directory, which for the shared workspace strategy IS the build root
 // — config.validateHandoffNoteSteps rejects handoff_note: under an isolated
-// strategy precisely because that equivalence is what makes the note reachable
-// by the next step.
+// strategy, and rejects dir: on either end of a note edge, precisely because
+// that equivalence is what makes the note reachable by the next step (whose
+// own path resolution is relative to ITS working directory).
 //
 // A write failure is logged by the caller and never fails the step: the note
 // is a productivity aid for the next agent, and losing it must not throw away
 // a completed agent run.
-func writeHandoffNote(buildDir, agentName, jobName string, note map[string]string, trajectory []recordedToolCall, spillDir string) (string, error) {
+func writeHandoffNote(buildDir, agentName, jobName string, note map[string]string, trajectory []recordedToolCall) (string, error) {
 	dir := filepath.Join(buildDir, config.HandoffNoteDir)
 
 	err := os.MkdirAll(dir, 0o750)
@@ -383,7 +407,7 @@ func writeHandoffNote(buildDir, agentName, jobName string, note map[string]strin
 
 	path := filepath.Join(dir, agentName+".md")
 
-	err = os.WriteFile(path, []byte(renderHandoffNote(agentName, jobName, note, trajectory, spillDir)), 0o600)
+	err = os.WriteFile(path, []byte(renderHandoffNote(agentName, jobName, note, trajectory)), 0o600)
 	if err != nil {
 		return "", fmt.Errorf("write handoff note: %w", err)
 	}
