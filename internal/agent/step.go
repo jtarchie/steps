@@ -199,7 +199,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	spillDir := newToolOutputSpillDir(dir, step.Agent)
 
-	contextBlocks, err := prepareContextBlocks(dir, ri.ContextPaths, decls)
+	contextBlocks, err := prepareContextBlocks(dir, withHandoffNotePath(step, dir, ri.ContextPaths), decls)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 		closeAll(closers)
@@ -435,7 +435,27 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 		return StepOutcome{Previous: previous}, wrapped
 	}
 
+	// Publish the handoff note only now, once the step has fully succeeded:
+	// a failed run, a failed assert, or a failed capture leaves the previous
+	// note (if any) in place rather than replacing it with one describing work
+	// that did not stand.
+	publishHandoffNote(prepared, jobName, res)
+
+	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", agentResultRecord(res), nil)
+	if err != nil {
+		return StepOutcome{Previous: previous}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+	}
+
+	return StepOutcome{Hash: hash, Verdict: res.verdict, Note: res.note, Previous: previous}, nil
+}
+
+// agentResultRecord builds the result map RunStep records for a succeeded
+// agent step: always the response and turn count, plus whichever optional
+// outcomes the run actually produced. Extracted from RunStep to keep its
+// cyclomatic complexity under the linter budget.
+func agentResultRecord(res conversationResult) map[string]any {
 	result := map[string]any{"response": res.text, "turns": res.turns}
+
 	if res.verdict != "" {
 		result["verdict"] = res.verdict
 	}
@@ -444,12 +464,11 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 		result["note"] = res.note
 	}
 
-	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", result, nil)
-	if err != nil {
-		return StepOutcome{Previous: previous}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+	if res.handoffNote != nil {
+		result["handoff_note"] = res.handoffNote
 	}
 
-	return StepOutcome{Hash: hash, Verdict: res.verdict, Note: res.note, Previous: previous}, nil
+	return result
 }
 
 // assertAgentResponse checks an agent step's assert (stdout and/or

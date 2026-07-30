@@ -69,6 +69,14 @@ func (p agentGenParams) applyTo(cfg *genai.GenerateContentConfig) {
 type recordedToolCall struct {
 	name string
 	args map[string]any
+	// ok reports whether the call actually succeeded, per the same shapes
+	// requiredCallSucceeded reads. Backfilled once the turn's results are in
+	// (see markTrajectoryResults), so it is false for a call that failed or
+	// was rejected by a max_calls: budget without ever running. Trajectory
+	// CONSUMERS differ on whether they want it: assert.tool_calls judges what
+	// the model chose, success or not, while a handoff note's computed
+	// files-touched section must list only what genuinely happened.
+	ok bool
 }
 
 // conversationResult is one completed attempt's output: the model's final
@@ -91,6 +99,10 @@ type conversationResult struct {
 	// routed-to step's Handoff (see handoff.go) as the sender's deliberate,
 	// authored "why".
 	note string
+	// handoffNote is the fields captured by the last SUCCESSFUL write_handoff
+	// call (see handoffnote.go); nil when the step declares no handoff_note:
+	// or the model never wrote one. RunStep renders it to disk after the run.
+	handoffNote map[string]string
 }
 
 // agentConversation is one runnable attempt's inputs.
@@ -236,6 +248,10 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 	// own verdict ends on its final one, and note travels with whichever
 	// choice won.
 	var verdict, note string
+	// handoffNote is the last successful write_handoff call's captured fields
+	// (nil until one lands) — per-attempt like everything above, so a retry
+	// renders the note the surviving attempt actually wrote.
+	var handoffNote map[string]string
 	// compactionSummary/compactionStalled are maybeCompact's running state —
 	// per-attempt like trajectory/verdict/note above, since a retry.Do restart
 	// gets a fresh buildAgentRequest (and therefore a fresh, uncompacted
@@ -256,7 +272,7 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 
 		resp, err := generateOnce(ctx, llm, req)
 		if err != nil {
-			return conversationResult{turns: turn, trajectory: trajectory, verdict: verdict, note: note}, err
+			return conversationResult{turns: turn, trajectory: trajectory, verdict: verdict, note: note, handoffNote: handoffNote}, err
 		}
 
 		req.Contents = append(req.Contents, resp.Content)
@@ -265,7 +281,7 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 		if len(calls) == 0 {
 			missing := unsatisfiedRequiredTools(conv.tools.required, satisfied)
 			if len(missing) == 0 {
-				return conversationResult{text: text, turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note}, nil
+				return conversationResult{text: text, turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note, handoffNote: handoffNote}, nil
 			}
 
 			forceRequiredTool(req, missing[0], conv.toolChoiceStringOnly)
@@ -275,15 +291,20 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 
 		req.Config.ToolConfig = nil // clear any forcing from the prior turn — the model chooses freely again next time it tries to stop
 
+		turnStart := len(trajectory)
+
 		for _, call := range calls {
 			trajectory = append(trajectory, recordedToolCall{name: call.Name, args: call.Args})
 		}
 
 		parts := toolResponseParts(ctx, calls, conv.env, conv.tools.registry, conv.tools.maxCalls, callCounts)
+		markTrajectoryResults(trajectory[turnStart:], parts)
 
 		if choice, n := conv.trackToolResults(parts, satisfied); choice != "" {
 			verdict, note = choice, n // last successful verdict (and its note) wins across turns
 		}
+
+		handoffNote = latestHandoffNote(parts, handoffNote) // last successful write wins, like the verdict above
 
 		req.Contents = append(req.Contents, &genai.Content{
 			Role:  genai.RoleUser,
@@ -292,7 +313,7 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 
 		detectErr := detector.respond(req, calls, parts)
 		if detectErr != nil {
-			return conversationResult{turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note}, detectErr
+			return conversationResult{turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note, handoffNote: handoffNote}, detectErr
 		}
 	}
 
@@ -300,7 +321,7 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 	// ran but didn't finish its task), not infrastructure errors — mark them
 	// so hook dispatch classifies them as failed rather than errored. A
 	// transport error from generateOnce above stays unwrapped → errored.
-	exhausted := conversationResult{turns: conv.maxTurns, trajectory: trajectory, verdict: verdict, note: note}
+	exhausted := conversationResult{turns: conv.maxTurns, trajectory: trajectory, verdict: verdict, note: note, handoffNote: handoffNote}
 
 	missing := unsatisfiedRequiredTools(conv.tools.required, satisfied)
 	if len(missing) > 0 {

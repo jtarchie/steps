@@ -34,6 +34,13 @@ func ValidateArtifactName(name string) error {
 		return fmt.Errorf("invalid artifact name %q: must match %s", name, artifactNamePattern.String())
 	}
 
+	// Reserved: handoff notes are rendered under this directory in the shared
+	// build root (see HandoffNoteDir), so an artifact of the same name would
+	// materialize over them.
+	if name == HandoffNoteDir {
+		return fmt.Errorf("invalid artifact name %q: reserved for handoff notes", name)
+	}
+
 	return nil
 }
 
@@ -794,6 +801,26 @@ type Step struct {
 	// context block is appended and previous_run (if granted) answers "no
 	// previous run" as data.
 	Handoff *HandoffSpec `yaml:"handoff,omitempty"`
+	// HandoffNote, on an agent step, requires the step to write a handoff note
+	// before its conversation may end: a synthesized write_handoff tool (see
+	// internal/agent) with a fixed three-field form, rendered to
+	// handoff/<step>.md in the build workspace and injected into the next
+	// agent step's conversation at start. It is the FORWARD counterpart to
+	// Handoff, which carries context BACKWARD along a to:/verdicts: route.
+	//
+	// Agent-only, never on a hook, and only valid when a later agent step
+	// exists in the same get-segment to receive it — see
+	// validateHandoffNoteSteps, which also resolves HandoffNoteFrom.
+	HandoffNote bool `yaml:"handoff_note,omitempty"`
+	// HandoffNoteFrom is COMPUTED at load (never written in YAML): the name of
+	// the nearest preceding agent step in this step's get-segment that
+	// declares handoff_note. "" when no such step exists — the common case,
+	// and the step then receives no note. Resolving the receiver statically
+	// rather than carrying it through internal/pipeline is what makes note
+	// delivery automatically idempotent: every dispatch of this step, first
+	// entry or a to:-driven redo, re-reads whatever note is on disk, so a
+	// redo always sees the newest one.
+	HandoffNoteFrom string `yaml:"-"`
 	// InputMapping/OutputMapping rename a task step's declared inputs/outputs
 	// onto plan-artifact names, mirroring Concourse's input_mapping/
 	// output_mapping (see docs/conformance.md;
@@ -1107,6 +1134,7 @@ func (c *Config) validate() error {
 		c.validateToolCallGuards,
 		c.validateStepGuards,
 		c.validateStepContextPaths,
+		c.validateHandoffNoteSteps,
 		c.validateStepTransitions,
 		c.validateAsserts,
 		c.validateCredentialHandling,

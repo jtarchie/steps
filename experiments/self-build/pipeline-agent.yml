@@ -221,6 +221,11 @@ jobs:
     context_paths: [repo/CLAUDE.md]
     attempts: 2       # whole-conversation restart on a transport failure
     timeout: 20m      # per attempt, not total -- see docs/attempts-timeout.md
+    # Forces a shift-change report for the coder before this step may end.
+    # The plan document is the PR artifact; the note is the operational
+    # handoff, and it carries a computed list of every file this step actually
+    # touched -- which is what stops the coder re-walking the same tree.
+    handoff_note: true
     prompt: |
       Plan ONE implementation step for ONE story. You have NO shell.
       The only file you write is the plan document.
@@ -251,6 +256,7 @@ jobs:
     # is that with headroom. attempts: covers transport faults only.
     timeout: 45m
     handoff: { tool: true }   # a redo gets a previous_run tool over the last verdict
+    handoff_note: true        # forward: writes the reviewer's shift-change report
     prompt: |
       Implement ONE story's already-written plan. repo/ is a real git clone,
       yours to edit.
@@ -258,6 +264,10 @@ jobs:
       1. read_file on stories/num and stories/file, then on the plan at
          repo/experiments/self-build/plans/{num}.md. (repo/CLAUDE.md is
          already available via read_file — follow it exactly.)
+         The planner's handoff note is ALREADY in your context: its
+         "Files touched" section is computed by the runner, not written by
+         the planner, so it is a reliable record of where the planner
+         actually looked. Check it before you search for anything.
       2. Implement it end to end: code, tests, and doc/example updates,
          following CLAUDE.md exactly. If the story adds a behavior or guard
          to one of several similar code paths, run the sibling check and
@@ -300,6 +310,14 @@ jobs:
       The diff and the plan are your evidence. You are not exploring this
       codebase -- the planner already did, and its findings are in the plan.
       Read a file only to check a specific claim you intend to cite.
+
+      The coder's handoff note is already in your context. Everything the
+      coder WROTE in it is a claim, not evidence -- verify each against the
+      diff before relying on it, and treat its "watch_out" section as a list
+      of places to look hardest, not as reassurance. Its final "Files
+      touched" section is different: the runner computed that from the run
+      itself, so it is mechanical truth, and it tells you which parts of the
+      diff deserve your attention first.
 
       1. read_file on stories/num and stories/file, then on
          repo/docs/proposals/stories/{file} and the plan the implementer

@@ -48,6 +48,46 @@ func TestSelfBuildPipelineLoadsCleanly(t *testing.T) {
 	}
 }
 
+// TestSelfBuildHandoffChain pins the forward handoff chain in the self-build
+// pipeline: planner hands to coder, coder hands to reviewer. Losing a link
+// silently returns each agent to re-researching what its predecessor already
+// knew — the exact failure this pipeline exists to avoid.
+func TestSelfBuildHandoffChain(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join("..", "..", "experiments", "self-build", "pipeline-agent.yml")
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig(%s): %v", path, err)
+	}
+
+	// agent name -> (sender it receives from, whether it writes one itself)
+	want := map[string]struct {
+		from  string
+		sends bool
+	}{
+		"planner":  {"", true},
+		"coder":    {"planner", true},
+		"reviewer": {"coder", false},
+	}
+
+	for _, step := range cfg.Jobs[0].Plan {
+		expected, tracked := want[step.Agent]
+		if !tracked {
+			continue
+		}
+
+		if step.HandoffNoteFrom != expected.from {
+			t.Errorf("%s receives a note from %q, want %q", step.Agent, step.HandoffNoteFrom, expected.from)
+		}
+
+		if step.HandoffNote != expected.sends {
+			t.Errorf("%s writes a handoff note = %v, want %v", step.Agent, step.HandoffNote, expected.sends)
+		}
+	}
+}
+
 // TestHooksParseOnStepAndJob checks that on_* / ensure hooks decode (inline)
 // onto both a plan step and a job, and that a hook is itself a full Step.
 func TestHooksParseOnStepAndJob(t *testing.T) {

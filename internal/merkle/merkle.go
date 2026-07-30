@@ -181,6 +181,32 @@ func withHandoff(step config.Step, content map[string]any) map[string]any {
 		content["handoff"] = map[string]any{"context": step.Handoff.Context, "tool": step.Handoff.Tool}
 	}
 
+	return withHandoffNote(step, content)
+}
+
+// withHandoffNote folds a step's handoff_note: participation into content,
+// but only when it participates — so an unrelated step hashes byte-identically
+// to before this field existed (the same value-gating as withHandoff).
+//
+// Both sides are identity: handoff_note adds a required write_handoff tool to
+// what the step executes with, and HandoffNoteFrom (computed at load, see
+// config.validateHandoffNoteSteps) adds an injected context block. The note's
+// CONTENT is excluded, like the routed handoff's runtime facts above — but for
+// a different reason than context_paths', which is chained through its input
+// artifacts' hashes. A note's content is chained through nothing: correctness
+// rests on agent steps being unconditionally Unskippable (see planNonGetNode),
+// so a receiving agent step always re-runs and always re-reads the current
+// note. A `task` reading handoff/*.md would NOT be safe that way — see
+// docs/agents.md.
+func withHandoffNote(step config.Step, content map[string]any) map[string]any {
+	if step.HandoffNote {
+		content["handoff_note"] = true
+	}
+
+	if step.HandoffNoteFrom != "" {
+		content["handoff_note_from"] = step.HandoffNoteFrom
+	}
+
 	return content
 }
 

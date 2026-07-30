@@ -142,6 +142,14 @@ func injectSynthesizedTools(step config.Step, handoff *Handoff, decls *genai.Too
 		return "", err
 	}
 
+	// A step may require BOTH a verdict and a handoff note; the required-tool
+	// machinery already handles more than one (unsatisfiedRequiredTools forces
+	// them one per turn until all are satisfied).
+	_, err = injectWriteHandoffTool(step, decls, registry, required)
+	if err != nil {
+		return "", err
+	}
+
 	if step.Handoff != nil && step.Handoff.Tool {
 		err = injectHandoffTool(handoff, decls, registry)
 		if err != nil {

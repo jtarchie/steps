@@ -208,6 +208,60 @@ Paths are relative to the step's working directory and confined to its workspace
 
 **How it works**: At preparation time, each `context_paths` file is read and confined by `resolveAgentPath`. At conversation start, `buildAgentRequest` prepends a simulated `read_file` tool call + result pair for each path before the user prompt — the same `{"content": …}` response shape the real `read_file` tool uses. This keeps the context visible to the model without consuming a turn or injecting content into the system message.
 
+## Authored handoff (`handoff_note:`)
+
+Agents in a plan are a relay: each works alone, and the next one starts with none of its predecessor's context. Left to files-by-convention, every agent re-researches what the one before it already knew. `handoff_note: true` makes the departing agent write a shift-change report *while it still holds the context*, and delivers it to the next agent automatically.
+
+```yaml
+- agent: planner
+  handoff_note: true      # the entire configuration surface
+- agent: coder
+  handoff_note: true
+- task: build-check       # non-agent steps are stepped over
+- agent: reviewer         # receives the coder's note
+```
+
+The receiver is **computed, not declared**: the next `agent` step in the same get-segment. There is nothing else to configure — no schema, no addressing, no opt-in on the receiving side.
+
+**The form is fixed** (three required string fields, owned by `steps`, not the pipeline):
+
+| field | what it asks for |
+|---|---|
+| `done` | factual inventory of what was done, with file:line — explicitly *not* a self-grade |
+| `facts` | what the next agent needs, including **dead ends** — what was read and ruled out, so the search isn't repeated |
+| `watch_out` | risks, uncertainties, and any deviation from instructions, with the reason |
+
+A synthesized **required** `write_handoff` tool carries them. Required means the same thing it does for `verdicts:`: the model's turn is constrained via `tool_choice` when it tries to finish without having called it (see `forceRequiredTool`), so the note cannot be silently skipped. A step may require both a verdict and a note — the required-tool machinery forces one per turn until all are satisfied.
+
+The rendered note (`handoff/<step>.md` in the build workspace) opens with a provenance header and ends with a section the author could not have written:
+
+```markdown
+> Model-authored by agent "coder" (job "self-build") — claims to verify, not facts.
+> The final section is computed by the runner and is the only part the author could not write.
+
+## done
+...
+## Files touched (computed from the run, not authored)
+read_file: internal/pipeline/pipeline.go, internal/config/config.go
+edit_file: internal/pipeline/pipeline.go
+other tools: run_shell x18, verify_gate x11
+```
+
+**What crosses, and what deliberately does not.** Only the three authored fields plus the computed section. The sender's raw response, its conversation, and its tool-call *arguments* stay behind. That is a security boundary, not tidiness: a response can quote shell or MCP output the receiver has no grant for, and an argument can be an arbitrary model-authored string. So the computed section carries **path arguments of file tools only** — every other tool contributes a name and a count (`run_shell x18`), never its command line — and it counts only calls that **succeeded**, since a `write_file` the model requested but that failed touched nothing and listing it would make the one mechanical section into just another claim. Authored fields have their markdown headings demoted, so a sender cannot forge the computed heading, and are size-capped so a runaway field cannot push the note past the receiver's context-file limit and fail the *innocent* step.
+
+The receiver is expected to treat the authored part as claims — the built-in `reviewer` persona states the trust order explicitly (deterministic output > the code > model-authored prose).
+
+**Delivery** reuses the `context_paths` machinery exactly: the note is prepended to the receiver's context paths, so it arrives as a synthetic `read_file` result at conversation start — zero turns, guaranteed presence, and re-readable from disk if the conversation is later compacted. Because the path is re-resolved on *every* dispatch rather than captured once, a `to:`-driven redo of the receiver always picks up the newest note. A missing note (the sender was guard-skipped, or never ran) is skipped silently rather than failing the receiver — the one place this differs from `context_paths`, where a missing file is a hard error because the author named it explicitly.
+
+**Limits, enforced at load time:**
+- Agent steps only, never hooks; the sender needs a later agent step in the same get-segment (a note never crosses a `get` fan-out — each fanned-out build is independent), and the receiver must grant `read_file`.
+- **Not supported under `workspace: strategy: copy`/`btrfs`.** Under isolation only *declared outputs* survive a step, so a note written to the build root would be discarded with the sender's workspace. This is a load error rather than a silent loss.
+- `handoff` is a reserved artifact name — an artifact so named would materialize over the note directory.
+
+**Merkle**: the `handoff_note:` declaration and the computed sender name both enter the step's hashed content (they change the tool set and the injected context, respectively). The note's *contents* do not — correctness rests on agent steps being unconditionally unskippable, so a receiving agent always re-runs and re-reads the current note. A `task` step reading `handoff/*.md` would **not** be safe that way: tasks are skippable, and could be skipped against a stale note.
+
+**Relation to `handoff:`**: `handoff:` carries context *backward* along a `to:`/`verdicts:` route (a rejected step learning why, via `previous_run`). `handoff_note:` carries it *forward* along the normal path. They compose — the self-build coder uses both.
+
 ## Repairing malformed tool-call arguments
 
 An OpenAI-compatible server sends a tool call's `arguments` as a JSON *string*, and weak local models (LM Studio, Ollama class) malformed it often: truncated at `max_tokens` mid-string, trailing commas, prose or markdown fences around the object. The LLM adapter parses that string leniently — on *any* parse failure it silently substitutes an **empty map**, so the call arrived at the conversation as if the model had passed no arguments at all: the tool answered "missing required argument", the model had no idea why, and a coding agent could burn most of its turn budget rediscovering the failure.

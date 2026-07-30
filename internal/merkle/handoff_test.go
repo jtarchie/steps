@@ -59,3 +59,62 @@ func TestHandoffHashBustsWhenSet(t *testing.T) {
 		t.Error("enabling both should hash differently from either alone")
 	}
 }
+
+// TestHandoffNoteHashStabilityWhenUnset proves the same value-gating for
+// handoff_note: a step that neither sends nor receives one keeps the content
+// map it had before the feature existed.
+func TestHandoffNoteHashStabilityWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	cfg := agentCfg(nil, "")
+
+	content, err := AgentContentMap(cfg, config.Step{Agent: "reviewer", Prompt: "do it"}, mustRI(t, cfg, config.Step{Agent: "reviewer", Prompt: "do it"}))
+	if err != nil {
+		t.Fatalf("AgentContentMap: %v", err)
+	}
+
+	for _, key := range []string{"handoff_note", "handoff_note_from"} {
+		if _, present := content[key]; present {
+			t.Errorf("unset handoff_note must not put %q in the hashed content", key)
+		}
+	}
+}
+
+// TestHandoffNoteHashBustsWhenSet proves both sides are identity: sending a
+// note adds a required tool to what the step executes with, and receiving one
+// adds an injected context block, so neither may share a hash with a step
+// that does neither.
+func TestHandoffNoteHashBustsWhenSet(t *testing.T) {
+	t.Parallel()
+
+	cfg := agentCfg(nil, "")
+
+	unset := mustAgentHash(t, cfg, config.Step{Agent: "reviewer", Prompt: "do it"})
+	sending := mustAgentHash(t, cfg, config.Step{Agent: "reviewer", Prompt: "do it", HandoffNote: true})
+	receiving := mustAgentHash(t, cfg, config.Step{Agent: "reviewer", Prompt: "do it", HandoffNoteFrom: "planner"})
+	fromOther := mustAgentHash(t, cfg, config.Step{Agent: "reviewer", Prompt: "do it", HandoffNoteFrom: "coder"})
+
+	if unset == sending {
+		t.Error("declaring handoff_note should change the hash")
+	}
+
+	if unset == receiving {
+		t.Error("receiving a handoff note should change the hash")
+	}
+
+	if receiving == fromOther {
+		t.Error("receiving from a different sender should hash differently")
+	}
+}
+
+// mustRI resolves step's invocation or fails the test.
+func mustRI(t *testing.T, cfg *config.Config, step config.Step) config.ResolvedInvocation {
+	t.Helper()
+
+	ri, err := cfg.ResolveAgentInvocation(step)
+	if err != nil {
+		t.Fatalf("ResolveAgentInvocation: %v", err)
+	}
+
+	return ri
+}
