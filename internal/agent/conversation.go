@@ -95,12 +95,13 @@ type conversationResult struct {
 
 // agentConversation is one runnable attempt's inputs.
 type agentConversation struct {
-	system   string
-	prompt   string
-	env      toolEnv
-	tools    agentTools
-	params   agentGenParams
-	maxTurns int
+	system        string
+	prompt        string
+	contextBlocks []contextBlock
+	env           toolEnv
+	tools         agentTools
+	params        agentGenParams
+	maxTurns      int
 	// toolChoiceStringOnly forces a required tool call via the string
 	// tool_choice: "required" instead of a named function object — see
 	// forceRequiredTool. Set from config.ResolvedInvocation.StringOnlyToolChoice.
@@ -117,8 +118,11 @@ type agentConversation struct {
 }
 
 // buildAgentRequest builds a fresh LLM request (system + user prompt + tools
-// + dials). A fresh one is built per attempt so a retry starts from a clean
-// conversation rather than the grown Contents of a failed attempt.
+// + dials). When conv.contextBlocks is non-empty, synthetic read_file tool
+// call/response messages are prepended before the user prompt so the model
+// sees the context as if it had called read_file itself. A fresh request is
+// built per attempt so a retry starts from a clean conversation rather than
+// the grown Contents of a failed attempt.
 func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 	cfg := &genai.GenerateContentConfig{
 		SystemInstruction: &genai.Content{Parts: []*genai.Part{{Text: conv.system}}},
@@ -126,8 +130,46 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 	}
 	conv.params.applyTo(cfg)
 
+	contents := make([]*genai.Content, 0, 1+len(conv.contextBlocks)*2)
+
+	for i, block := range conv.contextBlocks {
+		callID := fmt.Sprintf("ctx_%d", i)
+
+		// Synthetic assistant message: read_file call for this context path.
+		contents = append(contents, &genai.Content{
+			Role: genai.RoleModel,
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   callID,
+					Name: "read_file",
+					Args: map[string]any{"path": block.path},
+				},
+			}},
+		})
+
+		// Synthetic tool result: the file content as read_file would return it.
+		contents = append(contents, &genai.Content{
+			Role: genai.RoleUser,
+			Parts: []*genai.Part{{
+				FunctionResponse: &genai.FunctionResponse{
+					ID:   callID,
+					Name: "read_file",
+					Response: map[string]any{
+						"content": block.content,
+					},
+				},
+			}},
+		})
+	}
+
+	// User prompt comes after any injected context.
+	contents = append(contents, &genai.Content{
+		Role:  genai.RoleUser,
+		Parts: []*genai.Part{{Text: conv.prompt}},
+	})
+
 	return &model.LLMRequest{
-		Contents: []*genai.Content{{Role: genai.RoleUser, Parts: []*genai.Part{{Text: conv.prompt}}}},
+		Contents: contents,
 		Config:   cfg,
 	}
 }

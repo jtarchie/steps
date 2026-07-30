@@ -53,7 +53,7 @@ func TestBuildSystemMessage(t *testing.T) {
 	t.Run("custom persona is preserved and dir noted", func(t *testing.T) {
 		t.Parallel()
 
-		got := buildSystemMessage("You are a terse reviewer.", "/work/prs", nil)
+		got := buildSystemMessage("You are a terse reviewer.", "/work/prs")
 		if !strings.HasPrefix(got, "You are a terse reviewer.") {
 			t.Errorf("persona not preserved: %q", got)
 		}
@@ -66,26 +66,18 @@ func TestBuildSystemMessage(t *testing.T) {
 	t.Run("empty persona falls back to the default", func(t *testing.T) {
 		t.Parallel()
 
-		got := buildSystemMessage("", "/work", nil)
+		got := buildSystemMessage("", "/work")
 		if !strings.HasPrefix(got, defaultAgentPersona) {
 			t.Errorf("expected the default persona, got %q", got)
 		}
 	})
 
-	t.Run("context blocks are appended as wrapped reference material", func(t *testing.T) {
+	t.Run("context blocks are NOT in the system message", func(t *testing.T) {
 		t.Parallel()
 
-		got := buildSystemMessage("persona", "/work", []contextBlock{
-			{path: "repo/CLAUDE.md", content: "rule one\nrule two\n"},
-		})
-
-		want := `<context path="repo/CLAUDE.md">` + "\nrule one\nrule two\n</context>"
-		if !strings.Contains(got, want) {
-			t.Errorf("context block missing or malformed.\nwant substring: %q\ngot: %q", want, got)
-		}
-
-		if strings.Index(got, "persona") > strings.Index(got, "<context") {
-			t.Errorf("context block should follow the persona, got %q", got)
+		got := buildSystemMessage("persona", "/work")
+		if strings.Contains(got, "<context") || strings.Contains(got, "</context>") {
+			t.Errorf("system message should not contain context blocks: %q", got)
 		}
 	})
 }

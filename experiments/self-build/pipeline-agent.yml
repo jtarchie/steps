@@ -101,7 +101,6 @@ agents:
 - name: planner
   source: { model: lmstudio/google/gemma-4-26b-a4b }
   max_turns: 200
-  context_paths: [repo/CLAUDE.md]   # injected into the system prompt — no read_file turn needed
   system_file: "@builtin/planner"
   tools:
   - mcp: gopls
@@ -116,7 +115,6 @@ agents:
 - name: coder
   source: { model: lmstudio/google/gemma-4-26b-a4b }
   max_turns: 200
-  context_paths: [repo/CLAUDE.md]
   system_file: "@builtin/builder"
   tools:
   - mcp: gopls
@@ -153,7 +151,6 @@ agents:
 - name: reviewer
   source: { model: lmstudio/google/gemma-4-26b-a4b }
   max_turns: 200
-  context_paths: [repo/CLAUDE.md]
   system_file: "@builtin/reviewer"
   tools:
   - mcp: gopls
@@ -188,6 +185,7 @@ jobs:
   - get: repo
   - agent: planner
     inputs: [stories, repo]
+    context_paths: [repo/CLAUDE.md]
     attempts: 2       # whole-conversation restart on a transport failure
     timeout: 20m      # per attempt, not total -- see docs/attempts-timeout.md
     prompt: |
@@ -195,8 +193,8 @@ jobs:
       The only file you write is the plan document.
 
       1. read_file on stories/num and stories/file, then on the story doc at
-         repo/docs/proposals/stories/{file}. (repo/CLAUDE.md is already in
-         your system prompt — follow it.)
+         repo/docs/proposals/stories/{file}. (repo/CLAUDE.md is already
+         available via read_file — follow it.)
       2. Find where the feature must integrate. The feature the story ASKS
          FOR does not exist yet, so never search for its own name. Relevant:
          repo/internal/{config,pipeline,merkle,store,trigger,agent}. For
@@ -212,6 +210,7 @@ jobs:
          covering all of them. Do not describe a file you have not read.
   - agent: coder
     inputs: [stories, repo]
+    context_paths: [repo/CLAUDE.md]
     attempts: 2
     timeout: 25m
     handoff: { tool: true }   # a redo gets a previous_run tool over the last verdict
@@ -221,7 +220,7 @@ jobs:
 
       1. read_file on stories/num and stories/file, then on the plan at
          repo/experiments/self-build/plans/{num}.md. (repo/CLAUDE.md is
-         already in your system prompt — follow it exactly.)
+         already available via read_file — follow it exactly.)
       2. Implement it end to end: code, tests, and doc/example updates,
          following CLAUDE.md exactly. If the story adds a behavior or guard
          to one of several similar code paths, run the sibling check and
@@ -252,6 +251,7 @@ jobs:
     max_visits: 4
   - agent: reviewer
     inputs: [stories, repo]
+    context_paths: [repo/CLAUDE.md]
     attempts: 2
     timeout: 20m
     prompt: |
@@ -261,8 +261,8 @@ jobs:
       cite as file:line is not a concern.
 
       1. read_file on stories/num and stories/file, then on
-         repo/docs/proposals/stories/{file}. (repo/CLAUDE.md is already in
-         your system prompt.)
+         repo/docs/proposals/stories/{file}. (repo/CLAUDE.md is already
+         available via read_file.)
       2. repo_diff. A `??` line is a NEW file that does not appear in the
          diff at all -- read each of those with read_file.
       3. Judge whether the story is fully AND CORRECTLY implemented, not

@@ -289,14 +289,6 @@ type Agent struct {
 	// pipeline file's directory, instead of writing it inline — useful since a
 	// persona is often long freeform prose. Mutually exclusive with System.
 	SystemFile string `yaml:"system_file,omitempty"`
-	// ContextPaths lists files whose contents are spliced into the system
-	// message at run time (e.g. ["repo/CLAUDE.md"]), so project conventions
-	// every invocation should follow are guaranteed-present instead of
-	// costing the model a read_file turn it might skip. Paths are relative
-	// to the agent step's working directory and confined to its workspace —
-	// in practice the file lives inside a declared input. A missing or
-	// unreadable file fails the step at preparation, not mid-conversation.
-	ContextPaths []string `yaml:"context_paths,omitempty"`
 	// Generation dials, forwarded to the model when set. ReasoningEffort is
 	// one of "low", "medium", "high" (for reasoning-capable models).
 	Temperature     *float64 `yaml:"temperature,omitempty"`
@@ -774,6 +766,15 @@ type Step struct {
 	// it, and To routes on the chosen value. Every declared verdict must have a
 	// To entry, and no verdict may be named with a reserved key. Agent-only.
 	Verdicts []string `yaml:"verdicts,omitempty"`
+	// ContextPaths lists files whose contents are injected at conversation
+	// start as synthetic read_file tool results — the agent sees the file
+	// contents as if it had called read_file itself, without consuming a
+	// turn. Paths are relative to the step's working directory and confined
+	// to its workspace (resolveAgentPath); in practice each file lives
+	// inside a declared input, e.g. ["repo/CLAUDE.md"]. Only valid on agent
+	// steps. A missing, escaping, or over-100KB file fails the step at
+	// preparation, before a token is spent.
+	ContextPaths []string `yaml:"context_paths,omitempty"`
 	// Hooks are the step's on_success/on_failure/on_error/on_abort/ensure
 	// reaction steps (see Hooks). Inlined so they sit alongside the step's
 	// own fields in YAML.
@@ -1105,6 +1106,7 @@ func (c *Config) validate() error {
 		c.validateAgentGraph,
 		c.validateToolCallGuards,
 		c.validateStepGuards,
+		c.validateStepContextPaths,
 		c.validateStepTransitions,
 		c.validateAsserts,
 		c.validateCredentialHandling,
@@ -1552,6 +1554,37 @@ func (c *Config) validateStepGuards() error {
 
 			if strings.TrimSpace(step.When.Run) == "" {
 				return fmt.Errorf("%s: when requires a command", label)
+			}
+
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateStepContextPaths rejects context_paths: on non-agent steps — a
+// path like "repo/CLAUDE.md" only has meaning when an agent step knows its
+// workspace inputs, and the synthetic read_file injection at run time
+// requires read_file to be in the tool grant.
+func (c *Config) validateStepContextPaths() error {
+	for _, job := range c.Jobs {
+		err := job.visitSteps(func(label string, step *Step) error {
+			if len(step.ContextPaths) == 0 {
+				return nil
+			}
+
+			if step.Agent == "" {
+				return fmt.Errorf("%s: context_paths is only valid on agent steps", label)
+			}
+
+			for _, p := range step.ContextPaths {
+				if strings.TrimSpace(p) == "" {
+					return fmt.Errorf("%s: context_paths must not contain an empty path", label)
+				}
 			}
 
 			return nil
@@ -3157,8 +3190,9 @@ type ResolvedInvocation struct {
 	APIKeyEnv   string
 	RequiresKey bool
 	Persona     string
-	// ContextPaths mirrors Agent.ContextPaths once resolved (agent-level
-	// only; no per-step override, same as MaxTurns/CompactAfterTokens).
+	// ContextPaths mirrors Step.ContextPaths once resolved — populated from
+	// the step, not the agent definition, since concrete input paths are
+	// only known at the step level.
 	ContextPaths []string
 	// Generation dials, mirroring Agent's own fields once resolved. Kept flat
 	// here (rather than a nested type) so this package doesn't need to depend
@@ -3243,7 +3277,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		APIKeyEnv:            apiKeyEnv,
 		RequiresKey:          requiresKey,
 		Persona:              agent.System,
-		ContextPaths:         agent.ContextPaths,
+		ContextPaths:         step.ContextPaths,
 		Temperature:          agent.Temperature,
 		TopP:                 agent.TopP,
 		MaxTokens:            agent.MaxTokens,

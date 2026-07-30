@@ -115,10 +115,11 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 	}
 
 	conv := agentConversation{
-		system: buildSystemMessage(ri.Persona, dir, contextBlocks),
-		prompt: prompt,
-		env:    toolEnv{dir: dir, runner: runner, spillDir: spillDir},
-		tools:  agentTools{decls: decls, registry: registry, required: requiredToolNames(toolSpecs), maxCalls: maxCallsByName(toolSpecs)},
+		system:        buildSystemMessage(ri.Persona, dir),
+		prompt:        prompt,
+		contextBlocks: contextBlocks,
+		env:           toolEnv{dir: dir, runner: runner, spillDir: spillDir},
+		tools:         agentTools{decls: decls, registry: registry, required: requiredToolNames(toolSpecs), maxCalls: maxCallsByName(toolSpecs)},
 		params: agentGenParams{
 			temperature: ri.Temperature,
 			topP:        ri.TopP,

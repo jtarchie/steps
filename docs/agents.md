@@ -7,7 +7,7 @@ How an `agent` step in a pipeline actually runs, and the features around custom 
 An agent step runs a tool-calling conversation loop:
 
 1. Parse the agent's config: model/endpoint, system prompt, granted tools, `max_turns` (default 8).
-2. Build a system message combining the agent's persona with working-directory context (plus any `context_paths:` files — see below).
+2. Build a system message combining the agent's persona with working-directory context (any `context_paths:` files are delivered as synthetic `read_file` tool results — see below).
 3. Loop, up to `max_turns`:
    - Send the conversation + tool definitions to the model.
    - If the model requests tools, execute them (`read_file`, `list_dir`, `search_files`, `run_shell`, `write_file`, `edit_file`, or a custom/sub-agent tool).
@@ -184,22 +184,29 @@ This is the one place a step's config can come from a fetched artifact, and it i
 
 The artifact named must be declared in the step's own `inputs:` (checked at `LoadConfig`, mirroring how `dir:`'s first path component is validated) and must be read out of the artifact's contents, which are untrusted — the same symlink-aware path confinement `read_file`/`list_dir` use (`resolveAgentPath`) applies here too. This form cannot be resolved at load time: `merkle.PlanChains` hashes every step before any `get`'s `in:` has run, so the file doesn't exist yet at plan time. That costs nothing, though — an agent step's chain is already unconditionally unskippable (see "Top-level `tasks:` reuse" above and `internal/merkle`'s `planNonGetNode`), so there is no caching to lose by resolving this after plan time.
 
-## `context_paths:` files injected into the system prompt
+## `context_paths:` files delivered as synthetic `read_file` results
 
-An `agents:` entry can declare `context_paths:` — files whose full contents are spliced into the system message at run time, each wrapped in a `<context path="...">` block after the persona:
+An `agent` step can declare `context_paths:` — files whose contents are injected at conversation start as synthetic `read_file` tool results. The model sees the file contents as if it had called `read_file` itself, without consuming a turn:
 
 ```yaml
-agents:
-- name: coder
-  source: { model: lmstudio/qwen2.5-coder }
-  context_paths: [repo/CLAUDE.md]
+jobs:
+- name: build
+  plan:
+  - get: repo
+  - agent: coder
+    inputs: [repo]
+    context_paths: [repo/CLAUDE.md]
 ```
 
-The point is not convenience but **guarantee**: conventions every invocation must follow (build/lint/test commands, package-dependency rules) are present from the first turn, instead of costing a `read_file` round trip the model might not bother with — and costing it again for every agent in a multi-agent loop that each needs the same file.
+The point is not convenience but **guarantee**: conventions every invocation must follow (build/lint/test commands, package-dependency rules) are present from the first turn, instead of costing a `read_file` round trip the model might not bother with.
 
-Paths are relative to the step's working directory and confined to its workspace (`resolveAgentPath`, the same guard the file tools use), so in practice the file lives inside a declared input — `repo/CLAUDE.md` inside the `repo` get. They are read at **run time** (per attempt for agent steps and fix agents, per call for sub-agents), which is exactly what distinguishes them from `system_file:`: `system_file:` is the pipeline author's own persona, resolved once at `LoadConfig`; `context_paths:` is content that arrives with a fetched artifact and can change between runs. A missing, escaping, or over-100KB file fails the step at preparation, before a token is spent — it is operator-authored config, so a bad one is a loud error, not a surprise mid-conversation.
+Paths are relative to the step's working directory and confined to its workspace (`resolveAgentPath`, the same guard the file tools use), so in practice the file lives inside a declared input — `repo/CLAUDE.md` inside the `repo` get. They are read at **run time** (per attempt), which is exactly what distinguishes them from `system_file:`: `system_file:` is the pipeline author's own persona, resolved once at `LoadConfig`; `context_paths:` is content that arrives with a fetched artifact and can change between runs. A missing, escaping, or over-100KB file fails the step at preparation, before a token is spent — it is operator-authored config, so a bad one is a loud error, not a surprise mid-conversation.
+
+`context_paths` is a step-level field, not agent-level — the agent definition (`agents:`) has no notion of which inputs are available. It is only valid on `agent` steps and requires `read_file` to be in the tool grant (which it is by default). Sub-agents and fix agents do not inherit the parent step's `context_paths`; the parent is expected to provide all necessary context via the sub-agent's `request` argument or the fix agent's prompt.
 
 **Merkle**: the *paths* (not contents) enter the step's hashed content — the files live inside the workspace, so their content is already chained through the input artifacts' own hashes.
+
+**How it works**: At preparation time, each `context_paths` file is read and confined by `resolveAgentPath`. At conversation start, `buildAgentRequest` prepends a simulated `read_file` tool call + result pair for each path before the user prompt — the same `{"content": …}` response shape the real `read_file` tool uses. This keeps the context visible to the model without consuming a turn or injecting content into the system message.
 
 ## Repairing malformed tool-call arguments
 

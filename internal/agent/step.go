@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"google.golang.org/adk/v2/model"
+	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
@@ -197,7 +199,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	spillDir := newToolOutputSpillDir(dir, step.Agent)
 
-	contextBlocks, err := loadContextBlocks(dir, ri.ContextPaths)
+	contextBlocks, err := prepareContextBlocks(dir, ri.ContextPaths, decls)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 		closeAll(closers)
@@ -206,10 +208,11 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	}
 
 	conv := agentConversation{
-		system: buildSystemMessage(ri.Persona, dir, contextBlocks),
-		prompt: promptWithHandoff(step.Prompt, step.Handoff, handoff, spillDir),
-		env:    toolEnv{dir: dir, runner: runner, spillDir: spillDir},
-		tools:  agentTools{decls: decls, registry: registry, required: required, maxCalls: maxCallsByName(ri.ToolSpecs)},
+		system:        buildSystemMessage(ri.Persona, dir),
+		prompt:        promptWithHandoff(step.Prompt, step.Handoff, handoff, spillDir),
+		contextBlocks: contextBlocks,
+		env:           toolEnv{dir: dir, runner: runner, spillDir: spillDir},
+		tools:         agentTools{decls: decls, registry: registry, required: required, maxCalls: maxCallsByName(ri.ToolSpecs)},
 		params: agentGenParams{
 			temperature: ri.Temperature,
 			topP:        ri.TopP,
@@ -473,6 +476,33 @@ func assertAgentResponse(assert *config.Assert, res conversationResult) error {
 	}
 
 	return nil
+}
+
+// prepareContextBlocks loads context_paths files and validates that read_file
+// is declared when context paths are present. Extracted from prepareAgentStep
+// to keep its cyclomatic complexity under the linter budget.
+func prepareContextBlocks(dir string, paths []string, decls *genai.Tool) ([]contextBlock, error) {
+	blocks, err := loadContextBlocks(dir, paths)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(blocks) > 0 && !hasReadFileDecl(decls) {
+		return nil, errors.New("context_paths requires read_file in the tool grant")
+	}
+
+	return blocks, nil
+}
+
+// hasReadFileDecl reports whether decls declares the read_file tool.
+func hasReadFileDecl(decls *genai.Tool) bool {
+	for _, decl := range decls.FunctionDeclarations {
+		if decl.Name == "read_file" {
+			return true
+		}
+	}
+
+	return false
 }
 
 // matchToolCallTrajectory reports whether want appears, in order, as a

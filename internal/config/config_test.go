@@ -683,12 +683,14 @@ func TestResolveAgentInvocationContextPaths(t *testing.T) {
 	t.Parallel()
 
 	cfg := &Config{Agents: []Agent{{
-		Name:         "a",
-		Source:       AgentSource{Model: "openai/gpt-4o"},
-		ContextPaths: []string{"repo/CLAUDE.md"},
+		Name:   "a",
+		Source: AgentSource{Model: "openai/gpt-4o"},
 	}}}
 
-	ri, err := cfg.ResolveAgentInvocation(Step{Agent: "a"})
+	ri, err := cfg.ResolveAgentInvocation(Step{
+		Agent:        "a",
+		ContextPaths: []string{"repo/CLAUDE.md"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -696,6 +698,44 @@ func TestResolveAgentInvocationContextPaths(t *testing.T) {
 	if len(ri.ContextPaths) != 1 || ri.ContextPaths[0] != "repo/CLAUDE.md" {
 		t.Errorf("contextPaths = %v, want [repo/CLAUDE.md]", ri.ContextPaths)
 	}
+}
+
+// TestStepContextPathsValidation ensures context_paths is rejected on non-agent steps.
+func TestStepContextPathsValidation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("rejected on non-agent steps", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{
+			Jobs: []Job{{
+				Name: "test",
+				Plan: []Step{{Task: "build", ContextPaths: []string{"repo/CLAUDE.md"}}},
+			}},
+		}
+
+		err := cfg.validateStepContextPaths()
+		if err == nil || !strings.Contains(err.Error(), "context_paths is only valid on agent steps") {
+			t.Fatalf("expected an error about agent steps, got %v", err)
+		}
+	})
+
+	t.Run("allowed on agent steps", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{
+			Agents: []Agent{{Name: "a", Source: AgentSource{Model: "openai/gpt-4o"}}},
+			Jobs: []Job{{
+				Name: "test",
+				Plan: []Step{{Agent: "a", ContextPaths: []string{"repo/CLAUDE.md"}}},
+			}},
+		}
+
+		err := cfg.validateStepContextPaths()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }
 
 // TestResolveAgentInvocationCompaction covers CompactAfterTokens' resolution

@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 
 	genaiopenai "github.com/achetronic/adk-utils-go/genai/openai"
 	"google.golang.org/adk/v2/model"
@@ -36,24 +35,15 @@ type contextBlock struct {
 }
 
 // buildSystemMessage combines an agent's persona with the operating note
-// for a given working directory, then appends each declared context file in
-// an XML-ish wrapper — the shape models are trained to recognize for
-// reference material (and the same one <transition_context> already uses in
-// this codebase's handoffs).
-func buildSystemMessage(persona, dir string, contexts []contextBlock) string {
+// for a given working directory. context_paths content is no longer injected
+// here — it is delivered as synthetic read_file tool results (see
+// buildAgentRequest).
+func buildSystemMessage(persona, dir string) string {
 	if persona == "" {
 		persona = defaultAgentPersona
 	}
 
-	var b strings.Builder
-
-	b.WriteString(persona + "\n\n" + fmt.Sprintf(agentOperatingNote, dir))
-
-	for _, c := range contexts {
-		fmt.Fprintf(&b, "\n\n<context path=%q>\n%s\n</context>", c.path, strings.TrimRight(c.content, "\n"))
-	}
-
-	return b.String()
+	return persona + "\n\n" + fmt.Sprintf(agentOperatingNote, dir)
 }
 
 // loadContextBlocks reads an agent's declared context_paths out of the
