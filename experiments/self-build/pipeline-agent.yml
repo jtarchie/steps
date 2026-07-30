@@ -25,10 +25,12 @@
 # on PATH.
 #
 # Two model slots, as YAML anchors: `&fast` (planner and reviewer, which read
-# and judge) and `&coding` (coder, which writes). `&coding` ships as a
-# PLACEHOLDER you must fill in -- point it at a coding-tuned model, which does
-# meaningfully better at the sustained editing `coder` does. Set both to the
-# same slug to go back to one model everywhere.
+# and judge -- GLM-4.7-Flash) and `&coding` (coder, which writes -- Qwen3 Coder
+# Flash). Both are cheap and both quote a real cached-input price, which is
+# what makes the prompt caching in internal/agent/openrouter.go worth having;
+# a model with no cache discount pays full price for the whole re-sent history
+# every turn. Swap either for whatever you prefer, or point both at the same
+# slug to go back to one model everywhere.
 #
 # The repo resource uses gh repo clone and gh api to interact with the
 # remote GitHub repo — needs gh authenticated (GH_TOKEN or gh auth login).
@@ -108,7 +110,13 @@ agents:
 # modify the repo" is structural rather than a promise: the only write
 # it can do is write_file, constrained to its workspace.
 - name: planner
-  source: &fast { model: openrouter/deepseek/deepseek-v4-flash }
+  # GLM-4.7-Flash: a 30B-class model tuned for agentic coding and long-horizon
+  # task planning, which is exactly what planner and reviewer do. $0.06/M in,
+  # $0.40/M out, $0.01/M cached read -- a 6x discount on the re-sent history
+  # that dominates a tool-calling conversation. Served by four providers whose
+  # context ceilings differ (128k-202k), so the x-session-id pin in
+  # internal/agent/openrouter.go is doing real work here.
+  source: &fast { model: openrouter/z-ai/glm-4.7-flash }
   max_turns: 200
   system_file: "@builtin/planner"
   tools:
@@ -123,8 +131,15 @@ agents:
 # Implements the plan end to end: code, tests, docs/examples. This is the one
 # agent doing sustained surgical Go edits (148 tool calls in the run that
 # prompted the split), so it gets its own model rather than sharing *fast.
+#
+# Qwen3 Coder Flash: a coding agent model specializing in autonomous
+# programming via tool calling, which is the failure mode that matters over
+# 150 turns -- one malformed tool call costs a turn. $0.195/M in, $0.975/M
+# out, $0.039/M cached read, 1M context so the conversation never needs
+# compacting. Single first-party provider (Alibaba), so there is exactly one
+# prompt cache to stay warm in.
 - name: coder
-  source: &coding { model: openrouter/PLACEHOLDER }  # TODO: a coding-tuned slug
+  source: &coding { model: openrouter/qwen/qwen3-coder-flash }
   max_turns: 200
   system_file: "@builtin/builder"
   tools:
