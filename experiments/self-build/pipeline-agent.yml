@@ -13,8 +13,9 @@
 # its narrow tools within reach. Making the repo an input deleted ~190 lines
 # of that, and left the narrow tools genuinely narrow.
 #
-# `put: repo` commits and pushes the workspace clone. A failed review never
-# reaches it, so the real checkout is never left dirty by an abandoned attempt.
+# `put: repo` commits, pushes to a per-story branch, and opens a PR via
+# `gh pr create`. A failed review never reaches it, so the real checkout
+# is never left dirty by an abandoned attempt.
 #
 # gopls is granted ONE tool (plus go_diagnostics for coder): finding every
 # call site of a symbol without false-positiving on a comment or missing a
@@ -23,7 +24,7 @@
 # with the server name prefixed ("gopls__go_symbol_references"). Needs `gopls`
 # on PATH.
 #
-# Swap `lmstudio/google/gemma-4-26b-a4b` for whatever you have loaded; a
+# Swap `opencode/deepseek-v4-flash` for whatever model you prefer; a
 # coding-tuned model will do meaningfully better on `coder` specifically.
 #
 # Before a real run point `repo`'s source.uri at a scratch clone, not your
@@ -71,7 +72,13 @@ resource_types:
       git diff --cached --quiet && exit 0
       git -c user.name=steps -c user.email=steps@localhost \
         commit --quiet -m "self-build: story $num ($(basename "$file" .md))"
-      git push --quiet origin HEAD:refs/heads/self-build
+      branch="self-build/story-$num"
+      git push --quiet origin HEAD:"$branch"
+      gh pr create \
+        --base main \
+        --head "$branch" \
+        --title "$(cat experiments/self-build/prs/$num/title)" \
+        --body-file experiments/self-build/prs/$num/body.md
 
 # gopls' MCP server as a local subprocess. cwd: is RELATIVE, so it resolves
 # against each agent step's own working directory -- gopls indexes the same
@@ -99,7 +106,7 @@ agents:
 # modify the repo" is structural rather than a promise: the only write
 # it can do is write_file, constrained to its workspace.
 - name: planner
-  source: { model: lmstudio/google/gemma-4-26b-a4b }
+  source: { model: opencode/deepseek-v4-flash }
   max_turns: 200
   system_file: "@builtin/planner"
   tools:
@@ -113,7 +120,7 @@ agents:
 
 # Implements the plan end to end: code, tests, docs/examples.
 - name: coder
-  source: { model: lmstudio/google/gemma-4-26b-a4b }
+  source: { model: opencode/deepseek-v4-flash }
   max_turns: 200
   system_file: "@builtin/builder"
   tools:
@@ -149,7 +156,7 @@ agents:
 
 # Quality gate before the put. No shell — read_only posture.
 - name: reviewer
-  source: { model: lmstudio/google/gemma-4-26b-a4b }
+  source: { model: opencode/deepseek-v4-flash }
   max_turns: 200
   system_file: "@builtin/reviewer"
   tools:
@@ -276,12 +283,22 @@ jobs:
             them -- a fix applied to only one is a fail;
          d. edge cases the story implies (empty, zero, negative, malformed)
             are handled deliberately, not silently accepted.
-      4. Write your critique to repo/experiments/self-build/critiques/{num}.md
-         — first line exactly PASS or FAIL, then your reasoning with file:line
-         citations. That file must exist before you call the verdict tool.
-      5. Call the verdict tool with exactly "pass" or "fail" and a short
-         `note` — THIS routes the pipeline and is what the implementer sees
-         on a redo.
+       4. Write your critique to repo/experiments/self-build/critiques/{num}.md
+          — first line exactly PASS or FAIL, then your reasoning with file:line
+          citations. That file must exist before you call the verdict tool.
+       5. If you intend to choose "pass" (the change passes review), write
+          these files with write_file BEFORE calling the verdict tool — they
+          become the PR:
+          a. repo/experiments/self-build/prs/{num}/title — a one-line PR
+             title like "story 001: short description of the change"
+          b. repo/experiments/self-build/prs/{num}/body.md — the PR
+             description: a concise summary of the story, what changed
+             (files and modules touched), and that lint/test/build/review
+             passed.
+          For a "fail" verdict skip these files entirely.
+       6. Call the verdict tool with exactly "pass" or "fail" and a short
+          `note` — THIS routes the pipeline and is what the implementer sees
+          on a redo.
     verdicts: [pass, fail]
     to:
       pass: repo
