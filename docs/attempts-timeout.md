@@ -45,6 +45,26 @@ Do NOT set timeouts too aggressively — a legitimate long-running operation sho
 
 To implement a total timeout across all attempts, set a longer task-level timeout and a short step-level timeout — but this is rarely needed.
 
+### An expired timeout is not retried
+
+When an attempt exhausts its own `timeout:`, the step ends there — the remaining attempts are **skipped**. The same work against the same budget expires again, so retrying only doubles the wall clock and the bill. This matters most for `agent` steps, where a retry rebuilds the whole conversation from scratch and pays for it a second time.
+
+`attempts:` buys retries of a transient fault; it cannot buy more time. If a step legitimately needs longer, raise `timeout:`:
+
+```yaml
+# DON'T: 2 x 20m of a review that needs 25m, then a failed job
+- agent: reviewer
+  attempts: 2
+  timeout: 20m
+
+# DO: give it the time, keep the attempts for transport faults
+- agent: reviewer
+  attempts: 2
+  timeout: 40m
+```
+
+A job-level abort (SIGINT/SIGTERM) is distinct and still stops everything immediately. A deadline from *inside* an attempt — an MCP or HTTP client's own timeout, say — is a normal transient failure and stays retryable; only the step's own `timeout:` ends the retry loop.
+
 ## Interaction with `fix:`
 
 When a task step has both `attempts:` and `fix:`, the fix agent runs **once per exhausted attempt**:
@@ -154,7 +174,7 @@ Retries the resource's out command up to 3 times, with a 5-minute deadline per a
   timeout: 10m
 ```
 
-Bounds the agent's entire conversation (including all tool calls) to 10 minutes. If the agent hasn't finished by then, the step times out and is classified as errored.
+Bounds the agent's entire conversation (including all tool calls) to 10 minutes. If the agent hasn't finished by then, the step times out and is classified as errored — and any remaining `attempts:` are skipped, since a restarted conversation would get the same 10 minutes.
 
 ## Why No Global Default?
 

@@ -152,7 +152,9 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 		res, runErr := runAgentConversation(withAttempt(attemptCtx, attempt), llm, conv)
 		result = res
 
-		return runErr
+		// Same reasoning as runPrepared: a timeout is not transient, and a
+		// retry restarts the conversation on the same budget.
+		return retry.StopOnDeadline(ctx, attemptCtx, runErr)
 	})
 	printAgentResponse(result)
 

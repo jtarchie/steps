@@ -24,8 +24,11 @@
 # with the server name prefixed ("gopls__go_symbol_references"). Needs `gopls`
 # on PATH.
 #
-# Swap `openrouter/deepseek/deepseek-v4-flash` for whatever model you prefer; a
-# coding-tuned model will do meaningfully better on `coder` specifically.
+# Two model slots, as YAML anchors: `&fast` (planner and reviewer, which read
+# and judge) and `&coding` (coder, which writes). `&coding` ships as a
+# PLACEHOLDER you must fill in -- point it at a coding-tuned model, which does
+# meaningfully better at the sustained editing `coder` does. Set both to the
+# same slug to go back to one model everywhere.
 #
 # The repo resource uses gh repo clone and gh api to interact with the
 # remote GitHub repo — needs gh authenticated (GH_TOKEN or gh auth login).
@@ -105,7 +108,7 @@ agents:
 # modify the repo" is structural rather than a promise: the only write
 # it can do is write_file, constrained to its workspace.
 - name: planner
-  source: { model: openrouter/deepseek/deepseek-v4-flash }
+  source: &fast { model: openrouter/deepseek/deepseek-v4-flash }
   max_turns: 200
   system_file: "@builtin/planner"
   tools:
@@ -117,9 +120,11 @@ agents:
   - search_files
   - write_file
 
-# Implements the plan end to end: code, tests, docs/examples.
+# Implements the plan end to end: code, tests, docs/examples. This is the one
+# agent doing sustained surgical Go edits (148 tool calls in the run that
+# prompted the split), so it gets its own model rather than sharing *fast.
 - name: coder
-  source: { model: openrouter/deepseek/deepseek-v4-flash }
+  source: &coding { model: openrouter/PLACEHOLDER }  # TODO: a coding-tuned slug
   max_turns: 200
   system_file: "@builtin/builder"
   tools:
@@ -154,8 +159,17 @@ agents:
       exit "$rc"
 
 # Quality gate before the put. No shell — read_only posture.
+#
+# No search_files and no list_dir, deliberately. Those are the open-ended
+# exploration tools, and open-ended exploration is exactly what sank an earlier
+# run: with a 25KB diff already in hand the reviewer spent most of its turns
+# re-deriving internal/pipeline from scratch, pushing its context past 80k
+# tokens and its latency to ~40s/turn, and it timed out before reaching a
+# verdict. Its evidence is the diff and the planner's plan; read_file verifies
+# a specific claim it intends to cite, and gopls answers the one question text
+# search genuinely cannot (every call site of a symbol, for the sibling check).
 - name: reviewer
-  source: { model: openrouter/deepseek/deepseek-v4-flash }
+  source: *fast
   max_turns: 200
   system_file: "@builtin/reviewer"
   tools:
@@ -163,8 +177,6 @@ agents:
     tools: [go_symbol_references]
     max_output_bytes: 6000
   - read_file
-  - list_dir
-  - search_files
   - write_file
   - name: repo_diff
     description: >
@@ -218,7 +230,11 @@ jobs:
     inputs: [stories, repo]
     context_paths: [repo/CLAUDE.md]
     attempts: 2
-    timeout: 25m
+    # A timeout now ends the step outright rather than restarting the whole
+    # conversation (see docs/attempts-timeout.md), so this has to be a budget
+    # the work actually fits in. A cold run took ~42m across two attempts; 45m
+    # is that with headroom. attempts: covers transport faults only.
+    timeout: 45m
     handoff: { tool: true }   # a redo gets a previous_run tool over the last verdict
     prompt: |
       Implement ONE story's already-written plan. repo/ is a real git clone,
@@ -266,9 +282,16 @@ jobs:
       compiler cannot check. You do not edit files. A concern you cannot
       cite as file:line is not a concern.
 
+      The diff and the plan are your evidence. You are not exploring this
+      codebase -- the planner already did, and its findings are in the plan.
+      Read a file only to check a specific claim you intend to cite.
+
       1. read_file on stories/num and stories/file, then on
-         repo/docs/proposals/stories/{file}. (repo/CLAUDE.md is already
-         available via read_file.)
+         repo/docs/proposals/stories/{file} and the plan the implementer
+         worked from, repo/experiments/self-build/plans/{num}.md -- it names
+         the files that were supposed to change and the sibling sites gopls
+         returned, which is most of what you need to check the diff against.
+         (repo/CLAUDE.md is already available via read_file.)
       2. repo_diff. A `??` line is a NEW file that does not appear in the
          diff at all -- read each of those with read_file.
       3. Judge whether the story is fully AND CORRECTLY implemented, not

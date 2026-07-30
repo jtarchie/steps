@@ -16,6 +16,38 @@ func TestExampleFlowLoadsCleanly(t *testing.T) {
 	}
 }
 
+// TestSelfBuildPipelineLoadsCleanly guards experiments/self-build/pipeline-agent.yml
+// against schema drift. It is the one pipeline in the repo that is run by hand
+// against a live model, so nothing else would catch a bad tool grant or a
+// broken YAML anchor until someone had already spent 20 minutes of tokens on
+// it. LoadConfig resolves the &fast/&coding aliases and runs
+// validateMCPToolGrants, which is entirely static -- it never dials gopls --
+// so this needs no network, no model, and no gopls on PATH.
+func TestSelfBuildPipelineLoadsCleanly(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join("..", "..", "experiments", "self-build", "pipeline-agent.yml")
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig(%s): %v", path, err)
+	}
+
+	// The reviewer's tool grant is load-bearing: search_files and list_dir were
+	// removed deliberately (they drive the open-ended exploration that timed
+	// the step out), and re-adding one would silently undo that.
+	reviewer, err := cfg.FindAgent("reviewer")
+	if err != nil {
+		t.Fatalf("FindAgent(reviewer): %v", err)
+	}
+
+	for _, tool := range reviewer.Tools {
+		if tool.Builtin == "search_files" || tool.Builtin == "list_dir" {
+			t.Errorf("reviewer regained %q; it reviews a diff, it does not explore the tree", tool.Builtin)
+		}
+	}
+}
+
 // TestHooksParseOnStepAndJob checks that on_* / ensure hooks decode (inline)
 // onto both a plan step and a job, and that a hook is itself a full Step.
 func TestHooksParseOnStepAndJob(t *testing.T) {

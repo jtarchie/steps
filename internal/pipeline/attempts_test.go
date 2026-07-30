@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -190,6 +191,70 @@ func TestTaskTimeoutIsDeadlineExceeded(t *testing.T) {
 	// The error should wrap a DeadlineExceeded.
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected DeadlineExceeded in error chain, got: %v", err)
+	}
+}
+
+// TestTaskTimeoutSkipsRemainingAttempts verifies that a per-attempt timeout
+// ends the step immediately instead of burning the rest of the budget. The
+// same work against the same deadline expires again, so attempts 2 and 3 would
+// only double the wall clock — see retry.Stop and docs/attempts-timeout.md.
+func TestTaskTimeoutSkipsRemainingAttempts(t *testing.T) {
+	provider, err := workspace.NewProvider(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bw, err := provider.NewBuild(context.Background(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workspace.CloseBuild(bw, "test")
+
+	// One line appended per invocation, so the count is the attempt count.
+	counterFile := filepath.Join(t.TempDir(), "counter")
+
+	cfg := &config.Config{
+		Tasks: []config.Task{
+			{
+				Name:    "always-slow",
+				Run:     fmt.Sprintf("echo x >> %s\nsleep 5\n", counterFile),
+				Timeout: "100ms",
+			},
+		},
+	}
+
+	step := config.Step{Task: "always-slow", Attempts: 3}
+
+	rt, err := cfg.ResolveTask(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err = executeTask(ctx, cfg, step, rt, bw)
+	if err == nil {
+		t.Fatal("executeTask should have timed out")
+	}
+
+	data, readErr := os.ReadFile(counterFile) //nolint:gosec // path is this test's own t.TempDir()
+	if readErr != nil {
+		t.Fatalf("counter file not found: %v", readErr)
+	}
+
+	if got := strings.Count(string(data), "x"); got != 1 {
+		t.Errorf("task ran %d times, want 1 (a timeout must not be retried)", got)
+	}
+
+	// The error the caller sees is unchanged: still a DeadlineExceeded chain,
+	// still classified as errored, so hook dispatch behaves as before.
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected DeadlineExceeded in error chain, got: %v", err)
+	}
+
+	if class := outcome.Classify(ctx, err); class != outcome.Errored {
+		t.Errorf("classification = %v, want %v", class, outcome.Errored)
 	}
 }
 

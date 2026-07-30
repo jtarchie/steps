@@ -750,7 +750,9 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 // own progress line. It is the single retry+per-attempt-timeout scaffold every
 // get/task/put step shares; a per-attempt timeout expires only the attempt's
 // context, leaving the parent ctx (which governs retry.Do's backoff and abort)
-// untouched, so a timed-out attempt is retried while a job abort still stops.
+// untouched, so a job abort stays distinguishable from a step overrunning its
+// own budget. An overrun ends the step immediately (retry.Stop) rather than
+// spending the remaining attempts re-failing against the same budget.
 func retryWithTimeout(ctx context.Context, attempts int, timeoutStr string, marker func(attempt, total int), fn func(ctx context.Context) error) error {
 	timeout, err := config.ParseTimeout(timeoutStr)
 	if err != nil {
@@ -774,7 +776,9 @@ func retryWithTimeout(ctx context.Context, attempts int, timeoutStr string, mark
 			defer cancel()
 		}
 
-		return fn(attemptCtx)
+		// On this step's own wall clock expiring, stop: the same work against
+		// the same budget would just expire again.
+		return retry.StopOnDeadline(ctx, attemptCtx, fn(attemptCtx))
 	})
 }
 

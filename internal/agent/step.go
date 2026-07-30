@@ -621,7 +621,11 @@ func runPrepared(ctx context.Context, prepared preparedAgentStep) (conversationR
 		// that actually failed.
 		result = res
 
-		return runErr
+		// On the step's own timeout, stop: a retry rebuilds the conversation
+		// from scratch (see buildAgentRequest) and gets the same budget, so it
+		// re-fails deterministically and bills the whole conversation twice.
+		// attempts: buys transport retries, not more time.
+		return retry.StopOnDeadline(ctx, attemptCtx, runErr)
 	})
 
 	return result, err //nolint:wrapcheck // callers (RunStep/RunHook) wrap with step context
