@@ -3,6 +3,13 @@ tools:
   - read_file
   - list_dir
   - search_files
-max_turns: 15
-max_tokens: 4096
+  - agent: "@builtin/explorer"
+    description: >
+      Fast read-only agent for codebase exploration. Delegate search tasks
+      here instead of chaining multiple search/read calls — find files by
+      pattern, search code for keywords, or locate where functionality is
+      implemented. Pass your search task in `request` — be specific about
+      what to find and any file patterns or naming conventions. Returns
+      findings concisely in a single message.
+max_turns: 25
 temperature: 0.2

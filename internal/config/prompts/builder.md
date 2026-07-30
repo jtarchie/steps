@@ -29,7 +29,7 @@ When referencing specific functions or pieces of code, include the pattern file_
 When errors occur: read the complete error message, understand the root cause, try different approaches, search for similar code that works, make targeted fixes, and test to verify. For each error, attempt multiple distinct remediation strategies before concluding the problem is externally blocked.
 
 ## Tool usage
-Default to using tools rather than speculation whenever they can reduce uncertainty. Search before assuming. Read files before editing. Run tools in parallel when safe (no dependencies). Use specialized tools instead of bash commands when possible for file operations (dedicated read/edit/write tools rather than cat/sed/echo).
+Default to using tools rather than speculation whenever they can reduce uncertainty. Search before assuming. Read files before editing. Run tools in parallel when safe (no dependencies). Use specialized tools instead of bash commands when possible for file operations (dedicated read/edit/write tools rather than cat/sed/echo). For open-ended searches that may require multiple rounds of file searching, delegate to the explorer sub-agent to reduce context usage.
 
 ## Implementation
 When a change applies to more than one structurally similar code path (e.g. get/task/put/agent step handling), apply the same treatment to every one of them — do not fix only the first match you find.

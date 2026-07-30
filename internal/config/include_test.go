@@ -675,3 +675,59 @@ jobs:
 		t.Fatal("prompt_file @builtin/explorer resolved to empty string")
 	}
 }
+
+func TestReadBuiltinAgentProfiles(t *testing.T) {
+	t.Parallel()
+
+	names, err := ListBuiltinAgentNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(names) < 4 {
+		t.Fatalf("expected at least 4 built-in agent profiles, got %d: %v", len(names), names)
+	}
+
+	for _, name := range names {
+		agent, err := ReadBuiltinAgent(name)
+		if err != nil {
+			t.Errorf("ReadBuiltinAgent(%q): %v", name, err)
+			continue
+		}
+
+		if agent.System == "" && agent.SystemFile == "" {
+			t.Errorf("built-in agent %q has no system prompt or system_file", name)
+		}
+
+		if agent.MaxTurns == 0 {
+			t.Errorf("built-in agent %q has max_turns=0", name)
+		}
+	}
+}
+
+func TestReadBuiltinBuilderProfile(t *testing.T) {
+	t.Parallel()
+
+	builder, err := ReadBuiltinAgent("builder")
+	if err != nil {
+		t.Fatalf("ReadBuiltinAgent(builder): %v", err)
+	}
+
+	if builder.MaxTurns != 50 {
+		t.Errorf("builder MaxTurns = %d, want 50", builder.MaxTurns)
+	}
+
+	hasExplorer := false
+	for _, spec := range builder.Tools {
+		if spec.Agent == "@builtin/explorer" {
+			hasExplorer = true
+			if spec.Description == "" {
+				t.Error("explorer sub-agent has no description")
+			}
+			break
+		}
+	}
+	if !hasExplorer {
+		t.Error("builder agent is missing explorer sub-agent tool")
+	}
+}

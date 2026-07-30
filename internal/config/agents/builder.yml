@@ -6,4 +6,12 @@ tools:
   - write_file
   - edit_file
   - search_files
-max_turns: 25
+  - agent: "@builtin/explorer"
+    description: >
+      Fast read-only agent for codebase exploration. Use this instead of
+      chaining multiple search/read calls when you need to find files by
+      pattern, search code for keywords, or locate where specific
+      functionality is implemented. Pass your search task in `request` — be
+      specific about what to find, any file patterns or naming conventions
+      to search. Returns findings concisely in a single message.
+max_turns: 50

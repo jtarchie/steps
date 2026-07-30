@@ -4,5 +4,4 @@ tools:
   - list_dir
   - search_files
   - run_shell
-max_turns: 10
-max_tokens: 4096
+max_turns: 15
