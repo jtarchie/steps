@@ -4,9 +4,10 @@
 # feature but lives in examples/workspace.yml — its `workspace:` block is
 # pipeline-global and would force isolation on these jobs too.)
 
-# Every agent below inherits this model. Override it per agent with its own
-# source.model:, per run with $STEPS_MODEL, or edit this one line — the point
-# is that the model is named once rather than on every agent.
+# Every agent below inherits this model, so it is named once rather than on
+# every agent. Override it for a run without editing this file:
+#   STEPS_MODEL=lmstudio/your-model steps run examples/infra.yml --job <name>
+# A single agent can still pin its own with source.model:.
 defaults:
   model: lmstudio/google/gemma-4-26b-a4b
 

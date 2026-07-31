@@ -24,19 +24,47 @@ jobs:
 ```
 
 ```bash
-./steps run pipeline.yml --job hello
+./steps run pipeline.yml
 ```
 
-A `task`/`agent` step may declare `inputs:` — the resources/outputs it reads — and (under `workspace:` isolation) `outputs:`. Both are optional and default to empty. When you declare an input, it's validated against producers, so a step pointed at an artifact nobody fetched fails at plan time. See [`docs/workspace.md`](docs/workspace.md).
+`--job` is only needed when the pipeline has more than one job.
+
+Fetching something real needs a resource. `git` is built in, so this still needs no `resource_types:` block:
+
+```yaml
+resources:
+- name: repo
+  type: git
+  source:
+    uri: https://github.com/jtarchie/ci.git
+    branch: main
+
+jobs:
+- name: build
+  plan:
+  - get: repo
+  - task: compile
+    run: cd repo && go build ./...
+```
+
+See [`docs/resources.md`](docs/resources.md) for other resource types and the `check`/`in`/`out` contract.
 
 ## Commands
 
-- `steps run <pipeline.yml> --job <name>` — run one job once.
-- `steps watch <pipeline.yml>` — poll `trigger: true` resources and automatically run affected jobs.
-- `steps test <pipeline.yml>` — run every job and check any `assert:` directives (useful for self-verifying, modelless pipeline fixtures).
+| Command | What it does |
+|---|---|
+| `steps run <pipeline>` | Run one job once. |
+| `steps validate <pipeline>` | Check the file for errors without running anything. |
+| `steps plan <pipeline>` | Show which steps a run would execute and which are cached. |
+| `steps runs <pipeline>` | Show what past runs recorded (`--steps`, `--queue`). |
+| `steps watch <pipeline>` | Poll `trigger: true` resources and run affected jobs. |
+| `steps test <pipeline>` | Run every job and check `assert:` directives. |
+| `steps mcp tools\|login` | Inspect or authorize `mcp_servers:` entries. |
+
+Exit codes: `0` success, `1` a step failed, `2` the pipeline could not be run (config or infrastructure), `130` interrupted.
 
 ## Learn more
 
-- [`examples/`](examples/) — runnable example pipelines, one per feature area (control flow, agents, infra, workspace isolation).
-- [`docs/`](docs/) — feature-by-feature reference (agent tool semantics, hooks/conditionals/routing, containers, triggers, workspace isolation, templating).
+- [`docs/`](docs/README.md) — indexed reference: start with [resources](docs/resources.md), then [control flow](docs/control-flow.md) or [agents](docs/agents.md).
+- [`examples/`](examples/) — runnable pipelines, one per feature area. Agent examples read `$STEPS_MODEL`, so point them at whatever you run: `STEPS_MODEL=lmstudio/your-model steps run examples/agents.yml --job review`.
 - [`CLAUDE.md`](CLAUDE.md) — architecture, build constraints, and contribution notes for anyone (human or agent) changing this codebase.

@@ -18,7 +18,7 @@ mcp_servers:
 ```
 
 - `name` is how `agents:` tool grants and `resource_types:` `mcp:` blocks reference this server — declared once, shared by any number of consumers, the same "reusable top-level block" idiom as `agents:`/`resources:`.
-- `endpoint` is validated at `LoadConfig` the same way `AgentSource.Endpoint` is (`validateMCPServers`, mirroring `validateAgentEndpoints`): it must not embed userinfo (`https://user:token@host/`), since it's folded into merkle-hashed content — use `auth.api_key_env` for a credential, never the endpoint itself.
+- `endpoint` is validated at `LoadConfig` the same way `AgentSource.Endpoint` is (`validateMCPServers`, mirroring `validateAgentEndpoints`): it must not embed userinfo (`https://user:token@host/`), since it's folded into cache-hashed content — use `auth.api_key_env` for a credential, never the endpoint itself.
 - `auth.type` is `"none"` (default, when `auth:` is omitted entirely), `"bearer"`, or `"oauth"`. `"bearer"` requires `api_key_env` — a static token read from that OS environment variable at run time, exactly like an LLM `agents:` entry's `api_key_env` (the value is never stored in YAML or hashed; only the env var *name* is).
 
 ## Local (stdio) servers
@@ -77,10 +77,10 @@ agents:
 
 - **Single tool** (`tool:`): the only form that may also set `description:` (overriding the server's own), `required:`, or `max_calls:` — the same semantics as a custom tool (see [agents.md](agents.md)'s call-guards section). Its model-facing function name is `<server>__<tool>` (double underscore — a dot, which "server.tool" would naturally suggest, is rejected by OpenAI's function-name charset).
 - **Named subset** (`tools:`): a list of tool names, each exposed under its own `<server>__<tool>` name with the server's own description. `description:`/`required:`/`max_calls:` are load-time errors here — they're single-tool concepts.
-- **Bare form** (neither set): every tool the server currently exposes, discovered via `steps mcp tools` at your own pace — not something `steps` re-checks automatically (see the merkle caveat below).
+- **Bare form** (neither set): every tool the server currently exposes, discovered via `steps mcp tools` at your own pace — not something `steps` re-checks automatically (see the cache caveat below).
 - **`args:` is invalid on every MCP form** — an MCP tool's arguments are schema-shaped by the remote server, not a flat string template, so there's nothing to pin the way a custom tool's `run:` template arguments can be.
 - **Grant, not inline**: like a sub-agent tool, an MCP grant must live on the `agents:` entry (or a `fix:`'s own `tools:` override — MCP tools *are* allowed in a fix agent's grant, unlike sub-agents) and be selected by bare name (`tools: [github]` on a step) — a step cannot introduce `{mcp: ..., tool: ...}` inline. This is enforced at `LoadConfig` and again at the tool-grant merge point.
-- **Merkle hashing**: a server's endpoint/auth type/`api_key_env` name (never a value) — or, for a stdio server, its `command`/`args`/`cwd` (note `args` is hashed in order, since argv order is semantic, unlike the sorted `tools: [...]` list below) — and the granted tool name(s) fold into the step's hash — editing any of these busts the cache. The bare "all tools" form hashes as a static marker, since merkle-time planning has no live connection to the server to enumerate its current tools; use the explicit `tools: [...]` form if you want a server's tool list changing to bust the cache on its own.
+- **Caching hashing**: a server's endpoint/auth type/`api_key_env` name (never a value) — or, for a stdio server, its `command`/`args`/`cwd` (note `args` is hashed in order, since argv order is semantic, unlike the sorted `tools: [...]` list below) — and the granted tool name(s) fold into the step's hash — editing any of these busts the cache. The bare "all tools" form hashes as a static marker, since cache-time planning has no live connection to the server to enumerate its current tools; use the explicit `tools: [...]` form if you want a server's tool list changing to bust the cache on its own.
 - **Tool results**: translated to the same map shape every other tool returns — a transport failure or a tool result with `isError: true` becomes `{"error": ...}`; a successful call becomes `{"structured_content": ..., "content": ...}` (the joined text content).
 
 ## Backing a resource type with MCP
@@ -126,7 +126,7 @@ This runs the OAuth 2.1 authorization-code + PKCE flow: discovers the server's p
 
 - **Per-user, not per-pipeline**: the resulting token is saved to `${XDG_CONFIG_HOME:-~/.config}/steps/mcp/<server-name>.json` (`0600`, directory `0700`) — deliberately outside any pipeline's own `.steps/` directory. An OAuth token is a per-user-per-service credential, not a per-pipeline execution artifact: logging in once authorizes that server for **every** pipeline that references a server by the same name, and it keeps this file out of the plan-time hashing / `.steps/state.db` call chain entirely (no pipeline path is threaded through it).
 - **Silent refresh, no re-prompting**: `steps run`/`steps watch` never run an interactive flow themselves — they load the persisted token and refresh it silently as needed, writing the refreshed (and, for providers that rotate it, the new refresh) token back to the same file. If the token can't be refreshed (revoked, or never logged in), the error names the exact `steps mcp login` command to run.
-- **Trust boundary**: like `AgentSource.APIKeyEnv`, nothing token-shaped is ever merkle-hashed or written to `.steps/state.db` — the token file is a separate, non-hashed mechanism, the same treatment this repo already gives LLM provider credentials.
+- **Trust boundary**: like `AgentSource.APIKeyEnv`, nothing token-shaped is ever cache-hashed or written to `.steps/state.db` — the token file is a separate, non-hashed mechanism, the same treatment this repo already gives LLM provider credentials.
 
 ## Command surface
 

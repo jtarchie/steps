@@ -1,0 +1,97 @@
+# A realistic pipeline end to end: fetch, build, have an agent judge the
+# result, publish. Every other example demonstrates one feature area; this one
+# shows the shape a first real pipeline actually takes.
+#
+#   steps validate examples/review-pipeline.yml     # check it
+#   steps plan     examples/review-pipeline.yml     # what would run vs cache
+#   STEPS_MODEL=lmstudio/your-model \
+#     steps run    examples/review-pipeline.yml     # run it (needs a model)
+#
+# Needs: git, go, and any OpenAI-compatible model server. No credentials.
+
+# Named once. $STEPS_MODEL overrides it, so this file runs as-is on a machine
+# whose model nobody could have guessed when it was written.
+defaults:
+  model: lmstudio/google/gemma-4-26b-a4b
+
+# Fetching a repo needs no resource_types: entry — `git` is built in.
+# Publishing does: only you know where things go and what credentials that
+# takes. This stand-in just lists what it was handed.
+resource_types:
+- name: report-store
+  config:
+    check: 'echo ''[{"ref":"latest"}]'''
+    in: "true"
+    out: |
+      echo "publishing to {{ .source.dest | shellquote }}:"
+      find . -type f -name '*.md' -exec echo "  {}" \;
+
+resources:
+- name: repo
+  type: git
+  source:
+    uri: https://github.com/jtarchie/ci.git
+    branch: main
+
+- name: reports
+  type: report-store
+  source:
+    dest: ./published-reports
+
+agents:
+# Read-only by design: this agent judges, it does not edit. Withholding
+# run_shell and the write tools is what makes that guarantee real rather than
+# a request in the prompt.
+- name: reviewer
+  system: |
+    You review a build report. Be specific and terse. Judge only what the
+    report and the repository actually show — never claim to have read
+    something you did not.
+  max_turns: 12
+  tools: [read_file, list_dir, search_files]
+
+jobs:
+- name: review
+  plan:
+  # trigger: true lets `steps watch` run this job whenever the branch moves.
+  - get: repo
+    trigger: true
+
+  # An ordinary task. Its output is a file the agent will read.
+  - task: build
+    run: |
+      set -e
+      mkdir -p report
+      cd repo
+      echo "# Build report"                       >  ../report/BUILD.md
+      echo                                        >> ../report/BUILD.md
+      echo "commit: $(git rev-parse --short HEAD)" >> ../report/BUILD.md
+      echo "go files: $(find . -name '*.go' | wc -l | tr -d ' ')" >> ../report/BUILD.md
+      go build ./... 2>&1 | head -20              >> ../report/BUILD.md || true
+
+  # The agent decides what happens next. verdicts: declares the vocabulary it
+  # must choose from, and to: routes on the choice — so the model picks a
+  # branch, and the pipeline (not the prompt) decides what each branch means.
+  - agent: reviewer
+    prompt: |
+      Read report/BUILD.md. Check its claims against the repository in repo/.
+      Then call the verdict tool: `publish` if the report is accurate and the
+      build is clean, `investigate` if anything looks wrong or unverifiable.
+    verdicts: [publish, investigate]
+    to:
+      publish: reports
+      investigate: explain
+
+  # Reached only on the publish verdict.
+  - put: reports
+
+  # Reached only on the investigate verdict. Exits non-zero, so the job fails
+  # and its on_failure hook fires — an unclean build should not look green.
+  - task: explain
+    run: |
+      echo "the reviewer did not clear this build; see the report above"
+      exit 1
+
+  on_failure:
+    task: notify
+    run: echo "review pipeline needs a human"

@@ -76,21 +76,25 @@ func (c *Config) validateAgentModels() error {
 	return nil
 }
 
-// applyDefaults fills in each agent's unset source.model from the pipeline's
-// defaults: block, or from $STEPS_MODEL.
+// applyDefaults fills in each agent's unset source.model from $STEPS_MODEL or
+// the pipeline's defaults: block.
 //
-// Resolution order is agent → defaults: → environment, most specific first,
-// so a pipeline can pin one agent to a bigger model while the rest follow the
-// default. It runs after built-in registration, so a bare `@builtin/reviewer`
+// Resolution order is agent → $STEPS_MODEL → defaults:.
+//
+// An agent naming its own model always wins: that is a deliberate per-agent
+// decision ("this one needs the big model"), and nothing should override it.
+// Between the other two, the environment wins, because defaults.model is the
+// pipeline's *suggestion* and it cannot know what the reader actually runs —
+// a checked-in model name is why a shipped example is otherwise unrunnable by
+// anyone but its author. STEPS_MODEL=... makes it run without editing a file.
+//
+// It runs after built-in registration, so a bare `@builtin/reviewer`
 // reference becomes usable with no agents: entry at all.
 func (c *Config) applyDefaults() {
-	model := ""
-	if c.Defaults != nil {
-		model = c.Defaults.Model
-	}
+	model := os.Getenv(stepsModelEnv)
 
-	if model == "" {
-		model = os.Getenv(stepsModelEnv)
+	if model == "" && c.Defaults != nil {
+		model = c.Defaults.Model
 	}
 
 	if model == "" {

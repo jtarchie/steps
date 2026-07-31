@@ -77,8 +77,10 @@ jobs:
 	}
 }
 
-// defaults: beats the environment — the file is the more specific statement.
-func TestDefaultsModelBeatsEnv(t *testing.T) {
+// $STEPS_MODEL overrides defaults: — a checked-in default cannot know what
+// the reader runs, which is exactly why a shipped example with a hardcoded
+// model is unrunnable by anyone but its author.
+func TestEnvOverridesDefaultsModel(t *testing.T) {
 	t.Setenv(stepsModelEnv, "lmstudio/from-env")
 
 	path := writeConfig(t, `
@@ -86,9 +88,15 @@ defaults:
   model: lmstudio/from-file
 agents:
 - name: reviewer
+- name: pinned
+  source: { model: openai/gpt-5 }
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: review }]
+  plan:
+  - agent: reviewer
+    prompt: review
+  - agent: pinned
+    prompt: think
 `)
 
 	cfg, err := LoadConfig(path)
@@ -101,8 +109,19 @@ jobs:
 		t.Fatal(err)
 	}
 
-	if agent.Source.Model != "lmstudio/from-file" {
-		t.Errorf("model = %q, want the pipeline's defaults.model", agent.Source.Model)
+	if agent.Source.Model != "lmstudio/from-env" {
+		t.Errorf("model = %q, want $%s to override defaults.model", agent.Source.Model, stepsModelEnv)
+	}
+
+	// An agent naming its own model still wins over both: that is a
+	// deliberate per-agent decision, not a gap to fill.
+	pinned, err := cfg.FindAgent("pinned")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if pinned.Source.Model != "openai/gpt-5" {
+		t.Errorf("pinned model = %q, want the agent's own model to win", pinned.Source.Model)
 	}
 }
 

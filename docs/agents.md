@@ -11,9 +11,9 @@ An agent step runs a tool-calling conversation loop:
 3. Loop, up to `max_turns`:
    - Send the conversation + tool definitions to the model.
    - If the model requests tools, execute them (`read_file`, `list_dir`, `search_files`, `run_shell`, `write_file`, `edit_file`, or a custom/sub-agent tool).
-   - Cap any tool output at 32,000 bytes before it goes back to the model, so a noisy command can't blow out the context window — output over that is saved to a file under the step's working directory instead of being dropped, with a short pointer message taking its place (see "Compacting long conversations" below); `read_file` is the exception on both counts — it reads up to 100,000 bytes (a spilled file exists precisely so the model can pull it back, so its read budget is deliberately larger than the spill threshold) and degrades to a plain truncation with `start_line`/`end_line` paging rather than spilling a file back out to another file.
+   - Cap any tool output at 32,000 bytes before it goes back to the model, so a noisy command can't blow out the context window — output over that is saved to a file under the step's working directory instead of being dropped, with a short pointer message taking its place (see [compaction](agents-internals.md#compacting-long-conversations)); `read_file` is the exception on both counts — it reads up to 100,000 bytes (a spilled file exists precisely so the model can pull it back, so its read budget is deliberately larger than the spill threshold) and degrades to a plain truncation with `start_line`/`end_line` paging rather than spilling a file back out to another file.
    - Append the tool results and continue.
-4. Exit when the model stops requesting tools, `max_turns` is exceeded, or loop detection kills a stuck conversation (see "Loop detection" below).
+4. Exit when the model stops requesting tools, `max_turns` is exceeded, or [loop detection](agents-internals.md#loop-detection) kills a stuck conversation.
 5. Print the model's final response text to the terminal, followed by its verdict and note if the step declares `verdicts:` — this happens whether the run succeeded or hit its turn budget, since a turn-exhausted attempt's partial response is still available.
 6. Record the step's output.
 
@@ -21,7 +21,7 @@ Two tools can be synthesized onto a step's grant beyond what `tools:` lists: a r
 
 ## Built-in tools
 
-`read_file`, `list_dir`, and `run_shell` are granted automatically whenever a step's `tools:` is absent (`config.DefaultAgentToolSpecs`) — this is the zero-config default every existing pipeline already gets. Three more built-ins exist but are deliberately **not** in that default set, because folding any of them in would change the resolved tool grant, and therefore the merkle hash, of every agent step that declares no `tools:` block:
+`read_file`, `list_dir`, and `run_shell` are granted automatically whenever a step's `tools:` is absent (`config.DefaultAgentToolSpecs`) — this is the zero-config default every existing pipeline already gets. Three more built-ins exist but are deliberately **not** in that default set, because folding any of them in would change the resolved tool grant, and therefore the cache hash, of every agent step that declares no `tools:` block:
 
 | tool | what it does |
 |---|---|
@@ -93,7 +93,7 @@ tools:
 
 ## Sub-agent delegation (`agent:` tools)
 
-A `tools:` entry can be a sub-agent tool — `{ agent: <name>, description: <text> }` — instead of a builtin or custom tool. It exposes another `agents:` entry to the parent model as a callable tool taking a single `request` string. This is "delegate and get an answer back," distinct from a job/resource handoff — it only touches `internal/config`, `internal/agent`, and `internal/merkle`.
+A `tools:` entry can be a sub-agent tool — `{ agent: <name>, description: <text> }` — instead of a builtin or custom tool. It exposes another `agents:` entry to the parent model as a callable tool taking a single `request` string. This is "delegate and get an answer back," distinct from a job/resource handoff — it only touches `internal/config`, `internal/agent`, and `internal/cache`.
 
 ```yaml
 agents:
@@ -111,11 +111,52 @@ agents:
 - Each call runs the child's own fresh tool-calling conversation (its own model, persona, dials, `max_turns`, tool grant) and returns its final text as the tool result, capped at 32,000 bytes like any other tool output — a chattier answer is saved to a file instead of being dropped, with a pointer message in its place.
 - The child runs in the **caller's** working directory but under the **child's own** resolved image — a sub-agent is a different worker, unlike a fix agent (which reproduces the failing task's image; see [infra.md](infra.md)).
 - The child's LLM client and tool tree are built eagerly during the parent step's preparation, so a bad credential or grant for a granted sub-agent fails before the first call, not during it.
-- No merkle node, `job_run`, or execution-log entry is recorded for the child conversation — same no-record contract as `fix:` agents and hook steps. Only the parent's *call* of the sub-agent tool appears in the parent's own trajectory.
+- No cache node, `job_run`, or execution-log entry is recorded for the child conversation — same no-record contract as `fix:` agents and hook steps. Only the parent's *call* of the sub-agent tool appears in the parent's own trajectory.
 - A child failure (transport error, exhausted `max_turns`, a child required tool never succeeding) comes back to the parent as `{"error": ...}`, never a Go error that aborts the parent conversation.
 - A sub-agent is a capability grant like `run_shell`: a step selects a granted one by bare name and cannot introduce one inline.
 - **Load-time graph checks**: a sub-agent tool must set no `builtin`/`name`/`run`, can never be `required:`, and must reference an existing agent. The agent graph is walked depth-first for cycles and capped at a nesting depth of 8. A fix agent may not grant sub-agents (out of scope for v1).
-- **Merkle**: a sub-agent tool folds in the child's resolved invocation content (model/endpoint/persona/dials/max_turns/image + its own tools, recursively), so editing a child — or grandchild — busts the parent step's hash. The child's prompt/dir/inputs/outputs/assert/hooks aren't part of its identity (a sub-agent has no step), and its API key/env var are excluded.
+- **Caching**: a sub-agent tool folds in the child's resolved invocation content (model/endpoint/persona/dials/max_turns/image + its own tools, recursively), so editing a child — or grandchild — busts the parent step's hash. The child's prompt/dir/inputs/outputs/assert/hooks aren't part of its identity (a sub-agent has no step), and its API key/env var are excluded.
+
+## Self-healing tasks (`fix:`)
+
+`fix:` attaches an agent to a **task** step: if the command exits non-zero, the agent is invoked to repair whatever broke, and then the command runs again. A green run never constructs the agent at all, so a passing pipeline pays nothing.
+
+```yaml
+agents:
+- name: fixer
+  system: You fix failing checks. Make the smallest change that works.
+  tools: [read_file, search_files, edit_file, run_shell]
+
+jobs:
+- name: build
+  plan:
+  - get: repo
+  - task: test
+    run: cd repo && go test ./...
+    fix: fixer                 # scalar: just the agent name
+```
+
+The mapping form takes per-task overrides:
+
+```yaml
+    fix:
+      agent: fixer
+      prompt: Only fix compile errors; never touch a test assertion.
+      dir: repo
+      tools: [read_file, edit_file]   # narrow the agent's grant for this task
+      attempts: 2
+      timeout: 10m
+```
+
+**How the loop terminates.** The agent is seeded with the failing command's captured output and given the parent task itself as a zero-arg **rerun tool** (its `run:`, never its `fix:`, so a rerun cannot recurse). It can edit, rerun, and see the new output. When the conversation ends, `steps` runs the command one final time, and *that* exit code decides the step. There is no repeat-until-green loop: one agent conversation, then one verdict. A still-red command fails the step normally, firing `on_failure`.
+
+**What a fix agent needs.** It must be able to edit, and the default tool grant deliberately excludes the write tools, so grant them explicitly — `edit_file` for surgical changes, `search_files` to find the failure site without flooding the conversation with shell grep output.
+
+**Restrictions.** A fix agent may not grant sub-agents, may not use MCP tool grants, and may not set `image:` (it runs in the parent task's image). Its conversation records no cache node or `job_run` of its own — only the parent task's outcome is recorded.
+
+**Caching.** A task with a `fix:` makes its chain uncacheable, since whether it succeeds may depend on what a model did. The run prints `note: <step> makes this chain uncacheable (fix: agent)` at the point that happens.
+
+Worked example: the `self-heal` jobs in [`examples/agents.yml`](../examples/agents.yml).
 
 ## Top-level `tasks:` reuse
 
@@ -124,7 +165,7 @@ A top-level `tasks:` list (mirroring `resources:`/`agents:`) lets a `run:`/`fix:
 - **`run:` present** → the step is inline; `tasks:` is never consulted, even if a same-named entry exists there.
 - **`run:` absent** → `task:` instead names a `tasks:` entry, and its `run`/`fix` are used. The step's own `fix:`, if set, overrides the referenced task's `fix:` for that step only.
 
-This resolution (`Config.ResolveTask`) runs identically at plan time and run time, so a task's merkle hash is always computed from its *resolved* `run:` string — an inline task's hash is unaffected (a `run_file:` include resolves before that hash is ever computed; see below). An undefined reference is an ordinary `FindTask` error at plan time. An agent step's connection/dials/tool-grant resolve the same way, via `Config.ResolveAgentInvocation`.
+This resolution (`Config.ResolveTask`) runs identically at plan time and run time, so a task's cache hash is always computed from its *resolved* `run:` string — an inline task's hash is unaffected (a `run_file:` include resolves before that hash is ever computed; see below). An undefined reference is an ordinary `FindTask` error at plan time. An agent step's connection/dials/tool-grant resolve the same way, via `Config.ResolveAgentInvocation`.
 
 ## External files: `run_file:`, `system_file:`, `prompt_file:`, and `file:`
 
@@ -147,7 +188,7 @@ jobs:
     prompt_file: prompts/review.md  # loads Step.Prompt from a file
 ```
 
-Every `*_file:` path is resolved **once, at `LoadConfig` time**, relative to the pipeline YAML's own directory — before `validate()` runs and long before any merkle hashing or execution — so everything downstream (`ResolveTask`, `ResolveAgentInvocation`, `TaskNodeContent`, `AgentContentMap`, every executor) sees the resolved text and cannot tell it apart from the same value written inline. Since `TaskNodeContent`/`AgentContentMap` hash `run:`/`prompt:`/`system:` **by value**, editing an included file busts the merkle cache exactly like editing an inline value would — for free, with no special-casing anywhere else in the codebase.
+Every `*_file:` path is resolved **once, at `LoadConfig` time**, relative to the pipeline YAML's own directory — before `validate()` runs and long before any cache hashing or execution — so everything downstream (`ResolveTask`, `ResolveAgentInvocation`, `TaskNodeContent`, `AgentContentMap`, every executor) sees the resolved text and cannot tell it apart from the same value written inline. Since `TaskNodeContent`/`AgentContentMap` hash `run:`/`prompt:`/`system:` **by value**, editing an included file busts the cache cache exactly like editing an inline value would — for free, with no special-casing anywhere else in the codebase.
 
 A path may use `..` to escape the pipeline's own directory: the pipeline file is trusted input, and a file placed beside it by the same author is at the same trust level — a shared `../tasks/` directory next to a `pipelines/` directory is a legitimate layout, not a hole to close. Setting both a field and its `*_file:` sibling (e.g. both `run:` and `run_file:`) is a load-time error, and so is an empty included file — either would silently change what the entry means (an empty `run_file:` would leave a task step's `run:` empty, making it fall through `ResolveTask`'s inline short-circuit to a `tasks:` reference instead).
 
@@ -182,7 +223,7 @@ This is the one place a step's config can come from a fetched artifact, and it i
 - **A task's `run:` already reaches into a fetched artifact today.** `run: sh repo/ci/build.sh` works unchanged in both shared and isolated mode (isolated mode just needs `inputs: [repo]`), so an artifact-sourced task-config file would add nothing beyond what plain `run:` already does, while requiring the step to redeclare its own `inputs:`/`outputs:`/`image:` anyway.
 - **An agent's connection is a credential boundary a fetched repo must never cross.** An `Agent`'s `source.endpoint:`/`api_key_env:` decide where a configured API key gets sent; letting a repo supply either would let it redirect that credential to an attacker-chosen server, walking straight around the `HostEnv()` allowlist and `validateAgentEndpoints` that exist to keep exactly that from happening. A prompt is just the task text the model already reads the repo to act on — no new credential exposure.
 
-The artifact named must be declared in the step's own `inputs:` (checked at `LoadConfig`, mirroring how `dir:`'s first path component is validated) and must be read out of the artifact's contents, which are untrusted — the same symlink-aware path confinement `read_file`/`list_dir` use (`resolveAgentPath`) applies here too. This form cannot be resolved at load time: `merkle.PlanChains` hashes every step before any `get`'s `in:` has run, so the file doesn't exist yet at plan time. That costs nothing, though — an agent step's chain is already unconditionally unskippable (see "Top-level `tasks:` reuse" above and `internal/merkle`'s `planNonGetNode`), so there is no caching to lose by resolving this after plan time.
+The artifact named must be declared in the step's own `inputs:` (checked at `LoadConfig`, mirroring how `dir:`'s first path component is validated) and must be read out of the artifact's contents, which are untrusted — the same symlink-aware path confinement `read_file`/`list_dir` use (`resolveAgentPath`) applies here too. This form cannot be resolved at load time: `cache.PlanChains` hashes every step before any `get`'s `in:` has run, so the file doesn't exist yet at plan time. That costs nothing, though — an agent step's chain is already unconditionally unskippable (see "Top-level `tasks:` reuse" above and `internal/cache`'s `planNonGetNode`), so there is no caching to lose by resolving this after plan time.
 
 ## `context_paths:` files delivered as synthetic `read_file` results
 
@@ -204,11 +245,13 @@ Paths are relative to the step's working directory and confined to its workspace
 
 `context_paths` is a step-level field, not agent-level — the agent definition (`agents:`) has no notion of which inputs are available. It is only valid on `agent` steps and requires `read_file` to be in the tool grant (which it is by default). Sub-agents and fix agents do not inherit the parent step's `context_paths`; the parent is expected to provide all necessary context via the sub-agent's `request` argument or the fix agent's prompt.
 
-**Merkle**: the *paths* (not contents) enter the step's hashed content — the files live inside the workspace, so their content is already chained through the input artifacts' own hashes.
+**Caching**: the *paths* (not contents) enter the step's hashed content — the files live inside the workspace, so their content is already chained through the input artifacts' own hashes.
 
 **How it works**: At preparation time, each `context_paths` file is read and confined by `resolveAgentPath`. At conversation start, `buildAgentRequest` prepends a simulated `read_file` tool call + result pair for each path before the user prompt — the same `{"content": …}` response shape the real `read_file` tool uses. This keeps the context visible to the model without consuming a turn or injecting content into the system message.
 
-## Authored handoff (`handoff: { note: true }`)
+## Authored handoff notes
+
+Enabled with `handoff: { note: true }`.
 
 Agents in a plan are a relay: each works alone, and the next one starts with none of its predecessor's context. Left to files-by-convention, every agent re-researches what the one before it already knew. `handoff: { note: true }` makes the departing agent write a shift-change report *while it still holds the context*, and delivers it to the next agent automatically.
 
@@ -262,137 +305,14 @@ The receiver is expected to treat the authored part as claims — the built-in `
 - **Sender names must be unique within a segment.** A note is addressed by step name (`handoff/<step>.md`), so two `handoff: { note: true }` steps with the same `agent:` would write the same file.
 - `handoff` is a reserved artifact name — an artifact so named would materialize over the note directory. Rejected as a step input/output by `ValidateArtifactName`, and as a *resource* name by the `handoff: { note: true }` load check (a `get` materializes into `<build>/<name>` without passing through that validator on the shared strategy).
 
-**Merkle**: the `handoff: { note: true }` declaration and the computed sender name both enter the step's hashed content (they change the tool set and the injected context, respectively). The note's *contents* do not — correctness rests on agent steps being unconditionally unskippable, so a receiving agent always re-runs and re-reads the current note. A `task` step reading `handoff/*.md` would **not** be safe that way: tasks are skippable, and could be skipped against a stale note.
+**Caching**: the `handoff: { note: true }` declaration and the computed sender name both enter the step's hashed content (they change the tool set and the injected context, respectively). The note's *contents* do not — correctness rests on agent steps being unconditionally unskippable, so a receiving agent always re-runs and re-reads the current note. A `task` step reading `handoff/*.md` would **not** be safe that way: tasks are skippable, and could be skipped against a stale note.
 
 **Relation to `handoff:`**: `handoff:` carries context *backward* along a `to:`/`verdicts:` route (a rejected step learning why, via `previous_run`). `handoff: { note: true }` carries it *forward* along the normal path. They compose — the self-build coder uses both.
 
-## Repairing malformed tool-call arguments
+## What's not on this page
 
-An OpenAI-compatible server sends a tool call's `arguments` as a JSON *string*, and weak local models (LM Studio, Ollama class) malformed it often: truncated at `max_tokens` mid-string, trailing commas, prose or markdown fences around the object. The LLM adapter parses that string leniently — on *any* parse failure it silently substitutes an **empty map**, so the call arrived at the conversation as if the model had passed no arguments at all: the tool answered "missing required argument", the model had no idea why, and a coding agent could burn most of its turn budget rediscovering the failure.
-
-Every agent's HTTP client therefore carries a **response-repair transport** (`internal/agent/repair.go`) that inspects each chat-completion response and, for any `arguments` string that doesn't parse, attempts a minimal best-effort repair before the adapter ever sees it — the same validate → repair → re-validate shape as crush/fantasy's tool-call repair, placed at the transport because that is the last place the model's raw text exists. The rule set covers only what local models actually produce: dropping prose/fences around the object, closing an unterminated string and unclosed braces (truncation), supplying `null` for a dangling key, and stripping trailing commas. Anything else is left exactly as-is — an unrepairable call behaves precisely as it did before this existed, so repair can only recover a call, never alter a valid one (an all-valid response passes through byte-identically, and non-chat requests are never touched).
-
-Transport-level only, like the OpenRouter caching levers: no config surface, no merkle impact, and it applies to **every** provider, since malformed arguments are an OpenAI-compat-wide hazard rather than a provider-specific one.
-
-## Loop detection
-
-`max_turns` bounds how long a conversation can run, but it is a blunt backstop: an agent that re-issues the *identical* tool call and gets the *identical* result — re-reading a file it has already read, re-running a command whose output cannot change — is stuck, and before loop detection it would spin out its entire turn budget producing nothing. The conversation loop now hashes each tool **interaction** (tool name + arguments + result; `internal/agent/loop.go`, copied from crush's `loop_detection.go`) and counts repeats within a sliding window of the last 10 tool-executing turns.
-
-The result is part of the hash so that *productive* repetition never trips the detector: re-reading a file after an edit returns different bytes, and a verify command's output changes as the tree is fixed. Only call-and-result-both-identical accumulates.
-
-The reaction is two-strike. The first time one interaction exceeds 5 copies in the window, the conversation gets a warning message naming the tool and telling the model to change approach — the window is **not** reset, so the warning is the model's only chance. A second detection (i.e. it repeated the same interaction once more) fails the attempt as a task failure (`failed`, not `errored`, for hook dispatch) with "agent stuck in a loop". Unlike crush's window — which only starts counting after 10 full turns — any count over the threshold triggers, so an agent with the default 8 `max_turns` is protected exactly like one with 200. A retry (`attempts:`) starts with a clean detector, like all per-attempt state.
-
-## OpenRouter prompt caching
-
-An agent whose `model:` resolves to OpenRouter (the `openrouter/` prefix, or a `source.endpoint:` pointing at `openrouter.ai`) gets two request mutations automatically. Neither is on by default in a stock OpenAI-compatible client, and without them a conversation pays full input price on every turn — exactly where caching is worth the most, since the whole prior history is re-sent each time.
-
-- **`x-session-id`** — **one identifier per agent, per job run**, so OpenRouter pins that agent's calls to a single provider instance and its prompt cache stays warm. Without it, sticky routing only engages *after* a cache hit is observed, which is too late for a short job.
-- **`cache_control: {type: ephemeral}`** — a top-level body field, OpenRouter's "automatic" caching form: it caches through the last cacheable block and advances the boundary as the conversation grows, rather than spending one of the four explicit per-message breakpoints. Injected **only** for Anthropic-routed models (`anthropic/…` or `~anthropic/…`), the family that needs an explicit marker. Providers with implicit caching (OpenAI, Gemini, DeepSeek, Groq, …) are left alone; sending them a marker risks a 400 for no gain.
-
-### Why the session is scoped per agent
-
-OpenRouter tracks sticky routing "at the account level, per model, and per conversation" — and an `agents:` entry *is* the (model, persona, dials) bundle, so two different agents share no cacheable prefix and are not one conversation. The session key is therefore the job run **plus the agent name**:
-
-| | Same session? | Why |
-|---|---|---|
-| Turns of one step's conversation loop | yes | the whole prior history is re-sent each turn — the big win |
-| A `to:`/`verdicts:` revise loop re-entering a step | yes | same agent, same prefix, across separate visits |
-| A sub-agent called repeatedly by its parent | yes | same persona every call |
-| A `fix:` agent retrying | yes | same persona every attempt |
-| Two different agents in one job | **no** | different model and persona — nothing to reuse |
-| The same agent in two runs (incl. concurrent) | **no** | no cross-run provider pin |
-| A second/third `attempts:` retry | **no** | see below |
-
-A retry deliberately **breaks** the pin instead of extending it. `retry.Do` wraps "a network round trip to an LLM endpoint (rate limiting, transient 5xx)" and retries on any error, so the failure being retried may well be the pinned provider's — reusing the session would send the retry straight back to the instance that just failed. What that gives up is small: a retry starts a *fresh* conversation, so a shared session would only have reused the short system+tools+prompt prefix, never the accumulated history, which is discarded either way.
-
-The per-agent split is not merely tidy. With a **router model** (`openrouter/auto` and friends) a session pins the *resolved model*, not just the provider — so under a run-wide session whichever agent ran first would silently choose the concrete model for every later agent in the job.
-
-Keying on the agent **name** rather than the step index is equally deliberate: scoping per step *invocation* would fragment exactly the revise-loop and repeated-sub-agent cases where caching pays off most.
-
-Both mutations are transport-level only:
-
-- **No config surface.** There is nothing to opt into and nothing to set — pointing an agent at OpenRouter is the whole trigger.
-- **No merkle impact.** The session ID and cache marker never enter a step's hashed content, so enabling caching cannot invalidate a cached step, and the same pipeline hashes identically before and after.
-- **No effect on other providers.** A non-OpenRouter base URL gets no custom HTTP client at all, leaving `openai-go` to build its own exactly as it did before this existed.
-
-Cached-token accounting is deliberately not surfaced: `steps` tracks no token usage anywhere, so there is nowhere to report a hit rate. Check the OpenRouter activity dashboard to confirm caching is landing.
-
-## Timeout and Attempts on Agent Steps
-
-Agent steps can set `timeout:` and `attempts:` to bound their execution:
-
-```yaml
-- agent: reviewer
-  prompt: "Review the PR"
-  timeout: 10m
-  attempts: 2
-```
-
-**Timeout** bounds the **entire conversation** (all turns, all tool calls) to a wall-clock deadline. The built-in `agentStepTimeout` is 10 minutes; `timeout:` (if set) overrides it. A timeout mid-conversation classifies as **errored**, not failed.
-
-**Attempts** retries the **whole conversation** on failure (LLM transport error, `max_turns` exhaustion, a tool error in required-tool mode). Each attempt gets its own fresh conversation with the model — prior turns are discarded, the session pin is broken (see OpenRouter section above), and the `max_turns` budget resets. Intermediate tool failures *within* one conversation never trigger a retry; they come back to the model as data. Only after all `attempts:` retries are exhausted does a failure become the step's final outcome.
-
-A task step's `fix:` agent can also set `attempts:` and `timeout:` independently:
-
-```yaml
-- task: test.sh
-  attempts: 3
-  fix:
-    agent: fixer
-    timeout: 5m
-    attempts: 2
-```
-
-The fix agent's timeout/attempts are separate budgets — they don't consume or conflict with the task's retry count or timeout.
-
-See [attempts-timeout.md](attempts-timeout.md) for a detailed guide covering the interaction with `assert:`, hook firing, and other step types.
-
-## Compacting long conversations
-
-Every model response and every tool result is normally appended to an agent step's conversation forever, for up to `max_turns` turns. A long-running agent — many tool calls, large file reads — can grow past the model's real context window well before hitting that turn cap; the provider call then errors out, and if `attempts:` allows a retry, the *whole* conversation restarts from scratch rather than degrading gracefully.
-
-`compact_after_tokens:` bounds this, on an `agents:` entry:
-
-```yaml
-agents:
-- name: coder
-  source: { model: openrouter/anthropic/claude-3.5-sonnet }
-  max_turns: 60
-  compact_after_tokens: 40000    # smaller than the 102,400 default -- see below
-```
-
-Once a conversation's estimated size crosses the budget, the agent's own model is asked to summarize everything older than a recent window (roughly the most recent 30% of the budget), and the conversation continues from `[summary] + [recent turns]` instead of the full history. This can happen more than once in a very long conversation — each pass folds the previous summary into the new one. A summarization failure is logged and the turn proceeds uncompacted; it never aborts the attempt, the same failure-is-data treatment a tool failure gets.
-
-**On by default, at 102,400 tokens (80% of an assumed 128K context window) — unlike every other feature on this page.** An agent that sets no `compact_after_tokens:` still gets compaction; `compact_after_tokens: 0` is what disables it. This is a deliberate exception to this codebase's usual value-gating contract for opt-in features ("absent, its behavior ... byte-identical to before it existed") — merkle hashes are unaffected either way (see below), but the conversation's *behavior* differs for any pipeline whose agent crosses the budget. The 20% headroom below a full 128K window is load-bearing, not padding: the size estimate covers the conversation alone, never the system prompt or the tool schemas resent with every request, so a budget set at the full window would only ever fire after a request had already overflowed.
-
-**Small-context and local models must lower it.** 102,400 tokens is close to an entire typical context window — a 32K-token local model (LM Studio, Ollama) will overflow long before the default ever triggers. Set a budget comfortably under the model's real window, e.g. `compact_after_tokens: 20000` for a 32K model:
-
-```yaml
-- name: reviewer
-  source: { model: lmstudio/qwen2.5-coder }
-  max_turns: 60
-  compact_after_tokens: 20000     # the 32K default would never fire in time
-```
-
-**The count is a local estimate, not accounting.** It's the same `len(text)/4` heuristic used elsewhere, applied to the conversation's own content — never the provider's real token-usage data. "`steps` tracks no token usage anywhere" (see the OpenRouter section above) still holds; this is a size heuristic that decides *when to compact*, not a usage figure anything reports.
-
-### Narrowing one tool's inline budget
-
-The 32,000-byte cap is global, which is the right default but has no answer for a tool whose output is mostly noise by construction — a fuzzy search returning a ranked list where the answer is the first few entries and the tail costs context on every subsequent turn. `max_output_bytes:` on a grant lowers the budget for that one tool:
-
-```yaml
-tools:
-- mcp: gopls
-  tools: [go_symbol_references]
-  max_output_bytes: 6000
-```
-
-It can only **narrow**, never widen: a value at or above the global cap resolves back to the global cap. Narrowing loses no data either — overflow still spills to a file the model can read back — it only shrinks what lands inline.
-
-It is rejected on **built-ins**, which already carry their own output contract (`read_file` pages, `list_dir` counts entries, `search_files` is bounded by arithmetic); stacking a second, conflicting bound on a designed one is a bug surface rather than a knob. It is also rejected on **sub-agent tools**, whose result is another agent's considered answer rather than a data dump. It is valid on custom tools and on all three MCP grant forms — unlike `description`/`required`/`max_calls`, which stay single-`tool:`-only, because the tool worth capping is typically one noisy member of a `tools: [...]` subset and making it carry the cap in its own grant entry would open a second connection to the same server.
-
-`max_output_bytes:` **is** part of the merkle hash (value-gated, so leaving it unset hashes byte-identically to before the field existed) — it changes what a call returns to the model, and therefore the conversation the step produces.
-
-**Compaction is lossy.** Tool results are truncated to 4000 bytes apiece in the summarization prompt, and everything older than the retained window survives only as prose in the summary — not verbatim. Separately, and independently of compaction: any tool result too large to return inline (over 32,000 bytes — `run_shell`/a custom tool, an MCP tool's text or structured content, a sub-agent's final answer, a `previous_run` field or trajectory arg, a `fix:` loop's failure output) is instead saved to a file under the step's working directory, with a short `<persistent_file>` pointer message (path, size, a preview) taking its place in the conversation. That pointer message is well under 4000 bytes, so it survives compaction's own truncation intact — a compacted agent can still `read_file` whatever it had already gathered before compaction, even though the raw conversation turn that produced it is gone. `read_file` itself is the exception to the spill-to-file treatment: it reads up to 100,000 bytes in a single call — deliberately larger than the 32,000-byte spill threshold, so a spilled file can always be pulled back whole in one read rather than looping the model on a truncated prefix — and an oversized *file* read degrades to a plain truncation (spilling a file read back out to another file would be a pointless loop) with `start_line`/`end_line` to page through the rest.
-
-**Not part of the merkle hash.** Like `timeout:`/`attempts:`, `compact_after_tokens:` is operational — it changes how a conversation manages its own context budget, not the result it's aiming for — so it never enters a step's hashed content and cannot invalidate a cached step, in either direction.
+The mechanics underneath an agent step — malformed tool-call repair, loop
+detection, OpenRouter prompt caching, how `timeout:`/`attempts:` interact, and
+conversation compaction — are in [agents-internals.md](agents-internals.md).
+Reach for it when behavior surprises you; you don't need it to write a
+pipeline.
