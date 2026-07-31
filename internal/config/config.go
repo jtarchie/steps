@@ -62,6 +62,7 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	cfg.registerBuiltinAgents()
+	cfg.registerBuiltinResourceTypes()
 
 	err = cfg.resolveSubAgentDescriptions()
 	if err != nil {

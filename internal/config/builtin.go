@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-//go:embed prompts/*.md agents/*.yml tools/*.md
+//go:embed prompts/*.md agents/*.yml tools/*.md resource_types/*.yml
 var builtinFS embed.FS
 
 // ReadBuiltinPrompt returns the content of a named built-in system prompt.
@@ -121,6 +121,96 @@ func (c *Config) registerBuiltinAgents() {
 		c.Agents = append(c.Agents, agent)
 		slog.Debug("builtin.agents.register", "name", fullName)
 	}
+}
+
+// ListBuiltinResourceTypeNames returns the available built-in resource type
+// names.
+func ListBuiltinResourceTypeNames() ([]string, error) {
+	entries, err := builtinFS.ReadDir("resource_types")
+	if err != nil {
+		return nil, fmt.Errorf("reading built-in resource type dir: %w", err)
+	}
+
+	names := make([]string, 0, len(entries))
+
+	for _, entry := range entries {
+		name, ok := strings.CutSuffix(entry.Name(), ".yml")
+		if !entry.IsDir() && ok {
+			names = append(names, name)
+		}
+	}
+
+	return names, nil
+}
+
+// ReadBuiltinResourceType returns the parsed YAML of a named built-in resource
+// type. name is like "git" — resolves to "resource_types/<name>.yml".
+func ReadBuiltinResourceType(name string) (ResourceType, error) {
+	data, err := builtinFS.ReadFile("resource_types/" + name + ".yml")
+	if err != nil {
+		return ResourceType{}, fmt.Errorf("built-in resource type %q not found", name)
+	}
+
+	var resourceType ResourceType
+
+	err = strictUnmarshal(data, &resourceType)
+	if err != nil {
+		return ResourceType{}, fmt.Errorf("built-in resource type %q: %w", name, err)
+	}
+
+	return resourceType, nil
+}
+
+// registerBuiltinResourceTypes makes every built-in resource type available
+// under its bare name, so `type: git` needs no resource_types: block at all.
+//
+// It exists because there were no built-in types: cloning a repository — step
+// two of essentially every real pipeline — meant hand-writing check/in shell
+// against an undocumented JSON contract. The three examples in this repo each
+// wrote their own, and none of them agreed.
+//
+// Unlike a built-in agent (which merges — see registerBuiltinAgents), a
+// user-defined type of the same name replaces this one outright. A type is a
+// set of command templates, and half of one command paired with half of
+// another is not a resource type anyone meant to write.
+func (c *Config) registerBuiltinResourceTypes() {
+	builtinNames, err := ListBuiltinResourceTypeNames()
+	if err != nil {
+		slog.Warn("builtin.resource_types.list", "error", err)
+
+		return
+	}
+
+	for _, name := range builtinNames {
+		if c.findResourceTypeIndex(name) >= 0 {
+			slog.Debug("builtin.resource_types.shadowed", "name", name)
+
+			continue
+		}
+
+		resourceType, err := ReadBuiltinResourceType(name)
+		if err != nil {
+			slog.Warn("builtin.resource_types.load", "name", name, "error", err)
+
+			continue
+		}
+
+		resourceType.Name = name
+		c.ResourceTypes = append(c.ResourceTypes, resourceType)
+		slog.Debug("builtin.resource_types.register", "name", name)
+	}
+}
+
+// findResourceTypeIndex returns the index of the resource type with the given
+// name, or -1.
+func (c *Config) findResourceTypeIndex(name string) int {
+	for i := range c.ResourceTypes {
+		if c.ResourceTypes[i].Name == name {
+			return i
+		}
+	}
+
+	return -1
 }
 
 // resolveBuiltinAgentSystem resolves a built-in agent's system_file reference

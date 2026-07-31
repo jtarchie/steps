@@ -6,6 +6,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 )
 
 // ResourceType defines a resource kind as a set of shell command templates.
@@ -36,6 +37,32 @@ type Resource struct {
 	Name   string         `yaml:"name"`
 	Type   string         `yaml:"type"`
 	Source map[string]any `yaml:"source"`
+}
+
+// validateResourcePut rejects a put step against a resource type that declares
+// no way to put: an mcp-backed type with no out: tool, or a shell-backed type
+// with no out: command.
+//
+// The shell half is what makes a built-in like `git` honest about being
+// read-only — `put: repo` against it is a load error naming the reason, rather
+// than a run that reaches the put and fails obscurely, or (worse) a type
+// carrying a placeholder `out: "true"` that silently succeeds having pushed
+// nothing. That placeholder is exactly the ritual this repo's own examples
+// used to copy around.
+func validateResourcePut(label, put string, resourceType *ResourceType) error {
+	if resourceType.Config.MCP != nil {
+		if resourceType.Config.MCP.Out == nil {
+			return fmt.Errorf("%s: put %q targets mcp-backed resource type %q, which sets no mcp.out.tool; add one, or respond via an agent step granted the server's tools instead", label, put, resourceType.Name)
+		}
+
+		return nil
+	}
+
+	if strings.TrimSpace(resourceType.Config.Out) == "" {
+		return fmt.Errorf("%s: put %q targets resource type %q, which declares no out: command; add one to describe what publishing means for this type", label, put, resourceType.Name)
+	}
+
+	return nil
 }
 
 // validateGetResource enforces that a step's resource: is only set on get

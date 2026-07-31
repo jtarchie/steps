@@ -1,0 +1,47 @@
+# The built-in `git` resource type: clone a branch at its current head.
+#
+# Registered automatically as `type: git` (see registerBuiltinResourceTypes),
+# so a pipeline that just wants a checkout writes a resource and nothing else:
+#
+#   resources:
+#   - name: repo
+#     type: git
+#     source:
+#       uri: https://github.com/jtarchie/steps.git
+#       branch: main          # optional; omitted follows the remote's HEAD
+#
+# Requires the `git` binary. Set image: on your own copy of this type to run
+# it in a container instead.
+#
+# There is deliberately no out:, so `put: repo` against this type is a load
+# error rather than a silent no-op. Pushing is policy (which branch, which
+# credentials, force or not) and belongs in a resource type you own.
+#
+# branch is read as `index .source "branch"` rather than `.source.branch`
+# because templates render with missingkey=error: an absent optional key must
+# be asked for in a way that answers "nothing" instead of failing.
+config:
+  # ls-remote is the cheapest possible "what is the head?" — no clone, no
+  # working tree. An unknown branch prints nothing, which would otherwise be
+  # an empty version list (read as "no versions yet"), so it fails loudly.
+  check: |
+    set -e
+    ref=$(git ls-remote {{ .source.uri | shellquote }} {{ index .source "branch" | default "HEAD" | shellquote }} | cut -f1)
+    if [ -z "$ref" ]; then
+      echo "git: no ref {{ index .source "branch" | default "HEAD" }} on {{ .source.uri }}" >&2
+      exit 1
+    fi
+    printf '[{"ref":"%s"}]\n' "$ref"
+
+  # Fetch exactly the commit check pinned, shallowly. Servers that refuse a
+  # by-SHA fetch fall back to fetching the branch, after which the commit is
+  # in history and the checkout is still the pinned one — so a branch that
+  # moved between check and in yields the version that was planned, never a
+  # surprise newer one.
+  in: |
+    set -e
+    git init -q .
+    git remote add origin {{ .source.uri | shellquote }}
+    git fetch -q --no-tags --depth 1 origin {{ .version.ref | shellquote }} 2>/dev/null \
+      || git fetch -q --no-tags origin {{ index .source "branch" | default "HEAD" | shellquote }}
+    git checkout -q {{ .version.ref | shellquote }}

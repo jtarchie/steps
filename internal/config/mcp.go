@@ -432,10 +432,9 @@ func (c *Config) validateMCPResourceConfig(rtName string, mcp *MCPResourceConfig
 	return nil
 }
 
-// validateMCPResourcePuts rejects a put step targeting an mcp-backed
-// resource type whose config sets no out: tool — the mcp analogue of a
-// shell resource type with an empty out: command, but checkable (and
-// checked) at load time instead of failing confusingly at run time.
+// validateMCPResourcePuts rejects a put step whose resource type declares no
+// way to put — see validateResourcePut for the rule, which covers both the
+// mcp-backed and shell-backed forms.
 func (c *Config) validateMCPResourcePuts() error {
 	for _, job := range c.Jobs {
 		err := job.visitSteps(func(label string, step *Step) error {
@@ -453,11 +452,7 @@ func (c *Config) validateMCPResourcePuts() error {
 				return nil //nolint:nilerr // unresolvable resource type is caught elsewhere at run time
 			}
 
-			if resourceType.Config.MCP != nil && resourceType.Config.MCP.Out == nil {
-				return fmt.Errorf("%s: put %q targets mcp-backed resource type %q, which sets no mcp.out.tool; add one, or respond via an agent step granted the server's tools instead", label, step.Put, resourceType.Name)
-			}
-
-			return nil
+			return validateResourcePut(label, step.Put, resourceType)
 		})
 		if err != nil {
 			return err

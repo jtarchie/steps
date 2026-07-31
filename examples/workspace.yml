@@ -23,28 +23,28 @@ workspace:
   # directory removal otherwise, which still reclaims the space — just
   # without the instant subvolume-metadata cleanup.
 
+# Fetching a repo needs no resource_types: block — `git` ships with steps.
+# Publishing does: what "publish" means is specific to where you're sending
+# it, so a put target is a type you write. This one just lists what it was
+# handed, standing in for a real upload.
 resource_types:
-- name: github
+- name: artifact-store
   config:
-    check: |
-      gh api repos/{{ .source.owner }}/{{ .source.repo }}/branches/{{ .source.branch }} -q '.commit.sha' | jq -R '{ref: .}' | jq -s .
-    in: |
-      gh repo clone {{ .source.owner }}/{{ .source.repo }} . && git -C . checkout {{ .version.ref }}
-    out: "true"
+    check: 'echo ''[{"ref":"latest"}]'''
+    in: "true"
+    out: |
+      echo "publishing to {{ .source.bucket | shellquote }}:" && find . -type f | head -20
 
 resources:
 - name: repo
-  type: github
+  type: git
   source:
-    owner: jtarchie
-    repo: ci
+    uri: https://github.com/jtarchie/ci.git
     branch: main
 - name: results
-  type: github
+  type: artifact-store
   source:
-    owner: jtarchie
-    repo: ci
-    branch: results
+    bucket: releases
 
 agents:
 - name: reviewer

@@ -12,13 +12,8 @@ resource_types:
     check: gh pr list --json id,title,number,createdAt,updatedAt,headRefOid --repo {{ .source.repo }} --state open -q 'sort_by(.updatedAt)'
     in: gh repo clone {{ .source.repo }} . && gh pr checkout {{ .version.number }}
     out: gh pr update-branch --repo {{ .source.repo }} {{ .version.number }}
-# For the `self-heal` jobs: pin a branch to its head SHA and clone it.
-- name: github
-  config:
-    check: |
-      gh api repos/{{ .source.owner }}/{{ .source.repo }}/branches/{{ .source.branch }} -q '.commit.sha' | jq -R '{ref: .}' | jq -s .
-    in: |
-      gh repo clone {{ .source.owner }}/{{ .source.repo }} . && git -C . checkout {{ .version.ref }}
+# (The `self-heal` jobs fetch a plain checkout, which needs no resource type
+# at all — see the `repo` resource below, which uses the built-in `git`.)
 # For the `delegate` job: fabricate a checkout with one long file, fully
 # offline (no network/credentials) so only a local model is needed.
 - name: fixture
@@ -64,8 +59,8 @@ resources:
   type: pull-request
   source: { repo: jtarchie/ci }
 - name: repo
-  type: github
-  source: { owner: jtarchie, repo: ci, branch: main }
+  type: git
+  source: { uri: https://github.com/jtarchie/ci.git, branch: main }
 - name: notes
   type: fixture
   source: {}

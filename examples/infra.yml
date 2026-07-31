@@ -32,9 +32,15 @@ resource_types:
                              # before relying on this name — see docs/mcp.md
 
 # ── Containerized execution ──────────────────────────────────────────────────
-# check/in/out run inside plain alpine instead of needing git on the host.
+# A plain checkout needs no resource type — `git` is built in (see the `repo`
+# resource below). This one exists to show image:, which runs check/in in a
+# container instead of on the host, so the host needs no git installed.
+#
 # DockerRunner wraps every command as `sh -c`, so pick images with a shell
 # entrypoint (alpine's default), not ones like alpine/git that exec git.
+#
+# There is no out: because nothing puts to it; a put against a type with no
+# out: is a load error rather than a silently successful no-op.
 - name: git-alpine
   image: alpine:3
   config:
@@ -42,7 +48,6 @@ resource_types:
       apk add --no-cache -q git && git ls-remote {{ .source.uri }} {{ .source.branch }} | cut -f1 | sed 's/.*/[{"ref":"&"}]/'
     in: |
       apk add --no-cache -q git && git clone --branch {{ .source.branch }} --depth 1 {{ .source.uri }} . && git checkout {{ .version.ref }}
-    out: "true"
 
 mcp_servers:
 - name: linear
