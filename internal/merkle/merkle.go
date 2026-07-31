@@ -199,7 +199,7 @@ func withHandoff(step config.Step, content map[string]any) map[string]any {
 // note. A `task` reading handoff/*.md would NOT be safe that way — see
 // docs/agents.md.
 func withHandoffNote(step config.Step, content map[string]any) map[string]any {
-	if step.HandoffNote {
+	if step.WantsNote() {
 		content["handoff_note"] = true
 	}
 

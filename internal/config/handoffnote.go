@@ -51,7 +51,7 @@ func (c *Config) validateHandoffNoteSteps() error {
 // rejectHandoffNoteOnHook rejects handoff_note: on a hook step: a hook is a
 // reaction, not a positioned step with a successor to hand off to.
 func rejectHandoffNoteOnHook(label string, step *Step) error {
-	if step.HandoffNote {
+	if step.WantsNote() {
 		return fmt.Errorf("%s: handoff_note is not valid on hook steps", label)
 	}
 
@@ -105,7 +105,7 @@ func (c *Config) validateHandoffNoteSegment(job *Job, segment []int) error {
 		step := &job.Plan[idx]
 
 		if step.Agent == "" {
-			if step.HandoffNote {
+			if step.WantsNote() {
 				return fmt.Errorf("job %q step %d: handoff_note is only valid on agent steps", job.Name, idx)
 			}
 
@@ -123,7 +123,7 @@ func (c *Config) validateHandoffNoteSegment(job *Job, segment []int) error {
 			}
 		}
 
-		if step.HandoffNote {
+		if step.WantsNote() {
 			err := c.checkHandoffNoteSender(job, idx, *step)
 			if err != nil {
 				return err
@@ -236,7 +236,7 @@ func checkHandoffNoteDelivered(job *Job, segment []int) error {
 			received[step.HandoffNoteFrom] = true
 		}
 
-		if !step.HandoffNote {
+		if !step.WantsNote() {
 			continue
 		}
 
@@ -252,7 +252,7 @@ func checkHandoffNoteDelivered(job *Job, segment []int) error {
 	// edges names the same one every load.
 	for _, idx := range segment {
 		step := job.Plan[idx]
-		if step.HandoffNote && !received[stepName(step)] {
+		if step.WantsNote() && !received[stepName(step)] {
 			return fmt.Errorf("job %q step %d: handoff_note is set but no later agent step in this segment receives it", job.Name, idx)
 		}
 	}

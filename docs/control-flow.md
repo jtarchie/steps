@@ -71,7 +71,9 @@ A `task`/`put`/`agent` step can carry `to:` — a map that routes to another ste
 
 Every agent step is otherwise a fresh, hermetic conversation — a step reached via `to:`/`verdicts:` learns nothing about why it was invoked. `handoff:` opts an agent step into transition context on **routed entry only**: the step's first/unrouted execution is unaffected. Illustrated in `examples/agents.yml`'s `judge` job (needs a model).
 
-> `handoff:` carries context **backward**, along a route, for a step being sent back to redo something. For the **forward** direction — what each agent hands the next one on the normal path — see [`handoff_note:`](agents.md#authored-handoff-handoff_note) in the agents guide. They compose on the same step.
+> `handoff:` has two directions, and each is a field rather than a separate key. `context:`/`tool:` look **backward**, along a route, for a step being sent back to redo something. `note:` looks **forward** — what this agent hands the next one on the normal path; see [authored handoff](agents.md#authored-handoff-handoff-note) in the agents guide. Both compose on one step: `handoff: { tool: true, note: true }`.
+>
+> In the mapping form every field defaults to off and means only itself. Only `context:`/`tool:` require a `to:` route to target this step; a note-only handoff needs none.
 
 ```yaml
 - agent: writer

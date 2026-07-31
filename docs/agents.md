@@ -208,17 +208,19 @@ Paths are relative to the step's working directory and confined to its workspace
 
 **How it works**: At preparation time, each `context_paths` file is read and confined by `resolveAgentPath`. At conversation start, `buildAgentRequest` prepends a simulated `read_file` tool call + result pair for each path before the user prompt — the same `{"content": …}` response shape the real `read_file` tool uses. This keeps the context visible to the model without consuming a turn or injecting content into the system message.
 
-## Authored handoff (`handoff_note:`)
+## Authored handoff (`handoff: { note: true }`)
 
-Agents in a plan are a relay: each works alone, and the next one starts with none of its predecessor's context. Left to files-by-convention, every agent re-researches what the one before it already knew. `handoff_note: true` makes the departing agent write a shift-change report *while it still holds the context*, and delivers it to the next agent automatically.
+Agents in a plan are a relay: each works alone, and the next one starts with none of its predecessor's context. Left to files-by-convention, every agent re-researches what the one before it already knew. `handoff: { note: true }` makes the departing agent write a shift-change report *while it still holds the context*, and delivers it to the next agent automatically.
+
+It is the **forward** half of [`handoff:`](control-flow.md#handoff-context-handoff); `context:`/`tool:` are the backward half, and the two compose on one step.
 
 ```yaml
 - agent: planner
-  handoff_note: true      # the entire configuration surface
+  handoff: { note: true }   # the entire configuration surface
 - agent: coder
-  handoff_note: true
-- task: build-check       # non-agent steps are stepped over
-- agent: reviewer         # receives the coder's note
+  handoff: { note: true }
+- task: build-check         # non-agent steps are stepped over
+- agent: reviewer           # receives the coder's note
 ```
 
 The receiver is **computed, not declared**: the next `agent` step in the same get-segment. There is nothing else to configure — no schema, no addressing, no opt-in on the receiving side.
@@ -257,12 +259,12 @@ The receiver is expected to treat the authored part as claims — the built-in `
 - Agent steps only, never hooks; the sender needs a later agent step in the same get-segment (a note never crosses a `get` fan-out — each fanned-out build is independent), and the receiver must grant `read_file`.
 - **Not supported under `workspace: strategy: copy`/`btrfs`.** Under isolation only *declared outputs* survive a step, so a note written to the build root would be discarded with the sender's workspace. This is a load error rather than a silent loss.
 - **No `dir:` on either end.** The note lives in the build root; a step with `dir:` writes it inside a materialized input artifact instead (dirtying it), and a receiver with `dir:` can never reach the root — `../handoff/x.md` is rejected as escaping the working directory. Same reasoning as the isolation rule: a load error beats a silent non-delivery.
-- **Sender names must be unique within a segment.** A note is addressed by step name (`handoff/<step>.md`), so two `handoff_note:` steps with the same `agent:` would write the same file.
-- `handoff` is a reserved artifact name — an artifact so named would materialize over the note directory. Rejected as a step input/output by `ValidateArtifactName`, and as a *resource* name by the `handoff_note:` load check (a `get` materializes into `<build>/<name>` without passing through that validator on the shared strategy).
+- **Sender names must be unique within a segment.** A note is addressed by step name (`handoff/<step>.md`), so two `handoff: { note: true }` steps with the same `agent:` would write the same file.
+- `handoff` is a reserved artifact name — an artifact so named would materialize over the note directory. Rejected as a step input/output by `ValidateArtifactName`, and as a *resource* name by the `handoff: { note: true }` load check (a `get` materializes into `<build>/<name>` without passing through that validator on the shared strategy).
 
-**Merkle**: the `handoff_note:` declaration and the computed sender name both enter the step's hashed content (they change the tool set and the injected context, respectively). The note's *contents* do not — correctness rests on agent steps being unconditionally unskippable, so a receiving agent always re-runs and re-reads the current note. A `task` step reading `handoff/*.md` would **not** be safe that way: tasks are skippable, and could be skipped against a stale note.
+**Merkle**: the `handoff: { note: true }` declaration and the computed sender name both enter the step's hashed content (they change the tool set and the injected context, respectively). The note's *contents* do not — correctness rests on agent steps being unconditionally unskippable, so a receiving agent always re-runs and re-reads the current note. A `task` step reading `handoff/*.md` would **not** be safe that way: tasks are skippable, and could be skipped against a stale note.
 
-**Relation to `handoff:`**: `handoff:` carries context *backward* along a `to:`/`verdicts:` route (a rejected step learning why, via `previous_run`). `handoff_note:` carries it *forward* along the normal path. They compose — the self-build coder uses both.
+**Relation to `handoff:`**: `handoff:` carries context *backward* along a `to:`/`verdicts:` route (a rejected step learning why, via `previous_run`). `handoff: { note: true }` carries it *forward* along the normal path. They compose — the self-build coder uses both.
 
 ## Repairing malformed tool-call arguments
 

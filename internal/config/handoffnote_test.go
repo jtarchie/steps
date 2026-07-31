@@ -41,7 +41,7 @@ func TestHandoffNoteResolvesReceiver(t *testing.T) {
 
 	cfg, err := loadHandoffNote(t, `
   - agent: writer
-    handoff_note: true
+    handoff: { note: true }
   - agent: reader
 `)
 	if err != nil {
@@ -65,7 +65,7 @@ func TestHandoffNoteCarriesAcrossTaskStep(t *testing.T) {
 
 	cfg, err := loadHandoffNote(t, `
   - agent: writer
-    handoff_note: true
+    handoff: { note: true }
   - task: gate
   - agent: reader
 `)
@@ -85,9 +85,9 @@ func TestHandoffNoteChainsThroughMiddleAgent(t *testing.T) {
 
 	cfg, err := loadHandoffNote(t, `
   - agent: writer
-    handoff_note: true
+    handoff: { note: true }
   - agent: reader
-    handoff_note: true
+    handoff: { note: true }
   - agent: reader
 `)
 	if err != nil {
@@ -114,25 +114,25 @@ func TestHandoffNoteRejections(t *testing.T) {
 		"no receiver in segment": {`
   - agent: reader
   - agent: writer
-    handoff_note: true
+    handoff: { note: true }
 `, "no later agent step in this segment receives it"},
 
 		"receiver only after a get boundary": {`
   - agent: writer
-    handoff_note: true
+    handoff: { note: true }
   - get: thing
   - agent: reader
 `, "no later agent step in this segment receives it"},
 
 		"on a task step": {`
   - task: gate
-    handoff_note: true
+    handoff: { note: true }
   - agent: reader
 `, "only valid on agent steps"},
 
 		"receiver cannot read_file": {`
   - agent: writer
-    handoff_note: true
+    handoff: { note: true }
   - agent: blind
 `, "does not grant read_file"},
 
@@ -143,13 +143,13 @@ func TestHandoffNoteRejections(t *testing.T) {
 		"sender sets dir": {`
   - agent: writer
     dir: sub
-    handoff_note: true
+    handoff: { note: true }
   - agent: reader
 `, "cannot set dir:"},
 
 		"receiver sets dir": {`
   - agent: writer
-    handoff_note: true
+    handoff: { note: true }
   - agent: reader
     dir: sub
 `, "cannot set dir:"},
@@ -158,9 +158,9 @@ func TestHandoffNoteRejections(t *testing.T) {
 		// write the same file and fool the "nothing receives it" check.
 		"two senders share a name": {`
   - agent: writer
-    handoff_note: true
+    handoff: { note: true }
   - agent: writer
-    handoff_note: true
+    handoff: { note: true }
   - agent: reader
 `, "two steps named"},
 	}
@@ -188,10 +188,10 @@ func TestHandoffNoteRejectedOnHook(t *testing.T) {
 
 	_, err := loadHandoffNote(t, `
   - agent: writer
-    handoff_note: true
+    handoff: { note: true }
     on_failure:
       agent: reader
-      handoff_note: true
+      handoff: { note: true }
   - agent: reader
 `)
 	if err == nil || !strings.Contains(err.Error(), "not valid on hook steps") {
@@ -211,7 +211,7 @@ workspace:
   strategy: copy
 `+strings.TrimPrefix(handoffNotePipeline(`
   - agent: writer
-    handoff_note: true
+    handoff: { note: true }
   - agent: reader
 `), "\n"))
 
@@ -254,7 +254,7 @@ resources:
   source: {}
 `+strings.TrimPrefix(handoffNotePipeline(`
   - agent: writer
-    handoff_note: true
+    handoff: { note: true }
   - agent: reader
 `), "\n"))
 

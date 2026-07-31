@@ -153,20 +153,9 @@ type Step struct {
 	// context block is appended and previous_run (if granted) answers "no
 	// previous run" as data.
 	Handoff *HandoffSpec `yaml:"handoff,omitempty"`
-	// HandoffNote, on an agent step, requires the step to write a handoff note
-	// before its conversation may end: a synthesized write_handoff tool (see
-	// internal/agent) with a fixed three-field form, rendered to
-	// handoff/<step>.md in the build workspace and injected into the next
-	// agent step's conversation at start. It is the FORWARD counterpart to
-	// Handoff, which carries context BACKWARD along a to:/verdicts: route.
-	//
-	// Agent-only, never on a hook, and only valid when a later agent step
-	// exists in the same get-segment to receive it — see
-	// validateHandoffNoteSteps, which also resolves HandoffNoteFrom.
-	HandoffNote bool `yaml:"handoff_note,omitempty"`
 	// HandoffNoteFrom is COMPUTED at load (never written in YAML): the name of
 	// the nearest preceding agent step in this step's get-segment that
-	// declares handoff_note. "" when no such step exists — the common case,
+	// declares handoff: {note: true}. "" when no such step exists — the common
 	// and the step then receives no note. Resolving the receiver statically
 	// rather than carrying it through internal/pipeline is what makes note
 	// delivery automatically idempotent: every dispatch of this step, first

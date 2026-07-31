@@ -80,13 +80,18 @@ jobs:
 func TestHandoffMappingShapes(t *testing.T) {
 	t.Parallel()
 
+	// Each field means exactly what it says. Nothing turns itself on: an
+	// earlier rule defaulted context to true whenever it wasn't named, so
+	// `{ tool: true }` quietly enabled two features — and would have made a
+	// note-only mapping demand a to: route that has nothing to do with it.
 	cases := []struct {
 		name        string
 		yaml        string
 		wantContext bool
 		wantTool    bool
 	}{
-		{"tool only, context defaults true", "{ tool: true }", true, true},
+		{"tool only stays tool only", "{ tool: true }", false, true},
+		{"context and tool together", "{ context: true, tool: true }", true, true},
 		{"context explicit false, tool true", "{ context: false, tool: true }", false, true},
 		{"context explicit true, no tool", "{ context: true }", true, false},
 	}
@@ -280,4 +285,101 @@ jobs:
 	if err != nil {
 		t.Fatalf("a step targeted by another step's to: should be a valid handoff: target, got: %v", err)
 	}
+}
+
+// Both directions on one step, in one key. handoff: and handoff_note: used to
+// be separate top-level keys whose names implied they were variants of one
+// feature when they point opposite ways — the docs needed a dedicated aside
+// to say so. Direction is a field now.
+func TestHandoffCarriesBothDirections(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+agents:
+- name: writer
+  source: { model: lmstudio/qwen }
+- name: reviewer
+  source: { model: lmstudio/qwen }
+- name: publisher
+  source: { model: lmstudio/qwen }
+  tools: [read_file]
+jobs:
+- name: j
+  plan:
+  - agent: writer
+    prompt: draft
+  - agent: reviewer
+    prompt: review
+    handoff: { tool: true, note: true }
+    to: { failure: reviewer }
+    max_visits: 2
+  - agent: publisher
+    prompt: publish
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	step := cfg.Jobs[0].Plan[1]
+
+	if !step.Handoff.Tool {
+		t.Error("Tool = false, want the backward previous_run tool enabled")
+	}
+
+	if !step.WantsNote() {
+		t.Error("WantsNote() = false, want the forward note enabled")
+	}
+
+	if !step.Handoff.Receives() {
+		t.Error("Receives() = false, want a step granted tool: to count as receiving")
+	}
+}
+
+// A note-only handoff writes forward along the plan, so it needs no to: route
+// pointing at it — the requirement that applies to the backward half only.
+func TestNoteOnlyHandoffNeedsNoRoute(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+agents:
+- name: planner
+  source: { model: lmstudio/qwen }
+- name: coder
+  source: { model: lmstudio/qwen }
+  tools: [read_file]
+jobs:
+- name: j
+  plan:
+  - agent: planner
+    prompt: plan it
+    handoff: { note: true }
+  - agent: coder
+    prompt: build it
+`)
+
+	_, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("a note-only handoff must not require a to: route: %v", err)
+	}
+}
+
+// The backward half still does require one, or the field is dead config.
+func TestReceivingHandoffStillRequiresARoute(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+agents:
+- name: writer
+  source: { model: lmstudio/qwen }
+jobs:
+- name: j
+  plan:
+  - agent: writer
+    prompt: draft
+    handoff: { context: true }
+`)
+
+	wantLoadError(t, path, "no to: route in this segment targets step")
 }

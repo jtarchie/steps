@@ -82,8 +82,8 @@ func TestSelfBuildHandoffChain(t *testing.T) {
 			t.Errorf("%s receives a note from %q, want %q", step.Agent, step.HandoffNoteFrom, expected.from)
 		}
 
-		if step.HandoffNote != expected.sends {
-			t.Errorf("%s writes a handoff note = %v, want %v", step.Agent, step.HandoffNote, expected.sends)
+		if step.WantsNote() != expected.sends {
+			t.Errorf("%s writes a handoff note = %v, want %v", step.Agent, step.WantsNote(), expected.sends)
 		}
 	}
 }

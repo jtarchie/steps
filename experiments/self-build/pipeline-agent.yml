@@ -225,7 +225,7 @@ jobs:
     # The plan document is the PR artifact; the note is the operational
     # handoff, and it carries a computed list of every file this step actually
     # touched -- which is what stops the coder re-walking the same tree.
-    handoff_note: true
+    handoff: { note: true }
     prompt: |
       Plan ONE implementation step for ONE story. You have NO shell.
       The only file you write is the plan document.
@@ -255,8 +255,10 @@ jobs:
     # the work actually fits in. A cold run took ~42m across two attempts; 45m
     # is that with headroom. attempts: covers transport faults only.
     timeout: 45m
-    handoff: { tool: true }   # a redo gets a previous_run tool over the last verdict
-    handoff_note: true        # forward: writes the reviewer's shift-change report
+    # Both directions on one step: a redo gets a previous_run tool over the
+    # last verdict (backward), and it writes the next agent a shift-change
+    # report (forward).
+    handoff: { tool: true, note: true }
     prompt: |
       Implement ONE story's already-written plan. repo/ is a real git clone,
       yours to edit.

@@ -101,7 +101,7 @@ const handoffNoteResultKey = "handoff_note"
 // doesn't). A pre-existing tool of the same name is a conflict, rejected here
 // rather than silently shadowed.
 func injectWriteHandoffTool(step config.Step, decls *genai.Tool, registry map[string]toolImpl, required map[string]bool) (string, error) {
-	if !step.HandoffNote {
+	if !step.WantsNote() {
 		return "", nil
 	}
 
@@ -369,7 +369,7 @@ func sortedSet(set map[string]bool) []string {
 // guard-skipped sender (see withHandoffNotePath), so the pipeline degrades to
 // today's behavior rather than breaking.
 func publishHandoffNote(prepared preparedAgentStep, jobName string, res conversationResult) {
-	if !prepared.step.HandoffNote || res.handoffNote == nil {
+	if !prepared.step.WantsNote() || res.handoffNote == nil {
 		return
 	}
 

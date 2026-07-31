@@ -18,7 +18,7 @@ func TestWriteHandoffToolIsRequired(t *testing.T) {
 	registry := map[string]toolImpl{}
 	required := map[string]bool{}
 
-	name, err := injectWriteHandoffTool(config.Step{HandoffNote: true}, decls, registry, required)
+	name, err := injectWriteHandoffTool(config.Step{Handoff: &config.HandoffSpec{Note: true}}, decls, registry, required)
 	if err != nil {
 		t.Fatalf("injectWriteHandoffTool: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestWriteHandoffToolSkippedAndCollision(t *testing.T) {
 
 	registry := map[string]toolImpl{writeHandoffToolName: nil}
 
-	_, err = injectWriteHandoffTool(config.Step{HandoffNote: true}, &genai.Tool{}, registry, map[string]bool{})
+	_, err = injectWriteHandoffTool(config.Step{Handoff: &config.HandoffSpec{Note: true}}, &genai.Tool{}, registry, map[string]bool{})
 	if err == nil || !strings.Contains(err.Error(), "already defines a tool") {
 		t.Errorf("collision error = %v, want a rejection", err)
 	}

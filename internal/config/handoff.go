@@ -9,19 +9,35 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// HandoffSpec is a step's handoff: (see Step.Handoff). Context enables the
-// pushed <transition_context> prompt block; Tool enables the pulled
-// previous_run tool. A scalar `handoff: true` is shorthand for {context:
-// true}; a mapping's context defaults to true unless explicitly set false,
-// so `handoff: {tool: true}` enables both.
+// HandoffSpec is a step's handoff: — everything an agent step exchanges with
+// the other agent steps around it, in one key.
+//
+// Two directions, three switches:
+//
+//	context: receive a <transition_context> block from the step that routed here
+//	tool:    receive a previous_run tool to pull that step's run on demand
+//	note:    write a note for the next agent step in this segment to read
+//
+// context/tool look BACKWARD along a to:/verdicts: route; note looks FORWARD
+// along the plan. note: was its own top-level key (handoff_note:) until the
+// two proved impossible to tell apart by name — the docs needed a dedicated
+// aside explaining that handoff: and handoff_note: were unrelated features
+// pointing opposite ways. Direction is now a field, not a spelling.
+//
+// A scalar `handoff: true` means {context: true}. In the mapping form every
+// field means exactly what it says and defaults to off: an earlier rule where
+// context turned itself on unless explicitly disabled made `handoff: {tool:
+// true}` quietly enable two things, and would have made a note-only mapping
+// demand a to: route it has nothing to do with.
 type HandoffSpec struct {
 	Context bool
 	Tool    bool
+	Note    bool
 }
 
 // UnmarshalYAML decodes a HandoffSpec from either a scalar (handoff: true/
-// false, context only) or a mapping ({context, tool}) YAML node — the same
-// scalar-or-mapping idiom as WhenSpec/FixSpec.
+// false, context only) or a mapping ({context, tool, note}) YAML node — the
+// same scalar-or-mapping idiom as WhenSpec/FixSpec.
 func (h *HandoffSpec) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias kinds that can't appear here
 	case yaml.ScalarNode:
@@ -36,14 +52,15 @@ func (h *HandoffSpec) UnmarshalYAML(value *yaml.Node) error {
 
 		return nil
 	case yaml.MappingNode:
-		err := rejectUnknownKeys(value, "step handoff", "context", "tool")
+		err := rejectUnknownKeys(value, "step handoff", "context", "tool", "note")
 		if err != nil {
 			return err
 		}
 
 		var m struct {
-			Context *bool `yaml:"context"`
-			Tool    bool  `yaml:"tool"`
+			Context bool `yaml:"context"`
+			Tool    bool `yaml:"tool"`
+			Note    bool `yaml:"note"`
 		}
 
 		err = value.Decode(&m)
@@ -51,12 +68,11 @@ func (h *HandoffSpec) UnmarshalYAML(value *yaml.Node) error {
 			return fmt.Errorf("step handoff: %w", err)
 		}
 
-		h.Context = m.Context == nil || *m.Context
-		h.Tool = m.Tool
+		h.Context, h.Tool, h.Note = m.Context, m.Tool, m.Note
 
 		return nil
 	default:
-		return fmt.Errorf("step handoff at line %d must be a boolean or a {context, tool} mapping", value.Line)
+		return fmt.Errorf("step handoff at line %d must be a boolean or a {context, tool, note} mapping", value.Line)
 	}
 }
 
@@ -64,7 +80,19 @@ func (h *HandoffSpec) UnmarshalYAML(value *yaml.Node) error {
 // HandoffSpec (handoff: false, or handoff: {context: false}) is rejected at
 // LoadConfig (validateHandoffSteps) rather than silently accepted as a no-op.
 func (h *HandoffSpec) Enabled() bool {
+	return h.Context || h.Tool || h.Note
+}
+
+// Receives reports whether h asks for anything from the step that routed
+// here — the backward half, and the only half that requires a to: route.
+func (h *HandoffSpec) Receives() bool {
 	return h.Context || h.Tool
+}
+
+// WantsNote reports whether this step must write a handoff note before its
+// conversation may end (the forward half).
+func (s Step) WantsNote() bool {
+	return s.Handoff != nil && s.Handoff.Note
 }
 
 // validateHandoffSteps enforces the handoff: rules at load time: it is never
@@ -157,11 +185,13 @@ func validateHandoffSegment(job Job, segment []int) error {
 		}
 
 		if !step.Handoff.Enabled() {
-			return fmt.Errorf("%s: handoff enables nothing (set context and/or tool)", label)
+			return fmt.Errorf("%s: handoff enables nothing (set context, tool, and/or note)", label)
 		}
 
-		if !targeted[stepName(step)] {
-			return fmt.Errorf("%s: handoff is set but no to: route in this segment targets step %q", label, stepName(step))
+		// Only the backward half needs a route to receive from; a note-only
+		// handoff writes forward along the plan and has no such requirement.
+		if step.Handoff.Receives() && !targeted[stepName(step)] {
+			return fmt.Errorf("%s: handoff sets context/tool but no to: route in this segment targets step %q", label, stepName(step))
 		}
 	}
 
