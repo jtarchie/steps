@@ -44,6 +44,45 @@ func Fail(err error) error {
 	return &Failure{Err: err}
 }
 
+// Process exit codes, one per outcome class a caller can act on.
+const (
+	// ExitOK is a successful run.
+	ExitOK = 0
+	// ExitFailed is a task-level failure: something the pipeline ran said no.
+	ExitFailed = 1
+	// ExitErrored is an infrastructure or configuration error: the pipeline
+	// could not be run as written. Worth retrying only after a fix, where a
+	// Failed run may just mean "the tests are red".
+	ExitErrored = 2
+	// ExitAborted is the conventional 128+SIGINT for a canceled run.
+	ExitAborted = 130
+)
+
+// ExitCode maps a top-level error to the process's exit status, so a script
+// wrapping steps can tell "my task failed" from "docker is down" from "I hit
+// Ctrl-C" — all three of which used to exit 1.
+//
+// It is Classify's counterpart at the process boundary, where there is no job
+// context to consult: an abort is detected from the error chain instead. A
+// config or CLI error carries no Failure marker and so lands on ExitErrored,
+// which is right — an unparseable pipeline is not a red test.
+func ExitCode(err error) int {
+	if err == nil {
+		return ExitOK
+	}
+
+	if errors.Is(err, context.Canceled) {
+		return ExitAborted
+	}
+
+	var failure *Failure
+	if errors.As(err, &failure) {
+		return ExitFailed
+	}
+
+	return ExitErrored
+}
+
 // Classify buckets err for hook dispatch. ctx must be the enclosing
 // (job-level) context: an abort is "the run was canceled", so it is tested via
 // ctx.Err() first — keying on errors.Is(err, context.DeadlineExceeded) instead

@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
+	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/trigger"
@@ -45,6 +47,7 @@ type CLI struct {
 	Run      RunCmd           `cmd:""                                  default:"withargs"                                             help:"run a single job once"`
 	Watch    WatchCmd         `cmd:""                                  help:"poll trigger: true resources and auto-run affected jobs"`
 	Test     TestCmd          `cmd:""                                  help:"run every job (force) and verify assert directives"`
+	Validate ValidateCmd      `cmd:""                                  help:"check a pipeline for errors without running anything"`
 	MCP      MCPCmd           `cmd:""                                  help:"inspect or authorize a pipeline's mcp_servers: entries"`
 }
 
@@ -175,6 +178,48 @@ func (t *TestCmd) Run() error {
 	}
 
 	fmt.Printf("%d/%d passed\n", len(executed), len(executed))
+
+	return nil
+}
+
+// ValidateCmd checks a pipeline and prints what's wrong with it, without
+// running any of it.
+//
+// Every check it performs already existed; the only way to reach them was to
+// start a run, which opens a state store, builds a workspace, preflights
+// docker, and then begins executing steps. That made "is my YAML right?" an
+// expensive, side-effecting question — worst while writing the pipeline, which
+// is exactly when it gets asked. This command answers it with no store, no
+// workspace, no containers, and nothing written to disk.
+type ValidateCmd struct {
+	Pipeline string `arg:"" help:"path to the pipeline YAML file"`
+}
+
+// Run loads the pipeline (which runs every config-level validator) and then
+// checks artifact flow for each job, joining the failures so one invocation
+// reports everything wrong with the file.
+func (v *ValidateCmd) Run() error {
+	cfg, err := config.LoadConfig(v.Pipeline)
+	if err != nil {
+		return fmt.Errorf("could not load pipeline: %w", err)
+	}
+
+	var errs []error
+
+	for i := range cfg.Jobs {
+		flowErr := workspace.ValidateArtifactFlow(cfg, &cfg.Jobs[i])
+		if flowErr != nil {
+			errs = append(errs, flowErr)
+		}
+	}
+
+	err = errors.Join(errs...)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("ok: %s (%d job(s), %d resource(s), %d agent(s))\n",
+		v.Pipeline, len(cfg.Jobs), len(cfg.Resources), len(cfg.Agents))
 
 	return nil
 }
@@ -404,12 +449,14 @@ func main() {
 
 	err := run(os.Args[1:])
 	if err != nil {
-		slog.Debug("main.run", "error", err)
+		code := outcome.ExitCode(err)
+
+		slog.Debug("main.run", "error", err, "code", code)
 		fmt.Fprintf(os.Stderr, "steps: error: %v\n", err)
-		os.Exit(1)
+		os.Exit(code)
 	}
 
-	slog.Debug("main.exit", "code", 0)
+	slog.Debug("main.exit", "code", outcome.ExitOK)
 }
 
 func run(args []string) error {

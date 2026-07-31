@@ -91,6 +91,13 @@ linters:
             # into resource/agent territory, which pipeline.RunJob still
             # exclusively orchestrates.
             - "github.com/jtarchie/steps/internal/mcp"
+            # outcome is a stdlib-only leaf supplying the vocabulary main
+            # needs at the process boundary: which exit code an error earns
+            # (outcome.ExitCode). Classifying a failure as "the pipeline said
+            # no" vs "the pipeline could not run" is the same distinction
+            # pipeline already uses for hook dispatch, so main consumes it
+            # rather than keeping a second, drifting copy.
+            - "github.com/jtarchie/steps/internal/outcome"
             - "github.com/jtarchie/steps/internal/store"
             - "github.com/jtarchie/steps/internal/trigger"
             - "github.com/jtarchie/steps/internal/workspace"

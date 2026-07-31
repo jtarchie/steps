@@ -58,3 +58,33 @@ func TestFailNilSafe(t *testing.T) {
 		t.Error("Fail(nil) should be nil")
 	}
 }
+
+// A wrapper script needs to tell "my task failed" from "the runner could not
+// run" from "I hit Ctrl-C". All three used to exit 1.
+func TestExitCode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "success", err: nil, want: ExitOK},
+		{name: "task failure", err: Fail(errors.New("exit status 1")), want: ExitFailed},
+		{name: "wrapped task failure", err: fmt.Errorf("run: %w", Fail(errors.New("red"))), want: ExitFailed},
+		{name: "infrastructure error", err: errors.New("docker daemon not running"), want: ExitErrored},
+		{name: "config error", err: errors.New("pipeline YAML: unknown key"), want: ExitErrored},
+		{name: "abort", err: fmt.Errorf("run: %w", context.Canceled), want: ExitAborted},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := ExitCode(test.err)
+			if got != test.want {
+				t.Errorf("ExitCode(%v) = %d, want %d", test.err, got, test.want)
+			}
+		})
+	}
+}
