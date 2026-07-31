@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-//go:embed prompts/*.md agents/*.yml tools/*.md skills/*/SKILL.md
+//go:embed prompts/*.md agents/*.yml tools/*.md
 var builtinFS embed.FS
 
 // ReadBuiltinPrompt returns the content of a named built-in system prompt.
@@ -46,16 +46,6 @@ func ReadBuiltinToolDescription(name string) (string, error) {
 	return string(data), nil
 }
 
-// ReadBuiltinSkill returns the content of a named built-in skill.
-// name is like "code-review" — resolves to "skills/<name>/SKILL.md".
-func ReadBuiltinSkill(name string) (string, error) {
-	data, err := builtinFS.ReadFile("skills/" + name + "/SKILL.md")
-	if err != nil {
-		return "", fmt.Errorf("built-in skill %q not found", name)
-	}
-	return string(data), nil
-}
-
 // ListBuiltinAgentNames returns the available built-in agent profile names.
 func ListBuiltinAgentNames() ([]string, error) {
 	entries, err := builtinFS.ReadDir("agents")
@@ -74,35 +64,60 @@ func ListBuiltinAgentNames() ([]string, error) {
 	return names, nil
 }
 
-// registerBuiltinAgents populates c.Agents with built-in agent profiles for
-// any name not already defined by the user's pipeline config. A user-defined
-// agent with the same name as a built-in overrides it (pipeline config wins).
+// registerBuiltinAgents makes every built-in agent profile available as
+// @builtin/<name>, and merges a user's same-named entry ON TOP of the profile
+// rather than replacing it.
+//
+// The merge is what makes these usable at all. Built-in profiles ship a
+// persona and a tool grant but no source: — they can't, since the model to
+// call is the one thing only the user knows. Under the previous
+// all-or-nothing rule, naming @builtin/reviewer in agents: to supply that
+// model discarded the whole profile, so the only way to get a model was to
+// lose the prompt the profile existed for. Now the entry supplies what it
+// sets and inherits the rest:
+//
+//	agents:
+//	- name: "@builtin/reviewer"
+//	  source: { model: lmstudio/qwen }   # persona and tools come from the profile
+//
+// It reuses mergeAgentDocument, so an @builtin reference behaves exactly like
+// a file: include that happens to live in the embedded FS — same "inline wins"
+// semantics, no second merge philosophy to learn.
 func (c *Config) registerBuiltinAgents() {
 	builtinNames, err := ListBuiltinAgentNames()
 	if err != nil {
 		slog.Warn("builtin.agents.list", "error", err)
+
 		return
 	}
 
 	for _, name := range builtinNames {
 		fullName := "@builtin/" + name
-		if c.findAgentByName(fullName) {
-			continue
-		}
 
 		agent, err := ReadBuiltinAgent(name)
 		if err != nil {
 			slog.Warn("builtin.agents.load", "name", name, "error", err)
+
 			continue
 		}
 
 		err = resolveBuiltinAgentSystem(&agent)
 		if err != nil {
 			slog.Warn("builtin.agents.resolve", "name", name, "error", err)
+
 			continue
 		}
 
 		agent.Name = fullName
+
+		existing := c.findAgentIndex(fullName)
+		if existing >= 0 {
+			mergeAgentDocument(&c.Agents[existing], agent)
+			slog.Debug("builtin.agents.merge", "name", fullName)
+
+			continue
+		}
+
 		c.Agents = append(c.Agents, agent)
 		slog.Debug("builtin.agents.register", "name", fullName)
 	}
@@ -131,14 +146,15 @@ func resolveBuiltinAgentSystem(a *Agent) error {
 	return nil
 }
 
-// findAgentByName checks if an agent with the given name already exists.
-func (c *Config) findAgentByName(name string) bool {
+// findAgentIndex returns the index of the agent with the given name, or -1.
+func (c *Config) findAgentIndex(name string) int {
 	for i := range c.Agents {
 		if c.Agents[i].Name == name {
-			return true
+			return i
 		}
 	}
-	return false
+
+	return -1
 }
 
 // resolveSubAgentDescriptions walks every agent's tool spec and, for any

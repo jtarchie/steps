@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -117,5 +118,56 @@ func TestValidateExamples(t *testing.T) {
 				t.Errorf("validate %s: %v", path, err)
 			}
 		})
+	}
+}
+
+// A built-in agent referenced with only a source: reaches the model carrying
+// the profile's persona and tool grant. This is the whole point of the
+// @builtin merge: the pipeline supplies the one thing it must (which model),
+// and gets the prompt and tools it referenced the profile for.
+func TestEndToEndBuiltinAgentSuppliesOnlyTheModel(t *testing.T) {
+	dir := t.TempDir()
+	fake := newFakeLLM(t, says("Looks fine."))
+
+	path := writePipeline(t, dir, `
+agents:
+- name: "@builtin/reviewer"
+  source:
+    model: openai/test-model
+    endpoint: `+fake.URL+`
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+jobs:
+- name: review
+  plan:
+  - agent: "@builtin/reviewer"
+    prompt: review the notes
+`)
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	err := run([]string{path})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	req := fake.request(1)
+
+	if req.systemMessage() == "" {
+		t.Error("no system message on the wire; the built-in persona was lost")
+	}
+
+	// reviewer is the read-only profile: it grants read tools and
+	// deliberately no shell or write access.
+	got := req.toolNames()
+	for _, want := range []string{"read_file", "list_dir", "search_files"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("tools on the wire = %v, want it to include %q", got, want)
+		}
+	}
+
+	for _, unwanted := range []string{"run_shell", "write_file", "edit_file"} {
+		if slices.Contains(got, unwanted) {
+			t.Errorf("tools on the wire = %v, want the read-only profile to withhold %q", got, unwanted)
+		}
 	}
 }

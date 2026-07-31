@@ -304,14 +304,24 @@ jobs:
 
 # ─── Built-in agents (@builtin/<name>) ──────────────────────────────────────
 # Ships with the binary: @builtin/builder, @builtin/planner, @builtin/explorer,
-# @builtin/reviewer. Each bundles a system prompt and default tool grant.
+# @builtin/reviewer. Each bundles a system prompt, a tool grant, and dials.
 #
-# Use them like any agent step:
-#   - agent: "@builtin/builder"
-#     prompt: Refactor api/handlers.go to use generics.
+# They carry no source: — which model to call is the one thing only you know —
+# so declare one and inherit everything else:
+#   agents:
+#   - name: "@builtin/builder"
+#     source: { model: openrouter/anthropic/claude-3.5-sonnet }
 #
-# A pipeline-level agents: entry with the same name overrides the built-in.
-# system_file: "@builtin/<name>" also works to load just the prompt:
+#   jobs:
+#   - name: refactor
+#     plan:
+#     - agent: "@builtin/builder"
+#       prompt: Refactor api/handlers.go to use generics.
+#
+# Anything the entry sets wins over the profile, so the same block can raise
+# max_turns: or narrow tools: while keeping the built-in persona.
+#
+# system_file: "@builtin/<name>" still works to borrow only the prompt:
 #   agents:
 #   - name: my-coder
 #     source: { model: openrouter/anthropic/claude-3.5-sonnet }
