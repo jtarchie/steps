@@ -9,6 +9,26 @@ import (
 	"strings"
 )
 
+// notFound is the shared shape of every "you named something that isn't
+// there" error: the kind of thing looked up, what was written, the nearest
+// match when there is one, and the full list to choose from. FindJob has
+// reported the available names for a while; the other lookups now do too,
+// since a misspelled name is the most common way to misconfigure a pipeline
+// that is otherwise well-formed.
+func notFound(kind, name string, available []string) error {
+	return fmt.Errorf("no %s named %q%s (available: %v)", kind, name, suggestion(name, available), available)
+}
+
+// names collects the Name field of every entry, in declaration order, via get.
+func names[T any](entries []T, get func(T) string) []string {
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, get(entry))
+	}
+
+	return out
+}
+
 // suggestion renders the parenthetical for an error message — ` (did you mean
 // "prompt"?)` — or "" when nothing is close enough to be worth guessing.
 func suggestion(got string, candidates []string) string {

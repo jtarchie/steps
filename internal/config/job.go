@@ -16,6 +16,9 @@ type Job struct {
 	// job's run must have produced (see Assert). A match clears the plan's
 	// failure; a mismatch fails the job. Never hashed.
 	Assert *Assert `yaml:"assert,omitempty"`
+	// Line is the job's source line in the pipeline file, filled in after
+	// decoding (see stampLines). Never written in YAML and never hashed.
+	Line int `yaml:"-"`
 }
 
 // visitHookSteps calls fn for every hook step reachable from a job (each plan
@@ -26,7 +29,7 @@ func (j Job) visitHookSteps(fn func(label string, step *Step) error) error {
 
 	for i := range j.Plan {
 		err := j.Plan[i].Hooks.Each(func(name string, hook *Step) error {
-			return visitStepTree(fmt.Sprintf("%s step %d (%s hook)", jobLabel, i, name), hook, fn)
+			return visitStepTree(fmt.Sprintf("%s step %d%s (%s hook)", jobLabel, i, j.Plan[i].at(), name), hook, fn)
 		})
 		if err != nil {
 			return err
@@ -48,7 +51,7 @@ func (j Job) visitSteps(fn func(label string, step *Step) error) error {
 	jobLabel := fmt.Sprintf("job %q", j.Name)
 
 	for i := range j.Plan {
-		err := visitStepTree(fmt.Sprintf("%s step %d", jobLabel, i), &j.Plan[i], fn)
+		err := visitStepTree(fmt.Sprintf("%s step %d%s", jobLabel, i, j.Plan[i].at()), &j.Plan[i], fn)
 		if err != nil {
 			return err
 		}

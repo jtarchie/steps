@@ -199,7 +199,7 @@ func (c *Config) FindAgent(name string) (*Agent, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("no agent named %q", name)
+	return nil, notFound("agent", name, names(c.Agents, func(a Agent) string { return a.Name }))
 }
 
 // validateAgentEndpoints rejects an agents: entry whose source.endpoint:

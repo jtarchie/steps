@@ -302,6 +302,15 @@ func TestLoadConfigStepPromptFileDeferredFormLeftUnresolved(t *testing.T) {
 	t.Parallel()
 
 	path := writeConfig(t, `
+resource_types:
+- name: mock
+  config:
+    check: 'echo ''[{"ref":"1"}]'''
+    in: "true"
+resources:
+- name: repo
+  type: mock
+  source: {}
 agents:
 - name: reviewer
   source: { model: lmstudio/qwen }

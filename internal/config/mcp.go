@@ -132,7 +132,7 @@ func (c *Config) FindMCPServer(name string) (*MCPServer, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("no mcp_servers entry named %q", name)
+	return nil, notFound("mcp_servers entry", name, names(c.MCPServers, func(s MCPServer) string { return s.Name }))
 }
 
 // validateMCPServers checks every mcp_servers: entry at load time: a

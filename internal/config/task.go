@@ -121,5 +121,5 @@ func (c *Config) FindTask(name string) (*Task, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("no task named %q", name)
+	return nil, notFound("task", name, names(c.Tasks, func(t Task) string { return t.Name }))
 }

@@ -80,7 +80,7 @@ func (c *Config) FindResource(name string) (*Resource, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("no resource named %q", name)
+	return nil, notFound("resource", name, names(c.Resources, func(r Resource) string { return r.Name }))
 }
 
 // FindResourceType returns the resource type with the given name, or an error if not found.
@@ -95,5 +95,5 @@ func (c *Config) FindResourceType(name string) (*ResourceType, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("no resource_type named %q", name)
+	return nil, notFound("resource_type", name, names(c.ResourceTypes, func(rt ResourceType) string { return rt.Name }))
 }

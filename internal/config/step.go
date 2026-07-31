@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -198,6 +199,10 @@ type Step struct {
 	// or twice in a plan under two names. Empty (the default) means the
 	// resource name equals Get. Get steps only.
 	Resource string `yaml:"resource,omitempty"`
+	// Line is the step's source line in the pipeline file, filled in after
+	// decoding (see stampLines) so a validation error can point at a place in
+	// the file. Never written in YAML and never hashed.
+	Line int `yaml:"-"`
 }
 
 // InputSpec is a step's inputs: declaration. It is a distinct type rather than
@@ -375,6 +380,149 @@ func (s Step) Kind() (kind StepKind, ok bool) {
 	}
 
 	return kind, ok
+}
+
+// validateStepKinds rejects a step that names no kind, or more than one.
+//
+// Step.Kind already answers this, but until now only validateHookStep and
+// validateStepAssert asked: a plan step setting both task: and agent: loaded
+// cleanly and failed mid-run, after earlier steps had already executed. A
+// malformed step is a typo, and a typo should cost a load, not a build.
+func (c *Config) validateStepKinds() error {
+	for _, job := range c.Jobs {
+		err := job.visitSteps(func(label string, step *Step) error {
+			_, ok := step.Kind()
+			if ok {
+				return nil
+			}
+
+			set := step.kindFieldsSet()
+			if len(set) == 0 {
+				return fmt.Errorf("%s: step names no kind, set one of get/task/put/agent", label)
+			}
+
+			return fmt.Errorf("%s: step sets %s, but a step is exactly one of get/task/put/agent",
+				label, strings.Join(set, " and "))
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// kindFieldsSet names the kind-selecting fields this step sets, in schema
+// order, for the "sets task and agent" half of validateStepKinds' message.
+func (s Step) kindFieldsSet() []string {
+	set := make([]string, 0, 4)
+
+	for _, candidate := range [...]struct {
+		name  string
+		value string
+	}{
+		{"get", s.Get},
+		{"task", s.Task},
+		{"put", s.Put},
+		{"agent", s.Agent},
+	} {
+		if candidate.value != "" {
+			set = append(set, candidate.name)
+		}
+	}
+
+	return set
+}
+
+// validateStepReferences rejects a step naming a resource, agent, or tasks:
+// entry that the pipeline does not define.
+//
+// A misspelled name is the most common way to break an otherwise well-formed
+// pipeline, and it used to survive load: only a get step's resource: alias was
+// checked, so `agent: reviwer` or `put: relase` failed partway through a run,
+// after earlier steps had already done their work. Checking every reference up
+// front makes a typo cost a load rather than a build.
+func (c *Config) validateStepReferences() error {
+	for _, job := range c.Jobs {
+		err := job.visitSteps(func(label string, step *Step) error {
+			err := c.resolveStepReference(step)
+			if err != nil {
+				return fmt.Errorf("%s: %w", label, err)
+			}
+
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// resolveStepReference looks up whatever a step names, reporting the lookup
+// error unchanged. A step whose kind is malformed resolves to nothing —
+// validateStepKinds reports that on its own rather than having every caller
+// repeat it.
+func (c *Config) resolveStepReference(step *Step) error {
+	kind, ok := step.Kind()
+	if !ok {
+		return nil
+	}
+
+	var err error
+
+	switch kind {
+	case StepKindGet:
+		if step.Resource != "" {
+			return nil // the alias is validateGetResource's to check
+		}
+
+		_, err = c.FindResource(step.Get)
+	case StepKindPut:
+		_, err = c.FindResource(step.Put)
+	case StepKindAgent:
+		_, err = c.FindAgent(step.Agent)
+	case StepKindTask:
+		if step.Run != "" {
+			return nil // an inline task never consults tasks:
+		}
+
+		_, err = c.FindTask(step.Task)
+	}
+
+	return err
+}
+
+// validateStepFieldPlacement rejects the three kind-specific fields that had
+// no placement check: trigger: and version: (get-only) and params: (put-only).
+//
+// Every other kind-specific field already errors when written on the wrong
+// kind. These three were silently ignored instead, so `trigger: true` on a
+// task step — a plausible reading of "run this when something changes" —
+// looked accepted and did nothing.
+func (c *Config) validateStepFieldPlacement() error {
+	for _, job := range c.Jobs {
+		err := job.visitSteps(func(label string, step *Step) error {
+			isGet, isPut := step.Get != "", step.Put != ""
+
+			switch {
+			case step.Trigger && !isGet:
+				return fmt.Errorf("%s: trigger is only valid on get steps", label)
+			case step.Version != nil && !isGet:
+				return fmt.Errorf("%s: version is only valid on get steps", label)
+			case step.Params != nil && !isPut:
+				return fmt.Errorf("%s: params is only valid on put steps", label)
+			default:
+				return nil
+			}
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func visitStepTree(label string, step *Step, fn func(label string, step *Step) error) error {

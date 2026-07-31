@@ -5,6 +5,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -46,6 +47,8 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("could not parse pipeline YAML %q: %w", path, err)
 	}
 
+	cfg.stampLines(data)
+
 	slog.Info("config.loaded",
 		"path", path,
 		"resource_types", len(cfg.ResourceTypes),
@@ -73,11 +76,19 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// validate checks schema-level invariants that yaml.Unmarshal can't express
+// validate checks schema-level invariants that the YAML decoder can't express
 // on its own — in particular everything around workspace:/inputs:/outputs:,
 // so a misconfigured pipeline fails at load time rather than mid-build.
+//
+// Every check runs and their errors are joined, rather than returning at the
+// first one: a pipeline with four mistakes should take one run to find them
+// all, not four. Each check still stops at its own first error, which keeps
+// the walkers simple and the output short.
 func (c *Config) validate() error {
 	checks := []func() error{
+		c.validateStepKinds,
+		c.validateStepReferences,
+		c.validateStepFieldPlacement,
 		c.validateWorkspace,
 		c.validateArtifactDecls,
 		c.validateGetResource,
@@ -96,14 +107,16 @@ func (c *Config) validate() error {
 		c.validateCredentialHandling,
 	}
 
+	errs := make([]error, 0, len(checks))
+
 	for _, check := range checks {
 		err := check()
 		if err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // validateCredentialHandling groups validateAgentEndpoints and every
