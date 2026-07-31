@@ -35,3 +35,13 @@ steps mcp tools|login       inspect or authorize mcp_servers: entries
 ```
 
 Two of these answer most "why is it doing that?" questions: `steps plan` explains what the cache would skip, and `steps runs --steps` shows what previous runs actually did.
+
+## Editor support
+
+[`steps.schema.json`](../steps.schema.json) is a JSON Schema for the pipeline format. Point your editor at it with a modeline on the first line of a pipeline, as every example does:
+
+```yaml
+# yaml-language-server: $schema=./steps.schema.json
+```
+
+That gives completion and inline errors while you type. `steps validate` remains the authority — it checks rules a schema can't express, like whether a `to:` target exists in the same segment — but the schema catches misspelled keys at the keystroke rather than the run.

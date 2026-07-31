@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../steps.schema.json
 # Control flow, all in one self-verifying pipeline. Four opt-in features that
 # shape which steps run and in what order — each modelless, so the whole file
 # runs offline as a regression fixture:

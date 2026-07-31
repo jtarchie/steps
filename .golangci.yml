@@ -79,6 +79,13 @@ linters:
             - "$gostd"
             - "github.com/alecthomas/kong"
             - "github.com/lmittmann/tint"
+            # Test-only, both of them: schema_test.go validates every shipped
+            # example against steps.schema.json (the published editor schema)
+            # and asserts its step properties still match config.Step's yaml
+            # tags. main's own code imports neither — the schema is a
+            # documentation artifact, and this is what stops it drifting.
+            - "github.com/santhosh-tekuri/jsonschema/v6"
+            - "gopkg.in/yaml.v3"
             - "github.com/modelcontextprotocol/go-sdk/mcp"
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/pipeline"

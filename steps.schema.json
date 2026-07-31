@@ -1,0 +1,840 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jtarchie/steps/steps.schema.json",
+  "title": "steps pipeline",
+  "description": "A Concourse-style pipeline with LLM agent steps. Add `# yaml-language-server: $schema=./steps.schema.json` at the top of a pipeline file for editor completion and validation.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "defaults": {
+      "$ref": "#/$defs/defaults"
+    },
+    "resource_types": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/resourceType"
+      }
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/resource"
+      }
+    },
+    "agents": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/agent"
+      }
+    },
+    "mcp_servers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/mcpServer"
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/task"
+      }
+    },
+    "jobs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    "workspace": {
+      "$ref": "#/$defs/workspace"
+    },
+    "assert": {
+      "$ref": "#/$defs/assert"
+    }
+  },
+  "$defs": {
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Pipeline-wide fallbacks. $STEPS_MODEL overrides model.",
+      "properties": {
+        "model": {
+          "type": "string",
+          "description": "source.model for any agent that names none."
+        }
+      }
+    },
+    "resourceType": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "config"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "image": {
+          "type": "string",
+          "description": "Run check/in/out in this container image instead of on the host."
+        },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "check": {
+              "type": "string",
+              "description": "Prints a JSON array of version objects, oldest first."
+            },
+            "in": {
+              "type": "string",
+              "description": "Fetches one version into the (empty) working directory."
+            },
+            "out": {
+              "type": "string",
+              "description": "Publishes. Omit to make the type read-only; a put against it is then an error."
+            },
+            "mcp": {
+              "$ref": "#/$defs/mcpResourceConfig"
+            }
+          }
+        }
+      }
+    },
+    "mcpResourceConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "server",
+        "check"
+      ],
+      "description": "Back check/in/out with MCP tool calls instead of shell commands. Mutually exclusive with check/in/out.",
+      "properties": {
+        "server": {
+          "type": "string"
+        },
+        "check": {
+          "$ref": "#/$defs/mcpToolCall"
+        },
+        "in": {
+          "$ref": "#/$defs/mcpToolCall"
+        },
+        "out": {
+          "$ref": "#/$defs/mcpToolCall"
+        }
+      }
+    },
+    "mcpToolCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool"
+      ],
+      "properties": {
+        "tool": {
+          "type": "string"
+        }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "type"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "description": "A resource_types: entry, or the built-in `git`."
+        },
+        "source": {
+          "type": "object",
+          "description": "Type-specific configuration, available as {{ .source.* }}."
+        }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/agentSource"
+        },
+        "description": {
+          "type": "string",
+          "description": "Required when this agent is granted as a sub-agent tool."
+        },
+        "file": {
+          "type": "string",
+          "description": "Load this agent from a YAML document; inline fields win."
+        },
+        "image": {
+          "type": "string"
+        },
+        "system": {
+          "type": "string"
+        },
+        "system_file": {
+          "type": "string",
+          "description": "Load system from a file, or @builtin/<name>."
+        },
+        "temperature": {
+          "type": "number"
+        },
+        "top_p": {
+          "type": "number"
+        },
+        "max_tokens": {
+          "type": "integer"
+        },
+        "reasoning_effort": {
+          "type": "string"
+        },
+        "max_turns": {
+          "type": "integer",
+          "description": "Tool-calling turns per attempt. Default 8."
+        },
+        "compact_after_tokens": {
+          "type": "integer",
+          "description": "Compact the conversation past this size. 0 disables."
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/toolSpec"
+          }
+        }
+      }
+    },
+    "agentSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string",
+          "description": "Provider-prefixed, e.g. openai/gpt-4o or lmstudio/qwen."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "Required when the model has no known provider prefix."
+        },
+        "api_key_env": {
+          "type": "string",
+          "description": "Environment variable holding the key. Never the key itself."
+        },
+        "string_tool_choice": {
+          "type": "boolean"
+        }
+      }
+    },
+    "toolSpec": {
+      "description": "A builtin name, a custom command-backed tool, a sub-agent, or an MCP grant.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "A built-in tool by name.",
+          "enum": [
+            "read_file",
+            "list_dir",
+            "run_shell",
+            "write_file",
+            "edit_file",
+            "search_files"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "builtin"
+          ],
+          "properties": {
+            "builtin": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "run"
+          ],
+          "description": "A custom tool backed by a shell command.",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "run": {
+              "type": "string",
+              "description": "sh -c template; {{ .args.X }} interpolated. Use | shellquote."
+            },
+            "required": {
+              "type": "boolean",
+              "description": "The step cannot finish until this succeeds once."
+            },
+            "max_calls": {
+              "type": "integer"
+            },
+            "max_output_bytes": {
+              "type": "integer"
+            },
+            "args": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Pinned arguments the model can neither see nor set."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "agent"
+          ],
+          "description": "Expose another agent as a callable tool.",
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mcp"
+          ],
+          "description": "Grant tools from an mcp_servers: entry: one (tool:), a subset (tools:), or all.",
+          "properties": {
+            "mcp": {
+              "type": "string"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "description": {
+              "type": "string"
+            },
+            "required": {
+              "type": "boolean"
+            },
+            "max_calls": {
+              "type": "integer"
+            },
+            "max_output_bytes": {
+              "type": "integer"
+            }
+          }
+        }
+      ]
+    },
+    "mcpServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "HTTP transport. Mutually exclusive with command."
+        },
+        "command": {
+          "type": "string",
+          "description": "stdio transport: a subprocess to run."
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "command only."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "command only."
+        },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "enum": [
+                "none",
+                "bearer",
+                "oauth"
+              ]
+            },
+            "api_key_env": {
+              "type": "string",
+              "description": "bearer only."
+            },
+            "scopes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "run": {
+          "type": "string"
+        },
+        "run_file": {
+          "type": "string",
+          "description": "Mutually exclusive with run."
+        },
+        "file": {
+          "type": "string",
+          "description": "Load this task from a YAML document; inline fields win."
+        },
+        "fix": {
+          "$ref": "#/$defs/fixSpec"
+        },
+        "image": {
+          "type": "string"
+        },
+        "timeout": {
+          "type": "string",
+          "description": "Go duration, e.g. 2m."
+        },
+        "inputs": {
+          "$ref": "#/$defs/inputSpecNames"
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "fixSpec": {
+      "description": "An agent to invoke when the task's run: exits non-zero.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "The agent's name."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "agent"
+          ],
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "prompt_file": {
+              "type": "string"
+            },
+            "dir": {
+              "type": "string"
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/toolSpec"
+              }
+            },
+            "attempts": {
+              "type": "integer"
+            },
+            "timeout": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "inputSpec": {
+      "description": "Artifact names this step reads, or the scalar `all` (put steps only).",
+      "oneOf": [
+        {
+          "const": "all"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "inputSpecNames": {
+      "description": "Artifact names. `all` is not valid on a tasks: entry.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "plan"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "plan": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/step"
+          }
+        },
+        "assert": {
+          "$ref": "#/$defs/assert"
+        },
+        "on_success": {
+          "$ref": "#/$defs/step"
+        },
+        "on_failure": {
+          "$ref": "#/$defs/step"
+        },
+        "on_error": {
+          "$ref": "#/$defs/step"
+        },
+        "on_abort": {
+          "$ref": "#/$defs/step"
+        },
+        "ensure": {
+          "$ref": "#/$defs/step"
+        }
+      }
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Exactly one of get/task/put/agent.",
+      "properties": {
+        "get": {
+          "type": "string"
+        },
+        "trigger": {
+          "type": "boolean",
+          "description": "get only: poll this in `steps watch`."
+        },
+        "version": {
+          "description": "get only: `latest` (default), `every`, or a pinned version object."
+        },
+        "resource": {
+          "type": "string",
+          "description": "get only: the resource to fetch when it differs from the step's name."
+        },
+        "task": {
+          "type": "string"
+        },
+        "run": {
+          "type": "string",
+          "description": "task only. Present means inline; absent means task: names a tasks: entry."
+        },
+        "run_file": {
+          "type": "string"
+        },
+        "fix": {
+          "$ref": "#/$defs/fixSpec"
+        },
+        "input_mapping": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "output_mapping": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "put": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object",
+          "description": "put only: passed to the out command as {{ .params.* }}."
+        },
+        "agent": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "prompt_file": {
+          "$ref": "#/$defs/fileRef"
+        },
+        "dir": {
+          "type": "string"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/toolSpec"
+          }
+        },
+        "attempts": {
+          "type": "integer"
+        },
+        "context_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "verdicts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "handoff": {
+          "$ref": "#/$defs/handoffSpec"
+        },
+        "timeout": {
+          "type": "string",
+          "description": "Go duration, per attempt."
+        },
+        "inputs": {
+          "$ref": "#/$defs/inputSpec"
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "image": {
+          "type": "string"
+        },
+        "when": {
+          "$ref": "#/$defs/whenSpec"
+        },
+        "to": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Route by outcome: success/failure, or a verdict name."
+        },
+        "max_visits": {
+          "type": "integer",
+          "description": "Required when any to: target routes backward."
+        },
+        "assert": {
+          "$ref": "#/$defs/assert"
+        },
+        "on_success": {
+          "$ref": "#/$defs/step"
+        },
+        "on_failure": {
+          "$ref": "#/$defs/step"
+        },
+        "on_error": {
+          "$ref": "#/$defs/step"
+        },
+        "on_abort": {
+          "$ref": "#/$defs/step"
+        },
+        "ensure": {
+          "$ref": "#/$defs/step"
+        }
+      }
+    },
+    "whenSpec": {
+      "description": "A guard command. Exit 0 runs the step, non-zero skips it.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "run"
+          ],
+          "properties": {
+            "run": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "handoffSpec": {
+      "description": "What this agent step exchanges with the steps around it. context/tool look backward along a route; note looks forward along the plan.",
+      "oneOf": [
+        {
+          "type": "boolean",
+          "description": "Shorthand for { context: true }."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "context": {
+              "type": "boolean",
+              "description": "Receive a <transition_context> block on routed entry."
+            },
+            "tool": {
+              "type": "boolean",
+              "description": "Receive a previous_run tool."
+            },
+            "note": {
+              "type": "boolean",
+              "description": "Write a handoff note for the next agent step."
+            }
+          }
+        }
+      ]
+    },
+    "fileRef": {
+      "description": "A pipeline-relative path, or a file inside a declared input artifact.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "artifact",
+            "path"
+          ],
+          "properties": {
+            "artifact": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "assert": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Position decides which fields are legal: execution on a job/pipeline, stdout/code on a task step, stdout/tool_calls on an agent step.",
+      "properties": {
+        "execution": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stdout": {
+          "type": "string"
+        },
+        "code": {
+          "type": "integer"
+        },
+        "tool_calls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "args": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strategy"
+      ],
+      "description": "Opt into per-step isolation. Absent means every step in a build shares one directory.",
+      "properties": {
+        "strategy": {
+          "enum": [
+            "copy",
+            "btrfs"
+          ]
+        },
+        "root": {
+          "type": "string",
+          "description": "Required for btrfs."
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "compression": {
+              "enum": [
+                "zstd",
+                "lzo",
+                "zlib",
+                "none"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

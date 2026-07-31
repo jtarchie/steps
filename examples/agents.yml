@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../steps.schema.json
 # Agent features, consolidated. Every job here invokes an LLM, so — unlike
 # examples/flow.yml — this file can't be a `steps test` fixture (no
 # mock-provider seam at the CLI). It's a reference: read the job whose feature

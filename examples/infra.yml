@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../steps.schema.json
 # Two pipeline-infrastructure features that don't fit the control-flow or agent
 # files: cross-job triggering and containerized execution. They share no state;
 # read the jobs for the one you want. (Workspace isolation is a third such
