@@ -5,6 +5,12 @@
 # Point the agents at any local OpenAI-compatible server (lmstudio/ollama) or
 # swap the model refs for a cloud provider.
 
+# Every agent below inherits this model. Override it per agent with its own
+# source.model:, per run with $STEPS_MODEL, or edit this one line — the point
+# is that the model is named once rather than on every agent.
+defaults:
+  model: lmstudio/google/gemma-4-26b-a4b
+
 resource_types:
 # For the `review` job: list/checkout open PRs and post a verdict via gh.
 - name: pull-request
@@ -72,7 +78,6 @@ agents:
 # The reviewer: reads, runs read-only git/gh, and posts a verdict through a
 # custom tool that shows off the tool-call guards (required/max_calls/args).
 - name: reviewer
-  source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: |
     You are a security-focused reviewer. Be terse, cite file:line, prioritize
     correctness over style, and never claim to have read a diff you didn't.
@@ -98,7 +103,6 @@ agents:
 # conversation. Neither is in the default grant (adding one would change every
 # zero-config step's merkle hash), so both are listed explicitly.
 - name: fixer
-  source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: |
     You fix failing checks. The repo is under ./repo. Make the smallest change
     that makes the check pass. Never weaken assertions or delete tests.
@@ -114,11 +118,9 @@ agents:
 # Sub-agent delegation: `lead` grants `summarizer` as a callable tool, so it can
 # offload bulk reading to a cheaper model instead of pulling a whole file in.
 - name: summarizer
-  source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: You compress files. Given a path, read it and return only the gist.
   tools: [read_file]
 - name: lead
-  source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: |
     You are a lead reviewer. Prefer to delegate bulk reading to the
     `summarizer` tool (pass the path in `request`) rather than reading large
@@ -134,7 +136,6 @@ agents:
 # every tool). No sub-delegation here, just tools sourced from a remote MCP
 # server instead of a shell command.
 - name: triager
-  source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: You triage GitHub issues, finding ones needing attention and summarizing them.
   tools:
   - mcp: github-mcp
@@ -154,19 +155,15 @@ agents:
 # writer produces), so every agent that touches it is granted the tools to read
 # it — and the judge job below declares that flow with inputs:/outputs:.
 - name: writer
-  source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: You draft short summaries. You read files and write your draft to disk.
   tools: [read_file, list_dir, run_shell]
 - name: critic
-  source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: You review a draft and decide whether it ships, needs revision, or must escalate.
   tools: [read_file, list_dir]
 - name: publisher
-  source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: You publish the approved draft.
   tools: [read_file]
 - name: escalator
-  source: { model: lmstudio/google/gemma-4-26b-a4b }
   system: You write a note handing the draft to a human.
   tools: [read_file]
 

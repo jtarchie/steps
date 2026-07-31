@@ -43,8 +43,15 @@ type Task struct {
 	// Inputs/Outputs are consulted only when a pipeline sets workspace: (see
 	// WorkspaceConfig); a referencing step's own Inputs/Outputs, if
 	// non-nil, override these for that step only — mirroring how Fix works.
-	Inputs  []string `yaml:"inputs,omitempty"`
-	Outputs []string `yaml:"outputs,omitempty"`
+	//
+	// Inputs is the same *InputSpec a step carries, so `inputs:` means one
+	// thing in the schema rather than two types that happened to share a
+	// name. The list form decodes identically; only the scalar `all` differs,
+	// and that stays put-only (validateTaskInputsAll) — a reusable task
+	// declaring "everything available" would depend on whichever job called
+	// it, which is the opposite of reusable.
+	Inputs  *InputSpec `yaml:"inputs,omitempty"`
+	Outputs []string   `yaml:"outputs,omitempty"`
 }
 
 // FixSpec is a task step's fix: — the agent to invoke when the task's run:

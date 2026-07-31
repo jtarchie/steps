@@ -342,7 +342,7 @@ func TestResolveTaskInputsOutputsOverride(t *testing.T) {
 	cfg := &Config{
 		Workspace: &WorkspaceConfig{Strategy: "copy"},
 		Tasks: []Task{
-			{Name: "build", Run: "echo hi", Inputs: []string{"repo"}, Outputs: []string{"built"}},
+			{Name: "build", Run: "echo hi", Inputs: Inputs("repo"), Outputs: []string{"built"}},
 		},
 	}
 

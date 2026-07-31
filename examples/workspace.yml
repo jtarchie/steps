@@ -23,6 +23,12 @@ workspace:
   # directory removal otherwise, which still reclaims the space — just
   # without the instant subvolume-metadata cleanup.
 
+# Every agent below inherits this model. Override it per agent with its own
+# source.model:, per run with $STEPS_MODEL, or edit this one line — the point
+# is that the model is named once rather than on every agent.
+defaults:
+  model: lmstudio/google/gemma-4-26b-a4b
+
 # Fetching a repo needs no resource_types: block — `git` ships with steps.
 # Publishing does: what "publish" means is specific to where you're sending
 # it, so a put target is a type you write. This one just lists what it was
@@ -48,9 +54,6 @@ resources:
 
 agents:
 - name: reviewer
-  source:
-    model: lmstudio/google/gemma-4-26b-a4b
-    # api_key_env defaults to OPENROUTER_API_KEY
   system: |
     You review a build's release notes for obvious mistakes. The build's
     output is checked out under ./built in your working directory — nothing

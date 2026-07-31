@@ -64,7 +64,7 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 		fix = step.Fix
 	}
 
-	inputs := task.Inputs
+	inputs := task.Inputs.names()
 	if step.InputsDeclared() {
 		inputs = step.InputNames()
 	}

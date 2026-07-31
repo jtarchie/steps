@@ -4,6 +4,12 @@
 # feature but lives in examples/workspace.yml — its `workspace:` block is
 # pipeline-global and would force isolation on these jobs too.)
 
+# Every agent below inherits this model. Override it per agent with its own
+# source.model:, per run with $STEPS_MODEL, or edit this one line — the point
+# is that the model is named once rather than on every agent.
+defaults:
+  model: lmstudio/google/gemma-4-26b-a4b
+
 resource_types:
 # ── Downstream triggers ──────────────────────────────────────────────────────
 # A self-contained counter backed by a file, so the trigger flow runs with no
@@ -70,7 +76,6 @@ resources:
 
 agents:
 - name: reviewer
-  source: { model: lmstudio/google/gemma-4-26b-a4b }
   image: python:3.12          # run_shell/custom tools execute in python:3.12
   system: You inspect a checked-out repo and report anything unusual.
   tools: [read_file, list_dir, run_shell]

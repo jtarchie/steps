@@ -234,6 +234,31 @@ func (in *InputSpec) UnmarshalYAML(node *yaml.Node) error {
 	}
 }
 
+// names returns the explicit input names, nil-safe, so a caller holding a
+// possibly-absent inputs: doesn't have to nil-check before reading it.
+func (in *InputSpec) names() []string {
+	if in == nil {
+		return nil
+	}
+
+	return in.Names
+}
+
+// validateTaskInputsAll rejects `inputs: all` on a tasks: entry. The scalar
+// means "every artifact available at this point", which is a property of the
+// job doing the calling — a reusable task that declared it would see something
+// different in every job, which is the opposite of reusable. It stays a put
+// step's escape hatch (see InputSpec).
+func (c *Config) validateTaskInputsAll() error {
+	for _, task := range c.Tasks {
+		if task.Inputs != nil && task.Inputs.All {
+			return fmt.Errorf("task %q: inputs: all is only valid on put steps; list the names this task needs", task.Name)
+		}
+	}
+
+	return nil
+}
+
 // Inputs constructs a declared *InputSpec from an explicit name list —
 // Inputs() declares the empty "starts from nothing" form, Inputs("a", "b") a
 // named list. It exists so callers building a Step programmatically (tests,

@@ -367,3 +367,59 @@ func TestFindWithoutNearMatchStillListsCandidates(t *testing.T) {
 
 // second returns the error from a (value, error) pair, discarding the value.
 func second[T any](_ T, err error) error { return err }
+
+// A tasks: entry and a step now spell inputs: the same way — one type, one
+// meaning in the schema, rather than two that happened to share a name.
+func TestTaskInputsAcceptsTheSameFormsAsAStep(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+workspace:
+  strategy: copy
+tasks:
+- name: build
+  run: "true"
+  inputs: [repo]
+  outputs: [built]
+jobs:
+- name: j
+  plan:
+  - task: fetch
+    run: "true"
+    outputs: [repo]
+  - task: build
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	task, err := cfg.FindTask("build")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := task.Inputs.Names; len(got) != 1 || got[0] != "repo" {
+		t.Errorf("task inputs = %v, want [repo]", got)
+	}
+}
+
+// `inputs: all` stays put-only. On a reusable task it would resolve to
+// whatever the calling job happened to have, which is the opposite of
+// reusable.
+func TestTaskInputsAllIsRejected(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+tasks:
+- name: build
+  run: "true"
+  inputs: all
+jobs:
+- name: j
+  plan: [{ task: build }]
+`)
+
+	wantLoadError(t, path, `task "build": inputs: all is only valid on put steps`)
+}

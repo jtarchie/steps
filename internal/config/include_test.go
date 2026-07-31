@@ -592,7 +592,11 @@ jobs:
 func TestLoadConfigBuiltinAgentRegistration(t *testing.T) {
 	t.Parallel()
 
+	// defaults.model is all a bare @builtin/ reference needs: no agents:
+	// entry, no per-agent connection string.
 	path := writeConfig(t, `
+defaults:
+  model: lmstudio/qwen
 jobs:
 - name: build
   plan:

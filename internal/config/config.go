@@ -20,6 +20,9 @@ type Config struct {
 	MCPServers    []MCPServer    `yaml:"mcp_servers,omitempty"`
 	Tasks         []Task         `yaml:"tasks"`
 	Jobs          []Job          `yaml:"jobs"`
+	// Defaults supplies pipeline-wide fallbacks — currently just the model
+	// every agent uses when it names none. See Defaults.
+	Defaults *Defaults `yaml:"defaults,omitempty"`
 	// Workspace opts the pipeline into Concourse-style per-step isolation.
 	// Absent (the default) keeps every step in a triggered build sharing one
 	// mutable directory, exactly as before this field existed. See
@@ -64,6 +67,10 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.registerBuiltinAgents()
 	cfg.registerBuiltinResourceTypes()
 
+	// After built-in registration, so a bare @builtin/<name> reference picks
+	// up the default model without needing an agents: entry at all.
+	cfg.applyDefaults()
+
 	err = cfg.resolveSubAgentDescriptions()
 	if err != nil {
 		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
@@ -89,6 +96,7 @@ func (c *Config) validate() error {
 	checks := []func() error{
 		c.validateStepKinds,
 		c.validateStepReferences,
+		c.validateTaskInputsAll,
 		c.validateStepFieldPlacement,
 		c.validateWorkspace,
 		c.validateArtifactDecls,
@@ -97,6 +105,7 @@ func (c *Config) validate() error {
 		c.validateImageRules,
 		c.validateTimeouts,
 		c.validateAgentCompaction,
+		c.validateAgentModels,
 		c.validateHooks,
 		c.validateAgentGraph,
 		c.validateToolCallGuards,

@@ -38,7 +38,7 @@ func (c *Config) validateArtifactDecls() error {
 	for i := range c.Tasks {
 		task := c.Tasks[i]
 
-		err := validateArtifactNames(fmt.Sprintf("task %q", task.Name), task.Inputs, task.Outputs)
+		err := validateArtifactNames(fmt.Sprintf("task %q", task.Name), task.Inputs.names(), task.Outputs)
 		if err != nil {
 			return err
 		}
