@@ -84,7 +84,7 @@ func TestNewToolOutputSpillDir(t *testing.T) {
 func testStepSpace(t *testing.T) workspace.StepSpace {
 	t.Helper()
 
-	provider, err := workspace.NewProvider(nil)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}

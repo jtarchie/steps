@@ -441,7 +441,7 @@ func TestDrainOneRunsClaimedJobAndReportsEmptyQueue(t *testing.T) {
 	cfg := loadConfig(t, dir, dummyPipeline(versionsPath, taskCounter))
 	st := mustOpenStore(t, dir)
 
-	provider, err := workspace.NewProvider(cfg.Workspace)
+	provider, err := workspace.NewProvider(cfg.Workspace, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
@@ -562,7 +562,7 @@ jobs:
 
 	st := mustOpenStore(t, dir)
 
-	provider, err := workspace.NewProvider(cfg.Workspace)
+	provider, err := workspace.NewProvider(cfg.Workspace, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
@@ -588,7 +588,7 @@ func TestWatchRejectsNonPositiveInterval(t *testing.T) {
 
 	st := mustOpenStore(t, dir)
 
-	provider, err := workspace.NewProvider(cfg.Workspace)
+	provider, err := workspace.NewProvider(cfg.Workspace, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
@@ -630,7 +630,7 @@ jobs:
 
 	st := mustOpenStore(t, dir)
 
-	provider, err := workspace.NewProvider(cfg.Workspace)
+	provider, err := workspace.NewProvider(cfg.Workspace, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
@@ -699,7 +699,7 @@ jobs:
 
 	st := mustOpenStore(t, dir)
 
-	provider, err := workspace.NewProvider(cfg.Workspace)
+	provider, err := workspace.NewProvider(cfg.Workspace, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
@@ -777,7 +777,7 @@ jobs:
 
 	st := mustOpenStore(t, dir)
 
-	provider, err := workspace.NewProvider(cfg.Workspace)
+	provider, err := workspace.NewProvider(cfg.Workspace, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
@@ -868,7 +868,7 @@ jobs:
 
 	st := mustOpenStore(t, dir)
 
-	provider, err := workspace.NewProvider(cfg.Workspace)
+	provider, err := workspace.NewProvider(cfg.Workspace, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}

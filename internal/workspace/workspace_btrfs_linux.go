@@ -33,7 +33,7 @@ const btrfsCmdTimeout = 30 * time.Second
 // required (enforced by Config.validateWorkspace at load time) and is never
 // owned/removed by the provider — only the build/step subvolumes created
 // under it are.
-func newBtrfsProvider(ws *config.WorkspaceConfig) Provider {
+func newBtrfsProvider(ws *config.WorkspaceConfig, keep bool) Provider {
 	return &isolatingProvider{
 		backend: btrfsBackend{compression: ws.Options.Compression},
 		validate: func() error {
@@ -41,6 +41,7 @@ func newBtrfsProvider(ws *config.WorkspaceConfig) Provider {
 		},
 		root:     ws.Root,
 		ownsRoot: false,
+		keep:     keep,
 	}
 }
 

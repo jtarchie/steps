@@ -88,7 +88,7 @@ func newTestBtrfsProvider(t *testing.T) Provider {
 		}
 	})
 
-	p := newBtrfsProvider(&config.WorkspaceConfig{Strategy: "btrfs", Root: dir, Options: config.WorkspaceOptions{Compression: "zstd"}})
+	p := newBtrfsProvider(&config.WorkspaceConfig{Strategy: "btrfs", Root: dir, Options: config.WorkspaceOptions{Compression: "zstd"}}, false)
 
 	err = p.Validate()
 	if err != nil {

@@ -98,7 +98,7 @@ func TestSharedProviderReturnsBuildRootForEveryStep(t *testing.T) {
 func newTestCopyProvider(t *testing.T) Provider {
 	t.Helper()
 
-	p, err := newCopyProvider(&config.WorkspaceConfig{Strategy: "copy", Root: t.TempDir()})
+	p, err := newCopyProvider(&config.WorkspaceConfig{Strategy: "copy", Root: t.TempDir()}, false)
 	if err != nil {
 		t.Fatalf("newCopyProvider: %v", err)
 	}

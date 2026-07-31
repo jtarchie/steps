@@ -19,7 +19,7 @@ import (
 func hookTestScope(t *testing.T, markerFile string) hookScope {
 	t.Helper()
 
-	provider, err := workspace.NewProvider(nil)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestRunHooksAbortGracePeriod(t *testing.T) {
 func TestRunHooksEnsureFailsGreenOutcome(t *testing.T) {
 	cfg := &config.Config{Tasks: []config.Task{{Name: "boom", Run: "exit 1"}}}
 
-	provider, err := workspace.NewProvider(nil)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

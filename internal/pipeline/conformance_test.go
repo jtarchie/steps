@@ -75,7 +75,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	provider, err := workspace.NewProvider(nil)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

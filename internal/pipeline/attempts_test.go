@@ -18,7 +18,7 @@ import (
 // TestTaskWithAttempts verifies that a task with attempts: 3 retries on
 // failure and succeeds on a later attempt.
 func TestTaskWithAttempts(t *testing.T) {
-	provider, err := workspace.NewProvider(nil)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestTaskWithAttempts(t *testing.T) {
 // TestTaskWithAttemptsAllFail verifies that when all attempts fail, the error
 // is returned.
 func TestTaskWithAttemptsAllFail(t *testing.T) {
-	provider, err := workspace.NewProvider(nil)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestTaskWithAttemptsAllFail(t *testing.T) {
 
 // TestTaskWithTimeout verifies that a task times out mid-execution.
 func TestTaskWithTimeout(t *testing.T) {
-	provider, err := workspace.NewProvider(nil)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestTaskWithTimeout(t *testing.T) {
 // TestTaskTimeoutIsDeadlineExceeded verifies that a task's timeout results in
 // a DeadlineExceeded error somewhere in the chain.
 func TestTaskTimeoutIsDeadlineExceeded(t *testing.T) {
-	provider, err := workspace.NewProvider(nil)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestTaskTimeoutIsDeadlineExceeded(t *testing.T) {
 // same work against the same deadline expires again, so attempts 2 and 3 would
 // only double the wall clock — see retry.Stop and docs/attempts-timeout.md.
 func TestTaskTimeoutSkipsRemainingAttempts(t *testing.T) {
-	provider, err := workspace.NewProvider(nil)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestTaskTimeoutSkipsRemainingAttempts(t *testing.T) {
 // TestTaskWithAssertAndAttempts verifies that assert is evaluated correctly
 // when attempts is set, and retries happen if the assertion fails.
 func TestTaskWithAssertAndAttempts(t *testing.T) {
-	provider, err := workspace.NewProvider(nil)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +319,7 @@ func TestTaskWithAssertAndAttempts(t *testing.T) {
 // TestTaskHooksFireOnce verifies that hooks fire exactly once after all
 // attempts are exhausted, not once per attempt.
 func TestTaskHooksFireOnce(t *testing.T) {
-	provider, err := workspace.NewProvider(nil)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -61,10 +61,11 @@ var buildVersion = "dev"
 
 // RunCmd runs a single job's plan once, exactly as steps has always done.
 type RunCmd struct {
-	Pipeline string            `arg:""                                                                 help:"path to the pipeline YAML file"`
-	Job      string            `help:"job name to run (defaults to the pipeline's only job)"`
-	Pin      map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                name:"pin"`
-	Force    bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
+	Pipeline      string            `arg:""                                                                 help:"path to the pipeline YAML file"`
+	Job           string            `help:"job name to run (defaults to the pipeline's only job)"`
+	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                name:"pin"`
+	Force         bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
+	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                             help:"leave the build workspace on disk instead of deleting it"`
 }
 
 // Run loads the pipeline, selects a job, and runs it once via
@@ -80,7 +81,7 @@ func (r *RunCmd) Run() error {
 		return err
 	}
 
-	st, provider, cleanup, err := setup(cfg, r.Pipeline)
+	st, provider, cleanup, err := setup(cfg, r.Pipeline, r.KeepWorkspace)
 	if err != nil {
 		return err
 	}
@@ -101,6 +102,7 @@ type WatchCmd struct {
 	MaxConcurrent int               `default:"1"                                                            help:"maximum number of triggered jobs running at once"`
 	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                name:"pin"`
 	Force         bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
+	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                             help:"leave the build workspace on disk instead of deleting it"`
 }
 
 // Run loads the pipeline and blocks in trigger.Watch until canceled
@@ -111,7 +113,7 @@ func (w *WatchCmd) Run() error {
 		return fmt.Errorf("could not load pipeline: %w", err)
 	}
 
-	st, provider, cleanup, err := setup(cfg, w.Pipeline)
+	st, provider, cleanup, err := setup(cfg, w.Pipeline, w.KeepWorkspace)
 	if err != nil {
 		return err
 	}
@@ -142,7 +144,7 @@ func (t *TestCmd) Run() error {
 		return fmt.Errorf("could not load pipeline: %w", err)
 	}
 
-	st, provider, cleanup, err := setup(cfg, t.Pipeline)
+	st, provider, cleanup, err := setup(cfg, t.Pipeline, false)
 	if err != nil {
 		return err
 	}
@@ -645,13 +647,13 @@ func run(args []string) error {
 // (logging, not returning, any close error — mirroring the deferred
 // close-error handling both commands used inline before this helper
 // existed).
-func setup(cfg *config.Config, pipelinePath string) (*store.Store, workspace.Provider, func(), error) {
+func setup(cfg *config.Config, pipelinePath string, keepWorkspace bool) (*store.Store, workspace.Provider, func(), error) {
 	st, err := store.OpenStore(statePath(pipelinePath))
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("could not open state store: %w", err)
 	}
 
-	provider, err := workspace.NewProvider(cfg.Workspace)
+	provider, err := workspace.NewProvider(cfg.Workspace, keepWorkspace)
 	if err != nil {
 		_ = st.Close()
 

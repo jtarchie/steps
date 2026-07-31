@@ -91,19 +91,38 @@ func sanitizeLabel(label string) string {
 
 // NewProvider builds the provider a pipeline's workspace: block
 // selects. ws == nil (no block present) is the default, unchanged behavior.
-func NewProvider(ws *config.WorkspaceConfig) (Provider, error) {
+//
+// keep leaves each build's directory on disk instead of removing it at Close,
+// and prints where it is. A build workspace is otherwise destroyed
+// unconditionally, including on the failure path — so the files an agent or
+// task had just edited when it failed, the most useful thing to look at, were
+// always already gone by the time the error reached the terminal.
+func NewProvider(ws *config.WorkspaceConfig, keep bool) (Provider, error) {
 	if ws == nil {
-		return &sharedProvider{}, nil
+		return &sharedProvider{keep: keep}, nil
 	}
 
 	switch ws.Strategy {
 	case "copy":
-		return newCopyProvider(ws)
+		return newCopyProvider(ws, keep)
 	case "btrfs":
-		return newBtrfsProvider(ws), nil
+		return newBtrfsProvider(ws, keep), nil
 	default:
 		return nil, fmt.Errorf("unknown workspace strategy %q", ws.Strategy)
 	}
+}
+
+// keepWorkspace reports that root is being left in place, and reports whether
+// the caller should skip removing it.
+func keepWorkspace(keep bool, root string) bool {
+	if !keep {
+		return false
+	}
+
+	fmt.Printf("workspace kept: %s\n", root)
+	slog.Debug("workspace.kept", "dir", root)
+
+	return true
 }
 
 // CloseBuild is a best-effort cleanup helper for the pipeline/agent
@@ -129,11 +148,11 @@ func CloseSpace(space StepSpace, label string) {
 // sharedProvider is the default Provider used when no workspace:
 // block is configured. Every step in a build sees the same directory,
 // exactly as before this feature existed.
-type sharedProvider struct{}
+type sharedProvider struct{ keep bool }
 
 func (*sharedProvider) Validate() error { return nil }
 
-func (*sharedProvider) NewBuild(_ context.Context, _ string) (BuildWorkspace, error) {
+func (p *sharedProvider) NewBuild(_ context.Context, _ string) (BuildWorkspace, error) {
 	root, err := os.MkdirTemp("", "steps-*")
 	if err != nil {
 		return nil, fmt.Errorf("could not create workspace: %w", err)
@@ -141,12 +160,15 @@ func (*sharedProvider) NewBuild(_ context.Context, _ string) (BuildWorkspace, er
 
 	slog.Debug("workspace.create", "dir", root)
 
-	return &sharedBuild{root: root}, nil
+	return &sharedBuild{root: root, keep: p.keep}, nil
 }
 
 func (*sharedProvider) Close() error { return nil }
 
-type sharedBuild struct{ root string }
+type sharedBuild struct {
+	root string
+	keep bool
+}
 
 func (b *sharedBuild) ResourceDir(_ context.Context, name string) (string, error) {
 	dir := filepath.Join(b.root, name)
@@ -168,6 +190,10 @@ func (b *sharedBuild) PutSpace(_ context.Context, _ string, _ []string, _ bool) 
 }
 
 func (b *sharedBuild) Close() error {
+	if keepWorkspace(b.keep, b.root) {
+		return nil
+	}
+
 	slog.Debug("workspace.remove", "dir", b.root)
 
 	err := os.RemoveAll(b.root)
@@ -250,6 +276,7 @@ type isolatingProvider struct {
 	validate func() error
 	root     string
 	ownsRoot bool
+	keep     bool
 	builds   atomic.Int64
 }
 
@@ -288,11 +315,15 @@ func (p *isolatingProvider) NewBuild(ctx context.Context, label string) (BuildWo
 
 	_ = ctx // no subprocess work happens at this layer; ctx kept for interface symmetry
 
-	return &isolatingBuild{backend: p.backend, root: root, artifacts: artifacts, stepsDir: steps}, nil
+	return &isolatingBuild{backend: p.backend, root: root, artifacts: artifacts, stepsDir: steps, keep: p.keep}, nil
 }
 
 func (p *isolatingProvider) Close() error {
 	if !p.ownsRoot {
+		return nil
+	}
+
+	if keepWorkspace(p.keep, p.root) {
 		return nil
 	}
 
@@ -309,6 +340,7 @@ type isolatingBuild struct {
 	root        string
 	artifacts   string
 	stepsDir    string
+	keep        bool
 	stepCounter atomic.Int64
 }
 
@@ -466,6 +498,14 @@ func mappedName(name string, mapping map[string]string) string {
 // through backend.removeTree — which, on btrfs, deletes those subvolumes
 // explicitly instead of relying on os.RemoveAll's rmdir of a subvolume.
 func (b *isolatingBuild) Close() error {
+	// The provider prints its own kept-root line when it owns the root; a
+	// build under a user-supplied workspace.root: has none, so say it here.
+	if b.keep {
+		slog.Debug("workspace.kept", "dir", b.root)
+
+		return nil
+	}
+
 	err := b.backend.removeTree(b.root)
 	if err != nil {
 		return fmt.Errorf("could not remove build workspace %q: %w", b.root, err)

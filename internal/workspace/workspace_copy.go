@@ -15,7 +15,7 @@ import (
 // filesystem supports it. root is resolved once at construction time (see
 // newIsolatingRoot) rather than lazily, so isolatingProvider always has a
 // real, absolute path to build under.
-func newCopyProvider(ws *config.WorkspaceConfig) (Provider, error) {
+func newCopyProvider(ws *config.WorkspaceConfig, keep bool) (Provider, error) {
 	root, ownsRoot, err := newIsolatingRoot(ws.Root)
 	if err != nil {
 		return nil, err
@@ -28,6 +28,7 @@ func newCopyProvider(ws *config.WorkspaceConfig) (Provider, error) {
 		},
 		root:     root,
 		ownsRoot: ownsRoot,
+		keep:     keep,
 	}, nil
 }
 

@@ -84,10 +84,15 @@ func resolveAgentDir(workspaceDir, stepDir string) (string, error) {
 // caller. The recorded status reflects the classified outcome (failed vs
 // errored vs aborted), and the write uses a detached context so an aborted
 // step's outcome still persists rather than being dropped by the canceled ctx.
-func recordAgentFailure(ctx context.Context, st *store.Store, node merkle.Node, jobName string, runErr error) {
+//
+// res is whatever the conversation produced before it failed. Recording it
+// (rather than the nil this used to store) is the whole point: a failed agent
+// step is exactly the one you need to reconstruct afterwards, and its response
+// and tool calls were being thrown away.
+func recordAgentFailure(ctx context.Context, st *store.Store, node merkle.Node, jobName string, res conversationResult, runErr error) {
 	status := string(outcome.Classify(ctx, runErr))
 	recCtx := context.WithoutCancel(ctx)
-	_ = st.RecordNode(recCtx, nodeRecord(node), jobName, status, nil, runErr)
+	_ = st.RecordNode(recCtx, nodeRecord(node), jobName, status, agentResultRecord(res), runErr)
 	_ = st.RecordJobRun(recCtx, jobName, node.Hash, status, runErr)
 }
 
@@ -413,7 +418,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	}
 
 	if err != nil {
-		recordAgentFailure(ctx, st, node, jobName, err)
+		recordAgentFailure(ctx, st, node, jobName, res, err)
 
 		// A failed run emitted no clean verdict; the pipeline routes it via
 		// to["failure"] (or fails the job).
@@ -422,7 +427,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 
 	err = assertAgentResponse(step.Assert, res)
 	if err != nil {
-		recordAgentFailure(ctx, st, node, jobName, err)
+		recordAgentFailure(ctx, st, node, jobName, res, err)
 
 		return StepOutcome{Previous: previous}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
@@ -430,7 +435,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	err = prepared.space.Capture(ctx)
 	if err != nil {
 		wrapped := fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
-		recordAgentFailure(ctx, st, node, jobName, wrapped)
+		recordAgentFailure(ctx, st, node, jobName, res, wrapped)
 
 		return StepOutcome{Previous: previous}, wrapped
 	}
@@ -456,6 +461,10 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 func agentResultRecord(res conversationResult) map[string]any {
 	result := map[string]any{"response": res.text, "turns": res.turns}
 
+	if trajectory := recordedTrajectory(res.trajectory); len(trajectory) > 0 {
+		result["trajectory"] = trajectory
+	}
+
 	if res.verdict != "" {
 		result["verdict"] = res.verdict
 	}
@@ -469,6 +478,63 @@ func agentResultRecord(res conversationResult) map[string]any {
 	}
 
 	return result
+}
+
+// maxRecordedArgBytes caps how much of a single tool argument is persisted.
+// The trajectory is a record of what the agent did, not a copy of what it
+// wrote: a write_file call's whole content would balloon nodes.result for no
+// diagnostic gain, since the file itself is the artifact.
+const maxRecordedArgBytes = 2048
+
+// recordedTrajectory converts a run's tool calls into the plain shape stored
+// in nodes.result. It is the persistence counterpart to exportTrajectory (see
+// handoff.go), which shapes the same calls for the previous_run tool and drops
+// the ok flag; here that flag is the point, since "it called write_file and it
+// failed" is a different story from "it called write_file".
+//
+// The trajectory used to die with the process — it existed only in memory, for
+// a routed-to successor and the handoff note's files-touched section. So the
+// most useful question about an agent step ("what did it actually do?") had no
+// answer once the run ended, and none at all for a step that failed.
+func recordedTrajectory(calls []recordedToolCall) []map[string]any {
+	if len(calls) == 0 {
+		return nil
+	}
+
+	out := make([]map[string]any, 0, len(calls))
+
+	for _, call := range calls {
+		out = append(out, map[string]any{
+			"name": call.name,
+			"args": truncateArgs(call.args),
+			"ok":   call.ok,
+		})
+	}
+
+	return out
+}
+
+// truncateArgs copies args with over-long string values elided, so one
+// enormous argument can't dominate a node's recorded result.
+func truncateArgs(args map[string]any) map[string]any {
+	if len(args) == 0 {
+		return nil
+	}
+
+	out := make(map[string]any, len(args))
+
+	for key, value := range args {
+		text, isString := value.(string)
+		if isString && len(text) > maxRecordedArgBytes {
+			out[key] = text[:maxRecordedArgBytes] + "…(truncated)"
+
+			continue
+		}
+
+		out[key] = value
+	}
+
+	return out
 }
 
 // assertAgentResponse checks an agent step's assert (stdout and/or

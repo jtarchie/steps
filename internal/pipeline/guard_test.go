@@ -15,7 +15,7 @@ import (
 func guardTestBuild(t *testing.T) (workspace.BuildWorkspace, string) {
 	t.Helper()
 
-	provider, err := workspace.NewProvider(nil)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
