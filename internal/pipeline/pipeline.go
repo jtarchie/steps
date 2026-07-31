@@ -714,8 +714,11 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 	}
 
 	if skippable[hash] {
-		fmt.Printf("skip: %s\n", rt.Name)
-		slog.Info("job.skip", "job", jobName, "index", i, "kind", "task", "task", rt.Name, "hash", hash)
+		// Every other skip line names its reason — (chain), (when),
+		// (version: ...) — and this one, the cache hit that triggers all the
+		// (chain) lines below it, was the only bare one.
+		fmt.Printf("skip: %s (cached)\n", rt.Name)
+		slog.Info("job.skip", "job", jobName, "index", i, "kind", "task", "task", rt.Name, "reason", "cached", "hash", hash)
 
 		return parentHash, stepChainSkipped, nil
 	}

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/outcome"
@@ -97,10 +98,34 @@ func applyRouting(ctx context.Context, steps []config.Step, i int, step config.S
 	}
 
 	if routed {
+		reportRoute(steps, i, step, target, key, visits)
+
 		return target, key, nil, nil // consume the outcome — the job does not also fail
 	}
 
 	return i + 1, "", stepErr, nil
+}
+
+// reportRoute prints the jump a to:/verdicts: transition just took.
+//
+// Routing was entirely invisible: the computation happened here and said
+// nothing, so a loop looked like a step repeating for no reason, and the first
+// hint that jumping was even involved was "exceeded max_visits" at the end.
+//
+// The counter tracks the ROUTING step, not the target: max_visits bounds how
+// many times this step may execute (see resolveTransition), so its own count
+// against its own bound is the number that says how close the loop is to
+// exhausting.
+func reportRoute(steps []config.Step, i int, step config.Step, target int, key string, visits map[int]int) {
+	from, to := executedStepName(step), executedStepName(steps[target])
+
+	progress := fmt.Sprintf("visit %d", visits[i])
+	if step.MaxVisits > 0 {
+		progress = fmt.Sprintf("visit %d/%d", visits[i], step.MaxVisits)
+	}
+
+	fmt.Printf("route: %s --%s--> %s (%s)\n", from, key, to, progress)
+	slog.Info("job.route", "from", from, "key", key, "to", to, "visit", visits[i], "max_visits", step.MaxVisits, "index", i)
 }
 
 // stepForcesUnskippable reports whether a step makes its chain unskippable: a
@@ -110,7 +135,7 @@ func applyRouting(ctx context.Context, steps []config.Step, i int, step config.S
 // or a when:/to: whose runtime outcome the planner cannot know. Such a chain
 // is never recorded as a reusable "this whole chain succeeded" hash.
 func stepForcesUnskippable(cfg *config.Config, step config.Step) (bool, error) {
-	if step.Put != "" || step.Agent != "" || step.When != nil || step.To != nil {
+	if unskippableReason(step) != "" {
 		return true, nil
 	}
 
@@ -126,12 +151,49 @@ func stepForcesUnskippable(cfg *config.Config, step config.Step) (bool, error) {
 	return rt.Fix != nil, nil
 }
 
+// unskippableReason names why a step makes its chain uncacheable, or "" when
+// it doesn't (or when the reason is a fix:, which needs task resolution — see
+// stepForcesUnskippable).
+//
+// It exists so the run can SAY so. That a when: guard or a to: route silently
+// disables caching for everything downstream is real, documented behavior that
+// produced no output at all: the user saw steps re-running and had to infer
+// the rule.
+func unskippableReason(step config.Step) string {
+	switch {
+	case step.Put != "":
+		return "put step"
+	case step.Agent != "":
+		return "agent step"
+	case step.When != nil:
+		return "when: guard"
+	case step.To != nil:
+		return "to: routing"
+	default:
+		return ""
+	}
+}
+
 // foldStepUnskippable ORs step's own unskippability into chainUnskippable in
-// one call, keeping runSteps's own branch count down.
+// one call, keeping runSteps's own branch count down. On the false->true
+// transition it prints why, once — the point at which the rest of this chain
+// stopped being cacheable.
 func foldStepUnskippable(cfg *config.Config, step config.Step, chainUnskippable bool) (bool, error) {
 	unskippable, err := stepForcesUnskippable(cfg, step)
 	if err != nil {
 		return chainUnskippable, err
+	}
+
+	if unskippable && !chainUnskippable {
+		reason := unskippableReason(step)
+		if reason == "" {
+			reason = "fix: agent"
+		}
+
+		name := executedStepName(step)
+
+		fmt.Printf("note: %s makes this chain uncacheable (%s)\n", name, reason)
+		slog.Debug("job.uncacheable", "step", name, "reason", reason)
 	}
 
 	return chainUnskippable || unskippable, nil
