@@ -99,6 +99,13 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 	case yaml.ScalarNode:
 		return value.Decode(&t.Builtin) //nolint:wrapcheck // yaml.v3 error is already descriptive
 	case yaml.MappingNode:
+		err := rejectUnknownKeys(value, "agent tool",
+			"builtin", "name", "description", "run", "agent", "mcp", "tool", "tools",
+			"required", "max_calls", "max_output_bytes", "args")
+		if err != nil {
+			return err
+		}
+
 		var m struct {
 			Builtin        string            `yaml:"builtin"`
 			Name           string            `yaml:"name"`
@@ -114,7 +121,7 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 			Args           map[string]string `yaml:"args"`
 		}
 
-		err := value.Decode(&m)
+		err = value.Decode(&m)
 		if err != nil {
 			return fmt.Errorf("agent tool: %w", err)
 		}

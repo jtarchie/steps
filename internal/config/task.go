@@ -79,6 +79,12 @@ func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 	case yaml.ScalarNode:
 		return value.Decode(&f.Agent) //nolint:wrapcheck // yaml.v3 error is already descriptive
 	case yaml.MappingNode:
+		err := rejectUnknownKeys(value, "task fix",
+			"agent", "prompt", "prompt_file", "dir", "tools", "attempts", "timeout")
+		if err != nil {
+			return err
+		}
+
 		var m struct {
 			Agent      string     `yaml:"agent"`
 			Prompt     string     `yaml:"prompt"`
@@ -89,7 +95,7 @@ func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 			Timeout    string     `yaml:"timeout"`
 		}
 
-		err := value.Decode(&m)
+		err = value.Decode(&m)
 		if err != nil {
 			return fmt.Errorf("task fix: %w", err)
 		}

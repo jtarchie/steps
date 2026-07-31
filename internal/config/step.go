@@ -305,12 +305,17 @@ func (f *FileRef) UnmarshalYAML(value *yaml.Node) error {
 	case yaml.ScalarNode:
 		return value.Decode(&f.Path) //nolint:wrapcheck // yaml.v3 error is already descriptive
 	case yaml.MappingNode:
+		err := rejectUnknownKeys(value, "prompt_file", "artifact", "path")
+		if err != nil {
+			return err
+		}
+
 		var m struct {
 			Artifact string `yaml:"artifact"`
 			Path     string `yaml:"path"`
 		}
 
-		err := value.Decode(&m)
+		err = value.Decode(&m)
 		if err != nil {
 			return fmt.Errorf("prompt_file: %w", err)
 		}

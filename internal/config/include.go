@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // resolveFileIncludes inlines every *_file field's contents (and every
@@ -171,7 +169,7 @@ func loadTaskDocument(baseDir, context, path string) (Task, error) {
 
 	var doc Task
 
-	err = yaml.Unmarshal(data, &doc)
+	err = strictUnmarshal(data, &doc)
 	if err != nil {
 		return Task{}, fmt.Errorf("%s: file %q: %w", context, path, err)
 	}
@@ -241,7 +239,7 @@ func loadAgentDocument(baseDir, context, path string) (Agent, error) {
 
 	var doc Agent
 
-	err = yaml.Unmarshal(data, &doc)
+	err = strictUnmarshal(data, &doc)
 	if err != nil {
 		return Agent{}, fmt.Errorf("%s: file %q: %w", context, path, err)
 	}

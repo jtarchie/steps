@@ -36,12 +36,17 @@ func (h *HandoffSpec) UnmarshalYAML(value *yaml.Node) error {
 
 		return nil
 	case yaml.MappingNode:
+		err := rejectUnknownKeys(value, "step handoff", "context", "tool")
+		if err != nil {
+			return err
+		}
+
 		var m struct {
 			Context *bool `yaml:"context"`
 			Tool    bool  `yaml:"tool"`
 		}
 
-		err := value.Decode(&m)
+		err = value.Decode(&m)
 		if err != nil {
 			return fmt.Errorf("step handoff: %w", err)
 		}

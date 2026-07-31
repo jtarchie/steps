@@ -37,11 +37,16 @@ func (w *WhenSpec) UnmarshalYAML(value *yaml.Node) error {
 	case yaml.ScalarNode:
 		return value.Decode(&w.Run) //nolint:wrapcheck // yaml.v3 error is already descriptive
 	case yaml.MappingNode:
+		err := rejectUnknownKeys(value, "step when", "run")
+		if err != nil {
+			return err
+		}
+
 		var m struct {
 			Run string `yaml:"run"`
 		}
 
-		err := value.Decode(&m)
+		err = value.Decode(&m)
 		if err != nil {
 			return fmt.Errorf("step when: %w", err)
 		}

@@ -81,7 +81,6 @@ agents:
   source: { model: lmstudio/qwen }
   tools:
   - agent: extra
-    inputs: []
     description: d
     args: { x: "1" }
 - name: extra

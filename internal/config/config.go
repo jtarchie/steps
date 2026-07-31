@@ -9,8 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-
-	"gopkg.in/yaml.v3"
 )
 
 // Config is the top-level shape of a Concourse-style pipeline YAML file.
@@ -43,7 +41,7 @@ func LoadConfig(path string) (*Config, error) {
 
 	var cfg Config
 
-	err = yaml.Unmarshal(data, &cfg)
+	err = strictUnmarshal(data, &cfg)
 	if err != nil {
 		return nil, fmt.Errorf("could not parse pipeline YAML %q: %w", path, err)
 	}

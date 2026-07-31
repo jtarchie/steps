@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 //go:embed prompts/*.md agents/*.yml tools/*.md skills/*/SKILL.md
@@ -31,7 +29,7 @@ func ReadBuiltinAgent(name string) (Agent, error) {
 	}
 	var agent Agent
 
-	err = yaml.Unmarshal(data, &agent)
+	err = strictUnmarshal(data, &agent)
 	if err != nil {
 		return Agent{}, fmt.Errorf("built-in agent %q: %w", name, err)
 	}

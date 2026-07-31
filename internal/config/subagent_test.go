@@ -18,7 +18,6 @@ agents:
   tools:
   - read_file
   - agent: extra
-    inputs: []
     description: Delegate a narrow subtask.
 - name: extra
   source: { model: lmstudio/qwen }
@@ -75,7 +74,6 @@ agents:
   tools:
   - read_file
   - agent: extra
-    inputs: []
     description: Delegate.
 - name: extra
   source: { model: lmstudio/qwen }
@@ -120,7 +118,6 @@ agents:
   source: { model: lmstudio/qwen }
   tools:
   - agent: ghost
-    inputs: []
     description: nope
 jobs:
 - name: j
@@ -136,7 +133,6 @@ agents:
   source: { model: lmstudio/qwen }
   tools:
   - agent: extra
-    inputs: []
     description: d
     required: true
 - name: extra
@@ -155,7 +151,6 @@ agents:
   source: { model: lmstudio/qwen }
   tools:
   - agent: extra
-    inputs: []
     description: d
     run: echo hi
 - name: extra
@@ -182,7 +177,6 @@ jobs:
     prompt: x
     tools:
     - agent: extra
-      inputs: []
       description: d
 `,
 			want: "must be granted on an agent, not added inline on a step",
@@ -195,7 +189,6 @@ agents:
   source: { model: lmstudio/qwen }
   tools:
   - agent: reviewer
-    inputs: []
     description: d
 jobs:
 - name: j
@@ -228,7 +221,6 @@ agents:
   tools:
   - run_shell
   - agent: extra
-    inputs: []
     description: d
 - name: extra
   source: { model: lmstudio/qwen }
