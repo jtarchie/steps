@@ -51,6 +51,7 @@ type CLI struct {
 	Test     TestCmd          `cmd:""                                  help:"run every job (force) and verify assert directives"`
 	Validate ValidateCmd      `cmd:""                                  help:"check a pipeline for errors without running anything"`
 	Runs     RunsCmd          `cmd:""                                  help:"show what past runs recorded"`
+	Plan     PlanCmd          `cmd:""                                  help:"show which steps a run would execute or skip"`
 	MCP      MCPCmd           `cmd:""                                  help:"inspect or authorize a pipeline's mcp_servers: entries"`
 }
 
@@ -225,6 +226,80 @@ func (v *ValidateCmd) Run() error {
 
 	fmt.Printf("ok: %s (%d job(s), %d resource(s), %d agent(s))\n",
 		v.Pipeline, len(cfg.Jobs), len(cfg.Resources), len(cfg.Agents))
+
+	return nil
+}
+
+// PlanCmd shows which steps a run would execute and which it would skip,
+// without executing any of them.
+//
+// It is a distinct verb rather than a --dry-run flag on `run`: previewing is
+// a read, and a flag on the run command reads as "and then run it".
+//
+// The planner already computes this and acts on it immediately, so finding
+// out what a run would skip meant starting one — the wrong trade when the
+// question is "is my cache in the state I think it is?".
+type PlanCmd struct {
+	Pipeline string            `arg:""                                                   help:"path to the pipeline YAML file"`
+	Job      string            `help:"job to plan (defaults to the pipeline's only job)"`
+	Pin      map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"  name:"pin"`
+}
+
+// Run loads the pipeline, plans the selected job, and prints one line per
+// step. Resource check commands run (planning has always resolved get
+// versions), but no step executes and nothing is recorded.
+func (p *PlanCmd) Run() error {
+	cfg, err := config.LoadConfig(p.Pipeline)
+	if err != nil {
+		return fmt.Errorf("could not load pipeline: %w", err)
+	}
+
+	job, err := selectJob(cfg, p.Job)
+	if err != nil {
+		return err
+	}
+
+	st, err := store.OpenStore(statePath(p.Pipeline))
+	if err != nil {
+		return fmt.Errorf("could not open state store: %w", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	ctx, cancel := withSignalCancel(context.Background())
+	defer cancel()
+
+	rows, err := pipeline.Explain(ctx, cfg, job, p.Pin, st)
+	if err != nil {
+		return fmt.Errorf("could not plan job: %w", err)
+	}
+
+	if len(rows) == 0 {
+		fmt.Printf("job %q plans no steps\n", job.Name)
+
+		return nil
+	}
+
+	writer := newTabWriter()
+	_, _ = fmt.Fprintln(writer, "ACTION\tSTEP\tHASH\tWHY")
+
+	skips := 0
+
+	for _, row := range rows {
+		action := "run"
+		if row.WouldSkip {
+			action = "skip"
+			skips++
+		}
+
+		_, _ = fmt.Fprintf(writer, "%s\t%s %s\t%s\t%s\n", action, row.Kind, row.Name, row.ShortHash, row.Reason)
+	}
+
+	err = flush(writer)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("\n%d step(s): %d would run, %d cached\n", len(rows), len(rows)-skips, skips)
 
 	return nil
 }
