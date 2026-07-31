@@ -171,3 +171,74 @@ jobs:
 		}
 	}
 }
+
+// steps runs reads back what a run recorded. Everything it prints was already
+// being written and had no reader: the only route to "why did my last run
+// fail" was opening .steps/state.db by hand and knowing the schema.
+func TestRunsReportsHistory(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: boom
+    run: exit 3
+`)
+
+	// The run fails; that outcome is what we want to read back.
+	err := run([]string{path})
+	if err == nil {
+		t.Fatal("expected the pipeline to fail")
+	}
+
+	out := captureStdout(t, func() {
+		runsErr := run([]string{"runs", path})
+		if runsErr != nil {
+			t.Fatalf("runs: %v", runsErr)
+		}
+	})
+
+	for _, want := range []string{"build", "failed"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("runs output %q\n  is missing %q", out, want)
+		}
+	}
+
+	steps := captureStdout(t, func() {
+		runsErr := run([]string{"runs", path, "--steps"})
+		if runsErr != nil {
+			t.Fatalf("runs --steps: %v", runsErr)
+		}
+	})
+
+	if !strings.Contains(steps, "boom") {
+		t.Errorf("runs --steps output %q\n  is missing the failing step name", steps)
+	}
+}
+
+// Asking about history on a pipeline that has never run says so, and — since
+// this is a read — does not create a state store as a side effect.
+func TestRunsOnAFreshPipelineWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan: [{ task: t, run: "true" }]
+`)
+
+	out := captureStdout(t, func() {
+		err := run([]string{"runs", path})
+		if err != nil {
+			t.Fatalf("runs: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "no runs recorded yet") {
+		t.Errorf("output = %q, want it to say there is no history yet", out)
+	}
+
+	_, err := os.Stat(filepath.Join(dir, ".steps"))
+	if err == nil {
+		t.Error("runs created a state store; reading history must not write")
+	}
+}

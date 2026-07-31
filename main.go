@@ -18,7 +18,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/alecthomas/kong"
@@ -48,6 +50,7 @@ type CLI struct {
 	Watch    WatchCmd         `cmd:""                                  help:"poll trigger: true resources and auto-run affected jobs"`
 	Test     TestCmd          `cmd:""                                  help:"run every job (force) and verify assert directives"`
 	Validate ValidateCmd      `cmd:""                                  help:"check a pipeline for errors without running anything"`
+	Runs     RunsCmd          `cmd:""                                  help:"show what past runs recorded"`
 	MCP      MCPCmd           `cmd:""                                  help:"inspect or authorize a pipeline's mcp_servers: entries"`
 }
 
@@ -222,6 +225,164 @@ func (v *ValidateCmd) Run() error {
 		v.Pipeline, len(cfg.Jobs), len(cfg.Resources), len(cfg.Agents))
 
 	return nil
+}
+
+// RunsCmd prints what past runs recorded — job outcomes by default, the
+// per-step detail with --steps, and what `steps watch` has queued with
+// --queue.
+//
+// The store has always written all of this and offered no way to read it: the
+// only route to "why did my last run fail" was opening .steps/state.db in
+// sqlite and knowing the schema, which the vendored pure-Go driver means may
+// not even be installed.
+type RunsCmd struct {
+	Pipeline string `arg:""                                                  help:"path to the pipeline YAML file"`
+	Job      string `help:"only show runs of this job"`
+	Limit    int    `default:"20"                                            help:"maximum number of rows to show"`
+	Steps    bool   `help:"show individual steps instead of job outcomes"`
+	Queue    bool   `help:"show the watch trigger queue instead of job runs"`
+}
+
+// Run opens the pipeline's state store read-only and prints the requested
+// view. It stats the database first so asking about history never creates
+// one: a read command that leaves a .steps/ behind would be a surprising
+// thing for `steps runs` to do on a fresh checkout.
+func (r *RunsCmd) Run() error {
+	path := statePath(r.Pipeline)
+
+	_, err := os.Stat(path)
+	if err != nil {
+		fmt.Printf("no runs recorded yet for %s\n", r.Pipeline)
+
+		return nil
+	}
+
+	st, err := store.OpenStore(path)
+	if err != nil {
+		return fmt.Errorf("could not open state store: %w", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	ctx := context.Background()
+
+	switch {
+	case r.Queue:
+		return r.printQueue(ctx, st)
+	case r.Steps:
+		return r.printSteps(ctx, st)
+	default:
+		return r.printJobRuns(ctx, st)
+	}
+}
+
+func (r *RunsCmd) printJobRuns(ctx context.Context, st *store.Store) error {
+	rows, err := st.ListJobRuns(ctx, r.Job, r.Limit)
+	if err != nil {
+		return fmt.Errorf("could not read job runs: %w", err)
+	}
+
+	if len(rows) == 0 {
+		fmt.Println("no job runs recorded")
+
+		return nil
+	}
+
+	writer := newTabWriter()
+	_, _ = fmt.Fprintln(writer, "WHEN\tJOB\tSTATUS\tERROR")
+
+	for _, row := range rows {
+		_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n",
+			formatWhen(row.CreatedAt), row.JobName, row.Status, firstLine(row.Error))
+	}
+
+	return flush(writer)
+}
+
+func (r *RunsCmd) printSteps(ctx context.Context, st *store.Store) error {
+	rows, err := st.ListNodes(ctx, r.Job, r.Limit)
+	if err != nil {
+		return fmt.Errorf("could not read steps: %w", err)
+	}
+
+	if len(rows) == 0 {
+		fmt.Println("no steps recorded")
+
+		return nil
+	}
+
+	writer := newTabWriter()
+	_, _ = fmt.Fprintln(writer, "WHEN\tJOB\tSTEP\tSTATUS\tERROR")
+
+	for _, row := range rows {
+		_, _ = fmt.Fprintf(writer, "%s\t%s\t%s %s\t%s\t%s\n",
+			formatWhen(row.CreatedAt), row.JobName, row.Kind, row.Resource, row.Status, firstLine(row.Error))
+	}
+
+	return flush(writer)
+}
+
+func (r *RunsCmd) printQueue(ctx context.Context, st *store.Store) error {
+	rows, err := st.ListTriggerQueue(ctx, r.Limit)
+	if err != nil {
+		return fmt.Errorf("could not read the trigger queue: %w", err)
+	}
+
+	if len(rows) == 0 {
+		fmt.Println("trigger queue is empty")
+
+		return nil
+	}
+
+	writer := newTabWriter()
+	_, _ = fmt.Fprintln(writer, "ENQUEUED\tJOB\tSTATUS\tREASON\tERROR")
+
+	for _, row := range rows {
+		_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n",
+			formatWhen(row.EnqueuedAt), row.JobName, row.Status, row.Reason, firstLine(row.Error))
+	}
+
+	return flush(writer)
+}
+
+// newTabWriter returns the aligned-column writer every runs view prints
+// through.
+func newTabWriter() *tabwriter.Writer {
+	return tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+}
+
+func flush(writer *tabwriter.Writer) error {
+	err := writer.Flush()
+	if err != nil {
+		return fmt.Errorf("could not write output: %w", err)
+	}
+
+	return nil
+}
+
+// formatWhen renders a timestamp in local time, or "-" when unset.
+func formatWhen(when time.Time) string {
+	if when.IsZero() {
+		return "-"
+	}
+
+	return when.Local().Format("2006-01-02 15:04:05")
+}
+
+// firstLine truncates an error to its first line and a readable width, since
+// these are columns in a table — the full text is in the run's own output.
+func firstLine(text string) string {
+	if text == "" {
+		return "-"
+	}
+
+	line, _, _ := strings.Cut(text, "\n")
+
+	const maxWidth = 70
+	if len(line) > maxWidth {
+		return line[:maxWidth-1] + "…"
+	}
+
+	return line
 }
 
 // MCPCmd groups the two mcp_servers:-related subcommands: `tools` (list a

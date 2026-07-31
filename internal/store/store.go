@@ -217,21 +217,6 @@ func (s *Store) queryHasSucceededChunk(ctx context.Context, jobName string, chun
 	return nil
 }
 
-// CountJobRuns returns how many job_runs rows exist for jobName, regardless
-// of status — an unskippable chain (a put/agent, or a task whose fix:,
-// possibly inherited from a tasks: entry, makes its success non-deterministic)
-// must never get a row recorded here at all.
-func (s *Store) CountJobRuns(ctx context.Context, jobName string) (int, error) {
-	var count int
-
-	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM job_runs WHERE job_name = ?`, jobName).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("could not query job_runs: %w", err)
-	}
-
-	return count, nil
-}
-
 // NodeRecord is the subset of a merkle plan node's fields this package
 // persists. It's a plain data shape rather than an import of merkle.Node so
 // this leaf package doesn't need to depend on the planner — callers convert

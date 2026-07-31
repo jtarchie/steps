@@ -56,12 +56,12 @@ jobs:
 	}
 	defer func() { _ = st.Close() }()
 
-	count, err := st.CountJobRuns(context.Background(), "build")
+	runs, err := st.ListJobRuns(context.Background(), "build", 10)
 	if err != nil {
-		t.Fatalf("count job_runs: %v", err)
+		t.Fatalf("list job_runs: %v", err)
 	}
 
-	if count != 0 {
+	if count := len(runs); count != 0 {
 		t.Errorf("job_runs rows for job %q = %d, want 0: a task whose fix: is inherited from a tasks: entry "+
 			"must never be recorded as a reusable succeeded chain", "build", count)
 	}
