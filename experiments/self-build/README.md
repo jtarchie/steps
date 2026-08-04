@@ -1,9 +1,19 @@
 # self-build: dogfooding `steps` to build its own roadmap
 
-An experiment: use `steps` itself to walk [../stories/](../stories/) in
-order, using the `claude` CLI as the plan/execute/critique worker for each
-story. [pipeline.yml](pipeline.yml) is the whole thing — no generator, no
-per-story duplication.
+An experiment: use `steps` itself to walk the roadmap stories in order, using
+the `claude` CLI as the plan/execute/critique worker for each story.
+[pipeline.yml](pipeline.yml) is the whole thing — no generator, no per-story
+duplication.
+
+> **⚠️ Both pipelines are non-functional as written.** The stories used to be
+> markdown files under `docs/proposals/stories/`; they are now
+> [GitHub issues](https://github.com/jtarchie/steps/issues), and those files
+> have been deleted. The `stories` resource still globs the old directory, so
+> `check:` returns no versions and the `version: every` fan-out runs zero
+> times — silently, since "no new versions" and "the source directory is gone"
+> look identical from outside. Rewiring the resource against `gh issue list`
+> is [#21](https://github.com/jtarchie/steps/issues/21); everything below
+> describes the design either way.
 
 There is a second variant, [pipeline-agent.yml](pipeline-agent.yml), that
 does the same walk using `steps`' own `agent:` step type instead of the
@@ -60,7 +70,8 @@ The boundary there is `coder`'s persona instructions, not a hard guarantee.
 ## How it's wired
 
 - **`stories` resource** (`resource_types:`/`resources:` in pipeline.yml):
-  `check:` globs `docs/proposals/stories/000-*.md .. 013-*.md` and emits one
+  `check:` globs `docs/proposals/stories/000-*.md .. 013-*.md` (the deleted
+  directory — see the warning above and #21) and emits one
   version per file (`{"num": "000", "file": "000-...md"}`, ...), via a small
   Ruby one-liner (`Dir.glob(...).sort.map{...}.to_json`) rather than
   hand-rolled `printf`/comma-tracking — the one part of this resource type
@@ -220,7 +231,19 @@ resource's `check:` to just that story's file (or pin the get step with
 - Should a story that exhausts `max_visits` (4 failed rounds) do something
   other than fail the whole job — e.g. leave a `FAILED` marker and let the
   fan-out continue to the next story, so one stuck story doesn't block the
-  other 13? That's exactly what [011-approval-steps](../stories/011-approval-steps.md)
-  and [013-watch-circuit-breaker](../stories/013-watch-circuit-breaker.md)
-  would eventually give this pipeline if they existed yet — a fitting
-  bootstrap problem.
+  other 13? That's exactly what approval steps
+  ([#17](https://github.com/jtarchie/steps/issues/17)) and the watch circuit
+  breaker ([#19](https://github.com/jtarchie/steps/issues/19)) would eventually
+  give this pipeline if they existed yet — a fitting bootstrap problem.
+
+- The harness's own weaknesses, surfaced by reviewing what it produced for
+  story 001, are now tracked as issues labeled
+  [`self-build`](https://github.com/jtarchie/steps/labels/self-build):
+  the reviewer can't run anything it reviews
+  ([#22](https://github.com/jtarchie/steps/issues/22)), the objective gate
+  can't fail untested behavior
+  ([#23](https://github.com/jtarchie/steps/issues/23)), the planner's sibling
+  check misses enum-variant additions
+  ([#24](https://github.com/jtarchie/steps/issues/24)), and a single reviewer
+  verdict decides everything
+  ([#25](https://github.com/jtarchie/steps/issues/25)).

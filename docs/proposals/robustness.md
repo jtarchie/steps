@@ -381,3 +381,30 @@ independent and the highest-value single feature for multi-job robustness.
 first. Everything in Tier 2 composes from Tier 1 machinery plus code that
 already exists (verdict loop, handoff rendering, trigger queue, outcome
 classification).
+
+## Where these live now
+
+Each feature above was broken out into a story and is now tracked as a GitHub
+issue, labeled by tier — see [the issue list](https://github.com/jtarchie/steps/issues).
+The issues are the source of truth for scope, acceptance criteria, and status;
+this document stays as the survey they were derived from.
+
+Cross-cutting notes surfaced while breaking them out, which no single issue
+owns:
+
+- **`attempts:`/`timeout:`, `try:`, and budgets share an outcome-classification
+  requirement**: timeouts and budget breaches should classify as `errored`, not
+  `failed`, so `on_error` hooks (not `on_failure`) fire — consistent with
+  existing `outcome.Classify` semantics.
+- **`in_parallel` is the keystone**: `across:`, ensemble agents, and `race:`
+  all reuse its branch-runner and cancellation semantics rather than inventing
+  their own.
+- **Pipeline vars and budgets both touch secret handling**: a `((var))` sourced
+  from a vars-file and a cost-budget's spend total both risk landing sensitive
+  or operational data in `state.db` if not deliberately excluded from hashing —
+  worth reviewing together against the existing `api_key_env`/`endpoint:`
+  precedent this repo's trust-boundary rules already set elsewhere.
+- **Webhooks, approval steps, and the watch circuit breaker all need an
+  outbound notification path** (webhook received, approval pending, breaker
+  tripped) — likely worth designing once as a shared "notify" mechanism (e.g. a
+  hook-triggered `put`) rather than three bespoke ones.

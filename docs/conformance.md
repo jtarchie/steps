@@ -35,5 +35,5 @@ Living checklist — update when a claim is added, resolved, or found to diverge
 
 ## Known gaps
 
-- No fixture yet for `passed:` or `serial`/`serial_groups:` — both are proposed, not yet implemented (`docs/proposals/stories/003-passed-cross-job-fan-in.md`, `004-serial-groups.md`). Add their conformance tests as part of implementing them, not before.
+- No fixture yet for `passed:` or `serial`/`serial_groups:` — both are proposed, not yet implemented ([#9](https://github.com/jtarchie/steps/issues/9), [#10](https://github.com/jtarchie/steps/issues/10)). Add their conformance tests as part of implementing them, not before.
 - `input_mapping`/`output_mapping`'s two undocumented sub-behaviors (an omitted key defaults to binding by its own declared name; a mapping naming a nonexistent plan artifact is a load-time error) aren't in Concourse's docs — they're `steps`'s own reasonable design choices, not Concourse claims, and don't need a conformance test (there's nothing upstream to conform to).
