@@ -32,27 +32,54 @@
 # every turn. Swap either for whatever you prefer, or point both at the same
 # slug to go back to one model everywhere.
 #
-# The repo resource uses gh repo clone and gh api to interact with the
-# remote GitHub repo — needs gh authenticated (GH_TOKEN or gh auth login).
+# Both resources are GitHub-backed and need `gh` authenticated (GH_TOKEN or
+# gh auth login): `repo` clones and opens the PR, and `stories` reads the
+# roadmap from open issues labeled `story` rather than from files in the repo.
+# That last part is what lets the pipeline retire its own work -- the PR body
+# gets a "Closes #N", so a merged story stops appearing in the next check:,
+# with nothing to edit here.
 resource_types:
 - name: stories
   config:
-    # Discovering versions is the one thing that must look at the real
-    # repository, since it runs before any workspace exists.
+    # One version per OPEN issue labeled `story`. The stories used to be
+    # markdown files in the repo; an issue carries the same text plus three
+    # things a file could not: state (closing an issue retires the story, with
+    # no edit here), a label to select on, and a number a PR can reference so
+    # merging closes it.
+    #
+    # `num` is the 3-digit story number parsed out of the title, NOT the issue
+    # number: it names the branch and the plans/<num>.md and prs/<num>/ paths,
+    # which already exist for earlier stories. An issue whose title doesn't
+    # match the "Story NNN:" shape is skipped rather than guessed at.
+    #
+    # sort_by(.num) then .[0:limit] is the story SELECTOR. Every open story is
+    # a candidate, so limit: 1 (the default in resources: below) means "work
+    # the lowest-numbered open story", which is what the old glob did by being
+    # hand-narrowed to 001-*.md. Raise it to walk several per run -- but note
+    # `version: every` runs them one after another, and a cold story costs the
+    # coder up to 45m, so the wall-clock is roughly linear in this number.
     check: |
-      ruby -e '
-        require "json"
-        versions = Dir.glob(File.join(ARGV[0], ARGV[1], "001-*.md")).sort.map do |path|
-          name = File.basename(path)
-          { num: name[0, 3], file: name }
-        end
-        puts versions.to_json
-      ' -- {{ .source.repo | shellquote }} {{ .source.dir | shellquote }}
-    # Only the pointers: the story TEXT lives in repo/, which the agents have.
+      gh issue list \
+        --repo {{ .source.repo | shellquote }} \
+        --label {{ .source.label | shellquote }} \
+        --state open --limit 100 \
+        --json number,title \
+        --jq '[ .[]
+                | select(.title | test("^Story [0-9]{3}:"))
+                | { num: (.title | capture("^Story (?<n>[0-9]{3}):").n),
+                    issue: (.number | tostring) } ]
+              | sort_by(.num)
+              | .[0:{{ .source.limit }}]'
+    # The story TEXT now comes from the issue body, so unlike the file era this
+    # materializes the actual prose rather than a pointer into repo/.
     in: |
       set -e
       echo {{ .version.num | shellquote }} > ./num
-      echo {{ .version.file | shellquote }} > ./file
+      echo {{ .version.issue | shellquote }} > ./issue
+      gh issue view {{ .version.issue | shellquote }} \
+        --repo {{ .source.repo | shellquote }} --json title --jq .title > ./title
+      gh issue view {{ .version.issue | shellquote }} \
+        --repo {{ .source.repo | shellquote }} --json body --jq .body > ./body.md
 
 - name: repo
   config:
@@ -61,28 +88,61 @@ resource_types:
     # A clone, not a copy: agents get a real working tree, so go test,
     # golangci-lint and git diff all behave normally, and the origin is
     # untouched until the put.
+    #
+    # GIT_CONFIG_GLOBAL=/dev/null is load-bearing, not hygiene. An operator's
+    # ~/.gitconfig may carry `url.ssh://git@github.com/.insteadOf
+    # https://github.com/`, which silently rewrites this HTTPS clone to SSH
+    # and makes it depend on a loaded ssh-agent -- so it passes on the machine
+    # that set it up and fails with "Permission denied (publickey)" the moment
+    # the agent stops answering. Dropping the global config strips the rewrite;
+    # the credential helper then puts gh's own token back in its place, so
+    # auth comes from the same `gh auth` this resource already requires. The
+    # commits below pass identity with `git -c`, so nothing else here wanted
+    # the global config anyway.
     in: |
       set -e
-      gh repo clone jtarchie/steps . -- --quiet
+      export GIT_CONFIG_GLOBAL=/dev/null
+      export GIT_CONFIG_COUNT=1
+      export GIT_CONFIG_KEY_0="credential.https://github.com.helper"
+      export GIT_CONFIG_VALUE_0="!gh auth git-credential"
+      git clone --quiet https://github.com/jtarchie/steps .
       git checkout --quiet {{ .version.ref | shellquote }}
     # Runs with the build workspace as cwd, so stories/ and repo/ are both
     # visible. An unchanged tree exits cleanly rather than failing the job.
     out: |
       set -e
+      # Same rewrite bypass as in:, for the same reason -- origin is an HTTPS
+      # URL, so a global insteadOf would send this push over SSH too.
+      export GIT_CONFIG_GLOBAL=/dev/null
+      export GIT_CONFIG_COUNT=1
+      export GIT_CONFIG_KEY_0="credential.https://github.com.helper"
+      export GIT_CONFIG_VALUE_0="!gh auth git-credential"
       num="$(cat stories/num)"
-      file="$(cat stories/file)"
+      issue="$(cat stories/issue)"
+      # The title already begins "Story NNN: "; the commit subject says the
+      # number itself, so strip the prefix rather than printing it twice.
+      subject="$(sed -E 's/^Story [0-9]{3}: *//' stories/title)"
       cd {{ .params.path | shellquote }}
       git add -A
       git diff --cached --quiet && exit 0
       git -c user.name=steps -c user.email=steps@localhost \
-        commit --quiet -m "self-build: story $num ($(basename "$file" .md))"
+        commit --quiet -m "self-build: story $num ($subject)"
       branch="self-build/story-$num"
-      git push --quiet origin HEAD:"$branch"
+      # refs/heads/ must be spelled out: in: pins the clone with `git checkout
+      # <sha>`, so HEAD here is always DETACHED, and git refuses to guess a
+      # destination refname from a detached HEAD ("not a full refname").
+      git push --quiet origin HEAD:refs/heads/"$branch"
+      # Closes #N is appended here, not asked of the reviewer: it is mechanical,
+      # and it is what makes merging a self-build PR retire its own story --
+      # which in turn is what drops it out of the next check:.
+      body="$(mktemp)"
+      cat "experiments/self-build/prs/$num/body.md" > "$body"
+      printf '\nCloses #%s\n' "$issue" >> "$body"
       gh pr create \
         --base main \
         --head "$branch" \
         --title "$(cat experiments/self-build/prs/$num/title)" \
-        --body-file experiments/self-build/prs/$num/body.md
+        --body-file "$body"
 
 # gopls' MCP server as a local subprocess. cwd: is RELATIVE, so it resolves
 # against each agent step's own working directory -- gopls indexes the same
@@ -98,8 +158,9 @@ resources:
 - name: stories
   type: stories
   source:
-    dir: docs/proposals/stories
-    repo: /Users/jtarchie/workspace/steps
+    repo: jtarchie/steps
+    label: story
+    limit: 1          # lowest-numbered open story only; see the type's check:
 - name: repo
   type: repo
   source:
@@ -116,7 +177,7 @@ agents:
   # that dominates a tool-calling conversation. Served by four providers whose
   # context ceilings differ (128k-202k), so the x-session-id pin in
   # internal/agent/openrouter.go is doing real work here.
-  source: &fast { model: openrouter/z-ai/glm-4.7-flash }
+  source: &fast { model: opencode/deepseek-v4-pro }
   max_turns: 200
   system_file: "@builtin/planner"
   tools:
@@ -139,7 +200,13 @@ agents:
 # compacting. Single first-party provider (Alibaba), so there is exactly one
 # prompt cache to stay warm in.
 - name: coder
-  source: &coding { model: openrouter/qwen/qwen3-coder-flash }
+  # TEMPORARY: this slot wants deepseek-v4-flash, but that model went
+  # unavailable upstream mid-experiment -- a 5-token request to it times out
+  # while deepseek-v4-pro and glm-5.2 on the same gateway answer in seconds.
+  # Every failure in that run landed on this agent and none on the planner,
+  # which is the same-gateway control. Pointed at -pro until -flash answers
+  # again; restoring it is this one line.
+  source: &coding { model: opencode/deepseek-v4-pro }
   max_turns: 200
   system_file: "@builtin/builder"
   tools:
@@ -230,9 +297,13 @@ jobs:
       Plan ONE implementation step for ONE story. You have NO shell.
       The only file you write is the plan document.
 
-      1. read_file on stories/num and stories/file, then on the story doc at
-         repo/docs/proposals/stories/{file}. (repo/CLAUDE.md is already
-         available via read_file — follow it.)
+      1. read_file on stories/body.md — that IS the story, the text of a
+         GitHub issue, and it is the contract you are planning against. Its
+         "Acceptance criteria" checklist is the definition of done; your plan
+         must say which change satisfies each one. stories/num is the story
+         number the paths below use, and stories/title is its one-line
+         summary. (repo/CLAUDE.md is already available via read_file — follow
+         it.)
       2. Find where the feature must integrate. The feature the story ASKS
          FOR does not exist yet, so never search for its own name. Relevant:
          repo/internal/{config,pipeline,merkle,store,trigger,agent}. For
@@ -249,11 +320,19 @@ jobs:
   - agent: coder
     inputs: [stories, repo]
     context_paths: [repo/CLAUDE.md]
+    # attempts: covers transport faults only. Deliberately still 2, after a
+    # run where raising it to 6 was the wrong reflex: the 500s and connection
+    # resets it was meant to absorb all came from this step's model being down
+    # upstream, and no retry count survives that. Each attempt restarts the
+    # WHOLE conversation -- there is no per-request retry in the transport
+    # stack (internal/agent/provider.go's agentHTTPClient) -- so a high
+    # attempts: mostly buys a bigger bill for the same failure. Raise it only
+    # for faults a fresh conversation could actually clear.
     attempts: 2
     # A timeout now ends the step outright rather than restarting the whole
     # conversation (see docs/attempts-timeout.md), so this has to be a budget
     # the work actually fits in. A cold run took ~42m across two attempts; 45m
-    # is that with headroom. attempts: covers transport faults only.
+    # is that with headroom.
     timeout: 45m
     # Both directions on one step: a redo gets a previous_run tool over the
     # last verdict (backward), and it writes the next agent a shift-change
@@ -263,9 +342,19 @@ jobs:
       Implement ONE story's already-written plan. repo/ is a real git clone,
       yours to edit.
 
-      1. read_file on stories/num and stories/file, then on the plan at
-         repo/experiments/self-build/plans/{num}.md. (repo/CLAUDE.md is
-         already available via read_file — follow it exactly.)
+      0. `run_shell` on `cd repo && git status --short && git diff --stat`
+         BEFORE anything else. An `attempts:` restart throws away the
+         conversation but NOT the workspace, so a dirty tree here means a
+         previous attempt of THIS step was cut off mid-flight by a transport
+         fault and its edits are still on disk. Read those files and continue
+         from them -- do not redo work that is already there, and do not
+         revert it. A clean tree means you are starting cold.
+      1. read_file on stories/num, then on the plan at
+         repo/experiments/self-build/plans/{num}.md. stories/body.md is the
+         story itself (a GitHub issue) — read it too: the plan is an
+         interpretation of it, and the issue's "Acceptance criteria" is what
+         the reviewer will hold the result to. (repo/CLAUDE.md is already
+         available via read_file — follow it exactly.)
          The planner's handoff note is ALREADY in your context: its
          "Files touched" section is computed by the runner, not written by
          the planner, so it is a reliable record of where the planner
@@ -321,11 +410,15 @@ jobs:
       itself, so it is mechanical truth, and it tells you which parts of the
       diff deserve your attention first.
 
-      1. read_file on stories/num and stories/file, then on
-         repo/docs/proposals/stories/{file} and the plan the implementer
-         worked from, repo/experiments/self-build/plans/{num}.md -- it names
-         the files that were supposed to change and the sibling sites gopls
-         returned, which is most of what you need to check the diff against.
+      1. read_file on stories/num and stories/body.md — the story itself, a
+         GitHub issue. Its "Acceptance criteria" checklist is the contract:
+         your critique must walk it item by item and cite, per item, the
+         file:line that satisfies it. An item you cannot cite is a FAIL, and
+         a requirement stated in the issue's prose but absent from the plan
+         is exactly the kind of miss the plan cannot warn you about. Then
+         read the plan the implementer worked from,
+         repo/experiments/self-build/plans/{num}.md -- it names the files that
+         were supposed to change and the sibling sites gopls returned.
          (repo/CLAUDE.md is already available via read_file.)
       2. repo_diff. A `??` line is a NEW file that does not appear in the
          diff at all -- read each of those with read_file.

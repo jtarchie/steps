@@ -5,15 +5,16 @@ the `claude` CLI as the plan/execute/critique worker for each story.
 [pipeline.yml](pipeline.yml) is the whole thing — no generator, no per-story
 duplication.
 
-> **⚠️ Both pipelines are non-functional as written.** The stories used to be
+> **⚠️ `pipeline.yml` is non-functional as written.** The stories used to be
 > markdown files under `docs/proposals/stories/`; they are now
-> [GitHub issues](https://github.com/jtarchie/steps/issues), and those files
-> have been deleted. The `stories` resource still globs the old directory, so
-> `check:` returns no versions and the `version: every` fan-out runs zero
-> times — silently, since "no new versions" and "the source directory is gone"
-> look identical from outside. Rewiring the resource against `gh issue list`
-> is [#21](https://github.com/jtarchie/steps/issues/21); everything below
-> describes the design either way.
+> [GitHub issues](https://github.com/jtarchie/steps/issues) labeled `story`,
+> and those files have been deleted. `pipeline.yml`'s `stories` resource still
+> globs the old directory, so `check:` returns no versions and the
+> `version: every` fan-out runs zero times — silently, since "no new versions"
+> and "the source directory is gone" look identical from outside.
+> [pipeline-agent.yml](pipeline-agent.yml) has been rewired against
+> `gh issue list` ([#21](https://github.com/jtarchie/steps/issues/21)) and
+> works; the same change has not been made to `pipeline.yml`.
 
 There is a second variant, [pipeline-agent.yml](pipeline-agent.yml), that
 does the same walk using `steps`' own `agent:` step type instead of the
@@ -69,16 +70,28 @@ The boundary there is `coder`'s persona instructions, not a hard guarantee.
 
 ## How it's wired
 
-- **`stories` resource** (`resource_types:`/`resources:` in pipeline.yml):
-  `check:` globs `docs/proposals/stories/000-*.md .. 013-*.md` (the deleted
-  directory — see the warning above and #21) and emits one
-  version per file (`{"num": "000", "file": "000-...md"}`, ...), via a small
-  Ruby one-liner (`Dir.glob(...).sort.map{...}.to_json`) rather than
-  hand-rolled `printf`/comma-tracking — the one part of this resource type
-  that's real data manipulation rather than shelling out to another CLI.
-  `.source.dir` is passed as a `ruby -e '...' -- <arg>` process argument
-  (`shellquote`'s actual job), not interpolated into the Ruby source, so it
-  needs no Ruby-side escaping.
+- **`stories` resource** (`resource_types:`/`resources:`): in
+  `pipeline-agent.yml`, `check:` is `gh issue list --label story --state open`
+  piped through a `--jq` filter that keeps issues titled `Story NNN: ...`,
+  emits one version per issue (`{"num": "002", "issue": "8"}`), sorts by story
+  number, and takes the first `source.limit` of them. `num` is parsed from the
+  title rather than being the issue number, because it names the branch and
+  the `plans/<num>.md` / `prs/<num>/` paths that already exist for earlier
+  stories. `in:` then writes `num`, `issue`, `title`, and the issue body as
+  `body.md` — the story text itself, where the file era only wrote a pointer
+  into `repo/`.
+
+  `source.limit` is the story selector. Every open story is a candidate, so
+  `limit: 1` means "work the lowest-numbered open story", which is what the
+  old glob did by being hand-narrowed to `001-*.md`. Raising it walks several
+  per run, one after another.
+
+  Closing an issue retires its story with no edit to the pipeline, and `out:`
+  appends `Closes #N` to the PR body — so merging a self-build PR drops that
+  story out of the next `check:` on its own.
+
+  (`pipeline.yml` still has the old Ruby-glob version of this resource — see
+  the warning above.)
 - **`get: stories, version: every`** fans the rest of the plan out once per
   version — a feature built for "run the plan once per new resource
   version," repurposed here as "run the plan once per story." Each version's
