@@ -64,7 +64,12 @@ func (c *Config) validateAsserts() error {
 		}
 
 		err := job.visitSteps(func(label string, step *Step) error {
-			stepErr := validateStepAssert(label, step)
+			stepErr := rejectAssertInsideTry(label, step)
+			if stepErr != nil {
+				return stepErr
+			}
+
+			stepErr = validateStepAssert(label, step)
 			if stepErr != nil {
 				return stepErr
 			}
@@ -157,7 +162,29 @@ func requireExecutionOnly(label string, assert *Assert) error {
 	return nil
 }
 
-// validateStepAssert rejects a step assert that's misplaced (get/put) or
+// rejectAssertInsideTry rejects assert: on a try: wrapper and on the step it
+// wraps.
+//
+// assert: is the self-verification that turns a step into a `steps test`
+// fixture, and try: exists to swallow exactly the failure such an assert
+// reports — so an assert anywhere inside a try: can never fail a run. Left
+// legal it is worse than dead config: a mismatch prints its got-vs-want line,
+// the run continues, and `steps test` reports PASS on the broken fixture the
+// assert was written to catch. Both halves are checked here because only the
+// wrapper can see that its inner step is wrapped.
+func rejectAssertInsideTry(label string, step *Step) error {
+	if step.Try == nil {
+		return nil
+	}
+
+	if step.Assert != nil || step.Try.Assert != nil {
+		return fmt.Errorf("%s: assert is not valid on a try: step or the step it wraps — try: tolerates the failure, so the assertion could never fail the run", label)
+	}
+
+	return nil
+}
+
+// validateStepAssert rejects a step assert that's misplaced (get/put/try) or
 // carries the wrong fields for its step kind.
 //
 //nolint:cyclop // the switch over step kinds is inherently branching
@@ -181,7 +208,9 @@ func validateStepAssert(label string, step *Step) error {
 	case StepKindPut:
 		return fmt.Errorf("%s (put %q): assert is not valid on put steps", label, step.Put)
 	case StepKindTry:
-		return validateStepAssert(label, step.Try)
+		// Unreachable in practice — rejectAssertInsideTry runs first and
+		// reports the wrapper and the wrapped step in one message.
+		return fmt.Errorf("%s: assert is not valid on a try: step", label)
 	case StepKindAgent:
 		if step.Assert.Code != nil {
 			return fmt.Errorf("%s (agent %q): assert.code is not valid on agent steps (no exit code); use assert.stdout", label, step.Agent)

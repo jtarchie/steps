@@ -170,3 +170,48 @@ func TestFirstPathComponent(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateArtifactFlowThroughTry checks that a try: wrapper is transparent
+// to artifact flow in both directions. It used to fall into the switch's
+// default and return nil, which made a wrapped producer invisible: the very
+// next step naming its output failed static validation — before anything ran —
+// with the misleading "nothing produces bin", and a wrapped step's own bogus
+// inputs: went unchecked.
+func TestValidateArtifactFlowThroughTry(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+
+	t.Run("a wrapped task publishes its outputs", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{
+			Name: "j",
+			Plan: []config.Step{
+				{Try: &config.Step{Task: "build", Run: "true", Outputs: []string{"bin"}}},
+				{Task: "deploy", Run: "true", Inputs: config.Inputs("bin")},
+			},
+		}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err != nil {
+			t.Fatalf("err = %v, want nil (the wrapped build produces bin)", err)
+		}
+	})
+
+	t.Run("a wrapped task's undeclared input is still caught", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{
+			Name: "j",
+			Plan: []config.Step{
+				{Try: &config.Step{Task: "build", Run: "true", Inputs: config.Inputs("missing")}},
+			},
+		}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err == nil || !strings.Contains(err.Error(), "not a resource fetched") {
+			t.Fatalf("err = %v, want an undeclared-input error", err)
+		}
+	})
+}

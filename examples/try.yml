@@ -1,15 +1,108 @@
-# try: tolerated failure — wrap a step so its real outcome is recorded but
-# doesn't fail the plan. Best-effort work like notifications, cleanup, or
-# metrics pushes that should never block the build.
+# yaml-language-server: $schema=../steps.schema.json
+# try: — tolerated failure. Wrap a step so a task-level failure of that step
+# doesn't stop the plan: best-effort notifications, cleanup, or metrics pushes
+# that should never block a build.
+#
+# The wrapper is transparent. Only the plan walker is lied to; everything that
+# OBSERVES the outcome sees the truth — the wrapped step's hooks fire on its
+# real result, a to: on the wrapper routes on that result, and the recorded
+# node keeps it. And only a task-level failure is tolerated: an infrastructure
+# error or a Ctrl-C still stops the run.
+#
+# Every job here is modelless and self-verifying via assert.execution, so the
+# whole file runs offline as a regression fixture:
+#
+#   steps test examples/try.yml             # runs every job, checks every assert
+#   steps run examples/try.yml --job <name>
+#
+# No network, credentials, or model.
+assert:
+  execution:
+    - tolerate
+    - inner-hooks
+    - route-on-truth
+    - tolerate-in-hook
+    - nested
+
 jobs:
-  - name: try-demo
-    plan:
-      - task: build
-        run: make build
-      - try:
-          task: notify
-          run: |
-            curl -s -X POST https://example.com/status -d "build finished"
-        # The plan continues even if notify fails.
-      - task: deploy
-        run: make deploy
+# The whole point: a failing step inside try: does not fail the job, and the
+# plan continues past it. `notify` runs (and fails); `deploy` still runs.
+- name: tolerate
+  plan:
+  - task: build
+    run: echo built
+  - try:
+      task: notify
+      run: exit 1          # stand-in for a flaky curl to a status endpoint
+  - task: deploy
+    run: echo deployed
+  assert:
+    execution: [build, notify, deploy]
+
+# The wrapped step's own hooks observe its REAL outcome, not the tolerated one.
+# on_failure fires because notify genuinely failed — try: only decides whether
+# the PLAN stops, never what the step's observers are told.
+- name: inner-hooks
+  plan:
+  - try:
+      task: notify
+      run: exit 1
+      on_failure:
+        task: log-miss
+        run: echo "notification failed"
+      ensure:
+        task: always
+        run: echo cleanup
+  - task: after
+    run: echo after
+  assert:
+    execution: [notify, log-miss, always, after]
+
+# to: on the WRAPPER routes on the wrapped step's real outcome, so a
+# `failure:` branch is reachable — the tolerated success is not what routing
+# sees. Routing fields go on the wrapper (the step with a position in the
+# plan); writing to: on the wrapped step is a load error.
+- name: route-on-truth
+  plan:
+  - try:
+      task: migrate
+      run: exit 1
+    to:
+      failure: abort-deploy
+      success: deploy
+  - task: deploy
+    run: echo deployed
+  - task: abort-deploy
+    run: echo "skipping deploy, migration failed"
+  assert:
+    execution: [migrate, abort-deploy]
+
+# try: is also valid as a hook body, which is where best-effort notification
+# usually belongs: a failing ensure/on_success hook normally fails an otherwise
+# green step, and wrapping it is what stops that.
+- name: tolerate-in-hook
+  plan:
+  - task: build
+    run: echo built
+    ensure:
+      try:
+        task: notify
+        run: exit 1
+  - task: after
+    run: echo after
+  assert:
+    execution: [build, notify, after]
+
+# try: nests (pointlessly, but legally) and composes with attempts:/timeout:
+# on the wrapped step — retry a few times, then shrug.
+- name: nested
+  plan:
+  - try:
+      try:
+        task: flaky
+        run: exit 1
+        attempts: 2
+  - task: after
+    run: echo after
+  assert:
+    execution: [flaky, after]

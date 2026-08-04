@@ -174,25 +174,51 @@ func validateHandoffSegment(job Job, segment []int) error {
 
 	for _, idx := range segment {
 		step := job.Plan[idx]
-		if step.Handoff == nil {
-			continue
-		}
-
 		label := fmt.Sprintf("job %q step %d", job.Name, idx)
 
-		if step.Agent == "" {
-			return fmt.Errorf("%s: handoff is only valid on agent steps", label)
+		err := checkHandoffStep(label, step, targeted)
+		if err != nil {
+			return err
 		}
 
-		if !step.Handoff.Enabled() {
-			return fmt.Errorf("%s: handoff enables nothing (set context, tool, and/or note)", label)
+		// A try: wrapper is transparent to handoff:, which belongs on the
+		// agent step it wraps — the wrapper is not itself an agent step, so
+		// the check above rejects it there. Without this second pass the
+		// wrapped agent's handoff: went entirely unvalidated AND unwired: it
+		// loaded clean and then reached the agent as nil, so a tolerated agent
+		// answered a redo as if freshly started.
+		if step.Try != nil {
+			err = checkHandoffStep(label, step.Unwrap(), targeted)
+			if err != nil {
+				return err
+			}
 		}
+	}
 
-		// Only the backward half needs a route to receive from; a note-only
-		// handoff writes forward along the plan and has no such requirement.
-		if step.Handoff.Receives() && !targeted[stepName(step)] {
-			return fmt.Errorf("%s: handoff sets context/tool but no to: route in this segment targets step %q", label, stepName(step))
-		}
+	return nil
+}
+
+// checkHandoffStep validates one step's handoff:, if it sets one: agent-only,
+// enables something, and — for the backward (receiving) half — is named by at
+// least one to: route in its segment. targeted is that segment's set of route
+// target names.
+func checkHandoffStep(label string, step Step, targeted map[string]bool) error {
+	if step.Handoff == nil {
+		return nil
+	}
+
+	if step.Agent == "" {
+		return fmt.Errorf("%s: handoff is only valid on agent steps", label)
+	}
+
+	if !step.Handoff.Enabled() {
+		return fmt.Errorf("%s: handoff enables nothing (set context, tool, and/or note)", label)
+	}
+
+	// Only the backward half needs a route to receive from; a note-only
+	// handoff writes forward along the plan and has no such requirement.
+	if step.Handoff.Receives() && !targeted[stepName(step)] {
+		return fmt.Errorf("%s: handoff sets context/tool but no to: route in this segment targets step %q", label, stepName(step))
 	}
 
 	return nil

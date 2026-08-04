@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"slices"
+
+	"github.com/jtarchie/steps/internal/config"
 )
 
 // execLog is the ordered list of entity names that actually ran during one
@@ -49,6 +51,19 @@ func recordExecution(ctx context.Context, name string) {
 	}
 
 	log.record(name)
+}
+
+// recordStepExecution records step's name, except for a try: wrapper — the
+// step it wraps records itself, under the same name (executedStepName looks
+// through the wrapper), so logging both would double-count one execution in a
+// job's assert.execution. Recording only the wrapper is not an option: it would
+// claim an execution for a when:-guarded inner step that never ran.
+func recordStepExecution(ctx context.Context, step config.Step) {
+	if step.Try != nil {
+		return
+	}
+
+	recordExecution(ctx, executedStepName(step))
 }
 
 // checkExecution compares the names that actually ran (got) against the

@@ -945,5 +945,24 @@ func tryNode(cfg *config.Config, step config.Step, i int, parentHash string) (No
 		return Node{}, fmt.Errorf("step %d (try): %w", i, err)
 	}
 
-	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindTry, StepIndex: i, Content: content}, nil
+	// Resource names the wrapped step, matching what internal/pipeline records
+	// at run time — without it `steps plan` printed a nameless try row.
+	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindTry, StepIndex: i, Resource: stepResourceName(step), Content: content}, nil
+}
+
+// stepResourceName is the name a node is displayed under: whichever of
+// task/put/agent a step sets, looking through any try: wrappers.
+func stepResourceName(step config.Step) string {
+	inner := step.Unwrap()
+
+	switch {
+	case inner.Task != "":
+		return inner.Task
+	case inner.Put != "":
+		return inner.Put
+	case inner.Agent != "":
+		return inner.Agent
+	default:
+		return ""
+	}
 }

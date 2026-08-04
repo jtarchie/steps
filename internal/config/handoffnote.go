@@ -102,7 +102,10 @@ func (c *Config) validateHandoffNoteSegment(job *Job, segment []int) error {
 	sender := ""
 
 	for _, idx := range segment {
-		step := &job.Plan[idx]
+		// try: is transparent to notes: a wrapped agent step still sends and
+		// receives one, and HandoffNoteFrom must land on the step the runtime
+		// actually hands to internal/agent — the wrapper is never that step.
+		step := unwrapStep(&job.Plan[idx])
 
 		if step.Agent == "" {
 			if step.WantsNote() {
@@ -230,7 +233,7 @@ func checkHandoffNoteDelivered(job *Job, segment []int) error {
 	received := map[string]bool{}
 
 	for _, idx := range segment {
-		step := job.Plan[idx]
+		step := job.Plan[idx].Unwrap() // try: is transparent to notes
 
 		if step.HandoffNoteFrom != "" {
 			received[step.HandoffNoteFrom] = true
@@ -251,7 +254,7 @@ func checkHandoffNoteDelivered(job *Job, segment []int) error {
 	// Reported in plan order, not map order, so a pipeline with two broken
 	// edges names the same one every load.
 	for _, idx := range segment {
-		step := job.Plan[idx]
+		step := job.Plan[idx].Unwrap()
 		if step.WantsNote() && !received[stepName(step)] {
 			return fmt.Errorf("job %q step %d: handoff_note is set but no later agent step in this segment receives it", job.Name, idx)
 		}

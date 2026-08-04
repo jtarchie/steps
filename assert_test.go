@@ -115,6 +115,18 @@ func TestStepsTestFixturePasses(t *testing.T) {
 	}
 }
 
+// TestStepsTestTryFixturePasses runs the try: fixture, whose five jobs pin the
+// behaviors a wrapper is easy to get wrong: the plan continues past a tolerated
+// failure, the WRAPPED step's hooks fire on its real outcome, a to: on the
+// wrapper routes on that outcome rather than the tolerated one, a try: hook
+// body doesn't fail its green step, and try: nests.
+func TestStepsTestTryFixturePasses(t *testing.T) {
+	err := run([]string{"test", filepath.Join("examples", "try.yml")})
+	if err != nil {
+		t.Fatalf("steps test examples/try.yml: %v", err)
+	}
+}
+
 // TestStepsTestDetectsWrongAssert verifies `steps test` fails when a fixture's
 // assert.execution names something that didn't run.
 func TestStepsTestDetectsWrongAssert(t *testing.T) {

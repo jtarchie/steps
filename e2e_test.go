@@ -530,3 +530,92 @@ jobs:
 	// The step after try still ran.
 	findNode(t, nodes, "task", "still-runs")
 }
+
+// TestEndToEndTryRoutesOnRealOutcome pins the half of try: that is easiest to
+// get backwards: the wrapper is transparent to everything that OBSERVES the
+// outcome, and only the plan walker is lied to. A `to: {failure: ...}` on the
+// wrapper must fire (an implementation that swallowed the error before routing
+// made every failure branch dead code and silently fell through to the next
+// step instead), and the wrapped step's own hooks must fire on its real result.
+func TestEndToEndTryRoutesOnRealOutcome(t *testing.T) {
+	dir := t.TempDir()
+	hookLog := filepath.Join(dir, "hook.log")
+	recoverLog := filepath.Join(dir, "recover.log")
+	fallthroughLog := filepath.Join(dir, "fallthrough.log")
+
+	pipeline := fmt.Sprintf(`
+jobs:
+- name: try-demo
+  plan:
+  - try:
+      task: migrate
+      run: exit 1
+      on_failure:
+        task: alert
+        run: echo alerted >> %[1]s
+    to:
+      failure: recover
+      success: deploy
+  - task: deploy
+    run: echo deployed >> %[3]s
+  - task: recover
+    run: echo recovered >> %[2]s
+`, hookLog, recoverLog, fallthroughLog)
+
+	path := writePipeline(t, dir, pipeline)
+
+	err := run([]string{path})
+	if err != nil {
+		t.Fatalf("run should have succeeded (the failure routed): %v", err)
+	}
+
+	// The wrapped step's own on_failure hook saw the real (failed) outcome.
+	assertLineCount(t, hookLog, 1)
+
+	// to: failure won: the plan jumped to recover instead of falling through.
+	assertLineCount(t, recoverLog, 1)
+
+	// deploy is the fall-through target the failure route must have skipped.
+	assertNoFile(t, fallthroughLog)
+}
+
+// TestEndToEndTryDoesNotTolerateInfraError pins the other line: try: swallows a
+// task-level failure and nothing else. An unreachable provider is an
+// infrastructure error, so a try-wrapped agent that can't be reached must still
+// fail the run — swallowing it would report a green job for an outage, and the
+// same classification is what keeps a Ctrl-C from being reported as success.
+func TestEndToEndTryDoesNotTolerateInfraError(t *testing.T) {
+	dir := t.TempDir()
+	afterLog := filepath.Join(dir, "after.log")
+
+	pipeline := fmt.Sprintf(`
+agents:
+- name: reviewer
+  source:
+    endpoint: http://127.0.0.1:1/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+
+jobs:
+- name: try-demo
+  plan:
+  - try:
+      agent: reviewer
+      prompt: Review it.
+      attempts: 1
+  - task: after
+    run: echo after >> %s
+`, afterLog)
+
+	path := writePipeline(t, dir, pipeline)
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	err := run([]string{path})
+	if err == nil {
+		t.Fatal("run should have failed: try: does not tolerate an infrastructure error")
+	}
+
+	// The plan must not have continued past an untolerated error.
+	assertNoFile(t, afterLog)
+}

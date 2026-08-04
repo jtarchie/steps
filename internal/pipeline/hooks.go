@@ -119,7 +119,7 @@ func runMatchedHook(ctx context.Context, scope hookScope, name string, step *con
 // task's fix: agent): the enclosing step or job records the aggregate outcome.
 // get is never a valid hook (rejected at LoadConfig), so it is not handled.
 func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
-	recordExecution(ctx, executedStepName(step))
+	recordStepExecution(ctx, step)
 
 	kind, ok := step.Kind()
 	if !ok {
@@ -146,7 +146,11 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 
 		return nil
 	case config.StepKindTry:
-		return runHookStep(ctx, scope, *step.Try)
+		// A try: hook body tolerates its own failure, exactly as it does in a
+		// plan. Without the toleration a `ensure: {try: {put: notify}}` — the
+		// use docs/control-flow.md advertises — still turned a green build red
+		// via runHooks' promotion of a failed on_success/ensure hook.
+		return tolerateTryFailure(ctx, scope.jobName, step, runHookStep(ctx, scope, *step.Try))
 	default: // config.StepKindGet — not a valid hook body
 		return errors.New("unrecognized hook step (must be task, put, or agent)")
 	}
