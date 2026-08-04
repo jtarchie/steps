@@ -1,6 +1,8 @@
-# Same idea as pipeline.yml but plan/execute/critique are steps' own `agent:`
-# step type instead of shelling out to the `claude` CLI -- for running this
-# experiment against a local model. See README.md's "agent: vs claude CLI".
+# Walks the roadmap one story at a time -- plan, implement, gate, review, PR --
+# using steps' own `agent:` step type rather than shelling out to a coding CLI,
+# which is what lets the whole experiment run against a local or cheap model.
+# An earlier variant (pipeline.yml, driving `claude -p` from task: steps) has
+# been deleted; see README.md.
 #
 # The repository under development is an ORDINARY INPUT ARTIFACT (`get: repo`),
 # not a path the agents reach out to, and that is the whole shape of this
@@ -240,7 +242,7 @@ agents:
       fi
       exit "$rc"
 
-# Quality gate before the put. No shell — read_only posture.
+# Quality gate before the put.
 #
 # No search_files and no list_dir, deliberately. Those are the open-ended
 # exploration tools, and open-ended exploration is exactly what sank an earlier
@@ -250,6 +252,24 @@ agents:
 # verdict. Its evidence is the diff and the planner's plan; read_file verifies
 # a specific claim it intends to cite, and gopls answers the one question text
 # search genuinely cannot (every call site of a symbol, for the sibling check).
+#
+# try_pipeline is the exception to "no execution", and it is here because the
+# read-only posture had a specific, measured cost. This reviewer returned PASS
+# on story 001; a second review found ten confirmed defects, and every one was
+# confirmed by building the binary and running a three-line pipeline. Four of
+# them were docs asserting behavior the code never had -- a class a reader
+# cannot catch at all, since the doc and the code are separately plausible and
+# only disagree at runtime.
+#
+# It is NOT a relaxation of the context-budget rule above: a probe is a
+# pipeline the reviewer writes to answer one question, not a search. It IS a
+# relaxation of the no-shell posture -- a probe's `run:` is a shell, so this is
+# shell by proxy, and nothing confines it. That does not lower the pipeline's
+# floor: `coder` already holds an unrestricted run_shell against the same
+# workspace, so arbitrary model-authored shell was already inside the trust
+# boundary. What the reviewer still cannot do is WRITE to the repo -- it has no
+# edit_file and no write_file target inside repo/ other than its own critique
+# and PR files.
 - name: reviewer
   source: *fast
   max_turns: 200
@@ -276,6 +296,44 @@ agents:
       git --no-pager diff --stat HEAD
       printf -- '\n--- git diff HEAD (the uncommitted work under review) ---\n'
       git --no-pager diff HEAD
+  - name: try_pipeline
+    description: >
+      RUN a pipeline against the build under review and return its transcript.
+      One argument, `yaml`: the full text of a small pipeline. It is built from
+      the working tree, run with `steps test` (every job, in order, evaluating
+      any `assert:`), and the output plus the exit code come back to you.
+      This is how you CHECK a claim instead of inferring it. Use it on every
+      behavioral bullet the diff adds to docs/, on every acceptance criterion
+      in the story, and on any control-flow reasoning of your own you are about
+      to cite -- write the smallest pipeline that would be WRONG if the claim
+      held, and run it. A non-zero exit is a normal, often expected result, not
+      a tool failure. Keep each pipeline to a few steps; `run: exit 1` and
+      `run: echo MARKER` are usually all a probe needs.
+      MAKE THE PROBE SELF-CHECKING wherever you can, with a job-level
+      `assert: {execution: [a, b, c]}` naming the exact steps and hooks that
+      must run, or a step `assert: {stdout: MARKER}`. Then PROBE EXIT is the
+      answer and you are not eyeballing a transcript: a mismatch prints
+      `want: [...]` / `got: [...]`, which names the missing step for you. Fall
+      back to reading the transcript only for claims no assert can express.
+    max_output_bytes: 8000
+    run: |
+      cd repo || exit 1
+      # Built OUTSIDE the git tree: a binary inside repo/ would show up as a
+      # `??` line in repo_diff and read as an untracked file under review.
+      bin="$(cd .. && pwd)/steps-review-bin"
+      build=$(go build -o "$bin" . 2>&1) || {
+        printf 'BUILD FAILED -- cannot probe this tree:\n%s\n' "$build"
+        exit 1
+      }
+      probe="$(mktemp -d)"
+      printf '%s\n' {{ .args.yaml | shellquote }} > "$probe/probe.yml"
+      rc=0
+      out=$(cd "$probe" && "$bin" test probe.yml 2>&1) || rc=$?
+      printf '%s\n' "$out" | tail -n 200
+      # Always exit 0: the probe's own exit code is the OBSERVATION, reported
+      # here as data. Failing the tool call would read as "the tool broke" and
+      # invite a pointless retry of a probe that worked exactly as intended.
+      printf '\nPROBE EXIT: %s\n' "$rc"
 
 jobs:
 - name: self-build
@@ -402,6 +460,14 @@ jobs:
       codebase -- the planner already did, and its findings are in the plan.
       Read a file only to check a specific claim you intend to cite.
 
+      Reading is the weaker of your two instruments. try_pipeline RUNS a
+      pipeline against this build and hands you the transcript, and a claim
+      you have RUN is worth more than a claim you have reasoned about. The
+      last time this step passed a change on reading alone, it approved ten
+      defects, and every one of them was a three-line pipeline away from
+      being obvious. Prefer the probe. Budget for it: a probe costs seconds,
+      and you have 200 turns.
+
       The coder's handoff note is already in your context. Everything the
       coder WROTE in it is a claim, not evidence -- verify each against the
       diff before relying on it, and treat its "watch_out" section as a list
@@ -422,21 +488,46 @@ jobs:
          (repo/CLAUDE.md is already available via read_file.)
       2. repo_diff. A `??` line is a NEW file that does not appear in the
          diff at all -- read each of those with read_file.
-      3. Judge whether the story is fully AND CORRECTLY implemented, not
+      3. PROBE, before you judge. Build a list of every behavioral claim this
+         change makes -- each bullet the diff adds or edits under docs/, each
+         acceptance criterion in the story, each new example job -- and run
+         try_pipeline on each one. Write the pipeline that would be WRONG if
+         the claim held, and give it an `assert:` so the probe answers itself.
+         Three that would have caught real defects:
+           - "the inner step's hooks still fire" -> wrap a failing task whose
+             on_failure runs `alert`, and assert
+             `execution: [flaky, alert, after]`. On a build where the hook is
+             skipped this FAILS with `got: [flaky after]` -- it names the
+             missing hook for you.
+           - "routing sees the real outcome" -> give the step a
+             to: {failure: X, success: Y} and assert the execution list
+             contains X, not Y.
+           - "steps test still catches a broken assert" -> write the broken
+             assert and see whether the run reports PASS.
+         A claim you could not probe, say so in the critique and explain why.
+         A claim whose probe disagrees with the doc or the story is a FAIL --
+         it does not matter which of the two you think is right.
+      4. Judge whether the story is fully AND CORRECTLY implemented, not
          merely plausible-looking:
          a. the feature described is present, with tests that exercise it;
          b. docs/examples are updated if the story called for them, and every
             claim they make about behavior is true of the code next to it --
-            a comment contradicting the code is a fail, not a nitpick;
+            a comment contradicting the code is a fail, not a nitpick, and
+            this is what step 3 is for;
          c. if the change touches one of several similar code paths, run the
             sibling check and confirm the SAME treatment landed on all of
             them -- a fix applied to only one is a fail;
          d. edge cases the story implies (empty, zero, negative, malformed)
-            are handled deliberately, not silently accepted.
-       4. Write your critique to repo/experiments/self-build/critiques/{num}.md
+            are handled deliberately, not silently accepted;
+         e. every example the change ships under examples/ actually RUNS --
+            probe it. A non-runnable example passes lint, tests and build
+            without complaint, because nothing executes it.
+       5. Write your critique to repo/experiments/self-build/critiques/{num}.md
           — first line exactly PASS or FAIL, then your reasoning with file:line
-          citations. That file must exist before you call the verdict tool.
-       5. If you intend to choose "pass" (the change passes review), write
+          citations. Cite a probe by its pipeline and the line of transcript
+          that settled it, the same way you would cite a file:line. That file
+          must exist before you call the verdict tool.
+       6. If you intend to choose "pass" (the change passes review), write
           these files with write_file BEFORE calling the verdict tool — they
           become the PR:
           a. repo/experiments/self-build/prs/{num}/title — a one-line PR
@@ -446,7 +537,7 @@ jobs:
              (files and modules touched), and that lint/test/build/review
              passed.
           For a "fail" verdict skip these files entirely.
-       6. Call the verdict tool with exactly "pass" or "fail" and a short
+       7. Call the verdict tool with exactly "pass" or "fail" and a short
           `note` — THIS routes the pipeline and is what the implementer sees
           on a redo.
     verdicts: [pass, fail]
