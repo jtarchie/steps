@@ -670,6 +670,21 @@ func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step co
 		return validateTaskArtifactFlow(cfg, jobName, i, step, available)
 	case step.Agent != "":
 		return validateAgentArtifactFlow(cfg, jobName, i, step, available)
+	case step.Try != nil:
+		// try: only changes whether a FAILURE stops the plan; it changes
+		// nothing about artifacts, so the wrapped step's inputs are checked
+		// and its outputs published exactly as if it were unwrapped. Falling
+		// into the default below instead made a try-wrapped producer invisible
+		// here, and the next step naming its output failed static validation
+		// with "not a resource fetched or an output produced earlier".
+		pre := maps.Clone(available)
+
+		err := validateStepArtifactFlow(cfg, jobName, i, *step.Try, available)
+		if err != nil {
+			return err
+		}
+
+		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
 	default:
 		return nil
 	}

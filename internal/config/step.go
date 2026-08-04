@@ -75,6 +75,21 @@ type Step struct {
 	// timeout bounds both its check and in commands); for task/put steps it
 	// overrides the referenced task/agent's Timeout.
 	Timeout string `yaml:"timeout,omitempty"`
+	// Try wraps an inner step so a task-level failure of that step doesn't
+	// stop the plan. The wrapper is transparent: the inner step runs exactly
+	// as it would unwrapped (its when: guard, hooks and outcome are all real),
+	// and everything that observes the outcome — the wrapper's own hooks, its
+	// to: route, the recorded node — sees the truth. Only the plan walker is
+	// lied to, and only for an outcome.Failed inner step: an infrastructure
+	// error or an abort still stops the run (see internal/pipeline's
+	// tolerateTryFailure). Composes with attempts:/timeout: on the inner step,
+	// and with try: itself (a doubled try: is legal, if pointless).
+	//
+	// The wrapper is the plan-positioned step, so to:/max_visits: belong on it
+	// and are rejected on the step it wraps; verdicts:/handoff: stay on the
+	// agent step being wrapped, since that is what internal/agent reads. Also
+	// valid as a hook body, where it tolerates the hook's failure the same way.
+	Try *Step `yaml:"try,omitempty"`
 	// Inputs/Outputs declare which named artifacts a task/agent/put step
 	// draws from and (task/agent only) produces. Each name is either a
 	// resource fetched by an earlier get step or an output produced by an
@@ -366,6 +381,7 @@ const (
 	StepKindTask  StepKind = "task"
 	StepKindPut   StepKind = "put"
 	StepKindAgent StepKind = "agent"
+	StepKindTry   StepKind = "try"
 )
 
 // Kind reports which single kind of step s is. ok is false when zero, or
@@ -381,6 +397,7 @@ func (s Step) Kind() (kind StepKind, ok bool) {
 		{StepKindTask, s.Task != ""},
 		{StepKindPut, s.Put != ""},
 		{StepKindAgent, s.Agent != ""},
+		{StepKindTry, s.Try != nil},
 	} {
 		if !candidate.set {
 			continue
@@ -429,7 +446,7 @@ func (c *Config) validateStepKinds() error {
 // kindFieldsSet names the kind-selecting fields this step sets, in schema
 // order, for the "sets task and agent" half of validateStepKinds' message.
 func (s Step) kindFieldsSet() []string {
-	set := make([]string, 0, 4)
+	set := make([]string, 0, 5)
 
 	for _, candidate := range [...]struct {
 		name  string
@@ -443,6 +460,10 @@ func (s Step) kindFieldsSet() []string {
 		if candidate.value != "" {
 			set = append(set, candidate.name)
 		}
+	}
+
+	if s.Try != nil {
+		set = append(set, "try")
 	}
 
 	return set
@@ -497,6 +518,8 @@ func (c *Config) resolveStepReference(step *Step) error {
 		_, err = c.FindResource(step.Put)
 	case StepKindAgent:
 		_, err = c.FindAgent(step.Agent)
+	case StepKindTry:
+		err = c.resolveStepReference(step.Try)
 	case StepKindTask:
 		if step.Run != "" {
 			return nil // an inline task never consults tasks:
@@ -545,7 +568,88 @@ func visitStepTree(label string, step *Step, fn func(label string, step *Step) e
 		return err
 	}
 
+	if step.Try != nil {
+		err = visitStepTree(label+" (try)", step.Try, fn)
+		if err != nil {
+			return err
+		}
+	}
+
 	return step.Hooks.Each(func(name string, hook *Step) error {
 		return visitStepTree(fmt.Sprintf("%s (%s hook)", label, name), hook, fn)
 	})
+}
+
+// Unwrap returns the step a try: chain ultimately wraps — s itself when s is
+// not a try wrapper. Callers that care about what a plan step actually RUNS
+// (which agent, which verdicts:, which handoff:) go through this, since a try:
+// wrapper carries none of those fields itself.
+func (s Step) Unwrap() Step {
+	return *unwrapStep(&s)
+}
+
+// unwrapStep is Unwrap for a caller that needs to MUTATE what it finds — see
+// validateHandoffNoteSegment, which stamps HandoffNoteFrom onto the agent step
+// a try: wraps rather than onto the wrapper the runtime never hands to an
+// agent. A free function rather than a second method, so Step keeps a single
+// receiver kind (.golangci.yml's recvcheck).
+func unwrapStep(s *Step) *Step {
+	for s.Try != nil {
+		s = s.Try
+	}
+
+	return s
+}
+
+// validateTrySteps rejects malformed try wrappers: a bare try: (nil inner
+// step), try: wrapped around a get step, try: that also sets another kind
+// field, or a try: whose inner step has no recognized kind. It also enforces
+// the division of fields between the wrapper and what it wraps — see
+// validateWrappedStepFields.
+func (c *Config) validateTrySteps() error {
+	for _, job := range c.Jobs {
+		err := job.visitSteps(func(label string, step *Step) error {
+			if step.Try == nil {
+				return nil
+			}
+
+			innerKind, ok := step.Try.Kind()
+			if !ok {
+				return fmt.Errorf("%s: try: wraps an unrecognized or empty step", label)
+			}
+			if innerKind == StepKindGet {
+				return fmt.Errorf("%s: try: cannot wrap a get step", label)
+			}
+
+			fields := step.kindFieldsSet()
+			if len(fields) > 1 { // "try" + something else
+				return fmt.Errorf("%s: try: is a wrapper — do not also set get/task/put/agent", label)
+			}
+
+			return validateWrappedStepFields(label, step.Try)
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateWrappedStepFields rejects the fields that are dead config on the step
+// inside a try:, because only the wrapper occupies a position in the plan.
+//
+// Routing is resolved against the plan step (internal/pipeline's applyRouting
+// never sees the wrapped step), so a to:/max_visits: written one level too deep
+// used to load fine and then silently never fire — the plan just fell through
+// past a failure the author believed they had routed.
+func validateWrappedStepFields(label string, inner *Step) error {
+	switch {
+	case inner.To != nil:
+		return fmt.Errorf("%s: to: belongs on the try: step, not the step it wraps (only the wrapper has a position in the plan)", label)
+	case inner.MaxVisits != 0:
+		return fmt.Errorf("%s: max_visits belongs on the try: step, not the step it wraps (only the wrapper has a position in the plan)", label)
+	default:
+		return nil
+	}
 }

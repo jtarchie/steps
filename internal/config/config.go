@@ -98,6 +98,7 @@ func (c *Config) validate() error {
 		c.validateStepReferences,
 		c.validateTaskInputsAll,
 		c.validateStepFieldPlacement,
+		c.validateTrySteps,
 		c.validateWorkspace,
 		c.validateArtifactDecls,
 		c.validateGetResource,

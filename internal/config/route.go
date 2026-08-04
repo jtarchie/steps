@@ -31,6 +31,8 @@ func stepName(step Step) string {
 		return step.Agent
 	case StepKindPut:
 		return step.Put
+	case StepKindTry:
+		return stepName(*step.Try)
 	default:
 		return ""
 	}
@@ -128,7 +130,10 @@ func validateSegment(job Job, segment []int) error {
 	usesRouting := false
 
 	for _, idx := range segment {
-		if job.Plan[idx].To != nil || len(job.Plan[idx].Verdicts) > 0 {
+		// Unwrap for verdicts:, which sits on the agent step a try: may wrap —
+		// otherwise a wrapped `verdicts:` with no to: skips this whole check
+		// and reaches run time with a synthesized verdict tool routing nowhere.
+		if job.Plan[idx].To != nil || len(job.Plan[idx].Unwrap().Verdicts) > 0 {
 			usesRouting = true
 
 			break
@@ -168,8 +173,16 @@ func validateSegment(job Job, segment []int) error {
 func validateStepRouting(job Job, planIdx, segPos int, step Step, pos map[string]int) error {
 	label := fmt.Sprintf("job %q step %d", job.Name, planIdx)
 
-	if len(step.Verdicts) > 0 {
-		err := validateVerdictMode(label, step)
+	// try: is transparent to routing: to:/max_visits: sit on the wrapper,
+	// which is the step with a position in the plan, while verdicts: stays on
+	// the agent step it wraps — that is what internal/agent reads to
+	// synthesize the required verdict tool. Unwrapping here is what lets a
+	// tolerated agent still route on its verdict instead of being rejected
+	// with "to: key %q is not valid (expected success or failure)".
+	inner := step.Unwrap()
+
+	if len(inner.Verdicts) > 0 {
+		err := validateVerdictMode(label, step, inner)
 		if err != nil {
 			return err
 		}
@@ -186,9 +199,11 @@ func validateStepRouting(job Job, planIdx, segPos int, step Step, pos map[string
 
 // validateVerdictMode enforces the verdict-mode shape: agent-only, well-formed
 // verdict names, and a complete, consistent mapping between the declared
-// verdicts and the to: keys.
-func validateVerdictMode(label string, step Step) error {
-	if step.Agent == "" {
+// verdicts and the to: keys. step is the plan-positioned step (which carries
+// to:); inner is what it runs (which carries agent:/verdicts:). The two are the
+// same step unless a try: wraps it.
+func validateVerdictMode(label string, step, inner Step) error {
+	if inner.Agent == "" {
 		return fmt.Errorf("%s: verdicts is only valid on agent steps", label)
 	}
 
@@ -196,7 +211,7 @@ func validateVerdictMode(label string, step Step) error {
 		return fmt.Errorf("%s: verdicts requires a to: map", label)
 	}
 
-	declared, err := validateVerdictNames(label, step)
+	declared, err := validateVerdictNames(label, step, inner)
 	if err != nil {
 		return err
 	}
@@ -206,10 +221,10 @@ func validateVerdictMode(label string, step Step) error {
 
 // validateVerdictNames checks each declared verdict is non-empty, unique, not a
 // reserved key, and has a to: target; it returns the set of declared names.
-func validateVerdictNames(label string, step Step) (map[string]bool, error) {
-	declared := make(map[string]bool, len(step.Verdicts))
+func validateVerdictNames(label string, step, inner Step) (map[string]bool, error) {
+	declared := make(map[string]bool, len(inner.Verdicts))
 
-	for _, verdict := range step.Verdicts {
+	for _, verdict := range inner.Verdicts {
 		switch {
 		case verdict == "":
 			return nil, fmt.Errorf("%s: verdicts must not contain an empty name", label)

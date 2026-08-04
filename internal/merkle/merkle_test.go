@@ -817,3 +817,168 @@ func TestAgentContentMapOmitsCompaction(t *testing.T) {
 		t.Error(`an agent with compact_after_tokens should not have a "compact_after_tokens" content key`)
 	}
 }
+
+// TestTryNodeContentWrapsInnerStep checks that TryNodeContent folds the inner
+// step's content under a "try" key.
+func TestTryNodeContentWrapsInnerStep(t *testing.T) {
+	t.Parallel()
+
+	inner := config.Step{Task: "build", Run: "echo hi"}
+	rt := config.ResolvedTask{Name: "build", Run: "echo hi"}
+
+	innerContent, err := TaskNodeContent(&config.Config{}, inner, rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tryContent, err := TryNodeContent(&config.Config{}, config.Step{Try: &inner})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wrapped, ok := tryContent["try"].(map[string]any)
+	if !ok {
+		t.Fatalf("TryNodeContent: try key missing or not a map; got %#v", tryContent)
+	}
+
+	if wrapped["run"] != innerContent["run"] {
+		t.Errorf("wrapped inner content run = %v, want %v", wrapped["run"], innerContent["run"])
+	}
+}
+
+// TestTryNodeContentNested checks that double-try produces {"try": {"try": {...}}}.
+func TestTryNodeContentNested(t *testing.T) {
+	t.Parallel()
+
+	inner := config.Step{Task: "build", Run: "echo hi"}
+	step := config.Step{Try: &config.Step{Try: &inner}}
+
+	content, err := TryNodeContent(&config.Config{}, step)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outer, ok := content["try"].(map[string]any)
+	if !ok {
+		t.Fatalf("outer try key missing; got %#v", content)
+	}
+
+	innerContent, ok := outer["try"].(map[string]any)
+	if !ok {
+		t.Fatalf("inner try key missing; got %#v", outer)
+	}
+
+	if innerContent["run"] != "echo hi" {
+		t.Errorf("innermost run = %v, want 'echo hi'", innerContent["run"])
+	}
+}
+
+// TestTryNodeHashChangesWithInnerStep checks that changing the inner step
+// changes the try node's hash.
+func TestTryNodeHashChangesWithInnerStep(t *testing.T) {
+	t.Parallel()
+
+	mustHash := func(step config.Step) string {
+		t.Helper()
+		content, err := TryNodeContent(&config.Config{}, step)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hash, err := HashNode(NodeKindTry, content, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return hash
+	}
+
+	a := mustHash(config.Step{Try: &config.Step{Task: "build", Run: "echo a"}})
+	b := mustHash(config.Step{Try: &config.Step{Task: "build", Run: "echo b"}})
+
+	if a == b {
+		t.Error("changing inner step's run did not change the try node hash")
+	}
+}
+
+// TestTryNodeHashStable checks that the same inner step produces the same hash.
+func TestTryNodeHashStable(t *testing.T) {
+	t.Parallel()
+
+	step := config.Step{Try: &config.Step{Task: "build", Run: "echo hi"}}
+
+	content1, err := TryNodeContent(&config.Config{}, step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash1, err := HashNode(NodeKindTry, content1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content2, err := TryNodeContent(&config.Config{}, step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash2, err := HashNode(NodeKindTry, content2, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if hash1 != hash2 {
+		t.Error("identical try steps produced different hashes")
+	}
+}
+
+// TestTryNodeHashChangesWithOuterHooks checks that adding a hook to the try
+// wrapper changes its hash.
+func TestTryNodeHashChangesWithOuterHooks(t *testing.T) {
+	t.Parallel()
+
+	inner := config.Step{Task: "build", Run: "echo hi"}
+
+	mustHash := func(step config.Step) string {
+		t.Helper()
+		content, err := TryNodeContent(&config.Config{}, step)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hash, err := HashNode(NodeKindTry, content, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return hash
+	}
+
+	noHook := mustHash(config.Step{Try: &inner})
+	withHook := mustHash(config.Step{
+		Try:   &inner,
+		Hooks: config.Hooks{OnSuccess: &config.Step{Task: "notify", Run: "echo ok"}},
+	})
+
+	if noHook == withHook {
+		t.Error("adding a hook to the try wrapper did not change the hash")
+	}
+}
+
+// TestPlanChainsTryStepIsUnskippable checks that a try step makes its chain unskippable.
+func TestPlanChainsTryStepIsUnskippable(t *testing.T) {
+	t.Parallel()
+
+	cfg := planCfg(`[{"ref":"v1"}]`, "v1")
+	steps := []config.Step{
+		{Get: "thing"},
+		{Try: &config.Step{Task: "work", Run: "echo hi"}},
+	}
+
+	chains, err := PlanChains(context.Background(), cfg, "build", steps, nil, nil)
+	if err != nil {
+		t.Fatalf("PlanChains: %v", err)
+	}
+
+	if len(chains) != 1 {
+		t.Fatalf("len(chains) = %d, want 1", len(chains))
+	}
+
+	if !chains[0].Unskippable {
+		t.Error("a chain containing a try step must be unskippable")
+	}
+}

@@ -337,6 +337,10 @@ func executeNonGetStep(
 		return true, exhaustedErr
 	}
 
+	// Last, so a try: wrapper's to: has already routed on the real outcome and
+	// the wrapper's hooks have already observed it.
+	err = tolerateTryFailure(ctx, jobName, step, err)
+
 	if err != nil {
 		return true, err
 	}
@@ -399,7 +403,12 @@ func reportChainSkipped(jobName string, steps []config.Step) {
 // otherwise, so a step without handoff: never sees a pending value even when
 // one exists. Split out of runSteps to keep its cyclomatic complexity down.
 func handoffFor(step config.Step, pending *agent.Handoff) *agent.Handoff {
-	if step.Handoff != nil && step.Handoff.Enabled() {
+	// Unwrap: handoff: sits on the agent step, which a try: wrapper hides —
+	// the wrapper itself never carries one (load-time rejected as "handoff is
+	// only valid on agent steps"), so without this a tolerated agent was
+	// reached with a nil Handoff and answered a redo as if freshly started.
+	inner := step.Unwrap()
+	if inner.Handoff != nil && inner.Handoff.Enabled() {
 		return pending
 	}
 
@@ -443,7 +452,7 @@ func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i in
 	// job's assert.execution, before hooks so the order reads
 	// [step, its hooks...].
 	if disposition == stepRan {
-		recordExecution(ctx, executedStepName(step))
+		recordStepExecution(ctx, step)
 	}
 
 	// Neither kind of skip fires hooks: the step did not run, so it has no
@@ -508,6 +517,8 @@ func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string,
 		}
 
 		return stepOut.Hash, stepRan, no, nil
+	case config.StepKindTry:
+		return runTryStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
 	default: // config.StepKindGet — dispatchNonGetStep is only called for non-get steps
 		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}
@@ -525,6 +536,84 @@ func recordChainSucceeded(ctx context.Context, st *store.Store, jobName, rootHas
 	if err != nil {
 		return fmt.Errorf("job %q: %w", jobName, err)
 	}
+
+	return nil
+}
+
+// runTryStep executes a try: wrapper. It runs the inner step exactly as if it
+// were unwrapped — through runNonGetStep, so the inner step's own when: guard,
+// hooks and execution log all behave normally — and hands its REAL outcome
+// (disposition, verdict, error) back to the plan walker.
+//
+// Nothing is swallowed here. Toleration is deliberately the last thing that
+// happens to the error, in executeNonGetStep, after routing: that is what lets
+// a `to: {failure: ...}` on the wrapper fire, and what keeps an aborted or
+// infrastructure-errored inner step from being reported as a green job. An
+// earlier revision called dispatchNonGetStep and returned nil from here, which
+// cost all three at once.
+func runTryStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, parentHash string, handoff *agent.Handoff) (string, stepDisposition, nonGetOutcome, error) {
+	content, err := merkle.TryNodeContent(cfg, step)
+	if err != nil {
+		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (try): %w", i, err)
+	}
+
+	hash, err := merkle.HashNode(merkle.NodeKindTry, content, parentHash)
+	if err != nil {
+		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (try): %w", i, err)
+	}
+
+	inner := *step.Try
+	name := executedStepName(inner)
+
+	fmt.Printf("try: %s\n", name)
+	slog.Debug("job.step", "job", jobName, "index", i, "kind", "try", "inner", name)
+
+	// Run the inner step with the try node's hash as parent — the inner step
+	// chains under the try wrapper. No caching (nil skippable): try is always
+	// unskippable, so the inner step always runs.
+	_, disposition, innerNo, innerErr := runNonGetStep(ctx, cfg, jobName, i, inner, bw, st, nil, hash, handoff)
+
+	// The wrapper's node status is what the plan did with the outcome, not
+	// what the inner step's outcome was (the inner step records that itself):
+	// "succeeded" when the failure is about to be tolerated, "failed" when it
+	// is one of the classes try: does not cover and the job stops here.
+	status := "succeeded"
+	if innerErr != nil && !toleratedByTry(ctx, innerErr) {
+		status = "failed"
+	}
+
+	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindTry, StepIndex: i, Resource: name, Content: content}
+	recCtx := context.WithoutCancel(ctx)
+	_ = st.RecordNode(recCtx, nodeRecord(node), jobName, status, nil, innerErr)
+
+	return hash, disposition, innerNo, innerErr
+}
+
+// toleratedByTry reports whether err is the kind of outcome a try: wrapper
+// exists to swallow: a task-level failure and nothing else.
+//
+// An Errored (infrastructure) or Aborted (ctx-canceled) step is NOT tolerated.
+// This is the same line outcomeKey draws for to: routing, for the same reason:
+// swallowing them would report a green job for a Ctrl-C or a docker outage,
+// and would let the plan march on into steps whose context is already dead.
+func toleratedByTry(ctx context.Context, err error) bool {
+	return err != nil && outcome.Classify(ctx, err) == outcome.Failed
+}
+
+// tolerateTryFailure is a try: wrapper's whole effect on the plan: it turns the
+// inner step's task-level failure into a nil error so runSteps continues, and
+// says so on the transcript. It runs AFTER applyRouting, so a wrapper that
+// routed on the failure has already consumed the error and prints nothing extra
+// here. Any non-try step, and any outcome try: doesn't cover, passes through.
+func tolerateTryFailure(ctx context.Context, jobName string, step config.Step, err error) error {
+	if step.Try == nil || !toleratedByTry(ctx, err) {
+		return err
+	}
+
+	name := executedStepName(step)
+
+	fmt.Printf("try: %s failed (tried, continuing)\n", name)
+	slog.Info("job.try", "job", jobName, "step", name, "outcome", "tolerated", "error", err.Error())
 
 	return nil
 }

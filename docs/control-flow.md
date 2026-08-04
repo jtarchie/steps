@@ -2,6 +2,7 @@
 
 Three distinct, easy-to-conflate mechanisms for shaping how a job's plan executes, plus the self-verification (`assert:`) that makes fixtures out of them. All are opt-in; a pipeline that uses none of this hashes and behaves exactly as if the feature didn't exist. See `examples/flow.yml` — every job there is a self-verifying, modelless `steps test` fixture; run it with `steps test examples/flow.yml`.
 
+- **`try:`** (tolerate) wraps a step so its failure doesn't stop the plan — best-effort notifications, cleanup, or metrics pushes.
 - **`when:`** (guard) runs *before* a step and decides whether it runs at all.
 - **`to:`** (route) runs *after* a step and decides which step runs next — including jumping backward to form a loop.
 - **Hooks** (`on_success`/`on_failure`/etc.) *react* to a step's outcome with a nested side-step, and never change control flow — you can't build a loop with a hook.
@@ -56,6 +57,32 @@ A `task`/`put`/`agent` step (including a hook step) can carry `when:` — a shel
 - The guard command is folded into the step's content hash, but its *outcome* is a run-time fact the planner can't know, so any chain containing a `when:` step is unskippable — never recorded as a reusable "this whole chain succeeded" hash.
 - Invalid on `get` steps (a get fans the remainder of the plan out per version, so a conditional get has no coherent meaning).
 - This is how an agent decides routing without typed outputs: an `agent` step writes a verdict into a declared output artifact, and the next step's `when:` tests that file. The model proposes; a deterministic command disposes; both are visible in the YAML.
+
+## Tolerated failure (`try:`)
+
+A `try:` wraps a single inner step (task, put, agent, or another try) so a **task-level failure** of that step doesn't stop the plan. Every job in `examples/try.yml` is a modelless, self-verifying fixture for the rules below — run it with `steps test examples/try.yml`.
+
+```yaml
+- try:
+    put: slack-notify
+    params:
+      text: "build finished"
+```
+
+The wrapper is **transparent**: the only thing it changes is whether the plan walker stops. Everything that *observes* the outcome sees the truth.
+
+- **The wrapped step runs exactly as it would unwrapped.** Its `when:` guard decides whether it runs at all (a guard-skipped step records no execution, wrapper or not), its own hooks fire on its real outcome, and its node records that outcome. The wrapper records a second node, `succeeded` when the failure was tolerated.
+- **Only `outcome.Failed` is tolerated.** An infrastructure error (docker, transport, workspace) or an abort (Ctrl-C) still stops the run and exits non-zero — the same line `to:` routing draws. Tolerating those would report a green job for a canceled build and march the plan into steps whose context is already dead.
+- **`to:` routing sees the real outcome**, because toleration happens *after* routing. `to: {failure: cleanup}` on the wrapper is reachable. The target name is the wrapped step's own name (task/put/agent).
+- **Hooks on the wrapper** also observe the real outcome, so `on_failure` on a `try:` fires when the wrapped step failed.
+- **The wrapper is the plan-positioned step**, so `to:` and `max_visits:` belong on it and are rejected on the step it wraps (where they used to load fine and silently never fire). `verdicts:`, `handoff:` and `handoff_note:` stay on the `agent:` step being wrapped, since that is what the agent runtime reads — a tolerated agent still routes on its verdict and still receives its transition context.
+- **`assert:` is rejected anywhere inside a `try:`**, on the wrapper and on the step it wraps alike. `assert:` is what makes a step a `steps test` fixture and `try:` swallows exactly the failure it reports, so such an assert could never fail a run — it would sit in a suite reporting PASS on the broken fixture it was written to catch.
+- **Composability:** `try:` nests (doubled `try:` is fine) and composes with `attempts:`/`timeout:` on the wrapped step — retry a few times, then shrug. Also works with `fix:` on a task — attempt repair, then tolerate if the fix doesn't stick.
+- **Artifacts flow through unchanged**: a wrapped task's `outputs:` are available to later steps exactly as if it were unwrapped (note that a *tolerated* step may not have produced them — a later `inputs:` on that artifact is a static contract, not a runtime guarantee).
+- **Output visibility**: when a failure is tolerated, the run prints `try: <name> failed (tried, continuing)` so the transcript doesn't read all-green while quietly eating a failure.
+- **Invalid on get steps** (a get fans the remainder of the plan per version, which has no coherent meaning inside a tolerated wrapper). Try wrapping get is rejected at load time.
+- **Valid as a hook body**: `ensure: { try: { put: slack-notify } }` is the usual home for best-effort notification — a failing `on_success`/`ensure` hook otherwise fails an otherwise-green step, and the wrapper is what stops that.
+- **Always unskippable**: the try wrapper and everything downstream of it always executes — removing `try:` from a step changes its identity, so re-running after an edit must not read a stale cache.
 
 ## Step transitions (`to:`/`max_visits:`/`verdicts:`)
 

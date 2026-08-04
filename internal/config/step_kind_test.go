@@ -15,9 +15,11 @@ func TestStepKind(t *testing.T) {
 		{name: "task", step: Step{Task: "build"}, wantKind: StepKindTask, wantOK: true},
 		{name: "put", step: Step{Put: "thing"}, wantKind: StepKindPut, wantOK: true},
 		{name: "agent", step: Step{Agent: "reviewer"}, wantKind: StepKindAgent, wantOK: true},
+		{name: "try", step: Step{Try: &Step{Task: "build", Run: "echo"}}, wantKind: StepKindTry, wantOK: true},
 		{name: "zero kinds set", step: Step{}, wantOK: false},
 		{name: "two kinds set (task and put)", step: Step{Task: "build", Put: "thing"}, wantOK: false},
 		{name: "two kinds set (get and agent)", step: Step{Get: "thing", Agent: "reviewer"}, wantOK: false},
+		{name: "two kinds set (try and task)", step: Step{Try: &Step{Task: "build"}, Task: "build"}, wantOK: false},
 		{name: "three kinds set", step: Step{Task: "build", Put: "thing", Agent: "reviewer"}, wantOK: false},
 	}
 
