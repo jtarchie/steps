@@ -508,6 +508,10 @@ func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string,
 		}
 
 		return stepOut.Hash, stepRan, no, nil
+	case config.StepKindTry:
+		hash, no, err := runTryStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
+
+		return hash, stepRan, no, err
 	default: // config.StepKindGet — dispatchNonGetStep is only called for non-get steps
 		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}
@@ -527,6 +531,44 @@ func recordChainSucceeded(ctx context.Context, st *store.Store, jobName, rootHas
 	}
 
 	return nil
+}
+
+// runTryStep executes a try: wrapper: it dispatches the inner step, swallows
+// any failure, records the try node as succeeded, and returns the inner step's
+// real outcome for to: routing while always returning nil error to the plan.
+// The inner step's hooks and assert fire normally.
+func runTryStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, parentHash string, handoff *agent.Handoff) (string, nonGetOutcome, error) {
+	content, err := merkle.TryNodeContent(cfg, step)
+	if err != nil {
+		return "", nonGetOutcome{}, fmt.Errorf("step %d (try): %w", i, err)
+	}
+
+	hash, err := merkle.HashNode(merkle.NodeKindTry, content, parentHash)
+	if err != nil {
+		return "", nonGetOutcome{}, fmt.Errorf("step %d (try): %w", i, err)
+	}
+
+	fmt.Printf("try: %s\n", executedStepName(*step.Try))
+	slog.Debug("job.step", "job", jobName, "index", i, "kind", "try", "inner", executedStepName(*step.Try))
+
+	// Run the inner step with the try node's hash as parent — the inner step
+	// chains under the try wrapper. No caching (nil skippable): try is always
+	// unskippable, so the inner step always runs.
+	_, _, innerNo, innerErr := dispatchNonGetStep(ctx, cfg, jobName, i, *step.Try, bw, st, nil, hash, handoff)
+
+	// Inner hooks already fired inside dispatchNonGetStep → runNonGetStep.
+	if innerErr != nil {
+		fmt.Printf("try: %s failed (tried, continuing)\n", executedStepName(*step.Try))
+		slog.Info("job.try", "job", jobName, "step", executedStepName(*step.Try), "outcome", "tolerated")
+	}
+
+	// Record the try wrapper node as succeeded regardless of inner outcome.
+	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindTry, StepIndex: i, Resource: executedStepName(*step.Try), Content: content}
+	recCtx := context.WithoutCancel(ctx)
+	_ = st.RecordNode(recCtx, nodeRecord(node), jobName, "succeeded", nil, innerErr)
+
+	// Return the real outcome for routing (to: on try routes on truth).
+	return hash, innerNo, nil // nil error = plan continues
 }
 
 // runGetStep resolves and (unless skippable) fetches step's resource

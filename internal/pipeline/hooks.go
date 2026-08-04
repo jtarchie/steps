@@ -145,6 +145,8 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 		}
 
 		return nil
+	case config.StepKindTry:
+		return runHookStep(ctx, scope, *step.Try)
 	default: // config.StepKindGet — not a valid hook body
 		return errors.New("unrecognized hook step (must be task, put, or agent)")
 	}
@@ -172,6 +174,8 @@ func executedStepName(step config.Step) string {
 		return step.Agent
 	case config.StepKindPut:
 		return step.Put
+	case config.StepKindTry:
+		return executedStepName(*step.Try)
 	default:
 		return ""
 	}
@@ -188,6 +192,8 @@ func stepLabel(i int, step config.Step) string {
 		return fmt.Sprintf("step %d (put %q)", i, step.Put)
 	case config.StepKindAgent:
 		return fmt.Sprintf("step %d (agent %q)", i, step.Agent)
+	case config.StepKindTry:
+		return fmt.Sprintf("step %d (try %q)", i, executedStepName(*step.Try))
 	default: // config.StepKindTask, or a malformed step — label as a task, as before
 		return fmt.Sprintf("step %d (task %q)", i, step.Task)
 	}

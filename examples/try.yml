@@ -1,0 +1,15 @@
+# try: tolerated failure — wrap a step so its real outcome is recorded but
+# doesn't fail the plan. Best-effort work like notifications, cleanup, or
+# metrics pushes that should never block the build.
+jobs:
+  - name: try-demo
+    plan:
+      - task: build
+        run: make build
+      - try:
+          task: notify
+          run: |
+            curl -s -X POST https://example.com/status -d "build finished"
+        # The plan continues even if notify fails.
+      - task: deploy
+        run: make deploy

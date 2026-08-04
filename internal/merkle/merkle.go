@@ -29,6 +29,7 @@ const (
 	NodeKindTask  NodeKind = "task"
 	NodeKindPut   NodeKind = "put"
 	NodeKindAgent NodeKind = "agent"
+	NodeKindTry   NodeKind = "try"
 )
 
 // Node is one content-addressed step in a job's resolved execution chain.
@@ -255,6 +256,8 @@ func hooksContent(cfg *config.Config, hooks config.Hooks) (map[string]any, error
 // its kind through the same builders a plan step uses (which recurse into the
 // hook's own hooks). get is never a valid hook (rejected at LoadConfig), so it
 // is not handled here.
+//
+//nolint:cyclop // the switch over step kinds is inherently branching
 func hookContentMap(cfg *config.Config, step config.Step) (map[string]any, error) {
 	kind, ok := step.Kind()
 	if !ok {
@@ -288,8 +291,71 @@ func hookContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 		}
 
 		return AgentContentMap(cfg, step, ri)
+	case config.StepKindTry:
+		return TryNodeContent(cfg, step)
 	default: // config.StepKindGet — not a valid hook body
 		return nil, errors.New("unrecognized hook step (must be task, put, or agent)")
+	}
+}
+
+// TryNodeContent builds the hashed content for a try wrapper by folding the
+// inner step's content under a "try" key, then folding in the outer step's
+// hooks/routing/when. The inner step's own node is recorded independently
+// (as failed/succeeded); only the wrapper appears in the plan chain.
+// Nested try steps recurse through stepContentMap.
+func TryNodeContent(cfg *config.Config, step config.Step) (map[string]any, error) {
+	innerContent, err := stepContentMap(cfg, *step.Try)
+	if err != nil {
+		return nil, fmt.Errorf("try: %w", err)
+	}
+
+	content := map[string]any{"try": innerContent}
+
+	return withHooks(cfg, step, withWhen(step, withRouting(step, content)))
+}
+
+// stepContentMap dispatches on a step's kind to build its hashed content,
+// reusing the same builders a plan step uses. It exists so TryNodeContent and
+// hookContentMap can share the dispatch without duplicating it.
+//
+//nolint:cyclop // the switch over step kinds is inherently branching
+func stepContentMap(cfg *config.Config, step config.Step) (map[string]any, error) {
+	kind, ok := step.Kind()
+	if !ok {
+		return nil, errors.New("unrecognized step")
+	}
+
+	switch kind { //nolint:exhaustive // StepKindGet is not a valid non-get step kind here
+	case config.StepKindTask:
+		rt, err := cfg.ResolveTask(step)
+		if err != nil {
+			return nil, fmt.Errorf("resolve task: %w", err)
+		}
+
+		return TaskNodeContent(cfg, step, rt)
+	case config.StepKindPut:
+		res, err := cfg.FindResource(step.Put)
+		if err != nil {
+			return nil, fmt.Errorf("resolve put: %w", err)
+		}
+
+		resourceType, err := cfg.FindResourceType(res.Type)
+		if err != nil {
+			return nil, fmt.Errorf("resolve put: %w", err)
+		}
+
+		return PutNodeContent(cfg, step, *resourceType, res.Source, step.Params, step.InputNames(), step.InputsAll())
+	case config.StepKindAgent:
+		ri, err := cfg.ResolveAgentInvocation(step)
+		if err != nil {
+			return nil, fmt.Errorf("resolve agent: %w", err)
+		}
+
+		return AgentContentMap(cfg, step, ri)
+	case config.StepKindTry:
+		return TryNodeContent(cfg, step)
+	default:
+		return nil, errors.New("unrecognized step")
 	}
 }
 
@@ -763,6 +829,10 @@ func planNonGetNode(cfg *config.Config, step config.Step, i int, parentHash stri
 		node, err := agentNode(cfg, step, i, parentHash)
 
 		return node, true, err
+	case config.StepKindTry:
+		node, err := tryNode(cfg, step, i, parentHash)
+
+		return node, true, err // try is always unskippable
 	default: // config.StepKindGet — planNonGetNode is only ever called for non-get steps
 		return Node{}, false, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}
@@ -862,4 +932,18 @@ func agentNode(cfg *config.Config, step config.Step, i int, parentHash string) (
 	}
 
 	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindAgent, StepIndex: i, Resource: ri.AgentName, Content: content}, nil
+}
+
+func tryNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, error) {
+	content, err := TryNodeContent(cfg, step)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (try): %w", i, err)
+	}
+
+	hash, err := HashNode(NodeKindTry, content, parentHash)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (try): %w", i, err)
+	}
+
+	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindTry, StepIndex: i, Content: content}, nil
 }

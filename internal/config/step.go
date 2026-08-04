@@ -75,6 +75,11 @@ type Step struct {
 	// timeout bounds both its check and in commands); for task/put steps it
 	// overrides the referenced task/agent's Timeout.
 	Timeout string `yaml:"timeout,omitempty"`
+	// Try wraps an inner step so its failure is tolerated: the inner step's
+	// hooks and assert fire normally, to: routing sees the real outcome, but
+	// the plan walker always sees success. Composes with attempts:/timeout:
+	// on the inner step. Invalid on hook steps — hooks are already reactions.
+	Try *Step `yaml:"try,omitempty"`
 	// Inputs/Outputs declare which named artifacts a task/agent/put step
 	// draws from and (task/agent only) produces. Each name is either a
 	// resource fetched by an earlier get step or an output produced by an
@@ -366,6 +371,7 @@ const (
 	StepKindTask  StepKind = "task"
 	StepKindPut   StepKind = "put"
 	StepKindAgent StepKind = "agent"
+	StepKindTry   StepKind = "try"
 )
 
 // Kind reports which single kind of step s is. ok is false when zero, or
@@ -381,6 +387,7 @@ func (s Step) Kind() (kind StepKind, ok bool) {
 		{StepKindTask, s.Task != ""},
 		{StepKindPut, s.Put != ""},
 		{StepKindAgent, s.Agent != ""},
+		{StepKindTry, s.Try != nil},
 	} {
 		if !candidate.set {
 			continue
@@ -429,7 +436,7 @@ func (c *Config) validateStepKinds() error {
 // kindFieldsSet names the kind-selecting fields this step sets, in schema
 // order, for the "sets task and agent" half of validateStepKinds' message.
 func (s Step) kindFieldsSet() []string {
-	set := make([]string, 0, 4)
+	set := make([]string, 0, 5)
 
 	for _, candidate := range [...]struct {
 		name  string
@@ -443,6 +450,10 @@ func (s Step) kindFieldsSet() []string {
 		if candidate.value != "" {
 			set = append(set, candidate.name)
 		}
+	}
+
+	if s.Try != nil {
+		set = append(set, "try")
 	}
 
 	return set
@@ -497,6 +508,8 @@ func (c *Config) resolveStepReference(step *Step) error {
 		_, err = c.FindResource(step.Put)
 	case StepKindAgent:
 		_, err = c.FindAgent(step.Agent)
+	case StepKindTry:
+		err = c.resolveStepReference(step.Try)
 	case StepKindTask:
 		if step.Run != "" {
 			return nil // an inline task never consults tasks:
@@ -545,7 +558,47 @@ func visitStepTree(label string, step *Step, fn func(label string, step *Step) e
 		return err
 	}
 
+	if step.Try != nil {
+		err = visitStepTree(label+" (try)", step.Try, fn)
+		if err != nil {
+			return err
+		}
+	}
+
 	return step.Hooks.Each(func(name string, hook *Step) error {
 		return visitStepTree(fmt.Sprintf("%s (%s hook)", label, name), hook, fn)
 	})
+}
+
+// validateTrySteps rejects malformed try wrappers: a bare try: (nil inner
+// step), try: wrapped around a get step, try: that also sets another kind
+// field, or a try: whose inner step has no recognized kind.
+func (c *Config) validateTrySteps() error {
+	for _, job := range c.Jobs {
+		err := job.visitSteps(func(label string, step *Step) error {
+			if step.Try == nil {
+				return nil
+			}
+
+			innerKind, ok := step.Try.Kind()
+			if !ok {
+				return fmt.Errorf("%s: try: wraps an unrecognized or empty step", label)
+			}
+			if innerKind == StepKindGet {
+				return fmt.Errorf("%s: try: cannot wrap a get step", label)
+			}
+
+			fields := step.kindFieldsSet()
+			if len(fields) > 1 { // "try" + something else
+				return fmt.Errorf("%s: try: is a wrapper — do not also set get/task/put/agent", label)
+			}
+
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

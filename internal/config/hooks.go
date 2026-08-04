@@ -101,11 +101,11 @@ func validateHookTree(parentLabel string, hooks Hooks, noArtifacts bool) error {
 func validateHookStep(label string, step *Step) error {
 	kind, ok := step.Kind()
 	if !ok {
-		return fmt.Errorf("%s: unrecognized hook step (must be task, put, or agent)", label)
+		return fmt.Errorf("%s: unrecognized hook step (must be task, put, agent, or try)", label)
 	}
 
 	if kind == StepKindGet {
-		return fmt.Errorf("%s: get is not valid in a hook; hooks must be task, put, or agent steps", label)
+		return fmt.Errorf("%s: get is not valid in a hook; hooks must be task, put, agent, or try steps", label)
 	}
 
 	return nil

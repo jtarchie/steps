@@ -159,6 +159,8 @@ func requireExecutionOnly(label string, assert *Assert) error {
 
 // validateStepAssert rejects a step assert that's misplaced (get/put) or
 // carries the wrong fields for its step kind.
+//
+//nolint:cyclop // the switch over step kinds is inherently branching
 func validateStepAssert(label string, step *Step) error {
 	if step.Assert == nil {
 		return nil
@@ -178,6 +180,8 @@ func validateStepAssert(label string, step *Step) error {
 		return fmt.Errorf("%s (get %q): assert is not valid on get steps", label, step.Get)
 	case StepKindPut:
 		return fmt.Errorf("%s (put %q): assert is not valid on put steps", label, step.Put)
+	case StepKindTry:
+		return validateStepAssert(label, step.Try)
 	case StepKindAgent:
 		if step.Assert.Code != nil {
 			return fmt.Errorf("%s (agent %q): assert.code is not valid on agent steps (no exit code); use assert.stdout", label, step.Agent)

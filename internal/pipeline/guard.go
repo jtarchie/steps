@@ -100,6 +100,8 @@ func resolveStepImage(cfg *config.Config, step config.Step) (string, error) {
 		}
 
 		return ri.Image, nil
+	case config.StepKindTry:
+		return resolveStepImage(cfg, *step.Try)
 	case config.StepKindPut:
 		resource, err := cfg.FindResource(step.Put)
 		if err != nil {

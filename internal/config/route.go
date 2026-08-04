@@ -31,6 +31,8 @@ func stepName(step Step) string {
 		return step.Agent
 	case StepKindPut:
 		return step.Put
+	case StepKindTry:
+		return stepName(*step.Try)
 	default:
 		return ""
 	}

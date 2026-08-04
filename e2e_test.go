@@ -483,3 +483,50 @@ func testSadPathProviderUnreachable(t *testing.T) {
 		t.Errorf("job_runs = %+v, want exactly one row with status errored", runs)
 	}
 }
+
+// TestEndToEndTryToleratesFailure exercises the try: wrapper: a failing task
+// inside a try block does not fail the plan — the plan continues with the
+// next step, and the store records the try node as succeeded while the inner
+// step's node records its real outcome.
+func TestEndToEndTryToleratesFailure(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "try-after.log")
+
+	pipeline := fmt.Sprintf(`
+jobs:
+- name: try-demo
+  plan:
+  - try:
+      task: flaky
+      run: exit 1
+  - task: still-runs
+    run: echo after-try >> %s
+`, logPath)
+
+	path := writePipeline(t, dir, pipeline)
+
+	err := run([]string{path})
+	if err != nil {
+		t.Fatalf("run should have succeeded (try swallowed the failure): %v", err)
+	}
+
+	// The plan continued past the failed tried step.
+	assertLineCount(t, logPath, 1)
+
+	nodes := storeNodes(t, path)
+
+	// The try wrapper node is recorded as succeeded.
+	tryNode := findNode(t, nodes, "try", "flaky")
+	if tryNode.Status != "succeeded" {
+		t.Errorf("try node status = %q, want succeeded", tryNode.Status)
+	}
+
+	// The inner task node is recorded with its real failed outcome.
+	failedTask := findNode(t, nodes, "task", "flaky")
+	if failedTask.Status != "failed" {
+		t.Errorf("inner task node status = %q, want failed", failedTask.Status)
+	}
+
+	// The step after try still ran.
+	findNode(t, nodes, "task", "still-runs")
+}

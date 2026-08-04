@@ -645,6 +645,10 @@
           "type": "string",
           "description": "Go duration, per attempt."
         },
+        "try": {
+          "$ref": "#/$defs/step",
+          "description": "Wrap a step so its failure is tolerated. The inner step's hooks and assert fire normally; to: routing sees the real outcome."
+        },
         "inputs": {
           "$ref": "#/$defs/inputSpec"
         },
