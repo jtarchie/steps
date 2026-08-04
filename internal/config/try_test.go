@@ -308,6 +308,25 @@ jobs:
 		}
 	})
 
+	t.Run("wrapped verdicts with no to: is still rejected", func(t *testing.T) {
+		t.Parallel()
+
+		// validateSegment's "does this segment use routing at all" gate reads
+		// verdicts: off the plan step. Without unwrapping there, a wrapped
+		// agent declaring verdicts: skipped verdict validation entirely and
+		// reached run time with a synthesized verdict tool routing nowhere.
+		path := writeConfig(t, agents+`
+jobs:
+- name: build
+  plan:
+  - try:
+      agent: reviewer
+      prompt: judge it
+      verdicts: [pass, fail]
+`)
+		wantLoadError(t, path, "verdicts requires a to: map")
+	})
+
 	t.Run("handoff on the wrapped agent is accepted", func(t *testing.T) {
 		t.Parallel()
 

@@ -130,7 +130,10 @@ func validateSegment(job Job, segment []int) error {
 	usesRouting := false
 
 	for _, idx := range segment {
-		if job.Plan[idx].To != nil || len(job.Plan[idx].Verdicts) > 0 {
+		// Unwrap for verdicts:, which sits on the agent step a try: may wrap —
+		// otherwise a wrapped `verdicts:` with no to: skips this whole check
+		// and reaches run time with a synthesized verdict tool routing nowhere.
+		if job.Plan[idx].To != nil || len(job.Plan[idx].Unwrap().Verdicts) > 0 {
 			usesRouting = true
 
 			break
