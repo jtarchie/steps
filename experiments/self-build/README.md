@@ -1,26 +1,33 @@
 # self-build: dogfooding `steps` to build its own roadmap
 
-An experiment: use `steps` itself to walk the roadmap stories in order, using
-the `claude` CLI as the plan/execute/critique worker for each story.
-[pipeline.yml](pipeline.yml) is the whole thing — no generator, no per-story
-duplication.
+An experiment: use `steps` itself to walk its own roadmap, one story at a
+time. [pipeline-agent.yml](pipeline-agent.yml) is the whole thing — no
+generator, no per-story duplication.
 
-> **⚠️ `pipeline.yml` is non-functional as written.** The stories used to be
-> markdown files under `docs/proposals/stories/`; they are now
-> [GitHub issues](https://github.com/jtarchie/steps/issues) labeled `story`,
-> and those files have been deleted. `pipeline.yml`'s `stories` resource still
-> globs the old directory, so `check:` returns no versions and the
-> `version: every` fan-out runs zero times — silently, since "no new versions"
-> and "the source directory is gone" look identical from outside.
-> [pipeline-agent.yml](pipeline-agent.yml) has been rewired against
-> `gh issue list` ([#21](https://github.com/jtarchie/steps/issues/21)) and
-> works; the same change has not been made to `pipeline.yml`.
+The stories are [GitHub issues](https://github.com/jtarchie/steps/issues)
+labeled `story`, one per roadmap feature. The pipeline's `stories` resource
+lists the open ones, and each run plans, implements, gates, reviews, and (only
+on a passing review) opens a PR whose body says `Closes #N` — so merging
+retires the story and it stops appearing on the next check. Earlier revisions
+kept the stories as markdown files under `docs/proposals/stories/` and chose
+between them by hand-editing a glob; both are gone.
 
-There is a second variant, [pipeline-agent.yml](pipeline-agent.yml), that
-does the same walk using `steps`' own `agent:` step type instead of the
-`claude` CLI — for trying this against a local model (LM Studio/Ollama)
-rather than Claude. See its own header comment for the full rationale; the
-short version:
+> **⚠️ Parts of this document describe earlier revisions.** Two changes have
+> outrun it. First, the repository became an ordinary `get: repo` input
+> artifact, which deleted the custom shell tools described below
+> (`story_brief`, `read_repo_file`, `repo_shell`, `stories/repo`, …) — the
+> pipeline's own header comment is current on that. Second, there used to be a
+> second variant, `pipeline.yml`, driving `claude -p` instead of `agent:`
+> steps; it has been deleted, so everything about `plan`/`execute`/`critique`
+> as `task:` steps, `--allowedTools`, `--permission-mode`, `source.repo`, and
+> the streaming-output notes is history, not description. The accurate parts
+> are this intro, "`stories` resource" under How it's wired, "Before running
+> this for real", and "Running it".
+
+The agents are `steps`' own `agent:` step type rather than a shelled-out
+`claude` CLI, which is what lets the experiment run against a local or cheap
+model (LM Studio/Ollama, OpenRouter). See the pipeline's header comment for
+the full rationale; the short version:
 
 - **No free CLAUDE.md pickup.** `claude` reads it from the checkout's cwd
   automatically; an `agent:` step doesn't, so the `stories` resource's `in:`
@@ -50,15 +57,14 @@ short version:
   `pipeline-agent.yml`'s own header comment for gopls' tool set and why it
   covers navigation but not file reading or general edits.
 - **`verdicts:`/`to:`/`handoff:` replace the hand-rolled PASS/FAIL grep and
-  critique-file re-read** `pipeline.yml`'s `critique` task needed, because
+  critique-file re-read** the deleted `claude -p` variant needed, because
   those are agent-only mechanisms `claude -p` (a plain shell command from
   `steps`' point of view) can't participate in. The reviewer still writes a
   human-readable `experiments/self-build/critiques/<num>.md`, but routing is
   driven by the `verdict` tool call, not by grepping that file.
 
-Same "before running this for real" cautions apply as `pipeline.yml`
-(`source.repo` needs to point at a dedicated worktree, it makes up to 14 real
-commits, etc. — see below) plus one more: `planner` and `reviewer` are
+The "before running this for real" cautions below all apply (it makes real
+commits and opens real PRs), plus one more: `planner` and `reviewer` are
 structurally limited to writing one fixed file each (no `repo_shell`, no
 general `write_repo_file` — see above), but `coder`'s `repo_shell` is exactly
 as unconfined as `claude`'s bare `Bash` would be, the same
@@ -90,8 +96,8 @@ The boundary there is `coder`'s persona instructions, not a hard guarantee.
   appends `Closes #N` to the PR body — so merging a self-build PR drops that
   story out of the next `check:` on its own.
 
-  (`pipeline.yml` still has the old Ruby-glob version of this resource — see
-  the warning above.)
+  Both are a change from the file era, where `check:` globbed the story
+  directory and `in:` wrote only a pointer into `repo/`.
 - **`get: stories, version: every`** fans the rest of the plan out once per
   version — a feature built for "run the plan once per new resource
   version," repurposed here as "run the plan once per story." Each version's
@@ -181,60 +187,70 @@ The boundary there is `coder`'s persona instructions, not a hard guarantee.
 
 ## Before running this for real
 
-This has now been *attempted* once (interrupted early, on purpose — see
-"`source.repo`" above for what that run caught) but never completed. Running
-it for real means something qualitatively different from every other example
-in this repo:
+This has now completed once, on story 001, producing
+[PR #1](https://github.com/jtarchie/steps/pull/1). Running it for real means
+something qualitatively different from every other example in this repo:
 
-- **`source.repo` currently points at `/Users/jtarchie/workspace/steps` —
-  the primary checkout, not a worktree.** Change this to a dedicated
-  worktree's absolute path (see "Running it" below) before a real run.
-  Nothing in the pipeline itself enforces isolation; the field is a plain
-  string, easy to forget to change back.
-- **`execute` runs `claude` with `--permission-mode bypassPermissions`.**
-  That's full autonomy — no per-action approval — because the story loop
-  needs to edit code, add tests, and iteratively fix lint/test/build failures
-  without a human in that inner loop. This is the one step in the whole
-  pipeline that trades away human review; every other step (`plan`,
-  `critique`'s qualitative check) uses a narrower `--allowedTools` list or
-  the default permission mode.
-- **It will make up to 14 real commits** (one per story, only on a critique
-  `PASS`) with real code changes, each potentially preceded by up to 3 redo
-  rounds, directly onto whatever branch `source.repo` has checked out.
-- **Cost and time**: 14 stories × up to 3 `claude` calls per round × up to 4
-  rounds is a real amount of model usage and wall-clock time in the worst
-  case — `execute` in particular is "implement a production feature with
-  tests," not a quick query. Expect this to run for hours unattended, not
-  minutes.
+- **It writes to the real GitHub repository.** Nothing local is at risk — the
+  `repo` resource clones into the step's own ephemeral workspace, so the
+  checkout you invoke from is never touched — but a passing review pushes a
+  `self-build/story-NNN` branch to `origin` and opens a PR against `main`. To
+  aim that somewhere safer, change the clone URL and `gh api` target in the
+  `repo` resource type and the `--repo` in the `stories` resource type; there
+  are four places and nothing cross-checks them.
+- **`coder` holds an unrestricted `run_shell`.** That is full autonomy — no
+  per-action approval — because the story loop has to edit code, add tests,
+  and iteratively fix lint/test/build failures without a human in that inner
+  loop. It is the one agent that trades away review; `planner` and `reviewer`
+  hold no shell at all and can only write files inside their own workspace.
+  `steps`' tool-grant system cannot confine what a granted `run_shell` does,
+  so the boundary is the persona, not a guarantee.
+- **PR #1 is the case for reading the result rather than trusting it.** It
+  passed lint, tests, build, and the pipeline's own reviewer, and a second
+  review still found ten confirmed defects. The harness weaknesses that
+  allowed that are tracked as issues labeled
+  [`self-build`](https://github.com/jtarchie/steps/labels/self-build).
+- **Cost and time**: `coder` alone is budgeted at `timeout: 45m` per attempt
+  with `attempts: 2`, and `build-check` can send it back up to 4 times while
+  `reviewer` can send it back 3. One story is "implement a production feature
+  with tests," not a quick query — expect hours unattended, not minutes, and
+  multiply by `source.limit` if you raise it.
 - **Ordering dependency between stories isn't enforced.** Story 002
-  (`in_parallel`) is the keystone several later stories build on; running
-  the full sequence in order means later stories' `execute` should find
-  earlier features already merged, but nothing here *checks* that a later
-  story's implementation actually leans on an earlier one — that's on the
-  plan/execute prompts (which do point back at CLAUDE.md and the story's own
-  cross-references) doing the right thing, not a mechanical guarantee.
+  (`in_parallel`) is the keystone several later stories build on. Running in
+  ascending order means a later story's `coder` should find earlier features
+  already merged, but nothing *checks* that — and since `check:` lists open
+  issues, an unmerged earlier story stays in the queue rather than blocking
+  the ones that depend on it. That's on the prompts (which point back at
+  CLAUDE.md and the issue's own cross-references) doing the right thing.
 
 ## Running it
 
-Whole sequence, in a dedicated worktree (recommended — set up the worktree
-*and* point `source.repo` at it, both are required):
+Needs, on PATH and authenticated: `gh` (both resources are GitHub-backed —
+`gh auth login` or `GH_TOKEN`), `gopls` (the MCP server the agents navigate
+with), and credentials for whatever `agents: source.model` points at.
 
 ```
-git worktree add ../steps-self-build -b self-build
+steps run experiments/self-build/pipeline-agent.yml --job self-build
 ```
 
-Edit `pipeline.yml`'s `resources: - name: stories - source: repo:` to the
-worktree's absolute path, then, from either directory (task steps `cd` into
-`source.repo` regardless of where `steps` itself was invoked from):
+No worktree setup and no local path to configure: the `repo` resource clones
+`https://github.com/jtarchie/steps` into the step's own ephemeral workspace,
+so nothing touches the checkout you invoke from. What it *does* touch is the
+remote — a passing review pushes a `self-build/story-NNN` branch and opens a
+real PR against `main`. Read the "Before running this for real" section above
+before the first unattended run.
 
-```
-steps run experiments/self-build/pipeline.yml --job self-build
+`source.limit: 1` already restricts a run to the lowest-numbered open story,
+which is the right setting for a trial. To work a specific story instead, pin
+the get step:
+
+```yaml
+- get: stories
+  version: { num: "002", issue: "8" }
 ```
 
-One story only, for a first trial run: temporarily restrict the `stories`
-resource's `check:` to just that story's file (or pin the get step with
-`version: {num: "000"}` instead of `every`) before trusting the full
-14-story unattended run.
+To widen it, raise `limit`; `version: every` then walks that many stories in
+ascending order, one after another.
 
 ## Open design questions this sketch left for a real attempt
 
