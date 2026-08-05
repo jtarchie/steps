@@ -176,3 +176,38 @@ A plan is otherwise strictly sequential, so independent work waits on itself: th
 ### Writing a regression test for a parallel block
 
 Use `assert.outcome`. `assert.execution` alone structurally cannot catch a swallowed branch failure — both builds run the same branches, so the assert matches either way and then *clears* the difference under test. `examples/in-parallel.yml`'s `no-fail-fast-still-propagates` job is the shape to copy, and it is verified to go red when the swallow defect is reintroduced.
+
+## `race:` — first success wins
+
+Run a fast/cheap path and a slow/reliable path at the same time, keep whichever finishes successfully first, cancel the other.
+
+```yaml
+workspace:
+  strategy: copy      # required — see below
+
+jobs:
+- name: summarize
+  plan:
+  - race:
+      steps:
+      - {agent: fast-model, prompt: "Summarize the release.", outputs: [summary]}
+      - {agent: strong-model, prompt: "Summarize the release.", outputs: [summary]}
+```
+
+### ⚠️ This costs more, not less
+
+Running both branches **always costs both**, every time, even when the fast one wins. The value is "never wait for the slow path", not "spend less". If you reached for `race:` to save money, you want caching or plain retries instead.
+
+### ⚠️ It is unsafe for side-effecting steps
+
+Cancelling a loser stops only **future** work. A branch that already filed an issue, sent a notification, or pushed a commit keeps that side effect. `race:` is safe for read/generate-only steps; for anything that changes the outside world, run one branch.
+
+Cancellation is also *bounded*, not instantaneous: killing `sh -c "sleep 5; …"` kills the shell but not the `sleep` it forked, so a cancelled step is given a short grace period (see `cancelWaitDelay`) before it is abandoned.
+
+The rest of the rules:
+
+- **"First success" means completed without error** — not a judgment about output quality. A fast but mediocre answer still wins. Gate quality with a downstream `assert:`/`verdicts:` step; folding it in here would make the outcome depend on something no branch can observe about itself.
+- **The winner's outputs are the step's outputs**, so a downstream step never has to know which branch won. Every branch must therefore declare the *same* `outputs:` — a mismatch is a load error.
+- **Workspace isolation is required**, enforced at load. Losing branches are cancelled while they may be mid-write; under the shared single-directory workspace that lets a loser corrupt the winner's files, and there is no version of that which is safe.
+- **A race needs at least two branches.** One runner is a step with extra words.
+- **When every branch fails, the block fails** and reports all of them. A hedge is not a guarantee.

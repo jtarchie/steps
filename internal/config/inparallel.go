@@ -52,7 +52,7 @@ func (c *Config) validateInParallel() error {
 				return nil
 			}
 
-			return validateInParallelBlock(label, step)
+			return c.validateInParallelBlock(label, step)
 		})
 		if err != nil {
 			return err
@@ -62,7 +62,7 @@ func (c *Config) validateInParallel() error {
 	return c.validateParallelOutputs()
 }
 
-func validateInParallelBlock(label string, step *Step) error {
+func (c *Config) validateInParallelBlock(label string, step *Step) error {
 	if len(step.InParallel.Steps) == 0 {
 		return fmt.Errorf("%s: in_parallel.steps must not be empty", label)
 	}
@@ -71,30 +71,7 @@ func validateInParallelBlock(label string, step *Step) error {
 		return fmt.Errorf("%s: in_parallel.limit must not be negative (omit it for unbounded)", label)
 	}
 
-	// Fields that describe an operation, on a thing that performs none.
-	for _, rejected := range []struct {
-		name string
-		set  bool
-	}{
-		{"inputs", step.InputsDeclared()},
-		{"outputs", step.Outputs != nil},
-		{"image", step.Image != ""},
-		{"run", step.Run != ""},
-		{"prompt", step.Prompt != ""},
-		{"params", step.Params != nil},
-		{"trigger", step.Trigger},
-		{"version", step.Version != nil},
-		{"verdicts", len(step.Verdicts) > 0},
-		{"handoff", step.Handoff != nil},
-		{"assert", step.Assert != nil},
-	} {
-		if rejected.set {
-			return fmt.Errorf("%s: %s is not valid on an in_parallel step; set it on the step inside the block that it describes",
-				label, rejected.name)
-		}
-	}
-
-	return nil
+	return c.rejectOperationFields(label, step, "an in_parallel")
 }
 
 // validateParallelOutputs rejects two branches of one in_parallel: block
@@ -137,11 +114,19 @@ func (c *Config) validateParallelOutputs() error {
 }
 
 // branchOutputs lists every artifact one branch produces, looking through a
-// try: wrapper and down into a nested in_parallel: block — a duplicate is a
-// duplicate however deeply the branch that produces it is nested.
+// try: wrapper and down into a nested block — a duplicate is a duplicate
+// however deeply the branch that produces it is nested.
+//
+// A race: block contributes its branches' outputs once, not once per branch:
+// every racer declares the same outputs by construction (validateRaceBlock),
+// and only the winner's are produced.
 func branchOutputs(step *Step) []string {
 	if step.Try != nil {
 		return branchOutputs(step.Try)
+	}
+
+	if step.Race != nil {
+		return branchOutputs(&step.Race.Steps[0])
 	}
 
 	if step.InParallel == nil {

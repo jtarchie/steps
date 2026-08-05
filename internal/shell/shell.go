@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Runner runs pipeline-defined commands, either on the host or inside a
@@ -545,6 +546,7 @@ func (h HostRunner) Run(ctx context.Context, command string) error {
 	slog.Debug("shell.run", "command", command, "cwd", h.cwd)
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
+	cmd.WaitDelay = cancelWaitDelay
 	cmd.Dir = h.cwd
 	cmd.Env = HostEnv()
 	cmd.Stdin = os.Stdin
@@ -578,6 +580,7 @@ func (h HostRunner) RunCapture(ctx context.Context, command string) ([]byte, err
 	slog.Debug("shell.capture", "command", command, "cwd", h.cwd)
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
+	cmd.WaitDelay = cancelWaitDelay
 	cmd.Dir = h.cwd
 	cmd.Env = HostEnv()
 	cmd.Stdin = os.Stdin
@@ -645,6 +648,7 @@ func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes
 	slog.Debug("shell.capture_full", "command", command, "cwd", h.cwd)
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
+	cmd.WaitDelay = cancelWaitDelay
 	cmd.Dir = h.cwd
 	cmd.Env = HostEnv()
 	cmd.Stdin = nil
@@ -713,3 +717,18 @@ func RunShellCapture(ctx context.Context, command, cwd string) ([]byte, error) {
 func RunShellCaptureFull(ctx context.Context, command, cwd string) (stdout, stderr string, exitCode int, err error) {
 	return HostRunner{cwd: cwd}.RunCaptureFull(ctx, command)
 }
+
+// cancelWaitDelay bounds how long a cancelled command is waited on after its
+// own process has been killed.
+//
+// Killing `sh -c "sleep 5; echo done"` kills the shell, not the `sleep` it
+// forked — and a surviving grandchild still holds the stdout pipe, so
+// cmd.Wait would block on the I/O copy until that grandchild exits on its own.
+// A cancelled step would then take as long as whatever it started, which
+// defeats every feature built on cancellation: fail_fast, race:, and Ctrl-C.
+//
+// ponytail: the complete fix is a process group per command (Setpgid, then
+// kill the negative pid), which reaps grandchildren too. That is unix-only and
+// wants build-tagged files; this bounds the damage portably in one line until
+// something needs the difference between "2 seconds late" and "immediate".
+const cancelWaitDelay = 2 * time.Second

@@ -119,6 +119,7 @@ func (c *Config) validate() error {
 		c.validateBudgets,
 		c.validatePreflight,
 		c.validateInParallel,
+		c.validateRace,
 		c.validateCredentialHandling,
 	}
 

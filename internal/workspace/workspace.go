@@ -674,14 +674,12 @@ func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step co
 
 		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
 	case step.InParallel != nil:
-		pre := maps.Clone(available)
-
-		err := validateParallelArtifactFlow(cfg, jobName, i, step, available)
-		if err != nil {
-			return err
-		}
-
-		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
+		return validateBlockArtifactFlow(cfg, jobName, i, step, step.InParallel.Steps, available)
+	case step.Race != nil:
+		// Every racer declares the same outputs (config rejects anything
+		// else), and only the winner's are produced — so the block's effect on
+		// the artifact view is one branch's, not the union of all of them.
+		return validateBlockArtifactFlow(cfg, jobName, i, step, step.Race.Steps, available)
 	default:
 		return nil
 	}
@@ -704,6 +702,19 @@ func validatePutArtifactFlow(cfg *config.Config, jobName string, i int, step con
 	return validateStepHooks(cfg, jobName, i, step, snap, snap)
 }
 
+// validateBlockArtifactFlow validates a concurrent block's branches and then
+// the block's own hooks.
+func validateBlockArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, branches []config.Step, available map[string]bool) error {
+	pre := maps.Clone(available)
+
+	err := validateParallelArtifactFlow(cfg, jobName, i, branches, available)
+	if err != nil {
+		return err
+	}
+
+	return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
+}
+
 // validateParallelArtifactFlow checks each branch of an in_parallel: block
 // against the artifacts available when the BLOCK started — never against each
 // other's outputs.
@@ -713,10 +724,10 @@ func validatePutArtifactFlow(cfg *config.Config, jobName string, i int, step con
 // artifact is not available here" rather than "sometimes". Everything the
 // branches produce joins the view after the block, where a later step may
 // legitimately consume it.
-func validateParallelArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+func validateParallelArtifactFlow(cfg *config.Config, jobName string, i int, branches []config.Step, available map[string]bool) error {
 	start := maps.Clone(available)
 
-	for _, branch := range step.InParallel.Steps {
+	for _, branch := range branches {
 		produced := maps.Clone(start)
 
 		err := validateStepArtifactFlow(cfg, jobName, i, branch, produced)

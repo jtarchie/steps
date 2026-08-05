@@ -33,6 +33,8 @@ const (
 	// NodeKindParallel is an in_parallel: block. The block hashes its
 	// branches' content, so changing any branch changes the block.
 	NodeKindParallel NodeKind = "in_parallel"
+	// NodeKindRace is a race: block.
+	NodeKindRace NodeKind = "race"
 )
 
 // Node is one content-addressed step in a job's resolved execution chain.
@@ -359,6 +361,8 @@ func stepContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 		return TryNodeContent(cfg, step)
 	case config.StepKindInParallel:
 		return ParallelNodeContent(cfg, step)
+	case config.StepKindRace:
+		return RaceNodeContent(cfg, step)
 	default:
 		return nil, errors.New("unrecognized step")
 	}
@@ -854,6 +858,10 @@ func planNonGetNode(cfg *config.Config, step config.Step, i int, parentHash stri
 		node, err := tryNode(cfg, step, i, parentHash)
 
 		return node, true, err // try is always unskippable
+	case config.StepKindRace:
+		node, err := raceNode(cfg, step, i, parentHash)
+
+		return node, true, err // always unskippable, like in_parallel
 	case config.StepKindInParallel:
 		node, err := parallelNode(cfg, step, i, parentHash)
 
@@ -865,6 +873,25 @@ func planNonGetNode(cfg *config.Config, step config.Step, i int, parentHash stri
 	default: // config.StepKindGet — planNonGetNode is only ever called for non-get steps
 		return Node{}, false, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}
+}
+
+// RaceNodeContent hashes a race: block: its branches' content, in declaration
+// order. Which branch wins is a run-time race, not part of the step's
+// identity — the block means "any of these", and a cached success is a success
+// whichever one produced it.
+func RaceNodeContent(cfg *config.Config, step config.Step) (map[string]any, error) {
+	branches := make([]any, 0, len(step.Race.Steps))
+
+	for i := range step.Race.Steps {
+		branchContent, err := stepContentMap(cfg, step.Race.Steps[i])
+		if err != nil {
+			return nil, fmt.Errorf("race branch %d: %w", i, err)
+		}
+
+		branches = append(branches, branchContent)
+	}
+
+	return withHooks(cfg, step, withWhen(step, withRouting(step, map[string]any{"race": branches})))
 }
 
 // planTaskNode builds a task step's plan node and decides whether a chain
@@ -900,6 +927,21 @@ func parallelNode(cfg *config.Config, step config.Step, i int, parentHash string
 	}
 
 	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindParallel, StepIndex: i, Content: content}, nil
+}
+
+// raceNode builds the plan node for a race: block.
+func raceNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, error) {
+	content, err := RaceNodeContent(cfg, step)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (race): %w", i, err)
+	}
+
+	hash, err := HashNode(NodeKindRace, content, parentHash)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (race): %w", i, err)
+	}
+
+	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindRace, StepIndex: i, Content: content}, nil
 }
 
 // planGetStep resolves step's version(s) and recurses into the remainder of

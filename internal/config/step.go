@@ -93,6 +93,9 @@ type Step struct {
 	// InParallel runs several steps at the same time instead of one after
 	// another. See InParallel.
 	InParallel *InParallel `yaml:"in_parallel,omitempty"`
+	// Race runs several steps at once and keeps whichever finishes
+	// successfully first. See Race.
+	Race *Race `yaml:"race,omitempty"`
 	// Inputs/Outputs declare which named artifacts a task/agent/put step
 	// draws from and (task/agent only) produces. Each name is either a
 	// resource fetched by an earlier get step or an output produced by an
@@ -375,6 +378,36 @@ func (f *FileRef) Deferred() bool {
 	return f != nil && f.Artifact != ""
 }
 
+// resolveGetReference resolves a get step's resource, unless it aliases one —
+// an alias is validateGetResource's to check.
+func (c *Config) resolveGetReference(step *Step) error {
+	if step.Resource != "" {
+		return nil
+	}
+
+	_, err := c.FindResource(step.Get)
+
+	return err
+}
+
+// branchesOf returns a concurrent block's branches keyed by which kind of
+// block they belong to, or nothing for an ordinary step. It exists so the
+// walkers below treat in_parallel: and race: identically — they differ in what
+// their branches' outcomes MEAN, never in the fact that they have branches,
+// and a walker that knew about one but not the other is precisely the silent
+// gap this codebase has shipped before.
+func branchesOf(step *Step) map[string][]Step {
+	//kindswitch:ignore only the container kinds have branches; the leaf kinds are the point of the default
+	switch {
+	case step.InParallel != nil:
+		return map[string][]Step{"in_parallel": step.InParallel.Steps}
+	case step.Race != nil:
+		return map[string][]Step{"race": step.Race.Steps}
+	default:
+		return nil
+	}
+}
+
 // resolveBranchReferences resolves every branch of an in_parallel: block. A
 // block references nothing itself; its branches are ordinary steps and
 // reference exactly what they always did.
@@ -405,6 +438,8 @@ const (
 	// tagless ones via that analyzer. Story 001 added a kind and shipped ten
 	// defects, six of them a dispatch site that silently did nothing for it.
 	StepKindInParallel StepKind = "in_parallel"
+	// StepKindRace is a block whose first successful branch wins.
+	StepKindRace StepKind = "race"
 )
 
 // Kind reports which single kind of step s is. ok is false when zero, or
@@ -422,6 +457,7 @@ func (s Step) Kind() (kind StepKind, ok bool) {
 		{StepKindAgent, s.Agent != ""},
 		{StepKindTry, s.Try != nil},
 		{StepKindInParallel, s.InParallel != nil},
+		{StepKindRace, s.Race != nil},
 	} {
 		if !candidate.set {
 			continue
@@ -533,19 +569,17 @@ func (c *Config) resolveStepReference(step *Step) error {
 
 	switch kind {
 	case StepKindGet:
-		if step.Resource != "" {
-			return nil // the alias is validateGetResource's to check
-		}
-
-		_, err = c.FindResource(step.Get)
+		return c.resolveGetReference(step)
 	case StepKindPut:
 		_, err = c.FindResource(step.Put)
 	case StepKindAgent:
 		_, err = c.FindAgent(step.Agent)
 	case StepKindTry:
 		err = c.resolveStepReference(step.Try)
-	case StepKindInParallel:
-		err = c.resolveBranchReferences(step.InParallel.Steps)
+	case StepKindInParallel, StepKindRace:
+		for _, branches := range branchesOf(step) {
+			err = c.resolveBranchReferences(branches)
+		}
 	case StepKindTask:
 		if step.Run != "" {
 			return nil // an inline task never consults tasks:
@@ -601,12 +635,12 @@ func visitStepTree(label string, step *Step, fn func(label string, step *Step) e
 		}
 	}
 
-	// Descend into an in_parallel: block's branches. Without this every
+	// Descend into a concurrent block's branches. Without this every
 	// validator in this package would silently stop at the block, and a
 	// branch could carry anything at all.
-	if step.InParallel != nil {
-		for i := range step.InParallel.Steps {
-			err = visitStepTree(fmt.Sprintf("%s (in_parallel branch %d)", label, i), &step.InParallel.Steps[i], fn)
+	for kind, branches := range branchesOf(step) {
+		for i := range branches {
+			err = visitStepTree(fmt.Sprintf("%s (%s branch %d)", label, kind, i), &branches[i], fn)
 			if err != nil {
 				return err
 			}

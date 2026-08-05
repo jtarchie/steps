@@ -1,0 +1,21 @@
+# The winner's outputs become the step's outputs, so a downstream step must not
+# have to know which branch won — which means the branches have to agree on
+# what those outputs are.
+# expect: every race branch must declare the same outputs
+
+workspace:
+  strategy: copy
+
+jobs:
+- name: build
+  plan:
+  - race:
+      steps:
+      - task: fast
+        inputs: []
+        outputs: [summary]
+        run: mkdir -p summary
+      - task: slow
+        inputs: []
+        outputs: [report]
+        run: mkdir -p report

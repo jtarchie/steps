@@ -1,0 +1,14 @@
+# A race with one runner is a step with extra words.
+# expect: race.steps needs at least two branches
+
+workspace:
+  strategy: copy
+
+jobs:
+- name: build
+  plan:
+  - race:
+      steps:
+      - task: alone
+        inputs: []
+        run: echo alone

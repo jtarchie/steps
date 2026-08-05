@@ -725,6 +725,23 @@
             }
           }
         },
+        "race": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "steps"
+          ],
+          "description": "Run several steps at once and keep whichever finishes successfully first. A LATENCY hedge: both branches are always billed. Requires workspace isolation, and every branch must declare the same outputs.",
+          "properties": {
+            "steps": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "$ref": "#/$defs/step"
+              }
+            }
+          }
+        },
         "inputs": {
           "$ref": "#/$defs/inputSpec"
         },

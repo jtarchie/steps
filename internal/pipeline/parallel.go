@@ -223,3 +223,121 @@ func limitSuffix(limit int) string {
 
 	return fmt.Sprintf(" (limit %d)", limit)
 }
+
+// runRaceStep runs a race: block's branches concurrently and keeps whichever
+// completes successfully first, cancelling the rest.
+//
+// "Successfully" means completed without error — NOT a judgment about output
+// quality. A fast but mediocre answer still wins; gating on quality is a
+// downstream assert:/verdicts: concern, and folding it in here would make the
+// race's outcome depend on something no branch can observe about itself.
+//
+// Losing branches are cancelled, which stops only FUTURE work: a loser that
+// already had a real-world side effect keeps it. That is why race: requires
+// workspace isolation and is documented as safe for read/generate-only agents.
+func runRaceStep(
+	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step,
+	bw workspace.BuildWorkspace, st *store.Store, parentHash string, handoff *agent.Handoff,
+) (string, stepDisposition, nonGetOutcome, error) {
+	content, err := merkle.RaceNodeContent(cfg, step)
+	if err != nil {
+		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (race): %w", i, err)
+	}
+
+	hash, err := merkle.HashNode(merkle.NodeKindRace, content, parentHash)
+	if err != nil {
+		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (race): %w", i, err)
+	}
+
+	branches := step.Race.Steps
+
+	fmt.Printf("race: %d branches\n", len(branches))
+	slog.Debug("job.step", "job", jobName, "index", i, "kind", "race", "branches", len(branches))
+
+	winner, results := raceBranches(ctx, cfg, jobName, i, branches, bw, st, hash, handoff)
+	raceErr := raceOutcome(ctx, winner, results)
+
+	status := "succeeded"
+	if raceErr != nil {
+		status = "failed"
+	}
+
+	node := merkle.Node{
+		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindRace,
+		StepIndex: i, Resource: executedStepName(step), Content: content,
+	}
+	_ = st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), jobName, status, nil, raceErr)
+
+	return hash, stepRan, nonGetOutcome{}, raceErr
+}
+
+// raceBranches starts every branch and returns the index of the first to
+// succeed (-1 if none did) along with every branch's result.
+func raceBranches(
+	ctx context.Context, cfg *config.Config, jobName string, i int, branches []config.Step,
+	bw workspace.BuildWorkspace, st *store.Store, blockHash string, handoff *agent.Handoff,
+) (int, []branchResult) {
+	raceCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		winner  = -1
+		results = make([]branchResult, len(branches))
+		logs    = make([]*execLog, len(branches))
+	)
+
+	for index := range branches {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			branch := branches[index]
+			results[index] = branchResult{index: index, name: executedStepName(branch)}
+
+			runCtx, branchLog := forkExecLog(raceCtx)
+			logs[index] = branchLog
+
+			_, _, _, err := runNonGetStep(runCtx, cfg, jobName, i, branch, bw, st, nil, blockHash, handoff)
+			results[index].err = err
+
+			if err != nil {
+				return
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			// First success wins; a later one changes nothing, and cancelling
+			// again is harmless.
+			if winner < 0 {
+				winner = index
+			}
+
+			cancel()
+		}()
+	}
+
+	wg.Wait()
+
+	// Only the winner's execution is recorded. A cancelled loser's partial
+	// work is not something a fixture should have to predict, and its
+	// artifacts are discarded.
+	if winner >= 0 && logs[winner] != nil {
+		mergeExecLog(ctx, logs[winner])
+	}
+
+	return winner, results
+}
+
+// raceOutcome reports the block's error: none when some branch won, and every
+// branch's failure when none did.
+func raceOutcome(ctx context.Context, winner int, results []branchResult) error {
+	if winner >= 0 {
+		return nil
+	}
+
+	return combineBranchErrors(ctx, results)
+}
