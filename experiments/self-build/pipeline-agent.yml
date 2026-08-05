@@ -315,6 +315,15 @@ agents:
       answer and you are not eyeballing a transcript: a mismatch prints
       `want: [...]` / `got: [...]`, which names the missing step for you. Fall
       back to reading the transcript only for claims no assert can express.
+      KEEP PROBES MODELLESS. This tool runs with the host env stripped to a
+      short allowlist (PATH, HOME, locale, TMPDIR, proxies) -- no API keys, by
+      design -- so an `agent:` step in a probe dies with `environment variable
+      "..." (api_key_env) is not set`. That is the sandbox, NOT a defect in the
+      change. task:/put:/get:/when:/to:/hooks/assert: all work fine and cover
+      every control-flow claim. For a claim that genuinely needs a model, do
+      not probe it: say so in the critique, and check instead that an e2e test
+      covers it against the fake provider seam (newFakeLLM in
+      fakeprovider_test.go) -- that is how this repo tests agent behavior.
     max_output_bytes: 8000
     run: |
       cd repo || exit 1
@@ -327,6 +336,17 @@ agents:
       }
       probe="$(mktemp -d)"
       printf '%s\n' {{ .args.yaml | shellquote }} > "$probe/probe.yml"
+      # internal/shell.HostEnv strips this shell to a short allowlist that
+      # deliberately excludes every api_key_env secret, so an agent-backed
+      # probe cannot authenticate and dies looking like a bug in the change.
+      # Say so up front rather than letting the model misattribute it. Advisory
+      # only -- probing that a config with an agent: is REJECTED at load time
+      # is legitimate and never reaches credentials.
+      if grep -qE '^[[:space:]]*-?[[:space:]]*agent:' "$probe/probe.yml"; then
+        printf 'NOTE: this probe declares an agent:. No API keys reach this\n'
+        printf 'sandbox, so if it fails on api_key_env that is the harness,\n'
+        printf 'not the change under review. Probe control flow modelless.\n\n'
+      fi
       rc=0
       out=$(cd "$probe" && "$bin" test probe.yml 2>&1) || rc=$?
       printf '%s\n' "$out" | tail -n 200
@@ -504,9 +524,16 @@ jobs:
              contains X, not Y.
            - "steps test still catches a broken assert" -> write the broken
              assert and see whether the run reports PASS.
-         A claim you could not probe, say so in the critique and explain why.
          A claim whose probe disagrees with the doc or the story is a FAIL --
          it does not matter which of the two you think is right.
+         Probes are MODELLESS: no API keys reach the probe sandbox, so an
+         `agent:` step in one fails on api_key_env no matter how correct the
+         change is. Control flow, artifacts, caching, validation and every
+         assert are all reachable without a model. For a claim that truly
+         needs one, do not probe and do not guess -- say so in the critique,
+         and check instead that an e2e test exercises it against the fake
+         provider (newFakeLLM in fakeprovider_test.go). A story whose central
+         behavior is agent-side and ships with no such test is a FAIL on 4a.
       4. Judge whether the story is fully AND CORRECTLY implemented, not
          merely plausible-looking:
          a. the feature described is present, with tests that exercise it;
