@@ -324,6 +324,13 @@ agents:
       not probe it: say so in the critique, and check instead that an e2e test
       covers it against the fake provider seam (newFakeLLM in
       fakeprovider_test.go) -- that is how this repo tests agent behavior.
+      Two refusals you may see. `REFUSED` means the probe tried to run steps on
+      a pipeline from inside a step; rewrite it to express the behavior
+      directly. `HARNESS VOID` means this build failed an internal control --
+      it broke `assert:` evaluation itself, so no probe result in this review
+      means anything. That is a serious defect in the change: report it and
+      FAIL. Every probe is bounded at 120s, and `PROBE EXIT: 124` means it
+      hung -- usually a finding about the change, not about the probe.
     max_output_bytes: 8000
     run: |
       cd repo || exit 1
@@ -336,6 +343,49 @@ agents:
       }
       probe="$(mktemp -d)"
       printf '%s\n' {{ .args.yaml | shellquote }} > "$probe/probe.yml"
+
+      # NO RE-ENTRY. A probe runs steps; letting it run steps ON this pipeline
+      # (or on itself) nests the whole experiment inside one review turn --
+      # cloning, agent calls, spend, and no bound. `steps` is not on PATH here,
+      # which makes it unlikely rather than impossible: repo/ holds the source
+      # and $bin is one directory up.
+      if grep -qnE '(^|[^[:alnum:]_-])(steps|steps-review-bin|go[[:space:]]+run)[[:space:]]+(run|test|watch|plan|\.)([[:space:]]|$)|pipeline-agent\.yml' "$probe/probe.yml"; then
+        printf 'REFUSED: this probe invokes steps (or this pipeline) from inside\n'
+        printf 'a step. A probe is a pipeline to RUN, not a pipeline that runs\n'
+        printf 'pipelines. Express the behavior directly with task:/put:/when:/\n'
+        printf 'to:/hooks/assert: instead.\n'
+        exit 1
+      fi
+
+      # A bound. The probe is built from the tree UNDER REVIEW, so a change
+      # that introduces an unbounded to: loop or a hung command would otherwise
+      # spin here until the whole 30m step timeout is gone and the review is
+      # lost. Two minutes is generous for a few steps.
+      limit=120
+      to=""
+      for t in timeout gtimeout; do
+        command -v "$t" >/dev/null 2>&1 && { to="$t $limit"; break; }
+      done
+      [ -n "$to" ] || printf 'NOTE: no timeout(1) here; this probe is UNBOUNDED.\n\n'
+
+      # CONTROL FIRST. The probe binary is the artifact under test, so a change
+      # that breaks assert evaluation would make every probe report PASS and
+      # this tool would cheerfully confirm whatever it was asked. This control
+      # asserts an execution list that CANNOT hold; a healthy build fails it
+      # (exit 2). If it passes, the harness is lying and every other probe in
+      # this review is void. Verified: patching checkExecution to always return
+      # nil flips this control from exit 2 to exit 0.
+      printf 'jobs:\n- name: harness-control\n  assert:\n    execution: [__no_such_step__]\n  plan:\n  - task: real\n    run: "true"\n' > "$probe/control.yml"
+      crc=0
+      (cd "$probe" && $to "$bin" test control.yml) >/dev/null 2>&1 || crc=$?
+      if [ "$crc" -eq 0 ]; then
+        printf 'HARNESS VOID: the control probe -- an assert that cannot hold --\n'
+        printf 'PASSED on this build. assert evaluation is broken by the change\n'
+        printf 'under review, so no probe result means anything. That is itself\n'
+        printf 'a defect: report it and FAIL the review.\n'
+        exit 1
+      fi
+
       # internal/shell.HostEnv strips this shell to a short allowlist that
       # deliberately excludes every api_key_env secret, so an agent-backed
       # probe cannot authenticate and dies looking like a bug in the change.
@@ -348,8 +398,9 @@ agents:
         printf 'not the change under review. Probe control flow modelless.\n\n'
       fi
       rc=0
-      out=$(cd "$probe" && "$bin" test probe.yml 2>&1) || rc=$?
+      out=$(cd "$probe" && $to "$bin" test probe.yml 2>&1) || rc=$?
       printf '%s\n' "$out" | tail -n 200
+      [ "$rc" -eq 124 ] && printf '\n(timed out after %ss -- the probe hung)\n' "$limit"
       # Always exit 0: the probe's own exit code is the OBSERVATION, reported
       # here as data. Failing the tool call would read as "the tool broke" and
       # invite a pointless retry of a probe that worked exactly as intended.
