@@ -793,20 +793,25 @@ jobs:
          plan at repo/experiments/self-build/plans/{num}.md for the syntax the
          feature will actually have — your fixtures must use the spelling the
          plan commits to, or they test a feature nobody is building.
-      2. A FIXTURE MUST BE ABLE TO GO GREEN. Test this before you write one:
-         "once the feature is correctly built, does `steps test` on this file
-         EXIT 0?" If the answer is no, it does not belong in examples/, and
-         the single biggest source of no is a NEGATIVE requirement -- one
-         that says some config must be REJECTED at load. That pipeline fails
-         by design, forever, and TestExamplesRun runs every examples/*.yml,
-         so committing one pins the suite red no matter how correct the
-         implementation is. The implementer would then be handed a target it
-         cannot reach and no way to tell that from its own bug.
-         Negative requirements are still real requirements: record them in
-         the manifest with the Go test that should cover them (a LoadConfig
-         call asserting the error), which is where a must-be-rejected claim
-         belongs. Same for anything needing a model, and anything about log
-         formatting a step assert cannot observe.
+      2. A FIXTURE MUST BE ABLE TO GO GREEN -- or, if it is a NEGATIVE
+         requirement, it goes somewhere else that expects red. Test this
+         before you write one: "once the feature is correctly built, does
+         `steps test` on this file EXIT 0?"
+         If the answer is no BECAUSE the requirement says some config must be
+         REJECTED at load, write it to repo/examples/invalid/<what>.yml
+         instead, with a `# expect: <substring>` comment naming the error it
+         must produce. TestExamplesInvalid requires every file there to FAIL
+         LoadConfig with that error, and a file that fails for a different
+         reason fails the test -- so the `# expect:` line is the assertion,
+         not decoration. Negative requirements used to be the single biggest
+         group that could not be expressed at all; they are now the easiest.
+         ALSO record each one in the manifest with the Go table test that
+         covers it (a LoadConfig call asserting the error substring). Both,
+         not either: the invalid example is the readable demonstration, the
+         table row is what the reviewer is entitled to trust WITHOUT probing.
+         If the answer is no for any other reason -- it needs a model, or it
+         is about log formatting a step assert cannot observe -- write no
+         fixture and record it in the manifest.
          For each requirement that DOES survive that test, write ONE fixture
          to repo/examples/<feature>-<aspect>.yml. Small and self-verifying:
          a job-level `assert: {execution: [a, b, c]}` naming the exact steps
@@ -831,12 +836,22 @@ jobs:
          requirement that genuinely needs a model, write no fixture -- record
          it in the manifest as needing an e2e test against the fake provider
          (newFakeLLM in fakeprovider_test.go) and move on.
-      4. Write the manifest to repo/experiments/self-build/specs/{num}.md: a
-         table of requirement -> fixture file -> the red you observed, plus a
-         section listing requirements you could NOT express as a fixture and
-         why. That section is not an admission of failure; it is the exact
-         list of things the reviewers still have to judge by reading, and it
-         is how they know where reading is still required.
+      4. Write the manifest to repo/experiments/self-build/specs/{num}.md.
+         THREE sections, and the reviewers read all three:
+           - RUNNABLE FIXTURES: requirement -> examples/<file>.yml -> the red
+             you observed.
+           - NEGATIVE REQUIREMENTS: requirement -> examples/invalid/<file>.yml
+             -> the exact error substring -> "covered by Go table test". This
+             section is a CONTRACT with the reviewers: anything listed here is
+             pinned by a test that runs on every `go test ./...`, so a
+             reviewer must not spend a probe re-establishing it. Measured on
+             one story-002 run, 74% of all probe effort went to re-deriving
+             eight load-time rejections, some of them three review rounds
+             apart. That is the waste this section exists to end.
+           - COULD NOT EXPRESS: requirements no fixture and no table test can
+             carry, and why. Not an admission of failure; it is the exact list
+             of things the reviewers still have to judge by reading, and it is
+             how they know where reading is still required.
   - agent: coder_config
     inputs: [stories, repo]
     context_paths: [repo/CLAUDE.md]
@@ -867,6 +882,25 @@ jobs:
          steps.schema.json or schema_test.go fails by reflection.
          If the plan carries a "## Dispatch sites" table, the rows in
          internal/config are yours; leave the rest.
+      2a. EVERY NEGATIVE REQUIREMENT GETS A GO TABLE TEST, IN THIS PASS.
+         The manifest's NEGATIVE REQUIREMENTS section is the table: one row
+         per config that must be rejected, each with the error substring the
+         spec agent already committed to. Write them as ONE table-driven test
+         in internal/config -- one LoadConfig call per row, asserting the
+         error contains that substring -- in the file that owns the feature,
+         beside the validator you just wrote.
+         Do this even though examples/invalid/ already demonstrates the same
+         rejections. They are not redundant: the invalid example is the
+         readable one a human or a doc links to, and the table row is the
+         cheap one that runs in milliseconds and can assert on rejections
+         with no readable YAML form.
+         WHY THIS IS YOUR JOB AND NOT A NICE-TO-HAVE: a rejection with no
+         test is a claim the reviewer has to verify by writing a probe, and a
+         probe costs a model turn, a build and a subprocess EVERY TIME it is
+         written. Measured on one story-002 run: 119 probes, 88 of them
+         re-deriving the same eight load-time rejections across four review
+         rounds. Writing the table here, once, is what makes that number
+         zero.
       3. verify_build after every edit. NOT verify_gate: `go test ./...`
          includes the fixtures, which are red until layer 2 exists, so a
          failing test suite right now is the DESIGN and not your bug.
@@ -1164,10 +1198,24 @@ jobs:
          (repo/CLAUDE.md is already available via read_file.)
       2. repo_diff. A `??` line is a NEW file that does not appear in the
          diff at all -- read each of those with read_file.
-      3. PROBE, before you judge. Build a list of every behavioral claim this
-         change makes -- each bullet the diff adds or edits under docs/, each
-         acceptance criterion in the story, each new example job -- and run
-         try_pipeline on each one. Write the pipeline that would be WRONG if
+      3. PROBE, before you judge -- BUT NOT WHAT THE SUITE ALREADY PROVES.
+         Read repo/experiments/self-build/specs/{num}.md first. Its NEGATIVE
+         REQUIREMENTS section lists every load-time rejection that is already
+         pinned by a Go table test and an examples/invalid/ file, both of
+         which run on `go test ./...`. DO NOT PROBE THOSE. A probe costs a
+         model turn, a build and a subprocess; a table row costs
+         milliseconds and has already run. If you doubt the coverage, verify
+         it once by reading the test -- not by re-running the rejection.
+         Measured on one story-002 run: 119 probes, 88 of them re-deriving
+         the same eight rejections across four review rounds, some three
+         visits apart. That was 74% of all verification effort spent
+         re-establishing facts already established, and it is context you do
+         not have -- it is why this step is denied search_files and list_dir
+         in the first place.
+         A probe is for a claim no test expresses. Build that list -- each
+         bullet the diff adds or edits under docs/, each acceptance criterion
+         the manifest does NOT mark as covered, each new example job -- and
+         run try_pipeline on it. Write the pipeline that would be WRONG if
          the claim held, and give it an `assert:` so the probe answers itself.
          Three that would have caught real defects:
            - "the inner step's hooks still fire" -> wrap a failing task whose
@@ -1339,11 +1387,20 @@ jobs:
          as file:line, or a probe. search_files from the requirement's own
          words. A requirement you cannot cite is a FAIL, and "the plan says
          it was done" is not a citation.
-      3. PROBE the requirements that describe BEHAVIOR. try_pipeline runs a
-         pipeline against this build; a claim you have run outranks a claim
-         you have read, and "nothing implements this" is exactly the claim a
-         probe settles fastest -- write the pipeline that only passes if the
-         requirement holds, give it an `assert:`, and let PROBE EXIT answer.
+      3. PROBE the requirements that describe BEHAVIOR -- except the ones
+         already covered. The spec manifest at
+         repo/experiments/self-build/specs/{num}.md marks every load-time
+         rejection as pinned by a Go table test and an examples/invalid/
+         file; for those, checking that the test EXISTS is the citation, and
+         re-running the rejection through a probe buys nothing. Your scarce
+         resource is the same one the other reviewer's is: on one story-002
+         run, 74% of all probe effort went to re-deriving eight rejections
+         that a table test already covered.
+         For everything else, try_pipeline runs a pipeline against this
+         build; a claim you have run outranks a claim you have read, and
+         "nothing implements this" is exactly the claim a probe settles
+         fastest -- write the pipeline that only passes if the requirement
+         holds, give it an `assert:`, and let PROBE EXIT answer.
          Probes are MODELLESS (no API keys reach that sandbox), so for a
          requirement that genuinely needs a model, check instead that an e2e
          test covers it against the fake provider (newFakeLLM in

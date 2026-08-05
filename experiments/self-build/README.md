@@ -19,6 +19,18 @@ retires the story and it stops appearing on the next check. Earlier revisions
 kept the stories as markdown files in the repo and chose between them by
 hand-editing a glob; both are gone, and `source.limit` is the selector now.
 
+> **Negative requirements are fixtures now.** `examples/invalid/*.yml` holds
+> pipelines that must FAIL to load, each with a `# expect: <substring>` line
+> naming the error — so a "this config must be rejected" requirement, once the
+> largest group the spec agent could not express, is now the easiest. The spec
+> agent writes both the invalid example and a manifest row; `coder_config`
+> writes the Go table test in the same pass; and both reviewers are forbidden
+> from spending a probe on anything the manifest marks as covered. That last
+> rule is the point: measured on one story-002 run, 119 probes were written and
+> 88 of them re-derived the same eight load-time rejections across four review
+> rounds — 74% of all verification effort spent re-establishing facts already
+> established, some of them three visits earlier.
+
 > **⚠️ Parts of this document describe earlier revisions.** Two changes have
 > outrun it. First, the repository became an ordinary `get: repo` input
 > artifact, which deleted the custom shell tools described below
