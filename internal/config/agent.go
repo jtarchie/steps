@@ -62,6 +62,11 @@ type Agent struct {
 	// need a pointer for. Like MaxTurns, this is agent-only: no per-step
 	// override.
 	CompactAfterTokens *int `yaml:"compact_after_tokens,omitempty"`
+	// Preflight opts this agent out of (or into) the pre-run health check.
+	// A pointer so unset inherits defaults.preflight. The case it exists for
+	// is a model expected to be slow to WAKE — a cold local model would fail
+	// a probe that a real conversation would have waited out.
+	Preflight *bool `yaml:"preflight,omitempty"`
 	// Budget caps what one invocation of this agent may spend (see Budget).
 	// Per invocation, not per job: a job budget is the cumulative ceiling and
 	// lives on the job. Never hashed.

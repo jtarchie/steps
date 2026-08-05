@@ -218,6 +218,10 @@ func writeTaskFixPipeline(t *testing.T, dir, endpointA, endpointB, run, taskFix,
 
 	path := filepath.Join(dir, "pipeline.yml")
 	pipeline := fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
 agents:
 - name: fixerA
   source:

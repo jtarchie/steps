@@ -48,6 +48,10 @@ func e2ePipeline(t *testing.T, dir, endpoint, workspaceBlock string) string {
 	t.Helper()
 
 	yaml := workspaceBlock + fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
 resource_types:
 - name: dummy
   config:
@@ -596,6 +600,10 @@ func TestEndToEndTryDoesNotTolerateInfraError(t *testing.T) {
 	afterLog := filepath.Join(dir, "after.log")
 
 	pipeline := fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
 agents:
 - name: reviewer
   source:
@@ -643,6 +651,10 @@ func testSadPathAttemptsRetryTheRequest(t *testing.T) {
 	fake := newFakeLLM(t, outage...)
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
 agents:
 - name: reviewer
   source:

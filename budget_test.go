@@ -14,6 +14,10 @@ func budgetPipeline(t *testing.T, dir, endpoint, agentBudget, jobBudget string) 
 	t.Helper()
 
 	return writePipeline(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
 agents:
 - name: writer
   source:
@@ -102,6 +106,10 @@ func TestJobBudgetReportsTheRunningTotal(t *testing.T) {
 	)
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
 agents:
 - name: planner
   source:

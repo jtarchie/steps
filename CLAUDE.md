@@ -50,7 +50,7 @@ All of them always pass clean on a fresh checkout. If any of them fails, that is
 
 ## Project layout
 
-`main.go` is a thin CLI entrypoint (kong-based: `run`/`watch`/`test`/`validate`/`plan`/`runs`/`mcp` subcommands) over single-responsibility `internal/` packages forming an **acyclic dependency graph**, enforced by `.golangci.yml`'s `depguard` linter (each package has an explicit import allow-list — a new import outside a package's list is a signal the change belongs elsewhere, not a rule to route around):
+`main.go` is a thin CLI entrypoint (kong-based: `run`/`watch`/`test`/`validate`/`preflight`/`plan`/`runs`/`mcp` subcommands) over single-responsibility `internal/` packages forming an **acyclic dependency graph**, enforced by `.golangci.yml`'s `depguard` linter (each package has an explicit import allow-list — a new import outside a package's list is a signal the change belongs elsewhere, not a rule to route around):
 
 ```
 internal/shell, internal/template, internal/retry, internal/store, internal/config, internal/outcome   (leaves)

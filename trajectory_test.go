@@ -88,6 +88,10 @@ func TestAgentTrajectoryIsPersisted(t *testing.T) {
 	)
 
 	path := writePipeline(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+
 agents:
 - name: worker
   source:
@@ -130,6 +134,10 @@ func TestFailedAgentStepRecordsWhatItDid(t *testing.T) {
 	)
 
 	path := writePipeline(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+
 agents:
 - name: worker
   source:
@@ -177,6 +185,10 @@ func TestTrajectoryArgsAreTruncated(t *testing.T) {
 	)
 
 	path := writePipeline(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+
 agents:
 - name: worker
   source:

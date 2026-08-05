@@ -21,6 +21,10 @@ func TestRunJobDoesNotRecordSucceededForInheritedFix(t *testing.T) {
 	path := filepath.Join(dir, "pipeline.yml")
 
 	pipeline := `
+defaults:
+  preflight:
+    disabled: true
+
 agents:
 - name: fixer
   source:

@@ -19,6 +19,10 @@ func TestRunJobAgentNeverSkipped(t *testing.T) {
 	path := filepath.Join(dir, "pipeline.yml")
 
 	pipeline := fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
 agents:
 - name: reviewer
   source:
@@ -69,6 +73,10 @@ func TestRunJobAgentPromptFileArtifactReadsRepoFile(t *testing.T) {
 	path := filepath.Join(dir, "pipeline.yml")
 
 	pipeline := fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
 resource_types:
 - name: dummy
   config:

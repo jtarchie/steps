@@ -61,6 +61,25 @@
         "model": {
           "type": "string",
           "description": "source.model for any agent that names none."
+        },
+        "preflight": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The pre-run health check of a job's models and MCP servers. On by default.",
+          "properties": {
+            "disabled": {
+              "type": "boolean",
+              "description": "Skip the check entirely."
+            },
+            "timeout": {
+              "type": "string",
+              "description": "Per-check deadline, e.g. 30s. Default 30s."
+            },
+            "cache": {
+              "type": "string",
+              "description": "How long a verified target stays trusted, e.g. 5m. Keeps steps watch from probing every poll. Default 5m."
+            }
+          }
         }
       }
     },
@@ -173,6 +192,10 @@
         },
         "budget": {
           "$ref": "#/$defs/budget"
+        },
+        "preflight": {
+          "type": "boolean",
+          "description": "Opt this agent out of (or into) the pre-run health check. For a model expected to be slow to wake."
         },
         "description": {
           "type": "string",

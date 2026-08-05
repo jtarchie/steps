@@ -91,3 +91,42 @@ func (c *Config) JobNames() []string {
 
 	return names
 }
+
+// AgentNames lists every agent this job's plan invokes — plan steps, hook
+// steps, any task's fix: agent, and any sub-agent granted inline on a step —
+// in plan order, deduplicated.
+//
+// It exists for preflight, whose whole point is to check only what THIS job
+// needs: a pipeline with ten agents whose job uses two must probe two.
+// Sub-agents granted on an agents: entry rather than inline are expanded by
+// the caller, which has the Config needed to resolve them.
+func (j Job) AgentNames() []string {
+	var names []string
+
+	seen := map[string]bool{}
+
+	add := func(name string) {
+		if name == "" || seen[name] {
+			return
+		}
+
+		seen[name] = true
+		names = append(names, name)
+	}
+
+	_ = j.visitSteps(func(_ string, step *Step) error {
+		add(step.Agent)
+
+		if step.Fix != nil {
+			add(step.Fix.Agent)
+		}
+
+		for _, spec := range step.Tools {
+			add(spec.Agent) // a sub-agent grant is another model this job reaches
+		}
+
+		return nil
+	})
+
+	return names
+}

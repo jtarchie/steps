@@ -138,6 +138,10 @@ func TestEndToEndBuiltinAgentSuppliesOnlyTheModel(t *testing.T) {
 	fake := newFakeLLM(t, says("Looks fine."))
 
 	path := writePipeline(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+
 agents:
 - name: "@builtin/reviewer"
   source:
@@ -302,6 +306,10 @@ jobs:
 func TestValidateAcceptsAPipelineWhoseCredentialsArePresent(t *testing.T) {
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+
 agents:
 - name: writer
   source:
@@ -330,6 +338,10 @@ jobs:
 func TestValidateRejectsAnUnknownProviderPrefix(t *testing.T) {
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+
 agents:
 - name: writer
   source:

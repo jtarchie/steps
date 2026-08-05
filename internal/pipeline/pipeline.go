@@ -58,6 +58,11 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
+	err = preflight(ctx, cfg, job)
+	if err != nil {
+		return err
+	}
+
 	if cfg.UsesImages() {
 		err = shell.ValidateDocker(ctx)
 		if err != nil {
@@ -1396,3 +1401,86 @@ func humanCount(n int) string {
 
 	return out.String()
 }
+
+// preflightKey types the context value that switches preflight off.
+type preflightKey struct{}
+
+// WithoutPreflight disables the pre-run health check for this invocation,
+// backing the --no-preflight flag. On the context rather than a RunJob
+// parameter because every caller in the chain would otherwise have to thread a
+// flag it has no opinion about.
+func WithoutPreflight(ctx context.Context) context.Context {
+	return context.WithValue(ctx, preflightKey{}, true)
+}
+
+func preflightDisabled(ctx context.Context) bool {
+	disabled, _ := ctx.Value(preflightKey{}).(bool)
+
+	return disabled
+}
+
+// Preflight probes every model and MCP server the job's plan reaches and
+// reports the ones that are not working. It runs nothing and changes nothing.
+//
+// Exported so `steps preflight` can ask the question without committing to a
+// run. The CLI layer reaches internal/agent through here rather than directly,
+// keeping the dependency direction the depguard rules describe.
+func Preflight(ctx context.Context, cfg *config.Config, job *config.Job) []config.Problem {
+	names := job.AgentNames()
+	if len(names) == 0 {
+		return nil
+	}
+
+	settings := preflightSettings(cfg)
+	if !settings.Enabled() {
+		return nil
+	}
+
+	return agent.Preflight(ctx, cfg, names, settings)
+}
+
+// preflight proves the models and MCP servers this job's plan needs are
+// actually working, before a single step runs.
+//
+// The failure it exists for is a plan like plan -> code -> check -> review
+// -> publish discovering, half an hour and real money in, that a model was
+// never going to answer. Under `steps watch` it is worse: nobody is watching,
+// and a job re-triggers against a dead model indefinitely.
+//
+// A job with no agent steps checks nothing and costs nothing.
+func preflight(ctx context.Context, cfg *config.Config, job *config.Job) error {
+	if preflightDisabled(ctx) {
+		return nil
+	}
+
+	problems := Preflight(ctx, cfg, job)
+	if len(problems) == 0 {
+		return nil
+	}
+
+	// Explicitly "no steps were run": the whole value of failing here rather
+	// than mid-plan is that nothing was spent, and the message has to say so
+	// or a reader cannot tell this from an ordinary step failure.
+	var out strings.Builder
+
+	fmt.Fprintf(&out, "job %q: preflight failed, no steps were run:", job.Name)
+
+	for _, problem := range problems {
+		fmt.Fprintf(&out, "\n  %s: %s", problem.Target, problem.Detail)
+	}
+
+	return errors.New(out.String())
+}
+
+func preflightSettings(cfg *config.Config) *config.Preflight {
+	if cfg.Defaults == nil {
+		return nil
+	}
+
+	return cfg.Defaults.Preflight
+}
+
+// ResetPreflightCache forgets everything preflight has verified in this
+// process. Tests use it to stay independent of each other; nothing in a real
+// run needs it, since the cache is bounded by its own TTL.
+func ResetPreflightCache() { agent.ResetProbeCache() }

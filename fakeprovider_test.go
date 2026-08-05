@@ -39,6 +39,13 @@ type scriptedCall struct {
 	args map[string]any
 }
 
+// Why so many fixtures in this package carry
+// `defaults: {preflight: {disabled: true}}`: `steps run` probes every model a
+// job reaches before running any step (see internal/pipeline's preflight), and
+// that probe is a real provider request. Left on, it would pop a scripted turn
+// and shift every request count in every test that is about something else.
+// preflight_test.go is where the probe itself is exercised, deliberately.
+
 // turn is one scripted provider response, popped in order — one per request
 // the run makes. Exactly one of its modes applies: a plain assistant message
 // (text), a tool-call message (calls), an HTTP error (status), or a verbatim
@@ -103,6 +110,8 @@ func call(name string, args map[string]any) scriptedCall {
 // failsWith scripts a transport-level failure: the endpoint answers with an
 // HTTP status instead of a completion. Used to prove an LLM outage
 // classifies as errored (infrastructure) rather than failed (task-level).
+//
+//nolint:unparam // every caller happens to want 500 today; the parameter is the point of the helper
 func failsWith(status int) turn {
 	return turn{status: status}
 }

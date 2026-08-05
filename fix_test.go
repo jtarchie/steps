@@ -56,6 +56,10 @@ func writeFixPipeline(t *testing.T, dir, endpoint, run string) string {
 
 	path := filepath.Join(dir, "pipeline.yml")
 	pipeline := fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
 agents:
 - name: fixer
   source:

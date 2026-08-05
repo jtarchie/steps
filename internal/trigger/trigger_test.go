@@ -92,6 +92,10 @@ func TestResources(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := loadConfig(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+
 resource_types:
 - name: dummy
   config: {check: "echo []", in: "true", out: "true"}
@@ -132,6 +136,10 @@ func TestAffectedJobs(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := loadConfig(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+
 resource_types:
 - name: dummy
   config: {check: "echo []", in: "true", out: "true"}
@@ -181,6 +189,10 @@ func TestResourcesAndAffectedJobsResolveGetAlias(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := loadConfig(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+
 resource_types:
 - name: dummy
   config: {check: "echo []", in: "true", out: "true"}
@@ -223,6 +235,10 @@ jobs:
 // each time it runs.
 func dummyPipeline(versionsPath, taskCounterPath string) string {
 	return fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
 resource_types:
 - name: dummy
   config:
@@ -312,6 +328,10 @@ func TestPollOnceEnqueuesJobOnceForMultipleDirtyResources(t *testing.T) {
 	writeVersions(t, versionsB, `[{"ref":"v1"}]`)
 
 	cfg := loadConfig(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
 resource_types:
 - name: dummy-a
   config: {check: "cat %s"}
@@ -372,6 +392,10 @@ func TestPollOnceDoesNotConsumeChangeWhenLaterCheckFails(t *testing.T) {
 	// thing-a is in the first job, so Resources() lists (and pollOnce checks)
 	// it before thing-b: it is observed dirty before thing-b's error aborts.
 	cfg := loadConfig(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
 resource_types:
 - name: dummy-a
   config: {check: "cat %s"}
@@ -547,6 +571,10 @@ func TestWatchErrorsImmediatelyWithNoTriggerResources(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := loadConfig(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+
 resource_types:
 - name: dummy
   config: {check: "echo []"}
@@ -609,6 +637,10 @@ func TestDrainOneMarksGenuineFailureAsFailed(t *testing.T) {
 	writeVersions(t, versionsPath, `[{"ref":"v1"}]`)
 
 	cfg := loadConfig(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
 resource_types:
 - name: dummy
   config:
@@ -675,6 +707,10 @@ func TestDrainOneFailingJobWithOnFailureHookStillMarksFailed(t *testing.T) {
 	marker := filepath.Join(dir, "notified.txt")
 
 	cfg := loadConfig(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
 resource_types:
 - name: dummy
   config:
@@ -756,6 +792,10 @@ func TestDrainOneLeavesCanceledJobReRunnableAfterSimulatedRestart(t *testing.T) 
 	taskCounter := filepath.Join(dir, "task-counter.txt")
 
 	cfg := loadConfig(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
 resource_types:
 - name: dummy
   config:
@@ -837,6 +877,10 @@ func TestDrainOneFixTaskInterruptedNeverInvokesFixAgent(t *testing.T) {
 	writeVersions(t, versionsPath, `[{"ref":"v1"}]`)
 
 	cfg := loadConfig(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
 agents:
 - name: fixer
   source:

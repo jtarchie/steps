@@ -31,6 +31,7 @@ steps test <pipeline>       run every job and check assert: directives
 steps validate <pipeline>   check the file, and that this machine can run it
 steps plan <pipeline>       show what a run would execute vs skip
 steps runs <pipeline>       show what past runs recorded
+steps preflight <pipeline>  check a job's models and MCP servers are live
 steps mcp tools|login       inspect or authorize mcp_servers: entries
 ```
 
@@ -51,7 +52,38 @@ steps: error: pipeline.yml cannot run here:
   mcp "gopls"    command "gopls" not found on PATH
 ```
 
-Add `--syntax-only` to check the file alone. That is the right flag for a pre-commit hook or a CI lint of a pipeline that build has no intention of running — it should not need that pipeline's production credentials on hand.
+`steps preflight` answers the run-time version of the same question: not "is this pipeline runnable" but "is it runnable *right now*". It sends a minimal request to every model the job reaches and starts every MCP server it grants, confirming the tools the pipeline names actually exist on them.
+
+**`steps run` does this automatically, before any step executes.** A plan like `plan -> code -> check -> review -> publish` used to discover a dead model half an hour in, with everything before it paid for and thrown away; under `steps watch` nobody is even there to notice. Now it fails in seconds, saying explicitly that nothing ran:
+
+```
+$ steps run pipeline.yml --job self-build
+steps: error: job "self-build": preflight failed, no steps were run:
+  agent "coder": model "deepseek-v4-flash": no response within 30s
+    (other models on this endpoint responded — the model itself looks unavailable, not the endpoint or the key)
+```
+
+That last line is the diagnostic a human reached for by hand: the same account, key and endpoint served another model fine, so the problem is the model.
+
+Tuning, all optional:
+
+```yaml
+defaults:
+  preflight:
+    disabled: false   # true skips it entirely
+    timeout: 30s      # per check
+    cache: 5m         # a target verified this recently is trusted
+
+agents:
+- name: coder
+  preflight: false    # opt one agent out — e.g. a local model slow to WAKE
+```
+
+The cache is what makes this usable under `steps watch`: without it every poll interval would pay for a probe request against every model. `--no-preflight` skips it for one invocation.
+
+**What it does not do:** preflight catches "broken before we start", not "breaks halfway through". In the incident it was built for, the model answered a test request two minutes before the run started and failed 36 minutes in — a preflight would have passed. Failing over mid-run is a separate feature.
+
+Add `--syntax-only` to `steps validate` to check the file alone. That is the right flag for a pre-commit hook or a CI lint of a pipeline that build has no intention of running — it should not need that pipeline's production credentials on hand.
 
 ## Editor support
 

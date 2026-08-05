@@ -44,15 +44,16 @@ import (
 // default logger before any subcommand's Run method executes — see
 // initLogging.
 type CLI struct {
-	LogLevel string           `default:"info"                          enum:"debug,info,warn,error"                                   env:"STEPS_LOG_LEVEL"        help:"log verbosity: debug, info, warn, or error"`
-	Version  kong.VersionFlag `help:"print the steps version and exit" name:"version"`
-	Run      RunCmd           `cmd:""                                  default:"withargs"                                             help:"run a single job once"`
-	Watch    WatchCmd         `cmd:""                                  help:"poll trigger: true resources and auto-run affected jobs"`
-	Test     TestCmd          `cmd:""                                  help:"run every job (force) and verify assert directives"`
-	Validate ValidateCmd      `cmd:""                                  help:"check a pipeline for errors without running anything"`
-	Runs     RunsCmd          `cmd:""                                  help:"show what past runs recorded"`
-	Plan     PlanCmd          `cmd:""                                  help:"show which steps a run would execute or skip"`
-	MCP      MCPCmd           `cmd:""                                  help:"inspect or authorize a pipeline's mcp_servers: entries"`
+	LogLevel  string           `default:"info"                          enum:"debug,info,warn,error"                                          env:"STEPS_LOG_LEVEL"        help:"log verbosity: debug, info, warn, or error"`
+	Version   kong.VersionFlag `help:"print the steps version and exit" name:"version"`
+	Run       RunCmd           `cmd:""                                  default:"withargs"                                                    help:"run a single job once"`
+	Watch     WatchCmd         `cmd:""                                  help:"poll trigger: true resources and auto-run affected jobs"`
+	Test      TestCmd          `cmd:""                                  help:"run every job (force) and verify assert directives"`
+	Validate  ValidateCmd      `cmd:""                                  help:"check a pipeline for errors without running anything"`
+	Runs      RunsCmd          `cmd:""                                  help:"show what past runs recorded"`
+	Plan      PlanCmd          `cmd:""                                  help:"show which steps a run would execute or skip"`
+	MCP       MCPCmd           `cmd:""                                  help:"inspect or authorize a pipeline's mcp_servers: entries"`
+	Preflight PreflightCmd     `cmd:""                                  help:"check a job's models and MCP servers are live, running nothing"`
 }
 
 // buildVersion is the version string steps --version prints. Overridden at
@@ -62,11 +63,12 @@ var buildVersion = "dev"
 
 // RunCmd runs a single job's plan once, exactly as steps has always done.
 type RunCmd struct {
-	Pipeline      string            `arg:""                                                                 help:"path to the pipeline YAML file"`
+	Pipeline      string            `arg:""                                                                   help:"path to the pipeline YAML file"`
 	Job           string            `help:"job name to run (defaults to the pipeline's only job)"`
-	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                name:"pin"`
+	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                  name:"pin"`
 	Force         bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
-	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                             help:"leave the build workspace on disk instead of deleting it"`
+	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                               help:"leave the build workspace on disk instead of deleting it"`
+	NoPreflight   bool              `help:"skip the pre-run health check of the job's models and MCP servers" name:"no-preflight"`
 }
 
 // Run loads the pipeline, selects a job, and runs it once via
@@ -91,6 +93,8 @@ func (r *RunCmd) Run() error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
+	ctx = applyPreflightFlag(ctx, r.NoPreflight)
+
 	return wrapRunErr(pipeline.RunJob(ctx, cfg, job, r.Pin, provider, st, r.Force))
 }
 
@@ -98,12 +102,13 @@ func (r *RunCmd) Run() error {
 // every job in the pipeline, and runs whichever jobs a version change
 // affects — see internal/trigger.
 type WatchCmd struct {
-	Pipeline      string            `arg:""                                                                 help:"path to the pipeline YAML file"`
-	Interval      time.Duration     `default:"30s"                                                          help:"how often to check trigger: true resources"`
-	MaxConcurrent int               `default:"1"                                                            help:"maximum number of triggered jobs running at once"`
-	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                name:"pin"`
+	Pipeline      string            `arg:""                                                                    help:"path to the pipeline YAML file"`
+	Interval      time.Duration     `default:"30s"                                                             help:"how often to check trigger: true resources"`
+	MaxConcurrent int               `default:"1"                                                               help:"maximum number of triggered jobs running at once"`
+	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                   name:"pin"`
 	Force         bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
-	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                             help:"leave the build workspace on disk instead of deleting it"`
+	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                                help:"leave the build workspace on disk instead of deleting it"`
+	NoPreflight   bool              `help:"skip the pre-run health check of each job's models and MCP servers" name:"no-preflight"`
 }
 
 // Run loads the pipeline and blocks in trigger.Watch until canceled
@@ -122,6 +127,8 @@ func (w *WatchCmd) Run() error {
 
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
+
+	ctx = applyPreflightFlag(ctx, w.NoPreflight)
 
 	return wrapRunErr(trigger.Watch(ctx, cfg, provider, st, w.Pin, w.Interval, w.MaxConcurrent, w.Force))
 }
@@ -857,4 +864,52 @@ func withSignalCancel(parent context.Context) (context.Context, context.CancelFu
 	}()
 
 	return ctx, cancel
+}
+
+// applyPreflightFlag threads --no-preflight down to internal/pipeline.
+func applyPreflightFlag(ctx context.Context, skip bool) context.Context {
+	if !skip {
+		return ctx
+	}
+
+	return pipeline.WithoutPreflight(ctx)
+}
+
+// PreflightCmd checks that a job's models and MCP servers are live, and runs
+// nothing.
+//
+// It is the same probe `steps run` performs automatically, exposed as a verb
+// for the case where you want the answer without committing to the run —
+// "before I kick this off for an hour, is the model up?". Pairing it with
+// `steps validate` covers both halves: validate answers "is this pipeline
+// runnable at all", preflight answers "is it runnable right now".
+type PreflightCmd struct {
+	Pipeline string `arg:""                                                    help:"path to the pipeline YAML file"`
+	Job      string `help:"job to check (defaults to the pipeline's only job)"`
+}
+
+// Run probes every model and MCP server the target job reaches and prints one
+// line per target.
+func (p *PreflightCmd) Run() error {
+	cfg, err := config.LoadConfig(p.Pipeline)
+	if err != nil {
+		return fmt.Errorf("could not load pipeline: %w", err)
+	}
+
+	job, err := selectJob(cfg, p.Job)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := withSignalCancel(context.Background())
+	defer cancel()
+
+	problems := pipeline.Preflight(ctx, cfg, job)
+	if len(problems) > 0 {
+		return fmt.Errorf("job %q cannot run right now:\n%s", job.Name, renderProblems(problems))
+	}
+
+	fmt.Printf("ok: job %q — every model and MCP server it needs responded\n", job.Name)
+
+	return nil
 }

@@ -33,6 +33,11 @@ type Defaults struct {
 	// Model is the source.model: an agents: entry inherits when it declares
 	// none. Falls back to $STEPS_MODEL when unset here.
 	Model string `yaml:"model,omitempty"`
+	// Preflight tunes the pre-run health check (see Preflight). It belongs
+	// here, unlike attempts:/timeout:, because it changes no step's failure
+	// semantics — it only decides how early a failure that WOULD happen is
+	// discovered.
+	Preflight *Preflight `yaml:"preflight,omitempty"`
 }
 
 // validateAgentModels rejects a step whose agent ends up with no model.

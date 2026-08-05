@@ -117,6 +117,7 @@ func (c *Config) validate() error {
 		c.validateStepTransitions,
 		c.validateAsserts,
 		c.validateBudgets,
+		c.validatePreflight,
 		c.validateCredentialHandling,
 	}
 
