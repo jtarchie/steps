@@ -66,5 +66,5 @@ Exit codes: `0` success, `1` a step failed, `2` the pipeline could not be run (c
 ## Learn more
 
 - [`docs/`](docs/README.md) — indexed reference: start with [resources](docs/resources.md), then [control flow](docs/control-flow.md) or [agents](docs/agents.md).
-- [`examples/`](examples/) — runnable pipelines, one per feature area. Agent examples read `$STEPS_MODEL`, so point them at whatever you run: `STEPS_MODEL=lmstudio/your-model steps run examples/agents.yml --job review`.
+- [`examples/`](examples/) — runnable pipelines, one per feature area. Agent examples ship pointed at `openrouter/qwen/qwen3.7-flash` (cheap, tool-calling) and need `OPENROUTER_API_KEY`. `$STEPS_MODEL` overrides that without editing a file — including onto a local server, which costs nothing and needs no key: `STEPS_MODEL=lmstudio/your-model steps run examples/agents.yml --job review`.
 - [`CLAUDE.md`](CLAUDE.md) — architecture, build constraints, and contribution notes for anyone (human or agent) changing this codebase.
