@@ -1,0 +1,9 @@
+# "Approve job build step 3?" is not a question. An approval nobody can read is
+# one nobody can answer responsibly.
+# expect: approval.message is required
+
+jobs:
+- name: publish
+  plan:
+  - approval:
+      timeout: 24h

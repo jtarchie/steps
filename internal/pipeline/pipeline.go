@@ -516,6 +516,10 @@ func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string,
 		return runLoadVarStep(ctx, jobName, i, step, bw, st, parentHash)
 	}
 
+	if step.Approval != nil {
+		return runApprovalStep(ctx, jobName, i, step, st, parentHash)
+	}
+
 	// across: is a MODIFIER, not a kind: the step it sits on is still a task
 	// (or a put, or an agent), it just runs once per combination. Checking it
 	// before resolving the kind is what keeps it off Step.Kind()'s table,

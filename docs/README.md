@@ -32,6 +32,10 @@ steps validate <pipeline>   check the file, and that this machine can run it
 steps plan <pipeline>       show what a run would execute vs skip
 steps runs <pipeline>       show what past runs recorded
 steps preflight <pipeline>  check a job's models and MCP servers are live
+steps jobs <pipeline>       list jobs the circuit breaker paused, or resume one
+steps approvals <pipeline>  list approval: steps waiting for a decision
+steps approve <pipeline> <id>
+steps reject <pipeline> <id>
 steps mcp tools|login       inspect or authorize mcp_servers: entries
 ```
 

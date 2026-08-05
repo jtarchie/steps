@@ -99,6 +99,9 @@ type Step struct {
 	// Ensemble asks several agents the same question and combines their
 	// answers into one verdict to route on. See Ensemble.
 	Ensemble *Ensemble `yaml:"ensemble,omitempty"`
+	// Approval pauses the plan until a person approves or rejects. See
+	// Approval.
+	Approval *Approval `yaml:"approval,omitempty"`
 	// LoadVar captures a value produced DURING the run — the contents of
 	// VarFile, trimmed — into a pipeline var that later steps reference as
 	// ((name)). See validateVars.
@@ -441,6 +444,12 @@ func (c *Config) resolveBranchReferences(steps []Step) error {
 	return nil
 }
 
+// ReferencesEntities reports whether a step of this kind names something the
+// pipeline has to resolve — a resource, a task, an agent, or branches that do.
+func (k StepKind) ReferencesEntities() bool {
+	return k != StepKindLoadVar && k != StepKindApproval
+}
+
 // StepKind is which of Get/Task/Put/Agent a Step is. See Step.Kind.
 type StepKind string
 
@@ -463,6 +472,8 @@ const (
 	StepKindEnsemble StepKind = "ensemble"
 	// StepKindLoadVar captures a run-time value into a pipeline var.
 	StepKindLoadVar StepKind = "load_var"
+	// StepKindApproval waits for a human decision.
+	StepKindApproval StepKind = "approval"
 )
 
 // Kind reports which single kind of step s is. ok is false when zero, or
@@ -483,6 +494,7 @@ func (s Step) Kind() (kind StepKind, ok bool) {
 		{StepKindRace, s.Race != nil},
 		{StepKindEnsemble, s.Ensemble != nil},
 		{StepKindLoadVar, s.LoadVar != ""},
+		{StepKindApproval, s.Approval != nil},
 	} {
 		if !candidate.set {
 			continue
@@ -588,8 +600,11 @@ func (c *Config) resolveStepReference(step *Step) error {
 	// A load_var: names a file, not a pipeline entity, so there is nothing to
 	// resolve against resources, tasks, or agents — same as a malformed step,
 	// whose kind another validator reports.
+	// A load_var: names a file and an approval: names a person; neither
+	// references a pipeline entity, same as a malformed step whose kind
+	// another validator reports.
 	kind, ok := step.Kind()
-	if !ok || kind == StepKindLoadVar {
+	if !ok || !kind.ReferencesEntities() {
 		return nil
 	}
 

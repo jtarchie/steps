@@ -41,6 +41,8 @@ const (
 	NodeKindAcross NodeKind = "across"
 	// NodeKindLoadVar is a load_var: capture.
 	NodeKindLoadVar NodeKind = "load_var"
+	// NodeKindApproval is an approval: wait.
+	NodeKindApproval NodeKind = "approval"
 )
 
 // Node is one content-addressed step in a job's resolved execution chain.
@@ -375,6 +377,8 @@ func stepContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 		// The captured value is a run-time fact; only the declaration is
 		// knowable here.
 		return map[string]any{"load_var": step.LoadVar, "file": step.VarFile}, nil
+	case config.StepKindApproval:
+		return map[string]any{"approval": step.Approval.Message}, nil
 	default:
 		return nil, errors.New("unrecognized step")
 	}
@@ -855,6 +859,13 @@ func planNonGetNode(cfg *config.Config, step config.Step, i int, parentHash stri
 	// depends on that value. Unskippable, always.
 	if step.LoadVar != "" {
 		return Node{ParentHash: parentHash, Kind: NodeKindLoadVar, StepIndex: i, Resource: step.LoadVar}, true, nil
+	}
+
+	// An approval: is a person, not a computation. Nothing about it is
+	// knowable at plan time, and a cached "they said yes once" must never
+	// stand in for asking again.
+	if step.Approval != nil {
+		return Node{ParentHash: parentHash, Kind: NodeKindApproval, StepIndex: i, Resource: "approval"}, true, nil
 	}
 
 	// across: is a modifier rather than a kind (see internal/pipeline's

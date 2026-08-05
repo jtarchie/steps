@@ -143,6 +143,7 @@ func (c *Config) validate() error {
 		c.validateSerial,
 		c.validateVars,
 		c.validateWebhookTokens,
+		c.validateApprovals,
 		c.validateCredentialHandling,
 	}
 

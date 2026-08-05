@@ -243,3 +243,46 @@ Cells that are puts or agents are never skipped, for the same reasons those step
 - **A failing cell does not stop the others.** A matrix asks "which of these combinations work", and stopping at the first red one answers that for exactly one cell. Every failure is reported.
 - **Cells are named for their coordinates** — `check [mode=fast suite=unit]` — unless you interpolate a variable into the name yourself. Without that every cell would share one name, which is unroutable and unreadable in a log.
 - **An empty axis, a duplicate `var:`, or a misspelled `{{ .vars.x }}` are load errors.** Each would otherwise mean silently running the wrong matrix.
+
+## `approval:` — a human in the plan
+
+Agent pipelines eventually gate something that cannot be undone — publishing, deploying, sending. Before this there was no place in a plan to stop and ask.
+
+```yaml
+- agent: write-draft
+  outputs: [draft]
+- approval:
+    message: "Draft is in draft/summary.md — publish?"
+    timeout: 24h
+- put: blog
+```
+
+```
+$ steps approvals pipeline.yml
+ID  JOB      REQUESTED             MESSAGE
+1   publish  2026-08-05T14:02:11Z  Draft is in draft/summary.md — publish?
+
+$ steps approve pipeline.yml 1
+approved: approval 1
+```
+
+### Three outcomes, deliberately different
+
+| | classification | why |
+|---|---|---|
+| approved | the plan continues | |
+| rejected | **failed** | a person decided; `on_failure` fires and a `to:` route can act on it |
+| expired | **aborted** | nobody decided anything |
+
+Conflating the last two would make a silent expiry indistinguishable from a rejection, and "the deploy was rejected" is a very different thing to read in a log from "the deploy was never looked at".
+
+### ⚠️ v1 scope: anyone who can run the CLI can approve
+
+Stated deliberately rather than left to be discovered — someone will ask the day this ships. There is no separate identity system. The recorded approver comes from `$STEPS_APPROVER`, `$USER`, or `$LOGNAME`: it is an **audit record**, not an authorization check.
+
+### The rest
+
+- **The audit trail is a row, not a chat message.** Who approved, when, and why a rejection was a rejection are exactly the facts someone needs to reconstruct a decision later, and they must not depend on external chat history.
+- **A decision cannot be overwritten.** Deciding an already-decided approval is an error; the record is a record.
+- **Nothing about an approval is cacheable.** A cached "they said yes once" must never stand in for asking again.
+- **Notification is the missing half, and it is not built in.** A parked approval nobody is told about is useless in practice. Today the step prints the message and the exact command to answer it, and logs `job.approval_pending` — put a `put:` to Slack or email in the step *before* the approval to actually reach someone. When the circuit breaker's notification path lands, both should use it.

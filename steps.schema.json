@@ -715,6 +715,24 @@
           "$ref": "#/$defs/step",
           "description": "Wrap a step so its failure is tolerated. The inner step's hooks and assert fire normally; to: routing sees the real outcome."
         },
+        "approval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "message"
+          ],
+          "description": "Pause the plan until a person approves or rejects.",
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "What is being asked. Required — an approval nobody can read is one nobody can answer responsibly."
+            },
+            "timeout": {
+              "type": "string",
+              "description": "How long to wait, e.g. 24h. An expired approval classifies as aborted, not failed."
+            }
+          }
+        },
         "load_var": {
           "type": "string",
           "description": "Capture the contents of file: into a pipeline var later steps reference as ((name))."

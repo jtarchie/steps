@@ -401,3 +401,72 @@ jobs:
 		t.Fatal("validate without --syntax-only reported ok for a pipeline that cannot run")
 	}
 }
+
+// TestEveryDocumentedCommandIsReachable checks every command docs/README.md
+// advertises actually parses.
+//
+// It exists because two commands shipped unreachable: the CLI struct field
+// that registers them was never added, so `steps jobs` and `steps approve`
+// parsed as the default run command with a nonsense pipeline argument.
+// Everything compiled and every unit test passed — the code was there, the
+// grammar was not.
+//
+// Driving it from the docs rather than from the struct is deliberate: a
+// struct-driven test can only check what is registered, which is precisely the
+// half that was fine. The docs are where a command is promised.
+func TestEveryDocumentedCommandIsReachable(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("docs", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	commands := documentedCommands(string(body))
+	if len(commands) < 5 {
+		t.Fatalf("found %d documented commands, expected the whole list — has the docs format changed?", len(commands))
+	}
+
+	for _, name := range commands {
+		t.Run(name, func(t *testing.T) {
+			// The command name alone, with none of its required arguments.
+			// A recognized command fails in the PARSER, complaining about the
+			// argument it is missing. An unrecognized one is swallowed by the
+			// default run command, which treats the word as a pipeline path
+			// and fails trying to open it — so that error is the signature of
+			// a command that does not exist. (--help would be the obvious
+			// probe, but kong exits the process for it.)
+			runErr := run([]string{name})
+			if runErr != nil && strings.Contains(runErr.Error(), "could not load pipeline") {
+				t.Errorf("docs/README.md advertises `steps %s`, but it parsed as the default command with %q as its pipeline: %v",
+					name, name, runErr)
+			}
+		})
+	}
+}
+
+// documentedCommands pulls the command names out of docs/README.md's command
+// list — the lines of the form "steps <name> ...".
+func documentedCommands(body string) []string {
+	var (
+		names []string
+		seen  = map[string]bool{}
+	)
+
+	for line := range strings.Lines(body) {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "steps" {
+			continue
+		}
+
+		// "steps mcp tools|login" documents one command with two verbs; the
+		// first word is the command either way.
+		name := strings.TrimSuffix(fields[1], ",")
+		if strings.HasPrefix(name, "<") || seen[name] {
+			continue
+		}
+
+		seen[name] = true
+		names = append(names, name)
+	}
+
+	return names
+}

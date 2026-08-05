@@ -55,6 +55,10 @@ type CLI struct {
 	Plan      PlanCmd          `cmd:""                                  help:"show which steps a run would execute or skip"`
 	MCP       MCPCmd           `cmd:""                                  help:"inspect or authorize a pipeline's mcp_servers: entries"`
 	Preflight PreflightCmd     `cmd:""                                  help:"check a job's models and MCP servers are live, running nothing"`
+	Jobs      JobsCmd          `cmd:""                                  help:"list jobs the watch circuit breaker has paused, or resume one"`
+	Approvals ApprovalsCmd     `cmd:""                                  help:"list approval: steps waiting for a decision"`
+	Approve   ApproveCmd       `cmd:""                                  help:"approve a waiting approval: step"`
+	Reject    RejectCmd        `cmd:""                                  help:"reject a waiting approval: step"`
 }
 
 // buildVersion is the version string steps --version prints. Overridden at
@@ -1039,4 +1043,126 @@ func loadWithVars(path string, flags map[string]string, varsFile string) (*confi
 	}
 
 	return cfg, nil
+}
+
+// ApprovalsCmd lists approval: steps waiting for a decision.
+//
+// A parked approval that nobody is told about is useless in practice, so this
+// is the "what is waiting on me?" command. It reads the same rows the audit
+// trail is made of.
+type ApprovalsCmd struct {
+	Pipeline string `arg:"" help:"path to the pipeline YAML file"`
+}
+
+// Run prints every pending approval.
+func (a *ApprovalsCmd) Run() error {
+	st, cleanup, err := openStore(a.Pipeline)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	pending, err := st.PendingApprovals(context.Background())
+	if err != nil {
+		return fmt.Errorf("could not list approvals: %w", err)
+	}
+
+	if len(pending) == 0 {
+		fmt.Println("no approvals are waiting")
+
+		return nil
+	}
+
+	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+
+	_, _ = fmt.Fprintln(writer, "ID\tJOB\tREQUESTED\tMESSAGE")
+
+	for _, approval := range pending {
+		_, _ = fmt.Fprintf(writer, "%d\t%s\t%s\t%s\n",
+			approval.ID, approval.JobName, approval.RequestedAt, approval.Message)
+	}
+
+	err = writer.Flush()
+	if err != nil {
+		return fmt.Errorf("could not write the approvals table: %w", err)
+	}
+
+	return nil
+}
+
+// ApproveCmd records a yes.
+//
+// ⚠️ v1 scope, stated deliberately rather than discovered: anyone who can run
+// this command can approve. There is no separate identity system — the
+// recorded approver is the OS user, which is an audit record, not an
+// authorization check. Someone will ask "can anyone approve?" the day this
+// ships, and the answer is yes, on purpose, for now.
+type ApproveCmd struct {
+	Pipeline string `arg:""                                       help:"path to the pipeline YAML file"`
+	ID       int64  `arg:""                                       help:"the approval id, from steps approvals"`
+	Reason   string `help:"note to record alongside the decision"`
+}
+
+// Run approves the named approval.
+func (a *ApproveCmd) Run() error {
+	return decideApproval(a.Pipeline, a.ID, "approved", a.Reason)
+}
+
+// RejectCmd records a no.
+type RejectCmd struct {
+	Pipeline string `arg:""                                    help:"path to the pipeline YAML file"`
+	ID       int64  `arg:""                                    help:"the approval id, from steps approvals"`
+	Reason   string `help:"why — recorded with the decision"`
+}
+
+// Run rejects the named approval.
+func (r *RejectCmd) Run() error {
+	return decideApproval(r.Pipeline, r.ID, "rejected", r.Reason)
+}
+
+// decideApproval records a decision against a pipeline's store.
+func decideApproval(pipelinePath string, id int64, status, reason string) error {
+	st, cleanup, err := openStore(pipelinePath)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	err = st.DecideApproval(context.Background(), id, status, currentUser(), reason)
+	if err != nil {
+		return fmt.Errorf("could not record the decision: %w", err)
+	}
+
+	fmt.Printf("%s: approval %d\n", status, id)
+
+	return nil
+}
+
+// currentUser is the audit record's "who". It is deliberately not an
+// authorization check: it records who ran the command on this host, which is
+// what someone reconstructing a decision later needs.
+func currentUser() string {
+	for _, key := range []string{"STEPS_APPROVER", "USER", "LOGNAME"} {
+		if value := os.Getenv(key); value != "" {
+			return value
+		}
+	}
+
+	return "unknown"
+}
+
+// openStore opens a pipeline's state store without building any workspace —
+// the read-only path the approval commands need.
+func openStore(pipelinePath string) (*store.Store, func(), error) {
+	cfg, err := config.LoadConfig(pipelinePath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("could not load pipeline: %w", err)
+	}
+
+	st, _, cleanup, err := setup(cfg, pipelinePath, false)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return st, cleanup, nil
 }
