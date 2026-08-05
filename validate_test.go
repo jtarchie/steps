@@ -101,7 +101,15 @@ jobs:
 
 // Every shipped example validates, so `steps validate examples/<x>.yml` is a
 // working first command for a reader who just copied one.
+//
+// The dummy OPENROUTER_API_KEY is load-bearing: validate now checks that the
+// credentials a pipeline names are actually present, and the agent examples
+// name one. Setting it here (rather than passing --syntax-only) keeps the full
+// path under test — the examples would otherwise only ever be checked with
+// half of validate switched off.
 func TestValidateExamples(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-key-not-used-for-any-call")
+
 	matches, err := filepath.Glob("examples/*.yml")
 	if err != nil {
 		t.Fatal(err)
@@ -240,5 +248,144 @@ jobs:
 	_, err := os.Stat(filepath.Join(dir, ".steps"))
 	if err == nil {
 		t.Error("runs created a state store; reading history must not write")
+	}
+}
+
+// TestValidateRejectsAPipelineThatCannotRunHere covers the gap that made `ok`
+// misleading: `steps validate` reported ok for a pipeline with an unset API
+// key and an MCP server whose binary is not installed. Both are yes/no facts
+// answerable in microseconds, and both used to surface at run time — for an
+// agent step, after it had already started billing.
+func TestValidateRejectsAPipelineThatCannotRunHere(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+mcp_servers:
+- name: nope
+  command: definitely-not-a-real-binary-xyz
+
+agents:
+- name: writer
+  source:
+    model: openai/gpt-4o
+    api_key_env: STEPS_TEST_DEFINITELY_UNSET_KEY
+
+jobs:
+- name: publish
+  plan:
+  - agent: writer
+    inputs: []
+    prompt: Write something.
+`)
+
+	err := run([]string{"validate", path})
+	if err == nil {
+		t.Fatal("validate reported ok for a pipeline that cannot run")
+	}
+
+	// Every problem, not just the first: finding them one run at a time is
+	// the failure mode this exists to end.
+	for _, want := range []string{
+		"STEPS_TEST_DEFINITELY_UNSET_KEY is not set",
+		`mcp "nope"`,
+		"not found on PATH",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q\n  is missing %q", err.Error(), want)
+		}
+	}
+}
+
+// TestValidateAcceptsAPipelineWhoseCredentialsArePresent is the other half:
+// the check must pass once the environment actually has what the pipeline
+// needs, or `steps validate` becomes unusable in exactly the CI setting it is
+// meant for.
+func TestValidateAcceptsAPipelineWhoseCredentialsArePresent(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+agents:
+- name: writer
+  source:
+    model: openai/gpt-4o
+    api_key_env: STEPS_TEST_PRESENT_KEY
+
+jobs:
+- name: publish
+  plan:
+  - agent: writer
+    inputs: []
+    prompt: Write something.
+`)
+
+	t.Setenv("STEPS_TEST_PRESENT_KEY", "set-to-something")
+
+	err := run([]string{"validate", path})
+	if err != nil {
+		t.Fatalf("validate rejected a runnable pipeline: %v", err)
+	}
+}
+
+// TestValidateRejectsAnUnknownProviderPrefix pins the static half at LOAD
+// time, not just in validate: a typo in a model name (`opencoder/` for
+// `opencode/`) should cost a load, not a run billed per token.
+func TestValidateRejectsAnUnknownProviderPrefix(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+agents:
+- name: writer
+  source:
+    model: notaprovider/some-model
+
+jobs:
+- name: publish
+  plan:
+  - agent: writer
+    inputs: []
+    prompt: Write something.
+`)
+
+	err := run([]string{"validate", path})
+	if err == nil {
+		t.Fatal("validate reported ok for a model with no known provider prefix")
+	}
+
+	if !strings.Contains(err.Error(), "no known provider prefix") {
+		t.Errorf("error does not name the unknown prefix: %v", err)
+	}
+}
+
+// TestValidateSyntaxOnlySkipsMachineChecks covers the lint-in-CI case: a
+// pre-commit hook or a build that checks a pipeline it has no intention of
+// running should not need that pipeline's production credentials on hand.
+func TestValidateSyntaxOnlySkipsMachineChecks(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+mcp_servers:
+- name: nope
+  command: definitely-not-a-real-binary-xyz
+
+agents:
+- name: writer
+  source:
+    model: openai/gpt-4o
+    api_key_env: STEPS_TEST_DEFINITELY_UNSET_KEY
+
+jobs:
+- name: publish
+  plan:
+  - agent: writer
+    inputs: []
+    prompt: Write something.
+`)
+
+	err := run([]string{"validate", path, "--syntax-only"})
+	if err != nil {
+		t.Fatalf("--syntax-only still checked this machine: %v", err)
+	}
+
+	// The same file without the flag must still be rejected, or the flag is
+	// not skipping anything.
+	err = run([]string{"validate", path})
+	if err == nil {
+		t.Fatal("validate without --syntax-only reported ok for a pipeline that cannot run")
 	}
 }

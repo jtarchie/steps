@@ -199,6 +199,12 @@ func (t *TestCmd) Run() error {
 // workspace, no containers, and nothing written to disk.
 type ValidateCmd struct {
 	Pipeline string `arg:"" help:"path to the pipeline YAML file"`
+	// SyntaxOnly skips the checks about THIS MACHINE — credentials and MCP
+	// binaries — leaving only the checks about the file. It exists for the
+	// lint-in-CI case: a pre-commit hook or a build that checks a pipeline it
+	// has no intention of running should not need that pipeline's production
+	// credentials on hand.
+	SyntaxOnly bool `help:"check the file only; skip credential and MCP-binary checks about this machine" name:"syntax-only"`
 }
 
 // Run loads the pipeline (which runs every config-level validator) and then
@@ -224,10 +230,48 @@ func (v *ValidateCmd) Run() error {
 		return err
 	}
 
+	// "ok" has to mean "this will run", not "the YAML parses". The checks
+	// above are all about the file; these are about the machine — credentials
+	// the agents need and binaries the MCP servers need, both knowable in
+	// microseconds and both, before this, discovered only at run time, after
+	// an agent step had already started billing.
+	//
+	// They live here rather than in LoadConfig deliberately: an absent key is
+	// a fact about this machine right now, so making it a load error would
+	// break `steps plan` on a laptop and any CI job that lints a pipeline it
+	// does not run.
+	problems := []config.Problem{}
+	if !v.SyntaxOnly {
+		problems = cfg.CheckEnvironment()
+	}
+
+	if len(problems) > 0 {
+		return fmt.Errorf("%s cannot run here:\n%s", v.Pipeline, renderProblems(problems))
+	}
+
 	fmt.Printf("ok: %s (%d job(s), %d resource(s), %d agent(s))\n",
 		v.Pipeline, len(cfg.Jobs), len(cfg.Resources), len(cfg.Agents))
 
 	return nil
+}
+
+// renderProblems lays out preflight problems one per line, target-first, so a
+// pipeline with several is read as a checklist rather than as prose. Reporting
+// all of them is the point: finding them one run at a time is the failure mode
+// this exists to end.
+func renderProblems(problems []config.Problem) string {
+	var out strings.Builder
+
+	width := 0
+	for _, problem := range problems {
+		width = max(width, len(problem.Target))
+	}
+
+	for _, problem := range problems {
+		fmt.Fprintf(&out, "  %-*s  %s\n", width, problem.Target, problem.Detail)
+	}
+
+	return strings.TrimRight(out.String(), "\n")
 }
 
 // PlanCmd shows which steps a run would execute and which it would skip,

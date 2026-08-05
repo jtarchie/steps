@@ -107,6 +107,7 @@ func (c *Config) validate() error {
 		c.validateTimeouts,
 		c.validateAgentCompaction,
 		c.validateAgentModels,
+		c.validateAgentProviders,
 		c.validateHooks,
 		c.validateAgentGraph,
 		c.validateToolCallGuards,

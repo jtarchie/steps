@@ -1,0 +1,16 @@
+# A model name carries a provider prefix that resolves the endpoint and the
+# default credential. An unrecognized one is almost always a typo (`opencoder/`
+# for `opencode/`), and a typo should cost a load, not a run billed per token.
+# expect: has no known provider prefix
+
+agents:
+- name: writer
+  source:
+    model: notaprovider/some-model
+
+jobs:
+- name: publish
+  plan:
+  - agent: writer
+    inputs: []
+    prompt: Write something.

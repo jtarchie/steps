@@ -28,13 +28,30 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 steps run <pipeline>        run one job
 steps watch <pipeline>      poll trigger: true resources, run affected jobs
 steps test <pipeline>       run every job and check assert: directives
-steps validate <pipeline>   check the file without running anything
+steps validate <pipeline>   check the file, and that this machine can run it
 steps plan <pipeline>       show what a run would execute vs skip
 steps runs <pipeline>       show what past runs recorded
 steps mcp tools|login       inspect or authorize mcp_servers: entries
 ```
 
 Two of these answer most "why is it doing that?" questions: `steps plan` explains what the cache would skip, and `steps runs --steps` shows what previous runs actually did.
+
+`steps validate` answers a third: *will this run at all?* It checks the file — syntax, references, field placement — and then the things the file depends on that live outside it:
+
+- every model name resolves to a known provider (a typo like `opencoder/` for `opencode/` is a load error, not a failed run)
+- every `api_key_env:` the pipeline names is actually set
+- every stdio `mcp_servers:` command is actually on `PATH`
+
+It reports all of them at once, because finding them one run at a time is the problem:
+
+```
+$ steps validate pipeline.yml
+steps: error: pipeline.yml cannot run here:
+  agent "coder"  $OPENROUTER_API_KEY is not set (source.api_key_env)
+  mcp "gopls"    command "gopls" not found on PATH
+```
+
+Add `--syntax-only` to check the file alone. That is the right flag for a pre-commit hook or a CI lint of a pipeline that build has no intention of running — it should not need that pipeline's production credentials on hand.
 
 ## Editor support
 
