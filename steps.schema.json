@@ -769,13 +769,21 @@
     "assert": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Position decides which fields are legal: execution on a job/pipeline, stdout/code on a task step, stdout/tool_calls on an agent step.",
+      "description": "Position decides which fields are legal: execution on a job/pipeline, outcome on a job, stdout/code on a task step, stdout/tool_calls on an agent step.",
       "properties": {
         "execution": {
           "type": "array",
           "items": {
             "type": "string"
           }
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "succeeded",
+            "failed"
+          ],
+          "description": "Job asserts only. What the plan must have CONCLUDED, as opposed to which steps ran. failed: requires an error and then clears it; succeeded: requires none, and opts out of the rule that a matching execution: clears a failure."
         },
         "stdout": {
           "type": "string"

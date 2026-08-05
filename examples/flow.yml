@@ -8,10 +8,12 @@
 #   hooks              on_success / on_failure / ensure reactions (observers)
 #   run_file:          load a task's run: from a file next to this pipeline
 #
-# All verification is `assert.execution`: each job names the exact ordered set
-# of task/hook names it must run, and the top-level assert names the jobs. A
+# Verification is `assert.execution`: each job names the exact ordered set of
+# task/hook names it must run, and the top-level assert names the jobs. A
 # MATCHING job assert clears that job's failure — which is what lets the
-# deliberately-failing jobs (`exhaust`, `failing`) still report success. Run:
+# deliberately-failing jobs (`exhaust`, `failing`) still report success. The
+# `passing`/`failing` pair adds `assert.outcome`, which pins what the plan
+# CONCLUDED — the thing execution: structurally cannot observe. Run:
 #
 #   steps test examples/flow.yml            # runs every job, checks every assert
 #   steps run examples/flow.yml --job <name>
@@ -155,11 +157,19 @@ jobs:
     run: echo "job succeeded"
   assert:
     execution: [work, celebrate, cleanup, announce]
+    outcome: succeeded
 
 # Failure path: work exits nonzero, so on_failure + ensure fire; the on_failure
 # hook carries its OWN nested ensure (hooks recurse), then the job's on_failure
 # fires. Without the assert this job would exit nonzero — the matching assert
 # clears the failure.
+#
+# outcome: failed is what makes this a real regression fixture rather than a
+# fixture-shaped file. execution: alone cannot tell a propagated failure from a
+# swallowed one: the same five names run either way, so the assert matches on a
+# build where the error reaches the job AND on one where something ate it — and
+# then the match clears the very difference under test. outcome: failed fails
+# this job if the plan ever stops concluding failure.
 - name: failing
   plan:
   - task: work
@@ -181,6 +191,7 @@ jobs:
     run: echo "job failed"
   assert:
     execution: [work, apologize, log, cleanup, alert]
+    outcome: failed
 
 # ─── run_file: (external task config) ───────────────────────────────────────
 # A task's run: can be loaded from a file next to the pipeline instead of

@@ -4,31 +4,52 @@ package config
 // names), job (step names), and step (stdout/exit code/tool-call trajectory).
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 )
 
 // Assert is a self-verification directive, in one of two shapes depending on
 // where it's attached:
-//   - On a Config (top level) or a Job, only Execution is valid: an ordered
-//     list of the names that must have run — job names for a Config, task/
-//     agent/hook names for a Job. By omission it also asserts what must NOT
-//     run. A matching Job assert clears the plan's failure, so one green
-//     fixture can contain deliberately-failing tasks.
+//   - On a Config (top level), only Execution is valid: an ordered list of the
+//     job names that must have run.
+//   - On a Job, Execution (task/agent/hook names) and Outcome. By omission
+//     Execution also asserts what must NOT run. A matching Job Execution
+//     clears the plan's failure, so one green fixture can contain
+//     deliberately-failing tasks; Outcome is how a fixture says what the plan
+//     concluded, which Execution structurally cannot.
 //   - On a task/agent Step, only Stdout/Code are valid: Stdout is a substring
 //     the step's captured output must contain, Code the exact expected exit
 //     code (task only). A matching assert makes a non-zero-exit task a
 //     success.
 type Assert struct {
 	Execution []string `yaml:"execution,omitempty"`
-	Stdout    *string  `yaml:"stdout,omitempty"`
-	Code      *int     `yaml:"code,omitempty"`
+	// Outcome, on a Job, asserts what the plan CONCLUDED rather than which
+	// steps ran: AssertOutcomeFailed or AssertOutcomeSucceeded. It exists
+	// because execution: cannot express "this job should have failed" — a
+	// matching execution: clears the plan's error, so a fixture for any defect
+	// about error propagation or swallowing passes on the broken build and the
+	// fixed build alike. See docs/control-flow.md.
+	Outcome string  `yaml:"outcome,omitempty"`
+	Stdout  *string `yaml:"stdout,omitempty"`
+	Code    *int    `yaml:"code,omitempty"`
 	// ToolCalls, on an agent step, asserts the ordered trajectory of tool
 	// calls the model made (see ExpectedToolCall). Agent-only: a task step
 	// runs no tools. Every entry must appear, in order, as a subsequence of
 	// the observed calls.
 	ToolCalls []ExpectedToolCall `yaml:"tool_calls,omitempty"`
 }
+
+// The two legal values of a job's assert.outcome.
+const (
+	// AssertOutcomeSucceeded requires the plan to have produced no error. It
+	// is not a no-op: it opts a job OUT of the rule that a matching
+	// execution: clears whatever the plan produced.
+	AssertOutcomeSucceeded = "succeeded"
+	// AssertOutcomeFailed requires the plan to have produced an error, and
+	// then clears it — the assertion is what makes the job green.
+	AssertOutcomeFailed = "failed"
+)
 
 // ExpectedToolCall is one entry in an agent step's assert.tool_calls: the
 // tool's name, plus (optionally) a subset of the arguments the model must
@@ -42,28 +63,24 @@ type ExpectedToolCall struct {
 	Args map[string]string `yaml:"args,omitempty"`
 }
 
-// validateAsserts enforces which Assert fields are valid where: a Config- or
-// Job-level assert may only set execution:; a task/agent step's assert may
-// only set stdout:/code: (and code: only on tasks). A step assert is rejected
-// on get/put steps. Hook steps are walked too (via visitSteps), so an assert
-// on a hook task/agent gets the same treatment.
+// validateAsserts enforces which Assert fields are valid where: a pipeline
+// assert may only set execution:; a job assert execution: and outcome:; a
+// task/agent step's assert only stdout:/code: (and code: only on tasks). A step
+// assert is rejected on get/put steps. Hook steps are walked too (via
+// visitSteps), so an assert on a hook task/agent gets the same treatment.
 func (c *Config) validateAsserts() error {
-	if c.Assert != nil {
-		err := requireExecutionOnly("pipeline assert", c.Assert)
-		if err != nil {
-			return err
-		}
+	err := validatePipelineAssert(c.Assert)
+	if err != nil {
+		return err
 	}
 
 	for _, job := range c.Jobs {
-		if job.Assert != nil {
-			err := requireExecutionOnly(fmt.Sprintf("job %q assert", job.Name), job.Assert)
-			if err != nil {
-				return err
-			}
+		err = validateJobAssert(job.Name, job.Assert)
+		if err != nil {
+			return err
 		}
 
-		err := job.visitSteps(func(label string, step *Step) error {
+		err = job.visitSteps(func(label string, step *Step) error {
 			stepErr := rejectAssertInsideTry(label, step)
 			if stepErr != nil {
 				return stepErr
@@ -152,6 +169,57 @@ func pinnedArgsByTool(agentTools, stepTools []ToolSpec) map[string]map[string]bo
 	return index
 }
 
+// validatePipelineAssert checks the top-level assert:, which names job names
+// and nothing else. outcome: has no meaning here — a pipeline runs many jobs
+// and concludes once per job, not once overall.
+func validatePipelineAssert(assert *Assert) error {
+	if assert == nil {
+		return nil
+	}
+
+	err := requireExecutionOnly("pipeline assert", assert)
+	if err != nil {
+		return err
+	}
+
+	if assert.Outcome != "" {
+		return errors.New("pipeline assert: outcome is only valid on a job assert; a pipeline runs many jobs and has no single outcome")
+	}
+
+	return nil
+}
+
+// validateJobAssert checks a job's assert:, which may set execution: and
+// outcome: but none of the step-only fields.
+func validateJobAssert(jobName string, assert *Assert) error {
+	if assert == nil {
+		return nil
+	}
+
+	label := fmt.Sprintf("job %q assert", jobName)
+
+	err := requireExecutionOnly(label, assert)
+	if err != nil {
+		return err
+	}
+
+	return validateAssertOutcome(label, assert.Outcome)
+}
+
+// validateAssertOutcome rejects any assert.outcome value other than the two
+// legal ones. Absent is legal — it means today's behavior, where a job's
+// conclusion is not asserted on at all.
+func validateAssertOutcome(label, outcome string) error {
+	switch outcome {
+	case "", AssertOutcomeSucceeded, AssertOutcomeFailed:
+		return nil
+	default:
+		return fmt.Errorf("%s: outcome %q is not valid; use %q or %q%s",
+			label, outcome, AssertOutcomeSucceeded, AssertOutcomeFailed,
+			suggestion(outcome, []string{AssertOutcomeSucceeded, AssertOutcomeFailed}))
+	}
+}
+
 // requireExecutionOnly rejects an execution-level assert (Config/Job) that
 // carries the step-only stdout:/code: fields.
 func requireExecutionOnly(label string, assert *Assert) error {
@@ -195,6 +263,10 @@ func validateStepAssert(label string, step *Step) error {
 
 	if len(step.Assert.Execution) > 0 {
 		return fmt.Errorf("%s: execution is only valid on job/pipeline asserts, not a step assert", label)
+	}
+
+	if step.Assert.Outcome != "" {
+		return fmt.Errorf("%s: outcome is only valid on a job assert; a step's own success is asserted with stdout/code", label)
 	}
 
 	kind, ok := step.Kind()

@@ -1,0 +1,14 @@
+# A pipeline assert names the jobs that must run. It has no single outcome to
+# assert on — each job concludes separately, so outcome: belongs on a job.
+# expect: outcome is only valid on a job assert
+
+assert:
+  execution: [build]
+  outcome: failed
+
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    run: "true"

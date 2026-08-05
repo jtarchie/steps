@@ -100,19 +100,9 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 
 	finalErr := runHooks(ctx, scope, job.Hooks, runErr)
 
-	// A job assert.execution is the final word: it runs after hooks so the log
-	// includes them. A match clears whatever the plan/hooks produced (so a
-	// fixture of deliberately-failing tasks can be green); a mismatch fails the
-	// job regardless, and is never itself cleared.
-	if job.Assert != nil && len(job.Assert.Execution) > 0 {
-		assertErr := checkExecution(fmt.Sprintf("job %q", job.Name), job.Assert.Execution, log.snapshot())
-		if assertErr != nil {
-			return assertErr
-		}
-
-		finalErr = nil
-	}
-
+	// A job assert is the final word: it runs after hooks so the log includes
+	// them. A mismatch fails the job regardless, and is never itself cleared.
+	finalErr = checkJobAssert(job, log, finalErr)
 	if finalErr != nil {
 		return finalErr
 	}

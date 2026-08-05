@@ -76,3 +76,62 @@ func checkExecution(label string, want, got []string) error {
 
 	return fmt.Errorf("%s: assert.execution mismatch:\n  want: %v\n  got:  %v", label, want, got)
 }
+
+// checkJobAssert evaluates a job's assert: against what ran (log) and what the
+// plan concluded (planErr), returning the error the job should now carry: nil
+// when every assertion held, otherwise the assertion failure or the plan's own
+// error. An assertion failure is never cleared.
+//
+// The two directives answer different questions and compose:
+//
+//	execution:  which steps ran, in what order
+//	outcome:    what the plan CONCLUDED
+//
+// A matching execution: clears whatever the plan produced, which is what lets a
+// fixture of deliberately-failing tasks be green. That clearing is also why
+// execution: alone cannot express "this job should have failed": both branches
+// of an error-propagation defect run the same steps, so the assert matches
+// either way and then erases the very difference under test. outcome: is the
+// missing half — and outcome: succeeded is not a no-op, it opts out of the
+// clearing so a plan failure stays a failure.
+//
+// Absent outcome:, this is byte-identical to the behavior that predates it.
+func checkJobAssert(job *config.Job, log *execLog, planErr error) error {
+	if job.Assert == nil {
+		return planErr
+	}
+
+	label := fmt.Sprintf("job %q", job.Name)
+
+	if len(job.Assert.Execution) > 0 {
+		err := checkExecution(label, job.Assert.Execution, log.snapshot())
+		if err != nil {
+			return err
+		}
+	}
+
+	switch job.Assert.Outcome {
+	case config.AssertOutcomeFailed:
+		if planErr == nil {
+			return fmt.Errorf("%s: assert.outcome: failed, but the plan succeeded", label)
+		}
+
+		// The failure was the assertion: satisfying it is what makes the job
+		// green, exactly as a matching execution: does.
+		return nil
+
+	case config.AssertOutcomeSucceeded:
+		if planErr != nil {
+			return fmt.Errorf("%s: assert.outcome: succeeded, but the plan failed: %w", label, planErr)
+		}
+
+		return nil
+
+	default: // absent
+		if len(job.Assert.Execution) > 0 {
+			return nil
+		}
+
+		return planErr
+	}
+}

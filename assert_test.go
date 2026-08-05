@@ -107,6 +107,125 @@ jobs:
 	wantRunError(t, path)
 }
 
+// TestJobAssertOutcomeFailedRequiresAFailure is the discriminating half of
+// assert:. The two jobs run the SAME steps and differ only in whether the plan
+// concluded failure — which is precisely what assert.execution cannot see, and
+// then erases by clearing the error on a match.
+func TestJobAssertOutcomeFailedRequiresAFailure(t *testing.T) {
+	tests := []struct {
+		name    string
+		run     string
+		wantErr bool
+	}{
+		{name: "plan failed as asserted", run: "exit 1", wantErr: false},
+		{name: "plan succeeded, so the assert fails", run: "true", wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "pipeline.yml")
+
+			writePipelineFile(t, path, fmt.Sprintf(`
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    run: %q
+  assert:
+    execution: [work]
+    outcome: failed
+`, test.run))
+
+			err := run([]string{"run", path, "--job", "build"})
+			if test.wantErr && err == nil {
+				t.Fatal("job succeeded, want a failure: assert.outcome said failed but the plan passed")
+			}
+
+			if !test.wantErr && err != nil {
+				t.Fatalf("job failed, want success: the plan failed exactly as asserted: %v", err)
+			}
+		})
+	}
+}
+
+// TestJobAssertOutcomeSucceededOptsOutOfClearing verifies outcome: succeeded is
+// not a no-op: a matching execution: normally clears a plan failure, and this
+// is how a fixture says "no, that failure is real."
+func TestJobAssertOutcomeSucceededOptsOutOfClearing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pipeline.yml")
+
+	writePipelineFile(t, path, `
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    run: exit 1
+  assert:
+    execution: [work]
+    outcome: succeeded
+`)
+
+	err := run([]string{"run", path, "--job", "build"})
+	if err == nil {
+		t.Fatal("job succeeded; a matching execution: must not clear the failure when outcome: succeeded is set")
+	}
+
+	if !strings.Contains(err.Error(), "assert.outcome: succeeded") {
+		t.Errorf("error does not name the assertion that failed: %v", err)
+	}
+}
+
+// TestJobAssertExecutionStillClearsWithoutOutcome pins the compatibility half:
+// absent outcome:, a matching execution: clears the plan's failure exactly as
+// it did before the field existed.
+func TestJobAssertExecutionStillClearsWithoutOutcome(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pipeline.yml")
+
+	writePipelineFile(t, path, `
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    run: exit 1
+  assert:
+    execution: [work]
+`)
+
+	mustRun(t, path)
+}
+
+// TestJobAssertOutcomeAndExecutionCompose verifies a mismatch in EITHER
+// directive fails the job, including when the other one holds.
+func TestJobAssertOutcomeAndExecutionCompose(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pipeline.yml")
+
+	// outcome: failed holds — the plan does fail — but execution: names a step
+	// that never ran.
+	writePipelineFile(t, path, `
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    run: exit 1
+  assert:
+    execution: [work, never-ran]
+    outcome: failed
+`)
+
+	err := run([]string{"run", path, "--job", "build"})
+	if err == nil {
+		t.Fatal("job succeeded; a satisfied outcome: must not excuse a mismatched execution:")
+	}
+
+	if !strings.Contains(err.Error(), "assert.execution mismatch") {
+		t.Errorf("want the execution mismatch reported, got: %v", err)
+	}
+}
+
 // exampleSkipMarker opts an example out of TestExamplesRun. It is deliberately
 // OPT-OUT: an example that says nothing must run offline and pass. An opt-in
 // marker would have let examples/try.yml ship calling `make build` in a repo

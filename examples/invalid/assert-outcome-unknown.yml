@@ -1,0 +1,12 @@
+# assert.outcome takes exactly two values. A third is almost always a guess at
+# the vocabulary, so the error names both and offers the near miss.
+# expect: did you mean "succeeded"?
+
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    run: "true"
+  assert:
+    outcome: suceeded

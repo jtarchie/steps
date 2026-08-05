@@ -1,0 +1,12 @@
+# outcome: is about what a whole plan concluded. A single step's own success is
+# asserted with stdout:/code:.
+# expect: outcome is only valid on a job assert
+
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    run: "true"
+    assert:
+      outcome: succeeded
