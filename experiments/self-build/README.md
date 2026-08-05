@@ -6,8 +6,11 @@ generator, no per-story duplication.
 
 The stories are [GitHub issues](https://github.com/jtarchie/steps/issues)
 labeled `story`, one per roadmap feature. The pipeline's `stories` resource
-lists the open ones, and each run plans, implements, gates, reviews, and (only
-on a passing review) opens a PR whose body says `Closes #N` — so merging
+lists the open ones, and each run plans, implements, gates, reviews **twice**
+(`reviewer` reads the diff and asks whether the change is correct;
+`completeness` is denied the diff and asks what the story required that
+nothing implements — both must pass, either sends the coder back), and only
+then opens a PR whose body says `Closes #N` — so merging
 retires the story and it stops appearing on the next check. Earlier revisions
 kept the stories as markdown files in the repo and chose between them by
 hand-editing a glob; both are gone, and `source.limit` is the selector now.

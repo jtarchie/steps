@@ -26,13 +26,19 @@
 # with the server name prefixed ("gopls__go_symbol_references"). Needs `gopls`
 # on PATH.
 #
-# Two model slots, as YAML anchors: `&fast` (planner and reviewer, which read
-# and judge -- GLM-4.7-Flash) and `&coding` (coder, which writes -- Qwen3 Coder
-# Flash). Both are cheap and both quote a real cached-input price, which is
-# what makes the prompt caching in internal/agent/openrouter.go worth having;
-# a model with no cache discount pays full price for the whole re-sent history
-# every turn. Swap either for whatever you prefer, or point both at the same
-# slug to go back to one model everywhere.
+# Two model slots, as YAML anchors: `&fast` (planner and the two reviewers,
+# which read and judge) and `&coding` (coder, which writes). Both point at
+# deepseek-v4-pro today; the split is kept so either persona can move without
+# touching the other. Prefer a model quoting a real cached-input price -- the
+# prompt caching in internal/agent/openrouter.go is worth nothing against a
+# model with no cache discount, which pays full price for the whole re-sent
+# history every turn.
+#
+# The review gate is TWO agents, not one, and they must both pass. `reviewer`
+# reads the diff and asks whether what was built is correct; `completeness`
+# is denied the diff and asks what the story required that nothing
+# implements. See the comment above the completeness agent for why a second
+# lens is not the same thing as a second sample.
 #
 # Both resources are GitHub-backed and need `gh` authenticated (GH_TOKEN or
 # gh auth login): `repo` clones and opens the PR, and `stories` reads the
@@ -202,12 +208,15 @@ agents:
 # compacting. Single first-party provider (Alibaba), so there is exactly one
 # prompt cache to stay warm in.
 - name: coder
-  # TEMPORARY: this slot wants deepseek-v4-flash, but that model went
-  # unavailable upstream mid-experiment -- a 5-token request to it times out
-  # while deepseek-v4-pro and glm-5.2 on the same gateway answer in seconds.
-  # Every failure in that run landed on this agent and none on the planner,
-  # which is the same-gateway control. Pointed at -pro until -flash answers
-  # again; restoring it is this one line.
+  # deepseek-v4-pro, same as *fast. This slot was split off to run a cheaper
+  # coding model (the two personas want different things: one reads and
+  # judges, one writes for 150 turns), and it briefly pointed at
+  # deepseek-v4-flash -- which then went unavailable upstream mid-experiment,
+  # timing out on a 5-token request while -pro on the same gateway answered
+  # in seconds. Every failure in that run landed here and none on the
+  # planner, which is the same-gateway control. Both slots are -pro now by
+  # decision, not by outage; the anchor stays split so pointing this at a
+  # different model again is one line.
   source: &coding { model: opencode/deepseek-v4-pro }
   max_turns: 200
   system_file: "@builtin/builder"
@@ -301,7 +310,8 @@ agents:
       git --no-pager diff --stat HEAD
       printf -- '\n--- git diff HEAD (the uncommitted work under review) ---\n'
       git --no-pager diff HEAD
-  - name: try_pipeline
+  - &try_pipeline
+    name: try_pipeline
     description: >
       RUN a pipeline against the build under review and return its transcript.
       One argument, `yaml`: the full text of a small pipeline. It is built from
@@ -410,6 +420,38 @@ agents:
       # here as data. Failing the tool call would read as "the tool broke" and
       # invite a pointless retry of a probe that worked exactly as intended.
       printf '\nPROBE EXIT: %s\n' "$rc"
+
+# The SECOND verdict, and a different failure mode rather than a rerun. The
+# reviewer above returned PASS on story 001; a second review found ten
+# confirmed defects, and they split about evenly between "this is wrong" (the
+# lens above, anchored on the diff) and "this case was never handled" -- which
+# the diff cannot show you, because a case nobody handled appears in no diff.
+#
+# So this one gets NO repo_diff, deliberately. That is the whole design: the
+# reviewer above is instructed to trust the plan and read the diff, which is a
+# sound context-budget decision and also guarantees it inherits the plan's
+# blind spots. "What code path exists that this plan never mentions?" is
+# structurally unaskable there. Denying the diff here means this agent cannot
+# anchor on what was written and has to start from what was ASKED FOR.
+#
+# It gets the exploration tools the reviewer above is denied (search_files,
+# list_dir) for the same reason -- its job IS the open-ended search, and it
+# spends no context on a 25KB diff to make room for it. try_pipeline is shared
+# with the reviewer above by anchor, since "nothing implements this" is a
+# claim a probe settles faster than any amount of reading.
+- name: completeness
+  source: *fast
+  max_turns: 200
+  system_file: "@builtin/reviewer"
+  tools:
+  - mcp: gopls
+    tools: [go_symbol_references]
+    max_output_bytes: 6000
+  - read_file
+  - list_dir
+  - search_files
+  - write_file
+  - *try_pipeline
 
 jobs:
 - name: self-build
@@ -565,7 +607,11 @@ jobs:
       here after a previous attempt. A failed build/lint/test gate: just call
       verify_gate, your changes are still here so you will see the errors
       directly. A failed review: call previous_run for the reviewer's note,
-      and read_file on repo/experiments/self-build/critiques/{num}.md.
+      then read BOTH critiques, since either reviewer can send you back and
+      they fail for different reasons --
+      repo/experiments/self-build/critiques/{num}.md is "this is wrong" and
+      {num}-completeness.md is "this was never implemented". The second one
+      may not exist if the first reviewer failed you; that is normal.
   - task: build-check
     inputs: [repo]
     run: |
@@ -636,9 +682,12 @@ jobs:
       1. read_file on stories/num and stories/body.md — the story itself, a
          GitHub issue. Its "Acceptance criteria" checklist is the contract:
          your critique must walk it item by item and cite, per item, the
-         file:line that satisfies it. An item you cannot cite is a FAIL, and
-         a requirement stated in the issue's prose but absent from the plan
-         is exactly the kind of miss the plan cannot warn you about. Then
+         file:line or the probe that satisfies it. An item you cannot cite is
+         a FAIL. The checklist is not the whole contract, though: a
+         requirement stated only in the issue's PROSE binds exactly as hard
+         and is the kind the plan cannot warn you about, because it has no
+         box to leave unticked. Anything phrased as MUST, "otherwise", or
+         naming a failure to avoid goes on your list too. Then
          read the plan the implementer worked from,
          repo/experiments/self-build/plans/{num}.md -- it names the files that
          were supposed to change and the sibling sites gopls returned.
@@ -725,6 +774,81 @@ jobs:
        7. Call the verdict tool with exactly "pass" or "fail" and a short
           `note` — THIS routes the pipeline and is what the implementer sees
           on a redo.
+    verdicts: [pass, fail]
+    to:
+      # A pass here is no longer a publish -- it is a promotion to the second
+      # reviewer. BOTH must pass to reach the put; either one FAILs back to
+      # the coder, which is what makes this a gate rather than a second
+      # opinion nobody is bound by.
+      pass: completeness
+      fail: coder
+      failure: coder   # reviewer errored or never called verdict
+    max_visits: 3
+  - agent: completeness
+    inputs: [stories, repo]
+    context_paths: [repo/CLAUDE.md]
+    attempts: 2
+    timeout: 30m
+    prompt: |
+      You are the SECOND of two reviewers and you are looking for what is
+      MISSING. The first reviewer already asked "is what was built correct?"
+      and answered it against the diff; it passed, or you would not be
+      running. Asking that question again buys nothing. Yours is the one the
+      diff cannot answer: WHAT DOES THIS STORY REQUIRE THAT NOTHING
+      IMPLEMENTS?
+
+      You have NO repo_diff, on purpose. A case nobody handled appears in no
+      diff, and a requirement nobody implemented appears in no diff either --
+      so the diff is not merely unhelpful for your question, it actively
+      anchors you on what was written instead of what was asked. Start from
+      the story. The tree is the evidence: search_files and list_dir are
+      yours, and unlike the first reviewer you are EXPECTED to explore.
+
+      The plan is a suspect, not a source. The first reviewer is instructed
+      to trust it; that is why you exist. When the plan omitted a code path,
+      the implementer never touched it and the first reviewer never looked
+      for it -- so the omission survives every gate up to you. Read the plan
+      to learn WHAT WAS NOT CONSIDERED, never to be reassured.
+
+      1. read_file on stories/num and stories/body.md — the story, a GitHub
+         issue. Then extract EVERY REQUIREMENT it states, and do this before
+         you look at any code, so the list is the story's and not the
+         implementation's. Two sources, both binding:
+           - each box in "Acceptance criteria";
+           - each requirement stated only in PROSE. These are the ones that
+             get lost. Story 001 said in a plain sentence that `steps test`'s
+             `assert:` must check the inner step's real outcome, not the
+             swallowed one -- it shipped broken and the critique never
+             mentioned it, because prose has no checkbox to leave unticked.
+         Anything phrased as MUST, "otherwise", "so that", or naming a
+         failure to avoid is a requirement. Write the list down first.
+      2. For each requirement, find the thing that satisfies it and cite it
+         as file:line, or a probe. search_files from the requirement's own
+         words. A requirement you cannot cite is a FAIL, and "the plan says
+         it was done" is not a citation.
+      3. PROBE the requirements that describe BEHAVIOR. try_pipeline runs a
+         pipeline against this build; a claim you have run outranks a claim
+         you have read, and "nothing implements this" is exactly the claim a
+         probe settles fastest -- write the pipeline that only passes if the
+         requirement holds, give it an `assert:`, and let PROBE EXIT answer.
+         Probes are MODELLESS (no API keys reach that sandbox), so for a
+         requirement that genuinely needs a model, check instead that an e2e
+         test covers it against the fake provider (newFakeLLM in
+         fakeprovider_test.go) and say so.
+      4. Then ask what the story implies that it never spells out:
+         a. a code path that handles every existing case but not the new one
+            -- if the plan carries a "## Dispatch sites" table, the rows it
+            does NOT contain are your search space, not the rows it does;
+         b. a doc or example that now describes behavior nobody verified;
+         c. an edge case (empty, zero, negative, malformed) the story implies
+            and nothing rejects deliberately.
+      5. Write repo/experiments/self-build/critiques/{num}-completeness.md —
+         first line exactly PASS or FAIL, then the requirement list from step
+         1 with its citation or probe per line. A requirement with no
+         citation is what a FAIL looks like; name it in the note.
+      6. Call the verdict tool with exactly "pass" or "fail" and a short
+         `note`. A pass here publishes the change, so pass only when every
+         requirement on your list has a citation.
     verdicts: [pass, fail]
     to:
       pass: repo
