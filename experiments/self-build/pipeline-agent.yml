@@ -1217,6 +1217,20 @@ jobs:
           shipped can never come back silently. This costs you one write_file
           and it is the difference between a finding and a regression test.
           Do not add `# steps-test: skip` to it.
+          NOW PROVE IT DISCRIMINATES. try_pipeline the fixture's text against
+          THIS build, the one with the defect still in it, and require a
+          NON-ZERO PROBE EXIT. A fixture that passes on the broken build pins
+          nothing and is worse than none, because it reads as coverage.
+          The trap is specific and it has already been walked into here:
+          `assert: {execution: [...]}` CLEARS a job failure when it matches
+          (internal/pipeline/pipeline.go, RunJob -- deliberate, so a fixture
+          of deliberately-failing tasks can be green). So an execution list
+          proves only WHICH STEPS RAN. It cannot see whether an error
+          propagated, and for any defect about error propagation, swallowing,
+          or exit status it passes on the broken build and the fixed one
+          alike. For those, drop the job-level assert entirely and let the
+          job's own failure be the signal, or assert on a marker that only
+          the correct behavior writes.
        6. If you intend to choose "pass" (the change passes review), write
           these files with write_file BEFORE calling the verdict tool — they
           become the PR:
