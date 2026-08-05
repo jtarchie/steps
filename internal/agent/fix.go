@@ -6,7 +6,6 @@ import (
 	"os"
 
 	"github.com/jtarchie/steps/internal/config"
-	"github.com/jtarchie/steps/internal/retry"
 	"github.com/jtarchie/steps/internal/shell"
 )
 
@@ -141,30 +140,7 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 	// answer available. The caller (runFixTask, internal/pipeline/pipeline.go)
 	// already printed "task %q failed ...; invoking fix agent %q" before this
 	// call, so this only needs the response body, not another "agent:" banner.
-	var (
-		result   conversationResult
-		requests *requestCounter
-	)
-
-	err = retry.Do(ctx, ri.Attempts, func(attempt int) error {
-		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-
-		// Same as runPrepared: a counter per attempt so the failure log can
-		// report the real provider-request cost, and withAttempt keeps a retry
-		// off the provider instance the previous attempt may have just failed
-		// against (see composeSessionID).
-		requests = &requestCounter{}
-
-		res, runErr := runAgentConversation(withRequestCounter(withAttempt(attemptCtx, attempt), requests), llm, conv)
-		result = res
-
-		// Same reasoning as runPrepared: a timeout is not transient, and a
-		// retry restarts the conversation on the same budget.
-		return retry.StopOnDeadline(ctx, attemptCtx, runErr)
-	}, retry.WithLogFields(func(int) []any {
-		return []any{"provider_requests", requests.Total()}
-	}))
+	result, err := runOneConversation(ctx, ri, llm, conv, timeout)
 	printAgentResponse(result)
 
 	if err != nil {

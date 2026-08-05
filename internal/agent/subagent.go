@@ -151,13 +151,12 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 
 	fmt.Printf("agent: %s (sub-agent)\n", c.ri.AgentName)
 
-	// Reset the attempt scope: a sub-agent runs its conversation exactly once
-	// (there is no retry.Do here), so it must not inherit the *parent's*
-	// attempt index. Without this a parent retry would move the child onto a
-	// fresh session and throw away the child's warm cache, even though the
-	// child is replaying the identical prompt it already ran (see
+	// The child gets its own request counter so its provider requests are
+	// attributed to it rather than silently folded into the parent's total.
+	// Its session is stable per (run, agent) with no attempt component, so
+	// repeated calls with the identical prompt keep a warm cache (see
 	// composeSessionID).
-	res, runErr := runAgentConversation(withAttempt(ctx, 0), c.llm, conv)
+	res, runErr := runAgentConversation(withRequestCounter(ctx, &requestCounter{}), c.llm, conv)
 	printAgentResponse(res)
 
 	if runErr != nil {

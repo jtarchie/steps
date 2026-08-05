@@ -61,36 +61,39 @@ func TestAgentHTTPClientSkipsNonOpenRouter(t *testing.T) {
 	}
 }
 
-// attemptRecordingLLM records the attempt index carried by the context of
-// every GenerateContent call, and fails each call so retry.Do keeps going.
-type attemptRecordingLLM struct {
-	attempts []int
+// callCountingLLM counts GenerateContent calls and fails every one.
+type callCountingLLM struct {
+	calls int
 }
 
-func (l *attemptRecordingLLM) Name() string { return "attempt-recorder" }
+func (l *callCountingLLM) Name() string { return "call-counter" }
 
-func (l *attemptRecordingLLM) GenerateContent(
-	ctx context.Context,
+func (l *callCountingLLM) GenerateContent(
+	_ context.Context,
 	_ *model.LLMRequest,
 	_ bool,
 ) iter.Seq2[*model.LLMResponse, error] {
-	l.attempts = append(l.attempts, attemptFromContext(ctx))
+	l.calls++
 
 	return func(yield func(*model.LLMResponse, error) bool) {
-		yield(nil, errors.New("attempt-recorder: always fails"))
+		yield(nil, errors.New("call-counter: always fails"))
 	}
 }
 
-// TestRunPreparedThreadsAttemptIntoContext guards the retry-loop half of the
-// session scoping: composeSessionID's own tests prove a differing attempt
-// yields a differing session, but only this proves the retry loop actually
-// supplies one. Both call sites previously discarded the index as `_ int`, so
-// a regression to that shape would otherwise leave every test green while
-// pinning all retries to the provider instance that just failed.
-func TestRunPreparedThreadsAttemptIntoContext(t *testing.T) {
+// TestRunPreparedRunsOneConversation pins the removal of whole-conversation
+// restart. attempts: 3 used to mean "run this entire conversation three
+// times", discarding every accumulated turn between them and re-billing the
+// whole history — against a failure the transport had already retried and
+// concluded was not transient. It now retries the failing REQUEST (see
+// requests.go), so the conversation itself runs exactly once no matter what
+// attempts: says.
+//
+// The LLM here is above the transport, so it sees conversations, not requests:
+// exactly one call is the whole assertion.
+func TestRunPreparedRunsOneConversation(t *testing.T) {
 	t.Parallel()
 
-	llm := &attemptRecordingLLM{}
+	llm := &callCountingLLM{}
 
 	_, err := runPrepared(t.Context(), preparedAgentStep{
 		ri:  config.ResolvedInvocation{Attempts: 3, MaxTurns: testMaxTurns},
@@ -102,17 +105,10 @@ func TestRunPreparedThreadsAttemptIntoContext(t *testing.T) {
 		},
 	})
 	if err == nil {
-		t.Fatal("expected the always-failing LLM to exhaust every attempt")
+		t.Fatal("expected the always-failing LLM to fail the conversation")
 	}
 
-	want := []int{0, 1, 2}
-	if len(llm.attempts) != len(want) {
-		t.Fatalf("recorded attempts %v, want %v", llm.attempts, want)
-	}
-
-	for i, got := range llm.attempts {
-		if got != want[i] {
-			t.Errorf("call %d saw attempt %d, want %d", i, got, want[i])
-		}
+	if llm.calls != 1 {
+		t.Errorf("conversation ran %d times, want 1 — attempts: must not restart it", llm.calls)
 	}
 }

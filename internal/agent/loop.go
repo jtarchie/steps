@@ -52,9 +52,8 @@ const (
 	loopDetectionMaxRepeats = 5
 )
 
-// loopDetector is one conversation attempt's repetition tracker. Like
-// callCounts/trajectory it is per-attempt state: a retry.Do restart gets a
-// fresh detector and a clean slate.
+// loopDetector is one conversation's repetition tracker, scoped like
+// callCounts and trajectory beside it.
 type loopDetector struct {
 	// turns holds each recent turn's signature counts, oldest first, capped
 	// at loopDetectionWindow entries.

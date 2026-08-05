@@ -186,19 +186,18 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 	}
 }
 
-// runAgentConversation runs one full attempt: an initial system+user
-// message, then up to conv.maxTurns request/tool-execute/append round trips,
-// terminating when the model responds with no tool calls while every
-// required tool has succeeded. There is no turn-level checkpointing — a
-// retry (see retry.Do in RunStep/RunFix) restarts the whole conversation from
-// scratch, but that only ever happens for a non-tool failure (generateOnce
-// erroring, or maxTurns exhausted below): a tool failure, required or not,
-// is always handed back into this same conversation as data, never a reason
-// to abort it. If a tool call already had a side effect (e.g. posting a PR
-// review) before a later turn failed for an unrelated reason, a restart may
-// re-invoke it again; pipeline prompts should tell the model to check
-// current state before acting, the same caveat Concourse's own
-// task.attempts carries for non-idempotent tasks.
+// runAgentConversation runs one conversation: an initial system+user message,
+// then up to conv.maxTurns request/tool-execute/append round trips,
+// terminating when the model responds with no tool calls while every required
+// tool has succeeded.
+//
+// It runs ONCE per step. Nothing restarts it: attempts: retries the failing
+// REQUEST (see requests.go), so a transient fault is absorbed without losing a
+// single accumulated turn. A tool failure, required or not, is handed back
+// into this same conversation as data and is never a reason to abort. That
+// also retires a real hazard — a restart used to re-invoke tool calls whose
+// side effects had already happened (posting a PR review, say), because the
+// workspace survived the restart while the memory did not.
 //
 // If the model tries to stop without every required tool having succeeded
 // (exit_code 0 — a failed call doesn't count, and the model already saw why
@@ -234,28 +233,21 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversation) (conversationResult, error) {
 	req := buildAgentRequest(conv)
 	satisfied := make(map[string]bool, len(conv.tools.required))
-	// callCounts is local to this call, so a fresh attempt (retry.Do calling
-	// runAgentConversation again) always starts every tool's budget over —
-	// "a fresh conversation is a fresh budget."
+	// callCounts is local to this call: one conversation, one budget per tool.
 	callCounts := make(map[string]int, len(conv.tools.maxCalls))
-	// trajectory is likewise per-attempt: a retry reports only its own calls,
-	// which is what an assert.tool_calls check should see (the run that
-	// actually produced the step's outcome), not an accumulation across
-	// abandoned attempts.
+	// trajectory is likewise per-conversation, which is what an
+	// assert.tool_calls check should see: the calls that produced this step's
+	// outcome.
 	var trajectory []recordedToolCall
 	// verdict/note are the last successful verdict-tool choice and the note
-	// that accompanied it; per-attempt like the rest. A model that revises its
-	// own verdict ends on its final one, and note travels with whichever
-	// choice won.
+	// that accompanied it. A model that revises its own verdict ends on its
+	// final one, and note travels with whichever choice won.
 	var verdict, note string
 	// handoffNote is the last successful write_handoff call's captured fields
-	// (nil until one lands) — per-attempt like everything above, so a retry
-	// renders the note the surviving attempt actually wrote.
+	// (nil until one lands).
 	var handoffNote map[string]string
-	// compactionSummary/compactionStalled are maybeCompact's running state —
-	// per-attempt like trajectory/verdict/note above, since a retry.Do restart
-	// gets a fresh buildAgentRequest (and therefore a fresh, uncompacted
-	// req.Contents) and should start compaction fresh too.
+	// compactionSummary/compactionStalled are maybeCompact's running state,
+	// scoped to this conversation like everything above.
 	var compactionSummary string
 
 	var compactionStalled bool

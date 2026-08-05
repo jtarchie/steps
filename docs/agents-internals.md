@@ -21,7 +21,7 @@ Transport-level only, like the OpenRouter caching levers: no config surface, no 
 
 The result is part of the hash so that *productive* repetition never trips the detector: re-reading a file after an edit returns different bytes, and a verify command's output changes as the tree is fixed. Only call-and-result-both-identical accumulates.
 
-The reaction is two-strike. The first time one interaction exceeds 5 copies in the window, the conversation gets a warning message naming the tool and telling the model to change approach — the window is **not** reset, so the warning is the model's only chance. A second detection (i.e. it repeated the same interaction once more) fails the attempt as a task failure (`failed`, not `errored`, for hook dispatch) with "agent stuck in a loop". Unlike crush's window — which only starts counting after 10 full turns — any count over the threshold triggers, so an agent with the default 8 `max_turns` is protected exactly like one with 200. A retry (`attempts:`) starts with a clean detector, like all per-attempt state.
+The reaction is two-strike. The first time one interaction exceeds 5 copies in the window, the conversation gets a warning message naming the tool and telling the model to change approach — the window is **not** reset, so the warning is the model's only chance. A second detection (i.e. it repeated the same interaction once more) fails the attempt as a task failure (`failed`, not `errored`, for hook dispatch) with "agent stuck in a loop". Unlike crush's window — which only starts counting after 10 full turns — any count over the threshold triggers, so an agent with the default 8 `max_turns` is protected exactly like one with 200. The detector is scoped to the conversation, which now runs exactly once per step.
 
 ## OpenRouter prompt caching
 
@@ -39,12 +39,14 @@ OpenRouter tracks sticky routing "at the account level, per model, and per conve
 | Turns of one step's conversation loop | yes | the whole prior history is re-sent each turn — the big win |
 | A `to:`/`verdicts:` revise loop re-entering a step | yes | same agent, same prefix, across separate visits |
 | A sub-agent called repeatedly by its parent | yes | same persona every call |
-| A `fix:` agent retrying | yes | same persona every attempt |
+| A `fix:` agent | yes | same persona every call |
 | Two different agents in one job | **no** | different model and persona — nothing to reuse |
 | The same agent in two runs (incl. concurrent) | **no** | no cross-run provider pin |
-| A second/third `attempts:` retry | **no** | see below |
+| An `attempts:` request retry | yes | it continues the same conversation — see below |
 
-A retry deliberately **breaks** the pin instead of extending it. `retry.Do` wraps "a network round trip to an LLM endpoint (rate limiting, transient 5xx)" and retries on any error, so the failure being retried may well be the pinned provider's — reusing the session would send the retry straight back to the instance that just failed. What that gives up is small: a retry starts a *fresh* conversation, so a shared session would only have reused the short system+tools+prompt prefix, never the accumulated history, which is discarded either way.
+A retry used to **break** the pin instead of extending it, on the reasoning that the failure being retried might be the pinned provider's own — and little was lost, because a retry restarted the conversation and a shared session could only ever have reused the short system+tools+prompt prefix anyway.
+
+That reasoning inverted when `attempts:` became a request-level retry. A retry now *continues* the same conversation, so the accumulated prefix is exactly what it wants to reuse, and the session stays put. It is stable for the life of a `(run, agent)` with no retry component at all.
 
 The per-agent split is not merely tidy. With a **router model** (`openrouter/auto` and friends) a session pins the *resolved model*, not just the provider — so under a run-wide session whichever agent ran first would silently choose the concrete model for every later agent in the job.
 
@@ -69,9 +71,9 @@ Agent steps can set `timeout:` and `attempts:` to bound their execution:
   attempts: 2
 ```
 
-**Timeout** bounds the **entire conversation** (all turns, all tool calls) to a wall-clock deadline. The built-in `agentStepTimeout` is 10 minutes; `timeout:` (if set) overrides it. A timeout mid-conversation classifies as **errored**, not failed.
+**Timeout** bounds the **entire conversation** (all turns, all tool calls, and any request retries within them) to a wall-clock deadline. The built-in `agentStepTimeout` is 10 minutes; `timeout:` (if set) overrides it. A timeout mid-conversation classifies as **errored**, not failed.
 
-**Attempts** retries the **whole conversation** on failure (LLM transport error, `max_turns` exhaustion, a tool error in required-tool mode). Each attempt gets its own fresh conversation with the model — prior turns are discarded, the session pin is broken (see OpenRouter section above), and the `max_turns` budget resets. Intermediate tool failures *within* one conversation never trigger a retry; they come back to the model as data. Only after all `attempts:` retries are exhausted does a failure become the step's final outcome.
+**Attempts** retries the failing **request**, in `requests.go`'s transport. The conversation runs exactly once and carries on from where it was, so nothing accumulated is lost. Tool failures never trigger it at all — they come back to the model as data.
 
 A task step's `fix:` agent can also set `attempts:` and `timeout:` independently:
 
@@ -86,18 +88,20 @@ A task step's `fix:` agent can also set `attempts:` and `timeout:` independently
 
 The fix agent's timeout/attempts are separate budgets — they don't consume or conflict with the task's retry count or timeout.
 
-### The retry underneath `attempts:`
+### Why `attempts:` lives in a transport
 
-`attempts:` is not the only retry in play. The LLM client (`openai-go/v3`) retries every request up to two more times of its own accord — on connection errors and on 408/409/429/5xx — before `attempts:` ever sees a failure. `steps` does not configure that today: `adk-utils-go`'s `genai/openai` `Config` exposes only `APIKey`, `BaseURL`, `ModelName`, and `HTTPOptions`, with no `MaxRetries` among them.
+`internal/agent/requests.go` implements `attempts:` as `requestRetryTransport`, innermost in the client's stack. Two properties force it there.
 
-So the real cost of a failing turn is `attempts: × 3`, and it compounds: each retry re-sends the whole conversation so far. `internal/agent/requests.go` makes this observable — `requestLogTransport` sits innermost in the client's transport stack (the only place the SDK's own retries are distinguishable, since each is a separate round trip through the same `http.Client`) and logs every request the client is about to retry, while a per-attempt `requestCounter` feeds `provider_requests` into `retry.attempt_failed`.
+**It is the only layer that can see a request.** A request is the operation `attempts:` names, and everything above the transport deals in conversations.
 
-Two details worth knowing when reading that code:
+**It is the only layer that can switch off the client's own retry.** `openai-go/v3` retries every request twice by default, and `adk-utils-go`'s `genai/openai` `Config` exposes only `APIKey`, `BaseURL`, `ModelName`, and `HTTPOptions` — no `MaxRetries`. A retry loop anywhere *above* the transport therefore **multiplies** with that hidden one instead of replacing it, which is exactly the `attempts: × 3` problem that used to make `attempts: 6` cost up to eighteen requests. From inside the transport the retry can be refused, using the two mechanisms openai-go documents:
 
-- **Bursts are consecutive, not cumulative.** A success resets the counter, so a conversation of ten good turns followed by a failing one reports `attempt=1 of=3`, not `attempt=11`.
-- **The terminal failure is not logged as a retry.** Three failing requests produce two `agent.request_retry` lines; the third is the failure `retry.attempt_failed` reports, with the full count beside it. Logging it in both places would double-count the figure this exists to make honest.
+- `x-should-retry: false` set on the **response** — `requestconfig.shouldRetry` honors it above the status code. This covers every failure that reached a server.
+- `X-Stainless-Retry-Count` read off the **request** — the client's own counter, `0` on a first send. A connection error has no response to carry a header, and the client retries those unconditionally, so the transport stashes the exhausted error and hands it straight back on any round above 0, without touching the network.
 
-`sdkRequestsPerCall = 3` is a documented mirror of the dependency's default, not a setting. `e2e_test.go` pins the resulting request count, so a dependency bump that changes it fails the suite rather than silently re-pricing every failing call.
+Both paths are covered by tests in `requests_test.go`, and `e2e_test.go` pins the request count end to end — a dependency bump that breaks either mechanism fails the suite rather than silently re-pricing every failing call.
+
+One accounting detail: three failing requests produce two `agent.request_retry` lines. The third failure is the one the step reports, via `agent.conversation_failed` with the full `provider_requests` count beside it; logging it in both places would double-count the number this exists to make honest.
 
 See [attempts-timeout.md](attempts-timeout.md) for a detailed guide covering the interaction with `assert:`, hook firing, and other step types.
 

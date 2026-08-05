@@ -331,6 +331,7 @@ func assertSucceeded(t *testing.T, nodes []nodeRow, kind, resource string) {
 func TestEndToEndAgentSadPath(t *testing.T) {
 	t.Run("model rejects", testSadPathModelRejects)
 	t.Run("provider unreachable", testSadPathProviderUnreachable)
+	t.Run("attempts retry the request", testSadPathAttemptsRetryTheRequest)
 }
 
 // testSadPathModelRejects: the model reaches a decision and it is "no". That
@@ -442,20 +443,20 @@ func testSadPathProviderUnreachable(t *testing.T) {
 	assertLineCount(t, filepath.Join(dir, "task.log"), 1)
 
 	// ── retry layer ───────────────────────────────────────────────────
-	// One failing agent step costs three provider requests, not one.
-	// That amplification is invisible in this repo's own code: the step
-	// declares no attempts:, and internal/retry logs a single attempt —
-	// the extra two come from the underlying client's own transport
-	// retry (openai-go/v3 defaults to MaxRetries: 2). Pinned here
-	// because it silently multiplies latency and spend on every failing
-	// call; if a dependency bump changes it, this is where you find out.
-	const wantRequests = 3
+	// The step declares no attempts:, so a failing turn costs exactly ONE
+	// provider request. It used to cost three: the client retried twice
+	// underneath, invisibly and unconfigurably, and `attempts: 6` meant up
+	// to eighteen requests rather than six. Pinned here because a
+	// dependency bump or a change to requests.go's header handling would
+	// restore that multiplication silently, and spend is the only place it
+	// would show up.
+	const wantRequests = 1
 
 	if got := fake.requestCount(); got != wantRequests {
-		t.Errorf("provider requests = %d, want %d (1 attempt + the client's 2 transport retries)", got, wantRequests)
+		t.Errorf("provider requests = %d, want %d — attempts: is the whole retry budget", got, wantRequests)
 	}
 
-	assertHiddenRetriesVisible(t, stderr, wantRequests)
+	assertSpentExactly(t, stderr, wantRequests)
 
 	// ── routing layer ─────────────────────────────────────────────────
 	// This is the invariant that separates this subtest from the one
@@ -626,24 +627,77 @@ jobs:
 	assertNoFile(t, afterLog)
 }
 
-// assertHiddenRetriesVisible checks the run reported the transport-layer
-// retries it actually made. It is the end-to-end half of the unit tests in
-// internal/agent/requests_test.go: those prove the transport counts correctly
-// in isolation, this proves it is in the client's stack at all and that the
-// per-attempt counter reaches internal/retry.
-//
-// One line short of wantRequests, because the last failure of a burst is not
-// followed by a retry — retry.attempt_failed reports that one, with the full
-// request count beside it.
-func assertHiddenRetriesVisible(t *testing.T, stderr string, wantRequests int) {
-	t.Helper()
+// testSadPathAttemptsRetryTheRequest is the other half of the redefinition:
+// with attempts: 3, a failing turn costs exactly three provider requests --
+// three REQUESTS within one conversation, not three conversations. Under the
+// old semantics the same pipeline ran the whole conversation three times and
+// spent up to nine requests doing it.
+func testSadPathAttemptsRetryTheRequest(t *testing.T) {
+	dir := t.TempDir()
 
-	if got := strings.Count(stderr, "agent.request_retry"); got != wantRequests-1 {
-		t.Errorf("agent.request_retry lines = %d, want %d\n%s", got, wantRequests-1, stderr)
+	outage := make([]turn, 10)
+	for i := range outage {
+		outage[i] = failsWith(http.StatusInternalServerError)
 	}
+
+	fake := newFakeLLM(t, outage...)
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+agents:
+- name: reviewer
+  source:
+    endpoint: %s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+
+jobs:
+- name: build
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: Say something.
+    attempts: 3
+`, fake.URL))
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	logs := captureStderr(t)
+
+	err := run([]string{"run", path, "--job", "build"})
+	if err == nil {
+		t.Fatal("run succeeded despite the provider being unreachable")
+	}
+
+	stderr := logs()
+
+	if got := fake.requestCount(); got != 3 {
+		t.Errorf("provider requests = %d, want 3 — attempts: 3 means three requests, not three conversations", got)
+	}
+
+	// Two lines for three requests: the last failure is the one the step
+	// reports, with the total beside it.
+	if got := strings.Count(stderr, "agent.request_retry"); got != 2 {
+		t.Errorf("agent.request_retry lines = %d, want 2\n%s", got, stderr)
+	}
+
+	if !strings.Contains(stderr, "provider_requests=3") {
+		t.Errorf("the failure does not report what it cost:\n%s", stderr)
+	}
+}
+
+// assertSpentExactly checks a failed agent step reported the provider requests
+// it made, and that it made no more than attempts: allows. Both halves matter:
+// the count is what an operator reasons about spend with, and a silent extra
+// round is exactly the regression that motivated owning the retry.
+func assertSpentExactly(t *testing.T, stderr string, wantRequests int) {
+	t.Helper()
 
 	want := fmt.Sprintf("provider_requests=%d", wantRequests)
 	if !strings.Contains(stderr, want) {
-		t.Errorf("retry.attempt_failed does not report what the attempt really cost (want %q):\n%s", want, stderr)
+		t.Errorf("the failure does not report what it cost (want %q):\n%s", want, stderr)
+	}
+
+	if got := strings.Count(stderr, "agent.request_retry"); got != wantRequests-1 {
+		t.Errorf("agent.request_retry lines = %d, want %d\n%s", got, wantRequests-1, stderr)
 	}
 }

@@ -1,43 +1,62 @@
 package agent
 
-// Visibility for the LLM client's own transport-layer retry.
+// The agent step's request retry: attempts: applied where it belongs.
 //
-// There are two retry layers stacked on every agent step, and until this file
-// existed only one of them was observable:
+// `attempts:` used to mean two different operations depending on the step it
+// sat on. On a task it retried a command. On an agent it threw away every turn
+// of an accumulated conversation and started over — amnesia, not retry — at
+// three orders of magnitude more cost, against a failure the transport layer
+// had already retried and concluded was not transient. The workspace survived
+// a restart but the memory did not, so a restarted attempt inherited its own
+// half-finished edits with no recollection of making them; that incoherence
+// needed prompt text to work around, which is a design smell, not a prompting
+// problem. Across a real self-build experiment it fired five times and never
+// once changed the outcome.
 //
-//	HTTP request retry     openai-go/v3, MaxRetries: 2   invisible, unconfigurable
-//	whole-conversation     steps' own attempts:          logged, configurable
+// So attempts: now means what it means everywhere else: retry the failing
+// operation. For an agent, the failing operation is one HTTP request, and this
+// file is where that happens.
 //
-// They multiply. `provider requests per failing turn = attempts: x 3`, so
-// attempts: 2 is up to six requests and attempts: 6 is up to eighteen — each
-// one re-sending the entire conversation so far, which makes a retry late in a
-// long conversation one of the most expensive things this system can do. A
-// reader watching `attempt=1 attempts=2` scroll past reasonably concludes two
-// failed calls. The real figure was six, and nothing said so.
+// Doing it here rather than around the conversation is what makes the count
+// honest. The LLM client retries every request twice on its own (openai-go/v3
+// defaults to MaxRetries: 2) and adk-utils-go's Config exposes no knob for it,
+// so a retry loop anywhere above this transport MULTIPLIES with that hidden
+// one rather than replacing it — the old 'attempts: x 3' problem. Owning the
+// retry at the transport lets us also switch the SDK's own off per response,
+// so attempts: is the whole story:
 //
-// That matters commercially, not just aesthetically: providers that cap spend
-// by the dollar rather than by request rate (the self-build experiment ran
-// against one capped at $12/5h) can be exhausted in a fraction of the planned
-// time by a multiplier nobody can see.
-//
-// This file makes the hidden layer observable. Configuring it is #20's job.
+//	requests per failing turn  =  attempts:      (was: attempts: x 3)
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 )
 
-// sdkRequestsPerCall mirrors openai-go/v3's MaxRetries: 2 default — one
-// request plus two transport retries. It is a documented mirror of the
-// dependency's behavior, NOT a setting: adk-utils-go's genai/openai Config
-// exposes only APIKey/BaseURL/ModelName/HTTPOptions, so there is currently no
-// way to change it from here. e2e_test.go pins the resulting request count, so
-// a dependency bump that changes it fails the suite rather than silently
-// re-pricing every failing call.
-const sdkRequestsPerCall = 3
+// retryBackoffUnit is the linear pause between request retries, matching
+// internal/retry's own coarse unit: these wrap a network round trip to an LLM
+// endpoint, where a short pause is more likely to help than to waste time.
+const retryBackoffUnit = 500 * time.Millisecond
+
+// The two headers this transport uses to take ownership of retrying from the
+// SDK. Both are part of openai-go's documented behavior, not a workaround:
+//
+//   - shouldRetryHeader on a RESPONSE tells the client not to retry it
+//     (requestconfig.shouldRetry honors it above the status code).
+//   - retryCountHeader on a REQUEST is the client's own retry counter. A
+//     non-zero value means the client is retrying something this transport has
+//     already finished with, which only happens on the connection-error path
+//     where no response exists to carry the header above.
+const (
+	shouldRetryHeader = "x-should-retry"
+	retryCountHeader  = "X-Stainless-Retry-Count"
+)
 
 // retryableStatuses are the responses openai-go retries: request timeout,
 // conflict, rate limit, and every 5xx.
@@ -50,33 +69,22 @@ func retryableStatus(code int) bool {
 	}
 }
 
-// requestCounter tallies the provider requests one conversation attempt makes,
-// and how many of those were consecutive retryable failures. Consecutive,
-// because a burst is what a retry is: a success resets it, so a conversation
-// of ten good turns followed by a failing one reports "1 of 3", not "11".
+// requestCounter tallies the provider requests one agent conversation makes,
+// and remembers the last connection error so the client's own retry of it
+// costs nothing (see RoundTrip). It is what lets a failed step report the
+// requests it really spent rather than the turns it took.
 type requestCounter struct {
-	mu          sync.Mutex
-	total       int
-	consecutive int
+	mu        sync.Mutex
+	total     int
+	exhausted error
 }
 
-// record counts one round trip and reports the request's position within the
-// current failure burst (1-based), or 0 when the request did not fail.
-func (c *requestCounter) record(failed bool) int {
+// record counts one round trip.
+func (c *requestCounter) record() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.total++
-
-	if !failed {
-		c.consecutive = 0
-
-		return 0
-	}
-
-	c.consecutive++
-
-	return c.consecutive
 }
 
 // Total is the number of provider requests counted so far.
@@ -87,11 +95,27 @@ func (c *requestCounter) Total() int {
 	return c.total
 }
 
+// setExhausted/takeExhausted carry a connection error across the client's own
+// retry rounds. A response can refuse further retries with a header; an error
+// cannot, because there is no response to put one on.
+func (c *requestCounter) setExhausted(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.exhausted = err
+}
+
+func (c *requestCounter) takeExhausted() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.exhausted
+}
+
 type requestCounterKey struct{}
 
-// withRequestCounter scopes a counter to one conversation attempt. Every retry
-// callback that wraps a conversation installs one, so the count reported
-// alongside a failed attempt describes that attempt alone.
+// withRequestCounter scopes a counter to one agent conversation, so the count
+// a failure reports describes that conversation alone.
 func withRequestCounter(ctx context.Context, counter *requestCounter) context.Context {
 	return context.WithValue(ctx, requestCounterKey{}, counter)
 }
@@ -102,44 +126,119 @@ func requestCounterFrom(ctx context.Context) *requestCounter {
 	return counter
 }
 
-// requestLogTransport logs each provider request the client is about to retry.
-// It sits in the transport stack because that is the only place the hidden
-// retries are visible at all: the SDK reissues the whole request through this
-// same http.Client, so every retry is another RoundTrip here.
-type requestLogTransport struct {
-	base  http.RoundTripper
-	agent string
-	model string
+// requestRetryTransport is the agent step's attempts:. It retries one failing
+// request up to attempts times with a linear backoff, logs every retry, and
+// tells the SDK not to add retries of its own on top.
+//
+// It has to be a transport rather than a wrapper around the conversation for
+// two reasons. It is the only layer that can see an individual request, which
+// is the operation attempts: now names; and it is the only layer that can
+// switch off the client's built-in retry, without which any retry above it
+// would multiply by three rather than replace.
+type requestRetryTransport struct {
+	base     http.RoundTripper
+	agent    string
+	model    string
+	attempts int
 }
 
-func (t *requestLogTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	started := time.Now()
+func (t *requestRetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// The client is retrying a connection error this transport already spent
+	// its attempts on. Hand back the same error without touching the network:
+	// its retry budget is not ours to spend, and letting it through would
+	// restore the multiplication this design removes.
+	spent := t.alreadySpent(req)
+	if spent != nil {
+		return nil, spent
+	}
 
+	resp, err := t.retryLoop(req)
+
+	// attempts: is the whole retry budget. Refuse the client's own rounds:
+	// on a response with the header it honors, and on a connection error by
+	// stashing it for the branch above, since there is no response to put a
+	// header on.
+	counter := requestCounterFrom(req.Context())
+
+	switch {
+	case resp != nil:
+		resp.Header.Set(shouldRetryHeader, "false")
+	case counter != nil:
+		counter.setExhausted(err)
+	}
+
+	return resp, err
+}
+
+// alreadySpent reports the error a previous RoundTrip exhausted its attempts
+// on, when this request is the client retrying that same failure.
+func (t *requestRetryTransport) alreadySpent(req *http.Request) error {
+	counter := requestCounterFrom(req.Context())
+	if counter == nil || !isClientRetry(req) {
+		return nil
+	}
+
+	return counter.takeExhausted()
+}
+
+// retryLoop sends req until it succeeds, fails unretryably, or runs out of
+// attempts.
+func (t *requestRetryTransport) retryLoop(req *http.Request) (*http.Response, error) {
+	attempts := max(t.attempts, 1)
+
+	for attempt := 1; ; attempt++ {
+		resp, err := t.roundTripOnce(req)
+		if !t.retryable(resp, err) || attempt >= attempts || !replayable(req) {
+			return resp, err
+		}
+
+		t.logRetry(resp, err, attempt, attempts)
+		discard(resp)
+
+		select {
+		case <-req.Context().Done():
+			return nil, req.Context().Err() //nolint:wrapcheck // ctx.Err() is a well-known sentinel; wrapping adds nothing
+		case <-time.After(time.Duration(attempt) * retryBackoffUnit):
+		}
+
+		req, err = rewind(req)
+		if err != nil {
+			return nil, err
+		}
+	}
+}
+
+// roundTripOnce performs one request and counts it.
+func (t *requestRetryTransport) roundTripOnce(req *http.Request) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(req)
 
-	elapsed := time.Since(started)
-	failed := err != nil || retryableStatus(resp.StatusCode)
-
-	position := 0
 	if counter := requestCounterFrom(req.Context()); counter != nil {
-		position = counter.record(failed)
-	} else if failed {
-		position = 1
+		counter.record()
 	}
 
-	// The last request of a burst is not followed by a retry — its failure is
-	// the one the caller sees and internal/retry reports. Logging it here too
-	// would double-count the very number this exists to make honest.
-	if !failed || position >= sdkRequestsPerCall {
-		return resp, err //nolint:wrapcheck // a RoundTripper must return the transport's error unwrapped
+	return resp, err //nolint:wrapcheck // a RoundTripper must return the transport's error unwrapped
+}
+
+// retryable reports whether a result is worth another request: a connection
+// error, or one of the statuses the provider may recover from.
+func (t *requestRetryTransport) retryable(resp *http.Response, err error) bool {
+	if err != nil {
+		return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 	}
 
+	if resp.Header.Get(shouldRetryHeader) == "false" {
+		return false
+	}
+
+	return retryableStatus(resp.StatusCode)
+}
+
+func (t *requestRetryTransport) logRetry(resp *http.Response, err error, attempt, attempts int) {
 	fields := []any{
 		"agent", t.agent,
 		"model", t.model,
-		"attempt", position,
-		"of", sdkRequestsPerCall,
-		"elapsed", elapsed,
+		"attempt", attempt,
+		"attempts", attempts,
 	}
 
 	if err != nil {
@@ -149,6 +248,48 @@ func (t *requestLogTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	}
 
 	slog.Warn("agent.request_retry", fields...)
+}
 
-	return resp, err //nolint:wrapcheck // a RoundTripper must return the transport's error unwrapped
+// isClientRetry reports whether the SDK is reissuing a request it already sent
+// once. Its retry counter starts at 0 and increments per round, so anything
+// above 0 is a retry.
+func isClientRetry(req *http.Request) bool {
+	count, err := strconv.Atoi(req.Header.Get(retryCountHeader))
+
+	return err == nil && count > 0
+}
+
+// replayable reports whether a request's body can be sent again. A body with
+// no GetBody has already been consumed, so retrying would send an empty one —
+// the same rule the SDK applies to its own retries.
+func replayable(req *http.Request) bool {
+	return req.Body == nil || req.GetBody != nil
+}
+
+// rewind returns a copy of req with a fresh body for the next attempt.
+func rewind(req *http.Request) (*http.Request, error) {
+	if req.Body == nil {
+		return req, nil
+	}
+
+	body, err := req.GetBody()
+	if err != nil {
+		return nil, fmt.Errorf("rewind request body for retry: %w", err)
+	}
+
+	next := req.Clone(req.Context())
+	next.Body = body
+
+	return next, nil
+}
+
+// discard drains and closes a response being thrown away, so its connection
+// returns to the pool instead of being torn down on every retry.
+func discard(resp *http.Response) {
+	if resp == nil {
+		return
+	}
+
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	_ = resp.Body.Close()
 }

@@ -124,37 +124,39 @@ task: build (attempt 3/3)
 
 These markers appear in both CLI output and structured logs (`job.task.attempt`).
 
-## An agent step's `attempts:` multiplies — it does not add
+## What `attempts:` costs on an agent
 
-**This is the single most surprising thing about `attempts:` on an agent step.** There are two retry layers stacked on every agent call, and only one of them is yours:
-
-| Layer | Who owns it | Configurable |
-|---|---|---|
-| HTTP request retry | the LLM client (`openai-go/v3`, `MaxRetries: 2`) | no — not today |
-| whole-conversation retry | `steps`' own `attempts:` | yes |
-
-The client retries on connection errors and on HTTP 408, 409, 429, and every 5xx. So one failing turn costs **three** provider requests, not one, and the two layers multiply:
+`attempts:` means the same thing on every step kind: **retry the failing operation**. On a task that operation is a command. On an agent it is one HTTP request to the model — not the conversation.
 
 ```
-provider requests per failing turn  =  attempts:  ×  3
+provider requests per failing turn  =  attempts:
 ```
 
-- `attempts: 2` → up to **6** requests
-- `attempts: 6` → up to **18** requests
+A retry re-sends the failing request and the conversation carries on from exactly where it was. Nothing accumulated is lost, and a transient 500 costs one extra request rather than a whole re-billed history.
 
-Each of those re-sends the entire conversation so far, which makes a retry late in a long conversation one of the most expensive things this system can do. Against a provider that caps spend by the dollar rather than by request rate, an unnoticed 3× can exhaust the budget in a fraction of the planned time.
-
-**This is now visible.** Every request the client is about to retry logs a line, and each failed attempt reports what it actually spent:
+Every retry is logged, and a failed step reports what it really spent:
 
 ```
-WRN agent.request_retry  agent=coder model=deepseek-v4-pro attempt=1 of=3 status=500 elapsed=2.1s
-WRN agent.request_retry  agent=coder model=deepseek-v4-pro attempt=2 of=3 status=500 elapsed=5.4s
-WRN retry.attempt_failed attempt=1 attempts=2 provider_requests=3 error="... 500 ..."
+WRN agent.request_retry       agent=coder model=deepseek-v4-pro attempt=1 attempts=3 status=500
+WRN agent.request_retry       agent=coder model=deepseek-v4-pro attempt=2 attempts=3 status=500
+WRN agent.conversation_failed agent=coder provider_requests=3 error="... 500 ..."
 ```
 
-Two `agent.request_retry` lines for three requests: the last failure of a burst is not followed by a retry, and `retry.attempt_failed` reports that one with the total beside it. A successful turn logs nothing.
+Two retry lines for three requests: the last failure is the one the step reports, with the total beside it. A successful turn logs nothing.
 
-Read it as: *3 provider requests inside 1 conversation attempt, and there is 1 attempt left.* If you were reasoning about cost from `attempt=1 attempts=2` alone, you were off by 3×.
+Retryable failures are connection errors and HTTP 408, 409, 429, and 5xx. A 400 or a 401 is taken at its word — retrying a request the server rejected on its merits just pays to be told the same thing again.
+
+> ### ⚠️ Breaking change: `attempts:` on an agent used to restart the conversation
+>
+> It previously threw away every accumulated turn and started the conversation over from nothing. That was closer to *amnesia* than retry, and it cost three orders of magnitude more than the failure warranted — against a fault the transport layer had already retried and concluded was not transient.
+>
+> Worse, the restart was incoherent: the agent's **workspace survived but its memory did not**, so a restarted attempt inherited its own half-finished edits with no recollection of having made them. Pipelines needed prompt text (`run git status first, a dirty tree means a previous attempt was cut off`) to work around a config field. Across a real self-build experiment `attempts:` fired five times on agent steps and never once changed the outcome.
+>
+> There is also no longer a hidden multiplier. The LLM client used to retry every request twice on its own, so the real cost was `attempts: × 3` — `attempts: 6` meant up to **18** requests, each re-sending the entire history. `steps` now owns the retry outright and switches the client's off, so `attempts:` is the whole budget.
+>
+> **What to change:** nothing, in most pipelines — the new behavior is strictly cheaper and safer, and a bare `attempts: 2` now means "retry a failing request once" instead of "run this conversation twice". If you were relying on a restart to recover from a provider being *down*, that was never what it was good at: see `steps validate`'s preflight checks and agent source failover.
+>
+> The retry that actually works for a bad *answer* is unchanged and unaffected: `to:` routing with `max_visits:`, which re-enters the agent with the reviewer's critique in context. That is a fresh conversation *with feedback*, which is strictly better than a blind restart.
 
 ## Timeout Classification
 

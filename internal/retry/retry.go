@@ -62,42 +62,15 @@ func StopOnDeadline(ctx, attemptCtx context.Context, err error) error {
 	return Stop(err)
 }
 
-// Option adjusts Do's behavior.
-type Option func(*options)
-
-type options struct {
-	fields func(attempt int) []any
-}
-
-// WithLogFields supplies extra slog key/value pairs to append to the
-// per-attempt failure log line. It is called once per failed attempt, after fn
-// returns, so it can report what that attempt actually consumed.
-//
-// It exists because a caller can know something about the cost of an attempt
-// that this package cannot: internal/agent uses it to report how many provider
-// requests one conversation attempt really made, which is up to 3x the
-// attempts recorded here because the LLM client retries at the transport layer
-// underneath. A reader seeing "attempt=1 attempts=2" would otherwise conclude
-// two requests were made when the real figure is six.
-func WithLogFields(fields func(attempt int) []any) Option {
-	return func(o *options) { o.fields = fields }
-}
-
 // Do calls fn up to attempts times (attempts < 1 is treated as 1),
 // stopping at the first success. Between attempts it sleeps
 // attempt*agentRetryBackoffUnit, growing the pause linearly with each
 // retry. ctx cancellation aborts immediately. An error fn wrapped with Stop
 // ends the loop at once (see Stop). The last error is returned if every
 // attempt fails.
-func Do(ctx context.Context, attempts int, fn func(attempt int) error, opts ...Option) error {
+func Do(ctx context.Context, attempts int, fn func(attempt int) error) error {
 	if attempts < 1 {
 		attempts = 1
-	}
-
-	var settings options
-
-	for _, opt := range opts {
-		opt(&settings)
 	}
 
 	var lastErr error
@@ -116,21 +89,14 @@ func Do(ctx context.Context, attempts int, fn func(attempt int) error, opts ...O
 			return nil
 		}
 
-		extra := []any{}
-		if settings.fields != nil {
-			extra = settings.fields(attempt)
-		}
-
 		var stop *stopError
 		if errors.As(lastErr, &stop) {
-			slog.Warn("retry.not_retryable",
-				append([]any{"attempt", attempt + 1, "attempts", attempts, "error", stop.Err}, extra...)...)
+			slog.Warn("retry.not_retryable", "attempt", attempt+1, "attempts", attempts, "error", stop.Err)
 
 			return stop.Err
 		}
 
-		slog.Warn("retry.attempt_failed",
-			append([]any{"attempt", attempt + 1, "attempts", attempts, "error", lastErr}, extra...)...)
+		slog.Warn("retry.attempt_failed", "attempt", attempt+1, "attempts", attempts, "error", lastErr)
 	}
 
 	return lastErr

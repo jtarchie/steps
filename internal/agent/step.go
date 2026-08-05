@@ -18,7 +18,6 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
-	"github.com/jtarchie/steps/internal/retry"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
@@ -682,48 +681,49 @@ func describeTrajectory(got []recordedToolCall) string {
 	return "[" + strings.Join(names, ", ") + "]"
 }
 
-// runPrepared runs the (already resolved and materialized) conversation,
-// retrying the whole conversation up to the resolved attempt count with a
-// per-attempt timeout (step.Timeout if set, otherwise the default
-// agentStepTimeout) — per-attempt, not shared across attempts, matching the
-// get/task/put semantics documented in docs/attempts-timeout.md. Shared by
-// RunStep and RunHook so a hook agent runs the exact same conversation
-// machinery, minus the merkle/store recording RunStep does.
+// runPrepared runs the (already resolved and materialized) conversation under
+// its timeout (step.Timeout if set, otherwise the default agentStepTimeout).
+// Shared by RunStep and RunHook so a hook agent runs the exact same
+// conversation machinery, minus the merkle/store recording RunStep does.
+//
+// The timeout now bounds the conversation outright rather than each of several
+// restarts of it, which is what `timeout:` always read as. See
+// docs/attempts-timeout.md.
 func runPrepared(ctx context.Context, prepared preparedAgentStep) (conversationResult, error) {
 	timeout := agentTimeout(prepared.ri.Timeout)
 
-	var (
-		result   conversationResult
-		requests *requestCounter
-	)
+	return runOneConversation(ctx, prepared.ri, prepared.llm, prepared.conv, timeout)
+}
 
-	err := retry.Do(ctx, prepared.ri.Attempts, func(attempt int) error {
-		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
+// runOneConversation runs a conversation under its timeout and, on failure,
+// reports the provider requests it really spent.
+//
+// It runs the conversation ONCE. attempts: retries the failing request, down
+// in requests.go, which is why nothing here loops: a restart discarded every
+// accumulated turn and re-billed the whole conversation to re-ask a question
+// the transport had already retried and given up on. Shared by runPrepared and
+// RunFix so both spend attempts: on the same thing.
+func runOneConversation(
+	ctx context.Context,
+	ri config.ResolvedInvocation,
+	llm model.LLM,
+	conv agentConversation,
+	timeout time.Duration,
+) (conversationResult, error) {
+	convCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
-		// A counter per attempt, so the failure log reports what THIS attempt
-		// spent. withAttempt keeps a retry off the provider instance the
-		// previous attempt may have just failed against (see
-		// composeSessionID).
-		requests = &requestCounter{}
-		attemptCtx = withRequestCounter(withAttempt(attemptCtx, attempt), requests)
+	requests := &requestCounter{}
 
-		res, runErr := runAgentConversation(attemptCtx, prepared.llm, prepared.conv)
-		// Keep the latest attempt's result either way: on success it's the
-		// answer, and on failure its turns/trajectory describe the attempt
-		// that actually failed.
-		result = res
+	result, err := runAgentConversation(withRequestCounter(convCtx, requests), llm, conv)
+	if err != nil {
+		slog.Warn("agent.conversation_failed",
+			"agent", ri.AgentName,
+			"provider_requests", requests.Total(),
+			"error", err)
+	}
 
-		// On the step's own timeout, stop: a retry rebuilds the conversation
-		// from scratch (see buildAgentRequest) and gets the same budget, so it
-		// re-fails deterministically and bills the whole conversation twice.
-		// attempts: buys transport retries, not more time.
-		return retry.StopOnDeadline(ctx, attemptCtx, runErr)
-	}, retry.WithLogFields(func(int) []any {
-		return []any{"provider_requests", requests.Total()}
-	}))
-
-	return result, err //nolint:wrapcheck // callers (RunStep/RunHook) wrap with step context
+	return result, err
 }
 
 // RunHook runs an agent step as a hook: it resolves, materializes, runs the
