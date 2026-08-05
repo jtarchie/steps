@@ -1015,7 +1015,9 @@ jobs:
          now, so a red suite here is a real regression you introduced.
       5. Do not commit.
   - task: build-check
-    inputs: [repo]
+    # stories: is here for the fixture-promise check below, which needs the
+    # story number to scope itself to THIS story's manifest and critiques.
+    inputs: [repo, stories]
     run: |
       set -o pipefail
       cd repo
@@ -1042,10 +1044,43 @@ jobs:
         exit 1
       fi
       if git diff --diff-filter=D --name-only -- examples/ | grep -q .; then
-        echo "GATE: an examples/ fixture was DELETED."
+        echo "GATE: a TRACKED examples/ fixture was DELETED."
         echo "Deleting the test is not passing the test. Restore it; report a"
         echo "fixture you believe is wrong instead of removing it."
         git diff --diff-filter=D --name-only -- examples/
+        exit 1
+      fi
+
+      # The check above only sees TRACKED files, which is useless for the
+      # fixtures that matter: nothing commits during a run, so every fixture
+      # the spec agent or a reviewer writes is UNTRACKED. Creating and then
+      # deleting an untracked file leaves no trace in `git diff` at all.
+      # Observed: a coder deleted a reviewer-authored fixture and this gate
+      # said nothing.
+      #
+      # So the real check is against the record instead of against git: any
+      # examples/*.yml PATH NAMED in this story's spec manifest or in either
+      # critique must still exist on disk. Those documents are the list of
+      # what was promised, which is exactly what a deletion is trying to
+      # escape. Scoped to this story's files -- older critiques legitimately
+      # cite examples that have since been renamed away.
+      num="$(cat ../stories/num)"
+      named="$(grep -ohE 'examples/[A-Za-z0-9._-]+\.yml' \
+                 "experiments/self-build/specs/$num.md" \
+                 "experiments/self-build/critiques/$num.md" \
+                 "experiments/self-build/critiques/$num-completeness.md" \
+                 2>/dev/null | sort -u)"
+      missing=""
+      for f in $named; do
+        [ -f "$f" ] || missing="$missing $f"
+      done
+      if [ -n "$missing" ]; then
+        echo "GATE: fixture(s) promised in the spec manifest or a critique no"
+        echo "longer exist:$missing"
+        echo "A fixture is a commitment. If one is genuinely wrong -- most"
+        echo "often a NEGATIVE case that must fail at load, which can never"
+        echo "pass in examples/ -- say so in your handoff note and move its"
+        echo "coverage to a Go test. Do not delete it silently."
         exit 1
       fi
 
