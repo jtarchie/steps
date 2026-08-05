@@ -321,7 +321,12 @@ agents:
       behavioral bullet the diff adds to docs/, on every acceptance criterion
       in the story, and on any control-flow reasoning of your own you are about
       to cite -- write the smallest pipeline that would be WRONG if the claim
-      held, and run it. A non-zero exit is a normal, often expected result, not
+      held, and run it.
+      TO CHECK A SHIPPED EXAMPLE, read_file repo/examples/<name>.yml and pass
+      its TEXT here as `yaml`. Do NOT shell out to `steps validate` or
+      `steps test` from inside a probe: `steps` is not on PATH in this
+      sandbox, so that returns a bare exit 127 that looks like a defect in
+      the change and is not one. This tool already IS the runner. A non-zero exit is a normal, often expected result, not
       a tool failure. Keep each pipeline to a few steps; `run: exit 1` and
       `run: echo MARKER` are usually all a probe needs.
       MAKE THE PROBE SELF-CHECKING wherever you can, with a job-level
@@ -364,11 +369,24 @@ agents:
       # cloning, agent calls, spend, and no bound. `steps` is not on PATH here,
       # which makes it unlikely rather than impossible: repo/ holds the source
       # and $bin is one directory up.
-      if grep -qnE '(^|[^[:alnum:]_-])(steps|steps-review-bin|go[[:space:]]+run)[[:space:]]+(run|test|watch|plan|\.)([[:space:]]|$)|pipeline-agent\.yml' "$probe/probe.yml"; then
+      # `validate`/`runs`/`mcp` are in this list even though they are cheap and
+      # non-recursive. Leaving them out did not permit them -- `steps` is not
+      # on PATH, so the probe just died with a bare `exit status 127`, which
+      # reads as a defect in the change under review rather than as a sandbox
+      # boundary. Observed: a reviewer spent a turn on
+      # `cd repo && ./steps validate examples/parallel.yml` and got 127. An
+      # explicit refusal that says what to do instead is strictly better than
+      # a command-not-found.
+      if grep -qnE '(^|[^[:alnum:]_-])(steps|steps-review-bin|go[[:space:]]+run)[[:space:]]+(run|test|watch|plan|validate|runs|mcp|\.)([[:space:]]|$)|pipeline-agent\.yml' "$probe/probe.yml"; then
         printf 'REFUSED: this probe invokes steps (or this pipeline) from inside\n'
         printf 'a step. A probe is a pipeline to RUN, not a pipeline that runs\n'
-        printf 'pipelines. Express the behavior directly with task:/put:/when:/\n'
-        printf 'to:/hooks/assert: instead.\n'
+        printf 'pipelines -- the harness already runs YOUR yaml with `steps test`,\n'
+        printf 'so anything you shell out to is redundant at best.\n'
+        printf 'TO CHECK A SHIPPED EXAMPLE: read_file repo/examples/<name>.yml\n'
+        printf 'and pass its TEXT as this tool`s yaml argument. That runs the\n'
+        printf 'real example through the real binary, which is what you wanted.\n'
+        printf 'For anything else, express the behavior directly with\n'
+        printf 'task:/put:/when:/to:/hooks/assert:.\n'
         exit 1
       fi
 
