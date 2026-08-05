@@ -39,6 +39,8 @@ const (
 	NodeKindEnsemble NodeKind = "ensemble"
 	// NodeKindAcross is an across: matrix.
 	NodeKindAcross NodeKind = "across"
+	// NodeKindLoadVar is a load_var: capture.
+	NodeKindLoadVar NodeKind = "load_var"
 )
 
 // Node is one content-addressed step in a job's resolved execution chain.
@@ -369,6 +371,10 @@ func stepContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 		return RaceNodeContent(cfg, step)
 	case config.StepKindEnsemble:
 		return EnsembleNodeContent(cfg, step)
+	case config.StepKindLoadVar:
+		// The captured value is a run-time fact; only the declaration is
+		// knowable here.
+		return map[string]any{"load_var": step.LoadVar, "file": step.VarFile}, nil
 	default:
 		return nil, errors.New("unrecognized step")
 	}
@@ -844,6 +850,13 @@ func planSteps(
 // may depend on non-deterministic agent work) — including one inherited from
 // a referenced tasks: entry.
 func planNonGetNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, bool, error) {
+	// A load_var: captures a value that does not exist until the run produces
+	// it, so the planner cannot know what it will be — and every step after it
+	// depends on that value. Unskippable, always.
+	if step.LoadVar != "" {
+		return Node{ParentHash: parentHash, Kind: NodeKindLoadVar, StepIndex: i, Resource: step.LoadVar}, true, nil
+	}
+
 	// across: is a modifier rather than a kind (see internal/pipeline's
 	// dispatch): the block is one plan node whose cells are hashed inside it.
 	if len(step.Across) > 0 {
@@ -873,25 +886,13 @@ func planKindNode(cfg *config.Config, step config.Step, i int, parentHash string
 		node, err := agentNode(cfg, step, i, parentHash)
 
 		return node, true, err
-	case config.StepKindTry:
-		node, err := tryNode(cfg, step, i, parentHash)
+	case config.StepKindTry, config.StepKindRace, config.StepKindInParallel, config.StepKindEnsemble:
+		// Every container is unskippable. Its branches run inside it rather
+		// than as chain nodes of their own, so the planner cannot reason about
+		// which of them a cached success covers — and a branch may be a put or
+		// an agent, which are never skippable anyway.
+		node, err := planContainerNode(cfg, step, kind, i, parentHash)
 
-		return node, true, err // try is always unskippable
-	case config.StepKindRace:
-		node, err := raceNode(cfg, step, i, parentHash)
-
-		return node, true, err // always unskippable, like in_parallel
-	case config.StepKindEnsemble:
-		node, err := ensembleNode(cfg, step, i, parentHash)
-
-		return node, true, err // agent members are never skippable
-	case config.StepKindInParallel:
-		node, err := parallelNode(cfg, step, i, parentHash)
-
-		// Always unskippable. A block's branches run inside it rather than as
-		// chain nodes of their own, so the planner cannot reason about which
-		// of them a cached success covers — and a branch may be a put or an
-		// agent, which are never skippable anyway.
 		return node, true, err
 	default: // config.StepKindGet — planNonGetNode is only ever called for non-get steps
 		return Node{}, false, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
@@ -1019,6 +1020,20 @@ func parallelNode(cfg *config.Config, step config.Step, i int, parentHash string
 	}
 
 	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindParallel, StepIndex: i, Content: content}, nil
+}
+
+// planContainerNode builds the plan node for whichever container kind step is.
+func planContainerNode(cfg *config.Config, step config.Step, kind config.StepKind, i int, parentHash string) (Node, error) {
+	switch kind { //nolint:exhaustive // the caller dispatches only container kinds here
+	case config.StepKindTry:
+		return tryNode(cfg, step, i, parentHash)
+	case config.StepKindRace:
+		return raceNode(cfg, step, i, parentHash)
+	case config.StepKindEnsemble:
+		return ensembleNode(cfg, step, i, parentHash)
+	default: // config.StepKindInParallel
+		return parallelNode(cfg, step, i, parentHash)
+	}
 }
 
 // raceNode builds the plan node for a race: block.

@@ -711,6 +711,14 @@
           "$ref": "#/$defs/step",
           "description": "Wrap a step so its failure is tolerated. The inner step's hooks and assert fire normally; to: routing sees the real outcome."
         },
+        "load_var": {
+          "type": "string",
+          "description": "Capture the contents of file: into a pipeline var later steps reference as ((name))."
+        },
+        "file": {
+          "type": "string",
+          "description": "load_var steps only: the workspace-relative file to read the value from."
+        },
         "passed": {
           "type": "array",
           "minItems": 1,

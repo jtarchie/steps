@@ -1,0 +1,11 @@
+# An unresolved ((name)) reaches a shell as that literal text and fails
+# somewhere far from the mistake. Supply it with --var/--vars-file, or produce
+# it with an earlier load_var:.
+# expect: is neither passed with --var/--vars-file nor produced by an earlier load_var: step
+
+jobs:
+- name: build
+  plan:
+  - task: announce
+    inputs: []
+    run: echo ((nobody_supplies_this))

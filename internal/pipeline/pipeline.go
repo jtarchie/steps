@@ -90,6 +90,10 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	// provider pin; ignored outright by every non-OpenRouter provider.
 	ctx = agent.WithNewRun(ctx, job.Name)
 
+	// load_var: values are scoped to one job run: a var captured in one run
+	// says nothing about the next.
+	ctx = withRunVars(ctx)
+
 	// Remember which versions this run fetched, so a successful job can mark
 	// them green for any downstream job's passed: constraint.
 	ctx, fetched := withFetchedVersions(ctx)
@@ -502,6 +506,14 @@ func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string,
 		slog.Info("job.skip", "job", jobName, "index", i, "reason", "when", "step", executedStepName(step))
 
 		return parentHash, stepGuardSkipped, nonGetOutcome{}, nil
+	}
+
+	// A captured load_var: value changes what a step runs, so substitute
+	// before anything hashes or executes it.
+	step = renderStepVars(ctx, step)
+
+	if step.LoadVar != "" {
+		return runLoadVarStep(ctx, jobName, i, step, bw, st, parentHash)
 	}
 
 	// across: is a MODIFIER, not a kind: the step it sits on is still a task

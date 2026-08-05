@@ -36,12 +36,29 @@ type Config struct {
 
 // LoadConfig reads and parses a pipeline YAML file at path.
 func LoadConfig(path string) (*Config, error) {
+	return LoadConfigWithVars(path, nil)
+}
+
+// LoadConfigWithVars is LoadConfig with ((name)) substitution applied to the
+// source before it is parsed.
+//
+// Substituting before the parse is what lets a var appear anywhere a value
+// does — inside a URI, mid-command, as a whole mapping value — without this
+// package enumerating every field that might contain one.
+//
+// ⚠️ A substituted value is ORDINARY CONFIG: it is parsed, hashed, and stored
+// in state.db like anything else written in the file. Vars separate a
+// pipeline's shape from its parameters; they are not a secret store. Keep
+// credentials in the env-var references (api_key_env:) that exist for them.
+func LoadConfigWithVars(path string, vars map[string]string) (*Config, error) {
 	slog.Debug("config.load", "path", path)
 
 	data, err := os.ReadFile(path) //nolint:gosec // path is the pipeline file the user asked to run, not untrusted input
 	if err != nil {
 		return nil, fmt.Errorf("could not read pipeline file %q: %w", path, err)
 	}
+
+	data = InterpolateVars(data, vars)
 
 	var cfg Config
 
@@ -124,6 +141,7 @@ func (c *Config) validate() error {
 		c.validateAcross,
 		c.validatePassed,
 		c.validateSerial,
+		c.validateVars,
 		c.validateCredentialHandling,
 	}
 

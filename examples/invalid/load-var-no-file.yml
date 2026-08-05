@@ -1,0 +1,8 @@
+# A load_var: captures the contents of a file. Without naming one there is
+# nothing to capture.
+# expect: needs a file:
+
+jobs:
+- name: build
+  plan:
+  - load_var: tag

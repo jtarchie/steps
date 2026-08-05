@@ -99,6 +99,12 @@ type Step struct {
 	// Ensemble asks several agents the same question and combines their
 	// answers into one verdict to route on. See Ensemble.
 	Ensemble *Ensemble `yaml:"ensemble,omitempty"`
+	// LoadVar captures a value produced DURING the run — the contents of
+	// VarFile, trimmed — into a pipeline var that later steps reference as
+	// ((name)). See validateVars.
+	LoadVar string `yaml:"load_var,omitempty"`
+	// VarFile is the workspace-relative file a load_var: step reads.
+	VarFile string `yaml:"file,omitempty"`
 	// Passed, on a get step, names upstream jobs this version must ALREADY
 	// have succeeded in before this job will run against it. See
 	// validatePassed.
@@ -455,6 +461,8 @@ const (
 	StepKindRace StepKind = "race"
 	// StepKindEnsemble is a block whose members vote on a verdict.
 	StepKindEnsemble StepKind = "ensemble"
+	// StepKindLoadVar captures a run-time value into a pipeline var.
+	StepKindLoadVar StepKind = "load_var"
 )
 
 // Kind reports which single kind of step s is. ok is false when zero, or
@@ -474,6 +482,7 @@ func (s Step) Kind() (kind StepKind, ok bool) {
 		{StepKindInParallel, s.InParallel != nil},
 		{StepKindRace, s.Race != nil},
 		{StepKindEnsemble, s.Ensemble != nil},
+		{StepKindLoadVar, s.LoadVar != ""},
 	} {
 		if !candidate.set {
 			continue
@@ -576,14 +585,17 @@ func (c *Config) validateStepReferences() error {
 // validateStepKinds reports that on its own rather than having every caller
 // repeat it.
 func (c *Config) resolveStepReference(step *Step) error {
+	// A load_var: names a file, not a pipeline entity, so there is nothing to
+	// resolve against resources, tasks, or agents — same as a malformed step,
+	// whose kind another validator reports.
 	kind, ok := step.Kind()
-	if !ok {
+	if !ok || kind == StepKindLoadVar {
 		return nil
 	}
 
 	var err error
 
-	switch kind {
+	switch kind { //nolint:exhaustive // StepKindLoadVar returned above
 	case StepKindGet:
 		return c.resolveGetReference(step)
 	case StepKindPut:
@@ -597,12 +609,20 @@ func (c *Config) resolveStepReference(step *Step) error {
 			err = c.resolveBranchReferences(branches)
 		}
 	case StepKindTask:
-		if step.Run != "" {
-			return nil // an inline task never consults tasks:
-		}
-
-		_, err = c.FindTask(step.Task)
+		return c.resolveTaskReference(step)
 	}
+
+	return err
+}
+
+// resolveTaskReference resolves a task step's tasks: entry. An inline task —
+// one carrying its own run: — never consults tasks: at all.
+func (c *Config) resolveTaskReference(step *Step) error {
+	if step.Run != "" {
+		return nil
+	}
+
+	_, err := c.FindTask(step.Task)
 
 	return err
 }

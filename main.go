@@ -26,6 +26,7 @@ import (
 	"github.com/alecthomas/kong"
 	"github.com/lmittmann/tint"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+	"gopkg.in/yaml.v3"
 
 	"github.com/jtarchie/steps/internal/config"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
@@ -69,14 +70,16 @@ type RunCmd struct {
 	Force         bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
 	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                               help:"leave the build workspace on disk instead of deleting it"`
 	NoPreflight   bool              `help:"skip the pre-run health check of the job's models and MCP servers" name:"no-preflight"`
+	Var           map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."               name:"var"`
+	VarsFile      string            `help:"YAML file of pipeline vars"                                        name:"vars-file"`
 }
 
 // Run loads the pipeline, selects a job, and runs it once via
 // pipeline.RunJob.
 func (r *RunCmd) Run() error {
-	cfg, err := config.LoadConfig(r.Pipeline)
+	cfg, err := loadWithVars(r.Pipeline, r.Var, r.VarsFile)
 	if err != nil {
-		return fmt.Errorf("could not load pipeline: %w", err)
+		return err
 	}
 
 	job, err := selectJob(cfg, r.Job)
@@ -996,4 +999,43 @@ func resumeJob(ctx context.Context, cfg *config.Config, st *store.Store, name st
 	fmt.Printf("resumed: %s\n", name)
 
 	return nil
+}
+
+// loadWithVars loads a pipeline with ((name)) substitution applied, from
+// --var flags and an optional --vars-file.
+//
+// Flags win over the file: the file is the shared, checked-in set and the flag
+// is the one-off override, which is the only ordering that makes overriding
+// possible at all.
+func loadWithVars(path string, flags map[string]string, varsFile string) (*config.Config, error) {
+	vars := map[string]string{}
+
+	if varsFile != "" {
+		body, err := os.ReadFile(varsFile) //nolint:gosec // the vars file is one the operator named
+		if err != nil {
+			return nil, fmt.Errorf("could not read vars file %q: %w", varsFile, err)
+		}
+
+		var fromFile map[string]string
+
+		err = yaml.Unmarshal(body, &fromFile)
+		if err != nil {
+			return nil, fmt.Errorf("could not parse vars file %q: %w", varsFile, err)
+		}
+
+		for name, value := range fromFile {
+			vars[name] = value
+		}
+	}
+
+	for name, value := range flags {
+		vars[name] = value
+	}
+
+	cfg, err := config.LoadConfigWithVars(path, vars)
+	if err != nil {
+		return nil, fmt.Errorf("could not load pipeline: %w", err)
+	}
+
+	return cfg, nil
 }
