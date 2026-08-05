@@ -324,9 +324,18 @@ agents:
       held, and run it.
       TO CHECK A SHIPPED EXAMPLE, read_file repo/examples/<name>.yml and pass
       its TEXT here as `yaml`. Do NOT shell out to `steps validate` or
-      `steps test` from inside a probe: `steps` is not on PATH in this
-      sandbox, so that returns a bare exit 127 that looks like a defect in
-      the change and is not one. This tool already IS the runner. A non-zero exit is a normal, often expected result, not
+      `steps test` from inside a probe, and do not go looking for the binary:
+      `steps` is not on PATH in this sandbox, so that returns a bare exit 127
+      that looks like a defect in the change and is not one. This tool
+      already IS the runner.
+      TO CHECK THAT A BAD CONFIG IS REJECTED, make the BAD PIPELINE ITSELF
+      the `yaml`. It fails at load, the loader's error text is in the
+      transcript you get back, and PROBE EXIT is non-zero -- that IS the
+      evidence, and it is the whole technique. Do not wrap it in a task and
+      assert on stdout: a task's stdout is the task's, not the loader's, so
+      that probe can only ever fail. Empty blocks, missing required keys,
+      a field on the wrong step kind, two steps with one name -- all of them
+      are one probe each, and the assertion is simply that the run refused. A non-zero exit is a normal, often expected result, not
       a tool failure. Keep each pipeline to a few steps; `run: exit 1` and
       `run: echo MARKER` are usually all a probe needs.
       MAKE THE PROBE SELF-CHECKING wherever you can, with a job-level
