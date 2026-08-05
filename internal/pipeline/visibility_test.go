@@ -1,9 +1,16 @@
 package pipeline
 
 import (
+	"context"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // Why a chain stopped being cacheable is real, documented behavior that used
@@ -63,6 +70,113 @@ func TestFoldStepUnskippableReportsOnce(t *testing.T) {
 	if !unskippable {
 		t.Error("an already-unskippable chain must stay unskippable")
 	}
+}
+
+// A `get: version: every` whose check returns [] fans out zero builds and the
+// job exits 0 — the same thing a fully-successful job looks like. That is how
+// the self-build pipeline (experiments/self-build) spent runs doing literally
+// nothing after its story directory was deleted: "no new versions" and "the
+// source is gone" were indistinguishable from the outside. The empty case must
+// announce itself and say how much of the plan it dropped.
+func TestGetNoVersionsIsAnnounced(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+	marker := filepath.Join(dir, "ran.txt")
+
+	err := os.WriteFile(path, []byte(`
+resource_types:
+- name: empty
+  config:
+    check: printf '[]'
+    in: "true"
+
+resources:
+- name: thing
+  type: empty
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: thing
+    version: every
+  - task: work
+    run: touch `+marker+`
+  - task: more
+    run: "true"
+`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provider, err := workspace.NewProvider(nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := store.OpenStore(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var runErr error
+
+	out := captureStdout(t, func() {
+		runErr = RunJob(context.Background(), cfg, &cfg.Jobs[0], nil, provider, st, false)
+	})
+
+	if runErr != nil {
+		t.Fatalf("RunJob = %v; an empty check is idle, not a failure", runErr)
+	}
+
+	// The premise: nothing downstream ran. If this ever stops holding the
+	// message below is a lie, not just noise.
+	_, statErr := os.Stat(marker)
+	if statErr == nil {
+		t.Fatal("the task after an empty get ran; this test no longer covers the silent case")
+	}
+
+	if !strings.Contains(out, "get: thing returned no versions") {
+		t.Errorf("stdout must name the resource that came back empty; got:\n%s", out)
+	}
+
+	// The count is the part that makes it actionable — it says how much plan
+	// was silently dropped, not merely that a check was empty.
+	if !strings.Contains(out, "the 2 step(s) after it did not run") {
+		t.Errorf("stdout must say how many steps were dropped; got:\n%s", out)
+	}
+}
+
+// captureStdout runs fn with os.Stdout redirected to a pipe and returns what
+// fn printed. Callers must not use t.Parallel().
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+
+	orig := os.Stdout
+	os.Stdout = writer
+
+	fn()
+
+	_ = writer.Close()
+
+	os.Stdout = orig
+
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read captured stdout: %v", err)
+	}
+
+	return string(data)
 }
 
 // A plain task leaves the chain cacheable, so caching keeps working for the

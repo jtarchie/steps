@@ -54,7 +54,7 @@ Runs when a plan is built, and on every `steps watch` poll.
 
 - **Sees**: `{{ .source }}`.
 - **Must print**: a JSON **array** of version objects to stdout, **oldest first**. A version object is a flat map of strings — `{"ref": "abc123"}`, `{"number": "87"}`. The whole object identifies the version; steps never interprets the fields.
-- **Empty array** means "no versions yet", and the job does nothing. That is why a type should **fail loudly** (exit non-zero) when it can't answer, rather than printing nothing — a silent empty result looks like an idle resource, not a broken one.
+- **Empty array** means "no versions yet". Under `version: every` the get fans out zero times and the job exits 0, so steps prints `get: <name> returned no versions; the N step(s) after it did not run` to say how much of the plan that dropped; any other version mode fails the step with `no versions available`. The message tells you a check came back empty — it cannot tell you *why*, so a type should still **fail loudly** (exit non-zero) when it can't answer, rather than printing nothing.
 - **Exit non-zero** to fail the step.
 
 ```json

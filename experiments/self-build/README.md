@@ -9,8 +9,8 @@ labeled `story`, one per roadmap feature. The pipeline's `stories` resource
 lists the open ones, and each run plans, implements, gates, reviews, and (only
 on a passing review) opens a PR whose body says `Closes #N` — so merging
 retires the story and it stops appearing on the next check. Earlier revisions
-kept the stories as markdown files under `docs/proposals/stories/` and chose
-between them by hand-editing a glob; both are gone.
+kept the stories as markdown files in the repo and chose between them by
+hand-editing a glob; both are gone, and `source.limit` is the selector now.
 
 > **⚠️ Parts of this document describe earlier revisions.** Two changes have
 > outrun it. First, the repository became an ordinary `get: repo` input

@@ -646,6 +646,18 @@ func runGetStep(
 
 	slog.Debug("job.step", "job", jobName, "index", i, "kind", "get", "resource", step.Get, "versions", len(versions))
 
+	// version:every is the ONLY path that can reach here with nothing: every
+	// other mode narrows to a pin, and SelectVersion errors on an empty check
+	// (internal/resource/resource.go). So this loop runs zero builds, returns
+	// nil, and the job "succeeds" — outwardly identical to one whose steps all
+	// ran. The two cases want opposite reactions ("nothing new upstream" is
+	// idle; "the check is broken or its source is gone" is not), so say which
+	// resource went empty and how much of the plan that silently dropped.
+	if len(versions) == 0 {
+		fmt.Printf("get: %s returned no versions; the %d step(s) after it did not run\n", resource.Name, len(remainder))
+		slog.Warn("job.get.no_versions", "job", jobName, "index", i, "resource", resource.Name, "skipped_steps", len(remainder))
+	}
+
 	var buildErrs []error
 
 	for _, version := range versions {
@@ -705,7 +717,12 @@ func runGetStepInPlace(
 		return "", stepRan, err
 	}
 
+	// Same silence, milder consequence: the rest of the plan still runs, just
+	// without the artifact this get was supposed to materialize, so a later
+	// step fails on a missing input instead of on the empty check that caused
+	// it. Name the cause here, where it is known.
 	if len(versions) == 0 {
+		fmt.Printf("get: %s returned no versions; nothing was fetched\n", step.Get)
 		slog.Warn("job.get.no_versions", "job", jobName, "index", i, "resource", step.Get)
 
 		return parentHash, stepRan, nil
