@@ -34,11 +34,28 @@
 # model with no cache discount, which pays full price for the whole re-sent
 # history every turn.
 #
+# The story is turned into FAILING TESTS before any Go is written. `spec`
+# runs between the planner and the coder and writes each requirement it can
+# express as a self-verifying fixture into examples/, proving each one RED on
+# the untouched tree. Nothing new runs them: schema_test.go and
+# TestExamplesRun already glob examples/*.yml, so `go test ./...` -- the
+# coder's verify_gate and the build-check gate both -- executes them for
+# free, and the suite stays red until the feature is real.
+#
+# This replaced a loop that found defects one per round trip. Measured on
+# story 002: three real defects, three full re-reviews, and every instrument
+# that found one discarded at the end of the transcript. A fixture is that
+# same instrument, kept -- so the coder's target is runnable rather than
+# prose, defects surface in a two-second gate rather than a five-minute
+# conversation, and a defect found once cannot silently return.
+#
 # The review gate is TWO agents, not one, and they must both pass. `reviewer`
 # reads the diff and asks whether what was built is correct; `completeness`
 # is denied the diff and asks what the story required that nothing
 # implements. See the comment above the completeness agent for why a second
-# lens is not the same thing as a second sample.
+# lens is not the same thing as a second sample. Both now write what they
+# find as a FIXTURE rather than only as prose, which is what makes a finding
+# outlive its own review.
 #
 # Both resources are GitHub-backed and need `gh` authenticated (GH_TOKEN or
 # gh auth login): `repo` clones and opens the PR, and `stories` reads the
@@ -198,119 +215,38 @@ agents:
   - search_files
   - write_file
 
-# Implements the plan end to end: code, tests, docs/examples. This is the one
-# agent doing sustained surgical Go edits (148 tool calls in the run that
-# prompted the split), so it gets its own model rather than sharing *fast.
+# Turns the story into FAILING pipeline fixtures before a line of Go is
+# written. This exists because of what a run of story 002 measured: the
+# reviewer found three real defects, one per round trip, each costing a full
+# re-review -- serial discovery, O(n) conversations for n bugs. And every
+# instrument that found one was thrown away. `confirm-hook-substep-bug` was a
+# four-line pipeline with an assert: that pinned a genuine defect, and it
+# existed only inside a review transcript.
 #
-# Qwen3 Coder Flash: a coding agent model specializing in autonomous
-# programming via tool calling, which is the failure mode that matters over
-# 150 turns -- one malformed tool call costs a turn. $0.195/M in, $0.975/M
-# out, $0.039/M cached read, 1M context so the conversation never needs
-# compacting. Single first-party provider (Alibaba), so there is exactly one
-# prompt cache to stay warm in.
-- name: coder
-  # deepseek-v4-pro, same as *fast. This slot was split off to run a cheaper
-  # coding model (the two personas want different things: one reads and
-  # judges, one writes for 150 turns), and it briefly pointed at
-  # deepseek-v4-flash -- which then went unavailable upstream mid-experiment,
-  # timing out on a 5-token request while -pro on the same gateway answered
-  # in seconds. Every failure in that run landed here and none on the
-  # planner, which is the same-gateway control. Both slots are -pro now by
-  # decision, not by outage; the anchor stays split so pointing this at a
-  # different model again is one line.
-  source: &coding { model: opencode/deepseek-v4-pro }
+# A fixture here is the same artifact, kept. It needs NO new machinery,
+# which is the whole reason to put it in examples/: schema_test.go globs
+# examples/*.yml and validates each against steps.schema.json, and
+# TestExamplesRun (assert_test.go) RUNS each one. So a fixture written here
+# is automatically executed by `go test ./...`, which is already the coder's
+# verify_gate and the build-check gate. Red-until-implemented falls out of
+# the existing test suite rather than being enforced by a new step.
+#
+# The consequences are all the ones the run wanted: the coder's target stops
+# being prose and becomes a failing test it can run in two seconds; defects
+# are caught by a gate instead of by a five-minute review conversation; and a
+# defect found once can never come back, because the thing that found it is
+# committed. try_pipeline is granted for one purpose -- proving each fixture
+# is RED on the current tree, since a fixture that already passes tests
+# nothing at all.
+- name: spec
+  source: *fast
   max_turns: 200
   system_file: "@builtin/builder"
   tools:
-  - mcp: gopls
-    tools: [go_symbol_references, go_diagnostics]
-    max_output_bytes: 6000
   - read_file
   - list_dir
   - search_files
-  - edit_file
   - write_file
-  - run_shell
-  - name: verify_gate
-    description: >
-      Run the whole objective gate in one call and report PASS or FAIL: go
-      fmt && go mod tidy && golangci-lint run && go test ./... && go build.
-      No arguments. Call it after every edit -- a pass from before your last
-      change is worthless. Trimmed to the last 300 lines, where the failures
-      are. Do not type this chain into run_shell yourself; getting the &&
-      order wrong is how a past run reported success on a broken tree.
-      Note `go test ./...` here also RUNS every examples/*.yml through
-      `steps test` (TestExamplesRun), so an example that only looks right
-      fails this gate. An example that genuinely cannot run offline -- it
-      needs a live model, a network service, or docker -- opts out with a
-      `# steps-test: skip -- <reason>` line, and the reason is not optional.
-    run: |
-      cd repo || exit 1
-      rc=0
-      out=$(go fmt ./... 2>&1 && go mod tidy 2>&1 && golangci-lint run 2>&1 \
-            && go test ./... 2>&1 && go build -v 2>&1) || rc=$?
-      printf '%s\n' "$out" | tail -n 300
-      if [ "$rc" -eq 0 ]; then
-        printf '\nGATE: PASS\n'
-      else
-        printf '\nGATE: FAIL (exit %s) -- fix, then call verify_gate again\n' "$rc"
-      fi
-      exit "$rc"
-
-# Quality gate before the put.
-#
-# No search_files and no list_dir, deliberately. Those are the open-ended
-# exploration tools, and open-ended exploration is exactly what sank an earlier
-# run: with a 25KB diff already in hand the reviewer spent most of its turns
-# re-deriving internal/pipeline from scratch, pushing its context past 80k
-# tokens and its latency to ~40s/turn, and it timed out before reaching a
-# verdict. Its evidence is the diff and the planner's plan; read_file verifies
-# a specific claim it intends to cite, and gopls answers the one question text
-# search genuinely cannot (every call site of a symbol, for the sibling check).
-#
-# try_pipeline is the exception to "no execution", and it is here because the
-# read-only posture had a specific, measured cost. This reviewer returned PASS
-# on story 001; a second review found ten confirmed defects, and every one was
-# confirmed by building the binary and running a three-line pipeline. Four of
-# them were docs asserting behavior the code never had -- a class a reader
-# cannot catch at all, since the doc and the code are separately plausible and
-# only disagree at runtime.
-#
-# It is NOT a relaxation of the context-budget rule above: a probe is a
-# pipeline the reviewer writes to answer one question, not a search. It IS a
-# relaxation of the no-shell posture -- a probe's `run:` is a shell, so this is
-# shell by proxy, and nothing confines it. That does not lower the pipeline's
-# floor: `coder` already holds an unrestricted run_shell against the same
-# workspace, so arbitrary model-authored shell was already inside the trust
-# boundary. What the reviewer still cannot do is WRITE to the repo -- it has no
-# edit_file and no write_file target inside repo/ other than its own critique
-# and PR files.
-- name: reviewer
-  source: *fast
-  max_turns: 200
-  system_file: "@builtin/reviewer"
-  tools:
-  - mcp: gopls
-    tools: [go_symbol_references]
-    max_output_bytes: 6000
-  - read_file
-  - write_file
-  - name: repo_diff
-    description: >
-      Show what this attempt actually changed. No arguments. Returns `git
-      status --short`, `git diff --stat HEAD`, then `git diff HEAD` -- HEAD,
-      not `main...HEAD`, because the implementer does not commit, so the work
-      under review is UNCOMMITTED. A `??` line is a NEW file that will not
-      appear in the diff, so read it with read_file. An oversized diff spills
-      to a file; read_file accepts the absolute path from the pointer.
-    run: |
-      cd repo || exit 1
-      printf -- '--- git status --short (a "??" line is a NEW file) ---\n'
-      git --no-pager status --short
-      printf -- '\n--- git diff --stat HEAD ---\n'
-      git --no-pager diff --stat HEAD
-      printf -- '\n--- git diff HEAD (the uncommitted work under review) ---\n'
-      git --no-pager diff HEAD
   - &try_pipeline
     name: try_pipeline
     description: >
@@ -465,6 +401,128 @@ agents:
       # invite a pointless retry of a probe that worked exactly as intended.
       printf '\nPROBE EXIT: %s\n' "$rc"
 
+# Implements the plan end to end: code, tests, docs/examples. This is the one
+# agent doing sustained surgical Go edits (148 tool calls in the run that
+# prompted the split), so it gets its own model rather than sharing *fast.
+#
+# Qwen3 Coder Flash: a coding agent model specializing in autonomous
+# programming via tool calling, which is the failure mode that matters over
+# 150 turns -- one malformed tool call costs a turn. $0.195/M in, $0.975/M
+# out, $0.039/M cached read, 1M context so the conversation never needs
+# compacting. Single first-party provider (Alibaba), so there is exactly one
+# prompt cache to stay warm in.
+- name: coder
+  # deepseek-v4-pro, same as *fast. This slot was split off to run a cheaper
+  # coding model (the two personas want different things: one reads and
+  # judges, one writes for 150 turns), and it briefly pointed at
+  # deepseek-v4-flash -- which then went unavailable upstream mid-experiment,
+  # timing out on a 5-token request while -pro on the same gateway answered
+  # in seconds. Every failure in that run landed here and none on the
+  # planner, which is the same-gateway control. Both slots are -pro now by
+  # decision, not by outage; the anchor stays split so pointing this at a
+  # different model again is one line.
+  source: &coding { model: opencode/deepseek-v4-pro }
+  max_turns: 200
+  system_file: "@builtin/builder"
+  tools:
+  - mcp: gopls
+    tools: [go_symbol_references, go_diagnostics]
+    max_output_bytes: 6000
+  - read_file
+  - list_dir
+  - search_files
+  - edit_file
+  - write_file
+  - run_shell
+  - name: verify_gate
+    description: >
+      Run the whole objective gate in one call and report PASS or FAIL: go
+      fmt && go mod tidy && golangci-lint run && go test ./... && go build.
+      No arguments. Call it after every edit -- a pass from before your last
+      change is worthless. Trimmed to the last 300 lines, where the failures
+      are. Do not type this chain into run_shell yourself; getting the &&
+      order wrong is how a past run reported success on a broken tree.
+      Note `go test ./...` here also RUNS every examples/*.yml through
+      `steps test` (TestExamplesRun), so an example that only looks right
+      fails this gate. An example that genuinely cannot run offline -- it
+      needs a live model, a network service, or docker -- opts out with a
+      `# steps-test: skip -- <reason>` line, and the reason is not optional.
+    run: |
+      cd repo || exit 1
+      rc=0
+      out=$(go fmt ./... 2>&1 && go mod tidy 2>&1 && golangci-lint run 2>&1 \
+            && go test ./... 2>&1 && go build -v 2>&1) || rc=$?
+      printf '%s\n' "$out" | tail -n 300
+      if [ "$rc" -eq 0 ]; then
+        printf '\nGATE: PASS\n'
+      else
+        printf '\nGATE: FAIL (exit %s) -- fix, then call verify_gate again\n' "$rc"
+      fi
+      exit "$rc"
+
+# Quality gate before the put.
+#
+# No search_files and no list_dir, deliberately. Those are the open-ended
+# exploration tools, and open-ended exploration is exactly what sank an earlier
+# run: with a 25KB diff already in hand the reviewer spent most of its turns
+# re-deriving internal/pipeline from scratch, pushing its context past 80k
+# tokens and its latency to ~40s/turn, and it timed out before reaching a
+# verdict. Its evidence is the diff and the planner's plan; read_file verifies
+# a specific claim it intends to cite, and gopls answers the one question text
+# search genuinely cannot (every call site of a symbol, for the sibling check).
+#
+# try_pipeline is the exception to "no execution", and it is here because the
+# read-only posture had a specific, measured cost. This reviewer returned PASS
+# on story 001; a second review found ten confirmed defects, and every one was
+# confirmed by building the binary and running a three-line pipeline. Four of
+# them were docs asserting behavior the code never had -- a class a reader
+# cannot catch at all, since the doc and the code are separately plausible and
+# only disagree at runtime.
+#
+# It is NOT a relaxation of the context-budget rule above: a probe is a
+# pipeline the reviewer writes to answer one question, not a search. It IS a
+# relaxation of the no-shell posture -- a probe's `run:` is a shell, so this is
+# shell by proxy, and nothing confines it. That does not lower the pipeline's
+# floor: `coder` already holds an unrestricted run_shell against the same
+# workspace, so arbitrary model-authored shell was already inside the trust
+# boundary. What the reviewer still cannot do is EDIT the repo: it has no
+# edit_file at all, so it cannot touch a line of the implementation it is
+# judging. Its write_file is scoped by convention to three things -- its
+# critique, the PR files, and (since the spec-fixture redesign) a failing
+# fixture under repo/examples/ pinning a defect it found. That last one is a
+# real widening and it is deliberate: a reviewer that can only describe a
+# defect hands the coder a paragraph, while one that can commit the pipeline
+# that reproduces it hands over a test. It still cannot make anything PASS --
+# a fixture only ever adds a way to fail -- so the direction of the widening
+# is toward more scrutiny, not less.
+- name: reviewer
+  source: *fast
+  max_turns: 200
+  system_file: "@builtin/reviewer"
+  tools:
+  - mcp: gopls
+    tools: [go_symbol_references]
+    max_output_bytes: 6000
+  - read_file
+  - write_file
+  - name: repo_diff
+    description: >
+      Show what this attempt actually changed. No arguments. Returns `git
+      status --short`, `git diff --stat HEAD`, then `git diff HEAD` -- HEAD,
+      not `main...HEAD`, because the implementer does not commit, so the work
+      under review is UNCOMMITTED. A `??` line is a NEW file that will not
+      appear in the diff, so read it with read_file. An oversized diff spills
+      to a file; read_file accepts the absolute path from the pointer.
+    run: |
+      cd repo || exit 1
+      printf -- '--- git status --short (a "??" line is a NEW file) ---\n'
+      git --no-pager status --short
+      printf -- '\n--- git diff --stat HEAD ---\n'
+      git --no-pager diff --stat HEAD
+      printf -- '\n--- git diff HEAD (the uncommitted work under review) ---\n'
+      git --no-pager diff HEAD
+  - *try_pipeline
+
 # The SECOND verdict, and a different failure mode rather than a rerun. The
 # reviewer above returned PASS on story 001; a second review found ten
 # confirmed defects, and they split about evenly between "this is wrong" (the
@@ -592,6 +650,54 @@ jobs:
          named not one of them. Every gate passed. The reviewer walks the
          diff against this table row by row, so a row you cannot justify is
          cheaper to write now than a FAIL later.
+  - agent: spec
+    inputs: [stories, repo]
+    context_paths: [repo/CLAUDE.md]
+    attempts: 2
+    handoff: { note: true }
+    prompt: |
+      Turn this story into FAILING pipeline fixtures. You write no Go. You
+      run BEFORE the implementer, against a tree where the feature does not
+      exist yet, and that is the point: a fixture that passes right now is
+      testing nothing, and you must not hand one over.
+
+      1. read_file on stories/num and stories/body.md — the story, a GitHub
+         issue. List EVERY requirement: each box under "Acceptance criteria",
+         and each one stated only in PROSE (anything phrased as MUST,
+         "otherwise", "so that", or naming a failure to avoid). Then read the
+         plan at repo/experiments/self-build/plans/{num}.md for the syntax the
+         feature will actually have — your fixtures must use the spelling the
+         plan commits to, or they test a feature nobody is building.
+      2. For each requirement that a pipeline can express, write ONE fixture
+         to repo/examples/<feature>-<aspect>.yml. Small and self-verifying:
+         a job-level `assert: {execution: [a, b, c]}` naming the exact steps
+         and hooks that must run, or a step `assert: {stdout: MARKER}`. Name
+         the file for what it pins, not for the story.
+         WHY examples/ AND NOT A SCRATCH DIRECTORY: schema_test.go validates
+         every examples/*.yml against steps.schema.json, and TestExamplesRun
+         RUNS every one of them. So `go test ./...` -- which is the coder's
+         verify_gate and the build-check gate -- executes your fixtures with
+         no new wiring. The suite stays RED until the feature is real, which
+         is exactly the signal you are here to create. Never write
+         `# steps-test: skip` on a fixture; that marker is for examples that
+         genuinely cannot run offline, and using it here would silence the
+         only thing you produce.
+      3. PROVE EACH ONE IS RED. try_pipeline with the fixture's own text, on
+         this unmodified tree. Expect a non-zero PROBE EXIT -- usually a load
+         error, since the syntax does not exist yet. If a fixture PASSES, it
+         asserts something already true: rewrite it until it fails, or drop
+         it and say why. Report the observed red for each fixture.
+         Keep fixtures MODELLESS. No API keys reach the probe sandbox or the
+         test suite, so a fixture containing an `agent:` can never pass. For a
+         requirement that genuinely needs a model, write no fixture -- record
+         it in the manifest as needing an e2e test against the fake provider
+         (newFakeLLM in fakeprovider_test.go) and move on.
+      4. Write the manifest to repo/experiments/self-build/specs/{num}.md: a
+         table of requirement -> fixture file -> the red you observed, plus a
+         section listing requirements you could NOT express as a fixture and
+         why. That section is not an admission of failure; it is the exact
+         list of things the reviewers still have to judge by reading, and it
+         is how they know where reading is still required.
   - agent: coder
     inputs: [stories, repo]
     context_paths: [repo/CLAUDE.md]
@@ -638,6 +744,25 @@ jobs:
          "Files touched" section is computed by the runner, not written by
          the planner, so it is a reliable record of where the planner
          actually looked. Check it before you search for anything.
+      1a. YOUR TARGET IS ALREADY WRITTEN AND ALREADY FAILING. The spec agent
+         turned this story into fixtures under repo/examples/, and the
+         manifest at repo/experiments/self-build/specs/{num}.md maps each
+         requirement to the fixture that pins it and the red it observed.
+         Read the manifest first. `go test ./...` runs every examples/*.yml
+         (TestExamplesRun), so verify_gate is RED right now BY DESIGN, and it
+         goes green exactly when the feature is real. That is your definition
+         of done, and it is worth more than any prose: you can run it.
+         The manifest's "could not express as a fixture" section is the part
+         no test covers. Implement those with the same care and expect to be
+         judged on them by reading.
+         NEVER make a fixture pass by weakening it. Do not delete one, do not
+         loosen its assert:, do not add `# steps-test: skip`, do not rename it
+         out of examples/. A fixture you believe is genuinely WRONG -- it
+         asserts something the story never asked for -- is a legitimate
+         finding, but it is a thing you REPORT in your handoff note, leaving
+         the fixture untouched, not a thing you fix by deletion. The review
+         checks the fixtures against the manifest, so a quiet edit reads as
+         exactly what it is.
       2. Implement it end to end: code, tests, and doc/example updates,
          following CLAUDE.md exactly. If the story adds a behavior or guard
          to one of several similar code paths, run the sibling check and
@@ -664,8 +789,41 @@ jobs:
     run: |
       set -o pipefail
       cd repo
+
+      # FIXTURE TAMPERING, checked before anything else. The spec agent wrote
+      # failing fixtures into examples/ and the whole design rests on the
+      # coder making them pass. There is one cheap way to make a failing test
+      # pass that is not implementing the feature -- silence it -- so the two
+      # spellings of silence are refused mechanically here rather than left
+      # to a reviewer to notice.
+      #
+      # `# steps-test: skip` is the real risk: it is a documented, legitimate
+      # marker (for examples needing a live model, network or docker), which
+      # is exactly what makes it a plausible-looking way out. Any NEWLY added
+      # skip marker is refused; pre-existing ones are untouched, so the
+      # examples that genuinely need it keep working.
+      if git diff -U0 -- examples/ | grep -qE '^\+.*steps-test:[[:space:]]*skip'; then
+        echo "GATE: a 'steps-test: skip' marker was ADDED to examples/."
+        echo "That marker exempts an example from TestExamplesRun. Adding one"
+        echo "during implementation silences a fixture instead of satisfying"
+        echo "it. If a fixture is genuinely wrong, say so in the handoff note"
+        echo "and leave it failing -- do not skip it."
+        git diff -U0 -- examples/ | grep -E '^\+.*steps-test:[[:space:]]*skip'
+        exit 1
+      fi
+      if git diff --diff-filter=D --name-only -- examples/ | grep -q .; then
+        echo "GATE: an examples/ fixture was DELETED."
+        echo "Deleting the test is not passing the test. Restore it; report a"
+        echo "fixture you believe is wrong instead of removing it."
+        git diff --diff-filter=D --name-only -- examples/
+        exit 1
+      fi
+
       # Objective gate: cheap and deterministic, so an obviously-broken
-      # attempt is rejected before spending reviewer turns on it.
+      # attempt is rejected before spending reviewer turns on it. With the
+      # spec agent upstream this is also the FIXTURE gate -- go test runs
+      # every examples/*.yml, so "the story is implemented" and "this command
+      # exits 0" became the same statement.
       #
       # `go test ./...` now also RUNS every example that isn't explicitly
       # marked `# steps-test: skip` (TestExamplesRun), so a shipped example
@@ -802,11 +960,32 @@ jobs:
          e. every example the change ships under examples/ actually RUNS --
             probe it. A non-runnable example passes lint, tests and build
             without complaint, because nothing executes it.
+       4f. CHECK THE FIXTURES AGAINST THE MANIFEST. Read
+          repo/experiments/self-build/specs/{num}.md and confirm every fixture
+          it lists still exists in repo/examples/, still asserts what the
+          manifest says it asserts, and carries no `# steps-test: skip`. A
+          fixture that was weakened, renamed away, or skipped is a FAIL on its
+          own, whatever the rest of the diff looks like -- the gate went green
+          by silencing the test rather than satisfying it. The manifest's
+          "could not express as a fixture" section is the list of claims no
+          test covers: those are where your own probes and reading are still
+          the only instrument, so spend your effort there rather than
+          re-checking what the suite already runs.
        5. Write your critique to repo/experiments/self-build/critiques/{num}.md
           — first line exactly PASS or FAIL, then your reasoning with file:line
           citations. Cite a probe by its pipeline and the line of transcript
           that settled it, the same way you would cite a file:line. That file
           must exist before you call the verdict tool.
+       5a. A DEFECT YOU FOUND BY PROBE BECOMES A FIXTURE. If a probe of yours
+          failed on this build, you have already written the pipeline that
+          proves it -- write that same pipeline to
+          repo/examples/<what-it-pins>.yml with its assert:, and name the file
+          in your critique. Do this BEFORE the verdict, and do it whichever
+          way you are voting: on a FAIL it hands the coder a runnable repro
+          instead of a paragraph, and on a PASS it means the defect you nearly
+          shipped can never come back silently. This costs you one write_file
+          and it is the difference between a finding and a regression test.
+          Do not add `# steps-test: skip` to it.
        6. If you intend to choose "pass" (the change passes review), write
           these files with write_file BEFORE calling the verdict tool — they
           become the PR:
@@ -895,10 +1074,28 @@ jobs:
          b. a doc or example that now describes behavior nobody verified;
          c. an edge case (empty, zero, negative, malformed) the story implies
             and nothing rejects deliberately.
+      4d. Read the spec manifest at
+         repo/experiments/self-build/specs/{num}.md. Two different things
+         there matter to you, in opposite directions. Its fixture table is
+         requirements ALREADY covered by a test the suite runs -- do not
+         re-probe those, the gate did it. Its "could not express as a
+         fixture" section is the opposite: requirements nothing mechanical
+         checks, which makes them precisely your territory. Start there.
+         Then ask the question the manifest itself cannot: which requirement
+         from YOUR step-1 list appears nowhere in this manifest at all? The
+         spec agent read the same story you did and may have missed the same
+         prose you nearly missed. A requirement absent from both the manifest
+         and the code is the deepest miss available here, and you are the
+         last thing standing between it and a merge.
       5. Write repo/experiments/self-build/critiques/{num}-completeness.md —
          first line exactly PASS or FAIL, then the requirement list from step
          1 with its citation or probe per line. A requirement with no
          citation is what a FAIL looks like; name it in the note.
+      5a. A requirement you found uncovered, that a pipeline COULD express,
+         becomes a fixture: write it to repo/examples/<what-it-pins>.yml with
+         its assert:, and name it in the critique. You are the last reviewer,
+         so a gap you only describe is a gap that ships; a gap you commit as
+         a failing fixture cannot. Never mark it `# steps-test: skip`.
       6. Call the verdict tool with exactly "pass" or "fail" and a short
          `note`. A pass here publishes the change, so pass only when every
          requirement on your list has a citation.
