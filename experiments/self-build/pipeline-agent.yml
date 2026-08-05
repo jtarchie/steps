@@ -444,6 +444,45 @@ jobs:
          anything you plan to CHANGE, run the sibling check -- that is what
          tells you whether this story touches one code path or several. Do
          not repeat a query you have already run.
+      2a. ASK THE OTHER QUESTION FIRST if this story ADDS A VARIANT to a
+         type existing code switches on -- a new StepKind, a new NodeKind,
+         a new outcome class, a new verdict, a new resource backend. "Where
+         is the symbol I am editing used" is the wrong query for that shape:
+         the new variant has no call sites yet, so the sibling check returns
+         NOTHING and the story looks like it touches one file. Nothing in the
+         diff will ever point at the sites that matter; only the type will.
+         There are TWO queries, and story 001 -- one new StepKind, ten
+         shipped defects, six of them a missed site -- needed both. Run both.
+
+         QUERY 1: WHERE DOES EVERY EXISTING VARIANT GET HANDLED?
+         search_files for the existing variant names. BOTH SPELLINGS COUNT,
+         because this repo uses both for the same dispatch:
+           - tagged:   `case config.StepKindPut:`  (internal/merkle,
+             internal/pipeline/hooks.go, internal/config/assert.go)
+           - tagless:  `case step.Put != "":`      (internal/config/artifact.go,
+             internal/workspace/workspace.go, internal/pipeline/route.go)
+         The tagless form is the dangerous one: it is a plain boolean switch,
+         so neither the compiler nor .golangci.yml's `exhaustive` linter can
+         see a case is missing. It silently does nothing for your new variant
+         and every gate passes. Search at least two existing variants, not
+         one -- a site handling put but not get is one your single query
+         missed. This query found 2 of story 001's 6 sites.
+
+         QUERY 2 -- only if your new variant CONTAINS OR WRAPS another step
+         (try:, and any future wrapper). Then it is not merely a new switch
+         case: every site that reads a FIELD off a step now reads it off the
+         WRAPPER, where that field is empty or nil, and it will not switch on
+         anything at all. This is why query 1 alone is not enough -- it finds
+         switches, and these are field accesses. search_files for reads of
+         the fields your story interacts with (`.Verdicts`, `.Handoff`,
+         `.To`, `.Outputs`) and for `step.` in the validate* functions of
+         internal/config. Story 001's other 4 missed sites were all this
+         shape -- validateSegment, validateHandoffSegment,
+         validateHandoffNoteSegment, handoffFor -- and all four were fixed
+         the same way, by unwrapping to the inner step first. If an
+         `Unwrap()` (internal/config/step.go) already exists, its call sites
+         ARE this list for the previous wrapper: read them and ask which
+         apply to yours.
       3. Read the files you found. Page the big ones.
       4. Write the plan to repo/experiments/self-build/plans/{num}.md. File
          by file: what changes, what tests are needed, which docs/*.md and
@@ -451,6 +490,23 @@ jobs:
          than one structurally similar code path -- list the sibling sites
          gopls returned, with file:line -- and if so require a single test
          covering all of them. Do not describe a file you have not read.
+      4a. If 2a applied, the plan MUST carry a "## Dispatch sites" table --
+         every site BOTH queries returned, one row each, and a row is not
+         optional because you decided the site is irrelevant:
+
+           | Site (file:line) | Found by | Shape | New case belongs? | Why |
+           |---|---|---|---|---|
+           | internal/workspace/workspace.go:646 | Q1 | tagless step.X != "" | YES | wraps a producer, so its outputs must still flow |
+           | internal/config/handoff.go:176 | Q2 | reads step.Handoff | YES | wrapper carries none, so unwrap first |
+           | internal/config/route.go:32 | Q1 | tagged StepKind | NO | keyed on outcome, not kind |
+
+         A NO is a real answer and costs one line; an ABSENT ROW is the
+         defect this table exists to prevent. Story 001 added one StepKind
+         and shipped ten defects; six were a site that handled every other
+         kind and silently did nothing for the new one, and the 644-line plan
+         named not one of them. Every gate passed. The reviewer walks the
+         diff against this table row by row, so a row you cannot justify is
+         cheaper to write now than a FAIL later.
   - agent: coder
     inputs: [stories, repo]
     context_paths: [repo/CLAUDE.md]
@@ -625,6 +681,27 @@ jobs:
          c. if the change touches one of several similar code paths, run the
             sibling check and confirm the SAME treatment landed on all of
             them -- a fix applied to only one is a fail;
+         c2. if the plan carries a "## Dispatch sites" table, WALK IT ROW BY
+            ROW against the diff. This is mechanical and it is the one check
+            you can make without re-exploring: a YES row whose file:line does
+            not appear in the diff is a FAIL, and say which row. If the story
+            adds a variant to a type existing code switches on (a StepKind, a
+            NodeKind, an outcome class) and the plan has NO such table, that
+            is itself a FAIL -- the plan skipped the analysis, so you cannot
+            inherit it. Do not re-derive the table yourself; you do not have
+            the budget, and saying the plan is missing it is the finding.
+            Spot-check ONE row you doubt with search_files for an existing
+            variant name in both spellings (`case config.StepKindPut:` and
+            `case step.Put != "":` are the same dispatch, and the tagless
+            one is invisible to the compiler and to `exhaustive` alike).
+            If the new variant WRAPS a step, weight the table's Q2 rows
+            hardest: those sites read a field off a step, so on the wrapper
+            they read nil and do nothing quietly -- four of story 001's six
+            misses were exactly that, and none of them is a switch anything
+            could have flagged. A handled-nowhere variant usually probes
+            cleanly too: build the smallest pipeline using the new variant
+            where the missing site would matter, and assert the behavior
+            that site is supposed to provide;
          d. edge cases the story implies (empty, zero, negative, malformed)
             are handled deliberately, not silently accepted;
          e. every example the change ships under examples/ actually RUNS --
