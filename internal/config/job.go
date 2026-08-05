@@ -20,6 +20,17 @@ type Job struct {
 	// Budget). A cumulative ceiling, so the step that trips it is rarely the
 	// one that cost the most. Never hashed.
 	Budget *Budget `yaml:"budget,omitempty"`
+	// Serial states that two builds of this job must never run at once.
+	//
+	// It is a statement of intent rather than a switch: this runner always
+	// serializes builds of one job, so serial: true records that a pipeline
+	// depends on that. There is deliberately no serial: false — it would
+	// promise a parallelism this runner does not offer.
+	Serial bool `yaml:"serial,omitempty"`
+	// SerialGroups names locks this job holds while it runs. Two jobs sharing
+	// a group never run at the same time, which is what stops two different
+	// deploy jobs mutating one target concurrently.
+	SerialGroups []string `yaml:"serial_groups,omitempty"`
 	// MaxConsecutiveFailures pauses this job under `steps watch` once it has
 	// failed this many triggered RUNS in a row, until someone resumes it.
 	//

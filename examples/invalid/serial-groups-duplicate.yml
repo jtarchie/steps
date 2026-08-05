@@ -1,0 +1,11 @@
+# The same lock named twice does nothing the first mention did not already do,
+# which makes it a typo rather than a stronger guarantee.
+# expect: serial_groups names "deploy-lock" twice
+
+jobs:
+- name: deploy
+  serial_groups: [deploy-lock, deploy-lock]
+  plan:
+  - task: ship
+    inputs: []
+    run: "true"

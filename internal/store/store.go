@@ -75,6 +75,15 @@ CREATE TABLE IF NOT EXISTS job_versions (
     PRIMARY KEY (job_name, resource_name, version_json)
 );
 
+-- Which serial groups each job belongs to. Synced from config at startup; it
+-- lives in the database so the claim below can stay a single atomic
+-- statement rather than a read-then-claim with a race in the middle.
+CREATE TABLE IF NOT EXISTS job_serial_groups (
+    job_name   TEXT NOT NULL,
+    group_name TEXT NOT NULL,
+    PRIMARY KEY (job_name, group_name)
+);
+
 CREATE TABLE IF NOT EXISTS job_breaker (
     job_name    TEXT PRIMARY KEY,
     consecutive INTEGER NOT NULL,
@@ -385,12 +394,17 @@ func (s *Store) EnqueueJob(ctx context.Context, jobName, reason string) error {
 
 // ClaimNextJob atomically transitions the oldest claimable pending row to
 // running and returns its id/jobName; found=false when nothing is claimable.
-// A pending row whose job already has a running row is *not* claimable — this
+//
+// Two rows are not claimable. One whose job already has a running row — this
 // serializes builds of the same job (a version change enqueued mid-run runs
 // only after the in-flight build finishes, never concurrently with it), even
-// under a worker pool. The UPDATE...RETURNING is a single statement, so two
-// workers can never claim the same row — combined with this Store's single
-// (SetMaxOpenConns(1)) connection, no additional locking is needed.
+// under a worker pool. And one whose job shares a serial_groups: entry with a
+// job that is currently running, which is what stops two different jobs
+// mutating the same deploy target at once.
+//
+// Both conditions are inside the single UPDATE...RETURNING rather than checked
+// beforehand, so two workers can never claim conflicting rows — a
+// read-then-claim would have a race exactly where the lock is supposed to be.
 func (s *Store) ClaimNextJob(ctx context.Context) (int64, string, bool, error) {
 	var (
 		id      int64
@@ -406,6 +420,14 @@ func (s *Store) ClaimNextJob(ctx context.Context) (int64, string, bool, error) {
 			  AND NOT EXISTS (
 			      SELECT 1 FROM trigger_queue AS r
 			      WHERE r.job_name = tq.job_name AND r.status = 'running'
+			  )
+			  AND NOT EXISTS (
+			      SELECT 1
+			      FROM job_serial_groups AS mine
+			      JOIN job_serial_groups AS theirs ON theirs.group_name = mine.group_name
+			      JOIN trigger_queue AS busy
+			        ON busy.job_name = theirs.job_name AND busy.status = 'running'
+			      WHERE mine.job_name = tq.job_name
 			  )
 			ORDER BY tq.id LIMIT 1
 		)
@@ -650,4 +672,69 @@ func (s *Store) HasPassedVersion(ctx context.Context, jobName, resourceName, ver
 	}
 
 	return count > 0, nil
+}
+
+// SyncSerialGroups replaces the recorded job/serial-group membership with
+// what the pipeline currently declares.
+//
+// Replaced wholesale rather than merged: a group removed from the YAML must
+// stop holding a lock, and a stale row would keep two jobs apart forever with
+// nothing in the pipeline to explain why.
+func (s *Store) SyncSerialGroups(ctx context.Context, groups map[string][]string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("could not sync serial groups: %w", err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	_, err = tx.ExecContext(ctx, `DELETE FROM job_serial_groups`)
+	if err != nil {
+		return fmt.Errorf("could not clear serial groups: %w", err)
+	}
+
+	for jobName, names := range groups {
+		for _, group := range names {
+			_, err = tx.ExecContext(ctx,
+				`INSERT INTO job_serial_groups (job_name, group_name) VALUES (?, ?)
+				 ON CONFLICT (job_name, group_name) DO NOTHING`, jobName, group)
+			if err != nil {
+				return fmt.Errorf("could not record serial group %q for job %q: %w", group, jobName, err)
+			}
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("could not sync serial groups: %w", err)
+	}
+
+	return nil
+}
+
+// SerialGroupHolder names a running job that shares a serial group with
+// jobName, or "" when nothing is holding the lock. It exists so a waiting job
+// can say WHO it is waiting for — "queued" and "blocked on a lock" are
+// different states, and a reader who cannot tell them apart cannot tell a
+// stuck pipeline from a busy one.
+func (s *Store) SerialGroupHolder(ctx context.Context, jobName string) (string, error) {
+	var holder string
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT busy.job_name
+		FROM job_serial_groups AS mine
+		JOIN job_serial_groups AS theirs ON theirs.group_name = mine.group_name
+		JOIN trigger_queue AS busy ON busy.job_name = theirs.job_name AND busy.status = 'running'
+		WHERE mine.job_name = ?
+		LIMIT 1
+	`, jobName).Scan(&holder)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("could not read the serial-group holder for job %q: %w", jobName, err)
+	}
+
+	return holder, nil
 }

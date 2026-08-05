@@ -123,6 +123,7 @@ func (c *Config) validate() error {
 		c.validateEnsemble,
 		c.validateAcross,
 		c.validatePassed,
+		c.validateSerial,
 		c.validateCredentialHandling,
 	}
 

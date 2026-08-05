@@ -117,6 +117,14 @@ func Watch(
 		return fmt.Errorf("watch: %w", err)
 	}
 
+	// Serial-group membership lives in the database so the claim can stay one
+	// atomic statement (see Store.ClaimNextJob). Sync it from the pipeline as
+	// it is right now, so a group removed from the YAML stops holding a lock.
+	err = st.SyncSerialGroups(ctx, cfg.SerialGroupsByJob())
+	if err != nil {
+		return fmt.Errorf("watch: %w", err)
+	}
+
 	var wg sync.WaitGroup
 
 	for range maxConcurrent {
@@ -294,6 +302,31 @@ func enqueueAffected(ctx context.Context, cfg *config.Config, st *store.Store, o
 	return enqueued, nil
 }
 
+// reportSerialWaits says which pending jobs are held by a serial-group lock,
+// and who holds it.
+//
+// Without this a blocked job is indistinguishable from an idle watcher:
+// nothing is running for that job, nothing is being said, and the operator
+// cannot tell "nobody has picked this up" from "something is holding the
+// lock". Best-effort — a reporting failure must not fail the drain.
+func reportSerialWaits(ctx context.Context, cfg *config.Config, st *store.Store) {
+	for i := range cfg.Jobs {
+		job := &cfg.Jobs[i]
+
+		if !job.Serial && len(job.SerialGroups) == 0 {
+			continue
+		}
+
+		holder, err := st.SerialGroupHolder(ctx, job.Name)
+		if err != nil || holder == "" || holder == job.Name {
+			continue
+		}
+
+		fmt.Printf("trigger: %s waiting: lock held by %s\n", job.Name, holder)
+		slog.Info("trigger.serial_wait", "job", job.Name, "held_by", holder)
+	}
+}
+
 // jobReadyFor reports whether every passed: constraint the job declares is
 // satisfied by the versions currently observed.
 //
@@ -467,6 +500,11 @@ func drainOne(
 	}
 
 	if !found {
+		// Nothing claimable. That is usually an empty queue, but it is also
+		// what a serial-group lock looks like — and "queued" and "blocked on
+		// a lock" are different states a reader has to be able to tell apart.
+		reportSerialWaits(ctx, cfg, st)
+
 		return false, nil
 	}
 

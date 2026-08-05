@@ -582,6 +582,18 @@
         "budget": {
           "$ref": "#/$defs/budget"
         },
+        "serial": {
+          "type": "boolean",
+          "description": "State that two builds of this job must never run at once. Always true in practice — this records that a pipeline depends on it."
+        },
+        "serial_groups": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          },
+          "description": "Locks this job holds while it runs. Two jobs sharing a group never run at the same time."
+        },
         "max_consecutive_failures": {
           "type": "integer",
           "minimum": 1,

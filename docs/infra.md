@@ -140,3 +140,33 @@ How it works, and what each choice buys:
 - **`passed: [a, b]` means both**, not either.
 - **A held-back job is not a lost trigger.** The version stays current, so the next poll after the upstream job goes green enqueues it. Nothing needs to be re-pushed.
 - **Load-time checks.** `passed:` is get-only, may not name its own job, and may not name a job that never gets the same resource — that last one would be a deadlock spelled as a typo, since no version of a resource a job never fetches can ever pass there.
+
+## `serial:` / `serial_groups:` — stop jobs racing each other
+
+`steps watch --max-concurrent 4` runs jobs concurrently. For anything that deploys, publishes, or otherwise mutates the outside world, that is a hazard:
+
+```
+10:00:01  deploy-prod (v1) started
+10:00:04  deploy-prod (v2) started   ← both live, racing on the same target
+```
+
+```yaml
+jobs:
+- name: deploy-staging
+  serial: true                  # never two builds of me at once
+  serial_groups: [deploy-lock]  # and never at the same time as anyone else in the group
+- name: deploy-prod
+  serial_groups: [deploy-lock]
+```
+
+```
+10:00:01  deploy-prod (v1) started
+10:00:04  deploy-staging waiting: lock held by deploy-prod
+10:03:20  deploy-prod (v1) done
+10:03:20  deploy-staging started
+```
+
+- **`serial: true` is a statement of intent, not a switch.** This runner *always* serializes builds of one job — a version change enqueued mid-run waits for the in-flight build rather than racing it. Writing `serial: true` records that your pipeline depends on that guarantee. There is deliberately no `serial: false`: it would promise a parallelism this runner does not offer. (A divergence from Concourse, where builds of one job run concurrently unless `serial` says otherwise.)
+- **The lock is taken inside the claim**, in one atomic statement, rather than checked beforehand. A read-then-claim would have a race exactly where the lock is supposed to be.
+- **"Queued" and "blocked on a lock" look different.** A blocked job says who is holding it (`waiting: lock held by deploy-prod`); otherwise a held job is indistinguishable from an idle watcher, and an operator cannot tell a stuck pipeline from a busy one.
+- **Membership is synced from the pipeline on every `steps watch` startup.** A group removed from the YAML stops holding a lock immediately — a stale one would keep two jobs apart forever with nothing in the pipeline to explain why.
