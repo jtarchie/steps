@@ -62,9 +62,6 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_job
     ON trigger_queue(job_name) WHERE status = 'pending';
 
--- The watch circuit breaker: how many times in a row a job has failed, and
--- whether that has taken it out of the rotation. One row per job, created on
--- first outcome.
 -- Which resource versions each job has SUCCESSFULLY run against. It is what
 -- passed: reads: "has this exact version been green in that job yet".
 CREATE TABLE IF NOT EXISTS job_versions (
@@ -75,9 +72,24 @@ CREATE TABLE IF NOT EXISTS job_versions (
     PRIMARY KEY (job_name, resource_name, version_json)
 );
 
--- Which serial groups each job belongs to. Synced from config at startup; it
--- lives in the database so the claim below can stay a single atomic
--- statement rather than a read-then-claim with a race in the middle.
+-- One row per run invocation, with the steps it got through. It is what
+-- --resume reads: not "has this content succeeded before" (that is the merkle
+-- cache) but "did THIS run already do this step".
+CREATE TABLE IF NOT EXISTS runs (
+    id         TEXT PRIMARY KEY,
+    job_name   TEXT NOT NULL,
+    workspace  TEXT NOT NULL,
+    status     TEXT NOT NULL,
+    started_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS run_steps (
+    run_id     TEXT NOT NULL,
+    step_index INTEGER NOT NULL,
+    step_name  TEXT NOT NULL,
+    PRIMARY KEY (run_id, step_index)
+);
+
 -- Human decisions on approval: steps. The row IS the audit trail; it must not
 -- depend on external chat history.
 CREATE TABLE IF NOT EXISTS approvals (
@@ -91,12 +103,17 @@ CREATE TABLE IF NOT EXISTS approvals (
     reason       TEXT
 );
 
+-- Which serial groups each job belongs to. Synced from config at startup; it
+-- lives in the database so the claim can stay a single atomic statement
+-- rather than a read-then-claim with a race in the middle.
 CREATE TABLE IF NOT EXISTS job_serial_groups (
     job_name   TEXT NOT NULL,
     group_name TEXT NOT NULL,
     PRIMARY KEY (job_name, group_name)
 );
 
+-- The watch circuit breaker: how many times in a row a job has failed, and
+-- whether that has taken it out of the rotation.
 CREATE TABLE IF NOT EXISTS job_breaker (
     job_name    TEXT PRIMARY KEY,
     consecutive INTEGER NOT NULL,
@@ -858,4 +875,100 @@ func (s *Store) PendingApprovals(ctx context.Context) ([]Approval, error) {
 	}
 
 	return pending, nil
+}
+
+// Run is one `steps run` invocation that can be resumed.
+type Run struct {
+	ID        string
+	JobName   string
+	Workspace string
+	Status    string
+	StartedAt string
+}
+
+// StartRun records a run and the workspace its steps will share.
+func (s *Store) StartRun(ctx context.Context, id, jobName, workspaceDir string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO runs (id, job_name, workspace, status, started_at) VALUES (?, ?, ?, 'running', ?)
+		ON CONFLICT (id) DO UPDATE SET status = 'running'
+	`, id, jobName, workspaceDir, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		return fmt.Errorf("could not record run %q: %w", id, err)
+	}
+
+	return nil
+}
+
+// FinishRun records how a run ended.
+func (s *Store) FinishRun(ctx context.Context, id, status string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE runs SET status = ? WHERE id = ?`, status, id)
+	if err != nil {
+		return fmt.Errorf("could not finish run %q: %w", id, err)
+	}
+
+	return nil
+}
+
+// RecordRunStep marks one step of a run as done, so a resume skips it.
+func (s *Store) RecordRunStep(ctx context.Context, runID string, index int, name string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO run_steps (run_id, step_index, step_name) VALUES (?, ?, ?)
+		ON CONFLICT (run_id, step_index) DO NOTHING
+	`, runID, index, name)
+	if err != nil {
+		return fmt.Errorf("could not record step %d of run %q: %w", index, runID, err)
+	}
+
+	return nil
+}
+
+// FindRun reads a run by id.
+func (s *Store) FindRun(ctx context.Context, id string) (Run, error) {
+	var run Run
+
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, job_name, workspace, status, started_at FROM runs WHERE id = ?`, id).
+		Scan(&run.ID, &run.JobName, &run.Workspace, &run.Status, &run.StartedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Run{}, fmt.Errorf("no run %q was recorded", id)
+	}
+
+	if err != nil {
+		return Run{}, fmt.Errorf("could not read run %q: %w", id, err)
+	}
+
+	return run, nil
+}
+
+// CompletedRunSteps returns the step indexes a run already finished.
+func (s *Store) CompletedRunSteps(ctx context.Context, runID string) (map[int]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT step_index, step_name FROM run_steps WHERE run_id = ?`, runID)
+	if err != nil {
+		return nil, fmt.Errorf("could not read the steps of run %q: %w", runID, err)
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	done := map[int]string{}
+
+	for rows.Next() {
+		var (
+			index int
+			name  string
+		)
+
+		scanErr := rows.Scan(&index, &name)
+		if scanErr != nil {
+			return nil, fmt.Errorf("could not read a step of run %q: %w", runID, scanErr)
+		}
+
+		done[index] = name
+	}
+
+	if rows.Err() != nil {
+		return nil, fmt.Errorf("could not read the steps of run %q: %w", runID, rows.Err())
+	}
+
+	return done, nil
 }

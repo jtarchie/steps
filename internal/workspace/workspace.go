@@ -148,11 +148,25 @@ func CloseSpace(space StepSpace, label string) {
 // sharedProvider is the default Provider used when no workspace:
 // block is configured. Every step in a build sees the same directory,
 // exactly as before this feature existed.
-type sharedProvider struct{ keep bool }
+type sharedProvider struct {
+	keep bool
+	// reuse, when set, is an existing workspace directory a resumed run
+	// continues in rather than starting fresh.
+	reuse string
+}
 
 func (*sharedProvider) Validate() error { return nil }
 
 func (p *sharedProvider) NewBuild(_ context.Context, _ string) (BuildWorkspace, error) {
+	if p.reuse != "" {
+		// A resumed run continues in the workspace the failed run left behind
+		// — the artifacts its finished steps produced are the whole reason to
+		// resume rather than start over.
+		slog.Debug("workspace.reuse", "dir", p.reuse)
+
+		return &sharedBuild{root: p.reuse, keep: p.keep}, nil
+	}
+
 	root, err := os.MkdirTemp("", "steps-*")
 	if err != nil {
 		return nil, fmt.Errorf("could not create workspace: %w", err)
@@ -162,6 +176,19 @@ func (p *sharedProvider) NewBuild(_ context.Context, _ string) (BuildWorkspace, 
 
 	return &sharedBuild{root: root, keep: p.keep}, nil
 }
+
+// Reuse points the provider at an existing workspace directory instead of
+// creating a fresh one, for a resumed run.
+//
+// Only the shared provider supports it. An isolating strategy builds and tears
+// down a directory per STEP, so there is no single tree left behind to
+// continue in — resuming one is a different feature, and pretending otherwise
+// would silently start the resumed steps against empty inputs.
+func (p *sharedProvider) Reuse(dir string) { p.reuse = dir }
+
+// Root reports where this build's files are, so a failed run can say where to
+// find them.
+func (b *sharedBuild) Root() string { return b.root }
 
 func (*sharedProvider) Close() error { return nil }
 
@@ -1010,3 +1037,19 @@ func firstPathComponent(dir string) string {
 }
 
 var errUnsupportedPlatform = errors.New("unsupported platform")
+
+// Resumable is a Provider that can continue a previous run's workspace.
+//
+// Only the shared (default) provider implements it: an isolating strategy
+// builds a directory per step and tears it down, so there is no tree left to
+// continue in.
+type Resumable interface {
+	Reuse(dir string)
+	Provider
+}
+
+// RootedBuild is a BuildWorkspace that can say where its files are, so a
+// failed run can print the directory a resume will continue in.
+type RootedBuild interface {
+	Root() string
+}

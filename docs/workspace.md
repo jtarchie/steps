@@ -21,3 +21,28 @@ workspace:
 - **Caching hashes fold in `inputs:`/`outputs:`/mappings/`inputs: all` only when a pipeline has a `workspace:` block** — so switching a pipeline into isolated mode invalidates its cache (correctly: the executed step's view changed), but a pipeline that never opts in hashes exactly as it always has (adding the now-required `inputs:` to a shared-mode pipeline does *not* invalidate its cache). The `strategy`/`root`/`options` themselves are never hashed — copy and btrfs produce the same logical view, so switching backends doesn't invalidate anyone's cache.
 
 See also [infra.md](infra.md) for `image:`, which composes with workspace isolation (a containerized step still only sees its declared inputs/outputs), and for get renaming (`resource:`).
+
+## Resuming a failed run
+
+If a step fails, the whole job had to be re-run from the beginning — every expensive step that already succeeded, paid for again. For a plan of shell commands that is barely noticeable. For one with agent steps it is the difference between a 2-minute recovery and a 50-minute one, in real money, and it is **lossy**: an agent is not deterministic, so re-running does not reproduce the output that already passed review, it produces a different one.
+
+```
+$ steps run pipeline.yml --job publish
+... 50 minutes ...
+steps: error: put "repo": failed to push some refs
+run: K7QP2XM4  (resume with: steps run <pipeline> --resume K7QP2XM4)
+run: K7QP2XM4  workspace kept at /tmp/steps-1837462
+
+$ steps run pipeline.yml --resume K7QP2XM4
+skip: planner       (already succeeded)
+skip: coder         (already succeeded)
+skip: build-check   (already succeeded)
+skip: reviewer      (already succeeded)
+put: repo
+```
+
+- **This is not the merkle cache.** The cache asks "has this *content* succeeded before", which is deliberately never true for a put or an agent — side effects and non-determinism. A resume asks something narrower and answerable for exactly those steps: "did **this run** already do this one".
+- **A failed run keeps its workspace**, and says where. The files a step had just written when it failed are the most useful thing to look at, and they are what the resumed steps continue from — without them, "resume" would mean running the remaining steps against empty inputs and calling it a recovery.
+- **The job name comes from the run id.** `--resume <id>` alone is enough; being asked to remember which job an id belonged to would make the id useless on its own.
+- **Only the default shared workspace can be resumed.** A `workspace:` strategy builds and tears down a directory per step, so there is no tree left to continue in. `--resume` refuses rather than pretending.
+- **Steps are recorded as done on success only.** A failed step is exactly the one a resume must run again.

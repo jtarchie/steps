@@ -75,6 +75,7 @@ type RunCmd struct {
 	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                               help:"leave the build workspace on disk instead of deleting it"`
 	NoPreflight   bool              `help:"skip the pre-run health check of the job's models and MCP servers" name:"no-preflight"`
 	Var           map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."               name:"var"`
+	Resume        string            `help:"continue a failed run from the step that failed"                   name:"resume"`
 	VarsFile      string            `help:"YAML file of pipeline vars"                                        name:"vars-file"`
 }
 
@@ -82,11 +83,6 @@ type RunCmd struct {
 // pipeline.RunJob.
 func (r *RunCmd) Run() error {
 	cfg, err := loadWithVars(r.Pipeline, r.Var, r.VarsFile)
-	if err != nil {
-		return err
-	}
-
-	job, err := selectJob(cfg, r.Job)
 	if err != nil {
 		return err
 	}
@@ -101,6 +97,20 @@ func (r *RunCmd) Run() error {
 	defer cancel()
 
 	ctx = applyPreflightFlag(ctx, r.NoPreflight)
+
+	jobName := r.Job
+
+	if r.Resume != "" {
+		ctx, jobName, err = applyResume(ctx, st, provider, r.Resume, jobName)
+		if err != nil {
+			return err
+		}
+	}
+
+	job, err := selectJob(cfg, jobName)
+	if err != nil {
+		return err
+	}
 
 	runErr := pipeline.RunJob(ctx, cfg, job, r.Pin, provider, st, r.Force)
 
@@ -1165,4 +1175,39 @@ func openStore(pipelinePath string) (*store.Store, func(), error) {
 	}
 
 	return st, cleanup, nil
+}
+
+// applyResume points this invocation at a previous run: which steps it need
+// not repeat, and which workspace to continue in.
+//
+// The job name comes from the recorded run rather than the flag, so
+// `--resume <id>` alone is enough — asking an operator to remember which job a
+// run id belonged to would make the id useless on its own.
+func applyResume(
+	ctx context.Context, st *store.Store, provider workspace.Provider, runID, jobName string,
+) (context.Context, string, error) {
+	resumable, ok := provider.(workspace.Resumable)
+	if !ok {
+		// An isolating strategy builds and tears down a directory per STEP,
+		// so there is no tree left behind to continue in. Refusing is the only
+		// honest answer: resuming anyway would run the remaining steps against
+		// empty inputs and call it a recovery.
+		return ctx, "", errors.New("--resume needs the default shared workspace; a workspace: strategy tears down each step's directory, leaving nothing to continue from")
+	}
+
+	ctx, dir, err := pipeline.PrepareResume(ctx, st, runID)
+	if err != nil {
+		return ctx, "", fmt.Errorf("could not resume: %w", err)
+	}
+
+	resumable.Reuse(dir)
+
+	if jobName == "" {
+		jobName, err = pipeline.ResumeJobName(ctx, st, runID)
+		if err != nil {
+			return ctx, "", fmt.Errorf("could not resume: %w", err)
+		}
+	}
+
+	return ctx, jobName, nil
 }

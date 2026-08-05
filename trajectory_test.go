@@ -303,9 +303,19 @@ func keptWorkspaceDir(t *testing.T, out string) string {
 	t.Helper()
 
 	for line := range strings.SplitSeq(out, "\n") {
-		dir, found := strings.CutPrefix(strings.TrimSpace(line), "workspace kept: ")
+		trimmed := strings.TrimSpace(line)
+
+		// Either announcement will do: --keep-workspace says so directly, and
+		// a FAILED run keeps its workspace regardless (so it can be resumed)
+		// and says where alongside the resume id.
+		dir, found := strings.CutPrefix(trimmed, "workspace kept: ")
 		if found {
 			return dir
+		}
+
+		_, isResume, _ := strings.Cut(trimmed, "workspace kept at ")
+		if isResume != "" {
+			return isResume
 		}
 	}
 

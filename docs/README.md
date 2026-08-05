@@ -25,7 +25,7 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 ## Commands
 
 ```
-steps run <pipeline>        run one job
+steps run <pipeline>        run one job (--resume <id> continues a failed one)
 steps watch <pipeline>      poll trigger: true resources, run affected jobs
 steps test <pipeline>       run every job and check assert: directives
 steps validate <pipeline>   check the file, and that this machine can run it
