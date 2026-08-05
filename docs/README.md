@@ -45,3 +45,7 @@ Two of these answer most "why is it doing that?" questions: `steps plan` explain
 ```
 
 That gives completion and inline errors while you type. `steps validate` remains the authority — it checks rules a schema can't express, like whether a `to:` target exists in the same segment — but the schema catches misspelled keys at the keystroke rather than the run.
+
+## Examples
+
+[`examples/`](../examples/) holds runnable, self-contained pipelines, several of which verify themselves under `steps test`. Its [`invalid/`](../examples/invalid/) subdirectory is the inverse: pipelines that must be **rejected** at load, each naming the error it has to produce. That's where a rule like "`trigger:` is only valid on `get` steps" gets a file you can read, rather than living only as an error-substring assertion in a Go test.

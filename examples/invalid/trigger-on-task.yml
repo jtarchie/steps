@@ -1,0 +1,12 @@
+# trigger: decides whether a NEW VERSION of a resource starts a build, so it
+# only means anything on a get. On a task it reads as "run this automatically"
+# and does nothing at all.
+# expect: trigger is only valid on get steps
+
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    run: "true"
+    trigger: true

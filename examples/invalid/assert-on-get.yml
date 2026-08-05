@@ -1,0 +1,16 @@
+# assert: checks what a step produced — an exit code, stdout, tool calls. A get
+# produces an artifact, none of which those describe.
+# expect: assert is not valid on get steps
+
+resources:
+- name: repo
+  type: git
+  source:
+    uri: https://example.com/repo.git
+
+jobs:
+- name: build
+  plan:
+  - get: repo
+    assert:
+      code: 0

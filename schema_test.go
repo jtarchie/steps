@@ -79,6 +79,9 @@ func yamlAsJSONValue(t *testing.T, path string) any {
 // Every shipped example validates against the published schema. This is what
 // keeps the schema honest: it is hand-written, so nothing but a test stops it
 // drifting from what the loader actually accepts.
+//
+// The glob is deliberately non-recursive: examples/invalid/ is deliberately
+// schema-invalid (see TestExamplesInvalid) and must stay out of it.
 func TestExamplesMatchSchema(t *testing.T) {
 	schema := loadSchema(t)
 

@@ -1,0 +1,10 @@
+# A step is exactly one kind. Naming two is ambiguous, not a merge.
+# expect: but a step is exactly one of get/task/put/agent
+
+jobs:
+- name: build
+  plan:
+  - task: work
+    agent: reviewer
+    run: "true"
+    prompt: review it

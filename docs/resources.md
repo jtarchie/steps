@@ -111,7 +111,7 @@ Templates render with `missingkey=error`, so reading an optional field that wasn
 
 ## `trigger: true`
 
-Marks a `get` as something `steps watch` should poll. When its version changes, the jobs containing it run automatically. Valid only on `get` steps. See [infra.md](infra.md).
+Marks a `get` as something `steps watch` should poll. When its version changes, the jobs containing it run automatically. Valid only on `get` steps — setting it anywhere else is a load-time error, demonstrated by [examples/invalid/trigger-on-task.yml](../examples/invalid/trigger-on-task.yml). See [infra.md](infra.md).
 
 ## MCP-backed types
 

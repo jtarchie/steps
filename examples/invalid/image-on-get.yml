@@ -1,0 +1,15 @@
+# image: picks the container a task's run: executes in. A get runs the resource
+# type's `in`, not a script, so there is nothing for the image to apply to.
+# expect: image is not valid on get steps
+
+resources:
+- name: repo
+  type: git
+  source:
+    uri: https://example.com/repo.git
+
+jobs:
+- name: build
+  plan:
+  - get: repo
+    image: golang:1.26

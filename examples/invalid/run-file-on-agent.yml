@@ -1,0 +1,15 @@
+# run_file: loads a task's run: script from a file beside the pipeline. An agent
+# has no run:; the equivalent field is prompt_file:.
+# expect: run_file: is only valid on task steps
+
+agents:
+- name: reviewer
+  source:
+    model: openai/gpt-4o
+
+jobs:
+- name: build
+  plan:
+  - agent: reviewer
+    prompt: review it
+    run_file: tasks/build.sh

@@ -129,6 +129,10 @@ const exampleSkipMarker = "# steps-test: skip"
 //
 // Adding an example therefore opts it into this test automatically, and
 // exempting one costs a visible line in the file saying why.
+//
+// The glob is deliberately non-recursive: examples/invalid/ holds pipelines
+// that must FAIL to load (see TestExamplesInvalid), and including them here
+// would pin this test red forever.
 func TestExamplesRun(t *testing.T) {
 	matches, err := filepath.Glob(filepath.Join("examples", "*.yml"))
 	if err != nil {
@@ -183,7 +187,9 @@ func copyExampleDeps(t *testing.T, srcDir, dstDir string) {
 	}
 
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		// examples/invalid/ holds must-fail pipelines, not deps of a runnable
+		// example — no example loads anything from it.
+		if !entry.IsDir() || entry.Name() == "invalid" {
 			continue
 		}
 

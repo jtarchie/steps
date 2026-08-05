@@ -1,0 +1,11 @@
+# A misspelled key is silently ignored by most YAML loaders. steps decodes with
+# KnownFields(true) and suggests the near miss instead.
+# expect: promt
+
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    run: "true"
+    promt: review it
