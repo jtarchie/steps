@@ -6,7 +6,11 @@ generator, no per-story duplication.
 
 The stories are [GitHub issues](https://github.com/jtarchie/steps/issues)
 labeled `story`, one per roadmap feature. The pipeline's `stories` resource
-lists the open ones, and each run plans, implements, gates, reviews **twice**
+lists the open ones, and each run walks the story through eleven steps:
+**plan**, **spec** (turn each requirement into a *failing* fixture in
+`examples/`), implement in three layers (**config → runtime → docs**, so the
+context that once overflowed is three smaller ones and prose is written only
+after the behavior is real), an objective **gate**, then review **twice**
 (`reviewer` reads the diff and asks whether the change is correct;
 `completeness` is denied the diff and asks what the story required that
 nothing implements — both must pass, either sends the coder back), and only

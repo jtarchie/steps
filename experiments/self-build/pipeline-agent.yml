@@ -49,6 +49,18 @@
 # prose, defects surface in a two-second gate rather than a five-minute
 # conversation, and a defect found once cannot silently return.
 #
+# The implementation is THREE steps for the other half of that measurement:
+# the same run hit `agent.compaction_stalled` with 42 dispatch sites across
+# 19 files, which is not a prompt problem but a context-size one. So the work
+# splits along this repo's own acyclic package graph -- coder_config (types,
+# validation, schema; gated on BUILD only, since nothing there can turn a
+# fixture green alone), coder (the runtime that does turn them green, full
+# gate), coder_docs (prose last, once the behavior is real and proven). Three
+# fresh conversations instead of one that overflows, each handing the next a
+# runner-computed "Files touched" note. Docs go LAST deliberately: every
+# doc-contradicts-code defect this experiment has produced came from writing
+# the prose before the behavior existed.
+#
 # The review gate is TWO agents, not one, and they must both pass. `reviewer`
 # reads the diff and asks whether what was built is correct; `completeness`
 # is denied the diff and asks what the story required that nothing
@@ -401,9 +413,36 @@ agents:
       # invite a pointless retry of a probe that worked exactly as intended.
       printf '\nPROBE EXIT: %s\n' "$rc"
 
-# Implements the plan end to end: code, tests, docs/examples. This is the one
-# agent doing sustained surgical Go edits (148 tool calls in the run that
-# prompted the split), so it gets its own model rather than sharing *fast.
+# THREE coder steps, not one, because one conversation could not hold the
+# work. Measured on story 002: 42 dispatch sites across 19 files, 148 tool
+# calls, and the coder hit `agent.compaction_stalled -- recent window alone
+# exceeds the budget`, meaning there was nothing left to compact and the
+# conversation was simply too big. The spec fixtures fixed WHAT done means;
+# they do nothing about how much fits in one context.
+#
+# The split follows this repo's own dependency graph (see CLAUDE.md), which
+# is acyclic and enforced by depguard, so the layers really are orderable:
+#
+#   coder_config   internal/config + steps.schema.json   -- the leaf: types,
+#                  validation, the schema. Nothing here can make a fixture
+#                  pass on its own, so it is gated on BUILD only.
+#   coder          internal/pipeline, merkle, workspace  -- the runtime that
+#                  actually executes the feature. This is the layer that
+#                  turns the fixtures green, so it gets the full gate.
+#   coder_docs     docs/ and any remaining examples      -- prose last, once
+#                  the behavior it describes is real and verified.
+#
+# Each is a FRESH conversation with its own budget, so the context that blew
+# up is now three smaller ones, and each hands the next a runner-computed
+# "Files touched" note. The middle one keeps the name `coder` so the review
+# loop routes failures to the layer where semantic defects almost always
+# live -- and its prompt says plainly that it may edit any package, because
+# the split is about focus, not permission.
+#
+# This is the one persona doing sustained surgical Go edits, so it gets its
+# own model slot rather than sharing *fast.
+# Defined runtime-layer-first only because YAML anchors must precede their
+# aliases; the PLAN order below is config -> runtime -> docs.
 #
 # Qwen3 Coder Flash: a coding agent model specializing in autonomous
 # programming via tool calling, which is the failure mode that matters over
@@ -434,7 +473,32 @@ agents:
   - edit_file
   - write_file
   - run_shell
-  - name: verify_gate
+  - &verify_build
+    name: verify_build
+    description: >
+      COMPILE-ONLY gate: go fmt && go mod tidy && golangci-lint run && go
+      build. No arguments. It deliberately does NOT run go test, because the
+      spec fixtures in examples/ are RED by design until the runtime layer
+      lands, and a layer that cannot turn them green must not be judged by
+      them -- you would be staring at a failure that is not yours and cannot
+      be fixed from here. What this DOES catch is everything that is yours:
+      a type error, a lint violation, an unused import, a broken build.
+      Green here means "this layer is internally sound and the next layer can
+      build on it", which is the only claim you are in a position to make.
+    run: |
+      cd repo || exit 1
+      rc=0
+      out=$(go fmt ./... 2>&1 && go mod tidy 2>&1 && golangci-lint run 2>&1 \
+            && go build -v 2>&1) || rc=$?
+      printf '%s\n' "$out" | tail -n 300
+      if [ "$rc" -eq 0 ]; then
+        printf '\nBUILD GATE: PASS (tests NOT run -- fixtures stay red until runtime)\n'
+      else
+        printf '\nBUILD GATE: FAIL (exit %s) -- fix, then call verify_build again\n' "$rc"
+      fi
+      exit "$rc"
+  - &verify_gate
+    name: verify_gate
     description: >
       Run the whole objective gate in one call and report PASS or FAIL: go
       fmt && go mod tidy && golangci-lint run && go test ./... && go build.
@@ -459,6 +523,45 @@ agents:
         printf '\nGATE: FAIL (exit %s) -- fix, then call verify_gate again\n' "$rc"
       fi
       exit "$rc"
+
+# The config layer. Gated on BUILD only: nothing in internal/config can turn
+# a spec fixture green by itself, so holding this step to the fixture gate
+# would hold it to a failure it structurally cannot fix.
+- name: coder_config
+  source: *coding
+  max_turns: 200
+  system_file: "@builtin/builder"
+  tools:
+  - mcp: gopls
+    tools: [go_symbol_references, go_diagnostics]
+    max_output_bytes: 6000
+  - read_file
+  - list_dir
+  - search_files
+  - edit_file
+  - write_file
+  - run_shell
+  - *verify_build
+
+# The docs layer, last, once the behavior it describes is real AND the
+# fixtures prove it. Full gate: by this point green is achievable, and prose
+# that contradicts working code is the single most common defect this
+# experiment has produced.
+- name: coder_docs
+  source: *coding
+  max_turns: 200
+  system_file: "@builtin/builder"
+  tools:
+  - mcp: gopls
+    tools: [go_symbol_references, go_diagnostics]
+    max_output_bytes: 6000
+  - read_file
+  - list_dir
+  - search_files
+  - edit_file
+  - write_file
+  - run_shell
+  - *verify_gate
 
 # Quality gate before the put.
 #
@@ -698,6 +801,42 @@ jobs:
          why. That section is not an admission of failure; it is the exact
          list of things the reviewers still have to judge by reading, and it
          is how they know where reading is still required.
+  - agent: coder_config
+    inputs: [stories, repo]
+    context_paths: [repo/CLAUDE.md]
+    attempts: 2
+    handoff: { note: true }
+    prompt: |
+      LAYER 1 of 3: internal/config and steps.schema.json ONLY. Two later
+      steps do the runtime and the docs, so stop when this layer is sound --
+      finishing the whole story here is what blew the context budget the last
+      time one agent tried.
+
+      0. `run_shell` on `cd repo && git status --short` first. A dirty tree
+         means a previous attempt of THIS step was cut off mid-flight by a
+         transport fault; continue from those edits rather than redoing them.
+      1. read_file stories/num, the plan at
+         repo/experiments/self-build/plans/{num}.md, and the spec manifest at
+         repo/experiments/self-build/specs/{num}.md. The manifest lists the
+         fixtures in repo/examples/ that define done. READ THE FIXTURES: they
+         are the exact syntax users will write, so they tell you precisely
+         which fields, types and validation this layer must support. A field
+         a fixture uses and your types lack is a compile error later, in
+         someone else's step.
+      2. Implement ONLY: the config types, their YAML decoding, every
+         validation rule, and steps.schema.json. CLAUDE.md is binding, and
+         two of its rules bite hardest here -- one file per domain in
+         internal/config, and a new config.Step field MUST appear in
+         steps.schema.json or schema_test.go fails by reflection.
+         If the plan carries a "## Dispatch sites" table, the rows in
+         internal/config are yours; leave the rest.
+      3. verify_build after every edit. NOT verify_gate: `go test ./...`
+         includes the fixtures, which are red until layer 2 exists, so a
+         failing test suite right now is the DESIGN and not your bug.
+         verify_build must be PASS before you finish.
+      4. Do not commit. In your handoff note, tell layer 2 the exact type and
+         field names you created -- that is the interface it builds against,
+         and it cannot see this conversation.
   - agent: coder
     inputs: [stories, repo]
     context_paths: [repo/CLAUDE.md]
@@ -763,10 +902,23 @@ jobs:
          the fixture untouched, not a thing you fix by deletion. The review
          checks the fixtures against the manifest, so a quiet edit reads as
          exactly what it is.
-      2. Implement it end to end: code, tests, and doc/example updates,
-         following CLAUDE.md exactly. If the story adds a behavior or guard
-         to one of several similar code paths, run the sibling check and
-         apply the SAME treatment to all of them, not just the first.
+      1b. YOU ARE LAYER 2 OF 3. Layer 1 already did internal/config and the
+         schema -- its handoff note, above, names the exact types and fields
+         it created, and that is your interface. Layer 3 does docs/ after
+         you. So your work is the RUNTIME: internal/pipeline, internal/merkle,
+         internal/workspace, internal/agent, and the Go tests for them.
+         You MAY edit any package -- if layer 1 got a type wrong, fix it,
+         that is not a boundary violation. The split is about where your
+         attention goes, not about permission. But do not write docs/ prose;
+         layer 3 does that once your behavior is real and the fixtures prove
+         it, and prose written before the behavior is how this experiment has
+         repeatedly shipped a doc that contradicts its own code.
+         You are the layer that turns the fixtures GREEN. That is your
+         definition of done and you can run it.
+      2. Implement it end to end: runtime code and tests, following CLAUDE.md
+         exactly. If the story adds a behavior or guard to one of several
+         similar code paths, run the sibling check and apply the SAME
+         treatment to all of them, not just the first.
       3. After each edit, gopls__go_diagnostics on the file you touched.
          gopls has no LSP client feeding it your live edits, so its view can
          go stale: verify_gate is the real gate, not diagnostics.
@@ -784,6 +936,38 @@ jobs:
       repo/experiments/self-build/critiques/{num}.md is "this is wrong" and
       {num}-completeness.md is "this was never implemented". The second one
       may not exist if the first reviewer failed you; that is normal.
+  - agent: coder_docs
+    inputs: [stories, repo]
+    context_paths: [repo/CLAUDE.md]
+    attempts: 2
+    handoff: { note: true }
+    prompt: |
+      LAYER 3 of 3: documentation. The feature is implemented and its
+      fixtures are green. You write prose, and you write it LAST on purpose:
+      every doc-versus-code contradiction this experiment has produced came
+      from describing behavior before it existed. Story 001 shipped four of
+      them; story 002's headline docs example used syntax the code rejects at
+      load time, and only the final reviewer caught it.
+
+      1. read_file stories/num and stories/body.md (the story), the spec
+         manifest at repo/experiments/self-build/specs/{num}.md, and the two
+         handoff notes above -- between them they say what actually got
+         built, which is not always what the plan predicted.
+      2. Update docs/*.md per the story. The relevant files are named in the
+         plan; docs/README.md indexes them.
+         EVERY YAML SNIPPET YOU WRITE MUST BE ONE THAT RUNS. The fixtures in
+         repo/examples/ are known-good, verified syntax -- prefer adapting
+         one over inventing a snippet from the story's prose, which was
+         written before the feature existed and may describe a shape that was
+         never built. If you write a snippet that is not lifted from a
+         passing fixture, verify it: `run_shell` on
+         `cd repo && go build -o /tmp/s . && /tmp/s validate <file>`.
+      3. State the limits, not just the happy path: what the feature REFUSES
+         (every validation layer 1 added is a sentence users need), and any
+         interaction with existing features that surprised the runtime layer.
+      4. verify_gate -- the full one, and it must PASS. Green is achievable
+         now, so a red suite here is a real regression you introduced.
+      5. Do not commit.
   - task: build-check
     inputs: [repo]
     run: |
