@@ -96,6 +96,7 @@ func Watch(
 	interval time.Duration,
 	maxConcurrent int,
 	force bool,
+	listenAddr string,
 ) error {
 	if len(Resources(cfg)) == 0 {
 		return errors.New("no get step in any job sets trigger: true; nothing for watch to poll")
@@ -126,6 +127,21 @@ func Watch(
 	}
 
 	var wg sync.WaitGroup
+
+	// The webhook listener runs alongside the poll loop, never instead of it:
+	// a missed delivery must not mean a change is never noticed.
+	if listenAddr != "" {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			serveErr := serveWebhooks(ctx, cfg, st, listenAddr)
+			if serveErr != nil {
+				slog.Error("webhook.stopped", "error", serveErr)
+			}
+		}()
+	}
 
 	for range maxConcurrent {
 		wg.Add(1)

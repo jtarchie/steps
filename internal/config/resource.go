@@ -37,6 +37,16 @@ type Resource struct {
 	Name   string         `yaml:"name"`
 	Type   string         `yaml:"type"`
 	Source map[string]any `yaml:"source"`
+	// WebhookTokenEnv names an OS environment variable holding the shared
+	// secret a webhook must present to trigger an immediate check of this
+	// resource (see `steps watch --listen`).
+	//
+	// A REFERENCE, never the token itself — the same rule api_key_env follows,
+	// and for a sharper reason here: a resource's fields are hashed into the
+	// merkle content map, so a literal token would be written to state.db in
+	// cleartext. That is precisely the trust-boundary problem the env-var
+	// indirection exists to prevent.
+	WebhookTokenEnv string `yaml:"webhook_token_env,omitempty"`
 }
 
 // validateResourcePut rejects a put step against a resource type that declares

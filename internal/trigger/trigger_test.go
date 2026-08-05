@@ -597,7 +597,7 @@ jobs:
 
 	defer func() { _ = provider.Close() }()
 
-	err = Watch(context.Background(), cfg, provider, st, nil, 0, 1, false)
+	err = Watch(context.Background(), cfg, provider, st, nil, 0, 1, false, "")
 	if err == nil {
 		t.Fatal("Watch: expected an error when no get step sets trigger: true")
 	}
@@ -623,7 +623,7 @@ func TestWatchRejectsNonPositiveInterval(t *testing.T) {
 
 	defer func() { _ = provider.Close() }()
 
-	err = Watch(context.Background(), cfg, provider, st, nil, 0, 1, false)
+	err = Watch(context.Background(), cfg, provider, st, nil, 0, 1, false, "")
 	if err == nil {
 		t.Fatal("Watch: expected an error for a non-positive interval, not a ticker panic")
 	}

@@ -174,6 +174,10 @@
         "source": {
           "type": "object",
           "description": "Type-specific configuration, available as {{ .source.* }}."
+        },
+        "webhook_token_env": {
+          "type": "string",
+          "description": "Environment variable holding the shared secret a webhook must present to trigger an immediate check of this resource. The variable NAME, never the token itself."
         }
       }
     },

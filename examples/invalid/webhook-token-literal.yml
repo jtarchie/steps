@@ -1,0 +1,17 @@
+# webhook_token_env: names an environment variable, never the token. A literal
+# would both authenticate nothing and be hashed into state.db in cleartext,
+# which is the trust-boundary problem the indirection exists to prevent.
+# expect: not the token itself
+
+resources:
+- name: repo
+  type: git
+  source:
+    uri: https://example.com/repo.git
+  webhook_token_env: "sk-live-abc123-not-a-variable-name"
+
+jobs:
+- name: build
+  plan:
+  - get: repo
+    trigger: true

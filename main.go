@@ -121,6 +121,7 @@ type WatchCmd struct {
 	Force         bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
 	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                                help:"leave the build workspace on disk instead of deleting it"`
 	NoPreflight   bool              `help:"skip the pre-run health check of each job's models and MCP servers" name:"no-preflight"`
+	Listen        string            `help:"serve webhook checks on this address, e.g. :8080"                   name:"listen"`
 }
 
 // Run loads the pipeline and blocks in trigger.Watch until canceled
@@ -142,7 +143,7 @@ func (w *WatchCmd) Run() error {
 
 	ctx = applyPreflightFlag(ctx, w.NoPreflight)
 
-	return wrapRunErr(trigger.Watch(ctx, cfg, provider, st, w.Pin, w.Interval, w.MaxConcurrent, w.Force))
+	return wrapRunErr(trigger.Watch(ctx, cfg, provider, st, w.Pin, w.Interval, w.MaxConcurrent, w.Force, w.Listen))
 }
 
 // TestCmd runs every job in the pipeline (force, so nothing is skipped and the

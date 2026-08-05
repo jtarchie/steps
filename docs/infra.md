@@ -170,3 +170,29 @@ jobs:
 - **The lock is taken inside the claim**, in one atomic statement, rather than checked beforehand. A read-then-claim would have a race exactly where the lock is supposed to be.
 - **"Queued" and "blocked on a lock" look different.** A blocked job says who is holding it (`waiting: lock held by deploy-prod`); otherwise a held job is indistinguishable from an idle watcher, and an operator cannot tell a stuck pipeline from a busy one.
 - **Membership is synced from the pipeline on every `steps watch` startup.** A group removed from the YAML stops holding a lock immediately — a stale one would keep two jobs apart forever with nothing in the pipeline to explain why.
+
+## Webhook-triggered checks
+
+`steps watch` polls on an interval: short means fast reaction and lots of API calls, long means slow reaction. A webhook removes the tradeoff — react instantly, poll rarely as a safety net.
+
+```yaml
+resources:
+- name: repo
+  type: git
+  source: { uri: ... }
+  webhook_token_env: GITHUB_WEBHOOK_TOKEN    # the variable NAME, not the token
+```
+
+```bash
+steps watch pipeline.yml --listen :8080
+curl -X POST 'http://localhost:8080/check/repo?token=…'     # or: Authorization: Bearer …
+```
+
+This is the **lowest-urgency** thing in the roadmap it came from: polling already works, so it is a latency and rate-limit optimization rather than a correctness gap.
+
+- **The token is a credential, not config.** `webhook_token_env:` names an environment variable, following `api_key_env:`. A literal is rejected at load, for a sharper reason than usual: a resource's fields are hashed into the merkle content map, so a literal token would be written to `state.db` in cleartext.
+- **An unset token variable accepts nothing.** Reading an empty expectation as "no auth required" would turn a deployment mistake into an open trigger endpoint.
+- **A bad token and an unknown resource are indistinguishable** (both 401, authenticated before anything else). Otherwise the endpoint is a free directory of a pipeline's resource names to anyone who can reach it.
+- **POST only.** A GET would be triggerable by a browser preview or a link scanner.
+- **The poll loop keeps running.** A webhook that is never delivered — a failure, a restart mid-flight — must not mean a change is never noticed.
+- **A webhook treats the version as changed** even when it matches what was last recorded: the sender knows something the check output may not show yet.
