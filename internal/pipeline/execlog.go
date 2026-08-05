@@ -67,7 +67,7 @@ func recordStepExecution(ctx context.Context, step config.Step) {
 	// container, and its branches record themselves — in declaration order,
 	// not completion order (see runBranches), so assert.execution stays a
 	// deterministic thing to write.
-	if step.InParallel != nil || step.Race != nil {
+	if step.InParallel != nil || step.Race != nil || step.Ensemble != nil {
 		return
 	}
 

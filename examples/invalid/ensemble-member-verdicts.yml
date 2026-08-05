@@ -1,0 +1,27 @@
+# Every member votes in the same vocabulary, so it is declared once on the
+# block. A member with its own verdicts would be voting on a different
+# question from its peers.
+# expect: verdicts belong on the ensemble, not on a member
+
+agents:
+- name: reviewer-a
+  source:
+    model: openai/gpt-4o
+- name: reviewer-b
+  source:
+    model: openai/gpt-4o
+
+jobs:
+- name: review
+  plan:
+  - ensemble:
+      verdicts: [approve, reject]
+      decide: majority
+      agents:
+      - agent: reviewer-a
+        inputs: []
+        prompt: Review it.
+        verdicts: [yes, no]
+      - agent: reviewer-b
+        inputs: []
+        prompt: Review it.

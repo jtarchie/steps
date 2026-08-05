@@ -35,6 +35,8 @@ const (
 	NodeKindParallel NodeKind = "in_parallel"
 	// NodeKindRace is a race: block.
 	NodeKindRace NodeKind = "race"
+	// NodeKindEnsemble is an ensemble: block.
+	NodeKindEnsemble NodeKind = "ensemble"
 )
 
 // Node is one content-addressed step in a job's resolved execution chain.
@@ -363,6 +365,8 @@ func stepContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 		return ParallelNodeContent(cfg, step)
 	case config.StepKindRace:
 		return RaceNodeContent(cfg, step)
+	case config.StepKindEnsemble:
+		return EnsembleNodeContent(cfg, step)
 	default:
 		return nil, errors.New("unrecognized step")
 	}
@@ -862,6 +866,10 @@ func planNonGetNode(cfg *config.Config, step config.Step, i int, parentHash stri
 		node, err := raceNode(cfg, step, i, parentHash)
 
 		return node, true, err // always unskippable, like in_parallel
+	case config.StepKindEnsemble:
+		node, err := ensembleNode(cfg, step, i, parentHash)
+
+		return node, true, err // agent members are never skippable
 	case config.StepKindInParallel:
 		node, err := parallelNode(cfg, step, i, parentHash)
 
@@ -892,6 +900,34 @@ func RaceNodeContent(cfg *config.Config, step config.Step) (map[string]any, erro
 	}
 
 	return withHooks(cfg, step, withWhen(step, withRouting(step, map[string]any{"race": branches})))
+}
+
+// EnsembleNodeContent hashes an ensemble: block — its members' content, the
+// vocabulary they vote in, and the rule that combines them. All three change
+// what the block decides, so all three are part of its identity.
+func EnsembleNodeContent(cfg *config.Config, step config.Step) (map[string]any, error) {
+	members := make([]any, 0, len(step.Ensemble.Agents))
+
+	for i := range step.Ensemble.Agents {
+		member := step.Ensemble.Agents[i]
+		member.Verdicts = step.Ensemble.EnsembleVerdictsFor()
+
+		memberContent, err := stepContentMap(cfg, member)
+		if err != nil {
+			return nil, fmt.Errorf("ensemble member %d: %w", i, err)
+		}
+
+		members = append(members, memberContent)
+	}
+
+	content := map[string]any{
+		"ensemble":      members,
+		"verdicts":      step.Ensemble.Verdicts,
+		"decide":        step.Ensemble.Decide,
+		"member_errors": step.Ensemble.MemberErrors,
+	}
+
+	return withHooks(cfg, step, withWhen(step, withRouting(step, content)))
 }
 
 // planTaskNode builds a task step's plan node and decides whether a chain
@@ -942,6 +978,21 @@ func raceNode(cfg *config.Config, step config.Step, i int, parentHash string) (N
 	}
 
 	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindRace, StepIndex: i, Content: content}, nil
+}
+
+// ensembleNode builds the plan node for an ensemble: block.
+func ensembleNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, error) {
+	content, err := EnsembleNodeContent(cfg, step)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (ensemble): %w", i, err)
+	}
+
+	hash, err := HashNode(NodeKindEnsemble, content, parentHash)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (ensemble): %w", i, err)
+	}
+
+	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindEnsemble, StepIndex: i, Content: content}, nil
 }
 
 // planGetStep resolves step's version(s) and recurses into the remainder of

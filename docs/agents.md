@@ -387,3 +387,43 @@ How it behaves, and why:
 - **Never hashed, with a test.** Which source served a run is *availability*, not content. Declaring a fallback, or having one fire, does not change a step's cache key — the alternative would invalidate every agent step in the pipeline at exactly the moment things are already going badly.
 - **Loudly visible.** A fallback can produce meaningfully different output, so a run that used one says so in the log (`agent.failover`), on the step's own output line (`agent: writer (fallback: equivalent-model — big-model is unavailable)`), and in the recorded result (`fallback_model`). A quality dip caused by an outage that looks identical to a normal run is one nobody investigates.
 - **Every fallback endpoint is validated** like the primary — no credentials in the URL, and the provider prefix must resolve at load. A fallback nobody can resolve is one that will not save you, discovered during the outage it exists for.
+
+## Ensembles: asking several agents the same question
+
+A single model has blind spots. Ask one reviewer "is this correct?" and you get one opinion with no signal about how much to trust it; ask three and require a majority, and one model's bad day stops being decisive.
+
+```yaml
+- ensemble:
+    verdicts: [reject, approve]     # the vocabulary EVERY member votes in
+    decide: majority                # or: unanimous, any, or an agent name
+    member_errors: fail             # or: exclude
+    agents:
+    - {agent: reviewer-a, prompt: "Review the diff for correctness."}
+    - {agent: reviewer-b, prompt: "Review the diff for correctness."}
+    - {agent: reviewer-c, prompt: "Review the diff for correctness."}
+  to:
+    approve: publish
+    reject: revise
+```
+
+### ⚠️ N agents cost N times one
+
+Three reviewers cost three reviews, every run. This is the step where a job-level `budget:` earns its keep.
+
+### The decision rules
+
+- **`majority`** — the verdict more than half the voters chose.
+- **`unanimous`** — every voter agreed, or the block fails saying they did not.
+- **`any`** — the first verdict in `verdicts:` that anybody chose. `verdicts:` is an *ordered* list, so listing them most-to-least severe gives you "one objection is enough".
+- **an agent name** — that agent judges, receiving every member's vote and note. It is an ordinary agent step, so its reasoning is recorded, inspectable and cached like any other; a judge that is also a voting member is a load error, because it would be marking its own homework.
+
+### Two things that are never silent
+
+- **A tie is an error.** With an even membership, or three verdicts and no majority, picking the first vote would be an invisible bug. Name an agent in `decide:` to break ties deliberately.
+- **A member that ERRORS is not a member that voted.** A model or tool failure is not a "reject". By default one failed member fails the block; `member_errors: exclude` decides among the rest, and you have to ask for it — otherwise a three-agent ensemble silently becomes a two-agent one with a different meaning.
+
+### The rest
+
+- Members run **concurrently**, and each is its own merkle node: editing one member's prompt re-runs only that member.
+- `verdicts:` and `to:` live on the **block**, not on members. Every member votes in one vocabulary, and the block routes on the *decision* — a member routing on its own vote would leave the block half-taken.
+- Every member's vote and note is recorded with the step's result, so a run's record says what was decided *and what it was decided from*.

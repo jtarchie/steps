@@ -1,0 +1,19 @@
+# One opinion is a plain agent step. An ensemble exists because a single model
+# has blind spots, which needs at least a second one to notice.
+# expect: ensemble.agents needs at least two members
+
+agents:
+- name: reviewer
+  source:
+    model: openai/gpt-4o
+
+jobs:
+- name: review
+  plan:
+  - ensemble:
+      verdicts: [approve, reject]
+      decide: majority
+      agents:
+      - agent: reviewer
+        inputs: []
+        prompt: Review it.

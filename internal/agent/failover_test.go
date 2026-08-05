@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/merkle"
 )
 
 // TestResolveWithFailoverKeepsThePrimaryForHashing is the mechanism behind the
@@ -64,5 +65,56 @@ func TestResolveWithFailoverKeepsThePrimaryForHashing(t *testing.T) {
 	// conversation: a 200K fallback must not inherit a larger primary's.
 	if effective.ContextWindow != 200_000 {
 		t.Errorf("effective context window = %d, want the fallback model's 200000", effective.ContextWindow)
+	}
+}
+
+// TestEnsembleMembersHashIndependently pins the cost property that makes an
+// ensemble affordable to iterate on: each member is its own merkle node, so
+// editing one member's prompt re-runs only that member rather than the whole
+// panel.
+func TestEnsembleMembersHashIndependently(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{Agents: []config.Agent{
+		{Name: "a", Source: config.AgentSource{Model: "openai/gpt-4o", APIKeyEnv: "K"}},
+		{Name: "b", Source: config.AgentSource{Model: "openai/gpt-4o", APIKeyEnv: "K"}},
+	}}
+
+	member := func(name, prompt string) config.Step {
+		return config.Step{Agent: name, Prompt: prompt, Verdicts: []string{"approve", "reject"}}
+	}
+
+	hashOf := func(t *testing.T, step config.Step) string {
+		t.Helper()
+
+		ri, err := cfg.ResolveAgentInvocation(step)
+		if err != nil {
+			t.Fatalf("ResolveAgentInvocation: %v", err)
+		}
+
+		content, err := merkle.AgentContentMap(cfg, step, ri)
+		if err != nil {
+			t.Fatalf("AgentContentMap: %v", err)
+		}
+
+		hash, err := merkle.HashNode(merkle.NodeKindAgent, content, "")
+		if err != nil {
+			t.Fatalf("HashNode: %v", err)
+		}
+
+		return hash
+	}
+
+	untouched := hashOf(t, member("b", "review it"))
+
+	before := hashOf(t, member("a", "review it"))
+	after := hashOf(t, member("a", "review it carefully"))
+
+	if before == after {
+		t.Error("editing a member's prompt did not change that member's hash")
+	}
+
+	if untouched != hashOf(t, member("b", "review it")) {
+		t.Error("editing one member changed another member's hash")
 	}
 }

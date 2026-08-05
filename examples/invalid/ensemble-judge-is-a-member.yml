@@ -1,0 +1,25 @@
+# A judge weighs the members' reasoning. One that also voted would be marking
+# its own homework.
+# expect: a judge must not mark its own vote
+
+agents:
+- name: reviewer-a
+  source:
+    model: openai/gpt-4o
+- name: reviewer-b
+  source:
+    model: openai/gpt-4o
+
+jobs:
+- name: review
+  plan:
+  - ensemble:
+      verdicts: [approve, reject]
+      decide: reviewer-a
+      agents:
+      - agent: reviewer-a
+        inputs: []
+        prompt: Review it.
+      - agent: reviewer-b
+        inputs: []
+        prompt: Review it.

@@ -642,6 +642,7 @@ func ValidateArtifactFlow(cfg *config.Config, job *config.Job) error {
 // see only the pre-outputs view, since the step may have failed before
 // producing anything.
 func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+	//kindswitch:ignore the container kinds are handled together in the default, via blockBranches
 	switch {
 	case step.Get != "":
 		// A get inside an existing build fetches into the same workspace,
@@ -673,13 +674,34 @@ func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step co
 		}
 
 		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
+	default:
+		// A concurrent block (in_parallel:, race:, ensemble:) validates its
+		// branches; anything else declares no artifacts of its own.
+		//
+		// A race's branches all declare the SAME outputs (config rejects
+		// anything else) and only the winner's are produced, so the block's
+		// effect on the view is one branch's rather than the union — which
+		// falls out of the shared walk without a special case.
+		branches := blockBranches(step)
+		if branches == nil {
+			return nil
+		}
+
+		return validateBlockArtifactFlow(cfg, jobName, i, step, branches, available)
+	}
+}
+
+// blockBranches returns a concurrent block's branches, or nil for an ordinary
+// step.
+func blockBranches(step config.Step) []config.Step {
+	//kindswitch:ignore only the container kinds have branches; the leaf kinds are the point of the default
+	switch {
 	case step.InParallel != nil:
-		return validateBlockArtifactFlow(cfg, jobName, i, step, step.InParallel.Steps, available)
+		return step.InParallel.Steps
 	case step.Race != nil:
-		// Every racer declares the same outputs (config rejects anything
-		// else), and only the winner's are produced — so the block's effect on
-		// the artifact view is one branch's, not the union of all of them.
-		return validateBlockArtifactFlow(cfg, jobName, i, step, step.Race.Steps, available)
+		return step.Race.Steps
+	case step.Ensemble != nil:
+		return step.Ensemble.Agents
 	default:
 		return nil
 	}

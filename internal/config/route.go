@@ -181,6 +181,14 @@ func validateStepRouting(job Job, planIdx, segPos int, step Step, pos map[string
 	// with "to: key %q is not valid (expected success or failure)".
 	inner := step.Unwrap()
 
+	// An ensemble's verdicts live on the block, since every member votes in
+	// the same vocabulary, and the block routes on the DECISION. Treat them as
+	// the step's own for routing, or a to: naming a real verdict would be
+	// rejected as "expected success or failure".
+	if inner.Ensemble != nil {
+		inner.Verdicts = inner.Ensemble.Verdicts
+	}
+
 	if len(inner.Verdicts) > 0 {
 		err := validateVerdictMode(label, step, inner)
 		if err != nil {
@@ -203,7 +211,9 @@ func validateStepRouting(job Job, planIdx, segPos int, step Step, pos map[string
 // to:); inner is what it runs (which carries agent:/verdicts:). The two are the
 // same step unless a try: wraps it.
 func validateVerdictMode(label string, step, inner Step) error {
-	if inner.Agent == "" {
+	// An ensemble is the one non-agent step that produces a verdict: its
+	// members are agents and the block routes on their combined decision.
+	if inner.Agent == "" && inner.Ensemble == nil {
 		return fmt.Errorf("%s: verdicts is only valid on agent steps", label)
 	}
 

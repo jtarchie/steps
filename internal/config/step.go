@@ -96,6 +96,9 @@ type Step struct {
 	// Race runs several steps at once and keeps whichever finishes
 	// successfully first. See Race.
 	Race *Race `yaml:"race,omitempty"`
+	// Ensemble asks several agents the same question and combines their
+	// answers into one verdict to route on. See Ensemble.
+	Ensemble *Ensemble `yaml:"ensemble,omitempty"`
 	// Inputs/Outputs declare which named artifacts a task/agent/put step
 	// draws from and (task/agent only) produces. Each name is either a
 	// resource fetched by an earlier get step or an output produced by an
@@ -403,6 +406,8 @@ func branchesOf(step *Step) map[string][]Step {
 		return map[string][]Step{"in_parallel": step.InParallel.Steps}
 	case step.Race != nil:
 		return map[string][]Step{"race": step.Race.Steps}
+	case step.Ensemble != nil:
+		return map[string][]Step{"ensemble": step.Ensemble.Agents}
 	default:
 		return nil
 	}
@@ -440,6 +445,8 @@ const (
 	StepKindInParallel StepKind = "in_parallel"
 	// StepKindRace is a block whose first successful branch wins.
 	StepKindRace StepKind = "race"
+	// StepKindEnsemble is a block whose members vote on a verdict.
+	StepKindEnsemble StepKind = "ensemble"
 )
 
 // Kind reports which single kind of step s is. ok is false when zero, or
@@ -458,6 +465,7 @@ func (s Step) Kind() (kind StepKind, ok bool) {
 		{StepKindTry, s.Try != nil},
 		{StepKindInParallel, s.InParallel != nil},
 		{StepKindRace, s.Race != nil},
+		{StepKindEnsemble, s.Ensemble != nil},
 	} {
 		if !candidate.set {
 			continue
@@ -576,7 +584,7 @@ func (c *Config) resolveStepReference(step *Step) error {
 		_, err = c.FindAgent(step.Agent)
 	case StepKindTry:
 		err = c.resolveStepReference(step.Try)
-	case StepKindInParallel, StepKindRace:
+	case StepKindInParallel, StepKindRace, StepKindEnsemble:
 		for _, branches := range branchesOf(step) {
 			err = c.resolveBranchReferences(branches)
 		}

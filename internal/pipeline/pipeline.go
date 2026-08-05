@@ -537,6 +537,8 @@ func dispatchByKind(
 		return runParallelStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
 	case config.StepKindRace:
 		return runRaceStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
+	case config.StepKindEnsemble:
+		return runEnsembleStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
 	default: // config.StepKindGet — dispatchNonGetStep is only called for non-get steps
 		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}

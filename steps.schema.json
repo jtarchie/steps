@@ -725,6 +725,45 @@
             }
           }
         },
+        "ensemble": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "agents",
+            "verdicts",
+            "decide"
+          ],
+          "description": "Ask several agents the same question at once and combine their answers into one verdict to route on. Costs N times one agent.",
+          "properties": {
+            "agents": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "$ref": "#/$defs/step"
+              }
+            },
+            "verdicts": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              },
+              "description": "The vocabulary every member votes in, in precedence order for decide: any."
+            },
+            "decide": {
+              "type": "string",
+              "description": "majority, unanimous, any, or the name of an agent that judges."
+            },
+            "member_errors": {
+              "type": "string",
+              "enum": [
+                "fail",
+                "exclude"
+              ],
+              "description": "What a member that failed rather than voted does to the block. Default fail."
+            }
+          }
+        },
         "race": {
           "type": "object",
           "additionalProperties": false,
