@@ -498,6 +498,14 @@ func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string,
 		return parentHash, stepGuardSkipped, nonGetOutcome{}, nil
 	}
 
+	// across: is a MODIFIER, not a kind: the step it sits on is still a task
+	// (or a put, or an agent), it just runs once per combination. Checking it
+	// before resolving the kind is what keeps it off Step.Kind()'s table,
+	// where it would read as a second kind on every step that uses it.
+	if len(step.Across) > 0 {
+		return runAcrossStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
+	}
+
 	kind, ok := step.Kind()
 	if !ok {
 		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)

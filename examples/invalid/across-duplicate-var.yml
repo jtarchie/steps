@@ -1,0 +1,15 @@
+# Two axes with one name: the second would silently shadow the first, and half
+# the matrix would quietly not exist.
+# expect: twice
+
+jobs:
+- name: build
+  plan:
+  - across:
+    - var: suite
+      values: [unit]
+    - var: suite
+      values: [integration]
+    task: check
+    inputs: []
+    run: "true"

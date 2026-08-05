@@ -99,6 +99,10 @@ type Step struct {
 	// Ensemble asks several agents the same question and combines their
 	// answers into one verdict to route on. See Ensemble.
 	Ensemble *Ensemble `yaml:"ensemble,omitempty"`
+	// Across runs this step once per combination of the listed values,
+	// substituting {{ .vars.<name> }} into its fields. Expanded at load, so
+	// each cell is an ordinary plan step. See AcrossVar.
+	Across []AcrossVar `yaml:"across,omitempty"`
 	// Inputs/Outputs declare which named artifacts a task/agent/put step
 	// draws from and (task/agent only) produces. Each name is either a
 	// resource fetched by an earlier get step or an output produced by an

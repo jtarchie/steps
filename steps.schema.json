@@ -699,6 +699,31 @@
           "$ref": "#/$defs/step",
           "description": "Wrap a step so its failure is tolerated. The inner step's hooks and assert fire normally; to: routing sees the real outcome."
         },
+        "across": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Run this step once per combination of values, substituting {{ .vars.<name> }} into run/image/prompt/dir and the step's name. Expanded at load, so each cell caches independently.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "var",
+              "values"
+            ],
+            "properties": {
+              "var": {
+                "type": "string"
+              },
+              "values": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
         "in_parallel": {
           "type": "object",
           "additionalProperties": false,

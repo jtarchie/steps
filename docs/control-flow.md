@@ -211,3 +211,35 @@ The rest of the rules:
 - **Workspace isolation is required**, enforced at load. Losing branches are cancelled while they may be mid-write; under the shared single-directory workspace that lets a loser corrupt the winner's files, and there is no version of that which is safe.
 - **A race needs at least two branches.** One runner is a step with extra words.
 - **When every branch fails, the block fails** and reports all of them. A hedge is not a guarantee.
+
+## `across:` — one step, once per combination
+
+Run the same step for every combination of some values, instead of writing out a near-identical step per cell and keeping them in sync by hand.
+
+```yaml
+- across:
+  - var: go_version
+    values: ["1.25", "1.26"]
+  - var: package
+    values: [internal/agent, internal/pipeline]
+  task: matrix-test
+  image: "golang:{{ .vars.go_version }}"
+  run: go test ./{{ .vars.package }}/...
+```
+
+`across:` is a **modifier**, not a container: the step it sits on is still a task (or a put, or an agent), it just runs once per cell. `{{ .vars.<name> }}` substitutes into the command, the image, the prompt, the working directory, and the step's own name.
+
+### The headline: per-cell caching
+
+Concourse re-runs the **entire** matrix on any change. Here each cell is hashed and cached individually, so changing one value in one axis re-runs only the cells that value appears in.
+
+That works because cells are **siblings**, parented on the step before the block rather than on the block itself — the block's own hash folds in every cell, so parenting cells under it would make one cell's edit change every cell's identity, which is exactly the whole-matrix re-run this exists to avoid. `examples/across.yml` and `across_test.go` pin it.
+
+Cells that are puts or agents are never skipped, for the same reasons those steps never are anywhere else: side effects and non-determinism.
+
+### The rest
+
+- **Cells run in declaration order, not concurrently.** They commonly share a workspace, and a matrix's value is mostly in not hand-maintaining the copies. Put an `in_parallel:` inside a cell if a cell's own work should overlap.
+- **A failing cell does not stop the others.** A matrix asks "which of these combinations work", and stopping at the first red one answers that for exactly one cell. Every failure is reported.
+- **Cells are named for their coordinates** — `check [mode=fast suite=unit]` — unless you interpolate a variable into the name yourself. Without that every cell would share one name, which is unroutable and unreadable in a log.
+- **An empty axis, a duplicate `var:`, or a misspelled `{{ .vars.x }}` are load errors.** Each would otherwise mean silently running the wrong matrix.

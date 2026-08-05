@@ -1,0 +1,57 @@
+# yaml-language-server: $schema=../steps.schema.json
+# across: — run one step once per combination of values, instead of writing
+# out a near-identical step per cell and keeping them in sync by hand.
+#
+# The headline advantage over Concourse: PER-CELL CACHING. Each cell is an
+# ordinary plan step with its own merkle node, so changing one value in one
+# axis re-runs only the cells that value appears in — Concourse re-runs the
+# entire matrix on any change.
+#
+# Cells run in plan order, not concurrently. That is a deliberate limit: the
+# value of a matrix is mostly in not hand-maintaining the copies, and running
+# the cells concurrently would mean giving up the per-cell chaining that makes
+# the caching work.
+#
+# Run: steps test examples/across.yml     (no network, credentials, or model)
+assert:
+  execution:
+    - matrix
+    - named-cells
+
+jobs:
+# Two axes, four cells. `{{ .vars.<name> }}` substitutes into the command, the
+# image, the prompt, the working directory, and the step's own name.
+#
+# The cells are named for their coordinates automatically, because the author
+# interpolated nothing into the name — without that every cell would be called
+# "check", which is unroutable and unreadable in a log.
+- name: matrix
+  plan:
+  - across:
+    - var: suite
+      values: [unit, integration]
+    - var: mode
+      values: [fast, thorough]
+    task: check
+    inputs: []
+    run: echo "{{ .vars.suite }}/{{ .vars.mode }}"
+  assert:
+    execution:
+      - check [mode=fast suite=unit]
+      - check [mode=thorough suite=unit]
+      - check [mode=fast suite=integration]
+      - check [mode=thorough suite=integration]
+    outcome: succeeded
+
+# Name the cells yourself and the automatic suffix stays out of the way.
+- name: named-cells
+  plan:
+  - across:
+    - var: pkg
+      values: [agent, pipeline]
+    task: "test-{{ .vars.pkg }}"
+    inputs: []
+    run: echo "testing {{ .vars.pkg }}"
+  assert:
+    execution: [test-agent, test-pipeline]
+    outcome: succeeded

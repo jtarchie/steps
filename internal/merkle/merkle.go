@@ -37,6 +37,8 @@ const (
 	NodeKindRace NodeKind = "race"
 	// NodeKindEnsemble is an ensemble: block.
 	NodeKindEnsemble NodeKind = "ensemble"
+	// NodeKindAcross is an across: matrix.
+	NodeKindAcross NodeKind = "across"
 )
 
 // Node is one content-addressed step in a job's resolved execution chain.
@@ -842,6 +844,19 @@ func planSteps(
 // may depend on non-deterministic agent work) — including one inherited from
 // a referenced tasks: entry.
 func planNonGetNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, bool, error) {
+	// across: is a modifier rather than a kind (see internal/pipeline's
+	// dispatch): the block is one plan node whose cells are hashed inside it.
+	if len(step.Across) > 0 {
+		node, err := acrossNode(cfg, step, i, parentHash)
+
+		return node, true, err
+	}
+
+	return planKindNode(cfg, step, i, parentHash)
+}
+
+// planKindNode builds the plan node for an ordinary (non-across) step.
+func planKindNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, bool, error) {
 	kind, ok := step.Kind()
 	if !ok {
 		return Node{}, false, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
@@ -930,6 +945,47 @@ func EnsembleNodeContent(cfg *config.Config, step config.Step) (map[string]any, 
 	return withHooks(cfg, step, withWhen(step, withRouting(step, content)))
 }
 
+// AcrossNodeContent hashes an across: block from its cells' content. The
+// axes themselves are not hashed separately: two different matrices that
+// expand to the same cells ARE the same work.
+func AcrossNodeContent(cfg *config.Config, step config.Step, cells []config.Step) (map[string]any, error) {
+	contents := make([]any, 0, len(cells))
+
+	for i := range cells {
+		cellContent, err := stepContentMap(cfg, cells[i])
+		if err != nil {
+			return nil, fmt.Errorf("across cell %d: %w", i, err)
+		}
+
+		contents = append(contents, cellContent)
+	}
+
+	return withHooks(cfg, step, withWhen(step, withRouting(step, map[string]any{"across": contents})))
+}
+
+// CellHash is one across: cell's own content hash, plus whether the cell is
+// the kind of step that may be skipped when it matches.
+//
+// A put or an agent cell is never cacheable, for the same reason a put or
+// agent step never is: side effects, and non-determinism.
+func CellHash(cfg *config.Config, cell config.Step, parentHash string) (string, bool, error) {
+	content, err := stepContentMap(cfg, cell)
+	if err != nil {
+		return "", false, fmt.Errorf("across cell: %w", err)
+	}
+
+	kind, _ := cell.Kind()
+
+	hash, err := HashNode(NodeKind(kind), content, parentHash)
+	if err != nil {
+		return "", false, fmt.Errorf("across cell: %w", err)
+	}
+
+	cacheable := kind == config.StepKindTask && cell.Fix == nil && cell.When == nil && cell.To == nil
+
+	return hash, cacheable, nil
+}
+
 // planTaskNode builds a task step's plan node and decides whether a chain
 // through it may be skipped.
 //
@@ -978,6 +1034,26 @@ func raceNode(cfg *config.Config, step config.Step, i int, parentHash string) (N
 	}
 
 	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindRace, StepIndex: i, Content: content}, nil
+}
+
+// acrossNode builds the plan node for an across: matrix.
+func acrossNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, error) {
+	cells, err := config.ExpandAcross(fmt.Sprintf("step %d", i), step)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (across): %w", i, err)
+	}
+
+	content, err := AcrossNodeContent(cfg, step, cells)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (across): %w", i, err)
+	}
+
+	hash, err := HashNode(NodeKindAcross, content, parentHash)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (across): %w", i, err)
+	}
+
+	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindAcross, StepIndex: i, Content: content}, nil
 }
 
 // ensembleNode builds the plan node for an ensemble: block.

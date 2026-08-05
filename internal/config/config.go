@@ -121,6 +121,7 @@ func (c *Config) validate() error {
 		c.validateInParallel,
 		c.validateRace,
 		c.validateEnsemble,
+		c.validateAcross,
 		c.validateCredentialHandling,
 	}
 

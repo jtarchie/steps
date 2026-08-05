@@ -590,3 +590,24 @@ func (s *Store) PausedJobs(ctx context.Context) ([]PausedJob, error) {
 
 	return paused, nil
 }
+
+// HasNodeSucceeded reports whether a node with this exact hash has already
+// been recorded as succeeded for this job.
+//
+// It is per-NODE memoization, distinct from HasSucceeded's per-CHAIN check.
+// The chain form asks "did this whole path succeed", which is right for a
+// sequence: a changed step invalidates everything after it. An across: cell
+// has no such sequence — cells are siblings, and one cell changing says
+// nothing about another — so a cell asks about itself alone.
+func (s *Store) HasNodeSucceeded(ctx context.Context, jobName, hash string) (bool, error) {
+	var count int
+
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM nodes WHERE hash = ? AND job_name = ? AND status = 'succeeded'`,
+		hash, jobName).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("could not read node %q: %w", hash, err)
+	}
+
+	return count > 0, nil
+}

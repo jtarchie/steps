@@ -1,0 +1,13 @@
+# An axis with no values expands to no steps at all. A matrix that silently
+# runs nothing is the worst possible reading of a typo.
+# expect: has no values
+
+jobs:
+- name: build
+  plan:
+  - across:
+    - var: suite
+      values: []
+    task: check
+    inputs: []
+    run: "true"
