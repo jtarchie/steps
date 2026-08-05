@@ -62,3 +62,54 @@ func TestBudgetIsNotHashed(t *testing.T) {
 		t.Errorf("adding a budget changed the step's content hash:\n without: %v\n with:    %v", without, with)
 	}
 }
+
+// TestFallbackIsNotHashed pins the rule the issue warns is easy to get
+// backwards: which source served a run is AVAILABILITY, not content. Declaring
+// a fallback — or having one fire — must not change a step's cache key, or an
+// upstream outage would silently invalidate every agent step in the pipeline
+// at exactly the moment things are already going badly.
+func TestFallbackIsNotHashed(t *testing.T) {
+	t.Parallel()
+
+	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+
+	hashFor := func(t *testing.T, fallback []config.AgentFallback) string {
+		t.Helper()
+
+		cfg := &config.Config{Agents: []config.Agent{{
+			Name:     "reviewer",
+			Source:   config.AgentSource{Model: "openai/gpt-4o", APIKeyEnv: "TEST_KEY"},
+			Fallback: fallback,
+		}}}
+
+		ri, err := cfg.ResolveAgentInvocation(step)
+		if err != nil {
+			t.Fatalf("ResolveAgentInvocation: %v", err)
+		}
+
+		content, err := AgentContentMap(cfg, step, ri)
+		if err != nil {
+			t.Fatalf("AgentContentMap: %v", err)
+		}
+
+		if _, present := content["fallback"]; present {
+			t.Error("fallback appears in the hashed content")
+		}
+
+		hash, err := HashNode(NodeKindAgent, content, "")
+		if err != nil {
+			t.Fatalf("HashNode: %v", err)
+		}
+
+		return hash
+	}
+
+	without := hashFor(t, nil)
+	with := hashFor(t, []config.AgentFallback{{
+		Source: config.AgentSource{Model: "anthropic/claude-sonnet-4-5", APIKeyEnv: "BACKUP_KEY"},
+	}})
+
+	if without != with {
+		t.Errorf("declaring a fallback changed the step's hash:\n without: %s\n with:    %s", without, with)
+	}
+}

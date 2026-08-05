@@ -197,6 +197,22 @@
           "type": "boolean",
           "description": "Opt this agent out of (or into) the pre-run health check. For a model expected to be slow to wake."
         },
+        "fallback": {
+          "type": "array",
+          "description": "Alternate sources to use, in order, when the primary model is unreachable. Selected at preflight; never affects the step's cache key.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source"
+            ],
+            "properties": {
+              "source": {
+                "$ref": "#/$defs/agentSource"
+              }
+            }
+          }
+        },
         "description": {
           "type": "string",
           "description": "Required when this agent is granted as a sub-agent tool."

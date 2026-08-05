@@ -79,9 +79,13 @@ func (c *resultCache) store(key string, err error, now time.Time) {
 // stay independent of each other.
 func ResetProbeCache() {
 	probeCache.mu.Lock()
-	defer probeCache.mu.Unlock()
-
 	probeCache.entries = map[string]cacheEntry{}
+	probeCache.mu.Unlock()
+
+	selectedSources.mu.Lock()
+	defer selectedSources.mu.Unlock()
+
+	selectedSources.by = map[string]config.AgentSource{}
 }
 
 // Preflight checks every model and MCP server the named agents need, and
@@ -122,7 +126,7 @@ func Preflight(ctx context.Context, cfg *config.Config, agentNames []string, set
 			probeErr := probeModelCached(ctx, ri, settings)
 			if probeErr == nil {
 				healthyEndpoints[ri.BaseURL] = true
-			} else {
+			} else if !failOver(ctx, agent, ri, settings) {
 				failures = append(failures, modelFailure{name: name, ri: ri, err: probeErr})
 			}
 		}
@@ -162,6 +166,76 @@ func withSubAgents(cfg *config.Config, names []string) []string {
 	}
 
 	return out
+}
+
+// failOver tries each of an agent's fallback sources in order and selects the
+// first that answers, reporting whether one did.
+//
+// Preflight is the natural trigger: a primary that fails here is exactly when
+// to pick an alternate — before the run has spent anything, rather than after
+// failing partway in. It fires only on connection-level failures because that
+// is all a probe can produce; a model REFUSING a request is a different class
+// entirely, and falling over on one would silently reroute a legitimate
+// refusal to a possibly less suitable model.
+func failOver(ctx context.Context, agent *config.Agent, primary config.ResolvedInvocation, settings *config.Preflight) bool {
+	for i := range agent.Fallback {
+		candidate, err := primary.WithSource(agent.Fallback[i].Source, agent.CompactAfterTokens)
+		if err != nil {
+			continue // an unresolvable fallback is already a load error
+		}
+
+		probeErr := probeModelCached(ctx, candidate, settings)
+		if probeErr != nil {
+			slog.Warn("agent.fallback_unavailable",
+				"agent", agent.Name, "fallback", i, "model", candidate.ModelName, "error", probeErr)
+
+			continue
+		}
+
+		selectSource(agent.Name, agent.Fallback[i].Source)
+
+		// Loud, not silent. A fallback model can produce meaningfully
+		// different output, and a quality dip caused by an outage must not
+		// look identical to a normal run — otherwise nobody investigates.
+		slog.Warn("agent.failover",
+			"agent", agent.Name,
+			"from", primary.ModelName,
+			"to", candidate.ModelName,
+			"reason", "the primary model did not answer preflight")
+
+		return true
+	}
+
+	return false
+}
+
+// selectedSources records which fallback an agent is running on, for the life
+// of the process. Process-scoped like probeCache and for the same reason: a
+// `steps watch` that failed over should stay failed over rather than
+// re-probing a known-dead primary on every poll.
+//
+//nolint:gochecknoglobals // process-lifetime selection, deliberately shared across runs
+var selectedSources = struct {
+	mu sync.Mutex
+	by map[string]config.AgentSource
+}{by: map[string]config.AgentSource{}}
+
+func selectSource(agentName string, source config.AgentSource) {
+	selectedSources.mu.Lock()
+	defer selectedSources.mu.Unlock()
+
+	selectedSources.by[agentName] = source
+}
+
+// SelectedSource returns the fallback source preflight chose for an agent, if
+// any. internal/pipeline has no need for it; the agent step itself applies it.
+func selectedSource(agentName string) (config.AgentSource, bool) {
+	selectedSources.mu.Lock()
+	defer selectedSources.mu.Unlock()
+
+	source, ok := selectedSources.by[agentName]
+
+	return source, ok
 }
 
 // modelFailure is one model that did not answer, held until every model has

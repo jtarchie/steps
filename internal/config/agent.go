@@ -62,6 +62,9 @@ type Agent struct {
 	// need a pointer for. Like MaxTurns, this is agent-only: no per-step
 	// override.
 	CompactAfterTokens *int `yaml:"compact_after_tokens,omitempty"`
+	// Fallback lists alternate sources to use when the primary is
+	// UNREACHABLE, in order. See AgentFallback.
+	Fallback []AgentFallback `yaml:"fallback,omitempty"`
 	// Preflight opts this agent out of (or into) the pre-run health check.
 	// A pointer so unset inherits defaults.preflight. The case it exists for
 	// is a model expected to be slow to WAKE — a cold local model would fail
@@ -98,6 +101,23 @@ type AgentSource struct {
 	Model            string `yaml:"model"`
 	APIKeyEnv        string `yaml:"api_key_env,omitempty"`
 	StringToolChoice *bool  `yaml:"string_tool_choice,omitempty"`
+}
+
+// AgentFallback is one alternate model to fall over to when the primary is
+// unreachable — a different provider, a different endpoint, or the same
+// endpoint's larger sibling.
+//
+// It exists because a provider outage is not the sort of failure retrying
+// fixes. In one real run a model went unavailable upstream and killed three
+// consecutive runs over roughly 50 minutes, while attempts: amplified the
+// waste rather than absorbing it. The manual fix was exactly this: point the
+// agent at a different model, one line.
+//
+// Only the source can vary. A fallback is meant to be the same agent reaching
+// a different endpoint, not a different persona or a different tool grant —
+// swapping those would make an outage change what the agent is allowed to do.
+type AgentFallback struct {
+	Source AgentSource `yaml:"source"`
 }
 
 // defaultMaxAgentTurns is the default cap on one attempt's tool-calling loop
@@ -316,19 +336,38 @@ func (c *Config) validateAgentEndpoints() error {
 	for i := range c.Agents {
 		agent := c.Agents[i]
 
-		endpoint := agent.Source.Endpoint
-		if endpoint == "" {
-			continue
-		}
-
-		parsed, err := url.Parse(endpoint)
+		err := checkEndpointCredentials(agent.Name, "source", agent.Source)
 		if err != nil {
-			continue // an unparsable endpoint is left for resolveAgentTarget/the HTTP client to reject at run time
+			return err
 		}
 
-		if parsed.User != nil {
-			return fmt.Errorf("agent %q: source.endpoint must not embed credentials (userinfo); use source.api_key_env instead", agent.Name)
+		// Every fallback source gets the same check. Easy to miss precisely
+		// because it is a repeated structure rather than a single field, and
+		// a credential smuggled into a backup endpoint is no less a leak for
+		// being on the path nobody exercises until an outage.
+		for j := range agent.Fallback {
+			err = checkEndpointCredentials(agent.Name, fmt.Sprintf("fallback[%d].source", j), agent.Fallback[j].Source)
+			if err != nil {
+				return err
+			}
 		}
+	}
+
+	return nil
+}
+
+func checkEndpointCredentials(agentName, field string, source AgentSource) error {
+	if source.Endpoint == "" {
+		return nil
+	}
+
+	parsed, err := url.Parse(source.Endpoint)
+	if err != nil {
+		return nil //nolint:nilerr // an unparsable endpoint is left for resolveAgentTarget/the HTTP client to reject at run time
+	}
+
+	if parsed.User != nil {
+		return fmt.Errorf("agent %q: %s.endpoint must not embed credentials (userinfo); use api_key_env instead", agentName, field)
 	}
 
 	return nil

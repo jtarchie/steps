@@ -155,6 +155,15 @@ func (c *Config) validateAgentProviders() error {
 		if err != nil {
 			return fmt.Errorf("agent %q: %w", name, err)
 		}
+
+		// A fallback nobody can resolve is a fallback that will not save you,
+		// discovered during the outage it exists for.
+		for i := range agent.Fallback {
+			_, _, _, _, _, err = resolveAgentTarget(agent.Fallback[i].Source)
+			if err != nil {
+				return fmt.Errorf("agent %q fallback[%d]: %w", name, i, err)
+			}
+		}
 	}
 
 	return nil

@@ -106,8 +106,13 @@ type preparedAgentStep struct {
 	// time this is returned. RunStep must hash THIS copy, not its own step
 	// param, so merkle.AgentContentMap sees the loaded prompt text rather than
 	// the file reference.
-	step     config.Step
-	ri       config.ResolvedInvocation
+	step config.Step
+	// ri is the invocation as it will RUN, after any preflight failover.
+	ri config.ResolvedInvocation
+	// primary is the invocation as CONFIGURED, before failover. The step
+	// hashes against this one, so which source served a run is availability,
+	// not content: a fallback firing cannot invalidate a cache entry.
+	primary  config.ResolvedInvocation
 	space    workspace.StepSpace
 	conv     agentConversation
 	llm      model.LLM
@@ -138,9 +143,9 @@ func (p preparedAgentStep) close(stepLabel string) {
 // nil on a step's first/unrouted execution, or when the caller (RunHook)
 // never participates in routing at all.
 func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace, handoff *Handoff) (preparedAgentStep, error) {
-	ri, err := cfg.ResolveAgentInvocation(step)
+	primary, ri, err := resolveWithFailover(cfg, step)
 	if err != nil {
-		return preparedAgentStep{}, fmt.Errorf("agent %q: %w", step.Agent, err)
+		return preparedAgentStep{}, err
 	}
 
 	space, err := bw.TaskSpace(ctx, step.Agent, step.InputNames(), step.Outputs, nil, nil)
@@ -231,9 +236,41 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	}
 
 	return preparedAgentStep{
-		step: step, ri: ri, space: space, conv: conv, llm: newAgentLLM(ri, apiKey),
+		step: step, ri: ri, primary: primary, space: space, conv: conv, llm: newAgentLLM(ri, apiKey),
 		closers: closers, spillDir: spillDir,
 	}, nil
+}
+
+// resolveWithFailover resolves a step's agent twice over: as CONFIGURED, which
+// is what the step hashes against, and as it will actually RUN, which is the
+// same thing unless preflight failed the primary model over to a fallback.
+//
+// Keeping them apart is what lets an outage change where requests go without
+// invalidating a single cache entry — which source served a run is
+// availability, not content. Everything but the source is identical between
+// the two: an outage changes where requests go, never what the agent is.
+func resolveWithFailover(cfg *config.Config, step config.Step) (primary, effective config.ResolvedInvocation, err error) {
+	primary, err = cfg.ResolveAgentInvocation(step)
+	if err != nil {
+		return primary, effective, fmt.Errorf("agent %q: %w", step.Agent, err)
+	}
+
+	source, ok := selectedSource(primary.AgentName)
+	if !ok {
+		return primary, primary, nil
+	}
+
+	agent, err := cfg.FindAgent(primary.AgentName)
+	if err != nil {
+		return primary, primary, nil //nolint:nilerr // it resolved a moment ago; not worth failing a step over
+	}
+
+	effective, err = primary.WithSource(source, agent.CompactAfterTokens)
+	if err != nil {
+		return primary, primary, fmt.Errorf("agent %q: %w", step.Agent, err)
+	}
+
+	return primary, effective, nil
 }
 
 // prepareStepPrompt resolves a run-time prompt_file: {artifact, path} (see
@@ -393,7 +430,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	// resolveDeferredPrompt) while step.Prompt is still empty — hashing step
 	// here would hash an empty prompt for every such pipeline, colliding all
 	// of them onto the same node regardless of what the file actually said.
-	content, err := merkle.AgentContentMap(cfg, prepared.step, prepared.ri)
+	content, err := merkle.AgentContentMap(cfg, prepared.step, prepared.primary)
 	if err != nil {
 		return StepOutcome{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
@@ -405,11 +442,13 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 
 	slog.Debug("job.step", "job", jobName, "index", i, "kind", "agent", "agent", step.Agent)
 
-	fmt.Printf("agent: %s\n", step.Agent)
+	fmt.Printf("agent: %s%s\n", step.Agent, fallbackBanner(prepared))
 
-	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindAgent, StepIndex: i, Resource: prepared.ri.AgentName, Content: content}
+	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindAgent, StepIndex: i, Resource: prepared.primary.AgentName, Content: content}
 
 	res, err := runPrepared(ctx, prepared)
+	res.model = fallbackModel(prepared)
+
 	printAgentResponse(res)
 
 	previous := &PreviousRun{
@@ -460,6 +499,13 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 // cyclomatic complexity under the linter budget.
 func agentResultRecord(res conversationResult) map[string]any {
 	result := map[string]any{"response": res.text, "turns": res.turns}
+
+	if res.model != "" {
+		// Recorded only when a fallback served the run: a run's output has to
+		// carry which model produced it, or an outage-driven quality dip is
+		// indistinguishable afterwards from a normal run.
+		result["fallback_model"] = res.model
+	}
 
 	if trajectory := recordedTrajectory(res.trajectory); len(trajectory) > 0 {
 		result["trajectory"] = trajectory
@@ -742,9 +788,11 @@ func RunHook(ctx context.Context, cfg *config.Config, step config.Step, bw works
 	}
 	defer prepared.close(step.Agent)
 
-	fmt.Printf("agent: %s\n", step.Agent)
+	fmt.Printf("agent: %s%s\n", step.Agent, fallbackBanner(prepared))
 
 	res, err := runPrepared(ctx, prepared)
+	res.model = fallbackModel(prepared)
+
 	printAgentResponse(res)
 
 	if err != nil {
@@ -757,4 +805,30 @@ func RunHook(ctx context.Context, cfg *config.Config, step config.Step, bw works
 	}
 
 	return nil
+}
+
+// fallbackBanner annotates a step's own output line when it is running on a
+// fallback model, so the difference is visible where the run is being read
+// rather than only in a log line that scrolled past at startup.
+//
+// Visibility is the requirement, not a nicety: a fallback can produce
+// meaningfully different output, and a quality dip caused by an outage that
+// looks identical to a normal run is one nobody investigates.
+func fallbackBanner(prepared preparedAgentStep) string {
+	model := fallbackModel(prepared)
+	if model == "" {
+		return ""
+	}
+
+	return fmt.Sprintf(" (fallback: %s — %s is unavailable)", model, prepared.primary.ModelName)
+}
+
+// fallbackModel names the model serving this step when it is not the
+// configured one, else "".
+func fallbackModel(prepared preparedAgentStep) string {
+	if prepared.ri.ModelName == prepared.primary.ModelName && prepared.ri.BaseURL == prepared.primary.BaseURL {
+		return ""
+	}
+
+	return prepared.ri.ModelName
 }

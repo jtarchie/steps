@@ -212,3 +212,34 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		Image:                image,
 	}, nil
 }
+
+// WithSource returns a copy of ri reaching a different endpoint/model/
+// credential, leaving everything else — persona, dials, limits, tool grant —
+// exactly as resolved.
+//
+// It backs agent failover: an outage changes where a step's requests GO, and
+// must change nothing about what the agent is or is allowed to do. It also
+// keeps the failover path out of hashing: the caller hashes the primary
+// invocation and runs this one, so which source actually served a run is
+// availability, not content, and a fallback firing on one run cannot
+// invalidate a cache entry.
+func (ri ResolvedInvocation) WithSource(source AgentSource, explicitCompactAfterTokens *int) (ResolvedInvocation, error) {
+	baseURL, modelName, apiKeyEnv, requiresKey, stringOnlyToolChoice, err := resolveAgentTarget(source)
+	if err != nil {
+		return ResolvedInvocation{}, fmt.Errorf("fallback source: %w", err)
+	}
+
+	ri.BaseURL = baseURL
+	ri.ModelName = modelName
+	ri.APIKeyEnv = apiKeyEnv
+	ri.RequiresKey = requiresKey
+	ri.StringOnlyToolChoice = stringOnlyToolChoice
+
+	// The compaction budget follows the model that will actually serve the
+	// conversation — a 200K fallback must not inherit a 1M primary's budget.
+	// An explicit compact_after_tokens: still wins, since the operator set it
+	// for this agent, not for one of its endpoints.
+	ri.CompactAfterTokens, ri.ContextWindow = resolveCompactionBudget(modelName, explicitCompactAfterTokens)
+
+	return ri, nil
+}

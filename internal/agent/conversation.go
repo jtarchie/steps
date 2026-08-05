@@ -88,6 +88,11 @@ type conversationResult struct {
 	text       string
 	turns      int
 	trajectory []recordedToolCall
+	// model names the model that actually served this conversation, set ONLY
+	// when it was a fallback rather than the agent's configured primary. It is
+	// recorded with the result so a quality dip caused by an outage can be
+	// traced afterwards instead of looking like a normal run.
+	model string
 	// verdict is the choice from the last SUCCESSFUL call to the synthesized
 	// verdict tool (see agentConversation.verdictTool); "" when the step
 	// declares no verdicts or the model never emitted one. internal/pipeline

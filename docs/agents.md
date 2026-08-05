@@ -358,3 +358,32 @@ Things worth knowing:
 - **A sub-agent has its own budget**, from its own `agents:` entry — it is a separate invocation. Its spend is reported under its own name and rolls into the job total like any other step.
 
 **Tokens only, deliberately.** A token ceiling is provider-agnostic and exact. A money ceiling (`cost: "$2.50"`) would need a per-model price table that goes stale every time any provider changes its rates — an ongoing maintenance burden rather than a one-time cost — so it is left out until someone is prepared to own that table.
+
+## Failover: `fallback:`
+
+When an agent's model is unreachable, try a backup instead of retrying a dead connection.
+
+```yaml
+agents:
+- name: writer
+  source:
+    model: openrouter/some/big-model
+    api_key_env: PRIMARY_KEY
+  fallback:
+  - source:
+      endpoint: https://backup-provider/v1/
+      model: equivalent-model
+      api_key_env: BACKUP_KEY
+```
+
+This is not hypothetical tidying. In one real run a model went unavailable upstream and killed three consecutive runs over roughly 50 minutes, while `attempts:` amplified the waste rather than absorbing it. Diagnosis took 60 seconds by hand — the same account, key and endpoint served a sibling model in 11 seconds — and the fix was exactly the line above.
+
+How it behaves, and why:
+
+- **Preflight is the trigger.** A primary that fails its pre-run probe (see `steps preflight`) is exactly when to pick an alternate: before the run has spent anything, rather than after failing partway in. Sources are tried in order; the first that answers serves the run.
+- **Connection-level failures only.** A probe can only produce a timeout, an unreachable endpoint, or a 5xx. A model *refusing* a request is a different class entirely, already handled by ordinary error handling — falling over on one would silently reroute a legitimate refusal to a possibly less suitable model.
+- **The total is bounded.** Each source gets one probe, and `attempts:` applies to requests within whichever source won — not per source. A primary plus two fallbacks is at most three probes, not a multiplying tail of retries across all of them.
+- **Only the source changes.** Persona, dials, limits and tool grant are untouched: an outage changes where requests go, never what the agent is or is allowed to do. The compaction budget does follow the fallback model, since a 200K backup must not inherit a 1M primary's budget.
+- **Never hashed, with a test.** Which source served a run is *availability*, not content. Declaring a fallback, or having one fire, does not change a step's cache key — the alternative would invalidate every agent step in the pipeline at exactly the moment things are already going badly.
+- **Loudly visible.** A fallback can produce meaningfully different output, so a run that used one says so in the log (`agent.failover`), on the step's own output line (`agent: writer (fallback: equivalent-model — big-model is unavailable)`), and in the recorded result (`fallback_model`). A quality dip caused by an outage that looks identical to a normal run is one nobody investigates.
+- **Every fallback endpoint is validated** like the primary — no credentials in the URL, and the provider prefix must resolve at load. A fallback nobody can resolve is one that will not save you, discovered during the outage it exists for.
