@@ -95,7 +95,8 @@ resource_types:
     # hand-narrowed to 001-*.md. Raise it to walk several per run -- but note
     # `version: every` runs them one after another, and a cold story costs the
     # coder the better part of an hour, so wall-clock is roughly linear in
-    # this number and nothing caps it -- the agent steps carry no timeout:.
+    # this number, and the only cap is the deliberately-unreachable 2h
+    # timeout: each agent step carries.
     check: |
       gh issue list \
         --repo {{ .source.repo | shellquote }} \
@@ -687,6 +688,7 @@ jobs:
     inputs: [stories, repo]
     context_paths: [repo/CLAUDE.md]
     attempts: 2       # whole-conversation restart on a transport failure
+    timeout: 2h
     # Forces a shift-change report for the coder before this step may end.
     # The plan document is the PR artifact; the note is the operational
     # handoff, and it carries a computed list of every file this step actually
@@ -776,6 +778,7 @@ jobs:
     inputs: [stories, repo]
     context_paths: [repo/CLAUDE.md]
     attempts: 2
+    timeout: 2h
     handoff: { note: true }
     prompt: |
       Turn this story into FAILING pipeline fixtures. You write no Go. You
@@ -824,6 +827,7 @@ jobs:
     inputs: [stories, repo]
     context_paths: [repo/CLAUDE.md]
     attempts: 2
+    timeout: 2h
     handoff: { note: true }
     prompt: |
       LAYER 1 of 3: internal/config and steps.schema.json ONLY. Two later
@@ -868,15 +872,23 @@ jobs:
     # attempts: mostly buys a bigger bill for the same failure. Raise it only
     # for faults a fresh conversation could actually clear.
     attempts: 2
-    # NO timeout: on any agent step here, deliberately. A timeout ends the step
-    # outright rather than restarting the conversation (docs/attempts-timeout.md),
-    # so on a long story it does not retry the work -- it destroys it, along
-    # with every turn already spent. These steps are bounded by max_turns: and
-    # by max_visits: on the review loop, which bound the SPEND without
-    # discarding finished work, and that is the bound worth having. The probe
-    # sandbox keeps its own 120s cap: that one guards against a hung command
-    # inside the tree under review, and with no step timeout above it, it is
-    # the only thing that would ever stop one.
+    timeout: 2h
+    # EXPLICIT 2h, on every agent step. Omitting timeout: does NOT mean "no
+    # deadline" -- internal/agent/step.go's agentTimeout falls back to
+    # agentStepTimeout, a 10 MINUTE default, because the OpenAI client sets no
+    # request timeout of its own and relies entirely on ctx. So deleting the
+    # 20m/30m/45m values here did not remove the bound, it TIGHTENED it to ten
+    # minutes, and the next run died on `context deadline exceeded` in
+    # coder_config -- which retry correctly refuses to retry, since a fresh
+    # conversation would hit the same wall.
+    #
+    # 2h is chosen to be effectively unreachable while still stopping a hung
+    # endpoint from blocking forever, which is what agentStepTimeout is
+    # actually for. The real bounds on spend are max_turns: and max_visits:,
+    # which stop work without discarding what is already finished -- a
+    # timeout ends the step outright (docs/attempts-timeout.md) and throws
+    # away every turn already paid for. The probe sandbox keeps its own
+    # separate 120s cap for a hung command inside the tree under review.
     # Both directions on one step: a redo gets a previous_run tool over the
     # last verdict (backward), and it writes the next agent a shift-change
     # report (forward).
@@ -959,6 +971,7 @@ jobs:
     inputs: [stories, repo]
     context_paths: [repo/CLAUDE.md]
     attempts: 2
+    timeout: 2h
     handoff: { note: true }
     prompt: |
       LAYER 3 of 3: documentation. The feature is implemented and its
@@ -1060,6 +1073,7 @@ jobs:
     inputs: [stories, repo]
     context_paths: [repo/CLAUDE.md]
     attempts: 2
+    timeout: 2h
     prompt: |
       You are the quality gate before this story's changes are published.
       Lint, tests and build already passed — your job is the correctness a
@@ -1224,6 +1238,7 @@ jobs:
     inputs: [stories, repo]
     context_paths: [repo/CLAUDE.md]
     attempts: 2
+    timeout: 2h
     prompt: |
       You are the SECOND of two reviewers and you are looking for what is
       MISSING. The first reviewer already asked "is what was built correct?"
