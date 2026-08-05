@@ -40,6 +40,10 @@ func (c *Config) validateBudgets() error {
 		if err != nil {
 			return err
 		}
+
+		if job.MaxConsecutiveFailures < 0 {
+			return fmt.Errorf("job %q: max_consecutive_failures must not be negative (omit it for no circuit breaker)", job.Name)
+		}
 	}
 
 	return nil

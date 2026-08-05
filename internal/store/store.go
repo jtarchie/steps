@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -60,6 +61,15 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
 -- so a version change mid-run still enqueues a fresh pending row for after.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_job
     ON trigger_queue(job_name) WHERE status = 'pending';
+
+-- The watch circuit breaker: how many times in a row a job has failed, and
+-- whether that has taken it out of the rotation. One row per job, created on
+-- first outcome.
+CREATE TABLE IF NOT EXISTS job_breaker (
+    job_name    TEXT PRIMARY KEY,
+    consecutive INTEGER NOT NULL,
+    paused_at   TEXT
+);
 `
 
 // Store is the sqlite-backed persistence layer for job-run/node state.
@@ -472,4 +482,111 @@ func nullableString(b []byte) any {
 	}
 
 	return string(b)
+}
+
+// RecordJobOutcome updates a job's consecutive-failure count and reports
+// whether the job is now paused.
+//
+// It counts triggered RUNS, not the retries inside one — conflating the two
+// would trip the breaker on ordinary flakiness that a retry would have
+// absorbed, which is the opposite of the intent. maxFailures of 0 means the
+// job has no breaker: the count is still kept (so turning one on later starts
+// from a real number rather than zero), but it never pauses.
+func (s *Store) RecordJobOutcome(ctx context.Context, jobName string, succeeded bool, maxFailures int) (paused bool, consecutive int, err error) {
+	if succeeded {
+		return false, 0, s.ResetJobFailures(ctx, jobName)
+	}
+
+	err = s.db.QueryRowContext(ctx, `
+		INSERT INTO job_breaker (job_name, consecutive) VALUES (?, 1)
+		ON CONFLICT (job_name) DO UPDATE SET consecutive = job_breaker.consecutive + 1
+		RETURNING consecutive
+	`, jobName).Scan(&consecutive)
+	if err != nil {
+		return false, 0, fmt.Errorf("could not record failure for job %q: %w", jobName, err)
+	}
+
+	if maxFailures <= 0 || consecutive < maxFailures {
+		return false, consecutive, nil
+	}
+
+	_, err = s.db.ExecContext(ctx,
+		`UPDATE job_breaker SET paused_at = ? WHERE job_name = ? AND paused_at IS NULL`,
+		time.Now().UTC().Format(time.RFC3339), jobName)
+	if err != nil {
+		return false, consecutive, fmt.Errorf("could not pause job %q: %w", jobName, err)
+	}
+
+	return true, consecutive, nil
+}
+
+// ResetJobFailures clears a job's consecutive-failure count and un-pauses it.
+// Any success resets the breaker — including a manual `steps run`, which is
+// the natural way to confirm a fix.
+func (s *Store) ResetJobFailures(ctx context.Context, jobName string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO job_breaker (job_name, consecutive, paused_at) VALUES (?, 0, NULL)
+		 ON CONFLICT (job_name) DO UPDATE SET consecutive = 0, paused_at = NULL`, jobName)
+	if err != nil {
+		return fmt.Errorf("could not reset the failure count for job %q: %w", jobName, err)
+	}
+
+	return nil
+}
+
+// IsJobPaused reports whether the breaker has taken a job out of the rotation.
+func (s *Store) IsJobPaused(ctx context.Context, jobName string) (bool, error) {
+	var pausedAt sql.NullString
+
+	err := s.db.QueryRowContext(ctx,
+		`SELECT paused_at FROM job_breaker WHERE job_name = ?`, jobName).Scan(&pausedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("could not read the breaker for job %q: %w", jobName, err)
+	}
+
+	return pausedAt.Valid, nil
+}
+
+// PausedJob is one job the breaker has stopped, with the count that stopped it.
+type PausedJob struct {
+	Name        string
+	Consecutive int
+	PausedAt    string
+}
+
+// PausedJobs lists every job currently out of the rotation, oldest pause
+// first. It backs `steps jobs`, which is how an operator finds out a nightly
+// job stopped without reading a weekend of logs.
+func (s *Store) PausedJobs(ctx context.Context) ([]PausedJob, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT job_name, consecutive, paused_at FROM job_breaker
+		 WHERE paused_at IS NOT NULL ORDER BY paused_at`)
+	if err != nil {
+		return nil, fmt.Errorf("could not list paused jobs: %w", err)
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	var paused []PausedJob
+
+	for rows.Next() {
+		var job PausedJob
+
+		scanErr := rows.Scan(&job.Name, &job.Consecutive, &job.PausedAt)
+		if scanErr != nil {
+			return nil, fmt.Errorf("could not read a paused job: %w", scanErr)
+		}
+
+		paused = append(paused, job)
+	}
+
+	if rows.Err() != nil {
+		return nil, fmt.Errorf("could not list paused jobs: %w", rows.Err())
+	}
+
+	return paused, nil
 }

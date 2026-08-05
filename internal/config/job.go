@@ -20,6 +20,14 @@ type Job struct {
 	// Budget). A cumulative ceiling, so the step that trips it is rarely the
 	// one that cost the most. Never hashed.
 	Budget *Budget `yaml:"budget,omitempty"`
+	// MaxConsecutiveFailures pauses this job under `steps watch` once it has
+	// failed this many triggered RUNS in a row, until someone resumes it.
+	//
+	// It counts runs, not the attempts: retries inside one — conflating them
+	// would trip the breaker on ordinary flakiness a retry would have
+	// absorbed, which is the opposite of the intent. 0 (the default) means no
+	// breaker.
+	MaxConsecutiveFailures int `yaml:"max_consecutive_failures,omitempty"`
 	// Line is the job's source line in the pipeline file, filled in after
 	// decoding (see stampLines). Never written in YAML and never hashed.
 	Line int `yaml:"-"`

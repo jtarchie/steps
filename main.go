@@ -95,7 +95,16 @@ func (r *RunCmd) Run() error {
 
 	ctx = applyPreflightFlag(ctx, r.NoPreflight)
 
-	return wrapRunErr(pipeline.RunJob(ctx, cfg, job, r.Pin, provider, st, r.Force))
+	runErr := pipeline.RunJob(ctx, cfg, job, r.Pin, provider, st, r.Force)
+
+	// A successful manual run clears the watch circuit breaker: running the
+	// job by hand is the natural way to confirm a fix, and requiring a
+	// separate resume afterwards would be a step nobody remembers.
+	if runErr == nil {
+		_ = st.ResetJobFailures(context.WithoutCancel(ctx), job.Name)
+	}
+
+	return wrapRunErr(runErr)
 }
 
 // WatchCmd polls every resource named by a trigger:true get step, across
@@ -910,6 +919,81 @@ func (p *PreflightCmd) Run() error {
 	}
 
 	fmt.Printf("ok: job %q — every model and MCP server it needs responded\n", job.Name)
+
+	return nil
+}
+
+// JobsCmd inspects and clears the watch circuit breaker.
+//
+// It exists because a paused job is otherwise invisible: `steps watch` stops
+// triggering it and says so once, in output that has long since scrolled past
+// by the time anyone wonders why the nightly summary stopped arriving.
+type JobsCmd struct {
+	Pipeline string `arg:""                                     help:"path to the pipeline YAML file"`
+	Resume   string `help:"job to take out of the paused state"`
+}
+
+// Run lists paused jobs, or resumes one.
+func (j *JobsCmd) Run() error {
+	cfg, err := config.LoadConfig(j.Pipeline)
+	if err != nil {
+		return fmt.Errorf("could not load pipeline: %w", err)
+	}
+
+	st, _, cleanup, err := setup(cfg, j.Pipeline, false)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	ctx := context.Background()
+
+	if j.Resume != "" {
+		return resumeJob(ctx, cfg, st, j.Resume)
+	}
+
+	paused, err := st.PausedJobs(ctx)
+	if err != nil {
+		return fmt.Errorf("could not list paused jobs: %w", err)
+	}
+
+	if len(paused) == 0 {
+		fmt.Println("no jobs are paused")
+
+		return nil
+	}
+
+	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+
+	_, _ = fmt.Fprintln(writer, "JOB\tCONSECUTIVE FAILURES\tPAUSED AT")
+
+	for _, job := range paused {
+		_, _ = fmt.Fprintf(writer, "%s\t%d\t%s\n", job.Name, job.Consecutive, job.PausedAt)
+	}
+
+	err = writer.Flush()
+	if err != nil {
+		return fmt.Errorf("could not write the paused-job table: %w", err)
+	}
+
+	return nil
+}
+
+// resumeJob takes a job back out of the paused state, refusing a name the
+// pipeline does not have — a typo would otherwise report success while
+// resuming nothing.
+func resumeJob(ctx context.Context, cfg *config.Config, st *store.Store, name string) error {
+	_, err := cfg.FindJob(name)
+	if err != nil {
+		return fmt.Errorf("cannot resume: %w", err)
+	}
+
+	err = st.ResetJobFailures(ctx, name)
+	if err != nil {
+		return fmt.Errorf("could not resume job %q: %w", name, err)
+	}
+
+	fmt.Printf("resumed: %s\n", name)
 
 	return nil
 }

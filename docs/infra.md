@@ -72,3 +72,34 @@ The **artifact name is the `get:` value** (`source` here); the **resource fetche
 - **Triggers resolve by the underlying resource**: `steps watch` polls the *resolved* resource once no matter how many aliases reference it, and a version change enqueues every job whose `trigger: true` get resolves to it. `resource_checks` stays keyed by resource name.
 - **Load-time**: `resource:` is valid only on `get` steps and must name an existing resource.
 - **Caching**: an unaliased `get` hashes byte-identically to before this feature; an aliased `get` folds the artifact name into its hash so two aliases of the same resource (identical source/version) stay distinct.
+
+## Circuit breaker: `max_consecutive_failures:`
+
+`steps watch` runs unattended, and a job that fails on every new version will keep firing on every new version — burning model spend or CI minutes on a failure no automatic retry is going to fix. Nobody finds out until someone looks at a bill or a log.
+
+```yaml
+jobs:
+- name: nightly-summary
+  max_consecutive_failures: 3
+```
+
+```
+Fri 02:00  nightly-summary failed (1/3 consecutive)
+Sat 02:00  nightly-summary failed (2/3 consecutive)
+Sun 02:00  nightly-summary PAUSED after 3 consecutive failures — resume with: steps jobs resume nightly-summary
+Mon 02:00  nightly-summary is paused (resume with: steps jobs resume nightly-summary)
+```
+
+```bash
+steps jobs pipeline.yml                              # what is paused, and since when
+steps jobs pipeline.yml --resume nightly-summary     # put it back in the rotation
+```
+
+The decisions behind it:
+
+- **It counts triggered RUNS, not the `attempts:` retries inside one.** Conflating them would trip the breaker on ordinary flakiness that a retry would have absorbed — the opposite of the intent.
+- **Consecutive, not cumulative.** A job that fails, passes, then fails is flaky, not broken. Any success resets the count.
+- **Tripping is loud.** A breaker that trips silently defeats its own purpose; the entire point is that someone should know this stopped. Today that is a printed line plus a `trigger.job_paused` log record. When approval steps land they bring an outbound notification path (a hook firing a `put` to Slack or email), and this should use it — a log line that scrolls past is the weakest form of "someone should know".
+- **An interrupted run does not count.** Ctrl-C is an operator, not a broken job.
+- **Resume is manual, deliberately.** Any successful run clears the breaker — including a manual `steps run`, which is the natural way to confirm a fix. Auto-resume after a time window is explicitly deferred: unattended auto-resume defeats the safety purpose if the underlying breakage (a dead API key, say) has not actually been fixed.
+- **Off by default.** A job that declares no `max_consecutive_failures:` never pauses. The count is still kept, so turning a breaker on later starts from a real number rather than pretending the history did not happen.

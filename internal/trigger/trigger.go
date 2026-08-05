@@ -425,19 +425,30 @@ func drainOne(
 		return true, finalizeMissingJob(ctx, st, jobName, id, err)
 	}
 
+	skipped, err := skipIfPaused(ctx, st, jobName, id)
+	if skipped || err != nil {
+		return true, err
+	}
+
 	fmt.Printf("trigger: running %s\n", jobName)
 
-	runErr := pipeline.RunJob(ctx, cfg, job, pinned, provider, st, force)
+	return true, finalizeRun(ctx, st, job, id, pipeline.RunJob(ctx, cfg, job, pinned, provider, st, force))
+}
 
+// finalizeRun records a completed triggered run: its queue row, its breaker
+// count, and the error the caller reports.
+func finalizeRun(ctx context.Context, st *store.Store, job *config.Job, id int64, runErr error) error {
 	// A job interrupted by ctx-cancellation (SIGINT/SIGTERM mid-run) isn't a
 	// real failure: leave its row running so the next watch startup's
 	// ResetStaleRunning re-queues it, rather than marking it failed and
 	// silently dropping it (only a new version change would otherwise ever
 	// re-trigger it). This is specifically the *interrupted* case — see
 	// wasInterruptedByCancellation. A job that reached a terminal state
-	// (below) is finalized even if cancellation is racing it.
+	// (below) is finalized even if cancellation is racing it. It is also not
+	// counted against the breaker: an operator pressing ctrl-C is not the job
+	// being broken.
 	if runErr != nil && wasInterruptedByCancellation(runErr) {
-		return true, fmt.Errorf("triggered job %q: %w", jobName, runErr)
+		return fmt.Errorf("triggered job %q: %w", job.Name, runErr)
 	}
 
 	status := "done"
@@ -452,12 +463,79 @@ func drainOne(
 	// cause a spurious re-run on the next startup.
 	completeErr := st.CompleteJob(context.WithoutCancel(ctx), id, status, runErr)
 	if completeErr != nil {
-		return true, fmt.Errorf("complete job %q: %w", jobName, completeErr)
+		return fmt.Errorf("complete job %q: %w", job.Name, completeErr)
 	}
 
+	recordBreaker(ctx, st, job, runErr)
+
 	if runErr != nil {
-		return true, fmt.Errorf("triggered job %q: %w", jobName, runErr)
+		return fmt.Errorf("triggered job %q: %w", job.Name, runErr)
+	}
+
+	return nil
+}
+
+// skipIfPaused finalizes a queued row for a job the breaker has taken out of
+// the rotation, rather than leaving it pending — the queue would otherwise
+// fill with work nobody intends to do.
+func skipIfPaused(ctx context.Context, st *store.Store, jobName string, id int64) (bool, error) {
+	paused, err := st.IsJobPaused(ctx, jobName)
+	if err != nil {
+		return false, fmt.Errorf("triggered job %q: %w", jobName, err)
+	}
+
+	if !paused {
+		return false, nil
+	}
+
+	fmt.Printf("trigger: %s is paused (resume with: steps jobs resume %s)\n", jobName, jobName)
+
+	err = st.CompleteJob(context.WithoutCancel(ctx), id, "skipped", nil)
+	if err != nil {
+		return true, fmt.Errorf("triggered job %q: %w", jobName, err)
 	}
 
 	return true, nil
+}
+
+// recordBreaker advances (or clears) a job's consecutive-failure count and
+// says so loudly when the breaker trips.
+//
+// Loudly is the requirement, not a nicety: a breaker that trips silently
+// defeats its own purpose, since the entire point is that someone should know
+// this stopped. A broken nightly job left alone over a weekend fires four
+// times and nobody finds out until a bill arrives.
+//
+// Best-effort by design: failing to record a breaker count must not turn a
+// successful job into a failed one, or mask the real failure of a failed one.
+func recordBreaker(ctx context.Context, st *store.Store, job *config.Job, runErr error) {
+	// Detached: the outcome is already terminal, and a SIGINT arriving here
+	// must not lose the count that a later run reasons about.
+	recCtx := context.WithoutCancel(ctx)
+
+	paused, consecutive, err := st.RecordJobOutcome(recCtx, job.Name, runErr == nil, job.MaxConsecutiveFailures)
+	if err != nil {
+		slog.Warn("trigger.breaker_error", "job", job.Name, "error", err)
+
+		return
+	}
+
+	if runErr == nil || job.MaxConsecutiveFailures <= 0 {
+		return
+	}
+
+	if !paused {
+		fmt.Printf("trigger: %s failed (%d/%d consecutive)\n", job.Name, consecutive, job.MaxConsecutiveFailures)
+
+		return
+	}
+
+	fmt.Printf("trigger: %s PAUSED after %d consecutive failures — resume with: steps jobs resume %s\n",
+		job.Name, consecutive, job.Name)
+
+	slog.Warn("trigger.job_paused",
+		"job", job.Name,
+		"consecutive_failures", consecutive,
+		"max_consecutive_failures", job.MaxConsecutiveFailures,
+		"resume", "steps jobs resume "+job.Name)
 }

@@ -582,6 +582,11 @@
         "budget": {
           "$ref": "#/$defs/budget"
         },
+        "max_consecutive_failures": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Pause this job under steps watch after this many consecutive failed triggered runs. Resume with: steps jobs resume <name>. Omit for no circuit breaker."
+        },
         "on_success": {
           "$ref": "#/$defs/step"
         },
