@@ -1,6 +1,9 @@
 # Compiled binary (module name)
 /steps
 
+# `go build ./...` drops the tools/ checkers here
+/kindswitch
+
 # Persisted job-run state (sqlite)
 .steps/
 .scratch/

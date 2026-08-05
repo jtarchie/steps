@@ -797,6 +797,7 @@ func validateHookArtifactFlow(cfg *config.Config, jobName string, i int, hookNam
 		kind, name string
 	)
 
+	//kindswitch:ignore get: is the one kind rejected in a hook body at load time (see config's validateHookStep)
 	switch {
 	case hook.Task != "":
 		rt, err := cfg.ResolveTask(hook)
@@ -809,6 +810,15 @@ func validateHookArtifactFlow(cfg *config.Config, jobName string, i int, hookNam
 		inputs, kind, name = hook.InputNames(), "put", hook.Put
 	case hook.Agent != "":
 		inputs, kind, name = hook.InputNames(), "agent", hook.Agent
+	case hook.Try != nil:
+		// try: is a legal hook body, and a wrapper declares no inputs of its
+		// own — the step it wraps does, against this same view. Falling into
+		// the no-case branch left those inputs entirely unchecked, which is
+		// the whole failure mode this switch's kind coverage is about.
+		err := validateHookArtifactFlow(cfg, jobName, i, hookName+" (try)", *hook.Try, view)
+		if err != nil {
+			return err
+		}
 	}
 
 	for _, in := range inputs {

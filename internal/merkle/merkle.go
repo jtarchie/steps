@@ -955,6 +955,7 @@ func tryNode(cfg *config.Config, step config.Step, i int, parentHash string) (No
 func stepResourceName(step config.Step) string {
 	inner := step.Unwrap()
 
+	//kindswitch:ignore Unwrap() already resolved Try away, and a get node takes its name from the resource, not here
 	switch {
 	case inner.Task != "":
 		return inner.Task

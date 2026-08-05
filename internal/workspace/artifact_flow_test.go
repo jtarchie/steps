@@ -215,3 +215,61 @@ func TestValidateArtifactFlowThroughTry(t *testing.T) {
 		}
 	})
 }
+
+// TestValidateArtifactFlowTryWrappedHook covers a gap the kindswitch analyzer
+// found: validateHookArtifactFlow dispatched on task/put/agent only, so a
+// try:-wrapped hook — which is a legal hook body — matched no case, was left
+// with an empty input list, and had its wrapped step's inputs: checked against
+// nothing at all.
+func TestValidateArtifactFlowTryWrappedHook(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+
+	t.Run("undeclared input inside a try: hook is caught", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{
+			Name: "j",
+			Plan: []config.Step{{
+				Task: "work",
+				Run:  "true",
+				Hooks: config.Hooks{
+					OnFailure: &config.Step{
+						Try: &config.Step{Task: "notify", Run: "true", Inputs: config.Inputs("missing")},
+					},
+				},
+			}},
+		}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err == nil || !strings.Contains(err.Error(), "not available to this hook") {
+			t.Fatalf("err = %v, want the wrapped hook's undeclared input reported", err)
+		}
+	})
+
+	t.Run("an available input inside a try: hook still passes", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{
+			Name: "j",
+			Plan: []config.Step{
+				{Get: "repo"},
+				{
+					Task: "work",
+					Run:  "true",
+					Hooks: config.Hooks{
+						OnFailure: &config.Step{
+							Try: &config.Step{Task: "notify", Run: "true", Inputs: config.Inputs("repo")},
+						},
+					},
+				},
+			},
+		}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err != nil {
+			t.Fatalf("err = %v, want nil (repo is fetched before the step the hook hangs off)", err)
+		}
+	})
+}

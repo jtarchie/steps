@@ -62,6 +62,7 @@ func (c *Config) validateStepArtifactDecls(label string, step Step) error {
 		return err
 	}
 
+	//kindswitch:ignore Task, Agent and a try: wrapper all declare inputs/outputs the same way, which is what default: validates
 	switch {
 	case step.Get != "":
 		if step.InputsDeclared() || step.Outputs != nil {

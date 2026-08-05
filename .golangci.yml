@@ -71,10 +71,19 @@ linters:
         # config/store/workspace, and hand off to internal/pipeline. It must
         # not reach past internal/pipeline into the packages pipeline itself
         # orchestrates (merkle/resource/agent/shell/template/retry).
+        # tools/ holds build-time checkers, not shipped code. They are package
+        # main too, so they must be carved out of the rule below explicitly.
+        Tools:
+          files:
+            - "**/tools/**"
+          allow:
+            - "$gostd"
+            - "golang.org/x/tools"
         Main:
           files:
             - "$all"
             - "!**/internal/**"
+            - "!**/tools/**"
           allow:
             - "$gostd"
             - "github.com/alecthomas/kong"

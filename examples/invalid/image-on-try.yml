@@ -1,0 +1,13 @@
+# A try: wrapper carries no execution of its own — the step it wraps does, and
+# that step's image: is the one resolved. A wrapper's image: was accepted and
+# then silently ignored, which is worse than refusing it.
+# expect: image is not valid on a try: step
+
+jobs:
+- name: build
+  plan:
+  - try:
+      task: work
+      inputs: []
+      run: "true"
+    image: golang:1.26

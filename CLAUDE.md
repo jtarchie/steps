@@ -24,6 +24,15 @@ go mod tidy          # ~0.1s, currently a no-op — go.mod/go.sum are already ti
 golangci-lint run    # ~2.2s. ~40 linters enabled (.golangci.yml). MUST report "0 issues"
                       # before a change is done — a failing lint blocks the build, always
                       # fix lint before touching logic further.
+go run ./tools/kindswitch ./...
+                      # ~3s. Reports TAGLESS kind dispatch (`switch { case step.Put != "": }`)
+                      # that omits a kind from config.Step's own Kind() table. golangci-lint's
+                      # `exhaustive` covers only the TAGGED spelling (`switch kind {`) — the
+                      # tagless form is `switch true`, with no enum type to reason about, so it
+                      # is outside that analyzer's model, not a config gap. Must exit 0.
+                      # Suppress a deliberate omission with `//kindswitch:ignore <reason>` on
+                      # the line above the switch; a reason is mandatory (a bare directive is
+                      # ignored and the switch keeps reporting).
 go test ./...        # ~11s wall (parallel, default), ~26s with -p 1 (serialized).
                       # Both are fine; -p 1 only buys deterministic interleaved log output,
                       # it is not required for correctness (verified with -race -count=50
@@ -31,7 +40,7 @@ go test ./...        # ~11s wall (parallel, default), ~26s with -p 1 (serialized
 go build -v          # ~2.5s warm cache. Produces ./steps (~56MB).
 ```
 
-All four always pass clean on a fresh checkout. If any of them fails, that is a real regression — do not work around it with `--no-verify`-style shortcuts or by skipping a step.
+All of them always pass clean on a fresh checkout. If any of them fails, that is a real regression — do not work around it with `--no-verify`-style shortcuts or by skipping a step.
 
 **Test suite specifics:**
 - The default `go test ./...` needs no network, no Docker daemon, and no credentials. A handful of heavyweight integration tests (Docker- and btrfs-backed workspace isolation) are gated behind explicit opt-in env vars and skip cleanly otherwise: `STEPS_TEST_DOCKER=1` (pulls a real image, needs a Docker daemon) and `STEPS_TEST_BTRFS_ROOT=<dir>` (needs a real btrfs filesystem, Linux only). Don't set these unless you're specifically working on the Docker/btrfs workspace backends — they're slow and non-hermetic by design.
@@ -67,6 +76,8 @@ One-liner per package:
 - **`internal/store`** — SQLite persistence (`Store`), WAL setup, downstream-trigger tables.
 - **`internal/shell`** — command execution (`HostRunner`/`DockerRunner`), output capture/truncation.
 - **`internal/template`**, **`internal/retry`**, **`internal/outcome`** — YAML templating, linear-backoff retry, step/job error classification.
+
+**`tools/`** holds build-time checkers, not shipped code — currently just `tools/kindswitch`, the `go/analysis` pass in the validation sequence above. It reads `config.Step`'s kind set out of `Step.Kind()`'s own table and publishes it as an analysis Fact, so **adding a kind to that table is the single edit that widens what it checks** — there is no second list to keep in sync. Its own fixtures live in `tools/kindswitch/testdata/`.
 
 Config files: **`.golangci.yml`** (lint rules + the `depguard` dependency graph above) — this *is* the pre-check-in validation pipeline, there's no separate CI file. **`go.mod`** pins the Go version and every dependency.
 

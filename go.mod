@@ -14,6 +14,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sys v0.47.0
+	golang.org/x/tools v0.47.0
 	google.golang.org/adk/v2 v2.1.0
 	google.golang.org/genai v1.66.0
 	modernc.org/sqlite v1.55.0
@@ -52,6 +53,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/text v0.40.0 // indirect

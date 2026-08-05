@@ -37,11 +37,18 @@ func (c *Config) validateImages() error {
 				return nil
 			}
 
+			//kindswitch:ignore Task and Agent are the kinds image: is FOR — the cases here are the rejections
 			switch {
 			case step.Get != "":
 				return fmt.Errorf("%s (get %q): image is not valid on get steps", label, step.Get)
 			case step.Put != "":
 				return fmt.Errorf("%s (put %q): image is not valid on put steps; set it on the resource_type instead", label, step.Put)
+			case step.Try != nil:
+				// A wrapper's own image: was accepted and then ignored:
+				// resolveStepImage recurses into step.Try and reads the
+				// wrapped step's image, never the wrapper's. Silently doing
+				// nothing is worse than refusing.
+				return fmt.Errorf("%s: image is not valid on a try: step; set it on the step try: wraps", label)
 			}
 
 			return nil
