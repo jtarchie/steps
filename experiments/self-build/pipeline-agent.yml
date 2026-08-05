@@ -217,6 +217,15 @@ agents:
   # internal/agent/openrouter.go is doing real work here.
   source: &fast { model: opencode/deepseek-v4-pro }
   max_turns: 200
+  # 80% of deepseek-v4-pro real 1M window. The DEFAULT is 102,400 --
+  # 80% of an ASSUMED 128K window (docs/agents-internals.md) -- and
+  # leaving it there compacted at a tenth of the actual capacity, which
+  # is how a run hit compaction_stalled: after summarizing, the recent
+  # window alone still blew the tiny budget, so compaction gave up for
+  # good. The 20% headroom is load-bearing, not padding: the estimate
+  # counts the conversation only, never the system prompt or the tool
+  # schemas resent with every request.
+  compact_after_tokens: &ctx_1m 800000
   system_file: "@builtin/planner"
   tools:
   - mcp: gopls
@@ -253,6 +262,7 @@ agents:
 - name: spec
   source: *fast
   max_turns: 200
+  compact_after_tokens: *ctx_1m
   system_file: "@builtin/builder"
   tools:
   - read_file
@@ -444,12 +454,16 @@ agents:
 # Defined runtime-layer-first only because YAML anchors must precede their
 # aliases; the PLAN order below is config -> runtime -> docs.
 #
-# Qwen3 Coder Flash: a coding agent model specializing in autonomous
-# programming via tool calling, which is the failure mode that matters over
-# 150 turns -- one malformed tool call costs a turn. $0.195/M in, $0.975/M
-# out, $0.039/M cached read, 1M context so the conversation never needs
-# compacting. Single first-party provider (Alibaba), so there is exactly one
-# prompt cache to stay warm in.
+# This comment used to describe Qwen3 Coder Flash and ended "1M context so
+# the conversation never needs compacting". Both halves outlived their truth
+# and the second one did real damage: the slot moved to deepseek-v4-pro
+# (also 1M) but "never needs compacting" was never TRUE of either, because
+# compaction is on by DEFAULT at 102,400 tokens and no agent here overrode
+# it. A comment asserting the problem could not happen sat directly above
+# the agent that hit it. That is the doc-contradicts-code class this
+# pipeline exists to catch, in the pipeline's own source -- so the budget is
+# now set explicitly on every agent above, where it is checkable, rather
+# than assumed in prose.
 - name: coder
   # deepseek-v4-pro, same as *fast. This slot was split off to run a cheaper
   # coding model (the two personas want different things: one reads and
@@ -462,6 +476,7 @@ agents:
   # different model again is one line.
   source: &coding { model: opencode/deepseek-v4-pro }
   max_turns: 200
+  compact_after_tokens: *ctx_1m
   system_file: "@builtin/builder"
   tools:
   - mcp: gopls
@@ -530,6 +545,7 @@ agents:
 - name: coder_config
   source: *coding
   max_turns: 200
+  compact_after_tokens: *ctx_1m
   system_file: "@builtin/builder"
   tools:
   - mcp: gopls
@@ -550,6 +566,7 @@ agents:
 - name: coder_docs
   source: *coding
   max_turns: 200
+  compact_after_tokens: *ctx_1m
   system_file: "@builtin/builder"
   tools:
   - mcp: gopls
@@ -601,6 +618,7 @@ agents:
 - name: reviewer
   source: *fast
   max_turns: 200
+  compact_after_tokens: *ctx_1m
   system_file: "@builtin/reviewer"
   tools:
   - mcp: gopls
@@ -647,6 +665,7 @@ agents:
 - name: completeness
   source: *fast
   max_turns: 200
+  compact_after_tokens: *ctx_1m
   system_file: "@builtin/reviewer"
   tools:
   - mcp: gopls
