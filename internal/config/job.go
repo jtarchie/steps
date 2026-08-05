@@ -16,6 +16,10 @@ type Job struct {
 	// job's run must have produced (see Assert). A match clears the plan's
 	// failure; a mismatch fails the job. Never hashed.
 	Assert *Assert `yaml:"assert,omitempty"`
+	// Budget caps what every agent step in this job may spend TOGETHER (see
+	// Budget). A cumulative ceiling, so the step that trips it is rarely the
+	// one that cost the most. Never hashed.
+	Budget *Budget `yaml:"budget,omitempty"`
 	// Line is the job's source line in the pipeline file, filled in after
 	// decoding (see stampLines). Never written in YAML and never hashed.
 	Line int `yaml:"-"`

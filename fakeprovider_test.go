@@ -48,6 +48,32 @@ type turn struct {
 	calls  []scriptedCall
 	status int
 	body   string
+	// usage, when non-zero, adds the provider's own token accounting to the
+	// response. Real providers report it on every completion; scripting it is
+	// what lets a test drive budget: enforcement, which counts reported usage
+	// and never an estimate.
+	usage int
+}
+
+// spending returns tn with the provider reporting total tokens for it.
+func (tn turn) spending(total int) turn {
+	tn.usage = total
+
+	return tn
+}
+
+// usageJSON renders the usage block, split across prompt and completion the
+// way a real completion does. Empty when the turn scripts no usage, so the
+// no-usage-reported path stays exercised too.
+func (tn turn) usageJSON() string {
+	if tn.usage == 0 {
+		return ""
+	}
+
+	prompt := tn.usage * 8 / 10
+
+	return fmt.Sprintf(`,"usage":{"prompt_tokens":%d,"completion_tokens":%d,"total_tokens":%d}`,
+		prompt, tn.usage-prompt, tn.usage)
 }
 
 // says scripts a plain assistant reply — the message that ends a
@@ -102,8 +128,8 @@ func (tn turn) render(w http.ResponseWriter) {
 
 	if len(tn.calls) == 0 {
 		_, _ = fmt.Fprintf(w, `{"id":"fake","object":"chat.completion","created":0,"model":"test-model",
-			"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":%s}}]}`,
-			mustJSON(tn.text))
+			"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":%s}}]%s}`,
+			mustJSON(tn.text), tn.usageJSON())
 
 		return
 	}
@@ -122,8 +148,8 @@ func (tn turn) render(w http.ResponseWriter) {
 	}
 
 	_, _ = fmt.Fprintf(w, `{"id":"fake","object":"chat.completion","created":0,"model":"test-model",
-		"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[%s]}}]}`,
-		strings.Join(calls, ","))
+		"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[%s]}}]%s}`,
+		strings.Join(calls, ","), tn.usageJSON())
 }
 
 // mustJSON renders v as a JSON literal for embedding in a response template.

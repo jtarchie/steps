@@ -171,6 +171,9 @@
         "source": {
           "$ref": "#/$defs/agentSource"
         },
+        "budget": {
+          "$ref": "#/$defs/budget"
+        },
         "description": {
           "type": "string",
           "description": "Required when this agent is granted as a sub-agent tool."
@@ -537,6 +540,9 @@
         "assert": {
           "$ref": "#/$defs/assert"
         },
+        "budget": {
+          "$ref": "#/$defs/budget"
+        },
         "on_success": {
           "$ref": "#/$defs/step"
         },
@@ -765,6 +771,21 @@
           }
         }
       ]
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tokens"
+      ],
+      "description": "A ceiling on what agent work may spend. On an agent it is per invocation; on a job it is the cumulative total across every agent step. Never hashed.",
+      "properties": {
+        "tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum provider-reported tokens. Omit budget: entirely for no ceiling; 0 is rejected."
+        }
+      }
     },
     "assert": {
       "type": "object",

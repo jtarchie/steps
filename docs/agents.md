@@ -316,3 +316,45 @@ detection, OpenRouter prompt caching, how `timeout:`/`attempts:` interact, and
 conversation compaction — are in [agents-internals.md](agents-internals.md).
 Reach for it when behavior surprises you; you don't need it to write a
 pipeline.
+
+## Budgets: `budget.tokens`
+
+An agent step can loop, hold a long conversation where every turn re-sends the whole history, and retry. `budget:` is the ceiling on that — the AI equivalent of `timeout:`.
+
+```yaml
+agents:
+- name: writer
+  source: { model: openrouter/anthropic/claude-sonnet-4-5 }
+  budget:
+    tokens: 200000      # per invocation of this agent
+
+jobs:
+- name: publish
+  budget:
+    tokens: 500000      # cumulative, across every agent step in the job
+  plan: [...]
+```
+
+**Reporting happens whether or not you set one**, which is the point: it carries no risk, and it is what tells you which ceilings are even sensible. Every job that ran an agent step prints what it cost.
+
+```
+usage: 341,204 tokens across 4 agent step(s)
+  planner          120,338
+  coder            181,402
+  reviewer          39,464
+```
+
+Things worth knowing:
+
+- **The numbers are the provider's own reported usage**, not the `len(text)/4` estimate `compact_after_tokens:` uses to decide when to summarize. A provider that reports no usage contributes nothing — a ceiling must never trip on a number nobody reported, so this deliberately does not fall back to an estimate.
+- **A breach stops the step before its next tool calls run**, so a step that has already blown its ceiling does not go on to have side effects.
+- **A job breach reports the running total per step**, because a cumulative ceiling is rarely tripped by the step that cost the most:
+  ```
+  job budget exceeded: cap 200000 tokens, spent 200000
+    running total: planner 120338 -> coder 79662 (tripped here)
+  ```
+- **A breach classifies as `errored`, not `failed`.** It is an operational limit being hit, not the model producing a bad answer — so `on_error` fires, `on_failure` does not, and no `to:` route can treat it as a decision the model made. The same treatment timeouts get.
+- **Never hashed.** Like `assert:` and `timeout:`, a budget is an operational limit: adding one after reading a usage report must not invalidate every cached step, which would cost exactly what the budget exists to control.
+- **A sub-agent has its own budget**, from its own `agents:` entry — it is a separate invocation. Its spend is reported under its own name and rolls into the job total like any other step.
+
+**Tokens only, deliberately.** A token ceiling is provider-agnostic and exact. A money ceiling (`cost: "$2.50"`) would need a per-model price table that goes stale every time any provider changes its rates — an ongoing maintenance burden rather than a one-time cost — so it is left out until someone is prepared to own that table.

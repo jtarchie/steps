@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/jtarchie/steps/internal/agent"
@@ -83,6 +84,14 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	// concurrent jobs under `steps watch --max-concurrent` never share a
 	// provider pin; ignored outright by every non-OpenRouter provider.
 	ctx = agent.WithNewRun(ctx, job.Name)
+
+	// Account for what this job's agent steps spend, and enforce the job's
+	// cumulative ceiling if it set one. Installed here, not per step, because
+	// a job budget is by definition the sum across steps.
+	usage := agent.NewRunUsage(jobBudgetTokens(job))
+	ctx = agent.WithRunUsage(ctx, usage)
+
+	defer reportJobUsage(job.Name, usage)
 
 	// Everything from here on has a workspace to run job-level hooks in, so
 	// funnel planning and execution into one outcome and dispatch the job's
@@ -1326,4 +1335,64 @@ func fetchGetStep(ctx context.Context, cfg *config.Config, artifact string, reso
 	}
 
 	return nil
+}
+
+// jobBudgetTokens is a job's cumulative agent-token ceiling, or 0 for none.
+func jobBudgetTokens(job *config.Job) int {
+	if job.Budget == nil {
+		return 0
+	}
+
+	return job.Budget.Tokens
+}
+
+// reportJobUsage prints what a job's agent steps cost, with the per-step
+// breakdown.
+//
+// It runs whether or not a budget was set, and whether or not the job
+// succeeded. Being able to see "341,204 tokens across 4 agent steps" is
+// valuable on its own — it carries no correctness risk, and it is what tells
+// an operator which ceilings are even sensible to set. A job with no agent
+// steps prints nothing.
+func reportJobUsage(jobName string, usage *agent.RunUsage) {
+	steps := usage.Steps()
+	if len(steps) == 0 {
+		return
+	}
+
+	total := usage.Total()
+
+	fmt.Printf("usage: %s tokens across %d agent step(s)\n", humanCount(total), len(steps))
+
+	for _, step := range steps {
+		fmt.Printf("  %-16s %s\n", step.Step, humanCount(step.Total))
+	}
+
+	fields := []any{"job", jobName, "total_tokens", total, "agent_steps", len(steps)}
+	if budget := usage.Budget(); budget > 0 {
+		fields = append(fields, "budget_tokens", budget)
+	}
+
+	slog.Info("job.usage", fields...)
+}
+
+// humanCount renders a token count with thousands separators, since the
+// numbers involved are large enough that 341204 and 3412040 read alike.
+func humanCount(n int) string {
+	digits := strconv.Itoa(n)
+	if len(digits) <= 3 {
+		return digits
+	}
+
+	var out strings.Builder
+
+	for i, r := range digits {
+		if i > 0 && (len(digits)-i)%3 == 0 {
+			out.WriteByte(',')
+		}
+
+		out.WriteRune(r)
+	}
+
+	return out.String()
 }

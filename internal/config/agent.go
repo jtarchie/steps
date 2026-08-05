@@ -62,6 +62,10 @@ type Agent struct {
 	// need a pointer for. Like MaxTurns, this is agent-only: no per-step
 	// override.
 	CompactAfterTokens *int `yaml:"compact_after_tokens,omitempty"`
+	// Budget caps what one invocation of this agent may spend (see Budget).
+	// Per invocation, not per job: a job budget is the cumulative ceiling and
+	// lives on the job. Never hashed.
+	Budget *Budget `yaml:"budget,omitempty"`
 	// Tools is the grant: the built-in tools this agent may use plus any
 	// reusable custom tool definitions. A step selects a subset by name and
 	// may add its own inline custom tools. Empty grants all built-ins.

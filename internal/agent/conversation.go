@@ -127,6 +127,11 @@ type agentConversation struct {
 	// in compaction.go. 0 disables compaction entirely: the turn loop then
 	// behaves exactly as it did before this field existed.
 	compactAfterTokens int
+	// usage tallies the provider's own reported token counts across this
+	// conversation and enforces the agent's per-invocation budget: (see
+	// usage.go). Never nil — a step with no budget still counts, because the
+	// report is worth having on its own.
+	usage *stepUsage
 }
 
 // buildAgentRequest builds a fresh LLM request (system + user prompt + tools
@@ -231,6 +236,11 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 // defaultCompactAfterTokens), unlike every other value-gated field in this
 // package.
 func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversation) (conversationResult, error) {
+	// Whatever happens below, report what this conversation spent and roll it
+	// into the job total.
+	conv.usage = attachUsage(ctx, conv.usage)
+	defer conv.usage.finish()
+
 	req := buildAgentRequest(conv)
 	satisfied := make(map[string]bool, len(conv.tools.required))
 	// callCounts is local to this call: one conversation, one budget per tool.
@@ -262,7 +272,9 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 			compactionSummary, compactionStalled = maybeCompact(ctx, llm, req, conv, compactionSummary, compactionStalled)
 		}
 
-		resp, err := generateOnce(ctx, llm, req)
+		// The budget is checked before the turn's tool calls run: a step that
+		// has already blown its ceiling must not go on to have side effects.
+		resp, err := conv.generateWithinBudget(ctx, llm, req)
 		if err != nil {
 			return conversationResult{turns: turn, trajectory: trajectory, verdict: verdict, note: note, handoffNote: handoffNote}, err
 		}
@@ -271,12 +283,9 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 
 		calls, text := collectParts(resp.Content)
 		if len(calls) == 0 {
-			missing := unsatisfiedRequiredTools(conv.tools.required, satisfied)
-			if len(missing) == 0 {
+			if conv.finishOrForce(req, satisfied) {
 				return conversationResult{text: text, turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note, handoffNote: handoffNote}, nil
 			}
-
-			forceRequiredTool(req, missing[0], conv.toolChoiceStringOnly)
 
 			continue
 		}
@@ -424,6 +433,50 @@ func generateOnce(ctx context.Context, llm model.LLM, req *model.LLMRequest) (*m
 	}
 
 	return nil, errors.New("agent: model returned no response")
+}
+
+// generateWithinBudget makes one model call and folds its reported token usage
+// into this step's and the job's totals, failing the conversation when either
+// ceiling is breached.
+func (conv agentConversation) generateWithinBudget(ctx context.Context, llm model.LLM, req *model.LLMRequest) (*model.LLMResponse, error) {
+	resp, err := generateOnce(ctx, llm, req)
+	if err != nil {
+		return nil, err
+	}
+
+	if conv.usage.record(resp) {
+		return nil, conv.usage.exceededError()
+	}
+
+	return resp, nil
+}
+
+// attachUsage binds a conversation's token accounting to the job it runs in.
+// A nil counter is defaulted rather than required, so a caller that only cares
+// about the conversation (every unit test in this package) needn't build one.
+func attachUsage(ctx context.Context, usage *stepUsage) *stepUsage {
+	if usage == nil {
+		usage = &stepUsage{}
+	}
+
+	usage.run = RunUsageFrom(ctx)
+
+	return usage
+}
+
+// finishOrForce handles a turn in which the model requested no tools. It
+// reports true when the conversation is genuinely done — every required tool
+// has succeeded — and otherwise constrains the next turn to the first
+// still-unsatisfied required tool and reports false.
+func (conv agentConversation) finishOrForce(req *model.LLMRequest, satisfied map[string]bool) bool {
+	missing := unsatisfiedRequiredTools(conv.tools.required, satisfied)
+	if len(missing) == 0 {
+		return true
+	}
+
+	forceRequiredTool(req, missing[0], conv.toolChoiceStringOnly)
+
+	return false
 }
 
 // collectParts splits a model turn into the tool calls it requested and the

@@ -127,7 +127,11 @@ type ResolvedInvocation struct {
 	// "compacting at 102400 against a 1000000 window" — the mismatch that was
 	// previously invisible until compaction stalled.
 	ContextWindow int
-	ToolSpecs     []ToolSpec
+	// BudgetTokens is the ceiling on provider-reported tokens this one
+	// invocation may spend (see Agent.Budget); 0 means no ceiling. Never
+	// hashed — it is an operational limit, like Timeout.
+	BudgetTokens int
+	ToolSpecs    []ToolSpec
 	// StringOnlyToolChoice, when true, forces a required tool call (see
 	// forceRequiredTool in internal/agent) via tool_choice: "required"
 	// instead of a named function object — for providers whose
@@ -202,6 +206,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		Timeout:              step.Timeout,
 		CompactAfterTokens:   compactAfterTokens,
 		ContextWindow:        contextWindow,
+		BudgetTokens:         budgetTokens(agent.Budget),
 		ToolSpecs:            toolSpecs,
 		StringOnlyToolChoice: stringOnlyToolChoice,
 		Image:                image,

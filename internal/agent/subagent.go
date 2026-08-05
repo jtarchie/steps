@@ -147,6 +147,10 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		},
 		maxTurns:             c.ri.MaxTurns,
 		toolChoiceStringOnly: c.ri.StringOnlyToolChoice,
+		// A sub-agent gets its OWN budget, from its own agents: entry — it is
+		// a separate invocation of a separate agent. Its spend is reported
+		// under its own name and rolls up into the job total like any other.
+		usage: &stepUsage{name: c.ri.AgentName, budget: c.ri.BudgetTokens},
 	}
 
 	fmt.Printf("agent: %s (sub-agent)\n", c.ri.AgentName)
