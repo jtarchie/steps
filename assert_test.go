@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -106,24 +107,110 @@ jobs:
 	wantRunError(t, path)
 }
 
-// TestStepsTestFixturePasses runs the shipped self-verifying fixture through
-// the `test` subcommand end-to-end.
-func TestStepsTestFixturePasses(t *testing.T) {
-	err := run([]string{"test", filepath.Join("examples", "flow.yml")})
+// exampleSkipMarker opts an example out of TestExamplesRun. It is deliberately
+// OPT-OUT: an example that says nothing must run offline and pass. An opt-in
+// marker would have let examples/try.yml ship calling `make build` in a repo
+// with no Makefile — unrunnable, and silently uncovered, because an unmarked
+// file would simply not have been run.
+//
+// The reason text after the marker is for a human reading the file; only the
+// marker itself is matched.
+const exampleSkipMarker = "# steps-test: skip"
+
+// TestExamplesRun runs every shipped example through `steps test`, except
+// those explicitly marked as needing something this suite has not got.
+//
+// README.md and CLAUDE.md both promise the examples are runnable and
+// self-contained, and several are self-verifying regression fixtures. Nothing
+// enforced either half: TestValidateExamples proved they PARSE, and two
+// hardcoded tests ran two of them. A non-runnable example passes `go fmt`,
+// `go mod tidy`, `golangci-lint`, `go test` and `go build` without complaint,
+// because none of those execute it — which is exactly how one shipped.
+//
+// Adding an example therefore opts it into this test automatically, and
+// exempting one costs a visible line in the file saying why.
+func TestExamplesRun(t *testing.T) {
+	matches, err := filepath.Glob(filepath.Join("examples", "*.yml"))
 	if err != nil {
-		t.Fatalf("steps test examples/flow.yml: %v", err)
+		t.Fatal(err)
+	}
+
+	if len(matches) == 0 {
+		t.Fatal("no examples found")
+	}
+
+	for _, path := range matches {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			body, readErr := os.ReadFile(path) //nolint:gosec // repo-owned example file
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+
+			if strings.Contains(string(body), exampleSkipMarker) {
+				t.Skipf("%s opts out (%s)", path, exampleSkipMarker)
+			}
+
+			// Each example runs in its own directory so the state.db a run
+			// creates lands in a temp dir rather than examples/.
+			dir := t.TempDir()
+			dst := filepath.Join(dir, filepath.Base(path))
+
+			writeErr := os.WriteFile(dst, body, 0o600) //nolint:gosec // dst is under t.TempDir(), name from a repo-owned glob
+			if writeErr != nil {
+				t.Fatal(writeErr)
+			}
+
+			copyExampleDeps(t, filepath.Dir(path), dir)
+
+			runErr := run([]string{"test", dst})
+			if runErr != nil {
+				t.Errorf("steps test %s: %v", path, runErr)
+			}
+		})
 	}
 }
 
-// TestStepsTestTryFixturePasses runs the try: fixture, whose five jobs pin the
-// behaviors a wrapper is easy to get wrong: the plan continues past a tolerated
-// failure, the WRAPPED step's hooks fire on its real outcome, a to: on the
-// wrapper routes on that outcome rather than the tolerated one, a try: hook
-// body doesn't fail its green step, and try: nests.
-func TestStepsTestTryFixturePasses(t *testing.T) {
-	err := run([]string{"test", filepath.Join("examples", "try.yml")})
+// copyExampleDeps mirrors the sibling files an example loads from disk —
+// examples/tasks/ holds the run_file: targets flow.yml references — into the
+// temp directory the example is executed from, since those paths resolve
+// against the pipeline file's own directory.
+func copyExampleDeps(t *testing.T, srcDir, dstDir string) {
+	t.Helper()
+
+	entries, err := os.ReadDir(srcDir)
 	if err != nil {
-		t.Fatalf("steps test examples/try.yml: %v", err)
+		t.Fatal(err)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		sub := filepath.Join(dstDir, entry.Name())
+
+		mkErr := os.MkdirAll(sub, 0o750)
+		if mkErr != nil {
+			t.Fatal(mkErr)
+		}
+
+		files, readErr := os.ReadDir(filepath.Join(srcDir, entry.Name()))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+
+		for _, file := range files {
+			body, fileErr := os.ReadFile(filepath.Join(srcDir, entry.Name(), file.Name())) //nolint:gosec // repo-owned example file
+			if fileErr != nil {
+				t.Fatal(fileErr)
+			}
+
+			//nolint:gosec // sub is under t.TempDir(), name from a repo-owned dir listing
+			wErr := os.WriteFile(filepath.Join(sub, file.Name()), body, 0o600)
+			if wErr != nil {
+				t.Fatal(wErr)
+			}
+		}
 	}
 }
 

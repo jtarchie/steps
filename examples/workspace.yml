@@ -1,4 +1,5 @@
 # yaml-language-server: $schema=../steps.schema.json
+# steps-test: skip -- clones over the network and the release job needs a live LLM
 # Demonstrates opt-in Concourse-style workspace isolation. Without a
 # workspace: block, every step in a triggered build shares one mutable
 # directory and any task/agent can corrupt state for a later step — that's

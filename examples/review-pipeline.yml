@@ -1,4 +1,5 @@
 # yaml-language-server: $schema=../steps.schema.json
+# steps-test: skip -- the agent step needs a live LLM
 # A realistic pipeline end to end: fetch, build, have an agent judge the
 # result, publish. Every other example demonstrates one feature area; this one
 # shows the shape a first real pipeline actually takes.
