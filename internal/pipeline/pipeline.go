@@ -90,6 +90,10 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	// provider pin; ignored outright by every non-OpenRouter provider.
 	ctx = agent.WithNewRun(ctx, job.Name)
 
+	// Remember which versions this run fetched, so a successful job can mark
+	// them green for any downstream job's passed: constraint.
+	ctx, fetched := withFetchedVersions(ctx)
+
 	// Account for what this job's agent steps spend, and enforce the job's
 	// cumulative ceiling if it set one. Installed here, not per step, because
 	// a job budget is by definition the sum across steps.
@@ -120,6 +124,8 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	if finalErr != nil {
 		return finalErr
 	}
+
+	recordPassedVersions(ctx, st, job.Name, fetched)
 
 	slog.Info("job.done", "job", job.Name)
 
@@ -758,6 +764,8 @@ func runGetStepInPlace(
 
 	// Inside a triggered build a get resolves to a single version.
 	version := versions[0]
+
+	recordFetchedVersion(ctx, resource.Name, version)
 
 	content, err := merkle.GetNodeContent(cfg, step, *resourceType, resource.Source, version)
 	if err != nil {

@@ -1,0 +1,11 @@
+# passed: constrains which VERSION is fetched, so it only means something on
+# the step that fetches one.
+# expect: passed is only valid on get steps
+
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    run: "true"
+    passed: [test]

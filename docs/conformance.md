@@ -35,5 +35,6 @@ Living checklist — update when a claim is added, resolved, or found to diverge
 
 ## Known gaps
 
-- No fixture yet for `passed:` or `serial`/`serial_groups:` — both are proposed, not yet implemented ([#9](https://github.com/jtarchie/steps/issues/9), [#10](https://github.com/jtarchie/steps/issues/10)). Add their conformance tests as part of implementing them, not before.
+- `passed:` is implemented (`internal/trigger/passed_test.go`) but has no CONFORMANCE test yet: Concourse's version-selection algorithm resolves `passed:` across a whole plan at once, against a Postgres-backed versions DB, while this implementation asks a much simpler question per resource ("has this exact version been green in that job"). Transcribing a scenario from `atc/scheduler/algorithm/algorithm_test.go` is the way to find out where the two diverge — worth doing, and deliberately not claimed until it is.
+- No fixture yet for `serial`/`serial_groups:` — proposed, not yet implemented ([#10](https://github.com/jtarchie/steps/issues/10)). Add its conformance test as part of implementing it, not before.
 - `input_mapping`/`output_mapping`'s two undocumented sub-behaviors (an omitted key defaults to binding by its own declared name; a mapping naming a nonexistent plan artifact is a load-time error) aren't in Concourse's docs — they're `steps`'s own reasonable design choices, not Concourse claims, and don't need a conformance test (there's nothing upstream to conform to).

@@ -197,8 +197,11 @@ func runWorker(ctx context.Context, cfg *config.Config, provider workspace.Provi
 // recorded (dirty) — carried so pollOnce can enqueue affected jobs *before*
 // advancing the recorded version (see pollOnce).
 type observedResource struct {
-	latest string
-	dirty  bool
+	// version is the decoded latest version, kept alongside its JSON so a
+	// passed: constraint can be checked without re-parsing.
+	version map[string]any
+	latest  string
+	dirty   bool
 }
 
 // pollOnce checks every trigger resource once and enqueues (deduplicated)
@@ -260,9 +263,20 @@ func enqueueAffected(ctx context.Context, cfg *config.Config, st *store.Store, o
 		}
 
 		for _, job := range AffectedJobs(cfg, resourceName) {
-			if _, already := reasons[job.Name]; !already {
-				reasons[job.Name] = resourceName
+			if _, already := reasons[job.Name]; already {
+				continue
 			}
+
+			ready, err := jobReadyFor(ctx, st, job, observed)
+			if err != nil {
+				return nil, err
+			}
+
+			if !ready {
+				continue
+			}
+
+			reasons[job.Name] = resourceName
 		}
 	}
 
@@ -278,6 +292,43 @@ func enqueueAffected(ctx context.Context, cfg *config.Config, st *store.Store, o
 	}
 
 	return enqueued, nil
+}
+
+// jobReadyFor reports whether every passed: constraint the job declares is
+// satisfied by the versions currently observed.
+//
+// This is the correctness gap passed: exists to close: without it, watch can
+// trigger `deploy` on a commit the `test` job ALREADY FAILED on, and there is
+// no way to say "don't deploy unless the tests were green for this exact
+// commit".
+//
+// A job held back is not an error and not a lost trigger: the version stays
+// current, so the next poll after the upstream job goes green enqueues it.
+func jobReadyFor(ctx context.Context, st *store.Store, job *config.Job, observed map[string]observedResource) (bool, error) {
+	for resource, upstream := range job.PassedConstraints() {
+		obs, seen := observed[resource]
+		if !seen {
+			// The constrained resource was not checked this poll (it carries
+			// no trigger: true), so there is no version to judge. Holding the
+			// job back is the conservative reading, and the one that matches
+			// "only run against a version that passed".
+			return false, nil
+		}
+
+		passed, err := pipeline.VersionPassedUpstream(ctx, st, upstream, resource, obs.version)
+		if err != nil {
+			return false, fmt.Errorf("passed: constraint for job %q: %w", job.Name, err)
+		}
+
+		if !passed {
+			fmt.Printf("trigger: %s waiting — no version of %s has passed %v yet\n", job.Name, resource, upstream)
+			slog.Info("trigger.waiting_on_passed", "job", job.Name, "resource", resource, "upstream", upstream)
+
+			return false, nil
+		}
+	}
+
+	return true, nil
 }
 
 // checkResource runs resourceName's check command and reports its latest
@@ -317,7 +368,11 @@ func checkResource(ctx context.Context, cfg *config.Config, st *store.Store, res
 		return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}
 
-	return observedResource{latest: string(latest), dirty: found && previous != string(latest)}, true, nil
+	return observedResource{
+		version: versions[len(versions)-1],
+		latest:  string(latest),
+		dirty:   found && previous != string(latest),
+	}, true, nil
 }
 
 // recoverDrainPanic turns a value recovered from a panic in drainOne into the

@@ -103,3 +103,40 @@ The decisions behind it:
 - **An interrupted run does not count.** Ctrl-C is an operator, not a broken job.
 - **Resume is manual, deliberately.** Any successful run clears the breaker — including a manual `steps run`, which is the natural way to confirm a fix. Auto-resume after a time window is explicitly deferred: unattended auto-resume defeats the safety purpose if the underlying breakage (a dead API key, say) has not actually been fixed.
 - **Off by default.** A job that declares no `max_consecutive_failures:` never pauses. The count is still kept, so turning a breaker on later starts from a real number rather than pretending the history did not happen.
+
+## `passed:` — only run against versions that are green upstream
+
+Without it, `steps watch` will trigger `deploy` on a commit the `test` job **already failed on**, and there is no way to say otherwise. This is a correctness gap, not a convenience.
+
+```yaml
+jobs:
+- name: unit
+  plan:
+  - get: repo
+    trigger: true
+  - task: test
+    run: go test ./...
+
+- name: deploy
+  plan:
+  - get: repo
+    trigger: true
+    passed: [unit, lint]     # only a version green in BOTH
+  - put: production
+```
+
+```
+commit abc123 → unit    FAILED
+commit abc123 → deploy  waiting: no version has passed [unit lint] yet
+commit def456 → unit    ok
+commit def456 → lint    ok
+commit def456 → deploy  ok
+```
+
+How it works, and what each choice buys:
+
+- **A job records the versions it fetched only when the whole job succeeds.** `passed:` means "that job ran green against this exact version", and a job that failed after its `get` proves nothing about what it fetched.
+- **Per version, not per job.** A job green on `v1` does not release `v2`. That is the entire point — "the tests passed at some point" is exactly the claim that lets a bad commit deploy.
+- **`passed: [a, b]` means both**, not either.
+- **A held-back job is not a lost trigger.** The version stays current, so the next poll after the upstream job goes green enqueues it. Nothing needs to be re-pushed.
+- **Load-time checks.** `passed:` is get-only, may not name its own job, and may not name a job that never gets the same resource — that last one would be a deadlock spelled as a typo, since no version of a resource a job never fetches can ever pass there.

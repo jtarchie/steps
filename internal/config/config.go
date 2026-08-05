@@ -122,6 +122,7 @@ func (c *Config) validate() error {
 		c.validateRace,
 		c.validateEnsemble,
 		c.validateAcross,
+		c.validatePassed,
 		c.validateCredentialHandling,
 	}
 

@@ -65,6 +65,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_job
 -- The watch circuit breaker: how many times in a row a job has failed, and
 -- whether that has taken it out of the rotation. One row per job, created on
 -- first outcome.
+-- Which resource versions each job has SUCCESSFULLY run against. It is what
+-- passed: reads: "has this exact version been green in that job yet".
+CREATE TABLE IF NOT EXISTS job_versions (
+    job_name      TEXT NOT NULL,
+    resource_name TEXT NOT NULL,
+    version_json  TEXT NOT NULL,
+    recorded_at   TEXT NOT NULL,
+    PRIMARY KEY (job_name, resource_name, version_json)
+);
+
 CREATE TABLE IF NOT EXISTS job_breaker (
     job_name    TEXT PRIMARY KEY,
     consecutive INTEGER NOT NULL,
@@ -607,6 +617,36 @@ func (s *Store) HasNodeSucceeded(ctx context.Context, jobName, hash string) (boo
 		hash, jobName).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("could not read node %q: %w", hash, err)
+	}
+
+	return count > 0, nil
+}
+
+// RecordPassedVersion records that jobName completed successfully against this
+// exact version of a resource. It is what a downstream job's passed: reads.
+func (s *Store) RecordPassedVersion(ctx context.Context, jobName, resourceName, versionJSON string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO job_versions (job_name, resource_name, version_json, recorded_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (job_name, resource_name, version_json) DO NOTHING
+	`, jobName, resourceName, versionJSON, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		return fmt.Errorf("could not record a passed version for job %q: %w", jobName, err)
+	}
+
+	return nil
+}
+
+// HasPassedVersion reports whether jobName has already succeeded against this
+// exact version of a resource.
+func (s *Store) HasPassedVersion(ctx context.Context, jobName, resourceName, versionJSON string) (bool, error) {
+	var count int
+
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM job_versions WHERE job_name = ? AND resource_name = ? AND version_json = ?`,
+		jobName, resourceName, versionJSON).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("could not read passed versions for job %q: %w", jobName, err)
 	}
 
 	return count > 0, nil

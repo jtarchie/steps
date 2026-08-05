@@ -99,6 +99,10 @@ type Step struct {
 	// Ensemble asks several agents the same question and combines their
 	// answers into one verdict to route on. See Ensemble.
 	Ensemble *Ensemble `yaml:"ensemble,omitempty"`
+	// Passed, on a get step, names upstream jobs this version must ALREADY
+	// have succeeded in before this job will run against it. See
+	// validatePassed.
+	Passed []string `yaml:"passed,omitempty"`
 	// Across runs this step once per combination of the listed values,
 	// substituting {{ .vars.<name> }} into its fields. Expanded at load, so
 	// each cell is an ordinary plan step. See AcrossVar.

@@ -1,0 +1,21 @@
+# An upstream job that never gets this resource can never mark a version of it
+# green, so the constraint would block forever — a deadlock spelled as a typo.
+# expect: never gets resource
+
+resources:
+- name: repo
+  type: git
+  source:
+    uri: https://example.com/repo.git
+
+jobs:
+- name: unrelated
+  plan:
+  - task: work
+    inputs: []
+    run: "true"
+
+- name: deploy
+  plan:
+  - get: repo
+    passed: [unrelated]
