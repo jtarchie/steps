@@ -49,9 +49,16 @@ func TestSelfBuildPipelineLoadsCleanly(t *testing.T) {
 }
 
 // TestSelfBuildHandoffChain pins the forward handoff chain in the self-build
-// pipeline: planner hands to coder, coder hands to reviewer. Losing a link
-// silently returns each agent to re-researching what its predecessor already
-// knew — the exact failure this pipeline exists to avoid.
+// pipeline. Losing a link silently returns each agent to re-researching what
+// its predecessor already knew — the exact failure this pipeline exists to
+// avoid.
+//
+// The chain grew from planner→coder→reviewer to six links when the
+// implementation was split into config/runtime/docs layers and a spec step
+// was added ahead of them. That split is precisely why the chain matters
+// more now, not less: coder_config tells the runtime layer which types and
+// field names it created, and there is no other way for the next
+// conversation to learn them.
 func TestSelfBuildHandoffChain(t *testing.T) {
 	t.Parallel()
 
@@ -67,9 +74,12 @@ func TestSelfBuildHandoffChain(t *testing.T) {
 		from  string
 		sends bool
 	}{
-		"planner":  {"", true},
-		"coder":    {"planner", true},
-		"reviewer": {"coder", false},
+		"planner":      {"", true},
+		"spec":         {"planner", true},
+		"coder_config": {"spec", true},
+		"coder":        {"coder_config", true},
+		"coder_docs":   {"coder", true},
+		"reviewer":     {"coder_docs", false},
 	}
 
 	for _, step := range cfg.Jobs[0].Plan {
