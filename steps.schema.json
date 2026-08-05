@@ -699,6 +699,32 @@
           "$ref": "#/$defs/step",
           "description": "Wrap a step so its failure is tolerated. The inner step's hooks and assert fire normally; to: routing sees the real outcome."
         },
+        "in_parallel": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "steps"
+          ],
+          "description": "Run several steps at the same time instead of one after another.",
+          "properties": {
+            "steps": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/step"
+              }
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum branches in flight at once. Omit for unbounded."
+            },
+            "fail_fast": {
+              "type": "boolean",
+              "description": "Cancel the remaining branches as soon as one fails. The block fails either way."
+            }
+          }
+        },
         "inputs": {
           "$ref": "#/$defs/inputSpec"
         },

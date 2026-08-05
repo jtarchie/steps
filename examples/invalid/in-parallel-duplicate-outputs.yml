@@ -1,0 +1,19 @@
+# Sequential steps may reuse an output name — a later one replaces what an
+# earlier one wrote, in a defined order. Concurrent branches have no order, so
+# the same name written by two of them is a race whose winner is whichever
+# finished last.
+# expect: duplicate output names across in_parallel branches
+
+jobs:
+- name: build
+  plan:
+  - in_parallel:
+      steps:
+      - task: one
+        inputs: []
+        outputs: [report]
+        run: mkdir -p report
+      - task: two
+        inputs: []
+        outputs: [report]
+        run: mkdir -p report

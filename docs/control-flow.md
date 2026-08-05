@@ -144,3 +144,35 @@ Every agent step is otherwise a fresh, hermetic conversation — a step reached 
 - **`assert.tool_calls`**, on an agent step only: an ordered list of `{name, args}` entries the model's tool calls must satisfy, as an ordered subsequence (extra calls are fine) with subset-matched `args`. Values compare as strings. The trajectory records every call the model requested with its own arguments, *before* any `max_calls:` budget check or `args:` pinning — so a budget-rejected call still appears, and a pinned value is deliberately not matchable (asserting on a pinned key is caught at load time). `stdout` and `tool_calls` are ANDed when both are set.
 - **`steps test <pipeline.yml>`** runs every job in declaration order (forced, so the execution log is deterministic), prints per-job PASS/FAIL, and checks the pipeline-level `assert.execution`. This is the self-verifying-fixture entry point.
 - There's no modelless agent fixture for `assert.tool_calls` in `examples/` — a `steps test` fixture can't point an agent at a stub, since `source.endpoint:` is a credential boundary and isn't templatable. It's covered instead by unit tests plus the end-to-end tests in `e2e_test.go`, which drive a scripted OpenAI-compatible endpoint (`fakeprovider_test.go`) through a real `run()` and assert on the trajectory, the verdict route, and the recorded outcome. Likewise no `on_error`/`on_abort` fixture yet (would need a docker bad-image task / a per-task `timeout:` directive) — the classification and dispatch machinery already supports both, only the deterministic triggers are missing.
+
+## `in_parallel:` — several steps at once
+
+A plan is otherwise strictly sequential, so independent work waits on itself: three downloads run one at a time, and one slow resource check stalls everything behind it.
+
+```yaml
+- in_parallel:
+    limit: 2          # max in flight; omit for unbounded
+    fail_fast: true   # cancel the siblings on the first failure
+    steps:
+    - get: repo
+    - get: rules
+    - task: lint
+      run: golangci-lint run
+    - task: test
+      run: go test ./...
+```
+
+`examples/in-parallel.yml` is the runnable version of everything below.
+
+- **The block fails when any branch fails.** `fail_fast:` decides only whether the siblings are cancelled or allowed to finish — never whether the failure counts. That distinction is not hypothetical: the first implementation of this step swallowed a child failure under `fail_fast: false`, and a job containing a failing parallel step reported PASS.
+- **Every failure is reported**, not just the first. Debugging a parallel block, the useful question is whether one branch broke or all of them did.
+- **Classification follows the worst branch.** An errored branch (infrastructure) outranks a failed one (the step said no), so `on_error` fires rather than `on_failure`.
+- **Branches start in declaration order** and, with `limit:`, are admitted in that order. Which branch goes first is otherwise whichever goroutine the scheduler happened to pick, which is nothing a pipeline author can reason about.
+- **`assert.execution` stays deterministic.** Branch names are recorded in declaration order, not completion order, so a fixture can name them. The block itself records nothing — it is a container.
+- **A branch cannot consume a sibling's output.** Concurrent branches have no order between them, so that would be a race; the plan-time answer is "that artifact is not available here" rather than "sometimes". Everything the branches produce IS available to the steps after the block. Two branches declaring the same output name is a load error, including across nested blocks.
+- **The block itself takes no operation fields.** `inputs:`, `outputs:`, `image:`, `run:`, `prompt:`, `trigger:`, `assert:` and friends belong on the step inside it — a block fetches nothing, runs nothing and produces nothing of its own.
+- **`limit:` and `fail_fast:` are hashed**, unlike `attempts:`/`timeout:`/`budget:`. They are not "how hard to try": they change which steps run at all, so a cached result from one setting must not satisfy the other.
+
+### Writing a regression test for a parallel block
+
+Use `assert.outcome`. `assert.execution` alone structurally cannot catch a swallowed branch failure — both builds run the same branches, so the assert matches either way and then *clears* the difference under test. `examples/in-parallel.yml`'s `no-fail-fast-still-propagates` job is the shape to copy, and it is verified to go red when the swallow defect is reintroduced.

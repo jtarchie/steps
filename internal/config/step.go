@@ -90,6 +90,9 @@ type Step struct {
 	// agent step being wrapped, since that is what internal/agent reads. Also
 	// valid as a hook body, where it tolerates the hook's failure the same way.
 	Try *Step `yaml:"try,omitempty"`
+	// InParallel runs several steps at the same time instead of one after
+	// another. See InParallel.
+	InParallel *InParallel `yaml:"in_parallel,omitempty"`
 	// Inputs/Outputs declare which named artifacts a task/agent/put step
 	// draws from and (task/agent only) produces. Each name is either a
 	// resource fetched by an earlier get step or an output produced by an
@@ -372,6 +375,20 @@ func (f *FileRef) Deferred() bool {
 	return f != nil && f.Artifact != ""
 }
 
+// resolveBranchReferences resolves every branch of an in_parallel: block. A
+// block references nothing itself; its branches are ordinary steps and
+// reference exactly what they always did.
+func (c *Config) resolveBranchReferences(steps []Step) error {
+	for i := range steps {
+		err := c.resolveStepReference(&steps[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // StepKind is which of Get/Task/Put/Agent a Step is. See Step.Kind.
 type StepKind string
 
@@ -382,6 +399,12 @@ const (
 	StepKindPut   StepKind = "put"
 	StepKindAgent StepKind = "agent"
 	StepKindTry   StepKind = "try"
+	// StepKindInParallel is a block of steps that run concurrently. Adding it
+	// to this table is what makes `go run ./tools/kindswitch ./...` demand an
+	// answer from every dispatch site — the tagged ones via `exhaustive`, the
+	// tagless ones via that analyzer. Story 001 added a kind and shipped ten
+	// defects, six of them a dispatch site that silently did nothing for it.
+	StepKindInParallel StepKind = "in_parallel"
 )
 
 // Kind reports which single kind of step s is. ok is false when zero, or
@@ -398,6 +421,7 @@ func (s Step) Kind() (kind StepKind, ok bool) {
 		{StepKindPut, s.Put != ""},
 		{StepKindAgent, s.Agent != ""},
 		{StepKindTry, s.Try != nil},
+		{StepKindInParallel, s.InParallel != nil},
 	} {
 		if !candidate.set {
 			continue
@@ -520,6 +544,8 @@ func (c *Config) resolveStepReference(step *Step) error {
 		_, err = c.FindAgent(step.Agent)
 	case StepKindTry:
 		err = c.resolveStepReference(step.Try)
+	case StepKindInParallel:
+		err = c.resolveBranchReferences(step.InParallel.Steps)
 	case StepKindTask:
 		if step.Run != "" {
 			return nil // an inline task never consults tasks:
@@ -572,6 +598,18 @@ func visitStepTree(label string, step *Step, fn func(label string, step *Step) e
 		err = visitStepTree(label+" (try)", step.Try, fn)
 		if err != nil {
 			return err
+		}
+	}
+
+	// Descend into an in_parallel: block's branches. Without this every
+	// validator in this package would silently stop at the block, and a
+	// branch could carry anything at all.
+	if step.InParallel != nil {
+		for i := range step.InParallel.Steps {
+			err = visitStepTree(fmt.Sprintf("%s (in_parallel branch %d)", label, i), &step.InParallel.Steps[i], fn)
+			if err != nil {
+				return err
+			}
 		}
 	}
 

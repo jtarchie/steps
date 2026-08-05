@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=../steps.schema.json
+# in_parallel: — several steps at the same time instead of one after another.
+#
+# Every job here is a self-verifying, modelless `steps test` fixture. Run:
+#
+#   steps test examples/in-parallel.yml
+#
+# The two asserts do different jobs, and both are needed:
+#
+#   execution:  which steps ran. Branch names are recorded in DECLARATION
+#               order, never completion order, so this stays deterministic
+#               even though the branches finish in whatever order they finish.
+#   outcome:    what the plan CONCLUDED. This is the one that catches a
+#               swallowed branch failure — see the fail-fast jobs below.
+#
+# No network, credentials, or model.
+assert:
+  execution:
+    - concurrent
+    - bounded
+    - fail-fast-propagates
+    - no-fail-fast-still-propagates
+    - nested
+
+jobs:
+# ─── the basic shape ────────────────────────────────────────────────────────
+# Four independent steps that would otherwise queue behind each other.
+- name: concurrent
+  plan:
+  - in_parallel:
+      steps:
+      - task: alpha
+        inputs: []
+        run: echo alpha
+      - task: beta
+        inputs: []
+        run: echo beta
+      - task: gamma
+        inputs: []
+        run: echo gamma
+  assert:
+    execution: [alpha, beta, gamma]
+    outcome: succeeded
+
+# ─── limit: ─────────────────────────────────────────────────────────────────
+# At most two in flight. The result is identical, only the width changes —
+# which is why limit: is worth having but rarely worth setting.
+- name: bounded
+  plan:
+  - in_parallel:
+      limit: 2
+      steps:
+      - task: one
+        inputs: []
+        run: echo one
+      - task: two
+        inputs: []
+        run: echo two
+      - task: three
+        inputs: []
+        run: echo three
+  assert:
+    execution: [one, two, three]
+    outcome: succeeded
+
+# ─── fail_fast: true ────────────────────────────────────────────────────────
+# A failing branch cancels its siblings. The block still fails.
+- name: fail-fast-propagates
+  plan:
+  - in_parallel:
+      fail_fast: true
+      steps:
+      - task: failer
+        inputs: []
+        run: exit 1
+  assert:
+    execution: [failer]
+    outcome: failed
+
+# ─── fail_fast: false (the default) ─────────────────────────────────────────
+# THIS is the regression fixture. Both branches run either way, so
+# assert.execution matches whether the failure propagates or is swallowed —
+# and a matching execution: then CLEARS the very difference under test. Only
+# outcome: failed can tell the two builds apart, and the first implementation
+# of this step shipped with the failure swallowed.
+- name: no-fail-fast-still-propagates
+  plan:
+  - in_parallel:
+      steps:
+      - task: failer
+        inputs: []
+        run: exit 1
+      - task: ok
+        inputs: []
+        run: echo ok
+  assert:
+    execution: [failer, ok]
+    outcome: failed
+
+# ─── nesting ────────────────────────────────────────────────────────────────
+# A branch may itself be a block.
+- name: nested
+  plan:
+  - in_parallel:
+      steps:
+      - task: outer
+        inputs: []
+        run: echo outer
+      - in_parallel:
+          steps:
+          - task: inner-a
+            inputs: []
+            run: echo inner-a
+          - task: inner-b
+            inputs: []
+            run: echo inner-b
+  assert:
+    execution: [outer, inner-a, inner-b]
+    outcome: succeeded

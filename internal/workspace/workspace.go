@@ -653,19 +653,7 @@ func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step co
 
 		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
 	case step.Put != "":
-		// inputs: all draws on whatever exists, so there is nothing to check.
-		if !step.InputsAll() {
-			err := checkInputsAvailable(jobName, i, "put", step.Put, step.InputNames(), available)
-			if err != nil {
-				return err
-			}
-		}
-
-		// A put produces no artifacts into the build store, so pre and post
-		// are the same view.
-		snap := maps.Clone(available)
-
-		return validateStepHooks(cfg, jobName, i, step, snap, snap)
+		return validatePutArtifactFlow(cfg, jobName, i, step, available)
 	case step.Task != "":
 		return validateTaskArtifactFlow(cfg, jobName, i, step, available)
 	case step.Agent != "":
@@ -685,9 +673,63 @@ func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step co
 		}
 
 		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
+	case step.InParallel != nil:
+		pre := maps.Clone(available)
+
+		err := validateParallelArtifactFlow(cfg, jobName, i, step, available)
+		if err != nil {
+			return err
+		}
+
+		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
 	default:
 		return nil
 	}
+}
+
+// validatePutArtifactFlow checks a put step's declared inputs. A put produces
+// no artifacts into the build store, so its pre and post hook views are the
+// same one.
+func validatePutArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+	// inputs: all draws on whatever exists, so there is nothing to check.
+	if !step.InputsAll() {
+		err := checkInputsAvailable(jobName, i, "put", step.Put, step.InputNames(), available)
+		if err != nil {
+			return err
+		}
+	}
+
+	snap := maps.Clone(available)
+
+	return validateStepHooks(cfg, jobName, i, step, snap, snap)
+}
+
+// validateParallelArtifactFlow checks each branch of an in_parallel: block
+// against the artifacts available when the BLOCK started — never against each
+// other's outputs.
+//
+// Concurrent branches have no order between them, so a branch consuming a
+// sibling's output is a race, and the plan-time answer has to be "that
+// artifact is not available here" rather than "sometimes". Everything the
+// branches produce joins the view after the block, where a later step may
+// legitimately consume it.
+func validateParallelArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+	start := maps.Clone(available)
+
+	for _, branch := range step.InParallel.Steps {
+		produced := maps.Clone(start)
+
+		err := validateStepArtifactFlow(cfg, jobName, i, branch, produced)
+		if err != nil {
+			return err
+		}
+
+		for name := range produced {
+			available[name] = true
+		}
+	}
+
+	return nil
 }
 
 func validateAgentArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {

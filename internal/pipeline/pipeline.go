@@ -503,7 +503,17 @@ func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string,
 		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}
 
-	switch kind { //nolint:exhaustive // default covers config.StepKindGet — dispatchNonGetStep is only called for non-get steps
+	return dispatchByKind(ctx, cfg, jobName, i, kind, step, bw, st, skippable, parentHash, handoff)
+}
+
+// dispatchByKind routes a resolved non-get step to its runner. Split from the
+// guard evaluation above purely to stay inside the complexity budget; the
+// kinds it handles are the whole non-get set, which `exhaustive` enforces.
+func dispatchByKind(
+	ctx context.Context, cfg *config.Config, jobName string, i int, kind config.StepKind, step config.Step,
+	bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string, handoff *agent.Handoff,
+) (string, stepDisposition, nonGetOutcome, error) {
+	switch kind { //nolint:exhaustive // default covers config.StepKindGet — this is only called for non-get steps
 	case config.StepKindTask:
 		hash, disposition, err := runTaskStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash)
 
@@ -523,6 +533,8 @@ func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string,
 		return stepOut.Hash, stepRan, no, nil
 	case config.StepKindTry:
 		return runTryStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
+	case config.StepKindInParallel:
+		return runParallelStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
 	default: // config.StepKindGet — dispatchNonGetStep is only called for non-get steps
 		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}

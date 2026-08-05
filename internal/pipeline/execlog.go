@@ -63,7 +63,36 @@ func recordStepExecution(ctx context.Context, step config.Step) {
 		return
 	}
 
+	// An in_parallel: block records nothing of its own either: it is a
+	// container, and its branches record themselves — in declaration order,
+	// not completion order (see runBranches), so assert.execution stays a
+	// deterministic thing to write.
+	if step.InParallel != nil {
+		return
+	}
+
 	recordExecution(ctx, executedStepName(step))
+}
+
+// forkExecLog returns a context carrying a fresh, empty execution log, plus
+// that log. It lets concurrent branches record independently and have their
+// entries merged back in a defined order.
+func forkExecLog(ctx context.Context) (context.Context, *execLog) {
+	forked := &execLog{}
+
+	return withExecLog(ctx, forked), forked
+}
+
+// mergeExecLog appends another log's entries to the one in ctx.
+//
+// This is what keeps assert.execution usable with in_parallel: branches finish
+// in whatever order they finish, so recording as they go would make the log —
+// and therefore any assert on it — nondeterministic. Merging per branch, in
+// declaration order, gives back a stable sequence that a fixture can name.
+func mergeExecLog(ctx context.Context, from *execLog) {
+	for _, name := range from.snapshot() {
+		recordExecution(ctx, name)
+	}
 }
 
 // checkExecution compares the names that actually ran (got) against the

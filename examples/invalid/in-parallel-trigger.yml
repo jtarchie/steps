@@ -1,0 +1,14 @@
+# An in_parallel: block is a container, not an operation: it fetches nothing,
+# runs nothing, and produces nothing of its own. Every field describing an
+# operation belongs on the step inside it.
+# expect: trigger is not valid on an in_parallel step
+
+jobs:
+- name: build
+  plan:
+  - in_parallel:
+      steps:
+      - task: work
+        inputs: []
+        run: "true"
+    trigger: true

@@ -1,0 +1,12 @@
+# image: picks the container a step's command runs in. A block runs no command.
+# expect: image is not valid on an in_parallel step
+
+jobs:
+- name: build
+  plan:
+  - in_parallel:
+      steps:
+      - task: work
+        inputs: []
+        run: "true"
+    image: golang:1.26

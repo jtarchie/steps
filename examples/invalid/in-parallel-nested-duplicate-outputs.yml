@@ -1,0 +1,21 @@
+# The same race, one level down. The first implementation of this step checked
+# only the immediate children, so a duplicate inside a nested block went
+# undetected — a reviewer wrote a fixture for exactly this and it could not be
+# expressed until examples/invalid/ existed.
+# expect: duplicate output names across in_parallel branches
+
+jobs:
+- name: build
+  plan:
+  - in_parallel:
+      steps:
+      - task: one
+        inputs: []
+        outputs: [report]
+        run: mkdir -p report
+      - in_parallel:
+          steps:
+          - task: two
+            inputs: []
+            outputs: [report]
+            run: mkdir -p report

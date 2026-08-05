@@ -1,0 +1,9 @@
+# An in_parallel: with nothing in it is a typo. Running zero steps
+# "successfully" is the least useful reading of it.
+# expect: in_parallel.steps must not be empty
+
+jobs:
+- name: build
+  plan:
+  - in_parallel:
+      steps: []

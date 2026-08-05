@@ -30,6 +30,9 @@ const (
 	NodeKindPut   NodeKind = "put"
 	NodeKindAgent NodeKind = "agent"
 	NodeKindTry   NodeKind = "try"
+	// NodeKindParallel is an in_parallel: block. The block hashes its
+	// branches' content, so changing any branch changes the block.
+	NodeKindParallel NodeKind = "in_parallel"
 )
 
 // Node is one content-addressed step in a job's resolved execution chain.
@@ -354,9 +357,41 @@ func stepContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 		return AgentContentMap(cfg, step, ri)
 	case config.StepKindTry:
 		return TryNodeContent(cfg, step)
+	case config.StepKindInParallel:
+		return ParallelNodeContent(cfg, step)
 	default:
 		return nil, errors.New("unrecognized step")
 	}
+}
+
+// ParallelNodeContent hashes an in_parallel: block: its branches' own content,
+// in declaration order, plus the two settings that change what running it
+// means.
+//
+// limit and fail_fast are included deliberately, unlike the operational limits
+// elsewhere (attempts:, timeout:, budget:). They are not "how hard to try" —
+// they change which steps run: fail_fast decides whether the siblings of a
+// failing branch execute at all, and limit decides the order work is attempted
+// in. A cached result from one setting must not satisfy the other.
+func ParallelNodeContent(cfg *config.Config, step config.Step) (map[string]any, error) {
+	branches := make([]any, 0, len(step.InParallel.Steps))
+
+	for i := range step.InParallel.Steps {
+		branchContent, err := stepContentMap(cfg, step.InParallel.Steps[i])
+		if err != nil {
+			return nil, fmt.Errorf("in_parallel branch %d: %w", i, err)
+		}
+
+		branches = append(branches, branchContent)
+	}
+
+	content := map[string]any{
+		"in_parallel": branches,
+		"limit":       step.InParallel.Limit,
+		"fail_fast":   step.InParallel.FailsFast(),
+	}
+
+	return withHooks(cfg, step, withWhen(step, withRouting(step, content)))
 }
 
 // TaskNodeContent and PutNodeContent fold in inputs/outputs only when ws is
@@ -806,21 +841,7 @@ func planNonGetNode(cfg *config.Config, step config.Step, i int, parentHash stri
 
 	switch kind { //nolint:exhaustive // default covers config.StepKindGet — planNonGetNode is only ever called for non-get steps
 	case config.StepKindTask:
-		rt, err := cfg.ResolveTask(step)
-		if err != nil {
-			return Node{}, false, fmt.Errorf("step %d: %w", i, err)
-		}
-
-		node, err := taskNode(cfg, step, rt, i, parentHash)
-
-		// A task is unskippable if it has a fix:, or carries a when: guard or
-		// to: routing — the latter two have run-time-only outcomes the planner
-		// can't know, so a chain through them must never be recorded as a
-		// reusable success. This mirrors internal/pipeline's runtime
-		// chainUnskippable and makes the plan-time flag accurate rather than
-		// relying on that runtime flag alone (Unskippable is not hashed, so this
-		// only ever makes the cache more conservative).
-		return node, rt.Fix != nil || step.When != nil || step.To != nil, err
+		return planTaskNode(cfg, step, i, parentHash)
 	case config.StepKindPut:
 		node, err := putNode(cfg, step, i, parentHash)
 
@@ -833,9 +854,52 @@ func planNonGetNode(cfg *config.Config, step config.Step, i int, parentHash stri
 		node, err := tryNode(cfg, step, i, parentHash)
 
 		return node, true, err // try is always unskippable
+	case config.StepKindInParallel:
+		node, err := parallelNode(cfg, step, i, parentHash)
+
+		// Always unskippable. A block's branches run inside it rather than as
+		// chain nodes of their own, so the planner cannot reason about which
+		// of them a cached success covers — and a branch may be a put or an
+		// agent, which are never skippable anyway.
+		return node, true, err
 	default: // config.StepKindGet — planNonGetNode is only ever called for non-get steps
 		return Node{}, false, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}
+}
+
+// planTaskNode builds a task step's plan node and decides whether a chain
+// through it may be skipped.
+//
+// A task is unskippable if it has a fix:, or carries a when: guard or to:
+// routing — the latter two have run-time-only outcomes the planner can't know,
+// so a chain through them must never be recorded as a reusable success. This
+// mirrors internal/pipeline's runtime chainUnskippable and makes the plan-time
+// flag accurate rather than relying on that runtime flag alone (Unskippable is
+// not hashed, so this only ever makes the cache more conservative).
+func planTaskNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, bool, error) {
+	rt, err := cfg.ResolveTask(step)
+	if err != nil {
+		return Node{}, false, fmt.Errorf("step %d: %w", i, err)
+	}
+
+	node, err := taskNode(cfg, step, rt, i, parentHash)
+
+	return node, rt.Fix != nil || step.When != nil || step.To != nil, err
+}
+
+// parallelNode builds the plan node for an in_parallel: block.
+func parallelNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, error) {
+	content, err := ParallelNodeContent(cfg, step)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (in_parallel): %w", i, err)
+	}
+
+	hash, err := HashNode(NodeKindParallel, content, parentHash)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (in_parallel): %w", i, err)
+	}
+
+	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindParallel, StepIndex: i, Content: content}, nil
 }
 
 // planGetStep resolves step's version(s) and recurses into the remainder of
