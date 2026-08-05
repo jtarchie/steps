@@ -1564,3 +1564,89 @@ func TestParseTimeout(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveAgentInvocationDerivesCompactionBudget covers the defect that
+// compaction, on by default at 80% of an *assumed* 128K window, compacted a
+// 1M-context model at roughly a tenth of capacity — silently, forever, paying
+// for a summarization call each time that bought nothing.
+func TestResolveAgentInvocationDerivesCompactionBudget(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		model      string
+		explicit   *int
+		wantBudget int
+		wantWindow int
+	}{
+		{
+			name:       "a 1M model compacts against a 1M window",
+			model:      "openrouter/google/gemini-2.5-pro",
+			wantBudget: 800_000,
+			wantWindow: 1_000_000,
+		},
+		{
+			name:       "a 200K model compacts against a 200K window",
+			model:      "anthropic/claude-sonnet-4-5",
+			wantBudget: 160_000,
+			wantWindow: 200_000,
+		},
+		{
+			name:       "a suffixed 1M variant beats its own family entry",
+			model:      "anthropic/claude-opus-5[1m]",
+			wantBudget: 800_000,
+			wantWindow: 1_000_000,
+		},
+		{
+			// The safe direction to be wrong in, and the no-behavior-change
+			// case: everything this table has never heard of is unaffected.
+			name:       "an unknown model keeps the conservative default",
+			model:      "lmstudio/some-local-build-nobody-has-heard-of",
+			wantBudget: defaultCompactAfterTokens,
+			wantWindow: 0,
+		},
+		{
+			name:       "an explicit budget outranks the derived one",
+			model:      "anthropic/claude-sonnet-4-5",
+			explicit:   ptrTo(1234),
+			wantBudget: 1234,
+			wantWindow: 200_000,
+		},
+		{
+			name:       "an explicit 0 still disables compaction on a known model",
+			model:      "anthropic/claude-sonnet-4-5",
+			explicit:   ptrTo(0),
+			wantBudget: 0,
+			wantWindow: 200_000,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Config{Agents: []Agent{{
+				Name:               "a",
+				Source:             AgentSource{Model: test.model},
+				CompactAfterTokens: test.explicit,
+			}}}
+
+			ri, err := cfg.ResolveAgentInvocation(Step{Agent: "a"})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if ri.CompactAfterTokens != test.wantBudget {
+				t.Errorf("compact_after_tokens = %d, want %d", ri.CompactAfterTokens, test.wantBudget)
+			}
+
+			// The window is carried so a run can say what the budget was
+			// derived from; 0 means "we do not know this model".
+			if ri.ContextWindow != test.wantWindow {
+				t.Errorf("context_window = %d, want %d", ri.ContextWindow, test.wantWindow)
+			}
+		})
+	}
+}
+
+func ptrTo[T any](v T) *T { return &v }

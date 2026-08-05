@@ -8,6 +8,8 @@ import (
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
+
+	"github.com/jtarchie/steps/internal/config"
 )
 
 const (
@@ -119,8 +121,17 @@ func maybeCompact(ctx context.Context, llm model.LLM, req *model.LLMRequest, con
 
 	slog.Info("agent.compaction", "summarized_turns", len(oldContents), "recent_turns", len(recentContents))
 
-	if estimateContentTokens(recentContents) > conv.compactAfterTokens {
-		slog.Warn("agent.compaction_stalled", "reason", "recent window alone exceeds the budget; no further attempts this conversation")
+	if recent := estimateContentTokens(recentContents); recent > conv.compactAfterTokens {
+		// Name the budget and the field that changes it. The message used to
+		// describe the mechanism ("recent window alone exceeds the budget")
+		// and nothing else, so the first symptom of a budget set 10x too low
+		// for the model read like a bug in the agent loop rather than a
+		// setting anyone could fix.
+		slog.Warn("agent.compaction_stalled",
+			"reason", "the recent window alone exceeds the budget, so summarizing again cannot help; compaction is off for the rest of this conversation",
+			"compact_after_tokens", conv.compactAfterTokens,
+			"recent_window_tokens", recent,
+			"fix", "raise compact_after_tokens: on this agent (or lower a tool's own output budget, if one result is oversized)")
 
 		return summarized, true
 	}
@@ -530,3 +541,40 @@ func estimateContentTokens(contents []*genai.Content) int {
 
 	return total
 }
+
+// logCompactionBudget states the conversation-size budget in force, once per
+// agent step, alongside the model's context window when it is known.
+//
+// It exists because the budget was previously discoverable only by reading
+// the source. Compaction is ON by default, so an agent pointed at a 1M-context
+// model compacted at 102,400 tokens — a tenth of capacity — silently and
+// forever, paying for a summarization call each time that bought nothing. The
+// first visible symptom was a stall warning that read like an agent-loop bug.
+func logCompactionBudget(ri config.ResolvedInvocation) {
+	if ri.CompactAfterTokens <= 0 {
+		slog.Debug("agent.compaction_budget", "agent", ri.AgentName, "model", ri.ModelName, "compaction", "disabled")
+
+		return
+	}
+
+	fields := []any{
+		"agent", ri.AgentName,
+		"model", ri.ModelName,
+		"compact_after_tokens", ri.CompactAfterTokens,
+	}
+
+	if ri.ContextWindow > 0 {
+		fields = append(fields, "context_window", ri.ContextWindow)
+	} else {
+		// Unrecognized model: the budget is an assumption, and saying so is
+		// the difference between "this is tuned for my model" and "nobody
+		// knows how big my model's window is".
+		fields = append(fields, "context_window", "unknown", "assumed_window", defaultContextWindowNote)
+	}
+
+	slog.Info("agent.compaction_budget", fields...)
+}
+
+// defaultContextWindowNote describes the fallback in the one place a log line
+// needs to name it. internal/config owns the number itself.
+const defaultContextWindowNote = "128000 (set compact_after_tokens: if your model differs)"

@@ -713,6 +713,8 @@ func runOneConversation(
 	convCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	logCompactionBudget(ri)
+
 	requests := &requestCounter{}
 
 	result, err := runAgentConversation(withRequestCounter(convCtx, requests), llm, conv)

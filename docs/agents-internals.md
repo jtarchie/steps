@@ -107,7 +107,7 @@ See [attempts-timeout.md](attempts-timeout.md) for a detailed guide covering the
 
 ## Compacting long conversations
 
-Every model response and every tool result is normally appended to an agent step's conversation forever, for up to `max_turns` turns. A long-running agent — many tool calls, large file reads — can grow past the model's real context window well before hitting that turn cap; the provider call then errors out, and if `attempts:` allows a retry, the *whole* conversation restarts from scratch rather than degrading gracefully.
+Every model response and every tool result is normally appended to an agent step's conversation forever, for up to `max_turns` turns. A long-running agent — many tool calls, large file reads — can grow past the model's real context window well before hitting that turn cap, and the provider call then errors out.
 
 `compact_after_tokens:` bounds this, on an `agents:` entry:
 
@@ -121,9 +121,22 @@ agents:
 
 Once a conversation's estimated size crosses the budget, the agent's own model is asked to summarize everything older than a recent window (roughly the most recent 30% of the budget), and the conversation continues from `[summary] + [recent turns]` instead of the full history. This can happen more than once in a very long conversation — each pass folds the previous summary into the new one. A summarization failure is logged and the turn proceeds uncompacted; it never aborts the attempt, the same failure-is-data treatment a tool failure gets.
 
-**On by default, at 102,400 tokens (80% of an assumed 128K context window) — unlike every other feature on this page.** An agent that sets no `compact_after_tokens:` still gets compaction; `compact_after_tokens: 0` is what disables it. This is a deliberate exception to this codebase's usual value-gating contract for opt-in features ("absent, its behavior ... byte-identical to before it existed") — merkle hashes are unaffected either way (see below), but the conversation's *behavior* differs for any pipeline whose agent crosses the budget. The 20% headroom below a full 128K window is load-bearing, not padding: the size estimate covers the conversation alone, never the system prompt or the tool schemas resent with every request, so a budget set at the full window would only ever fire after a request had already overflowed.
+**On by default, at 80% of the model's context window — unlike every other feature on this page.** An agent that sets no `compact_after_tokens:` still gets compaction; `compact_after_tokens: 0` is what disables it. This is a deliberate exception to this codebase's usual value-gating contract for opt-in features ("absent, its behavior ... byte-identical to before it existed") — merkle hashes are unaffected either way (see below), but the conversation's *behavior* differs for any pipeline whose agent crosses the budget.
 
-**Small-context and local models must lower it.** 102,400 tokens is close to an entire typical context window — a 32K-token local model (LM Studio, Ollama) will overflow long before the default ever triggers. Set a budget comfortably under the model's real window, e.g. `compact_after_tokens: 20000` for a 32K model:
+The 20% headroom is load-bearing, not padding: the size estimate covers the conversation alone, never the system prompt or the tool schemas resent with every request, so a budget set at the full window would only ever fire after a request had already overflowed.
+
+**The window comes from the model.** `internal/config/agent.go`'s `contextWindows` table maps a model-name fragment to that model's window, so a 1M-context model compacts at 800,000 rather than at a tenth of its capacity. A model the table does not recognize keeps the conservative 102,400 (80% of an assumed 128K) — the safe direction to be wrong in, and no behavior change for anything that was already correct.
+
+That default used to be unconditional, and being wrong by 10x for a frontier model was invisible: nothing logged the budget in force, so the first symptom was a stall warning that read like a bug in the agent loop. Every agent step now states it:
+
+```
+INF agent.compaction_budget agent=coder model=google/gemini-2.5-pro compact_after_tokens=800000 context_window=1000000
+INF agent.compaction_budget agent=coder model=some-local-build compact_after_tokens=102400 context_window=unknown assumed_window="128000 (set compact_after_tokens: if your model differs)"
+```
+
+The table is deliberately short: an entry is only worth adding for a model whose window is confidently known and materially different from 128K. An operator always outranks it by setting `compact_after_tokens:` directly, which is also the answer for any model it has never heard of.
+
+**Small-context and local models must lower it.** A local build's name tells the table nothing, so it gets the 102,400 default — close to an entire typical context window, and a 32K-token local model (LM Studio, Ollama) will overflow long before that ever triggers. Set a budget comfortably under the model's real window, e.g. `compact_after_tokens: 20000` for a 32K model:
 
 ```yaml
 - name: reviewer

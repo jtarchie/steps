@@ -109,10 +109,98 @@ const defaultMaxAgentTurns = 8
 // fit. A budget set at the full window would only ever fire after the
 // request had already overflowed.
 //
-// This suits a 128K-or-larger model. A small local model (32K and under)
+// It is only the fallback for a model whose window this package does not
+// recognize (see contextWindowFor). A small local model (32K and under)
 // overflows well before this and must set compact_after_tokens: lower;
 // compact_after_tokens: 0 disables compaction entirely.
-const defaultCompactAfterTokens = 128_000 * 80 / 100 // 102,400
+const defaultCompactAfterTokens = defaultContextWindow * compactBudgetPercent / 100 // 102,400
+
+// defaultContextWindow is the window assumed for an unrecognized model: the
+// common size for current models, and conservative for anything larger.
+const defaultContextWindow = 128_000
+
+// compactBudgetPercent is how much of a model's context window compaction is
+// allowed to fill before it fires.
+const compactBudgetPercent = 80
+
+// contextWindows maps a fragment of a model name to that model's context
+// window, most specific first. Matching is on a lowercased substring of the
+// model name with any provider prefix already stripped, so it works the same
+// whether the model was written as `claude-sonnet-4-5` or
+// `openrouter/anthropic/claude-sonnet-4-5`.
+//
+// The point of the table is that a default budget must not be a guess about
+// somebody else's model. Compaction defaults ON at 80% of the window, so an
+// assumed 128K applied to a 1M-context model compacts at roughly a tenth of
+// capacity — silently, forever, paying for a summarization call that buys
+// nothing and losing conversation fidelity for no reason.
+//
+// It is deliberately short. An entry is only worth adding for a model whose
+// window is confidently known and materially different from the 128K default;
+// anything unrecognized keeps that conservative default, which is the safe
+// direction to be wrong in. An operator who knows better always outranks this
+// table by setting compact_after_tokens: directly.
+//
+//nolint:gochecknoglobals // static, read-only lookup table
+var contextWindows = []struct {
+	fragment string
+	window   int
+}{
+	// Anthropic ships 1M-context variants of some models under a suffixed id;
+	// checked before the family names below, which would otherwise match first.
+	{"[1m]", 1_000_000},
+	{"claude", 200_000},
+	{"gemini", 1_000_000},
+	{"gpt-4.1", 1_000_000},
+	{"gpt-4o", 128_000},
+	{"o3", 200_000},
+	{"o4-mini", 200_000},
+	{"llama-3.1", 128_000},
+	{"llama-3.3", 128_000},
+}
+
+// resolveCompactionBudget decides an invocation's conversation-size budget and
+// reports the context window it was derived from (0 when the model is not one
+// this package recognizes, so a caller can tell "1M, derived from the model"
+// from "128K, assumed because we have never heard of this model").
+//
+// Precedence: an explicit compact_after_tokens: always wins; otherwise the
+// budget is compactBudgetPercent of a recognized window; otherwise the
+// conservative default. Deriving it is the whole point — compaction defaults
+// ON, so an assumed 128K applied to a 1M model compacted at a tenth of
+// capacity, silently and forever, paying for a summarization call that bought
+// nothing.
+func resolveCompactionBudget(modelName string, explicit *int) (budget, contextWindow int) {
+	window, known := contextWindowFor(modelName)
+
+	budget = defaultCompactAfterTokens
+	if known {
+		budget = window * compactBudgetPercent / 100
+		contextWindow = window
+	}
+
+	if explicit != nil {
+		budget = *explicit
+	}
+
+	return budget, contextWindow
+}
+
+// contextWindowFor returns the context window known for a model name, and
+// whether it was recognized at all. The caller distinguishes the two: a
+// recognized window sets the compaction budget, an unrecognized one leaves
+// today's conservative default in place.
+func contextWindowFor(modelName string) (int, bool) {
+	name := strings.ToLower(modelName)
+
+	for _, entry := range contextWindows {
+		if strings.Contains(name, entry.fragment) {
+			return entry.window, true
+		}
+	}
+
+	return defaultContextWindow, false
+}
 
 // validReasoningEfforts are the only accepted values for an agent's
 // reasoning_effort. The corresponding genai.ThinkingLevel mapping lives in

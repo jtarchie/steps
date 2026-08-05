@@ -121,7 +121,13 @@ type ResolvedInvocation struct {
 	// Agent.CompactAfterTokens); 0 means compaction is disabled for this
 	// invocation.
 	CompactAfterTokens int
-	ToolSpecs          []ToolSpec
+	// ContextWindow is the model's context window when this package
+	// recognizes the model (see contextWindows), 0 when it does not. It is
+	// what CompactAfterTokens was derived from, carried so a run can SAY
+	// "compacting at 102400 against a 1000000 window" — the mismatch that was
+	// previously invisible until compaction stalled.
+	ContextWindow int
+	ToolSpecs     []ToolSpec
 	// StringOnlyToolChoice, when true, forces a required tool call (see
 	// forceRequiredTool in internal/agent) via tool_choice: "required"
 	// instead of a named function object — for providers whose
@@ -171,10 +177,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		attempts = 1
 	}
 
-	compactAfterTokens := defaultCompactAfterTokens
-	if agent.CompactAfterTokens != nil {
-		compactAfterTokens = *agent.CompactAfterTokens
-	}
+	compactAfterTokens, contextWindow := resolveCompactionBudget(modelName, agent.CompactAfterTokens)
 
 	image := agent.Image
 	if step.Image != "" {
@@ -198,6 +201,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		Attempts:             attempts,
 		Timeout:              step.Timeout,
 		CompactAfterTokens:   compactAfterTokens,
+		ContextWindow:        contextWindow,
 		ToolSpecs:            toolSpecs,
 		StringOnlyToolChoice: stringOnlyToolChoice,
 		Image:                image,
