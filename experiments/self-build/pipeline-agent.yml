@@ -65,7 +65,8 @@ resource_types:
     # the lowest-numbered open story", which is what the old glob did by being
     # hand-narrowed to 001-*.md. Raise it to walk several per run -- but note
     # `version: every` runs them one after another, and a cold story costs the
-    # coder up to 45m, so the wall-clock is roughly linear in this number.
+    # coder the better part of an hour, so wall-clock is roughly linear in
+    # this number and nothing caps it -- the agent steps carry no timeout:.
     check: |
       gh issue list \
         --repo {{ .source.repo | shellquote }} \
@@ -386,6 +387,22 @@ agents:
       # `cd repo && ./steps validate examples/parallel.yml` and got 127. An
       # explicit refusal that says what to do instead is strictly better than
       # a command-not-found.
+      # Naming the review binary AT ALL is refused, in any context, before the
+      # adjacency check below. Observed bypass: a probe wrote
+      # `STEPS=/abs/path/steps-review-bin` on one line and `$STEPS run p.yml`
+      # on the next. The name and the subcommand are then never adjacent, so
+      # the pattern below -- which requires them next to each other -- matched
+      # nothing and a full re-entry sailed through. Variable indirection
+      # defeats any adjacency rule, so do not try to out-pattern it: a probe
+      # has no legitimate reason to mention this binary, and that flat fact is
+      # the check.
+      if grep -qn 'steps-review-bin' "$probe/probe.yml"; then
+        printf 'REFUSED: this probe names the review binary. A probe is a\n'
+        printf 'pipeline for the harness to RUN -- it never invokes the binary\n'
+        printf 'itself, under any spelling, including via a variable. The yaml\n'
+        printf 'you pass is already executed by that binary.\n'
+        exit 1
+      fi
       if grep -qnE '(^|[^[:alnum:]_-])(steps|steps-review-bin|go[[:space:]]+run)[[:space:]]+(run|test|watch|plan|validate|runs|mcp|\.)([[:space:]]|$)|pipeline-agent\.yml' "$probe/probe.yml"; then
         printf 'REFUSED: this probe invokes steps (or this pipeline) from inside\n'
         printf 'a step. A probe is a pipeline to RUN, not a pipeline that runs\n'
@@ -490,7 +507,6 @@ jobs:
     inputs: [stories, repo]
     context_paths: [repo/CLAUDE.md]
     attempts: 2       # whole-conversation restart on a transport failure
-    timeout: 20m      # per attempt, not total -- see docs/attempts-timeout.md
     # Forces a shift-change report for the coder before this step may end.
     # The plan document is the PR artifact; the note is the operational
     # handoff, and it carries a computed list of every file this step actually
@@ -588,11 +604,15 @@ jobs:
     # attempts: mostly buys a bigger bill for the same failure. Raise it only
     # for faults a fresh conversation could actually clear.
     attempts: 2
-    # A timeout now ends the step outright rather than restarting the whole
-    # conversation (see docs/attempts-timeout.md), so this has to be a budget
-    # the work actually fits in. A cold run took ~42m across two attempts; 45m
-    # is that with headroom.
-    timeout: 45m
+    # NO timeout: on any agent step here, deliberately. A timeout ends the step
+    # outright rather than restarting the conversation (docs/attempts-timeout.md),
+    # so on a long story it does not retry the work -- it destroys it, along
+    # with every turn already spent. These steps are bounded by max_turns: and
+    # by max_visits: on the review loop, which bound the SPEND without
+    # discarding finished work, and that is the bound worth having. The probe
+    # sandbox keeps its own 120s cap: that one guards against a hung command
+    # inside the tree under review, and with no step timeout above it, it is
+    # the only thing that would ever stop one.
     # Both directions on one step: a redo gets a previous_run tool over the
     # last verdict (backward), and it writes the next agent a shift-change
     # report (forward).
@@ -674,12 +694,11 @@ jobs:
       fi
     to:
       failure: coder
-    max_visits: 4
+    max_visits: 10
   - agent: reviewer
     inputs: [stories, repo]
     context_paths: [repo/CLAUDE.md]
     attempts: 2
-    timeout: 30m
     prompt: |
       You are the quality gate before this story's changes are published.
       Lint, tests and build already passed — your job is the correctness a
@@ -810,12 +829,19 @@ jobs:
       pass: completeness
       fail: coder
       failure: coder   # reviewer errored or never called verdict
-    max_visits: 3
+    # Sized for TWO reviewers. With one gate, a story needing N coder passes
+    # cost N visits here; with a second gate that can send the coder back
+    # AFTER this one passed, the same story can revisit this step several
+    # more times without anything being wrong. Story 002 burned all 3 of the
+    # old budget before completeness had reviewed even once -- exhausting
+    # max_visits kills the run outright, discarding an hour of finished work
+    # over a bound that was only ever meant to stop a runaway loop. 10 still
+    # stops one; it just does not stop ordinary progress.
+    max_visits: 10
   - agent: completeness
     inputs: [stories, repo]
     context_paths: [repo/CLAUDE.md]
     attempts: 2
-    timeout: 30m
     prompt: |
       You are the SECOND of two reviewers and you are looking for what is
       MISSING. The first reviewer already asked "is what was built correct?"
@@ -881,6 +907,14 @@ jobs:
       pass: repo
       fail: coder
       failure: coder   # reviewer errored or never called verdict
-    max_visits: 3
+    # Sized for TWO reviewers. With one gate, a story needing N coder passes
+    # cost N visits here; with a second gate that can send the coder back
+    # AFTER this one passed, the same story can revisit this step several
+    # more times without anything being wrong. Story 002 burned all 3 of the
+    # old budget before completeness had reviewed even once -- exhausting
+    # max_visits kills the run outright, discarding an hour of finished work
+    # over a bound that was only ever meant to stop a runaway loop. 10 still
+    # stops one; it just does not stop ordinary progress.
+    max_visits: 10
   - put: repo
     params: { path: repo }
