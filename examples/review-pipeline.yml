@@ -1,5 +1,6 @@
 # yaml-language-server: $schema=../steps.schema.json
-# steps-test: skip -- the agent step needs a live LLM
+# steps-test: skip -- needs a live LLM (OPENROUTER_API_KEY), and its pass/fail
+# depends on the reviewer's verdict, so it can never be a deterministic fixture
 # A realistic pipeline end to end: fetch, build, have an agent judge the
 # result, publish. Every other example demonstrates one feature area; this one
 # shows the shape a first real pipeline actually takes.
@@ -9,12 +10,14 @@
 #   STEPS_MODEL=lmstudio/your-model \
 #     steps run    examples/review-pipeline.yml     # run it (needs a model)
 #
-# Needs: git, go, and any OpenAI-compatible model server. No credentials.
+# Needs: git, go, and a model. As shipped that is OpenRouter, so
+# OPENROUTER_API_KEY must be set; $STEPS_MODEL points it at a local server
+# instead (no key, no cost).
 
-# Named once. $STEPS_MODEL overrides it, so this file runs as-is on a machine
-# whose model nobody could have guessed when it was written.
+# Named once. openrouter/qwen/qwen3.7-flash is cheap ($0.03/M in, $0.13/M out,
+# 1M context) and the openrouter/ prefix supplies the base URL and key env var.
 defaults:
-  model: lmstudio/google/gemma-4-26b-a4b
+  model: openrouter/qwen/qwen3.7-flash
 
 # Fetching a repo needs no resource_types: entry — `git` is built in.
 # Publishing does: only you know where things go and what credentials that
