@@ -793,7 +793,21 @@ jobs:
          plan at repo/experiments/self-build/plans/{num}.md for the syntax the
          feature will actually have — your fixtures must use the spelling the
          plan commits to, or they test a feature nobody is building.
-      2. For each requirement that a pipeline can express, write ONE fixture
+      2. A FIXTURE MUST BE ABLE TO GO GREEN. Test this before you write one:
+         "once the feature is correctly built, does `steps test` on this file
+         EXIT 0?" If the answer is no, it does not belong in examples/, and
+         the single biggest source of no is a NEGATIVE requirement -- one
+         that says some config must be REJECTED at load. That pipeline fails
+         by design, forever, and TestExamplesRun runs every examples/*.yml,
+         so committing one pins the suite red no matter how correct the
+         implementation is. The implementer would then be handed a target it
+         cannot reach and no way to tell that from its own bug.
+         Negative requirements are still real requirements: record them in
+         the manifest with the Go test that should cover them (a LoadConfig
+         call asserting the error), which is where a must-be-rejected claim
+         belongs. Same for anything needing a model, and anything about log
+         formatting a step assert cannot observe.
+         For each requirement that DOES survive that test, write ONE fixture
          to repo/examples/<feature>-<aspect>.yml. Small and self-verifying:
          a job-level `assert: {execution: [a, b, c]}` naming the exact steps
          and hooks that must run, or a step `assert: {stdout: MARKER}`. Name
