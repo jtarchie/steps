@@ -692,15 +692,23 @@ func describeTrajectory(got []recordedToolCall) string {
 func runPrepared(ctx context.Context, prepared preparedAgentStep) (conversationResult, error) {
 	timeout := agentTimeout(prepared.ri.Timeout)
 
-	var result conversationResult
+	var (
+		result   conversationResult
+		requests *requestCounter
+	)
 
 	err := retry.Do(ctx, prepared.ri.Attempts, func(attempt int) error {
 		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		// withAttempt keeps a retry off the provider instance the previous
-		// attempt may have just failed against (see composeSessionID).
-		res, runErr := runAgentConversation(withAttempt(attemptCtx, attempt), prepared.llm, prepared.conv)
+		// A counter per attempt, so the failure log reports what THIS attempt
+		// spent. withAttempt keeps a retry off the provider instance the
+		// previous attempt may have just failed against (see
+		// composeSessionID).
+		requests = &requestCounter{}
+		attemptCtx = withRequestCounter(withAttempt(attemptCtx, attempt), requests)
+
+		res, runErr := runAgentConversation(attemptCtx, prepared.llm, prepared.conv)
 		// Keep the latest attempt's result either way: on success it's the
 		// answer, and on failure its turns/trajectory describe the attempt
 		// that actually failed.
@@ -711,7 +719,9 @@ func runPrepared(ctx context.Context, prepared preparedAgentStep) (conversationR
 		// re-fails deterministically and bills the whole conversation twice.
 		// attempts: buys transport retries, not more time.
 		return retry.StopOnDeadline(ctx, attemptCtx, runErr)
-	})
+	}, retry.WithLogFields(func(int) []any {
+		return []any{"provider_requests", requests.Total()}
+	}))
 
 	return result, err //nolint:wrapcheck // callers (RunStep/RunHook) wrap with step context
 }

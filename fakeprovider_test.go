@@ -528,3 +528,36 @@ func assertNoFile(t *testing.T, path string) {
 		t.Errorf("%s exists, but the step that writes it should not have run", filepath.Base(path))
 	}
 }
+
+// captureStderr redirects os.Stderr to a temp file for the rest of the test
+// and returns a reader for what was written. The logger writes there
+// (initLogging), and run() installs its own handler, so an in-process
+// slog.SetDefault would be overwritten the moment the CLI starts — the file
+// swap is what lets a test assert on what an operator would actually see.
+func captureStderr(t *testing.T) func() string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "stderr.log")
+
+	file, err := os.Create(path) //nolint:gosec // path is under t.TempDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prev := os.Stderr
+	os.Stderr = file
+
+	t.Cleanup(func() {
+		os.Stderr = prev
+		_ = file.Close()
+	})
+
+	return func() string {
+		body, readErr := os.ReadFile(path) //nolint:gosec // path is under t.TempDir()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+
+		return string(body)
+	}
+}

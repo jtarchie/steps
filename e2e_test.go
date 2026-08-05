@@ -426,10 +426,14 @@ func testSadPathProviderUnreachable(t *testing.T) {
 
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
+	logs := captureStderr(t)
+
 	err := run([]string{path})
 	if err == nil {
 		t.Fatal("run succeeded despite the provider being unreachable")
 	}
+
+	stderr := logs()
 
 	// ── resource/task layers still ran ────────────────────────────────
 	// The failure is isolated to the agent step; everything upstream of
@@ -450,6 +454,8 @@ func testSadPathProviderUnreachable(t *testing.T) {
 	if got := fake.requestCount(); got != wantRequests {
 		t.Errorf("provider requests = %d, want %d (1 attempt + the client's 2 transport retries)", got, wantRequests)
 	}
+
+	assertHiddenRetriesVisible(t, stderr, wantRequests)
 
 	// ── routing layer ─────────────────────────────────────────────────
 	// This is the invariant that separates this subtest from the one
@@ -618,4 +624,26 @@ jobs:
 
 	// The plan must not have continued past an untolerated error.
 	assertNoFile(t, afterLog)
+}
+
+// assertHiddenRetriesVisible checks the run reported the transport-layer
+// retries it actually made. It is the end-to-end half of the unit tests in
+// internal/agent/requests_test.go: those prove the transport counts correctly
+// in isolation, this proves it is in the client's stack at all and that the
+// per-attempt counter reaches internal/retry.
+//
+// One line short of wantRequests, because the last failure of a burst is not
+// followed by a retry — retry.attempt_failed reports that one, with the full
+// request count beside it.
+func assertHiddenRetriesVisible(t *testing.T, stderr string, wantRequests int) {
+	t.Helper()
+
+	if got := strings.Count(stderr, "agent.request_retry"); got != wantRequests-1 {
+		t.Errorf("agent.request_retry lines = %d, want %d\n%s", got, wantRequests-1, stderr)
+	}
+
+	want := fmt.Sprintf("provider_requests=%d", wantRequests)
+	if !strings.Contains(stderr, want) {
+		t.Errorf("retry.attempt_failed does not report what the attempt really cost (want %q):\n%s", want, stderr)
+	}
 }

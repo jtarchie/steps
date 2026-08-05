@@ -86,6 +86,19 @@ A task step's `fix:` agent can also set `attempts:` and `timeout:` independently
 
 The fix agent's timeout/attempts are separate budgets — they don't consume or conflict with the task's retry count or timeout.
 
+### The retry underneath `attempts:`
+
+`attempts:` is not the only retry in play. The LLM client (`openai-go/v3`) retries every request up to two more times of its own accord — on connection errors and on 408/409/429/5xx — before `attempts:` ever sees a failure. `steps` does not configure that today: `adk-utils-go`'s `genai/openai` `Config` exposes only `APIKey`, `BaseURL`, `ModelName`, and `HTTPOptions`, with no `MaxRetries` among them.
+
+So the real cost of a failing turn is `attempts: × 3`, and it compounds: each retry re-sends the whole conversation so far. `internal/agent/requests.go` makes this observable — `requestLogTransport` sits innermost in the client's transport stack (the only place the SDK's own retries are distinguishable, since each is a separate round trip through the same `http.Client`) and logs every request the client is about to retry, while a per-attempt `requestCounter` feeds `provider_requests` into `retry.attempt_failed`.
+
+Two details worth knowing when reading that code:
+
+- **Bursts are consecutive, not cumulative.** A success resets the counter, so a conversation of ten good turns followed by a failing one reports `attempt=1 of=3`, not `attempt=11`.
+- **The terminal failure is not logged as a retry.** Three failing requests produce two `agent.request_retry` lines; the third is the failure `retry.attempt_failed` reports, with the full count beside it. Logging it in both places would double-count the figure this exists to make honest.
+
+`sdkRequestsPerCall = 3` is a documented mirror of the dependency's default, not a setting. `e2e_test.go` pins the resulting request count, so a dependency bump that changes it fails the suite rather than silently re-pricing every failing call.
+
 See [attempts-timeout.md](attempts-timeout.md) for a detailed guide covering the interaction with `assert:`, hook firing, and other step types.
 
 ## Compacting long conversations

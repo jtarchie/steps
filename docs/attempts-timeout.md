@@ -124,6 +124,38 @@ task: build (attempt 3/3)
 
 These markers appear in both CLI output and structured logs (`job.task.attempt`).
 
+## An agent step's `attempts:` multiplies — it does not add
+
+**This is the single most surprising thing about `attempts:` on an agent step.** There are two retry layers stacked on every agent call, and only one of them is yours:
+
+| Layer | Who owns it | Configurable |
+|---|---|---|
+| HTTP request retry | the LLM client (`openai-go/v3`, `MaxRetries: 2`) | no — not today |
+| whole-conversation retry | `steps`' own `attempts:` | yes |
+
+The client retries on connection errors and on HTTP 408, 409, 429, and every 5xx. So one failing turn costs **three** provider requests, not one, and the two layers multiply:
+
+```
+provider requests per failing turn  =  attempts:  ×  3
+```
+
+- `attempts: 2` → up to **6** requests
+- `attempts: 6` → up to **18** requests
+
+Each of those re-sends the entire conversation so far, which makes a retry late in a long conversation one of the most expensive things this system can do. Against a provider that caps spend by the dollar rather than by request rate, an unnoticed 3× can exhaust the budget in a fraction of the planned time.
+
+**This is now visible.** Every request the client is about to retry logs a line, and each failed attempt reports what it actually spent:
+
+```
+WRN agent.request_retry  agent=coder model=deepseek-v4-pro attempt=1 of=3 status=500 elapsed=2.1s
+WRN agent.request_retry  agent=coder model=deepseek-v4-pro attempt=2 of=3 status=500 elapsed=5.4s
+WRN retry.attempt_failed attempt=1 attempts=2 provider_requests=3 error="... 500 ..."
+```
+
+Two `agent.request_retry` lines for three requests: the last failure of a burst is not followed by a retry, and `retry.attempt_failed` reports that one with the total beside it. A successful turn logs nothing.
+
+Read it as: *3 provider requests inside 1 conversation attempt, and there is 1 attempt left.* If you were reasoning about cost from `attempt=1 attempts=2` alone, you were off by 3×.
+
 ## Timeout Classification
 
 Timeouts classify as **errored**, not **failed**:

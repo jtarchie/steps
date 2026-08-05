@@ -143,13 +143,18 @@ func newAgentLLM(ri config.ResolvedInvocation, apiKey string) model.LLM {
 
 // agentHTTPClient returns the *http.Client an invocation's LLM uses. Its
 // transport stack is, innermost out: the shared base transport (one
-// process-wide connection pool, see agentBaseTransport), the tool-call
-// argument repair transport (all providers — see repair.go), and, only for
-// an OpenRouter base URL, the session/cache transport (see openrouter.go).
-// Split out from newAgentLLM so the field mapping it performs — the session
-// is scoped by AgentName, not ModelName — is directly assertable in a test.
+// process-wide connection pool, see agentBaseTransport), the retry-visibility
+// transport (see requests.go — it must be innermost so it sees each of the
+// SDK's own transport retries as the separate round trips they are), the
+// tool-call argument repair transport (all providers — see repair.go), and,
+// only for an OpenRouter base URL, the session/cache transport (see
+// openrouter.go). Split out from newAgentLLM so the field mapping it performs
+// — the session is scoped by AgentName, not ModelName — is directly assertable
+// in a test.
 func agentHTTPClient(ri config.ResolvedInvocation) *http.Client {
-	var transport http.RoundTripper = &repairTransport{base: agentBaseTransport()}
+	logged := &requestLogTransport{base: agentBaseTransport(), agent: ri.AgentName, model: ri.ModelName}
+
+	var transport http.RoundTripper = &repairTransport{base: logged}
 
 	if isOpenRouterBaseURL(ri.BaseURL) {
 		transport = &openRouterTransport{base: transport, agent: ri.AgentName}
