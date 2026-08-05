@@ -619,3 +619,75 @@ jobs:
 	// The plan must not have continued past an untolerated error.
 	assertNoFile(t, afterLog)
 }
+
+// TestEndToEndInParallelFailFastCancelsAgent verifies that fail_fast: true
+// propagates context cancellation to still-running agent steps when a sibling
+// fails. The agent is scripted to call run_shell with a slow command so it is
+// mid-execution when the sibling task fails; cancellation should abort the
+// tool execution and prevent the second model request from being made.
+func TestEndToEndInParallelFailFastCancelsAgent(t *testing.T) {
+	dir := t.TempDir()
+
+	// Script: first turn calls run_shell with a slow command, keeping the
+	// agent busy executing the tool while the sibling task fails. The second
+	// turn would be the final response — if cancellation works, the agent
+	// never reaches it.
+	fake := newFakeLLM(t,
+		callsTool("run_shell", map[string]any{"command": "sleep 2"}),
+		says("Looks good."),
+	)
+
+	pipeline := fmt.Sprintf(`
+resource_types:
+- name: dummy
+  config:
+    check: echo '[{"ref":"v1"}]'
+    in: echo fetched >> %s
+
+resources:
+- name: repo
+  type: dummy
+  source: {}
+
+agents:
+- name: reviewer
+  source:
+    endpoint: %s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools: [run_shell]
+
+jobs:
+- name: build
+  plan:
+  - get: repo
+  - in_parallel:
+      fail_fast: true
+      steps:
+      - agent: reviewer
+        inputs: [repo]
+        prompt: Do something slow.
+      - task: fast-fail
+        inputs: [repo]
+        run: exit 1
+`, filepath.Join(dir, "get.log"), fake.URL)
+
+	path := writePipeline(t, dir, pipeline)
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	err := run([]string{path})
+	if err == nil {
+		t.Fatal("run should have failed: one child failed with fail_fast: true")
+	}
+
+	// The get step should have completed before in_parallel started.
+	assertLineCount(t, filepath.Join(dir, "get.log"), 1)
+
+	// The agent should NOT have consumed all scripted turns — cancellation
+	// should have aborted the slow tool execution and prevented the second
+	// model request.
+	if got := fake.requestCount(); got >= 2 {
+		t.Errorf("agent consumed %d requests, want < 2 (cancellation should have stopped it)", got)
+	}
+}

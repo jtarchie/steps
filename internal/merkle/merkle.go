@@ -25,11 +25,12 @@ type NodeKind string
 
 // The four step kinds a Node can represent.
 const (
-	NodeKindGet   NodeKind = "get"
-	NodeKindTask  NodeKind = "task"
-	NodeKindPut   NodeKind = "put"
-	NodeKindAgent NodeKind = "agent"
-	NodeKindTry   NodeKind = "try"
+	NodeKindGet        NodeKind = "get"
+	NodeKindTask       NodeKind = "task"
+	NodeKindPut        NodeKind = "put"
+	NodeKindAgent      NodeKind = "agent"
+	NodeKindTry        NodeKind = "try"
+	NodeKindInParallel NodeKind = "in_parallel"
 )
 
 // Node is one content-addressed step in a job's resolved execution chain.
@@ -293,6 +294,8 @@ func hookContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 		return AgentContentMap(cfg, step, ri)
 	case config.StepKindTry:
 		return TryNodeContent(cfg, step)
+	case config.StepKindInParallel:
+		return InParallelNodeContent(cfg, step)
 	default: // config.StepKindGet — not a valid hook body
 		return nil, errors.New("unrecognized hook step (must be task, put, or agent)")
 	}
@@ -310,6 +313,32 @@ func TryNodeContent(cfg *config.Config, step config.Step) (map[string]any, error
 	}
 
 	content := map[string]any{"try": innerContent}
+
+	return withHooks(cfg, step, withWhen(step, withRouting(step, content)))
+}
+
+// InParallelNodeContent builds the hashed content for an in_parallel wrapper
+// by folding each child step's content under a "steps" key plus limit and
+// fail_fast. Each child's content is resolved through stepContentMap.
+func InParallelNodeContent(cfg *config.Config, step config.Step) (map[string]any, error) {
+	spec := step.InParallel
+
+	children := make([]map[string]any, len(spec.Steps))
+	for i, child := range spec.Steps {
+		cc, err := stepContentMap(cfg, child)
+		if err != nil {
+			return nil, fmt.Errorf("in_parallel child %d: %w", i, err)
+		}
+		children[i] = cc
+	}
+
+	content := map[string]any{
+		"in_parallel": map[string]any{
+			"limit":     spec.Limit,
+			"fail_fast": spec.FailFast,
+			"steps":     children,
+		},
+	}
 
 	return withHooks(cfg, step, withWhen(step, withRouting(step, content)))
 }
@@ -354,6 +383,8 @@ func stepContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 		return AgentContentMap(cfg, step, ri)
 	case config.StepKindTry:
 		return TryNodeContent(cfg, step)
+	case config.StepKindInParallel:
+		return InParallelNodeContent(cfg, step)
 	default:
 		return nil, errors.New("unrecognized step")
 	}
@@ -804,6 +835,10 @@ func planNonGetNode(cfg *config.Config, step config.Step, i int, parentHash stri
 		return Node{}, false, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}
 
+	return planNonGetNodeByKind(cfg, step, i, parentHash, kind)
+}
+
+func planNonGetNodeByKind(cfg *config.Config, step config.Step, i int, parentHash string, kind config.StepKind) (Node, bool, error) {
 	switch kind { //nolint:exhaustive // default covers config.StepKindGet — planNonGetNode is only ever called for non-get steps
 	case config.StepKindTask:
 		rt, err := cfg.ResolveTask(step)
@@ -833,6 +868,10 @@ func planNonGetNode(cfg *config.Config, step config.Step, i int, parentHash stri
 		node, err := tryNode(cfg, step, i, parentHash)
 
 		return node, true, err // try is always unskippable
+	case config.StepKindInParallel:
+		node, err := inParallelNode(cfg, step, i, parentHash)
+
+		return node, true, err // in_parallel is always unskippable
 	default: // config.StepKindGet — planNonGetNode is only ever called for non-get steps
 		return Node{}, false, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}
@@ -948,6 +987,20 @@ func tryNode(cfg *config.Config, step config.Step, i int, parentHash string) (No
 	// Resource names the wrapped step, matching what internal/pipeline records
 	// at run time — without it `steps plan` printed a nameless try row.
 	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindTry, StepIndex: i, Resource: stepResourceName(step), Content: content}, nil
+}
+
+func inParallelNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, error) {
+	content, err := InParallelNodeContent(cfg, step)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (in_parallel): %w", i, err)
+	}
+
+	hash, err := HashNode(NodeKindInParallel, content, parentHash)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (in_parallel): %w", i, err)
+	}
+
+	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindInParallel, StepIndex: i, Resource: "in_parallel", Content: content}, nil
 }
 
 // stepResourceName is the name a node is displayed under: whichever of

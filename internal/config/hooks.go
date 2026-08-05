@@ -105,8 +105,11 @@ func validateHookStep(label string, step *Step) error {
 	}
 
 	if kind == StepKindGet {
-		return fmt.Errorf("%s: get is not valid in a hook; hooks must be task, put, agent, or try steps", label)
+		return fmt.Errorf("%s: get is not valid in a hook; hooks must be task, put, agent, try, or in_parallel steps", label)
 	}
+
+	// in_parallel is a container; its children are validated recursively by
+	// visitStepTree, so a get inside an in_parallel hook is still caught.
 
 	return nil
 }

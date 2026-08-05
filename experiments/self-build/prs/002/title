@@ -1,0 +1,1 @@
+story 002: add `in_parallel:` step for concurrent execution with limit and fail-fast

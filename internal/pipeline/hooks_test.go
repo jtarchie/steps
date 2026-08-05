@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/outcome"
@@ -175,5 +176,60 @@ func TestRunHooksEnsureFailsGreenOutcome(t *testing.T) {
 	failErr := runHooks(context.Background(), newScope(), hooks, base)
 	if !errors.Is(failErr, base) {
 		t.Errorf("runHooks returned %v, want the original base error", failErr)
+	}
+}
+
+// TestRunInParallelHookFailFast verifies that fail_fast: true on an in_parallel
+// hook cancels siblings when the first child fails.
+func TestRunInParallelHookFailFast(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+
+	pipelineYAML := `
+jobs:
+- name: build
+  plan:
+  - task: main
+    run: exit 1
+    ensure:
+      in_parallel:
+        fail_fast: true
+        steps:
+        - task: fast-fail
+          run: exit 1
+        - task: slow
+          run: sleep 10
+`
+
+	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provider, err := workspace.NewProvider(nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := openTestStore(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err = RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, store, true)
+	if err == nil {
+		t.Error("RunJob: expected error from failing hook child with fail_fast: true, got nil")
+	}
+
+	// If we reached here quickly (before the 10s sleep), fail_fast cancellation worked.
+	if ctx.Err() != nil {
+		t.Fatal("test context expired; hook fail_fast may not have cancelled the slow child")
 	}
 }

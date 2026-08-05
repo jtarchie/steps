@@ -7,7 +7,7 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 | Page | What it covers | Length |
 |---|---|---|
 | [resources.md](resources.md) | Resources and resource types: the built-in `git`, the `check`/`in`/`out` contract, `version:`, `trigger:` | short |
-| [control-flow.md](control-flow.md) | `when:` guards, hooks, `to:`/`max_visits:` routing, verdicts, handoff, `assert:` | medium |
+| [control-flow.md](control-flow.md) | `try:`, `in_parallel:`, `when:` guards, hooks, `to:`/`max_visits:` routing, verdicts, handoff, `assert:` | medium |
 | [agents.md](agents.md) | Agent steps: tools, prompts, verdicts, `fix:`, handoff notes, sub-agents | long |
 | [attempts-timeout.md](attempts-timeout.md) | `attempts:` and `timeout:`, and how they interact | short |
 | [workspace.md](workspace.md) | `inputs:`/`outputs:` and opt-in per-step isolation | short |

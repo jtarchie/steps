@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=../steps.schema.json
+# in_parallel: routing — a child step's to: target is validated at load
+# (cross-branch routing and routing outside the block are rejected) but
+# NOT followed at runtime — every child runs concurrently regardless of
+# any child's to: disposition. This fixture verifies that all three
+# children execute even when one routes to another.
+#
+# Self-verifying via step-level assert.stdout on every task.
+#
+#   steps test examples/in-parallel-routing.yml
+#
+# No network, credentials, or model.
+assert:
+  execution:
+    - within-branch
+
+jobs:
+- name: within-branch
+  plan:
+  - in_parallel:
+      steps:
+      - task: start
+        run: echo "starting"
+        to:
+          success: finish
+        assert:
+          stdout: "starting"
+      - task: sibling
+        run: echo "sibling done"
+        assert:
+          stdout: "sibling done"
+      - task: finish
+        run: echo "routed here"
+        assert:
+          stdout: "routed here"

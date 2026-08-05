@@ -499,6 +499,12 @@ func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string,
 		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}
 
+	return dispatchNonGetStepKind(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash, handoff, kind)
+}
+
+// dispatchNonGetStepKind routes a recognized step kind to its handler.
+// Extracted from dispatchNonGetStep to stay under the cyclop limit.
+func dispatchNonGetStepKind(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string, handoff *agent.Handoff, kind config.StepKind) (string, stepDisposition, nonGetOutcome, error) {
 	switch kind { //nolint:exhaustive // default covers config.StepKindGet — dispatchNonGetStep is only called for non-get steps
 	case config.StepKindTask:
 		hash, disposition, err := runTaskStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash)
@@ -519,6 +525,8 @@ func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string,
 		return stepOut.Hash, stepRan, no, nil
 	case config.StepKindTry:
 		return runTryStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
+	case config.StepKindInParallel:
+		return runInParallelStep(ctx, cfg, jobName, i, step, bw, st, parentHash)
 	default: // config.StepKindGet — dispatchNonGetStep is only called for non-get steps
 		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}
@@ -598,6 +606,118 @@ func runTryStep(ctx context.Context, cfg *config.Config, jobName string, i int, 
 // and would let the plan march on into steps whose context is already dead.
 func toleratedByTry(ctx context.Context, err error) bool {
 	return err != nil && outcome.Classify(ctx, err) == outcome.Failed
+}
+
+// runInParallelStep executes an in_parallel wrapper: it hashes the wrapper node,
+// runs all children concurrently with a limit and optional fail_fast, then
+// aggregates outcomes. Each child runs through runNonGetStep, recording itself
+// independently. The wrapper is always unskippable.
+func runInParallelStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, parentHash string) (string, stepDisposition, nonGetOutcome, error) {
+	spec := step.InParallel
+
+	content, err := merkle.InParallelNodeContent(cfg, step)
+	if err != nil {
+		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (in_parallel): %w", i, err)
+	}
+
+	hash, err := merkle.HashNode(merkle.NodeKindInParallel, content, parentHash)
+	if err != nil {
+		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (in_parallel): %w", i, err)
+	}
+
+	fmt.Printf("in_parallel: %d children\n", len(spec.Steps))
+	slog.Debug("job.step", "job", jobName, "index", i, "kind", "in_parallel", "children", len(spec.Steps))
+
+	firstErr := runInParallelChildren(ctx, cfg, jobName, i, step, bw, st, hash)
+
+	// Record children in declaration order for deterministic assert.execution.
+	// Use the real execLog context (stashed under execLogRealKey when running
+	// inside a parent in_parallel that suppressed recording).
+	for _, child := range spec.Steps {
+		recordStepExecution(execLogCtx(ctx), child)
+	}
+
+	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindInParallel, StepIndex: i, Resource: "in_parallel", Content: content}
+	status := "succeeded"
+	if firstErr != nil {
+		status = string(outcome.Classify(ctx, firstErr))
+	}
+	recCtx2 := context.WithoutCancel(ctx)
+	_ = st.RecordNode(recCtx2, nodeRecord(node), jobName, status, nil, firstErr)
+
+	if firstErr != nil {
+		return hash, stepRan, nonGetOutcome{}, firstErr
+	}
+
+	return hash, stepRan, nonGetOutcome{}, nil
+}
+
+// runInParallelChildren runs all children of an in_parallel step concurrently,
+// bounded by spec.Limit, and returns the first error encountered (nil if all
+// succeeded). Children run with execution-log recording suppressed; the
+// caller is responsible for recording children in declaration order for
+// deterministic assert.execution ordering.
+func runInParallelChildren(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, parentHash string) error {
+	spec := step.InParallel
+
+	children := spec.Steps
+	limit := spec.Limit
+	if limit <= 0 || limit > len(children) {
+		limit = len(children)
+	}
+
+	type childResult struct {
+		index int
+		err   error
+	}
+
+	sem := make(chan struct{}, limit)
+	results := make(chan childResult, len(children))
+
+	// Suppress automatic execution recording during concurrent execution —
+	// children would record in non-deterministic completion order.
+	noLogCtx := context.WithValue(ctx, execLogKey, nil)
+	// Thread the real ctx so nested in_parallel wrappers can still record
+	// their own children through it. If the current ctx already has a real
+	// ctx stashed (we're already nested), propagate that one.
+	realCtx := execLogCtx(ctx)
+	childCtx := context.WithValue(noLogCtx, execLogRealKey, realCtx)
+
+	// When fail_fast is set, derive a cancellable context so the first
+	// child failure cancels still-running siblings.  The deferred cancel
+	// is a no-op cleanup when the context is already cancelled; when
+	// fail_fast is false it just releases resources.
+	childCtx, cancel := context.WithCancel(childCtx)
+	defer cancel()
+
+	for j, child := range children {
+		sem <- struct{}{}
+		go func(idx int, c config.Step) {
+			defer func() { <-sem }()
+			label := fmt.Sprintf("[branch %d]", idx)
+			fmt.Printf("%s starting\n", label)
+			_, _, _, childErr := runNonGetStep(childCtx, cfg, jobName, i, c, bw, st, nil, parentHash, nil)
+			if childErr != nil {
+				fmt.Printf("%s failed: %v\n", label, childErr)
+			} else {
+				fmt.Printf("%s done\n", label)
+			}
+			results <- childResult{index: idx, err: childErr}
+		}(j, child)
+	}
+
+	var firstErr error
+	for range children {
+		r := <-results
+		if r.err != nil && firstErr == nil {
+			firstErr = r.err
+			if spec.FailFast {
+				cancel()
+			}
+		}
+	}
+
+	return firstErr
 }
 
 // tolerateTryFailure is a try: wrapper's whole effect on the plan: it turns the

@@ -193,6 +193,15 @@ func validateHandoffSegment(job Job, segment []int) error {
 				return err
 			}
 		}
+
+		// Recurse into in_parallel children: the wrapper itself has no agent,
+		// but children inside a branch may carry handoff: and need validation.
+		if step.InParallel != nil {
+			err = checkInParallelHandoff(job, idx, step, targeted)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
@@ -219,6 +228,37 @@ func checkHandoffStep(label string, step Step, targeted map[string]bool) error {
 	// handoff writes forward along the plan and has no such requirement.
 	if step.Handoff.Receives() && !targeted[stepName(step)] {
 		return fmt.Errorf("%s: handoff sets context/tool but no to: route in this segment targets step %q", label, stepName(step))
+	}
+
+	return nil
+}
+
+// checkInParallelHandoff validates handoff: on each child of an in_parallel
+// block, recursing into nested in_parallel blocks. The wrapper itself has no
+// agent; children inside a branch carry handoff: and need validation.
+func checkInParallelHandoff(job Job, planIdx int, step Step, targeted map[string]bool) error {
+	for childIdx := range step.InParallel.Steps {
+		child := &step.InParallel.Steps[childIdx]
+		label := fmt.Sprintf("job %q step %d (child %d)", job.Name, planIdx, childIdx)
+
+		err := checkHandoffStep(label, *child, targeted)
+		if err != nil {
+			return err
+		}
+
+		if child.Try != nil {
+			err = checkHandoffStep(label, child.Unwrap(), targeted)
+			if err != nil {
+				return err
+			}
+		}
+
+		if child.InParallel != nil {
+			err = checkInParallelHandoff(job, planIdx, *child, targeted)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil

@@ -1,8 +1,9 @@
 # Control Flow
 
-Three distinct, easy-to-conflate mechanisms for shaping how a job's plan executes, plus the self-verification (`assert:`) that makes fixtures out of them. All are opt-in; a pipeline that uses none of this hashes and behaves exactly as if the feature didn't exist. See `examples/flow.yml` — every job there is a self-verifying, modelless `steps test` fixture; run it with `steps test examples/flow.yml`.
+Four distinct, easy-to-conflate mechanisms for shaping how a job's plan executes, plus the self-verification (`assert:`) that makes fixtures out of them. All are opt-in; a pipeline that uses none of this hashes and behaves exactly as if the feature didn't exist. See `examples/flow.yml` — every job there is a self-verifying, modelless `steps test` fixture; run it with `steps test examples/flow.yml`.
 
 - **`try:`** (tolerate) wraps a step so its failure doesn't stop the plan — best-effort notifications, cleanup, or metrics pushes.
+- **`in_parallel:`** (concurrency) runs several steps at once with an optional limit and on-first-failure cancellation.
 - **`when:`** (guard) runs *before* a step and decides whether it runs at all.
 - **`to:`** (route) runs *after* a step and decides which step runs next — including jumping backward to form a loop.
 - **Hooks** (`on_success`/`on_failure`/etc.) *react* to a step's outcome with a nested side-step, and never change control flow — you can't build a loop with a hook.
@@ -11,7 +12,7 @@ On a failing step with both a hook and a route: the hook fires first (react), th
 
 ## Hooks (`on_success`/`on_failure`/`on_error`/`on_abort`/`ensure`)
 
-Any plan step, or the whole job, can carry hooks. A hook is itself a full step (task/put/agent — never `get`), so it can `run:` a command, `put:` a resource, or invoke an `agent:`, and may recursively carry its own hooks.
+Any plan step, or the whole job, can carry hooks. A hook is itself a full step (task/put/agent/try/in_parallel — never `get`), so it can `run:` a command, `put:` a resource, invoke an `agent:`, run several steps concurrently, or wrap a tolerated step, and may recursively carry its own hooks.
 
 ```yaml
 jobs:
@@ -84,6 +85,62 @@ The wrapper is **transparent**: the only thing it changes is whether the plan wa
 - **Valid as a hook body**: `ensure: { try: { put: slack-notify } }` is the usual home for best-effort notification — a failing `on_success`/`ensure` hook otherwise fails an otherwise-green step, and the wrapper is what stops that.
 - **Always unskippable**: the try wrapper and everything downstream of it always executes — removing `try:` from a step changes its identity, so re-running after an edit must not read a stale cache.
 
+## Concurrency (`in_parallel:`)
+
+`in_parallel:` wraps several child steps and runs them concurrently instead of one after another. Each child runs its own hooks, records its own outcome, and participates in artifact flow like any other step. The wrapper occupies a single position in the plan and aggregates outcomes. Every `examples/in-parallel-*.yml` fixture is a modelless, self-verifying `steps test` example.
+
+```yaml
+- in_parallel:
+    limit: 2          # max in flight; unset or 0 means unbounded
+    fail_fast: true   # first failure cancels the rest (default: false)
+    steps:
+    - task: lint
+      run: echo "lint complete"
+    - task: test
+      run: echo "test complete"
+```
+
+- **`limit:`** bounds how many children run at once. Unset or 0 means every child starts immediately (unbounded). This is the tool for bounding container/CPU/memory load when several parallel steps each set `image:`.
+- **`fail_fast:`** controls sibling cancellation. When `true` (the default is `false`), the first child failure stops the remaining children — their contexts are cancelled and they receive `[branch N] failed: context canceled`. When `false`, all children run to completion regardless of sibling failures — but the wrapper still returns the error and the job fails (it is NOT a tolerance mechanism like `try:`).
+- **Aggregation**: on `fail_fast: true`, the first child error becomes the wrapper's error. On `fail_fast: false`, the first error encountered is returned — all children still run, but the aggregate is still an error (the wrapper does *not* swallow failures the way `try:` does).
+
+### What is refused
+
+`in_parallel:` is a container, not a step that itself does work. Several fields that belong on individual children are rejected on the wrapper at load time:
+
+- **`when:`**, **`image:`**, **`assert:`**, **`trigger:`**, **`version:`**, **`params:`**, **`resource:`** on an `in_parallel:` wrapper are all rejected — set them on the individual children that need them.
+- **Cross-branch routing** — a child's `to:` or `verdicts:` target must resolve within the same branch. Routing to a sibling branch or outside the block is rejected at load. See Routing scope below.
+- **Duplicate output names** across children are rejected at load — two children at any nesting depth both producing an artifact named `result` is a naming collision. Duplicates are detected recursively through nested `in_parallel:` blocks. Silent last-write-wins would be a correctness trap, so it's a hard error instead.
+- **`get` steps as children** are not supported. A get step fans the remainder of the plan out per version, which has no coherent meaning inside a concurrent block. Get steps inside `in_parallel:` are rejected at load time. Put your `get` steps outside the `in_parallel:` block.
+
+### Routing scope
+
+A child step's `to:` (or an agent child's `verdicts:`) may route to another child **within the same branch**. Cross-branch routing — a child in branch 0 routing to a step in branch 1 — is rejected at load. Routing to a step outside the `in_parallel:` block entirely is also rejected. Each branch is its own routing mini-segment.
+
+Within-branch routing targets are validated at load time but **not followed at runtime** — every child runs concurrently regardless of any child's `to:` disposition. This is a consequence of concurrent execution: all children always run, so there is nothing to route around. The `examples/in-parallel-routing.yml` fixture passes because all three children run concurrently anyway, not because the `to:` route is executed.
+
+A consequence of routes not being followed: **`handoff:` and `handoff_note:` on children inside `in_parallel:`** are validated at load time (the route target is checked to exist within the same branch) but are never delivered at runtime — the handoff machinery fires on entry from a `to:` route, and no route is ever followed to a child inside `in_parallel:`. Declaring either inside a concurrent block is harmless but has no effect. This also means a `previous_run` handoff tool inside an in_parallel branch will always answer `\"no previous run\"`.
+
+`to:`/`max_visits:` on the wrapper itself controls how the wrapper routes *out* of the block after aggregation — the same contract as any other step with `to:`/`max_visits:`. Other steps cannot route *to* an in_parallel wrapper — it has no routable name — so a backward route from outside into the block is impossible.
+
+### Nesting
+
+`in_parallel:` inside `in_parallel:` works from day one. Children at any nesting depth execute concurrently within their own branch scope. The `examples/in-parallel-nested.yml` fixture verifies two levels and the same rules (limit, fail_fast, routing scope, duplicate-output rejection) apply recursively.
+
+### Hooks
+
+Hooks (`on_success`/`on_failure`/`on_error`/`on_abort`/`ensure`) on the `in_parallel:` wrapper fire after all children complete, on the aggregated outcome. Children run their own hooks independently. `in_parallel:` is also valid as a hook body — `ensure: { in_parallel: { ... } }` is the way to run two cleanup steps in parallel.
+
+### Execution log and caching
+
+- **Execution log**: children record themselves in **declaration order** after all complete, not in the order they finish — so `assert.execution` on a job that contains `in_parallel:` is deterministic regardless of which child's goroutine finished first. The wrapper itself records nothing.
+- **Always unskippable**: the in_parallel wrapper and everything downstream of it always executes — concurrent execution is non-deterministic by nature. Removing `in_parallel:` from a step changes its identity, so re-running after an edit must not read a stale cache.
+- **Output labeling**: each child's output lines are prefixed with `[branch N]` so concurrent interleaving is readable. For example a three-child block prints `[branch 0] starting`, `[branch 1] starting`, `[branch 2] starting`, then each child's stdout/stderr and `[branch N] done` or `[branch N] failed: ...`.
+
+### Workspace safety
+
+All children of an `in_parallel:` block share one workspace by default. Two concurrent tasks writing to the same file path is a data race and can silently corrupt output. If your children write files, either coordinate them (each child writes to a distinct subdirectory) or switch to isolated workspaces — see [workspace.md](workspace.md) for `strategy: copy` (safe on any platform) and `strategy: btrfs` (fast copy-on-write snapshots, Linux only). This hazard is not detected at load time — `in_parallel:` does not require workspace isolation, but the docs must tell you before you hit it.
+
 ## Step transitions (`to:`/`max_visits:`/`verdicts:`)
 
 A `task`/`put`/`agent` step can carry `to:` — a map that routes to another step **in the same get-segment** based on this step's outcome, including jumping backward to form a bounded loop (a judge/revise cycle). Task loops are self-verifying via `examples/flow.yml`; verdict routing is illustrated in `examples/agents.yml` (needs a model).
@@ -126,7 +183,7 @@ Every agent step is otherwise a fresh, hermetic conversation — a step reached 
 
   The `<note>` element is present only when the routing step was a verdict agent that gave one (see `verdicts:`'s optional `note` arg in [agents.md](agents.md)) — a deliberate, authored "why," not a summary. `visit:` reads `(unbounded)` when the target has no `max_visits:` (an all-forward route). A note's content is truncated and sanitized (a literal `</note>` can't close the element early) — the same trust domain as any other upstream model-authored text.
 - **Pull (`tool`)**: synthesizes a read-only, non-required `previous_run` tool the model can call on demand, returning the routed-from **agent** step's recorded run — final response, verdict + note, turn count, and tool-call trajectory (optionally filtered to `section: response` or `section: trajectory`) — without any of it entering context unrequested. When there's nothing to report (first execution, or the routing step wasn't an agent), it answers `"no previous run: ..."` as data, never an error.
-- **Routed-entry only.** A step reached by falling through in declaration order (no `to:` involved) gets no block and no report from `previous_run` — `handoff:` is meaningless there and is rejected at load unless the step is the target of at least one `to:` route within its own get-segment.
+- **Routed-entry only.** A step reached by falling through in declaration order (no `to:` involved) gets no block and no report from `previous_run` — `handoff:` is meaningless there and is rejected at load unless the step is the target of at least one `to:` route within its own get-segment. `handoff:` on a child inside an `in_parallel:` block is validated at load but never delivered at runtime — routes within `in_parallel:` are not followed (see [Concurrency](#concurrency-in_parallel)).
 - **Agent-only**, and invalid on hook steps (a hook is a reaction, not a positioned step with predecessors).
 - A `to.failure` route from a **failed** agent still carries its partial response/trajectory into `previous_run` — the run is packaged from the last attempt's result regardless of outcome. A `to.failure` route from a task/put carries the from-step/key in the block, but `previous_run` reports "no previous run" (there's no agent run to describe).
 - A `when:` guard that skips the routed-to step still **consumes** the pending handoff — the transition happened; the guard just declined to run it. The next step to actually execute gets nothing from it.

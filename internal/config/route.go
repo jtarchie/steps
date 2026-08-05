@@ -24,7 +24,7 @@ func stepName(step Step) string {
 		return ""
 	}
 
-	switch kind { //nolint:exhaustive // default covers StepKindGet, which is not a valid to: target
+	switch kind { //nolint:exhaustive // default covers StepKindGet and StepKindInParallel, which are not valid to: targets
 	case StepKindTask:
 		return step.Task
 	case StepKindAgent:
@@ -60,6 +60,11 @@ func (c *Config) validateStepTransitions() error {
 		}
 
 		err = c.validatePlanSegments(job)
+		if err != nil {
+			return err
+		}
+
+		err = c.validateInParallelRouting(job)
 		if err != nil {
 			return err
 		}
@@ -286,6 +291,96 @@ func validateRouteTargets(label string, segPos int, step Step, pos map[string]in
 
 	if backward && step.MaxVisits > maxVisitsLimit {
 		return fmt.Errorf("%s: max_visits %d exceeds the maximum of %d", label, step.MaxVisits, maxVisitsLimit)
+	}
+
+	return nil
+}
+
+// validateInParallelRouting walks every in_parallel step in a job's plan and
+// validates routing within each branch independently: a child's to: target
+// must resolve to another child in the same branch. Cross-branch routing and
+// routing outside the block are rejected. Recurses into nested in_parallel.
+func (c *Config) validateInParallelRouting(job Job) error {
+	for planIdx := range job.Plan {
+		err := c.validateInParallelRoutingStep(job, planIdx, job.Plan[planIdx])
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateInParallelRoutingStep validates routing within the branches of a
+// single in_parallel step at planIdx. Recurses into nested in_parallel blocks
+// within each branch.
+func (c *Config) validateInParallelRoutingStep(job Job, planIdx int, step Step) error {
+	if step.InParallel == nil {
+		return nil
+	}
+
+	for branchIdx := range step.InParallel.Steps {
+		children := step.InParallel.Steps
+		pos := buildBranchPos(children)
+		err := validateBranchRouting(job.Name, planIdx, branchIdx, children, pos)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// buildBranchPos builds a name → position map for the children of one branch.
+func buildBranchPos(children []Step) map[string]int {
+	pos := make(map[string]int, len(children))
+	for i, child := range children {
+		name := stepName(child)
+		if name == "" {
+			continue
+		}
+		// Duplicate names within a branch are caught by validateBranchRouting
+		// via the pos check; keep the first occurrence.
+		if _, dup := pos[name]; !dup {
+			pos[name] = i
+		}
+	}
+	return pos
+}
+
+// validateBranchRouting validates to: targets for every child in a branch.
+// Rejects targets outside the branch, backward routing without max_visits,
+// and excessive max_visits. Recurses into nested in_parallel blocks.
+func validateBranchRouting(jobName string, planIdx, branchIdx int, children []Step, pos map[string]int) error {
+	for i, child := range children {
+		// Recurse into nested in_parallel first.
+		if child.InParallel != nil {
+			for nestedIdx := range child.InParallel.Steps {
+				nc := child.InParallel.Steps
+				npos := buildBranchPos(nc)
+				err := validateBranchRouting(jobName, planIdx, nestedIdx, nc, npos)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+		for key, target := range child.To {
+			targetPos, ok := pos[target]
+			if !ok {
+				return fmt.Errorf("job %q step %d (branch %d): to: %s routes to %q, which is not a step in the same branch", jobName, planIdx, branchIdx, key, target)
+			}
+
+			if targetPos <= i {
+				if child.MaxVisits <= 0 {
+					return fmt.Errorf("job %q step %d (branch %d): to: routes backward, so max_visits must be set (> 0)", jobName, planIdx, branchIdx)
+				}
+
+				if child.MaxVisits > maxVisitsLimit {
+					return fmt.Errorf("job %q step %d (branch %d): max_visits %d exceeds the maximum of %d", jobName, planIdx, branchIdx, child.MaxVisits, maxVisitsLimit)
+				}
+			}
+		}
 	}
 
 	return nil

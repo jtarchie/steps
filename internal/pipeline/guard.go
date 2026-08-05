@@ -85,6 +85,10 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 func resolveStepImage(cfg *config.Config, step config.Step) (string, error) {
 	kind, _ := step.Kind()
 
+	return resolveStepImageByKind(cfg, step, kind)
+}
+
+func resolveStepImageByKind(cfg *config.Config, step config.Step, kind config.StepKind) (string, error) {
 	switch kind { //nolint:exhaustive // default covers config.StepKindGet and a malformed step alike — no image to resolve here
 	case config.StepKindTask:
 		rt, err := cfg.ResolveTask(step)

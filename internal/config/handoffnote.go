@@ -112,6 +112,15 @@ func (c *Config) validateHandoffNoteSegment(job *Job, segment []int) error {
 				return fmt.Errorf("job %q step %d: handoff_note is only valid on agent steps", job.Name, idx)
 			}
 
+			// Recurse into in_parallel children: each branch is its own
+			// note chain independent of the plan-level sender.
+			if job.Plan[idx].InParallel != nil {
+				err := validateHandoffNoteInParallel(c, job, idx, job.Plan[idx].InParallel)
+				if err != nil {
+					return err
+				}
+			}
+
 			continue
 		}
 
@@ -258,6 +267,79 @@ func checkHandoffNoteDelivered(job *Job, segment []int) error {
 		if step.WantsNote() && !received[stepName(step)] {
 			return fmt.Errorf("job %q step %d: handoff_note is set but no later agent step in this segment receives it", job.Name, idx)
 		}
+	}
+
+	return nil
+}
+
+// validateHandoffNoteInParallel validates handoff note chains within every
+// branch of an in_parallel block. Each branch is its own independent chain.
+func validateHandoffNoteInParallel(c *Config, job *Job, planIdx int, spec *InParallelSpec) error {
+	for branchIdx, child := range spec.Steps {
+		err := c.validateHandoffNoteBranch(job, planIdx, branchIdx, child)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateHandoffNoteBranch validates a handoff note chain within one branch
+// of an in_parallel block. Each branch is its own chain — a sender in branch 0
+// delivers to the next agent step in branch 0, not across branches.
+func (c *Config) validateHandoffNoteBranch(job *Job, planIdx, branchIdx int, root Step) error {
+	sender := ""
+
+	for i := range []Step{root} {
+		child := &root
+		err := c.processNoteBranchChild(job, planIdx, branchIdx, i, child, &sender)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// processNoteBranchChild processes one child in a handoff note branch chain.
+// Recurses into nested in_parallel blocks.
+func (c *Config) processNoteBranchChild(job *Job, planIdx, branchIdx, childIdx int, child *Step, sender *string) error {
+	if child.InParallel != nil {
+		for nestedIdx, nc := range child.InParallel.Steps {
+			err := c.validateHandoffNoteBranch(job, planIdx, nestedIdx, nc)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	inner := unwrapStep(child)
+
+	if inner.Agent == "" {
+		if inner.WantsNote() {
+			return fmt.Errorf("job %q step %d (branch %d child %d): handoff_note is only valid on agent steps", job.Name, planIdx, branchIdx, childIdx)
+		}
+
+		return nil
+	}
+
+	inner.HandoffNoteFrom = *sender
+
+	if *sender != "" {
+		err := c.checkHandoffNoteReceiver(job, planIdx, *inner)
+		if err != nil {
+			return err
+		}
+	}
+
+	if inner.WantsNote() {
+		err := c.checkHandoffNoteSender(job, planIdx, *inner)
+		if err != nil {
+			return err
+		}
+
+		*sender = stepName(*inner)
 	}
 
 	return nil

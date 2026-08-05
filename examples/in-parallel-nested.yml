@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=../steps.schema.json
+# in_parallel: nesting — an in_parallel block inside another in_parallel
+# block runs correctly. Both levels' children execute.
+#
+# Self-verifying via step-level assert.stdout on every leaf task.
+#
+#   steps test examples/in-parallel-nested.yml
+#
+# No network, credentials, or model.
+assert:
+  execution:
+    - nested
+
+jobs:
+- name: nested
+  plan:
+  - in_parallel:
+      steps:
+      - in_parallel:
+          steps:
+          - task: a1
+            run: echo "inner a1"
+            assert:
+              stdout: "inner a1"
+          - task: a2
+            run: echo "inner a2"
+            assert:
+              stdout: "inner a2"
+      - in_parallel:
+          steps:
+          - task: b1
+            run: echo "inner b1"
+            assert:
+              stdout: "inner b1"
+          - task: b2
+            run: echo "inner b2"
+            assert:
+              stdout: "inner b2"

@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=../steps.schema.json
+# in_parallel: fail_fast — when false, a failing child does not stop its
+# siblings; all children run to completion and the wrapper tolerates the
+# failure. (fail_fast: true is the opposite — first failure cancels siblings —
+# but non-deterministic scheduling makes it hard to self-verify in a fixture,
+# so it lives in Go-level tests.)
+#
+# Self-verifying: the job assert clears the plan failure from the failing
+# child, and each child checks its own stdout.
+#
+#   steps test examples/in-parallel-fail-fast.yml
+#
+# No network, credentials, or model.
+assert:
+  execution:
+    - tolerate
+
+jobs:
+- name: tolerate
+  plan:
+  - in_parallel:
+      fail_fast: false
+      steps:
+      - task: failing
+        run: echo "i failed"; exit 1
+        assert:
+          stdout: "i failed"
+      - task: still-runs
+        run: echo "i still ran"
+        assert:
+          stdout: "i still ran"
+  assert:
+    execution: [failing, still-runs]

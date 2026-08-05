@@ -151,6 +151,8 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 		// use docs/control-flow.md advertises — still turned a green build red
 		// via runHooks' promotion of a failed on_success/ensure hook.
 		return tolerateTryFailure(ctx, scope.jobName, step, runHookStep(ctx, scope, *step.Try))
+	case config.StepKindInParallel:
+		return runInParallelHookStep(ctx, scope, step)
 	default: // config.StepKindGet — not a valid hook body
 		return errors.New("unrecognized hook step (must be task, put, or agent)")
 	}
@@ -160,6 +162,65 @@ func logIfHookFailed(scope hookScope, name string, err error) {
 	if err != nil {
 		slog.Warn("job.hook.failed", "scope", scope.label, "hook", name, "error", err.Error())
 	}
+}
+
+// runInParallelHookStep executes an in_parallel hook step by running its
+// children concurrently, respecting limit and fail_fast, and collecting
+// errors.
+func runInParallelHookStep(ctx context.Context, scope hookScope, step config.Step) error {
+	spec := step.InParallel
+
+	children := spec.Steps
+	limit := spec.Limit
+	if limit <= 0 || limit > len(children) {
+		limit = len(children)
+	}
+
+	type result struct {
+		index int
+		err   error
+	}
+
+	// Suppress automatic execution logging during concurrent execution —
+	// children would record in non-deterministic completion order. We
+	// re-record in declaration order after all complete.
+	noLogCtx := context.WithValue(ctx, execLogKey, nil)
+
+	// When fail_fast is set, derive a cancellable context so the first
+	// child failure cancels still-running siblings.
+	childCtx, cancel := context.WithCancel(noLogCtx)
+	defer cancel()
+
+	sem := make(chan struct{}, limit)
+	results := make(chan result, len(children))
+
+	for i, child := range children {
+		sem <- struct{}{}
+		go func(idx int, c config.Step) {
+			defer func() { <-sem }()
+			label := fmt.Sprintf("%s (branch %d)", scope.label, idx)
+			err := runHookStep(childCtx, hookScope{cfg: scope.cfg, jobName: scope.jobName, label: label, bw: scope.bw}, c)
+			results <- result{index: idx, err: err}
+		}(i, child)
+	}
+
+	var firstErr error
+	for range children {
+		r := <-results
+		if r.err != nil && firstErr == nil {
+			firstErr = r.err
+			if spec.FailFast {
+				cancel()
+			}
+		}
+	}
+
+	// Record children in declaration order for deterministic assert.execution.
+	for _, child := range children {
+		recordStepExecution(ctx, child)
+	}
+
+	return firstErr
 }
 
 // executedStepName is the bare name of whatever a task/agent/put step ran,
@@ -180,6 +241,8 @@ func executedStepName(step config.Step) string {
 		return step.Put
 	case config.StepKindTry:
 		return executedStepName(*step.Try)
+	case config.StepKindInParallel:
+		return ""
 	default:
 		return ""
 	}
@@ -198,6 +261,8 @@ func stepLabel(i int, step config.Step) string {
 		return fmt.Sprintf("step %d (agent %q)", i, step.Agent)
 	case config.StepKindTry:
 		return fmt.Sprintf("step %d (try %q)", i, executedStepName(*step.Try))
+	case config.StepKindInParallel:
+		return fmt.Sprintf("step %d (in_parallel)", i)
 	default: // config.StepKindTask, or a malformed step — label as a task, as before
 		return fmt.Sprintf("step %d (task %q)", i, step.Task)
 	}

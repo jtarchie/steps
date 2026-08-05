@@ -69,6 +69,11 @@ func (c *Config) validateAsserts() error {
 				return stepErr
 			}
 
+			stepErr = rejectAssertInsideInParallel(label, step)
+			if stepErr != nil {
+				return stepErr
+			}
+
 			stepErr = validateStepAssert(label, step)
 			if stepErr != nil {
 				return stepErr
@@ -184,6 +189,18 @@ func rejectAssertInsideTry(label string, step *Step) error {
 	return nil
 }
 
+// rejectAssertInsideInParallel rejects assert: on an in_parallel wrapper.
+// in_parallel is a container that does not itself produce output or exit with
+// a code, so an assert on it is meaningless. Individual children may carry
+// their own assert:, which is validated via visitStepTree.
+func rejectAssertInsideInParallel(label string, step *Step) error {
+	if step.InParallel != nil && step.Assert != nil {
+		return fmt.Errorf("%s: assert is not valid on an in_parallel step; set it on individual children instead", label)
+	}
+
+	return nil
+}
+
 // validateStepAssert rejects a step assert that's misplaced (get/put/try) or
 // carries the wrong fields for its step kind.
 //
@@ -211,6 +228,9 @@ func validateStepAssert(label string, step *Step) error {
 		// Unreachable in practice — rejectAssertInsideTry runs first and
 		// reports the wrapper and the wrapped step in one message.
 		return fmt.Errorf("%s: assert is not valid on a try: step", label)
+	case StepKindInParallel:
+		// Unreachable in practice — rejectAssertInsideInParallel runs first.
+		return fmt.Errorf("%s: assert is not valid on an in_parallel step", label)
 	case StepKindAgent:
 		if step.Assert.Code != nil {
 			return fmt.Errorf("%s (agent %q): assert.code is not valid on agent steps (no exit code); use assert.stdout", label, step.Agent)

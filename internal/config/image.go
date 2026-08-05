@@ -42,6 +42,8 @@ func (c *Config) validateImages() error {
 				return fmt.Errorf("%s (get %q): image is not valid on get steps", label, step.Get)
 			case step.Put != "":
 				return fmt.Errorf("%s (put %q): image is not valid on put steps; set it on the resource_type instead", label, step.Put)
+			case step.InParallel != nil:
+				return fmt.Errorf("%s: image is not valid on in_parallel steps; set it on individual children instead", label)
 			}
 
 			return nil

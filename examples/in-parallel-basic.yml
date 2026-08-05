@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=../steps.schema.json
+# in_parallel: basic concurrency — two tasks run at the same time, not one
+# after the other. Both must complete successfully. limit: 2 bounds the
+# maximum in-flight count.
+#
+# Self-verifying via step-level assert.stdout — each child checks its own
+# output, so the test is immune to non-deterministic interleaving.
+#
+#   steps test examples/in-parallel-basic.yml
+#
+# No network, credentials, or model.
+assert:
+  execution:
+    - basic
+
+jobs:
+- name: basic
+  plan:
+  - in_parallel:
+      limit: 2
+      steps:
+      - task: lint
+        run: echo "lint complete"
+        assert:
+          stdout: "lint complete"
+      - task: test
+        run: echo "test complete"
+        assert:
+          stdout: "test complete"

@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=../steps.schema.json
+# Regression test: fail_fast: false must NOT swallow child failures.
+# When a child fails and fail_fast is false, the wrapper reports the
+# error — the wrapper is NOT a try: tolerance mechanism.  The job-level
+# assert clears the propagated failure so the fixture stays green; the
+# assert.execution list proves both children ran and neither was swallowed.
+#
+#   steps test examples/in-parallel-fail-fast-swallow.yml
+#
+# No network, credentials, or model.
+
+jobs:
+- name: swallow-bug
+  plan:
+  - in_parallel:
+      fail_fast: false
+      steps:
+      - task: failer
+        run: exit 1
+      - task: ok
+        run: echo "ok"
+        assert:
+          stdout: ok
+  assert:
+    execution: [failer, ok]

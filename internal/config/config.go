@@ -99,6 +99,7 @@ func (c *Config) validate() error {
 		c.validateTaskInputsAll,
 		c.validateStepFieldPlacement,
 		c.validateTrySteps,
+		c.validateInParallelSteps,
 		c.validateWorkspace,
 		c.validateArtifactDecls,
 		c.validateGetResource,

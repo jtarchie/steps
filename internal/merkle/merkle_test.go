@@ -982,3 +982,104 @@ func TestPlanChainsTryStepIsUnskippable(t *testing.T) {
 		t.Error("a chain containing a try step must be unskippable")
 	}
 }
+
+func TestInParallelNodeContent(t *testing.T) {
+	t.Parallel()
+
+	inParallel := config.Step{
+		InParallel: &config.InParallelSpec{
+			Limit:    2,
+			FailFast: true,
+			Steps: []config.Step{
+				{Task: "lint", Run: "echo lint"},
+				{Task: "test", Run: "echo test"},
+			},
+		},
+	}
+
+	content, err := InParallelNodeContent(&config.Config{}, inParallel)
+	if err != nil {
+		t.Fatalf("InParallelNodeContent: %v", err)
+	}
+
+	ip, ok := content["in_parallel"].(map[string]any)
+	if !ok {
+		t.Fatalf("in_parallel key not found in content: %#v", content)
+	}
+
+	if ip["limit"].(int) != 2 {
+		t.Errorf("limit = %v, want 2", ip["limit"])
+	}
+
+	if ip["fail_fast"].(bool) != true {
+		t.Errorf("fail_fast = %v, want true", ip["fail_fast"])
+	}
+
+	steps, ok := ip["steps"].([]map[string]any)
+	if !ok || len(steps) != 2 {
+		t.Fatalf("steps = %v, want 2 children", ip["steps"])
+	}
+}
+
+func TestPlanInParallel(t *testing.T) {
+	t.Parallel()
+
+	steps := []config.Step{
+		{
+			InParallel: &config.InParallelSpec{
+				Steps: []config.Step{
+					{Task: "lint", Run: "echo lint"},
+					{Task: "test", Run: "echo test"},
+				},
+			},
+		},
+	}
+
+	cfg := &config.Config{}
+	chains, err := PlanChains(context.Background(), cfg, "build", steps, nil, nil)
+	if err != nil {
+		t.Fatalf("PlanChains: %v", err)
+	}
+
+	if len(chains) != 1 {
+		t.Fatalf("len(chains) = %d, want 1", len(chains))
+	}
+
+	chain := chains[0]
+	if len(chain.Nodes) != 1 {
+		t.Fatalf("len(chain.Nodes) = %d, want 1", len(chain.Nodes))
+	}
+
+	node := chain.Nodes[0]
+	if node.Kind != NodeKindInParallel {
+		t.Errorf("node.Kind = %q, want %q", node.Kind, NodeKindInParallel)
+	}
+}
+
+func TestInParallelUnskippable(t *testing.T) {
+	t.Parallel()
+
+	steps := []config.Step{
+		{
+			InParallel: &config.InParallelSpec{
+				Steps: []config.Step{
+					{Task: "lint", Run: "echo lint"},
+				},
+			},
+		},
+	}
+
+	cfg := &config.Config{}
+	chains, err := PlanChains(context.Background(), cfg, "build", steps, nil, nil)
+	if err != nil {
+		t.Fatalf("PlanChains: %v", err)
+	}
+
+	if len(chains) != 1 {
+		t.Fatalf("len(chains) = %d, want 1", len(chains))
+	}
+
+	if !chains[0].Unskippable {
+		t.Error("a chain containing an in_parallel step must be unskippable")
+	}
+}

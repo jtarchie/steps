@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=../steps.schema.json
+# in_parallel: routing is a no-op at runtime — every child runs
+# concurrently regardless of any child's to: disposition. Routes
+# within a branch are validated at load time (cross-branch routing
+# is rejected) but NOT followed at runtime. This fixture pins that
+# behavior: all three children run even though start routes to finish.
+#
+# Self-verifying via step-level assert.stdout on every task.
+#
+#   steps test examples/in-parallel-routing-noop.yml
+#
+# No network, credentials, or model.
+assert:
+  execution:
+    - noop-routing
+
+jobs:
+- name: noop-routing
+  plan:
+  - in_parallel:
+      steps:
+      - task: start
+        run: echo "starting"
+        to:
+          success: finish
+        assert:
+          stdout: "starting"
+      - task: sibling
+        run: echo "sibling done"
+        assert:
+          stdout: "sibling done"
+      - task: finish
+        run: echo "routed here"
+        assert:
+          stdout: "routed here"

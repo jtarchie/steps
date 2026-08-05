@@ -64,23 +64,11 @@ func (c *Config) validateStepArtifactDecls(label string, step Step) error {
 
 	switch {
 	case step.Get != "":
-		if step.InputsDeclared() || step.Outputs != nil {
-			return fmt.Errorf("%s (get %q): inputs/outputs are not valid on get steps", label, step.Get)
-		}
-
-		return nil
+		return validateGetArtifactDecls(label, step)
+	case step.InParallel != nil:
+		return validateInParallelBranchOutputs(label, step.InParallel.Steps)
 	case step.Put != "":
-		if step.Outputs != nil {
-			return fmt.Errorf("%s (put %q): outputs are not valid on put steps", label, step.Put)
-		}
-
-		// inputs: all is a put-only escape hatch; it names no artifacts, so
-		// skip name validation for it.
-		if step.InputsAll() {
-			return nil
-		}
-
-		return validateArtifactNames(fmt.Sprintf("%s (put %q)", label, step.Put), step.InputNames(), nil)
+		return validatePutArtifactDecls(label, step)
 	default:
 		if step.InputsAll() {
 			return fmt.Errorf("%s: inputs: all is only valid on put steps", label)
@@ -88,6 +76,28 @@ func (c *Config) validateStepArtifactDecls(label string, step Step) error {
 
 		return validateArtifactNames(label, step.InputNames(), step.Outputs)
 	}
+}
+
+// validateGetArtifactDecls rejects inputs/outputs on get steps.
+func validateGetArtifactDecls(label string, step Step) error {
+	if step.InputsDeclared() || step.Outputs != nil {
+		return fmt.Errorf("%s (get %q): inputs/outputs are not valid on get steps", label, step.Get)
+	}
+
+	return nil
+}
+
+// validatePutArtifactDecls validates put step artifact declarations.
+func validatePutArtifactDecls(label string, step Step) error {
+	if step.Outputs != nil {
+		return fmt.Errorf("%s (put %q): outputs are not valid on put steps", label, step.Put)
+	}
+
+	if step.InputsAll() {
+		return nil
+	}
+
+	return validateArtifactNames(fmt.Sprintf("%s (put %q)", label, step.Put), step.InputNames(), nil)
 }
 
 // validateMappingPlacement enforces that input_mapping/output_mapping — which

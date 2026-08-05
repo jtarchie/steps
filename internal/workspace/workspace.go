@@ -653,19 +653,7 @@ func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step co
 
 		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
 	case step.Put != "":
-		// inputs: all draws on whatever exists, so there is nothing to check.
-		if !step.InputsAll() {
-			err := checkInputsAvailable(jobName, i, "put", step.Put, step.InputNames(), available)
-			if err != nil {
-				return err
-			}
-		}
-
-		// A put produces no artifacts into the build store, so pre and post
-		// are the same view.
-		snap := maps.Clone(available)
-
-		return validateStepHooks(cfg, jobName, i, step, snap, snap)
+		return validatePutArtifactFlow(cfg, jobName, i, step, available)
 	case step.Task != "":
 		return validateTaskArtifactFlow(cfg, jobName, i, step, available)
 	case step.Agent != "":
@@ -685,9 +673,44 @@ func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step co
 		}
 
 		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
+	case step.InParallel != nil:
+		return validateInParallelArtifactFlow(cfg, jobName, i, step, available)
 	default:
 		return nil
 	}
+}
+
+// validatePutArtifactFlow validates artifact flow for a put step: it checks
+// that declared inputs are available in the plan (unless inputs: all), then
+// validates hooks. A put produces no artifacts, so pre and post are identical.
+func validatePutArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+	if !step.InputsAll() {
+		err := checkInputsAvailable(jobName, i, "put", step.Put, step.InputNames(), available)
+		if err != nil {
+			return err
+		}
+	}
+
+	snap := maps.Clone(available)
+
+	return validateStepHooks(cfg, jobName, i, step, snap, snap)
+}
+
+// validateInParallelArtifactFlow validates artifact flow for an in_parallel
+// block: each child's inputs are checked against the pre-block available set;
+// outputs from all children are published to the post view. Duplicate outputs
+// across children are caught at load by validateInParallelSteps.
+func validateInParallelArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+	pre := maps.Clone(available)
+
+	for j, child := range step.InParallel.Steps {
+		err := validateStepArtifactFlow(cfg, jobName, i, child, available)
+		if err != nil {
+			return fmt.Errorf("in_parallel child %d: %w", j, err)
+		}
+	}
+
+	return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
 }
 
 func validateAgentArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {

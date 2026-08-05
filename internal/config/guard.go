@@ -75,6 +75,10 @@ func (c *Config) validateStepGuards() error {
 				return fmt.Errorf("%s (get %q): when is not valid on get steps", label, step.Get)
 			}
 
+			if step.InParallel != nil {
+				return fmt.Errorf("%s: when is not valid on in_parallel steps; set it on individual children instead", label)
+			}
+
 			if strings.TrimSpace(step.When.Run) == "" {
 				return fmt.Errorf("%s: when requires a command", label)
 			}

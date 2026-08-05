@@ -167,6 +167,8 @@ func unskippableReason(step config.Step) string {
 		return "agent step"
 	case step.Try != nil:
 		return "try step"
+	case step.InParallel != nil:
+		return "in_parallel step"
 	case step.When != nil:
 		return "when: guard"
 	case step.To != nil:

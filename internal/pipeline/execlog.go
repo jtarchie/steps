@@ -35,6 +35,14 @@ type execLogKeyType struct{}
 // or write it.
 var execLogKey = execLogKeyType{} //nolint:gochecknoglobals // zero-size context key sentinel
 
+type execLogRealKeyType struct{}
+
+// execLogRealKey stores the real execLog context for use by nested in_parallel
+// wrappers whose children run with execLog suppressed (nil). The wrapped
+// context is used as a fallback when the primary execLog is nil, so nested
+// in_parallel wrappers can still record their children in declaration order.
+var execLogRealKey = execLogRealKeyType{} //nolint:gochecknoglobals // zero-size context key sentinel
+
 // withExecLog returns ctx carrying log, so the dispatch points reached through
 // it can record without any signature changes.
 func withExecLog(ctx context.Context, log *execLog) context.Context {
@@ -46,7 +54,7 @@ func withExecLog(ctx context.Context, log *execLog) context.Context {
 // trigger, unit tests — is unaffected).
 func recordExecution(ctx context.Context, name string) {
 	log, ok := ctx.Value(execLogKey).(*execLog)
-	if !ok {
+	if !ok || log == nil {
 		return
 	}
 
@@ -62,8 +70,22 @@ func recordStepExecution(ctx context.Context, step config.Step) {
 	if step.Try != nil {
 		return
 	}
+	if step.InParallel != nil {
+		return
+	}
 
 	recordExecution(ctx, executedStepName(step))
+}
+
+// execLogCtx returns the context to use for execution-log recording, preferring
+// the real ctx stashed under execLogRealKey when the primary context's execLog
+// has been suppressed (e.g. inside concurrent in_parallel children).
+func execLogCtx(ctx context.Context) context.Context {
+	if realCtx, ok := ctx.Value(execLogRealKey).(context.Context); ok {
+		return realCtx
+	}
+
+	return ctx
 }
 
 // checkExecution compares the names that actually ran (got) against the

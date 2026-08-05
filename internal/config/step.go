@@ -90,6 +90,16 @@ type Step struct {
 	// agent step being wrapped, since that is what internal/agent reads. Also
 	// valid as a hook body, where it tolerates the hook's failure the same way.
 	Try *Step `yaml:"try,omitempty"`
+	// InParallel runs several child steps concurrently, with an optional
+	// concurrency limit and fail-fast cancellation. Each child runs its own
+	// hooks, records its own outcome, and participates in artifact flow.
+	// The wrapper aggregates outcomes: on fail_fast: true, the first child
+	// failure cancels siblings; otherwise all children run to completion.
+	// Duplicate output/artifact names across branches are rejected at load.
+	// Nesting works: in_parallel inside in_parallel is valid. to:/max_visits:
+	// on the wrapper route the entire block; children's to: targets must
+	// resolve within the same branch.
+	InParallel *InParallelSpec `yaml:"in_parallel,omitempty"`
 	// Inputs/Outputs declare which named artifacts a task/agent/put step
 	// draws from and (task/agent only) produces. Each name is either a
 	// resource fetched by an earlier get step or an output produced by an
@@ -372,16 +382,25 @@ func (f *FileRef) Deferred() bool {
 	return f != nil && f.Artifact != ""
 }
 
-// StepKind is which of Get/Task/Put/Agent a Step is. See Step.Kind.
+// InParallelSpec is the in_parallel: step — run several steps concurrently
+// with an optional concurrency limit and fail-fast cancellation.
+type InParallelSpec struct {
+	Limit    int    `yaml:"limit,omitempty"`
+	FailFast bool   `yaml:"fail_fast,omitempty"`
+	Steps    []Step `yaml:"steps"`
+}
+
+// StepKind is which of Get/Task/Put/Agent/Try/InParallel a Step is. See Step.Kind.
 type StepKind string
 
 // The StepKind values, one per Step field Kind can resolve to.
 const (
-	StepKindGet   StepKind = "get"
-	StepKindTask  StepKind = "task"
-	StepKindPut   StepKind = "put"
-	StepKindAgent StepKind = "agent"
-	StepKindTry   StepKind = "try"
+	StepKindGet        StepKind = "get"
+	StepKindTask       StepKind = "task"
+	StepKindPut        StepKind = "put"
+	StepKindAgent      StepKind = "agent"
+	StepKindTry        StepKind = "try"
+	StepKindInParallel StepKind = "in_parallel"
 )
 
 // Kind reports which single kind of step s is. ok is false when zero, or
@@ -398,6 +417,7 @@ func (s Step) Kind() (kind StepKind, ok bool) {
 		{StepKindPut, s.Put != ""},
 		{StepKindAgent, s.Agent != ""},
 		{StepKindTry, s.Try != nil},
+		{StepKindInParallel, s.InParallel != nil},
 	} {
 		if !candidate.set {
 			continue
@@ -466,6 +486,10 @@ func (s Step) kindFieldsSet() []string {
 		set = append(set, "try")
 	}
 
+	if s.InParallel != nil {
+		set = append(set, "in_parallel")
+	}
+
 	return set
 }
 
@@ -520,6 +544,8 @@ func (c *Config) resolveStepReference(step *Step) error {
 		_, err = c.FindAgent(step.Agent)
 	case StepKindTry:
 		err = c.resolveStepReference(step.Try)
+	case StepKindInParallel:
+		return resolveInParallelReferences(c, step.InParallel)
 	case StepKindTask:
 		if step.Run != "" {
 			return nil // an inline task never consults tasks:
@@ -529,6 +555,19 @@ func (c *Config) resolveStepReference(step *Step) error {
 	}
 
 	return err
+}
+
+// resolveInParallelReferences resolves step references within every child of
+// an in_parallel block.
+func resolveInParallelReferences(c *Config, spec *InParallelSpec) error {
+	for i := range spec.Steps {
+		err := c.resolveStepReference(&spec.Steps[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // validateStepFieldPlacement rejects the three kind-specific fields that had
@@ -572,6 +611,15 @@ func visitStepTree(label string, step *Step, fn func(label string, step *Step) e
 		err = visitStepTree(label+" (try)", step.Try, fn)
 		if err != nil {
 			return err
+		}
+	}
+
+	if step.InParallel != nil {
+		for i := range step.InParallel.Steps {
+			err = visitStepTree(fmt.Sprintf("%s (branch %d)", label, i), &step.InParallel.Steps[i], fn)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -652,4 +700,98 @@ func validateWrappedStepFields(label string, inner *Step) error {
 	default:
 		return nil
 	}
+}
+
+// validateInParallelSteps rejects malformed in_parallel wrappers: a bare
+// in_parallel: (nil inner spec), an empty steps:, get steps as children
+// (get has no meaning inside concurrent execution), or duplicate output
+// names across branches (load-time naming collision check).
+func (c *Config) validateInParallelSteps() error {
+	for _, job := range c.Jobs {
+		err := job.visitSteps(func(label string, step *Step) error {
+			if step.InParallel == nil {
+				return nil
+			}
+
+			if len(step.InParallel.Steps) == 0 {
+				return fmt.Errorf("%s: in_parallel: steps must not be empty", label)
+			}
+
+			fields := step.kindFieldsSet()
+			if len(fields) > 1 { // "in_parallel" + something else
+				return fmt.Errorf("%s: in_parallel: is a wrapper — do not also set get/task/put/agent/try", label)
+			}
+
+			err := validateInParallelNoGetChildren(label, step.InParallel.Steps)
+			if err != nil {
+				return err
+			}
+
+			return validateInParallelBranchOutputs(label, step.InParallel.Steps)
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateInParallelNoGetChildren rejects get steps inside in_parallel branches
+// — get fans the plan per version, which has no meaning inside concurrent
+// execution. The error cites the branch label for discoverability.
+func validateInParallelNoGetChildren(label string, children []Step) error {
+	for i, child := range children {
+		if child.Get != "" {
+			return fmt.Errorf("%s (branch %d): get steps are not supported inside in_parallel", label, i)
+		}
+		if child.InParallel != nil {
+			err := validateInParallelNoGetChildren(fmt.Sprintf("%s (branch %d)", label, i), child.InParallel.Steps)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validateInParallelBranchOutputs rejects duplicate output names across
+// children of a single in_parallel block — the "naming collisions" acceptance
+// criterion (load-time error, not runtime or silent last-write-wins).
+// Recurses into nested in_parallel blocks.
+func validateInParallelBranchOutputs(label string, children []Step) error {
+	seen := map[string]int{} // output name → child index that declared it
+
+	err := collectInParallelOutputs(label, children, seen)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// collectInParallelOutputs collects outputs from children into seen, recursing
+// into nested in_parallel blocks. Returns an error if any output name is
+// produced by more than one child.
+func collectInParallelOutputs(label string, children []Step, seen map[string]int) error {
+	for i, child := range children {
+		for _, name := range child.Outputs {
+			if prev, dup := seen[name]; dup {
+				return fmt.Errorf("%s: output %q is produced by both child %d and child %d of in_parallel; duplicate output names across branches are not allowed", label, name, prev, i)
+			}
+
+			seen[name] = i
+		}
+
+		// Recurse into nested in_parallel blocks so duplicates across
+		// nested branches are also caught at load time.
+		if child.InParallel != nil {
+			err := collectInParallelOutputs(fmt.Sprintf("%s (branch %d)", label, i), child.InParallel.Steps, seen)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
