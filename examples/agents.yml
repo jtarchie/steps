@@ -1,4 +1,6 @@
 # yaml-language-server: $schema=../steps.schema.json
+# steps-test: skip -- every job invokes a live LLM (needs OPENROUTER_API_KEY;
+# the mcp-tools job additionally needs GITHUB_PAT)
 # Agent features, consolidated. Every job here invokes an LLM, so — unlike
 # examples/flow.yml — this file can't be a `steps test` fixture (no
 # mock-provider seam at the CLI). It's a reference: read the job whose feature
@@ -7,11 +9,15 @@
 # swap the model refs for a cloud provider.
 
 # Every agent below inherits this model, so it is named once rather than on
-# every agent. Override it for a run without editing this file:
+# every agent. openrouter/qwen/qwen3.7-flash is a cheap tool-calling model
+# ($0.03/M in, $0.13/M out, 1M context); the openrouter/ prefix supplies both
+# the base URL and the OPENROUTER_API_KEY env var name, so no api_key_env: is
+# needed -- but a key IS. Point it anywhere else for a run, including a local
+# server that costs nothing and needs no key:
 #   STEPS_MODEL=lmstudio/your-model steps run examples/agents.yml --job <name>
 # A single agent can still pin its own with source.model:.
 defaults:
-  model: lmstudio/google/gemma-4-26b-a4b
+  model: openrouter/qwen/qwen3.7-flash
 
 resource_types:
 # For the `review` job: list/checkout open PRs and post a verdict via gh.
@@ -304,7 +310,7 @@ jobs:
 # so declare one and inherit everything else:
 #   agents:
 #   - name: "@builtin/builder"
-#     source: { model: openrouter/anthropic/claude-3.5-sonnet }
+#     source: { model: openrouter/qwen/qwen3.7-flash }
 #
 #   jobs:
 #   - name: refactor
@@ -318,6 +324,6 @@ jobs:
 # system_file: "@builtin/<name>" still works to borrow only the prompt:
 #   agents:
 #   - name: my-coder
-#     source: { model: openrouter/anthropic/claude-3.5-sonnet }
+#     source: { model: openrouter/qwen/qwen3.7-flash }
 #     system_file: "@builtin/builder"
 #     tools: [read_file, list_dir, run_shell, write_file, edit_file, search_files]

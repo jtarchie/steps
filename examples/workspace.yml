@@ -1,4 +1,6 @@
 # yaml-language-server: $schema=../steps.schema.json
+# steps-test: skip -- clones over the network, and the release jobs need a live
+# LLM (OPENROUTER_API_KEY)
 # Demonstrates opt-in Concourse-style workspace isolation. Without a
 # workspace: block, every step in a triggered build shares one mutable
 # directory and any task/agent can corrupt state for a later step — that's
@@ -25,11 +27,15 @@ workspace:
   # without the instant subvolume-metadata cleanup.
 
 # Every agent below inherits this model, so it is named once rather than on
-# every agent. Override it for a run without editing this file:
+# every agent. openrouter/qwen/qwen3.7-flash is a cheap tool-calling model
+# ($0.03/M in, $0.13/M out, 1M context); the openrouter/ prefix supplies both
+# the base URL and the OPENROUTER_API_KEY env var name, so no api_key_env: is
+# needed -- but a key IS. Point it anywhere else for a run, including a local
+# server that costs nothing and needs no key:
 #   STEPS_MODEL=lmstudio/your-model steps run examples/workspace.yml --job <name>
 # A single agent can still pin its own with source.model:.
 defaults:
-  model: lmstudio/google/gemma-4-26b-a4b
+  model: openrouter/qwen/qwen3.7-flash
 
 # Fetching a repo needs no resource_types: block — `git` ships with steps.
 # Publishing does: what "publish" means is specific to where you're sending

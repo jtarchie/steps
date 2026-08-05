@@ -229,6 +229,11 @@ agents:
       change is worthless. Trimmed to the last 300 lines, where the failures
       are. Do not type this chain into run_shell yourself; getting the &&
       order wrong is how a past run reported success on a broken tree.
+      Note `go test ./...` here also RUNS every examples/*.yml through
+      `steps test` (TestExamplesRun), so an example that only looks right
+      fails this gate. An example that genuinely cannot run offline -- it
+      needs a live model, a network service, or docker -- opts out with a
+      `# steps-test: skip -- <reason>` line, and the reason is not optional.
     run: |
       cd repo || exit 1
       rc=0
@@ -512,7 +517,32 @@ jobs:
       cd repo
       # Objective gate: cheap and deterministic, so an obviously-broken
       # attempt is rejected before spending reviewer turns on it.
-      golangci-lint run && go test ./... && go build -v
+      #
+      # `go test ./...` now also RUNS every example that isn't explicitly
+      # marked `# steps-test: skip` (TestExamplesRun), so a shipped example
+      # that doesn't execute fails here rather than reaching the reviewer.
+      golangci-lint run && go test ./... && go build -v || exit 1
+
+      # Structural coverage. The gate above can only run tests that exist, so
+      # it cannot fail an attempt that adds user-visible surface and covers it
+      # with nothing. steps.schema.json is the tightest available proxy for
+      # "user-visible surface": CLAUDE.md requires a new config.Step field to
+      # appear there, and schema_test.go enforces that by reflection -- so a
+      # touched schema means new pipeline syntax, and new pipeline syntax with
+      # no example is undemonstrated and unexercised. A pure refactor or an
+      # internal bug fix never touches it, which is what keeps this from
+      # firing on work that legitimately ships no example.
+      changed="$(git status --porcelain | awk '{print $NF}')"
+      if printf '%s\n' "$changed" | grep -q '^steps\.schema\.json$'; then
+        if ! printf '%s\n' "$changed" | grep -q '^examples/'; then
+          echo "GATE: steps.schema.json changed but no examples/ file did."
+          echo "New pipeline syntax needs a runnable example -- ideally a"
+          echo "self-verifying job with assert.execution, which is what makes"
+          echo "it a regression fixture instead of a snippet. Add one, or"
+          echo "explain in the plan why this syntax cannot be demonstrated."
+          exit 1
+        fi
+      fi
     to:
       failure: coder
     max_visits: 4
