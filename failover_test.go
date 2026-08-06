@@ -106,3 +106,67 @@ func TestFailoverFailsWhenEverySourceIsDown(t *testing.T) {
 		t.Errorf("error does not report the preflight failure: %v", err)
 	}
 }
+
+// TestFailoverAppliesToEveryAgentSharingAModel covers a hole that made
+// preflight report a clean bill of health for a run that could not start.
+//
+// Model probes are deduped by (endpoint, model) so a shared model costs one
+// request. The failover DECISION was deduped along with it, so a second agent
+// on the same dead model was skipped entirely: nothing was recorded for it,
+// nothing was reported, and the run died mid-plan against the dead primary
+// while the log said preflight passed.
+func TestFailoverAppliesToEveryAgentSharingAModel(t *testing.T) {
+	pipeline.ResetPreflightCache()
+
+	dir := t.TempDir()
+
+	outage := make([]turn, 4)
+	for i := range outage {
+		outage[i] = failsWith(http.StatusInternalServerError)
+	}
+
+	dead := newFakeLLM(t, outage...)
+	live := newFakeLLM(t, says("probe ok"), says("probe ok"), says("done"), says("done"))
+
+	// Both agents run the same model on the same dead endpoint. Only
+	// `has-fallback` declares an alternate.
+	path := writePipeline(t, dir, fmt.Sprintf(`
+agents:
+- name: has-fallback
+  source:
+    endpoint: %[1]s/v1/
+    model: shared-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  fallback:
+  - source:
+      endpoint: %[2]s/v1/
+      model: backup-model
+      api_key_env: STEPS_TEST_AGENT_API_KEY
+- name: no-fallback
+  source:
+    endpoint: %[1]s/v1/
+    model: shared-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+
+jobs:
+- name: publish
+  plan:
+  - agent: has-fallback
+    inputs: []
+    prompt: Plan it.
+  - agent: no-fallback
+    inputs: []
+    prompt: Build it.
+`, dead.URL, live.URL))
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	err := run([]string{"run", path, "--job", "publish"})
+	if err == nil {
+		t.Fatal("preflight passed with an agent whose only model is down and has no fallback")
+	}
+
+	if !strings.Contains(err.Error(), "no-fallback") {
+		t.Errorf("preflight did not name the agent that cannot run: %v", err)
+	}
+}

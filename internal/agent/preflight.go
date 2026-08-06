@@ -104,7 +104,6 @@ func Preflight(ctx context.Context, cfg *config.Config, agentNames []string, set
 		// endpoint responded" points at the model, not the credentials.
 		healthyEndpoints = map[string]bool{}
 		failures         []modelFailure
-		seenModel        = map[string]bool{}
 		seenServer       = map[string]bool{}
 	)
 
@@ -119,16 +118,17 @@ func Preflight(ctx context.Context, cfg *config.Config, agentNames []string, set
 			continue // an unresolvable agent is already a load error
 		}
 
-		key := ri.BaseURL + "|" + ri.ModelName
-		if !seenModel[key] {
-			seenModel[key] = true
-
-			probeErr := probeModelCached(ctx, ri, settings)
-			if probeErr == nil {
-				healthyEndpoints[ri.BaseURL] = true
-			} else if !failOver(ctx, agent, ri, settings) {
-				failures = append(failures, modelFailure{name: name, ri: ri, err: probeErr})
-			}
+		// Every agent gets its own decision, even when several share a model.
+		// Deduping by (endpoint, model) and skipping the later agents left
+		// them with no failover recorded while preflight reported zero
+		// problems — the run then died mid-plan against the dead primary,
+		// which is exactly the failure preflight exists to move earlier.
+		// probeModelCached already collapses the network cost to one request.
+		probeErr := probeModelCached(ctx, ri, settings)
+		if probeErr == nil {
+			healthyEndpoints[ri.BaseURL] = true
+		} else if !failOver(ctx, agent, ri, settings) {
+			failures = append(failures, modelFailure{name: name, ri: ri, err: probeErr})
 		}
 
 		problems = append(problems, probeAgentServers(ctx, cfg, ri, settings, seenServer)...)
