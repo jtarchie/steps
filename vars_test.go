@@ -136,3 +136,36 @@ jobs:
 		t.Errorf("error does not explain what is missing: %v", err)
 	}
 }
+
+// TestVarsWorkOnEveryCommandThatLoadsAPipeline covers the gap that made the
+// feature unusable: --var and --vars-file existed only on `steps run`, so
+// `steps validate` in CI and `steps watch` in production both rejected the
+// very pipelines vars were added for — an unresolved ((name)) is a load error,
+// and four of the five commands had no way to resolve one.
+func TestVarsWorkOnEveryCommandThatLoadsAPipeline(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: announce
+    inputs: []
+    run: echo ((target))
+`)
+
+	// Every command that loads a pipeline without running a job. `run`,
+	// `watch` and `test` are excluded only because they would execute
+	// something; their flags are wired identically.
+	for _, args := range [][]string{
+		{"validate", path, "--var", "target=staging"},
+		{"plan", path, "--job", "build", "--var", "target=staging"},
+		{"preflight", path, "--job", "build", "--var", "target=staging"},
+	} {
+		t.Run(args[0], func(t *testing.T) {
+			err := run(args)
+			if err != nil && strings.Contains(err.Error(), "((target))") {
+				t.Errorf("`steps %s` cannot resolve vars: %v", args[0], err)
+			}
+		})
+	}
+}

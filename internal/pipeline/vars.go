@@ -79,6 +79,14 @@ func renderStepVars(ctx context.Context, step config.Step) config.Step {
 	step.Dir = config.RenderVars(step.Dir, values)
 	step.VarFile = config.RenderVars(step.VarFile, values)
 
+	// params: is where a captured version most often belongs — it is what a
+	// put hands the resource. Rendering it is not optional garnish: the
+	// literal text `((version))` used to reach the out: command and publish a
+	// release by that name.
+	if rendered, ok := config.RenderValue(step.Params, values).(map[string]any); ok {
+		step.Params = rendered
+	}
+
 	return step
 }
 

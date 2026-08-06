@@ -136,14 +136,16 @@ type WatchCmd struct {
 	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                                help:"leave the build workspace on disk instead of deleting it"`
 	NoPreflight   bool              `help:"skip the pre-run health check of each job's models and MCP servers" name:"no-preflight"`
 	Listen        string            `help:"serve webhook checks on this address, e.g. :8080"                   name:"listen"`
+	Var           map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                name:"var"`
+	VarsFile      string            `help:"YAML file of pipeline vars"                                         name:"vars-file"`
 }
 
 // Run loads the pipeline and blocks in trigger.Watch until canceled
 // (SIGINT/SIGTERM).
 func (w *WatchCmd) Run() error {
-	cfg, err := config.LoadConfig(w.Pipeline)
+	cfg, err := loadWithVars(w.Pipeline, w.Var, w.VarsFile)
 	if err != nil {
-		return fmt.Errorf("could not load pipeline: %w", err)
+		return err
 	}
 
 	st, provider, cleanup, err := setup(cfg, w.Pipeline, w.KeepWorkspace)
@@ -166,7 +168,9 @@ func (w *WatchCmd) Run() error {
 // top-level assert.execution of job names is checked here. It's the entry
 // point for a self-verifying fixture (see examples/flow.yml).
 type TestCmd struct {
-	Pipeline string `arg:"" help:"path to the pipeline YAML file"`
+	Pipeline string            `arg:""                                                     help:"path to the pipeline YAML file"`
+	Var      map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..." name:"var"`
+	VarsFile string            `help:"YAML file of pipeline vars"                          name:"vars-file"`
 }
 
 // Run loads the pipeline, runs every job (force), and reports pass/fail per
@@ -174,9 +178,9 @@ type TestCmd struct {
 // any job failed or the pipeline assert mismatched, so the process exits
 // non-zero.
 func (t *TestCmd) Run() error {
-	cfg, err := config.LoadConfig(t.Pipeline)
+	cfg, err := loadWithVars(t.Pipeline, t.Var, t.VarsFile)
 	if err != nil {
-		return fmt.Errorf("could not load pipeline: %w", err)
+		return err
 	}
 
 	st, provider, cleanup, err := setup(cfg, t.Pipeline, false)
@@ -238,16 +242,18 @@ type ValidateCmd struct {
 	// lint-in-CI case: a pre-commit hook or a build that checks a pipeline it
 	// has no intention of running should not need that pipeline's production
 	// credentials on hand.
-	SyntaxOnly bool `help:"check the file only; skip credential and MCP-binary checks about this machine" name:"syntax-only"`
+	SyntaxOnly bool              `help:"check the file only; skip credential and MCP-binary checks about this machine" name:"syntax-only"`
+	Var        map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                           name:"var"`
+	VarsFile   string            `help:"YAML file of pipeline vars"                                                    name:"vars-file"`
 }
 
 // Run loads the pipeline (which runs every config-level validator) and then
 // checks artifact flow for each job, joining the failures so one invocation
 // reports everything wrong with the file.
 func (v *ValidateCmd) Run() error {
-	cfg, err := config.LoadConfig(v.Pipeline)
+	cfg, err := loadWithVars(v.Pipeline, v.Var, v.VarsFile)
 	if err != nil {
-		return fmt.Errorf("could not load pipeline: %w", err)
+		return err
 	}
 
 	var errs []error
@@ -318,18 +324,20 @@ func renderProblems(problems []config.Problem) string {
 // out what a run would skip meant starting one — the wrong trade when the
 // question is "is my cache in the state I think it is?".
 type PlanCmd struct {
-	Pipeline string            `arg:""                                                   help:"path to the pipeline YAML file"`
+	Pipeline string            `arg:""                                                     help:"path to the pipeline YAML file"`
 	Job      string            `help:"job to plan (defaults to the pipeline's only job)"`
-	Pin      map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"  name:"pin"`
+	Pin      map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"    name:"pin"`
+	Var      map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..." name:"var"`
+	VarsFile string            `help:"YAML file of pipeline vars"                          name:"vars-file"`
 }
 
 // Run loads the pipeline, plans the selected job, and prints one line per
 // step. Resource check commands run (planning has always resolved get
 // versions), but no step executes and nothing is recorded.
 func (p *PlanCmd) Run() error {
-	cfg, err := config.LoadConfig(p.Pipeline)
+	cfg, err := loadWithVars(p.Pipeline, p.Var, p.VarsFile)
 	if err != nil {
-		return fmt.Errorf("could not load pipeline: %w", err)
+		return err
 	}
 
 	job, err := selectJob(cfg, p.Job)
@@ -911,16 +919,18 @@ func applyPreflightFlag(ctx context.Context, skip bool) context.Context {
 // `steps validate` covers both halves: validate answers "is this pipeline
 // runnable at all", preflight answers "is it runnable right now".
 type PreflightCmd struct {
-	Pipeline string `arg:""                                                    help:"path to the pipeline YAML file"`
-	Job      string `help:"job to check (defaults to the pipeline's only job)"`
+	Pipeline string            `arg:""                                                     help:"path to the pipeline YAML file"`
+	Job      string            `help:"job to check (defaults to the pipeline's only job)"`
+	Var      map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..." name:"var"`
+	VarsFile string            `help:"YAML file of pipeline vars"                          name:"vars-file"`
 }
 
 // Run probes every model and MCP server the target job reaches and prints one
 // line per target.
 func (p *PreflightCmd) Run() error {
-	cfg, err := config.LoadConfig(p.Pipeline)
+	cfg, err := loadWithVars(p.Pipeline, p.Var, p.VarsFile)
 	if err != nil {
-		return fmt.Errorf("could not load pipeline: %w", err)
+		return err
 	}
 
 	job, err := selectJob(cfg, p.Job)

@@ -138,14 +138,14 @@ func validateLoadVarStep(label string, step *Step) error {
 }
 
 // checkStepVars rejects references a step makes to vars nothing supplies.
+//
+// The field list must match what renderStepVars actually substitutes, or a
+// reference passes validation and then reaches the outside world verbatim: a
+// `((version))` in a put's params: was neither rejected here nor rendered
+// there, so the resource's out: published a release literally named
+// "((version))".
 func checkStepVars(label string, step *Step, produced map[string]bool) error {
-	for _, field := range []struct{ name, value string }{
-		{"run", step.Run},
-		{"prompt", step.Prompt},
-		{"image", step.Image},
-		{"dir", step.Dir},
-		{"file", step.VarFile},
-	} {
+	for _, field := range varFields(step) {
 		for _, name := range UnresolvedVars(field.value) {
 			if !produced[name] {
 				return fmt.Errorf("%s: %s references ((%s)), which is neither passed with --var/--vars-file nor produced by an earlier load_var: step",
@@ -154,5 +154,76 @@ func checkStepVars(label string, step *Step, produced map[string]bool) error {
 		}
 	}
 
+	// params: is a free-form mapping rather than a field, so it is walked
+	// rather than listed.
+	for _, name := range unresolvedInValue(step.Params) {
+		if !produced[name] {
+			return fmt.Errorf("%s: params references ((%s)), which is neither passed with --var/--vars-file nor produced by an earlier load_var: step",
+				label, name)
+		}
+	}
+
 	return nil
+}
+
+// varField is one string field a var may appear in.
+type varField struct{ name, value string }
+
+// VarFields lists a step's substitutable string fields, so validation and
+// run-time rendering cannot drift apart. Adding a field here is what makes it
+// both checked and rendered.
+func varFields(step *Step) []varField {
+	return []varField{
+		{"run", step.Run},
+		{"prompt", step.Prompt},
+		{"image", step.Image},
+		{"dir", step.Dir},
+		{"file", step.VarFile},
+	}
+}
+
+// unresolvedInValue walks a decoded YAML value — a params: mapping, a nested
+// list, a scalar — and returns every ((name)) still in it.
+func unresolvedInValue(value any) []string {
+	var names []string
+
+	switch typed := value.(type) {
+	case string:
+		names = append(names, UnresolvedVars(typed)...)
+	case map[string]any:
+		for _, nested := range typed {
+			names = append(names, unresolvedInValue(nested)...)
+		}
+	case []any:
+		for _, nested := range typed {
+			names = append(names, unresolvedInValue(nested)...)
+		}
+	}
+
+	return names
+}
+
+// RenderValue substitutes ((name)) throughout a decoded YAML value, returning
+// a copy. Used for params:, which is a free-form mapping rather than a field.
+func RenderValue(value any, vars map[string]string) any {
+	switch typed := value.(type) {
+	case string:
+		return RenderVars(typed, vars)
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, nested := range typed {
+			out[key] = RenderValue(nested, vars)
+		}
+
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, nested := range typed {
+			out[i] = RenderValue(nested, vars)
+		}
+
+		return out
+	default:
+		return value
+	}
 }
