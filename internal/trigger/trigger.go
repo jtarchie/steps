@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -42,7 +43,17 @@ func Resources(cfg *config.Config) []string {
 
 	for _, job := range cfg.Jobs {
 		for _, step := range job.Plan {
-			if step.Get == "" || !step.Trigger {
+			// trigger: true is the reason to poll. passed: is the other one:
+			// a constrained get needs its version OBSERVED for the constraint
+			// to be judged at all, even when a change to it triggers nothing.
+			// Without this a `get: artifacts, passed: [build]` with no
+			// trigger: was never checked, so jobReadyFor saw no version and
+			// held the job back for the lifetime of the watcher, silently.
+			//
+			// Polling it enqueues nothing on its own: AffectedJobs still
+			// requires trigger: true, so a change here cannot start a build
+			// that never asked to be started by it.
+			if step.Get == "" || (!step.Trigger && len(step.Passed) == 0) {
 				continue
 			}
 
@@ -260,6 +271,20 @@ func pollOnce(ctx context.Context, cfg *config.Config, st *store.Store) ([]strin
 		return nil, err
 	}
 
+	// Then release anything a passed: constraint was holding back. This runs
+	// on EVERY poll, against the current version rather than a changed one:
+	// the poll that first sees a version is necessarily earlier than the
+	// upstream job going green on it, so a constrained job is held back and
+	// the recorded version then advances past it. Waiting for the resource to
+	// go dirty again would mean waiting for a version nobody has tested yet —
+	// which is to say, forever.
+	released, err := releaseConstrainedJobs(ctx, cfg, st, observed, enqueued)
+	if err != nil {
+		return nil, err
+	}
+
+	enqueued = append(enqueued, released...)
+
 	// Only now — after every affected job is durably queued — advance each
 	// resource's recorded version. A failure here returns the jobs already
 	// enqueued and leaves the not-yet-recorded resources dirty for retry.
@@ -341,6 +366,83 @@ func reportSerialWaits(ctx context.Context, cfg *config.Config, st *store.Store)
 		fmt.Printf("trigger: %s waiting: lock held by %s\n", job.Name, holder)
 		slog.Info("trigger.serial_wait", "job", job.Name, "held_by", holder)
 	}
+}
+
+// releaseConstrainedJobs enqueues every passed:-constrained job whose upstream
+// jobs have now gone green on the version currently observed.
+//
+// The guard against enqueueing the same work forever is the job's OWN passed
+// record: once it succeeds against a version it has recorded one, so it stops
+// being releasable for that version. A job that keeps failing is re-attempted
+// one at a time (the queue holds at most one pending row per job) until the
+// circuit breaker pauses it, which is what the breaker is for.
+func releaseConstrainedJobs(
+	ctx context.Context, cfg *config.Config, st *store.Store,
+	observed map[string]observedResource, alreadyEnqueued []string,
+) ([]string, error) {
+	var released []string
+
+	for i := range cfg.Jobs {
+		job := &cfg.Jobs[i]
+
+		constraints := job.PassedConstraints()
+		if len(constraints) == 0 || slices.Contains(alreadyEnqueued, job.Name) {
+			continue
+		}
+
+		ready, err := jobReadyFor(ctx, st, job, observed)
+		if err != nil {
+			return nil, err
+		}
+
+		if !ready {
+			continue
+		}
+
+		done, err := jobAlreadyRanThese(ctx, st, job.Name, constraints, observed)
+		if err != nil {
+			return nil, err
+		}
+
+		if done {
+			continue
+		}
+
+		err = st.EnqueueJob(ctx, job.Name, "upstream jobs passed this version")
+		if err != nil {
+			return nil, fmt.Errorf("enqueue job %q: %w", job.Name, err)
+		}
+
+		released = append(released, job.Name)
+	}
+
+	return released, nil
+}
+
+// jobAlreadyRanThese reports whether the job has itself already succeeded
+// against every constrained resource's current version — the fact that stops a
+// released job being released again on the next poll.
+func jobAlreadyRanThese(
+	ctx context.Context, st *store.Store, jobName string,
+	constraints map[string][]string, observed map[string]observedResource,
+) (bool, error) {
+	for resource := range constraints {
+		obs, seen := observed[resource]
+		if !seen {
+			return false, nil
+		}
+
+		passed, err := pipeline.VersionPassedUpstream(ctx, st, []string{jobName}, resource, obs.version)
+		if err != nil {
+			return false, fmt.Errorf("passed: constraint for job %q: %w", jobName, err)
+		}
+
+		if !passed {
+			return false, nil
+		}
+	}
+
+	return true, nil
 }
 
 // jobReadyFor reports whether every passed: constraint the job declares is
