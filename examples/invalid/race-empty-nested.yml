@@ -1,0 +1,16 @@
+# A race: with no branches, nested inside an in_parallel:. The outer block's
+# duplicate-output walk reaches the inner race before the race's own arity
+# check runs, so this used to panic LoadConfig outright rather than report the
+# problem — a config typo that took down a watch process.
+# expect: race.steps needs at least two branches
+
+workspace:
+  strategy: copy
+
+jobs:
+- name: build
+  plan:
+  - in_parallel:
+      steps:
+      - race:
+          steps: []
