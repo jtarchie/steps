@@ -17,7 +17,9 @@
 # Run: steps test examples/composite.yml   (no network, credentials, or model)
 assert:
   execution:
+    - tried-branch
     - nested-race
+    - matrix-tolerant
     - var-params
 
 # race: requires workspace isolation at load time, and it applies file-wide.
@@ -46,6 +48,30 @@ resources:
   source: {}
 
 jobs:
+# ─── try: inside in_parallel: ───────────────────────────────────────────────
+# A tolerated failure inside a concurrent branch must stay tolerated. Both
+# halves are load-bearing and neither single-feature file can see this:
+# in-parallel.yml proves a bare failing branch FAILS the block, try.yml proves
+# a wrapped failure is tolerated in a SERIAL plan. Only together do they ask
+# whether the block still concludes success — and for a while it did not,
+# because toleration lived in the plan walk and a branch never reaches it.
+#
+# outcome: is the whole assertion. Both steps run either way, so execution:
+# alone matches whether the failure was swallowed or propagated.
+- name: tried-branch
+  plan:
+  - in_parallel:
+      steps:
+      - try:
+          task: notify
+          run: exit 1
+      - task: build
+        inputs: []
+        run: echo built
+  assert:
+    execution: [notify, build]
+    outcome: succeeded
+
 # ─── race: inside in_parallel: ──────────────────────────────────────────────
 # The nesting that panicked. branchOutputs walks a block to collect the names
 # its branches produce, and read the first racer to do it — but validate() runs
@@ -76,6 +102,29 @@ jobs:
         run: echo sibling
   assert:
     execution: [quick, sibling]
+    outcome: succeeded
+
+# ─── try: inside across: ────────────────────────────────────────────────────
+# A matrix cell whose body is a wrapper. Every renderable field — the command,
+# and the name the cell is known by — sits on the wrapped step rather than on
+# the cell, so a renderer that only looked at the cell substituted nothing at
+# all: both cells ran the literal `{{ .vars.shard }}` text under one shared,
+# unroutable name. execution: is the assertion that catches it, because the
+# names ARE the coordinates.
+#
+# One cell fails and one passes; the matrix still concludes success, since a
+# failing cell never stops the rest and each cell tolerates its own failure.
+- name: matrix-tolerant
+  plan:
+  - across:
+    - var: shard
+      values: [a, b]
+    try:
+      task: "flaky-{{ .vars.shard }}"
+      inputs: []
+      run: test "{{ .vars.shard }}" = a
+  assert:
+    execution: [flaky-a, flaky-b]
     outcome: succeeded
 
 # ─── load_var: into a put's params: ─────────────────────────────────────────

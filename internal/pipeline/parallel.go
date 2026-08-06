@@ -133,6 +133,19 @@ func runBranches(
 			logs[index] = branchLog
 
 			_, _, _, err := runNonGetStep(runCtx, cfg, jobName, i, branch, bw, st, nil, blockHash, handoff)
+
+			// A try: branch tolerates its own failure HERE, because the plan
+			// walk never sees a branch — executeNonGetStep is where every
+			// other try: is tolerated, and runNonGetStep is as far up as a
+			// branch goes. Without this the identical wrapper was tolerated
+			// in a serial plan and propagated inside a block, which is the
+			// case try: is most often reached for: a best-effort notification
+			// running alongside the work it reports on.
+			//
+			// Before the fail_fast check, so a tolerated failure does not
+			// cancel its siblings either. It is not a failure any more.
+			err = tolerateTryFailure(runCtx, jobName, branch, err)
+
 			results[index].err = err
 
 			if err != nil && step.InParallel.FailsFast() {

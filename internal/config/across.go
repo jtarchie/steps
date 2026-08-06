@@ -134,6 +134,31 @@ func combinations(axes []AcrossVar) []map[string]string {
 // everything would mean a template failure in an unrelated field could break a
 // pipeline that never asked for one.
 func renderCell(label string, cell *Step, vars map[string]string) error {
+	// A try: cell keeps every renderable field on the step it wraps rather
+	// than on itself, so render through the wrapper. Without this a matrix
+	// whose body is a try: rendered NOTHING: each cell ran the literal
+	// `{{ .vars.x }}` text and every cell answered to the same unroutable
+	// name, since the auto-naming below reads a Task that is always empty on
+	// the wrapper.
+	//
+	// The copy is the load-bearing part. ExpandAcross builds a cell by
+	// assigning the step, which copies the struct but SHARES the Try pointer
+	// with every other cell — rendering through it in place means cell 1
+	// consumes the template and cell 2 finds nothing left to substitute, so
+	// all of them end up with cell 1's command under one name.
+	if cell.Try != nil {
+		inner := *cell.Try
+
+		err := renderCell(label, &inner, vars)
+		if err != nil {
+			return err
+		}
+
+		cell.Try = &inner
+
+		return nil
+	}
+
 	fields := []struct {
 		name  string
 		value *string
