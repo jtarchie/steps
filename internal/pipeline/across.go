@@ -111,7 +111,7 @@ func runAcrossCell(
 		return false, err //nolint:wrapcheck // CellHash names the cell
 	}
 
-	if cacheable {
+	if cacheable && !forced(ctx) {
 		done, lookupErr := st.HasNodeSucceeded(ctx, jobName, cellHash)
 		if lookupErr != nil {
 			return false, fmt.Errorf("cell cache: %w", lookupErr)

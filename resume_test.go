@@ -166,3 +166,52 @@ func resumeID(t *testing.T, out string) string {
 
 	return match[1]
 }
+
+// TestResumeDoesNotSkipAFailedBranch pins the worst shape a resume can take:
+// reporting success while the work that failed was never re-attempted.
+//
+// The completed-step marker used to be recorded from inside the branch
+// runners, under the ENCLOSING BLOCK's plan index — so one succeeding branch
+// marked the whole in_parallel: as done, and the resume skipped the block
+// including the branch that had failed. The job then exited 0.
+func TestResumeDoesNotSkipAFailedBranch(t *testing.T) {
+	dir := t.TempDir()
+
+	good := filepath.Join(dir, "good.log")
+	bad := filepath.Join(dir, "bad.log")
+	flag := filepath.Join(dir, "fixed")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+jobs:
+- name: build
+  plan:
+  - in_parallel:
+      steps:
+      - task: good
+        inputs: []
+        run: echo ran >> %[1]s
+      - task: bad
+        inputs: []
+        run: echo attempt >> %[2]s && test -f %[3]s
+`, good, bad, flag))
+
+	out := captureStdout(t, func() {
+		err := run([]string{"run", path, "--job", "build"})
+		if err == nil {
+			t.Fatal("expected the failing branch to fail the block")
+		}
+	})
+
+	runID := resumeID(t, out)
+
+	writePipelineFile(t, flag, "")
+
+	err := run([]string{"run", path, "--resume", runID})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+
+	// The failing branch ran again. Without that, the resumed job would have
+	// exited 0 having done nothing.
+	assertLineCount(t, bad, 2)
+}

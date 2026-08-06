@@ -105,3 +105,29 @@ func reportResumable(runID string, bw workspace.BuildWorkspace) {
 		fmt.Printf("run: %s  workspace kept at %s\n", runID, rooted.Root())
 	}
 }
+
+// forceKey types the context value carrying --force.
+type forceKey struct{}
+
+// withForce records that this run was asked to re-run everything.
+//
+// RunJob's skipCache only bypasses the chain-skip planner, which is enough for
+// every step that consults `skippable`. An across: cell does not — it asks the
+// store about its own node hash directly, which is what gives a matrix
+// per-cell caching — so it needs the flag itself, or `--force` and `steps
+// test` would print `skip: <cell> (unchanged)` for every cell and evaluate
+// none of their asserts.
+func withForce(ctx context.Context, force bool) context.Context {
+	if !force {
+		return ctx
+	}
+
+	return context.WithValue(ctx, forceKey{}, true)
+}
+
+// forced reports whether this run must re-run everything.
+func forced(ctx context.Context) bool {
+	force, _ := ctx.Value(forceKey{}).(bool)
+
+	return force
+}

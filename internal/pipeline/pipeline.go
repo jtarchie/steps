@@ -102,6 +102,12 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	// provider pin; ignored outright by every non-OpenRouter provider.
 	ctx = agent.WithNewRun(ctx, job.Name)
 
+	// --force means re-run everything, and everything includes the parts that
+	// keep their own cache rather than consulting the chain index (across:
+	// cells). Carried on the context because the runners that need it are
+	// several frames below the flag.
+	ctx = withForce(ctx, skipCache)
+
 	// load_var: values are scoped to one job run: a var captured in one run
 	// says nothing about the next.
 	ctx = withRunVars(ctx)
@@ -363,11 +369,28 @@ func executeNonGetStep(
 	skippable map[string]bool,
 	visits map[int]int,
 ) (bool, error) {
+	// A step this run already finished is skipped outright. This is narrower
+	// than the merkle cache and answerable where the cache is not: an agent
+	// step is never content-cacheable, but "this run already ran it" is a
+	// fact, and re-running it would produce a DIFFERENT answer rather than
+	// the reviewed one.
+	//
+	// It lives HERE, in the plan walk, and not in runNonGetStep — which the
+	// concurrent block runners also call, with the enclosing BLOCK's index.
+	// Recorded from there, one succeeding branch marked the whole block done,
+	// and a resume skipped the block including the branch that had failed,
+	// exiting 0 having re-attempted nothing.
+	if skipCompletedStep(ctx, jobName, i) {
+		return false, nil
+	}
+
 	newParentHash, disposition, no, err := runNonGetStep(ctx, cfg, jobName, *i, step, bw, st, skippable, *parentHash, handoffFor(step, *pending))
 
 	if disposition == stepRan {
 		visits[*i]++
 	}
+
+	recordCompletedStep(ctx, st, *i, step, err)
 
 	nextIndex, routedKey, err, exhaustedErr := applyRouting(ctx, steps, *i, step, disposition, no.verdict, err, visits)
 	if exhaustedErr != nil {
@@ -477,6 +500,42 @@ func nextPendingHandoff(jobName string, step config.Step, steps []config.Step, r
 	}
 }
 
+// recordCompletedStep marks a plan step as one a resume will not repeat.
+//
+// On success only: a failed step is exactly the one a resume must run again.
+// And on PLAN steps only — the concurrent block runners call runNonGetStep
+// with the enclosing block's index, so recording from there marked a whole
+// block done the moment any one branch succeeded.
+func recordCompletedStep(ctx context.Context, st *store.Store, i int, step config.Step, err error) {
+	if err != nil {
+		return
+	}
+
+	resume := resumeFrom(ctx)
+	if resume == nil {
+		return
+	}
+
+	_ = st.RecordRunStep(context.WithoutCancel(ctx), resume.id, i, executedStepName(step))
+}
+
+// skipCompletedStep skips a plan step a previous attempt of this run already
+// finished, advancing the index. It reports whether it skipped.
+func skipCompletedStep(ctx context.Context, jobName string, i *int) bool {
+	name, done := resumeFrom(ctx).alreadyDone(*i)
+	if !done {
+		return false
+	}
+
+	fmt.Printf("skip: %s (already succeeded)\n", name)
+	slog.Info("job.skip", "job", jobName, "index", *i, "reason", "resume", "step", name)
+	recordExecution(ctx, name)
+
+	*i++
+
+	return true
+}
+
 // runNonGetStep runs a task/put/agent step and dispatches its hooks around the
 // outcome. A skipped (merkle-cached) step fires no hooks — it did not run, so
 // there is nothing for its observers to react to. When a green step is failed
@@ -490,14 +549,6 @@ func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i in
 	// [step, its hooks...].
 	if disposition == stepRan {
 		recordStepExecution(ctx, step)
-	}
-
-	// A step that finished is one a resume will not repeat. Recorded on
-	// success only: a failed step is exactly the one a resume must run again.
-	if err == nil {
-		if resume := resumeFrom(ctx); resume != nil {
-			_ = st.RecordRunStep(context.WithoutCancel(ctx), resume.id, i, executedStepName(step))
-		}
 	}
 
 	// Neither kind of skip fires hooks: the step did not run, so it has no
@@ -535,19 +586,6 @@ func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string,
 	if !shouldRun {
 		fmt.Printf("skip: %s (when)\n", executedStepName(step))
 		slog.Info("job.skip", "job", jobName, "index", i, "reason", "when", "step", executedStepName(step))
-
-		return parentHash, stepGuardSkipped, nonGetOutcome{}, nil
-	}
-
-	// A step this run already finished is skipped outright. This is narrower
-	// than the merkle cache and answerable where the cache is not: an agent
-	// step is never content-cacheable, but "this run already ran it" is a
-	// fact, and re-running it would produce a DIFFERENT answer rather than
-	// the reviewed one.
-	if name, done := resumeFrom(ctx).alreadyDone(i); done {
-		fmt.Printf("skip: %s (already succeeded)\n", name)
-		slog.Info("job.skip", "job", jobName, "index", i, "reason", "resume", "step", name)
-		recordExecution(ctx, name)
 
 		return parentHash, stepGuardSkipped, nonGetOutcome{}, nil
 	}
