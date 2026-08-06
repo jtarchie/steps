@@ -1,0 +1,22 @@
+# A note is addressed by step name, and every agent cell of a matrix shares
+# the step's one name — so each cell overwrote handoff/<name>.md in turn and
+# the receiver read whichever wrote last, silently losing the rest.
+# expect: handoff is not supported on an across: step
+
+agents:
+- name: writer
+  source:
+    endpoint: "http://localhost:0"
+    model: fake
+
+jobs:
+- name: shards
+  plan:
+  - across:
+    - var: shard
+      values: [a, b]
+    agent: writer
+    prompt: "review shard {{ .vars.shard }}"
+    handoff: { note: true }
+  - agent: writer
+    prompt: summarize

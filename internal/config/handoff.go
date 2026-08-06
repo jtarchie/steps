@@ -97,9 +97,11 @@ func (s Step) WantsNote() bool {
 
 // validateHandoffSteps enforces the handoff: rules at load time: it is never
 // valid on a hook step (a hook is a reaction, not a positioned step with
-// predecessors), and on a plan step it is agent-only, must enable at least
-// one of context/tool, and must be the target of at least one to: route
-// within its own get-segment — otherwise the field is dead config.
+// predecessors), never inside a concurrent block or on an across: step (see
+// rejectHandoffInBranches/rejectHandoffOnAcross), and on a plan step it is
+// agent-only, must enable at least one of context/tool, and must be the
+// target of at least one to: route within its own get-segment — otherwise the
+// field is dead config.
 func (c *Config) validateHandoffSteps() error {
 	for i := range c.Jobs {
 		job := c.Jobs[i]
@@ -109,9 +111,73 @@ func (c *Config) validateHandoffSteps() error {
 			return err
 		}
 
+		err = rejectHandoffInBranches(job)
+		if err != nil {
+			return err
+		}
+
+		err = rejectHandoffOnAcross(job)
+		if err != nil {
+			return err
+		}
+
 		err = c.validateHandoffSegments(job)
 		if err != nil {
 			return err
+		}
+	}
+
+	return nil
+}
+
+// rejectHandoffInBranches rejects handoff: on any step nested inside a
+// concurrent block (an in_parallel:/race: branch, an ensemble member). The
+// segment walks below iterate only top-level plan steps, so a branch's
+// handoff: was never validated OR wired: it loaded clean, then forced the
+// agent to write a note nothing received (note:), or promised a transition
+// context no route could deliver (context:/tool:). A load error until
+// branches participate in handoff, rather than dead config.
+func rejectHandoffInBranches(job Job) error {
+	for i := range job.Plan {
+		label := fmt.Sprintf("job %q step %d", job.Name, i)
+
+		for kind, branches := range branchesOf(unwrapStep(&job.Plan[i])) {
+			for b := range branches {
+				err := visitStepTree(fmt.Sprintf("%s (%s branch %d)", label, kind, b), &branches[b], rejectNestedHandoff)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// rejectNestedHandoff rejects handoff: on one step inside a concurrent block.
+func rejectNestedHandoff(label string, step *Step) error {
+	if step.Handoff != nil {
+		return fmt.Errorf("%s: handoff is not supported inside a concurrent block — a branch has no position in the plan for a note chain or a to: route to reach", label)
+	}
+
+	return nil
+}
+
+// rejectHandoffOnAcross rejects handoff: on an across: step (looking through
+// a try: wrapper, where the agent cell body lives). Every agent cell shares
+// the step's one name, so each cell in turn overwrote handoff/<name>.md and
+// the receiver read whichever cell wrote last — every earlier cell's note was
+// silently lost. Cells need to be first-class senders before this can mean
+// something.
+func rejectHandoffOnAcross(job Job) error {
+	for i := range job.Plan {
+		step := job.Plan[i]
+		if len(step.Across) == 0 {
+			continue
+		}
+
+		if step.Unwrap().Handoff != nil {
+			return fmt.Errorf("job %q step %d: handoff is not supported on an across: step — every cell would write the same note and only the last would survive", job.Name, i)
 		}
 	}
 

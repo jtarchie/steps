@@ -1,0 +1,25 @@
+# handoff: wires a step into its segment's note chain and to: routes, but the
+# segment walks see only top-level plan steps — a branch has no position in
+# the plan. This used to load clean and then force the agent to write a note
+# nothing received.
+# expect: handoff is not supported inside a concurrent block
+
+agents:
+- name: writer
+  source:
+    endpoint: "http://localhost:0"
+    model: fake
+
+jobs:
+- name: build
+  plan:
+  - in_parallel:
+      steps:
+      - agent: writer
+        prompt: write something
+        handoff: { note: true }
+      - task: work
+        inputs: []
+        run: "true"
+  - agent: writer
+    prompt: summarize
