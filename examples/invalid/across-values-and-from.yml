@@ -1,0 +1,15 @@
+# An axis takes its values from one place or the other: values: is the static
+# list in the pipeline text, from: is a run-context key an earlier step fills.
+# Setting both leaves no rule for which one wins that is not invented here.
+# expect: sets both values: and from:
+
+jobs:
+- name: audit
+  plan:
+  - across:
+    - var: finding
+      values: [a, b]
+      from: findings
+    task: "investigate-{{ .vars.finding }}"
+    inputs: []
+    run: "true"

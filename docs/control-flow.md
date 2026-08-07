@@ -244,6 +244,31 @@ Cells that are puts or agents are never skipped, for the same reasons those step
 - **Cells are named for their coordinates** — `check [mode=fast suite=unit]` — unless you interpolate a variable into the name yourself. Without that every cell would share one name, which is unroutable and unreadable in a log.
 - **An empty axis, a duplicate `var:`, or a misspelled `{{ .vars.x }}` are load errors.** Each would otherwise mean silently running the wrong matrix.
 
+### Runtime fan-out: `from:`
+
+An axis can take its values from the **run context** instead of the pipeline text, so an earlier step decides how wide the matrix is:
+
+```yaml
+- agent: scanner
+  context: write
+  prompt: Record the findings worth investigating as a JSON array under `findings`.
+- across:
+  - var: finding
+    from: findings          # instead of values:
+  agent: investigator
+  prompt: "Investigate: {{ .vars.finding }}"
+```
+
+This is "the agent plans, the pipeline executes": one step produces a work list, and each item becomes its own cell — independently hashed, cached and reported — instead of one agent grinding through the whole list in a conversation that outgrows its window.
+
+`values:` and `from:` are mutually exclusive per axis, and an axis needs one of them; both are load errors. A runtime axis can sit beside a static one, and the product is taken as usual.
+
+**The source must be a JSON array of strings.** `from:` is the same axis with the list computed later, so a value interpolates through `{{ .vars.x }}` exactly as a static one does and a runtime cell hashes identically to the static cell it is indistinguishable from. An array of objects is refused rather than flattened — there is no rendering of an object into a name or a command that would not be a rule invented on the spot.
+
+**Because the array is produced during the run, usually by a model, nothing about it was reviewed by the author.** So: at most 1000 items (an unbounded array turns an upstream typo into an unbounded bill — the error says to filter at the source or split the run), a missing key or wrong shape fails the step naming the key, and an empty array is an error rather than a matrix that silently runs nothing.
+
+**Planning.** A static matrix expands at load, so `steps plan` shows every cell. A runtime one cannot: its width is not knowable until the step that fills its source has run. It hashes its *declaration* at plan time — the axes including the source key, plus the unexpanded template — which means the planner cannot predict what that block, or anything downstream of it, will do. The cells themselves hash at run time and cache per cell exactly as static cells do.
+
 ## `approval:` — a human in the plan
 
 Agent pipelines eventually gate something that cannot be undone — publishing, deploying, sending. Before this there was no place in a plan to stop and ask.

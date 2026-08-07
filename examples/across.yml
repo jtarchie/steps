@@ -17,6 +17,7 @@ assert:
   execution:
     - matrix
     - named-cells
+    - runtime-cells
 
 jobs:
 # Two axes, four cells. `{{ .vars.<name> }}` substitutes into the command, the
@@ -54,4 +55,41 @@ jobs:
     run: echo "testing {{ .vars.pkg }}"
   assert:
     execution: [test-agent, test-pipeline]
+    outcome: succeeded
+
+# ─── runtime fan-out: from: ─────────────────────────────────────────────────
+# An axis can take its values from the RUN CONTEXT instead of the pipeline
+# text, so an earlier step decides how wide the matrix is. Here a task records
+# the list; in a real pipeline it is usually an agent calling set_context, which
+# is the "agent plans, pipeline executes" shape — each item becomes its own
+# cell, hashed and cached and reported separately, instead of one agent
+# grinding through the whole list in a conversation that outgrows its window.
+#
+# The source must be a JSON array of STRINGS: from: is the same axis with the
+# list computed later, so a value interpolates through {{ .vars.x }} exactly as
+# a static one does. An array of objects is refused rather than flattened.
+#
+# The array is produced during the run, so nothing about it was reviewed when
+# this file was written: at most 1000 items, and a missing key, wrong shape, or
+# empty array fails the step naming the key rather than quietly running nothing.
+#
+# What this costs: `steps plan` cannot show these cells, because their number
+# is not knowable until scan has run. The block hashes its declaration at plan
+# time; the cells hash at run time and cache per cell as usual.
+- name: runtime-cells
+  plan:
+  - task: scan
+    inputs: []
+    context: write
+    run: |
+      mkdir -p context
+      printf '["alpha","beta"]' > context/findings
+  - across:
+    - var: finding
+      from: findings
+    task: "investigate-{{ .vars.finding }}"
+    inputs: []
+    run: echo "investigating {{ .vars.finding }}"
+  assert:
+    execution: [scan, investigate-alpha, investigate-beta]
     outcome: succeeded

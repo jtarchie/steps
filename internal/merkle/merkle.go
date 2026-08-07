@@ -1004,6 +1004,57 @@ func AcrossNodeContent(cfg *config.Config, step config.Step, cells []config.Step
 	return withHooks(cfg, step, withWhen(step, withRouting(step, map[string]any{"across": contents})))
 }
 
+// AcrossPlanContent is a matrix's content at PLAN time, where a runtime axis
+// has no values yet.
+//
+// A static matrix expands and hashes its cells exactly as before. A runtime
+// one hashes the axes as declared — including the source key, so pointing an
+// axis at a different key is a different block — plus the unexpanded template.
+// The marker keeps the two spellings apart: a runtime matrix must never
+// collide with a static one that happens to render the same way.
+func AcrossPlanContent(cfg *config.Config, step config.Step, i int) (map[string]any, error) {
+	if !config.HasRuntimeAxis(step) {
+		cells, err := config.ExpandAcross(fmt.Sprintf("step %d", i), step)
+		if err != nil {
+			return nil, fmt.Errorf("step %d (across): %w", i, err)
+		}
+
+		content, err := AcrossNodeContent(cfg, step, cells)
+		if err != nil {
+			return nil, fmt.Errorf("step %d (across): %w", i, err)
+		}
+
+		return content, nil
+	}
+
+	template, err := stepContentMap(cfg, acrossTemplate(step))
+	if err != nil {
+		return nil, fmt.Errorf("step %d (across): %w", i, err)
+	}
+
+	axes := make([]any, 0, len(step.Across))
+	for _, axis := range step.Across {
+		axes = append(axes, map[string]any{"var": axis.Var, "values": axis.Values, "from": axis.From})
+	}
+
+	content, err := withHooks(cfg, step, withWhen(step, withRouting(step, map[string]any{
+		"across_runtime": map[string]any{"axes": axes, "template": template},
+	})))
+	if err != nil {
+		return nil, fmt.Errorf("step %d (across): %w", i, err)
+	}
+
+	return content, nil
+}
+
+// acrossTemplate is the matrix step with its axes stripped: the body a cell is
+// rendered from, before any substitution.
+func acrossTemplate(step config.Step) config.Step {
+	step.Across = nil
+
+	return step
+}
+
 // CellHash is one across: cell's own content hash, plus whether the cell is
 // the kind of step that may be skipped when it matches.
 //
@@ -1092,15 +1143,18 @@ func raceNode(cfg *config.Config, step config.Step, i int, parentHash string) (N
 }
 
 // acrossNode builds the plan node for an across: matrix.
+//
+// A matrix with a from: axis takes its values from what an earlier step
+// records, so at PLAN time it has no cells to fold in: the array does not
+// exist yet. It hashes its declaration instead (see AcrossPlanContent), which
+// means the planner cannot predict what such a block — or anything downstream
+// of it — will do. That is honest rather than unfortunate: the width of the
+// matrix is genuinely not knowable until the run reaches it, and a plan that
+// claimed otherwise would be predicting a skip it cannot make good on.
 func acrossNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, error) {
-	cells, err := config.ExpandAcross(fmt.Sprintf("step %d", i), step)
+	content, err := AcrossPlanContent(cfg, step, i)
 	if err != nil {
-		return Node{}, fmt.Errorf("step %d (across): %w", i, err)
-	}
-
-	content, err := AcrossNodeContent(cfg, step, cells)
-	if err != nil {
-		return Node{}, fmt.Errorf("step %d (across): %w", i, err)
+		return Node{}, err
 	}
 
 	hash, err := HashNode(NodeKindAcross, content, parentHash)

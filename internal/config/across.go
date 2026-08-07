@@ -11,10 +11,46 @@ import (
 )
 
 // AcrossVar is one axis of a matrix: a variable name and the values it takes.
+//
+// The values come from exactly one of two places. values: is the static list,
+// known when the pipeline is written. from: names a run-context key holding a
+// JSON array, so an earlier step decides at run time how wide the matrix is —
+// "investigate each of these findings", where nobody knew the findings when
+// the pipeline was authored.
 type AcrossVar struct {
 	Var    string   `yaml:"var"`
-	Values []string `yaml:"values"`
+	Values []string `yaml:"values,omitempty"`
+	// From is a run-context key (see ContextDir / set_context) whose value must
+	// be a JSON array. Mutually exclusive with Values.
+	From string `yaml:"from,omitempty"`
 }
+
+// Runtime reports whether this axis takes its values from the run context
+// rather than from the pipeline text.
+func (a AcrossVar) Runtime() bool {
+	return a.From != ""
+}
+
+// HasRuntimeAxis reports whether any axis of step's matrix is runtime-valued,
+// which is what makes the whole matrix un-expandable at load time.
+func HasRuntimeAxis(step Step) bool {
+	for _, axis := range step.Across {
+		if axis.Runtime() {
+			return true
+		}
+	}
+
+	return false
+}
+
+// MaxAcrossItems bounds how many items one runtime axis may expand to.
+//
+// The array is produced during the run, often by a model, so its length is not
+// something the pipeline author reviewed. Each item becomes a cell with its own
+// hash, workspace and possibly its own model call, so an unbounded array turns
+// a typo upstream into an unbounded bill. Refusing with a message that says
+// what to do beats discovering it halfway through.
+const MaxAcrossItems = 1000
 
 // ExpandAcross renders an across: step into its cells: one step per
 // combination of values, with `{{ .vars.<name> }}` substituted into the
@@ -32,12 +68,30 @@ type AcrossVar struct {
 // copies. Put an in_parallel: inside a cell if a cell's own work should
 // overlap.
 func ExpandAcross(label string, step Step) ([]Step, error) {
+	return ExpandAcrossValues(label, step, nil)
+}
+
+// ExpandAcrossValues is ExpandAcross with the runtime axes already resolved:
+// runtime maps each from: axis's var name to the values it took this run.
+//
+// Two entry points rather than one because the two happen at different times.
+// A static matrix expands at load, so a malformed one costs a load rather than
+// a run; a runtime matrix cannot exist until the step that fills its source
+// has run, so it expands in internal/pipeline instead. Both share every rule
+// below, which is what keeps a runtime cell hashing identically to the static
+// cell it is indistinguishable from.
+func ExpandAcrossValues(label string, step Step, runtime map[string][]string) ([]Step, error) {
 	err := validateAcrossAxes(label, step.Across)
 	if err != nil {
 		return nil, err
 	}
 
-	combos := combinations(step.Across)
+	axes, err := resolveAxes(label, step.Across, runtime)
+	if err != nil {
+		return nil, err
+	}
+
+	combos := combinations(axes)
 
 	cells := make([]Step, 0, len(combos))
 
@@ -56,13 +110,45 @@ func ExpandAcross(label string, step Step) ([]Step, error) {
 	return cells, nil
 }
 
+// resolveAxes substitutes the runtime values into any from: axis, leaving a
+// static axis untouched. A from: axis with nothing supplied is a programming
+// error in the caller, not a config error — every runtime path resolves every
+// axis before expanding — so it says so plainly rather than expanding to zero
+// cells and looking like a matrix that ran.
+func resolveAxes(label string, declared []AcrossVar, runtime map[string][]string) ([]AcrossVar, error) {
+	axes := make([]AcrossVar, len(declared))
+
+	for i, axis := range declared {
+		if axis.Runtime() {
+			values, ok := runtime[axis.Var]
+			if !ok {
+				return nil, fmt.Errorf("%s: across var %q takes its values from context key %q, which was not resolved before expanding", label, axis.Var, axis.From)
+			}
+
+			axis.Values = values
+		}
+
+		axes[i] = axis
+	}
+
+	return axes, nil
+}
+
 // validateAcross checks every across: step in the pipeline at load, so a
 // malformed matrix costs a load rather than a run.
+//
+// A matrix with a runtime axis is checked but not expanded: its width is not
+// known until the step that fills its source has run. The axis rules above
+// still apply, so the shape mistakes a load can catch are still caught at load.
 func (c *Config) validateAcross() error {
 	for _, job := range c.Jobs {
 		err := job.visitSteps(func(label string, step *Step) error {
 			if len(step.Across) == 0 {
 				return nil
+			}
+
+			if HasRuntimeAxis(*step) {
+				return validateAcrossAxes(label, step.Across)
 			}
 
 			_, expandErr := ExpandAcross(label, *step)
@@ -87,8 +173,10 @@ func validateAcrossAxes(label string, axes []AcrossVar) error {
 		switch {
 		case axis.Var == "":
 			return fmt.Errorf("%s: across[%d] has no var: name", label, i)
-		case len(axis.Values) == 0:
-			return fmt.Errorf("%s: across[%d] (%s) has no values:; an axis with nothing in it would expand to no steps at all", label, i, axis.Var)
+		case len(axis.Values) > 0 && axis.Runtime():
+			return fmt.Errorf("%s: across[%d] (%s) sets both values: and from:; an axis takes its values from one place or the other", label, i, axis.Var)
+		case len(axis.Values) == 0 && !axis.Runtime():
+			return fmt.Errorf("%s: across[%d] (%s) has no values: and no from:; an axis with nothing in it would expand to no steps at all", label, i, axis.Var)
 		case seen[axis.Var]:
 			return fmt.Errorf("%s: across declares var %q twice; the second would silently shadow the first", label, axis.Var)
 		}

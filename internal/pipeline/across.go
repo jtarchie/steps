@@ -31,9 +31,16 @@ func runAcrossStep(
 ) (string, stepDisposition, nonGetOutcome, error) {
 	label := fmt.Sprintf("job %q step %d", jobName, i)
 
-	cells, err := config.ExpandAcross(label, step)
+	// A from: axis takes its values from what an earlier step recorded, so the
+	// matrix's width is only knowable here — see acrossruntime.go.
+	runtime, err := resolveRuntimeAxes(ctx, st, agent.RunIDFrom(ctx), step)
 	if err != nil {
-		return "", stepRan, nonGetOutcome{}, err //nolint:wrapcheck // ExpandAcross already carries the job/step label
+		return "", stepRan, nonGetOutcome{}, fmt.Errorf("%s: %w", label, err)
+	}
+
+	cells, err := config.ExpandAcrossValues(label, step, runtime)
+	if err != nil {
+		return "", stepRan, nonGetOutcome{}, err //nolint:wrapcheck // ExpandAcrossValues already carries the job/step label
 	}
 
 	content, err := merkle.AcrossNodeContent(cfg, step, cells)

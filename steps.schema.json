@@ -766,13 +766,24 @@
         "across": {
           "type": "array",
           "minItems": 1,
-          "description": "Run this step once per combination of values, substituting {{ .vars.<name> }} into run/image/prompt/dir and the step's name. Expanded at load, so each cell caches independently.",
+          "description": "Run this step once per combination of values, substituting {{ .vars.<name> }} into run/image/prompt/dir and the step's name. A values: axis expands at load; a from: axis expands at run time. Each cell caches independently.",
           "items": {
             "type": "object",
             "additionalProperties": false,
             "required": [
-              "var",
-              "values"
+              "var"
+            ],
+            "oneOf": [
+              {
+                "required": [
+                  "values"
+                ]
+              },
+              {
+                "required": [
+                  "from"
+                ]
+              }
             ],
             "properties": {
               "var": {
@@ -784,6 +795,10 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "from": {
+                "type": "string",
+                "description": "Run-context key holding a JSON array of strings, recorded by an earlier step. Mutually exclusive with values."
               }
             }
           }
