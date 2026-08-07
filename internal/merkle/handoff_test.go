@@ -91,8 +91,8 @@ func TestHandoffNoteHashBustsWhenSet(t *testing.T) {
 
 	unset := mustAgentHash(t, cfg, config.Step{Agent: "reviewer", Prompt: "do it"})
 	sending := mustAgentHash(t, cfg, config.Step{Agent: "reviewer", Prompt: "do it", Handoff: &config.HandoffSpec{Note: true}})
-	receiving := mustAgentHash(t, cfg, config.Step{Agent: "reviewer", Prompt: "do it", HandoffNoteFrom: "planner"})
-	fromOther := mustAgentHash(t, cfg, config.Step{Agent: "reviewer", Prompt: "do it", HandoffNoteFrom: "coder"})
+	receiving := mustAgentHash(t, cfg, config.Step{Agent: "reviewer", Prompt: "do it", HandoffNoteFrom: []string{"planner"}})
+	fromOther := mustAgentHash(t, cfg, config.Step{Agent: "reviewer", Prompt: "do it", HandoffNoteFrom: []string{"coder"}})
 
 	if unset == sending {
 		t.Error("declaring handoff_note should change the hash")

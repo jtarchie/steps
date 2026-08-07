@@ -222,6 +222,10 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
+	// Delivered notes are model-authored, and a fan-in delivers several at
+	// once — the widest injection surface here, so each is fenced as data.
+	contextBlocks = fenceNoteBlocks(contextBlocks)
+
 	conv := agentConversation{
 		system:        buildSystemMessage(ri.Persona, dir),
 		prompt:        promptWithHandoff(step.Prompt, step.Handoff, handoff, spillDir),

@@ -99,7 +99,7 @@ func (c *Config) validateHandoffNoteSegments(job *Job) error {
 // intervening task/put steps — a build-check between an implementer and a
 // reviewer must not break the chain.
 func (c *Config) validateHandoffNoteSegment(job *Job, segment []int) error {
-	sender := ""
+	var pending []string
 
 	for _, idx := range segment {
 		// try: is transparent to notes: a wrapped agent step still sends and
@@ -107,36 +107,121 @@ func (c *Config) validateHandoffNoteSegment(job *Job, segment []int) error {
 		// actually hands to internal/agent — the wrapper is never that step.
 		step := unwrapStep(&job.Plan[idx])
 
-		if step.Agent == "" {
-			if step.WantsNote() {
-				return fmt.Errorf("job %q step %d: handoff_note is only valid on agent steps", job.Name, idx)
+		if branches := branchesOf(step); branches != nil {
+			sent, err := c.wireHandoffNoteBlock(job, idx, branches, pending)
+			if err != nil {
+				return err
+			}
+
+			// A block that sent nothing is transparent, exactly like an
+			// intervening task: whatever was pending before it still is.
+			if len(sent) > 0 {
+				pending = sent
 			}
 
 			continue
 		}
 
-		// Read before write: a step both receiving and sending (the middle of
-		// a chain) takes the previous sender, then becomes the sender itself.
-		step.HandoffNoteFrom = sender
-
-		if sender != "" {
-			err := c.checkHandoffNoteReceiver(job, idx, *step)
-			if err != nil {
-				return err
-			}
+		next, err := c.wireHandoffNoteStep(job, idx, step, pending)
+		if err != nil {
+			return err
 		}
 
-		if step.WantsNote() {
-			err := c.checkHandoffNoteSender(job, idx, *step)
-			if err != nil {
-				return err
-			}
-
-			sender = stepName(*step)
-		}
+		pending = next
 	}
 
 	return checkHandoffNoteDelivered(job, segment)
+}
+
+// wireHandoffNoteStep wires one ordinary (non-block) step and reports what the
+// step after it should receive: this step's own name once it sends, otherwise
+// whatever was already pending.
+func (c *Config) wireHandoffNoteStep(job *Job, idx int, step *Step, pending []string) ([]string, error) {
+	if step.Agent == "" {
+		if step.WantsNote() {
+			return nil, fmt.Errorf("job %q step %d: handoff_note is only valid on agent steps", job.Name, idx)
+		}
+
+		// A task or put between two agents is transparent: it neither
+		// receives the pending notes nor clears them.
+		return pending, nil
+	}
+
+	// Read before write: a step both receiving and sending (the middle of a
+	// chain) takes the pending notes, then becomes the only pending sender.
+	step.HandoffNoteFrom = pending
+
+	if len(pending) > 0 {
+		err := c.checkHandoffNoteReceiver(job, idx, *step)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if step.WantsNote() {
+		err := c.checkHandoffNoteSender(job, idx, *step)
+		if err != nil {
+			return nil, err
+		}
+
+		return []string{stepName(*step)}, nil
+	}
+
+	return pending, nil
+}
+
+// wireHandoffNoteBlock wires a concurrent block: every branch's first agent
+// receives what was pending before the block (a broadcast — a note is read
+// only, so one report with several readers is free), and the step after the
+// block receives every note the branches sent (the aggregate).
+//
+// Branch order is declaration order, so a fan-in reads its branches in the
+// order the pipeline lists them however they actually finished. A race: is no
+// different here: only the winner's file exists at delivery time, and an
+// absent note is already skipped by design, so listing every racer resolves to
+// the winner without the load-time walk having to know who won.
+// It returns only what the block SENT, never what it received. Returning the
+// pending notes back would make a block of two non-sending branches report the
+// same sender twice, and the step after it would be handed the one note twice
+// over.
+func (c *Config) wireHandoffNoteBlock(job *Job, idx int, branches map[string][]Step, pending []string) ([]string, error) {
+	var sent []string
+
+	// Iterated through branchesOf's single entry; the map has exactly one kind.
+	for _, steps := range branches {
+		for b := range steps {
+			branchSent, err := c.wireHandoffNoteBranch(job, idx, &steps[b], pending)
+			if err != nil {
+				return nil, err
+			}
+
+			sent = append(sent, branchSent...)
+		}
+	}
+
+	return sent, nil
+}
+
+// wireHandoffNoteBranch wires one branch of a concurrent block and reports the
+// notes IT sent — nothing when the branch only receives. A nested block inside
+// a branch recurses through the same pair.
+func (c *Config) wireHandoffNoteBranch(job *Job, idx int, branch *Step, pending []string) ([]string, error) {
+	step := unwrapStep(branch)
+
+	if nested := branchesOf(step); nested != nil {
+		return c.wireHandoffNoteBlock(job, idx, nested, pending)
+	}
+
+	_, err := c.wireHandoffNoteStep(job, idx, step, pending)
+	if err != nil {
+		return nil, err
+	}
+
+	if step.Agent == "" || !step.WantsNote() {
+		return nil, nil
+	}
+
+	return []string{stepName(*step)}, nil
 }
 
 // checkHandoffNoteSender validates one sending step. Under workspace
@@ -216,7 +301,7 @@ func (c *Config) checkHandoffNoteReceiver(job *Job, idx int, step Step) error {
 		}
 	}
 
-	return fmt.Errorf("job %q step %d: receives a handoff_note from step %q but does not grant %s", job.Name, idx, step.HandoffNoteFrom, readFileToolName)
+	return fmt.Errorf("job %q step %d: receives a handoff_note from %v but does not grant %s", job.Name, idx, step.HandoffNoteFrom, readFileToolName)
 }
 
 // checkHandoffNoteDelivered rejects a sending step whose note nothing
@@ -232,33 +317,70 @@ func checkHandoffNoteDelivered(job *Job, segment []int) error {
 	senders := map[string]int{}
 	received := map[string]bool{}
 
+	// Branches send and receive too, so the bookkeeping walks into blocks —
+	// checking only top-level steps was what let a branch's note be wired to
+	// nobody and still load clean.
 	for _, idx := range segment {
-		step := job.Plan[idx].Unwrap() // try: is transparent to notes
+		err := eachNoteStep(&job.Plan[idx], func(step *Step) error {
+			for _, from := range step.HandoffNoteFrom {
+				received[from] = true
+			}
 
-		if step.HandoffNoteFrom != "" {
-			received[step.HandoffNoteFrom] = true
+			if !step.WantsNote() {
+				return nil
+			}
+
+			name := stepName(*step)
+			if prev, dup := senders[name]; dup {
+				return fmt.Errorf("job %q step %d: handoff_note is set on two steps named %q in this segment (step %d is the other); a note is addressed by step name, so the names must be unique", job.Name, idx, name, prev)
+			}
+
+			senders[name] = idx
+
+			return nil
+		})
+		if err != nil {
+			return err
 		}
-
-		if !step.WantsNote() {
-			continue
-		}
-
-		name := stepName(step)
-		if prev, dup := senders[name]; dup {
-			return fmt.Errorf("job %q step %d: handoff_note is set on two steps named %q in this segment (step %d is the other); a note is addressed by step name, so the names must be unique", job.Name, idx, name, prev)
-		}
-
-		senders[name] = idx
 	}
 
 	// Reported in plan order, not map order, so a pipeline with two broken
 	// edges names the same one every load.
 	for _, idx := range segment {
-		step := job.Plan[idx].Unwrap()
-		if step.WantsNote() && !received[stepName(step)] {
-			return fmt.Errorf("job %q step %d: handoff_note is set but no later agent step in this segment receives it", job.Name, idx)
+		err := eachNoteStep(&job.Plan[idx], func(step *Step) error {
+			if step.WantsNote() && !received[stepName(*step)] {
+				return fmt.Errorf("job %q step %d: handoff_note is set but no later agent step in this segment receives it", job.Name, idx)
+			}
+
+			return nil
+		})
+		if err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+// eachNoteStep calls fn for every step a note edge can attach to under root:
+// root itself (through any try: wrapper), and recursively every branch of a
+// concurrent block. Declaration order, so errors report the same step twice
+// running.
+func eachNoteStep(root *Step, fn func(step *Step) error) error {
+	step := unwrapStep(root)
+
+	if branches := branchesOf(step); branches != nil {
+		for _, steps := range branches {
+			for i := range steps {
+				err := eachNoteStep(&steps[i], fn)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+		return nil
+	}
+
+	return fn(step)
 }

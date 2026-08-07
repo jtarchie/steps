@@ -275,7 +275,7 @@ func TestWriteAndDeliverHandoffNote(t *testing.T) {
 		t.Errorf("path = %q, want it under handoff/", path)
 	}
 
-	receiver := config.Step{Agent: "coder", HandoffNoteFrom: "planner"}
+	receiver := config.Step{Agent: "coder", HandoffNoteFrom: []string{"planner"}}
 
 	got := withHandoffNotePath(receiver, dir, []string{"repo/CLAUDE.md"})
 	if len(got) != 2 || got[0] != "handoff/planner.md" {
@@ -284,7 +284,7 @@ func TestWriteAndDeliverHandoffNote(t *testing.T) {
 
 	// A sender that never ran (guard-skipped) leaves no file; the receiver
 	// must degrade to its own context paths, not fail.
-	absent := config.Step{Agent: "coder", HandoffNoteFrom: "ghost"}
+	absent := config.Step{Agent: "coder", HandoffNoteFrom: []string{"ghost"}}
 	if got := withHandoffNotePath(absent, dir, []string{"repo/CLAUDE.md"}); len(got) != 1 {
 		t.Errorf("context paths = %v, want the missing note skipped", got)
 	}

@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestConfigValidateTrySteps(t *testing.T) {
 	t.Parallel()
@@ -399,8 +402,8 @@ jobs:
 		// The runtime hands internal/agent the WRAPPED step, so that is where
 		// the computed receiver has to land.
 		got := cfg.Jobs[0].Plan[1].Try.HandoffNoteFrom
-		if got != "planner" {
-			t.Errorf("wrapped agent's HandoffNoteFrom = %q, want %q", got, "planner")
+		if !slices.Equal(got, []string{"planner"}) {
+			t.Errorf("wrapped agent HandoffNoteFrom = %v, want [planner]", got)
 		}
 	})
 }

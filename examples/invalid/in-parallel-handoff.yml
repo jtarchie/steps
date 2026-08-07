@@ -1,8 +1,13 @@
-# handoff: wires a step into its segment's note chain and to: routes, but the
-# segment walks see only top-level plan steps — a branch has no position in
-# the plan. This used to load clean and then force the agent to write a note
-# nothing received.
-# expect: handoff is not supported inside a concurrent block
+# handoff: context/tool describe arriving via a to:/verdicts: route — which
+# step sent control here, and what it said. A branch of a concurrent block is
+# not a routable position: nothing can route to it, so the fields could never
+# fire. This used to load clean and promise a transition context that never
+# arrived.
+#
+# handoff: { note: true } IS supported here — that is the fan-out/fan-in case,
+# where a branch receives the note pending before the block and sends one to
+# the step after it. See examples/agents.yml.
+# expect: handoff context/tool is not supported inside a concurrent block
 
 agents:
 - name: writer
@@ -17,7 +22,7 @@ jobs:
       steps:
       - agent: writer
         prompt: write something
-        handoff: { note: true }
+        handoff: { tool: true }
       - task: work
         inputs: []
         run: "true"

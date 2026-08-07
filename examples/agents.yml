@@ -123,6 +123,16 @@ agents:
   max_turns: 20       # the fix<->re-run loop budget (turns carry memory)
   tools: [read_file, list_dir, search_files, edit_file, write_file, run_shell]
 
+# The fan-in-review cast. Each needs read_file, because a delivered handoff
+# note arrives as a synthetic read_file result — a receiver without that grant
+# is a load error rather than a silently empty conversation.
+- name: planner
+  system: You decide what a review should look for, and hand that plan on.
+- name: security-reviewer
+  system: You review for security issues and report what you found.
+- name: perf-reviewer
+  system: You review for performance issues and report what you found.
+
 # Sub-agent delegation: `lead` grants `summarizer` as a callable tool, so it can
 # offload bulk reading to a cheaper model instead of pulling a whole file in.
 - name: summarizer
@@ -263,6 +273,41 @@ jobs:
     context: { fidelity: "off" }
     prompt: |
       Write a haiku about pipelines. You are shown no recorded facts.
+
+# ─── handoff notes across a concurrent block (needs a model) ────────────────
+# A note is a shift-change report: the departing agent writes it WHILE IT STILL
+# HOLDS the context, and the next agent gets it automatically. Unlike a context
+# key (one fact for everyone), a note is a whole document for whoever comes
+# next.
+#
+# Both directions cross an in_parallel: block. planner's note is broadcast into
+# every branch — a note is read-only, so one report with many readers is free.
+# Each branch then writes its own, and synthesizer receives ALL of them, as
+# separate documents in declaration order: which reviewer said what is part of
+# what they said, so merging them into one file would destroy the answer.
+#
+# Each delivered note arrives fenced and labelled as data rather than
+# instructions. Several model-authored documents landing in one conversation is
+# the widest injection surface here.
+- name: fan-in-review
+  plan:
+  - agent: planner
+    handoff: { note: true }
+    prompt: |
+      Decide what a review of this pipeline should look for. Write your
+      handoff note for the reviewers who run next.
+  - in_parallel:
+      steps:
+      - agent: security-reviewer
+        handoff: { note: true }
+        prompt: Review for security issues, following the plan you were handed.
+      - agent: perf-reviewer
+        handoff: { note: true }
+        prompt: Review for performance issues, following the plan you were handed.
+  - agent: summarizer
+    prompt: |
+      You were handed one note per reviewer. Combine them into a single
+      verdict, saying which reviewer raised what.
 
 # ─── sub-agent delegation (needs a local model; otherwise offline) ───────────
 - name: delegate

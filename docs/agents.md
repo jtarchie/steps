@@ -298,8 +298,37 @@ The receiver is expected to treat the authored part as claims — the built-in `
 
 **Delivery** reuses the `context_paths` machinery exactly: the note is prepended to the receiver's context paths, so it arrives as a synthetic `read_file` result at conversation start — zero turns, guaranteed presence, and re-readable from disk if the conversation is later compacted. Because the path is re-resolved on *every* dispatch rather than captured once, a `to:`-driven redo of the receiver always picks up the newest note. A missing note (the sender was guard-skipped, or never ran) is skipped silently rather than failing the receiver — the one place this differs from `context_paths`, where a missing file is a hard error because the author named it explicitly.
 
+### Notes across a concurrent block
+
+A note chain reaches into `in_parallel:` and `race:` blocks, in both directions:
+
+```yaml
+- agent: planner
+  handoff: { note: true }     # broadcast into every branch below
+- in_parallel:
+    steps:
+    - agent: security-reviewer
+      handoff: { note: true }  # each branch reports out
+    - agent: perf-reviewer
+      handoff: { note: true }
+- agent: synthesizer          # receives BOTH branch notes, in declaration order
+```
+
+**Broadcast (fan-out):** the note pending before a block is delivered to every branch. Safe by construction — a note is read-only, so one report with several readers costs nothing.
+
+**Aggregate (fan-in):** the first agent step after the block receives one note per sending branch, each as its own synthetic `read_file`, ordered by declaration rather than by which branch finished first. They stay separate files rather than being merged into one document because the branch a claim came from is part of the claim: a synthesizer needs to know which reviewer said what.
+
+**Framing.** Every delivered note is wrapped in a randomized `<untrusted-…>` fence and introduced as *data, not instructions*. A fan-in puts several model-authored documents into one conversation at once — the widest injection surface this feature has — and the tag is re-rolled until it does not appear in the content, so a note cannot close the fence and append text that reads as the pipeline's own.
+
+**`race:`** needs no special rule: only the winner's note file exists at delivery time, and an absent note is already skipped by design, so listing every racer resolves to the winner.
+
+A block that sends nothing is **transparent** — a block of tasks between two agents does not break the chain, the same way a single intervening task does not.
+
+Still rejected inside a block: `handoff: { context: true }` and `{ tool: true }`. Those describe arriving via a `to:`/`verdicts:` route, and a branch is not a routable position — nothing can route to it, so the fields would be permanently dead. `across:` is also still rejected outright: every cell answers to the same step name, so all of them would write the same `handoff/<name>.md` and only the last would survive.
+
 **Limits, enforced at load time:**
 - Agent steps only, never hooks; the sender needs a later agent step in the same get-segment (a note never crosses a `get` fan-out — each fanned-out build is independent), and the receiver must grant `read_file`.
+- Sender names must be unique across the whole segment, branches included — the name is the address, so two branches running the same agent would write the same file.
 - **Not supported under `workspace: strategy: copy`/`btrfs`.** Under isolation only *declared outputs* survive a step, so a note written to the build root would be discarded with the sender's workspace. This is a load error rather than a silent loss.
 - **No `dir:` on either end.** The note lives in the build root; a step with `dir:` writes it inside a materialized input artifact instead (dirtying it), and a receiver with `dir:` can never reach the root — `../handoff/x.md` is rejected as escaping the working directory. Same reasoning as the isolation rule: a load error beats a silent non-delivery.
 - **Sender names must be unique within a segment.** A note is addressed by step name (`handoff/<step>.md`), so two `handoff: { note: true }` steps with the same `agent:` would write the same file.

@@ -194,15 +194,21 @@ type Step struct {
 	// context block is appended and previous_run (if granted) answers "no
 	// previous run" as data.
 	Handoff *HandoffSpec `yaml:"handoff,omitempty"`
-	// HandoffNoteFrom is COMPUTED at load (never written in YAML): the name of
-	// the nearest preceding agent step in this step's get-segment that
-	// declares handoff: {note: true}. "" when no such step exists — the common
-	// and the step then receives no note. Resolving the receiver statically
-	// rather than carrying it through internal/pipeline is what makes note
-	// delivery automatically idempotent: every dispatch of this step, first
-	// entry or a to:-driven redo, re-reads whatever note is on disk, so a
-	// redo always sees the newest one.
-	HandoffNoteFrom string `yaml:"-"`
+	// HandoffNoteFrom is COMPUTED at load (never written in YAML): the names of
+	// the preceding steps in this step's get-segment whose handoff: {note:
+	// true} this step receives. Empty when there are none — the common case.
+	//
+	// Usually one: the nearest preceding sender. It is a LIST because a
+	// concurrent block has several branches that each send, and the step after
+	// the block receives all of them (see validateHandoffNoteSegment). Ordered
+	// by declaration so a fan-in reads its branches in the order the pipeline
+	// lists them, however they actually finished.
+	//
+	// Resolving the receiver statically rather than carrying it through
+	// internal/pipeline is what makes delivery idempotent: every dispatch of
+	// this step, first entry or a to:-driven redo, re-reads whatever notes are
+	// on disk, so a redo always sees the newest ones.
+	HandoffNoteFrom []string `yaml:"-"`
 	// Context, on an agent step, opts into the run's shared key/value store:
 	// `context: write` grants a synthesized set_context tool the model calls to
 	// record a fact for the steps that come after it. Agent-only, never a hook,

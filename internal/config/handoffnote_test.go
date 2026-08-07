@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -14,6 +15,9 @@ agents:
   source: { model: openai/gpt-4o }
   tools: [read_file, write_file]
 - name: reader
+  source: { model: openai/gpt-4o }
+  tools: [read_file]
+- name: reader2
   source: { model: openai/gpt-4o }
   tools: [read_file]
 - name: blind
@@ -49,11 +53,11 @@ func TestHandoffNoteResolvesReceiver(t *testing.T) {
 	}
 
 	plan := cfg.Jobs[0].Plan
-	if got := plan[0].HandoffNoteFrom; got != "" {
+	if got := plan[0].HandoffNoteFrom; len(got) != 0 {
 		t.Errorf("sender HandoffNoteFrom = %q, want empty", got)
 	}
 
-	if got := plan[1].HandoffNoteFrom; got != "writer" {
+	if got := plan[1].HandoffNoteFrom; !slices.Equal(got, []string{"writer"}) {
 		t.Errorf("receiver HandoffNoteFrom = %q, want %q", got, "writer")
 	}
 }
@@ -73,7 +77,7 @@ func TestHandoffNoteCarriesAcrossTaskStep(t *testing.T) {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	if got := cfg.Jobs[0].Plan[2].HandoffNoteFrom; got != "writer" {
+	if got := cfg.Jobs[0].Plan[2].HandoffNoteFrom; !slices.Equal(got, []string{"writer"}) {
 		t.Errorf("HandoffNoteFrom = %q, want %q across an intervening task", got, "writer")
 	}
 }
@@ -95,11 +99,11 @@ func TestHandoffNoteChainsThroughMiddleAgent(t *testing.T) {
 	}
 
 	plan := cfg.Jobs[0].Plan
-	if got := plan[1].HandoffNoteFrom; got != "writer" {
+	if got := plan[1].HandoffNoteFrom; !slices.Equal(got, []string{"writer"}) {
 		t.Errorf("middle step HandoffNoteFrom = %q, want %q", got, "writer")
 	}
 
-	if got := plan[2].HandoffNoteFrom; got != "reader" {
+	if got := plan[2].HandoffNoteFrom; !slices.Equal(got, []string{"reader"}) {
 		t.Errorf("last step HandoffNoteFrom = %q, want %q", got, "reader")
 	}
 }
@@ -261,5 +265,118 @@ resources:
 	_, err := LoadConfig(path)
 	if err == nil || !strings.Contains(err.Error(), "reserved for handoff notes") {
 		t.Fatalf("error = %v, want it to reject a resource named %q alongside handoff_note", err, HandoffNoteDir)
+	}
+}
+
+// TestHandoffNoteFansOutAndIn is the concurrent-block wiring (#38): the note
+// pending before a block reaches EVERY branch (broadcast, safe because a note
+// is read only), and the step after the block receives every note the branches
+// sent (aggregate), in declaration order.
+func TestHandoffNoteFansOutAndIn(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := loadHandoffNote(t, `
+  - agent: writer
+    handoff: { note: true }
+  - in_parallel:
+      steps:
+      - agent: reader
+        handoff: { note: true }
+      - agent: reader2
+        handoff: { note: true }
+  - agent: reader
+`)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	branches := cfg.Jobs[0].Plan[1].InParallel.Steps
+
+	// Broadcast: both branches were handed the pre-block sender's note.
+	for i := range branches {
+		if got := branches[i].HandoffNoteFrom; !slices.Equal(got, []string{"writer"}) {
+			t.Errorf("branch %d HandoffNoteFrom = %v, want [writer]", i, got)
+		}
+	}
+
+	// Aggregate: the step after the block receives both branches, in the order
+	// the pipeline lists them — not the order they happen to finish.
+	if got := cfg.Jobs[0].Plan[2].HandoffNoteFrom; !slices.Equal(got, []string{"reader", "reader2"}) {
+		t.Errorf("fan-in HandoffNoteFrom = %v, want [reader reader2]", got)
+	}
+}
+
+// TestHandoffNoteBlockWithNoSendersIsTransparent proves a block that sends
+// nothing does not break a chain across it: the step after still receives what
+// was pending before, the same way an intervening task does.
+func TestHandoffNoteBlockWithNoSendersIsTransparent(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := loadHandoffNote(t, `
+  - agent: writer
+    handoff: { note: true }
+  - in_parallel:
+      steps:
+      - task: gate
+        inputs: []
+      - task: gate
+        inputs: []
+  - agent: reader
+`)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	if got := cfg.Jobs[0].Plan[2].HandoffNoteFrom; !slices.Equal(got, []string{"writer"}) {
+		t.Errorf("HandoffNoteFrom = %v, want [writer] across a block that sends nothing", got)
+	}
+}
+
+// TestHandoffNoteBranchSenderNeedsAReceiver proves the dead-config rule
+// reaches into blocks: a branch that sends with nothing after the block to
+// receive it is rejected, exactly as a top-level sender would be.
+func TestHandoffNoteBranchSenderNeedsAReceiver(t *testing.T) {
+	t.Parallel()
+
+	_, err := loadHandoffNote(t, `
+  - in_parallel:
+      steps:
+      - agent: reader
+        handoff: { note: true }
+      - task: gate
+        inputs: []
+  - task: gate
+    inputs: []
+`)
+	if err == nil {
+		t.Fatal("LoadConfig succeeded; a branch note nothing receives must be rejected")
+	}
+
+	if !strings.Contains(err.Error(), "no later agent step") {
+		t.Errorf("error = %v, want it to name the missing receiver", err)
+	}
+}
+
+// TestHandoffNoteBranchesMustHaveUniqueNames proves the name-is-the-address
+// rule holds inside a block: two branches running the same agent would write
+// the same handoff/<name>.md, so one note would silently overwrite the other.
+func TestHandoffNoteBranchesMustHaveUniqueNames(t *testing.T) {
+	t.Parallel()
+
+	_, err := loadHandoffNote(t, `
+  - in_parallel:
+      steps:
+      - agent: reader
+        handoff: { note: true }
+      - agent: reader
+        handoff: { note: true }
+  - agent: reader
+`)
+	if err == nil {
+		t.Fatal("LoadConfig succeeded; two branches sending under one name must be rejected")
+	}
+
+	if !strings.Contains(err.Error(), "names must be unique") {
+		t.Errorf("error = %v, want it to name the collision", err)
 	}
 }

@@ -217,7 +217,7 @@ func withHandoffNote(step config.Step, content map[string]any) map[string]any {
 		content["handoff_note"] = true
 	}
 
-	if step.HandoffNoteFrom != "" {
+	if len(step.HandoffNoteFrom) > 0 {
 		content["handoff_note_from"] = step.HandoffNoteFrom
 	}
 

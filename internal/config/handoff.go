@@ -154,10 +154,17 @@ func rejectHandoffInBranches(job Job) error {
 	return nil
 }
 
-// rejectNestedHandoff rejects handoff: on one step inside a concurrent block.
+// rejectNestedHandoff rejects the BACKWARD half of handoff: inside a
+// concurrent block. context:/tool: describe arriving via a to:/verdicts:
+// route, and a branch is not a routable position — nothing can route to it, so
+// the fields would be permanently dead.
+//
+// note: is legal here and is the fan-out/fan-in case: a branch receives what
+// was pending before the block and sends to the step after it (see
+// wireHandoffNoteBlock).
 func rejectNestedHandoff(label string, step *Step) error {
-	if step.Handoff != nil {
-		return fmt.Errorf("%s: handoff is not supported inside a concurrent block — a branch has no position in the plan for a note chain or a to: route to reach", label)
+	if step.Handoff != nil && step.Handoff.Receives() {
+		return fmt.Errorf("%s: handoff context/tool is not supported inside a concurrent block — a branch is not a routable position, so no to: route could ever reach it", label)
 	}
 
 	return nil
@@ -177,7 +184,7 @@ func rejectHandoffOnAcross(job Job) error {
 		}
 
 		if step.Unwrap().Handoff != nil {
-			return fmt.Errorf("job %q step %d: handoff is not supported on an across: step — every cell would write the same note and only the last would survive", job.Name, i)
+			return fmt.Errorf("job %q step %d: handoff is not supported on an across: step — every cell answers to the same step name, so they would all write the same note and only the last would survive", job.Name, i)
 		}
 	}
 
