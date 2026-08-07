@@ -98,6 +98,15 @@ func runIDFromContext(ctx context.Context) string {
 	return id
 }
 
+// RunIDFrom is runIDFromContext for other packages: internal/pipeline needs
+// the same identity to scope a task's recorded context to the run that
+// produced it (see the run_context table). Exported here rather than
+// re-derived there so one run has exactly one id, whichever half of the
+// context store writes it.
+func RunIDFrom(ctx context.Context) string {
+	return runIDFromContext(ctx)
+}
+
 // sanitizeLabel reduces a free-form name to characters legal in an HTTP header
 // value and bounds its length. Job and agent names are arbitrary YAML strings
 // that may contain spaces or non-ASCII; dropping to an unreserved ASCII subset

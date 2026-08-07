@@ -193,6 +193,22 @@ const ReservedContextPrefix = "internal."
 // recap, and in log lines, so it gets a ceiling.
 const MaxContextKeyLen = 128
 
+// MaxContextValueLen bounds one recorded value, whoever wrote it. A value is
+// quoted into a later model's context, so an unbounded one is a way to spend a
+// downstream step's whole window on a single fact. Shared by the set_context
+// tool boundary and the task collector so both refuse at the same size.
+const MaxContextValueLen = 8192
+
+// ContextDir is the directory in a task's working space whose files a
+// `context: write` task records. Reserved as an artifact name — an artifact so
+// called would materialize over it (see ValidateArtifactName).
+//
+// The file NAME is the key, verbatim, extension included: a task that wants
+// the key `failure_cause` writes `context/failure_cause`. Stripping an
+// extension would be the kind of quiet rule that makes `a.txt` and `a.md`
+// collide for reasons nobody can see in the pipeline.
+const ContextDir = "context"
+
 // ValidateContextKey reports whether key is one a step may write. Shared by
 // the tool boundary (internal/agent) so the rule is stated once.
 //
@@ -210,6 +226,14 @@ func ValidateContextKey(key string) error {
 
 	if strings.HasPrefix(key, ReservedContextPrefix) {
 		return fmt.Errorf("context key %q uses the reserved %q prefix", key, ReservedContextPrefix)
+	}
+
+	// "." and ".." pass the charset below but are path traversal everywhere a
+	// key is also a file name (see ContextDir). A directory listing never
+	// yields them, so this is belt and braces rather than a live hole — but the
+	// charset is the wrong place to learn that from.
+	if key == "." || key == ".." {
+		return fmt.Errorf("context key %q is a path element, not a name", key)
 	}
 
 	for _, r := range key {
@@ -277,13 +301,23 @@ func rejectContextOnHook(label string, step *Step) error {
 }
 
 // checkContextStep validates one step's context:, if it sets one.
+//
+// Both halves are legal on an agent step. A TASK may write — it records facts
+// by writing files into ContextDir, which the runner collects — but may not
+// read: fidelity: renders a recap into a conversation, and a shell command has
+// none. That asymmetry is also what keeps caching honest, since a command
+// whose text depended on a runtime fact could not be hashed at plan time.
 func checkContextStep(label string, step *Step) error {
 	if step.Context == nil {
 		return nil
 	}
 
-	if step.Agent == "" {
-		return fmt.Errorf("%s: context is only valid on agent steps", label)
+	if step.Agent == "" && step.Task == "" {
+		return fmt.Errorf("%s: context is only valid on agent and task steps", label)
+	}
+
+	if step.Agent == "" && step.Context.Fidelity != "" {
+		return fmt.Errorf("%s: context fidelity is only valid on agent steps; a task writes context but never reads it", label)
 	}
 
 	if !step.Context.Enabled() {

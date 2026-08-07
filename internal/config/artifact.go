@@ -31,6 +31,13 @@ func ValidateArtifactName(name string) error {
 		return fmt.Errorf("invalid artifact name %q: reserved for handoff notes", name)
 	}
 
+	// Reserved for the same reason: a context: write task records facts by
+	// writing files into this directory of its working space (see ContextDir),
+	// and an artifact of the same name would materialize over them.
+	if name == ContextDir {
+		return fmt.Errorf("invalid artifact name %q: reserved for recorded context", name)
+	}
+
 	return nil
 }
 

@@ -960,6 +960,14 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 		fmt.Printf("skip: %s (cached)\n", rt.Name)
 		slog.Info("job.skip", "job", jobName, "index", i, "kind", "task", "task", rt.Name, "reason", "cached", "hash", hash)
 
+		// The command did not run, so anything it recorded has to come back
+		// from what it recorded last time — otherwise a cached run reaches the
+		// agent steps with facts a fresh run would have had.
+		err = replayTaskContext(ctx, st, agent.RunIDFrom(ctx), rt.Name, hash)
+		if err != nil {
+			return "", stepChainSkipped, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
+		}
+
 		return parentHash, stepChainSkipped, nil
 	}
 
@@ -969,7 +977,7 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindTask, StepIndex: i, Resource: rt.Name, Content: content}
 
-	err = executeTask(ctx, cfg, step, rt, bw)
+	collected, err := executeTask(ctx, cfg, step, rt, bw)
 	if err != nil {
 		wrapped := fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 		recordStepFailure(ctx, st, node, jobName, wrapped)
@@ -977,7 +985,14 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 		return "", stepRan, wrapped
 	}
 
-	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", nil, nil)
+	// Recorded on the node as well as in the run context, so a later skip of
+	// this same step can replay it (see replayTaskContext).
+	err = recordTaskContext(ctx, st, agent.RunIDFrom(ctx), rt.Name, collected)
+	if err != nil {
+		return "", stepRan, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
+	}
+
+	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", taskNodeResult(collected), nil)
 	if err != nil {
 		return "", stepRan, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 	}
@@ -1029,10 +1044,14 @@ func retryWithTimeout(ctx context.Context, attempts int, timeoutStr string, mark
 // runs its command with retries and timeout, and captures its declared outputs
 // — with no merkle/store recording. Shared by runTaskStep (which records the
 // aggregate outcome) and hook execution (where the enclosing step/job records it).
-func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt config.ResolvedTask, bw workspace.BuildWorkspace) error {
+// A `context: write` task's recorded facts are collected here, before the
+// space closes — the values go to SQLite rather than to another step's
+// directory, so unlike a handoff note this works under every workspace
+// strategy.
+func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt config.ResolvedTask, bw workspace.BuildWorkspace) (map[string]string, error) {
 	space, err := bw.TaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs, rt.InputMapping, rt.OutputMapping)
 	if err != nil {
-		return fmt.Errorf("task %q: %w", rt.Name, err)
+		return nil, fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 	defer workspace.CloseSpace(space, rt.Name)
 
@@ -1043,15 +1062,24 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 		return runTaskCommand(attemptCtx, cfg, rt, space.Dir())
 	})
 	if err != nil {
-		return fmt.Errorf("task %q: %w", rt.Name, err)
+		return nil, fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 
 	err = space.Capture(ctx)
 	if err != nil {
-		return fmt.Errorf("task %q: %w", rt.Name, err)
+		return nil, fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 
-	return nil
+	if !step.WritesContext() {
+		return map[string]string{}, nil
+	}
+
+	collected, err := collectTaskContext(space.Dir())
+	if err != nil {
+		return nil, fmt.Errorf("task %q: %w", rt.Name, err)
+	}
+
+	return collected, nil
 }
 
 // recordStepFailure records a step's failed node and job_run, classifying the

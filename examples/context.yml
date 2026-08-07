@@ -1,0 +1,68 @@
+# yaml-language-server: $schema=../steps.schema.json
+# The run context store: named facts one step records and later steps read.
+#
+# Agent steps are otherwise islands — the next one starts with none of what the
+# last learned. A handoff note (see agents.yml) is a whole document addressed
+# to ONE successor; a context key is one fact addressed to all of them.
+#
+# Two ways in, because the two step kinds have different hands:
+#   - a TASK writes files into context/; the file name is the key, verbatim
+#   - an AGENT calls the synthesized set_context(key, value) tool
+#
+# One way out, and it is automatic: every agent step opens with a recap of what
+# was recorded, delivered as a synthetic read_context result. Nothing to
+# declare, no turn spent, and fidelity: decides how much of it lands.
+#
+# THIS FILE IS THE TASK HALF, so it runs with no model at all. The agent half —
+# set_context, the automatic recap, and the fidelity: opt-out — is the
+# `record-facts` job in agents.yml, which needs a live model.
+#
+# Run: steps test examples/context.yml   (no network, credentials, or model)
+assert:
+  execution:
+    - record-facts
+
+# Pipeline-wide recap detail, for the agent steps that would read this back.
+# A step's own context.fidelity wins over it. Levels, in ascending detail:
+# off, truncate, compact (the default), summary.
+defaults:
+  context:
+    fidelity: compact
+
+jobs:
+# A task records what it measured. The file NAME is the key, exactly as written
+# — `context/failure_count`, not `failure_count.txt`. Stripping extensions
+# would quietly collide a.txt with a.md for reasons nobody can see here.
+#
+# A file whose name is not a valid key, or whose contents exceed the size cap,
+# is skipped with a warning rather than failing the step: the command already
+# succeeded, and failing it afterwards over a file name would discard real work
+# for bookkeeping.
+- name: record-facts
+  plan:
+  - task: run-tests
+    inputs: []
+    context: write
+    run: |
+      mkdir -p context
+      # Whatever a command can measure, it can record: exit codes, counts,
+      # versions, the name of the thing that broke.
+      printf '3' > context/failure_count
+      printf 'expired cert in the fixture' > context/failure_cause
+
+  # A task is skippable, unlike an agent step. Run this job twice with
+  # `steps run examples/context.yml --job record-facts` and the second run
+  # prints `skip: run-tests (cached)` — the command does not execute at all.
+  # What it recorded is stashed on its node and replayed on that skip, so both
+  # runs end with the same facts on record. A cached run and a fresh run must
+  # not disagree about what is true. See docs/agents.md.
+  #
+  # (`steps test` always runs every job from scratch, so it never shows the
+  # skip — that is what makes it a test runner rather than a build.)
+  - task: show
+    inputs: []
+    run: echo "facts recorded; rerun with steps run to watch run-tests cache"
+
+  assert:
+    execution: [run-tests, show]
+    outcome: succeeded

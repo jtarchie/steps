@@ -9,6 +9,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -284,6 +285,142 @@ jobs:
   - agent: fixer
     prompt: Fix the cause.
 %[2]s`, endpoint, readerExtra)
+}
+
+// TestEndToEndTaskContextSurvivesACacheHit is the correctness claim of the
+// task-write half (#37): a task that records facts and is then SKIPPED on a
+// rerun must still yield them, or a cached run and a fresh run disagree about
+// what is true.
+//
+// The job is task-only on purpose. A chain containing an agent is never
+// skippable, so a task→agent pipeline would never exercise the skip at all —
+// the test would pass while proving nothing.
+func TestEndToEndTaskContextSurvivesACacheHit(t *testing.T) {
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "runs.log")
+	path := writePipeline(t, dir, fmt.Sprintf(`
+jobs:
+- name: test
+  plan:
+  - task: run-tests
+    inputs: []
+    context: write
+    run: |
+      echo ran >> %[1]s
+      mkdir -p context
+      printf 'expired cert' > context/failure_cause
+`, counter))
+
+	mustRun(t, path)
+
+	// The second run is where the claim lives: same content, so the task is a
+	// cache hit and its command never runs again.
+	mustRun(t, path)
+
+	assertLineCount(t, counter, 1)
+
+	byRun := storeContextByRun(t, path)
+	if len(byRun) != 2 {
+		t.Fatalf("run_context covers %d runs, want 2 — the skipped run must replay what it recorded, not skip silently (got %+v)", len(byRun), byRun)
+	}
+
+	for runID, facts := range byRun {
+		if facts["failure_cause"] != "expired cert" {
+			t.Errorf("run %s recorded %+v, want failure_cause=expired cert", runID, facts)
+		}
+	}
+}
+
+// TestEndToEndTaskContextReachesAnAgent proves the two halves meet: what a
+// shell command wrote into context/ arrives in a later agent's recap, with no
+// tool call and no file read on the agent's side.
+func TestEndToEndTaskContextReachesAnAgent(t *testing.T) {
+	dir := t.TempDir()
+	fake := newFakeLLM(t, says("Fixed."))
+	path := writePipeline(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: fixer
+  source:
+    endpoint: %[1]s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools:
+  - builtin: read_file
+
+jobs:
+- name: test
+  plan:
+  - task: run-tests
+    inputs: []
+    context: write
+    run: |
+      mkdir -p context
+      printf 'expired cert in the e2e suite' > context/failure_cause
+  - agent: fixer
+    prompt: Fix the cause.
+`, fake.URL))
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	mustRun(t, path)
+
+	results := fake.request(1).toolResults()
+	if len(results) != 1 {
+		t.Fatalf("agent's opening request carried %d tool results, want 1 (the recap); got %v", len(results), results)
+	}
+
+	if !strings.Contains(results[0], "expired cert in the e2e suite") {
+		t.Errorf("recap = %q, want the fact the task wrote", results[0])
+	}
+
+	// Attribution names the task, so the agent can tell a machine-measured
+	// fact from a model-authored one.
+	if !strings.Contains(results[0], "run-tests") {
+		t.Errorf("recap = %q, want the writing task named", results[0])
+	}
+}
+
+// storeContextByRun returns every recorded fact grouped by the run that
+// recorded it — the shape that makes "did the cached run replay?" a direct
+// question.
+func storeContextByRun(t *testing.T, pipelinePath string) map[string]map[string]string {
+	t.Helper()
+
+	db := openStateDB(t, pipelinePath)
+
+	rows, err := db.QueryContext(t.Context(), `SELECT run_id, key, value FROM run_context ORDER BY run_id, key`)
+	if err != nil {
+		t.Fatalf("query run_context: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	byRun := map[string]map[string]string{}
+
+	for rows.Next() {
+		var runID, key, value string
+
+		err = rows.Scan(&runID, &key, &value)
+		if err != nil {
+			t.Fatalf("scan run_context: %v", err)
+		}
+
+		if byRun[runID] == nil {
+			byRun[runID] = map[string]string{}
+		}
+
+		byRun[runID][key] = value
+	}
+
+	err = rows.Err()
+	if err != nil {
+		t.Fatalf("read run_context: %v", err)
+	}
+
+	return byRun
 }
 
 // contextRow is one run_context row, read back for assertions.

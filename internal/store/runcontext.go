@@ -5,6 +5,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -39,6 +42,40 @@ func (s *Store) SetContext(ctx context.Context, runID, key, value, writtenBy str
 	}
 
 	return nil
+}
+
+// NodeResult returns what a node recorded alongside its outcome, or nil when
+// the node is unknown or recorded nothing.
+//
+// It exists for cache replay: a skipped step never runs, so whatever it
+// recorded the first time has to come back from here or the run would disagree
+// with an identical one that executed. Missing is not an error — most nodes
+// record no result at all.
+func (s *Store) NodeResult(ctx context.Context, hash string) (map[string]any, error) {
+	var raw sql.NullString
+
+	err := s.db.QueryRowContext(ctx, `SELECT result FROM nodes WHERE hash = ?`, hash).Scan(&raw)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil //nolint:nilnil // an unknown node is a legitimate "nothing recorded", not a failure
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("could not read the result of node %q: %w", hash, err)
+	}
+
+	if !raw.Valid || raw.String == "" {
+		return nil, nil //nolint:nilnil // a node that recorded no result is the common case
+	}
+
+	var result map[string]any
+
+	err = json.Unmarshal([]byte(raw.String), &result)
+	if err != nil {
+		return nil, fmt.Errorf("could not decode the result of node %q: %w", hash, err)
+	}
+
+	return result, nil
 }
 
 // RunContext returns every fact recorded for a run, ordered by key.

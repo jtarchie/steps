@@ -69,7 +69,29 @@ func TestContextValidationErrors(t *testing.T) {
 		want     string
 	}{
 		{
-			name: "context on a task step",
+			name: "context on a put step",
+			pipeline: `
+resource_types:
+- name: dummy
+  config:
+    check: "echo '[]'"
+    in: "true"
+    out: "true"
+resources:
+- name: results
+  type: dummy
+  source: {}
+jobs:
+- name: j
+  plan:
+  - put: results
+    inputs: []
+    context: write
+`,
+			want: "context is only valid on agent and task steps",
+		},
+		{
+			name: "fidelity on a task step",
 			pipeline: `
 jobs:
 - name: j
@@ -77,9 +99,9 @@ jobs:
   - task: a
     inputs: []
     run: "true"
-    context: write
+    context: { write: true, fidelity: summary }
 `,
-			want: "context is only valid on agent steps",
+			want: "context fidelity is only valid on agent steps",
 		},
 		{
 			name: "context enables nothing",

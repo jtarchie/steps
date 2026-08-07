@@ -335,8 +335,32 @@ Facts are captured through a real tool rather than parsed out of the model's fin
 - keys outside `[A-Za-z0-9_-.]` or longer than 128 characters, since a key is an identifier a later step reads back by name and whitespace would make one that renders one way and matches another;
 - values over 8 KiB — a value is quoted into a later model's context, so an unbounded one spends a downstream step's whole window on a single fact.
 
+### Tasks write context too
+
+A shell command cannot call a tool, so a `context: write` **task** records facts by writing files into a `context/` directory in its working space. The file name is the key, verbatim:
+
+```yaml
+- task: run-tests
+  inputs: [repo]
+  context: write
+  run: |
+    go test ./... > out.txt 2>&1 || true
+    mkdir -p context
+    grep -c FAIL out.txt > context/failure_count
+    printf 'expired cert' > context/failure_cause
+```
+
+The name is used exactly as written — extension included — so a task that wants the key `failure_cause` writes `context/failure_cause`, not `failure_cause.txt`. Stripping extensions would be a quiet rule that makes `a.txt` and `a.md` collide for reasons nobody can see in the pipeline.
+
+A file whose name is not a valid key, or whose contents exceed the value cap, is **skipped with a warning** rather than failing the step: the command already ran and succeeded, and failing it afterwards over the shape of a file name would discard real work for bookkeeping. Nested directories are skipped for the same reason — keys are flat.
+
+`context` is a reserved artifact name, like `handoff`.
+
+**Cache replay.** Tasks are skippable, unlike agent steps — so a task that recorded facts and is later a cache hit would leave a rerun with none of them, and a cached run would disagree with a fresh one about what is true. The recorded facts are therefore stashed on the task's node alongside its outcome, and **replayed when the step is skipped**. Unlike a handoff note, this works under every workspace strategy: the values go to SQLite, not into another step's directory.
+
 **Limits, enforced at load time:**
-- Agent steps only. A task records facts by writing files, not by calling a model tool.
+- Agent and task steps only — a put hands an artifact to a resource and has nothing of its own to say.
+- `fidelity:` is agent-only: it renders a recap into a conversation, and a shell command has none.
 - Never on a hook step: a hook runs outside the plan's ordering, so what it stored — and whether the steps reading it had already run — would depend on when it happened to fire.
 - **Not yet supported inside `in_parallel:`/`race:` or on an `across:` step.** Concurrent branches each work from their own copy, so branch writes have to surface at the *join* rather than merge into the shared store — two branches writing one key would resolve to whichever finished last, the hazard `validateParallelOutputs` already refuses for artifact names. The join half does not exist yet, so this is a load error rather than a silently discarded write.
 
