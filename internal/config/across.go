@@ -247,6 +247,11 @@ func renderCell(label string, cell *Step, vars map[string]string) error {
 		return nil
 	}
 
+	// Captured BEFORE rendering: whether the author distinguished the cells
+	// themselves is a question about the template they wrote, not about the
+	// text it happened to produce (see nameCell).
+	templateName := stepName(*cell)
+
 	fields := []struct {
 		name  string
 		value *string
@@ -269,26 +274,37 @@ func renderCell(label string, cell *Step, vars map[string]string) error {
 		*field.value = rendered
 	}
 
-	// A cell that renders to the same name as its siblings is unroutable and
-	// unreadable in a log, so name it by its coordinates when the author did
-	// not do it themselves.
-	if cell.Task != "" && !strings.Contains(cell.Task, "{{") && len(vars) > 0 && cellNameIsShared(cell, vars) {
-		cell.Task += " [" + coordinates(vars) + "]"
-	}
+	nameCell(cell, templateName, vars)
 
 	return nil
 }
 
-// cellNameIsShared reports whether the step's name would be identical across
-// cells — true whenever the author interpolated no variable into it.
-func cellNameIsShared(cell *Step, vars map[string]string) bool {
-	for _, value := range vars {
-		if strings.Contains(cell.Task, value) {
-			return false
-		}
+// nameCell gives a cell an identity distinct from its siblings.
+//
+// The coordinates land on Label, NOT on the task:/agent:/put: field they used
+// to be appended to. Those fields are lookup keys — FindTask, FindAgent, the
+// resource — so renaming them renamed the thing being looked up: a matrix over
+// a shared tasks: entry failed with `no task named "shared [shard=b]"`, and an
+// agent cell could not be renamed at all, leaving every agent cell of a matrix
+// answering to one name.
+//
+// An author who interpolated a variable into the name themselves has already
+// made the cells distinct, so nothing is added — their name is the identity,
+// and a coordinate suffix on top would be noise.
+//
+// templateName is the name BEFORE substitution, and asking it rather than the
+// rendered name is the whole point. The old check looked for a cell's value as
+// a substring of its rendered name, which is a coincidence detector: a matrix
+// over `values: [a, b]` on a task named "shared" found the "a" in "shared" and
+// concluded the author had distinguished that cell, so one cell was named
+// "shared" and its sibling "shared [shard=b]". Whether the author interpolated
+// anything is a fact about the template, and the template can simply be asked.
+func nameCell(cell *Step, templateName string, vars map[string]string) {
+	if len(vars) == 0 || templateName == "" || strings.Contains(templateName, "{{") {
+		return
 	}
 
-	return true
+	cell.Label = stepName(*cell) + " [" + coordinates(vars) + "]"
 }
 
 // coordinates renders a cell's variables in declaration-independent, stable

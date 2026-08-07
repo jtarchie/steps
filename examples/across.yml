@@ -18,6 +18,7 @@ assert:
     - matrix
     - named-cells
     - runtime-cells
+    - shared-task-cells
 
 jobs:
 # Two axes, four cells. `{{ .vars.<name> }}` substitutes into the command, the
@@ -93,3 +94,23 @@ jobs:
   assert:
     execution: [scan, investigate-alpha, investigate-beta]
     outcome: succeeded
+
+# ─── a matrix over a REUSABLE task ──────────────────────────────────────────
+# The cell references a tasks: entry by name instead of carrying its own run:.
+# That used to be broken: the coordinates were appended to the very field the
+# lookup keys on, so the cell died with `no task named "lint [pkg=agent]"`.
+# The coordinates now live on the cell's identity, leaving the lookup alone.
+- name: shared-task-cells
+  plan:
+  - across:
+    - var: pkg
+      values: [agent, pipeline]
+    task: lint
+    inputs: []
+  assert:
+    execution: ["lint [pkg=agent]", "lint [pkg=pipeline]"]
+    outcome: succeeded
+
+tasks:
+- name: lint
+  run: echo "linting"

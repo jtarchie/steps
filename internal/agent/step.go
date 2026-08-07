@@ -453,9 +453,14 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 
 	slog.Debug("job.step", "job", jobName, "index", i, "kind", "agent", "agent", step.Agent)
 
-	fmt.Printf("agent: %s%s\n", step.Agent, fallbackBanner(prepared))
+	// The name this step is KNOWN by: an across: cell reports and records under
+	// its labelled identity rather than the agent it resolves through, so two
+	// cells of one matrix are finally tellable apart in a run.
+	name := step.DisplayName()
 
-	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindAgent, StepIndex: i, Resource: prepared.primary.AgentName, Content: content}
+	fmt.Printf("agent: %s%s\n", name, fallbackBanner(prepared))
+
+	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindAgent, StepIndex: i, Resource: name, Content: content}
 
 	res, err := runPrepared(ctx, prepared)
 	res.model = fallbackModel(prepared)

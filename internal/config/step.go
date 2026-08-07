@@ -209,6 +209,22 @@ type Step struct {
 	// this step, first entry or a to:-driven redo, re-reads whatever notes are
 	// on disk, so a redo always sees the newest ones.
 	HandoffNoteFrom []string `yaml:"-"`
+	// Label is COMPUTED at expansion (never written in YAML): the name this
+	// step is KNOWN BY, when that differs from the name it is RESOLVED by.
+	//
+	// task:/agent:/put: each do two jobs — they identify the step (routing
+	// target, handoff note address, recorded node, assert.execution) and they
+	// look something up (FindTask, FindAgent, the resource). An across: matrix
+	// needs its cells to be distinguishable, so it used to append coordinates
+	// to the very field the lookup keys on: a cell over a shared tasks: entry
+	// then failed with `no task named "shared [shard=b]"`, and an agent cell
+	// could not be renamed at all, since FindAgent has no inline escape the way
+	// ResolveTask does. So every agent cell of a matrix answered to one name,
+	// which is why handoff: and context: are still rejected there.
+	//
+	// Label carries the identity half, leaving the lookup half alone. Empty on
+	// an ordinary step, where the two names are the same thing — see stepName.
+	Label string `yaml:"-"`
 	// Context, on an agent step, opts into the run's shared key/value store:
 	// `context: write` grants a synthesized set_context tool the model calls to
 	// record a fact for the steps that come after it. Agent-only, never a hook,

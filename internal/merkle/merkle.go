@@ -177,6 +177,23 @@ func withRouting(step config.Step, content map[string]any) map[string]any {
 		content["verdicts"] = step.Verdicts // order-significant: it is the emitted enum
 	}
 
+	// A computed Label is the name the step is known by (see config.Step.Label),
+	// and it belongs to identity for a concrete reason: a matrix whose author
+	// interpolated nothing produces cells that differ ONLY by their
+	// coordinates. Those coordinates used to sit in the task: field and entered
+	// the hash through it; now they sit here. Leave them out and every such
+	// cell collapses onto one hash — the matrix runs once and reports itself
+	// cached for the rest.
+	//
+	// Folded in withRouting rather than at a single call site because the
+	// runners hash through the leaf builders directly (TaskNodeContent,
+	// AgentContentMap, PutNodeContent) while cache lookups go through
+	// stepContentMap. Both paths pass through here, and a label present on one
+	// but not the other is a cell that can never match its own recorded node.
+	if step.Label != "" {
+		content["label"] = step.Label
+	}
+
 	return content
 }
 

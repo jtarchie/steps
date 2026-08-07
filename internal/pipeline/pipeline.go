@@ -973,9 +973,14 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 
 	slog.Debug("job.step", "job", jobName, "index", i, "kind", "task", "task", rt.Name, "run", rt.Run)
 
-	fmt.Printf("task: %s\n", rt.Name)
+	// The name the step is KNOWN by, which for an across: cell is its labelled
+	// identity rather than the task it resolves through — so the run line, the
+	// recorded node, and the skip line on the next run all say the same thing.
+	name := executedStepName(step)
 
-	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindTask, StepIndex: i, Resource: rt.Name, Content: content}
+	fmt.Printf("task: %s\n", name)
+
+	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindTask, StepIndex: i, Resource: name, Content: content}
 
 	collected, err := executeTask(ctx, cfg, step, rt, bw)
 	if err != nil {
@@ -1056,8 +1061,8 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 	defer workspace.CloseSpace(space, rt.Name)
 
 	err = retryWithTimeout(ctx, step.Attempts, rt.Timeout, func(attempt, total int) {
-		fmt.Printf("task: %s (attempt %d/%d)\n", rt.Name, attempt, total)
-		slog.Info("job.task.attempt", "task", rt.Name, "attempt", attempt, "total_attempts", total)
+		fmt.Printf("task: %s (attempt %d/%d)\n", executedStepName(step), attempt, total)
+		slog.Info("job.task.attempt", "task", executedStepName(step), "attempt", attempt, "total_attempts", total)
 	}, func(attemptCtx context.Context) error {
 		return runTaskCommand(attemptCtx, cfg, rt, space.Dir())
 	})

@@ -170,6 +170,13 @@ func logIfHookFailed(scope hookScope, name string, err error) {
 // recorded into the execution log for a job's assert.execution. get steps
 // record their resource name separately (see runTriggeredBuild).
 func executedStepName(step config.Step) string {
+	// Mirrors config.stepName: a computed Label is the step's identity when it
+	// has one, so a matrix cell is reported and recorded under the name it is
+	// known by rather than the one it resolves through.
+	if step.Label != "" {
+		return step.Label
+	}
+
 	kind, ok := step.Kind()
 	if !ok {
 		return ""

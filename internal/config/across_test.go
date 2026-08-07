@@ -127,3 +127,130 @@ func TestExpandAcrossValuesRefusesAnUnresolvedAxis(t *testing.T) {
 		t.Fatalf("error = %v, want it to name the unresolved axis", err)
 	}
 }
+
+// TestAcrossCellOverSharedTaskResolves is the regression: a matrix cell that
+// references a reusable tasks: entry by name.
+//
+// The coordinates used to be appended to cell.Task, which is the field
+// ResolveTask looks the shared task up by, so every such matrix died with
+// `no task named "shared [shard=b]"`. Inline run: cells never hit it, because
+// ResolveTask short-circuits on run: before the lookup — which is exactly why
+// this went unnoticed.
+func TestAcrossCellOverSharedTaskResolves(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+tasks:
+- name: shared
+  run: "true"
+jobs:
+- name: j
+  plan:
+  - across:
+    - var: shard
+      values: [a, b]
+    task: shared
+    inputs: []
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	cells, err := ExpandAcross("job \"j\" step 0", cfg.Jobs[0].Plan[0])
+	if err != nil {
+		t.Fatalf("ExpandAcross: %v", err)
+	}
+
+	for i, cell := range cells {
+		// The lookup key is untouched...
+		if cell.Task != "shared" {
+			t.Errorf("cell %d task = %q, want %q — the lookup key must not carry coordinates", i, cell.Task, "shared")
+		}
+
+		// ...and resolution therefore succeeds, which is the bug.
+		_, err := cfg.ResolveTask(cell)
+		if err != nil {
+			t.Errorf("cell %d: ResolveTask: %v", i, err)
+		}
+	}
+
+	// ...while the identities are still distinct.
+	if a, b := cells[0].DisplayName(), cells[1].DisplayName(); a == b {
+		t.Errorf("both cells are named %q; a matrix's cells must be tellable apart", a)
+	}
+}
+
+// TestAcrossAgentCellsGetDistinctNames is what the split unblocks: an agent
+// cell can finally be named, because the name no longer has to double as the
+// FindAgent key. Every agent cell of a matrix used to answer to one name,
+// which is why handoff: and context: are rejected on across: steps.
+func TestAcrossAgentCellsGetDistinctNames(t *testing.T) {
+	t.Parallel()
+
+	cells, err := ExpandAcross("job \"j\" step 0", Step{
+		Across: []AcrossVar{{Var: "shard", Values: []string{"a", "b"}}},
+		Agent:  "reviewer",
+		Prompt: "review it",
+	})
+	if err != nil {
+		t.Fatalf("ExpandAcross: %v", err)
+	}
+
+	for i, want := range []string{"reviewer [shard=a]", "reviewer [shard=b]"} {
+		if got := cells[i].DisplayName(); got != want {
+			t.Errorf("cell %d name = %q, want %q", i, got, want)
+		}
+
+		// The agent to invoke is untouched, or FindAgent would fail.
+		if cells[i].Agent != "reviewer" {
+			t.Errorf("cell %d agent = %q, want reviewer", i, cells[i].Agent)
+		}
+	}
+}
+
+// TestAcrossAuthorNamedCellsAreLeftAlone proves the naming defers to an author
+// who distinguished the cells themselves, and that it decides that from the
+// TEMPLATE rather than from the rendered text.
+//
+// The old check looked for a value as a substring of the rendered name, which
+// is a coincidence detector: values [a, b] over a task named "shared" found
+// the "a" in "shared" and left that cell unsuffixed while its sibling got one.
+func TestAcrossAuthorNamedCellsAreLeftAlone(t *testing.T) {
+	t.Parallel()
+
+	cells, err := ExpandAcross("job \"j\" step 0", Step{
+		Across: []AcrossVar{{Var: "shard", Values: []string{"a", "b"}}},
+		Task:   "check-{{ .vars.shard }}",
+		Run:    "true",
+	})
+	if err != nil {
+		t.Fatalf("ExpandAcross: %v", err)
+	}
+
+	for i, want := range []string{"check-a", "check-b"} {
+		if got := cells[i].DisplayName(); got != want {
+			t.Errorf("cell %d name = %q, want %q (an author-named cell gets no suffix)", i, got, want)
+		}
+
+		if cells[i].Label != "" {
+			t.Errorf("cell %d label = %q, want none", i, cells[i].Label)
+		}
+	}
+}
+
+// TestOrdinaryStepHasNoLabel pins the value-gating: a step outside a matrix
+// carries no Label, so it hashes exactly as it did before the field existed.
+func TestOrdinaryStepHasNoLabel(t *testing.T) {
+	t.Parallel()
+
+	step := Step{Task: "build", Run: "true"}
+	if step.Label != "" {
+		t.Errorf("Label = %q, want empty on an ordinary step", step.Label)
+	}
+
+	if got := step.DisplayName(); got != "build" {
+		t.Errorf("DisplayName() = %q, want the task name", got)
+	}
+}

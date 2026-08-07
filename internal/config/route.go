@@ -15,10 +15,26 @@ import (
 //nolint:gochecknoglobals // static, read-only lookup table
 var reservedRouteKeys = map[string]bool{"success": true, "failure": true}
 
+// DisplayName is stepName for other packages: the name a step is KNOWN by,
+// which is what a run's output, its recorded node, and assert.execution should
+// all agree on. Distinct from the task:/agent:/put: value once an across: cell
+// has been named (see Step.Label), and identical to it otherwise.
+func (s Step) DisplayName() string {
+	return stepName(s)
+}
+
 // stepName is the name a step is referenced by as a to: jump target: whichever
 // of task/put/agent is set. Duplicated (not shared with internal/pipeline's
 // executedStepName) because internal/config depends on nothing internal.
 func stepName(step Step) string {
+	// A computed Label is the step's identity when it has one — see Step.Label.
+	// It wins over the kind fields below precisely because those are also
+	// lookup keys, and an across: cell renames itself without renaming what it
+	// resolves.
+	if step.Label != "" {
+		return step.Label
+	}
+
 	kind, ok := step.Kind()
 	if !ok {
 		return ""
