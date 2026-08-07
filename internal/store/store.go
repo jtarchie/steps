@@ -90,6 +90,22 @@ CREATE TABLE IF NOT EXISTS run_steps (
     PRIMARY KEY (run_id, step_index)
 );
 
+-- The run-scoped key/value store an agent step writes with set_context. Keyed
+-- by run so two runs of one job — including two concurrent ones under
+-- steps watch — never read each other's facts.
+--
+-- Last write wins on a key, which is why written_by and written_at are kept:
+-- the row says who overwrote what, so a run's record answers "where did this
+-- value come from" without replaying the transcript.
+CREATE TABLE IF NOT EXISTS run_context (
+    run_id     TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    written_by TEXT NOT NULL,
+    written_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, key)
+);
+
 -- Human decisions on approval: steps. The row IS the audit trail; it must not
 -- depend on external chat history.
 CREATE TABLE IF NOT EXISTS approvals (

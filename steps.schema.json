@@ -707,6 +707,9 @@
         "handoff": {
           "$ref": "#/$defs/handoffSpec"
         },
+        "context": {
+          "$ref": "#/$defs/contextSpec"
+        },
         "timeout": {
           "type": "string",
           "description": "Go duration, per attempt."
@@ -917,6 +920,25 @@
           "properties": {
             "run": {
               "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "contextSpec": {
+      "description": "What this agent step does with the run's shared key/value store. Reading is automatic; writing is opt-in.",
+      "oneOf": [
+        {
+          "const": "write",
+          "description": "Shorthand for { write: true }."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "write": {
+              "type": "boolean",
+              "description": "Grant the set_context tool, which records a fact for later steps."
             }
           }
         }

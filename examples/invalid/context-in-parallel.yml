@@ -1,0 +1,23 @@
+# Concurrent branches each work from their own copy of the run context, so a
+# branch's writes have to surface at the join rather than merge into the shared
+# store — two branches writing one key would resolve to whichever finished
+# last. The join does not exist yet, so the write would be silently discarded.
+# expect: context is not supported inside a concurrent block
+
+agents:
+- name: writer
+  source:
+    endpoint: "http://localhost:0"
+    model: fake
+
+jobs:
+- name: build
+  plan:
+  - in_parallel:
+      steps:
+      - agent: writer
+        prompt: investigate
+        context: write
+      - task: work
+        inputs: []
+        run: "true"

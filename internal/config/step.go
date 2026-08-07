@@ -203,6 +203,11 @@ type Step struct {
 	// entry or a to:-driven redo, re-reads whatever note is on disk, so a
 	// redo always sees the newest one.
 	HandoffNoteFrom string `yaml:"-"`
+	// Context, on an agent step, opts into the run's shared key/value store:
+	// `context: write` grants a synthesized set_context tool the model calls to
+	// record a fact for the steps that come after it. Agent-only, never a hook,
+	// and not yet valid inside a concurrent block — see validateContextSteps.
+	Context *ContextSpec `yaml:"context,omitempty"`
 	// InputMapping/OutputMapping rename a task step's declared inputs/outputs
 	// onto plan-artifact names, mirroring Concourse's input_mapping/
 	// output_mapping (see docs/conformance.md;

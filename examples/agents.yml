@@ -235,6 +235,24 @@ jobs:
         go vet failed (output below). Code is under ./repo. Fix with minimal
         edits, then re-run the `vet` tool. Do not silence vet with //nolint.
 
+# ─── run context store (needs a model) ──────────────────────────────────────
+# context: write grants a set_context(key, value) tool. The investigator
+# records named facts while it still holds the context; every later step in the
+# run can read them back. A handoff note is a whole document addressed to the
+# NEXT agent; a context key is one fact addressed to all of them.
+#
+# The tool is never required — the agent is offered somewhere to put a
+# conclusion, not made to produce one. Writing a key twice replaces it.
+- name: record-facts
+  plan:
+  - get: notes
+  - agent: lead
+    dir: notes
+    context: write
+    prompt: |
+      Read NOTES.txt. Record what it is about with set_context under the key
+      `subject`, then reply with one sentence describing the file.
+
 # ─── sub-agent delegation (needs a local model; otherwise offline) ───────────
 - name: delegate
   plan:

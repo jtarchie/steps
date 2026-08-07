@@ -221,6 +221,25 @@ func withHandoffNote(step config.Step, content map[string]any) map[string]any {
 		content["handoff_note_from"] = step.HandoffNoteFrom
 	}
 
+	return withContext(step, content)
+}
+
+// withContext folds a step's context: declaration into content, but only when
+// set — so a step without one hashes byte-identically to before this field
+// existed (the same value-gating as withHandoff).
+//
+// The declaration is identity because it changes the step's tool grant: a
+// context: write step is offered set_context and a plain one is not, and two
+// steps that differ only in what tools they hold are not the same step. What
+// the step actually STORED is excluded, for the reason the handoff note's
+// content is: it cannot be known at plan time, and agent steps are
+// unconditionally Unskippable (see planNonGetNode), so a run always re-executes
+// and re-records rather than replaying a stale write.
+func withContext(step config.Step, content map[string]any) map[string]any {
+	if step.Context != nil {
+		content["context"] = map[string]any{"write": step.Context.Write}
+	}
+
 	return content
 }
 

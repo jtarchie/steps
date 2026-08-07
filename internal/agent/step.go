@@ -142,7 +142,7 @@ func (p preparedAgentStep) close(stepLabel string) {
 // (see Handoff) to seed the conversation with when step.Handoff enables it —
 // nil on a step's first/unrouted execution, or when the caller (RunHook)
 // never participates in routing at all.
-func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace, handoff *Handoff) (preparedAgentStep, error) {
+func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace, handoff *Handoff, write contextWriter) (preparedAgentStep, error) {
 	primary, ri, err := resolveWithFailover(cfg, step)
 	if err != nil {
 		return preparedAgentStep{}, err
@@ -180,7 +180,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	required := requiredToolNames(ri.ToolSpecs)
 
-	verdictTool, err := injectSynthesizedTools(step, handoff, decls, registry, required)
+	verdictTool, err := injectSynthesizedTools(step, handoff, write, decls, registry, required)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 		closeAll(closers)
@@ -419,7 +419,7 @@ func printAgentResponse(res conversationResult) {
 // on the returned StepOutcome.Verdict and threads StepOutcome.Previous/Note
 // into the next step's Handoff when this step itself routes somewhere.
 func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, parentHash string, handoff *Handoff) (StepOutcome, error) {
-	prepared, err := prepareAgentStep(ctx, cfg, step, bw, handoff)
+	prepared, err := prepareAgentStep(ctx, cfg, step, bw, handoff, contextWriterFor(st, runIDFromContext(ctx), step.Agent))
 	if err != nil {
 		return StepOutcome{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
@@ -782,7 +782,9 @@ func runOneConversation(
 // is already outcome-marked where appropriate (see runAgentConversation), so
 // the caller's hook classification works unchanged.
 func RunHook(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) error {
-	prepared, err := prepareAgentStep(ctx, cfg, step, bw, nil)
+	// nil writer: a hook cannot declare context: (validateContextSteps rejects
+	// it), so there is never a set_context tool to serve here.
+	prepared, err := prepareAgentStep(ctx, cfg, step, bw, nil, nil)
 	if err != nil {
 		return fmt.Errorf("agent %q: %w", step.Agent, err)
 	}

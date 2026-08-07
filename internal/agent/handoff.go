@@ -136,8 +136,15 @@ func promptWithHandoff(prompt string, spec *config.HandoffSpec, handoff *Handoff
 // cyclomatic complexity down — both injections share the same
 // close-on-error handling at the call site. Returns the verdict tool's name
 // (see injectVerdictTool), "" when the step declares no verdicts.
-func injectSynthesizedTools(step config.Step, handoff *Handoff, decls *genai.Tool, registry map[string]toolImpl, required map[string]bool) (string, error) {
+// write is the seam onto the run context store — nil when there is nowhere to
+// record (see contextWriterFor), which leaves set_context unoffered.
+func injectSynthesizedTools(step config.Step, handoff *Handoff, write contextWriter, decls *genai.Tool, registry map[string]toolImpl, required map[string]bool) (string, error) {
 	verdictTool, err := injectVerdictTool(step.Verdicts, decls, registry, required)
+	if err != nil {
+		return "", err
+	}
+
+	err = injectSetContextTool(step, write, decls, registry)
 	if err != nil {
 		return "", err
 	}

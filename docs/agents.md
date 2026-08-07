@@ -309,6 +309,41 @@ The receiver is expected to treat the authored part as claims — the built-in `
 
 **Relation to `handoff:`**: `handoff:` carries context *backward* along a `to:`/`verdicts:` route (a rejected step learning why, via `previous_run`). `handoff: { note: true }` carries it *forward* along the normal path. They compose — the self-build coder uses both.
 
+## The run context store (`context: write`)
+
+A handoff note is a whole document addressed to one specific successor. The run context store is the other shape: individual named facts, recorded once and readable by every later step in the run.
+
+```yaml
+- agent: investigator
+  prompt: Investigate why the nightly build failed.
+  context: write            # scalar shorthand
+- agent: fixer
+  prompt: Fix the cause.
+  context: { write: true }  # mapping form, same thing
+```
+
+`context: write` grants a synthesized **`set_context(key, value)`** tool. The model calls it to record a conclusion:
+
+```json
+set_context({ "key": "failure_cause", "value": "flaky DNS in the e2e suite" })
+```
+
+Facts are captured through a real tool rather than parsed out of the model's final answer, for the same reason `verdict` and `write_handoff` are: free-text parsing fails silently the moment a model formats its reply differently, and a silently-lost fact is indistinguishable from one the model never learned. Unlike those two, `set_context` is **never required** — the step is offered somewhere to put a fact, not made to produce one. Writing the same key again replaces the previous value; the store answers "what is true now", and the trajectory already records every call that got it there.
+
+**At the tool boundary**, a call is refused — as data the model can react to, never as a step failure:
+- keys under the reserved `internal.` prefix, so a model cannot overwrite engine bookkeeping by guessing a name;
+- keys outside `[A-Za-z0-9_-.]` or longer than 128 characters, since a key is an identifier a later step reads back by name and whitespace would make one that renders one way and matches another;
+- values over 8 KiB — a value is quoted into a later model's context, so an unbounded one spends a downstream step's whole window on a single fact.
+
+**Limits, enforced at load time:**
+- Agent steps only. A task records facts by writing files, not by calling a model tool.
+- Never on a hook step: a hook runs outside the plan's ordering, so what it stored — and whether the steps reading it had already run — would depend on when it happened to fire.
+- **Not yet supported inside `in_parallel:`/`race:` or on an `across:` step.** Concurrent branches each work from their own copy, so branch writes have to surface at the *join* rather than merge into the shared store — two branches writing one key would resolve to whichever finished last, the hazard `validateParallelOutputs` already refuses for artifact names. The join half does not exist yet, so this is a load error rather than a silently discarded write.
+
+**Scope**: the store is keyed by run, so two runs of one job — including two concurrent ones under `steps watch` — never read each other's facts. Rows carry `written_by`, so the record answers "who recorded this" without replaying a transcript.
+
+**Caching**: the `context: write` declaration enters the step's hashed content (it changes the tool grant, and two steps differing in tools are not the same step). What a step *stored* does not — it cannot be known at plan time, and agent steps are unconditionally unskippable, so a run always re-executes and re-records rather than replaying a stale write.
+
 ## What's not on this page
 
 The mechanics underneath an agent step — malformed tool-call repair, loop
