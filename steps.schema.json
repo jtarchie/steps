@@ -80,6 +80,17 @@
               "description": "How long a verified target stays trusted, e.g. 5m. Keeps steps watch from probing every poll. Default 5m."
             }
           }
+        },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Pipeline-wide run-context settings.",
+          "properties": {
+            "fidelity": {
+              "enum": ["off", "truncate", "compact", "summary"],
+              "description": "Default recap detail for every agent step. A step's own context.fidelity wins. Default compact."
+            }
+          }
         }
       }
     },
@@ -939,6 +950,10 @@
             "write": {
               "type": "boolean",
               "description": "Grant the set_context tool, which records a fact for later steps."
+            },
+            "fidelity": {
+              "enum": ["off", "truncate", "compact", "summary"],
+              "description": "How much of the recorded context this step is shown. Defaults to compact; off opts out entirely."
             }
           }
         }

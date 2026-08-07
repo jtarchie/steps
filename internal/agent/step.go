@@ -142,7 +142,12 @@ func (p preparedAgentStep) close(stepLabel string) {
 // (see Handoff) to seed the conversation with when step.Handoff enables it —
 // nil on a step's first/unrouted execution, or when the caller (RunHook)
 // never participates in routing at all.
-func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace, handoff *Handoff, write contextWriter) (preparedAgentStep, error) {
+// st is the run-context seam: both halves of the context store are derived
+// from it here (the set_context writer and the recap read back), so callers
+// pass one thing and a nil store simply means "no context store on this path".
+func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace, handoff *Handoff, st *store.Store) (preparedAgentStep, error) {
+	runID := runIDFromContext(ctx)
+
 	primary, ri, err := resolveWithFailover(cfg, step)
 	if err != nil {
 		return preparedAgentStep{}, err
@@ -180,7 +185,8 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	required := requiredToolNames(ri.ToolSpecs)
 
-	verdictTool, err := injectSynthesizedTools(step, handoff, write, decls, registry, required)
+	synthesized, err := injectSynthesizedTools(ctx, cfg, step,
+		synthesisInputs{handoff: handoff, store: st, runID: runID}, decls, registry, required)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 		closeAll(closers)
@@ -220,6 +226,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		system:        buildSystemMessage(ri.Persona, dir),
 		prompt:        promptWithHandoff(step.Prompt, step.Handoff, handoff, spillDir),
 		contextBlocks: contextBlocks,
+		recap:         synthesized.recap,
 		env:           toolEnv{dir: dir, runner: runner, spillDir: spillDir},
 		tools:         agentTools{decls: decls, registry: registry, required: required, maxCalls: maxCallsByName(ri.ToolSpecs)},
 		params: agentGenParams{
@@ -230,7 +237,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		},
 		maxTurns:             ri.MaxTurns,
 		toolChoiceStringOnly: ri.StringOnlyToolChoice,
-		verdictTool:          verdictTool,
+		verdictTool:          synthesized.verdictTool,
 		compactAfterTokens:   ri.CompactAfterTokens,
 		usage:                &stepUsage{name: ri.AgentName, budget: ri.BudgetTokens},
 	}
@@ -419,7 +426,7 @@ func printAgentResponse(res conversationResult) {
 // on the returned StepOutcome.Verdict and threads StepOutcome.Previous/Note
 // into the next step's Handoff when this step itself routes somewhere.
 func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, parentHash string, handoff *Handoff) (StepOutcome, error) {
-	prepared, err := prepareAgentStep(ctx, cfg, step, bw, handoff, contextWriterFor(st, runIDFromContext(ctx), step.Agent))
+	prepared, err := prepareAgentStep(ctx, cfg, step, bw, handoff, st)
 	if err != nil {
 		return StepOutcome{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}

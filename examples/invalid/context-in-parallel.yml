@@ -1,8 +1,12 @@
-# Concurrent branches each work from their own copy of the run context, so a
+# Concurrent branches would each need their own copy of the run context, so a
 # branch's writes have to surface at the join rather than merge into the shared
 # store — two branches writing one key would resolve to whichever finished
-# last. The join does not exist yet, so the write would be silently discarded.
-# expect: context is not supported inside a concurrent block
+# last. The join does not exist yet, so the write would land in the shared
+# store and race.
+#
+# Only WRITES are rejected: reading inside a branch is safe, so a branch may
+# still set context: { fidelity: ... }.
+# expect: context: write is not supported inside a concurrent block
 
 agents:
 - name: writer

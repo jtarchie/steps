@@ -9,6 +9,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // Handoff describes how control arrived at a step via a to:/verdicts:
@@ -129,24 +130,59 @@ func promptWithHandoff(prompt string, spec *config.HandoffSpec, handoff *Handoff
 	return prompt + "\n\n" + renderHandoffBlock(handoff, spillDir)
 }
 
-// injectSynthesizedTools adds the routing-related tools a step's own
-// declarations call for onto an already-built tool set: the required
-// verdict tool (step.Verdicts) and/or the read-only previous_run tool
-// (step.Handoff.Tool). Split out of prepareAgentStep to keep its own
-// cyclomatic complexity down — both injections share the same
-// close-on-error handling at the call site. Returns the verdict tool's name
-// (see injectVerdictTool), "" when the step declares no verdicts.
-// write is the seam onto the run context store — nil when there is nowhere to
-// record (see contextWriterFor), which leaves set_context unoffered.
-func injectSynthesizedTools(step config.Step, handoff *Handoff, write contextWriter, decls *genai.Tool, registry map[string]toolImpl, required map[string]bool) (string, error) {
+// synthesizedTools is what injectSynthesizedTools produced beyond the tool
+// set it mutated in place: the verdict tool's name (see injectVerdictTool),
+// "" when the step declares no verdicts; and the rendered run-context recap
+// (see buildRecap), "" when there is nothing to show.
+type synthesizedTools struct {
+	verdictTool string
+	recap       string
+}
+
+// synthesisInputs is everything the synthesized tools are derived from beyond
+// the step itself: the transition context a previous_run tool serves, the
+// store seam both halves of the run context need, and the run identity that
+// scopes it.
+type synthesisInputs struct {
+	handoff *Handoff
+	store   *store.Store
+	runID   string
+}
+
+// injectSynthesizedTools adds the tools a step's own declarations call for
+// onto an already-built tool set: the required verdict tool (step.Verdicts),
+// the required write_handoff tool (handoff: {note: true}), the read-only
+// previous_run tool (handoff: {tool: true}), the set_context writer
+// (context: write), and the read_context reader whenever this run has recorded
+// anything at all.
+//
+// Split out of prepareAgentStep to keep its own cyclomatic complexity down —
+// every injection shares one close-on-error handler at the call site.
+func injectSynthesizedTools(
+	ctx context.Context, cfg *config.Config, step config.Step, in synthesisInputs,
+	decls *genai.Tool, registry map[string]toolImpl, required map[string]bool,
+) (synthesizedTools, error) {
 	verdictTool, err := injectVerdictTool(step.Verdicts, decls, registry, required)
 	if err != nil {
-		return "", err
+		return synthesizedTools{}, err
 	}
 
-	err = injectSetContextTool(step, write, decls, registry)
+	err = injectSetContextTool(step, contextWriterFor(in.store, in.runID, step.Agent), decls, registry)
 	if err != nil {
-		return "", err
+		return synthesizedTools{}, err
+	}
+
+	// The recap is read here rather than at the call site so the read_context
+	// tool it implies is injected with every other synthesized tool, in one
+	// place, under one error handler.
+	recap, entries, err := buildRecap(ctx, in.store, in.runID, cfg.ResolveContextFidelity(step))
+	if err != nil {
+		return synthesizedTools{}, err
+	}
+
+	err = injectReadContextTool(entries, decls, registry)
+	if err != nil {
+		return synthesizedTools{}, err
 	}
 
 	// A step may require BOTH a verdict and a handoff note; the required-tool
@@ -154,17 +190,17 @@ func injectSynthesizedTools(step config.Step, handoff *Handoff, write contextWri
 	// them one per turn until all are satisfied).
 	_, err = injectWriteHandoffTool(step, decls, registry, required)
 	if err != nil {
-		return "", err
+		return synthesizedTools{}, err
 	}
 
 	if step.Handoff != nil && step.Handoff.Tool {
-		err = injectHandoffTool(handoff, decls, registry)
+		err = injectHandoffTool(in.handoff, decls, registry)
 		if err != nil {
-			return "", err
+			return synthesizedTools{}, err
 		}
 	}
 
-	return verdictTool, nil
+	return synthesizedTools{verdictTool: verdictTool, recap: recap}, nil
 }
 
 // previousRunToolName is the fixed name of the synthesized read-only tool a

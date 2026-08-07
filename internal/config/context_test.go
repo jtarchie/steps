@@ -195,6 +195,181 @@ jobs:
 	}
 }
 
+// TestResolveContextFidelity pins the precedence: step, then defaults, then
+// compact. First match wins, and a pipeline that declares neither still gets
+// a recap — reading is on by default, unlike writing.
+func TestResolveContextFidelity(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		defaults string
+		step     string
+		want     ContextFidelity
+	}{
+		{name: "nothing declared", want: FidelityCompact},
+		{name: "defaults only", defaults: "defaults:\n  context:\n    fidelity: summary\n", want: FidelitySummary},
+		{name: "step wins over defaults", defaults: "defaults:\n  context:\n    fidelity: summary\n", step: "    context: { fidelity: truncate }\n", want: FidelityTruncate},
+		{name: "step opts out", step: "    context: { fidelity: \"off\" }\n", want: FidelityOff},
+		{name: "write only leaves the default", step: "    context: write\n", want: FidelityCompact},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := writeConfig(t, tc.defaults+`
+agents:
+- name: writer
+  source: { model: lmstudio/qwen }
+jobs:
+- name: j
+  plan:
+  - agent: writer
+    prompt: go
+`+tc.step)
+
+			cfg, err := LoadConfig(path)
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+
+			if got := cfg.ResolveContextFidelity(cfg.Jobs[0].Plan[0]); got != tc.want {
+				t.Errorf("ResolveContextFidelity = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestContextFidelityRejectsUnknownLevels covers both places a level can be
+// written, and proves the error names the vocabulary rather than just
+// refusing.
+func TestContextFidelityRejectsUnknownLevels(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct{ name, pipeline, want string }{
+		{
+			name: "on a step",
+			pipeline: `
+agents:
+- name: writer
+  source: { model: lmstudio/qwen }
+jobs:
+- name: j
+  plan:
+  - agent: writer
+    prompt: go
+    context: { fidelity: verbose }
+`,
+			want: `unknown fidelity "verbose"`,
+		},
+		{
+			name: "in defaults",
+			pipeline: `
+defaults:
+  context:
+    fidelity: brief
+agents:
+- name: writer
+  source: { model: lmstudio/qwen }
+jobs:
+- name: j
+  plan:
+  - agent: writer
+    prompt: go
+`,
+			want: `unknown fidelity "brief"`,
+		},
+		{
+			name: "a near miss suggests the right one",
+			pipeline: `
+agents:
+- name: writer
+  source: { model: lmstudio/qwen }
+jobs:
+- name: j
+  plan:
+  - agent: writer
+    prompt: go
+    context: { fidelity: truncat }
+`,
+			want: `did you mean "truncate"?`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := writeConfig(t, tc.pipeline)
+			wantLoadError(t, path, tc.want)
+		})
+	}
+}
+
+// TestContextFidelityOnlyIsValid proves a read-only spec loads: `context:
+// {fidelity: off}` enables no tool, and reading it as "enables nothing" would
+// reject the opt-out — the one spelling a step most wants.
+func TestContextFidelityOnlyIsValid(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+agents:
+- name: writer
+  source: { model: lmstudio/qwen }
+jobs:
+- name: j
+  plan:
+  - agent: writer
+    prompt: go
+    context: { fidelity: "off" }
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	step := cfg.Jobs[0].Plan[0]
+	if step.WritesContext() {
+		t.Error("WritesContext() = true, want false for a fidelity-only spec")
+	}
+
+	if got := cfg.ResolveContextFidelity(step); got != FidelityOff {
+		t.Errorf("ResolveContextFidelity = %q, want off", got)
+	}
+}
+
+// TestContextReadIsLegalInsideABranch proves only WRITES are rejected in a
+// concurrent block. A branch step opting out of the recap has nothing to race
+// with, and rejecting it would take the opt-out away from exactly the steps
+// most likely to want it.
+func TestContextReadIsLegalInsideABranch(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+agents:
+- name: writer
+  source: { model: lmstudio/qwen }
+jobs:
+- name: j
+  plan:
+  - in_parallel:
+      steps:
+      - agent: writer
+        prompt: go
+        context: { fidelity: "off" }
+      - task: work
+        inputs: []
+        run: "true"
+`)
+
+	_, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v, want a read-only context spec to be legal in a branch", err)
+	}
+}
+
 // TestValidateContextKey pins the tool boundary's key rule. The reserved
 // prefix and the charset are what stop a model from overwriting engine
 // bookkeeping or minting a key that renders one way and matches another.

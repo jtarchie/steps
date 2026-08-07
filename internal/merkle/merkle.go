@@ -235,9 +235,19 @@ func withHandoffNote(step config.Step, content map[string]any) map[string]any {
 // content is: it cannot be known at plan time, and agent steps are
 // unconditionally Unskippable (see planNonGetNode), so a run always re-executes
 // and re-records rather than replaying a stale write.
+// The fidelity is identity for the same reason: it decides how much of the
+// recorded context is rendered into the step's opening conversation, and two
+// steps shown different things are not the same step. The recorded FACTS are
+// excluded — a runtime value the planner cannot know, and one that agent steps
+// being Unskippable makes safe to leave out.
 func withContext(step config.Step, content map[string]any) map[string]any {
 	if step.Context != nil {
-		content["context"] = map[string]any{"write": step.Context.Write}
+		entry := map[string]any{"write": step.Context.Write}
+		if step.Context.Fidelity != "" {
+			entry["fidelity"] = string(step.Context.Fidelity)
+		}
+
+		content["context"] = entry
 	}
 
 	return content

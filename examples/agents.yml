@@ -252,6 +252,17 @@ jobs:
     prompt: |
       Read NOTES.txt. Record what it is about with set_context under the key
       `subject`, then reply with one sentence describing the file.
+  # Reading is automatic: this step declares no context: at all and still opens
+  # with a recap of what lead recorded, delivered as a synthetic read_context
+  # result. fidelity: controls how much of each value it sees — off opts out
+  # entirely, summary shows values in full. Default is compact.
+  - agent: summarizer
+    prompt: |
+      Using the recorded `subject` fact, write one sentence for a changelog.
+  - agent: summarizer
+    context: { fidelity: "off" }
+    prompt: |
+      Write a haiku about pipelines. You are shown no recorded facts.
 
 # ─── sub-agent delegation (needs a local model; otherwise offline) ───────────
 - name: delegate

@@ -115,10 +115,14 @@ type agentConversation struct {
 	system        string
 	prompt        string
 	contextBlocks []contextBlock
-	env           toolEnv
-	tools         agentTools
-	params        agentGenParams
-	maxTurns      int
+	// recap is the rendered run-context recap delivered as a synthetic
+	// read_context result before anything else, or "" when the run recorded
+	// nothing or the step opted out with fidelity: off. See recap.go.
+	recap    string
+	env      toolEnv
+	tools    agentTools
+	params   agentGenParams
+	maxTurns int
 	// toolChoiceStringOnly forces a required tool call via the string
 	// tool_choice: "required" instead of a named function object — see
 	// forceRequiredTool. Set from config.ResolvedInvocation.StringOnlyToolChoice.
@@ -139,6 +143,30 @@ type agentConversation struct {
 	usage *stepUsage
 }
 
+// syntheticToolExchange builds the call/result message pair that makes
+// content look like the answer to a tool the model already called: an
+// assistant turn requesting name(args), then the matching result.
+//
+// It is how anything reaches a conversation without costing a turn or
+// depending on the model choosing to ask — context_paths files and the run
+// context recap both arrive this way.
+func syntheticToolExchange(callID, name string, args map[string]any, content string) []*genai.Content {
+	return []*genai.Content{
+		{
+			Role:  genai.RoleModel,
+			Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: callID, Name: name, Args: args}}},
+		},
+		{
+			Role: genai.RoleUser,
+			Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{
+				ID:       callID,
+				Name:     name,
+				Response: map[string]any{"content": content},
+			}}},
+		},
+	}
+}
+
 // buildAgentRequest builds a fresh LLM request (system + user prompt + tools
 // + dials). When conv.contextBlocks is non-empty, synthetic read_file tool
 // call/response messages are prepended before the user prompt so the model
@@ -152,36 +180,17 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 	}
 	conv.params.applyTo(cfg)
 
-	contents := make([]*genai.Content, 0, 1+len(conv.contextBlocks)*2)
+	contents := make([]*genai.Content, 0, 3+len(conv.contextBlocks)*2)
+
+	// The recap comes first: it is what happened BEFORE this step, and the
+	// context_paths files below are what this step was handed to work on.
+	if conv.recap != "" {
+		contents = append(contents, syntheticToolExchange("recap", readContextToolName, nil, conv.recap)...)
+	}
 
 	for i, block := range conv.contextBlocks {
-		callID := fmt.Sprintf("ctx_%d", i)
-
-		// Synthetic assistant message: read_file call for this context path.
-		contents = append(contents, &genai.Content{
-			Role: genai.RoleModel,
-			Parts: []*genai.Part{{
-				FunctionCall: &genai.FunctionCall{
-					ID:   callID,
-					Name: "read_file",
-					Args: map[string]any{"path": block.path},
-				},
-			}},
-		})
-
-		// Synthetic tool result: the file content as read_file would return it.
-		contents = append(contents, &genai.Content{
-			Role: genai.RoleUser,
-			Parts: []*genai.Part{{
-				FunctionResponse: &genai.FunctionResponse{
-					ID:   callID,
-					Name: "read_file",
-					Response: map[string]any{
-						"content": block.content,
-					},
-				},
-			}},
-		})
+		contents = append(contents, syntheticToolExchange(
+			fmt.Sprintf("ctx_%d", i), "read_file", map[string]any{"path": block.path}, block.content)...)
 	}
 
 	// User prompt comes after any injected context.

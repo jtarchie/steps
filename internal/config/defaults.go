@@ -38,6 +38,20 @@ type Defaults struct {
 	// semantics — it only decides how early a failure that WOULD happen is
 	// discovered.
 	Preflight *Preflight `yaml:"preflight,omitempty"`
+	// Context sets the pipeline-wide context recap detail (see
+	// ContextDefaults). Admissible here for Preflight's reason: it changes no
+	// step's failure semantics, only how much of what earlier steps recorded a
+	// later one is shown. An absent fidelity does not MEAN anything the way an
+	// absent timeout: does, so defaulting it flips no documented semantic.
+	Context *ContextDefaults `yaml:"context,omitempty"`
+}
+
+// ContextDefaults holds the pipeline-wide context: settings. Only the recap
+// level: writing is per-step by construction, since it grants a tool, and a
+// pipeline-wide default that handed every agent a tool would be the opposite
+// of opt-in.
+type ContextDefaults struct {
+	Fidelity ContextFidelity `yaml:"fidelity,omitempty"`
 }
 
 // validateAgentModels rejects a step whose agent ends up with no model.

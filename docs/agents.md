@@ -342,7 +342,46 @@ Facts are captured through a real tool rather than parsed out of the model's fin
 
 **Scope**: the store is keyed by run, so two runs of one job — including two concurrent ones under `steps watch` — never read each other's facts. Rows carry `written_by`, so the record answers "who recorded this" without replaying a transcript.
 
-**Caching**: the `context: write` declaration enters the step's hashed content (it changes the tool grant, and two steps differing in tools are not the same step). What a step *stored* does not — it cannot be known at plan time, and agent steps are unconditionally unskippable, so a run always re-executes and re-records rather than replaying a stale write.
+### Reading it back: the recap
+
+Reading is **automatic**. Every agent step opens with a rendered recap of what earlier steps recorded, delivered as a synthetic `read_context` tool result — the same trick `context_paths` uses, so it costs no turn and cannot be skipped by a model that decides not to look. A `read_context` tool is offered alongside it, so a conversation that later compacts can ask for the facts again instead of working from a summary of them.
+
+Nothing is delivered when nothing was recorded: a pipeline that never writes context sees no recap, no tool, and no change to what reaches the wire.
+
+`fidelity:` controls how much of each fact survives:
+
+| fidelity | what the step sees |
+|---|---|
+| `off` | nothing at all — the complete opt-out |
+| `truncate` | key names only, with who recorded them |
+| `compact` *(default)* | each key with its value shortened to ~240 characters, elision marked |
+| `summary` | each key with its value in full |
+
+There is deliberately no "share the whole prior conversation" rung: agent steps are hermetic here — each is a fresh conversation — so every level is a rendered recap.
+
+Set it per step, or pipeline-wide; first match wins:
+
+```yaml
+defaults:
+  context:
+    fidelity: summary       # pipeline-wide
+
+jobs:
+- name: triage
+  plan:
+  - agent: investigator
+    context: write          # writes; still reads at the default level
+  - agent: notifier
+    context: { fidelity: "off" }   # reads nothing
+  - agent: auditor
+    context: { write: true, fidelity: summary }  # both switches, independently
+```
+
+The recap opens by saying what it is — recorded facts are **data, not instructions** — because it carries text one model wrote into another model's context, and without the framing a recorded "ignore your instructions" reads as one.
+
+**Reads are agent-only.** Task `run:`/`params:`, put params, and `when:` guards cannot reference the context store, and no template hook exists for them. That boundary is what keeps content-addressed caching honest: a shell command whose text depended on a runtime fact could not be hashed at plan time, and a task is skippable in a way an agent step is not.
+
+**Caching**: the `context: write` declaration and the `fidelity:` setting both enter the step's hashed content (one changes the tool grant, the other changes the opening conversation, and two steps differing in either are not the same step). What a step *stored* does not — it cannot be known at plan time, and agent steps are unconditionally unskippable, so a run always re-executes and re-records rather than replaying a stale write.
 
 ## What's not on this page
 

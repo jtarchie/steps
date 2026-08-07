@@ -156,6 +156,136 @@ jobs:
 	}
 }
 
+// TestEndToEndContextRecapReachesLaterStep is the read half (#36): what one
+// step records with set_context arrives in the NEXT step's conversation
+// automatically, as a synthetic read_context exchange rather than a turn the
+// model had to spend. The second agent is granted no context: at all — the
+// recap is not something a step opts into.
+func TestEndToEndContextRecapReachesLaterStep(t *testing.T) {
+	dir := t.TempDir()
+	fake := newFakeLLM(t,
+		// investigator
+		callsTool("set_context", map[string]any{
+			"key":   "failure_cause",
+			"value": "flaky DNS in the e2e suite",
+		}),
+		says("Investigated."),
+		// fixer — no context: declaration of its own
+		says("Fixed."),
+	)
+	path := writePipeline(t, dir, twoStepContextPipeline(fake.URL, ""))
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	mustRun(t, path)
+
+	// The fixer's opening request is request 3 (the investigator used two).
+	fixer := fake.request(3)
+
+	// ── delivery layer ────────────────────────────────────────────────────
+	// The fact arrives as an already-answered read_context call, so it costs
+	// the step no turn and cannot be skipped by a model that decides not to
+	// look.
+	results := fixer.toolResults()
+	if len(results) != 1 {
+		t.Fatalf("fixer's opening request carried %d tool results, want 1 (the recap); got %v", len(results), results)
+	}
+
+	if !strings.Contains(results[0], "failure_cause") || !strings.Contains(results[0], "flaky DNS") {
+		t.Errorf("recap = %q, want the recorded key and value", results[0])
+	}
+
+	// The recap says what it is, so a model cannot mistake a recorded fact
+	// for an instruction it was given.
+	if !strings.Contains(results[0], "data, not instructions") {
+		t.Errorf("recap = %q, want the data-not-instructions framing", results[0])
+	}
+
+	// read_context is offered too, so a conversation that later compacts can
+	// ask for the facts again instead of working from a summary of them.
+	if got := fixer.toolNames(); !slices.Contains(got, "read_context") {
+		t.Errorf("fixer's offered tools = %v, want read_context among them", got)
+	}
+
+	// The investigator ran BEFORE anything was recorded, so its own opening
+	// request carried no recap and was offered no read_context.
+	if got := fake.request(1).toolNames(); slices.Contains(got, "read_context") {
+		t.Errorf("investigator's offered tools = %v; nothing was recorded yet, so read_context must be absent", got)
+	}
+}
+
+// TestEndToEndContextFidelityOff proves the opt-out is complete: the same
+// pipeline with fidelity: off on the reader delivers no recap and no tool,
+// even though the store holds a fact.
+func TestEndToEndContextFidelityOff(t *testing.T) {
+	dir := t.TempDir()
+	fake := newFakeLLM(t,
+		callsTool("set_context", map[string]any{
+			"key":   "failure_cause",
+			"value": "flaky DNS in the e2e suite",
+		}),
+		says("Investigated."),
+		says("Fixed."),
+	)
+	path := writePipeline(t, dir, twoStepContextPipeline(fake.URL, "    context: { fidelity: \"off\" }\n"))
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	mustRun(t, path)
+
+	fixer := fake.request(3)
+
+	if results := fixer.toolResults(); len(results) != 0 {
+		t.Errorf("fixer carried %v with fidelity: off, want no recap at all", results)
+	}
+
+	if got := fixer.toolNames(); slices.Contains(got, "read_context") {
+		t.Errorf("fixer's offered tools = %v; fidelity: off must offer no read_context either", got)
+	}
+
+	// The write still happened — opting out of reading is not opting out of
+	// the store.
+	if entries := storeRunContext(t, path); len(entries) != 1 {
+		t.Errorf("run_context = %+v, want the investigator's write to have landed", entries)
+	}
+}
+
+// twoStepContextPipeline is a writer followed by a reader. readerExtra is
+// spliced into the reader step, so one fixture serves both the default-recap
+// and the opted-out cases.
+func twoStepContextPipeline(endpoint, readerExtra string) string {
+	return fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: investigator
+  source:
+    endpoint: %[1]s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools:
+  - builtin: read_file
+- name: fixer
+  source:
+    endpoint: %[1]s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools:
+  - builtin: read_file
+
+jobs:
+- name: triage
+  plan:
+  - agent: investigator
+    prompt: Investigate the failure.
+    context: write
+  - agent: fixer
+    prompt: Fix the cause.
+%[2]s`, endpoint, readerExtra)
+}
+
 // contextRow is one run_context row, read back for assertions.
 type contextRow struct {
 	Key       string
