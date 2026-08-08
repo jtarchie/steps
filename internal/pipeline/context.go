@@ -236,34 +236,76 @@ func mergedContextKey(branch, prefix, key string) string {
 		return merged
 	}
 
-	if strings.HasPrefix(merged, config.ReservedContextPrefix) {
-		merged = "internal_" + strings.TrimPrefix(merged, "internal")
-	}
+	repaired := repairContextKey(prefix, key)
 
-	if len(merged) > config.MaxContextKeyLen {
-		merged = truncateContextKey(merged)
-	}
+	slog.Warn("branch.context.key_repaired", "branch", branch, "key", merged, "stored_as", repaired)
 
-	slog.Warn("branch.context.key_repaired", "branch", branch, "key", prefix+key, "stored_as", merged)
-
-	return merged
+	return repaired
 }
 
-// contextKeyHashLen is how much of a digest a truncated key carries.
+// repairContextKey returns a valid key carrying as much of prefix+key as fits.
+//
+// Total by construction: a key that survives neither the cut nor the escape
+// falls back to the digest alone, which is still unique and still valid.
+// Without that floor this could hand SetContext a key the tool boundary would
+// have refused, while logging that it had repaired one.
+func repairContextKey(prefix, key string) string {
+	digest := contextKeyDigest(prefix + key)
+
+	repaired := prefix + key
+	if len(repaired) > config.MaxContextKeyLen {
+		repaired = truncateContextKey(prefix, key, digest)
+	}
+
+	// Length-preserving on purpose ("internal." and "internal_" are both nine
+	// characters), so escaping cannot push a just-cut key back over the ceiling.
+	if strings.HasPrefix(repaired, config.ReservedContextPrefix) {
+		repaired = "internal_" + repaired[len(config.ReservedContextPrefix):]
+	}
+
+	if config.ValidateContextKey(repaired) != nil {
+		return "merged." + digest
+	}
+
+	return repaired
+}
+
+// contextKeyHashLen is how much of a digest a repaired key carries.
 const contextKeyHashLen = 8
 
-// truncateContextKey cuts an over-long merged key down to the ceiling, marking
-// the cut with a short digest of the whole key.
+// contextKeyDigest is the marker a repaired key ends with: short, hex, and
+// derived from the WHOLE untruncated key.
 //
-// The digest is the point. Cutting alone would collapse two long keys that
-// share a prefix onto one row — the lost update the branch scopes exist to
-// prevent, reintroduced by the repair. Keys are ASCII by charset, so the cut
-// cannot land mid-rune.
-func truncateContextKey(key string) string {
-	digest := sha256.Sum256([]byte(key))
-	keep := config.MaxContextKeyLen - contextKeyHashLen - 1
+// The digest is what keeps a repair from becoming a collision. Cutting alone
+// would collapse two long keys that share a prefix onto one row — the lost
+// update the branch scopes exist to prevent, reintroduced by the repair.
+func contextKeyDigest(key string) string {
+	sum := sha256.Sum256([]byte(key))
 
-	return key[:keep] + "." + hex.EncodeToString(digest[:])[:contextKeyHashLen]
+	return hex.EncodeToString(sum[:])[:contextKeyHashLen]
+}
+
+// truncateContextKey cuts an over-long merged key down to the ceiling, keeping
+// the KEY whole and spending what is left on the prefix.
+//
+// That split is the point. The key is the fact's name — what a later step reads
+// it back by and what a synthesizer sees in a recap — while the prefix is
+// provenance, and provenance is what compounds: one matrix cell named from a
+// model-authored label can fill the budget on its own. Cutting the tail instead
+// would leave `<118 characters of branch name>.<digest>` and destroy the name of
+// every fact that branch recorded.
+//
+// The prefix keeps its TAIL, since the nearest enclosing block is its most
+// informative segment. Keys are ASCII by charset, so no cut lands mid-rune.
+func truncateContextKey(prefix, key, digest string) string {
+	budget := config.MaxContextKeyLen - len(digest) - 1
+
+	// A key that overruns on its own leaves nothing to spend on provenance.
+	if len(key) >= budget {
+		return key[:budget] + "." + digest
+	}
+
+	return prefix[len(prefix)-(budget-len(key)):] + key + "." + digest
 }
 
 // branchPrefixes resolves the key prefix each branch's facts are qualified by,

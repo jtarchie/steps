@@ -5,6 +5,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"text/template"
@@ -495,24 +496,12 @@ func checkAxisReferences(label, field string, tree *parse.Tree, declared map[str
 	})
 
 	if unknown != "" {
+		// Sorted so the suggestion is drawn from the same list on every run.
 		return fmt.Errorf("%s: across %s: {{ .vars.%s }} names no axis of this matrix%s",
-			label, field, unknown, suggestion(unknown, sortedBoolKeys(declared)))
+			label, field, unknown, suggestion(unknown, slices.Sorted(maps.Keys(declared))))
 	}
 
 	return nil
-}
-
-// sortedBoolKeys returns a set's members in stable order, so a suggestion is
-// drawn from the same list on every run.
-func sortedBoolKeys(set map[string]bool) []string {
-	keys := make([]string, 0, len(set))
-	for key := range set {
-		keys = append(keys, key)
-	}
-
-	slices.Sort(keys)
-
-	return keys
 }
 
 // renderCell substitutes `{{ .vars.<name> }}` into the fields where a matrix

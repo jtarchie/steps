@@ -115,24 +115,41 @@ func TestMergedContextKeyStaysValid(t *testing.T) {
 		}
 	})
 
-	t.Run("an over-long key is cut to the ceiling and marked", func(t *testing.T) {
+	t.Run("an over-long key keeps the fact name and spends the rest on provenance", func(t *testing.T) {
 		t.Parallel()
 
-		// A key at the limit under a long branch name: legal when written,
-		// illegal once qualified. Prefixes also compound with nesting, so this
-		// is not only reachable by a pathological name.
-		key := strings.Repeat("k", config.MaxContextKeyLen)
-		prefix := strings.Repeat("b", 40) + "."
+		// One matrix cell named from a model-authored label fills the budget on
+		// its own, and prefixes compound with nesting on top of that — so this
+		// is reachable without a pathological pipeline. The KEY is what a later
+		// step reads the fact back by, so it is what has to survive.
+		prefix := strings.Repeat("b", config.MaxContextKeyLen) + "."
 
-		got := mergedContextKey("branch", prefix, key)
+		got := mergedContextKey("branch", prefix, "failure_cause")
 
 		err := config.ValidateContextKey(got)
 		if err != nil {
 			t.Fatalf("merged key %q does not validate: %v", got, err)
 		}
 
-		if !strings.HasPrefix(got, prefix) {
-			t.Errorf("merged key %q lost the branch prefix", got)
+		if !strings.Contains(got, "failure_cause") {
+			t.Errorf("merged key %q dropped the fact name; the provenance is what should have been cut", got)
+		}
+	})
+
+	t.Run("a key that overruns alone leaves nothing to spend on provenance", func(t *testing.T) {
+		t.Parallel()
+
+		key := strings.Repeat("k", config.MaxContextKeyLen)
+
+		got := mergedContextKey("branch", "branch.", key)
+
+		err := config.ValidateContextKey(got)
+		if err != nil {
+			t.Fatalf("merged key %q does not validate: %v", got, err)
+		}
+
+		if !strings.HasPrefix(got, "kkkk") {
+			t.Errorf("merged key %q, want what survives to be the key itself", got)
 		}
 	})
 
@@ -152,19 +169,55 @@ func TestMergedContextKeyStaysValid(t *testing.T) {
 			t.Errorf("two distinct long keys both merged to %q", first)
 		}
 	})
+}
 
-	t.Run("a branch named internal cannot land in the reserved namespace", func(t *testing.T) {
+// TestMergedContextKeyStaysOutOfTheReservedNamespace is the other rule a
+// synthesized key can break, split from the length cases above because the two
+// repairs interact and the interaction is the interesting part.
+func TestMergedContextKeyStaysOutOfTheReservedNamespace(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		prefix string
+	}{
+		{name: "a branch named internal", prefix: "internal."},
+		// Cutting the prefix can expose an INNER block named `internal` as the
+		// new leading segment, so the escape has to run after the cut — and be
+		// length-preserving, or it would push a just-cut key back over.
+		{name: "a cut landing on a nested internal block",
+			prefix: strings.Repeat("b", 30) + "internal." + strings.Repeat("c", 103)},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := mergedContextKey("internal", tc.prefix, "finding")
+
+			err := config.ValidateContextKey(got)
+			if err != nil {
+				t.Fatalf("merged key %q does not validate: %v", got, err)
+			}
+
+			if strings.HasPrefix(got, config.ReservedContextPrefix) {
+				t.Errorf("merged key %q is inside the reserved namespace", got)
+			}
+		})
+	}
+
+	t.Run("a key nothing can repair still comes back valid", func(t *testing.T) {
 		t.Parallel()
 
-		got := mergedContextKey("internal", "internal.", "finding")
+		// The floor. No caller reaches it today — every key the merge reads has
+		// already passed ValidateContextKey — but without it a future writer
+		// with a looser charset would have its key written to the store while
+		// the log claimed a repair.
+		got := repairContextKey("branch.", "a key with spaces")
 
 		err := config.ValidateContextKey(got)
 		if err != nil {
-			t.Fatalf("merged key %q does not validate: %v", got, err)
-		}
-
-		if strings.HasPrefix(got, config.ReservedContextPrefix) {
-			t.Errorf("merged key %q is inside the reserved namespace", got)
+			t.Errorf("repaired key %q does not validate: %v", got, err)
 		}
 	})
 }
