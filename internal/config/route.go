@@ -165,6 +165,18 @@ func validateSegment(job Job, segment []int) error {
 	for segPos, idx := range segment {
 		name := stepName(job.Plan[idx])
 
+		// A container — in_parallel:, race:, across:, approval: — has no name
+		// of its own, and pos is what to: targets resolve against, so an
+		// unnamed step could never be jumped to in the first place. Requiring
+		// those names to be unique made two blocks in one routing segment a
+		// load error reported as `step name "" is duplicated`, which named
+		// neither block and described a collision between two things that
+		// cannot be targeted at all. A fan-out beside a fan-in, in a job with
+		// a loop, is an ordinary shape (see examples/pr-review.yml).
+		if name == "" {
+			continue
+		}
+
 		_, dup := pos[name]
 		if dup {
 			return fmt.Errorf("job %q: step name %q is duplicated within a to:-using segment; names must be unique to be jump targets", job.Name, name)

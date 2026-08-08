@@ -281,11 +281,14 @@ func (r capturedRequest) forcedTool() string {
 type fakeLLM struct {
 	URL string
 
-	t        *testing.T
-	mu       sync.Mutex
-	script   []turn
-	repeat   bool
-	next     int
+	t      *testing.T
+	mu     sync.Mutex
+	script []turn
+	repeat bool
+	next   int
+	// route, when set, answers each request from its CONTENT instead of its
+	// position. See newRoutedFakeLLM.
+	route    func(capturedRequest) turn
 	requests []capturedRequest
 }
 
@@ -307,6 +310,27 @@ func newRepeatingFakeLLM(t *testing.T, only turn) *fakeLLM {
 	t.Helper()
 
 	return startFakeLLM(t, true, []turn{only})
+}
+
+// newRoutedFakeLLM starts a fake provider that answers each request from what
+// it ASKS rather than from its position in a script.
+//
+// Position stops being a usable key the moment a pipeline runs agents
+// concurrently: `max_in_flight:` cells reach the provider in whatever order
+// their goroutines get scheduled, so turn 3 belongs to whichever cell got
+// there first, which is exactly what a fixture must not depend on. Routing on
+// content is order-independent, so the same assertions hold however the run
+// interleaves.
+//
+// route runs on the server's goroutines and must therefore be safe to call
+// concurrently — read the request, return a turn, keep no state.
+func newRoutedFakeLLM(t *testing.T, route func(capturedRequest) turn) *fakeLLM {
+	t.Helper()
+
+	fake := startFakeLLM(t, false, nil)
+	fake.route = route
+
+	return fake
 }
 
 func startFakeLLM(t *testing.T, repeat bool, script []turn) *fakeLLM {
@@ -345,7 +369,14 @@ func (f *fakeLLM) handle(w http.ResponseWriter, r *http.Request) {
 	f.requests = append(f.requests, req)
 	index := f.next
 	f.next++
+	route := f.route
 	f.mu.Unlock()
+
+	if route != nil {
+		route(req).render(w)
+
+		return
+	}
 
 	if index >= len(f.script) {
 		if f.repeat {

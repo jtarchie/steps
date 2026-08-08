@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestTransitionsLoadAndDecode(t *testing.T) {
 	t.Parallel()
@@ -349,5 +352,69 @@ jobs:
 	_, err := LoadConfig(path)
 	if err != nil {
 		t.Fatalf("a forward-only to: should load without max_visits, got: %v", err)
+	}
+}
+
+// TestSegmentAllowsSeveralUnnamedBlocks covers the shape a fan-out pipeline
+// takes: a concurrent block and a matrix in one job that also loops.
+//
+// Containers have no name, and pos — the map to: targets resolve against — was
+// keyed by name for every step including them. Two blocks in one routing
+// segment therefore collided on "", and the load failed with `step name "" is
+// duplicated`: a message that named neither block, and described a conflict
+// between two steps that cannot be to: targets in the first place.
+func TestSegmentAllowsSeveralUnnamedBlocks(t *testing.T) {
+	t.Parallel()
+
+	job := Job{
+		Name: "review",
+		Plan: []Step{
+			{Task: "anatomy", Run: "true"},
+			{InParallel: &InParallel{Steps: []Step{
+				{Task: "lens-a", Run: "true"},
+				{Task: "lens-b", Run: "true"},
+			}}},
+			{
+				Across: []AcrossVar{{Var: "dim", Values: []string{"a", "b"}}},
+				Task:   "reviewer",
+				Run:    "true",
+			},
+			{
+				Task:      "synthesize",
+				Run:       "true",
+				To:        map[string]string{"success": "publish", "failure": "anatomy"},
+				MaxVisits: 2,
+			},
+			{Task: "publish", Run: "true"},
+		},
+	}
+
+	err := validateSegment(job, []int{0, 1, 2, 3, 4})
+	if err != nil {
+		t.Fatalf("two unnamed blocks in a routing segment: %v", err)
+	}
+}
+
+// TestSegmentStillRejectsDuplicateNamedSteps is the other half: skipping
+// unnamed steps must not weaken the rule for steps that DO have names, since
+// a to: target naming two of them has no answer.
+func TestSegmentStillRejectsDuplicateNamedSteps(t *testing.T) {
+	t.Parallel()
+
+	job := Job{
+		Name: "review",
+		Plan: []Step{
+			{Task: "work", Run: "true", To: map[string]string{"success": "work"}, MaxVisits: 2},
+			{Task: "work", Run: "true"},
+		},
+	}
+
+	err := validateSegment(job, []int{0, 1})
+	if err == nil {
+		t.Fatal("two steps named \"work\" validated in a to:-using segment")
+	}
+
+	if !strings.Contains(err.Error(), "duplicated") {
+		t.Errorf("error = %v, want it to name the duplication", err)
 	}
 }
