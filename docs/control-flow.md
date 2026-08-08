@@ -263,9 +263,36 @@ This is "the agent plans, the pipeline executes": one step produces a work list,
 
 `values:` and `from:` are mutually exclusive per axis, and an axis needs one of them; both are load errors. A runtime axis can sit beside a static one, and the product is taken as usual.
 
-**The source must be a JSON array of strings.** `from:` is the same axis with the list computed later, so a value interpolates through `{{ .vars.x }}` exactly as a static one does and a runtime cell hashes identically to the static cell it is indistinguishable from. An array of objects is refused rather than flattened — there is no rendering of an object into a name or a command that would not be a rule invented on the spot.
+**The source is a JSON array of strings**, or of flat objects (below). `from:` is the same axis with the list computed later, so a value interpolates through `{{ .vars.x }}` exactly as a static one does and a runtime cell hashes identically to the static cell it is indistinguishable from.
 
 **Because the array is produced during the run, usually by a model, nothing about it was reviewed by the author.** So: at most 1000 items (an unbounded array turns an upstream typo into an unbounded bill — the error says to filter at the source or split the run), a missing key or wrong shape fails the step naming the key, and an empty array is an error rather than a matrix that silently runs nothing.
+
+#### Items with structure
+
+A work item is usually more than a name. A finding has a file, a line, a claim; flattening it to an id means every cell starts by going to look up what it was handed. So a `from:` array may hold **flat objects**, and a cell names the fields it wants:
+
+```yaml
+- agent: reviewer
+  context: write
+  prompt: >
+    Record findings under `findings` as a JSON array of flat objects:
+    {"id", "file", "line", "claim"}.
+- across:
+  - var: finding
+    from: findings
+    label: id            # which field names each cell
+  agent: verifier
+  prompt: |
+    Falsify or confirm: {{ .vars.finding.claim }}
+    Evidence lives at {{ .vars.finding.file }}:{{ .vars.finding.line }}.
+```
+
+- **Name a field; a bare `{{ .vars.finding }}` is an error.** An object has no single rendering, and choosing one here (JSON? comma-joined?) is the invented rule that kept objects out of `from:` to begin with. Field access has no such problem, because the author names exactly what renders.
+- **`label:` says which field names a cell** — `verifier [finding=SQLI-42]`. Coordinates need a scalar: a cell's name is a routing target and an `assert.execution` entry. Without `label:` cells are named by 1-based position (`[finding=#3]`) — deterministic, but it tells a reader nothing. `label:` is invalid on a `values:` axis, where strings already name themselves.
+- **Fields must be scalars** (string, number, boolean). Numbers keep their own text, so `"line": 42` renders `42`. A nested object or a list is refused for the same reason a bare object is; record it under its own key, or flatten it where it is written.
+- **An array is homogeneous** — all strings or all objects. A mixed one means the step that recorded it disagreed with itself about what an item is, and half the cells would render a template the other half cannot.
+- **Every item must carry every field any template names**, and this is checked over the whole array *before any cell runs*. A malformed item fails the block loudly rather than failing cell 7 of 40 after six have already spent their model calls.
+- **Nothing about hashing changes**, which is the load-bearing part: a cell's identity is the step it *renders to*, so a field no template mentions never enters it — the same property strings already had.
 
 **Planning.** A static matrix expands at load, so `steps plan` shows every cell. A runtime one cannot: its width is not knowable until the step that fills its source has run. It hashes its *declaration* at plan time — the axes including the source key, plus the unexpanded template — which means the planner cannot predict what that block, or anything downstream of it, will do. The cells themselves hash at run time and cache per cell exactly as static cells do.
 

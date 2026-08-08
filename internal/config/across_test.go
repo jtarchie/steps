@@ -90,7 +90,7 @@ func TestExpandAcrossValuesSubstitutesRuntimeValues(t *testing.T) {
 		Run:    "echo {{ .vars.finding }}",
 	}
 
-	cells, err := ExpandAcrossValues("job \"j\" step 0", step, map[string][]string{
+	cells, err := ExpandAcrossValues("job \"j\" step 0", step, map[string][]any{
 		"finding": {"alpha", "beta"},
 	})
 	if err != nil {

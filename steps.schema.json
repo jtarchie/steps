@@ -798,7 +798,11 @@
               },
               "from": {
                 "type": "string",
-                "description": "Run-context key holding a JSON array of strings, recorded by an earlier step. Mutually exclusive with values."
+                "description": "Run-context key holding a JSON array recorded by an earlier step: all strings, or all flat objects whose fields a cell names individually ({{ .vars.finding.file }}). Mutually exclusive with values."
+              },
+              "label": {
+                "type": "string",
+                "description": "from: axes holding objects only. Which field names each cell; absent, cells are named by their 1-based position (#3)."
               }
             }
           }
