@@ -319,8 +319,34 @@ workspace:
 - **Cells are admitted in declaration order.** Under a limit especially, "which cells go first" is otherwise whichever goroutines the scheduler happened to run.
 - **`assert.execution` stays deterministic**: each cell records into its own log, merged back in declaration order at the join — the same treatment `in_parallel:` branches get.
 - **There is no `fail_fast:`.** A matrix asks which combinations work; cancelling the siblings of the first red cell answers that for exactly one cell. Every cell runs and every failure is reported, exactly as in the serial walk.
-- **Recorded context is scoped per cell** and merged at the join under a key naming the cell (`reviewer [dimension=api-boundaries].finding`), because concurrent cells recording one key have no order to resolve by. A *serial* matrix keeps the plain last-wins described in [agents.md](agents.md#writing-from-concurrent-branches) — sequential writers resolve in an order readable off the pipeline. Consequence worth knowing: raising `max_in_flight` changes the key names a downstream step reads.
+- **A matrix that records context must say `qualify:`** — see below. Concurrent cells cannot share a key, so this is a load error rather than a silent re-keying.
 - **Not hashed**, unlike `in_parallel:`'s `limit:`/`fail_fast:`. Those change which steps run at all; this changes only how many run at once, and the cell set is identical at any width — so widening a matrix whose cells are all cached re-runs nothing.
+
+### Per-cell facts: `context: { write: true, qualify: true }`
+
+Two cells recording the same key is the ordinary case for a fan-out — every reviewer records a `finding`. Serially that resolves the way two sequential steps do: the later wins, in an order readable off the pipeline. Concurrently there is no order, so each cell writes to a scope only it touches and the join merges them under a key naming the cell:
+
+```
+without qualify, serial   ->  finding
+with qualify              ->  reviewer [dim=api-boundaries].finding
+```
+
+`qualify:` is what says which of those the matrix means, **independently of scheduling**:
+
+```yaml
+- across:
+  - var: dim
+    from: dimensions
+    label: id
+  max_in_flight: 4
+  agent: reviewer
+  context: { write: true, qualify: true }
+```
+
+- **It applies serially too.** That is the entire point: the same pipeline records the same keys at `max_in_flight: 4` and with the line deleted, so turning concurrency on and off is invisible to every downstream step — which is what makes `max_in_flight:` safe to add and remove, and why it is not hashed.
+- **`max_in_flight > 1` with `context: write` requires it**, as a load error naming the fix. Before this, scheduling silently rewrote a data contract: a downstream agent's recap changed shape and any step reading a key by name stopped finding it, with nothing to report.
+- **It is `across:`-only, and needs `write:`.** An ordinary step is not a cell, and there is nothing to qualify without writes. A step inside an `in_parallel:` branch is qualified by its branch already, and always was — branches are heterogeneous steps with no serial spelling, so no rename was ever possible there.
+- **Unqualified stays last-wins**, as described in [agents.md](agents.md#writing-from-concurrent-branches). Prefixes are noise when there is no collision to disambiguate, so opting in is what turns them on.
 
 ## `approval:` — a human in the plan
 

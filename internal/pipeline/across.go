@@ -93,10 +93,27 @@ func runAcrossCells(
 		return runAcrossCellsConcurrently(ctx, cfg, jobName, i, step, cells, bw, st, cellParent, handoff)
 	}
 
-	var failures []error
+	// context qualify: is a property of the MATRIX, not of the scheduling, so
+	// a serial qualified matrix scopes and merges exactly as the concurrent
+	// walk does. That is what makes the two spellings of one pipeline record
+	// the same key names — the reason max_in_flight: is safe to add and remove.
+	qualified := step.Unwrap().QualifiesContext()
 
-	for _, cell := range cells {
-		skipped, err := runAcrossCell(ctx, cfg, jobName, i, cell, bw, st, cellParent, handoff)
+	var (
+		failures []error
+		results  = make([]branchResult, len(cells))
+	)
+
+	for index, cell := range cells {
+		results[index] = branchResult{index: index, name: executedStepName(cell)}
+
+		cellCtx := ctx
+		if qualified {
+			cellCtx = agent.WithContextScope(ctx,
+				branchContextScope(agent.ContextWriteScope(ctx), index, results[index].name))
+		}
+
+		skipped, err := runAcrossCell(cellCtx, cfg, jobName, i, cell, bw, st, cellParent, handoff)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("cell %q: %w", executedStepName(cell), err))
 
@@ -109,6 +126,10 @@ func runAcrossCells(
 		if skipped {
 			fmt.Printf("skip: %s (unchanged)\n", executedStepName(cell))
 		}
+	}
+
+	if qualified {
+		mergeBranchesContext(ctx, st, results)
 	}
 
 	return errors.Join(failures...)

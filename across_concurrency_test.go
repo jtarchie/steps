@@ -97,17 +97,20 @@ jobs:
 	mustRun(t, path)
 }
 
-// TestAcrossMaxInFlightScopesContextPerCell covers the hazard concurrency
-// introduces for the run context store: two cells recording the same key.
+// TestAcrossQualifiedContextKeysDoNotDependOnScheduling covers the hazard
+// concurrency introduces for the run context store — two cells recording the
+// same key — and the property that makes it safe to opt into.
 //
-// Serial cells resolve that the way two sequential steps do — the later wins,
-// in an order readable off the pipeline. Concurrent cells have no order, so
-// each writes to a scope only it touches and the join merges them under a key
-// naming the cell, exactly as in_parallel: branches do. Without that, this
-// records one `finding` belonging to whichever cell happened to finish last.
-func TestAcrossMaxInFlightScopesContextPerCell(t *testing.T) {
-	dir := t.TempDir()
-	path := writePipeline(t, dir, `
+// Cells that share a key have to be scoped, or the value that survives belongs
+// to whichever cell finished last. But which cells overlap is a SCHEDULING
+// decision, and key names are a data contract, so `context: qualify: true`
+// states the intent once and both spellings honour it: the same pipeline
+// records the same keys serially and at max_in_flight: 2. Turning concurrency
+// on or off is then invisible to every downstream step, which is the point of
+// max_in_flight: not being hashed.
+func TestAcrossQualifiedContextKeysDoNotDependOnScheduling(t *testing.T) {
+	pipeline := func(maxInFlight string) string {
+		return `
 workspace:
   strategy: copy
 
@@ -117,7 +120,52 @@ jobs:
   - across:
     - var: cell
       values: [alpha, beta]
-    max_in_flight: 2
+` + maxInFlight + `    task: "record-{{ .vars.cell }}"
+    inputs: []
+    context: { write: true, qualify: true }
+    run: |
+      mkdir -p context
+      printf '{{ .vars.cell }} found something' > context/finding
+`
+	}
+
+	want := []string{"record-alpha.finding", "record-beta.finding"}
+
+	for _, tc := range []struct{ name, maxInFlight string }{
+		{"serial", ""},
+		{"concurrent", "    max_in_flight: 2\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writePipeline(t, t.TempDir(), pipeline(tc.maxInFlight))
+
+			mustRun(t, path)
+
+			got := runContextKeys(t, path)
+			if len(got) != len(want) {
+				t.Fatalf("run context keys = %v, want one per cell %v (a lost key means two cells shared a scope)", got, want)
+			}
+
+			for i := range want {
+				if got[i] != want[i] {
+					t.Errorf("key %d = %q, want %q", i, got[i], want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestAcrossUnqualifiedSerialContextIsLastWins pins the other half: without
+// qualify:, a serial matrix keeps the plain last-wins a reader expects from
+// two sequential steps writing one key. Prefixes are noise when there is no
+// collision to disambiguate, so opting in has to be what turns them on.
+func TestAcrossUnqualifiedSerialContextIsLastWins(t *testing.T) {
+	path := writePipeline(t, t.TempDir(), `
+jobs:
+- name: fan
+  plan:
+  - across:
+    - var: cell
+      values: [alpha, beta]
     task: "record-{{ .vars.cell }}"
     inputs: []
     context: write
@@ -129,16 +177,8 @@ jobs:
 	mustRun(t, path)
 
 	got := runContextKeys(t, path)
-	want := []string{"record-alpha.finding", "record-beta.finding"}
-
-	if len(got) != len(want) {
-		t.Fatalf("run context keys = %v, want one per cell %v (a lost key means two cells shared a scope)", got, want)
-	}
-
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("key %d = %q, want %q", i, got[i], want[i])
-		}
+	if len(got) != 1 || got[0] != "finding" {
+		t.Fatalf("run context keys = %v, want exactly [finding]", got)
 	}
 }
 

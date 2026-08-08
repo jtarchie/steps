@@ -425,3 +425,160 @@ jobs:
 		t.Fatalf("LoadConfig: %v, want context: write to be legal on a matrix", err)
 	}
 }
+
+// TestContextQualifyRules covers qualify:'s load-time contract from both
+// directions: it has to describe a matrix that writes, and a concurrent matrix
+// that writes has to state it.
+//
+// The last case is the one the field exists for. Without it, adding
+// max_in_flight: silently re-keyed everything the matrix recorded — the
+// downstream step reading `finding` by name simply stopped finding it, and
+// nothing anywhere said so.
+func TestContextQualifyRules(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct{ name, plan, wantErr string }{
+		{
+			name: "qualified matrix",
+			plan: `
+  - across:
+    - var: shard
+      values: [a, b]
+    agent: writer
+    prompt: "go {{ .vars.shard }}"
+    context: { write: true, qualify: true }`,
+		},
+		{
+			name: "qualified concurrent matrix",
+			plan: `
+  - across:
+    - var: shard
+      values: [a, b]
+    max_in_flight: 2
+    agent: writer
+    prompt: "go {{ .vars.shard }}"
+    context: { write: true, qualify: true }`,
+		},
+		{
+			name: "concurrent matrix that writes without qualifying",
+			plan: `
+  - across:
+    - var: shard
+      values: [a, b]
+    max_in_flight: 2
+    agent: writer
+    prompt: "go {{ .vars.shard }}"
+    context: write`,
+			wantErr: "requires context qualify: true",
+		},
+		{
+			// The concurrency is real, but there is nothing to re-key: no
+			// write, no keys, no contract to change.
+			name: "concurrent matrix that does not write",
+			plan: `
+  - across:
+    - var: shard
+      values: [a, b]
+    max_in_flight: 2
+    agent: writer
+    prompt: "go {{ .vars.shard }}"`,
+		},
+		{
+			name: "qualify on a step with no matrix",
+			plan: `
+  - agent: writer
+    prompt: go
+    context: { write: true, qualify: true }`,
+			wantErr: "only valid on an across: step",
+		},
+		{
+			name: "qualify without write",
+			plan: `
+  - across:
+    - var: shard
+      values: [a, b]
+    agent: writer
+    prompt: "go {{ .vars.shard }}"
+    context: { qualify: true }`,
+			wantErr: "does not write",
+		},
+		{
+			// across:/max_in_flight: sit on the wrapper and context: on the
+			// agent it wraps, so a check reading either step alone answers the
+			// wrong question — and this shape would load clean.
+			name: "concurrent matrix wrapped in try:",
+			plan: `
+  - across:
+    - var: shard
+      values: [a, b]
+    max_in_flight: 2
+    try:
+      agent: writer
+      prompt: "go {{ .vars.shard }}"
+      context: write`,
+			wantErr: "requires context qualify: true",
+		},
+		{
+			name: "qualified matrix wrapped in try:",
+			plan: `
+  - across:
+    - var: shard
+      values: [a, b]
+    max_in_flight: 2
+    try:
+      agent: writer
+      prompt: "go {{ .vars.shard }}"
+      context: { write: true, qualify: true }`,
+		},
+		{
+			// A matrix nested in a concurrent branch is still reached: the
+			// walk descends into blocks the way every other validator does.
+			name: "concurrent matrix inside an in_parallel branch",
+			plan: `
+  - in_parallel:
+      steps:
+      - across:
+        - var: shard
+          values: [a, b]
+        max_in_flight: 2
+        agent: writer
+        prompt: "go {{ .vars.shard }}"
+        context: write`,
+			wantErr: "requires context qualify: true",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := writeConfig(t, `
+workspace:
+  strategy: copy
+agents:
+- name: writer
+  source: { model: lmstudio/qwen }
+jobs:
+- name: j
+  plan:`+tc.plan+"\n")
+
+			_, err := LoadConfig(path)
+
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("LoadConfig: %v, want it to load", err)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("LoadConfig: no error, want one containing %q", tc.wantErr)
+			}
+
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %q, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}

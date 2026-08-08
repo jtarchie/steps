@@ -32,6 +32,22 @@ type ContextSpec struct {
 	// means "not stated here" and falls through to defaults.context.fidelity
 	// and then to FidelityCompact — see ResolveContextFidelity.
 	Fidelity ContextFidelity
+	// Qualify, on an across: step, says the matrix records PER-CELL facts:
+	// each cell writes to a scope only it touches, and the join merges them
+	// under keys naming the cell (`reviewer [dim=api].finding`) instead of the
+	// cells overwriting one another under the plain key.
+	//
+	// It exists to take that decision away from max_in_flight:. Concurrent
+	// cells have to be scoped — two writers on one key produce neither cell's
+	// value — so scheduling used to decide the KEY NAMES a downstream step
+	// reads, and adding max_in_flight: silently reshaped a data contract.
+	// Stated here it is a property of the matrix, so the serial and concurrent
+	// spellings of one pipeline agree and max_in_flight: is safe to add and
+	// remove — which is the point of it not being hashed.
+	//
+	// max_in_flight > 1 therefore REQUIRES it rather than implying it: a load
+	// error naming the fix, instead of a rename nothing reports.
+	Qualify bool
 }
 
 // ContextFidelity is how detailed a step's context recap is.
@@ -138,7 +154,7 @@ func (c *ContextSpec) UnmarshalYAML(value *yaml.Node) error {
 
 		return nil
 	case yaml.MappingNode:
-		err := rejectUnknownKeys(value, "step context", "write", "fidelity")
+		err := rejectUnknownKeys(value, "step context", "write", "fidelity", "qualify")
 		if err != nil {
 			return err
 		}
@@ -146,6 +162,7 @@ func (c *ContextSpec) UnmarshalYAML(value *yaml.Node) error {
 		var m struct {
 			Write    bool            `yaml:"write"`
 			Fidelity ContextFidelity `yaml:"fidelity"`
+			Qualify  bool            `yaml:"qualify"`
 		}
 
 		err = value.Decode(&m)
@@ -158,11 +175,11 @@ func (c *ContextSpec) UnmarshalYAML(value *yaml.Node) error {
 			return err
 		}
 
-		c.Write, c.Fidelity = m.Write, m.Fidelity
+		c.Write, c.Fidelity, c.Qualify = m.Write, m.Fidelity, m.Qualify
 
 		return nil
 	default:
-		return fmt.Errorf("step context at line %d must be %q or a {write, fidelity} mapping", value.Line, contextWriteScalar)
+		return fmt.Errorf("step context at line %d must be %q or a {write, fidelity, qualify} mapping", value.Line, contextWriteScalar)
 	}
 }
 
@@ -175,12 +192,18 @@ func (c *ContextSpec) UnmarshalYAML(value *yaml.Node) error {
 // reading it as "enables nothing" would reject the one spelling a step most
 // wants.
 func (c *ContextSpec) Enabled() bool {
-	return c.Write || c.Fidelity != ""
+	return c.Write || c.Fidelity != "" || c.Qualify
 }
 
 // WritesContext reports whether this step is granted the set_context tool.
 func (s Step) WritesContext() bool {
 	return s.Context != nil && s.Context.Write
+}
+
+// QualifiesContext reports whether this step's matrix records per-cell facts:
+// each cell scoped, merged at the join under a key naming the cell.
+func (s Step) QualifiesContext() bool {
+	return s.Context != nil && s.Context.Qualify
 }
 
 // ReservedContextPrefix is the key namespace the engine keeps for itself. A
@@ -285,7 +308,7 @@ func (c *Config) validateContextSteps() error {
 		}
 	}
 
-	return nil
+	return c.validateContextQualify()
 }
 
 // rejectContextOnHook rejects context: on a hook step. A hook is a reaction
@@ -321,7 +344,82 @@ func checkContextStep(label string, step *Step) error {
 	}
 
 	if !step.Context.Enabled() {
-		return fmt.Errorf("%s: context enables nothing (set write and/or fidelity)", label)
+		return fmt.Errorf("%s: context enables nothing (set write, fidelity and/or qualify)", label)
+	}
+
+	return nil
+}
+
+// validateContextQualify enforces qualify:'s contract across every job.
+//
+// It walks the plan itself rather than riding visitSteps, because the two
+// halves of the question sit on different steps once a try: is involved:
+// across: and max_in_flight: are on the WRAPPER (it is the step with a
+// position in the plan), while context: is on the agent it wraps. visitSteps
+// visits those separately, so either half alone would answer the wrong
+// question — the inner step looking like a context write with no matrix, and
+// the wrapper like a concurrent matrix that writes nothing.
+func (c *Config) validateContextQualify() error {
+	for _, job := range c.Jobs {
+		for i := range job.Plan {
+			err := visitQualifyStep(fmt.Sprintf("job %q step %d", job.Name, i), &job.Plan[i])
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// visitQualifyStep checks one plan step and any concurrent block beneath it.
+func visitQualifyStep(label string, step *Step) error {
+	inner := unwrapStep(step)
+
+	err := checkContextQualify(label, step, inner)
+	if err != nil {
+		return err
+	}
+
+	for kind, branches := range branchesOf(inner) {
+		for b := range branches {
+			err = visitQualifyStep(fmt.Sprintf("%s (%s branch %d)", label, kind, b), &branches[b])
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// checkContextQualify enforces the two halves of qualify:'s contract — that it
+// describes a matrix that writes, and that a concurrent matrix says so.
+//
+// The second is the whole reason the field exists. Concurrent cells MUST be
+// scoped, so before qualify: it was max_in_flight: that decided the key names a
+// downstream step reads: one pipeline recorded `finding` serially and
+// `reviewer__dim_api_.finding` at max_in_flight: 4, with nothing to tell the
+// author that a step reading a key by name had stopped finding it. Refusing
+// here turns that silent rename into a load error naming the one-line fix.
+//
+// outer carries the matrix (across:, max_in_flight:); inner carries context:.
+// They are the same step unless a try: wraps it.
+func checkContextQualify(label string, outer, inner *Step) error {
+	if inner.QualifiesContext() {
+		switch {
+		case len(outer.Across) == 0:
+			return fmt.Errorf("%s: context qualify: names the cell each fact came from, so it is only valid on an across: step", label)
+		case !inner.WritesContext():
+			return fmt.Errorf("%s: context qualify: describes how this step's writes are keyed, but the step does not write (set write: true)", label)
+		}
+
+		return nil
+	}
+
+	if outer.MaxInFlight > 1 && inner.WritesContext() {
+		return fmt.Errorf("%s: max_in_flight: %d with context write requires context qualify: true — concurrent cells cannot share one key, so each cell's facts are recorded under a key naming it (finding becomes %q); saying so here is what keeps the key names the same whether or not the cells run concurrently",
+			label, outer.MaxInFlight, "reviewer [dim=api].finding")
 	}
 
 	return nil

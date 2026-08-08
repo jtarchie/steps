@@ -316,7 +316,11 @@ jobs:
     max_in_flight: 4
     agent: reviewer
     inputs: [pr]
-    context: write
+    # qualify: this matrix records a fact PER CELL, so each cell's findings
+    # come back under a key naming it rather than the cells overwriting one
+    # another. Stated rather than inferred from max_in_flight:, so the key
+    # names a downstream step reads do not change if the concurrency does.
+    context: { write: true, qualify: true }
     context_paths: ["{{ .vars.dim.path }}"]
     prompt: |
       Review this change through one dimension only: {{ .vars.dim.focus }}

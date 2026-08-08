@@ -78,7 +78,7 @@ jobs:
     max_in_flight: 3
     agent: reviewer
     inputs: []
-    context: write
+    context: { write: true, qualify: true }
     prompt: |
       Review this change through one dimension only: {{ .vars.dim.focus }}
       Start from: {{ .vars.dim.scope }}
