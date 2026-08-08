@@ -1,0 +1,27 @@
+# `next` is a reserved to: TARGET, so no step in a routing segment may answer
+# to it.
+#
+# Every other value in a to: map is a step name. `next` is the one that is not:
+# it means "continue in declaration order", which is how a verdict lands on a
+# container — an in_parallel:, race:, across: or approval: has no name to be
+# jumped to.
+#
+# A step called `next` beside a to: that says `next` would make one word mean
+# two things in the one place they meet, and whichever won would be a rule
+# nobody could read off the pipeline. Rename the step.
+#
+# Only inside a to:-using segment: a pipeline that routes nowhere never reads
+# the word, so it may call a step whatever it likes.
+# expect: collides with the reserved to: target
+
+jobs:
+- name: j
+  plan:
+  - task: work
+    inputs: []
+    run: "true"
+    to:
+      success: next
+  - task: next
+    inputs: []
+    run: "true"

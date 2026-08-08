@@ -28,6 +28,7 @@ assert:
     # to:/max_visits: jobs
     - converge
     - exhaust
+    - fall-through
     # hooks jobs
     - passing
     - failing
@@ -129,6 +130,36 @@ jobs:
     run: echo escalated
   assert:
     execution: [flaky, flaky, escalate]
+
+# `to: next` — the one target that is not a step name. It means "continue in
+# declaration order", which is the only way to route INTO a container: an
+# in_parallel:, race:, across: or approval: has no name to be jumped to.
+#
+# Routing past one instead is not equivalent, and quietly so. If the block
+# below were an approval: gate, `success: publish` would skip the human check
+# the pipeline exists to have — while looking like it merely moved on.
+#
+# It is always forward, so it never needs max_visits:. Note that `failure:
+# next` is a real route and not a fall-through: it CONSUMES the failure, which
+# is what lets probe fail without failing the job.
+- name: fall-through
+  plan:
+  - task: probe
+    run: exit 1
+    to:
+      failure: next                   # carry on anyway, into the block below
+      success: next
+  - in_parallel:
+      steps:
+      - task: check-a
+        run: echo checking a
+      - task: check-b
+        run: echo checking b
+  - task: publish-result
+    run: echo published
+  assert:
+    execution: [probe, check-a, check-b, publish-result]
+    outcome: succeeded
 
 # ─── hooks (reactions) ──────────────────────────────────────────────────────
 # A hook is a full step (task/put/agent) that runs in reaction to an outcome:

@@ -915,7 +915,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Route by outcome: success/failure, or a verdict name."
+          "description": "Route by outcome: success/failure, or a verdict name. Each value is a step name in the same get-segment, or the reserved target \"next\" — continue in declaration order, which is the only way to land on a container (in_parallel/race/across/ensemble/approval), since those have no name."
         },
         "max_visits": {
           "type": "integer",

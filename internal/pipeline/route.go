@@ -64,6 +64,14 @@ func resolveTransition(ctx context.Context, steps []config.Step, i int, step con
 		return 0, false, "", nil
 	}
 
+	// The reserved positional target: continue in declaration order. It still
+	// ROUTES rather than falling through — a to: failure: next means "carry on
+	// anyway", which only works if the caller consumes the error the way it
+	// does for any other route.
+	if target == config.RouteTargetNext {
+		return i + 1, true, matchedKey, nil
+	}
+
 	targetIndex, found := indexOfStep(steps, target)
 	if !found {
 		// Load-time validation guarantees the target resolves within the
@@ -117,7 +125,7 @@ func applyRouting(ctx context.Context, steps []config.Step, i int, step config.S
 // against its own bound is the number that says how close the loop is to
 // exhausting.
 func reportRoute(steps []config.Step, i int, step config.Step, target int, key string, visits map[int]int) {
-	from, to := executedStepName(step), executedStepName(steps[target])
+	from, to := executedStepName(step), routeTargetName(steps, target)
 
 	progress := fmt.Sprintf("visit %d", visits[i])
 	if step.MaxVisits > 0 {
@@ -199,6 +207,20 @@ func foldStepUnskippable(cfg *config.Config, step config.Step, chainUnskippable 
 	}
 
 	return chainUnskippable || unskippable, nil
+}
+
+// routeTargetName names the step a route landed on, for the log line.
+//
+// `to: next` on the LAST step of a segment resolves one past the end, which is
+// the same place an unrouted final step goes. That is a legal destination and
+// not a step, so it is named rather than indexed — a bare steps[target] here
+// panics on exactly the pipeline whose last outcome says "just carry on".
+func routeTargetName(steps []config.Step, target int) string {
+	if target >= len(steps) {
+		return "end of plan"
+	}
+
+	return executedStepName(steps[target])
 }
 
 // indexOfStep returns the position of the step named name (its task/put/agent

@@ -418,3 +418,164 @@ func TestSegmentStillRejectsDuplicateNamedSteps(t *testing.T) {
 		t.Errorf("error = %v, want it to name the duplication", err)
 	}
 }
+
+// TestRouteTargetNext covers the reserved positional target — the one to:
+// value that is not a step name.
+//
+// Its reason to exist is the case at the top: a verdict must name a target and
+// a container has none, so an author whose next step is an approval: gate had
+// to route PAST it, which does not skip a formality but the human gate the
+// pipeline exists to have.
+func TestRouteTargetNext(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct{ name, plan, wantErr string }{
+		{
+			name: "verdict falls through into an approval gate",
+			plan: `
+  - agent: critic
+    inputs: []
+    prompt: judge it
+    verdicts: [approve, revise]
+    to:
+      approve: next
+      revise: draft
+    max_visits: 2
+  - approval:
+      message: "publish it?"
+  - task: draft
+    inputs: []
+    run: "true"`,
+		},
+		{
+			// Forward by construction, so it can never be the backward jump
+			// max_visits: bounds.
+			name: "needs no max_visits",
+			plan: `
+  - task: work
+    inputs: []
+    run: "true"
+    to: { success: next, failure: next }
+  - task: after
+    inputs: []
+    run: "true"`,
+		},
+		{
+			// One past the end of a segment is where an unrouted final step
+			// goes anyway, so "carry on" is meaningful even with nothing after.
+			name: "on the last step of a segment",
+			plan: `
+  - task: work
+    inputs: []
+    run: "true"
+    to: { failure: next }`,
+		},
+		{
+			name: "a step named next collides",
+			plan: `
+  - task: work
+    inputs: []
+    run: "true"
+    to: { success: next }
+  - task: next
+    inputs: []
+    run: "true"`,
+			wantErr: "collides with the reserved to: target",
+		},
+		{
+			// The word is only read where to: is, so a pipeline that routes
+			// nowhere may still call a step whatever it likes.
+			name: "a step named next is fine without routing",
+			plan: `
+  - task: next
+    inputs: []
+    run: "true"`,
+		},
+		{
+			name: "a near miss is suggested",
+			plan: `
+  - task: work
+    inputs: []
+    run: "true"
+    to: { success: nex }
+  - task: after
+    inputs: []
+    run: "true"`,
+			wantErr: `did you mean "next"`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := writeConfig(t, `
+agents:
+- name: critic
+  source: { model: lmstudio/qwen }
+jobs:
+- name: j
+  plan:`+tc.plan+"\n")
+
+			_, err := LoadConfig(path)
+
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("LoadConfig: %v, want it to load", err)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("LoadConfig: no error, want one containing %q", tc.wantErr)
+			}
+
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %q, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestRouteTargetNextSatisfiesHandoff proves the step `next` lands on counts
+// as a route target for handoff:, which requires one.
+//
+// It is reachable by a verdict exactly as a named target is, so it can want
+// the transition context — and `targeted` is keyed by NAME, which `next` has
+// none of. Without resolving it positionally this rejects a legitimate
+// handoff: as unreachable.
+func TestRouteTargetNextSatisfiesHandoff(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+agents:
+- name: critic
+  source: { model: lmstudio/qwen }
+- name: fixer
+  source: { model: lmstudio/qwen }
+jobs:
+- name: j
+  plan:
+  - agent: critic
+    inputs: []
+    prompt: judge it
+    verdicts: [approve, revise]
+    to:
+      approve: done
+      revise: next
+    max_visits: 2
+  - agent: fixer
+    inputs: []
+    prompt: fix it
+    handoff: true
+  - task: done
+    inputs: []
+    run: "true"
+`)
+
+	_, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v, want a handoff: on the step next lands on to be legal", err)
+	}
+}

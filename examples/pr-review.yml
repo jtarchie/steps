@@ -378,12 +378,16 @@ jobs:
       it — and say which. Answer `complete` otherwise. "More could always be
       said" is not a blind spot.
 
-  # A verdict must name a step to route to, and a container has no name — so
-  # this is where `complete` lands. It earns its place rather than existing to
-  # be a jump target: it is the deterministic check that the synthesizer
-  # actually wrote the files it claimed, run BEFORE a person is asked to look.
-  # A model that answered `complete` having written nothing fails here instead
-  # of paging someone to discover it.
+  # `complete` lands here rather than on `next` because this step earns its
+  # place: it is the deterministic check that the synthesizer actually wrote
+  # the files it claimed, run BEFORE a person is asked to look. A model that
+  # answered `complete` having written nothing fails here instead of paging
+  # someone to discover it.
+  #
+  # `to: { complete: next }` is the spelling when there is no such step — it
+  # lands on the approval: gate below, which has no name to be routed to. This
+  # example predates that and kept the leaf, because a real check beats a
+  # fall-through.
   - task: check-draft
     inputs: [review]
     run: |

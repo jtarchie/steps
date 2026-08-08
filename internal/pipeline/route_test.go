@@ -218,3 +218,86 @@ func TestResolveTransitionNoTo(t *testing.T) {
 		t.Errorf("got key=%q, want \"\"", key)
 	}
 }
+
+// TestResolveTransitionNextIsPositional covers the reserved to: target: it
+// resolves to the following position rather than to a name, which is what lets
+// a verdict land on a container that has none.
+func TestResolveTransitionNextIsPositional(t *testing.T) {
+	t.Parallel()
+
+	steps := []config.Step{
+		{Agent: "critic", Verdicts: []string{"approve"}, To: map[string]string{"approve": config.RouteTargetNext}},
+		{Approval: &config.Approval{Message: "publish it?"}}, // no name of its own
+		{Put: "release"},
+	}
+
+	next, routed, key, exhausted := resolveTransition(
+		context.Background(), steps, 0, steps[0], nil, "approve", map[int]int{0: 1})
+	if exhausted != nil {
+		t.Fatalf("unexpected exhaustion: %v", exhausted)
+	}
+
+	if !routed || next != 1 {
+		t.Errorf("got next=%d routed=%v, want 1,true — the approval gate, not the put past it", next, routed)
+	}
+
+	if key != "approve" {
+		t.Errorf("got key=%q, want the verdict that matched", key)
+	}
+}
+
+// TestApplyRoutingNextConsumesAFailure is why `next` routes rather than
+// falling through: `to: { failure: next }` means "carry on anyway", and only a
+// real route consumes the error so the job does not also fail.
+func TestApplyRoutingNextConsumesAFailure(t *testing.T) {
+	t.Parallel()
+
+	steps := []config.Step{
+		{Task: "flaky", To: map[string]string{"failure": config.RouteTargetNext}},
+		{Task: "after"},
+	}
+
+	stepErr := outcome.Fail(errors.New("flaky failed"))
+
+	next, key, consumed, exhausted := applyRouting(
+		context.Background(), steps, 0, steps[0], stepRan, "", stepErr, map[int]int{0: 1})
+	if exhausted != nil {
+		t.Fatalf("unexpected exhaustion: %v", exhausted)
+	}
+
+	if next != 1 || key != "failure" {
+		t.Errorf("got next=%d key=%q, want 1,\"failure\"", next, key)
+	}
+
+	if consumed != nil {
+		t.Errorf("error = %v, want it consumed by the route", consumed)
+	}
+}
+
+// TestApplyRoutingNextOffTheEndOfASegment pins the boundary: `next` on the
+// last step resolves one past the end, which is where an unrouted final step
+// goes anyway. reportRoute names that rather than indexing it — a bare lookup
+// panics on exactly the pipeline whose last outcome says "just carry on".
+func TestApplyRoutingNextOffTheEndOfASegment(t *testing.T) {
+	t.Parallel()
+
+	steps := []config.Step{
+		{Task: "last", To: map[string]string{"failure": config.RouteTargetNext}},
+	}
+
+	stepErr := outcome.Fail(errors.New("last failed"))
+
+	next, _, consumed, exhausted := applyRouting(
+		context.Background(), steps, 0, steps[0], stepRan, "", stepErr, map[int]int{0: 1})
+	if exhausted != nil {
+		t.Fatalf("unexpected exhaustion: %v", exhausted)
+	}
+
+	if next != 1 {
+		t.Errorf("next = %d, want 1 (one past the only step)", next)
+	}
+
+	if consumed != nil {
+		t.Errorf("error = %v, want it consumed by the route", consumed)
+	}
+}

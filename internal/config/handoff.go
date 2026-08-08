@@ -244,8 +244,20 @@ func (c *Config) validateHandoffSegments(job Job) error {
 func validateHandoffSegment(job Job, segment []int) error {
 	targeted := map[string]bool{}
 
-	for _, idx := range segment {
+	for segPos, idx := range segment {
 		for _, target := range job.Plan[idx].To {
+			// `next` names no step, but the step it lands on is as much a
+			// route target as a named one — it can be arrived at by a verdict,
+			// so it can want a handoff. Resolve it to that step's name, or
+			// this rejects a legitimate handoff: as unreachable.
+			if target == RouteTargetNext {
+				if segPos+1 < len(segment) {
+					targeted[stepName(job.Plan[segment[segPos+1]])] = true
+				}
+
+				continue
+			}
+
 			targeted[target] = true
 		}
 	}

@@ -5,6 +5,8 @@ package config
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 )
 
 // reservedRouteKeys are the outcome keys with fixed meaning in a step's to:
@@ -14,6 +16,26 @@ import (
 //
 //nolint:gochecknoglobals // static, read-only lookup table
 var reservedRouteKeys = map[string]bool{"success": true, "failure": true}
+
+// RouteTargetNext is the reserved to: TARGET — the value side, where every
+// other entry is a step name — meaning "continue in declaration order".
+//
+// It exists because a verdict must name a target, and a container has none:
+// stepName returns "" for in_parallel:, race:, across:, ensemble: and
+// approval:. An author whose next step was one of those had to route PAST it
+// to some later leaf, which does not skip a formality — routing past an
+// approval: skips the human gate the pipeline exists to have — or insert a
+// leaf step purely to give the verdict somewhere safe to land.
+//
+// Positional rather than named, so it needs no naming surface on block steps,
+// and it says the thing an author wants to say independently of containers:
+// this outcome is not a jump. Always forward, so it never requires
+// max_visits:.
+//
+// The cost is one reserved word on the value side. A step named "next" inside
+// a to:-using segment is refused at load rather than silently shadowed —
+// otherwise "next" would mean two things in the one place they collide.
+const RouteTargetNext = "next"
 
 // DisplayName is stepName for other packages: the name a step is KNOWN by,
 // which is what a run's output, its recorded node, and assert.execution should
@@ -160,6 +182,27 @@ func validateSegment(job Job, segment []int) error {
 		return nil
 	}
 
+	pos, err := segmentPositions(job, segment)
+	if err != nil {
+		return err
+	}
+
+	for segPos, idx := range segment {
+		err = validateStepRouting(job, idx, segPos, job.Plan[idx], pos)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// segmentPositions maps each named step in the segment to its
+// segment-relative position — what a to: target resolves against.
+//
+// It also rejects the two names that cannot be targets: a duplicate, which has
+// no answer, and the reserved "next".
+func segmentPositions(job Job, segment []int) (map[string]int, error) {
 	pos := make(map[string]int, len(segment))
 
 	for segPos, idx := range segment {
@@ -172,27 +215,29 @@ func validateSegment(job Job, segment []int) error {
 		// load error reported as `step name "" is duplicated`, which named
 		// neither block and described a collision between two things that
 		// cannot be targeted at all. A fan-out beside a fan-in, in a job with
-		// a loop, is an ordinary shape (see examples/pr-review.yml).
+		// a loop, is an ordinary shape (see examples/pr-review.yml). Reaching
+		// one is what RouteTargetNext is for.
 		if name == "" {
 			continue
 		}
 
+		// "next" is a to: target with a fixed positional meaning, so a step
+		// answering to it would make one word mean two things in the one place
+		// they meet. Refused only inside a to:-using segment, since that is
+		// the only place the word is read at all.
+		if name == RouteTargetNext {
+			return nil, fmt.Errorf("job %q: step %q collides with the reserved to: target %q, which means the next step in declaration order; rename the step", job.Name, name, RouteTargetNext)
+		}
+
 		_, dup := pos[name]
 		if dup {
-			return fmt.Errorf("job %q: step name %q is duplicated within a to:-using segment; names must be unique to be jump targets", job.Name, name)
+			return nil, fmt.Errorf("job %q: step name %q is duplicated within a to:-using segment; names must be unique to be jump targets", job.Name, name)
 		}
 
 		pos[name] = segPos
 	}
 
-	for segPos, idx := range segment {
-		err := validateStepRouting(job, idx, segPos, job.Plan[idx], pos)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return pos, nil
 }
 
 // validateStepRouting validates one step's to:/verdicts:/max_visits: against
@@ -308,9 +353,16 @@ func validateRouteTargets(label string, segPos int, step Step, pos map[string]in
 	backward := false
 
 	for key, target := range step.To {
+		// The one target that is not a name. It is the position after this
+		// step, so it always exists (falling off the end of a segment is what
+		// an unrouted step does anyway) and is always forward.
+		if target == RouteTargetNext {
+			continue
+		}
+
 		targetPos, ok := pos[target]
 		if !ok {
-			return fmt.Errorf("%s: to: %s routes to %q, which is not a step in the same segment", label, key, target)
+			return fmt.Errorf("%s: to: %s routes to %q, which is not a step in the same segment%s", label, key, target, suggestion(target, append(slices.Sorted(maps.Keys(pos)), RouteTargetNext)))
 		}
 
 		if targetPos <= segPos {
