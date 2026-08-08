@@ -377,3 +377,166 @@ func containsString(haystack []string, needle string) bool {
 
 	return false
 }
+
+// TestEndToEndAcrossRendersContextPaths pins the evidence-pack half of the
+// fan-out: each cell OPENS holding the file its dimension named, delivered as
+// a synthetic read_file result rather than as a turn it had to spend.
+//
+// This is an e2e rather than a config test because the config test proves only
+// that the template rendered. What matters is that the rendered path survived
+// merkle, workspace and preparation and arrived on the WIRE as that cell's
+// file — and that concurrent cells did not hand each other the wrong one,
+// which is the failure a shared slice header would produce and which nothing
+// downstream would ever report.
+func TestEndToEndAcrossRendersContextPaths(t *testing.T) {
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	dir := t.TempDir()
+
+	// Each file's CONTENTS carry a unique marker, so a cell's request can be
+	// matched to the file it was actually handed rather than to the one it was
+	// told about.
+	//
+	// The marker is derived from the file name rather than carried as a field:
+	// every agent step opens with a recap of the recorded context, which here
+	// holds the whole dimensions array — so a marker stored in it would appear
+	// in every cell's request without any file having been delivered at all.
+	dimensions := []map[string]string{
+		{"id": "state", "file": "store.go"},
+		{"id": "api", "file": "api.go"},
+		{"id": "errors", "file": "run.go"},
+	}
+
+	fake := newRoutedFakeLLM(t, func(req capturedRequest) turn {
+		// Asking which tool was called rather than whether any tool traffic
+		// exists — see reviewScript for why the distinction matters.
+		if strings.Contains(req.systemMessage(), "compiler") && !modelHasCalled(req, "set_context") {
+			return callsTools(call("set_context", map[string]any{
+				"key": "dimensions", "value": mustMarshal(dimensions),
+			}))
+		}
+
+		return says("reviewed")
+	})
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+workspace:
+  strategy: copy
+
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: compiler
+  system: you are the compiler
+  source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
+- name: reviewer
+  system: you are a reviewer
+  source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
+
+jobs:
+- name: review
+  plan:
+  - task: checkout
+    outputs: [src]
+    run: |
+      printf 'package store // CONTENTS_OF_store.go\n' > src/store.go
+      printf 'package api // CONTENTS_OF_api.go\n'     > src/api.go
+      printf 'package run // CONTENTS_OF_run.go\n'     > src/run.go
+
+  - agent: compiler
+    inputs: []
+    context: write
+    prompt: Decide the dimensions.
+
+  - across:
+    - var: dim
+      from: dimensions
+      label: id
+    max_in_flight: 3
+    agent: reviewer
+    inputs: [src]
+    context_paths: ["src/{{ .vars.dim.file }}"]
+    prompt: Review {{ .vars.dim.id }}.
+`, fake.URL+"/v1/"))
+
+	mustRun(t, path)
+
+	assertSucceeded(t, storeNodes(t, path), "agent", "reviewer [dim=state]")
+
+	// Every cell's request must carry ITS file and no sibling's. Matching the
+	// prompt to the tool results is the whole assertion: a shared slice header
+	// renders every cell to the first cell's path, which still succeeds, still
+	// delivers a real file, and is still wrong.
+	seen := map[string]bool{}
+
+	for i := 1; i <= fake.requestCount(); i++ {
+		req := fake.request(i)
+
+		prompt := userPrompt(req)
+		if !strings.HasPrefix(prompt, "Review ") {
+			continue
+		}
+
+		file, ok := fileFor(dimensions, strings.TrimSuffix(strings.TrimPrefix(prompt, "Review "), "."))
+		if !ok {
+			t.Fatalf("request %d prompt %q names no dimension", i, prompt)
+		}
+
+		assertCellGotOnlyItsFile(t, prompt, req, file, dimensions)
+
+		seen[file] = true
+	}
+
+	if len(seen) != len(dimensions) {
+		t.Errorf("matched %d reviewer requests to a dimension, want %d", len(seen), len(dimensions))
+	}
+}
+
+// assertCellGotOnlyItsFile checks one cell's request carries the contents of
+// the file its dimension named, and of no sibling's.
+//
+// Both halves matter. Missing its own file is the ordinary regression; holding
+// a sibling's is the aliasing one, which still succeeds, still delivers a real
+// file, and is still the wrong review.
+func assertCellGotOnlyItsFile(t *testing.T, prompt string, req capturedRequest, file string, dimensions []map[string]string) {
+	t.Helper()
+
+	want := "CONTENTS_OF_" + file
+	delivered := strings.Join(req.toolResults(), "\n")
+
+	if !strings.Contains(delivered, want) {
+		t.Errorf("cell for %q was not given %s; its context_paths delivered: %s", prompt, want, delivered)
+	}
+
+	for _, dim := range dimensions {
+		other := "CONTENTS_OF_" + dim["file"]
+		if other != want && strings.Contains(delivered, other) {
+			t.Errorf("cell for %q was also given %s, which belongs to another cell", prompt, other)
+		}
+	}
+}
+
+// userPrompt returns the request's first user message — the step's prompt, as
+// distinct from the synthetic tool traffic that precedes it.
+func userPrompt(req capturedRequest) string {
+	for _, msg := range req.Messages {
+		if msg.Role == "user" {
+			return strings.TrimSpace(msg.Content)
+		}
+	}
+
+	return ""
+}
+
+// fileFor returns the file the dimension with this id was assigned.
+func fileFor(dimensions []map[string]string, id string) (string, bool) {
+	for _, dim := range dimensions {
+		if dim["id"] == id {
+			return dim["file"], true
+		}
+	}
+
+	return "", false
+}

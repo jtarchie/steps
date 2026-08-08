@@ -336,3 +336,160 @@ func TestValidateAcrossTemplatesOnRuntimeMatrix(t *testing.T) {
 		})
 	}
 }
+
+// TestAcrossRendersContextPaths covers the per-cell evidence pack: each cell
+// arrives already holding the code it was assigned, rather than spending its
+// first turns navigating to it.
+//
+// Both matrix spellings are here because they render through different
+// entry points — a static matrix expands at load, a runtime one in
+// internal/pipeline — and the guarantee is that a runtime cell is
+// indistinguishable from the static cell it renders to.
+func TestAcrossRendersContextPaths(t *testing.T) {
+	t.Parallel()
+
+	t.Run("static axis", func(t *testing.T) {
+		t.Parallel()
+
+		cells, err := ExpandAcross(`job "j" step 0`, Step{
+			Across:       []AcrossVar{{Var: "pkg", Values: []string{"agent", "pipeline"}}},
+			Agent:        "reviewer",
+			Prompt:       "review {{ .vars.pkg }}",
+			ContextPaths: []string{"repo/internal/{{ .vars.pkg }}/step.go", "repo/CLAUDE.md"},
+		})
+		if err != nil {
+			t.Fatalf("ExpandAcross: %v", err)
+		}
+
+		for i, want := range []string{"agent", "pipeline"} {
+			got := cells[i].ContextPaths
+			if len(got) != 2 {
+				t.Fatalf("cell %d has %d context paths, want 2", i, len(got))
+			}
+
+			if got[0] != "repo/internal/"+want+"/step.go" {
+				t.Errorf("cell %d context_paths[0] = %q, want the %s path", i, got[0], want)
+			}
+
+			// An entry with no template is left exactly as written; only the
+			// entries that name a var differ per cell.
+			if got[1] != "repo/CLAUDE.md" {
+				t.Errorf("cell %d context_paths[1] = %q, want it untouched", i, got[1])
+			}
+		}
+	})
+
+	t.Run("runtime object axis", func(t *testing.T) {
+		t.Parallel()
+
+		cells, err := ExpandAcrossValues(`job "j" step 0`, Step{
+			Across:       []AcrossVar{{Var: "dim", From: "dimensions", Label: "id"}},
+			Agent:        "reviewer",
+			Prompt:       "review {{ .vars.dim.focus }}",
+			ContextPaths: []string{"{{ .vars.dim.scope }}"},
+		}, map[string][]any{
+			"dim": {
+				map[string]string{"id": "api", "focus": "boundaries", "scope": "repo/api.go"},
+				map[string]string{"id": "db", "focus": "queries", "scope": "repo/db.go"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("ExpandAcrossValues: %v", err)
+		}
+
+		for i, want := range []string{"repo/api.go", "repo/db.go"} {
+			if got := cells[i].ContextPaths[0]; got != want {
+				t.Errorf("cell %d context_paths[0] = %q, want %q", i, got, want)
+			}
+		}
+	})
+}
+
+// TestAcrossContextPathsDoNotAliasBetweenCells is the regression the slice
+// clone in renderCell exists for.
+//
+// ExpandAcross builds a cell by assigning the step, which copies the struct
+// but SHARES the array behind context_paths. Rendering the elements in place
+// meant cell 1 consumed the template and every later cell found cell 1's
+// already-rendered path — the same aliasing the Try pointer had, and silent
+// rather than loud: every cell would read the FIRST cell's file and review it
+// under its own name.
+func TestAcrossContextPathsDoNotAliasBetweenCells(t *testing.T) {
+	t.Parallel()
+
+	step := Step{
+		Across:       []AcrossVar{{Var: "pkg", Values: []string{"a", "b", "c"}}},
+		Agent:        "reviewer",
+		ContextPaths: []string{"repo/{{ .vars.pkg }}.go"},
+	}
+
+	cells, err := ExpandAcross(`job "j" step 0`, step)
+	if err != nil {
+		t.Fatalf("ExpandAcross: %v", err)
+	}
+
+	for i, want := range []string{"repo/a.go", "repo/b.go", "repo/c.go"} {
+		if got := cells[i].ContextPaths[0]; got != want {
+			t.Errorf("cell %d context_paths[0] = %q, want %q", i, got, want)
+		}
+	}
+
+	// The step the caller passed in is not consumed either: validateAcross
+	// expands a static matrix at load and the pipeline expands it again to run
+	// it, off the same Step.
+	if step.ContextPaths[0] != "repo/{{ .vars.pkg }}.go" {
+		t.Errorf("source step context_paths[0] = %q, want the template untouched", step.ContextPaths[0])
+	}
+}
+
+// TestAcrossContextPathTemplateErrors proves a context path is checked exactly
+// like a prompt is — at load for both matrix spellings, since it joined the
+// one list renderCell and validateAcrossTemplates share.
+func TestAcrossContextPathTemplateErrors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("runtime matrix fails at load", func(t *testing.T) {
+		t.Parallel()
+
+		err := validateAcrossTemplates(`job "j" step 0`, Step{
+			Across:       []AcrossVar{{Var: "dim", From: "dimensions"}},
+			Agent:        "reviewer",
+			ContextPaths: []string{"{{ .vars.dimm.scope }}"},
+		})
+		if err == nil || !strings.Contains(err.Error(), "names no axis") {
+			t.Fatalf("error = %v, want it to name the undeclared axis", err)
+		}
+
+		if !strings.Contains(err.Error(), "context_paths[0]") {
+			t.Errorf("error = %q, want it to name the offending path entry", err)
+		}
+	})
+
+	t.Run("static matrix fails at expansion", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := ExpandAcross(`job "j" step 0`, Step{
+			Across:       []AcrossVar{{Var: "pkg", Values: []string{"a"}}},
+			Agent:        "reviewer",
+			ContextPaths: []string{"repo/{{ .vars.pgk }}.go"},
+		})
+		if err == nil || !strings.Contains(err.Error(), "context_paths[0]") {
+			t.Fatalf("error = %v, want it to name the offending path entry", err)
+		}
+	})
+
+	t.Run("bare object reference is refused", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := ExpandAcrossValues(`job "j" step 0`, Step{
+			Across:       []AcrossVar{{Var: "dim", From: "dimensions", Label: "id"}},
+			Agent:        "reviewer",
+			ContextPaths: []string{"{{ .vars.dim }}"},
+		}, map[string][]any{
+			"dim": {map[string]string{"id": "api", "scope": "repo/api.go"}},
+		})
+		if err == nil || !strings.Contains(err.Error(), "has no single rendering") {
+			t.Fatalf("error = %v, want the bare-object refusal", err)
+		}
+	})
+}

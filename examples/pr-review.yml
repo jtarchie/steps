@@ -285,7 +285,13 @@ jobs:
 
         id     a short kebab-case identifier, unique in the list
         focus  one sentence: what a reviewer taking this dimension looks for
-        scope  a space-separated list of paths from the change to look at
+        path   the ONE file most central to this dimension, as a repo-relative
+               path prefixed `pr/` — its contents are handed to the reviewer
+               before it says anything, so a wrong path costs a whole cell
+        scope  a space-separated list of the OTHER paths worth reading
+
+      `path` is one file, not a list. A dimension that genuinely needs two
+      files read up front is two dimensions.
 
       At most eight. Fewer is better than overlapping.
 
@@ -298,6 +304,11 @@ jobs:
   # addressable by assert:. Their findings come back under keys naming the cell
   # (reviewer [dim=<id>].finding), so the falsifier can tell which reviewer
   # said what.
+  #
+  # context_paths: renders per cell, so each reviewer OPENS holding the file it
+  # was assigned — delivered as a synthetic read_file result, costing no turn.
+  # That is the difference between "go find your scope" (several turns, and no
+  # way to tell whether it actually read the code) and an evidence pack.
   - across:
     - var: dim
       from: dimensions
@@ -306,10 +317,13 @@ jobs:
     agent: reviewer
     inputs: [pr]
     context: write
+    context_paths: ["{{ .vars.dim.path }}"]
     prompt: |
       Review this change through one dimension only: {{ .vars.dim.focus }}
 
-      Start from these paths: {{ .vars.dim.scope }}
+      {{ .vars.dim.path }} is already in your context — you have its current
+      contents above, so reason over them directly rather than re-reading it.
+      Open these only if that is insufficient: {{ .vars.dim.scope }}
 
       Other dimensions are being reviewed at the same time as yours — the
       recap in your context lists them. A finding that clearly belongs to

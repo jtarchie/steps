@@ -418,22 +418,36 @@ type renderableField struct {
 // differ per cell.
 //
 // The set is deliberately small: the command, the container it runs in, the
-// prompt, the working directory, and the names the step is known by. Rendering
-// everything would mean a template failure in an unrelated field could break a
-// pipeline that never asked for one.
+// prompt, the working directory, the files the conversation opens holding, and
+// the names the step is known by. Rendering everything would mean a template
+// failure in an unrelated field could break a pipeline that never asked for
+// one.
 //
 // One list, read by both the renderer and the load-time template check, so a
 // field cannot be rendered without also being validated (or the reverse).
+//
+// context_paths: is a LIST, so it contributes one entry per element rather
+// than one entry: a renderableField is a single string, and an entry named
+// `context_paths[1]` puts an error on the path that has the mistake instead of
+// on the whole list. Each entry points INTO the slice, which is why renderCell
+// clones it first.
 func renderableFields(cell *Step) []renderableField {
-	return []renderableField{
-		{"task", &cell.Task},
-		{"run", &cell.Run},
-		{"image", &cell.Image},
-		{"prompt", &cell.Prompt},
-		{"dir", &cell.Dir},
-		{"put", &cell.Put},
-		{"get", &cell.Get},
+	fields := make([]renderableField, 0, 7+len(cell.ContextPaths))
+	fields = append(fields,
+		renderableField{"task", &cell.Task},
+		renderableField{"run", &cell.Run},
+		renderableField{"image", &cell.Image},
+		renderableField{"prompt", &cell.Prompt},
+		renderableField{"dir", &cell.Dir},
+		renderableField{"put", &cell.Put},
+		renderableField{"get", &cell.Get},
+	)
+
+	for i := range cell.ContextPaths {
+		fields = append(fields, renderableField{fmt.Sprintf("context_paths[%d]", i), &cell.ContextPaths[i]})
 	}
+
+	return fields
 }
 
 // validateAcrossTemplates checks a RUNTIME matrix's templates at load time.
@@ -536,6 +550,14 @@ func renderCell(label string, cell *Step, combo acrossCombo) error {
 	// themselves is a question about the template they wrote, not about the
 	// text it happened to produce (see nameCell).
 	templateName := stepName(*cell)
+
+	// The same aliasing the Try pointer above has, for the same reason:
+	// ExpandAcross builds a cell by assigning the step, which copies the struct
+	// but SHARES the array behind context_paths with every other cell.
+	// renderableFields hands out pointers INTO that array, so rendering in
+	// place would have cell 1 consume the template and leave cell 2 with cell
+	// 1's paths.
+	cell.ContextPaths = slices.Clone(cell.ContextPaths)
 
 	for _, field := range renderableFields(cell) {
 		rendered, err := renderVars(*field.value, combo)

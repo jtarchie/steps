@@ -245,7 +245,21 @@ Paths are relative to the step's working directory and confined to its workspace
 
 `context_paths` is a step-level field, not agent-level — the agent definition (`agents:`) has no notion of which inputs are available. It is only valid on `agent` steps and requires `read_file` to be in the tool grant (which it is by default). Sub-agents and fix agents do not inherit the parent step's `context_paths`; the parent is expected to provide all necessary context via the sub-agent's `request` argument or the fix agent's prompt.
 
-**Caching**: the *paths* (not contents) enter the step's hashed content — the files live inside the workspace, so their content is already chained through the input artifacts' own hashes.
+**In an `across:` matrix**, each entry renders `{{ .vars.<name> }}` per cell, so a cell arrives already holding the code it was assigned instead of spending its first turns navigating to it:
+
+```yaml
+- across:
+  - var: dim
+    from: dimensions      # [{id: api, focus: "boundaries", scope: "repo/api.go"}, …]
+    label: id
+  agent: reviewer
+  context_paths: ["{{ .vars.dim.scope }}"]
+  prompt: "Review {{ .vars.dim.focus }}"
+```
+
+One path per entry: a field renders to one string, and a space-separated `scope` is not split into several paths. An item that needs three files carries three fields, or the axis carries three items. A `{{ .vars.x }}` naming an axis the matrix does not declare is a **load** error for both matrix spellings, exactly as it is in `prompt:` — the error names the entry (`context_paths[0]`), not just the list. A bare `{{ .vars.dim }}` where the item is an object is refused for the usual reason: an object has no single rendering as a path.
+
+**Caching**: the *paths* (not contents) enter the step's hashed content — the files live inside the workspace, so their content is already chained through the input artifacts' own hashes. A matrix cell hashes the path it rendered to, which is what makes two cells reviewing different files two different steps.
 
 **How it works**: At preparation time, each `context_paths` file is read and confined by `resolveAgentPath`. At conversation start, `buildAgentRequest` prepends a simulated `read_file` tool call + result pair for each path before the user prompt — the same `{"content": …}` response shape the real `read_file` tool uses. This keeps the context visible to the model without consuming a turn or injecting content into the system message.
 

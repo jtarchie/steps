@@ -227,7 +227,7 @@ Run the same step for every combination of some values, instead of writing out a
   run: go test ./{{ .vars.package }}/...
 ```
 
-`across:` is a **modifier**, not a container: the step it sits on is still a task (or a put, or an agent), it just runs once per cell. `{{ .vars.<name> }}` substitutes into the command, the image, the prompt, the working directory, and the step's own name.
+`across:` is a **modifier**, not a container: the step it sits on is still a task (or a put, or an agent), it just runs once per cell. `{{ .vars.<name> }}` substitutes into the command, the image, the prompt, the working directory, the step's own name, and each entry of an agent step's `context_paths:` — so a fan-out cell can be *handed* the file it was assigned rather than told to go find it (see [agents.md](agents.md#context_paths-files-delivered-as-synthetic-read_file-results)).
 
 ### The headline: per-cell caching
 
