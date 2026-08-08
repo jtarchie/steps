@@ -724,3 +724,73 @@ func TestAgentHTTPClientTransportStack(t *testing.T) {
 		}
 	})
 }
+
+// TestContextScopeChain covers what a nested block's context can see and where
+// it writes (#40.2).
+//
+// The write scope is the innermost frame, unchanged. The READ scopes are the
+// whole nesting, run first, so a nearer scope shadows a farther one — which is
+// what lets a step inside a branch see what an earlier step of the same branch
+// recorded, instead of waiting for the join it will never outlive.
+func TestContextScopeChain(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no block reads and writes the run", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := WithNewRun(t.Context(), "build")
+		run := ContextWriteScope(ctx)
+
+		if got := ContextReadScopes(ctx); len(got) != 1 || got[0] != run {
+			t.Errorf("ContextReadScopes = %v, want just the run %q", got, run)
+		}
+	})
+
+	t.Run("nesting appends rather than replacing", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := WithNewRun(t.Context(), "build")
+		run := ContextWriteScope(ctx)
+
+		branch := WithContextScope(ctx, "branch")
+		cell := WithContextScope(branch, "cell")
+
+		if got := ContextWriteScope(cell); got != "cell" {
+			t.Errorf("ContextWriteScope = %q, want the innermost scope", got)
+		}
+
+		want := []string{run, "branch", "cell"}
+
+		got := ContextReadScopes(cell)
+		if len(got) != len(want) {
+			t.Fatalf("ContextReadScopes = %v, want %v", got, want)
+		}
+
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("scope %d = %q, want %q", i, got[i], want[i])
+			}
+		}
+	})
+
+	t.Run("a sibling cannot see into another branch", func(t *testing.T) {
+		t.Parallel()
+
+		// The chain is copied on derive, so two branches forked from one parent
+		// do not share the backing array — without that, the second append
+		// could overwrite the first branch's frame in place.
+		ctx := WithNewRun(t.Context(), "build")
+		first := WithContextScope(WithContextScope(ctx, "block"), "branch0")
+		second := WithContextScope(WithContextScope(ctx, "block"), "branch1")
+
+		for _, scope := range ContextReadScopes(first) {
+			if scope == "branch1" {
+				t.Errorf("branch0 can see %q; a concurrent sibling must stay invisible", scope)
+			}
+		}
+
+		if got := ContextWriteScope(second); got != "branch1" {
+			t.Errorf("ContextWriteScope = %q, want branch1", got)
+		}
+	})
+}

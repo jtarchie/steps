@@ -34,7 +34,7 @@ func runAcrossStep(
 
 	// A from: axis takes its values from what an earlier step recorded, so the
 	// matrix's width is only knowable here — see acrossruntime.go.
-	runtime, err := resolveRuntimeAxes(ctx, st, agent.RunIDFrom(ctx), step)
+	runtime, err := resolveRuntimeAxes(ctx, st, agent.ContextReadScopes(ctx), step)
 	if err != nil {
 		return "", stepRan, nonGetOutcome{}, fmt.Errorf("%s: %w", label, err)
 	}

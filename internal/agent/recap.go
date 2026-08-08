@@ -99,15 +99,19 @@ func recapValue(value string, fidelity config.ContextFidelity) string {
 		len(value)-len(kept), readContextToolName)
 }
 
-// buildRecap reads the run's recorded context and renders it for this step,
+// buildRecap reads the recorded context visible to this step and renders it,
 // returning "" when the step opted out, when nothing was recorded, or when
 // there is no store/run to read from.
-func buildRecap(ctx context.Context, st *store.Store, runID string, fidelity config.ContextFidelity) (string, []store.ContextEntry, error) {
-	if st == nil || runID == "" || fidelity == config.FidelityOff {
+//
+// scopes is the run plus whatever concurrent blocks this step sits inside, so
+// a step in a branch sees what its own branch recorded and not only what
+// existed before the block — see ContextReadScopes.
+func buildRecap(ctx context.Context, st *store.Store, scopes []string, fidelity config.ContextFidelity) (string, []store.ContextEntry, error) {
+	if st == nil || len(scopes) == 0 || scopes[0] == "" || fidelity == config.FidelityOff {
 		return "", nil, nil
 	}
 
-	entries, err := st.RunContext(ctx, runID)
+	entries, err := st.LayeredContext(ctx, scopes)
 	if err != nil {
 		return "", nil, fmt.Errorf("could not read run context: %w", err)
 	}

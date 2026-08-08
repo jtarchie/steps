@@ -37,18 +37,22 @@ import (
 // What is still refused is a rendering nobody asked for: mixed arrays, nested
 // values inside an item, and (in internal/config) an object interpolated
 // without naming a field.
-func resolveRuntimeAxes(ctx context.Context, st *store.Store, runID string, step config.Step) (map[string][]any, error) {
+// scopes is the run plus whatever concurrent blocks this matrix sits inside,
+// layered nearest-wins — the same set an agent step's recap reads, so a matrix
+// can fan out over an array its own branch recorded rather than only over one
+// that existed before the block.
+func resolveRuntimeAxes(ctx context.Context, st *store.Store, scopes []string, step config.Step) (map[string][]any, error) {
 	resolved := map[string][]any{}
 
 	if !config.HasRuntimeAxis(step) {
 		return resolved, nil
 	}
 
-	if st == nil || runID == "" {
+	if st == nil || len(scopes) == 0 || scopes[0] == "" {
 		return nil, errors.New("across: from: needs the run context store, which this run has none of")
 	}
 
-	entries, err := st.RunContext(ctx, runID)
+	entries, err := st.LayeredContext(ctx, scopes)
 	if err != nil {
 		return nil, fmt.Errorf("across: %w", err)
 	}

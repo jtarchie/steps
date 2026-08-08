@@ -438,6 +438,8 @@ Reading is **automatic**. Every agent step opens with a rendered recap of what e
 
 Nothing is delivered when nothing was recorded: a pipeline that never writes context sees no recap, no tool, and no change to what reaches the wire.
 
+**Inside a block, a step reads its own block's scope layered over the run**, nearest wins. So two steps in one branch see each other exactly as two steps outside a block do — under the key the fact was written with, since the branch prefix is added at the join and not before. A concurrent *sibling's* writes stay invisible either way: they live in a scope on nobody else's chain, and only the join lifts them. An `across: from:` axis resolves against the same layered view, so a matrix can fan out over an array its own branch recorded.
+
 `fidelity:` controls how much of each fact survives:
 
 | fidelity | what the step sees |

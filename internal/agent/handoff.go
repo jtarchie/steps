@@ -146,8 +146,9 @@ type synthesizedTools struct {
 type synthesisInputs struct {
 	handoff *Handoff
 	store   *store.Store
-	// runID scopes what this step READS: the run, always.
-	runID string
+	// readScopes is what this step can SEE: the run, plus every concurrent
+	// block it sits inside, nearest last. See ContextReadScopes.
+	readScopes []string
 	// writeScope is where what it RECORDS lands — the run, except inside a
 	// concurrent branch. See WithContextScope.
 	writeScope string
@@ -172,8 +173,9 @@ func injectSynthesizedTools(
 	}
 
 	// Writes go to the write SCOPE, which is the run itself except inside a
-	// concurrent branch (see WithContextScope); reads below stay on the run, so
-	// a branch still sees everything established before the block.
+	// concurrent branch (see WithContextScope); reads below layer that scope
+	// over the run, so a branch sees everything established before the block
+	// AND what it has recorded itself.
 	//
 	// Attributed to the name the step is KNOWN by, so a matrix's recorded facts
 	// say which cell established them rather than naming the agent three times.
@@ -185,7 +187,7 @@ func injectSynthesizedTools(
 	// The recap is read here rather than at the call site so the read_context
 	// tool it implies is injected with every other synthesized tool, in one
 	// place, under one error handler.
-	recap, entries, err := buildRecap(ctx, in.store, in.runID, cfg.ResolveContextFidelity(step))
+	recap, entries, err := buildRecap(ctx, in.store, in.readScopes, cfg.ResolveContextFidelity(step))
 	if err != nil {
 		return synthesizedTools{}, err
 	}

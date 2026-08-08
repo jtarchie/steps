@@ -649,3 +649,88 @@ func scanContextRows(t *testing.T, rows *sql.Rows) []contextRow {
 
 	return entries
 }
+
+// TestEndToEndContextVisibleInsideOneBranch covers the read side of branch
+// scoping (#40.2): a step inside a concurrent branch sees what an EARLIER step
+// of the same branch recorded.
+//
+// Writes go to a scope only the branch touches and reads used to come from the
+// run alone, so those facts became visible only at the join — after the branch
+// had finished, which is to say never, to anything inside it. Two sequential
+// steps outside a block always saw each other, which is what kept the
+// asymmetry hidden until a matrix was nested in a branch, exactly as here.
+//
+// The matrix's cells are serial, so the provider is reached in a fixed order
+// and a positional script is honest: the second branch is a task and never
+// talks to a model at all.
+func TestEndToEndContextVisibleInsideOneBranch(t *testing.T) {
+	dir := t.TempDir()
+	fake := newFakeLLM(t,
+		// Cell 1 (record): writes the fact into the BRANCH's scope.
+		callsTool("set_context", map[string]any{"key": "finding", "value": "expired cert"}),
+		says("Recorded."),
+		// Cell 2 (read): opens with a recap that must already carry it.
+		says("Read it."),
+	)
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: worker
+  source:
+    endpoint: %[1]s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  system: You work.
+
+jobs:
+- name: audit
+  plan:
+  - in_parallel:
+      steps:
+      - across:
+        - var: phase
+          values: [record, read]
+        agent: worker
+        context: write
+        prompt: "phase {{ .vars.phase }}"
+      - task: unrelated
+        inputs: []
+        run: "true"
+`, fake.URL))
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	mustRun(t, path)
+
+	// The reading cell's FIRST request. Without the layered read it carries no
+	// recap at all: the fact is one scope below the run, and the run is empty
+	// until the join.
+	reading := fake.request(3)
+
+	if !slices.Contains(reading.toolNames(), "read_context") {
+		t.Fatalf("the reading cell was offered %v; without the branch's own facts there is no recap to re-read",
+			reading.toolNames())
+	}
+
+	results := reading.toolResults()
+	if len(results) != 1 {
+		t.Fatalf("the reading cell opened with %d tool results, want the single synthetic recap: %v", len(results), results)
+	}
+
+	// Under the key it was WRITTEN with. The branch prefix is a merge-time
+	// concern, so inside the branch a fact reads back by its own name — which
+	// is what makes two steps in a branch behave like two steps outside one.
+	if !strings.Contains(results[0], "finding: expired cert") {
+		t.Errorf("recap = %q, want the fact this branch recorded, under its plain key", results[0])
+	}
+
+	// And it still arrives at the run, once, branch-qualified by the join.
+	entries := storeRunContext(t, path)
+	if len(entries) != 1 || !strings.HasSuffix(entries[0].Key, ".finding") {
+		t.Errorf("run_context = %+v, want one branch-qualified finding", entries)
+	}
+}

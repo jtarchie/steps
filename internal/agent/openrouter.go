@@ -98,40 +98,63 @@ func runIDFromContext(ctx context.Context) string {
 	return id
 }
 
-// RunIDFrom is runIDFromContext for other packages: internal/pipeline needs
-// the same identity to scope a task's recorded context to the run that
-// produced it (see the run_context table). Exported here rather than
-// re-derived there so one run has exactly one id, whichever half of the
-// context store writes it.
-func RunIDFrom(ctx context.Context) string {
-	return runIDFromContext(ctx)
-}
-
-// contextScopeKey types the context value holding the run-context WRITE scope,
-// when it differs from the run itself.
+// contextScopeKey types the context value holding the run-context write scope
+// CHAIN — the enclosing blocks this context sits inside, outermost first, empty
+// on the plain run.
 type contextScopeKey struct{}
 
 // WithContextScope derives a context whose recorded facts land under scope
 // instead of the run id.
 //
-// It exists for concurrent branches. Reads stay on the run scope — a branch
-// must still see everything established before the block — but writes go
-// somewhere only that branch touches, so two branches recording the same key
-// cannot resolve to whichever finished last. internal/pipeline merges each
-// branch's scope back at the join, in declaration order, under a key naming
-// the branch (see mergeBranchContext).
+// It exists for concurrent branches: writes go somewhere only that branch
+// touches, so two branches recording the same key cannot resolve to whichever
+// finished last. internal/pipeline merges each branch's scope back at the join,
+// in declaration order, under a key naming the branch (see mergeBranchContext).
+//
+// The scope is APPENDED to a chain rather than replacing one, because reads
+// need the whole nesting and not just the innermost frame — see
+// ContextReadScopes.
 func WithContextScope(ctx context.Context, scope string) context.Context {
-	return context.WithValue(ctx, contextScopeKey{}, scope)
+	return context.WithValue(ctx, contextScopeKey{}, append(contextScopeChain(ctx), scope))
 }
 
 // ContextWriteScope reports where facts recorded on this context should land:
-// the branch scope when one is set, otherwise the run itself.
+// the innermost branch scope when there is one, otherwise the run itself.
 func ContextWriteScope(ctx context.Context) string {
-	if scope, ok := ctx.Value(contextScopeKey{}).(string); ok && scope != "" {
-		return scope
+	chain := contextScopeChain(ctx)
+	if len(chain) == 0 {
+		return runIDFromContext(ctx)
 	}
 
-	return runIDFromContext(ctx)
+	return chain[len(chain)-1]
+}
+
+// ContextReadScopes reports every scope a step on this context can see, from
+// the run outward-in, so a nearer scope shadows a farther one.
+//
+// Writes and reads used to disagree about this. A branch wrote into its own
+// scope and read from the run, so a step INSIDE a branch could not see what an
+// earlier step of the same branch had just recorded — the facts became visible
+// only at the join, by which point the branch had finished. Two steps outside a
+// block do see each other, which is what made the asymmetry invisible until an
+// across: matrix was nested in an in_parallel: branch.
+//
+// A concurrent SIBLING's writes stay invisible either way: they are in a scope
+// that is on nobody else's chain.
+func ContextReadScopes(ctx context.Context) []string {
+	chain := contextScopeChain(ctx)
+	scopes := make([]string, 0, len(chain)+1)
+
+	return append(append(scopes, runIDFromContext(ctx)), chain...)
+}
+
+// contextScopeChain returns the write-scope chain carried on ctx, innermost
+// last. A copy, so a caller appending to it cannot reach back into a context a
+// sibling is also reading.
+func contextScopeChain(ctx context.Context) []string {
+	chain, _ := ctx.Value(contextScopeKey{}).([]string)
+
+	return append([]string(nil), chain...)
 }
 
 // sanitizeLabel reduces a free-form name to characters legal in an HTTP header

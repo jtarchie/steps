@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -76,6 +77,50 @@ func (s *Store) NodeResult(ctx context.Context, hash string) (map[string]any, er
 	}
 
 	return result, nil
+}
+
+// LayeredContext returns the facts visible from a nested write scope: every
+// scope read in order, with a nearer one shadowing a farther one key by key,
+// ordered by key like RunContext.
+//
+// It exists because writes and reads had different answers to "which scope".
+// A concurrent branch writes into a scope only it touches, so its facts reach
+// the run only at the join — which meant a step INSIDE the branch could not see
+// what an earlier step of the same branch had recorded, while the identical two
+// steps outside a block could. The asymmetry was invisible until someone nested
+// an across: matrix in a branch.
+//
+// Nearest-wins rather than merged: a branch that corrects a fact established
+// before the block should see its own correction, exactly as a later step
+// outside a block sees the earlier step's overwrite.
+func (s *Store) LayeredContext(ctx context.Context, scopes []string) ([]ContextEntry, error) {
+	if len(scopes) == 1 {
+		return s.RunContext(ctx, scopes[0])
+	}
+
+	visible := map[string]ContextEntry{}
+
+	for _, scope := range scopes {
+		entries, err := s.RunContext(ctx, scope)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, entry := range entries {
+			visible[entry.Key] = entry
+		}
+	}
+
+	merged := make([]ContextEntry, 0, len(visible))
+	for _, entry := range visible {
+		merged = append(merged, entry)
+	}
+
+	// Sorted for RunContext's reason: a rendered recap has to read the same way
+	// twice, and map order is not an order.
+	sort.Slice(merged, func(i, j int) bool { return merged[i].Key < merged[j].Key })
+
+	return merged, nil
 }
 
 // RunContext returns every fact recorded for a run, ordered by key.

@@ -96,3 +96,83 @@ func mustSetContext(t *testing.T, store *Store, runID, key, value, writtenBy str
 		t.Fatalf("SetContext(%q, %q): %v", runID, key, err)
 	}
 }
+
+// TestLayeredContextNearestScopeWins covers what a step inside a concurrent
+// branch can see (#40.2).
+//
+// Writes go to the branch's own scope and reads used to come from the run
+// alone, so a step in a branch could not see what an earlier step of the SAME
+// branch had recorded — the facts only surfaced at the join, after the branch
+// had finished. Two steps outside a block always saw each other, which is what
+// made the asymmetry invisible until a matrix was nested in a branch.
+func TestLayeredContextNearestScopeWins(t *testing.T) {
+	t.Parallel()
+
+	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	defer func() { _ = store.Close() }()
+
+	mustSetContext(t, store, "run", "owner", "platform", "triage")
+	mustSetContext(t, store, "run", "verdict", "unknown", "triage")
+	mustSetContext(t, store, "run#0:reviewer", "verdict", "block", "reviewer")
+	mustSetContext(t, store, "run#0:reviewer#1:cell", "finding", "expired cert", "cell")
+
+	// A concurrent SIBLING's scope is on nobody else's chain, so its writes stay
+	// invisible until the join lifts them.
+	mustSetContext(t, store, "run#1:other", "verdict", "ship it", "other")
+
+	entries, err := store.LayeredContext(t.Context(), []string{"run", "run#0:reviewer", "run#0:reviewer#1:cell"})
+	if err != nil {
+		t.Fatalf("LayeredContext: %v", err)
+	}
+
+	got := map[string]string{}
+	for _, entry := range entries {
+		got[entry.Key] = entry.Value
+	}
+
+	want := map[string]string{
+		"owner":   "platform",     // only the run has it
+		"verdict": "block",        // the branch shadows the run
+		"finding": "expired cert", // the innermost scope contributes its own
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("entries = %+v, want %d keys", entries, len(want))
+	}
+
+	for key, value := range want {
+		if got[key] != value {
+			t.Errorf("%s = %q, want %q", key, got[key], value)
+		}
+	}
+
+	// Ordered by key, like RunContext, or a rendered recap reads differently
+	// every time for no reason.
+	for i := 1; i < len(entries); i++ {
+		if entries[i-1].Key > entries[i].Key {
+			t.Errorf("entries are not ordered by key: %+v", entries)
+
+			break
+		}
+	}
+}
+
+// TestLayeredContextOnTheRunAlone pins the common case: no block, one scope,
+// exactly what RunContext returns.
+func TestLayeredContextOnTheRunAlone(t *testing.T) {
+	t.Parallel()
+
+	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	defer func() { _ = store.Close() }()
+
+	mustSetContext(t, store, "run", "owner", "platform", "triage")
+
+	entries, err := store.LayeredContext(t.Context(), []string{"run"})
+	if err != nil {
+		t.Fatalf("LayeredContext: %v", err)
+	}
+
+	if len(entries) != 1 || entries[0].Key != "owner" || entries[0].Value != "platform" {
+		t.Errorf("entries = %+v, want the run's single fact", entries)
+	}
+}

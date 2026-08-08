@@ -146,8 +146,6 @@ func (p preparedAgentStep) close(stepLabel string) {
 // from it here (the set_context writer and the recap read back), so callers
 // pass one thing and a nil store simply means "no context store on this path".
 func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace, handoff *Handoff, st *store.Store) (preparedAgentStep, error) {
-	runID := runIDFromContext(ctx)
-
 	primary, ri, err := resolveWithFailover(cfg, step)
 	if err != nil {
 		return preparedAgentStep{}, err
@@ -186,7 +184,8 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	required := requiredToolNames(ri.ToolSpecs)
 
 	synthesized, err := injectSynthesizedTools(ctx, cfg, step,
-		synthesisInputs{handoff: handoff, store: st, runID: runID, writeScope: ContextWriteScope(ctx)}, decls, registry, required)
+		synthesisInputs{handoff: handoff, store: st, readScopes: ContextReadScopes(ctx), writeScope: ContextWriteScope(ctx)},
+		decls, registry, required)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 		closeAll(closers)
