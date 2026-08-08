@@ -273,7 +273,19 @@ func (c *Config) validateAcross() error {
 			}
 
 			if HasRuntimeAxis(*step) {
-				return validateAcrossAxes(label, step.Across)
+				err = validateAcrossAxes(label, step.Across)
+				if err != nil {
+					return err
+				}
+
+				// The templates are the one thing a runtime matrix would
+				// otherwise never have checked. A static matrix gets them
+				// validated as a side effect of expanding here; a runtime one
+				// cannot expand until the step that fills its source has run,
+				// so without this an unclosed brace loads clean and fails
+				// mid-run — after the agent step that produced the array has
+				// already been paid for.
+				return validateAcrossTemplates(label, *step)
 			}
 
 			_, expandErr := ExpandAcross(label, *step)
@@ -394,13 +406,117 @@ func combinations(axes []acrossAxis) []acrossCombo {
 	return combos
 }
 
-// renderCell substitutes `{{ .vars.<name> }}` into the fields where a matrix
-// value can meaningfully differ per cell.
+// renderableField is one field a cell's `{{ .vars.<name> }}` substitution
+// reaches, paired with the name an error should call it by.
+type renderableField struct {
+	name  string
+	value *string
+}
+
+// renderableFields returns the fields where a matrix value can meaningfully
+// differ per cell.
 //
 // The set is deliberately small: the command, the container it runs in, the
 // prompt, the working directory, and the names the step is known by. Rendering
 // everything would mean a template failure in an unrelated field could break a
 // pipeline that never asked for one.
+//
+// One list, read by both the renderer and the load-time template check, so a
+// field cannot be rendered without also being validated (or the reverse).
+func renderableFields(cell *Step) []renderableField {
+	return []renderableField{
+		{"task", &cell.Task},
+		{"run", &cell.Run},
+		{"image", &cell.Image},
+		{"prompt", &cell.Prompt},
+		{"dir", &cell.Dir},
+		{"put", &cell.Put},
+		{"get", &cell.Get},
+	}
+}
+
+// validateAcrossTemplates checks a RUNTIME matrix's templates at load time.
+//
+// A static matrix expands during validation, so a malformed template is caught
+// as a side effect of rendering it. A runtime matrix cannot expand until the
+// step that fills its source has run — so without this, an unclosed brace or a
+// misspelled axis name loads clean and fails mid-run, after the agent step that
+// produced the array has already been paid for.
+//
+// Two things are knowable without the values: whether the template PARSES, and
+// whether every `{{ .vars.x }}` names an axis this matrix actually declares.
+// What the items contain is not, so a field reference (`.vars.x.field`) is left
+// for expansion, which checks it against every item at once.
+func validateAcrossTemplates(label string, step Step) error {
+	declared := make(map[string]bool, len(step.Across))
+	for _, axis := range step.Across {
+		declared[axis.Var] = true
+	}
+
+	// A try: cell keeps every renderable field on the step it wraps, so that is
+	// where the templates are — the same unwrap renderCell does below.
+	cell := step
+
+	for _, field := range renderableFields(unwrapStep(&cell)) {
+		if !strings.Contains(*field.value, "{{") {
+			continue
+		}
+
+		parsed, err := template.New("across").Option("missingkey=error").Parse(*field.value)
+		if err != nil {
+			return fmt.Errorf("%s: across %s: could not parse the template: %w", label, field.name, err)
+		}
+
+		err = checkAxisReferences(label, field.name, parsed.Tree, declared)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkAxisReferences rejects a `{{ .vars.x }}` naming an axis the matrix does
+// not declare — the runtime-matrix half of the misspelling a static matrix
+// catches by expanding, where missingkey=error reports it.
+func checkAxisReferences(label, field string, tree *parse.Tree, declared map[string]bool) error {
+	if tree == nil || tree.Root == nil {
+		return nil
+	}
+
+	var unknown string
+
+	walkTemplateFields(tree.Root, func(node *parse.FieldNode) {
+		// `.vars.x` and `.vars.x.field` both name x; a bare `.vars` names
+		// nothing and is left alone.
+		if unknown == "" && len(node.Ident) >= 2 && node.Ident[0] == "vars" && !declared[node.Ident[1]] {
+			unknown = node.Ident[1]
+		}
+	})
+
+	if unknown != "" {
+		return fmt.Errorf("%s: across %s: {{ .vars.%s }} names no axis of this matrix%s",
+			label, field, unknown, suggestion(unknown, sortedBoolKeys(declared)))
+	}
+
+	return nil
+}
+
+// sortedBoolKeys returns a set's members in stable order, so a suggestion is
+// drawn from the same list on every run.
+func sortedBoolKeys(set map[string]bool) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+
+	slices.Sort(keys)
+
+	return keys
+}
+
+// renderCell substitutes `{{ .vars.<name> }}` into the fields where a matrix
+// value can meaningfully differ per cell.
 func renderCell(label string, cell *Step, combo acrossCombo) error {
 	// A try: cell keeps every renderable field on the step it wraps rather
 	// than on itself, so render through the wrapper. Without this a matrix
@@ -432,20 +548,7 @@ func renderCell(label string, cell *Step, combo acrossCombo) error {
 	// text it happened to produce (see nameCell).
 	templateName := stepName(*cell)
 
-	fields := []struct {
-		name  string
-		value *string
-	}{
-		{"task", &cell.Task},
-		{"run", &cell.Run},
-		{"image", &cell.Image},
-		{"prompt", &cell.Prompt},
-		{"dir", &cell.Dir},
-		{"put", &cell.Put},
-		{"get", &cell.Get},
-	}
-
-	for _, field := range fields {
+	for _, field := range renderableFields(cell) {
 		rendered, err := renderVars(*field.value, combo)
 		if err != nil {
 			return fmt.Errorf("%s: across %s: %w", label, field.name, err)

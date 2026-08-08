@@ -254,3 +254,85 @@ func TestOrdinaryStepHasNoLabel(t *testing.T) {
 		t.Errorf("DisplayName() = %q, want the task name", got)
 	}
 }
+
+// TestValidateAcrossTemplatesOnRuntimeMatrix covers the one check a runtime
+// matrix used to skip entirely (#40.3): its cells cannot expand at load, and
+// template validation was a side effect of expanding.
+//
+// Parse-only, so the object case must still pass — there is no dummy value set
+// that satisfies both a string axis and an object axis, which is why nothing is
+// rendered here.
+func TestValidateAcrossTemplatesOnRuntimeMatrix(t *testing.T) {
+	t.Parallel()
+
+	runtimeStep := func(run string) Step {
+		return Step{
+			Across: []AcrossVar{{Var: "finding", From: "findings"}},
+			Task:   "check",
+			Run:    run,
+		}
+	}
+
+	tests := []struct {
+		name    string
+		step    Step
+		wantErr string
+	}{
+		{
+			name:    "unclosed brace",
+			step:    runtimeStep("echo {{ .vars.finding }"),
+			wantErr: "could not parse the template",
+		},
+		{
+			name:    "var no axis declares",
+			step:    runtimeStep("echo {{ .vars.finidng }}"),
+			wantErr: "names no axis",
+		},
+		{
+			name:    "undeclared var inside a field access",
+			step:    runtimeStep("echo {{ .vars.findings.file }}"),
+			wantErr: "names no axis",
+		},
+		{
+			name: "undeclared var inside an if body",
+			step: runtimeStep("{{ if .vars.finding }}echo {{ .vars.other }}{{ end }}"),
+			// The walk descends into branch bodies, or the check has the same
+			// hole rejectBareObjectRefs closed.
+			wantErr: "names no axis",
+		},
+		{
+			name: "through a try: wrapper",
+			step: Step{
+				Across: []AcrossVar{{Var: "finding", From: "findings"}},
+				Try:    &Step{Task: "check", Run: "echo {{ .vars.finding }"},
+			},
+			wantErr: "could not parse the template",
+		},
+		{name: "field access on an object item", step: runtimeStep("echo {{ .vars.finding.file }}")},
+		{name: "no template at all", step: runtimeStep("true")},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validateAcrossTemplates(`job "j" step 0`, tc.step)
+
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateAcrossTemplates: %v, want no error", err)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("validateAcrossTemplates: no error, want one containing %q", tc.wantErr)
+			}
+
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %q, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
