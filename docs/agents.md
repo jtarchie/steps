@@ -422,6 +422,8 @@ A branch writes to a scope only it touches, and those scopes are merged back at 
 
 Both survive. Without the branch scope they would be one key resolving to whichever branch finished last — the hazard `validateParallelOutputs` already refuses for artifact names. The branch name becomes a prefix rather than being dropped, because which branch established a fact is part of the fact.
 
+The prefix is a step name reduced to the key charset, so a name may lose detail on the way in (`check [shard=a]` becomes `check__shard_a_`). Two names that reduce alike — `lint.go` and `lint_go` — would then be one prefix and one lost update again, so a collision is disambiguated by branch index (`lint_go-0.`, `lint_go-1.`) across the whole sibling set. A merged key that lands over the 128-character ceiling (prefixes compound with nesting) is cut to fit and marked with a short digest of the whole key, so two long keys sharing a prefix still land on two rows.
+
 `race:` merges the **winner's** facts only; a cancelled loser's partial writes are discarded with its workspace, the same treatment its execution log gets.
 
 **One load error remains, for tasks only.** A task records by writing files into `context/` in its working directory, and under the *shared* strategy every step's working directory is the same build root — so two concurrent branches both writing `context/finding` are two writers on one file. That is not a lost update, it is a corrupt one: the observed value was `n+1 query credential`, one branch's bytes overlaid on the other's. Set `workspace.strategy` (`copy` or `btrfs`), which gives each branch its own directory, or record from an agent step, where `set_context` is a tool call and never touches the filesystem.

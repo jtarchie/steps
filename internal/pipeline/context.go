@@ -14,6 +14,8 @@ package pipeline
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
@@ -185,7 +187,11 @@ func branchContextScope(enclosing string, index int, name string) string {
 //
 // Best-effort on read: a branch that recorded nothing has no rows, which is
 // the common case and not an error.
-func mergeBranchContext(ctx context.Context, st *store.Store, into, scope, branch string) error {
+//
+// prefix is resolved by the caller over the whole sibling set, not derived from
+// branch here — two differently-named branches can reduce to one prefix, and
+// only something holding all of them can see that (see branchPrefixes).
+func mergeBranchContext(ctx context.Context, st *store.Store, into, scope, branch, prefix string) error {
 	if st == nil || into == "" {
 		return nil
 	}
@@ -195,10 +201,10 @@ func mergeBranchContext(ctx context.Context, st *store.Store, into, scope, branc
 		return fmt.Errorf("branch %q context: %w", branch, err)
 	}
 
-	prefix := contextKeyPrefix(branch)
-
 	for _, entry := range entries {
-		err = st.SetContext(ctx, into, prefix+entry.Key, entry.Value, entry.WrittenBy)
+		key := mergedContextKey(branch, prefix, entry.Key)
+
+		err = st.SetContext(ctx, into, key, entry.Value, entry.WrittenBy)
 		if err != nil {
 			return fmt.Errorf("branch %q context: %w", branch, err)
 		}
@@ -211,11 +217,107 @@ func mergeBranchContext(ctx context.Context, st *store.Store, into, scope, branc
 	return nil
 }
 
-// contextKeyPrefix turns a branch name into a key prefix. A step name may hold
-// characters a context key may not (a matrix cell's " [shard=a]", say), so it
-// is reduced to the key charset rather than producing a key that renders one
-// way and matches another.
-func contextKeyPrefix(branch string) string {
+// mergedContextKey is the key one branch's fact lands under in the enclosing
+// scope, repaired if the prefixing pushed it outside what a key may be.
+//
+// The merge synthesizes keys and writes them straight through SetContext, so it
+// is the one writer that bypasses the tool boundary's validation. Two rules can
+// break: the length ceiling, since a prefix is added to a key that may already
+// be at the limit and prefixes COMPOUND with nesting
+// (`branch0.reviewer.finding`); and the reserved namespace, if a branch is
+// literally named `internal`.
+//
+// Repaired rather than dropped. The branch already did the work, and a fact
+// discarded at the join is indistinguishable from one nobody recorded.
+func mergedContextKey(branch, prefix, key string) string {
+	merged := prefix + key
+
+	if config.ValidateContextKey(merged) == nil {
+		return merged
+	}
+
+	if strings.HasPrefix(merged, config.ReservedContextPrefix) {
+		merged = "internal_" + strings.TrimPrefix(merged, "internal")
+	}
+
+	if len(merged) > config.MaxContextKeyLen {
+		merged = truncateContextKey(merged)
+	}
+
+	slog.Warn("branch.context.key_repaired", "branch", branch, "key", prefix+key, "stored_as", merged)
+
+	return merged
+}
+
+// contextKeyHashLen is how much of a digest a truncated key carries.
+const contextKeyHashLen = 8
+
+// truncateContextKey cuts an over-long merged key down to the ceiling, marking
+// the cut with a short digest of the whole key.
+//
+// The digest is the point. Cutting alone would collapse two long keys that
+// share a prefix onto one row — the lost update the branch scopes exist to
+// prevent, reintroduced by the repair. Keys are ASCII by charset, so the cut
+// cannot land mid-rune.
+func truncateContextKey(key string) string {
+	digest := sha256.Sum256([]byte(key))
+	keep := config.MaxContextKeyLen - contextKeyHashLen - 1
+
+	return key[:keep] + "." + hex.EncodeToString(digest[:])[:contextKeyHashLen]
+}
+
+// branchPrefixes resolves the key prefix each branch's facts are qualified by,
+// over the whole sibling set at once.
+//
+// Together, not one at a time, because sanitation is lossy: contextKeySegment
+// maps every character outside the key charset to `_`, so branches named
+// `lint.go` and `lint_go` both reduce to `lint_go` and their merged facts
+// overwrite each other at the join — the same lost update the branch scopes
+// prevent, reintroduced by the naming rather than by the scope.
+//
+// A collision disambiguates by branch INDEX rather than by making the
+// sanitation cleverer: the index is already unique within the set, and any
+// cleverer mapping is one more rule a reader has to know to predict a key.
+func branchPrefixes(results []branchResult) []string {
+	segments := make([]string, len(results))
+	counts := map[string]int{}
+
+	for i, result := range results {
+		segments[i] = contextKeySegment(branchPrefixName(result))
+		counts[segments[i]]++
+	}
+
+	var (
+		taken    = map[string]bool{}
+		prefixes = make([]string, len(results))
+	)
+
+	for i, segment := range segments {
+		// EVERY member of a colliding group is suffixed, not just the later
+		// ones: qualifying one branch and not its twin would make which name
+		// got the plain form depend on declaration order.
+		if counts[segment] > 1 {
+			segment = fmt.Sprintf("%s-%d", segment, results[i].index)
+		}
+
+		// A third sibling may be literally named like a disambiguated one, so
+		// keep widening until nothing else has claimed it.
+		for taken[segment] {
+			segment += "_"
+		}
+
+		taken[segment] = true
+		prefixes[i] = segment + "."
+	}
+
+	return prefixes
+}
+
+// contextKeySegment turns a branch name into one segment of a key prefix. A
+// step name may hold characters a context key may not (a matrix cell's
+// " [shard=a]", say), so it is reduced to the key charset rather than producing
+// a key that renders one way and matches another.
+func contextKeySegment(branch string) string {
 	var b strings.Builder
 
 	for _, r := range branch {
@@ -227,7 +329,7 @@ func contextKeyPrefix(branch string) string {
 		}
 	}
 
-	return b.String() + "."
+	return b.String()
 }
 
 // sortedKeys returns m's keys in sorted order.

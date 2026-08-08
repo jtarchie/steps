@@ -205,7 +205,12 @@ func runBranches(
 func mergeBranchesContext(ctx context.Context, st *store.Store, results []branchResult) {
 	enclosing := agent.ContextWriteScope(ctx)
 
-	for _, result := range results {
+	// Resolved over the whole set before any of it is written: two branch names
+	// can sanitize to one prefix, and only something holding every sibling can
+	// tell.
+	prefixes := branchPrefixes(results)
+
+	for i, result := range results {
 		// An unnamed branch is one that IS a block: executedStepName has no
 		// name for a container. It still has to be merged, or the facts its
 		// own join lifted into it stay one level below the run and no later
@@ -214,7 +219,7 @@ func mergeBranchesContext(ctx context.Context, st *store.Store, results []branch
 		err := mergeBranchContext(
 			context.WithoutCancel(ctx), st, enclosing,
 			branchContextScope(enclosing, result.index, result.name),
-			branchPrefixName(result),
+			branchPrefixName(result), prefixes[i],
 		)
 		if err != nil {
 			slog.Warn("branch.context.merge_failed", "branch", result.name, "error", err)
