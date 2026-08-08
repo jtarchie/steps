@@ -448,6 +448,69 @@ jobs:
 	}
 }
 
+// TestEndToEndNestedBranchContextSurvives is the nesting case, and it is a
+// regression test: branch scopes were first derived from the RUN id, so a
+// nested block inside two different branches computed the SAME scope for its
+// own branch 0. The two tasks then overwrote each other's rows before either
+// join saw them, and only one fact survived the whole run — the exact lost
+// update branch scoping exists to prevent, one level down.
+//
+// Scopes now nest, and each join merges into its ENCLOSING scope rather than
+// straight into the run, so the facts travel up one single-threaded step at a
+// time.
+func TestEndToEndNestedBranchContextSurvives(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+workspace:
+  strategy: copy
+
+jobs:
+- name: review
+  plan:
+  - in_parallel:
+      steps:
+      - in_parallel:
+          steps:
+          - task: scan
+            inputs: []
+            outputs: []
+            context: write
+            run: |
+              mkdir -p context
+              printf 'FROM-LEFT' > context/finding
+      - in_parallel:
+          steps:
+          - task: scan
+            inputs: []
+            outputs: []
+            context: write
+            run: |
+              mkdir -p context
+              printf 'FROM-RIGHT' > context/finding
+`)
+
+	mustRun(t, path)
+
+	facts := map[string]string{}
+	for _, entry := range storeRunContext(t, path) {
+		facts[entry.Key] = entry.Value
+	}
+
+	// Both reached the run scope, each still attributable. The nested blocks
+	// have no step name of their own, so they are qualified by position —
+	// without that they would collapse onto one key and the second would win.
+	want := map[string]string{
+		"branch0.scan.finding": "FROM-LEFT",
+		"branch1.scan.finding": "FROM-RIGHT",
+	}
+
+	for key, value := range want {
+		if facts[key] != value {
+			t.Errorf("%s = %q, want %q (got all: %+v)", key, facts[key], value, facts)
+		}
+	}
+}
+
 // TestEndToEndRaceContextKeepsOnlyTheWinner proves a loser's partial facts are
 // discarded with its workspace, the same treatment its execution log gets.
 func TestEndToEndRaceContextKeepsOnlyTheWinner(t *testing.T) {

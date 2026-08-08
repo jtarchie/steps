@@ -169,8 +169,8 @@ func decodeRecordedContext(recorded map[string]any) map[string]string {
 // branchContextScope is the run-context write scope for one branch of a
 // concurrent block: rows nobody else in the run touches, so two branches
 // recording the same key cannot resolve to whichever finished last.
-func branchContextScope(runID string, index int, name string) string {
-	return fmt.Sprintf("%s#%d:%s", runID, index, name)
+func branchContextScope(enclosing string, index int, name string) string {
+	return fmt.Sprintf("%s#%d:%s", enclosing, index, name)
 }
 
 // mergeBranchContext folds what one branch recorded back into the run, under
@@ -185,8 +185,8 @@ func branchContextScope(runID string, index int, name string) string {
 //
 // Best-effort on read: a branch that recorded nothing has no rows, which is
 // the common case and not an error.
-func mergeBranchContext(ctx context.Context, st *store.Store, runID, scope, branch string) error {
-	if st == nil || runID == "" {
+func mergeBranchContext(ctx context.Context, st *store.Store, into, scope, branch string) error {
+	if st == nil || into == "" {
 		return nil
 	}
 
@@ -198,7 +198,7 @@ func mergeBranchContext(ctx context.Context, st *store.Store, runID, scope, bran
 	prefix := contextKeyPrefix(branch)
 
 	for _, entry := range entries {
-		err = st.SetContext(ctx, runID, prefix+entry.Key, entry.Value, entry.WrittenBy)
+		err = st.SetContext(ctx, into, prefix+entry.Key, entry.Value, entry.WrittenBy)
 		if err != nil {
 			return fmt.Errorf("branch %q context: %w", branch, err)
 		}

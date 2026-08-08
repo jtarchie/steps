@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"google.golang.org/genai"
 
@@ -78,13 +79,24 @@ func renderRecap(entries []store.ContextEntry, fidelity config.ContextFidelity) 
 // recapValue renders one value at the given fidelity. The elision is marked
 // rather than silent: a model shown a truncated value with no sign of it will
 // answer as if it had the whole thing.
+//
+// Cut on a rune boundary, not a byte one. A fact is model-authored text and
+// routinely holds non-ASCII — an identifier with an accent, a quoted log line
+// with a dash — and slicing mid-rune puts a broken code point on the wire,
+// which the JSON encoder turns into a replacement character inside the very
+// value a later step is meant to read.
 func recapValue(value string, fidelity config.ContextFidelity) string {
 	if fidelity != config.FidelityCompact || len(value) <= compactValueLen {
 		return value
 	}
 
-	return value[:compactValueLen] + fmt.Sprintf("... (%d characters truncated; call %s with detail: \"full\" for all of it)",
-		len(value)-compactValueLen, readContextToolName)
+	kept := value[:compactValueLen]
+	for len(kept) > 0 && !utf8.ValidString(kept) {
+		kept = kept[:len(kept)-1]
+	}
+
+	return kept + fmt.Sprintf("... (%d characters truncated; call %s with detail: \"full\" for all of it)",
+		len(value)-len(kept), readContextToolName)
 }
 
 // buildRecap reads the run's recorded context and renders it for this step,
@@ -107,10 +119,10 @@ func buildRecap(ctx context.Context, st *store.Store, runID string, fidelity con
 // the run's facts.
 //
 // The snapshot is deliberate: it is the same set the recap was rendered from,
-// so a re-read cannot disagree with what the step was already shown. A step
-// that wants to see a sibling's later write does not exist — steps are
-// sequential, and a concurrent one cannot write at all (see
-// rejectContextInBranches).
+// so a re-read cannot disagree with what the step was already shown. A
+// concurrent sibling's writes are invisible either way — a branch records into
+// its own scope and only the join lifts those into the run, by which point
+// this step has finished.
 func buildReadContextTool(entries []store.ContextEntry) (*genai.FunctionDeclaration, toolImpl) {
 	decl := &genai.FunctionDeclaration{
 		Name: readContextToolName,

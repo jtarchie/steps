@@ -30,13 +30,6 @@ import (
 // treatment verdictToolName and writeHandoffToolName get.
 const setContextToolName = "set_context"
 
-// maxContextValueLen bounds one recorded value. A value is written by a model
-// and later rendered into another model's recap, so an unbounded one is a way
-// to spend a downstream step's whole context window on a single fact. Refused
-// at the boundary with a message the model can act on, rather than truncated
-// silently into something that reads complete but is not.
-const maxContextValueLen = 8192
-
 // contextWriter records one fact. It is the seam internal/agent has on the
 // store: RunStep closes over the run id and the writing step's name, so the
 // tool implementation below never learns either.
@@ -79,10 +72,10 @@ func buildSetContextTool(write contextWriter) (*genai.FunctionDeclaration, toolI
 			return map[string]any{"error": err.Error()}
 		}
 
-		if len(value) > maxContextValueLen {
+		if len(value) > config.MaxContextValueLen {
 			return map[string]any{"error": fmt.Sprintf(
 				"value for %q is %d characters, above the limit of %d; record a summary and leave the detail in a file",
-				key, len(value), maxContextValueLen)}
+				key, len(value), config.MaxContextValueLen)}
 		}
 
 		err = write(ctx, key, value)

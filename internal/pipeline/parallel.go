@@ -106,6 +106,15 @@ func runBranches(
 	// `limit:` especially, "which two go first" is otherwise whichever
 	// goroutines the scheduler happened to run, which is nothing a pipeline
 	// author can reason about.
+	// Identity is stamped here, in the parent, rather than inside the
+	// goroutine: under fail_fast a branch may never start, and a zero-value
+	// result would then claim index 0 — which the context merge below reads
+	// as branch 0's scope. Every branch now carries its own index whether or
+	// not it ran; one that never ran simply has no rows to merge.
+	for index := range branches {
+		results[index] = branchResult{index: index, name: executedStepName(branches[index])}
+	}
+
 	for index := range branches {
 		slot.acquire()
 
@@ -123,7 +132,6 @@ func runBranches(
 			defer slot.release()
 
 			branch := branches[index]
-			results[index] = branchResult{index: index, name: executedStepName(branch)}
 
 			// Each branch records into its own log, merged back in
 			// declaration order below — branches finish in whatever order
@@ -137,7 +145,13 @@ func runBranches(
 			// straight into the run would make two branches recording one key
 			// resolve to whichever finished last — the hazard
 			// validateParallelOutputs already refuses for artifact names.
-			runCtx = agent.WithContextScope(runCtx, branchContextScope(agent.RunIDFrom(ctx), index, results[index].name))
+			//
+			// Derived from the ENCLOSING scope, not from the run: a nested
+			// block inside two different branches would otherwise compute the
+			// same scope for its own branch 0 and the two would overwrite each
+			// other's rows before either join saw them.
+			runCtx = agent.WithContextScope(runCtx,
+				branchContextScope(agent.ContextWriteScope(ctx), index, results[index].name))
 
 			_, _, _, err := runNonGetStep(runCtx, cfg, jobName, i, branch, bw, st, nil, blockHash, handoff)
 
@@ -174,29 +188,48 @@ func runBranches(
 	return results
 }
 
-// mergeBranchesContext folds every branch's recorded facts back into the run,
-// in declaration order, once they have all finished.
+// mergeBranchesContext folds every branch's recorded facts back into the scope
+// the block itself writes to, in declaration order, once they have all
+// finished.
+//
+// Into the ENCLOSING scope rather than into the run: a nested block runs
+// inside its own branch's goroutine, so merging straight into the run would
+// put two concurrent writers on the run's rows — the very race the branch
+// scopes exist to remove. Merging one level at a time means the outer join
+// carries the inner facts the rest of the way up, still single-threaded.
 //
 // Order and single-threadedness are the whole point: this is what turns
 // concurrent writes into a deterministic result. A failure to merge is logged
 // rather than raised — the branches' own outcomes are the block's outcome, and
 // losing a recorded fact must not turn a green block red.
 func mergeBranchesContext(ctx context.Context, st *store.Store, results []branchResult) {
-	runID := agent.RunIDFrom(ctx)
+	enclosing := agent.ContextWriteScope(ctx)
 
 	for _, result := range results {
-		if result.name == "" {
-			continue
-		}
-
+		// An unnamed branch is one that IS a block: executedStepName has no
+		// name for a container. It still has to be merged, or the facts its
+		// own join lifted into it stay one level below the run and no later
+		// step ever sees them — and it still needs an identity, or two such
+		// branches collapse onto one key and the second silently wins.
 		err := mergeBranchContext(
-			context.WithoutCancel(ctx), st, runID,
-			branchContextScope(runID, result.index, result.name), result.name,
+			context.WithoutCancel(ctx), st, enclosing,
+			branchContextScope(enclosing, result.index, result.name),
+			branchPrefixName(result),
 		)
 		if err != nil {
 			slog.Warn("branch.context.merge_failed", "branch", result.name, "error", err)
 		}
 	}
+}
+
+// branchPrefixName is the name a branch's recorded facts are qualified by: its
+// step name, or its position when it has none (a nested block).
+func branchPrefixName(result branchResult) string {
+	if result.name != "" {
+		return result.name
+	}
+
+	return fmt.Sprintf("branch%d", result.index)
 }
 
 // combineBranchErrors turns the branches' outcomes into the block's own.
@@ -350,7 +383,8 @@ func raceBranches(
 			// Scoped like an in_parallel: branch, but only the winner's scope
 			// is merged below — a cancelled loser's partial facts are discarded
 			// with its workspace, the same treatment its exec log gets.
-			runCtx = agent.WithContextScope(runCtx, branchContextScope(agent.RunIDFrom(ctx), index, results[index].name))
+			runCtx = agent.WithContextScope(runCtx,
+				branchContextScope(agent.ContextWriteScope(ctx), index, results[index].name))
 
 			_, _, _, err := runNonGetStep(runCtx, cfg, jobName, i, branch, bw, st, nil, blockHash, handoff)
 			results[index].err = err

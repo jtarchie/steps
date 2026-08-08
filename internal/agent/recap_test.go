@@ -3,6 +3,7 @@ package agent
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"google.golang.org/genai"
 
@@ -149,5 +150,25 @@ func TestInjectReadContextToolSkipsAnEmptyRun(t *testing.T) {
 
 	if _, ok := registry[readContextToolName]; !ok {
 		t.Errorf("registry = %v, want %s once facts exist", registry, readContextToolName)
+	}
+}
+
+// TestRecapValueTruncatesOnARuneBoundary guards the compact elision against
+// splitting a multi-byte character. A recorded fact is model-authored text and
+// routinely holds non-ASCII; a byte-boundary cut puts a broken code point into
+// the very value a later step is meant to read.
+func TestRecapValueTruncatesOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+
+	// "é" is two bytes, so a cut at compactValueLen lands mid-rune.
+	value := strings.Repeat("a", compactValueLen-1) + "é" + strings.Repeat("b", 50)
+
+	got := recapValue(value, config.FidelityCompact)
+	if !utf8.ValidString(got) {
+		t.Errorf("recapValue produced invalid UTF-8: %q", got)
+	}
+
+	if !strings.Contains(got, "truncated") {
+		t.Errorf("recapValue = %q, want the elision marked", got)
 	}
 }
