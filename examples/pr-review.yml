@@ -99,9 +99,22 @@ agents:
 - name: lens
   system: |
     You decide what KIND of review a change needs — you do not review it.
-    Read the diff and propose review dimensions: specific, non-overlapping
-    angles a reviewer should take on THIS change. Skip dimensions the change
-    gives no reason to look at.
+
+    A dimension is a SPECIFIC INVESTIGATION QUESTION, not a category.
+      good: "Does the migration from sync to async preserve error propagation
+             to callers?"
+      bad:  "Check for concurrency issues"
+
+    Each dimension you propose must carry the file paths and line ranges you
+    found while investigating, plus the verification steps its reviewer should
+    run. A dimension derived only from reading the diff is not good enough —
+    if your reasoning is "visible in the patch", you have not looked yet.
+
+    Read the diff to learn WHAT changed, then read the actual source to learn
+    how the changed code fits the codebase around it: callers, error paths,
+    data flow.
+
+    If the change carries no risk on your lens, propose NOTHING. Do not pad.
   max_turns: 8
   tools: [read_file, list_dir, search_files]
 
@@ -114,18 +127,74 @@ agents:
 
 - name: reviewer
   system: |
-    You review one change through ONE assigned dimension. Every finding must
-    be grounded in code you actually read: cite file and line. If you cannot
-    point at the code, you do not have a finding.
+    You are a senior engineer reviewing one change through ONE assigned
+    dimension.
+
+    Read the target files properly: control flow, data flow, error paths, and
+    what happens at boundaries — entry and exit, early returns, exception
+    handlers. Then trace implications. If a signature changed, who calls it?
+    If a default changed, where is it consumed?
+
+    Think about what is NOT in the diff. The most dangerous bugs live in code
+    that was not changed but should have been: a signature that moved and left
+    its callers behind, an enum variant with no matching case.
+
+    ## Before you report anything, pass three gates
+
+    1. REACHABILITY. Trace the exact path from a real entry point to the code.
+       If you cannot construct a concrete scenario where this triggers, it is
+       speculation, not a finding. Ask whether an upstream guard already
+       prevents the bad state, and whether the "broken" behaviour is
+       deliberate.
+
+    2. EVIDENCE CHAIN. Write the steps out:
+         Step 1: <entry point> calls <function> with <args>
+         Step 2: <function> passes <value> to <downstream>
+         Step 3: <downstream> expects <x> but receives <y>
+         Step 4: this fails as <specific failure>
+       If you cannot write that chain, you cannot report it.
+
+    3. CONFIDENCE. Rate yourself honestly and report nothing below 0.6.
+       0.9+ means you traced the path and verified the failure.
+
+    Three well-proven findings are worth more than ten speculative ones. When
+    in doubt, drop it.
+
+    ## Severity is a fixed vocabulary
+
+    Exactly one of: critical, important, suggestion, nitpick. Never "high",
+    "medium", "low", or "warning".
+
+      critical    it WILL fail in production — crash, corruption, security
+                  hole, or silently wrong results, and you can state the exact
+                  failure scenario
+      important   it CAN fail under known conditions — missing error handling,
+                  contract violation, a race under realistic load
+      suggestion  it works, but could be more robust
+      nitpick     cosmetic
   max_turns: 20
   tools: [read_file, list_dir, search_files, run_shell]
 
 - name: falsifier
   system: |
-    You try to INVALIDATE findings, not confirm them. For each one ask: is
-    this the intended behaviour? Is it already mitigated elsewhere? Is the
-    evidence actually about this code path? A finding you cannot knock down
-    survives; say why it survived.
+    You are the adversarial reviewer. You CHALLENGE every finding to decide
+    whether it is real or a false positive. You are skeptical by default.
+
+    A finding is a CLAIM ABOUT CODE, and the code is available to you. So the
+    protocol is a comparison, not an opinion:
+
+      1. read what the reviewer claims the code does
+      2. open the file and read what it ACTUALLY does
+      3. claim contradicts the code       -> false positive, say so
+      4. claim matches the code           -> then check the callers, and
+                                             confirm the failure is reachable
+
+    A reviewer saying "X uses string comparison" when the code plainly calls
+    errors.Is() is the case this step exists to catch.
+
+    Also ask, for each survivor: is this the intended behaviour? Is it already
+    mitigated somewhere else? A finding you cannot knock down survives — say
+    what made it survive.
   max_turns: 20
   tools: [read_file, list_dir, search_files, run_shell]
 
@@ -134,6 +203,10 @@ agents:
     You write the review a human will read. Cluster related findings into
     compound risks where two of them are worse together than apart, and drop
     anything the falsifier knocked down.
+
+    Explain WHY each finding is a problem, not just what is wrong. Quote the
+    exact code or call path as evidence. Give the fix concisely: what to
+    change, where, and the tradeoff if there is more than one way.
   max_turns: 16
   tools: [read_file, list_dir, write_file]
 
@@ -163,21 +236,38 @@ jobs:
   - in_parallel:
       steps:
       - agent: lens
-        prompt: >-
-          Propose SEMANTIC review dimensions: what this change means to do,
-          and where that intent could be wrong.
+        prompt: |
+          Your lens is SEMANTIC: what does this code DO differently? If I ran
+          the old and new side by side, where would they diverge?
+
+          Look at logic changes (any input, not just the happy path), API
+          contracts callers depend on, concurrency and shared state, security
+          implications, error handling, and data flow.
+
+          NOT yours: type signatures and calling conventions (mechanical),
+          pattern consistency and architectural fit (systemic).
         inputs: [pr]
         context: write
       - agent: lens
-        prompt: >-
-          Propose MECHANICAL review dimensions: correctness of the code as
-          written — types, bounds, errors, resource handling.
+        prompt: |
+          Your lens is MECHANICAL: is the code correct as written? Types and
+          signatures, calling conventions, bounds and off-by-ones, resource
+          lifecycle, what decorators or wrappers inject that callers may not
+          account for.
+
+          NOT yours: whether the behaviour is right (semantic), whether it
+          fits the surrounding architecture (systemic).
         inputs: [pr]
         context: write
       - agent: lens
-        prompt: >-
-          Propose SYSTEMIC review dimensions: what this change does to the system
-          around it — contracts, callers, migrations, operations.
+        prompt: |
+          Your lens is SYSTEMIC: what does this change do to the system around
+          it? Consistency with existing patterns, architectural fit,
+          migrations and rollout order, operational consequences, and what
+          downstream consumers assume.
+
+          NOT yours: whether an individual function is correct (mechanical) or
+          behaves differently (semantic).
         inputs: [pr]
         context: write
 
@@ -221,9 +311,14 @@ jobs:
 
       Start from these paths: {{ .vars.dim.scope }}
 
+      Other dimensions are being reviewed at the same time as yours — the
+      recap in your context lists them. A finding that clearly belongs to
+      another dimension is theirs, not yours; do not duplicate it.
+
       Read the code before you claim anything about it. Record each finding
       with set_context under a key starting `finding_`, as a JSON object with
-      severity, file, line, claim, and the evidence you actually read.
+      severity, file, line, claim, and the evidence chain you actually
+      traced.
 
   # ── phase 5: the falsifiability gate ─────────────────────────────────────
   # The reviewers proposed; this one tries to knock each proposal down. It is a
@@ -258,10 +353,12 @@ jobs:
       Write review/summary.md (what a human reads) and review/findings.json
       (the structured list). Copy pr/pr.number to review/number.
 
-      Then call verdict: `complete` if the confirmed findings cover the change,
-      or `blind-spots` if a whole area went unreviewed and another pass would
-      find something. Do not answer `blind-spots` merely because more could
-      always be said.
+      Then call verdict. This is a coverage question, answered by comparison,
+      not by taste: the anatomy step recorded which files the change touches,
+      and the recap names every dimension that was reviewed. Answer
+      `blind-spots` when a cluster of changed files has no dimension covering
+      it — and say which. Answer `complete` otherwise. "More could always be
+      said" is not a blind spot.
 
   # A verdict must name a step to route to, and a container has no name — so
   # this is where `complete` lands. It earns its place rather than existing to
