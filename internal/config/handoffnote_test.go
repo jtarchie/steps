@@ -380,3 +380,79 @@ func TestHandoffNoteBranchesMustHaveUniqueNames(t *testing.T) {
 		t.Errorf("error = %v, want it to name the collision", err)
 	}
 }
+
+// TestHandoffNoteFromAMatrixFansIn is the across: case, unblocked by giving a
+// cell an identity separate from what it resolves through: every cell sends
+// its own note, and the step after the matrix receives one per cell.
+func TestHandoffNoteFromAMatrixFansIn(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := loadHandoffNote(t, `
+  - across:
+    - var: shard
+      values: [a, b]
+    agent: writer
+    handoff: { note: true }
+  - agent: reader
+`)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	want := []string{"writer [shard=a]", "writer [shard=b]"}
+	if got := cfg.Jobs[0].Plan[1].HandoffNoteFrom; !slices.Equal(got, want) {
+		t.Errorf("receiver HandoffNoteFrom = %v, want %v", got, want)
+	}
+}
+
+// TestHandoffNoteIntoAMatrixBroadcasts proves the other direction: cells
+// inherit the pending note from the across: step they are expanded out of, so
+// every cell opens with what the step before the matrix handed on.
+func TestHandoffNoteIntoAMatrixBroadcasts(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := loadHandoffNote(t, `
+  - agent: writer
+    handoff: { note: true }
+  - across:
+    - var: shard
+      values: [a, b]
+    agent: reader
+`)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	cells, err := ExpandAcross("job \"build\" step 1", cfg.Jobs[0].Plan[1])
+	if err != nil {
+		t.Fatalf("ExpandAcross: %v", err)
+	}
+
+	for i := range cells {
+		if got := cells[i].HandoffNoteFrom; !slices.Equal(got, []string{"writer"}) {
+			t.Errorf("cell %d HandoffNoteFrom = %v, want [writer]", i, got)
+		}
+	}
+}
+
+// TestHandoffNoteRejectedOnARuntimeMatrix guards the one matrix shape that
+// cannot work: a from: axis has no cells until the run reaches it, so there
+// are no names to address a note to at load — and delivery is wired statically
+// on purpose, since that is what makes a to:-driven redo idempotent.
+func TestHandoffNoteRejectedOnARuntimeMatrix(t *testing.T) {
+	t.Parallel()
+
+	_, err := loadHandoffNote(t, `
+  - agent: writer
+    context: write
+  - across:
+    - var: shard
+      from: shards
+    agent: writer
+    handoff: { note: true }
+  - agent: reader
+`)
+	if err == nil || !strings.Contains(err.Error(), "not supported on an across: step with a from: axis") {
+		t.Fatalf("error = %v, want a runtime matrix's notes to be rejected", err)
+	}
+}

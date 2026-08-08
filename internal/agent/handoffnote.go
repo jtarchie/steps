@@ -374,8 +374,12 @@ func publishHandoffNote(prepared preparedAgentStep, jobName string, res conversa
 		return
 	}
 
+	// Addressed by the name the step is KNOWN by, not the agent it resolves
+	// through — otherwise every cell of a matrix would write one file and only
+	// the last would survive, which is why handoff: was rejected on across:
+	// until the two names were separated (see config.Step.Label).
 	path, err := writeHandoffNote(
-		prepared.conv.env.dir, prepared.step.Agent, jobName,
+		prepared.conv.env.dir, prepared.step.DisplayName(), jobName,
 		res.handoffNote, res.trajectory,
 	)
 	if err != nil {

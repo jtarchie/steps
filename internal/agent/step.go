@@ -186,7 +186,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	required := requiredToolNames(ri.ToolSpecs)
 
 	synthesized, err := injectSynthesizedTools(ctx, cfg, step,
-		synthesisInputs{handoff: handoff, store: st, runID: runID}, decls, registry, required)
+		synthesisInputs{handoff: handoff, store: st, runID: runID, writeScope: ContextWriteScope(ctx)}, decls, registry, required)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 		closeAll(closers)

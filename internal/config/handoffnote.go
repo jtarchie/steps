@@ -164,10 +164,45 @@ func (c *Config) wireHandoffNoteStep(job *Job, idx int, step *Step, pending []st
 			return nil, err
 		}
 
-		return []string{stepName(*step)}, nil
+		return acrossSenderNames(job, idx, step)
 	}
 
 	return pending, nil
+}
+
+// acrossSenderNames is the note a sending step leaves behind: its own name,
+// or — for a matrix — one per cell.
+//
+// A cell writes handoff/<its label>.md (see publishHandoffNote), so the step
+// after the matrix receives one note per combination, exactly as it receives
+// one per branch of a concurrent block. That only works because a cell's
+// identity is now separate from what it resolves through; before that, every
+// cell shared one name and wrote over the same file.
+//
+// A RUNTIME matrix is refused: its cells do not exist until the step filling
+// its source has run, so there are no names to address at load. Delivery is
+// wired statically on purpose (it is what makes a redo idempotent), so this is
+// a real limit rather than an oversight, and it says so.
+func acrossSenderNames(job *Job, idx int, step *Step) ([]string, error) {
+	if len(step.Across) == 0 {
+		return []string{stepName(*step)}, nil
+	}
+
+	if HasRuntimeAxis(*step) {
+		return nil, fmt.Errorf("job %q step %d: handoff_note is not supported on an across: step with a from: axis; its cells do not exist until the run reaches them, so there are no notes to address", job.Name, idx)
+	}
+
+	cells, err := ExpandAcross(fmt.Sprintf("job %q step %d", job.Name, idx), *step)
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(cells))
+	for i := range cells {
+		names = append(names, stepName(cells[i]))
+	}
+
+	return names, nil
 }
 
 // wireHandoffNoteBlock wires a concurrent block: every branch's first agent
@@ -322,22 +357,7 @@ func checkHandoffNoteDelivered(job *Job, segment []int) error {
 	// nobody and still load clean.
 	for _, idx := range segment {
 		err := eachNoteStep(&job.Plan[idx], func(step *Step) error {
-			for _, from := range step.HandoffNoteFrom {
-				received[from] = true
-			}
-
-			if !step.WantsNote() {
-				return nil
-			}
-
-			name := stepName(*step)
-			if prev, dup := senders[name]; dup {
-				return fmt.Errorf("job %q step %d: handoff_note is set on two steps named %q in this segment (step %d is the other); a note is addressed by step name, so the names must be unique", job.Name, idx, name, prev)
-			}
-
-			senders[name] = idx
-
-			return nil
+			return collectNoteSenders(job, idx, step, senders, received)
 		})
 		if err != nil {
 			return err
@@ -348,8 +368,19 @@ func checkHandoffNoteDelivered(job *Job, segment []int) error {
 	// edges names the same one every load.
 	for _, idx := range segment {
 		err := eachNoteStep(&job.Plan[idx], func(step *Step) error {
-			if step.WantsNote() && !received[stepName(*step)] {
-				return fmt.Errorf("job %q step %d: handoff_note is set but no later agent step in this segment receives it", job.Name, idx)
+			if !step.WantsNote() {
+				return nil
+			}
+
+			names, err := acrossSenderNames(job, idx, step)
+			if err != nil {
+				return err
+			}
+
+			for _, name := range names {
+				if !received[name] {
+					return fmt.Errorf("job %q step %d: handoff_note is set but no later agent step in this segment receives it", job.Name, idx)
+				}
 			}
 
 			return nil
@@ -357,6 +388,36 @@ func checkHandoffNoteDelivered(job *Job, segment []int) error {
 		if err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+// collectNoteSenders records what one step receives and what it sends, and
+// rejects two senders sharing a name — the name is the address, so a
+// collision would send one note to nobody while both wrote the same file.
+func collectNoteSenders(job *Job, idx int, step *Step, senders map[string]int, received map[string]bool) error {
+	for _, from := range step.HandoffNoteFrom {
+		received[from] = true
+	}
+
+	if !step.WantsNote() {
+		return nil
+	}
+
+	// A matrix contributes one sender per cell — already validated by the
+	// wiring walk, so an error here cannot be new.
+	names, err := acrossSenderNames(job, idx, step)
+	if err != nil {
+		return err
+	}
+
+	for _, name := range names {
+		if prev, dup := senders[name]; dup {
+			return fmt.Errorf("job %q step %d: handoff_note is set on two steps named %q in this segment (step %d is the other); a note is addressed by step name, so the names must be unique", job.Name, idx, name, prev)
+		}
+
+		senders[name] = idx
 	}
 
 	return nil

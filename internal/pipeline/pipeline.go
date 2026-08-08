@@ -963,7 +963,7 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 		// The command did not run, so anything it recorded has to come back
 		// from what it recorded last time — otherwise a cached run reaches the
 		// agent steps with facts a fresh run would have had.
-		err = replayTaskContext(ctx, st, agent.RunIDFrom(ctx), rt.Name, hash)
+		err = replayTaskContext(ctx, st, agent.ContextWriteScope(ctx), rt.Name, hash)
 		if err != nil {
 			return "", stepChainSkipped, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 		}
@@ -992,7 +992,7 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 
 	// Recorded on the node as well as in the run context, so a later skip of
 	// this same step can replay it (see replayTaskContext).
-	err = recordTaskContext(ctx, st, agent.RunIDFrom(ctx), rt.Name, collected)
+	err = recordTaskContext(ctx, st, agent.ContextWriteScope(ctx), rt.Name, collected)
 	if err != nil {
 		return "", stepRan, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 	}

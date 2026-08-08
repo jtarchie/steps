@@ -132,6 +132,13 @@ func runBranches(
 			runCtx, branchLog := forkExecLog(branchCtx)
 			logs[index] = branchLog
 
+			// Context writes go to a scope only this branch touches; they are
+			// merged back at the join below, in declaration order. Writing
+			// straight into the run would make two branches recording one key
+			// resolve to whichever finished last — the hazard
+			// validateParallelOutputs already refuses for artifact names.
+			runCtx = agent.WithContextScope(runCtx, branchContextScope(agent.RunIDFrom(ctx), index, results[index].name))
+
 			_, _, _, err := runNonGetStep(runCtx, cfg, jobName, i, branch, bw, st, nil, blockHash, handoff)
 
 			// A try: branch tolerates its own failure HERE, because the plan
@@ -162,7 +169,34 @@ func runBranches(
 		}
 	}
 
+	mergeBranchesContext(ctx, st, results)
+
 	return results
+}
+
+// mergeBranchesContext folds every branch's recorded facts back into the run,
+// in declaration order, once they have all finished.
+//
+// Order and single-threadedness are the whole point: this is what turns
+// concurrent writes into a deterministic result. A failure to merge is logged
+// rather than raised — the branches' own outcomes are the block's outcome, and
+// losing a recorded fact must not turn a green block red.
+func mergeBranchesContext(ctx context.Context, st *store.Store, results []branchResult) {
+	runID := agent.RunIDFrom(ctx)
+
+	for _, result := range results {
+		if result.name == "" {
+			continue
+		}
+
+		err := mergeBranchContext(
+			context.WithoutCancel(ctx), st, runID,
+			branchContextScope(runID, result.index, result.name), result.name,
+		)
+		if err != nil {
+			slog.Warn("branch.context.merge_failed", "branch", result.name, "error", err)
+		}
+	}
 }
 
 // combineBranchErrors turns the branches' outcomes into the block's own.
@@ -313,6 +347,11 @@ func raceBranches(
 			runCtx, branchLog := forkExecLog(raceCtx)
 			logs[index] = branchLog
 
+			// Scoped like an in_parallel: branch, but only the winner's scope
+			// is merged below — a cancelled loser's partial facts are discarded
+			// with its workspace, the same treatment its exec log gets.
+			runCtx = agent.WithContextScope(runCtx, branchContextScope(agent.RunIDFrom(ctx), index, results[index].name))
+
 			_, _, _, err := runNonGetStep(runCtx, cfg, jobName, i, branch, bw, st, nil, blockHash, handoff)
 			results[index].err = err
 
@@ -340,6 +379,10 @@ func raceBranches(
 	// artifacts are discarded.
 	if winner >= 0 && logs[winner] != nil {
 		mergeExecLog(ctx, logs[winner])
+	}
+
+	if winner >= 0 {
+		mergeBranchesContext(ctx, st, results[winner:winner+1])
 	}
 
 	return winner, results

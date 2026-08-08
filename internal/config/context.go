@@ -279,7 +279,7 @@ func (c *Config) validateContextSteps() error {
 			return err
 		}
 
-		err = rejectContextInBranches(job)
+		err = c.rejectContextInBranches(job)
 		if err != nil {
 			return err
 		}
@@ -327,32 +327,33 @@ func checkContextStep(label string, step *Step) error {
 	return nil
 }
 
-// rejectContextInBranches rejects context WRITES on a step inside a concurrent
-// block or on an across: step.
+// rejectContextInBranches refuses the one shape of concurrent context write
+// that cannot be made safe: a TASK writing under the shared workspace.
 //
-// Concurrent branches would each need their own copy of the context, so a
-// branch's writes have to surface at the join rather than merge into the
-// shared store — two branches writing one key into one store resolve to
-// whichever finished last, the same hazard validateParallelOutputs already
-// refuses for artifact names. The join half does not exist yet, so a write in
-// a branch would land in the shared store and race. A load error until it does.
+// Concurrent writes to the STORE are fine now — a branch writes to a scope
+// only it touches and internal/pipeline merges those back at the join, in
+// declaration order, under keys naming the branch. But a task records by
+// writing files into ContextDir of its working directory, and under the shared
+// strategy every step's working directory is the same build root. Two branches
+// both writing `context/finding` are two writers on one file: the value that
+// survives is neither of theirs. Observed as `n+1 query credential` — one
+// branch's bytes overlaid on the other's.
 //
-// Only writes. READING inside a branch is safe and stays legal: a recap is
-// delivered per step from what was recorded before the block, and nothing a
-// branch reads can collide with what a sibling reads. Rejecting fidelity: too
-// would take the opt-out away from exactly the steps most likely to want it.
-func rejectContextInBranches(job Job) error {
+// Under copy/btrfs each branch has its own directory, so there is no collision
+// and this allows it. An AGENT is unaffected either way: set_context is a tool
+// call, and never touches the filesystem.
+func (c *Config) rejectContextInBranches(job Job) error {
+	if c.Workspace != nil {
+		return nil
+	}
+
 	for i := range job.Plan {
 		label := fmt.Sprintf("job %q step %d", job.Name, i)
 		step := unwrapStep(&job.Plan[i])
 
-		if len(job.Plan[i].Across) > 0 && step.WritesContext() {
-			return fmt.Errorf("%s: context: write is not supported on an across: step yet — each cell would write into one shared store, and the join that separates them does not exist", label)
-		}
-
 		for kind, branches := range branchesOf(step) {
 			for b := range branches {
-				err := visitStepTree(fmt.Sprintf("%s (%s branch %d)", label, kind, b), &branches[b], rejectNestedContextWrite)
+				err := visitStepTree(fmt.Sprintf("%s (%s branch %d)", label, kind, b), &branches[b], rejectSharedBranchTaskWrite)
 				if err != nil {
 					return err
 				}
@@ -363,11 +364,11 @@ func rejectContextInBranches(job Job) error {
 	return nil
 }
 
-// rejectNestedContextWrite rejects context: write on one step inside a
-// concurrent block. A read-only context: {fidelity: ...} is left alone.
-func rejectNestedContextWrite(label string, step *Step) error {
-	if step.WritesContext() {
-		return fmt.Errorf("%s: context: write is not supported inside a concurrent block yet — branches would write into one shared store, and the join that separates them does not exist", label)
+// rejectSharedBranchTaskWrite rejects one concurrent task's context: write
+// under the shared workspace strategy.
+func rejectSharedBranchTaskWrite(label string, step *Step) error {
+	if step.Task != "" && step.WritesContext() {
+		return fmt.Errorf("%s: a task cannot write context inside a concurrent block under the shared workspace — every branch writes into one %s/ directory, so concurrent branches would overwrite each other's files. Set workspace.strategy (copy or btrfs), or record the facts from an agent step instead", label, ContextDir)
 	}
 
 	return nil

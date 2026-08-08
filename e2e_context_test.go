@@ -384,6 +384,116 @@ jobs:
 	}
 }
 
+// TestEndToEndBranchContextIsMergedByBranch is the claim that made context
+// writes a load error inside a concurrent block until now: two branches
+// recording the SAME key must not resolve to whichever finished last.
+//
+// Both branches write `finding`. They come back as two keys, named for the
+// branch that recorded each, and the step after the block sees both.
+func TestEndToEndBranchContextIsMergedByBranch(t *testing.T) {
+	dir := t.TempDir()
+
+	// Isolated on purpose: two concurrent TASKS record by writing files, and
+	// under the shared strategy both would write one context/finding in one
+	// build root and corrupt each other. That is a load error (see
+	// rejectContextInBranches); this is the shape that works.
+	path := writePipeline(t, dir, `
+workspace:
+  strategy: copy
+
+jobs:
+- name: review
+  plan:
+  - in_parallel:
+      steps:
+      - task: security
+        inputs: []
+        outputs: []
+        context: write
+        run: |
+          mkdir -p context
+          printf 'hardcoded credential' > context/finding
+      - task: perf
+        inputs: []
+        outputs: []
+        context: write
+        run: |
+          mkdir -p context
+          printf 'n+1 query' > context/finding
+`)
+
+	mustRun(t, path)
+
+	facts := map[string]string{}
+	for _, entry := range storeRunContext(t, path) {
+		facts[entry.Key] = entry.Value
+	}
+
+	// Neither branch's fact was lost to the other's.
+	want := map[string]string{
+		"security.finding": "hardcoded credential",
+		"perf.finding":     "n+1 query",
+	}
+
+	for key, value := range want {
+		if facts[key] != value {
+			t.Errorf("%s = %q, want %q (got all: %+v)", key, facts[key], value, facts)
+		}
+	}
+
+	// And the unqualified key never appears: a bare `finding` would mean one
+	// branch had silently overwritten the other.
+	if _, collided := facts["finding"]; collided {
+		t.Errorf("run context holds a bare %q; branch writes must be keyed by branch, got %+v", "finding", facts)
+	}
+}
+
+// TestEndToEndRaceContextKeepsOnlyTheWinner proves a loser's partial facts are
+// discarded with its workspace, the same treatment its execution log gets.
+func TestEndToEndRaceContextKeepsOnlyTheWinner(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+workspace:
+  strategy: copy
+
+jobs:
+- name: pick
+  plan:
+  - race:
+      steps:
+      - task: quick
+        inputs: []
+        outputs: []
+        context: write
+        run: |
+          mkdir -p context
+          printf 'quick' > context/answer
+      - task: slow
+        inputs: []
+        outputs: []
+        context: write
+        run: |
+          sleep 5
+          mkdir -p context
+          printf 'slow' > context/answer
+`)
+
+	mustRun(t, path)
+
+	facts := map[string]string{}
+	for _, entry := range storeRunContext(t, path) {
+		facts[entry.Key] = entry.Value
+	}
+
+	if facts["quick.answer"] != "quick" {
+		t.Errorf("winner's fact = %q, want %q (got all: %+v)", facts["quick.answer"], "quick", facts)
+	}
+
+	if _, present := facts["slow.answer"]; present {
+		t.Errorf("a cancelled racer's fact survived: %+v", facts)
+	}
+}
+
 // storeContextByRun returns every recorded fact grouped by the run that
 // recorded it — the shape that makes "did the cached run replay?" a direct
 // question.
@@ -392,7 +502,7 @@ func storeContextByRun(t *testing.T, pipelinePath string) map[string]map[string]
 
 	db := openStateDB(t, pipelinePath)
 
-	rows, err := db.QueryContext(t.Context(), `SELECT run_id, key, value FROM run_context ORDER BY run_id, key`)
+	rows, err := db.QueryContext(t.Context(), `SELECT run_id, key, value FROM run_context WHERE run_id NOT LIKE '%#%' ORDER BY run_id, key`)
 	if err != nil {
 		t.Fatalf("query run_context: %v", err)
 	}
@@ -430,12 +540,21 @@ type contextRow struct {
 	WrittenBy string
 }
 
+// storeRunContext returns the facts recorded at RUN scope — what a later step
+// would actually be shown.
+//
+// Branch scopes are excluded (they carry a '#'): a concurrent branch records
+// into a scope only it touches, which is then merged back under a
+// branch-qualified key. Returning those raw would report every branch fact
+// twice, once under its own bare key, which reads exactly like the collision
+// this design exists to prevent.
 func storeRunContext(t *testing.T, pipelinePath string) []contextRow {
 	t.Helper()
 
 	db := openStateDB(t, pipelinePath)
 
-	rows, err := db.QueryContext(t.Context(), `SELECT key, value, written_by FROM run_context ORDER BY key`)
+	rows, err := db.QueryContext(t.Context(),
+		`SELECT key, value, written_by FROM run_context WHERE run_id NOT LIKE '%#%' ORDER BY key`)
 	if err != nil {
 		t.Fatalf("query run_context: %v", err)
 	}

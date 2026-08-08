@@ -21,6 +21,15 @@
 assert:
   execution:
     - record-facts
+    - branch-facts
+
+# Required only by the branch-facts job at the bottom: two concurrent TASKS
+# record by writing files, and under the shared strategy both would write one
+# context/finding in one build root and corrupt each other (a load error).
+# Isolation gives each branch its own directory. An agent recording via
+# set_context needs none of this — it is a tool call, not a file.
+workspace:
+  strategy: copy
 
 # Pipeline-wide recap detail, for the agent steps that would read this back.
 # A step's own context.fidelity wins over it. Levels, in ascending detail:
@@ -65,4 +74,37 @@ jobs:
 
   assert:
     execution: [run-tests, show]
+    outcome: succeeded
+
+# ─── concurrent branches record without racing ──────────────────────────────
+# Both branches record the SAME key. They survive as two keys, named for the
+# branch that recorded each, because a branch writes to a scope only it touches
+# and the join merges those back — on one goroutine, in declaration order.
+# Without that, one key would resolve to whichever branch finished last.
+#
+# strategy: copy is required HERE and only here: a task records by writing
+# files, and under the shared strategy both branches would write one
+# context/finding in one build root and corrupt each other. That is a load
+# error. An agent writing via set_context needs no isolation — it is a tool
+# call, not a file.
+- name: branch-facts
+  plan:
+  - in_parallel:
+      steps:
+      - task: security
+        inputs: []
+        outputs: []
+        context: write
+        run: |
+          mkdir -p context
+          printf 'hardcoded credential in deploy.sh' > context/finding
+      - task: perf
+        inputs: []
+        outputs: []
+        context: write
+        run: |
+          mkdir -p context
+          printf 'n+1 query in the report view' > context/finding
+  assert:
+    execution: [security, perf]
     outcome: succeeded

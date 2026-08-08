@@ -128,3 +128,66 @@ func TestEndToEndHandoffNoteFanOutAndIn(t *testing.T) {
 		t.Errorf("branches did not receive the pre-block note; got %q", broadcast)
 	}
 }
+
+// TestEndToEndHandoffNoteFromAMatrix is the across: half: every cell of a
+// matrix writes its own note, and the step after the matrix opens with all of
+// them.
+//
+// Cells run in declaration order, so the fake provider's linear script needs
+// no serialization here — unlike the concurrent block above.
+func TestEndToEndHandoffNoteFromAMatrix(t *testing.T) {
+	dir := t.TempDir()
+
+	script := make([]turn, 0, 5)
+	script = append(script, writesNote("shard-a")...)
+	script = append(script, writesNote("shard-b")...)
+	script = append(script, says("Summarized."))
+
+	fake := newFakeLLM(t, script...)
+	path := writePipeline(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: reviewer
+  source: { endpoint: %[1]s/v1/, model: test-model, api_key_env: STEPS_TEST_AGENT_API_KEY }
+  tools: [read_file]
+- name: summarizer
+  source: { endpoint: %[1]s/v1/, model: test-model, api_key_env: STEPS_TEST_AGENT_API_KEY }
+  tools: [read_file]
+
+jobs:
+- name: review
+  plan:
+  - across:
+    - var: shard
+      values: [a, b]
+    agent: reviewer
+    prompt: "Review shard {{ .vars.shard }}."
+    handoff: { note: true }
+  - agent: summarizer
+    prompt: Combine the shard reviews.
+`, fake.URL))
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	mustRun(t, path)
+
+	last := fake.request(fake.requestCount())
+
+	results := last.toolResults()
+	if len(results) != 2 {
+		t.Fatalf("summarizer opened with %d notes, want one per cell; got %v", len(results), results)
+	}
+
+	// Each cell's note is its own document, and each names the cell that wrote
+	// it — which is the point: before the identity split, both cells wrote one
+	// file and only the last survived.
+	joined := strings.Join(results, "\n")
+	for _, want := range []string{"shard=a", "shard=b"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("delivery is missing the %q cell's note; got %v", want, results)
+		}
+	}
+}

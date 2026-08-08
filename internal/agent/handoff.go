@@ -146,7 +146,11 @@ type synthesizedTools struct {
 type synthesisInputs struct {
 	handoff *Handoff
 	store   *store.Store
-	runID   string
+	// runID scopes what this step READS: the run, always.
+	runID string
+	// writeScope is where what it RECORDS lands — the run, except inside a
+	// concurrent branch. See WithContextScope.
+	writeScope string
 }
 
 // injectSynthesizedTools adds the tools a step's own declarations call for
@@ -167,7 +171,13 @@ func injectSynthesizedTools(
 		return synthesizedTools{}, err
 	}
 
-	err = injectSetContextTool(step, contextWriterFor(in.store, in.runID, step.Agent), decls, registry)
+	// Writes go to the write SCOPE, which is the run itself except inside a
+	// concurrent branch (see WithContextScope); reads below stay on the run, so
+	// a branch still sees everything established before the block.
+	//
+	// Attributed to the name the step is KNOWN by, so a matrix's recorded facts
+	// say which cell established them rather than naming the agent three times.
+	err = injectSetContextTool(step, contextWriterFor(in.store, in.writeScope, step.DisplayName()), decls, registry)
 	if err != nil {
 		return synthesizedTools{}, err
 	}

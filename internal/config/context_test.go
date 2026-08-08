@@ -167,44 +167,6 @@ jobs:
 `,
 			want: "context is not valid on hook steps",
 		},
-		{
-			name: "context inside an in_parallel branch",
-			pipeline: `
-agents:
-- name: writer
-  source: { model: lmstudio/qwen }
-jobs:
-- name: j
-  plan:
-  - in_parallel:
-      steps:
-      - agent: writer
-        prompt: go
-        context: write
-      - task: work
-        inputs: []
-        run: "true"
-`,
-			want: "not supported inside a concurrent block",
-		},
-		{
-			name: "context on an across step",
-			pipeline: `
-agents:
-- name: writer
-  source: { model: lmstudio/qwen }
-jobs:
-- name: j
-  plan:
-  - across:
-    - var: shard
-      values: [a, b]
-    agent: writer
-    prompt: "go {{ .vars.shard }}"
-    context: write
-`,
-			want: "not supported on an across: step",
-		},
 	}
 
 	for _, tc := range cases {
@@ -433,5 +395,33 @@ func TestValidateContextKey(t *testing.T) {
 				t.Errorf("ValidateContextKey(%q) = %v, want it to mention %q", tc.key, err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// TestContextWriteIsLegalOnAMatrix proves the matrix case is NOT the branch
+// case. Cells run in declaration order, so two cells writing one key resolve
+// the way two sequential steps do — the later wins, in an order the author can
+// read off the pipeline. Only concurrent branches have no such order.
+func TestContextWriteIsLegalOnAMatrix(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+agents:
+- name: writer
+  source: { model: lmstudio/qwen }
+jobs:
+- name: j
+  plan:
+  - across:
+    - var: shard
+      values: [a, b]
+    agent: writer
+    prompt: "go {{ .vars.shard }}"
+    context: write
+`)
+
+	_, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v, want context: write to be legal on a matrix", err)
 	}
 }

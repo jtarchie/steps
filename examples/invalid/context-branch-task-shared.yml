@@ -1,0 +1,30 @@
+# A task records context by writing files into context/ in its working
+# directory. Under the SHARED workspace strategy every step's working directory
+# is the same build root, so two concurrent branches both writing
+# context/finding are two writers on one file — the surviving value is neither
+# of theirs, it is their bytes overlaid.
+#
+# Concurrent writes to the STORE are fine: a branch writes to a scope only it
+# touches and the join merges those back under a key naming the branch. It is
+# the FILE that collides. Set workspace.strategy, which gives each branch its
+# own directory, or record from an agent step, where set_context is a tool call
+# and never touches the filesystem.
+# expect: a task cannot write context inside a concurrent block under the shared workspace
+
+jobs:
+- name: review
+  plan:
+  - in_parallel:
+      steps:
+      - task: security
+        inputs: []
+        context: write
+        run: |
+          mkdir -p context
+          printf 'hardcoded credential' > context/finding
+      - task: perf
+        inputs: []
+        context: write
+        run: |
+          mkdir -p context
+          printf 'n+1 query' > context/finding

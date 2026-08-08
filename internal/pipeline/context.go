@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
@@ -163,6 +164,70 @@ func decodeRecordedContext(recorded map[string]any) map[string]string {
 	}
 
 	return decoded
+}
+
+// branchContextScope is the run-context write scope for one branch of a
+// concurrent block: rows nobody else in the run touches, so two branches
+// recording the same key cannot resolve to whichever finished last.
+func branchContextScope(runID string, index int, name string) string {
+	return fmt.Sprintf("%s#%d:%s", runID, index, name)
+}
+
+// mergeBranchContext folds what one branch recorded back into the run, under
+// keys naming the branch that recorded them.
+//
+// Called at the JOIN, after every branch has finished, on one goroutine and in
+// declaration order — which is what makes it deterministic where writing
+// straight into the run would not have been. The branch name becomes a key
+// prefix rather than being dropped: which branch established a fact is part of
+// the fact, and a synthesizer needs to know that the security branch rated
+// something high while the performance branch rated it low.
+//
+// Best-effort on read: a branch that recorded nothing has no rows, which is
+// the common case and not an error.
+func mergeBranchContext(ctx context.Context, st *store.Store, runID, scope, branch string) error {
+	if st == nil || runID == "" {
+		return nil
+	}
+
+	entries, err := st.RunContext(ctx, scope)
+	if err != nil {
+		return fmt.Errorf("branch %q context: %w", branch, err)
+	}
+
+	prefix := contextKeyPrefix(branch)
+
+	for _, entry := range entries {
+		err = st.SetContext(ctx, runID, prefix+entry.Key, entry.Value, entry.WrittenBy)
+		if err != nil {
+			return fmt.Errorf("branch %q context: %w", branch, err)
+		}
+	}
+
+	if len(entries) > 0 {
+		slog.Debug("branch.context.merged", "branch", branch, "keys", len(entries))
+	}
+
+	return nil
+}
+
+// contextKeyPrefix turns a branch name into a key prefix. A step name may hold
+// characters a context key may not (a matrix cell's " [shard=a]", say), so it
+// is reduced to the key charset rather than producing a key that renders one
+// way and matches another.
+func contextKeyPrefix(branch string) string {
+	var b strings.Builder
+
+	for _, r := range branch {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+
+	return b.String() + "."
 }
 
 // sortedKeys returns m's keys in sorted order.

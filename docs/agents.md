@@ -324,7 +324,20 @@ A note chain reaches into `in_parallel:` and `race:` blocks, in both directions:
 
 A block that sends nothing is **transparent** — a block of tasks between two agents does not break the chain, the same way a single intervening task does not.
 
-Still rejected inside a block: `handoff: { context: true }` and `{ tool: true }`. Those describe arriving via a `to:`/`verdicts:` route, and a branch is not a routable position — nothing can route to it, so the fields would be permanently dead. `across:` is also still rejected outright: every cell answers to the same step name, so all of them would write the same `handoff/<name>.md` and only the last would survive.
+**A matrix fans in too.** Each cell of an `across:` step writes `handoff/<its label>.md`, and the step after the matrix receives one note per cell:
+
+```yaml
+- across:
+  - var: shard
+    values: [a, b]
+  agent: reviewer
+  handoff: { note: true }   # reviewer [shard=a] and reviewer [shard=b] each send
+- agent: summarizer         # receives both
+```
+
+That works because a cell's identity is separate from the agent it resolves through; before that split, every cell wrote the same file and only the last survived. A **runtime** matrix (`from:`) is still rejected — its cells do not exist until the run reaches them, so there are no names to address at load, and delivery is wired statically on purpose (it is what makes a `to:`-driven redo idempotent).
+
+Still rejected: `handoff: { context: true }` and `{ tool: true }`, both inside a block and on a matrix. Those describe arriving via a `to:`/`verdicts:` route. A branch is not a routable position, and a route targets a matrix rather than any one cell — so in both cases the fields could never fire.
 
 **Limits, enforced at load time:**
 - Agent steps only, never hooks; the sender needs a later agent step in the same get-segment (a note never crosses a `get` fan-out — each fanned-out build is independent), and the receiver must grant `read_file`.
@@ -391,7 +404,29 @@ A file whose name is not a valid key, or whose contents exceed the value cap, is
 - Agent and task steps only — a put hands an artifact to a resource and has nothing of its own to say.
 - `fidelity:` is agent-only: it renders a recap into a conversation, and a shell command has none.
 - Never on a hook step: a hook runs outside the plan's ordering, so what it stored — and whether the steps reading it had already run — would depend on when it happened to fire.
-- **Not yet supported inside `in_parallel:`/`race:` or on an `across:` step.** Concurrent branches each work from their own copy, so branch writes have to surface at the *join* rather than merge into the shared store — two branches writing one key would resolve to whichever finished last, the hazard `validateParallelOutputs` already refuses for artifact names. The join half does not exist yet, so this is a load error rather than a silently discarded write.
+- A **task** cannot write context inside a concurrent block under the *shared* workspace — see below.
+
+### Writing from concurrent branches
+
+A branch writes to a scope only it touches, and those scopes are merged back at the **join** — on one goroutine, in declaration order — under keys naming the branch:
+
+```yaml
+- in_parallel:
+    steps:
+    - agent: security-reviewer
+      context: write        # records `finding`
+    - agent: perf-reviewer
+      context: write        # also records `finding`
+- agent: synthesizer        # sees security-reviewer.finding AND perf-reviewer.finding
+```
+
+Both survive. Without the branch scope they would be one key resolving to whichever branch finished last — the hazard `validateParallelOutputs` already refuses for artifact names. The branch name becomes a prefix rather than being dropped, because which branch established a fact is part of the fact.
+
+`race:` merges the **winner's** facts only; a cancelled loser's partial writes are discarded with its workspace, the same treatment its execution log gets.
+
+**One load error remains, for tasks only.** A task records by writing files into `context/` in its working directory, and under the *shared* strategy every step's working directory is the same build root — so two concurrent branches both writing `context/finding` are two writers on one file. That is not a lost update, it is a corrupt one: the observed value was `n+1 query credential`, one branch's bytes overlaid on the other's. Set `workspace.strategy` (`copy` or `btrfs`), which gives each branch its own directory, or record from an agent step, where `set_context` is a tool call and never touches the filesystem.
+
+An **`across:` matrix** needs none of this: its cells run in declaration order, not concurrently, so two cells writing one key resolve the way two sequential steps do — the later wins, in an order readable off the pipeline.
 
 **Scope**: the store is keyed by run, so two runs of one job — including two concurrent ones under `steps watch` — never read each other's facts. Rows carry `written_by`, so the record answers "who recorded this" without replaying a transcript.
 

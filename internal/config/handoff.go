@@ -170,12 +170,17 @@ func rejectNestedHandoff(label string, step *Step) error {
 	return nil
 }
 
-// rejectHandoffOnAcross rejects handoff: on an across: step (looking through
-// a try: wrapper, where the agent cell body lives). Every agent cell shares
-// the step's one name, so each cell in turn overwrote handoff/<name>.md and
-// the receiver read whichever cell wrote last — every earlier cell's note was
-// silently lost. Cells need to be first-class senders before this can mean
-// something.
+// rejectHandoffOnAcross rejects the BACKWARD half of handoff: on an across:
+// step (looking through a try: wrapper, where the cell body lives).
+//
+// context:/tool: describe arriving via a to:/verdicts: route. A matrix is one
+// plan step expanding into siblings, and a route targets the step rather than
+// any one cell, so there is no cell a transition could be said to have entered.
+//
+// note: is supported: each cell writes handoff/<its label>.md and the step
+// after the matrix receives one per cell (see acrossSenderNames). That became
+// possible only once a cell's identity was separated from what it resolves
+// through — before, every cell wrote the same file and only the last survived.
 func rejectHandoffOnAcross(job Job) error {
 	for i := range job.Plan {
 		step := job.Plan[i]
@@ -183,8 +188,8 @@ func rejectHandoffOnAcross(job Job) error {
 			continue
 		}
 
-		if step.Unwrap().Handoff != nil {
-			return fmt.Errorf("job %q step %d: handoff is not supported on an across: step — every cell answers to the same step name, so they would all write the same note and only the last would survive", job.Name, i)
+		if handoff := step.Unwrap().Handoff; handoff != nil && handoff.Receives() {
+			return fmt.Errorf("job %q step %d: handoff context/tool is not supported on an across: step — a to: route targets the matrix, not any one cell, so no cell can be said to have been routed to", job.Name, i)
 		}
 	}
 

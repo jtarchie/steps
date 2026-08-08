@@ -107,6 +107,33 @@ func RunIDFrom(ctx context.Context) string {
 	return runIDFromContext(ctx)
 }
 
+// contextScopeKey types the context value holding the run-context WRITE scope,
+// when it differs from the run itself.
+type contextScopeKey struct{}
+
+// WithContextScope derives a context whose recorded facts land under scope
+// instead of the run id.
+//
+// It exists for concurrent branches. Reads stay on the run scope — a branch
+// must still see everything established before the block — but writes go
+// somewhere only that branch touches, so two branches recording the same key
+// cannot resolve to whichever finished last. internal/pipeline merges each
+// branch's scope back at the join, in declaration order, under a key naming
+// the branch (see mergeBranchContext).
+func WithContextScope(ctx context.Context, scope string) context.Context {
+	return context.WithValue(ctx, contextScopeKey{}, scope)
+}
+
+// ContextWriteScope reports where facts recorded on this context should land:
+// the branch scope when one is set, otherwise the run itself.
+func ContextWriteScope(ctx context.Context) string {
+	if scope, ok := ctx.Value(contextScopeKey{}).(string); ok && scope != "" {
+		return scope
+	}
+
+	return runIDFromContext(ctx)
+}
+
 // sanitizeLabel reduces a free-form name to characters legal in an HTTP header
 // value and bounds its length. Job and agent names are arbitrary YAML strings
 // that may contain spaces or non-ASCII; dropping to an unreserved ASCII subset

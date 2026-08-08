@@ -1,7 +1,12 @@
-# A note is addressed by step name, and every agent cell of a matrix shares
-# the step's one name — so each cell overwrote handoff/<name>.md in turn and
-# the receiver read whichever wrote last, silently losing the rest.
-# expect: handoff is not supported on an across: step
+# handoff: context/tool describe arriving via a to:/verdicts: route. A matrix
+# is ONE plan step that expands into siblings, and a route targets that step
+# rather than any single cell — so no cell can be said to have been routed to,
+# and the fields could never fire.
+#
+# handoff: { note: true } IS supported on a matrix: each cell writes
+# handoff/<its label>.md and the step after the matrix receives one note per
+# cell. See examples/agents.yml.
+# expect: handoff context/tool is not supported on an across: step
 
 agents:
 - name: writer
@@ -17,6 +22,6 @@ jobs:
       values: [a, b]
     agent: writer
     prompt: "review shard {{ .vars.shard }}"
-    handoff: { note: true }
+    handoff: { tool: true }
   - agent: writer
     prompt: summarize
