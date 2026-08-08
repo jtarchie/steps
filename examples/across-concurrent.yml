@@ -1,0 +1,100 @@
+# yaml-language-server: $schema=../steps.schema.json
+# max_in_flight: — run a matrix's cells CONCURRENTLY instead of in declaration
+# order.
+#
+# Cells are serial by default, and for a hand-written matrix that is usually
+# right: the value is mostly in not maintaining near-identical copies by hand.
+# It stops being right for a RUNTIME fan-out (see across.yml's from: axis),
+# where an earlier step decides the width and the cells are N independent
+# agents with no ordering between them. Serially that costs N times one cell's
+# wall clock for nothing.
+#
+# This lives in its own file because it needs `workspace:`, which is a
+# pipeline-global block — it would force isolation on every job in
+# across.yml.
+#
+# Run: steps test examples/across-concurrent.yml  (no network, credentials, or model)
+
+# Required for max_in_flight > 1, and the reason is worth reading. A matrix's
+# cells are CLONES of one step: they declare the same outputs: and their
+# commands write the same paths. Under the default shared strategy every step's
+# working directory is the same build root, so two cells running at once are two
+# writers on one file. Isolation gives each cell its own directory.
+workspace:
+  strategy: copy
+
+assert:
+  execution:
+    - concurrent-cells
+    - bounded-width
+    - every-failure-reported
+
+jobs:
+# Three cells, all three in flight. Each writes its start marker and then waits
+# for its siblings' — so this job only completes if they really do overlap, and
+# a regression to the serial walk shows up as the 10-second wait each cell
+# spends alone rather than as a silent success.
+#
+# assert.execution names the cells in DECLARATION order, which is the property
+# that makes a concurrent matrix testable at all: cells finish in whatever order
+# they finish, and each records into its own log merged back in order at the
+# join.
+- name: concurrent-cells
+  plan:
+  # Clears the rendezvous directory first, so a leftover set of markers from an
+  # earlier run cannot satisfy the wait below and let a serial regression pass.
+  - task: reset
+    inputs: []
+    run: rm -rf "${TMPDIR:-/tmp}/steps-across-example-$PPID"
+  - across:
+    - var: cell
+      values: [a, b, c]
+    max_in_flight: 3
+    task: "wait-{{ .vars.cell }}"
+    inputs: []
+    run: |
+      marks="${TMPDIR:-/tmp}/steps-across-example-$PPID"
+      mkdir -p "$marks"
+      touch "$marks/{{ .vars.cell }}"
+      for _ in $(seq 1 100); do
+        [ "$(ls "$marks" | wc -l)" -ge 3 ] && exit 0
+        sleep 0.1
+      done
+      echo "ran with no sibling in flight" >&2
+      exit 1
+  assert:
+    execution: [reset, wait-a, wait-b, wait-c]
+    outcome: succeeded
+
+# A width lower than the cell count admits cells in declaration order, two at a
+# time. Which cells go first is otherwise whichever goroutines the scheduler
+# happened to run, which is nothing a pipeline author can reason about.
+- name: bounded-width
+  plan:
+  - across:
+    - var: shard
+      values: [one, two, three, four]
+    max_in_flight: 2
+    task: "shard-{{ .vars.shard }}"
+    inputs: []
+    run: echo "shard {{ .vars.shard }}"
+  assert:
+    execution: [shard-one, shard-two, shard-three, shard-four]
+    outcome: succeeded
+
+# Concurrency changes nothing about what a failing cell MEANS. A matrix asks
+# which combinations work, so every cell runs and every failure is reported —
+# there is deliberately no fail_fast: here, because cancelling the siblings of
+# the first red cell would answer that question for exactly one cell.
+- name: every-failure-reported
+  plan:
+  - across:
+    - var: cell
+      values: [good, bad, alsobad]
+    max_in_flight: 3
+    task: "check-{{ .vars.cell }}"
+    inputs: []
+    run: test "{{ .vars.cell }}" = good
+  assert:
+    execution: [check-good, check-bad, check-alsobad]
+    outcome: failed

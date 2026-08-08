@@ -239,7 +239,7 @@ Cells that are puts or agents are never skipped, for the same reasons those step
 
 ### The rest
 
-- **Cells run in declaration order, not concurrently.** They commonly share a workspace, and a matrix's value is mostly in not hand-maintaining the copies. Put an `in_parallel:` inside a cell if a cell's own work should overlap.
+- **Cells run in declaration order, not concurrently** — unless the step says `max_in_flight:` (below). They commonly share a workspace, and a matrix's value is mostly in not hand-maintaining the copies. Put an `in_parallel:` inside a cell if a cell's own work should overlap.
 - **A failing cell does not stop the others.** A matrix asks "which of these combinations work", and stopping at the first red one answers that for exactly one cell. Every failure is reported.
 - **Cells are named for their coordinates** — `check [mode=fast suite=unit]` — unless you interpolate a variable into the name yourself. Without that every cell would share one name, which is unroutable and unreadable in a log.
 - **An empty axis, a duplicate `var:`, or a misspelled `{{ .vars.x }}` are load errors.** Each would otherwise mean silently running the wrong matrix.
@@ -268,6 +268,32 @@ This is "the agent plans, the pipeline executes": one step produces a work list,
 **Because the array is produced during the run, usually by a model, nothing about it was reviewed by the author.** So: at most 1000 items (an unbounded array turns an upstream typo into an unbounded bill — the error says to filter at the source or split the run), a missing key or wrong shape fails the step naming the key, and an empty array is an error rather than a matrix that silently runs nothing.
 
 **Planning.** A static matrix expands at load, so `steps plan` shows every cell. A runtime one cannot: its width is not knowable until the step that fills its source has run. It hashes its *declaration* at plan time — the axes including the source key, plus the unexpanded template — which means the planner cannot predict what that block, or anything downstream of it, will do. The cells themselves hash at run time and cache per cell exactly as static cells do.
+
+### Concurrent cells: `max_in_flight:`
+
+Serial cells are the right default for a hand-written matrix. They are the wrong default for a runtime fan-out, where the cells are N independent agents an earlier step decided on, and running them one at a time costs N times one cell's wall clock for nothing.
+
+```yaml
+workspace:
+  strategy: copy          # required above 1
+
+- across:
+  - var: dimension
+    from: dimensions
+  max_in_flight: 4        # four cells at a time
+  agent: reviewer
+  prompt: "Review the diff through the {{ .vars.dimension }} lens."
+```
+
+`examples/across-concurrent.yml` is the runnable version, self-verifying via `steps test`.
+
+- **Unset or `1` is the serial walk**, unchanged. This is opt-in, unlike `in_parallel:`'s `limit:` where an absent value means unbounded — each default matches the contract its own block already had. A value at or above the cell count is effectively unbounded.
+- **Workspace isolation is required above 1**, enforced at load, for the reason `race:` requires it. A matrix's cells are *clones of one step*: they declare the same `outputs:` and their commands write the same paths, so under the shared strategy two cells at once are two writers on one file — and what survives is neither cell's bytes.
+- **Cells are admitted in declaration order.** Under a limit especially, "which cells go first" is otherwise whichever goroutines the scheduler happened to run.
+- **`assert.execution` stays deterministic**: each cell records into its own log, merged back in declaration order at the join — the same treatment `in_parallel:` branches get.
+- **There is no `fail_fast:`.** A matrix asks which combinations work; cancelling the siblings of the first red cell answers that for exactly one cell. Every cell runs and every failure is reported, exactly as in the serial walk.
+- **Recorded context is scoped per cell** and merged at the join under a key naming the cell (`reviewer [dimension=api-boundaries].finding`), because concurrent cells recording one key have no order to resolve by. A *serial* matrix keeps the plain last-wins described in [agents.md](agents.md#writing-from-concurrent-branches) — sequential writers resolve in an order readable off the pipeline. Consequence worth knowing: raising `max_in_flight` changes the key names a downstream step reads.
+- **Not hashed**, unlike `in_parallel:`'s `limit:`/`fail_fast:`. Those change which steps run at all; this changes only how many run at once, and the cell set is identical at any width — so widening a matrix whose cells are all cached re-runs nothing.
 
 ## `approval:` — a human in the plan
 

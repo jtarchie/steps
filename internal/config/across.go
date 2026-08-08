@@ -143,6 +143,13 @@ func resolveAxes(label string, declared []AcrossVar, runtime map[string][]string
 func (c *Config) validateAcross() error {
 	for _, job := range c.Jobs {
 		err := job.visitSteps(func(label string, step *Step) error {
+			// Checked before the early return below, so max_in_flight: on a
+			// step with no across: is caught rather than silently ignored.
+			err := c.validateAcrossConcurrency(label, step)
+			if err != nil {
+				return err
+			}
+
 			if len(step.Across) == 0 {
 				return nil
 			}
@@ -158,6 +165,38 @@ func (c *Config) validateAcross() error {
 		if err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+// validateAcrossConcurrency checks max_in_flight: — that it describes a matrix
+// at all, and that a concurrent one has somewhere safe to run.
+//
+// The isolation requirement is race:'s, for the same reason. A matrix's cells
+// are one step's clones: they declare the same outputs: and their commands
+// write the same paths, so under the shared strategy — where every step's
+// working directory IS the build root — two cells running at once are two
+// writers on one file. Serial cells never collide, which is why this is a
+// requirement of the concurrency and not of across:.
+func (c *Config) validateAcrossConcurrency(label string, step *Step) error {
+	if step.MaxInFlight == 0 {
+		return nil
+	}
+
+	if step.MaxInFlight < 0 {
+		return fmt.Errorf("%s: max_in_flight is %d; it counts cells, so it cannot be negative", label, step.MaxInFlight)
+	}
+
+	if len(step.Across) == 0 {
+		return fmt.Errorf("%s: max_in_flight is only valid on an across: step; it bounds how many cells run at once", label)
+	}
+
+	// 1 is the serial default spelled out. It changes nothing, so it needs
+	// nothing — refusing it would make "be explicit about the default" an
+	// error.
+	if step.MaxInFlight > 1 && c.Workspace == nil {
+		return fmt.Errorf("%s: max_in_flight: %d requires workspace isolation (set a top-level workspace: strategy); concurrent cells are clones of one step writing the same paths, and would otherwise share one mutable directory", label, step.MaxInFlight)
 	}
 
 	return nil

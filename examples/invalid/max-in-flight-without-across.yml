@@ -1,0 +1,16 @@
+# max_in_flight bounds how many across: CELLS run at once, so on a step with no
+# across: there is nothing for it to bound.
+#
+# Rejected rather than ignored: read as "run this step four ways at once" it is
+# a plausible thing to write, and a silently-ignored field is indistinguishable
+# from one that worked. For concurrency between DIFFERENT steps, use
+# in_parallel: — that block's limit: is the field this one is being mistaken for.
+# expect: max_in_flight is only valid on an across: step
+
+jobs:
+- name: fan
+  plan:
+  - task: check
+    inputs: []
+    max_in_flight: 4
+    run: "true"

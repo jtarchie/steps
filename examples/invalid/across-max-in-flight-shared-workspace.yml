@@ -1,0 +1,24 @@
+# Concurrent matrix cells need workspace isolation, for the reason race:
+# branches do.
+#
+# A matrix's cells are CLONES of one step: they declare the same outputs: and
+# their commands write the same paths. Under the shared strategy every step's
+# working directory is the same build root, so two cells running at once are two
+# writers on one file — and unlike a lost update, what survives is neither
+# cell's bytes.
+#
+# Serial cells never collide, which is why this is a requirement of the
+# concurrency and not of across: itself. Set workspace.strategy (copy or btrfs),
+# or drop max_in_flight and let the cells run in declaration order.
+# expect: requires workspace isolation
+
+jobs:
+- name: fan
+  plan:
+  - across:
+    - var: shard
+      values: [a, b, c]
+    max_in_flight: 3
+    task: check
+    inputs: []
+    run: echo {{ .vars.shard }} > report.txt

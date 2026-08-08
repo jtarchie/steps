@@ -7,10 +7,11 @@
 # axis re-runs only the cells that value appears in — Concourse re-runs the
 # entire matrix on any change.
 #
-# Cells run in plan order, not concurrently. That is a deliberate limit: the
-# value of a matrix is mostly in not hand-maintaining the copies, and running
-# the cells concurrently would mean giving up the per-cell chaining that makes
-# the caching work.
+# Cells run in plan order by default: the value of a hand-written matrix is
+# mostly in not maintaining near-identical copies by hand, and a shared
+# workspace makes serial the safe default. A step that wants them at once says
+# max_in_flight: — see across-concurrent.yml, which needs workspace isolation
+# and so lives in its own file.
 #
 # Run: steps test examples/across.yml     (no network, credentials, or model)
 assert:

@@ -803,6 +803,12 @@
             }
           }
         },
+        "max_in_flight": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "across: steps only. How many cells may run at once. Unset or 1 runs them serially in declaration order; above 1 requires a top-level workspace: strategy. Not hashed — changing it never re-runs a cached cell.",
+          "default": 1
+        },
         "in_parallel": {
           "type": "object",
           "additionalProperties": false,

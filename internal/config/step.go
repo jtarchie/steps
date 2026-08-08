@@ -116,6 +116,23 @@ type Step struct {
 	// substituting {{ .vars.<name> }} into its fields. Expanded at load, so
 	// each cell is an ordinary plan step. See AcrossVar.
 	Across []AcrossVar `yaml:"across,omitempty"`
+	// MaxInFlight bounds how many across: cells run at once. Unset or 1 keeps
+	// the serial declaration-order walk this modifier has always had; anything
+	// higher runs that many cells concurrently, and a value at or above the
+	// cell count is effectively unbounded. Opt-in, unlike in_parallel:'s
+	// limit: where an absent value means unbounded — each default matches the
+	// contract its own block already had.
+	//
+	// Above 1 it requires workspace isolation, for the reason race: does:
+	// cells are one step's clones, so they write the same output names into
+	// the same working directory, and under the shared strategy concurrent
+	// cells are two writers on one file. See validateAcrossConcurrency.
+	//
+	// NOT hashed, unlike in_parallel:'s limit:/fail_fast:. Those change which
+	// steps run at all; this only changes how many run at once, and the cell
+	// set is identical at any width — so raising it must not re-run a matrix
+	// whose cells are all cached.
+	MaxInFlight int `yaml:"max_in_flight,omitempty"`
 	// Inputs/Outputs declare which named artifacts a task/agent/put step
 	// draws from and (task/agent only) produces. Each name is either a
 	// resource fetched by an earlier get step or an output produced by an

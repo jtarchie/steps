@@ -426,7 +426,7 @@ Both survive. Without the branch scope they would be one key resolving to whiche
 
 **One load error remains, for tasks only.** A task records by writing files into `context/` in its working directory, and under the *shared* strategy every step's working directory is the same build root — so two concurrent branches both writing `context/finding` are two writers on one file. That is not a lost update, it is a corrupt one: the observed value was `n+1 query credential`, one branch's bytes overlaid on the other's. Set `workspace.strategy` (`copy` or `btrfs`), which gives each branch its own directory, or record from an agent step, where `set_context` is a tool call and never touches the filesystem.
 
-An **`across:` matrix** needs none of this: its cells run in declaration order, not concurrently, so two cells writing one key resolve the way two sequential steps do — the later wins, in an order readable off the pipeline.
+An **`across:` matrix** needs none of this by default: its cells run in declaration order, so two cells writing one key resolve the way two sequential steps do — the later wins, in an order readable off the pipeline. A matrix that sets [`max_in_flight:`](control-flow.md#concurrent-cells-max_in_flight) is scoped and merged exactly like the branches above, since concurrent cells have no order to resolve by; the cell name becomes the prefix.
 
 **Scope**: the store is keyed by run, so two runs of one job — including two concurrent ones under `steps watch` — never read each other's facts. Rows carry `written_by`, so the record answers "who recorded this" without replaying a transcript.
 
