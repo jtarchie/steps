@@ -8,6 +8,8 @@ package workspace
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,7 +18,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
+	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 )
@@ -296,6 +301,10 @@ type treeBackend interface {
 	removeTree(dir string) error
 }
 
+// buildDirPrefix is what every build directory under an isolating root starts
+// with — the marker sweepStaleBuilds recognizes as ours to remove.
+const buildDirPrefix = "b-"
+
 // isolatingProvider is the shared Provider for any strategy that
 // materializes real per-step directories (copy, btrfs).
 type isolatingProvider struct {
@@ -304,20 +313,78 @@ type isolatingProvider struct {
 	root     string
 	ownsRoot bool
 	keep     bool
-	builds   atomic.Int64
+	// token distinguishes this invocation's build directories from any other's
+	// — see newInvocationToken.
+	token  string
+	builds atomic.Int64
 }
 
 func (p *isolatingProvider) Validate() error {
 	if p.validate != nil {
-		return p.validate()
+		err := p.validate()
+		if err != nil {
+			return err
+		}
 	}
+
+	p.sweepStaleBuilds()
 
 	return nil
 }
 
+// sweepStaleBuilds removes build directories left behind by an earlier run.
+//
+// A build is normally torn down at Close, so anything still here belongs to a
+// process that never got to run it: a SIGKILL, a panicking host, a pulled
+// plug. Under strategy: btrfs those directories hold live subvolumes, which
+// ordinary cleanup never reclaims and which need `btrfs subvolume delete` —
+// so without this they accumulate, and the disk they hold is only recoverable
+// by hand.
+//
+// Skipped entirely under --keep-workspace: that flag means "leave the files
+// for me to look at", and deleting the previous run's kept workspace at the
+// start of the next one would defeat the only reason to pass it.
+//
+// Best-effort and non-fatal: a failure here is logged, never returned. Not
+// being able to tidy up is not a reason to refuse to run.
+func (p *isolatingProvider) sweepStaleBuilds() {
+	if p.keep {
+		return
+	}
+
+	entries, err := os.ReadDir(p.root)
+	if err != nil {
+		slog.Debug("workspace.sweep_skipped", "root", p.root, "error", err)
+
+		return
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), buildDirPrefix) {
+			continue
+		}
+
+		dir := filepath.Join(p.root, entry.Name())
+
+		slog.Info("workspace.sweep_stale_build", "dir", dir)
+
+		removeErr := p.backend.removeTree(dir)
+		if removeErr != nil {
+			slog.Warn("workspace.sweep_failed", "dir", dir, "error", removeErr)
+		}
+	}
+}
+
 func (p *isolatingProvider) NewBuild(ctx context.Context, label string) (BuildWorkspace, error) {
+	// The token comes before the counter because the counter alone is not
+	// unique: it restarts at 1 in every process, so a crashed run's leftover
+	// b-1-<label> would collide with the next run's — MkdirAll succeeds on the
+	// existing directory and the backend then fails creating an artifact
+	// subvolume that is already there. sweepStaleBuilds normally removes those
+	// first; the token is what makes the collision impossible even when the
+	// sweep is skipped (--keep-workspace) or two processes share a root.
 	n := p.builds.Add(1)
-	root := filepath.Join(p.root, fmt.Sprintf("b-%d-%s", n, sanitizeLabel(label)))
+	root := filepath.Join(p.root, fmt.Sprintf("%s%s-%d-%s", buildDirPrefix, p.token, n, sanitizeLabel(label)))
 
 	err := os.MkdirAll(root, 0o750)
 	if err != nil {
@@ -603,6 +670,25 @@ func (s *isolatingSpace) Close() error {
 	}
 
 	return nil
+}
+
+// newInvocationToken returns a short random string identifying one steps
+// invocation's build directories.
+//
+// Random rather than the pid: pids are reused, and a run whose leftovers are
+// still on disk is exactly the run whose pid is now free. It only has to be
+// distinct from whatever else is under the root, so eight hex characters is
+// ample; a failure to read randomness falls back to the process start time,
+// since a token that is merely probably-unique still beats no token.
+func newInvocationToken() string {
+	var buf [4]byte
+
+	_, err := rand.Read(buf[:])
+	if err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+
+	return hex.EncodeToString(buf[:])
 }
 
 // newIsolatingRoot resolves the on-disk root an isolating provider

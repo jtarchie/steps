@@ -42,6 +42,7 @@ func newBtrfsProvider(ws *config.WorkspaceConfig, keep bool) Provider {
 		root:     ws.Root,
 		ownsRoot: false,
 		keep:     keep,
+		token:    newInvocationToken(),
 	}
 }
 

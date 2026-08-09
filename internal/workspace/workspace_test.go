@@ -610,3 +610,141 @@ func TestValidateArtifactFlowNoOpWithoutWorkspace(t *testing.T) {
 		t.Errorf("validateArtifactFlow with no workspace: block should always be a no-op, got %v", err)
 	}
 }
+
+// TestIsolatingProviderSweepsStaleBuilds covers the crash-recovery half of the
+// leak: a build directory is normally removed at Close, so one still present
+// at startup belongs to a process that never got there. Under btrfs those
+// directories hold live subvolumes that ordinary cleanup never reclaims.
+func TestIsolatingProviderSweepsStaleBuilds(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	stale := filepath.Join(root, "b-deadbeef-1-build")
+
+	err := os.MkdirAll(filepath.Join(stale, "artifacts", "repo"), 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Not ours: an unrelated directory under a shared root must survive.
+	keepMe := filepath.Join(root, "unrelated")
+
+	err = os.MkdirAll(keepMe, 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provider, err := NewProvider(&config.WorkspaceConfig{Strategy: "copy", Root: root}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { _ = provider.Close() }()
+
+	err = provider.Validate()
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	_, statErr := os.Stat(stale)
+	if !os.IsNotExist(statErr) {
+		t.Errorf("stale build directory %q survived the sweep", stale)
+	}
+
+	_, statErr = os.Stat(keepMe)
+	if statErr != nil {
+		t.Errorf("sweep removed a directory it does not own: %v", statErr)
+	}
+}
+
+// TestIsolatingProviderKeepSkipsTheSweep is the guard that makes the sweep
+// safe: --keep-workspace means "leave the files for me to look at", and
+// deleting last run's kept workspace at the start of the next one would
+// defeat the only reason to pass it.
+func TestIsolatingProviderKeepSkipsTheSweep(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	kept := filepath.Join(root, "b-deadbeef-1-build")
+
+	err := os.MkdirAll(kept, 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provider, err := NewProvider(&config.WorkspaceConfig{Strategy: "copy", Root: root}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { _ = provider.Close() }()
+
+	err = provider.Validate()
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	_, statErr := os.Stat(kept)
+	if statErr != nil {
+		t.Errorf("--keep-workspace should not sweep a previous run's workspace: %v", statErr)
+	}
+}
+
+// TestIsolatingProviderBuildDirsDoNotCollideAcrossInvocations pins the other
+// half. The per-build counter restarts at 1 in every process, so without a
+// per-invocation token two runs sharing a root produce the same
+// b-1-<label> — MkdirAll succeeds on the existing directory and the backend
+// then fails creating an artifact tree that is already there.
+func TestIsolatingProviderBuildDirsDoNotCollideAcrossInvocations(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfg := &config.WorkspaceConfig{Strategy: "copy", Root: root}
+
+	newBuildDir := func(t *testing.T) string {
+		t.Helper()
+
+		// keep: true so the first invocation's directory is still there when
+		// the second one runs — exactly the situation a crash leaves behind.
+		provider, err := NewProvider(cfg, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		bw, err := provider.NewBuild(context.Background(), "build")
+		if err != nil {
+			t.Fatalf("NewBuild: %v", err)
+		}
+
+		dir, err := bw.ResourceDir(context.Background(), "repo")
+		if err != nil {
+			t.Fatalf("ResourceDir: %v", err)
+		}
+
+		return dir
+	}
+
+	first := newBuildDir(t)
+	second := newBuildDir(t)
+
+	if first == second {
+		t.Errorf("two invocations produced the same build directory %q", first)
+	}
+}
+
+func TestNewInvocationTokenIsUnique(t *testing.T) {
+	t.Parallel()
+
+	seen := map[string]bool{}
+
+	for range 100 {
+		token := newInvocationToken()
+		if seen[token] {
+			t.Fatalf("newInvocationToken returned %q twice", token)
+		}
+
+		seen[token] = true
+	}
+}

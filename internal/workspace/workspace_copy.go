@@ -29,6 +29,7 @@ func newCopyProvider(ws *config.WorkspaceConfig, keep bool) (Provider, error) {
 		root:     root,
 		ownsRoot: ownsRoot,
 		keep:     keep,
+		token:    newInvocationToken(),
 	}, nil
 }
 
