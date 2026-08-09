@@ -33,7 +33,7 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 		return true, nil
 	}
 
-	image, env, err := resolveStepImage(cfg, step)
+	spec, err := resolveStepRuntime(cfg, step)
 	if err != nil {
 		return false, err
 	}
@@ -46,7 +46,9 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 	}
 	defer workspace.CloseSpace(space, label)
 
-	runner, err := shell.NewRunner(image, space.Dir(), env)
+	spec.Cwd = space.Dir()
+
+	runner, err := shell.NewRunner(spec)
 	if err != nil {
 		return false, err //nolint:wrapcheck // NewRunner's error already names the cause
 	}
@@ -78,46 +80,47 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 	return exitCode == 0, nil
 }
 
-// resolveStepImage returns the image and env: a step's own work would execute
-// under, so its guard runs in the same environment — a guard that needs a tool
-// only the image has, or a credential only env: passes through, must find it.
-// Each step kind resolves both the same way its runner does: a task through
-// ResolveTask (step values overriding the tasks: entry), an agent through
-// ResolveAgentInvocation, and a put from its resource type (a put step may set
-// neither itself).
-func resolveStepImage(cfg *config.Config, step config.Step) (image string, env []string, err error) {
+// resolveStepRuntime returns how a step's own work would execute — image,
+// env:, user: — so its guard runs in the same environment. A guard that needs
+// a tool only the image has, or a credential only env: passes through, must
+// find it. Each step kind resolves the same way its runner does: a task
+// through ResolveTask (step values overriding the tasks: entry), an agent
+// through ResolveAgentInvocation, and a put from its resource type (a put step
+// may set none of them itself). Cwd is left to the caller, which is the only
+// part a guard supplies for itself.
+func resolveStepRuntime(cfg *config.Config, step config.Step) (shell.RunnerSpec, error) {
 	kind, _ := step.Kind()
 
 	switch kind { //nolint:exhaustive // default covers config.StepKindGet and a malformed step alike — nothing to resolve here
 	case config.StepKindTask:
 		rt, err := cfg.ResolveTask(step)
 		if err != nil {
-			return "", nil, fmt.Errorf("resolve task: %w", err)
+			return shell.RunnerSpec{}, fmt.Errorf("resolve task: %w", err)
 		}
 
-		return rt.Image, rt.Env, nil
+		return shell.RunnerSpec{Image: rt.Image, Env: rt.Env, User: rt.User}, nil
 	case config.StepKindAgent:
 		ri, err := cfg.ResolveAgentInvocation(step)
 		if err != nil {
-			return "", nil, fmt.Errorf("resolve agent: %w", err)
+			return shell.RunnerSpec{}, fmt.Errorf("resolve agent: %w", err)
 		}
 
-		return ri.Image, ri.Env, nil
+		return shell.RunnerSpec{Image: ri.Image, Env: ri.Env, User: ri.User}, nil
 	case config.StepKindTry:
-		return resolveStepImage(cfg, *step.Try)
+		return resolveStepRuntime(cfg, *step.Try)
 	case config.StepKindPut:
 		resource, err := cfg.FindResource(step.Put)
 		if err != nil {
-			return "", nil, fmt.Errorf("resolve put: %w", err)
+			return shell.RunnerSpec{}, fmt.Errorf("resolve put: %w", err)
 		}
 
 		resourceType, err := cfg.FindResourceType(resource.Type)
 		if err != nil {
-			return "", nil, fmt.Errorf("resolve put: %w", err)
+			return shell.RunnerSpec{}, fmt.Errorf("resolve put: %w", err)
 		}
 
-		return resourceType.Image, resourceType.Env, nil
+		return shell.RunnerSpec{Image: resourceType.Image, Env: resourceType.Env, User: resourceType.User}, nil
 	default: // config.StepKindGet, or a malformed step — nothing to resolve here
-		return "", nil, nil
+		return shell.RunnerSpec{}, nil
 	}
 }

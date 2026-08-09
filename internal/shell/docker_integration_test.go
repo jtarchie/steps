@@ -46,7 +46,7 @@ func TestDockerRunnerIntegrationBindMountPersists(t *testing.T) {
 
 	dir := t.TempDir()
 
-	runner, err := NewRunner(testImage, dir, nil)
+	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: dir})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestDockerRunnerIntegrationBindMountPersists(t *testing.T) {
 func TestDockerRunnerIntegrationExitCodeRoundTrips(t *testing.T) {
 	requireDocker(t)
 
-	runner, err := NewRunner(testImage, t.TempDir(), nil)
+	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestDockerRunnerIntegrationHostEnvNotVisible(t *testing.T) {
 
 	t.Setenv("STEPS_TEST_HOST_SECRET", "leak-me-not")
 
-	runner, err := NewRunner(testImage, t.TempDir(), nil)
+	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestDockerRunnerIntegrationHostEnvNotVisible(t *testing.T) {
 func TestDockerRunnerIntegrationCancellationTerminatesWithinGrace(t *testing.T) {
 	requireDocker(t)
 
-	runner, err := NewRunner(testImage, t.TempDir(), nil)
+	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestDockerRunnerIntegrationCancellationTerminatesWithinGrace(t *testing.T) 
 func TestDockerRunnerIntegrationStatePersistsAcrossCommands(t *testing.T) {
 	requireDocker(t)
 
-	runner, err := NewRunner(testImage, t.TempDir(), nil)
+	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestDockerRunnerIntegrationStatePersistsAcrossCommands(t *testing.T) {
 func TestDockerRunnerIntegrationCloseRemovesContainer(t *testing.T) {
 	requireDocker(t)
 
-	runnerIface, err := NewRunner(testImage, t.TempDir(), nil)
+	runnerIface, err := NewRunner(RunnerSpec{Image: testImage, Cwd: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}

@@ -164,6 +164,10 @@ type Step struct {
 	// absent). Invalid on get/put steps, matching Image: a put's environment
 	// comes from its resource type, and a get has no task/agent to override.
 	Env []string `yaml:"env,omitempty"`
+	// User, on a task or agent step, overrides the referenced task's/agent's
+	// User for this step only (non-empty-wins, like Image). Invalid on
+	// get/put steps, for the same reason Image is.
+	User string `yaml:"user,omitempty"`
 	// When, on a task/put/agent step, gates whether the step runs at all: an
 	// explicit command whose exit code decides (0 runs, nonzero skips). See
 	// WhenSpec. Invalid on get steps — a get fans the remainder of the plan

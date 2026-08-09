@@ -81,39 +81,66 @@ func CloseRunner(r Runner, label string) {
 	}
 }
 
-// NewRunner returns a DockerRunner scoped to image and cwd, or a HostRunner
-// when image is empty — the single decision point every shell-out caller
-// (task, agent, resource) funnels through. For a DockerRunner, cwd is
-// resolved and validated once here (see resolveMountPath); an empty cwd is
-// valid (resource check: has none) and mounts nothing. HostRunner never
+// RunnerSpec is everything that decides how one step's commands execute: the
+// container to run them in (or the host, when Image is empty), the working
+// directory, and the per-entity knobs a pipeline can set alongside image:.
+//
+// A struct rather than a parameter list because these arrive together from
+// one config entity (a resource_type, task, or agent, with a step's overrides
+// already merged in by config.Resolve*), and every future knob of the same
+// kind belongs here rather than at the end of a growing signature.
+type RunnerSpec struct {
+	// Image runs commands in a container from this image; empty runs them on
+	// the host.
+	Image string
+	// Cwd is the working directory. For a container it is bind-mounted at its
+	// own resolved host path and set as the workdir; empty (only a resource
+	// check:) mounts nothing.
+	Cwd string
+	// Env are the variable NAMES the pipeline's env: opted this command into,
+	// on top of hostEnvAllowlist. They resolve against the steps process's own
+	// environment; a name that isn't set is simply absent, which is what lets
+	// a pipeline name an optional variable without every operator having to
+	// define it.
+	Env []string
+	// User is the container's user:, passed straight to `docker run --user`.
+	// Empty takes the platform default — see defaultContainerUser, which is
+	// where the Linux file-ownership problem is actually handled. Ignored for
+	// host execution, which always runs as whoever started steps.
+	User string
+}
+
+// NewRunner returns a DockerRunner scoped to spec, or a HostRunner when
+// spec.Image is empty — the single decision point every shell-out caller
+// (task, agent, resource) funnels through. For a DockerRunner, Cwd is
+// resolved and validated once here (see resolveMountPath). HostRunner never
 // errors — cwd needs no resolution for host execution. The returned runner
 // has no label (see WithLabel) until a caller that wants prefixed output
 // opts in explicitly.
-//
-// envNames are the variable NAMES the pipeline's env: opted this command
-// into, on top of hostEnvAllowlist. They are resolved against the steps
-// process's own environment here; a name that isn't set is simply absent,
-// which is what lets a pipeline name an optional variable without every
-// operator having to define it.
-func NewRunner(image, cwd string, envNames []string) (Runner, error) {
-	if image == "" {
-		return HostRunner{cwd: cwd, extraEnv: envNames}, nil
+func NewRunner(spec RunnerSpec) (Runner, error) {
+	if spec.Image == "" {
+		return HostRunner{cwd: spec.Cwd, extraEnv: spec.Env}, nil
 	}
 
 	var resolvedCwd string
 
-	if cwd != "" {
+	if spec.Cwd != "" {
 		var err error
 
-		resolvedCwd, err = resolveMountPath(cwd)
+		resolvedCwd, err = resolveMountPath(spec.Cwd)
 		if err != nil {
-			return nil, fmt.Errorf("resolve working directory %q: %w", cwd, err)
+			return nil, fmt.Errorf("resolve working directory %q: %w", spec.Cwd, err)
 		}
 	}
 
 	return DockerRunner{
-		Image:   image,
-		session: &dockerSession{image: image, resolvedCwd: resolvedCwd, envNames: envNames},
+		Image: spec.Image,
+		session: &dockerSession{
+			image:       spec.Image,
+			resolvedCwd: resolvedCwd,
+			envNames:    spec.Env,
+			user:        containerUser(spec.User),
+		},
 	}, nil
 }
 

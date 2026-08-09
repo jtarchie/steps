@@ -20,7 +20,10 @@ type ResourceType struct {
 	// on top of the always-allowed baseline (see shell.HostEnv). Names only —
 	// see validateEnvValues. This is how a resource type reaches a registry
 	// credential or deploy token without it being written into the pipeline.
-	Env    []string           `yaml:"env,omitempty"`
+	Env []string `yaml:"env,omitempty"`
+	// User is the container user check/in/out execute as (docker's --user).
+	// Empty takes the platform default — see shell's defaultContainerUser.
+	User   string             `yaml:"user,omitempty"`
 	Config ResourceTypeConfig `yaml:"config"`
 }
 

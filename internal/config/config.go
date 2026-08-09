@@ -122,6 +122,7 @@ func (c *Config) validate() error {
 		c.validateArtifactMappings,
 		c.validateImageRules,
 		c.validateEnvRules,
+		c.validateUserRules,
 		c.validateTimeouts,
 		c.validateAgentCompaction,
 		c.validateAgentModels,

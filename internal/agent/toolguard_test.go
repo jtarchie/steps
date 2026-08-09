@@ -309,7 +309,7 @@ func TestRunAgentConversationCallBudgetResetsAcrossAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runner, err := shell.NewRunner("", dir, nil)
+	runner, err := shell.NewRunner(shell.RunnerSpec{Cwd: dir})
 	if err != nil {
 		t.Fatal(err)
 	}

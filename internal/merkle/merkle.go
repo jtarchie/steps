@@ -116,6 +116,10 @@ func GetNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 		content["env"] = sortedEnv(resourceType.Env)
 	}
 
+	if resourceType.User != "" {
+		content["user"] = resourceType.User
+	}
+
 	err := withMCPResourceStage(cfg, resourceType, "in", content)
 	if err != nil {
 		return nil, err
@@ -534,6 +538,10 @@ func TaskNodeContent(cfg *config.Config, step config.Step, rt config.ResolvedTas
 		content["env"] = sortedEnv(rt.Env)
 	}
 
+	if rt.User != "" {
+		content["user"] = rt.User
+	}
+
 	if rt.Assert != nil {
 		content["assert"] = assertContent(rt.Assert)
 	}
@@ -612,6 +620,10 @@ func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 	// Names only — see the get node's env comment.
 	if len(resourceType.Env) > 0 {
 		content["env"] = sortedEnv(resourceType.Env)
+	}
+
+	if resourceType.User != "" {
+		content["user"] = resourceType.User
 	}
 
 	err := withMCPResourceStage(cfg, resourceType, "out", content)
@@ -821,6 +833,10 @@ func subAgentInvocationContent(cfg *config.Config, name string) (map[string]any,
 		content["env"] = sortedEnv(ri.Env)
 	}
 
+	if ri.User != "" {
+		content["user"] = ri.User
+	}
+
 	return content, nil
 }
 
@@ -876,6 +892,10 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 	// Names only — see the get node's env comment.
 	if len(ri.Env) > 0 {
 		content["env"] = sortedEnv(ri.Env)
+	}
+
+	if ri.User != "" {
+		content["user"] = ri.User
 	}
 
 	// Which CLI runs the conversation, when one does — value-gated so every

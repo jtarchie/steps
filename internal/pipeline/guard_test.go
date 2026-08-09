@@ -146,13 +146,13 @@ func TestResolveStepImage(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, _, err := resolveStepImage(cfg, tc.step)
+			spec, err := resolveStepRuntime(cfg, tc.step)
 			if err != nil {
-				t.Fatalf("resolveStepImage: %v", err)
+				t.Fatalf("resolveStepRuntime: %v", err)
 			}
 
-			if got != tc.want {
-				t.Errorf("image = %q, want %q", got, tc.want)
+			if spec.Image != tc.want {
+				t.Errorf("image = %q, want %q", spec.Image, tc.want)
 			}
 		})
 	}

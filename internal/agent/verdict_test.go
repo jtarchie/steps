@@ -27,7 +27,7 @@ func verdictConversation(t *testing.T, dir string, verdicts []string) agentConve
 		t.Fatal(err)
 	}
 
-	runner, err := shell.NewRunner("", dir, nil)
+	runner, err := shell.NewRunner(shell.RunnerSpec{Cwd: dir})
 	if err != nil {
 		t.Fatal(err)
 	}

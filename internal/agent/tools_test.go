@@ -23,7 +23,7 @@ import (
 // direct zero-value literal from this package would silently default to an
 // empty cwd (the test process's own working directory) instead of dir.
 func testEnv(dir string) toolEnv {
-	runner, _ := shell.NewRunner("", dir, nil) // host branch never errors
+	runner, _ := shell.NewRunner(shell.RunnerSpec{Cwd: dir}) // host branch never errors
 	return toolEnv{dir: dir, runner: runner}
 }
 

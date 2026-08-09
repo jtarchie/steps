@@ -203,7 +203,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
-	runner, err := shell.NewRunner(ri.Image, dir, ri.Env)
+	runner, err := shell.NewRunner(shell.RunnerSpec{Image: ri.Image, Cwd: dir, Env: ri.Env, User: ri.User})
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 		closeAll(closers)

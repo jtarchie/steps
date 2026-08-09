@@ -31,7 +31,31 @@ agents:
 - **Fix agents run under the failing task's image**, not the fix agent's own `image:` — so its `run_shell`/custom tools and the injected task-rerun tool reproduce the exact environment that produced the failure. A fix agent's own `image:` can therefore never take effect, so it's rejected at load time instead of silently ignored.
 - **Fail-fast validation**: if any `image:` is set anywhere in the config, `RunJob` validates docker (on `PATH`, `docker info` succeeds) before planning or executing anything.
 - **Caching hashing**: `image` folds into the relevant node content whenever it's non-empty — unlike `inputs:`/`outputs:` (see [workspace.md](workspace.md)), an image change alters what a command actually executes against regardless of workspace mode, so the gate is on the value itself.
-- **Known caveats** (documented, not solved): on Linux, a container's default (often root) user can leave root-owned files in the bind-mounted step directory, which both complicates workspace cleanup and can make an agent's host-side `edit_file` unable to write a file its own containerized `run_shell` just created; containerized commands have unrestricted network egress; and there's no way to override a step back to host execution once its task/agent sets an image.
+- **Known caveats** (documented, not solved): containerized commands have unrestricted network egress; and there's no way to override a step back to host execution once its task/agent sets an image.
+
+## Container user (`user:`)
+
+On Linux, a bind mount carries host uids straight through. A container running as root — which most images do — therefore writes **root-owned files into the step's working directory**, and three things break, none of them obviously related to each other:
+
+- An agent's file tools run host-side while its `run_shell` runs in the container, so the agent creates a file with one tool and then cannot edit it with another, mid-conversation, for no reason it can see.
+- Workspace capture and cleanup hit permission errors on files the step legitimately produced.
+- Whatever the step leaves behind needs root to delete, long after the run.
+
+So **on Linux the default is the uid:gid that started `steps`**, not the image's user. Elsewhere the mismatch doesn't arise (Docker Desktop's VM maps ownership on bind mounts) and forcing a uid would instead break images whose own files belong to the user they expect — so off Linux the default stays the image's.
+
+```yaml
+tasks:
+- name: install-deps
+  image: ubuntu
+  user: root          # this image installs packages at run time; it needs root
+  run: apt-get update && apt-get install -y jq && ./script.sh
+```
+
+- **`user:` is the escape hatch, and it always wins.** Anything `docker run --user` accepts works: `root`, `1000:1000`, a username in the image.
+- **The cost is real**: under the Linux default, an image that installs packages at run time or writes to a root-owned path fails. That failure is loud and local to the step — the trade being made against a silent, remote one. Reach for `user: root` when you hit it.
+- Settable on `resource_types:`, `tasks:`, `agents:`, and as a step-level override (non-empty-wins, like `image:`). Invalid on `get`/`put` steps.
+- A value starting with `-` is rejected at load time. Unlike `image:`, `--user` is passed *before* the `--` that makes the rest of the argv positional, so there is no separator protecting it — this check is the only thing between a tainted value and `docker run` accepting it as a flag.
+- **Caching**: `user:` folds into the node's hash — running as root and running as an unprivileged user are genuinely different executions.
 
 ## Passing environment through (`env:`)
 

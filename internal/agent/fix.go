@@ -89,7 +89,7 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 	}
 	defer closeAll(closers)
 
-	runner, err := shell.NewRunner(rt.Image, dir, rt.Env)
+	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: dir, Env: rt.Env, User: rt.User})
 	if err != nil {
 		return fmt.Errorf("fix agent %q: %w", fix.Agent, err)
 	}

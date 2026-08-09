@@ -32,6 +32,9 @@ type ResolvedTask struct {
 	// Env names the host environment variables this task's commands may see
 	// beyond the baseline. See Task.Env/Step.Env.
 	Env []string
+	// User is the container user this task's commands run as. See
+	// Task.User/Step.User.
+	User string
 	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
 	// means no timeout. Step.Timeout overrides Task.Timeout when set.
 	Timeout string
@@ -51,7 +54,7 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 	if step.Run != "" {
 		return ResolvedTask{
 			Name: step.Task, Run: step.Run, Fix: step.Fix,
-			Inputs: step.InputNames(), Outputs: step.Outputs, Image: step.Image, Env: step.Env, Timeout: step.Timeout,
+			Inputs: step.InputNames(), Outputs: step.Outputs, Image: step.Image, Env: step.Env, User: step.User, Timeout: step.Timeout,
 			InputMapping: step.InputMapping, OutputMapping: step.OutputMapping,
 			Assert: step.Assert,
 		}, nil
@@ -90,13 +93,20 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 		env = step.Env
 	}
 
+	// Non-empty-wins, like image:. There is no "" that means anything other
+	// than "unset", so declared-wins would have nothing extra to express.
+	user := task.User
+	if step.User != "" {
+		user = step.User
+	}
+
 	timeout := task.Timeout
 	if step.Timeout != "" {
 		timeout = step.Timeout
 	}
 
 	return ResolvedTask{
-		Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs, Image: image, Env: env, Timeout: timeout,
+		Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs, Image: image, Env: env, User: user, Timeout: timeout,
 		InputMapping: step.InputMapping, OutputMapping: step.OutputMapping, Assert: step.Assert,
 	}, nil
 }
@@ -161,10 +171,39 @@ type ResolvedInvocation struct {
 	// Env names the host environment variables this step's commands may see
 	// beyond the baseline. See Agent.Env/Step.Env.
 	Env []string
+	// User is the container user this step's commands run as. See
+	// Agent.User/Step.User.
+	User string
 	// Image, when non-empty, runs this step's run_shell/custom-tool commands
 	// in a container from this image instead of on the host. See
 	// Agent.Image/Step.Image.
 	Image string
+}
+
+// resolveAgentRuntime merges the three container settings a step may override
+// on its agents: entry. Split out of ResolveAgentInvocation only to keep that
+// function inside the linter's complexity budget.
+//
+// image: and user: are non-empty-wins; env: is DECLARED-wins, because an
+// explicit `env: []` on a step means "nothing beyond the baseline" and a
+// non-empty test would silently keep the agent's list instead.
+func resolveAgentRuntime(agent *Agent, step Step) (image string, env []string, user string) {
+	image = agent.Image
+	if step.Image != "" {
+		image = step.Image
+	}
+
+	env = agent.Env
+	if step.Env != nil {
+		env = step.Env
+	}
+
+	user = agent.User
+	if step.User != "" {
+		user = step.User
+	}
+
+	return image, env, user
 }
 
 // ResolveAgentInvocation resolves the agent named by step against c,
@@ -207,16 +246,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 
 	compactAfterTokens, contextWindow := resolveCompactionBudget(target.ModelName, agent.CompactAfterTokens)
 
-	image := agent.Image
-	if step.Image != "" {
-		image = step.Image
-	}
-
-	// Declared-wins, not non-empty-wins — see ResolveTask's env for why.
-	env := agent.Env
-	if step.Env != nil {
-		env = step.Env
-	}
+	image, env, user := resolveAgentRuntime(agent, step)
 
 	return ResolvedInvocation{
 		AgentName:            agent.Name,
@@ -243,6 +273,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		StringOnlyToolChoice: target.StringOnlyToolChoice,
 		Image:                image,
 		Env:                  env,
+		User:                 user,
 	}, nil
 }
 

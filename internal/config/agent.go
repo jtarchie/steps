@@ -41,6 +41,10 @@ type Agent struct {
 	// shell.HostEnv). Names only — see validateEnvValues. A step's own Env, if
 	// non-nil, overrides this for that step only (see Step.Env).
 	Env []string `yaml:"env,omitempty"`
+	// User is the container user this agent's run_shell/custom-tool commands
+	// execute as (docker's --user). Empty takes the platform default — see
+	// shell's defaultContainerUser. Only meaningful alongside Image.
+	User string `yaml:"user,omitempty"`
 	// System is the persona/system message given to the model. Empty falls
 	// back to a generic CI-agent persona.
 	System string `yaml:"system,omitempty"`

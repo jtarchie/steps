@@ -42,6 +42,10 @@ type Task struct {
 	// only — see validateEnvValues. A referencing step's own Env, if
 	// non-nil, overrides this for that step only, mirroring how Fix works.
 	Env []string `yaml:"env,omitempty"`
+	// User is the container user this task's run: executes as (docker's
+	// --user). Empty takes the platform default — see shell's
+	// defaultContainerUser. Only meaningful alongside Image.
+	User string `yaml:"user,omitempty"`
 	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
 	// (default) means no timeout. Inherited by task steps unless overridden.
 	Timeout string `yaml:"timeout,omitempty"`

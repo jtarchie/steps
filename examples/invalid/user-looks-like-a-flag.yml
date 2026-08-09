@@ -1,0 +1,17 @@
+# user: is passed as `--user <value>` BEFORE the "--" that makes the rest of
+# the docker run argv positional, so unlike image: there is no separator
+# protecting it -- a value docker reads as a flag would be handed to docker run
+# as that flag. This check is the only thing between a tainted user: and
+# docker granting whatever it means.
+# expect: must not start with '-'
+
+tasks:
+- name: build
+  image: alpine
+  run: echo hi
+  user: --privileged
+
+jobs:
+- name: ship
+  plan:
+  - task: build

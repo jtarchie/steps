@@ -141,7 +141,7 @@ func newTestConversation(t *testing.T, prompt, dir string) agentConversation {
 		t.Fatal(err)
 	}
 
-	runner, err := shell.NewRunner("", dir, nil)
+	runner, err := shell.NewRunner(shell.RunnerSpec{Cwd: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func requiredToolConversation(t *testing.T, dir string) agentConversation {
 		t.Fatal(err)
 	}
 
-	runner, err := shell.NewRunner("", dir, nil)
+	runner, err := shell.NewRunner(shell.RunnerSpec{Cwd: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestRunAgentConversationRecoversFailedRequiredTool(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runner, err := shell.NewRunner("", dir, nil)
+	runner, err := shell.NewRunner(shell.RunnerSpec{Cwd: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
