@@ -15,7 +15,12 @@ type ResourceType struct {
 	// Image, when set, runs check/in/out in a fresh `docker run --rm`
 	// container from this image instead of on the host. Empty (the default)
 	// keeps host execution, byte-identical to before this field existed.
-	Image  string             `yaml:"image,omitempty"`
+	Image string `yaml:"image,omitempty"`
+	// Env names host environment variables check/in/out are allowed to see,
+	// on top of the always-allowed baseline (see shell.HostEnv). Names only —
+	// see validateEnvValues. This is how a resource type reaches a registry
+	// credential or deploy token without it being written into the pipeline.
+	Env    []string           `yaml:"env,omitempty"`
 	Config ResourceTypeConfig `yaml:"config"`
 }
 

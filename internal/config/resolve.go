@@ -29,6 +29,9 @@ type ResolvedTask struct {
 	// re-runs) in a container from this image instead of on the host. See
 	// Task.Image/Step.Image.
 	Image string
+	// Env names the host environment variables this task's commands may see
+	// beyond the baseline. See Task.Env/Step.Env.
+	Env []string
 	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
 	// means no timeout. Step.Timeout overrides Task.Timeout when set.
 	Timeout string
@@ -48,7 +51,7 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 	if step.Run != "" {
 		return ResolvedTask{
 			Name: step.Task, Run: step.Run, Fix: step.Fix,
-			Inputs: step.InputNames(), Outputs: step.Outputs, Image: step.Image, Timeout: step.Timeout,
+			Inputs: step.InputNames(), Outputs: step.Outputs, Image: step.Image, Env: step.Env, Timeout: step.Timeout,
 			InputMapping: step.InputMapping, OutputMapping: step.OutputMapping,
 			Assert: step.Assert,
 		}, nil
@@ -79,13 +82,21 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 		image = step.Image
 	}
 
+	// Declared-wins rather than non-empty-wins: an explicit `env: []` on a
+	// step is a meaningful override ("nothing beyond the baseline"), which a
+	// non-empty test would silently discard.
+	env := task.Env
+	if step.Env != nil {
+		env = step.Env
+	}
+
 	timeout := task.Timeout
 	if step.Timeout != "" {
 		timeout = step.Timeout
 	}
 
 	return ResolvedTask{
-		Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs, Image: image, Timeout: timeout,
+		Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs, Image: image, Env: env, Timeout: timeout,
 		InputMapping: step.InputMapping, OutputMapping: step.OutputMapping, Assert: step.Assert,
 	}, nil
 }
@@ -147,6 +158,9 @@ type ResolvedInvocation struct {
 	// instead of a named function object — for providers whose
 	// OpenAI-compat server rejects the object form. See resolveAgentTarget.
 	StringOnlyToolChoice bool
+	// Env names the host environment variables this step's commands may see
+	// beyond the baseline. See Agent.Env/Step.Env.
+	Env []string
 	// Image, when non-empty, runs this step's run_shell/custom-tool commands
 	// in a container from this image instead of on the host. See
 	// Agent.Image/Step.Image.
@@ -198,6 +212,12 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		image = step.Image
 	}
 
+	// Declared-wins, not non-empty-wins — see ResolveTask's env for why.
+	env := agent.Env
+	if step.Env != nil {
+		env = step.Env
+	}
+
 	return ResolvedInvocation{
 		AgentName:            agent.Name,
 		Description:          agent.Description,
@@ -222,6 +242,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		ToolSpecs:            toolSpecs,
 		StringOnlyToolChoice: target.StringOnlyToolChoice,
 		Image:                image,
+		Env:                  env,
 	}, nil
 }
 

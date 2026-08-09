@@ -1114,7 +1114,7 @@ func recordStepFailure(ctx context.Context, st *store.Store, node merkle.Node, j
 // tool — then re-runs the command once; that re-run's exit code is the
 // verdict. A green run never constructs the agent.
 func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, workspaceDir string) error {
-	runner, err := shell.NewRunner(rt.Image, workspaceDir)
+	runner, err := shell.NewRunner(rt.Image, workspaceDir, rt.Env)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}

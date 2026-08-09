@@ -38,7 +38,7 @@ func CheckVersions(ctx context.Context, cfg *config.Config, rt config.ResourceTy
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
 
-	runner, err := shell.NewRunner(rt.Image, "")
+	runner, err := shell.NewRunner(rt.Image, "", rt.Env)
 	if err != nil {
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
@@ -151,7 +151,7 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, sour
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
 
-	runner, err := shell.NewRunner(rt.Image, destDir)
+	runner, err := shell.NewRunner(rt.Image, destDir, rt.Env)
 	if err != nil {
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
@@ -193,7 +193,7 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, sou
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}
 
-	runner, err := shell.NewRunner(rt.Image, srcDir)
+	runner, err := shell.NewRunner(rt.Image, srcDir, rt.Env)
 	if err != nil {
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}

@@ -146,7 +146,7 @@ func TestResolveStepImage(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := resolveStepImage(cfg, tc.step)
+			got, _, err := resolveStepImage(cfg, tc.step)
 			if err != nil {
 				t.Fatalf("resolveStepImage: %v", err)
 			}

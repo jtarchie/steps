@@ -89,9 +89,15 @@ func CloseRunner(r Runner, label string) {
 // errors — cwd needs no resolution for host execution. The returned runner
 // has no label (see WithLabel) until a caller that wants prefixed output
 // opts in explicitly.
-func NewRunner(image, cwd string) (Runner, error) {
+//
+// envNames are the variable NAMES the pipeline's env: opted this command
+// into, on top of hostEnvAllowlist. They are resolved against the steps
+// process's own environment here; a name that isn't set is simply absent,
+// which is what lets a pipeline name an optional variable without every
+// operator having to define it.
+func NewRunner(image, cwd string, envNames []string) (Runner, error) {
 	if image == "" {
-		return HostRunner{cwd: cwd}, nil
+		return HostRunner{cwd: cwd, extraEnv: envNames}, nil
 	}
 
 	var resolvedCwd string
@@ -107,7 +113,7 @@ func NewRunner(image, cwd string) (Runner, error) {
 
 	return DockerRunner{
 		Image:   image,
-		session: &dockerSession{image: image, resolvedCwd: resolvedCwd},
+		session: &dockerSession{image: image, resolvedCwd: resolvedCwd, envNames: envNames},
 	}, nil
 }
 
@@ -422,6 +428,9 @@ func FormatBytes(n int) string {
 type HostRunner struct {
 	cwd   string
 	label string
+	// extraEnv names variables the pipeline's env: opted in beyond
+	// hostEnvAllowlist — see NewRunner.
+	extraEnv []string
 }
 
 // WithLabel returns a copy of h that prefixes its live-streamed output —
@@ -479,12 +488,27 @@ var hostEnvAllowlist = map[string]bool{
 // so internal/mcp's stdio transport can apply the same trust boundary to an
 // mcp_servers: subprocess.
 func HostEnv() []string {
+	return hostEnvWith(nil)
+}
+
+// hostEnvWith is HostEnv plus the variables a pipeline's env: named
+// explicitly (see NewRunner). A named variable that isn't set in the steps
+// process's environment contributes nothing rather than an empty value: the
+// two are different to a command that tests for presence, and inventing an
+// empty one would turn "the operator forgot to export it" into a silent
+// misconfiguration instead of the command's own clear failure.
+func hostEnvWith(extra []string) []string {
+	opted := make(map[string]bool, len(extra))
+	for _, name := range extra {
+		opted[name] = true
+	}
+
 	full := os.Environ()
 	allowed := make([]string, 0, len(full))
 
 	for _, kv := range full {
 		key, _, ok := strings.Cut(kv, "=")
-		if ok && hostEnvAllowlist[key] {
+		if ok && (hostEnvAllowlist[key] || opted[key]) {
 			allowed = append(allowed, kv)
 		}
 	}
@@ -573,7 +597,7 @@ func (h HostRunner) Run(ctx context.Context, command string) error {
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.WaitDelay = cancelWaitDelay
 	cmd.Dir = h.cwd
-	cmd.Env = HostEnv()
+	cmd.Env = hostEnvWith(h.extraEnv)
 	cmd.Stdin = os.Stdin
 
 	stdoutW, flushStdout := prefixedStream(h.label, os.Stdout)
@@ -607,7 +631,7 @@ func (h HostRunner) RunCapture(ctx context.Context, command string) ([]byte, err
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.WaitDelay = cancelWaitDelay
 	cmd.Dir = h.cwd
-	cmd.Env = HostEnv()
+	cmd.Env = hostEnvWith(h.extraEnv)
 	cmd.Stdin = os.Stdin
 
 	var outBuf, errBuf bytes.Buffer
@@ -675,7 +699,7 @@ func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.WaitDelay = cancelWaitDelay
 	cmd.Dir = h.cwd
-	cmd.Env = HostEnv()
+	cmd.Env = hostEnvWith(h.extraEnv)
 	cmd.Stdin = nil
 
 	outWriter := newCaptureWriter(maxBytes, spillDir)

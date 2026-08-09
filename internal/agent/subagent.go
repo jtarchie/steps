@@ -117,7 +117,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		return map[string]any{"error": fmt.Sprintf("%s: missing required argument %q", c.ri.AgentName, subAgentRequestParam)}
 	}
 
-	runner, err := shell.NewRunner(c.ri.Image, env.dir)
+	runner, err := shell.NewRunner(c.ri.Image, env.dir, c.ri.Env)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}

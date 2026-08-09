@@ -1,0 +1,22 @@
+# env: on a put step, like image:, would be accepted and then ignored: a put
+# runs its resource type's out:, so the environment it sees comes from the
+# resource_type. Silently doing nothing is worse than refusing.
+# expect: env is not valid on put steps
+
+resource_types:
+- name: dummy
+  config:
+    check: echo '[]'
+    in: 'true'
+    out: 'true'
+
+resources:
+- name: results
+  type: dummy
+  source: {}
+
+jobs:
+- name: ship
+  plan:
+  - put: results
+    env: [DEPLOY_TOKEN]

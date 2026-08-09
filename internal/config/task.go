@@ -37,6 +37,11 @@ type Task struct {
 	// that step only — mirroring how Fix works. Empty (the default) keeps
 	// host execution, byte-identical to before this field existed.
 	Image string `yaml:"image,omitempty"`
+	// Env names host environment variables this task's run: is allowed to
+	// see, on top of the always-allowed baseline (see shell.HostEnv). Names
+	// only — see validateEnvValues. A referencing step's own Env, if
+	// non-nil, overrides this for that step only, mirroring how Fix works.
+	Env []string `yaml:"env,omitempty"`
 	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
 	// (default) means no timeout. Inherited by task steps unless overridden.
 	Timeout string `yaml:"timeout,omitempty"`

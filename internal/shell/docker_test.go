@@ -26,7 +26,7 @@ func TestDockerStartArgsMountsCwd(t *testing.T) {
 
 	resolvedCwd := t.TempDir()
 
-	args := dockerStartArgs("alpine", "steps-abc", resolvedCwd)
+	args := dockerStartArgs("alpine", "steps-abc", resolvedCwd, nil)
 
 	want := []string{
 		"run", "-d", "--rm", "--init", "--name", "steps-abc",
@@ -41,7 +41,7 @@ func TestDockerStartArgsMountsCwd(t *testing.T) {
 func TestDockerStartArgsEmptyCwdMountsNothing(t *testing.T) {
 	t.Parallel()
 
-	args := dockerStartArgs("alpine", "steps-abc", "")
+	args := dockerStartArgs("alpine", "steps-abc", "", nil)
 
 	want := []string{"run", "-d", "--rm", "--init", "--name", "steps-abc", "--", "alpine", "sh", "-c", "sleep 86400"}
 	if !reflect.DeepEqual(args, want) {
@@ -55,7 +55,7 @@ func TestDockerStartArgsEmptyCwdMountsNothing(t *testing.T) {
 func TestDockerStartArgsImageIsPositional(t *testing.T) {
 	t.Parallel()
 
-	args := dockerStartArgs("--privileged", "steps-abc", "")
+	args := dockerStartArgs("--privileged", "steps-abc", "", nil)
 
 	sep := slices.Index(args, "--")
 	if sep < 0 {
@@ -75,7 +75,7 @@ func TestDockerStartArgsImageIsPositional(t *testing.T) {
 func TestDockerStartArgsKeepaliveIsBounded(t *testing.T) {
 	t.Parallel()
 
-	args := dockerStartArgs("alpine", "steps-abc", "")
+	args := dockerStartArgs("alpine", "steps-abc", "", nil)
 
 	if !slices.Contains(args, "--rm") {
 		t.Errorf("args = %v, want --rm so an exited keepalive is reaped", args)
@@ -124,7 +124,7 @@ func TestDockerNeverPassesDashT(t *testing.T) {
 	t.Parallel()
 
 	for _, args := range [][]string{
-		dockerStartArgs("alpine", "steps-abc", t.TempDir()),
+		dockerStartArgs("alpine", "steps-abc", t.TempDir(), nil),
 		dockerExecArgs("steps-abc", "echo hi", true),
 		dockerExecArgs("steps-abc", "echo hi", false),
 	} {
@@ -206,7 +206,7 @@ func TestNewRunnerRejectsColonInPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = NewRunner("alpine", cwd)
+	_, err = NewRunner("alpine", cwd, nil)
 	if err == nil {
 		t.Error("expected an error for a working directory containing ':'")
 	}
@@ -215,7 +215,7 @@ func TestNewRunnerRejectsColonInPath(t *testing.T) {
 func TestNewRunner(t *testing.T) {
 	t.Parallel()
 
-	hostRunner, err := NewRunner("", "somedir")
+	hostRunner, err := NewRunner("", "somedir", nil)
 	if err != nil {
 		t.Fatalf("NewRunner(\"\", ...): %v", err)
 	}
@@ -224,7 +224,7 @@ func TestNewRunner(t *testing.T) {
 		t.Error("NewRunner(\"\", ...) should return a HostRunner")
 	}
 
-	dockerRunnerIface, err := NewRunner("alpine", t.TempDir())
+	dockerRunnerIface, err := NewRunner("alpine", t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewRunner(\"alpine\", ...): %v", err)
 	}
@@ -245,7 +245,7 @@ func TestNewRunner(t *testing.T) {
 func TestNewRunnerDoesNotStartAContainer(t *testing.T) {
 	argvFile := writeFakeDocker(t, 0, "", "")
 
-	_, err := NewRunner("alpine", t.TempDir())
+	_, err := NewRunner("alpine", t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestNewRunnerResolvesCwdOnce(t *testing.T) {
 
 	dir := t.TempDir()
 
-	runnerIface, err := NewRunner("alpine", dir)
+	runnerIface, err := NewRunner("alpine", dir, nil)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -367,7 +367,7 @@ func invocationsOf(lines []string, verb string) []string {
 func TestDockerRunnerCaptureFull(t *testing.T) {
 	writeFakeDocker(t, 3, "out text", "err text")
 
-	runner, err := NewRunner("alpine", t.TempDir())
+	runner, err := NewRunner("alpine", t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -397,7 +397,7 @@ func TestDockerRunnerCaptureFull(t *testing.T) {
 func TestDockerRunnerCaptureFullArgv(t *testing.T) {
 	argvFile := writeFakeDocker(t, 0, "", "")
 
-	runner, err := NewRunner("alpine", t.TempDir())
+	runner, err := NewRunner("alpine", t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -433,7 +433,7 @@ func TestDockerRunnerCaptureFullArgv(t *testing.T) {
 func TestDockerRunnerReusesOneContainer(t *testing.T) {
 	argvFile := writeFakeDocker(t, 0, "", "")
 
-	runner, err := NewRunner("alpine", t.TempDir())
+	runner, err := NewRunner("alpine", t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -487,7 +487,7 @@ func containerNameFromExec(t *testing.T, line string) string {
 func TestDockerRunnerCloseRemovesContainer(t *testing.T) {
 	argvFile := writeFakeDocker(t, 0, "", "")
 
-	runner, err := NewRunner("alpine", t.TempDir())
+	runner, err := NewRunner("alpine", t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -525,7 +525,7 @@ func TestDockerRunnerCloseRemovesContainer(t *testing.T) {
 func TestDockerRunnerCloseWithoutCommandsRemovesNothing(t *testing.T) {
 	argvFile := writeFakeDocker(t, 0, "", "")
 
-	runner, err := NewRunner("alpine", t.TempDir())
+	runner, err := NewRunner("alpine", t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -547,7 +547,7 @@ func TestDockerRunnerCloseWithoutCommandsRemovesNothing(t *testing.T) {
 func TestDockerRunnerCloseIsIdempotent(t *testing.T) {
 	argvFile := writeFakeDocker(t, 0, "", "")
 
-	runner, err := NewRunner("alpine", t.TempDir())
+	runner, err := NewRunner("alpine", t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -575,7 +575,7 @@ func TestDockerRunnerCloseIsIdempotent(t *testing.T) {
 func TestDockerRunnerWithLabelSharesOneContainer(t *testing.T) {
 	argvFile := writeFakeDocker(t, 0, "", "")
 
-	runner, err := NewRunner("alpine", t.TempDir())
+	runner, err := NewRunner("alpine", t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -608,7 +608,7 @@ func TestDockerRunnerStartFailureSurfacesAsData(t *testing.T) {
 	t.Setenv("FAKE_DOCKER_RUN_EXIT", "125")
 	t.Setenv("FAKE_DOCKER_RUN_STDERR", "Unable to find image 'nope:latest'")
 
-	runner, err := NewRunner("nope", t.TempDir())
+	runner, err := NewRunner("nope", t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -637,7 +637,7 @@ func TestDockerRunnerStartFailureIsSticky(t *testing.T) {
 	argvFile := writeFakeDocker(t, 0, "", "")
 	t.Setenv("FAKE_DOCKER_RUN_EXIT", "125")
 
-	runner, err := NewRunner("nope", t.TempDir())
+	runner, err := NewRunner("nope", t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -674,7 +674,7 @@ func TestDockerRunnerStartFailureIsAnExitError(t *testing.T) {
 	writeFakeDocker(t, 0, "", "")
 	t.Setenv("FAKE_DOCKER_RUN_EXIT", "125")
 
-	runner, err := NewRunner("nope", t.TempDir())
+	runner, err := NewRunner("nope", t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -701,7 +701,7 @@ func TestDockerRunnerCaptureFullHandlesAdversarialOutput(t *testing.T) {
 
 	writeFakeDocker(t, 0, adversarialStdout, "")
 
-	runner, err := NewRunner("alpine", t.TempDir())
+	runner, err := NewRunner("alpine", t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -721,7 +721,7 @@ func TestDockerRunnerCaptureFullHandlesAdversarialOutput(t *testing.T) {
 func TestDockerRunnerRunErrorsOnNonzeroExit(t *testing.T) {
 	writeFakeDocker(t, 1, "", "boom")
 
-	runner, err := NewRunner("alpine", t.TempDir())
+	runner, err := NewRunner("alpine", t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -737,7 +737,7 @@ func TestDockerRunnerRunErrorsOnNonzeroExit(t *testing.T) {
 func TestDockerRunnerRunCaptureReturnsStdout(t *testing.T) {
 	writeFakeDocker(t, 0, "captured output", "")
 
-	runner, err := NewRunner("alpine", t.TempDir())
+	runner, err := NewRunner("alpine", t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -762,7 +762,7 @@ func TestDockerRunnerRunCaptureReturnsStdout(t *testing.T) {
 func TestDockerRunnerRunCaptureLogsStderrOnFailure(t *testing.T) {
 	writeFakeDocker(t, 1, "", "boom from stderr")
 
-	runner, err := NewRunner("alpine", t.TempDir())
+	runner, err := NewRunner("alpine", t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -792,5 +792,58 @@ func TestValidateDockerMissingBinary(t *testing.T) {
 	err := ValidateDocker(context.Background())
 	if err == nil {
 		t.Error("expected an error when docker is not on PATH")
+	}
+}
+
+// TestDockerStartArgsPassesEnvByNameNotValue is the security-relevant half of
+// env: on the container path. `-e NAME=value` would put the secret in the
+// docker client's argv, readable by anything that can list host processes for
+// as long as the command runs — strictly worse than the host-side exposure
+// env: exists to manage. `-e NAME` makes the docker CLI forward the value out
+// of its own environment instead, so it never appears in an argument.
+func TestDockerStartArgsPassesEnvByNameNotValue(t *testing.T) {
+	t.Setenv("STEPS_TEST_SECRET", "hunter2")
+
+	args := dockerStartArgs("alpine", "steps-abc", "", []string{"STEPS_TEST_SECRET"})
+
+	i := slices.Index(args, "-e")
+	if i < 0 || i+1 >= len(args) {
+		t.Fatalf("args = %v, want an -e flag", args)
+	}
+
+	if args[i+1] != "STEPS_TEST_SECRET" {
+		t.Errorf("args[%d] = %q, want the bare variable name", i+1, args[i+1])
+	}
+
+	for _, arg := range args {
+		if strings.Contains(arg, "hunter2") {
+			t.Errorf("args = %v, want no argument to carry the variable's VALUE", args)
+		}
+	}
+}
+
+func TestDockerStartArgsNoEnvAddsNoFlags(t *testing.T) {
+	t.Parallel()
+
+	if args := dockerStartArgs("alpine", "steps-abc", "", nil); slices.Contains(args, "-e") {
+		t.Errorf("args = %v, did not want an -e flag when env: is unset", args)
+	}
+}
+
+// TestDockerStartArgsEnvPrecedesTheImage guards placement: an -e appended after
+// the "--" separator would be read as an argument to the container's command
+// rather than a flag to docker run.
+func TestDockerStartArgsEnvPrecedesTheImage(t *testing.T) {
+	t.Parallel()
+
+	args := dockerStartArgs("alpine", "steps-abc", "", []string{"A", "B"})
+
+	sep := slices.Index(args, "--")
+	if sep < 0 {
+		t.Fatalf("args = %v, want a -- separator", args)
+	}
+
+	if last := slices.Index(args[sep:], "-e"); last >= 0 {
+		t.Errorf("args = %v, want every -e before the -- separator", args)
 	}
 }

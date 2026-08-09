@@ -85,6 +85,10 @@ func (d DockerRunner) Close() error {
 type dockerSession struct {
 	image       string
 	resolvedCwd string
+	// envNames are the variables the pipeline's env: opted this command into.
+	// They are passed at container start, so every exec in the session
+	// inherits them.
+	envNames []string
 
 	mu sync.Mutex
 	// attempted records that start has been tried, so a failure is sticky:
@@ -123,7 +127,7 @@ func (s *dockerSession) ensure(ctx context.Context) (name, stderr string, err er
 		return "", "", err
 	}
 
-	args := dockerStartArgs(s.image, containerName, s.resolvedCwd)
+	args := dockerStartArgs(s.image, containerName, s.resolvedCwd, s.envNames)
 
 	slog.Debug("shell.docker.session_start", "image", s.image, "container", containerName, "cwd", s.resolvedCwd)
 
@@ -383,11 +387,21 @@ func dockerCommand(ctx context.Context, args []string) *exec.Cmd {
 // name. config.validateImageValues rejects such a value at LoadConfig time
 // too; this is defense in depth for any image string that reaches here by
 // another path.
-func dockerStartArgs(image, name, resolvedCwd string) []string {
+func dockerStartArgs(image, name, resolvedCwd string, envNames []string) []string {
 	args := []string{"run", "-d", "--rm", "--init", "--name", name}
 
 	if resolvedCwd != "" {
 		args = append(args, "-v", resolvedCwd+":"+resolvedCwd, "-w", resolvedCwd)
+	}
+
+	// `-e NAME` (no value) tells the docker CLI to forward the value from its
+	// OWN environment, which is ours. Spelling it `-e NAME=value` instead
+	// would put the secret in the docker client's argv, where anything able
+	// to read the host's process list could see it for as long as the command
+	// runs — a worse exposure than the one env: exists to avoid. A name that
+	// is unset here is simply not set in the container.
+	for _, name := range envNames {
+		args = append(args, "-e", name)
 	}
 
 	keepalive := fmt.Sprintf("sleep %d", int(dockerSessionLifetime.Seconds()))

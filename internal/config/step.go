@@ -158,6 +158,12 @@ type Step struct {
 	// image comes from its resource type, and a get has no task/agent to
 	// override.
 	Image string `yaml:"image,omitempty"`
+	// Env, on a task or agent step, overrides the referenced task's/agent's
+	// Env for this step only (declared-wins, like Inputs: an explicit empty
+	// list means "nothing beyond the baseline", which is distinguishable from
+	// absent). Invalid on get/put steps, matching Image: a put's environment
+	// comes from its resource type, and a get has no task/agent to override.
+	Env []string `yaml:"env,omitempty"`
 	// When, on a task/put/agent step, gates whether the step runs at all: an
 	// explicit command whose exit code decides (0 runs, nonzero skips). See
 	// WhenSpec. Invalid on get steps — a get fans the remainder of the plan

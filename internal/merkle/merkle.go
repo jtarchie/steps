@@ -70,6 +70,18 @@ type Chain struct {
 	Unskippable bool
 }
 
+// sortedEnv returns env's names in a stable order. Unlike inputs/outputs
+// (config.StableStrings, which deliberately preserves declaration order), an
+// env: list is a SET: naming the same two variables in the other order asks
+// for exactly the same execution environment, so it must not miss the cache.
+func sortedEnv(env []string) []string {
+	out := make([]string, len(env))
+	copy(out, env)
+	slices.Sort(out)
+
+	return out
+}
+
 // GetNodeContent builds the content map hashed for a get node. It, along
 // with TaskNodeContent, PutNodeContent, and AgentContentMap below, is shared
 // between planning (this file) and real execution (internal/pipeline,
@@ -93,6 +105,15 @@ func GetNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 
 	if resourceType.Image != "" {
 		content["image"] = resourceType.Image
+	}
+
+	// The variable NAMES, never their values: a value is a secret, and this
+	// map is persisted to state.db. Changing which variables a command can see
+	// changes what it executes against, so the names are identity; changing a
+	// value is the operator's environment moving under a pipeline, which this
+	// package has never claimed to hash (same reasoning as a model's weights).
+	if len(resourceType.Env) > 0 {
+		content["env"] = sortedEnv(resourceType.Env)
 	}
 
 	err := withMCPResourceStage(cfg, resourceType, "in", content)
@@ -508,6 +529,11 @@ func TaskNodeContent(cfg *config.Config, step config.Step, rt config.ResolvedTas
 		content["image"] = rt.Image
 	}
 
+	// Names only — see the get node's env comment.
+	if len(rt.Env) > 0 {
+		content["env"] = sortedEnv(rt.Env)
+	}
+
 	if rt.Assert != nil {
 		content["assert"] = assertContent(rt.Assert)
 	}
@@ -581,6 +607,11 @@ func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 
 	if resourceType.Image != "" {
 		content["image"] = resourceType.Image
+	}
+
+	// Names only — see the get node's env comment.
+	if len(resourceType.Env) > 0 {
+		content["env"] = sortedEnv(resourceType.Env)
 	}
 
 	err := withMCPResourceStage(cfg, resourceType, "out", content)
@@ -785,6 +816,11 @@ func subAgentInvocationContent(cfg *config.Config, name string) (map[string]any,
 		content["image"] = ri.Image
 	}
 
+	// Names only — see the get node's env comment.
+	if len(ri.Env) > 0 {
+		content["env"] = sortedEnv(ri.Env)
+	}
+
 	return content, nil
 }
 
@@ -835,6 +871,11 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 
 	if ri.Image != "" {
 		content["image"] = ri.Image
+	}
+
+	// Names only — see the get node's env comment.
+	if len(ri.Env) > 0 {
+		content["env"] = sortedEnv(ri.Env)
 	}
 
 	// Which CLI runs the conversation, when one does — value-gated so every

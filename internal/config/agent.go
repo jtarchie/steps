@@ -36,6 +36,11 @@ type Agent struct {
 	// host. A step's own Image, if set, overrides this for that step only
 	// (see Step.Image). Empty (the default) keeps host execution.
 	Image string `yaml:"image,omitempty"`
+	// Env names host environment variables this agent's run_shell/custom-tool
+	// commands are allowed to see, on top of the always-allowed baseline (see
+	// shell.HostEnv). Names only — see validateEnvValues. A step's own Env, if
+	// non-nil, overrides this for that step only (see Step.Env).
+	Env []string `yaml:"env,omitempty"`
 	// System is the persona/system message given to the model. Empty falls
 	// back to a generic CI-agent persona.
 	System string `yaml:"system,omitempty"`

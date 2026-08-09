@@ -288,7 +288,7 @@ func TestTrajectoryRecordsBudgetRejectedCall(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runner, err := shell.NewRunner("", dir)
+	runner, err := shell.NewRunner("", dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

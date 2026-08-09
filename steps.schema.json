@@ -109,6 +109,11 @@
           "type": "string",
           "description": "Run check/in/out in this container image instead of on the host."
         },
+        "env": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Host environment variable NAMES this entity's commands may see, on top of the built-in allowlist. Names only \u2014 a KEY=VALUE literal is rejected, since a value would be hashed into the state database in cleartext."
+        },
         "config": {
           "type": "object",
           "additionalProperties": false,
@@ -238,6 +243,11 @@
         },
         "image": {
           "type": "string"
+        },
+        "env": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Host environment variable NAMES this entity's commands may see, on top of the built-in allowlist. Names only \u2014 a KEY=VALUE literal is rejected, since a value would be hashed into the state database in cleartext."
         },
         "system": {
           "type": "string"
@@ -495,6 +505,11 @@
         },
         "image": {
           "type": "string"
+        },
+        "env": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Host environment variable NAMES this entity's commands may see, on top of the built-in allowlist. Names only \u2014 a KEY=VALUE literal is rejected, since a value would be hashed into the state database in cleartext."
         },
         "timeout": {
           "type": "string",
@@ -906,6 +921,11 @@
         },
         "image": {
           "type": "string"
+        },
+        "env": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Host environment variable NAMES this entity's commands may see, on top of the built-in allowlist. Names only \u2014 a KEY=VALUE literal is rejected, since a value would be hashed into the state database in cleartext."
         },
         "when": {
           "$ref": "#/$defs/whenSpec"

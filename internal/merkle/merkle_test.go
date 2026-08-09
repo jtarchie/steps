@@ -2,8 +2,10 @@ package merkle
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -1037,5 +1039,82 @@ func TestAgentContentMapCLI(t *testing.T) {
 
 	if httpHash == cliHash {
 		t.Error("moving an agent onto a cli did not change its hash")
+	}
+}
+
+// TestEnvOmittedFromHashWhenEmpty is the cache-stability guarantee for env:,
+// mirroring TestImageOmittedFromHashWhenEmpty: every pipeline that predates
+// the field must keep hashing exactly as it did.
+func TestEnvOmittedFromHashWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	content, err := TaskNodeContent(&config.Config{}, config.Step{}, config.ResolvedTask{Name: "build", Run: "echo hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := content["env"]; ok {
+		t.Errorf(`TaskNodeContent with no env set should not have an "env" key: %#v`, content)
+	}
+}
+
+// TestTaskEnvNamesAffectHash pins that WHICH variables a command can see is
+// identity — a command with a credential available executes differently from
+// one without, so a cached success from the latter must not satisfy the
+// former. Order must not matter, since it carries no meaning.
+func TestTaskEnvNamesAffectHash(t *testing.T) {
+	t.Parallel()
+
+	mustHash := func(t *testing.T, env []string) string {
+		t.Helper()
+
+		content, err := TaskNodeContent(&config.Config{}, config.Step{}, config.ResolvedTask{Name: "build", Run: "echo hi", Env: env})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		hash, err := HashNode(NodeKindTask, content, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return hash
+	}
+
+	none := mustHash(t, nil)
+	one := mustHash(t, []string{"TOKEN"})
+	two := mustHash(t, []string{"TOKEN", "REGION"})
+
+	if none == one {
+		t.Error("adding env: did not change the hash")
+	}
+
+	if one == two {
+		t.Error("adding a second env: name did not change the hash")
+	}
+
+	if got := mustHash(t, []string{"REGION", "TOKEN"}); got != two {
+		t.Error("env: order changed the hash, but the order of a name list carries no meaning")
+	}
+}
+
+// TestTaskEnvHashesNamesNotValues is the reason env: is a name list at all:
+// this content map is persisted to state.db, so a value must never reach it.
+func TestTaskEnvHashesNamesNotValues(t *testing.T) {
+	t.Setenv("STEPS_TEST_SECRET", "hunter2")
+
+	content, err := TaskNodeContent(&config.Config{}, config.Step{},
+		config.ResolvedTask{Name: "build", Run: "echo hi", Env: []string{"STEPS_TEST_SECRET"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rendered := fmt.Sprintf("%v", content)
+	if strings.Contains(rendered, "hunter2") {
+		t.Errorf("content = %s, want the variable's VALUE never to be hashed", rendered)
+	}
+
+	if !strings.Contains(rendered, "STEPS_TEST_SECRET") {
+		t.Errorf("content = %s, want the variable's NAME to be hashed", rendered)
 	}
 }

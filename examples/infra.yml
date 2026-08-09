@@ -94,6 +94,18 @@ tasks:
   run: mkdir -p built && (cd repo && wc -l $(find . -name '*.go')) > built/LINE_COUNTS.txt && cat /etc/os-release > built/BUILD_IMAGE.txt
   image: golang:1.26
 
+# env: names host variables a containerized command may see. A container
+# otherwise starts from its image's own environment with nothing from the host,
+# so this is the only way a containerized command reaches a token or a setting
+# the operator exported. Names only -- a KEY=VALUE literal is rejected at load
+# time, because these fields are hashed into state.db and a literal would be
+# written there in cleartext. A name nobody exported is simply absent in the
+# container, which is why this example still runs green with none of them set.
+- name: report-env
+  image: alpine:3
+  env: [GREETING, STEPS_BUILD_LABEL]
+  run: echo "greeting=${GREETING:-<unset>} label=${STEPS_BUILD_LABEL:-<unset>}"
+
 jobs:
 # ─── Downstream triggers — `steps watch` runs `notify` when `publish` puts ────
 # Self-contained, no network. Seed the counter first:
@@ -145,6 +157,9 @@ jobs:
   # proves the step-level image: override takes effect.
   - task: inspect
     image: alpine
+  # Try it with `GREETING=hello steps run examples/infra.yml --job ...` to see
+  # the value cross into the container.
+  - task: report-env
   # run_shell/custom-tool calls below execute in python:3.12.
   - agent: reviewer
     prompt: does the checked-out repo look like a normal Go project?

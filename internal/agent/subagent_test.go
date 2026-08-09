@@ -234,7 +234,7 @@ func TestSubAgentUsesChildImageRunner(t *testing.T) {
 	t.Parallel()
 
 	// Sanity: NewRunner with an empty image is the host runner.
-	_, err := shell.NewRunner("", t.TempDir())
+	_, err := shell.NewRunner("", t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}

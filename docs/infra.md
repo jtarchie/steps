@@ -31,7 +31,35 @@ agents:
 - **Fix agents run under the failing task's image**, not the fix agent's own `image:` — so its `run_shell`/custom tools and the injected task-rerun tool reproduce the exact environment that produced the failure. A fix agent's own `image:` can therefore never take effect, so it's rejected at load time instead of silently ignored.
 - **Fail-fast validation**: if any `image:` is set anywhere in the config, `RunJob` validates docker (on `PATH`, `docker info` succeeds) before planning or executing anything.
 - **Caching hashing**: `image` folds into the relevant node content whenever it's non-empty — unlike `inputs:`/`outputs:` (see [workspace.md](workspace.md)), an image change alters what a command actually executes against regardless of workspace mode, so the gate is on the value itself.
-- **Known caveats** (documented, not solved): on Linux, a container's default (often root) user can leave root-owned files in the bind-mounted step directory, which both complicates workspace cleanup and can make an agent's host-side `edit_file` unable to write a file its own containerized `run_shell` just created; no host environment reaches a containerized command, and there is no opt-in to pass one through, so a containerized command needing a credential has no path to it; containerized commands have unrestricted network egress; and there's no way to override a step back to host execution once its task/agent sets an image.
+- **Known caveats** (documented, not solved): on Linux, a container's default (often root) user can leave root-owned files in the bind-mounted step directory, which both complicates workspace cleanup and can make an agent's host-side `edit_file` unable to write a file its own containerized `run_shell` just created; containerized commands have unrestricted network egress; and there's no way to override a step back to host execution once its task/agent sets an image.
+
+## Passing environment through (`env:`)
+
+Commands run with a deliberately narrow environment: a host command sees a fixed allowlist (`PATH`, `HOME`, locale, `SSH_AUTH_SOCK`, proxy settings — not the operator's credentials), and a containerized command sees only its image's own environment. That default is the trust boundary: an agent directing `run_shell` should not get read access to everything the operator happened to export.
+
+`env:` opts specific variables back in, by **name**:
+
+```yaml
+resource_types:
+- name: registry
+  image: alpine
+  env: [REGISTRY_TOKEN]        # check/in/out can see it
+
+tasks:
+- name: deploy
+  image: alpine
+  env: [DEPLOY_TOKEN, AWS_REGION]
+
+agents:
+- name: reviewer
+  env: [GH_TOKEN]              # run_shell/custom tools can see it
+```
+
+- **Names, never values.** `env: [DEPLOY_TOKEN=hunter2]` is rejected at load time, following `api_key_env:`/`webhook_token_env:`. The reason is concrete: a resource type's, task's, and agent's fields are hashed into the merkle content map, which is written to `state.db` — a literal would be persisted in cleartext.
+- **Works on both execution paths.** On the host the named variables are added to the built-in allowlist; in a container they're passed with `docker run -e NAME` (no value), so the docker CLI forwards its own value and the secret never appears in an argv the host's process list would expose.
+- **An unset variable contributes nothing** rather than an empty value, so a command can still tell "not configured" from "configured empty".
+- **Step-level override**: a `task`/`agent` step's `env:` replaces the referenced entry's for that step only. Unlike `image:` this is *declared*-wins, not non-empty-wins — an explicit `env: []` means "nothing beyond the baseline", which is a real thing to want. Invalid on `get`/`put` steps (set it on the `resource_type`).
+- **Caching**: the variable **names** fold into the node's hash, since which variables a command can see changes what it executes. The values do not — a value changing is the operator's environment moving under the pipeline, which `steps` has never claimed to hash (the same reasoning that keeps a model's weights out of an agent's hash).
 
 ## Downstream triggers (`trigger: true` + `steps watch`)
 

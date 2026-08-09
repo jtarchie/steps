@@ -3,6 +3,8 @@ package shell
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -295,4 +297,47 @@ func TestHostRunnerCancellationIsDetectable(t *testing.T) {
 			t.Errorf("Run error = %v, want it to NOT satisfy errors.Is against context.Canceled/DeadlineExceeded for an ordinary failure", err)
 		}
 	})
+}
+
+// TestHostEnvWithOptsInNamedVariables covers the env: escape hatch on the host
+// path: hostEnvAllowlist stays the default trust boundary, and a pipeline can
+// name one more variable through it without widening that default for
+// everything else.
+func TestHostEnvWithOptsInNamedVariables(t *testing.T) {
+	t.Setenv("STEPS_TEST_OPTED_IN", "yes")
+	t.Setenv("STEPS_TEST_NOT_OPTED_IN", "no")
+
+	env := hostEnvWith([]string{"STEPS_TEST_OPTED_IN"})
+
+	if !slices.Contains(env, "STEPS_TEST_OPTED_IN=yes") {
+		t.Errorf("env = %v, want the opted-in variable to be present", env)
+	}
+
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "STEPS_TEST_NOT_OPTED_IN=") {
+			t.Errorf("env = %v, want a variable that was not named to stay out", env)
+		}
+	}
+}
+
+// TestHostEnvWithSkipsUnsetNames pins that naming a variable nobody exported
+// contributes nothing rather than an empty value: a command testing for
+// presence must be able to tell "unset" from "set to empty", and inventing the
+// latter would turn a forgotten export into a silent misconfiguration.
+func TestHostEnvWithSkipsUnsetNames(t *testing.T) {
+	env := hostEnvWith([]string{"STEPS_TEST_DEFINITELY_UNSET"})
+
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "STEPS_TEST_DEFINITELY_UNSET") {
+			t.Errorf("env = %v, want an unset name to contribute nothing", env)
+		}
+	}
+}
+
+// TestHostEnvUnchangedWithoutOptIn keeps the no-env: case byte-identical to
+// what HostEnv always returned.
+func TestHostEnvUnchangedWithoutOptIn(t *testing.T) {
+	if got, want := strings.Join(hostEnvWith(nil), "\n"), strings.Join(HostEnv(), "\n"); got != want {
+		t.Errorf("hostEnvWith(nil) = %q, want it identical to HostEnv() = %q", got, want)
+	}
 }
