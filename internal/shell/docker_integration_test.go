@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -50,6 +51,8 @@ func TestDockerRunnerIntegrationBindMountPersists(t *testing.T) {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
+	defer CloseRunner(runner, "test")
+
 	err = runner.Run(context.Background(), "echo hello > written.txt")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -73,6 +76,8 @@ func TestDockerRunnerIntegrationExitCodeRoundTrips(t *testing.T) {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
+	defer CloseRunner(runner, "test")
+
 	_, _, exitCode, err := runner.RunCaptureFull(context.Background(), "exit 7")
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v", err)
@@ -93,6 +98,8 @@ func TestDockerRunnerIntegrationHostEnvNotVisible(t *testing.T) {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
+	defer CloseRunner(runner, "test")
+
 	stdout, _, _, err := runner.RunCaptureFull(context.Background(), "echo \"[$STEPS_TEST_HOST_SECRET]\"")
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v", err)
@@ -111,6 +118,8 @@ func TestDockerRunnerIntegrationCancellationTerminatesWithinGrace(t *testing.T) 
 		t.Fatalf("NewRunner: %v", err)
 	}
 
+	defer CloseRunner(runner, "test")
+
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
@@ -124,6 +133,90 @@ func TestDockerRunnerIntegrationCancellationTerminatesWithinGrace(t *testing.T) 
 	}
 
 	_ = runErr // a killed docker client's own exit status varies; only timing is asserted here
+}
+
+// TestDockerRunnerIntegrationStatePersistsAcrossCommands is the behavior the
+// per-step container exists for, against a real daemon: an agent's
+// `pip install x` followed by `python y` as two run_shell calls has to work.
+// Under the old fresh-container-per-command shape every assertion here failed.
+func TestDockerRunnerIntegrationStatePersistsAcrossCommands(t *testing.T) {
+	requireDocker(t)
+
+	runner, err := NewRunner(testImage, t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	defer CloseRunner(runner, "test")
+
+	// Written outside the bind mount on purpose: a file under the mounted
+	// working directory would persist even without a shared container, so it
+	// would prove nothing about the container being the same one.
+	_, _, exitCode, err := runner.RunCaptureFull(context.Background(), "echo persisted > /tmp/marker")
+	if err != nil {
+		t.Fatalf("RunCaptureFull (write): %v", err)
+	}
+
+	if exitCode != 0 {
+		t.Fatalf("writing the marker exited %d", exitCode)
+	}
+
+	stdout, stderr, exitCode, err := runner.RunCaptureFull(context.Background(), "cat /tmp/marker")
+	if err != nil {
+		t.Fatalf("RunCaptureFull (read): %v", err)
+	}
+
+	if exitCode != 0 {
+		t.Fatalf("reading the marker exited %d (stderr: %s) — the second command ran in a different container", exitCode, stderr)
+	}
+
+	if stdout != "persisted\n" {
+		t.Errorf("stdout = %q, want %q", stdout, "persisted\n")
+	}
+}
+
+// TestDockerRunnerIntegrationCloseRemovesContainer confirms against a real
+// daemon that a step leaves nothing running behind it — the orphaned-container
+// caveat the session shape was meant to retire.
+func TestDockerRunnerIntegrationCloseRemovesContainer(t *testing.T) {
+	requireDocker(t)
+
+	runnerIface, err := NewRunner(testImage, t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	runner, ok := runnerIface.(DockerRunner)
+	if !ok {
+		t.Fatal("expected a DockerRunner")
+	}
+
+	_, _, _, err = runner.RunCaptureFull(context.Background(), "true")
+	if err != nil {
+		t.Fatalf("RunCaptureFull: %v", err)
+	}
+
+	name := runner.session.name
+	if name == "" {
+		t.Fatal("expected the session to have named a container")
+	}
+
+	err = runner.Close()
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-aq", "--filter", "name="+name).Output() //nolint:gosec // name is a hex string this package generated
+	if err != nil {
+		t.Fatalf("docker ps: %v", err)
+	}
+
+	if len(bytes.TrimSpace(out)) != 0 {
+		t.Errorf("container %s still exists after Close (docker ps: %q)", name, out)
+	}
 }
 
 func TestValidateDockerIntegration(t *testing.T) {

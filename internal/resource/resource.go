@@ -44,6 +44,7 @@ func CheckVersions(ctx context.Context, cfg *config.Config, rt config.ResourceTy
 	}
 
 	runner = runner.WithLabel(rt.Name + " check")
+	defer shell.CloseRunner(runner, rt.Name+" check")
 
 	out, err := runner.RunCapture(ctx, command)
 	if err != nil {
@@ -156,6 +157,7 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, sour
 	}
 
 	runner = runner.WithLabel(rt.Name + " in")
+	defer shell.CloseRunner(runner, rt.Name+" in")
 
 	err = runner.Run(ctx, command)
 	if err != nil {
@@ -197,6 +199,7 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, sou
 	}
 
 	runner = runner.WithLabel(rt.Name + " out")
+	defer shell.CloseRunner(runner, rt.Name+" out")
 
 	out, err := runner.RunCapture(ctx, command)
 	if err != nil {

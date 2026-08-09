@@ -123,6 +123,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	}
 
 	runner = runner.WithLabel(c.ri.AgentName)
+	defer shell.CloseRunner(runner, c.ri.AgentName)
 
 	// context_paths is step-level only (not inherited by sub-agents), so
 	// c.ri.ContextPaths is always empty here — loadContextBlocks still

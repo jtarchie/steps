@@ -14,64 +14,159 @@ import (
 	"testing"
 )
 
-// TestDockerRunArgsMountsCwd and its siblings below each assert one facet of
-// dockerRunArgs' argv construction; split into separate top-level functions
-// (rather than t.Run subtests of one function) to stay under the linter's
-// per-function cyclomatic-complexity budget. dockerRunArgs takes an
-// already-resolved cwd (resolution now happens once in NewRunner, not
-// here — see resolveMountPath) so these tests pass a plain absolute path
-// directly rather than exercising resolution.
-func TestDockerRunArgsMountsCwd(t *testing.T) {
+// TestDockerStartArgsMountsCwd and its siblings below each assert one facet
+// of the argv construction behind a step's container; split into separate
+// top-level functions (rather than t.Run subtests of one function) to stay
+// under the linter's per-function cyclomatic-complexity budget.
+// dockerStartArgs takes an already-resolved cwd (resolution happens once in
+// NewRunner, not here — see resolveMountPath) so these tests pass a plain
+// absolute path directly rather than exercising resolution.
+func TestDockerStartArgsMountsCwd(t *testing.T) {
 	t.Parallel()
 
 	resolvedCwd := t.TempDir()
 
-	args := dockerRunArgs("alpine", "echo hi", resolvedCwd, true)
+	args := dockerStartArgs("alpine", "steps-abc", resolvedCwd)
 
-	want := []string{"run", "--rm", "--init", "-i", "-v", resolvedCwd + ":" + resolvedCwd, "-w", resolvedCwd, "--", "alpine", "sh", "-c", "echo hi"}
+	want := []string{
+		"run", "-d", "--rm", "--init", "--name", "steps-abc",
+		"-v", resolvedCwd + ":" + resolvedCwd, "-w", resolvedCwd,
+		"--", "alpine", "sh", "-c", "sleep 86400",
+	}
 	if !reflect.DeepEqual(args, want) {
 		t.Errorf("args = %v, want %v", args, want)
 	}
 }
 
-func TestDockerRunArgsStdinFalseOmitsDashI(t *testing.T) {
+func TestDockerStartArgsEmptyCwdMountsNothing(t *testing.T) {
 	t.Parallel()
 
-	args := dockerRunArgs("alpine", "echo hi", t.TempDir(), false)
+	args := dockerStartArgs("alpine", "steps-abc", "")
+
+	want := []string{"run", "-d", "--rm", "--init", "--name", "steps-abc", "--", "alpine", "sh", "-c", "sleep 86400"}
+	if !reflect.DeepEqual(args, want) {
+		t.Errorf("args = %v, want %v", args, want)
+	}
+}
+
+// TestDockerStartArgsImageIsPositional guards the "--" that stops docker's
+// flag parser from reading an image value as a flag of its own — see
+// dockerStartArgs' doc and config.validateImageValues.
+func TestDockerStartArgsImageIsPositional(t *testing.T) {
+	t.Parallel()
+
+	args := dockerStartArgs("--privileged", "steps-abc", "")
+
+	sep := slices.Index(args, "--")
+	if sep < 0 {
+		t.Fatalf("args = %v, want a -- separator before the image", args)
+	}
+
+	if args[sep+1] != "--privileged" {
+		t.Errorf("args[%d] = %q, want the image to sit immediately after --", sep+1, args[sep+1])
+	}
+}
+
+// TestDockerStartArgsKeepaliveIsBounded guards the pairing that keeps a
+// SIGKILLed steps process from stranding a container forever: the keepalive
+// must terminate on its own, and --rm must be present to reap it when it
+// does. An endless loop here would reintroduce exactly the orphan the
+// session was built to eliminate.
+func TestDockerStartArgsKeepaliveIsBounded(t *testing.T) {
+	t.Parallel()
+
+	args := dockerStartArgs("alpine", "steps-abc", "")
+
+	if !slices.Contains(args, "--rm") {
+		t.Errorf("args = %v, want --rm so an exited keepalive is reaped", args)
+	}
+
+	keepalive := args[len(args)-1]
+	if !strings.HasPrefix(keepalive, "sleep ") {
+		t.Errorf("keepalive = %q, want a bounded sleep", keepalive)
+	}
+
+	secs, err := strconv.Atoi(strings.TrimPrefix(keepalive, "sleep "))
+	if err != nil {
+		t.Fatalf("keepalive %q does not end in a number: %v", keepalive, err)
+	}
+
+	if secs != int(dockerSessionLifetime.Seconds()) {
+		t.Errorf("keepalive = %ds, want %ds", secs, int(dockerSessionLifetime.Seconds()))
+	}
+}
+
+func TestDockerExecArgsStdin(t *testing.T) {
+	t.Parallel()
+
+	args := dockerExecArgs("steps-abc", "echo hi", true)
+
+	want := []string{"exec", "-i", "--", "steps-abc", "sh", "-c", "echo hi"}
+	if !reflect.DeepEqual(args, want) {
+		t.Errorf("args = %v, want %v", args, want)
+	}
+}
+
+func TestDockerExecArgsStdinFalseOmitsDashI(t *testing.T) {
+	t.Parallel()
+
+	args := dockerExecArgs("steps-abc", "echo hi", false)
 
 	if slices.Contains(args, "-i") {
 		t.Errorf("args = %v, did not want -i", args)
 	}
 }
 
-func TestDockerRunArgsNeverPassesDashTWithStdin(t *testing.T) {
+// TestDockerNeverPassesDashT covers both argv builders at once: a -t would
+// allocate a TTY, which changes how output is framed and is never wanted for
+// a non-interactive pipeline command.
+func TestDockerNeverPassesDashT(t *testing.T) {
 	t.Parallel()
 
-	args := dockerRunArgs("alpine", "echo hi", t.TempDir(), true)
-
-	if slices.Contains(args, "-t") {
-		t.Errorf("args = %v, did not want -t", args)
+	for _, args := range [][]string{
+		dockerStartArgs("alpine", "steps-abc", t.TempDir()),
+		dockerExecArgs("steps-abc", "echo hi", true),
+		dockerExecArgs("steps-abc", "echo hi", false),
+	} {
+		if slices.Contains(args, "-t") {
+			t.Errorf("args = %v, did not want -t", args)
+		}
 	}
 }
 
-func TestDockerRunArgsNeverPassesDashTWithoutStdin(t *testing.T) {
+func TestDockerExecArgsCommandOrdering(t *testing.T) {
 	t.Parallel()
 
-	args := dockerRunArgs("alpine", "echo hi", t.TempDir(), false)
+	args := dockerExecArgs("steps-abc", "do the thing", false)
 
-	if slices.Contains(args, "-t") {
-		t.Errorf("args = %v, did not want -t", args)
+	if got := args[len(args)-4:]; !reflect.DeepEqual(got, []string{"steps-abc", "sh", "-c", "do the thing"}) {
+		t.Errorf("tail of args = %v, want [steps-abc sh -c \"do the thing\"]", got)
 	}
 }
 
-func TestDockerRunArgsEmptyCwdMountsNothing(t *testing.T) {
+// TestNewContainerNameIsUnique guards the reason names are random rather than
+// derived from a step's name: two concurrent runs of the same step must never
+// contend for one container.
+func TestNewContainerNameIsUnique(t *testing.T) {
 	t.Parallel()
 
-	args := dockerRunArgs("alpine", "echo hi", "", false)
+	seen := map[string]bool{}
 
-	want := []string{"run", "--rm", "--init", "--", "alpine", "sh", "-c", "echo hi"}
-	if !reflect.DeepEqual(args, want) {
-		t.Errorf("args = %v, want %v", args, want)
+	for range 100 {
+		name, err := newContainerName()
+		if err != nil {
+			t.Fatalf("newContainerName: %v", err)
+		}
+
+		if !strings.HasPrefix(name, "steps-") {
+			t.Errorf("name = %q, want a steps- prefix", name)
+		}
+
+		if seen[name] {
+			t.Fatalf("newContainerName returned %q twice", name)
+		}
+
+		seen[name] = true
 	}
 }
 
@@ -79,7 +174,7 @@ func TestDockerRunArgsEmptyCwdMountsNothing(t *testing.T) {
 // host:container` volume spec silently misparsing a host path that itself
 // contains a ':' (a valid POSIX path character) — resolveMountPath (called
 // once by NewRunner at construction) must fail loudly instead of letting
-// dockerRunArgs build an argument docker would misinterpret.
+// dockerStartArgs build an argument docker would misinterpret.
 func TestResolveMountPathRejectsColonInPath(t *testing.T) {
 	t.Parallel()
 
@@ -117,16 +212,6 @@ func TestNewRunnerRejectsColonInPath(t *testing.T) {
 	}
 }
 
-func TestDockerRunArgsCommandOrdering(t *testing.T) {
-	t.Parallel()
-
-	args := dockerRunArgs("myimage", "do the thing", "", false)
-
-	if got := args[len(args)-4:]; !reflect.DeepEqual(got, []string{"myimage", "sh", "-c", "do the thing"}) {
-		t.Errorf("tail of args = %v, want [myimage sh -c \"do the thing\"]", got)
-	}
-}
-
 func TestNewRunner(t *testing.T) {
 	t.Parallel()
 
@@ -151,6 +236,23 @@ func TestNewRunner(t *testing.T) {
 
 	if runner.Image != "alpine" {
 		t.Errorf("Image = %q, want alpine", runner.Image)
+	}
+}
+
+// TestNewRunnerDoesNotStartAContainer pins the laziness: constructing a
+// runner must cost nothing. A step whose command is skipped, or which fails
+// before running anything, should never have paid for a container.
+func TestNewRunnerDoesNotStartAContainer(t *testing.T) {
+	argvFile := writeFakeDocker(t, 0, "", "")
+
+	_, err := NewRunner("alpine", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	_, statErr := os.Stat(argvFile)
+	if statErr == nil {
+		t.Error("NewRunner invoked docker; it should not start a container until the first command")
 	}
 }
 
@@ -179,13 +281,13 @@ func TestNewRunnerResolvesCwdOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if runner.resolvedCwd != want {
-		t.Errorf("resolvedCwd = %q, want %q", runner.resolvedCwd, want)
+	if runner.session.resolvedCwd != want {
+		t.Errorf("resolvedCwd = %q, want %q", runner.session.resolvedCwd, want)
 	}
 }
 
 // writeFakeDocker installs an executable "docker" script on PATH (via
-// t.Setenv, so this test can't run in parallel with siblings) that echoes
+// t.Setenv, so this test can't run in parallel with siblings) that appends
 // its argv to argvFile and exits with exitCode — a hermetic stand-in so
 // DockerRunner's process-plumbing (argv construction, exit code
 // propagation, stdout/stderr capture) can be exercised without a real
@@ -194,6 +296,13 @@ func TestNewRunnerResolvesCwdOnce(t *testing.T) {
 // text, so no shell-quoting of arbitrary content is needed at all — os/exec
 // passes env values through verbatim, unlike command-line text that a
 // shell re-parses.
+//
+// The configured exit code and output apply only to `docker exec` — the
+// command the caller actually asked to run. Session lifecycle invocations
+// (`run -d` to start the container, `rm -f` to remove it) succeed on their
+// own, so a test asserting on a command's failure isn't really asserting on
+// a failure to start the container. FAKE_DOCKER_RUN_EXIT overrides that for
+// the tests that want the start itself to fail.
 func writeFakeDocker(t *testing.T, exitCode int, stdout, stderr string) (argvFile string) {
 	t.Helper()
 
@@ -205,7 +314,11 @@ func writeFakeDocker(t *testing.T, exitCode int, stdout, stderr string) (argvFil
 	argvFile = filepath.Join(dir, "argv.txt")
 
 	script := "#!/bin/sh\n" +
-		"printf '%s\\n' \"$*\" > " + argvFile + "\n" +
+		"printf '%s\\n' \"$*\" >> " + argvFile + "\n" +
+		"case \"$1\" in\n" +
+		"  run) printf 'fakecontainerid\\n'; printf '%s' \"$FAKE_DOCKER_RUN_STDERR\" >&2; exit \"${FAKE_DOCKER_RUN_EXIT:-0}\" ;;\n" +
+		"  rm)  exit 0 ;;\n" +
+		"esac\n" +
 		"printf '%s' \"$FAKE_DOCKER_STDOUT\"\n" +
 		"printf '%s' \"$FAKE_DOCKER_STDERR\" >&2\n" +
 		"exit \"$FAKE_DOCKER_EXIT\"\n"
@@ -225,13 +338,41 @@ func writeFakeDocker(t *testing.T, exitCode int, stdout, stderr string) (argvFil
 	return argvFile
 }
 
+// recordedArgv returns each docker invocation the fake recorded, in order.
+func recordedArgv(t *testing.T, argvFile string) []string {
+	t.Helper()
+
+	recorded, err := os.ReadFile(argvFile) //nolint:gosec // test fixture path
+	if err != nil {
+		t.Fatalf("read recorded argv: %v", err)
+	}
+
+	return strings.Split(strings.TrimRight(string(recorded), "\n"), "\n")
+}
+
+// invocationsOf returns the recorded invocations whose docker subcommand is
+// verb (e.g. "run", "exec", "rm").
+func invocationsOf(lines []string, verb string) []string {
+	var out []string
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, verb+" ") {
+			out = append(out, line)
+		}
+	}
+
+	return out
+}
+
 func TestDockerRunnerCaptureFull(t *testing.T) {
-	argvFile := writeFakeDocker(t, 3, "out text", "err text")
+	writeFakeDocker(t, 3, "out text", "err text")
 
 	runner, err := NewRunner("alpine", t.TempDir())
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
+
+	defer CloseRunner(runner, "test")
 
 	stdout, stderr, exitCode, err := runner.RunCaptureFull(context.Background(), "do stuff")
 	if err != nil {
@@ -249,15 +390,304 @@ func TestDockerRunnerCaptureFull(t *testing.T) {
 	if stderr != "err text" {
 		t.Errorf("stderr = %q, want %q", stderr, "err text")
 	}
+}
 
-	recorded, readErr := os.ReadFile(argvFile) //nolint:gosec // test fixture path
-	if readErr != nil {
-		t.Fatalf("read recorded argv: %v", readErr)
+// TestDockerRunnerCaptureFullArgv is TestDockerRunnerCaptureFull's argv half,
+// split off to stay under the linter's per-function complexity budget.
+func TestDockerRunnerCaptureFullArgv(t *testing.T) {
+	argvFile := writeFakeDocker(t, 0, "", "")
+
+	runner, err := NewRunner("alpine", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
 	}
 
-	fields := strings.Fields(string(recorded))
-	if !strings.Contains(string(recorded), "do stuff") || !strings.Contains(string(recorded), "alpine") || slices.Contains(fields, "-i") {
-		t.Errorf("recorded argv = %q, want it to contain the image/command and omit the -i token (RunCaptureFull is non-interactive)", recorded)
+	defer CloseRunner(runner, "test")
+
+	_, _, _, err = runner.RunCaptureFull(context.Background(), "do stuff")
+	if err != nil {
+		t.Fatalf("RunCaptureFull: %v", err)
+	}
+
+	lines := recordedArgv(t, argvFile)
+
+	starts := invocationsOf(lines, "run")
+	if len(starts) != 1 || !strings.Contains(starts[0], "alpine") {
+		t.Errorf("run invocations = %v, want exactly one naming the image", starts)
+	}
+
+	execs := invocationsOf(lines, "exec")
+	if len(execs) != 1 {
+		t.Fatalf("exec invocations = %v, want exactly one", execs)
+	}
+
+	if !strings.Contains(execs[0], "do stuff") || slices.Contains(strings.Fields(execs[0]), "-i") {
+		t.Errorf("exec argv = %q, want it to contain the command and omit the -i token (RunCaptureFull is non-interactive)", execs[0])
+	}
+}
+
+// TestDockerRunnerReusesOneContainer is the point of the whole session: two
+// commands from one runner must land in the SAME container, so state a model
+// established in one run_shell call (an installed package, an exported
+// variable, a created file outside the mount) is still there for the next.
+func TestDockerRunnerReusesOneContainer(t *testing.T) {
+	argvFile := writeFakeDocker(t, 0, "", "")
+
+	runner, err := NewRunner("alpine", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	defer CloseRunner(runner, "test")
+
+	for _, command := range []string{"first", "second", "third"} {
+		_, _, _, runErr := runner.RunCaptureFull(context.Background(), command)
+		if runErr != nil {
+			t.Fatalf("RunCaptureFull(%q): %v", command, runErr)
+		}
+	}
+
+	lines := recordedArgv(t, argvFile)
+
+	if starts := invocationsOf(lines, "run"); len(starts) != 1 {
+		t.Errorf("run invocations = %v, want exactly one for three commands", starts)
+	}
+
+	execs := invocationsOf(lines, "exec")
+	if len(execs) != 3 {
+		t.Fatalf("exec invocations = %v, want three", execs)
+	}
+
+	name := containerNameFromExec(t, execs[0])
+	for _, exec := range execs[1:] {
+		if got := containerNameFromExec(t, exec); got != name {
+			t.Errorf("exec targeted container %q, want %q — every command must share one container", got, name)
+		}
+	}
+}
+
+// containerNameFromExec pulls the container name out of a recorded
+// `exec [-i] -- <name> sh -c ...` invocation.
+func containerNameFromExec(t *testing.T, line string) string {
+	t.Helper()
+
+	fields := strings.Fields(line)
+
+	sep := slices.Index(fields, "--")
+	if sep < 0 || sep+1 >= len(fields) {
+		t.Fatalf("exec argv %q has no -- separator followed by a container name", line)
+	}
+
+	return fields[sep+1]
+}
+
+// TestDockerRunnerCloseRemovesContainer guards the orphan fix: whatever
+// happens to an individual exec client, Close names the container and forces
+// it away.
+func TestDockerRunnerCloseRemovesContainer(t *testing.T) {
+	argvFile := writeFakeDocker(t, 0, "", "")
+
+	runner, err := NewRunner("alpine", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	_, _, _, err = runner.RunCaptureFull(context.Background(), "anything")
+	if err != nil {
+		t.Fatalf("RunCaptureFull: %v", err)
+	}
+
+	err = runner.Close()
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	lines := recordedArgv(t, argvFile)
+
+	removes := invocationsOf(lines, "rm")
+	if len(removes) != 1 {
+		t.Fatalf("rm invocations = %v, want exactly one", removes)
+	}
+
+	name := containerNameFromExec(t, invocationsOf(lines, "exec")[0])
+	if !strings.Contains(removes[0], name) {
+		t.Errorf("rm argv = %q, want it to name the container %q", removes[0], name)
+	}
+
+	if !strings.Contains(removes[0], "-f") {
+		t.Errorf("rm argv = %q, want -f so a still-running command cannot block teardown", removes[0])
+	}
+}
+
+// TestDockerRunnerCloseWithoutCommandsRemovesNothing pairs with
+// TestNewRunnerDoesNotStartAContainer: a runner that never ran anything has
+// no container, and Close must not invent a docker call (or an error) for it.
+func TestDockerRunnerCloseWithoutCommandsRemovesNothing(t *testing.T) {
+	argvFile := writeFakeDocker(t, 0, "", "")
+
+	runner, err := NewRunner("alpine", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	err = runner.Close()
+	if err != nil {
+		t.Fatalf("Close on an unused runner: %v", err)
+	}
+
+	_, statErr := os.Stat(argvFile)
+	if statErr == nil {
+		t.Errorf("Close invoked docker for a runner that never started a container: %v", recordedArgv(t, argvFile))
+	}
+}
+
+// TestDockerRunnerCloseIsIdempotent covers the double-close that falls out of
+// real wiring: an agent step registers its runner in closers AND a caller may
+// defer CloseRunner around it.
+func TestDockerRunnerCloseIsIdempotent(t *testing.T) {
+	argvFile := writeFakeDocker(t, 0, "", "")
+
+	runner, err := NewRunner("alpine", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	_, _, _, err = runner.RunCaptureFull(context.Background(), "anything")
+	if err != nil {
+		t.Fatalf("RunCaptureFull: %v", err)
+	}
+
+	for i := range 3 {
+		closeErr := runner.Close()
+		if closeErr != nil {
+			t.Fatalf("Close #%d: %v", i+1, closeErr)
+		}
+	}
+
+	if removes := invocationsOf(recordedArgv(t, argvFile), "rm"); len(removes) != 1 {
+		t.Errorf("rm invocations = %v, want exactly one across three Close calls", removes)
+	}
+}
+
+// TestDockerRunnerWithLabelSharesOneContainer guards the aliasing WithLabel
+// introduces: it returns a copy, and a copy that started its own container
+// would silently double a step's containers and split its state in half.
+func TestDockerRunnerWithLabelSharesOneContainer(t *testing.T) {
+	argvFile := writeFakeDocker(t, 0, "", "")
+
+	runner, err := NewRunner("alpine", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	defer CloseRunner(runner, "test")
+
+	labeled := runner.WithLabel("agent")
+
+	_, _, _, err = runner.RunCaptureFull(context.Background(), "from the original")
+	if err != nil {
+		t.Fatalf("RunCaptureFull: %v", err)
+	}
+
+	_, _, _, err = labeled.RunCaptureFull(context.Background(), "from the copy")
+	if err != nil {
+		t.Fatalf("RunCaptureFull (labeled): %v", err)
+	}
+
+	if starts := invocationsOf(recordedArgv(t, argvFile), "run"); len(starts) != 1 {
+		t.Errorf("run invocations = %v, want exactly one shared by the runner and its labeled copy", starts)
+	}
+}
+
+// TestDockerRunnerStartFailureSurfacesAsData pins the semantics documented in
+// docs/infra.md, which the move to a session had to preserve: a docker-level
+// failure (an unknown image exits 125) reaches an agent as an ordinary tool
+// result — an exit code and stderr — not as a Go error that aborts the step.
+func TestDockerRunnerStartFailureSurfacesAsData(t *testing.T) {
+	writeFakeDocker(t, 0, "", "")
+	t.Setenv("FAKE_DOCKER_RUN_EXIT", "125")
+	t.Setenv("FAKE_DOCKER_RUN_STDERR", "Unable to find image 'nope:latest'")
+
+	runner, err := NewRunner("nope", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	defer CloseRunner(runner, "test")
+
+	_, stderr, exitCode, err := runner.RunCaptureFull(context.Background(), "anything")
+	if err != nil {
+		t.Fatalf("RunCaptureFull returned a Go error for a docker-level failure: %v", err)
+	}
+
+	if exitCode != 125 {
+		t.Errorf("exitCode = %d, want 125 from the failed container start", exitCode)
+	}
+
+	if !strings.Contains(stderr, "Unable to find image") {
+		t.Errorf("stderr = %q, want docker's own start failure", stderr)
+	}
+}
+
+// TestDockerRunnerStartFailureIsSticky guards against re-paying for a
+// hopeless start on every command: an agent conversation with a bad image
+// would otherwise attempt (and, for a real daemon, re-pull) once per
+// run_shell call.
+func TestDockerRunnerStartFailureIsSticky(t *testing.T) {
+	argvFile := writeFakeDocker(t, 0, "", "")
+	t.Setenv("FAKE_DOCKER_RUN_EXIT", "125")
+
+	runner, err := NewRunner("nope", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	defer CloseRunner(runner, "test")
+
+	for range 3 {
+		_, _, exitCode, runErr := runner.RunCaptureFull(context.Background(), "anything")
+		if runErr != nil {
+			t.Fatalf("RunCaptureFull: %v", runErr)
+		}
+
+		if exitCode != 125 {
+			t.Errorf("exitCode = %d, want 125 on every command once the start failed", exitCode)
+		}
+	}
+
+	lines := recordedArgv(t, argvFile)
+
+	if starts := invocationsOf(lines, "run"); len(starts) != 1 {
+		t.Errorf("run invocations = %v, want exactly one — a failed start must not be retried per command", starts)
+	}
+
+	if execs := invocationsOf(lines, "exec"); len(execs) != 0 {
+		t.Errorf("exec invocations = %v, want none against a container that never started", execs)
+	}
+}
+
+// TestDockerRunnerStartFailureIsAnExitError keeps a containerized task's
+// docker-level failure classifying the way it always has: runTaskCommand asks
+// shell.IsExitError to tell a task failure from an infrastructure error, and
+// a start failure has to answer that question the same as any nonzero exit.
+func TestDockerRunnerStartFailureIsAnExitError(t *testing.T) {
+	writeFakeDocker(t, 0, "", "")
+	t.Setenv("FAKE_DOCKER_RUN_EXIT", "125")
+
+	runner, err := NewRunner("nope", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	defer CloseRunner(runner, "test")
+
+	err = runner.Run(context.Background(), "anything")
+	if err == nil {
+		t.Fatal("expected an error when the container could not start")
+	}
+
+	if !IsExitError(err) {
+		t.Errorf("IsExitError(%v) = false, want true so a containerized task still classifies as failed", err)
 	}
 }
 
@@ -275,6 +705,8 @@ func TestDockerRunnerCaptureFullHandlesAdversarialOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
+
+	defer CloseRunner(runner, "test")
 
 	stdout, _, _, err := runner.RunCaptureFull(context.Background(), "do stuff")
 	if err != nil {
@@ -294,6 +726,8 @@ func TestDockerRunnerRunErrorsOnNonzeroExit(t *testing.T) {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
+	defer CloseRunner(runner, "test")
+
 	err = runner.Run(context.Background(), "false")
 	if err == nil {
 		t.Error("expected an error for a nonzero exit from Run (unlike RunCaptureFull)")
@@ -307,6 +741,8 @@ func TestDockerRunnerRunCaptureReturnsStdout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
+
+	defer CloseRunner(runner, "test")
 
 	out, err := runner.RunCapture(context.Background(), "echo hi")
 	if err != nil {
@@ -330,6 +766,8 @@ func TestDockerRunnerRunCaptureLogsStderrOnFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
+
+	defer CloseRunner(runner, "test")
 
 	var logBuf bytes.Buffer
 

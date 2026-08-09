@@ -112,23 +112,33 @@ type preparedAgentStep struct {
 	// primary is the invocation as CONFIGURED, before failover. The step
 	// hashes against this one, so which source served a run is availability,
 	// not content: a fallback firing cannot invalidate a cache entry.
-	primary  config.ResolvedInvocation
-	space    workspace.StepSpace
-	conv     agentConversation
-	llm      model.LLM
-	closers  []io.Closer // MCP connections opened for this step's granted tools — see buildAgentTools
-	spillDir string      // run_shell/custom tool output spill dir — see toolEnv.spillDir; "" if it couldn't be created
+	primary config.ResolvedInvocation
+	space   workspace.StepSpace
+	conv    agentConversation
+	llm     model.LLM
+	// closers holds everything opened for this step that must be released
+	// before its directory goes away: the MCP connections buildAgentTools
+	// opened, and the shell runner (whose container, under image:, bind-mounts
+	// that very directory).
+	closers  []io.Closer
+	spillDir string // run_shell/custom tool output spill dir — see toolEnv.spillDir; "" if it couldn't be created
 }
 
-// close releases everything prepareAgentStep opened for this step: its
-// workspace space, any tool connections (MCP), and its spill dir (removed,
-// not just closed — it may hold files a large run_shell/custom tool output
-// spilled to; see toolEnv.spillDir). Ignores errors — this is always
-// deferred right after a successful prepareAgentStep, with the step's real
-// outcome already determined by the time it runs.
+// close releases everything prepareAgentStep opened for this step: any tool
+// connections (MCP) and the shell runner, then its workspace space, then its
+// spill dir (removed, not just closed — it may hold files a large
+// run_shell/custom tool output spilled to; see toolEnv.spillDir). Ignores
+// errors — this is always deferred right after a successful
+// prepareAgentStep, with the step's real outcome already determined by the
+// time it runs.
+//
+// The closers go first, before the space: both a containerized runner and a
+// stdio MCP server hold the step's directory (as a bind mount, as a working
+// directory), and tearing the directory out from under either is a worse
+// failure than the ordinary case this runs in.
 func (p preparedAgentStep) close(stepLabel string) {
-	workspace.CloseSpace(p.space, stepLabel)
 	closeAll(p.closers)
+	workspace.CloseSpace(p.space, stepLabel)
 
 	if p.spillDir != "" {
 		_ = os.RemoveAll(p.spillDir)
@@ -202,6 +212,10 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	}
 
 	runner = runner.WithLabel(step.Agent)
+
+	// Joins closers immediately, so every error path below tears the step's
+	// container down through the same closeAll the success path uses.
+	closers = append(closers, runner)
 
 	apiKey, err := lookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
 	if err != nil {

@@ -60,6 +60,25 @@ type Runner interface {
 	// label (the default from NewRunner) streams unprefixed, byte-identical
 	// to before this method existed.
 	WithLabel(label string) Runner
+	// Close releases whatever the runner holds open — for a DockerRunner,
+	// the step's container. Every caller of NewRunner must call it (see
+	// CloseRunner), including on the failure path: it is what keeps a step
+	// from stranding a container. A HostRunner has nothing to release and
+	// returns nil. Closing a runner that never ran a command is valid, as is
+	// closing twice; a copy made by WithLabel shares one underlying session,
+	// so closing either closes both.
+	Close() error
+}
+
+// CloseRunner is a best-effort cleanup helper for the deferred Close calls
+// every NewRunner caller owes: a cleanup failure must never mask the original
+// error already being returned, so it is only logged. Mirrors
+// internal/workspace's CloseBuild/CloseSpace precedent.
+func CloseRunner(r Runner, label string) {
+	err := r.Close()
+	if err != nil {
+		slog.Error("shell.runner_close", "label", label, "error", err)
+	}
 }
 
 // NewRunner returns a DockerRunner scoped to image and cwd, or a HostRunner
@@ -86,7 +105,10 @@ func NewRunner(image, cwd string) (Runner, error) {
 		}
 	}
 
-	return DockerRunner{Image: image, resolvedCwd: resolvedCwd}, nil
+	return DockerRunner{
+		Image:   image,
+		session: &dockerSession{image: image, resolvedCwd: resolvedCwd},
+	}, nil
 }
 
 // captureWriter accumulates one stdout/stderr stream from a running command
@@ -409,6 +431,9 @@ func (h HostRunner) WithLabel(label string) Runner {
 
 	return h
 }
+
+// Close satisfies Runner. Host execution holds nothing open.
+func (HostRunner) Close() error { return nil }
 
 // hostEnvAllowlist is the fixed set of environment variable names a
 // host-executed command (resource check/in/out, task run:, an agent's

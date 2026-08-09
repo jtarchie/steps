@@ -51,6 +51,8 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 		return false, err //nolint:wrapcheck // NewRunner's error already names the cause
 	}
 
+	defer shell.CloseRunner(runner, label)
+
 	stdout, stderr, exitCode, err := runner.RunCaptureFull(ctx, step.When.Run)
 	if err != nil {
 		return false, fmt.Errorf("guard command %q could not run: %w", step.When.Run, err)

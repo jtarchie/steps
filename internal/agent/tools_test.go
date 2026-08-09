@@ -117,10 +117,16 @@ func TestBuildAgentToolsWriteFile(t *testing.T) {
 	})
 }
 
-// TestRunShellDescriptionMentionsContainerIsolationOnlyWhenImageSet is split
-// out from TestBuildAgentToolsBuiltins to stay under the linter's
-// per-function cyclomatic-complexity budget.
-func TestRunShellDescriptionMentionsContainerIsolationOnlyWhenImageSet(t *testing.T) {
+// TestRunShellDescriptionMentionsTheImageOnlyWhenImageSet is split out from
+// TestBuildAgentToolsBuiltins to stay under the linter's per-function
+// cyclomatic-complexity budget.
+//
+// The negative assertion is the load-bearing one. The description used to
+// tell the model that each call got a fresh container and that nothing
+// persisted between them; a step's calls now share one container, so that
+// sentence would be an instruction to work around a constraint that no longer
+// exists — costing turns and producing worse commands.
+func TestRunShellDescriptionMentionsTheImageOnlyWhenImageSet(t *testing.T) {
 	t.Parallel()
 
 	runShellDecl := func(t *testing.T, image string) *genai.FunctionDeclaration {
@@ -135,13 +141,21 @@ func TestRunShellDescriptionMentionsContainerIsolationOnlyWhenImageSet(t *testin
 	}
 
 	hostDecl := runShellDecl(t, "")
-	if strings.Contains(hostDecl.Description, "fresh, independent container") {
+	if strings.Contains(hostDecl.Description, "container") {
 		t.Errorf("host (no image) description shouldn't mention containers: %q", hostDecl.Description)
 	}
 
 	containerDecl := runShellDecl(t, "alpine")
-	if !strings.Contains(containerDecl.Description, "fresh, independent container") {
-		t.Errorf("containerized description should mention per-call container isolation: %q", containerDecl.Description)
+	if !strings.Contains(containerDecl.Description, "alpine") {
+		t.Errorf("containerized description should name the image: %q", containerDecl.Description)
+	}
+
+	if strings.Contains(containerDecl.Description, "fresh, independent container") {
+		t.Errorf("containerized description still claims a fresh container per call, which is no longer true: %q", containerDecl.Description)
+	}
+
+	if !strings.Contains(containerDecl.Description, "shares one container") {
+		t.Errorf("containerized description should say state carries between calls: %q", containerDecl.Description)
 	}
 }
 

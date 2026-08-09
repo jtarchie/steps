@@ -163,10 +163,14 @@ type builtinTool struct {
 }
 
 // runShellDescription is run_shell's base description, extended when the
-// step is containerized (image != "") so the model knows each call is a
-// fresh, independent container: a cd/env var/installed package from one
-// run_shell call is invisible to the next, unlike host execution where
-// state persists naturally across calls in the same conversation.
+// step is containerized (image != "") to say where the command runs.
+//
+// It used to carry a warning that each call was a fresh container and that
+// nothing persisted between them. That warning is gone because the fact is:
+// a step's calls now share one container (see internal/shell's
+// dockerSession), so state behaves the way it does on the host. What is left
+// is the one thing a model still benefits from knowing — that it is inside an
+// image, which explains why the toolchain it expects may simply not be there.
 func runShellDescription(image string) string {
 	desc := "Run a shell command via `sh -c`, with cwd set to the step's working directory. Returns stdout, stderr, and exit_code." +
 		" If a stream's output is too large to return inline, it's instead saved to a file under the working directory and a" +
@@ -174,7 +178,8 @@ func runShellDescription(image string) string {
 		" run_shell (e.g. grep/sed on the absolute path), or with read_file, which accepts the absolute path from the" +
 		" pointer message directly, using start_line/end_line to page through it."
 	if image != "" {
-		desc += " Runs in a fresh, independent container each call — nothing installed, exported, or cd'd in one call persists to the next; chain related commands with && in a single call instead of relying on state from a prior one."
+		desc += fmt.Sprintf(" Runs inside the %s container image, not on the host — only what that image provides is available."+
+			" Every call in this step shares one container, so a package you install, a variable you export, or a directory you cd into stays in effect for later calls.", image)
 	}
 
 	return desc

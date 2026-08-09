@@ -95,6 +95,7 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 	}
 
 	runner = runner.WithLabel(fix.Agent)
+	defer shell.CloseRunner(runner, fix.Agent)
 
 	apiKey, err := lookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
 	if err != nil {

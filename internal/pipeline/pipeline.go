@@ -1120,6 +1120,7 @@ func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedT
 	}
 
 	runner = runner.WithLabel(rt.Name)
+	defer shell.CloseRunner(runner, rt.Name)
 
 	switch {
 	case rt.Assert != nil:
