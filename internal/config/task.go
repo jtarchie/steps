@@ -46,6 +46,9 @@ type Task struct {
 	// --user). Empty takes the platform default — see shell's
 	// defaultContainerUser. Only meaningful alongside Image.
 	User string `yaml:"user,omitempty"`
+	// Network is the container network this task's run: joins (docker's
+	// --network); "none" cuts off egress entirely. Requires Image.
+	Network string `yaml:"network,omitempty"`
 	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
 	// (default) means no timeout. Inherited by task steps unless overridden.
 	Timeout string `yaml:"timeout,omitempty"`

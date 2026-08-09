@@ -92,6 +92,8 @@ type dockerSession struct {
 	// user is the already-resolved --user value (see containerUser); empty
 	// takes the image's own default.
 	user string
+	// network is the --network value; empty takes docker's own default.
+	network string
 
 	mu sync.Mutex
 	// attempted records that start has been tried, so a failure is sticky:
@@ -130,7 +132,7 @@ func (s *dockerSession) ensure(ctx context.Context) (name, stderr string, err er
 		return "", "", err
 	}
 
-	args := dockerStartArgs(s.image, containerName, s.resolvedCwd, s.envNames, s.user)
+	args := dockerStartArgs(s.image, containerName, s.resolvedCwd, s.envNames, s.user, s.network)
 
 	slog.Debug("shell.docker.session_start", "image", s.image, "container", containerName, "cwd", s.resolvedCwd)
 
@@ -390,7 +392,7 @@ func dockerCommand(ctx context.Context, args []string) *exec.Cmd {
 // name. config.validateImageValues rejects such a value at LoadConfig time
 // too; this is defense in depth for any image string that reaches here by
 // another path.
-func dockerStartArgs(image, name, resolvedCwd string, envNames []string, user string) []string {
+func dockerStartArgs(image, name, resolvedCwd string, envNames []string, user, network string) []string {
 	args := []string{"run", "-d", "--rm", "--init", "--name", name}
 
 	if resolvedCwd != "" {
@@ -399,6 +401,10 @@ func dockerStartArgs(image, name, resolvedCwd string, envNames []string, user st
 
 	if user != "" {
 		args = append(args, "--user", user)
+	}
+
+	if network != "" {
+		args = append(args, "--network", network)
 	}
 
 	// `-e NAME` (no value) tells the docker CLI to forward the value from its

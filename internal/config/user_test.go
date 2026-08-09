@@ -69,7 +69,7 @@ func TestValidateUserPlacementRejectsGetAndPut(t *testing.T) {
 
 			cfg := &Config{Jobs: []Job{{Name: "j", Plan: []Step{tc.step}}}}
 
-			err := cfg.validateUserPlacement()
+			err := cfg.rejectOnGetAndPut("user", func(s *Step) bool { return s.User != "" })
 			if err == nil {
 				t.Fatalf("expected user: on a %s step to be rejected", tc.name)
 			}

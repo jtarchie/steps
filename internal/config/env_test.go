@@ -79,7 +79,7 @@ func TestValidateEnvPlacementRejectsGetAndPut(t *testing.T) {
 
 			cfg := &Config{Jobs: []Job{{Name: "j", Plan: []Step{tc.step}}}}
 
-			err := cfg.validateEnvPlacement()
+			err := cfg.rejectOnGetAndPut("env", func(s *Step) bool { return s.Env != nil })
 			if err == nil {
 				t.Fatalf("expected env: on a %s step to be rejected", tc.name)
 			}
@@ -102,7 +102,7 @@ func TestValidateEnvPlacementAllowsEmptyOnTaskAndAgent(t *testing.T) {
 		{Agent: "reviewer", Prompt: "x", Env: []string{}},
 	}}}}
 
-	err := cfg.validateEnvPlacement()
+	err := cfg.rejectOnGetAndPut("env", func(s *Step) bool { return s.Env != nil })
 	if err != nil {
 		t.Errorf("validateEnvPlacement: %v", err)
 	}

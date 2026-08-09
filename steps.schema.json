@@ -118,6 +118,10 @@
           "type": "string",
           "description": "Container user for docker's --user (e.g. \"root\", \"1000:1000\"). Empty takes the platform default: on Linux, the uid:gid running steps, so containers do not leave root-owned files in the bind-mounted working directory."
         },
+        "network": {
+          "type": "string",
+          "description": "Container network for docker's --network (e.g. \"none\" to cut off egress entirely, \"host\", or a named network). Requires image: \u2014 a host-executed command uses the host's network."
+        },
         "config": {
           "type": "object",
           "additionalProperties": false,
@@ -256,6 +260,10 @@
         "user": {
           "type": "string",
           "description": "Container user for docker's --user (e.g. \"root\", \"1000:1000\"). Empty takes the platform default: on Linux, the uid:gid running steps, so containers do not leave root-owned files in the bind-mounted working directory."
+        },
+        "network": {
+          "type": "string",
+          "description": "Container network for docker's --network (e.g. \"none\" to cut off egress entirely, \"host\", or a named network). Requires image: \u2014 a host-executed command uses the host's network."
         },
         "system": {
           "type": "string"
@@ -522,6 +530,10 @@
         "user": {
           "type": "string",
           "description": "Container user for docker's --user (e.g. \"root\", \"1000:1000\"). Empty takes the platform default: on Linux, the uid:gid running steps, so containers do not leave root-owned files in the bind-mounted working directory."
+        },
+        "network": {
+          "type": "string",
+          "description": "Container network for docker's --network (e.g. \"none\" to cut off egress entirely, \"host\", or a named network). Requires image: \u2014 a host-executed command uses the host's network."
         },
         "timeout": {
           "type": "string",
@@ -942,6 +954,10 @@
         "user": {
           "type": "string",
           "description": "Container user for docker's --user (e.g. \"root\", \"1000:1000\"). Empty takes the platform default: on Linux, the uid:gid running steps, so containers do not leave root-owned files in the bind-mounted working directory."
+        },
+        "network": {
+          "type": "string",
+          "description": "Container network for docker's --network (e.g. \"none\" to cut off egress entirely, \"host\", or a named network). Requires image: \u2014 a host-executed command uses the host's network."
         },
         "when": {
           "$ref": "#/$defs/whenSpec"

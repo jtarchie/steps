@@ -17,40 +17,10 @@ func (c *Config) validateEnvRules() error {
 		return err
 	}
 
-	return c.validateEnvPlacement()
-}
-
-// validateEnvPlacement rejects env: on get/put steps, mirroring
-// validateImages: a put's execution environment comes from its resource type,
-// and a get step has no task/agent to scope.
-func (c *Config) validateEnvPlacement() error {
-	for _, job := range c.Jobs {
-		err := job.visitSteps(func(label string, step *Step) error {
-			if step.Env == nil {
-				return nil
-			}
-
-			//kindswitch:ignore Task and Agent are the kinds env: is FOR — the cases here are the rejections
-			switch {
-			case step.Get != "":
-				return fmt.Errorf("%s (get %q): env is not valid on get steps; set it on the resource_type instead", label, step.Get)
-			case step.Put != "":
-				return fmt.Errorf("%s (put %q): env is not valid on put steps; set it on the resource_type instead", label, step.Put)
-			case step.Try != nil:
-				// Same reasoning as image: on a try: wrapper — the wrapper's
-				// value would be accepted and then ignored, since resolution
-				// reads the wrapped step's env, never the wrapper's.
-				return fmt.Errorf("%s: env is not valid on a try: step; set it on the step try: wraps", label)
-			}
-
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	// Non-nil, not non-empty: an explicit `env: []` is a real declaration
+	// ("nothing beyond the baseline"), so writing one on a get/put step is
+	// still the mistake this rejects.
+	return c.rejectOnGetAndPut("env", func(s *Step) bool { return s.Env != nil })
 }
 
 // validateEnvValues rejects an env: entry that carries a value rather than
@@ -64,67 +34,16 @@ func (c *Config) validateEnvPlacement() error {
 // cleartext. Accepting "KEY=value" silently would put the value in exactly
 // the place the whole convention exists to keep it out of.
 func (c *Config) validateEnvValues() error {
-	err := c.validateDeclaredEnvValues()
-	if err != nil {
-		return err
-	}
-
-	for _, job := range c.Jobs {
-		err := job.visitSteps(func(label string, step *Step) error {
-			return checkEnvNames(label, step.Env)
-		})
-		if err != nil {
-			return err
+	return c.visitContainerSettings(func(context string, settings containerSettings) error {
+		for _, name := range settings.Env {
+			err := checkEnvName(context, name)
+			if err != nil {
+				return err
+			}
 		}
-	}
 
-	return nil
-}
-
-// validateDeclaredEnvValues checks the top-level declarations; the steps are
-// walked by validateEnvValues itself. Split purely to stay inside the linter's
-// per-function complexity budget.
-func (c *Config) validateDeclaredEnvValues() error {
-	for i := range c.ResourceTypes {
-		rt := c.ResourceTypes[i]
-
-		err := checkEnvNames(fmt.Sprintf("resource_type %q", rt.Name), rt.Env)
-		if err != nil {
-			return err
-		}
-	}
-
-	for i := range c.Agents {
-		agent := c.Agents[i]
-
-		err := checkEnvNames(fmt.Sprintf("agent %q", agent.Name), agent.Env)
-		if err != nil {
-			return err
-		}
-	}
-
-	for i := range c.Tasks {
-		task := c.Tasks[i]
-
-		err := checkEnvNames(fmt.Sprintf("task %q", task.Name), task.Env)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// checkEnvNames validates every entry of one env: list.
-func checkEnvNames(context string, env []string) error {
-	for _, name := range env {
-		err := checkEnvName(context, name)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+		return nil
+	})
 }
 
 // checkEnvName rejects an env: entry that isn't a bare variable name.

@@ -35,6 +35,9 @@ type ResolvedTask struct {
 	// User is the container user this task's commands run as. See
 	// Task.User/Step.User.
 	User string
+	// Network is the container network this task's commands join. See
+	// Task.Network/Step.Network.
+	Network string
 	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
 	// means no timeout. Step.Timeout overrides Task.Timeout when set.
 	Timeout string
@@ -42,6 +45,35 @@ type ResolvedTask struct {
 	// Assert). It always comes from the step (top-level tasks: entries carry
 	// no assert), so a matching assert makes a non-zero-exit task a success.
 	Assert *Assert
+}
+
+// resolveTaskRuntime merges the execution settings a step may override on the
+// tasks: entry it references. The agents: sibling is resolveAgentRuntime; both
+// exist to keep their callers inside the linter's complexity budget.
+//
+// image:, user: and network: are non-empty-wins; env: is DECLARED-wins,
+// because an explicit `env: []` on a step means "nothing beyond the baseline"
+// and a non-empty test would silently keep the task's list instead.
+func resolveTaskRuntime(task *Task, step Step) containerSettings {
+	settings := task.containerSettings()
+
+	if step.Image != "" {
+		settings.Image = step.Image
+	}
+
+	if step.Env != nil {
+		settings.Env = step.Env
+	}
+
+	if step.User != "" {
+		settings.User = step.User
+	}
+
+	if step.Network != "" {
+		settings.Network = step.Network
+	}
+
+	return settings
 }
 
 // ResolveTask resolves step into a ResolvedTask: a step carrying its own
@@ -54,7 +86,7 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 	if step.Run != "" {
 		return ResolvedTask{
 			Name: step.Task, Run: step.Run, Fix: step.Fix,
-			Inputs: step.InputNames(), Outputs: step.Outputs, Image: step.Image, Env: step.Env, User: step.User, Timeout: step.Timeout,
+			Inputs: step.InputNames(), Outputs: step.Outputs, Image: step.Image, Env: step.Env, User: step.User, Network: step.Network, Timeout: step.Timeout,
 			InputMapping: step.InputMapping, OutputMapping: step.OutputMapping,
 			Assert: step.Assert,
 		}, nil
@@ -80,25 +112,7 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 		outputs = step.Outputs
 	}
 
-	image := task.Image
-	if step.Image != "" {
-		image = step.Image
-	}
-
-	// Declared-wins rather than non-empty-wins: an explicit `env: []` on a
-	// step is a meaningful override ("nothing beyond the baseline"), which a
-	// non-empty test would silently discard.
-	env := task.Env
-	if step.Env != nil {
-		env = step.Env
-	}
-
-	// Non-empty-wins, like image:. There is no "" that means anything other
-	// than "unset", so declared-wins would have nothing extra to express.
-	user := task.User
-	if step.User != "" {
-		user = step.User
-	}
+	runtime := resolveTaskRuntime(task, step)
 
 	timeout := task.Timeout
 	if step.Timeout != "" {
@@ -106,7 +120,8 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 	}
 
 	return ResolvedTask{
-		Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs, Image: image, Env: env, User: user, Timeout: timeout,
+		Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs,
+		Image: runtime.Image, Env: runtime.Env, User: runtime.User, Network: runtime.Network, Timeout: timeout,
 		InputMapping: step.InputMapping, OutputMapping: step.OutputMapping, Assert: step.Assert,
 	}, nil
 }
@@ -174,6 +189,9 @@ type ResolvedInvocation struct {
 	// User is the container user this step's commands run as. See
 	// Agent.User/Step.User.
 	User string
+	// Network is the container network this step's commands join. See
+	// Agent.Network/Step.Network.
+	Network string
 	// Image, when non-empty, runs this step's run_shell/custom-tool commands
 	// in a container from this image instead of on the host. See
 	// Agent.Image/Step.Image.
@@ -187,23 +205,26 @@ type ResolvedInvocation struct {
 // image: and user: are non-empty-wins; env: is DECLARED-wins, because an
 // explicit `env: []` on a step means "nothing beyond the baseline" and a
 // non-empty test would silently keep the agent's list instead.
-func resolveAgentRuntime(agent *Agent, step Step) (image string, env []string, user string) {
-	image = agent.Image
+func resolveAgentRuntime(agent *Agent, step Step) (settings containerSettings) {
+	settings = agent.containerSettings()
+
 	if step.Image != "" {
-		image = step.Image
+		settings.Image = step.Image
 	}
 
-	env = agent.Env
 	if step.Env != nil {
-		env = step.Env
+		settings.Env = step.Env
 	}
 
-	user = agent.User
 	if step.User != "" {
-		user = step.User
+		settings.User = step.User
 	}
 
-	return image, env, user
+	if step.Network != "" {
+		settings.Network = step.Network
+	}
+
+	return settings
 }
 
 // ResolveAgentInvocation resolves the agent named by step against c,
@@ -246,7 +267,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 
 	compactAfterTokens, contextWindow := resolveCompactionBudget(target.ModelName, agent.CompactAfterTokens)
 
-	image, env, user := resolveAgentRuntime(agent, step)
+	runtime := resolveAgentRuntime(agent, step)
 
 	return ResolvedInvocation{
 		AgentName:            agent.Name,
@@ -271,9 +292,10 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		BudgetUSD:            budgetUSD(agent.Budget),
 		ToolSpecs:            toolSpecs,
 		StringOnlyToolChoice: target.StringOnlyToolChoice,
-		Image:                image,
-		Env:                  env,
-		User:                 user,
+		Image:                runtime.Image,
+		Env:                  runtime.Env,
+		User:                 runtime.User,
+		Network:              runtime.Network,
 	}, nil
 }
 

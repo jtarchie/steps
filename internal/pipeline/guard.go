@@ -98,14 +98,14 @@ func resolveStepRuntime(cfg *config.Config, step config.Step) (shell.RunnerSpec,
 			return shell.RunnerSpec{}, fmt.Errorf("resolve task: %w", err)
 		}
 
-		return shell.RunnerSpec{Image: rt.Image, Env: rt.Env, User: rt.User}, nil
+		return shell.RunnerSpec{Image: rt.Image, Env: rt.Env, User: rt.User, Network: rt.Network}, nil
 	case config.StepKindAgent:
 		ri, err := cfg.ResolveAgentInvocation(step)
 		if err != nil {
 			return shell.RunnerSpec{}, fmt.Errorf("resolve agent: %w", err)
 		}
 
-		return shell.RunnerSpec{Image: ri.Image, Env: ri.Env, User: ri.User}, nil
+		return shell.RunnerSpec{Image: ri.Image, Env: ri.Env, User: ri.User, Network: ri.Network}, nil
 	case config.StepKindTry:
 		return resolveStepRuntime(cfg, *step.Try)
 	case config.StepKindPut:
@@ -119,7 +119,7 @@ func resolveStepRuntime(cfg *config.Config, step config.Step) (shell.RunnerSpec,
 			return shell.RunnerSpec{}, fmt.Errorf("resolve put: %w", err)
 		}
 
-		return shell.RunnerSpec{Image: resourceType.Image, Env: resourceType.Env, User: resourceType.User}, nil
+		return shell.RunnerSpec{Image: resourceType.Image, Env: resourceType.Env, User: resourceType.User, Network: resourceType.Network}, nil
 	default: // config.StepKindGet, or a malformed step — nothing to resolve here
 		return shell.RunnerSpec{}, nil
 	}

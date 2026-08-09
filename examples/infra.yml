@@ -106,6 +106,24 @@ tasks:
   env: [GREETING, STEPS_BUILD_LABEL]
   run: echo "greeting=${GREETING:-<unset>} label=${STEPS_BUILD_LABEL:-<unset>}"
 
+# network: none cuts the container off from the network entirely -- the knob
+# that matters when a step's commands are model-generated, since image: alone
+# isolates the filesystem view and leaves egress untouched. It requires image:,
+# because a host-executed command uses the host's network and `none` there
+# would be isolation in name only. user: is the escape hatch for the Linux
+# default (the uid:gid running steps, so containers stop leaving root-owned
+# files in the working directory); this image needs nothing privileged, so it
+# just demonstrates the spelling.
+- name: offline-check
+  image: alpine:3
+  network: none
+  user: root
+  run: |
+    if wget -q -T 2 -O /dev/null http://example.com; then
+      echo "UNEXPECTED: reached the network with network: none" && exit 1
+    fi
+    echo "network is cut off, as configured"
+
 jobs:
 # ─── Downstream triggers — `steps watch` runs `notify` when `publish` puts ────
 # Self-contained, no network. Seed the counter first:
@@ -160,6 +178,7 @@ jobs:
   # Try it with `GREETING=hello steps run examples/infra.yml --job ...` to see
   # the value cross into the container.
   - task: report-env
+  - task: offline-check
   # run_shell/custom-tool calls below execute in python:3.12.
   - agent: reviewer
     prompt: does the checked-out repo look like a normal Go project?

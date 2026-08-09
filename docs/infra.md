@@ -31,7 +31,26 @@ agents:
 - **Fix agents run under the failing task's image**, not the fix agent's own `image:` — so its `run_shell`/custom tools and the injected task-rerun tool reproduce the exact environment that produced the failure. A fix agent's own `image:` can therefore never take effect, so it's rejected at load time instead of silently ignored.
 - **Fail-fast validation**: if any `image:` is set anywhere in the config, `RunJob` validates docker (on `PATH`, `docker info` succeeds) before planning or executing anything.
 - **Caching hashing**: `image` folds into the relevant node content whenever it's non-empty — unlike `inputs:`/`outputs:` (see [workspace.md](workspace.md)), an image change alters what a command actually executes against regardless of workspace mode, so the gate is on the value itself.
-- **Known caveats** (documented, not solved): containerized commands have unrestricted network egress; and there's no way to override a step back to host execution once its task/agent sets an image.
+- **Known caveats** (documented, not solved): there's no way to override a step back to host execution once its task/agent sets an image.
+
+## Container network (`network:`)
+
+`image:` isolates a command's filesystem view but not its network — a containerized `run_shell` an agent wrote has the same egress the host does. For a step whose commands are model-generated, that is usually the isolation you actually wanted:
+
+```yaml
+agents:
+- name: analyzer
+  image: python:3.12
+  network: none        # can read the workspace, can't reach anything
+```
+
+- Passed straight to `docker run --network`, so `none`, `host`, `bridge`, or a named network (reaching a service on a compose network is a real use) all work. The value isn't checked against a fixed set; docker reports a typo itself at container start, like any other docker-level failure.
+- **Requires `image:`**, checked at load time. A host command uses the host's network, so `network: none` there would be isolation in name only — the kind of thing found in an incident review rather than at load.
+- A value starting with `-` is rejected, for the same reason `user:`'s is: `--network` is passed before the `--` separator.
+- Settable on `resource_types:`, `tasks:`, `agents:`, and as a step override (non-empty-wins). Invalid on `get`/`put` steps. Note that most resource types exist *to* reach the network, so this is rarely what you want on one.
+- **Caching**: `network:` folds into the node's hash.
+
+This is not a full sandbox — see [workspace.md](workspace.md) on the same point for the filesystem. A command can still reach the host filesystem by absolute path, and `network: host` opts back out entirely.
 
 ## Container user (`user:`)
 

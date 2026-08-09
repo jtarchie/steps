@@ -23,8 +23,13 @@ type ResourceType struct {
 	Env []string `yaml:"env,omitempty"`
 	// User is the container user check/in/out execute as (docker's --user).
 	// Empty takes the platform default — see shell's defaultContainerUser.
-	User   string             `yaml:"user,omitempty"`
-	Config ResourceTypeConfig `yaml:"config"`
+	User string `yaml:"user,omitempty"`
+	// Network is the container network check/in/out join (docker's
+	// --network); "none" cuts off egress entirely. Requires Image — and note
+	// that most resource types exist to reach the network, so this is rarely
+	// what you want on one.
+	Network string             `yaml:"network,omitempty"`
+	Config  ResourceTypeConfig `yaml:"config"`
 }
 
 // ResourceTypeConfig holds the check/in/out shell command templates.

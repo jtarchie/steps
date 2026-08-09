@@ -108,6 +108,11 @@ type RunnerSpec struct {
 	// where the Linux file-ownership problem is actually handled. Ignored for
 	// host execution, which always runs as whoever started steps.
 	User string
+	// Network is the container's network:, passed straight to `docker run
+	// --network`; "none" cuts the container off from the network entirely.
+	// Empty takes docker's own default. Meaningless for host execution, which
+	// config rejects at load time rather than silently ignoring.
+	Network string
 }
 
 // NewRunner returns a DockerRunner scoped to spec, or a HostRunner when
@@ -140,6 +145,7 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 			resolvedCwd: resolvedCwd,
 			envNames:    spec.Env,
 			user:        containerUser(spec.User),
+			network:     spec.Network,
 		},
 	}, nil
 }

@@ -27,7 +27,7 @@ func TestDockerStartArgsMountsCwd(t *testing.T) {
 
 	resolvedCwd := t.TempDir()
 
-	args := dockerStartArgs("alpine", "steps-abc", resolvedCwd, nil, "")
+	args := dockerStartArgs("alpine", "steps-abc", resolvedCwd, nil, "", "")
 
 	want := []string{
 		"run", "-d", "--rm", "--init", "--name", "steps-abc",
@@ -42,7 +42,7 @@ func TestDockerStartArgsMountsCwd(t *testing.T) {
 func TestDockerStartArgsEmptyCwdMountsNothing(t *testing.T) {
 	t.Parallel()
 
-	args := dockerStartArgs("alpine", "steps-abc", "", nil, "")
+	args := dockerStartArgs("alpine", "steps-abc", "", nil, "", "")
 
 	want := []string{"run", "-d", "--rm", "--init", "--name", "steps-abc", "--", "alpine", "sh", "-c", "sleep 86400"}
 	if !reflect.DeepEqual(args, want) {
@@ -56,7 +56,7 @@ func TestDockerStartArgsEmptyCwdMountsNothing(t *testing.T) {
 func TestDockerStartArgsImageIsPositional(t *testing.T) {
 	t.Parallel()
 
-	args := dockerStartArgs("--privileged", "steps-abc", "", nil, "")
+	args := dockerStartArgs("--privileged", "steps-abc", "", nil, "", "")
 
 	sep := slices.Index(args, "--")
 	if sep < 0 {
@@ -76,7 +76,7 @@ func TestDockerStartArgsImageIsPositional(t *testing.T) {
 func TestDockerStartArgsKeepaliveIsBounded(t *testing.T) {
 	t.Parallel()
 
-	args := dockerStartArgs("alpine", "steps-abc", "", nil, "")
+	args := dockerStartArgs("alpine", "steps-abc", "", nil, "", "")
 
 	if !slices.Contains(args, "--rm") {
 		t.Errorf("args = %v, want --rm so an exited keepalive is reaped", args)
@@ -125,7 +125,7 @@ func TestDockerNeverPassesDashT(t *testing.T) {
 	t.Parallel()
 
 	for _, args := range [][]string{
-		dockerStartArgs("alpine", "steps-abc", t.TempDir(), nil, ""),
+		dockerStartArgs("alpine", "steps-abc", t.TempDir(), nil, "", ""),
 		dockerExecArgs("steps-abc", "echo hi", true),
 		dockerExecArgs("steps-abc", "echo hi", false),
 	} {
@@ -805,7 +805,7 @@ func TestValidateDockerMissingBinary(t *testing.T) {
 func TestDockerStartArgsPassesEnvByNameNotValue(t *testing.T) {
 	t.Setenv("STEPS_TEST_SECRET", "hunter2")
 
-	args := dockerStartArgs("alpine", "steps-abc", "", []string{"STEPS_TEST_SECRET"}, "")
+	args := dockerStartArgs("alpine", "steps-abc", "", []string{"STEPS_TEST_SECRET"}, "", "")
 
 	i := slices.Index(args, "-e")
 	if i < 0 || i+1 >= len(args) {
@@ -826,7 +826,7 @@ func TestDockerStartArgsPassesEnvByNameNotValue(t *testing.T) {
 func TestDockerStartArgsNoEnvAddsNoFlags(t *testing.T) {
 	t.Parallel()
 
-	if args := dockerStartArgs("alpine", "steps-abc", "", nil, ""); slices.Contains(args, "-e") {
+	if args := dockerStartArgs("alpine", "steps-abc", "", nil, "", ""); slices.Contains(args, "-e") {
 		t.Errorf("args = %v, did not want an -e flag when env: is unset", args)
 	}
 }
@@ -837,7 +837,7 @@ func TestDockerStartArgsNoEnvAddsNoFlags(t *testing.T) {
 func TestDockerStartArgsEnvPrecedesTheImage(t *testing.T) {
 	t.Parallel()
 
-	args := dockerStartArgs("alpine", "steps-abc", "", []string{"A", "B"}, "")
+	args := dockerStartArgs("alpine", "steps-abc", "", []string{"A", "B"}, "", "")
 
 	sep := slices.Index(args, "--")
 	if sep < 0 {
@@ -853,7 +853,7 @@ func TestDockerStartArgsEnvPrecedesTheImage(t *testing.T) {
 func TestDockerStartArgsUserIsPassedThrough(t *testing.T) {
 	t.Parallel()
 
-	args := dockerStartArgs("alpine", "steps-abc", "", nil, "root")
+	args := dockerStartArgs("alpine", "steps-abc", "", nil, "root", "")
 
 	i := slices.Index(args, "--user")
 	if i < 0 || i+1 >= len(args) {
@@ -868,7 +868,7 @@ func TestDockerStartArgsUserIsPassedThrough(t *testing.T) {
 func TestDockerStartArgsNoUserAddsNoFlag(t *testing.T) {
 	t.Parallel()
 
-	if args := dockerStartArgs("alpine", "steps-abc", "", nil, ""); slices.Contains(args, "--user") {
+	if args := dockerStartArgs("alpine", "steps-abc", "", nil, "", ""); slices.Contains(args, "--user") {
 		t.Errorf("args = %v, did not want a --user flag when none was resolved", args)
 	}
 }
@@ -909,5 +909,36 @@ func TestDefaultContainerUserIsPlatformSpecific(t *testing.T) {
 
 	if got != "" {
 		t.Errorf("defaultContainerUser() = %q, want empty off linux (the image's own user)", got)
+	}
+}
+
+// TestDockerStartArgsNetworkIsPassedThrough covers the sandboxing knob: an
+// agent's model-directed run_shell had unrestricted egress with no way to say
+// otherwise, and `network: none` is the answer.
+func TestDockerStartArgsNetworkIsPassedThrough(t *testing.T) {
+	t.Parallel()
+
+	args := dockerStartArgs("alpine", "steps-abc", "", nil, "", "none")
+
+	i := slices.Index(args, "--network")
+	if i < 0 || i+1 >= len(args) {
+		t.Fatalf("args = %v, want a --network flag", args)
+	}
+
+	if args[i+1] != "none" {
+		t.Errorf("args[%d] = %q, want none", i+1, args[i+1])
+	}
+
+	sep := slices.Index(args, "--")
+	if i > sep {
+		t.Errorf("args = %v, want --network before the -- separator", args)
+	}
+}
+
+func TestDockerStartArgsNoNetworkAddsNoFlag(t *testing.T) {
+	t.Parallel()
+
+	if args := dockerStartArgs("alpine", "steps-abc", "", nil, "", ""); slices.Contains(args, "--network") {
+		t.Errorf("args = %v, did not want a --network flag when none was set", args)
 	}
 }

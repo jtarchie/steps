@@ -45,6 +45,10 @@ type Agent struct {
 	// execute as (docker's --user). Empty takes the platform default — see
 	// shell's defaultContainerUser. Only meaningful alongside Image.
 	User string `yaml:"user,omitempty"`
+	// Network is the container network this agent's run_shell/custom-tool
+	// commands join (docker's --network); "none" cuts off egress entirely.
+	// Requires Image.
+	Network string `yaml:"network,omitempty"`
 	// System is the persona/system message given to the model. Empty falls
 	// back to a generic CI-agent persona.
 	System string `yaml:"system,omitempty"`

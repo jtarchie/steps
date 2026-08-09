@@ -120,6 +120,10 @@ func GetNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 		content["user"] = resourceType.User
 	}
 
+	if resourceType.Network != "" {
+		content["network"] = resourceType.Network
+	}
+
 	err := withMCPResourceStage(cfg, resourceType, "in", content)
 	if err != nil {
 		return nil, err
@@ -542,6 +546,10 @@ func TaskNodeContent(cfg *config.Config, step config.Step, rt config.ResolvedTas
 		content["user"] = rt.User
 	}
 
+	if rt.Network != "" {
+		content["network"] = rt.Network
+	}
+
 	if rt.Assert != nil {
 		content["assert"] = assertContent(rt.Assert)
 	}
@@ -624,6 +632,10 @@ func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 
 	if resourceType.User != "" {
 		content["user"] = resourceType.User
+	}
+
+	if resourceType.Network != "" {
+		content["network"] = resourceType.Network
 	}
 
 	err := withMCPResourceStage(cfg, resourceType, "out", content)
@@ -837,6 +849,10 @@ func subAgentInvocationContent(cfg *config.Config, name string) (map[string]any,
 		content["user"] = ri.User
 	}
 
+	if ri.Network != "" {
+		content["network"] = ri.Network
+	}
+
 	return content, nil
 }
 
@@ -896,6 +912,10 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 
 	if ri.User != "" {
 		content["user"] = ri.User
+	}
+
+	if ri.Network != "" {
+		content["network"] = ri.Network
 	}
 
 	// Which CLI runs the conversation, when one does — value-gated so every

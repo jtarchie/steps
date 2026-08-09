@@ -123,6 +123,7 @@ func (c *Config) validate() error {
 		c.validateImageRules,
 		c.validateEnvRules,
 		c.validateUserRules,
+		c.validateNetworkRules,
 		c.validateTimeouts,
 		c.validateAgentCompaction,
 		c.validateAgentModels,
