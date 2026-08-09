@@ -155,3 +155,47 @@ jobs:
 		})
 	}
 }
+
+// TestJobTimeoutBoundsAFanOut is the regression for the defect the pipeline in
+// examples/pr-review.yml found in this very feature, reviewing the commit that
+// added it.
+//
+// The deadline was checked only at the top of the plan walk, and a whole
+// across: block is ONE iteration of that loop — so a matrix that ran long was
+// never revisited, and a job timeout could not bound the runtime fan-out it
+// was built for. Three one-second cells ran to completion against a
+// one-second deadline.
+//
+// Now the matrix stops admitting cells, and the plan walk still fails the job.
+func TestJobTimeoutBoundsAFanOut(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "cells.log")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+jobs:
+- name: fan
+  timeout: 1s
+  plan:
+  - across:
+    - var: cell
+      values: [a, b, c]
+    task: "work-{{ .vars.cell }}"
+    inputs: []
+    run: |
+      sleep 1
+      echo {{ .vars.cell }} >> %[1]s
+`, log))
+
+	err := run([]string{path})
+	if err == nil {
+		t.Fatal("the job succeeded; a passed deadline must fail it")
+	}
+
+	// The first cell runs (nothing has overrun yet) and takes the deadline
+	// past its limit; the rest are never started. Three would mean the matrix
+	// ignored the deadline entirely, which is the defect.
+	ran := strings.Fields(readFileString(t, log))
+	if len(ran) >= 3 {
+		t.Errorf("every cell ran despite the deadline: %v", ran)
+	}
+}

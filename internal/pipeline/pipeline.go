@@ -373,6 +373,15 @@ func runSteps(
 		}
 	}
 
+	// Once more after the last step. The check above runs BEFORE a step, so a
+	// deadline that passed during the final one — or during a fan-out that
+	// stopped admitting cells because of it — would otherwise never be looked
+	// at again, and the job would report success having overrun.
+	err := jobDeadlinePassed(ctx, jobName)
+	if err != nil {
+		return err
+	}
+
 	return recordChainSucceeded(ctx, st, jobName, parentHash, chainUnskippable)
 }
 

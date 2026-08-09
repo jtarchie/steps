@@ -111,9 +111,7 @@ func runAcrossCells(
 	spend := newBlockBudget(ctx, step)
 
 	for index, cell := range cells {
-		if spend.exhausted() {
-			spend.report(jobName, index, len(cells))
-
+		if stopAdmitting(ctx, jobName, spend, index, len(cells)) {
 			break
 		}
 
@@ -179,9 +177,7 @@ func runAcrossCellsConcurrently(
 		// admitting new cells while the ones already in flight run to
 		// completion and keep what they recorded. Checking inside the goroutine
 		// would instead race every cell that had already been admitted.
-		if spend.exhausted() {
-			spend.report(jobName, index, len(cells))
-
+		if stopAdmitting(ctx, jobName, spend, index, len(cells)) {
 			break
 		}
 
@@ -300,6 +296,38 @@ func (b *blockBudget) report(jobName string, ran, total int) {
 	slog.Warn("across.budget.exhausted",
 		"job", jobName, "cells_run", ran, "cells_total", total,
 		"spent_tokens", b.spent(), "budget_tokens", b.ceiling)
+}
+
+// stopAdmitting reports whether this matrix should start no further cell:
+// either it has spent its own allowance, or the JOB's wall-clock deadline has
+// passed.
+//
+// The deadline half is not redundant with the check in the plan walk. A whole
+// across: block is ONE iteration of that loop, so a matrix that runs long is
+// never revisited by it — which made a job timeout unable to bound the runtime
+// fan-out it was built for, the exact case the feature exists to catch. Asking
+// here turns "overrun by at most one step" into "at most one CELL", which is
+// what the docs were always claiming.
+//
+// The deadline does not fail the block. It stops admitting, and the plan walk
+// fails the job on its next iteration exactly as it already did — so a job
+// timeout still reports as a job timeout, and the money is simply not spent in
+// the meantime.
+func stopAdmitting(ctx context.Context, jobName string, spend *blockBudget, ran, total int) bool {
+	if spend.exhausted() {
+		spend.report(jobName, ran, total)
+
+		return true
+	}
+
+	if jobDeadlinePassed(ctx, jobName) != nil {
+		fmt.Printf("timeout: across stopped after %d of %d cells (the job's deadline passed)\n", ran, total)
+		slog.Warn("across.deadline.passed", "job", jobName, "cells_run", ran, "cells_total", total)
+
+		return true
+	}
+
+	return false
 }
 
 // runAcrossCell runs one cell unless its exact content already succeeded.

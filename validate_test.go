@@ -102,13 +102,19 @@ jobs:
 // Every shipped example validates, so `steps validate examples/<x>.yml` is a
 // working first command for a reader who just copied one.
 //
-// The dummy OPENROUTER_API_KEY is load-bearing: validate now checks that the
-// credentials a pipeline names are actually present, and the agent examples
-// name one. Setting it here (rather than passing --syntax-only) keeps the full
-// path under test — the examples would otherwise only ever be checked with
-// half of validate switched off.
+// The dummy keys are load-bearing: validate now checks that the credentials a
+// pipeline names are actually present, and the agent examples name one.
+// Setting them here (rather than passing --syntax-only) keeps the full path
+// under test — the examples would otherwise only ever be checked with half of
+// validate switched off.
+//
+// One per PROVIDER any example reaches for. An example that names a provider
+// with no key here fails this test rather than silently skipping the check,
+// which is how pointing pr-review.yml at opencode's Go models was caught.
 func TestValidateExamples(t *testing.T) {
-	t.Setenv("OPENROUTER_API_KEY", "test-key-not-used-for-any-call")
+	for _, key := range []string{"OPENROUTER_API_KEY", "OPENCODE_API_KEY"} {
+		t.Setenv(key, "test-key-not-used-for-any-call")
+	}
 
 	matches, err := filepath.Glob("examples/*.yml")
 	if err != nil {

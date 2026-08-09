@@ -60,6 +60,7 @@ jobs:
 ```
 
 - **Checked between steps, never during one.** The step that is running finishes and keeps its work; the deadline decides only whether the *next* one starts. So a job timeout and a step timeout compose rather than race, and a job never reports a deadline breach against work that was still making progress. The price is that a job may overrun by at most one step's duration — the honest cost of not cutting work off mid-flight.
+- **An `across:` block is checked per CELL, not per block.** A whole matrix is one step of the plan, so without this a runtime fan-out — the case this exists for — would never be revisited once it started, and a twelve-cell matrix could overrun by twelve cells. The matrix stops admitting cells when the deadline passes, and the job still fails.
 - **It fails the job**, and does so as a job-level *failure* (the same class as exceeding `max_visits:`), so the job's own `on_failure` and `ensure` fire. That is where a "this took too long" notification belongs.
 - **It does not degrade**, unlike [`budget:` on an `across:` block](control-flow.md#a-ceiling-that-degrades-budget). Same reasoning as the job's token ceiling: a job-level limit is a backstop against a run that has gone wrong, and stopping loudly is the right answer. Degrading belongs on the block whose width nobody knew when they wrote the pipeline.
 - **Never hashed**, like every operational limit — adding one invalidates no cache.
