@@ -116,6 +116,25 @@ type Step struct {
 	// substituting {{ .vars.<name> }} into its fields. Expanded at load, so
 	// each cell is an ordinary plan step. See AcrossVar.
 	Across []AcrossVar `yaml:"across,omitempty"`
+	// Budget caps what every cell of an across: block may spend TOGETHER, and
+	// unlike the job and agent ceilings it DEGRADES rather than failing: when
+	// the matrix has spent its allowance, no further cell is started, the ones
+	// already finished keep their work, and the plan carries on.
+	//
+	// That difference is the point. A job ceiling is a backstop against a
+	// runaway, so failing is right. A runtime fan-out is the one step whose
+	// cost nobody could know when they wrote the pipeline — its width is
+	// decided mid-run, usually by a model — and there, "review eight of the
+	// twelve dimensions and publish" beats "spend the same money and publish
+	// nothing".
+	//
+	// Cells that never started are simply not run: they record nothing, so a
+	// rerun with a larger ceiling picks up exactly where this one stopped
+	// (finished cells are cached, unstarted ones are not).
+	//
+	// across: steps only, tokens only. Never hashed, like every other
+	// operational limit — adding one must not invalidate a cached cell.
+	Budget *Budget `yaml:"budget,omitempty"`
 	// MaxInFlight bounds how many across: cells run at once. Unset or 1 keeps
 	// the serial declaration-order walk this modifier has always had; anything
 	// higher runs that many cells concurrently, and a value at or above the

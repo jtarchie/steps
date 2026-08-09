@@ -1,0 +1,23 @@
+# budget: on a step caps what an across: matrix's CELLS spend together. On a
+# step with no across:, there is no set of cells for it to cap.
+#
+# Rejected rather than ignored, because the two ceilings that DO exist for an
+# ordinary step are spelled elsewhere: an agent's own per-invocation ceiling
+# goes on the agents: entry, and a whole job's on the job. A budget: here reads
+# like it does one of those and does neither.
+# expect: only valid on an across: step
+
+agents:
+- name: reviewer
+  source:
+    model: openai/test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+
+jobs:
+- name: fan
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: review it
+    budget:
+      tokens: 500

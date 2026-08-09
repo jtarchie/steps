@@ -108,7 +108,15 @@ func runAcrossCells(
 		results = make([]branchResult, len(cells))
 	}
 
+	spend := newBlockBudget(ctx, step)
+
 	for index, cell := range cells {
+		if spend.exhausted() {
+			spend.report(jobName, index, len(cells))
+
+			break
+		}
+
 		cellCtx := ctx
 
 		if qualified {
@@ -164,7 +172,19 @@ func runAcrossCellsConcurrently(
 		results[index] = branchResult{index: index, name: executedStepName(cells[index])}
 	}
 
+	spend := newBlockBudget(ctx, step)
+
 	for index := range cells {
+		// Checked in the PARENT, before a slot is taken, so the block stops
+		// admitting new cells while the ones already in flight run to
+		// completion and keep what they recorded. Checking inside the goroutine
+		// would instead race every cell that had already been admitted.
+		if spend.exhausted() {
+			spend.report(jobName, index, len(cells))
+
+			break
+		}
+
 		// Acquired in the parent, before the goroutine starts, so cells are
 		// ADMITTED in declaration order — under a limit especially, "which
 		// cells go first" is otherwise whichever goroutines the scheduler
@@ -216,6 +236,70 @@ func runAcrossCellsConcurrently(
 	mergeBranchesContext(ctx, st, results)
 
 	return errors.Join(failures...)
+}
+
+// blockBudget is an across: block's token allowance: what its cells may spend
+// TOGETHER, and how much of it is left.
+//
+// Measured as a delta against the job's own accumulator rather than a counter
+// of its own — every agent step already rolls its provider-reported usage up
+// into RunUsage, so the matrix's spend is simply what the job's total moved by
+// while the block ran. No new plumbing, and it counts a cell's retries and
+// sub-agents for free, since those roll up the same way.
+//
+// A zero budget (the common case) is a nil ceiling that never trips.
+type blockBudget struct {
+	usage   *agent.RunUsage
+	start   int
+	ceiling int
+}
+
+func newBlockBudget(ctx context.Context, step config.Step) *blockBudget {
+	ceiling := config.StepBudgetTokens(step)
+	if ceiling <= 0 {
+		return &blockBudget{}
+	}
+
+	usage := agent.RunUsageFrom(ctx)
+	if usage == nil {
+		// No accumulator means no agent step can report anything, so there is
+		// nothing to meter. Not an error: a matrix of tasks with a budget is
+		// pointless, not wrong.
+		return &blockBudget{}
+	}
+
+	return &blockBudget{usage: usage, start: usage.Total(), ceiling: ceiling}
+}
+
+// exhausted reports whether the block has spent its allowance.
+//
+// Checked BEFORE a cell is started, never mid-cell: a cell that has begun runs
+// to completion and keeps what it recorded. That is the whole difference
+// between this and the job ceiling — the job's is a backstop and fails, this
+// one stops handing out new work.
+func (b *blockBudget) exhausted() bool {
+	return b.usage != nil && b.spent() >= b.ceiling
+}
+
+func (b *blockBudget) spent() int {
+	if b.usage == nil {
+		return 0
+	}
+
+	return b.usage.Total() - b.start
+}
+
+// report announces that the matrix stopped early. Loudly, because a truncated
+// fan-out that says nothing reads exactly like a complete one that found less:
+// the cells that never ran recorded nothing, so their silence is
+// indistinguishable from a clean result unless this says otherwise.
+func (b *blockBudget) report(jobName string, ran, total int) {
+	fmt.Printf("budget: across stopped after %d of %d cells (spent %s of %s tokens)\n",
+		ran, total, humanCount(b.spent()), humanCount(b.ceiling))
+
+	slog.Warn("across.budget.exhausted",
+		"job", jobName, "cells_run", ran, "cells_total", total,
+		"spent_tokens", b.spent(), "budget_tokens", b.ceiling)
 }
 
 // runAcrossCell runs one cell unless its exact content already succeeded.

@@ -353,6 +353,20 @@ jobs:
       from: dimensions
       label: id
     max_in_flight: 4
+    # The ceiling that belongs HERE rather than on the job. This is the only
+    # step whose cost nobody could know when this file was written — the
+    # compiler decided how many cells there are, minutes ago. When it runs out,
+    # the matrix stops starting reviewers, the ones that finished keep their
+    # findings, and the plan carries on to the falsifier and the synthesizer.
+    #
+    # A job-level ceiling could not do that: it fails, and the step that
+    # publishes is an agent too, so a breach would spend the money and post
+    # nothing. The job budget above stays as the backstop for a runaway.
+    #
+    # Re-running with a larger figure resumes rather than restarting: the cells
+    # that never started recorded nothing.
+    budget:
+      tokens: 1200000
     agent: reviewer
     inputs: [pr]
     # qualify: this matrix records a fact PER CELL, so each cell's findings

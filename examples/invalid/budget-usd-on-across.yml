@@ -1,0 +1,26 @@
+# A dollar ceiling is enforced inside a CLI agent's own subprocess, against
+# ITSELF — the subprocess meters its own spend and stops. It cannot see what
+# the other cells of a matrix have already spent, so `usd` on a block would
+# read as a ceiling on the whole matrix and cap nothing of the sort.
+#
+# Tokens are counted here, from the provider's reported usage, so they are the
+# one unit a block can actually add up across its cells.
+# expect: budget.usd is not valid on an across: step
+
+agents:
+- name: reviewer
+  source:
+    model: openai/test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+
+jobs:
+- name: fan
+  plan:
+  - across:
+    - var: item
+      values: [a, b]
+    agent: reviewer
+    inputs: []
+    prompt: "review {{ .vars.item }}"
+    budget:
+      usd: 1.50
