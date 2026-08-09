@@ -3,6 +3,7 @@ package shell
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -76,18 +77,22 @@ func TestDockerStartArgsImageIsPositional(t *testing.T) {
 	}
 }
 
-// TestDockerStartArgsKeepaliveIsBounded guards the pairing that keeps a
-// SIGKILLed steps process from stranding a container forever: the keepalive
-// must terminate on its own, and --rm must be present to reap it when it
-// does. An endless loop here would reintroduce exactly the orphan the
+// TestDockerStartArgsKeepaliveIsBounded guards what keeps a SIGKILLed steps
+// process from stranding a RUNNING container forever: the keepalive must
+// terminate on its own, leaving at worst an inert Exited row for the next
+// run's sweep. An endless loop would reintroduce exactly the orphan the
 // session was built to eliminate.
+//
+// --rm must NOT be present: a self-removing container takes its own exit code
+// and logs with it, and those are the entire diagnosis when an image rejects
+// the keepalive (see checkAlive).
 func TestDockerStartArgsKeepaliveIsBounded(t *testing.T) {
 	t.Parallel()
 
 	args := dockerStartArgs("alpine", "steps-abc", "", nil, "", "")
 
-	if !slices.Contains(args, "--rm") {
-		t.Errorf("args = %v, want --rm so an exited keepalive is reaped", args)
+	if slices.Contains(args, "--rm") {
+		t.Errorf("args = %v, did not want --rm — it would destroy the postmortem a failed start needs", args)
 	}
 
 	keepalive := args[len(args)-1]
@@ -325,8 +330,10 @@ func writeFakeDocker(t *testing.T, exitCode int, stdout, stderr string) (argvFil
 	script := "#!/bin/sh\n" +
 		"printf '%s\\n' \"$*\" >> " + argvFile + "\n" +
 		"case \"$1\" in\n" +
-		"  run) printf 'fakecontainerid\\n'; printf '%s' \"$FAKE_DOCKER_RUN_STDERR\" >&2; exit \"${FAKE_DOCKER_RUN_EXIT:-0}\" ;;\n" +
-		"  rm)  exit 0 ;;\n" +
+		"  run)     printf 'fakecontainerid\\n'; printf '%s' \"$FAKE_DOCKER_RUN_STDERR\" >&2; exit \"${FAKE_DOCKER_RUN_EXIT:-0}\" ;;\n" +
+		"  inspect) printf '%s\\n' \"${FAKE_DOCKER_STATE:-true 0}\"; exit 0 ;;\n" +
+		"  logs)    printf '%s\\n' \"$FAKE_DOCKER_LOGS\"; exit 0 ;;\n" +
+		"  rm)      exit 0 ;;\n" +
 		"esac\n" +
 		"printf '%s' \"$FAKE_DOCKER_STDOUT\"\n" +
 		"printf '%s' \"$FAKE_DOCKER_STDERR\" >&2\n" +
@@ -948,5 +955,101 @@ func TestDockerStartArgsNoNetworkAddsNoFlag(t *testing.T) {
 
 	if args := dockerStartArgs("alpine", "steps-abc", "", nil, "", ""); slices.Contains(args, "--network") {
 		t.Errorf("args = %v, did not want a --network flag when none was set", args)
+	}
+}
+
+// TestDockerRunnerDetectsAContainerThatDiedAtBirth is the case `docker run -d`
+// cannot report: it exits 0 for a container that stopped a millisecond later,
+// which is the NORMAL outcome for an image with an ENTRYPOINT, since the
+// keepalive becomes arguments to that entrypoint instead of replacing it.
+// Trusting exit 0 left every later exec saying "No such container", which
+// names neither the image nor the reason.
+func TestDockerRunnerDetectsAContainerThatDiedAtBirth(t *testing.T) {
+	writeFakeDocker(t, 0, "", "")
+	t.Setenv("FAKE_DOCKER_STATE", "false 127")
+	t.Setenv("FAKE_DOCKER_LOGS", "git: 'sh' is not a git command")
+
+	runner, err := NewRunner(RunnerSpec{Image: "alpine/git", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	defer CloseRunner(runner, "test")
+
+	_, _, _, err = runner.RunCaptureFull(t.Context(), "anything")
+	if err == nil {
+		t.Fatal("expected an error when the container did not stay up")
+	}
+
+	for _, want := range []string{"alpine/git", "127", "not a git command"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %v, want it to mention %q", err, want)
+		}
+	}
+}
+
+// TestDockerRunnerRemovesAContainerThatDiedAtBirth pins that diagnosing the
+// corpse does not mean keeping it: --rm is gone precisely so the postmortem
+// survives long enough to read, which makes removing it afterwards our job.
+func TestDockerRunnerRemovesAContainerThatDiedAtBirth(t *testing.T) {
+	argvFile := writeFakeDocker(t, 0, "", "")
+	t.Setenv("FAKE_DOCKER_STATE", "false 1")
+
+	runner, err := NewRunner(RunnerSpec{Image: "alpine", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	_, _, _, _ = runner.RunCaptureFull(t.Context(), "anything")
+
+	if removes := invocationsOf(recordedArgv(t, argvFile), "rm"); len(removes) != 1 {
+		t.Errorf("rm invocations = %v, want exactly one for the dead container", removes)
+	}
+}
+
+// TestDockerRunnerRejectsCommandsAfterClose guards the aliasing hazard Close
+// creates: it clears the container name, so without an explicit closed flag
+// the next command would exec against an empty name and report a malformed
+// docker invocation as an ordinary exit code.
+func TestDockerRunnerRejectsCommandsAfterClose(t *testing.T) {
+	argvFile := writeFakeDocker(t, 0, "", "")
+
+	runner, err := NewRunner(RunnerSpec{Image: "alpine", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	_, _, _, err = runner.RunCaptureFull(t.Context(), "first")
+	if err != nil {
+		t.Fatalf("RunCaptureFull: %v", err)
+	}
+
+	err = runner.Close()
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	_, _, _, err = runner.RunCaptureFull(t.Context(), "after close")
+	if !errors.Is(err, errSessionClosed) {
+		t.Errorf("err = %v, want errSessionClosed", err)
+	}
+
+	for _, line := range invocationsOf(recordedArgv(t, argvFile), "exec") {
+		if strings.Contains(line, "after close") {
+			t.Errorf("a command ran after Close: %q", line)
+		}
+	}
+}
+
+// TestDockerRunnerCloseToleratesAnAlreadyGoneContainer keeps a clean teardown
+// from logging an error: a container that exited on its own (the keepalive
+// expiring, a daemon restart) is the outcome Close wanted.
+func TestDockerRunnerCloseToleratesAnAlreadyGoneContainer(t *testing.T) {
+	if !containerAlreadyGone([]byte("Error response from daemon: No such container: steps-abc")) {
+		t.Error("containerAlreadyGone did not recognize docker's own wording")
+	}
+
+	if containerAlreadyGone([]byte("Error response from daemon: permission denied")) {
+		t.Error("containerAlreadyGone treated an unrelated failure as success")
 	}
 }

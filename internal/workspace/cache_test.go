@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -321,5 +322,105 @@ func TestNoCacheWithoutOptIn(t *testing.T) {
 
 	if fetches != 2 {
 		t.Errorf("fetches = %d, want 2 — the cache must be off unless the pipeline opts in", fetches)
+	}
+}
+
+// TestResourceCacheRefusesASymlinkedEntry is the guard materializeSpace and
+// Capture already apply, extended to the cache: the copy backend's
+// `cp -R -P -p src/. dst` dereferences a symlink at src itself despite -P, and
+// a step's shell commands can reach the cache by absolute path.
+func TestResourceCacheRefusesASymlinkedEntry(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	bw := cachingBuild(t, root, 10)
+
+	_, err := bw.FetchResource(context.Background(), "repo", "key-abc", func(dir string) error {
+		return os.WriteFile(filepath.Join(dir, "V"), []byte("real"), 0o600)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Swap the cache entry for a symlink to somewhere it must never copy from.
+	secret := t.TempDir()
+
+	err = os.WriteFile(filepath.Join(secret, "SECRET"), []byte("do not exfiltrate"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entry := filepath.Join(root, cacheDirName, "key-abc")
+
+	err = os.RemoveAll(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.Symlink(secret, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fetched := false
+
+	dir, err := bw.FetchResource(context.Background(), "repo2", "key-abc", func(d string) error {
+		fetched = true
+
+		return os.WriteFile(filepath.Join(d, "V"), []byte("refetched"), 0o600)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !fetched {
+		t.Error("a symlinked cache entry was restored instead of refused")
+	}
+
+	_, statErr := os.Stat(filepath.Join(dir, "SECRET"))
+	if statErr == nil {
+		t.Error("the symlink target's contents were copied into the resource directory")
+	}
+}
+
+// TestResourceCacheRefusesToStoreASymlink is the mirror: an in: that replaced
+// its own output directory with a symlink must not get that target copied into
+// the cache and served to every later build.
+func TestResourceCacheRefusesToStoreASymlink(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	bw := cachingBuild(t, root, 10)
+
+	secret := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(secret, "SECRET"), []byte("do not exfiltrate"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = bw.FetchResource(context.Background(), "repo", "key-abc", func(dir string) error {
+		// Stand in for an in: that swapped its directory for a symlink.
+		rmErr := os.RemoveAll(dir)
+		if rmErr != nil {
+			return fmt.Errorf("removing %q: %w", dir, rmErr)
+		}
+
+		linkErr := os.Symlink(secret, dir)
+		if linkErr != nil {
+			return fmt.Errorf("symlinking %q: %w", dir, linkErr)
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entry := filepath.Join(root, cacheDirName, "key-abc")
+
+	_, statErr := os.Stat(entry)
+	if statErr == nil {
+		t.Error("a symlinked fetch result was stored in the cache")
 	}
 }

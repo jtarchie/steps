@@ -17,6 +17,10 @@ import (
 	"time"
 )
 
+// errSessionClosed is returned when a command is issued through a runner
+// whose container has already been torn down.
+var errSessionClosed = errors.New("shell: the step's container has been closed")
+
 // dockerKillGrace bounds how long a canceled docker CLI client is given to
 // exit cleanly (SIGTERM) before Go force-kills it. Unlike the per-command
 // `docker run` this replaced, a force-killed client can no longer strand a
@@ -34,10 +38,11 @@ const dockerCleanupTimeout = 30 * time.Second
 // own. Nothing normally relies on it: Close removes the container as soon as
 // the step is done. It exists so that a steps process killed outright
 // (SIGKILL, a panicking host, a pulled plug) — which never gets to run Close
-// — still leaves no container behind indefinitely, because the keepalive
-// exits on its own and `--rm` reaps it. A step legitimately running longer
-// than this would see its container vanish mid-run, so it is set far above
-// any plausible step duration rather than tuned tightly.
+// — leaves a container that at least stops CONSUMING anything: the keepalive
+// exits and the container becomes an inert Exited row, which
+// SweepOrphanedContainers removes on the next run. A step legitimately
+// running longer than this would see its container die mid-run, so it is set
+// far above any plausible step duration rather than tuned tightly.
 const dockerSessionLifetime = 24 * time.Hour
 
 // DockerRunner runs commands inside one container per step: the session is
@@ -100,9 +105,15 @@ type dockerSession struct {
 	// a bad image must not be re-pulled once per command in an agent's
 	// conversation.
 	attempted bool
-	name      string
-	startOut  string
-	startErr  error
+	// closed records that the session was torn down, so a command issued
+	// afterwards fails saying so. Without it, close's clearing of name would
+	// leave attempted set and startErr nil, and the next command would exec
+	// against an empty container name — a malformed docker invocation
+	// reported as an opaque exit code.
+	closed   bool
+	name     string
+	startOut string
+	startErr error
 }
 
 // ensure starts the container if it has not been started yet, returning its
@@ -118,6 +129,10 @@ type dockerSession struct {
 func (s *dockerSession) ensure(ctx context.Context) (name, stderr string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.closed {
+		return "", "", errSessionClosed
+	}
 
 	if s.attempted {
 		return s.name, s.startOut, s.startErr
@@ -157,9 +172,83 @@ func (s *dockerSession) ensure(ctx context.Context) (name, stderr string, err er
 		return "", s.startOut, s.startErr
 	}
 
+	// `docker run -d` reports whether the container was STARTED, not whether
+	// it is still up: it exits 0 for a container that died a millisecond
+	// later. That is the normal outcome for an image with an ENTRYPOINT, since
+	// `sh -c <keepalive>` becomes arguments TO that entrypoint rather than
+	// replacing it — alpine/git runs `git sh -c ...` and exits. Taking exit 0
+	// as success left every later exec reporting "No such container", which
+	// says nothing about the actual cause.
+	deadErr := s.checkAlive(ctx, containerName)
+	if deadErr != nil {
+		s.startOut = deadErr.Error()
+		s.startErr = deadErr
+
+		slog.Debug("shell.docker.session_died", "image", s.image, "container", containerName, "error", deadErr)
+
+		// The corpse has told us what we needed; take it away now rather than
+		// leaving it for the next run's sweep. s.name is deliberately left
+		// unset, so close has nothing to do for this session.
+		removeContainer(ctx, containerName)
+
+		return "", s.startOut, s.startErr
+	}
+
 	s.name = containerName
 
 	return s.name, "", nil
+}
+
+// checkAlive reports why the container is no longer running, or nil if it is.
+//
+// The diagnosis is the point: the container's own exit code and first lines of
+// output are what say the image rejected the command, and they are gone the
+// moment anything removes it. This is why the container is NOT started with
+// --rm — a self-removing container takes its own postmortem with it.
+func (s *dockerSession) checkAlive(ctx context.Context, name string) error {
+	//nolint:gosec // name is a hex string this package generated
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}} {{.State.ExitCode}}", name).Output()
+	if err != nil {
+		// Cannot tell; assume it is fine rather than failing a working step on
+		// an inspect that did not answer.
+		slog.Debug("shell.docker.inspect_failed", "container", name, "error", err)
+
+		return nil
+	}
+
+	running, exitCode, ok := strings.Cut(strings.TrimSpace(string(out)), " ")
+	if !ok || running == "true" {
+		return nil
+	}
+
+	return fmt.Errorf("container for image %q exited immediately with code %s (its command was %q; an image with an ENTRYPOINT receives that as arguments rather than replacing it): %s",
+		s.image, exitCode, keepAliveCommand(), containerLogTail(ctx, name))
+}
+
+// removeContainer deletes a container by name, best-effort.
+func removeContainer(ctx context.Context, name string) {
+	//nolint:gosec // name is a hex string this package generated
+	out, err := exec.CommandContext(ctx, "docker", "rm", "-f", name).CombinedOutput()
+	if err != nil && !containerAlreadyGone(out) {
+		slog.Warn("shell.docker.remove_failed", "container", name, "error", err, "output", string(out))
+	}
+}
+
+// containerLogTail returns the last few lines the container produced, which
+// for a failed start is the image's own error message.
+func containerLogTail(ctx context.Context, name string) string {
+	//nolint:gosec // name is a hex string this package generated
+	out, err := exec.CommandContext(ctx, "docker", "logs", "--tail", "10", name).CombinedOutput()
+	if err != nil {
+		return "(no output)"
+	}
+
+	logs := strings.TrimSpace(string(out))
+	if logs == "" {
+		return "(no output)"
+	}
+
+	return logs
 }
 
 // close removes the container. It builds its own bounded context rather than
@@ -170,6 +259,7 @@ func (s *dockerSession) close() error {
 	s.mu.Lock()
 	name := s.name
 	s.name = ""
+	s.closed = true
 	s.mu.Unlock()
 
 	if name == "" {
@@ -183,10 +273,24 @@ func (s *dockerSession) close() error {
 
 	out, err := exec.CommandContext(ctx, "docker", "rm", "-f", name).CombinedOutput() //nolint:gosec // name is a hex string this package generated
 	if err != nil {
+		// A container that is already gone is the outcome this wanted, not a
+		// failure. It happens whenever the container exited on its own — the
+		// keepalive expiring, a daemon restart — and reporting it would put an
+		// ERROR in the log of a step that cleaned up perfectly well.
+		if containerAlreadyGone(out) {
+			return nil
+		}
+
 		return fmt.Errorf("removing container %s: %w: %s", name, err, out)
 	}
 
 	return nil
+}
+
+// containerAlreadyGone reports whether a docker rm failure is just the
+// container not existing.
+func containerAlreadyGone(dockerOutput []byte) bool {
+	return strings.Contains(string(dockerOutput), "No such container")
 }
 
 // newContainerName mints a random, collision-free container name. Random
@@ -379,10 +483,15 @@ func dockerCommand(ctx context.Context, args []string) *exec.Cmd {
 // and the keepalive is a `sleep` that would never reap them, so without tini
 // a long agent conversation would accumulate zombies in its own container.
 //
-// The keepalive is a bounded `sleep` rather than an endless loop, paired with
-// --rm: see dockerSessionLifetime for why an abandoned container has to be
-// able to exit on its own. It needs nothing from the image beyond the `sh`
-// and `sleep` that running any command through `sh -c` already assumes.
+// The keepalive is a bounded `sleep` rather than an endless loop: see
+// dockerSessionLifetime for why an abandoned container has to be able to stop
+// on its own.
+//
+// There is deliberately no --rm. A self-removing container takes its own
+// postmortem with it, and the postmortem is the whole diagnosis when an image
+// rejects the keepalive — see checkAlive. Removal is explicit instead: Close
+// for the normal path, checkAlive for a container that died at birth, and
+// SweepOrphanedContainers for a run that was killed before either could run.
 //
 // The literal "--" immediately before image is load-bearing, not decorative:
 // it tells docker's flag parser that everything after it is positional, so an
@@ -393,7 +502,7 @@ func dockerCommand(ctx context.Context, args []string) *exec.Cmd {
 // too; this is defense in depth for any image string that reaches here by
 // another path.
 func dockerStartArgs(image, name, resolvedCwd string, envNames []string, user, network string) []string {
-	args := []string{"run", "-d", "--rm", "--init", "--name", name}
+	args := []string{"run", "-d", "--init", "--name", name}
 
 	// Labels are how a container survives its creator. If this process is
 	// SIGKILLed, nothing runs Close, and the only thing left is a container
@@ -428,9 +537,15 @@ func dockerStartArgs(image, name, resolvedCwd string, envNames []string, user, n
 		args = append(args, "-e", name)
 	}
 
-	keepalive := fmt.Sprintf("sleep %d", int(dockerSessionLifetime.Seconds()))
+	return append(args, "--", image, "sh", "-c", keepAliveCommand())
+}
 
-	return append(args, "--", image, "sh", "-c", keepalive)
+// keepAliveCommand is what the session container runs so it stays up between
+// execs: a bounded sleep, so a container nothing ever removes still stops on
+// its own. It needs nothing from the image beyond the `sh` and `sleep` that
+// running any command through `sh -c` already assumes.
+func keepAliveCommand() string {
+	return fmt.Sprintf("sleep %d", int(dockerSessionLifetime.Seconds()))
 }
 
 // dockerExecArgs builds the argv (after "docker") for one command in an

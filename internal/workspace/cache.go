@@ -111,6 +111,19 @@ func (c *resourceCache) restore(ctx context.Context, path, dst string) bool {
 		return false
 	}
 
+	// Same guard materializeSpace and Capture apply, for the same reason: the
+	// copy backend's `cp -R -P -p src/. dst` dereferences a symlink AT src
+	// despite -P, and a step's shell commands can reach this directory by
+	// absolute path (isolation is hygiene, not a sandbox). A cache entry
+	// swapped for a symlink would otherwise copy that target into the next
+	// build's resource directory.
+	err = rejectSymlinkSrc(path)
+	if err != nil {
+		slog.Warn("workspace.cache_entry_rejected", "entry", path, "error", err)
+
+		return false
+	}
+
 	err = c.backend.remove(dst)
 	if err != nil {
 		slog.Warn("workspace.cache_restore_failed", "entry", path, "error", err)
@@ -143,7 +156,17 @@ func (c *resourceCache) restore(ctx context.Context, path, dst string) bool {
 
 // store seeds the cache from a freshly fetched directory.
 func (c *resourceCache) store(ctx context.Context, path, src string) {
-	err := c.backend.remove(path)
+	// The mirror of restore's guard: an in: that replaced its own output
+	// directory with a symlink would otherwise have that target's contents
+	// copied into the cache, and served to every later build.
+	err := rejectSymlinkSrc(src)
+	if err != nil {
+		slog.Warn("workspace.cache_store_rejected", "src", src, "error", err)
+
+		return
+	}
+
+	err = c.backend.remove(path)
 	if err != nil {
 		slog.Warn("workspace.cache_store_failed", "entry", path, "error", err)
 
