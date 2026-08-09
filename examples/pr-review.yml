@@ -198,6 +198,34 @@ agents:
   max_turns: 20
   tools: [read_file, list_dir, search_files, run_shell]
 
+- name: gatekeeper
+  system: |
+    You are the release manager. For each finding you answer ONE question,
+    and it is not the question severity answers.
+
+      severity   how bad is this?
+      you        must it be fixed BEFORE this ships?
+
+    Those come apart in both directions. A pedantic `critical` in unreachable
+    code can ship. A subtle `important` on a hot path cannot.
+
+    Apply a TIGHT bar. Blocking only if it breaks the build or tests, is a
+    security hole reachable from a real user-facing path, causes data loss or
+    corruption, breaks a public contract real callers depend on with no
+    migration, or regresses behaviour that worked before this change.
+
+    NOT blocking: style, naming, refactors, missing tests, defensive
+    programming with no demonstrated reachable exploit, performance that does
+    not change correctness, documentation, or "should also handle X" when X is
+    not currently reachable.
+
+    When you cannot decide, answer NOT blocking. That asymmetry is deliberate:
+    a real blocker that slips through is caught by the human reading the
+    review, while an advisory nit that blocks a merge teaches the team to
+    ignore the whole tool.
+  max_turns: 12
+  tools: [read_file, list_dir, search_files]
+
 - name: synthesizer
   system: |
     You write the review a human will read. Cluster related findings into
@@ -212,6 +240,17 @@ agents:
 
 jobs:
 - name: review
+  # The one directive this pipeline should not ship without. Every other
+  # example has a cost you can read off the file; here a model decides how many
+  # reviewers run, so the bill is not knowable when you write it. The matrix's
+  # own 1000-item cap bounds the COUNT, not the spend.
+  #
+  # Job-level, so it is cumulative across every agent step — the step that
+  # trips it is rarely the one that cost the most. Counted from the provider's
+  # reported usage, never an estimate. Never hashed, so adding it invalidates
+  # nothing.
+  budget:
+    tokens: 2000000
   plan:
   - get: pr
     trigger: true
@@ -352,6 +391,20 @@ jobs:
       id, severity, file, line, claim — and record `blind_spots` as a short
       note on anything the dimensions never looked at.
 
+  # ── the merge gate ───────────────────────────────────────────────────────
+  # Severity and "must this block the merge" are different questions, and
+  # answering them in one pass makes a reviewer's alarm calibration decide
+  # whether a PR ships. Separating them is what lets the review stay useful
+  # without turning every finding into a stop sign.
+  - agent: gatekeeper
+    inputs: [pr]
+    context: write
+    prompt: |
+      For each confirmed finding in your context, decide whether it must be
+      fixed before this PR merges. Record the answer with set_context under
+      `blocking`, as a JSON array of the finding ids that block — and only
+      those. An empty array is a legitimate answer and the common one.
+
   # ── phases 6 & 7: synthesize, and decide whether that was enough ─────────
   # The verdict is a required tool call with a fixed vocabulary, so routing
   # never depends on parsing prose. blind-spots sends the run back to the
@@ -371,7 +424,14 @@ jobs:
       Write review/summary.md (what a human reads) and review/findings.json
       (the structured list). Copy pr/pr.number to review/number.
 
-      Then call verdict. This is a coverage question, answered by comparison,
+      Then call verdict. ⚠️ Answering `blind-spots` re-runs every reviewer, not
+      just the uncovered ones: agent steps are never cached, so a second pass
+      pays for the whole matrix again. The reference implementation runs only
+      the gap dimensions; expressing that here means a second across: block
+      over a `gap_dimensions` key, guarded by when:, rather than this loop.
+      Weigh that against the budget above before routing back.
+
+      This is a coverage question, answered by comparison,
       not by taste: the anatomy step recorded which files the change touches,
       and the recap names every dimension that was reviewed. Answer
       `blind-spots` when a cluster of changed files has no dimension covering
