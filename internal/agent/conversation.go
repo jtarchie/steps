@@ -88,6 +88,11 @@ type conversationResult struct {
 	text       string
 	turns      int
 	trajectory []recordedToolCall
+	// wrappedUp records that this answer came from the final tool-less turn
+	// after the budget ran out, rather than from the model deciding it was
+	// done. A degraded answer that does not say it is degraded reads exactly
+	// like a confident one.
+	wrappedUp bool
 	// model names the model that actually served this conversation, set ONLY
 	// when it was a fallback rather than the agent's configured primary. It is
 	// recorded with the result so a quality dip caused by an outage can be
@@ -338,14 +343,74 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 	// transport error from generateOnce above stays unwrapped → errored.
 	exhausted := conversationResult{turns: conv.maxTurns, trajectory: trajectory, verdict: verdict, note: note, handoffNote: handoffNote}
 
+	return conv.outOfTurns(ctx, llm, req, exhausted, satisfied)
+}
+
+// outOfTurns decides what a conversation that used every turn is worth.
+func (conv agentConversation) outOfTurns(
+	ctx context.Context, llm model.LLM, req *model.LLMRequest,
+	exhausted conversationResult, satisfied map[string]bool,
+) (conversationResult, error) {
 	missing := unsatisfiedRequiredTools(conv.tools.required, satisfied)
 	if len(missing) > 0 {
 		//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
 		return exhausted, outcome.Fail(fmt.Errorf("agent exceeded %d turns; required tool(s) never succeeded: %s", conv.maxTurns, strings.Join(missing, ", ")))
 	}
 
+	// One more request, with the tools taken away, telling the model to answer
+	// from what it already has.
+	//
+	// Without this a spent budget DESTROYS the work rather than ending it: a
+	// model that was still reading on its last turn returns no text at all, and
+	// a step that had done twelve turns of useful investigation fails with
+	// nothing to show. That is the same mistake the block budget was built to
+	// avoid one level up — stop starting new work, keep what finished — and it
+	// is worse here, because nothing downstream can salvage an empty answer.
+	//
+	// Withheld tools rather than a polite request to stop: a model that has
+	// spent every turn calling tools has already demonstrated it will not stop
+	// when asked.
+	text, err := conv.answerWithoutTools(ctx, llm, req)
+	if err == nil && strings.TrimSpace(text) != "" {
+		slog.Warn("agent.turns_exhausted_answered", "max_turns", conv.maxTurns,
+			"detail", "the turn budget ran out; the model answered from what it had rather than finishing on its own")
+
+		exhausted.text = text
+		exhausted.wrappedUp = true
+
+		return exhausted, nil
+	}
+
 	//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
-	return exhausted, outcome.Fail(fmt.Errorf("agent exceeded %d turns without a final response", conv.maxTurns))
+	return exhausted, outcome.Fail(fmt.Errorf("agent exceeded %d turns without a final response, and produced none when asked to answer from what it had", conv.maxTurns))
+}
+
+// answerWithoutTools makes the final request of a conversation whose budget is
+// spent: no tools offered, and an instruction to answer now.
+//
+// The request is a copy in everything that matters — the tool grant and any
+// forcing are cleared on the live request, but the conversation is over, so
+// nothing reads them again.
+func (conv agentConversation) answerWithoutTools(ctx context.Context, llm model.LLM, req *model.LLMRequest) (string, error) {
+	req.Contents = append(req.Contents, &genai.Content{
+		Role: genai.RoleUser,
+		Parts: []*genai.Part{{Text: "You have used your entire turn budget, and no further tool calls are " +
+			"possible. Answer now, using only what you have already gathered. If your " +
+			"investigation was incomplete, give your best answer and say plainly which " +
+			"parts you could not verify."}},
+	})
+
+	req.Config.Tools = nil
+	req.Config.ToolConfig = nil
+
+	resp, err := conv.generateWithinBudget(ctx, llm, req)
+	if err != nil {
+		return "", err
+	}
+
+	_, text := collectParts(resp.Content)
+
+	return text, nil
 }
 
 // trackToolResults marks required tools satisfied for this turn's results and

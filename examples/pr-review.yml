@@ -130,18 +130,39 @@ agents:
              to callers?"
       bad:  "Check for concurrency issues"
 
-    Each dimension you propose must carry the file paths and line ranges you
-    found while investigating, plus the verification steps its reviewer should
-    run. A dimension derived only from reading the diff is not good enough —
-    if your reasoning is "visible in the patch", you have not looked yet.
+    The diff is already in your context. Plan from it. You may open a file it
+    names to confirm something specific, but you are NOT the step that reads
+    the codebase — the reviewers are, and each one opens holding the file you
+    assign it. Exploring here spends the run's budget on planning and leaves
+    none for reviewing.
 
-    Read the diff to learn WHAT changed, then read the actual source to learn
-    how the changed code fits the codebase around it: callers, error paths,
-    data flow.
+    Each dimension must carry the file it centres on and what its reviewer
+    should check there.
+
+    Answer within a handful of turns. If you find yourself opening a third
+    file, you are reviewing rather than planning: name the dimension and let
+    the reviewer do it.
 
     If the change carries no risk on your lens, propose NOTHING. Do not pad.
-  max_turns: 50
-  tools: [read_file, list_dir, search_files]
+  # 12, not the 50 the reviewers get. Measured, not guessed: at 8 turns and no
+  # repo these lenses cost ~80K each; at 50 turns with the repo checked out
+  # they cost 523K, 1.79M and 1.22M and took the whole job's purse before a
+  # single reviewer ran. A lens proposes dimensions from a diff it is already
+  # holding — it is not the step that reads the codebase.
+  max_turns: 8
+  # And a hard backstop, because turns alone do not bound a conversation whose
+  # every turn re-sends a growing context. pr-af gives its meta-selector phase
+  # 15% of the purse; this is that ratio, per lens, against the job budget
+  # below. It FAILS rather than degrading — a per-agent ceiling has no way to
+  # stop halfway — so it is set where tripping it means something went wrong,
+  # not where it is a normal outcome.
+  budget:
+    tokens: 400000
+  # read_file only. list_dir and search_files are what let a planning step
+  # wander a checked-out repo, and with them a lens exhausted every turn
+  # ceiling it was given — 8, 12 and 50 — answering on none of them. Naming a
+  # path it already has is enough to confirm; searching is the reviewers' job.
+  tools: [read_file]
 
 - name: compiler
   system: |
@@ -280,7 +301,7 @@ jobs:
   # afternoon. 1h is pr-af's own MaxDurationSeconds.
   timeout: 1h
   budget:
-    tokens: 2000000
+    tokens: 4000000
   plan:
   - get: pr
     trigger: true
@@ -416,7 +437,7 @@ jobs:
     # Re-running with a larger figure resumes rather than restarting: the cells
     # that never started recorded nothing.
     budget:
-      tokens: 900000
+      tokens: 1800000
     agent: reviewer
     inputs: [pr]
     # qualify: this matrix records a fact PER CELL, so each cell's findings

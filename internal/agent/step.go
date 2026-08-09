@@ -301,7 +301,7 @@ func resolveWithFailover(cfg *config.Config, step config.Step) (primary, effecti
 		return primary, primary, nil //nolint:nilerr // it resolved a moment ago; not worth failing a step over
 	}
 
-	effective, err = primary.WithSource(source, agent.CompactAfterTokens)
+	effective, err = primary.WithSource(source, agent)
 	if err != nil {
 		return primary, primary, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
@@ -540,6 +540,14 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 // cyclomatic complexity under the linter budget.
 func agentResultRecord(res conversationResult) map[string]any {
 	result := map[string]any{"response": res.text, "turns": res.turns}
+
+	if res.wrappedUp {
+		// The same reason fallback_model is recorded: an answer produced
+		// against a spent budget is not the answer the step would have given,
+		// and afterwards it is indistinguishable from a confident one unless
+		// the record says so.
+		result["wrapped_up"] = true
+	}
 
 	if res.model != "" {
 		// Recorded only when a fallback served the run: a run's output has to

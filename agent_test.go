@@ -117,3 +117,50 @@ jobs:
 		t.Errorf("the prompt_file's loaded text did not reach the model as the user message; got %+v", got)
 	}
 }
+
+// TestAgentAnswersWhenTurnsRunOut is the feature the PR-review pipeline needed
+// through four failed live runs: a spent budget must END a conversation, not
+// destroy it.
+//
+// A model that is still calling tools on its final turn used to return no text
+// at all, and the step failed with "exceeded N turns without a final response"
+// — twelve turns of real investigation thrown away. Now the runner takes the
+// tools away and asks for an answer from what was gathered.
+func TestAgentAnswersWhenTurnsRunOut(t *testing.T) {
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	dir := t.TempDir()
+
+	// Never stops calling tools on its own — exactly the model this exists for.
+	// The final turn is offered no tools, so the only thing it can do is answer.
+	fake := newRoutedFakeLLM(t, func(req capturedRequest) turn {
+		if len(req.Tools) == 0 {
+			return says("I ran out of budget. Based on what I read: the config parser is fine.")
+		}
+
+		return callsTool("list_dir", map[string]any{"path": "."})
+	})
+
+	path := writePipeline(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: browser
+  max_turns: 3
+  source: { model: openai/test-model, endpoint: `+fake.URL+`/v1/, api_key_env: STEPS_TEST_AGENT_API_KEY }
+
+jobs:
+- name: look
+  plan:
+  - agent: browser
+    inputs: []
+    prompt: Investigate the repository.
+`)
+
+	mustRun(t, path)
+
+	nodes := storeNodes(t, path)
+	assertSucceeded(t, nodes, "agent", "browser")
+}
