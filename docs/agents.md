@@ -623,9 +623,16 @@ A hosted agent that tries to finish without its required verdict gets forced int
 
 The verdict itself is captured in the parent process the moment the tool is called, over the bridge — the CLI is never trusted to report what it decided.
 
-### `attempts:` retries the whole invocation
+### `attempts:` resumes the conversation
 
-On the hosted path `attempts:` retries an individual HTTP request underneath a conversation that survives. A CLI's conversation lives inside the subprocess and dies with it, so there is nothing to resume: `attempts:` re-runs the whole invocation from the prompt.
+On the hosted path `attempts:` retries one HTTP request underneath a conversation that survives. A CLI agent gets the same guarantee by a different mechanism: the step names a session up front, and every retry **rejoins** it rather than starting the task over. The retried process is told what went wrong and to continue; it is not handed the original prompt again.
+
+This is not a cost optimization, it is the rule the hosted path already follows. `attempts:` used to restart an agent's conversation there too, and was deliberately removed: the workspace survived a restart but the memory did not, so a retried attempt inherited its own half-finished edits with no recollection of making them. A CLI agent has more of that problem, not less, because it edits more.
+
+Two consequences worth knowing:
+
+- **The turn budget is per step, not per attempt.** `max_turns` counts across the whole conversation, so a retry continues on the remaining budget rather than getting a fresh allowance — the same way a request retry on the hosted path never refunds turns. One caveat: turns spent by an attempt that died *before* reporting a result cannot be counted, because the CLI only reports its turn count in the terminal event.
+- **The transcript is cleaned up.** Session persistence has to stay on for a retry to resume, but steps deletes the step's own session file afterwards rather than leaving one behind per agent step in your home directory.
 
 Only *infrastructure* failures are retried — the process failed to start, exited nonzero, or died without reporting a result. A CLI that ran fine and concluded the task failed is an answer, not an outage, and is not re-rolled.
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -141,5 +142,94 @@ jobs:
 	node := findNode(t, storeNodes(t, path), "agent", "limited")
 	if node.Status != "succeeded" {
 		t.Errorf("agent node status = %q (%s), want succeeded", node.Status, node.Error)
+	}
+}
+
+// TestLiveCLIRetryResumesRealSession is the composition the fake cannot check:
+// steps passes --session-id then --resume (fake-covered), and a real killed
+// session can actually be resumed (checked by hand), but only this proves the
+// two halves meet.
+//
+// It matters because the alternative -- restarting -- is the design the hosted
+// path deliberately removed: a retried agent inherits its own half-finished
+// edits with no memory of making them.
+func TestLiveCLIRetryResumesRealSession(t *testing.T) {
+	requireClaudeCLI(t)
+
+	realCLI, err := exec.LookPath("claude")
+	if err != nil {
+		t.Skip("claude not found on PATH")
+	}
+
+	dir := t.TempDir()
+	shimDir := t.TempDir()
+	state := filepath.Join(shimDir, "count")
+
+	// A shim in front of the real binary: it SIGKILLs the first invocation
+	// partway through, which is the infrastructure failure attempts: exists
+	// for, and passes every later one through untouched.
+	shim := fmt.Sprintf(`#!/bin/sh
+n=$(cat %[1]q 2>/dev/null || echo 0)
+echo $((n+1)) > %[1]q
+if [ "$n" = "0" ]; then
+  exec timeout -s KILL 12 %[2]q "$@"
+fi
+exec %[2]q "$@"
+`, state, realCLI)
+
+	err = os.WriteFile(filepath.Join(shimDir, "claude"), []byte(shim), 0o700) //nolint:gosec // a test stub must be executable
+	if err != nil {
+		t.Fatalf("writing shim: %v", err)
+	}
+
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	path := writePipeline(t, dir, `
+agents:
+- name: worker
+  source:
+    model: "`+liveCLIModel+`"
+  max_turns: 12
+  tools: [write_file, read_file, run_shell]
+
+jobs:
+- name: work
+  plan:
+  - agent: worker
+    inputs: []
+    attempts: 2
+    prompt: |
+      Do these in order, pausing to think carefully about each one:
+      1. Write a file named one.txt containing the word ALPHA.
+      2. Write a file named two.txt containing the word BETA.
+      3. Write a file named three.txt containing the word GAMMA.
+  - task: capture
+    inputs: []
+    run: cp -f one.txt two.txt three.txt `+dir+`/ 2>/dev/null || true
+`)
+
+	err = run([]string{path})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// Two invocations: the killed one and the resumed one. If the shim never
+	// fired, this test proved nothing and should say so rather than pass.
+	count := strings.TrimSpace(readFileString(t, state))
+	if count != "2" {
+		t.Fatalf("claude ran %s time(s), want 2 — the first invocation was not killed, so no resume was exercised", count)
+	}
+
+	// A resumed session that could not be read would have failed the step, so
+	// reaching a succeeded node IS the proof that resume worked against a
+	// really-killed session.
+	node := findNode(t, storeNodes(t, path), "agent", "worker")
+	if node.Status != "succeeded" {
+		t.Fatalf("agent node status = %q (%s), want succeeded", node.Status, node.Error)
+	}
+
+	// And the work actually completed across the two attempts.
+	if got := strings.TrimSpace(readFileString(t, filepath.Join(dir, "three.txt"))); !strings.Contains(got, "GAMMA") {
+		t.Errorf("three.txt = %q, want GAMMA — the resumed attempt did not finish the task", got)
 	}
 }

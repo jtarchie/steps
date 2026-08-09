@@ -17,12 +17,14 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -81,11 +83,20 @@ var cliRuntimes = map[string]cliRuntime{
 //
 // attempts: means something different here than it does on the HTTP path,
 // where it retries an individual request beneath a conversation that survives
-// (see requests.go). A CLI's conversation is inside the subprocess and dies
-// with it, so the only thing left to retry is the whole invocation. That is
-// the honest reading of the knob for a process that cannot be resumed, and it
-// is why only INFRASTRUCTURE failures are retried: a CLI that ran and decided
-// the task failed gets its answer respected, not re-rolled.
+// (see requests.go). A CLI's conversation lives in a subprocess, so the
+// equivalent is to RESUME it: every attempt after the first reconnects to the
+// same session rather than starting the task over.
+//
+// That distinction is the whole point, and it is not a cost optimization.
+// `attempts:` used to restart an agent's conversation on the hosted path too,
+// and was deliberately removed (see requests.go and commit "attempts: meant
+// two different things on task vs agent"): the workspace survived a restart
+// but the memory did not, so a retried attempt inherited its own half-finished
+// edits with no recollection of making them. A CLI agent has exactly that
+// problem — more of it, since it edits more — so it gets exactly that fix.
+//
+// Only INFRASTRUCTURE failures are retried either way: a CLI that ran and
+// decided the task failed gets its answer respected, not re-rolled.
 func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout time.Duration) (conversationResult, error) {
 	runtime, known := cliRuntimes[prepared.ri.CLI]
 	if !known {
@@ -100,21 +111,58 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 	prepared.conv.usage = attachUsage(ctx, prepared.conv.usage)
 	defer prepared.conv.usage.finish()
 
-	var result conversationResult
+	// Minted here, not read from the CLI's own report: a session id we chose
+	// is one we can resume without parsing for it, and one we can clean up
+	// afterwards knowing no other run could own that name.
+	session, err := newCLISessionID()
+	if err != nil {
+		return conversationResult{}, fmt.Errorf("agent %q: %w", prepared.ri.AgentName, err)
+	}
 
-	err := retry.Do(ctx, prepared.ri.Attempts, func(attempt int) error {
+	defer cleanupCLISession(session)
+
+	var (
+		result     conversationResult
+		turnsSpent int
+	)
+
+	runErr := retry.Do(ctx, prepared.ri.Attempts, func(attempt int) error {
 		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
+		plan := cliAttempt{
+			session: session,
+			resume:  attempt > 0,
+			// The turn budget is per STEP, not per attempt — the hosted path
+			// counts turns in one conversation that request retries never
+			// reset, and a resumed session is the same conversation. The CLI
+			// counts turns per invocation, so the remainder is ours to track.
+			maxTurns: prepared.ri.MaxTurns - turnsSpent,
+			prompt:   renderCLIPrompt(prepared.conv),
+		}
+
+		if plan.resume {
+			plan.prompt = cliContinuationPrompt(result, prepared)
+		}
+
+		if plan.maxTurns <= 0 {
+			return retry.Stop(outcome.Fail(fmt.Errorf("agent %q: exhausted its %d-turn budget across %d attempt(s)",
+				prepared.ri.AgentName, prepared.ri.MaxTurns, attempt)))
+		}
+
 		var attemptErr error
 
-		result, attemptErr = runCLIAttempt(attemptCtx, prepared, runtime)
+		result, attemptErr = runCLIAttempt(attemptCtx, prepared, runtime, plan)
+		turnsSpent += result.turns
+		result.turns = turnsSpent
+
 		if attemptErr != nil {
 			slog.Warn("agent.cli.attempt_failed",
 				"agent", prepared.ri.AgentName,
 				"cli", prepared.ri.CLI,
 				"attempt", attempt+1,
 				"of", prepared.ri.Attempts,
+				"turns_spent", turnsSpent,
 				"error", attemptErr)
 		}
 
@@ -130,12 +178,96 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 	})
 
 	//nolint:wrapcheck // retry.Do returns the attempt's own error, already agent-labeled
-	return result, err
+	return result, runErr
+}
+
+// cliAttempt is one invocation's session state: which conversation it joins,
+// whether it is starting or continuing it, what it may still spend, and what
+// it is told.
+type cliAttempt struct {
+	session  string
+	resume   bool
+	maxTurns int
+	prompt   string
+}
+
+// cliContinuationPrompt is what a resumed attempt is told.
+//
+// It names what went wrong and nothing else. This is deliberately NOT the
+// prompt-text workaround the hosted path's restart semantics needed: there the
+// model had lost its memory and had to be talked around the resulting
+// incoherence, whereas here the conversation is intact and this is simply the
+// one fact the model cannot see — the failure happened outside its transcript.
+func cliContinuationPrompt(previous conversationResult, prepared preparedAgentStep) string {
+	var out strings.Builder
+
+	out.WriteString("Your previous attempt did not finish. ")
+
+	if len(previous.trajectory) > 0 {
+		fmt.Fprintf(&out, "You had made %d tool call(s) before it stopped. ", len(previous.trajectory))
+	}
+
+	out.WriteString("Your conversation and your working directory are both intact. " +
+		"Continue from where you stopped — do not start the task over, and do not repeat work you have already done.")
+
+	if len(prepared.step.Verdicts) > 0 {
+		fmt.Fprintf(&out, " When you are done, call the %s tool with one of: %s.",
+			verdictToolName, strings.Join(prepared.step.Verdicts, ", "))
+	}
+
+	return out.String()
+}
+
+// newCLISessionID mints a random RFC 4122 version 4 UUID, the form
+// --session-id requires.
+func newCLISessionID() (string, error) {
+	var buf [16]byte
+
+	_, err := rand.Read(buf[:])
+	if err != nil {
+		return "", fmt.Errorf("generating a cli session id: %w", err)
+	}
+
+	buf[6] = (buf[6] & 0x0f) | 0x40 // version 4
+	buf[8] = (buf[8] & 0x3f) | 0x80 // variant 10
+
+	return fmt.Sprintf("%x-%x-%x-%x-%x", buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16]), nil
+}
+
+// cleanupCLISession removes the transcript the CLI persisted for this step.
+//
+// Persistence has to stay on — it is what makes a retry able to resume — but a
+// pipeline should not silently accumulate a dead session file per agent step
+// in the operator's home directory, which is what happened before this
+// existed. Matching on the session id we minted rather than on a derived
+// directory name keeps the deletion precise: the only file that can match is
+// one this step created, whatever layout the CLI uses around it.
+//
+// Best effort throughout. A step that did its work must not fail over tidying,
+// and a CLI that stores transcripts somewhere else simply leaves nothing to
+// find.
+func cleanupCLISession(session string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+
+	matches, err := filepath.Glob(filepath.Join(home, ".claude", "projects", "*", session+".jsonl"))
+	if err != nil {
+		return
+	}
+
+	for _, match := range matches {
+		err := os.Remove(match)
+		if err != nil {
+			slog.Debug("agent.cli.session_cleanup_failed", "path", match, "error", err)
+		}
+	}
 }
 
 // runCLIAttempt is one subprocess: bridge up, process run, transcript read,
 // obligations checked.
-func runCLIAttempt(ctx context.Context, prepared preparedAgentStep, runtime cliRuntime) (conversationResult, error) {
+func runCLIAttempt(ctx context.Context, prepared preparedAgentStep, runtime cliRuntime, plan cliAttempt) (conversationResult, error) {
 	// A fresh bridge per attempt, so a verdict captured by an attempt that
 	// then crashed cannot be mistaken for this one's.
 	bridge, err := newCLIBridge(ctx, prepared.conv, nativeToolNames(prepared.conv, runtime))
@@ -152,7 +284,7 @@ func runCLIAttempt(ctx context.Context, prepared preparedAgentStep, runtime cliR
 
 	defer func() { _ = os.Remove(mcpConfig) }()
 
-	run, runErr := execCLI(ctx, prepared, runtime, mcpConfig)
+	run, runErr := execCLI(ctx, prepared, runtime, mcpConfig, plan)
 
 	verdict, note, handoffNote, satisfied, bridgeCalls := bridge.observed()
 
@@ -176,15 +308,21 @@ func runCLIAttempt(ctx context.Context, prepared preparedAgentStep, runtime cliR
 }
 
 // execCLI spawns the CLI and reads its transcript off stdout as it runs.
-func execCLI(ctx context.Context, prepared preparedAgentStep, runtime cliRuntime, mcpConfig string) (cliRunResult, error) {
+func execCLI(
+	ctx context.Context,
+	prepared preparedAgentStep,
+	runtime cliRuntime,
+	mcpConfig string,
+	plan cliAttempt,
+) (cliRunResult, error) {
 	binary := config.CLIBinary(prepared.ri.CLI)
-	args := cliArgs(prepared, runtime, mcpConfig)
+	args := cliArgs(prepared, runtime, mcpConfig, plan)
 
 	slog.Debug("agent.cli.exec", "agent", prepared.ri.AgentName, "binary", binary, "args", args, "dir", prepared.conv.env.dir)
 
 	cmd := exec.CommandContext(ctx, binary, args...) //nolint:gosec // binary comes from the static cliProviders table
 	cmd.Dir = prepared.conv.env.dir
-	cmd.Stdin = strings.NewReader(renderCLIPrompt(prepared.conv))
+	cmd.Stdin = strings.NewReader(plan.prompt)
 	cmd.Env = cliEnv(prepared.ri)
 	cmd.Stderr = &cliStderrLogger{agent: prepared.ri.AgentName}
 	cmd.WaitDelay = cliWaitDelay
@@ -286,13 +424,23 @@ func checkCLIObligations(prepared preparedAgentStep, run cliRunResult, satisfied
 // cliArgs builds the CLI's command line. Kept pure and separate from spawning
 // so what a grant translates to is directly assertable in a test — the
 // argument vector IS the permission boundary.
-func cliArgs(prepared preparedAgentStep, runtime cliRuntime, mcpConfig string) []string {
+func cliArgs(prepared preparedAgentStep, runtime cliRuntime, mcpConfig string, plan cliAttempt) []string {
 	args := []string{
 		"--print",
 		"--output-format", "stream-json",
 		"--verbose",
 		"--model", prepared.ri.ModelName,
-		"--max-turns", strconv.Itoa(prepared.ri.MaxTurns),
+		"--max-turns", strconv.Itoa(plan.maxTurns),
+	}
+
+	// A retry rejoins the conversation instead of restarting the task. Session
+	// flags are session-scoped, not sticky: every other flag below is re-read
+	// on a resume too, which is what lets each attempt point at its own
+	// freshly-bound bridge port.
+	if plan.resume {
+		args = append(args, "--resume", plan.session)
+	} else {
+		args = append(args, "--session-id", plan.session)
 	}
 
 	if persona := prepared.conv.system; persona != "" {

@@ -153,6 +153,16 @@ Project-level configuration deliberately still loads, and it is **also not hashe
 
 Tool names enter the trajectory exactly as the CLI reported them (`Bash`, `Read`, `mcp__steps__verdict`), because that is what actually ran. Translating them back to steps' built-in names would make the record a reconstruction rather than an observation. Worth knowing when writing `assert.tool_calls` against a CLI step.
 
+### Session continuity across retries
+
+Each CLI step mints a v4 UUID and passes `--session-id` on its first invocation, then `--resume <same id>` on every retry. Minting rather than parsing the CLI's reported `session_id` buys two things: the resume needs no round trip through the transcript, and cleanup can match on a name no other run could own.
+
+The load-bearing fact, verified rather than assumed: **session-scoped flags re-apply on resume.** A resumed invocation re-reads `--mcp-config`, which is what makes this compatible with the per-attempt bridge — each attempt binds a fresh ephemeral port, and a resume that inherited the first attempt's config would be talking to a dead socket. `--tools` re-applies the same way. Resume also survives `SIGKILL` mid-run, which matters because that is the actual retry trigger; `TestLiveCLIRetryResumesRealSession` drives exactly that path against the real binary.
+
+`--max-turns` counts per invocation, not per session, so the cumulative budget is steps' to track: each attempt is passed `max_turns - turnsSpent`, and the step fails outright rather than retrying when nothing is left.
+
+Session files are deleted afterwards by globbing `~/.claude/projects/*/<session>.jsonl`. Matching on the minted id rather than a derived directory name keeps the deletion precise — the only file that can match is one this step created — and the whole thing is best effort, because a step that did its work must never fail over tidying.
+
 ### Hashing
 
 `AgentContentMap` folds in a `cli` key, value-gated so every pre-existing hosted agent hashes byte-identically and no cache entry was invalidated by this shipping. Moving an agent between a CLI and a hosted provider does change its hash, which is correct — it is a different thing producing the output.

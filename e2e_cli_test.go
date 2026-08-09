@@ -228,6 +228,48 @@ fi
 	if got := readFileString(t, filepath.Join(dir, "approved.log")); !strings.Contains(got, "approved") {
 		t.Error("the retry's verdict did not route")
 	}
+
+	// The retry REJOINED the first attempt's conversation rather than starting
+	// the task over. That is the whole point: a restart leaves the agent
+	// holding its own half-finished edits with no memory of making them, which
+	// is why the hosted path stopped doing it (see requests.go).
+	opening, retried := cli.argv(t, 1), cli.argv(t, 2)
+
+	session := fieldAfter(t, opening, "--session-id")
+	if session == "" {
+		t.Fatalf("the opening invocation named no session:\n%s", opening)
+	}
+
+	if got := fieldAfter(t, retried, "--resume"); got != session {
+		t.Errorf("retry resumed %q, want the opening session %q", got, session)
+	}
+
+	if strings.Contains(retried, "--session-id|") {
+		t.Errorf("the retry started a new session instead of resuming:\n%s", retried)
+	}
+
+	// It was told to continue, not handed the task again.
+	if prompt := cli.prompt(t, 2); !strings.Contains(prompt, "do not start the task over") {
+		t.Errorf("the retry was not told to continue:\n%s", prompt)
+	}
+
+	if prompt := cli.prompt(t, 2); strings.Contains(prompt, "Review the diff.") {
+		t.Errorf("the retry was re-sent the original task:\n%s", prompt)
+	}
+}
+
+// fieldAfter returns the "|"-separated argv field following flag, or "".
+func fieldAfter(t *testing.T, argv, flag string) string {
+	t.Helper()
+
+	fields := strings.Split(argv, "|")
+	for i, field := range fields {
+		if field == flag && i+1 < len(fields) {
+			return fields[i+1]
+		}
+	}
+
+	return ""
 }
 
 // TestE2ECLIAgentDoesNotRetryTaskFailure is the other half of attempts:. The

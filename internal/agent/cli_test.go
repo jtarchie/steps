@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +12,11 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 )
+
+// firstAttempt is the plan a step's opening invocation runs under.
+func firstAttempt() cliAttempt {
+	return cliAttempt{session: "11111111-2222-4333-8444-555555555555", maxTurns: 12, prompt: "Review the diff."}
+}
 
 // argValue returns the value following flag in an argument vector, or "".
 func argValue(args []string, flag string) string {
@@ -58,7 +64,7 @@ func TestCLIArgs(t *testing.T) {
 	t.Parallel()
 
 	prepared := cliPrepared(t, []string{"read_file", "run_shell", "count_lines"})
-	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json")
+	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
 
 	for flag, want := range map[string]string{
 		"--model":                "sonnet",
@@ -87,7 +93,7 @@ func TestCLIToolPermissions(t *testing.T) {
 	t.Parallel()
 
 	prepared := cliPrepared(t, []string{"read_file", "run_shell", "count_lines"})
-	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json")
+	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
 
 	tools := strings.Split(argValue(args, "--tools"), ",")
 	allowed := strings.Split(argValue(args, "--allowedTools"), ",")
@@ -139,7 +145,7 @@ func TestCLIToolPermissions(t *testing.T) {
 func TestCLIToolPermissionsGrantedGatedTools(t *testing.T) {
 	t.Parallel()
 
-	args := cliArgs(cliPrepared(t, []string{"write_file", "edit_file"}), cliRuntimes["claude"], "/tmp/mcp.json")
+	args := cliArgs(cliPrepared(t, []string{"write_file", "edit_file"}), cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
 	allowed := strings.Split(argValue(args, "--allowedTools"), ",")
 	tools := strings.Split(argValue(args, "--tools"), ",")
 
@@ -160,7 +166,7 @@ func TestCLIToolPermissionsEmptyGrant(t *testing.T) {
 	t.Parallel()
 
 	prepared := cliPrepared(t, []string{"count_lines"})
-	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json")
+	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
 
 	if got := argValue(args, "--tools"); got != "" {
 		t.Errorf("--tools = %q, want empty — no built-in was granted", got)
@@ -180,7 +186,7 @@ func TestCLIArgsIsolatesUserConfig(t *testing.T) {
 	t.Parallel()
 
 	prepared := cliPrepared(t, []string{"read_file"})
-	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json")
+	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
 
 	if got := argValue(args, "--setting-sources"); got != "project" {
 		t.Errorf("--setting-sources = %q, want project (user-level config must not reach a pipeline step)", got)
@@ -361,7 +367,7 @@ func TestCLIArgsBudgetUSD(t *testing.T) {
 	prepared := cliPrepared(t, []string{"read_file"})
 	prepared.ri.BudgetUSD = 0.25
 
-	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json")
+	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
 
 	if got := argValue(args, "--max-budget-usd"); got != "0.25" {
 		t.Errorf("--max-budget-usd = %q, want 0.25", got)
@@ -370,7 +376,111 @@ func TestCLIArgsBudgetUSD(t *testing.T) {
 	// Unset means no ceiling, not a zero one -- a "0" would stop the run
 	// before it started.
 	noBudget := cliPrepared(t, []string{"read_file"})
-	if slices.Contains(cliArgs(noBudget, cliRuntimes["claude"], "/tmp/mcp.json"), "--max-budget-usd") {
+	if slices.Contains(cliArgs(noBudget, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt()), "--max-budget-usd") {
 		t.Error("--max-budget-usd was passed for an agent with no budget")
+	}
+}
+
+// TestCLIArgsSessionFlags pins the shape of the #20 parity fix: the opening
+// invocation NAMES a session, and every retry REJOINS it rather than starting
+// the task over. A restart is what the hosted path deliberately stopped doing,
+// because a retried agent inherited its own half-finished edits with no memory
+// of making them -- and a cli agent edits more, not less.
+func TestCLIArgsSessionFlags(t *testing.T) {
+	t.Parallel()
+
+	prepared := cliPrepared(t, []string{"read_file"})
+	session := "11111111-2222-4333-8444-555555555555"
+
+	opening := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json",
+		cliAttempt{session: session, maxTurns: 12, prompt: "go"})
+
+	if got := argValue(opening, "--session-id"); got != session {
+		t.Errorf("--session-id = %q, want the minted session", got)
+	}
+
+	if slices.Contains(opening, "--resume") {
+		t.Error("the opening invocation resumed something")
+	}
+
+	retried := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp2.json",
+		cliAttempt{session: session, resume: true, maxTurns: 9, prompt: "continue"})
+
+	if got := argValue(retried, "--resume"); got != session {
+		t.Errorf("--resume = %q, want the same session", got)
+	}
+
+	if slices.Contains(retried, "--session-id") {
+		t.Error("a retry re-declared the session instead of resuming it")
+	}
+
+	// The retry must point at ITS OWN bridge: each attempt binds a fresh
+	// ephemeral port, so carrying the first attempt's config would leave the
+	// resumed child talking to a socket nobody is listening on.
+	if got := argValue(retried, "--mcp-config"); got != "/tmp/mcp2.json" {
+		t.Errorf("--mcp-config = %q, want the retry's own bridge config", got)
+	}
+
+	// The turn budget is per STEP: the remainder, not a fresh allowance.
+	if got := argValue(retried, "--max-turns"); got != "9" {
+		t.Errorf("--max-turns = %q, want the remaining budget", got)
+	}
+}
+
+// TestCLIContinuationPrompt pins what a resumed attempt is told. The failure
+// happened outside the transcript, so the model cannot see it; everything else
+// it needs is already in the conversation it is rejoining.
+func TestCLIContinuationPrompt(t *testing.T) {
+	t.Parallel()
+
+	prepared := cliPrepared(t, []string{"read_file"})
+	prepared.step.Verdicts = []string{"approve", "reject"}
+
+	previous := conversationResult{trajectory: []recordedToolCall{{name: "Read"}, {name: "Bash"}}}
+	prompt := cliContinuationPrompt(previous, prepared)
+
+	for _, want := range []string{"did not finish", "2 tool call", "do not start the task over"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("continuation prompt is missing %q:\n%s", want, prompt)
+		}
+	}
+
+	// A resumed attempt still owes the step its verdict, and the obligation is
+	// worth restating since the tool is what ends the step.
+	if !strings.Contains(prompt, "approve, reject") {
+		t.Errorf("continuation prompt does not restate the verdicts:\n%s", prompt)
+	}
+
+	// It must not re-send the task: the session already has it, and repeating
+	// it invites redoing finished work.
+	if strings.Contains(prompt, "Review the diff.") {
+		t.Errorf("continuation prompt re-sent the original task:\n%s", prompt)
+	}
+}
+
+func TestNewCLISessionID(t *testing.T) {
+	t.Parallel()
+
+	// --session-id requires a valid UUID, so a malformed one fails the step at
+	// spawn rather than anywhere useful.
+	pattern := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+	seen := map[string]bool{}
+
+	for range 100 {
+		id, err := newCLISessionID()
+		if err != nil {
+			t.Fatalf("newCLISessionID: %v", err)
+		}
+
+		if !pattern.MatchString(id) {
+			t.Fatalf("session id %q is not a v4 uuid", id)
+		}
+
+		if seen[id] {
+			t.Fatalf("session id %q was minted twice", id)
+		}
+
+		seen[id] = true
 	}
 }
