@@ -68,6 +68,15 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 		if err != nil {
 			return fmt.Errorf("job %q: image: configured but docker is unavailable: %w", job.Name, err)
 		}
+
+		// Pull now rather than letting the first step needing an uncached image
+		// pay for it inside its own timeout, with the progress landing in that
+		// command's output. Present images are a local inspect, so a warm run
+		// (including every subsequent job under `steps watch`) costs nothing.
+		err = shell.PrepareImages(ctx, cfg.Images())
+		if err != nil {
+			return fmt.Errorf("job %q: %w", job.Name, err)
+		}
 	}
 
 	bw, err := provider.NewBuild(ctx, job.Name)

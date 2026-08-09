@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -169,39 +170,34 @@ func (c *Config) validateFixAgentImages() error {
 // image: — used to fail fast (before any step runs) when docker isn't
 // available but the pipeline needs it.
 func (c *Config) UsesImages() bool {
-	for _, rt := range c.ResourceTypes {
-		if rt.Image != "" {
-			return true
+	return len(c.Images()) > 0
+}
+
+// Images returns every distinct image: this pipeline can execute in, sorted.
+//
+// Used to pull them all before the first step runs. Without that, the first
+// command needing an uncached image pays the pull inside its own step: the
+// progress output lands in whatever that command's stderr is being used for
+// (a resource check's parsed output, an agent's tool result), and the download
+// counts against the step's timeout, so a large image on a cold daemon can
+// exhaust a budget meant for the work itself.
+func (c *Config) Images() []string {
+	seen := map[string]bool{}
+
+	_ = c.visitContainerSettings(func(_ string, settings containerSettings) error {
+		if settings.Image != "" {
+			seen[settings.Image] = true
 		}
+
+		return nil
+	})
+
+	images := make([]string, 0, len(seen))
+	for image := range seen {
+		images = append(images, image)
 	}
 
-	for _, a := range c.Agents {
-		if a.Image != "" {
-			return true
-		}
-	}
+	slices.Sort(images)
 
-	for _, t := range c.Tasks {
-		if t.Image != "" {
-			return true
-		}
-	}
-
-	for _, job := range c.Jobs {
-		found := false
-
-		_ = job.visitSteps(func(_ string, step *Step) error {
-			if step.Image != "" {
-				found = true
-			}
-
-			return nil
-		})
-
-		if found {
-			return true
-		}
-	}
-
-	return false
+	return images
 }
