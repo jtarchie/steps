@@ -121,14 +121,14 @@ agents:
     data flow.
 
     If the change carries no risk on your lens, propose NOTHING. Do not pad.
-  max_turns: 8
+  max_turns: 50
   tools: [read_file, list_dir, search_files]
 
 - name: compiler
   system: |
     You merge overlapping review dimensions into one list. Two proposals that
     would send a reviewer to the same lines are one dimension, not two.
-  max_turns: 8
+  max_turns: 50
   tools: [read_file]
 
 - name: reviewer
@@ -178,7 +178,7 @@ agents:
                   contract violation, a race under realistic load
       suggestion  it works, but could be more robust
       nitpick     cosmetic
-  max_turns: 20
+  max_turns: 50
   tools: [read_file, list_dir, search_files, run_shell]
 
 - name: falsifier
@@ -201,7 +201,7 @@ agents:
     Also ask, for each survivor: is this the intended behaviour? Is it already
     mitigated somewhere else? A finding you cannot knock down survives — say
     what made it survive.
-  max_turns: 20
+  max_turns: 50
   tools: [read_file, list_dir, search_files, run_shell]
 
 - name: gatekeeper
@@ -229,7 +229,7 @@ agents:
     a real blocker that slips through is caught by the human reading the
     review, while an advisory nit that blocks a merge teaches the team to
     ignore the whole tool.
-  max_turns: 12
+  max_turns: 50
   tools: [read_file, list_dir, search_files]
 
 - name: synthesizer
@@ -241,7 +241,7 @@ agents:
     Explain WHY each finding is a problem, not just what is wrong. Quote the
     exact code or call path as evidence. Give the fix concisely: what to
     change, where, and the tradeoff if there is more than one way.
-  max_turns: 16
+  max_turns: 50
   tools: [read_file, list_dir, write_file]
 
 jobs:
@@ -255,6 +255,11 @@ jobs:
   # trips it is rarely the one that cost the most. Counted from the provider's
   # reported usage, never an estimate. Never hashed, so adding it invalidates
   # nothing.
+  #
+  # And the wall clock, which the token ceiling does not bound: a fan-out of
+  # slow agents can sit inside every per-step deadline and still take all
+  # afternoon. 1h is pr-af's own MaxDurationSeconds.
+  timeout: 1h
   budget:
     tokens: 2000000
   plan:
@@ -292,6 +297,12 @@ jobs:
           NOT yours: type signatures and calling conventions (mechanical),
           pattern consistency and architectural fit (systemic).
         inputs: [pr]
+        # Handed the diff rather than sent to find it. The reference
+        # implementation embeds diff_patches directly in this prompt's context
+        # for the same reason: a lens that has to read_file its way to the diff
+        # spends turns navigating instead of thinking, and that is exactly how
+        # this step failed its first live run.
+        context_paths: [pr/pr.diff, pr/pr.json]
         context: write
       - agent: lens
         prompt: |
@@ -303,6 +314,12 @@ jobs:
           NOT yours: whether the behaviour is right (semantic), whether it
           fits the surrounding architecture (systemic).
         inputs: [pr]
+        # Handed the diff rather than sent to find it. The reference
+        # implementation embeds diff_patches directly in this prompt's context
+        # for the same reason: a lens that has to read_file its way to the diff
+        # spends turns navigating instead of thinking, and that is exactly how
+        # this step failed its first live run.
+        context_paths: [pr/pr.diff, pr/pr.json]
         context: write
       - agent: lens
         prompt: |
@@ -314,6 +331,12 @@ jobs:
           NOT yours: whether an individual function is correct (mechanical) or
           behaves differently (semantic).
         inputs: [pr]
+        # Handed the diff rather than sent to find it. The reference
+        # implementation embeds diff_patches directly in this prompt's context
+        # for the same reason: a lens that has to read_file its way to the diff
+        # spends turns navigating instead of thinking, and that is exactly how
+        # this step failed its first live run.
+        context_paths: [pr/pr.diff, pr/pr.json]
         context: write
 
   # ── phase 3: compile the work list ───────────────────────────────────────
@@ -338,7 +361,9 @@ jobs:
       `path` is one file, not a list. A dimension that genuinely needs two
       files read up front is two dimensions.
 
-      At most eight. Fewer is better than overlapping.
+      At most SIX. That is their "standard" depth; a very large change
+      justifies up to twelve, a trivial one three. Fewer is better than
+      overlapping.
 
   # ── phase 4: one ephemeral reviewer per dimension, concurrently ──────────
   # The matrix's width is not in this file — `from: dimensions` takes it from
@@ -358,7 +383,7 @@ jobs:
     - var: dim
       from: dimensions
       label: id
-    max_in_flight: 4
+    max_in_flight: 8
     # The ceiling that belongs HERE rather than on the job. This is the only
     # step whose cost nobody could know when this file was written — the
     # compiler decided how many cells there are, minutes ago. When it runs out,
@@ -372,7 +397,7 @@ jobs:
     # Re-running with a larger figure resumes rather than restarting: the cells
     # that never started recorded nothing.
     budget:
-      tokens: 1200000
+      tokens: 900000
     agent: reviewer
     inputs: [pr]
     # qualify: this matrix records a fact PER CELL, so each cell's findings
