@@ -280,7 +280,7 @@
       "properties": {
         "model": {
           "type": "string",
-          "description": "Provider-prefixed, e.g. openai/gpt-4o or lmstudio/qwen."
+          "description": "Provider-prefixed, e.g. openai/gpt-4o or lmstudio/qwen. An @-prefixed value (e.g. \"@claude/sonnet\", quoted -- @ is reserved in YAML) runs a coding-agent CLI as a subprocess instead of calling an endpoint; endpoint:, the generation dials, compact_after_tokens:, budget:, and image: do not apply to one."
         },
         "endpoint": {
           "type": "string",

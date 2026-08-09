@@ -1,0 +1,17 @@
+# A cli source runs a subprocess; there is no HTTP request to aim anywhere.
+# Accepting endpoint: would let the pipeline read as if it were configured
+# while the setting did nothing.
+# expect: remove source.endpoint
+
+agents:
+- name: reviewer
+  source:
+    model: "@claude/sonnet"
+    endpoint: https://example.test/v1/
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: Review something.

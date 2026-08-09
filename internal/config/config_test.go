@@ -494,7 +494,7 @@ func TestResolveAgentTarget(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			baseURL, modelName, apiKeyEnv, requiresKey, stringOnlyToolChoice, err := resolveAgentTarget(tt.source)
+			target, err := resolveAgentTarget(tt.source)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected an error")
@@ -507,24 +507,24 @@ func TestResolveAgentTarget(t *testing.T) {
 				t.Fatalf("resolveAgentTarget: %v", err)
 			}
 
-			if baseURL != tt.wantBaseURL {
-				t.Errorf("baseURL = %q, want %q", baseURL, tt.wantBaseURL)
+			if target.BaseURL != tt.wantBaseURL {
+				t.Errorf("baseURL = %q, want %q", target.BaseURL, tt.wantBaseURL)
 			}
 
-			if modelName != tt.wantModel {
-				t.Errorf("modelName = %q, want %q", modelName, tt.wantModel)
+			if target.ModelName != tt.wantModel {
+				t.Errorf("modelName = %q, want %q", target.ModelName, tt.wantModel)
 			}
 
-			if apiKeyEnv != tt.wantAPIKeyEnv {
-				t.Errorf("apiKeyEnv = %q, want %q", apiKeyEnv, tt.wantAPIKeyEnv)
+			if target.APIKeyEnv != tt.wantAPIKeyEnv {
+				t.Errorf("apiKeyEnv = %q, want %q", target.APIKeyEnv, tt.wantAPIKeyEnv)
 			}
 
-			if requiresKey != tt.wantRequiresKey {
-				t.Errorf("requiresKey = %v, want %v", requiresKey, tt.wantRequiresKey)
+			if target.RequiresKey != tt.wantRequiresKey {
+				t.Errorf("requiresKey = %v, want %v", target.RequiresKey, tt.wantRequiresKey)
 			}
 
-			if stringOnlyToolChoice != tt.wantStringOnlyToolChoice {
-				t.Errorf("stringOnlyToolChoice = %v, want %v", stringOnlyToolChoice, tt.wantStringOnlyToolChoice)
+			if target.StringOnlyToolChoice != tt.wantStringOnlyToolChoice {
+				t.Errorf("stringOnlyToolChoice = %v, want %v", target.StringOnlyToolChoice, tt.wantStringOnlyToolChoice)
 			}
 		})
 	}

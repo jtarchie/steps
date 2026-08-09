@@ -188,6 +188,27 @@ func (s *stepUsage) record(resp *model.LLMResponse) (exceeded bool) {
 	return s.run != nil && s.run.wouldExceed(s.total)
 }
 
+// addTokens folds in a spend reported all at once rather than response by
+// response — what a CLI-backed step gets, since its conversation happened
+// inside a subprocess and only its total comes back (see cli.go).
+//
+// Unlike record it reports no breach: by the time these numbers exist the
+// process has already exited, so there is nothing left to stop. The job-level
+// total still counts them, which is the point — a job budget: must see what a
+// CLI agent spent even though a per-agent budget: cannot cap it.
+func (s *stepUsage) addTokens(prompt, completion int) {
+	if prompt == 0 && completion == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.prompt += prompt
+	s.completion += completion
+	s.total += prompt + completion
+}
+
 // exceededError describes whichever ceiling this step just breached — its own
 // or the job's — with the job case carrying the running per-step total.
 func (s *stepUsage) exceededError() error {

@@ -125,6 +125,7 @@ func (c *Config) validate() error {
 		c.validateAgentCompaction,
 		c.validateAgentModels,
 		c.validateAgentProviders,
+		c.validateCLIAgents,
 		c.validateHooks,
 		c.validateAgentGraph,
 		c.validateToolCallGuards,

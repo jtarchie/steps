@@ -1,0 +1,315 @@
+package agent
+
+// The bridge that lets a CLI-backed agent step (see cli.go) use the tools its
+// pipeline granted it.
+//
+// A CLI owns its own tool loop, so steps cannot hand it a tool registry the
+// way it hands one to a model. What a CLI does accept is an MCP server. So
+// the parent process becomes one: every tool the step's grant produced that
+// the CLI has no native equivalent for — custom run: tools, mcp_servers:
+// grants, and the synthesized verdict/write_handoff/context tools — is
+// re-exported over a loopback MCP server the child connects back to.
+//
+// Two things fall out of this that are worth stating plainly. First, the tool
+// implementations are the SAME ones an HTTP agent runs: path confinement,
+// output caps and spilling, MCP subsetting and auth all apply unchanged,
+// because nothing was reimplemented. Second, a verdict call lands in the
+// parent's memory as it happens, over a channel the model cannot forge — the
+// CLI never has to be trusted to report what it decided, which is what keeps
+// verdict routing meaningful across the process boundary.
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"maps"
+	"net"
+	"net/http"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+	"google.golang.org/genai"
+)
+
+// cliBridgeServerName is the MCP server name the child CLI knows the bridge
+// by. It prefixes every bridged tool as `mcp__steps__<tool>` in the CLI's own
+// namespace, which is also how cliArgs must spell them on --allowedTools.
+const cliBridgeServerName = "steps"
+
+// cliBridgeShutdownTimeout bounds how long Close waits for in-flight bridge
+// requests. The child is already gone by then; this only covers a tool call
+// that outlived it.
+const cliBridgeShutdownTimeout = 5 * time.Second
+
+// cliBridge is a running loopback MCP server exposing one step's non-native
+// tools, plus what it observed the child do with them.
+type cliBridge struct {
+	server   *http.Server
+	listener net.Listener
+	url      string
+
+	// mu guards everything below: tool calls arrive on the HTTP server's
+	// goroutines, and the driver reads the captures after the child exits.
+	mu          sync.Mutex
+	verdict     string
+	note        string
+	handoffNote map[string]string
+	satisfied   map[string]bool
+	// calls records every bridged tool call in order, so the step's
+	// trajectory includes tools the CLI's own stream reports only by their
+	// prefixed name.
+	calls []recordedToolCall
+}
+
+// newCLIBridge starts a bridge serving every tool in conv's registry except
+// those named in skip — the built-ins the CLI runs natively (see
+// cliRuntime.natives). The caller must Close it.
+func newCLIBridge(ctx context.Context, conv agentConversation, skip map[string]bool) (*cliBridge, error) {
+	bridge := &cliBridge{
+		handoffNote: map[string]string{},
+		satisfied:   map[string]bool{},
+	}
+
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: cliBridgeServerName, Version: "v1"}, nil)
+
+	for _, decl := range conv.tools.decls.FunctionDeclarations {
+		if decl == nil || skip[decl.Name] {
+			continue
+		}
+
+		impl, ok := conv.tools.registry[decl.Name]
+		if !ok {
+			continue
+		}
+
+		server.AddTool(&sdkmcp.Tool{
+			Name:        decl.Name,
+			Description: decl.Description,
+			InputSchema: declInputSchema(decl),
+		}, bridge.handler(decl.Name, impl, conv.env))
+	}
+
+	var listenConfig net.ListenConfig
+
+	// Loopback only, ephemeral port: reachable by the child this process
+	// spawned and by nothing else on the network.
+	listener, err := listenConfig.Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, fmt.Errorf("cli bridge: listen: %w", err)
+	}
+
+	bridge.listener = listener
+	bridge.url = "http://" + listener.Addr().String()
+	bridge.server = &http.Server{
+		// Stateless: the bridge outlives no client. It serves exactly one
+		// child process for the length of one attempt, so per-session state
+		// would only be a way for a crashed child to strand something.
+		Handler: sdkmcp.NewStreamableHTTPHandler(
+			func(*http.Request) *sdkmcp.Server { return server },
+			&sdkmcp.StreamableHTTPOptions{Stateless: true},
+		),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	go func() {
+		err := bridge.server.Serve(listener)
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Debug("agent.cli.bridge.serve", "error", err)
+		}
+	}()
+
+	return bridge, nil
+}
+
+// handler adapts one toolImpl to MCP. The adaptation is deliberately thin —
+// the tool contract already says a failure is data, never a Go error, so the
+// only translation needed is which shape of data counts as an error to the
+// CLI.
+func (b *cliBridge) handler(name string, impl toolImpl, env toolEnv) sdkmcp.ToolHandler {
+	return func(ctx context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+		args := map[string]any{}
+		if len(req.Params.Arguments) > 0 {
+			err := json.Unmarshal(req.Params.Arguments, &args)
+			if err != nil {
+				return nil, fmt.Errorf("tool %q: arguments are not a JSON object: %w", name, err)
+			}
+		}
+
+		slog.Debug("agent.cli.bridge.call", "tool", name, "args", args)
+
+		result := impl(ctx, args, env)
+
+		b.capture(name, args, result)
+
+		payload, err := json.Marshal(result)
+		if err != nil {
+			return nil, fmt.Errorf("tool %q: encoding result: %w", name, err)
+		}
+
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: string(payload)}},
+			IsError: !requiredCallSucceeded(result),
+		}, nil
+	}
+}
+
+// capture records what a call means to the step, as opposed to what it means
+// to the model. This is the half of the bridge that verdict routing depends
+// on: the choice is read out of the tool's own result the moment it is
+// produced, in this process.
+func (b *cliBridge) capture(name string, args, result map[string]any) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	ok := requiredCallSucceeded(result)
+	b.calls = append(b.calls, recordedToolCall{name: name, args: args, ok: ok})
+
+	if !ok {
+		return
+	}
+
+	b.satisfied[name] = true
+
+	// Last successful call wins, matching how runAgentConversation resolves a
+	// model that revises its own verdict.
+	if verdict, isString := result["verdict"].(string); isString && verdict != "" {
+		b.verdict = verdict
+		b.note, _ = result["note"].(string)
+	}
+
+	if note, isNote := result[handoffNoteResultKey].(map[string]string); isNote {
+		b.handoffNote = note
+	}
+}
+
+// observed reports what the child did: the captured verdict/note, the handoff
+// note, which required tools were satisfied, and every bridged call in order.
+func (b *cliBridge) observed() (verdict, note string, handoffNote map[string]string, satisfied map[string]bool, calls []recordedToolCall) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.verdict, b.note, maps.Clone(b.handoffNote), maps.Clone(b.satisfied), append([]recordedToolCall(nil), b.calls...)
+}
+
+// writeConfig writes the --mcp-config document pointing the CLI at this
+// bridge, and returns its path. It goes to the OS temp dir, never the step's
+// workspace: the workspace is captured as artifacts and readable by the
+// agent's own file tools, and a live callback URL belongs in neither.
+func (b *cliBridge) writeConfig() (string, error) {
+	document := map[string]any{
+		"mcpServers": map[string]any{
+			cliBridgeServerName: map[string]any{"type": "http", "url": b.url},
+		},
+	}
+
+	payload, err := json.Marshal(document)
+	if err != nil {
+		return "", fmt.Errorf("cli bridge: encoding mcp config: %w", err)
+	}
+
+	file, err := os.CreateTemp("", "steps-cli-mcp-*.json")
+	if err != nil {
+		return "", fmt.Errorf("cli bridge: creating mcp config: %w", err)
+	}
+
+	defer func() { _ = file.Close() }()
+
+	_, err = file.Write(payload)
+	if err != nil {
+		return "", fmt.Errorf("cli bridge: writing mcp config: %w", err)
+	}
+
+	return file.Name(), nil
+}
+
+// Close stops serving. It is safe to call more than once.
+//
+// The step's context is deliberately stripped of cancellation first: a step
+// killed by its timeout is exactly when the bridge still needs a moment to
+// shut down cleanly, and an already-canceled context would skip that.
+func (b *cliBridge) Close(ctx context.Context) error {
+	if b.server == nil {
+		return nil
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cliBridgeShutdownTimeout)
+	defer cancel()
+
+	err := b.server.Shutdown(shutdownCtx)
+	b.server = nil
+
+	if err != nil {
+		_ = b.listener.Close()
+
+		return fmt.Errorf("cli bridge: shutdown: %w", err)
+	}
+
+	return nil
+}
+
+// bridgedToolName is how a bridged tool is spelled in the CLI's own tool
+// namespace — what --allowedTools must name to permit it.
+func bridgedToolName(name string) string {
+	return "mcp__" + cliBridgeServerName + "__" + name
+}
+
+// declInputSchema renders a tool declaration's parameters as a JSON Schema
+// object. An MCP-backed tool already carries the server's own schema and is
+// passed through untouched; everything else is converted from the genai
+// schema the HTTP path uses.
+func declInputSchema(decl *genai.FunctionDeclaration) any {
+	if decl.ParametersJsonSchema != nil {
+		return decl.ParametersJsonSchema
+	}
+
+	if decl.Parameters == nil {
+		return map[string]any{"type": "object", "properties": map[string]any{}}
+	}
+
+	return genaiSchemaToJSON(decl.Parameters)
+}
+
+// genaiSchemaToJSON converts the genai schema subset this package actually
+// builds (see builtinAgentTools, buildVerdictTool, resolveToolSpec) into plain
+// JSON Schema. Fields no tool here uses are deliberately not handled — a
+// silent partial conversion of something richer would be worse than the
+// obvious gap.
+func genaiSchemaToJSON(schema *genai.Schema) map[string]any {
+	out := map[string]any{}
+
+	if schema.Type != "" {
+		out["type"] = strings.ToLower(string(schema.Type))
+	}
+
+	if schema.Description != "" {
+		out["description"] = schema.Description
+	}
+
+	if len(schema.Enum) > 0 {
+		out["enum"] = append([]string{}, schema.Enum...)
+	}
+
+	if len(schema.Properties) > 0 {
+		properties := make(map[string]any, len(schema.Properties))
+		for name, property := range schema.Properties {
+			properties[name] = genaiSchemaToJSON(property)
+		}
+
+		out["properties"] = properties
+	}
+
+	if schema.Items != nil {
+		out["items"] = genaiSchemaToJSON(schema.Items)
+	}
+
+	if len(schema.Required) > 0 {
+		out["required"] = append([]string{}, schema.Required...)
+	}
+
+	return out
+}

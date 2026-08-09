@@ -1,0 +1,17 @@
+# Generation dials reach a model through request fields a cli does not expose.
+# Silently ignoring temperature: would make the pipeline read as if sampling
+# were pinned when nothing pinned it.
+# expect: temperature is not supported with a cli source
+
+agents:
+- name: reviewer
+  source:
+    model: "@claude/sonnet"
+  temperature: 0.2
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: Review something.

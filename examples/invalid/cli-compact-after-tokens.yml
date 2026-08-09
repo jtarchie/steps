@@ -1,0 +1,16 @@
+# Compaction is something internal/agent does to a conversation it owns. A cli
+# manages its own context window, so this setting would bind nothing.
+# expect: compact_after_tokens is not supported with a cli source
+
+agents:
+- name: reviewer
+  source:
+    model: "@claude/sonnet"
+  compact_after_tokens: 50000
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: Review something.

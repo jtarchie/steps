@@ -1,0 +1,15 @@
+# "@claude" names a cli but no model. Defaulting one would pick a model (and a
+# price) the pipeline never asked for.
+# expect: must name a model after the cli
+
+agents:
+- name: reviewer
+  source:
+    model: "@claude"
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: Review something.

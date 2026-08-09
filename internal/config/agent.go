@@ -373,6 +373,25 @@ func checkEndpointCredentials(agentName, field string, source AgentSource) error
 	return nil
 }
 
+// agentTarget is a source reduced to where the conversation goes and what it
+// costs to get in: either an HTTP endpoint (BaseURL set) or a CLI subprocess
+// (CLI set). Exactly one of the two is ever populated.
+//
+// It replaces what used to be six positional return values, so a new field —
+// CLI was the first — reaches every caller by name instead of by counting
+// blanks at five call sites.
+type agentTarget struct {
+	BaseURL              string
+	ModelName            string
+	APIKeyEnv            string
+	RequiresKey          bool
+	StringOnlyToolChoice bool
+	// CLI names a cliProviders entry when this source runs a coding-agent CLI
+	// instead of reaching an endpoint; "" for every HTTP source. See
+	// cliagent.go.
+	CLI string
+}
+
 // resolveAgentTarget interprets an optional "provider/" prefix on
 // source.Model (e.g. "openrouter/anthropic/claude-3.5-sonnet") against
 // agentProviders, splitting on the first "/" so a provider's own slashed
@@ -380,43 +399,67 @@ func checkEndpointCredentials(agentName, field string, source AgentSource) error
 // override the derived values. A model with no recognized provider prefix
 // requires an explicit source.Endpoint.
 //
-// stringOnlyToolChoice defaults to !provider.requiresKey for a recognized
+// A model spelled "@cli/model" resolves through resolveCLITarget instead — a
+// different kind of destination, not a different endpoint (see cliagent.go).
+//
+// StringOnlyToolChoice defaults to !provider.requiresKey for a recognized
 // provider prefix (local/no-auth providers get the string-only tool_choice
 // fallback; cloud providers get the precise named form) or false for an
 // explicit endpoint:, and source.StringToolChoice, when set, always wins.
-func resolveAgentTarget(source AgentSource) (baseURL, modelName, apiKeyEnv string, requiresKey, stringOnlyToolChoice bool, err error) {
+func resolveAgentTarget(source AgentSource) (agentTarget, error) {
+	if IsCLISource(source) {
+		return resolveCLITarget(source)
+	}
+
 	prefix, rest, hasPrefix := strings.Cut(source.Model, "/")
 
 	provider, known := agentProviders[prefix]
 	if hasPrefix && known && rest != "" {
-		baseURL = source.Endpoint
-		if baseURL == "" {
-			baseURL = provider.baseURL
-		}
-
-		apiKeyEnv = source.APIKeyEnv
-		if apiKeyEnv == "" {
-			apiKeyEnv = provider.keyEnv
-		}
-
-		stringOnlyToolChoice = !provider.requiresKey
-		if source.StringToolChoice != nil {
-			stringOnlyToolChoice = *source.StringToolChoice
-		}
-
-		return ensureTrailingSlash(baseURL), rest, apiKeyEnv, provider.requiresKey || source.APIKeyEnv != "", stringOnlyToolChoice, nil
+		return providerTarget(source, provider, rest), nil
 	}
 
 	if source.Endpoint == "" {
-		return "", "", "", false, false, fmt.Errorf("model %q has no known provider prefix; set source.endpoint", source.Model)
+		return agentTarget{}, fmt.Errorf("model %q has no known provider prefix; set source.endpoint", source.Model)
 	}
 
-	stringOnlyToolChoice = false
+	return agentTarget{
+		BaseURL:              ensureTrailingSlash(source.Endpoint),
+		ModelName:            source.Model,
+		APIKeyEnv:            source.APIKeyEnv,
+		RequiresKey:          source.APIKeyEnv != "",
+		StringOnlyToolChoice: stringToolChoice(source, false),
+	}, nil
+}
+
+// providerTarget resolves a source whose model carried a recognized provider
+// prefix, with modelName the part after it.
+func providerTarget(source AgentSource, provider agentProvider, modelName string) agentTarget {
+	baseURL := source.Endpoint
+	if baseURL == "" {
+		baseURL = provider.baseURL
+	}
+
+	apiKeyEnv := source.APIKeyEnv
+	if apiKeyEnv == "" {
+		apiKeyEnv = provider.keyEnv
+	}
+
+	return agentTarget{
+		BaseURL:              ensureTrailingSlash(baseURL),
+		ModelName:            modelName,
+		APIKeyEnv:            apiKeyEnv,
+		RequiresKey:          provider.requiresKey || source.APIKeyEnv != "",
+		StringOnlyToolChoice: stringToolChoice(source, !provider.requiresKey),
+	}
+}
+
+// stringToolChoice applies source.StringToolChoice over a derived default.
+func stringToolChoice(source AgentSource, derived bool) bool {
 	if source.StringToolChoice != nil {
-		stringOnlyToolChoice = *source.StringToolChoice
+		return *source.StringToolChoice
 	}
 
-	return ensureTrailingSlash(source.Endpoint), source.Model, source.APIKeyEnv, source.APIKeyEnv != "", stringOnlyToolChoice, nil
+	return derived
 }
 
 // ensureTrailingSlash normalizes a base URL to end in "/", since the

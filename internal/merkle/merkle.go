@@ -837,6 +837,16 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 		content["image"] = ri.Image
 	}
 
+	// Which CLI runs the conversation, when one does — value-gated so every
+	// pre-existing HTTP agent hashes exactly as it did before CLI sources
+	// existed. The CLI's own version is deliberately NOT folded in: it changes
+	// under the operator the same way a hosted model's weights do, and this
+	// package has never claimed to hash the thing on the other end of the
+	// wire, only which thing was asked.
+	if ri.CLI != "" {
+		content["cli"] = ri.CLI
+	}
+
 	if step.Assert != nil {
 		content["assert"] = assertContent(step.Assert)
 	}

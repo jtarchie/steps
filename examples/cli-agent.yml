@@ -1,0 +1,75 @@
+# yaml-language-server: $schema=../steps.schema.json
+# steps-test: skip -- runs the real `claude` CLI (needs it installed and
+# logged in; no API key required if you have a subscription)
+#
+# CLI-backed agents: an agent whose source.model starts with "@" runs a
+# coding-agent CLI as a subprocess instead of calling an OpenAI-compatible
+# endpoint. `@claude/sonnet` means "the claude CLI, asked for sonnet".
+#
+# The point is the division of labor. The CLI owns the conversation — its own
+# turn loop, its own tools, its own context management. steps owns everything
+# around it: the workspace the process runs in, the merkle hash that decides
+# whether it runs at all, the timeout, the recorded trajectory, and — the
+# reason this is worth doing inside a pipeline — the verdict that routes the
+# job.
+#
+# Run it:
+#   steps run examples/cli-agent.yml
+#
+# Note the quotes on "@claude/sonnet". YAML reserves a leading @, so an
+# unquoted value is a parse error.
+
+resources:
+- name: repo
+  type: git
+  source:
+    uri: https://github.com/jtarchie/steps
+
+agents:
+- name: reviewer
+  source:
+    model: "@claude/sonnet"
+  system: |
+    You review a repository and judge whether its documentation matches
+    its code. Be specific and brief.
+  max_turns: 20
+  tools:
+  # Granted built-ins become the CLI's OWN native tools — read_file is
+  # permission to use Read, run_shell permission to use Bash. Anything not
+  # granted here is denied to the subprocess outright, including the CLI's
+  # read-only tools.
+  - read_file
+  - list_dir
+  - run_shell
+  # A custom tool has no native equivalent, so steps serves it to the CLI
+  # over a loopback MCP server it starts for the step. Same tool, same
+  # output caps, same shell — reached over MCP instead of a tool call.
+  - name: count_go_files
+    description: Count the Go source files under a directory.
+    run: find {{ .args.dir }} -name '*.go' | wc -l
+
+jobs:
+- name: review-docs
+  plan:
+  - get: repo
+  - agent: reviewer
+    inputs: [repo]
+    prompt: |
+      Read repo/README.md, then look at the actual code in repo/internal.
+      Decide whether the README describes what the code does.
+    # verdicts: works exactly as it does for a hosted agent, but the
+    # enforcement differs: there is no tool_choice to force across a process
+    # boundary, so the rule moves to the exit. A step that declared verdicts:
+    # and finished without calling the verdict tool has FAILED — which is
+    # stricter than asking for one and hoping.
+    verdicts: [accurate, stale]
+    to:
+      accurate: celebrate
+      stale: flag
+      failure: flag
+  - task: flag
+    inputs: []
+    run: echo "the docs need work"
+  - task: celebrate
+    inputs: []
+    run: echo "docs and code agree"

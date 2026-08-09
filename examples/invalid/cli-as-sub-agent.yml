@@ -1,0 +1,22 @@
+# The inverse of cli-sub-agent-grant.yml: a cli agent cannot BE a sub-agent
+# either. buildSubAgentTool drives the child over the same turn loop, which a
+# cli source replaces.
+# expect: which has a cli source
+
+agents:
+- name: helper
+  description: Answers a narrow question.
+  source:
+    model: "@claude/sonnet"
+- name: reviewer
+  source:
+    model: openai/gpt-4o
+  tools:
+  - agent: helper
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: Review something.

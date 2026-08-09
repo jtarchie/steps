@@ -568,6 +568,81 @@ How it behaves, and why:
 - **Loudly visible.** A fallback can produce meaningfully different output, so a run that used one says so in the log (`agent.failover`), on the step's own output line (`agent: writer (fallback: equivalent-model — big-model is unavailable)`), and in the recorded result (`fallback_model`). A quality dip caused by an outage that looks identical to a normal run is one nobody investigates.
 - **Every fallback endpoint is validated** like the primary — no credentials in the URL, and the provider prefix must resolve at load. A fallback nobody can resolve is one that will not save you, discovered during the outage it exists for.
 
+## CLI-backed agents: `@claude/sonnet`
+
+An agent's `source.model` normally names a hosted model steps calls over HTTP. Prefix it with `@` instead and steps runs a coding-agent CLI as a subprocess:
+
+```yaml
+agents:
+- name: reviewer
+  source:
+    model: "@claude/sonnet"     # quotes required -- YAML reserves a leading @
+  tools: [read_file, run_shell]
+```
+
+The quotes are not stylistic. A leading `@` is a reserved indicator in YAML, so an unquoted value is a parse error before steps ever sees it.
+
+`@claude/sonnet` reads as "the claude CLI, asked for sonnet". The part after the slash is passed through untouched, so anything the CLI accepts for `--model` works.
+
+### What changes, and what doesn't
+
+This is **delegation, not a different transport**. The CLI owns the conversation: its own turn loop, its own tools, its own context window. steps owns everything around it, unchanged — the workspace the process runs in, the merkle hash that decides whether the step runs at all, `timeout:`, the recorded trajectory and response, `assert:`, handoff notes, and `verdicts:`/`to:` routing.
+
+That division is the whole point. You get the CLI's own tooling inside a pipeline that still caches, routes, and fans out.
+
+**Authentication** comes from the CLI's own credential store. The subprocess inherits `HOME`, so a subscription login works with no `api_key_env:` at all. Set `api_key_env:` only if you want a specific key forwarded as `ANTHROPIC_API_KEY`.
+
+### The tool grant becomes the CLI's permissions
+
+Granted built-ins map to the CLI's *native* tools, because a CLI is best at the tools its model was trained against:
+
+| granted built-in | claude CLI tool |
+| --- | --- |
+| `read_file` | `Read` |
+| `list_dir` | `Glob` |
+| `run_shell` | `Bash` |
+| `write_file` | `Write` |
+| `edit_file` | `Edit` |
+| `search_files` | `Grep` |
+
+Everything else in the grant — custom `run:` tools, `mcp:` grants, and the synthesized `verdict`/`write_handoff` tools — reaches the CLI over a loopback MCP server steps starts for the step and tears down after. Those are the *same* implementations a hosted agent runs, so output caps, spilling, MCP tool subsetting and MCP auth all behave identically. Credentials stay in the parent process; nothing is written into the CLI's config but a URL.
+
+Anything not granted is **denied** to the subprocess explicitly, not merely left off the allow-list. That matters: a CLI's read-only tools need no permission in non-interactive mode, so omitting `Grep` would not withhold it. `Task`, `WebFetch`, `WebSearch`, and `NotebookEdit` are always denied — capabilities no grant can describe. The CLI's own configured MCP servers are excluded too, so the grant is a limit rather than a suggestion.
+
+The tradeoff to know about: steps' path confinement is expressed in the CLI's vocabulary now, and the working directory is the fence rather than per-call validation. A grant including `run_shell` makes that distinction academic anyway — it does on the hosted path too.
+
+### Verdicts are enforced at exit
+
+A hosted agent that tries to finish without its required verdict gets forced into one more call via `tool_choice`. There is no such lever across a process boundary, so the rule moves to the exit instead: **a step that declared `verdicts:` and finished without calling the verdict tool has failed.** The failure is routable, so `failure:` in your `to:` map catches it.
+
+The verdict itself is captured in the parent process the moment the tool is called, over the bridge — the CLI is never trusted to report what it decided.
+
+### `attempts:` retries the whole invocation
+
+On the hosted path `attempts:` retries an individual HTTP request underneath a conversation that survives. A CLI's conversation lives inside the subprocess and dies with it, so there is nothing to resume: `attempts:` re-runs the whole invocation from the prompt.
+
+Only *infrastructure* failures are retried — the process failed to start, exited nonzero, or died without reporting a result. A CLI that ran fine and concluded the task failed is an answer, not an outage, and is not re-rolled.
+
+### What a CLI agent cannot do
+
+These are load errors, not silent no-ops, because a setting that reads as configured while binding nothing is worse than one that is rejected:
+
+| rejected | why |
+| --- | --- |
+| `source.endpoint:` | there is no request to aim anywhere |
+| `temperature:`, `top_p:`, `max_tokens:`, `reasoning_effort:` | the CLI chooses its own sampling |
+| `source.string_tool_choice:` | no `tool_choice` on the wire to spell |
+| `compact_after_tokens:` | the CLI compacts its own conversation |
+| `budget:` (on the agent) | spend is only known after exit, too late to stop |
+| `image:` (agent or step) | the CLI runs its tools on the host |
+| `required:`, `max_calls:`, `args:` on a tool | enforced by the turn loop the CLI replaces |
+| sub-agent tools, in either direction | a sub-agent nests inside a turn loop there is none of |
+| a CLI agent as a task's `fix:` agent | same reason |
+
+A job-level `budget:` still counts what a CLI agent spent — the CLI reports its usage on exit, and it is folded into the job total.
+
+`fallback:` works in both directions. A CLI agent can fall back to a hosted provider (useful when the binary is not installed on some machines), and a hosted agent can fall back to a CLI. Preflight checks a CLI target by looking for its binary on `PATH`; `steps preflight` reports a missing one before the run starts.
+
 ## Ensembles: asking several agents the same question
 
 A single model has blind spots. Ask one reviewer "is this correct?" and you get one opinion with no signal about how much to trust it; ask three and require a majority, and one model's bad day stops being decisive.

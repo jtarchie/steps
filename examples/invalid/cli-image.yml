@@ -1,0 +1,17 @@
+# image: runs an agent's shell tools inside a container. A cli runs its own
+# tools on the host, so the container would never be built and the isolation
+# the pipeline appears to ask for would not exist.
+# expect: image is not supported with a cli source
+
+agents:
+- name: reviewer
+  source:
+    model: "@claude/sonnet"
+  image: alpine:3
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: Review something.

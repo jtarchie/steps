@@ -105,6 +105,52 @@ One accounting detail: three failing requests produce two `agent.request_retry` 
 
 See [attempts-timeout.md](attempts-timeout.md) for a detailed guide covering the interaction with `assert:`, hook firing, and other step types.
 
+## CLI-backed agents: how delegation is wired
+
+A `source.model` of `@claude/sonnet` replaces the conversation, not the endpoint. The authoring view is in [agents.md](agents.md); this is the mechanism.
+
+### Where the branch lives
+
+`config.resolveAgentTarget` dispatches on the leading `@` to `resolveCLITarget`, which populates `ResolvedInvocation.CLI` (the `cliProviders` key) and leaves `BaseURL` empty. Exactly one branch downstream reads it: `runPrepared` in `step.go`, which calls `runCLIConversation` instead of `runOneConversation`. Because `runPrepared` is the single choke point already shared by `RunStep`, `RunHook`, and every routed re-entry, all three get the CLI path from that one line.
+
+`prepareAgentStep` is otherwise untouched: workspace, `buildAgentTools`, `injectSynthesizedTools`, context blocks, and the spill directory are all built identically. Only `newAgentLLM` is skipped — a CLI source has no HTTP client, so the OpenRouter/repair/retry transport stack has nothing to wrap.
+
+Two tables describe a CLI, deliberately split by concern: `config.cliProviders` holds what a *load* needs (which `@name` values exist, which binary to look for), and `agent.cliRuntimes` holds what an *invocation* needs (the native tool mapping, the always-denied list). `TestCLIRuntimesCoverProviders` asserts they cover the same keys, so half-adding a CLI fails the build rather than a run.
+
+### The bridge
+
+`clibridge.go` starts an MCP server in the parent process, on a loopback listener with an ephemeral port, for the duration of one attempt. It re-exports every tool in the step's registry except the ones the CLI serves natively, and writes a `--mcp-config` document naming its URL. The config file goes to the OS temp dir, never the workspace — the workspace is captured as artifacts and readable by the agent's own file tools, and a live callback URL belongs in neither.
+
+The server is **stateless** (`StreamableHTTPOptions{Stateless: true}`). It serves exactly one child for one attempt, so per-session state would only be a way for a crashed child to strand something.
+
+Adaptation is thin because the tool contract already fits: a `toolImpl` never returns a Go error, so the only translation is which result shape becomes `IsError` — and `requiredCallSucceeded`, the same predicate the HTTP loop uses, already answers that.
+
+The bridge is also where verdicts are captured. Every successful call is inspected for the `verdict`/`note` keys and the `handoff_note` payload, in the parent's memory, at the moment the tool runs. Nothing depends on the CLI reporting what it decided.
+
+### Enforcing required tools without `tool_choice`
+
+The HTTP loop enforces `required: true` by forcing an unsatisfied tool through the next turn's `tool_choice`. That lever does not cross a process boundary. `checkCLIObligations` moves the check to the exit instead: `unsatisfiedRequiredTools` — again the same function — is consulted once the process is gone, and anything still unsatisfied is an `outcome.Fail`. That is strictly stronger than the hosted path's "force one more turn and hope", at the cost of not being able to nudge mid-conversation.
+
+This is why tool guards (`required:`/`max_calls:`/`args:`) are rejected on CLI agents at load: only the synthesized tools have an enforcement point that survives the boundary.
+
+### Reading the transcript back
+
+`clistream.go` parses the CLI's line-delimited JSON off a pipe as it arrives, rather than buffering it whole — so a step killed by its timeout still records the trajectory of what it managed to do. Parsing is tolerant by design: the event schema belongs to the CLI, so an unknown event type, an unexpected content block, or an unparsable line is logged at debug and skipped. The one intolerable case is a missing terminal `result` event, which distinguishes "the CLI died mid-sentence" from "the CLI finished with nothing to say" — and that distinction is what `attempts:` keys off.
+
+Tool names enter the trajectory exactly as the CLI reported them (`Bash`, `Read`, `mcp__steps__verdict`), because that is what actually ran. Translating them back to steps' built-in names would make the record a reconstruction rather than an observation. Worth knowing when writing `assert.tool_calls` against a CLI step.
+
+### Hashing
+
+`AgentContentMap` folds in a `cli` key, value-gated so every pre-existing hosted agent hashes byte-identically and no cache entry was invalidated by this shipping. Moving an agent between a CLI and a hosted provider does change its hash, which is correct — it is a different thing producing the output.
+
+The CLI's own **version is deliberately not hashed**. It drifts under the operator exactly the way a hosted model's weights do, and this package has never claimed to hash the thing on the other end of the wire, only which thing was asked for. Folding in `claude --version` would also put a process spawn in the planning path, which `steps plan` and `steps watch` run constantly.
+
+### Preflight
+
+A CLI target's probe is `exec.LookPath`, nothing more. The HTTP probe sends a real request because an endpoint can be reachable and still reject the model or the key; a CLI has no equivalent cheap failure, and spawning one to find out would put a process launch in every `steps watch` poll. A CLI that is installed but broken fails at the step with the CLI's own error, which beats anything a probe would synthesize.
+
+The probe cache is keyed `cli|<cli>|<model>` rather than `model|<baseURL>|<model>`: `""` is a perfectly ordinary `BaseURL` for a CLI source, so a shared key space would let a CLI agent collide with an endpoint-less hosted one.
+
 ## Compacting long conversations
 
 Every model response and every tool result is normally appended to an agent step's conversation forever, for up to `max_turns` turns. A long-running agent — many tool calls, large file reads — can grow past the model's real context window well before hitting that turn cap, and the provider call then errors out.

@@ -1,0 +1,21 @@
+# required:/max_calls:/args: are enforced by the turn loop in internal/agent —
+# the loop a cli replaces wholesale. Accepting a guard nothing applies is worse
+# than rejecting it: the pipeline would claim a constraint it does not have.
+# expect: sets max_calls, which is not supported with a cli source
+
+agents:
+- name: reviewer
+  source:
+    model: "@claude/sonnet"
+  tools:
+  - name: count
+    description: Count the lines in a file.
+    run: wc -l {{ .args.path }}
+    max_calls: 2
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: Review something.

@@ -302,7 +302,14 @@ func preflightEnabled(agent *config.Agent, settings *config.Preflight) bool {
 }
 
 func probeModelCached(ctx context.Context, ri config.ResolvedInvocation, settings *config.Preflight) error {
+	// A CLI target is keyed on its own axis: "" is a perfectly ordinary
+	// BaseURL for a CLI source, so a shared key space would let a CLI agent
+	// and an endpoint-less HTTP one collide.
 	key := "model|" + ri.BaseURL + "|" + ri.ModelName
+	if ri.CLI != "" {
+		key = "cli|" + ri.CLI + "|" + ri.ModelName
+	}
+
 	now := time.Now()
 
 	found, cached := probeCache.lookup(key, settings.CacheWindow(), now)
@@ -323,6 +330,10 @@ func probeModelCached(ctx context.Context, ri config.ResolvedInvocation, setting
 // endpoint, the model name, and the credential are all exercised — a probe
 // that bypassed any of them would pass for a run that could not start.
 func probeModel(ctx context.Context, ri config.ResolvedInvocation, timeout time.Duration) error {
+	if ri.CLI != "" {
+		return probeCLI(ri)
+	}
+
 	apiKey, err := lookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
 	if err != nil {
 		return err

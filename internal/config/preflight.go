@@ -35,16 +35,17 @@ type Problem struct {
 func (p Problem) Error() string { return p.Target + ": " + p.Detail }
 
 // CheckEnvironment reports what this machine is missing for the pipeline to
-// run: credentials the agents need, and binaries the MCP servers need. It
-// makes no network calls and starts no processes — every check here is a
-// yes/no fact answerable in microseconds.
+// run: credentials the agents need, and binaries the MCP servers and CLI
+// agents need. It makes no network calls and starts no processes — every
+// check here is a yes/no fact answerable in microseconds.
 //
 // It reports every problem it finds rather than the first, since discovering
 // them one run at a time is the failure mode it exists to end.
 func (c *Config) CheckEnvironment() []Problem {
 	problems := c.checkAgentCredentials()
+	problems = append(problems, c.checkMCPCommands()...)
 
-	return append(problems, c.checkMCPCommands()...)
+	return append(problems, c.checkCLIBinaries()...)
 }
 
 // checkAgentCredentials reports agents whose api_key_env names an unset
@@ -64,18 +65,18 @@ func (c *Config) checkAgentCredentials() []Problem {
 
 		seen[name] = true
 
-		_, _, apiKeyEnv, requiresKey, _, err := resolveAgentTarget(agent.Source)
-		if err != nil || !requiresKey || apiKeyEnv == "" {
+		target, err := resolveAgentTarget(agent.Source)
+		if err != nil || !target.RequiresKey || target.APIKeyEnv == "" {
 			// An unresolvable target is already a load error (see
 			// validateAgentProviders); a provider that needs no key has
 			// nothing to check.
 			continue
 		}
 
-		if value, ok := os.LookupEnv(apiKeyEnv); !ok || value == "" {
+		if value, ok := os.LookupEnv(target.APIKeyEnv); !ok || value == "" {
 			problems = append(problems, Problem{
 				Target: fmt.Sprintf("agent %q", name),
-				Detail: fmt.Sprintf("$%s is not set (source.api_key_env)", apiKeyEnv),
+				Detail: fmt.Sprintf("$%s is not set (source.api_key_env)", target.APIKeyEnv),
 			})
 		}
 	}
@@ -151,7 +152,7 @@ func (c *Config) validateAgentProviders() error {
 			continue // validateStepReferences reports an unknown agent
 		}
 
-		_, _, _, _, _, err = resolveAgentTarget(agent.Source)
+		_, err = resolveAgentTarget(agent.Source)
 		if err != nil {
 			return fmt.Errorf("agent %q: %w", name, err)
 		}
@@ -159,7 +160,7 @@ func (c *Config) validateAgentProviders() error {
 		// A fallback nobody can resolve is a fallback that will not save you,
 		// discovered during the outage it exists for.
 		for i := range agent.Fallback {
-			_, _, _, _, _, err = resolveAgentTarget(agent.Fallback[i].Source)
+			_, err = resolveAgentTarget(agent.Fallback[i].Source)
 			if err != nil {
 				return fmt.Errorf("agent %q fallback[%d]: %w", name, i, err)
 			}

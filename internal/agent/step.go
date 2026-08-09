@@ -246,9 +246,21 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	}
 
 	return preparedAgentStep{
-		step: step, ri: ri, primary: primary, space: space, conv: conv, llm: newAgentLLM(ri, apiKey),
+		step: step, ri: ri, primary: primary, space: space, conv: conv, llm: invocationLLM(ri, apiKey),
 		closers: closers, spillDir: spillDir,
 	}, nil
+}
+
+// invocationLLM builds the client an invocation talks to, or nil for a CLI
+// source: the subprocess talks to the model itself, and everything a step
+// assembled reaches it through the bridge instead of through a request (see
+// cli.go).
+func invocationLLM(ri config.ResolvedInvocation, apiKey string) model.LLM {
+	if ri.CLI != "" {
+		return nil
+	}
+
+	return newAgentLLM(ri, apiKey)
 }
 
 // resolveWithFailover resolves a step's agent twice over: as CONFIGURED, which
@@ -754,6 +766,13 @@ func describeTrajectory(got []recordedToolCall) string {
 func runPrepared(ctx context.Context, prepared preparedAgentStep) (conversationResult, error) {
 	timeout := agentTimeout(prepared.ri.Timeout)
 
+	// A CLI source delegates the conversation to a subprocess instead of
+	// driving it here (see cli.go). Branching at this one choke point is what
+	// gives RunStep, RunHook, and every routed re-entry the CLI path for free.
+	if prepared.ri.CLI != "" {
+		return runCLIConversation(ctx, prepared, timeout)
+	}
+
 	return runOneConversation(ctx, prepared.ri, prepared.llm, prepared.conv, timeout)
 }
 
@@ -843,7 +862,13 @@ func fallbackBanner(prepared preparedAgentStep) string {
 // fallbackModel names the model serving this step when it is not the
 // configured one, else "".
 func fallbackModel(prepared preparedAgentStep) string {
-	if prepared.ri.ModelName == prepared.primary.ModelName && prepared.ri.BaseURL == prepared.primary.BaseURL {
+	same := prepared.ri.ModelName == prepared.primary.ModelName &&
+		prepared.ri.BaseURL == prepared.primary.BaseURL &&
+		// A failover between a CLI and a hosted provider can leave the model
+		// name identical while changing everything about how the step runs.
+		prepared.ri.CLI == prepared.primary.CLI
+
+	if same {
 		return ""
 	}
 

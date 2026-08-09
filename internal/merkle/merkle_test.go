@@ -982,3 +982,60 @@ func TestPlanChainsTryStepIsUnskippable(t *testing.T) {
 		t.Error("a chain containing a try step must be unskippable")
 	}
 }
+
+// TestAgentContentMapCLI pins both halves of the CLI key: an HTTP agent must
+// hash exactly as it did before CLI sources existed (the key is value-gated,
+// so no cache entry anywhere is invalidated by this feature shipping), and
+// moving an agent onto a CLI must invalidate it.
+func TestAgentContentMapCLI(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Agents: []config.Agent{
+			{Name: "reviewer", Source: config.AgentSource{Model: "@claude/sonnet"}},
+		},
+	}
+
+	base := config.ResolvedInvocation{
+		AgentName: "reviewer",
+		ModelName: "sonnet",
+		MaxTurns:  8,
+		Attempts:  1,
+		ToolSpecs: []config.ToolSpec{},
+	}
+
+	httpContent, err := AgentContentMap(cfg, config.Step{Agent: "reviewer"}, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := httpContent["cli"]; ok {
+		t.Error(`an http agent should not have a "cli" content key`)
+	}
+
+	cliRI := base
+	cliRI.CLI = "claude"
+
+	cliContent, err := AgentContentMap(cfg, config.Step{Agent: "reviewer"}, cliRI)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cliContent["cli"] != "claude" {
+		t.Errorf(`content["cli"] = %v, want "claude"`, cliContent["cli"])
+	}
+
+	httpHash, err := HashNode(NodeKindAgent, httpContent, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cliHash, err := HashNode(NodeKindAgent, cliContent, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if httpHash == cliHash {
+		t.Error("moving an agent onto a cli did not change its hash")
+	}
+}

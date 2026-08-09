@@ -1,0 +1,22 @@
+# A sub-agent tool runs a nested conversation inside the parent's turn loop. A
+# cli agent has no such loop to nest into. Delegate with a separate agent step
+# instead.
+# expect: grants a sub-agent, which is not supported with a cli source
+
+agents:
+- name: helper
+  description: Answers a narrow question.
+  source:
+    model: openai/gpt-4o
+- name: reviewer
+  source:
+    model: "@claude/sonnet"
+  tools:
+  - agent: helper
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: Review something.

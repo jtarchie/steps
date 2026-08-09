@@ -1,0 +1,19 @@
+# A per-invocation budget is a circuit breaker: it stops a conversation
+# mid-flight. A cli reports its spend only after the subprocess exits, which is
+# too late to stop anything — so this would read as a cap while capping
+# nothing. A job-level budget: still counts what a cli agent spent.
+# expect: budget is not supported with a cli source
+
+agents:
+- name: reviewer
+  source:
+    model: "@claude/sonnet"
+  budget:
+    tokens: 100000
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: Review something.

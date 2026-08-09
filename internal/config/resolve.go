@@ -101,7 +101,13 @@ type ResolvedInvocation struct {
 	ModelName   string
 	APIKeyEnv   string
 	RequiresKey bool
-	Persona     string
+	// CLI, when non-empty, names the coding-agent CLI that runs this
+	// invocation as a subprocess instead of an HTTP conversation (see
+	// cliagent.go). BaseURL is empty in that case, and ModelName is the model
+	// the CLI is asked for (e.g. "sonnet"). Hashed as `cli`, so moving an
+	// agent between a CLI and a hosted provider invalidates its cache.
+	CLI     string
+	Persona string
 	// ContextPaths mirrors Step.ContextPaths once resolved — populated from
 	// the step, not the agent definition, since concrete input paths are
 	// only known at the step level.
@@ -156,7 +162,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		return ResolvedInvocation{}, err
 	}
 
-	baseURL, modelName, apiKeyEnv, requiresKey, stringOnlyToolChoice, err := resolveAgentTarget(agent.Source)
+	target, err := resolveAgentTarget(agent.Source)
 	if err != nil {
 		return ResolvedInvocation{}, err
 	}
@@ -181,7 +187,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		attempts = 1
 	}
 
-	compactAfterTokens, contextWindow := resolveCompactionBudget(modelName, agent.CompactAfterTokens)
+	compactAfterTokens, contextWindow := resolveCompactionBudget(target.ModelName, agent.CompactAfterTokens)
 
 	image := agent.Image
 	if step.Image != "" {
@@ -191,10 +197,11 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 	return ResolvedInvocation{
 		AgentName:            agent.Name,
 		Description:          agent.Description,
-		BaseURL:              baseURL,
-		ModelName:            modelName,
-		APIKeyEnv:            apiKeyEnv,
-		RequiresKey:          requiresKey,
+		BaseURL:              target.BaseURL,
+		ModelName:            target.ModelName,
+		APIKeyEnv:            target.APIKeyEnv,
+		RequiresKey:          target.RequiresKey,
+		CLI:                  target.CLI,
 		Persona:              agent.System,
 		ContextPaths:         step.ContextPaths,
 		Temperature:          agent.Temperature,
@@ -208,7 +215,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		ContextWindow:        contextWindow,
 		BudgetTokens:         budgetTokens(agent.Budget),
 		ToolSpecs:            toolSpecs,
-		StringOnlyToolChoice: stringOnlyToolChoice,
+		StringOnlyToolChoice: target.StringOnlyToolChoice,
 		Image:                image,
 	}, nil
 }
@@ -224,22 +231,25 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 // availability, not content, and a fallback firing on one run cannot
 // invalidate a cache entry.
 func (ri ResolvedInvocation) WithSource(source AgentSource, explicitCompactAfterTokens *int) (ResolvedInvocation, error) {
-	baseURL, modelName, apiKeyEnv, requiresKey, stringOnlyToolChoice, err := resolveAgentTarget(source)
+	target, err := resolveAgentTarget(source)
 	if err != nil {
 		return ResolvedInvocation{}, fmt.Errorf("fallback source: %w", err)
 	}
 
-	ri.BaseURL = baseURL
-	ri.ModelName = modelName
-	ri.APIKeyEnv = apiKeyEnv
-	ri.RequiresKey = requiresKey
-	ri.StringOnlyToolChoice = stringOnlyToolChoice
+	ri.BaseURL = target.BaseURL
+	ri.ModelName = target.ModelName
+	ri.APIKeyEnv = target.APIKeyEnv
+	ri.RequiresKey = target.RequiresKey
+	ri.StringOnlyToolChoice = target.StringOnlyToolChoice
+	// Set AND cleared: failing over between a CLI and a hosted provider in
+	// either direction has to change which machinery runs the conversation.
+	ri.CLI = target.CLI
 
 	// The compaction budget follows the model that will actually serve the
 	// conversation — a 200K fallback must not inherit a 1M primary's budget.
 	// An explicit compact_after_tokens: still wins, since the operator set it
 	// for this agent, not for one of its endpoints.
-	ri.CompactAfterTokens, ri.ContextWindow = resolveCompactionBudget(modelName, explicitCompactAfterTokens)
+	ri.CompactAfterTokens, ri.ContextWindow = resolveCompactionBudget(target.ModelName, explicitCompactAfterTokens)
 
 	return ri, nil
 }

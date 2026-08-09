@@ -1,0 +1,20 @@
+# A task's fix: agent runs on the same conversation machinery as a sub-agent,
+# with a synthesized rerun tool the cli would never be offered.
+# expect: cannot run as a fix agent
+
+agents:
+- name: fixer
+  source:
+    model: "@claude/sonnet"
+
+tasks:
+- name: build
+  run: exit 1
+  fix:
+    agent: fixer
+    prompt: Fix the build.
+
+jobs:
+- name: ci
+  plan:
+  - task: build
