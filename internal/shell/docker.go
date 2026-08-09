@@ -395,6 +395,17 @@ func dockerCommand(ctx context.Context, args []string) *exec.Cmd {
 func dockerStartArgs(image, name, resolvedCwd string, envNames []string, user, network string) []string {
 	args := []string{"run", "-d", "--rm", "--init", "--name", name}
 
+	// Labels are how a container survives its creator. If this process is
+	// SIGKILLed, nothing runs Close, and the only thing left is a container
+	// with a name and no explanation — the keepalive expiring 24h later was
+	// the sole cleanup. These let the NEXT run recognize it as ours and whose
+	// it was; see SweepOrphanedContainers.
+	args = append(args,
+		"--label", dockerOwnerLabel+"=steps",
+		"--label", fmt.Sprintf("%s=%d", dockerPIDLabel, os.Getpid()),
+		"--label", dockerHostLabel+"="+ownerHostname(),
+	)
+
 	if resolvedCwd != "" {
 		args = append(args, "-v", resolvedCwd+":"+resolvedCwd, "-w", resolvedCwd)
 	}

@@ -69,6 +69,11 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 			return fmt.Errorf("job %q: image: configured but docker is unavailable: %w", job.Name, err)
 		}
 
+		// Reclaim containers a previous run was SIGKILLed before it could
+		// remove. Best-effort and silent when there is nothing to do, so this
+		// costs one `docker ps` on the overwhelmingly common clean start.
+		shell.SweepOrphanedContainers(ctx)
+
 		// Pull now rather than letting the first step needing an uncached image
 		// pay for it inside its own timeout, with the progress landing in that
 		// command's output. Present images are a local inspect, so a warm run

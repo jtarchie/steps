@@ -29,13 +29,22 @@ func TestDockerStartArgsMountsCwd(t *testing.T) {
 
 	args := dockerStartArgs("alpine", "steps-abc", resolvedCwd, nil, "", "")
 
-	want := []string{
-		"run", "-d", "--rm", "--init", "--name", "steps-abc",
-		"-v", resolvedCwd + ":" + resolvedCwd, "-w", resolvedCwd,
-		"--", "alpine", "sh", "-c", "sleep 86400",
+	if !slices.Contains(args, "-v") {
+		t.Fatalf("args = %v, want a -v mount", args)
 	}
-	if !reflect.DeepEqual(args, want) {
-		t.Errorf("args = %v, want %v", args, want)
+
+	i := slices.Index(args, "-v")
+	if args[i+1] != resolvedCwd+":"+resolvedCwd {
+		t.Errorf("mount = %q, want the cwd bound at its own path", args[i+1])
+	}
+
+	w := slices.Index(args, "-w")
+	if w < 0 || args[w+1] != resolvedCwd {
+		t.Errorf("args = %v, want -w %s", args, resolvedCwd)
+	}
+
+	if got := args[len(args)-4:]; !reflect.DeepEqual(got, []string{"alpine", "sh", "-c", "sleep 86400"}) {
+		t.Errorf("tail of args = %v, want the image and keepalive last", got)
 	}
 }
 
@@ -44,9 +53,8 @@ func TestDockerStartArgsEmptyCwdMountsNothing(t *testing.T) {
 
 	args := dockerStartArgs("alpine", "steps-abc", "", nil, "", "")
 
-	want := []string{"run", "-d", "--rm", "--init", "--name", "steps-abc", "--", "alpine", "sh", "-c", "sleep 86400"}
-	if !reflect.DeepEqual(args, want) {
-		t.Errorf("args = %v, want %v", args, want)
+	if slices.Contains(args, "-v") || slices.Contains(args, "-w") {
+		t.Errorf("args = %v, want no mount or workdir for an empty cwd", args)
 	}
 }
 
