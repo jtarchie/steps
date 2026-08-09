@@ -678,6 +678,10 @@
         },
         "ensure": {
           "$ref": "#/$defs/step"
+        },
+        "timeout": {
+          "type": "string",
+          "description": "Wall-clock deadline for the whole job, e.g. \"45m\". Checked BETWEEN steps: the running step finishes and no further step starts, so it composes with a step's own timeout: rather than racing it. Fails the job. Not hashed."
         }
       }
     },

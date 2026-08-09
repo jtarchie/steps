@@ -20,6 +20,24 @@ type Job struct {
 	// Budget). A cumulative ceiling, so the step that trips it is rarely the
 	// one that cost the most. Never hashed.
 	Budget *Budget `yaml:"budget,omitempty"`
+	// Timeout is a wall-clock deadline for the whole job (e.g. "45m"), the
+	// same ceiling Budget is in the other unit. Empty means none.
+	//
+	// Checked BETWEEN steps, never interrupting one. A step keeps its own
+	// timeout:, and this decides whether the NEXT one starts — so the two
+	// compose instead of racing, and a job never reports a deadline breach for
+	// a step that was actually still making progress. The cost is that the job
+	// can overrun by at most one step's duration, which is the honest price of
+	// not cutting work off mid-flight.
+	//
+	// It FAILS the job rather than degrading, unlike an across: block's
+	// budget:. Same reasoning as the token ceiling here: a job-level limit is a
+	// backstop against a run that has gone wrong, and the thing you want then
+	// is to stop and say so. Degrading belongs on the block whose width nobody
+	// knew when they wrote the pipeline.
+	//
+	// Never hashed — an operational limit, like every other.
+	Timeout string `yaml:"timeout,omitempty"`
 	// Serial states that two builds of this job must never run at once.
 	//
 	// It is a statement of intent rather than a switch: this runner always

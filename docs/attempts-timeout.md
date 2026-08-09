@@ -45,6 +45,25 @@ Do NOT set timeouts too aggressively — a legitimate long-running operation sho
 
 To implement a total timeout across all attempts, set a longer task-level timeout and a short step-level timeout — but this is rarely needed.
 
+### A whole job can have one too
+
+`timeout:` on a **job** is a wall-clock ceiling on the entire run — the same ceiling `budget:` gives in tokens, in the other unit. It exists because per-step timeouts do not add up to one: a job whose width is decided at run time (an `across:` block over what an earlier step recorded) can run twelve cells that each finish comfortably inside their own deadline and still take all afternoon.
+
+```yaml
+jobs:
+- name: review
+  timeout: 45m
+  budget:
+    tokens: 2000000
+  plan:
+  - ...
+```
+
+- **Checked between steps, never during one.** The step that is running finishes and keeps its work; the deadline decides only whether the *next* one starts. So a job timeout and a step timeout compose rather than race, and a job never reports a deadline breach against work that was still making progress. The price is that a job may overrun by at most one step's duration — the honest cost of not cutting work off mid-flight.
+- **It fails the job**, and does so as a job-level *failure* (the same class as exceeding `max_visits:`), so the job's own `on_failure` and `ensure` fire. That is where a "this took too long" notification belongs.
+- **It does not degrade**, unlike [`budget:` on an `across:` block](control-flow.md#a-ceiling-that-degrades-budget). Same reasoning as the job's token ceiling: a job-level limit is a backstop against a run that has gone wrong, and stopping loudly is the right answer. Degrading belongs on the block whose width nobody knew when they wrote the pipeline.
+- **Never hashed**, like every operational limit — adding one invalidates no cache.
+
 ### An expired timeout is not retried
 
 When an attempt exhausts its own `timeout:`, the step ends there — the remaining attempts are **skipped**. The same work against the same budget expires again, so retrying only doubles the wall clock and the bill. This matters most for `agent` steps, where a retry rebuilds the whole conversation from scratch and pays for it a second time.

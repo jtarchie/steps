@@ -15,7 +15,35 @@ func (c *Config) validateTimeouts() error {
 		return err
 	}
 
+	err = c.validateJobTimeouts()
+	if err != nil {
+		return err
+	}
+
 	return c.validateStepTimeouts()
+}
+
+// validateJobTimeouts checks the job-level wall-clock deadline.
+func (c *Config) validateJobTimeouts() error {
+	for _, job := range c.Jobs {
+		if job.Timeout == "" {
+			continue
+		}
+
+		d, err := ParseTimeout(job.Timeout)
+		if err != nil {
+			return fmt.Errorf("job %q: timeout: %w", job.Name, err)
+		}
+
+		// Zero would read as "no deadline" to anyone writing it and as "expire
+		// immediately" to anything enforcing it. Neither reading is safe to
+		// guess at, so it is a load error and the empty field means none.
+		if d <= 0 {
+			return fmt.Errorf("job %q: timeout must be a positive duration (omit it entirely for no deadline)", job.Name)
+		}
+	}
+
+	return nil
 }
 
 // validateTaskTimeouts checks all tasks: entries for valid timeout values.
