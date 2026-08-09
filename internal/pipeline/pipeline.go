@@ -487,6 +487,14 @@ func nextPendingHandoff(jobName string, step config.Step, steps []config.Step, r
 		return nil
 	}
 
+	// `to: <key>: next` on the LAST step of a plan slice routes one past the
+	// end — the same place an unrouted final step goes. There is no step there
+	// to hand anything to, and the field reads below would index out of range:
+	// a real panic, on exactly the pipeline whose last outcome says "carry on".
+	if nextIndex >= len(steps) {
+		return nil
+	}
+
 	return &agent.Handoff{
 		JobName:   jobName,
 		FromStep:  executedStepName(step),

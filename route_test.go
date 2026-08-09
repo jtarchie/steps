@@ -70,3 +70,27 @@ jobs:
 			"must never be recorded as a reusable succeeded chain", "build", count)
 	}
 }
+
+// TestRouteNextOffTheEndOfThePlanDoesNotPanic drives the whole runner over the
+// shape the unit tests could not reach: `to: { failure: next }` on the LAST
+// step of a plan.
+//
+// The route resolves one past the end — where an unrouted final step goes
+// anyway — and the two places that then wanted to look up "the step routed to"
+// both indexed the slice. Both were a hard panic, taking the process down on a
+// pipeline whose last outcome says nothing more than "carry on". The route also
+// has to CONSUME the failure, or a job that said to keep going still exits red.
+func TestRouteNextOffTheEndOfThePlanDoesNotPanic(t *testing.T) {
+	path := writePipeline(t, t.TempDir(), `
+jobs:
+- name: j
+  plan:
+  - task: probe
+    inputs: []
+    run: exit 1
+    to:
+      failure: next
+`)
+
+	mustRun(t, path)
+}

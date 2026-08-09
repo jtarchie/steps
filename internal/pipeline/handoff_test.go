@@ -100,3 +100,22 @@ func TestNextPendingHandoffVisitPreviewsNextExecution(t *testing.T) {
 		t.Errorf("Visit = %d, want 3 (the upcoming, 3rd execution of the target step)", got.Visit)
 	}
 }
+
+// TestNextPendingHandoffPastTheEndOfThePlan is the panic regression.
+//
+// `to: <key>: next` on the LAST step routes one past the end — the same place
+// an unrouted final step goes. It is a real route, so routedKey is non-empty
+// and this ran; the field reads then indexed steps[len(steps)] and crashed the
+// whole run on exactly the pipeline whose last outcome says "carry on".
+func TestNextPendingHandoffPastTheEndOfThePlan(t *testing.T) {
+	t.Parallel()
+
+	steps := []config.Step{
+		{Task: "last", To: map[string]string{"failure": config.RouteTargetNext}},
+	}
+
+	got := nextPendingHandoff("j", steps[0], steps, "failure", nonGetOutcome{}, map[int]int{}, 1)
+	if got != nil {
+		t.Errorf("nextPendingHandoff = %#v, want nil — there is no step past the end to hand off to", got)
+	}
+}

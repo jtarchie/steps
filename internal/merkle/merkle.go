@@ -257,11 +257,24 @@ func withHandoffNote(step config.Step, content map[string]any) map[string]any {
 // steps shown different things are not the same step. The recorded FACTS are
 // excluded — a runtime value the planner cannot know, and one that agent steps
 // being Unskippable makes safe to leave out.
+// The qualify is identity for the third variant of the same reason: it decides
+// WHERE the step's writes land — its own per-cell scope, merged under a key
+// naming the cell, rather than the run scope under the plain key. Two steps
+// recording under different key names are not the same step. Without it,
+// adding qualify: to a matrix of task cells is a cache hit: the cells skip, no
+// per-cell scope is ever written, and the join merges nothing — so the author
+// gets the OLD unqualified key with no error, which is the silent key-shape
+// change qualify: exists to eliminate. Value-gated like the fidelity above, so
+// every pipeline that does not set it hashes byte-identically to before.
 func withContext(step config.Step, content map[string]any) map[string]any {
 	if step.Context != nil {
 		entry := map[string]any{"write": step.Context.Write}
 		if step.Context.Fidelity != "" {
 			entry["fidelity"] = string(step.Context.Fidelity)
+		}
+
+		if step.Context.Qualify {
+			entry["qualify"] = true
 		}
 
 		content["context"] = entry
@@ -499,7 +512,12 @@ func TaskNodeContent(cfg *config.Config, step config.Step, rt config.ResolvedTas
 		content["assert"] = assertContent(rt.Assert)
 	}
 
-	return withHooks(cfg, step, withWhen(step, withRouting(step, content)))
+	// A task's context: is identity too, and this is the step kind where it
+	// actually bites: an agent is never cacheable, so hashing its declaration
+	// alone would be a no-op, while a task CELL of a matrix is the one thing a
+	// rerun can skip. Without this, adding qualify: to a matrix of task cells
+	// was a cache hit that recorded nothing.
+	return withHooks(cfg, step, withWhen(step, withRouting(step, withContext(step, content))))
 }
 
 // assertContent builds the stable content map for a task/agent step's assert

@@ -101,14 +101,18 @@ func runAcrossCells(
 
 	var (
 		failures []error
-		results  = make([]branchResult, len(cells))
+		results  []branchResult // only the qualified walk has a join to merge
 	)
 
-	for index, cell := range cells {
-		results[index] = branchResult{index: index, name: executedStepName(cell)}
+	if qualified {
+		results = make([]branchResult, len(cells))
+	}
 
+	for index, cell := range cells {
 		cellCtx := ctx
+
 		if qualified {
+			results[index] = branchResult{index: index, name: executedStepName(cell)}
 			cellCtx = agent.WithContextScope(ctx,
 				branchContextScope(agent.ContextWriteScope(ctx), index, results[index].name))
 		}

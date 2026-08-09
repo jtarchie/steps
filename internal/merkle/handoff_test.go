@@ -118,3 +118,102 @@ func mustRI(t *testing.T, cfg *config.Config, step config.Step) config.ResolvedI
 
 	return ri
 }
+
+// TestContextQualifyIsIdentity proves qualify: changes a step's hash.
+//
+// It decides WHERE the step's writes land — its own per-cell scope, merged
+// under a key naming the cell, rather than the run scope under the plain key —
+// so two steps recording under different key names are not the same step.
+//
+// Left out, adding qualify: to a matrix of task cells was a CACHE HIT: the
+// cells skipped, no per-cell scope was ever written, the join merged nothing,
+// and the author read back the old unqualified key with no error at all. That
+// is the silent key-shape change qualify: exists to eliminate, reintroduced by
+// the hash.
+func TestContextQualifyIsIdentity(t *testing.T) {
+	t.Parallel()
+
+	cfg := agentCfg(nil, "")
+	step := func(spec *config.ContextSpec) config.Step {
+		return config.Step{Agent: "reviewer", Prompt: "do it", Context: spec}
+	}
+
+	write := mustAgentHash(t, cfg, step(&config.ContextSpec{Write: true}))
+	qualified := mustAgentHash(t, cfg, step(&config.ContextSpec{Write: true, Qualify: true}))
+
+	if write == qualified {
+		t.Error("adding context qualify: must change an agent step's hash")
+	}
+}
+
+// TestContextQualifyIsIdentityForATask is the half that actually bites.
+//
+// An agent step is never cacheable, so hashing its declaration alone would be
+// a no-op — while a TASK cell of a matrix is the one thing a rerun can skip
+// (see CellHash). TaskNodeContent did not fold context: at all, so the agent
+// fix above changed nothing about the observed bug: the cells still skipped
+// and the join still merged empty scopes.
+func TestContextQualifyIsIdentityForATask(t *testing.T) {
+	t.Parallel()
+
+	cfg := agentCfg(nil, "")
+	hash := func(spec *config.ContextSpec) string {
+		t.Helper()
+
+		step := config.Step{Task: "record", Run: "true", Context: spec}
+
+		rt, err := cfg.ResolveTask(step)
+		if err != nil {
+			t.Fatalf("ResolveTask: %v", err)
+		}
+
+		content, err := TaskNodeContent(cfg, step, rt)
+		if err != nil {
+			t.Fatalf("TaskNodeContent: %v", err)
+		}
+
+		out, err := HashNode(NodeKindTask, content, "parent")
+		if err != nil {
+			t.Fatalf("HashNode: %v", err)
+		}
+
+		return out
+	}
+
+	if hash(&config.ContextSpec{Write: true}) == hash(&config.ContextSpec{Write: true, Qualify: true}) {
+		t.Error("adding context qualify: must change a task cell's hash; without it the cells skip and record nothing")
+	}
+
+	if hash(nil) == hash(&config.ContextSpec{Write: true}) {
+		t.Error("context: write changes whether the runner collects the context/ dir, so it must change a task's hash")
+	}
+}
+
+// TestContextQualifyHashStabilityWhenUnset is the other half: value-gating, so
+// every pipeline that does not set qualify: hashes byte-identically to before
+// the field existed and nothing already cached re-runs.
+func TestContextQualifyHashStabilityWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	cfg := agentCfg(nil, "")
+	step := config.Step{Agent: "reviewer", Prompt: "do it", Context: &config.ContextSpec{Write: true}}
+
+	ri, err := cfg.ResolveAgentInvocation(step)
+	if err != nil {
+		t.Fatalf("ResolveAgentInvocation: %v", err)
+	}
+
+	content, err := AgentContentMap(cfg, step, ri)
+	if err != nil {
+		t.Fatalf("AgentContentMap: %v", err)
+	}
+
+	entry, ok := content["context"].(map[string]any)
+	if !ok {
+		t.Fatalf("content[context] = %#v, want a map", content["context"])
+	}
+
+	if _, present := entry["qualify"]; present {
+		t.Error("unset qualify must not appear in the hashed content")
+	}
+}
