@@ -436,8 +436,9 @@ func TestCLIContinuationPrompt(t *testing.T) {
 	prepared := cliPrepared(t, []string{"read_file"})
 	prepared.step.Verdicts = []string{"approve", "reject"}
 
-	previous := conversationResult{trajectory: []recordedToolCall{{name: "Read"}, {name: "Bash"}}}
-	prompt := cliContinuationPrompt(previous, prepared)
+	state := newCLIStepState()
+	state.trajectory = []recordedToolCall{{name: "Read"}, {name: "Bash"}}
+	prompt := cliContinuationPrompt(state, prepared)
 
 	for _, want := range []string{"did not finish", "2 tool call", "do not start the task over"} {
 		if !strings.Contains(prompt, want) {
@@ -483,4 +484,80 @@ func TestNewCLISessionID(t *testing.T) {
 
 		seen[id] = true
 	}
+}
+
+// TestCLIStepStateAccumulatesAcrossAttempts pins the inversion resuming
+// causes. Under the old restart semantics a per-attempt view was right --
+// attempt 2 redid the work, so attempt 1.s verdict was stale. Sharing one
+// conversation flips that: a verdict emitted before the process died is still
+// this conversation.s verdict, and a resumed model that can see it already
+// called the tool has no reason to call it again. Dropping it would fail the
+// step for an obligation it actually met.
+func TestCLIStepStateAccumulatesAcrossAttempts(t *testing.T) {
+	t.Parallel()
+
+	state := newCLIStepState()
+
+	// Attempt 1: emitted a verdict through the bridge and made two calls,
+	// then died before reporting a result (so no text, no turns).
+	first := newFakeBridgeObservation(t, "approve", "looks fine", []recordedToolCall{{name: "verdict", ok: true}})
+	state.absorb(cliRunResult{turns: 0, trajectory: []recordedToolCall{{name: "Read", ok: true}}}, first)
+
+	// Attempt 2: resumed, finished, said nothing about a verdict because it
+	// had already given one.
+	second := newFakeBridgeObservation(t, "", "", nil)
+	state.absorb(cliRunResult{text: "done", turns: 3, trajectory: []recordedToolCall{{name: "Write", ok: true}}}, second)
+
+	result := state.result("sonnet")
+
+	if result.verdict != "approve" || result.note != "looks fine" {
+		t.Errorf("verdict/note = %q/%q, want the one emitted before the crash", result.verdict, result.note)
+	}
+
+	if !state.satisfied[verdictToolName] {
+		t.Error("the verdict obligation was forgotten between attempts")
+	}
+
+	// The conversation was continuous, so the record of it is too.
+	if len(result.trajectory) != 3 {
+		t.Errorf("trajectory has %d calls, want all 3 across both attempts: %+v", len(result.trajectory), result.trajectory)
+	}
+
+	if result.turns != 3 || result.text != "done" {
+		t.Errorf("result = {turns: %d, text: %q}, want {3, done}", result.turns, result.text)
+	}
+}
+
+// TestCLIStepStateKeepsEarlierAnswer pins the other half: an attempt that
+// produced nothing must not erase what an earlier one produced.
+func TestCLIStepStateKeepsEarlierAnswer(t *testing.T) {
+	t.Parallel()
+
+	state := newCLIStepState()
+	state.absorb(cliRunResult{text: "the real answer", turns: 2}, newFakeBridgeObservation(t, "reject", "", nil))
+	state.absorb(cliRunResult{}, newFakeBridgeObservation(t, "", "", nil))
+
+	result := state.result("sonnet")
+	if result.text != "the real answer" || result.verdict != "reject" {
+		t.Errorf("result = {text: %q, verdict: %q}, want the earlier attempt's output preserved", result.text, result.verdict)
+	}
+
+	// Nothing was written, so nothing is reported -- an empty map here would
+	// read downstream as though a handoff note existed.
+	if result.handoffNote != nil {
+		t.Errorf("handoffNote = %v, want nil", result.handoffNote)
+	}
+}
+
+// newFakeBridgeObservation builds a closed bridge carrying the given captures,
+// standing in for one attempt's worth of tool traffic.
+func newFakeBridgeObservation(t *testing.T, verdict, note string, calls []recordedToolCall) *cliBridge {
+	t.Helper()
+
+	bridge := &cliBridge{satisfied: map[string]bool{}, verdict: verdict, note: note, calls: calls}
+	if verdict != "" {
+		bridge.satisfied[verdictToolName] = true
+	}
+
+	return bridge
 }

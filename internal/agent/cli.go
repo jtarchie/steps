@@ -121,10 +121,12 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 
 	defer cleanupCLISession(session)
 
-	var (
-		result     conversationResult
-		turnsSpent int
-	)
+	// One state for the whole step, not one per attempt: the attempts share a
+	// conversation now, so what an attempt observed stays true for the ones
+	// after it. See cliStepState.
+	state := newCLIStepState()
+
+	var lastErr error
 
 	runErr := retry.Do(ctx, prepared.ri.Attempts, func(attempt int) error {
 		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -137,24 +139,28 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 			// counts turns in one conversation that request retries never
 			// reset, and a resumed session is the same conversation. The CLI
 			// counts turns per invocation, so the remainder is ours to track.
-			maxTurns: prepared.ri.MaxTurns - turnsSpent,
-			prompt:   renderCLIPrompt(prepared.conv),
+			maxTurns: prepared.ri.MaxTurns - state.turns,
 		}
 
+		// A resumed attempt is NOT re-sent the task: the session already holds
+		// the prompt, the recap and the context blocks, and repeating them
+		// invites redoing finished work.
 		if plan.resume {
-			plan.prompt = cliContinuationPrompt(result, prepared)
+			plan.prompt = cliContinuationPrompt(state, prepared)
+		} else {
+			plan.prompt = renderCLIPrompt(prepared.conv)
 		}
 
 		if plan.maxTurns <= 0 {
-			return retry.Stop(outcome.Fail(fmt.Errorf("agent %q: exhausted its %d-turn budget across %d attempt(s)",
-				prepared.ri.AgentName, prepared.ri.MaxTurns, attempt)))
+			// Carrying lastErr matters: the budget ran out because of whatever
+			// failed a moment ago, and reporting only the ceiling would hide
+			// the thing actually worth investigating.
+			return retry.Stop(outcome.Fail(fmt.Errorf("agent %q: exhausted its %d-turn budget across %d attempt(s); last failure: %w",
+				prepared.ri.AgentName, prepared.ri.MaxTurns, attempt, lastErr)))
 		}
 
-		var attemptErr error
-
-		result, attemptErr = runCLIAttempt(attemptCtx, prepared, runtime, plan)
-		turnsSpent += result.turns
-		result.turns = turnsSpent
+		attemptErr := runCLIAttempt(attemptCtx, prepared, runtime, plan, state)
+		lastErr = attemptErr
 
 		if attemptErr != nil {
 			slog.Warn("agent.cli.attempt_failed",
@@ -162,7 +168,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 				"cli", prepared.ri.CLI,
 				"attempt", attempt+1,
 				"of", prepared.ri.Attempts,
-				"turns_spent", turnsSpent,
+				"turns_spent", state.turns,
 				"error", attemptErr)
 		}
 
@@ -177,8 +183,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		return retry.StopOnDeadline(ctx, attemptCtx, attemptErr)
 	})
 
-	//nolint:wrapcheck // retry.Do returns the attempt's own error, already agent-labeled
-	return result, runErr
+	return state.result(prepared.ri.ModelName), runErr
 }
 
 // cliAttempt is one invocation's session state: which conversation it joins,
@@ -191,6 +196,73 @@ type cliAttempt struct {
 	prompt   string
 }
 
+// cliStepState is everything a step has observed across its attempts.
+//
+// It accumulates because the attempts share one conversation. Under the old
+// restart semantics a per-attempt view was right — attempt 2 redid the work,
+// so attempt 1's verdict was stale. Resuming inverts that, exactly as it
+// inverted the session-identity reasoning in #20: a verdict the model emitted
+// before the process died is still THIS conversation's verdict, and a resumed
+// model that can see it already called the tool has no reason to call it
+// again. Discarding it would fail the step for an obligation it met.
+//
+// The same holds for the trajectory: a resumed CLI reports only its new
+// events, so the calls a step actually made are the concatenation, not the
+// last slice.
+type cliStepState struct {
+	text        string
+	turns       int
+	trajectory  []recordedToolCall
+	verdict     string
+	note        string
+	handoffNote map[string]string
+	satisfied   map[string]bool
+}
+
+func newCLIStepState() *cliStepState {
+	return &cliStepState{satisfied: map[string]bool{}}
+}
+
+// absorb folds one attempt's observations in.
+func (s *cliStepState) absorb(run cliRunResult, bridge *cliBridge) {
+	verdict, note, handoffNote, satisfied, bridgeCalls := bridge.observed()
+
+	s.turns += run.turns
+	s.trajectory = append(s.trajectory, mergeCLITrajectory(run.trajectory, bridgeCalls)...)
+
+	// Last non-empty wins for the answer and the decision: a later attempt
+	// speaks for the conversation, but a crashed one that said nothing must
+	// not erase what an earlier one said.
+	if run.text != "" {
+		s.text = run.text
+	}
+
+	if verdict != "" {
+		s.verdict, s.note = verdict, note
+	}
+
+	if len(handoffNote) > 0 {
+		s.handoffNote = handoffNote
+	}
+
+	for name := range satisfied {
+		s.satisfied[name] = true
+	}
+}
+
+// result is what the step reports, however many attempts it took.
+func (s *cliStepState) result(modelName string) conversationResult {
+	return conversationResult{
+		text:        s.text,
+		turns:       s.turns,
+		trajectory:  s.trajectory,
+		model:       modelName,
+		verdict:     s.verdict,
+		note:        s.note,
+		handoffNote: s.handoffNote,
+	}
+}
+
 // cliContinuationPrompt is what a resumed attempt is told.
 //
 // It names what went wrong and nothing else. This is deliberately NOT the
@@ -198,13 +270,13 @@ type cliAttempt struct {
 // model had lost its memory and had to be talked around the resulting
 // incoherence, whereas here the conversation is intact and this is simply the
 // one fact the model cannot see — the failure happened outside its transcript.
-func cliContinuationPrompt(previous conversationResult, prepared preparedAgentStep) string {
+func cliContinuationPrompt(state *cliStepState, prepared preparedAgentStep) string {
 	var out strings.Builder
 
 	out.WriteString("Your previous attempt did not finish. ")
 
-	if len(previous.trajectory) > 0 {
-		fmt.Fprintf(&out, "You had made %d tool call(s) before it stopped. ", len(previous.trajectory))
+	if len(state.trajectory) > 0 {
+		fmt.Fprintf(&out, "You had made %d tool call(s) before it stopped. ", len(state.trajectory))
 	}
 
 	out.WriteString("Your conversation and your working directory are both intact. " +
@@ -266,45 +338,46 @@ func cleanupCLISession(session string) {
 }
 
 // runCLIAttempt is one subprocess: bridge up, process run, transcript read,
-// obligations checked.
-func runCLIAttempt(ctx context.Context, prepared preparedAgentStep, runtime cliRuntime, plan cliAttempt) (conversationResult, error) {
-	// A fresh bridge per attempt, so a verdict captured by an attempt that
-	// then crashed cannot be mistaken for this one's.
+// obligations checked. What it observed goes into state rather than into a
+// return value, so an attempt that fails before producing anything cannot
+// erase what earlier attempts of the same conversation already established.
+//
+// The bridge itself is still per-attempt — it has to be, since each one binds
+// its own port — but its captures are not.
+func runCLIAttempt(
+	ctx context.Context,
+	prepared preparedAgentStep,
+	runtime cliRuntime,
+	plan cliAttempt,
+	state *cliStepState,
+) error {
 	bridge, err := newCLIBridge(ctx, prepared.conv, nativeToolNames(prepared.conv, runtime))
 	if err != nil {
-		return conversationResult{}, err
+		return err
 	}
 
 	defer func() { _ = bridge.Close(ctx) }()
 
 	mcpConfig, err := bridge.writeConfig()
 	if err != nil {
-		return conversationResult{}, err
+		return err
 	}
 
 	defer func() { _ = os.Remove(mcpConfig) }()
 
 	run, runErr := execCLI(ctx, prepared, runtime, mcpConfig, plan)
 
-	verdict, note, handoffNote, satisfied, bridgeCalls := bridge.observed()
-
-	result := conversationResult{
-		text:        run.text,
-		turns:       run.turns,
-		trajectory:  mergeCLITrajectory(run.trajectory, bridgeCalls),
-		model:       prepared.ri.ModelName,
-		verdict:     verdict,
-		note:        note,
-		handoffNote: handoffNote,
-	}
-
+	state.absorb(run, bridge)
 	prepared.conv.usage.addTokens(run.inputTokens, run.outputTokens)
 
 	if runErr != nil {
-		return result, runErr
+		return runErr
 	}
 
-	return result, checkCLIObligations(prepared, run, satisfied)
+	// Checked against the STEP's satisfied set, not this attempt's: a verdict
+	// emitted before an earlier attempt died still counts, and the resumed
+	// model can see it already called the tool.
+	return checkCLIObligations(prepared, run, state.satisfied)
 }
 
 // execCLI spawns the CLI and reads its transcript off stdout as it runs.
