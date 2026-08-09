@@ -193,3 +193,58 @@ jobs:
 		})
 	}
 }
+
+// TestAcrossBudgetBindsUnderConcurrency is the regression for what the review
+// pipeline found reviewing this feature: the ceiling was checked BEFORE the
+// concurrency slot was acquired, so every admission until the limit saturated
+// read a spend of ~0 — the cells it was deciding against were still running.
+// A matrix could therefore launch max_in_flight cells before the budget meant
+// anything.
+//
+// Six cells at 400 tokens each against a 700-token allowance, two at a time.
+// The first two start blind, which is unavoidable: no spend exists yet. What
+// must not happen is all six running.
+func TestAcrossBudgetBindsUnderConcurrency(t *testing.T) {
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	dir := t.TempDir()
+	fake := newRepeatingFakeLLM(t, says("reviewed").spending(400))
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+workspace:
+  strategy: copy
+
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: reviewer
+  source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
+
+jobs:
+- name: fan
+  plan:
+  - task: plan-work
+    inputs: []
+    context: write
+    run: |
+      mkdir -p context
+      printf '["a","b","c","d","e","f"]' > context/items
+  - across:
+    - var: item
+      from: items
+    max_in_flight: 2
+    budget:
+      tokens: 700
+    agent: reviewer
+    inputs: []
+    prompt: "Review {{ .vars.item }}"
+`, fake.URL+"/v1/"))
+
+	mustRun(t, path)
+
+	if got := fake.requestCount(); got >= 6 {
+		t.Errorf("every cell ran (%d requests); the ceiling never bound under concurrency", got)
+	}
+}

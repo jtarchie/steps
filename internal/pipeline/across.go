@@ -177,15 +177,24 @@ func runAcrossCellsConcurrently(
 		// admitting new cells while the ones already in flight run to
 		// completion and keep what they recorded. Checking inside the goroutine
 		// would instead race every cell that had already been admitted.
-		if stopAdmitting(ctx, jobName, spend, index, len(cells)) {
-			break
-		}
-
 		// Acquired in the parent, before the goroutine starts, so cells are
 		// ADMITTED in declaration order — under a limit especially, "which
 		// cells go first" is otherwise whichever goroutines the scheduler
 		// happened to run, which is nothing a pipeline author can reason about.
+		//
+		// BEFORE the ceiling check, not after. Acquiring blocks until a cell
+		// finishes and rolls its usage up, so the check that follows reads
+		// spend that includes it. Checked first instead, every admission until
+		// the limit saturates sees a total of ~0 — the cells it is deciding
+		// against are still running — so a matrix could launch max_in_flight
+		// cells before the ceiling meant anything at all.
 		slot.acquire()
+
+		if stopAdmitting(ctx, jobName, spend, index, len(cells)) {
+			slot.release()
+
+			break
+		}
 
 		wg.Add(1)
 

@@ -319,7 +319,7 @@ budget: across stopped after 8 of 12 cells (spent 1,203,551 of 1,200,000 tokens)
 - **A rerun finishes the work.** The cells that ran are recorded and the ones that never started recorded nothing, so running again with a larger allowance picks up where the last one stopped rather than paying for the whole matrix again.
 - **Tokens only.** `usd` is enforced inside a CLI agent's own subprocess, against itself — it cannot see what the matrix's other cells have spent, so a dollar figure here would cap nothing. Rejected at load.
 - **Measured as a delta on the job's own accumulator**, so a cell's retries and sub-agents count for free. Not hashed, like every other operational limit.
-- **It is not a hard cap.** The cell that crosses the line has already spent whatever it spent; the ceiling bounds what gets *started*, not what a single cell can cost. Put a `budget:` on the agent for that, and keep the job's as the backstop.
+- **It is not a hard cap, and under `max_in_flight:` the overshoot is a whole batch.** The ceiling bounds what gets *started*, not what a running cell can cost. Serially that means one cell of overshoot. Concurrently it means up to `max_in_flight` of them: the first batch is admitted before any of it has reported a single token, because there is nothing to report yet. After that each admission waits for a slot — which frees only when a cell finishes and rolls its usage up — so later decisions read fresh totals. Size the allowance knowing the first batch is free, put a `budget:` on the agent to bound one cell, and keep the job's as the backstop.
 
 ### Concurrent cells: `max_in_flight:`
 

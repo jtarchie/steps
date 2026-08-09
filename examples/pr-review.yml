@@ -64,14 +64,33 @@ resource_types:
         --jq '[.[] | {ref: ((.number|tostring) + "@" + .headRefOid)}]'
     # The version's ref carries the head SHA, so a new push is a new version —
     # and therefore a new build, rather than a cache hit on the PR number.
+    # Fetches the diff AND the code it changed, at the exact commit under
+    # review. The code is the half that is easy to forget: every reviewer here
+    # is told to read the source rather than trust the patch, and a first live
+    # run proved what happens without it — the reviewers were handed a
+    # directory containing three files, and a lens said so in its own output
+    # ("the actual source tree isn't checked out here"). A diff shows WHAT
+    # changed; only the tree shows what else calls it.
     in: |
       set -e
       ref={{ .version.ref | shellquote }}
       number="${ref%%@*}"
+      sha="${ref##*@}"
       gh pr diff --repo {{ .source.repo | shellquote }} "$number" > pr.diff
       gh pr view --repo {{ .source.repo | shellquote }} "$number" \
         --json title,body,files,baseRefName > pr.json
       printf '%s' "$number" > pr.number
+
+      # Checked out INTO this artifact, so a path the compiler names reads
+      # `pr/internal/thing.go` — the same prefix the diff and metadata use.
+      # `checkout <sha> -- .` restores the tree without moving HEAD, which is
+      # what keeps the three files above from being clobbered.
+      git init -q .
+      git remote add origin "https://github.com/{{ .source.repo }}.git"
+      git fetch -q --no-tags --depth 1 origin "$sha" 2>/dev/null \
+        || git fetch -q --no-tags origin
+      git checkout -q --force "$sha" -- . 2>/dev/null \
+        || git checkout -q --force FETCH_HEAD -- .
 
 - name: github-review
   config:
