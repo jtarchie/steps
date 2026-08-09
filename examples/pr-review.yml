@@ -37,7 +37,13 @@ workspace:
   strategy: copy
 
 defaults:
-  model: openrouter/qwen/qwen3.7-flash
+  # opencode's Go provider (https://opencode.ai/docs/go/): the `opencode/`
+  # prefix supplies the base URL and the OPENCODE_API_KEY env var name, so a
+  # model here is just the model. glm-5.2 is the open model pr-af's own
+  # benchmark leads with, which makes it the honest default for a pipeline
+  # shaped after theirs. Swap per run without editing this file:
+  #   STEPS_MODEL=opencode/kimi-k3 steps run examples/pr-review.yml --job review
+  model: opencode/glm-5.2
   # Every agent below opens with a rendered recap of what earlier steps
   # recorded. summary keeps values whole — a finding's claim is the thing the
   # next agent has to reason about, so truncating it defeats the point.
