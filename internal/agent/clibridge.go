@@ -20,6 +20,8 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,9 +51,17 @@ const cliBridgeShutdownTimeout = 5 * time.Second
 // cliBridge is a running loopback MCP server exposing one step's non-native
 // tools, plus what it observed the child do with them.
 type cliBridge struct {
-	server   *http.Server
-	listener net.Listener
-	url      string
+	server    *http.Server
+	listener  net.Listener
+	url       string
+	closeOnce sync.Once
+	// token authenticates the child. Loopback is not a permission boundary:
+	// every process on the host can reach an open localhost port, and what
+	// this one serves is the step's custom run: tools (arbitrary shell in the
+	// workspace) and its verdict tool (which decides where the job goes next).
+	// The child learns the token from the mcp-config file, which is written
+	// 0600.
+	token string
 
 	// mu guards everything below: tool calls arrive on the HTTP server's
 	// goroutines, and the driver reads the captures after the child exits.
@@ -71,8 +81,8 @@ type cliBridge struct {
 // cliRuntime.natives). The caller must Close it.
 func newCLIBridge(ctx context.Context, conv agentConversation, skip map[string]bool) (*cliBridge, error) {
 	bridge := &cliBridge{
-		handoffNote: map[string]string{},
-		satisfied:   map[string]bool{},
+		satisfied: map[string]bool{},
+		token:     rand.Text(),
 	}
 
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: cliBridgeServerName, Version: "v1"}, nil)
@@ -103,21 +113,26 @@ func newCLIBridge(ctx context.Context, conv agentConversation, skip map[string]b
 		return nil, fmt.Errorf("cli bridge: listen: %w", err)
 	}
 
-	bridge.listener = listener
-	bridge.url = "http://" + listener.Addr().String()
-	bridge.server = &http.Server{
+	httpServer := &http.Server{
 		// Stateless: the bridge outlives no client. It serves exactly one
 		// child process for the length of one attempt, so per-session state
 		// would only be a way for a crashed child to strand something.
-		Handler: sdkmcp.NewStreamableHTTPHandler(
+		Handler: bridge.authenticated(sdkmcp.NewStreamableHTTPHandler(
 			func(*http.Request) *sdkmcp.Server { return server },
 			&sdkmcp.StreamableHTTPOptions{Stateless: true},
-		),
+		)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	bridge.listener = listener
+	bridge.url = "http://" + listener.Addr().String()
+	bridge.server = httpServer
+
+	// The goroutine closes over its OWN reference rather than reading
+	// bridge.server: Close can run before this goroutine is scheduled, and a
+	// Close that cleared the field would hand Serve a nil receiver.
 	go func() {
-		err := bridge.server.Serve(listener)
+		err := httpServer.Serve(listener)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Debug("agent.cli.bridge.serve", "error", err)
 		}
@@ -187,6 +202,24 @@ func (b *cliBridge) capture(name string, args, result map[string]any) {
 	}
 }
 
+// authenticated rejects any request not carrying this bridge's token. The
+// comparison is constant-time out of habit rather than necessity — a token
+// this short-lived is not worth timing — and a failure says nothing about why.
+func (b *cliBridge) authenticated(next http.Handler) http.Handler {
+	expected := []byte("Bearer " + b.token)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), expected) != 1 {
+			slog.Debug("agent.cli.bridge.unauthorized", "remote", r.RemoteAddr)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 // observed reports what the child did: the captured verdict/note, the handoff
 // note, which required tools were satisfied, and every bridged call in order.
 func (b *cliBridge) observed() (verdict, note string, handoffNote map[string]string, satisfied map[string]bool, calls []recordedToolCall) {
@@ -203,7 +236,11 @@ func (b *cliBridge) observed() (verdict, note string, handoffNote map[string]str
 func (b *cliBridge) writeConfig() (string, error) {
 	document := map[string]any{
 		"mcpServers": map[string]any{
-			cliBridgeServerName: map[string]any{"type": "http", "url": b.url},
+			cliBridgeServerName: map[string]any{
+				"type":    "http",
+				"url":     b.url,
+				"headers": map[string]any{"Authorization": "Bearer " + b.token},
+			},
 		},
 	}
 
@@ -233,23 +270,25 @@ func (b *cliBridge) writeConfig() (string, error) {
 // killed by its timeout is exactly when the bridge still needs a moment to
 // shut down cleanly, and an already-canceled context would skip that.
 func (b *cliBridge) Close(ctx context.Context) error {
-	if b.server == nil {
-		return nil
-	}
+	var err error
 
-	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cliBridgeShutdownTimeout)
-	defer cancel()
+	// Once rather than a nil-out: the field is read by the serving goroutine,
+	// and clearing it was a data race that could panic Serve.
+	b.closeOnce.Do(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cliBridgeShutdownTimeout)
+		defer cancel()
 
-	err := b.server.Shutdown(shutdownCtx)
-	b.server = nil
+		err = b.server.Shutdown(shutdownCtx)
+		if err != nil {
+			// Shutdown gives in-flight requests until the deadline; past it,
+			// take the port back regardless.
+			_ = b.listener.Close()
 
-	if err != nil {
-		_ = b.listener.Close()
+			err = fmt.Errorf("cli bridge: shutdown: %w", err)
+		}
+	})
 
-		return fmt.Errorf("cli bridge: shutdown: %w", err)
-	}
-
-	return nil
+	return err
 }
 
 // bridgedToolName is how a bridged tool is spelled in the CLI's own tool

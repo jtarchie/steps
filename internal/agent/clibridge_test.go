@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -10,6 +11,17 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/genai"
 )
+
+// bridgeAuth attaches the bridge's bearer token to every request, standing in
+// for what the CLI does with the headers in its mcp-config.
+type bridgeAuth struct{ token string }
+
+func (a bridgeAuth) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.Header.Set("Authorization", "Bearer "+a.token)
+
+	//nolint:wrapcheck // a test transport, and the caller inspects the original error
+	return http.DefaultTransport.RoundTrip(req)
+}
 
 // bridgeConversation builds a conversation carrying the given tools, enough
 // for the bridge to serve them.
@@ -31,7 +43,14 @@ func dialBridge(t *testing.T, bridge *cliBridge) *sdkmcp.ClientSession {
 
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test-cli", Version: "v0"}, nil)
 
-	session, err := client.Connect(t.Context(), &sdkmcp.StreamableClientTransport{Endpoint: bridge.url}, nil)
+	// Authenticated the way the child is: the token reaches the real CLI
+	// through the mcp-config file.
+	transport := &sdkmcp.StreamableClientTransport{
+		Endpoint:   bridge.url,
+		HTTPClient: &http.Client{Transport: bridgeAuth{token: bridge.token}},
+	}
+
+	session, err := client.Connect(t.Context(), transport, nil)
 	if err != nil {
 		t.Fatalf("connecting to bridge: %v", err)
 	}
@@ -204,8 +223,9 @@ func TestCLIBridgeWriteConfig(t *testing.T) {
 
 	document := struct {
 		MCPServers map[string]struct {
-			Type string `json:"type"`
-			URL  string `json:"url"`
+			Type    string            `json:"type"`
+			URL     string            `json:"url"`
+			Headers map[string]string `json:"headers"`
 		} `json:"mcpServers"`
 	}{}
 
@@ -226,5 +246,109 @@ func TestCLIBridgeWriteConfig(t *testing.T) {
 
 	if entry.Type != "http" || entry.URL != bridge.url {
 		t.Errorf("mcp config entry = %+v, want http at %s", entry, bridge.url)
+	}
+
+	// The token travels to the child here and nowhere else. Without it the
+	// child cannot call its own tools.
+	if entry.Headers["Authorization"] != "Bearer "+bridge.token {
+		t.Errorf("mcp config authorization = %q, want the bridge token", entry.Headers["Authorization"])
+	}
+
+	assertPrivateFile(t, path)
+}
+
+// assertPrivateFile fails unless path is readable only by its owner. The mcp
+// config carries a live capability -- a URL plus the token that works on it.
+func assertPrivateFile(t *testing.T, path string) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		t.Errorf("%s mode = %v, want no group/other access", path, perm)
+	}
+}
+
+// TestCLIBridgeRejectsUnauthenticatedCallers is the reason the token exists.
+// Loopback is not a permission boundary: any process on the host can reach an
+// open localhost port, and what the bridge serves is the step.s custom run:
+// tools (arbitrary shell in the workspace) plus the verdict that decides where
+// the job goes next.
+func TestCLIBridgeRejectsUnauthenticatedCallers(t *testing.T) {
+	t.Parallel()
+
+	decl, impl := buildVerdictTool([]string{"approve"})
+
+	bridge, err := newCLIBridge(
+		t.Context(),
+		bridgeConversation([]*genai.FunctionDeclaration{decl}, map[string]toolImpl{verdictToolName: impl}, nil),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("newCLIBridge: %v", err)
+	}
+
+	t.Cleanup(func() { _ = bridge.Close(t.Context()) })
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call",` +
+		`"params":{"name":"verdict","arguments":{"choice":"approve"}}}`
+
+	for _, tt := range []struct{ name, authorization string }{
+		{"no credentials", ""},
+		{"a wrong token", "Bearer not-the-token"},
+		{"the token without the scheme", bridge.token},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, bridge.url, strings.NewReader(body))
+			if err != nil {
+				t.Fatalf("building request: %v", err)
+			}
+
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+
+			if tt.authorization != "" {
+				req.Header.Set("Authorization", tt.authorization)
+			}
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("calling the bridge: %v", err)
+			}
+
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode != http.StatusUnauthorized {
+				t.Errorf("status = %d, want 401 — an unauthenticated caller reached the tools", resp.StatusCode)
+			}
+		})
+	}
+
+	// Most importantly, nothing it tried was executed.
+	if verdict, _, _, _, calls := bridge.observed(); verdict != "" || len(calls) > 0 {
+		t.Errorf("unauthenticated calls were executed: verdict %q, calls %+v", verdict, calls)
+	}
+}
+
+// TestCLIBridgeHandoffNoteAbsentWhenUnwritten pins that a step which never
+// wrote a handoff note reports none, rather than an empty map that
+// agentResultRecord would record as though a note existed.
+func TestCLIBridgeHandoffNoteAbsentWhenUnwritten(t *testing.T) {
+	t.Parallel()
+
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil)
+	if err != nil {
+		t.Fatalf("newCLIBridge: %v", err)
+	}
+
+	t.Cleanup(func() { _ = bridge.Close(t.Context()) })
+
+	if _, _, note, _, _ := bridge.observed(); note != nil {
+		t.Errorf("handoff note = %v, want nil when write_handoff was never called", note)
 	}
 }

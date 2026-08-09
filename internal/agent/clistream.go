@@ -44,6 +44,9 @@ type cliRunResult struct {
 	// errSubtype is the CLI's machine-readable reason when isError, e.g. a
 	// turn limit. Empty otherwise.
 	errSubtype string
+	// errMessage is the CLI's own prose reason when it reported one, which
+	// makes a better step failure than the subtype alone.
+	errMessage string
 	// sawResult reports whether the terminal result event arrived at all.
 	// False means the stream was truncated, which the driver treats as a
 	// failed invocation rather than an empty answer.
@@ -59,13 +62,26 @@ type cliEvent struct {
 	Message struct {
 		Content []cliContentBlock `json:"content"`
 	} `json:"message"`
-	Result   string `json:"result"`
-	NumTurns int    `json:"num_turns"`
-	IsError  bool   `json:"is_error"`
+	Result   string   `json:"result"`
+	NumTurns int      `json:"num_turns"`
+	IsError  bool     `json:"is_error"`
+	Errors   []string `json:"errors"`
 	Usage    struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
+		// Cached prompt tokens are counted as input, and counting them is not
+		// optional: a cached conversation reports nearly all of its prompt
+		// under these two, so reading input_tokens alone under-reports spend
+		// by orders of magnitude (9 vs 21560 in one observed run) and leaves a
+		// job budget: unable to trip.
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 	} `json:"usage"`
+}
+
+// promptTokens is everything the CLI charged for input on this run.
+func (e cliEvent) promptTokens() int {
+	return e.Usage.InputTokens + e.Usage.CacheCreationInputTokens + e.Usage.CacheReadInputTokens
 }
 
 // cliContentBlock is one block of an assistant or user message: the tool_use
@@ -122,8 +138,12 @@ func parseCLIStream(reader io.Reader) (cliRunResult, error) {
 			result.turns = event.NumTurns
 			result.isError = event.IsError
 			result.errSubtype = event.Subtype
-			result.inputTokens = event.Usage.InputTokens
+			result.inputTokens = event.promptTokens()
 			result.outputTokens = event.Usage.OutputTokens
+
+			if len(event.Errors) > 0 {
+				result.errMessage = event.Errors[0]
+			}
 		default:
 			slog.Debug("agent.cli.stream.skip", "type", event.Type)
 		}

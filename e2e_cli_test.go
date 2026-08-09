@@ -231,8 +231,11 @@ fi
 func TestE2ECLIAgentDoesNotRetryTaskFailure(t *testing.T) {
 	dir := t.TempDir()
 
+	// Exits 1 the way the real binary does when it reports a task failure:
+	// the whole point of the finding this pins is that the exit status must
+	// not turn a reported failure into a retryable infrastructure error.
 	cli := writeFakeClaude(t,
-		`echo '{"type":"result","subtype":"error_max_turns","result":"","num_turns":12,"is_error":true}'`)
+		"echo '"+cliErrorResultEvent("error_max_turns", "Reached maximum number of turns (12)")+"'\nexit 1")
 
 	yaml := strings.Replace(
 		readFileString(t, cliPipeline(t, dir)),
@@ -241,9 +244,24 @@ func TestE2ECLIAgentDoesNotRetryTaskFailure(t *testing.T) {
 		1)
 	path := writePipeline(t, dir, yaml)
 
-	_ = run([]string{path})
+	err := run([]string{path})
+	if err == nil {
+		t.Fatal("a cli that reported the task as failed produced a successful run")
+	}
 
 	if got := cli.invocations(t); got != 1 {
 		t.Errorf("the cli ran %d times, want 1 — a reported task failure must not be retried", got)
+	}
+
+	// Reported failures are routable, so the failure: branch ran. An exit
+	// status read as an infrastructure error would have errored the job
+	// instead, and no to: key could have caught it.
+	if got := readFileString(t, filepath.Join(dir, "escalated.log")); !strings.Contains(got, "escalated") {
+		t.Error("the failure branch did not run; the reported failure was not classified as a step failure")
+	}
+
+	agentNode := findNode(t, storeNodes(t, path), "agent", "reviewer")
+	if !strings.Contains(agentNode.Error, "Reached maximum number of turns") {
+		t.Errorf("recorded error = %q, want the cli's own message rather than a bare subtype", agentNode.Error)
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -97,6 +98,14 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 	if !known {
 		return conversationResult{}, fmt.Errorf("agent %q: no runtime for cli %q", prepared.ri.AgentName, prepared.ri.CLI)
 	}
+
+	// Bind this step's accounting to the job and report it however the step
+	// ends — the hosted path gets both from runAgentConversation, which this
+	// path never calls, so without them a CLI step's spend reached the step
+	// counters and stopped there: invisible to a job budget: and missing from
+	// the run's usage report.
+	prepared.conv.usage = attachUsage(ctx, prepared.conv.usage)
+	defer prepared.conv.usage.finish()
 
 	var result conversationResult
 
@@ -201,18 +210,39 @@ func execCLI(ctx context.Context, prepared preparedAgentStep, runtime cliRuntime
 	// mid-conversation still has the trajectory of what it managed to do.
 	run, parseErr := parseCLIStream(stdout)
 
+	// Drain whatever is left before waiting. A parse that stopped early (an
+	// over-long line) leaves the child writing into a pipe nobody reads, and
+	// cmd.Wait would then block on a process blocked on us until the step
+	// timeout expired.
+	if parseErr != nil {
+		_, _ = io.Copy(io.Discard, stdout)
+	}
+
 	waitErr := cmd.Wait()
 
 	switch {
-	case waitErr != nil:
-		return run, fmt.Errorf("agent %q: %s exited: %w", prepared.ri.AgentName, binary, waitErr)
 	case parseErr != nil:
 		return run, fmt.Errorf("agent %q: reading %s output: %w", prepared.ri.AgentName, binary, parseErr)
-	case !run.sawResult:
-		return run, fmt.Errorf("agent %q: %s exited cleanly without reporting a result", prepared.ri.AgentName, binary)
+
+	// A reported result outranks the exit status, and the order here is the
+	// whole point. The CLI exits NONZERO when it reports a task failure (a
+	// max-turns stop exits 1 with is_error), so checking waitErr first would
+	// call every such run an infrastructure error: classified as errored
+	// instead of failed, unroutable by failure:, and retried by attempts:
+	// at full cost for a conclusion the CLI already reached. If it spoke for
+	// itself, believe it — checkCLIObligations reads is_error from here.
+	case run.sawResult:
+		if waitErr != nil {
+			slog.Debug("agent.cli.exit", "agent", prepared.ri.AgentName, "error", waitErr, "reported_error", run.isError)
+		}
+
+		return run, nil
+
+	case waitErr != nil:
+		return run, fmt.Errorf("agent %q: %s exited: %w", prepared.ri.AgentName, binary, waitErr)
 	}
 
-	return run, nil
+	return run, fmt.Errorf("agent %q: %s exited cleanly without reporting a result", prepared.ri.AgentName, binary)
 }
 
 // checkCLIObligations turns what the CLI reported, plus what the bridge saw,
@@ -225,7 +255,14 @@ func execCLI(ctx context.Context, prepared preparedAgentStep, runtime cliRuntime
 // it is what lets `to:` routing mean the same thing either way.
 func checkCLIObligations(prepared preparedAgentStep, run cliRunResult, satisfied map[string]bool) error {
 	if run.isError {
-		reason := run.errSubtype
+		// The CLI's own sentence first ("Reached maximum number of turns (1)"),
+		// then its machine-readable subtype, then a generic line. An operator
+		// reading a failed step should not have to look up error_max_turns.
+		reason := run.errMessage
+		if reason == "" {
+			reason = run.errSubtype
+		}
+
 		if reason == "" {
 			reason = "the cli reported the task as failed"
 		}
@@ -358,8 +395,15 @@ func renderCLIPrompt(conv agentConversation) string {
 		out.WriteString("\n\n")
 	}
 
+	// Fenced, one tag per block. On the hosted path this content arrives as a
+	// read_file tool RESULT — a structural boundary the model reads as data.
+	// There is no such boundary in a prompt, so concatenating a file straight
+	// in would let "ignore previous instructions" inside somebody's README
+	// read exactly like an operator instruction. The tag is drawn fresh
+	// against the content so it cannot be closed early from inside.
 	for _, block := range conv.contextBlocks {
-		fmt.Fprintf(&out, "%s:\n%s\n\n", block.path, block.content)
+		tag := freshFenceTag(block.content)
+		fmt.Fprintf(&out, "%s:\n<%s>\n%s\n</%s>\n\n", block.path, tag, block.content, tag)
 	}
 
 	out.WriteString(conv.prompt)
@@ -397,7 +441,11 @@ func mergeCLITrajectory(streamed, bridged []recordedToolCall) []recordedToolCall
 		seen[call.name]++
 	}
 
-	merged := streamed
+	// A fresh slice rather than an alias of streamed: appending to the
+	// caller's slice would write bridge-only calls into run.trajectory's
+	// spare capacity, so the two records would stop being independent.
+	merged := make([]recordedToolCall, len(streamed), len(streamed)+len(bridged))
+	copy(merged, streamed)
 
 	for _, call := range bridged {
 		prefixed := bridgedToolName(call.name)

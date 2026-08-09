@@ -105,19 +105,33 @@ func cliToolUseEvent(id, name, argsJSON string) string {
 }
 
 // callBridgeScript is shell that calls one tool on the steps MCP bridge,
-// reading the bridge's URL out of the --mcp-config file the driver generated.
-// It is how a fake CLI reaches a tool the parent process serves — the same
-// round trip the real CLI makes, minus its own model.
+// reading the bridge's URL and bearer token out of the --mcp-config file the
+// driver generated. It is how a fake CLI reaches a tool the parent process
+// serves — the same round trip the real CLI makes, minus its own model.
 //
 // Stateless bridge, so this is a single POST: no initialize handshake, no
-// session header to carry.
+// session header to carry. The Authorization header is not optional — the
+// bridge rejects an unauthenticated caller, which is what stops any other
+// local process from running this step's tools.
 func callBridgeScript(tool, argsJSON string) string {
 	return fmt.Sprintf(`
 config=$(echo "$*" | tr ' ' '\n' | grep -A0 'steps-cli-mcp' | head -1)
 url=$(sed 's/.*"url":"\([^"]*\)".*/\1/' "$config")
+token=$(sed 's/.*"Authorization":"Bearer \([^"]*\)".*/\1/' "$config")
 curl -sS -X POST "$url" \
+  -H "Authorization: Bearer $token" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":%q,"arguments":%s}}' >/dev/null
 `, tool, argsJSON)
+}
+
+// cliErrorResultEvent is the terminal event of a run the CLI itself judged a
+// failure. The real binary EXITS NONZERO when it emits one (verified: a
+// max-turns stop exits 1), so the fake does too — a fake that exited 0 here
+// would let a regression test pass on behavior the real CLI does not have.
+func cliErrorResultEvent(subtype, message string) string {
+	return fmt.Sprintf(
+		`{"type":"result","subtype":%q,"result":"","num_turns":8,"is_error":true,"errors":[%q]}`,
+		subtype, message)
 }
