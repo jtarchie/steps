@@ -310,6 +310,10 @@ func mergeAgentDials(a *Agent, doc Agent) {
 	if a.CompactAfterTokens == nil {
 		a.CompactAfterTokens = doc.CompactAfterTokens
 	}
+
+	if a.ContextWindow == 0 {
+		a.ContextWindow = doc.ContextWindow
+	}
 }
 
 // resolveStepIncludes applies one step's own includes: run_file: (task steps

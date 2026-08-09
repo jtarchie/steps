@@ -100,16 +100,22 @@ func TestMaxOutputBytesHashStabilityWhenUnset(t *testing.T) {
 }
 
 // TestMaxOutputBytesHashIsPinned is the byte-identity guarantee stated as a
-// literal rather than a recompute: this hash was captured before
-// max_output_bytes: existed. If it changes, some field started leaking into
-// the content map unconditionally and every cached agent step in every
-// existing pipeline just got invalidated.
+// literal rather than a recompute: if this hash moves, every cached agent step
+// in every existing pipeline just got invalidated. Usually that means a field
+// started leaking into the content map unconditionally, and the answer is to
+// fix the leak, not the literal.
+//
+// It has been deliberately re-based once, when defaultMaxAgentTurns went from
+// 8 to 30: the fixture sets no max_turns:, max_turns IS hashed, and changing
+// what an unset one resolves to legitimately changes the conversation the step
+// produces. Re-basing is only correct when the invalidation is the intended
+// effect of the change, as it was there.
 func TestMaxOutputBytesHashIsPinned(t *testing.T) {
 	t.Parallel()
 
-	// Captured by running this fixture against the tree as it stood before
-	// max_output_bytes: was added, in a worktree at that commit.
-	const wantHash = "480a4f64eb4deca82307ddde0d04db3a9749549bd7fbe460f80e3bb1ee3d2649"
+	// Originally captured against the tree as it stood before
+	// max_output_bytes: was added; re-based at the max_turns default change.
+	const wantHash = "3b6a6810bccd6db74a0f1174d8842c9d6a3c4b7608b4bff5c434133b1e6b8652"
 
 	got := mustAgentHash(t, agentCfg([]config.ToolSpec{{Name: "post_review", Run: "gh pr review"}}, ""), config.Step{Agent: "reviewer", Prompt: "do it"})
 	if got != wantHash {

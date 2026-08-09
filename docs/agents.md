@@ -6,7 +6,7 @@ How an `agent` step in a pipeline actually runs, and the features around custom 
 
 An agent step runs a tool-calling conversation loop:
 
-1. Parse the agent's config: model/endpoint, system prompt, granted tools, `max_turns` (default 8).
+1. Parse the agent's config: model/endpoint, system prompt, granted tools, `max_turns` (default 30).
 2. Build a system message combining the agent's persona with working-directory context (any `context_paths:` files are delivered as synthetic `read_file` tool results — see below).
 3. Loop, up to `max_turns`:
    - Send the conversation + tool definitions to the model.
@@ -645,7 +645,7 @@ These are load errors, not silent no-ops, because a setting that reads as config
 | `source.endpoint:` | there is no request to aim anywhere |
 | `temperature:`, `top_p:`, `max_tokens:`, `reasoning_effort:` | the CLI chooses its own sampling |
 | `source.string_tool_choice:` | no `tool_choice` on the wire to spell |
-| `compact_after_tokens:` | the CLI compacts its own conversation |
+| `compact_after_tokens:`, `context_window:` | the CLI compacts its own conversation, against a window it resolves itself |
 | `budget.tokens:` | nothing counts tokens until the subprocess exits (use `budget.usd:`) |
 | `image:` (agent or step) | the CLI runs its tools on the host |
 | `required:`, `max_calls:`, `args:` on a tool | enforced by the turn loop the CLI replaces |

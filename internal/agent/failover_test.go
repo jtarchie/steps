@@ -62,9 +62,9 @@ func TestResolveWithFailoverKeepsThePrimaryForHashing(t *testing.T) {
 	}
 
 	// The compaction budget follows the model that will actually serve the
-	// conversation: a 200K fallback must not inherit a larger primary's.
-	if effective.ContextWindow != 200_000 {
-		t.Errorf("effective context window = %d, want the fallback model's 200000", effective.ContextWindow)
+	// conversation: a 1M fallback must not inherit the primary's 128K.
+	if effective.ContextWindow != 1_000_000 {
+		t.Errorf("effective context window = %d, want the fallback model's 1000000", effective.ContextWindow)
 	}
 }
 

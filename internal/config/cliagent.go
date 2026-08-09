@@ -198,6 +198,7 @@ func checkCLIAgentSettings(agent Agent) error {
 		{agent.ReasoningEffort != "", "reasoning_effort", "the cli manages its own reasoning budget"},
 		{agent.Source.StringToolChoice != nil, "source.string_tool_choice", "there is no tool_choice on the wire to spell"},
 		{agent.CompactAfterTokens != nil, "compact_after_tokens", "the cli compacts its own conversation"},
+		{agent.ContextWindow > 0, "context_window", "the cli compacts its own conversation, against a window it resolves itself"},
 		// Not budget itself: a CLI agent takes budget.usd, which the CLI
 		// enforces mid-run. Only the token spelling is unenforceable here,
 		// since nothing counts tokens until the subprocess has already exited.

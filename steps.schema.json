@@ -295,11 +295,15 @@
         },
         "max_turns": {
           "type": "integer",
-          "description": "Tool-calling turns per attempt. Default 8."
+          "description": "Tool-calling turns per attempt. Default 30."
         },
         "compact_after_tokens": {
           "type": "integer",
           "description": "Compact the conversation past this size. 0 disables."
+        },
+        "context_window": {
+          "type": "integer",
+          "description": "This model's context window, for a model steps does not recognize or a host that serves a smaller one. Compaction fires at 80% of it."
         },
         "tools": {
           "type": "array",

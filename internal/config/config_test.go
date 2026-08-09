@@ -1573,11 +1573,12 @@ func TestResolveAgentInvocationDerivesCompactionBudget(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		model      string
-		explicit   *int
-		wantBudget int
-		wantWindow int
+		name           string
+		model          string
+		explicitWindow int
+		explicit       *int
+		wantBudget     int
+		wantWindow     int
 	}{
 		{
 			name:       "a 1M model compacts against a 1M window",
@@ -1586,16 +1587,80 @@ func TestResolveAgentInvocationDerivesCompactionBudget(t *testing.T) {
 			wantWindow: 1_000_000,
 		},
 		{
+			// The family entry, which is now the MINORITY case for claude-*:
+			// only opus-4-5, haiku-4-5, opus-4-1 and 3-5-haiku are still 200K.
 			name:       "a 200K model compacts against a 200K window",
-			model:      "anthropic/claude-sonnet-4-5",
+			model:      "anthropic/claude-opus-4-5",
 			wantBudget: 160_000,
 			wantWindow: 200_000,
+		},
+		{
+			// The regression the enumerated Anthropic entries exist for: every
+			// current Claude is natively 1M, and the family entry's 200K
+			// compacted them at a fifth of capacity.
+			name:       "a 1M claude beats the 200K family entry",
+			model:      "anthropic/claude-sonnet-4-5",
+			wantBudget: 800_000,
+			wantWindow: 1_000_000,
+		},
+		{
+			// The same model as the case above, spelled the way OpenRouter
+			// spells it. Without normalizeModelName the dotted form misses
+			// every table entry and silently takes the 128K assumption.
+			name:       "a dotted model id resolves like its dashed spelling",
+			model:      "openrouter/anthropic/claude-sonnet-4.5",
+			wantBudget: 800_000,
+			wantWindow: 1_000_000,
+		},
+		{
+			// examples/pr-review.yml's own model, which was compacting at
+			// 102,400 — a tenth of capacity — against a 1M window.
+			name:       "an opencode zen model resolves",
+			model:      "opencode/glm-5.2",
+			wantBudget: 800_000,
+			wantWindow: 1_000_000,
+		},
+		{
+			// The family entry catches the rest of the same family low: glm-5
+			// and glm-5.1 are ~200K, not glm-5.2's 1M.
+			name:       "a family entry catches its smaller siblings",
+			model:      "opencode/glm-5.1",
+			wantBudget: 160_000,
+			wantWindow: 200_000,
+		},
+		{
+			// gpt-5.4 went to ~1M but its own mini/nano stayed at 400K, so the
+			// specific entries must be consulted before the family one.
+			name:       "a family split resolves most-specific-first",
+			model:      "openai/gpt-5.4-mini",
+			wantBudget: 320_000,
+			wantWindow: 400_000,
 		},
 		{
 			name:       "a suffixed 1M variant beats its own family entry",
 			model:      "anthropic/claude-opus-5[1m]",
 			wantBudget: 800_000,
 			wantWindow: 1_000_000,
+		},
+		{
+			// The escape hatch for everything the table cannot know: a local
+			// build, a release newer than the table, or a host serving a known
+			// model with a smaller window than it has natively.
+			name:           "an explicit context_window is used as the window",
+			model:          "lmstudio/some-local-build-nobody-has-heard-of",
+			explicitWindow: 64_000,
+			wantBudget:     51_200,
+			wantWindow:     64_000,
+		},
+		{
+			// context_window: says what the model IS; compact_after_tokens:
+			// overrides the budget outright, so it still wins over the former.
+			name:           "compact_after_tokens outranks context_window",
+			model:          "opencode/glm-5.2",
+			explicitWindow: 64_000,
+			explicit:       ptrTo(1000),
+			wantBudget:     1000,
+			wantWindow:     64_000,
 		},
 		{
 			// The safe direction to be wrong in, and the no-behavior-change
@@ -1607,14 +1672,14 @@ func TestResolveAgentInvocationDerivesCompactionBudget(t *testing.T) {
 		},
 		{
 			name:       "an explicit budget outranks the derived one",
-			model:      "anthropic/claude-sonnet-4-5",
+			model:      "anthropic/claude-opus-4-5",
 			explicit:   ptrTo(1234),
 			wantBudget: 1234,
 			wantWindow: 200_000,
 		},
 		{
 			name:       "an explicit 0 still disables compaction on a known model",
-			model:      "anthropic/claude-sonnet-4-5",
+			model:      "anthropic/claude-opus-4-5",
 			explicit:   ptrTo(0),
 			wantBudget: 0,
 			wantWindow: 200_000,
@@ -1628,6 +1693,7 @@ func TestResolveAgentInvocationDerivesCompactionBudget(t *testing.T) {
 			cfg := &Config{Agents: []Agent{{
 				Name:               "a",
 				Source:             AgentSource{Model: test.model},
+				ContextWindow:      test.explicitWindow,
 				CompactAfterTokens: test.explicit,
 			}}}
 
