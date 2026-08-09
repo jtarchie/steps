@@ -136,7 +136,36 @@ func (c *Config) validateCLIAgents() error {
 		}
 	}
 
+	err := c.checkHostedAgentBudgets()
+	if err != nil {
+		return err
+	}
+
 	return c.checkCLIAgentReferences()
+}
+
+// checkHostedAgentBudgets is the mirror of the budget.tokens rejection above:
+// a dollar ceiling has no meaning for an agent this process drives, because
+// there is no cost figure on the wire to compare it against. Rejecting it
+// keeps budget: honest in both directions rather than letting one spelling
+// sit there doing nothing.
+func (c *Config) checkHostedAgentBudgets() error {
+	for i := range c.Agents {
+		agent := c.Agents[i]
+
+		if budgetUSD(agent.Budget) > 0 && !agentUsesCLI(agent) {
+			return fmt.Errorf("agent %q: budget.usd is only supported with a cli source (%s...); a hosted provider reports tokens, not dollars — use budget.tokens",
+				agent.Name, CLISourcePrefix)
+		}
+	}
+
+	for _, job := range c.Jobs {
+		if budgetUSD(job.Budget) > 0 {
+			return fmt.Errorf("job %q: budget.usd is not supported; a job budget is cumulative across mixed step kinds — use budget.tokens", job.Name)
+		}
+	}
+
+	return nil
 }
 
 // agentUsesCLI reports whether any source this agent could run under is a CLI.
@@ -169,7 +198,10 @@ func checkCLIAgentSettings(agent Agent) error {
 		{agent.ReasoningEffort != "", "reasoning_effort", "the cli manages its own reasoning budget"},
 		{agent.Source.StringToolChoice != nil, "source.string_tool_choice", "there is no tool_choice on the wire to spell"},
 		{agent.CompactAfterTokens != nil, "compact_after_tokens", "the cli compacts its own conversation"},
-		{agent.Budget != nil, "budget", "spend is only visible after the subprocess exits, too late to stop it"},
+		// Not budget itself: a CLI agent takes budget.usd, which the CLI
+		// enforces mid-run. Only the token spelling is unenforceable here,
+		// since nothing counts tokens until the subprocess has already exited.
+		{budgetTokens(agent.Budget) > 0, "budget.tokens", "nothing counts tokens until the subprocess exits; use budget.usd, which the cli enforces mid-run"},
 		{agent.Image != "", "image", "the cli runs its tools on the host"},
 	}
 

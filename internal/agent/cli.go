@@ -54,12 +54,6 @@ const cliWaitDelay = 5 * time.Second
 type cliRuntime struct {
 	// natives maps a steps built-in tool name to the CLI's equivalent.
 	natives map[string]string
-	// alwaysDenied are tools no grant can turn on: capabilities the pipeline
-	// never asked for and cannot describe. Sub-agent spawning is denied
-	// because a nested agent would run outside every budget and record steps
-	// keeps; network fetches because a pipeline that wants the network says so
-	// with a resource or a run_shell grant.
-	alwaysDenied []string
 }
 
 // cliRuntimes mirrors config.cliProviders — same keys, invocation details
@@ -77,7 +71,6 @@ var cliRuntimes = map[string]cliRuntime{
 			"edit_file":    "Edit",
 			"search_files": "Grep",
 		},
-		alwaysDenied: []string{"Task", "WebFetch", "WebSearch", "NotebookEdit"},
 	},
 }
 
@@ -306,35 +299,60 @@ func cliArgs(prepared preparedAgentStep, runtime cliRuntime, mcpConfig string) [
 		args = append(args, "--append-system-prompt", persona)
 	}
 
-	allowed, denied := cliToolPermissions(prepared.conv, runtime)
+	// The CLI meters itself in dollars and can stop mid-conversation, which is
+	// the one circuit breaker available across the process boundary — a token
+	// count here only ever arrives after the spending is done.
+	if prepared.ri.BudgetUSD > 0 {
+		args = append(args, "--max-budget-usd", strconv.FormatFloat(prepared.ri.BudgetUSD, 'f', -1, 64))
+	}
 
-	// Both lists, always. An allow-list alone is not a fence: a CLI's
-	// read-only tools need no permission in non-interactive mode, so omitting
-	// `Read` from --allowedTools does not withhold it — only naming it on
-	// --disallowedTools does.
+	natives, allowed := cliToolPermissions(prepared.conv, runtime)
+
+	// Two flags for two different questions, and the distinction is the whole
+	// fence.
+	//
+	// --tools is the SURFACE: the CLI offers only the built-ins named here
+	// (verified — `--tools Read` reports exactly ["Read"] and nothing else).
+	// It is deny-by-default, which is why there is no list of things to deny:
+	// a built-in this build has never heard of is withheld because it was
+	// never named, rather than surviving because nobody remembered to add it.
+	// An empty value means no built-ins at all.
+	args = append(args, "--tools", strings.Join(natives, ","))
+
+	// --allowedTools is PERMISSION. Read/Glob/Grep need none, but Bash, Write
+	// and Edit are gated and would otherwise stall on a prompt nobody can
+	// answer in non-interactive mode; the bridge's own tools need naming here
+	// too, since --tools governs built-ins only.
 	args = append(args, "--allowedTools", strings.Join(allowed, ","))
-	args = append(args, "--disallowedTools", strings.Join(denied, ","))
 
 	// --strict-mcp-config is what makes the grant a limit rather than a
 	// suggestion: without it the CLI would also load the user's own MCP
 	// servers, handing the step tools the pipeline never granted.
 	args = append(args, "--mcp-config", mcpConfig, "--strict-mcp-config")
 
+	// A pipeline step is not a personal session. Without this the subprocess
+	// inherits the operator's whole ~/.claude — settings, hooks, plugins,
+	// skills, output styles — so the same pipeline behaves differently per
+	// machine and a user hook can fire inside a step that never declared one.
+	// Project scope stays: it is checked in beside the pipeline, reviewable,
+	// and identical everywhere the repo goes.
+	args = append(args, "--setting-sources", "project")
+
 	return args
 }
 
-// cliToolPermissions splits the CLI's tool surface into what this step
-// granted and what it must be denied.
-func cliToolPermissions(conv agentConversation, runtime cliRuntime) (allowed, denied []string) {
-	granted := map[string]bool{}
-
+// cliToolPermissions translates a step's grant into the CLI's two axes:
+// natives is the built-in surface (--tools), allowed is everything the child
+// may use without being asked (--allowedTools), which is the natives plus the
+// bridge's tools.
+func cliToolPermissions(conv agentConversation, runtime cliRuntime) (natives, allowed []string) {
 	for _, decl := range conv.tools.decls.FunctionDeclarations {
 		if decl == nil {
 			continue
 		}
 
 		if native, isNative := runtime.natives[decl.Name]; isNative {
-			granted[native] = true
+			natives = append(natives, native)
 			allowed = append(allowed, native)
 
 			continue
@@ -344,21 +362,12 @@ func cliToolPermissions(conv agentConversation, runtime cliRuntime) (allowed, de
 		allowed = append(allowed, bridgedToolName(decl.Name))
 	}
 
-	// Every native the runtime knows about but this step did not grant.
-	for _, native := range runtime.natives {
-		if !granted[native] {
-			denied = append(denied, native)
-		}
-	}
-
-	denied = append(denied, runtime.alwaysDenied...)
-
 	// Sorted so the command line is stable run to run — a permission boundary
 	// that reorders itself is one nobody can diff.
+	sort.Strings(natives)
 	sort.Strings(allowed)
-	sort.Strings(denied)
 
-	return allowed, denied
+	return natives, allowed
 }
 
 // nativeToolNames is the set of tool names the CLI serves itself, which the

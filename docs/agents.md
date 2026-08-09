@@ -605,9 +605,15 @@ Granted built-ins map to the CLI's *native* tools, because a CLI is best at the 
 | `edit_file` | `Edit` |
 | `search_files` | `Grep` |
 
-Everything else in the grant — custom `run:` tools, `mcp:` grants, and the synthesized `verdict`/`write_handoff` tools — reaches the CLI over a loopback MCP server steps starts for the step and tears down after. Those are the *same* implementations a hosted agent runs, so output caps, spilling, MCP tool subsetting and MCP auth all behave identically. Credentials stay in the parent process; nothing is written into the CLI's config but a URL.
+Everything else in the grant — custom `run:` tools, `mcp:` grants, and the synthesized `verdict`/`write_handoff` tools — reaches the CLI over a loopback MCP server steps starts for the step and tears down after. Those are the *same* implementations a hosted agent runs, so output caps, spilling, MCP tool subsetting and MCP auth all behave identically. Credentials stay in the parent process; nothing reaches the CLI's config but a URL and a single-use token.
 
-Anything not granted is **denied** to the subprocess explicitly, not merely left off the allow-list. That matters: a CLI's read-only tools need no permission in non-interactive mode, so omitting `Grep` would not withhold it. `Task`, `WebFetch`, `WebSearch`, and `NotebookEdit` are always denied — capabilities no grant can describe. The CLI's own configured MCP servers are excluded too, so the grant is a limit rather than a suggestion.
+Anything not granted is **absent**, not merely unapproved: the grant becomes the CLI's entire built-in surface, so a tool nobody named does not exist for that step. That is deny-by-default, and it is why there is no list of forbidden tools to maintain — a capability this build of steps has never heard of is withheld because it was never granted, rather than surviving because nobody remembered to add it. The CLI's own configured MCP servers are excluded too, so the grant is a limit rather than a suggestion.
+
+### A step is not your session
+
+A CLI agent step runs with **project-level configuration only**. The repo's own `CLAUDE.md` and settings still apply — they travel with the code, and an agent working in a repo should see that repo's conventions — but your personal `~/.claude` does not: no user settings, hooks, plugins, skills, or output styles.
+
+This is deliberate. A pipeline whose behavior depends on who ran it is not a pipeline, and a personal `PreToolUse` hook firing inside a step nobody declared it on is a surprise nothing in the YAML would explain. It is also markedly cheaper: dropping user-level config out of the system prompt cut a trivial one-step pipeline from ~76K prompt tokens to ~25K in a measured run.
 
 The tradeoff to know about: steps' path confinement is expressed in the CLI's vocabulary now, and the working directory is the fence rather than per-call validation. A grant including `run_shell` makes that distinction academic anyway — it does on the hosted path too.
 
@@ -633,13 +639,17 @@ These are load errors, not silent no-ops, because a setting that reads as config
 | `temperature:`, `top_p:`, `max_tokens:`, `reasoning_effort:` | the CLI chooses its own sampling |
 | `source.string_tool_choice:` | no `tool_choice` on the wire to spell |
 | `compact_after_tokens:` | the CLI compacts its own conversation |
-| `budget:` (on the agent) | spend is only known after exit, too late to stop |
+| `budget.tokens:` | nothing counts tokens until the subprocess exits (use `budget.usd:`) |
 | `image:` (agent or step) | the CLI runs its tools on the host |
 | `required:`, `max_calls:`, `args:` on a tool | enforced by the turn loop the CLI replaces |
 | sub-agent tools, in either direction | a sub-agent nests inside a turn loop there is none of |
 | a CLI agent as a task's `fix:` agent | same reason |
 
-A job-level `budget:` still counts what a CLI agent spent — the CLI reports its usage on exit, and it is folded into the job total.
+### Budgets are in dollars
+
+A CLI agent takes `budget: {usd: 0.50}` rather than `budget: {tokens:}`. The two runners meter different things and neither converts into the other honestly: a hosted conversation is driven here, so tokens are counted exactly as the provider reports them, while a CLI meters itself in dollars and can stop mid-conversation. Converting between them would need a per-model price table that goes stale whenever any provider changes its rates — a number that would silently go wrong — so each runner takes the unit it can enforce and the other spelling is a load error.
+
+A job-level `budget:` stays in tokens, since it is cumulative across mixed step kinds, and it still counts what a CLI agent spent — the CLI reports its usage on exit, and it is folded into the job total.
 
 `fallback:` works in both directions. A CLI agent can fall back to a hosted provider (useful when the binary is not installed on some machines), and a hosted agent can fall back to a CLI. Preflight checks a CLI target by looking for its binary on `PATH`; `steps preflight` reports a missing one before the run starts.
 

@@ -280,7 +280,7 @@
       "properties": {
         "model": {
           "type": "string",
-          "description": "Provider-prefixed, e.g. openai/gpt-4o or lmstudio/qwen. An @-prefixed value (e.g. \"@claude/sonnet\", quoted -- @ is reserved in YAML) runs a coding-agent CLI as a subprocess instead of calling an endpoint; endpoint:, the generation dials, compact_after_tokens:, budget:, and image: do not apply to one."
+          "description": "Provider-prefixed, e.g. openai/gpt-4o or lmstudio/qwen. An @-prefixed value (e.g. \"@claude/sonnet\", quoted -- @ is reserved in YAML) runs a coding-agent CLI as a subprocess instead of calling an endpoint; endpoint:, the generation dials, compact_after_tokens:, budget.tokens:, and image: do not apply to one (use budget.usd: instead)."
         },
         "endpoint": {
           "type": "string",
@@ -1042,15 +1042,18 @@
     "budget": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "tokens"
-      ],
-      "description": "A ceiling on what agent work may spend. On an agent it is per invocation; on a job it is the cumulative total across every agent step. Never hashed.",
+      "minProperties": 1,
+      "description": "A ceiling on what agent work may spend. On an agent it is per invocation; on a job it is the cumulative total across every agent step. Never hashed. Use tokens: for a hosted agent and usd: for a CLI agent (@claude/...) -- each runner meters only the unit it can enforce, and the other spelling is rejected.",
       "properties": {
         "tokens": {
           "type": "integer",
           "minimum": 1,
-          "description": "Maximum provider-reported tokens. Omit budget: entirely for no ceiling; 0 is rejected."
+          "description": "Maximum provider-reported tokens, for a hosted agent or a job. Omit budget: entirely for no ceiling; 0 is rejected."
+        },
+        "usd": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Maximum dollars, for a CLI agent only -- the CLI enforces it mid-conversation. Omit budget: entirely for no ceiling; 0 is rejected."
         }
       }
     },

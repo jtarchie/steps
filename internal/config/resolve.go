@@ -137,7 +137,11 @@ type ResolvedInvocation struct {
 	// invocation may spend (see Agent.Budget); 0 means no ceiling. Never
 	// hashed — it is an operational limit, like Timeout.
 	BudgetTokens int
-	ToolSpecs    []ToolSpec
+	// BudgetUSD is the dollar ceiling a CLI agent hands its subprocess (see
+	// Budget.USD); 0 means no ceiling. Never hashed, for the same reason
+	// BudgetTokens is not.
+	BudgetUSD float64
+	ToolSpecs []ToolSpec
 	// StringOnlyToolChoice, when true, forces a required tool call (see
 	// forceRequiredTool in internal/agent) via tool_choice: "required"
 	// instead of a named function object — for providers whose
@@ -214,6 +218,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		CompactAfterTokens:   compactAfterTokens,
 		ContextWindow:        contextWindow,
 		BudgetTokens:         budgetTokens(agent.Budget),
+		BudgetUSD:            budgetUSD(agent.Budget),
 		ToolSpecs:            toolSpecs,
 		StringOnlyToolChoice: target.StringOnlyToolChoice,
 		Image:                image,

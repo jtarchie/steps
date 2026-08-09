@@ -7,21 +7,35 @@ import "fmt"
 // Budget caps what an agent invocation, or a whole job's agent steps
 // together, may spend. It is the AI equivalent of timeout:.
 //
-// Tokens only, deliberately. A token ceiling is provider-agnostic and exact.
-// A money ceiling would need a per-model price table that goes stale every
-// time any provider changes its rates — an ongoing maintenance burden rather
-// than a one-time cost — so `cost:` is left out until someone is prepared to
-// own that table.
+// Two spellings, because the two runners meter different things and neither
+// can be converted into the other honestly. A hosted agent's conversation is
+// driven here, so tokens are counted exactly as the provider reports them; a
+// CLI agent's conversation happens inside a subprocess that meters itself in
+// dollars. Translating between them would need a per-model price table that
+// goes stale every time any provider changes its rates — an ongoing
+// maintenance burden, and a number that would silently go wrong — so each
+// runner takes the unit it can actually enforce and validation rejects the
+// other (see validateCLIAgents).
 //
 // Like assert: and timeout:, a budget is an operational limit and is never
 // hashed: adding one must not invalidate a cached step.
 type Budget struct {
-	// Tokens is the ceiling, counted from the provider's own reported usage
-	// (prompt + completion, including reasoning tokens where a provider
-	// reports them) — not an estimate. 0 is not "unlimited", it is rejected:
-	// a budget block that caps nothing is a typo, and reading it as "no
-	// limit" would be the most expensive possible interpretation.
+	// Tokens is the ceiling for a HOSTED agent, counted from the provider's
+	// own reported usage (prompt + completion, including reasoning tokens
+	// where a provider reports them) — not an estimate. 0 is not "unlimited",
+	// it is rejected: a budget block that caps nothing is a typo, and reading
+	// it as "no limit" would be the most expensive possible interpretation.
 	Tokens int `yaml:"tokens,omitempty"`
+	// USD is the ceiling for a CLI agent, enforced by the CLI itself
+	// mid-conversation. It exists because a subprocess reports its spend only
+	// on exit — too late for a token counter here to stop anything — while the
+	// CLI has a real circuit breaker of its own that takes dollars.
+	USD float64 `yaml:"usd,omitempty"`
+}
+
+// set reports whether this budget caps anything at all.
+func (b *Budget) set() bool {
+	return b != nil && (b.Tokens != 0 || b.USD != 0)
 }
 
 // validateBudgets rejects a budget: block that caps nothing, on an agent or a
@@ -49,7 +63,7 @@ func (c *Config) validateBudgets() error {
 	return nil
 }
 
-// budgetTokens is a budget's ceiling, or 0 for no budget at all.
+// budgetTokens is a budget's token ceiling, or 0 for no token budget.
 func budgetTokens(budget *Budget) int {
 	if budget == nil {
 		return 0
@@ -58,13 +72,34 @@ func budgetTokens(budget *Budget) int {
 	return budget.Tokens
 }
 
+// budgetUSD is a budget's dollar ceiling, or 0 for no dollar budget.
+func budgetUSD(budget *Budget) float64 {
+	if budget == nil {
+		return 0
+	}
+
+	return budget.USD
+}
+
+// validateBudget rejects a budget: block that caps nothing. Which SPELLING is
+// allowed where is a separate question, answered by the runner that would
+// enforce it (validateCLIAgents); this only insists that whatever was written
+// is a real ceiling.
 func validateBudget(label string, budget *Budget) error {
 	if budget == nil {
 		return nil
 	}
 
-	if budget.Tokens <= 0 {
+	if !budget.set() {
+		return fmt.Errorf("%s: budget must set tokens or usd to a positive ceiling (omit budget: entirely for no ceiling)", label)
+	}
+
+	if budget.Tokens < 0 {
 		return fmt.Errorf("%s: budget.tokens must be a positive number of tokens (omit budget: entirely for no ceiling)", label)
+	}
+
+	if budget.USD < 0 {
+		return fmt.Errorf("%s: budget.usd must be a positive dollar amount (omit budget: entirely for no ceiling)", label)
 	}
 
 	return nil

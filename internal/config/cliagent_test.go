@@ -206,3 +206,73 @@ func TestCLIProviderTableIsResolvable(t *testing.T) {
 		}
 	}
 }
+
+// TestBudgetSpellingFollowsTheRunner pins that each budget spelling is
+// accepted exactly where something can enforce it. The failure this prevents
+// is a pipeline that reads as if it had a spend limit while nothing applies
+// one -- the same class of silent no-op every other cli rejection exists for.
+func TestBudgetSpellingFollowsTheRunner(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		model         string
+		budget        Budget
+		wantErrSubstr string
+	}{
+		{
+			name:   "usd on a cli agent",
+			model:  "@claude/sonnet",
+			budget: Budget{USD: 0.5},
+		},
+		{
+			name:   "tokens on a hosted agent",
+			model:  "openai/gpt-4o",
+			budget: Budget{Tokens: 1000},
+		},
+		{
+			name:          "tokens on a cli agent",
+			model:         "@claude/sonnet",
+			budget:        Budget{Tokens: 1000},
+			wantErrSubstr: "budget.tokens is not supported with a cli source",
+		},
+		{
+			name:          "usd on a hosted agent",
+			model:         "openai/gpt-4o",
+			budget:        Budget{USD: 0.5},
+			wantErrSubstr: "budget.usd is only supported with a cli source",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			budget := tt.budget
+			cfg := &Config{
+				Agents: []Agent{{Name: "reviewer", Source: AgentSource{Model: tt.model}, Budget: &budget}},
+				Jobs: []Job{{Name: "review", Plan: []Step{
+					{Agent: "reviewer", Prompt: "go", Inputs: &InputSpec{}},
+				}}},
+			}
+
+			err := cfg.validate()
+
+			if tt.wantErrSubstr == "" {
+				if err != nil {
+					t.Fatalf("validate: %v", err)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("expected an error containing %q", tt.wantErrSubstr)
+			}
+
+			if !strings.Contains(err.Error(), tt.wantErrSubstr) {
+				t.Errorf("error = %q, want it to contain %q", err, tt.wantErrSubstr)
+			}
+		})
+	}
+}

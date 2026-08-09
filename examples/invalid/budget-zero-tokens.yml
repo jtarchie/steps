@@ -1,7 +1,12 @@
 # A budget: block that caps nothing is a typo, and reading it as "no limit"
 # would be the most expensive possible interpretation. Omit budget: entirely
 # for no ceiling.
-# expect: budget.tokens must be a positive number of tokens
+#
+# The message names both spellings since budget.usd arrived: an int field
+# cannot tell `tokens: 0` from an absent tokens:, so "you wrote a budget that
+# caps nothing" is the only honest thing to say, and it is also the more
+# useful one now that there are two ways to write a real ceiling.
+# expect: budget must set tokens or usd to a positive ceiling
 
 agents:
 - name: writer

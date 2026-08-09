@@ -1,0 +1,19 @@
+# The mirror of cli-budget.yml. A hosted provider reports tokens on the wire
+# and no cost figure at all, so there is nothing for a dollar ceiling to
+# compare against -- accepting it would let the pipeline claim a spend limit
+# nothing enforces.
+# expect: budget.usd is only supported with a cli source
+
+agents:
+- name: reviewer
+  source:
+    model: openai/gpt-4o
+  budget:
+    usd: 0.5
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: Review something.

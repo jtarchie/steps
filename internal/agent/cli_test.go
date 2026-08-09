@@ -24,7 +24,7 @@ func argValue(args []string, flag string) string {
 
 // cliPrepared builds a prepared step with the given granted tool names,
 // enough for the argument builder.
-func cliPrepared(t *testing.T, toolNames []string, verdicts []string) preparedAgentStep {
+func cliPrepared(t *testing.T, toolNames []string) preparedAgentStep {
 	t.Helper()
 
 	decls := make([]*genai.FunctionDeclaration, 0, len(toolNames))
@@ -42,7 +42,7 @@ func cliPrepared(t *testing.T, toolNames []string, verdicts []string) preparedAg
 	conv.prompt = "Review the diff."
 
 	return preparedAgentStep{
-		step: config.Step{Agent: "reviewer", Verdicts: verdicts},
+		step: config.Step{Agent: "reviewer"},
 		ri: config.ResolvedInvocation{
 			AgentName: "reviewer",
 			CLI:       "claude",
@@ -57,7 +57,7 @@ func cliPrepared(t *testing.T, toolNames []string, verdicts []string) preparedAg
 func TestCLIArgs(t *testing.T) {
 	t.Parallel()
 
-	prepared := cliPrepared(t, []string{"read_file", "run_shell", "count_lines"}, nil)
+	prepared := cliPrepared(t, []string{"read_file", "run_shell", "count_lines"})
 	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json")
 
 	for flag, want := range map[string]string{
@@ -86,13 +86,22 @@ func TestCLIArgs(t *testing.T) {
 func TestCLIToolPermissions(t *testing.T) {
 	t.Parallel()
 
-	prepared := cliPrepared(t, []string{"read_file", "run_shell", "count_lines"}, nil)
+	prepared := cliPrepared(t, []string{"read_file", "run_shell", "count_lines"})
 	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json")
 
+	tools := strings.Split(argValue(args, "--tools"), ",")
 	allowed := strings.Split(argValue(args, "--allowedTools"), ",")
-	denied := strings.Split(argValue(args, "--disallowedTools"), ",")
 
-	// Granted built-ins become the CLI's own native tools.
+	// --tools IS the surface, and it is an allow-list: exactly the granted
+	// built-ins, nothing else. Deny-by-default is the point — a built-in this
+	// build has never heard of is withheld because it was never named, where
+	// the old enumerate-and-deny list would have let it through.
+	if want := []string{"Bash", "Read"}; !slices.Equal(tools, want) {
+		t.Errorf("--tools = %v, want exactly %v", tools, want)
+	}
+
+	// Granted built-ins are also pre-approved, since Bash is permission-gated
+	// and would otherwise stall on a prompt nobody can answer.
 	for _, want := range []string{"Read", "Bash"} {
 		if !slices.Contains(allowed, want) {
 			t.Errorf("allowed = %v, want it to contain %q", allowed, want)
@@ -100,29 +109,81 @@ func TestCLIToolPermissions(t *testing.T) {
 	}
 
 	// A custom tool has no native equivalent; it reaches the CLI through the
-	// bridge, under the bridge's namespaced name.
+	// bridge, under the bridge's namespaced name. --tools governs built-ins
+	// only, so bridge tools have to be named on --allowedTools instead.
 	if !slices.Contains(allowed, "mcp__steps__count_lines") {
 		t.Errorf("allowed = %v, want the bridged custom tool", allowed)
 	}
 
-	// The ungranted built-ins must be DENIED, not merely omitted: a CLI's
-	// read-only tools need no permission in non-interactive mode, so leaving
-	// Grep off the allow-list would not withhold it.
-	for _, want := range []string{"Write", "Edit", "Grep"} {
-		if !slices.Contains(denied, want) {
-			t.Errorf("denied = %v, want it to contain ungranted %q", denied, want)
-		}
+	if slices.Contains(tools, "mcp__steps__count_lines") {
+		t.Errorf("--tools = %v, want built-ins only", tools)
 	}
 
-	if slices.Contains(allowed, "Write") {
-		t.Error("write_file was never granted but Write is allowed")
+	// Nothing ungranted reaches the child on either axis. Task/WebFetch/
+	// WebSearch used to need naming on a deny list; under --tools they are
+	// excluded by never having been mentioned, which is what makes this
+	// robust against the CLI growing a tool we have not heard of.
+	for _, unwanted := range []string{"Write", "Edit", "Grep", "Task", "WebFetch", "WebSearch"} {
+		if slices.Contains(tools, unwanted) || slices.Contains(allowed, unwanted) {
+			t.Errorf("ungranted %q reached the child: tools %v, allowed %v", unwanted, tools, allowed)
+		}
+	}
+}
+
+// TestCLIToolPermissionsGrantedGatedTools is the half a fake cannot prove on
+// its own: a GRANTED gated tool has to be pre-approved, or the step silently
+// loses a capability its pipeline asked for. Write and Edit need permission in
+// non-interactive mode where Read does not, so naming them is what makes them
+// usable (checked against the real binary by
+// TestLiveCLIGrantedWriteActuallyWrites).
+func TestCLIToolPermissionsGrantedGatedTools(t *testing.T) {
+	t.Parallel()
+
+	args := cliArgs(cliPrepared(t, []string{"write_file", "edit_file"}), cliRuntimes["claude"], "/tmp/mcp.json")
+	allowed := strings.Split(argValue(args, "--allowedTools"), ",")
+	tools := strings.Split(argValue(args, "--tools"), ",")
+
+	for _, want := range []string{"Write", "Edit"} {
+		if !slices.Contains(allowed, want) {
+			t.Errorf("allowed = %v, want the granted gated tool %q", allowed, want)
+		}
+
+		if !slices.Contains(tools, want) {
+			t.Errorf("--tools = %v, want the granted tool %q on the surface", tools, want)
+		}
+	}
+}
+
+// TestCLIToolPermissionsEmptyGrant pins the floor: an agent granted no
+// built-ins gets an empty surface rather than the CLI's default set.
+func TestCLIToolPermissionsEmptyGrant(t *testing.T) {
+	t.Parallel()
+
+	prepared := cliPrepared(t, []string{"count_lines"})
+	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json")
+
+	if got := argValue(args, "--tools"); got != "" {
+		t.Errorf("--tools = %q, want empty — no built-in was granted", got)
 	}
 
-	// Capabilities no grant can describe are denied unconditionally.
-	for _, want := range []string{"Task", "WebFetch", "WebSearch"} {
-		if !slices.Contains(denied, want) {
-			t.Errorf("denied = %v, want it to contain %q", denied, want)
-		}
+	// The bridged tool still has to get through; it is not a built-in.
+	if got := argValue(args, "--allowedTools"); got != "mcp__steps__count_lines" {
+		t.Errorf("--allowedTools = %q, want the bridged tool", got)
+	}
+}
+
+// TestCLIArgsIsolatesUserConfig pins that a pipeline step does not inherit the
+// operator's personal setup. Without this the same pipeline behaves
+// differently per machine, and a user hook fires inside a step that never
+// declared one — neither of which is visible in the merkle hash.
+func TestCLIArgsIsolatesUserConfig(t *testing.T) {
+	t.Parallel()
+
+	prepared := cliPrepared(t, []string{"read_file"})
+	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json")
+
+	if got := argValue(args, "--setting-sources"); got != "project" {
+		t.Errorf("--setting-sources = %q, want project (user-level config must not reach a pipeline step)", got)
 	}
 }
 
@@ -244,7 +305,7 @@ func TestRunCLIConversationReportsUsageToTheJob(t *testing.T) {
 	run := NewRunUsage(0)
 	ctx := WithRunUsage(t.Context(), run)
 
-	prepared := cliPrepared(t, []string{"read_file"}, nil)
+	prepared := cliPrepared(t, []string{"read_file"})
 	prepared.conv.usage = &stepUsage{name: "reviewer"}
 
 	// The fake binary prints nothing, so the attempt fails for want of a
@@ -287,5 +348,29 @@ func TestCLIPromptFencesContextBlocks(t *testing.T) {
 	// Some opening tag has to sit between the path label and the content.
 	if !strings.Contains(before, "<untrusted-") {
 		t.Errorf("context block is not fenced; a readme reads as operator instruction:\n%s", rendered)
+	}
+}
+
+// TestCLIArgsBudgetUSD pins the one circuit breaker that works across a
+// process boundary. A token ceiling cannot stop a CLI agent -- the count only
+// arrives once the subprocess has exited and the money is spent -- so
+// budget.usd is handed to the CLI, which meters itself and can stop mid-run.
+func TestCLIArgsBudgetUSD(t *testing.T) {
+	t.Parallel()
+
+	prepared := cliPrepared(t, []string{"read_file"})
+	prepared.ri.BudgetUSD = 0.25
+
+	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json")
+
+	if got := argValue(args, "--max-budget-usd"); got != "0.25" {
+		t.Errorf("--max-budget-usd = %q, want 0.25", got)
+	}
+
+	// Unset means no ceiling, not a zero one -- a "0" would stop the run
+	// before it started.
+	noBudget := cliPrepared(t, []string{"read_file"})
+	if slices.Contains(cliArgs(noBudget, cliRuntimes["claude"], "/tmp/mcp.json"), "--max-budget-usd") {
+		t.Error("--max-budget-usd was passed for an agent with no budget")
 	}
 }

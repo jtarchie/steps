@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
+	"sort"
 	"testing"
 )
 
@@ -22,11 +22,11 @@ import (
 // fakeCLI is a fake coding-agent CLI installed on PATH, plus the files it
 // records what it was asked to do into.
 type fakeCLI struct {
-	// argvPath receives the exact argument vector the driver built — the
-	// permission boundary, as the child actually saw it.
-	argvPath string
-	// promptPath receives everything written to the child's stdin.
-	promptPath string
+	// dir holds one argv-<pid> and one prompt-<pid> file per invocation.
+	// Per-invocation rather than one shared log, because concurrent cells
+	// (across: with max_in_flight:) run several children at once and two
+	// appends to the same file can interleave mid-line.
+	dir string
 }
 
 // writeFakeClaude installs a fake `claude` on PATH whose body is the given
@@ -42,20 +42,17 @@ func writeFakeClaude(t *testing.T, body string) fakeCLI {
 	}
 
 	dir := t.TempDir()
-	cli := fakeCLI{
-		argvPath:   filepath.Join(dir, "argv"),
-		promptPath: filepath.Join(dir, "prompt"),
-	}
+	records := t.TempDir()
+	cli := fakeCLI{dir: records}
 
-	// One line per invocation, arguments separated by "|". A plain "$*" would
-	// not do: --append-system-prompt carries the multi-line operating note, so
-	// argv is only one line once embedded newlines are flattened.
+	// Arguments separated by "|", newlines flattened: a plain "$*" would not
+	// do, since --append-system-prompt carries the multi-line operating note
+	// and would otherwise span lines.
 	script := fmt.Sprintf(`#!/bin/sh
-printf '%%s|' "$@" | tr '\n' ' ' >> %[1]q
-printf '\n' >> %[1]q
-cat >> %[2]q
-%[3]s
-`, cli.argvPath, cli.promptPath, body)
+printf '%%s|' "$@" | tr '\n' ' ' > %[1]q/argv-$$
+cat > %[1]q/prompt-$$
+%[2]s
+`, records, body)
 
 	err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o700) //nolint:gosec // a test stub must be executable
 	if err != nil {
@@ -67,28 +64,57 @@ cat >> %[2]q
 	return cli
 }
 
+// records returns the contents of every file matching prefix, one per
+// invocation, sorted by name so a sequential test reads them in a stable
+// order. Concurrent invocations have no meaningful order, so tests over those
+// must assert on the SET rather than on positions.
+func (c fakeCLI) records(t *testing.T, prefix string) []string {
+	t.Helper()
+
+	paths, err := filepath.Glob(filepath.Join(c.dir, prefix+"-*"))
+	if err != nil {
+		t.Fatalf("globbing %s records: %v", prefix, err)
+	}
+
+	sort.Strings(paths)
+
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		out = append(out, readFileString(t, path))
+	}
+
+	return out
+}
+
 // argv returns the argument vector of the nth (1-indexed) invocation.
 func (c fakeCLI) argv(t *testing.T, n int) string {
 	t.Helper()
 
-	lines := strings.Split(strings.TrimRight(readFileString(t, c.argvPath), "\n"), "\n")
-	if n > len(lines) {
-		t.Fatalf("the fake cli ran %d times, wanted invocation %d", len(lines), n)
+	argvs := c.records(t, "argv")
+	if n > len(argvs) {
+		t.Fatalf("the fake cli ran %d times, wanted invocation %d", len(argvs), n)
 	}
 
-	return lines[n-1]
+	return argvs[n-1]
+}
+
+// prompt returns the stdin of the nth (1-indexed) invocation.
+func (c fakeCLI) prompt(t *testing.T, n int) string {
+	t.Helper()
+
+	prompts := c.records(t, "prompt")
+	if n > len(prompts) {
+		t.Fatalf("the fake cli ran %d times, wanted invocation %d", len(prompts), n)
+	}
+
+	return prompts[n-1]
 }
 
 // invocations reports how many times the fake CLI ran.
 func (c fakeCLI) invocations(t *testing.T) int {
 	t.Helper()
 
-	_, err := os.Stat(c.argvPath)
-	if err != nil {
-		return 0
-	}
-
-	return len(strings.Split(strings.TrimRight(readFileString(t, c.argvPath), "\n"), "\n"))
+	return len(c.records(t, "argv"))
 }
 
 // cliResultEvent is the terminal event of a CLI transcript, as a shell-safe

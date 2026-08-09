@@ -133,6 +133,20 @@ The HTTP loop enforces `required: true` by forcing an unsatisfied tool through t
 
 This is why tool guards (`required:`/`max_calls:`/`args:`) are rejected on CLI agents at load: only the synthesized tools have an enforcement point that survives the boundary.
 
+### Two flags, two questions
+
+The child's tool surface is set by `--tools` and its permissions by `--allowedTools`, and conflating them is the mistake worth avoiding.
+
+`--tools` is the surface: the CLI offers only the built-ins named there, and nothing else exists for that step (verified — `--tools Read` reports exactly `["Read"]`). This is what makes the grant deny-by-default. The first implementation instead enumerated every known tool and denied the ungranted ones, which fails open the moment the CLI ships a tool this build has never heard of; `--tools` inverts that, so an unknown tool is excluded by never having been named.
+
+`--allowedTools` is permission, a different axis. `Read`/`Glob`/`Grep` need none, but `Bash`, `Write` and `Edit` are gated and would otherwise stall on a prompt nobody can answer in `-p` mode — so a *granted* gated tool must be named here or the step silently loses a capability its pipeline asked for. It is also how the bridge's `mcp__steps__*` tools are permitted, since `--tools` governs built-ins only. Both halves are pinned live (`TestLiveCLIGrantedWriteActuallyWrites`, `TestLiveCLIUngrantedToolIsWithheld`).
+
+### Configuration scope, and what is still not hashed
+
+`--setting-sources project` keeps a pipeline step out of the operator's personal configuration. Without it the subprocess inherits all of `~/.claude` — settings, hooks, plugins, skills, output styles — none of which appears in the merkle hash, so the same pipeline would behave differently per machine and a user hook could fire inside a step that never declared one.
+
+Project-level configuration deliberately still loads, and it is **also not hashed**. Folding it in would mean reading files that may sit outside the step's declared inputs, and the honest boundary is the same one this package already draws around the CLI's version: steps hashes *which* thing was asked for, not the state of everything on the other side of the call. A repo's `CLAUDE.md` changing does not invalidate a cached CLI agent step; if that matters for a given pipeline, name the file in `context_paths:`, which is hashed.
+
 ### Reading the transcript back
 
 `clistream.go` parses the CLI's line-delimited JSON off a pipe as it arrives, rather than buffering it whole — so a step killed by its timeout still records the trajectory of what it managed to do. Parsing is tolerant by design: the event schema belongs to the CLI, so an unknown event type, an unexpected content block, or an unparsable line is logged at debug and skipped. The one intolerable case is a missing terminal `result` event, which distinguishes "the CLI died mid-sentence" from "the CLI finished with nothing to say" — and that distinction is what `attempts:` keys off.

@@ -90,6 +90,10 @@ func TestE2ECLIAgentInvocation(t *testing.T) {
 		"--max-turns|12|",
 		"--append-system-prompt|You review code.",
 		"--strict-mcp-config|",
+		// A pipeline step must not inherit the operator's personal ~/.claude.
+		"--setting-sources|project|",
+		// The built-in surface is an allow-list of exactly what was granted.
+		"--tools|Bash,Read|",
 	} {
 		if !strings.Contains(argv, want) {
 			t.Errorf("argv is missing %q:\n%s", want, argv)
@@ -104,15 +108,16 @@ func TestE2ECLIAgentInvocation(t *testing.T) {
 		}
 	}
 
-	// Ungranted built-ins must be denied outright, not merely left off the
-	// allow-list: a CLI's read-only tools need no permission in -p mode.
-	for _, want := range []string{"Write", "Edit", "Grep", "Task", "WebFetch"} {
-		if !strings.Contains(argv, want) {
-			t.Errorf("argv does not deny %q:\n%s", want, argv)
+	// Nothing ungranted appears anywhere on the command line. Under --tools
+	// there is no deny list to name them on: they are withheld by omission,
+	// which is what makes a built-in this build has never heard of safe.
+	for _, unwanted := range []string{"Write", "Edit", "Grep", "Task", "WebFetch", "WebSearch"} {
+		if strings.Contains(argv, unwanted) {
+			t.Errorf("ungranted %q appears in argv:\n%s", unwanted, argv)
 		}
 	}
 
-	if prompt := readFileString(t, cli.promptPath); !strings.Contains(prompt, "Review the diff.") {
+	if prompt := cli.prompt(t, 1); !strings.Contains(prompt, "Review the diff.") {
 		t.Errorf("the prompt did not reach the cli's stdin:\n%s", prompt)
 	}
 }
@@ -263,5 +268,92 @@ func TestE2ECLIAgentDoesNotRetryTaskFailure(t *testing.T) {
 	agentNode := findNode(t, storeNodes(t, path), "agent", "reviewer")
 	if !strings.Contains(agentNode.Error, "Reached maximum number of turns") {
 		t.Errorf("recorded error = %q, want the cli's own message rather than a bare subtype", agentNode.Error)
+	}
+}
+
+// TestE2ECLIAgentsRunConcurrently covers matrix fan-out over a CLI agent,
+// which is where the per-attempt bridge stops being an implementation detail:
+// every cell spawns its own subprocess AND its own MCP server, so a cell
+// reading another cell.s captured verdict would route the wrong branch.
+// Nothing about that is exercised by a sequential test.
+func TestE2ECLIAgentsRunConcurrently(t *testing.T) {
+	_, err := exec.LookPath("curl")
+	if err != nil {
+		t.Skip("curl is needed to call the bridge from a shell-script cli")
+	}
+
+	dir := t.TempDir()
+
+	// Each cell votes for the branch named after itself, so a crossed wire
+	// between two bridges shows up as the wrong log file being written rather
+	// than as a silent pass.
+	cli := writeFakeClaude(t,
+		callBridgeScript("verdict", `{"choice":"approve"}`)+
+			"echo '"+cliResultEvent("done", 1)+"'")
+
+	yaml := fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+workspace:
+  strategy: copy
+
+agents:
+- name: reviewer
+  source:
+    model: "@claude/sonnet"
+  tools: [read_file]
+
+jobs:
+- name: review
+  plan:
+  - across:
+    - var: cell
+      values: [a, b, c]
+    max_in_flight: 3
+    agent: reviewer
+    inputs: []
+    outputs: []
+    prompt: Review cell {{ .vars.cell }}.
+    verdicts: [approve]
+    to:
+      approve: next
+  - task: record
+    inputs: []
+    run: echo joined >> %s
+`, filepath.Join(dir, "joined.log"))
+
+	path := writePipeline(t, dir, yaml)
+
+	err = run([]string{path})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if got := cli.invocations(t); got != 3 {
+		t.Fatalf("the cli ran %d times, want one per cell (3)", got)
+	}
+
+	// Every cell got its OWN bridge. Sharing one would mean one cell.s verdict
+	// capture could satisfy another cell.s obligation, which is precisely the
+	// failure a sequential test cannot see.
+	configs := map[string]bool{}
+
+	for _, argv := range cli.records(t, "argv") {
+		for _, field := range strings.Split(argv, "|") {
+			if strings.Contains(field, "steps-cli-mcp") {
+				configs[field] = true
+			}
+		}
+	}
+
+	if len(configs) != 3 {
+		t.Errorf("cells shared %d mcp config(s), want 3 distinct bridges: %v", len(configs), configs)
+	}
+
+	// All three cells routed on their own verdict, so the join was reached.
+	if got := readFileString(t, filepath.Join(dir, "joined.log")); !strings.Contains(got, "joined") {
+		t.Error("the step after the matrix did not run; a cell did not route")
 	}
 }
