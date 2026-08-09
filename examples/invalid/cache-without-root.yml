@@ -1,0 +1,27 @@
+# The cache has to outlive the run that filled it, which is the whole point.
+# Without an explicit root:, the copy strategy materializes under a temp
+# directory the provider creates and removes at the end of the run -- so a
+# "cache" there would be discarded every time, i.e. a slower way to fetch once.
+# expect: requires workspace.root
+
+workspace:
+  strategy: copy
+  cache:
+    resources: true
+
+resource_types:
+- name: dummy
+  config:
+    check: echo '[{"ref":"v1"}]'
+    in: 'true'
+    out: 'true'
+
+resources:
+- name: repo
+  type: dummy
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: repo

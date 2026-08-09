@@ -111,7 +111,7 @@ func NewProvider(ws *config.WorkspaceConfig, keep bool) (Provider, error) {
 	case "copy":
 		return newCopyProvider(ws, keep)
 	case "btrfs":
-		return newBtrfsProvider(ws, keep), nil
+		return newBtrfsProvider(ws, keep)
 	default:
 		return nil, fmt.Errorf("unknown workspace strategy %q", ws.Strategy)
 	}
@@ -315,8 +315,29 @@ type isolatingProvider struct {
 	keep     bool
 	// token distinguishes this invocation's build directories from any other's
 	// — see newInvocationToken.
-	token  string
+	token string
+	// cache is the cross-build resource cache, nil when the pipeline did not
+	// opt in (see config.CacheConfig).
+	cache  *resourceCache
 	builds atomic.Int64
+}
+
+// enableCache attaches the cross-build resource cache when the pipeline opted
+// in. Config guarantees an explicit root: alongside cache.resources, so the
+// cache directory always sits somewhere that outlives the run.
+func (p *isolatingProvider) enableCache(ws *config.WorkspaceConfig) error {
+	if !ws.CacheEnabled() {
+		return nil
+	}
+
+	cache, err := newResourceCache(p.backend, p.root, ws.CacheMaxEntries())
+	if err != nil {
+		return err
+	}
+
+	p.cache = cache
+
+	return nil
 }
 
 func (p *isolatingProvider) Validate() error {
@@ -360,6 +381,9 @@ func (p *isolatingProvider) sweepStaleBuilds() {
 	}
 
 	for _, entry := range entries {
+		// Only build directories. The cache lives under this root too and is
+		// the whole point of surviving a crash, so the prefix test is what
+		// keeps the sweep from throwing away the asset along with the garbage.
 		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), buildDirPrefix) {
 			continue
 		}
@@ -409,7 +433,7 @@ func (p *isolatingProvider) NewBuild(ctx context.Context, label string) (BuildWo
 
 	_ = ctx // no subprocess work happens at this layer; ctx kept for interface symmetry
 
-	return &isolatingBuild{backend: p.backend, root: root, artifacts: artifacts, stepsDir: steps, keep: p.keep}, nil
+	return &isolatingBuild{backend: p.backend, root: root, artifacts: artifacts, stepsDir: steps, keep: p.keep, cache: p.cache}, nil
 }
 
 func (p *isolatingProvider) Close() error {
@@ -435,7 +459,24 @@ type isolatingBuild struct {
 	artifacts   string
 	stepsDir    string
 	keep        bool
+	cache       *resourceCache
 	stepCounter atomic.Int64
+}
+
+// FetchResource implements CachingBuild. With no cache configured it is
+// exactly ResourceDir followed by fetch — the behavior every pipeline had
+// before the cache existed.
+func (b *isolatingBuild) FetchResource(ctx context.Context, name, cacheKey string, fetch func(dir string) error) (string, error) {
+	dir, err := b.ResourceDir(ctx, name)
+	if err != nil {
+		return "", err
+	}
+
+	if b.cache == nil || cacheKey == "" {
+		return dir, fetch(dir)
+	}
+
+	return dir, b.cache.Fetch(ctx, cacheKey, dir, func() error { return fetch(dir) })
 }
 
 func (b *isolatingBuild) ResourceDir(ctx context.Context, name string) (string, error) {
@@ -1138,4 +1179,23 @@ type Resumable interface {
 // failed run can print the directory a resume will continue in.
 type RootedBuild interface {
 	Root() string
+}
+
+// CachingBuild is a BuildWorkspace that can reuse a resource version fetched
+// by an earlier build instead of fetching it again.
+//
+// An optional interface, like Resumable and RootedBuild, rather than a method
+// on BuildWorkspace: only an isolating provider with a durable root can offer
+// it (the shared provider's workspace is a temp directory that goes away with
+// the run), and callers that do not find it simply fetch, which is what every
+// pipeline did before the cache existed.
+type CachingBuild interface {
+	// FetchResource returns the directory for resource name, populated either
+	// from the cache entry for cacheKey or by calling fetch. fetch receives the
+	// directory to populate and is called at most once; when it is not called,
+	// the directory already holds that version's content.
+	//
+	// A cache failure is never a fetch failure: anything that goes wrong with
+	// the cache falls back to calling fetch.
+	FetchResource(ctx context.Context, name, cacheKey string, fetch func(dir string) error) (string, error)
 }

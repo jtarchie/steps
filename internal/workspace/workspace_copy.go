@@ -21,7 +21,7 @@ func newCopyProvider(ws *config.WorkspaceConfig, keep bool) (Provider, error) {
 		return nil, err
 	}
 
-	return &isolatingProvider{
+	provider := &isolatingProvider{
 		backend: copyBackend{},
 		validate: func() error {
 			return validateRootWritable(root)
@@ -30,7 +30,14 @@ func newCopyProvider(ws *config.WorkspaceConfig, keep bool) (Provider, error) {
 		ownsRoot: ownsRoot,
 		keep:     keep,
 		token:    newInvocationToken(),
-	}, nil
+	}
+
+	err = provider.enableCache(ws)
+	if err != nil {
+		return nil, err
+	}
+
+	return provider, nil
 }
 
 // validateRootWritable probes root by creating and removing a temp

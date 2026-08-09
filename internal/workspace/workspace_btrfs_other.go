@@ -15,8 +15,8 @@ import (
 // equivalent. Config.validateWorkspace only checks schema shape at load
 // time (it can't know the runtime GOOS), so this is where the platform
 // check actually happens.
-func newBtrfsProvider(*config.WorkspaceConfig, bool) Provider {
-	return unsupportedBtrfsProvider{}
+func newBtrfsProvider(*config.WorkspaceConfig, bool) (Provider, error) {
+	return unsupportedBtrfsProvider{}, nil
 }
 
 type unsupportedBtrfsProvider struct{}

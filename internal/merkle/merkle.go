@@ -1435,3 +1435,52 @@ func stepResourceName(step config.Step) string {
 		return ""
 	}
 }
+
+// ResourceCacheKey identifies a fetched resource version for the cross-build
+// resource cache (see internal/workspace's resourceCache).
+//
+// It is deliberately NARROWER than GetNodeContent, which hashes a get NODE:
+// that includes the artifact name an alias fetches into, and it chains onto a
+// parent hash, so two jobs fetching the identical version of the identical
+// resource produce different node hashes. Both of those are right for deciding
+// whether a step can be skipped and wrong for deciding whether a fetch can be
+// reused — the bytes on disk do not care which job asked for them, and keying
+// the cache on the node hash would give every job its own copy of the same
+// content, which is most of the win gone.
+//
+// What it does fold in is everything that changes what in: produces: the
+// command itself, the source and version it runs against, and the execution
+// settings that decide what environment it runs in. An MCP-backed resource
+// type folds in its check/in tool identity through withMCPResourceStage, the
+// same as the node content does.
+func ResourceCacheKey(cfg *config.Config, resourceType config.ResourceType, source, version map[string]any) (string, error) {
+	content := map[string]any{
+		"in_template": resourceType.Config.In,
+		"source":      source,
+		"version":     version,
+	}
+
+	if resourceType.Image != "" {
+		content["image"] = resourceType.Image
+	}
+
+	if len(resourceType.Env) > 0 {
+		content["env"] = sortedEnv(resourceType.Env)
+	}
+
+	if resourceType.User != "" {
+		content["user"] = resourceType.User
+	}
+
+	if resourceType.Network != "" {
+		content["network"] = resourceType.Network
+	}
+
+	err := withMCPResourceStage(cfg, resourceType, "in", content)
+	if err != nil {
+		return "", err
+	}
+
+	// No parent hash: a cache entry is content, not a position in a plan.
+	return HashNode(NodeKindGet, content, "")
+}

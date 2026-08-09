@@ -24,6 +24,28 @@ workspace:
 
 See also [infra.md](infra.md) for `image:`, which composes with workspace isolation (a containerized step still only sees its declared inputs/outputs), and for get renaming (`resource:`).
 
+## Cross-build resource cache (`cache:`)
+
+Within one build, `strategy: btrfs` already makes materialization free — a `get` lands in an artifact subvolume and every step snapshots from it, copying no bytes. Across builds there was nothing. Agent and `put` steps make their chains unskippable (see [the caching section above](#workspace-isolation)), so a real run **re-fetches every `get` from scratch**, paying the network and the disk again every time. That is the gap between what this does and what baggageclaim does for Concourse, where a fetched version is a shared copy-on-write parent.
+
+```yaml
+workspace:
+  strategy: btrfs
+  root: /mnt/btrfs
+  cache:
+    resources: true
+    max_entries: 50    # optional; least-recently-used evicted first
+```
+
+- **Off by default, and the reason matters.** A cached version's `in:` does **not** run again. That is correct under the resource contract — `in:` materializes a version, and the same version materializes the same content (see [conformance.md](conformance.md)) — but a resource type whose `in:` has side effects beyond writing the directory (bumping a counter, posting a notification) would see those stop happening. Enabling the cache is you asserting your `in:` is a pure fetch.
+- **Requires `root:`.** The cache has to outlive the run that filled it; without an explicit root the provider materializes under a temp directory it removes at the end, so a cache there would be a slower way to fetch once. Rejected at load time.
+- **Keyed on content, not on plan position.** The key is a hash of the `in:` command, the source, the version, and the execution settings (`image:`/`env:`/`user:`/`network:`) — deliberately *not* the get node's merkle hash, which carries the artifact name and chains onto a parent, so two jobs fetching the same version would each get their own copy of identical bytes.
+- **A hit costs a snapshot.** On btrfs that is instant and copies nothing; on `copy` it is a copy, but still no fetch.
+- **A failed fetch is never cached** — the entry is seeded only after `in:` succeeds, so a half-written tree can't poison later builds.
+- **Bounded.** `max_entries` (default 50) evicts least-recently-used, tracked by mtime and refreshed on every hit. An unbounded cache on a long-lived `steps watch` host fills the disk eventually.
+- **The startup sweep spares it.** Leftover build directories are swept (above); the cache sits under the same root and is the one thing there worth keeping.
+- A cache failure never fails a build: anything that goes wrong reading, writing, or pruning falls back to fetching.
+
 ## Resuming a failed run
 
 If a step fails, the whole job had to be re-run from the beginning — every expensive step that already succeeded, paid for again. For a plan of shell commands that is barely noticeable. For one with agent steps it is the difference between a 2-minute recovery and a 50-minute one, in real money, and it is **lossy**: an agent is not deterministic, so re-running does not reproduce the output that already passed review, it produces a different one.

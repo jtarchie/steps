@@ -1494,15 +1494,56 @@ func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, step config.S
 	return nil
 }
 
+// resourceDir materializes artifact's directory and populates it with the
+// given version, either by running the resource type's in: or — when the
+// pipeline enabled the cross-build resource cache and this exact version has
+// been fetched before — by reusing what an earlier build fetched.
+//
+// The cache key deliberately is NOT the get node's hash (see
+// merkle.ResourceCacheKey): a node hash carries the step's position in a plan,
+// so keying on it would give every job its own copy of identical bytes. A
+// build workspace that cannot cache (the default shared one, or an isolating
+// one with the cache off) takes the plain path, which is what every pipeline
+// did before the cache existed.
+func resourceDir(
+	ctx context.Context, cfg *config.Config, artifact string,
+	resourceType config.ResourceType, source, version map[string]any,
+	bw workspace.BuildWorkspace, fetch func(dir string) error,
+) error {
+	caching, ok := bw.(workspace.CachingBuild)
+	if !ok {
+		dir, err := bw.ResourceDir(ctx, artifact)
+		if err != nil {
+			return fmt.Errorf("could not create resource dir for %q: %w", artifact, err)
+		}
+
+		return fetch(dir)
+	}
+
+	// A key this package cannot compute is not a reason to fail the fetch —
+	// an empty key simply means "do not cache this one".
+	key, err := merkle.ResourceCacheKey(cfg, resourceType, source, version)
+	if err != nil {
+		slog.Debug("job.get.cache_key_failed", "artifact", artifact, "error", err)
+
+		key = ""
+	}
+
+	// Not wrapped with the artifact name: this error is either the fetch's own
+	// (which the caller classifies as a task failure via IsExitError, a
+	// judgement an extra wrap would not change but the linter cannot see) or
+	// the workspace's, which already names the directory it failed on.
+	_, err = caching.FetchResource(ctx, artifact, key, fetch)
+
+	return err //nolint:wrapcheck // see above: the error is the caller-classified fetch error, passed through deliberately
+}
+
 func fetchGetStep(ctx context.Context, cfg *config.Config, artifact string, resource config.Resource, resourceType config.ResourceType, version map[string]any, bw workspace.BuildWorkspace) error {
 	fmt.Printf("get: %s (version: %v)\n", artifact, version)
 
-	destDir, err := bw.ResourceDir(ctx, artifact)
-	if err != nil {
-		return fmt.Errorf("could not create resource dir for %q: %w", artifact, err)
-	}
-
-	err = rsrc.RunIn(ctx, cfg, resourceType, resource.Source, version, destDir)
+	err := resourceDir(ctx, cfg, artifact, resourceType, resource.Source, version, bw, func(dir string) error {
+		return rsrc.RunIn(ctx, cfg, resourceType, resource.Source, version, dir)
+	})
 	if err != nil {
 		// A canceled ctx (per-attempt timeout, or a job-level abort) must
 		// propagate as-is rather than being marked a task-level Failure — a

@@ -1188,6 +1188,22 @@
               ]
             }
           }
+        },
+        "cache": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Reuse fetched resource versions across builds. Requires root:. Off by default: a cached version's in: does not run again, so enabling it asserts that in: is a pure fetch.",
+          "properties": {
+            "resources": {
+              "type": "boolean",
+              "description": "Enable the cross-build resource cache."
+            },
+            "max_entries": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "How many cached versions to keep, least-recently-used evicted first. 0 takes the default."
+            }
+          }
         }
       }
     }
