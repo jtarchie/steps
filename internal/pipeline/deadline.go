@@ -13,8 +13,17 @@ package pipeline
 // to be running, racing the step's own timeout: and reporting a job-level
 // deadline breach for work that was still making progress. Instead the plan
 // walk asks, between steps, whether there is time to start another — so the two
-// timeouts compose, and the cost is that a job may overrun by at most one
-// step's duration. That is the honest price of not interrupting work.
+// timeouts compose, and the cost is that a job may overrun by one step's
+// duration. That is the honest price of not interrupting work.
+//
+// And "one step's duration" is only as tight as that step is. retryWithTimeout
+// bounds an attempt ONLY when the step sets timeout: — without one, fn runs on
+// the job's own context, which this deliberately never cancels. So a job that
+// sets timeout: and contains one unbounded step that hangs overruns without
+// limit. That is a real hole in the guarantee, not a rounding error, and it is
+// stated here rather than papered over: the ceiling is as strong as the steps
+// underneath it, and a job that wants a hard bound gives its long steps their
+// own timeout: too.
 
 import (
 	"context"

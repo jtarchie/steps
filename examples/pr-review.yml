@@ -102,7 +102,7 @@ resource_types:
     out: |
       set -e
       test -s review/findings.json || { echo "no findings file"; exit 1; }
-      gh pr review --repo {{ .source.repo | shellquote }} "$(cat review/number)" \
+      gh pr review --repo {{ .source.repo | shellquote }} "$(cat pr/pr.number)" \
         --comment --body-file review/summary.md
 
 resources:
@@ -507,7 +507,8 @@ jobs:
       any that are worse together than apart into a single compound risk.
 
       Write review/summary.md (what a human reads) and review/findings.json
-      (the structured list). Copy pr/pr.number to review/number.
+      (the structured list). Nothing else — the PR number is the pipeline's to
+      know, not yours.
 
       Then call verdict. ⚠️ Answering `blind-spots` re-runs every reviewer, not
       just the uncovered ones: agent steps are never cached, so a second pass
@@ -534,12 +535,13 @@ jobs:
   # example predates that and kept the leaf, because a real check beats a
   # fall-through.
   - task: check-draft
-    inputs: [review]
+    inputs: [pr, review]
     run: |
       set -e
-      test -s review/summary.md   || { echo "no review summary was written" >&2; exit 1; }
+      test -s review/summary.md    || { echo "no review summary was written" >&2; exit 1; }
       test -s review/findings.json || { echo "no findings file was written" >&2; exit 1; }
-      test -s review/number       || { echo "no PR number was recorded" >&2; exit 1; }
+
+      test -s pr/pr.number         || { echo "the PR number was never fetched" >&2; exit 1; }
 
   # ── the gate before anything is public ───────────────────────────────────
   # Posting a review is not undoable. This is where a person looks first — the
@@ -548,8 +550,13 @@ jobs:
       message: "Review drafted in review/summary.md — post it to the PR?"
       timeout: 24h
 
+  # Both artifacts: the review to post, and the pr the number came from. That
+  # number was a model's job for one run — the synthesizer wrote both documents
+  # and skipped the clerical copy, and the whole review died at check-draft over
+  # a file the resource had already fetched. Anything a command can do is a
+  # thing to stop asking a model for.
   - put: pr-review
-    inputs: [review]
+    inputs: [pr, review]
 
   # Best-effort: a failing notification must not fail a review that succeeded.
   on_failure:

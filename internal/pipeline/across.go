@@ -260,7 +260,7 @@ type blockBudget struct {
 }
 
 func newBlockBudget(ctx context.Context, step config.Step) *blockBudget {
-	ceiling := config.StepBudgetTokens(step)
+	ceiling := stepBudgetTokens(step)
 	if ceiling <= 0 {
 		return &blockBudget{}
 	}

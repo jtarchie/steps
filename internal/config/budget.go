@@ -142,10 +142,3 @@ func validateBudget(label string, budget *Budget) error {
 
 	return nil
 }
-
-// StepBudgetTokens is an across: block's token ceiling, or 0 when it has none.
-// Exported because internal/pipeline meters the block and this package owns
-// what the field means.
-func StepBudgetTokens(step Step) int {
-	return budgetTokens(step.Budget)
-}

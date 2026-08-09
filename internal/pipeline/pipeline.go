@@ -1592,6 +1592,20 @@ func fetchGetStep(ctx context.Context, cfg *config.Config, artifact string, reso
 }
 
 // jobBudgetTokens is a job's cumulative agent-token ceiling, or 0 for none.
+// stepBudgetTokens is an across: block's token ceiling, or 0 when it has none.
+//
+// Alongside jobBudgetTokens rather than exported from config: the agent and job
+// ceilings are read through private helpers there and a private one here, and
+// exporting an accessor for this one alone both commits config's public API for
+// a single entity and leaves two nil-checks to drift apart.
+func stepBudgetTokens(step config.Step) int {
+	if step.Budget == nil {
+		return 0
+	}
+
+	return step.Budget.Tokens
+}
+
 func jobBudgetTokens(job *config.Job) int {
 	if job.Budget == nil {
 		return 0
