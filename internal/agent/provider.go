@@ -8,6 +8,7 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -52,8 +53,9 @@ func buildSystemMessage(persona, dir string) string {
 // and capped at maxReadFileBytes, the size read_file already treats as the
 // largest sane in-context document. A missing, escaping, or oversized file
 // is a hard preparation error: context_paths is operator-authored config,
-// so a bad one should fail the step loudly before a token is spent, not
-// surface as a surprise mid-conversation.
+// so a bad one — missing, or escaping the workspace — should fail the step
+// loudly before a token is spent, rather than surface as a surprise
+// mid-conversation. A file that is merely too BIG is not that: see below.
 func loadContextBlocks(dir string, paths []string) ([]contextBlock, error) {
 	if len(paths) == 0 {
 		return nil, nil
@@ -67,21 +69,37 @@ func loadContextBlocks(dir string, paths []string) ([]contextBlock, error) {
 			return nil, fmt.Errorf("context path %q: %w", p, err)
 		}
 
-		info, err := os.Stat(resolved)
-		if err != nil {
-			return nil, fmt.Errorf("context path %q: %w", p, err)
-		}
-
-		if info.Size() > maxReadFileBytes {
-			return nil, fmt.Errorf("context path %q is %d bytes, over the %d-byte limit", p, info.Size(), maxReadFileBytes)
-		}
-
 		data, err := os.ReadFile(resolved) //nolint:gosec // resolveAgentPath confines to dir
 		if err != nil {
 			return nil, fmt.Errorf("context path %q: %w", p, err)
 		}
 
-		blocks = append(blocks, contextBlock{path: p, content: string(data)})
+		// An oversized file is TRUNCATED, not refused.
+		//
+		// It used to fail the step, on the reasoning that context_paths: is
+		// operator-authored config and a bad one should be loud. But the
+		// operator authors a PATH, not a size: `pr/pr.diff` is a perfectly
+		// correct path that fails the moment the pull request it names grows
+		// past the limit — which is nothing they did, and is likeliest exactly
+		// when the review matters most. A matrix cell's path is model-authored
+		// now besides.
+		//
+		// So it degrades the way read_file does for the same reason: hand over
+		// what fits, and say plainly that there is more and how to reach it.
+		// Losing the tail of a diff costs a reviewer some context; failing the
+		// step costs the entire review.
+		content := string(data)
+		if len(data) > maxReadFileBytes {
+			content = string(data[:maxReadFileBytes]) + fmt.Sprintf(
+				"\n\n[truncated: %s is %d bytes, and the first %d are shown. "+
+					"Use read_file with start_line/end_line to page through the rest.]",
+				p, len(data), maxReadFileBytes)
+
+			slog.Warn("agent.context_path_truncated", "path", p,
+				"bytes", len(data), "limit", maxReadFileBytes)
+		}
+
+		blocks = append(blocks, contextBlock{path: p, content: content})
 	}
 
 	return blocks, nil

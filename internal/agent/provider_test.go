@@ -145,3 +145,39 @@ func TestLoadContextBlocksErrors(t *testing.T) {
 		}
 	})
 }
+
+// TestContextPathTruncatesInsteadOfFailing pins the degradation an oversized
+// context file gets.
+//
+// It used to fail the step. The live PR-review pipeline hit exactly that: a
+// `pr/pr.diff` that had grown past the limit killed the run at preparation —
+// a correct path, authored by an operator who does not control how large the
+// pull request under review happens to be.
+func TestContextPathTruncatesInsteadOfFailing(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	big := strings.Repeat("x", maxReadFileBytes+5000)
+
+	err := os.WriteFile(filepath.Join(dir, "big.diff"), []byte(big), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blocks, err := loadContextBlocks(dir, []string{"big.diff"})
+	if err != nil {
+		t.Fatalf("an oversized context path failed the step: %v", err)
+	}
+
+	if len(blocks) != 1 {
+		t.Fatalf("blocks = %d, want 1", len(blocks))
+	}
+
+	if !strings.Contains(blocks[0].content, "[truncated:") {
+		t.Error("the truncation is silent; the model must be told there is more")
+	}
+
+	if !strings.Contains(blocks[0].content, "read_file") {
+		t.Error("the notice does not say how to reach the rest")
+	}
+}
