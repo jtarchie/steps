@@ -300,7 +300,7 @@ jobs:
   # afternoon. 1h is pr-af's own MaxDurationSeconds.
   timeout: 1h
   budget:
-    tokens: 4000000
+    tokens: 8000000
   plan:
   - get: pr
     trigger: true
@@ -457,7 +457,7 @@ jobs:
     # count, this bounds nothing at all. At 8 it was decorative for a six-cell
     # matrix. At 4 the last two cells are decided against real spend.
     budget:
-      tokens: 1800000
+      tokens: 3600000
     # ONE reviewer failing must not cost the whole review.
     #
     # This is the reference implementation's own shape, and the reason the fan-
