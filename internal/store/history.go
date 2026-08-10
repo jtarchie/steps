@@ -218,6 +218,11 @@ type RunRow struct {
 	// ParentRunID is the run a replay forked from, empty for an ordinary run.
 	// It is what lets a tuning session read as a session rather than as a pile
 	// of unrelated runs that happen to share a job.
+	//
+	// Filled by EVERY query that builds a RunRow, deliberately: it was briefly
+	// selected by only one of them, which made Replayed() answer differently
+	// depending on which call site had loaded the row — the jobs list said a
+	// forked run was ordinary while its own page linked its parent.
 	ParentRunID string
 }
 
@@ -247,7 +252,7 @@ func (r RunRow) Duration() time.Duration {
 // has exactly one row per invocation, which is what a history is.
 func (s *Store) ListRuns(ctx context.Context, jobName string, limit int) ([]RunRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, job_name, workspace, status, started_at, COALESCE(finished_at, '')
+		SELECT id, job_name, workspace, status, started_at, COALESCE(finished_at, ''), COALESCE(parent_run_id, '')
 		FROM runs
 		WHERE (? = '' OR job_name = ?)
 		ORDER BY started_at DESC, rowid DESC
@@ -266,7 +271,7 @@ func (s *Store) ListRuns(ctx context.Context, jobName string, limit int) ([]RunR
 			startedAt, finishedAt string
 		)
 
-		err = rows.Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt)
+		err = rows.Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt, &row.ParentRunID)
 		if err != nil {
 			return nil, fmt.Errorf("could not scan runs row: %w", err)
 		}
@@ -288,7 +293,7 @@ func (s *Store) ListRuns(ctx context.Context, jobName string, limit int) ([]RunR
 // keyed by job name — one query for a jobs board rather than one per job.
 func (s *Store) LatestRunByJob(ctx context.Context) (map[string]RunRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT r.id, r.job_name, r.workspace, r.status, r.started_at, COALESCE(r.finished_at, '')
+		SELECT r.id, r.job_name, r.workspace, r.status, r.started_at, COALESCE(r.finished_at, ''), COALESCE(r.parent_run_id, '')
 		FROM runs r
 		JOIN (SELECT job_name, MAX(started_at) AS latest FROM runs GROUP BY job_name) m
 		  ON m.job_name = r.job_name AND m.latest = r.started_at
@@ -306,7 +311,7 @@ func (s *Store) LatestRunByJob(ctx context.Context) (map[string]RunRow, error) {
 			startedAt, finishedAt string
 		)
 
-		err = rows.Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt)
+		err = rows.Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt, &row.ParentRunID)
 		if err != nil {
 			return nil, fmt.Errorf("could not scan latest run row: %w", err)
 		}
@@ -482,7 +487,7 @@ func (s *Store) FindNode(ctx context.Context, hash string) (NodeRow, bool, error
 // "which runs reused this cached step" answer a node page is built on.
 func (s *Store) RunsUsingNode(ctx context.Context, hash string, limit int) ([]RunRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT r.id, r.job_name, r.workspace, r.status, r.started_at, COALESCE(r.finished_at, '')
+		SELECT r.id, r.job_name, r.workspace, r.status, r.started_at, COALESCE(r.finished_at, ''), COALESCE(r.parent_run_id, '')
 		FROM runs r
 		WHERE r.id IN (SELECT DISTINCT run_id FROM run_events WHERE hash = ?)
 		ORDER BY r.started_at DESC
@@ -501,7 +506,7 @@ func (s *Store) RunsUsingNode(ctx context.Context, hash string, limit int) ([]Ru
 			startedAt, finishedAt string
 		)
 
-		err = rows.Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt)
+		err = rows.Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt, &row.ParentRunID)
 		if err != nil {
 			return nil, fmt.Errorf("could not scan run using node: %w", err)
 		}
@@ -683,13 +688,13 @@ func (s *Store) FirstRunSince(ctx context.Context, jobName string, since time.Ti
 	)
 
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, job_name, workspace, status, started_at, COALESCE(finished_at, '')
+		SELECT id, job_name, workspace, status, started_at, COALESCE(finished_at, ''), COALESCE(parent_run_id, '')
 		FROM runs
 		WHERE job_name = ? AND started_at >= ?
 		ORDER BY started_at, rowid
 		LIMIT 1
 	`, jobName, since.UTC().Format(time.RFC3339Nano)).
-		Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt)
+		Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt, &row.ParentRunID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RunRow{}, false, nil
 	}

@@ -186,10 +186,20 @@ CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, seq);
 
 -- What each agent step spent, and the provider metadata that explains it.
 --
--- Keyed by (run_id, step_index) rather than by node hash, unlike
--- node_transcripts: a transcript is "what did this step say", which replaces
--- on re-record, while spend is a HISTORY. Agent steps re-run constantly, and
--- what each run cost is the entire question this table exists to answer.
+-- Keyed by (run_id, node_hash), NOT by (run_id, step_index): every agent step
+-- inside a block reports the BLOCK's plan index, so six across: cells, an
+-- ensemble's members and a do:'s children all share one index. Keying on it
+-- kept the last one and silently overwrote the rest — which on a six-cell
+-- review matrix meant reporting one reviewer and under-counting the run by the
+-- whole fan-out.
+--
+-- A node hash distinguishes them because that is exactly what it is for: each
+-- cell renders different content and hashes differently. Two byte-identical
+-- agent invocations in one run do collapse onto one row, which is correct —
+-- identical content under one parent IS one node.
+--
+-- step_index stays as a column for ordering, alongside rowid so steps sharing
+-- an index still read back in the order they were recorded.
 --
 -- cost_usd is nullable and stays NULL today: nothing in the request path
 -- reports a dollar figure yet. It is here rather than computed from a price
@@ -218,9 +228,9 @@ CREATE TABLE IF NOT EXISTS agent_usage (
     duration_ms       INTEGER NOT NULL,
     raw_meta          TEXT NOT NULL,
     created_at        TEXT NOT NULL,
-    PRIMARY KEY (run_id, step_index)
+    PRIMARY KEY (run_id, node_hash)
 );
-CREATE INDEX IF NOT EXISTS idx_agent_usage_run ON agent_usage(run_id);
+CREATE INDEX IF NOT EXISTS idx_agent_usage_run ON agent_usage(run_id, step_index);
 
 -- Full agent conversation transcripts, one row per agent node, kept OUT of
 -- nodes.result deliberately: result is loaded by planners and routed-to
@@ -1299,7 +1309,9 @@ type AgentUsage struct {
 //
 // Replaces on conflict: a step re-executed within one run (a to: route sending
 // the plan back over it) reports the spend of the attempt that finished last,
-// which is the one whose result the run actually used.
+// which is the one whose result the run actually used. The conflict is on the
+// node hash, so two DIFFERENT steps sharing a plan index — the cells of a
+// matrix, the members of an ensemble — never collide.
 func (s *Store) RecordAgentUsage(ctx context.Context, usage AgentUsage) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO agent_usage (
@@ -1309,7 +1321,8 @@ func (s *Store) RecordAgentUsage(ctx context.Context, usage AgentUsage) error {
 			cached_tokens, reasoning_tokens, cost_usd,
 			finish_reason, duration_ms, raw_meta, created_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (run_id, step_index) DO UPDATE SET
+		ON CONFLICT (run_id, node_hash) DO UPDATE SET
+			step_index = excluded.step_index,
 			step_name = excluded.step_name,
 			model_served = excluded.model_served,
 			prompt_tokens = excluded.prompt_tokens,
@@ -1344,7 +1357,7 @@ func (s *Store) RunUsage(ctx context.Context, runID string) ([]AgentUsage, error
 		       prompt_tokens, completion_tokens, total_tokens,
 		       cached_tokens, reasoning_tokens, cost_usd,
 		       finish_reason, duration_ms, raw_meta
-		FROM agent_usage WHERE run_id = ? ORDER BY step_index
+		FROM agent_usage WHERE run_id = ? ORDER BY step_index, rowid
 	`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("could not read usage for run %q: %w", runID, err)

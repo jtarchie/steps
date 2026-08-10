@@ -247,3 +247,94 @@ func assertRecordedStepUsage(t *testing.T, st *store.Store, runID string) {
 		t.Error("the provider's usage block was not kept")
 	}
 }
+
+// TestAgentUsageRecordsEveryCellOfAMatrix guards the keying of agent_usage.
+//
+// Every agent step inside a block reports the BLOCK's plan index — six across:
+// cells, an ensemble's members and a do:'s children all share one. Keying the
+// table on that index kept the last one and silently overwrote the rest, so a
+// six-cell review matrix reported one reviewer and under-counted the run by
+// the whole fan-out: the exact pipeline this feature exists to make legible.
+func TestAgentUsageRecordsEveryCellOfAMatrix(t *testing.T) {
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	dir := t.TempDir()
+
+	fake := newRepeatingFakeLLM(t, says("reviewed").spending(400))
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: reviewer
+  source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
+
+jobs:
+- name: fan
+  plan:
+  - across:
+    - var: shard
+      values: [a, b, c]
+    agent: reviewer
+    prompt: "review {{ .vars.shard }}"
+`, fake.URL))
+
+	err := run([]string{"run", path, "--job", "fan"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	st, err := store.OpenStore(statePath(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	ctx := context.Background()
+
+	totals, err := st.RunCostTotals(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(totals) != 1 {
+		t.Fatalf("recorded %d runs, want 1", len(totals))
+	}
+
+	// Three cells at 400 each. Under the old keying this was 400: one row,
+	// overwritten twice.
+	if totals[0].Steps != 3 {
+		t.Errorf("recorded %d agent steps, want 3 — the matrix's cells share a plan index and must not overwrite each other", totals[0].Steps)
+	}
+
+	if totals[0].Tokens != 1200 {
+		t.Errorf("recorded %d tokens, want 1200 (3 cells x 400)", totals[0].Tokens)
+	}
+
+	assertCellsNamedByCoordinate(t, st, totals[0].RunID)
+}
+
+// assertCellsNamedByCoordinate checks each cell is recorded under its own
+// label, which is what makes a cost report say WHICH reviewer was expensive
+// rather than only that one was.
+func assertCellsNamedByCoordinate(t *testing.T, st *store.Store, runID string) {
+	t.Helper()
+
+	usage, err := st.RunUsage(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seen := map[string]bool{}
+	for _, step := range usage {
+		seen[step.StepName] = true
+	}
+
+	for _, want := range []string{"reviewer [shard=a]", "reviewer [shard=b]", "reviewer [shard=c]"} {
+		if !seen[want] {
+			t.Errorf("no usage row for %q; recorded %v", want, seen)
+		}
+	}
+}

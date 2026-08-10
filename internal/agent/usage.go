@@ -71,10 +71,17 @@ type StepUsage struct {
 	// is otherwise indistinguishable from a model that simply said little —
 	// and a truncated JSON or verdict is a failure that reads as a bad answer.
 	FinishReason string
-	// Raw is the provider's own usage block, as JSON, for the fields nobody
-	// has asked for yet. The store has no schema versioning, so a field not
-	// captured today cannot be backfilled tomorrow; keeping the block whole
-	// costs a column and buys every future question about spend.
+	// Raw is the provider's usage block for the LAST response of the
+	// conversation, as JSON — the fields nobody has asked for yet. The store
+	// has no schema versioning, so a field not captured today cannot be
+	// backfilled tomorrow; keeping the block whole costs a column and buys
+	// every future question about spend.
+	//
+	// One response, deliberately, while every count beside it is the whole
+	// conversation's. Accumulating a dozen JSON blocks per step would store
+	// the transcript's weight again for a shape nothing reads yet. Do NOT
+	// reconcile this against Total — they answer different questions, and a
+	// 12-turn step will show them disagreeing by two orders of magnitude.
 	Raw string
 }
 
@@ -236,6 +243,9 @@ func (s *stepUsage) record(resp *model.LLMResponse) (exceeded bool) {
 		s.finishReason = string(resp.FinishReason)
 	}
 
+	// Overwritten rather than appended: this keeps the LAST response's block.
+	// See StepUsage.Raw for why that is deliberate and why it must not be read
+	// as the conversation's total.
 	encoded, err := json.Marshal(resp.UsageMetadata)
 	if err == nil {
 		s.raw = string(encoded)

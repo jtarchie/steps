@@ -466,7 +466,7 @@ type RunsCmd struct {
 	Steps    bool   `help:"show individual steps instead of job outcomes"`
 	Queue    bool   `help:"show the watch trigger queue instead of job runs"`
 	Cost     bool   `help:"show what each run's agent steps spent"`
-	RunID    string `help:"with --cost, break one run down per step"         name:"run"`
+	RunID    string `help:"break one run's agent spend down per step"        name:"run"`
 }
 
 // Run opens the pipeline's state store read-only and prints the requested
@@ -492,7 +492,11 @@ func (r *RunsCmd) Run() error {
 	ctx := context.Background()
 
 	switch {
-	case r.Cost && r.RunID != "":
+	// --run implies the per-step breakdown rather than needing --cost beside
+	// it. Naming a run is unambiguous about what is wanted, and a flag that
+	// reads as configured while binding nothing is the shape this codebase
+	// rejects everywhere else.
+	case r.RunID != "":
 		return r.printRunCost(ctx, st)
 	case r.Cost:
 		return r.printCostTotals(ctx, st)
