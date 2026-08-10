@@ -249,9 +249,25 @@ How it works, and what each choice buys:
 - **A held-back job is not a lost trigger.** The version stays current, so the next poll after the upstream job goes green enqueues it. Nothing needs to be re-pushed.
 - **Load-time checks.** `passed:` is get-only, may not name its own job, and may not name a job that never gets the same resource — that last one would be a deadlock spelled as a typo, since no version of a resource a job never fetches can ever pass there.
 
+## `max_in_flight:` — how many builds of one job at once
+
+By default a job's builds are **unlimited**, bounded only by `steps watch --max-concurrent`. Cap it per job when the work is not safe to overlap but does not need full serialization:
+
+```yaml
+jobs:
+- name: integration
+  max_in_flight: 2     # at most two builds of this job at a time
+  plan: [...]
+```
+
+- **Unset is unlimited**, matching Concourse. The worker pool is the real backstop: `--max-concurrent` caps builds across the whole pipeline regardless.
+- **`serial:`/`serial_groups:` force 1** and take precedence. Setting `max_in_flight:` alongside either is a **load error** rather than silently being overridden — the number would do nothing, and a quietly-ignored limit is worse than a rejected one. (Concourse accepts the combination and lets serial win; this is a deliberate narrowing.)
+- **A job the pipeline no longer describes defaults to 1.** A queue row can outlive its job definition, and serializing something nobody can describe is the conservative reading.
+- Note the same word means cell concurrency on an [`across:` step](control-flow.md#concurrent-cells-max_in_flight). That overload is Concourse's, and the two sit on different things — a job field, and a step field.
+
 ## `serial:` / `serial_groups:` — stop jobs racing each other
 
-`steps watch --max-concurrent 4` runs jobs concurrently. For anything that deploys, publishes, or otherwise mutates the outside world, that is a hazard:
+`steps watch --max-concurrent 4` runs jobs concurrently, and a job's own builds may overlap too (see `max_in_flight:` above). For anything that deploys, publishes, or otherwise mutates the outside world, that is a hazard:
 
 ```
 10:00:01  deploy-prod (v1) started

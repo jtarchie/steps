@@ -1,0 +1,10 @@
+# Same rule for serial_groups:, which also forces one build at a time.
+# expect: max_in_flight is set alongside serial_groups
+
+jobs:
+- name: deploy
+  serial_groups: [production]
+  max_in_flight: 3
+  plan:
+  - task: work
+    run: echo working

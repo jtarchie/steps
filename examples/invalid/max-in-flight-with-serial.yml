@@ -1,0 +1,13 @@
+# serial: forces one build at a time, so a max_in_flight: beside it is a
+# number that does nothing. Concourse lets serial win silently; this rejects
+# the combination instead, because a quietly-ignored limit is worse than a
+# load error naming the conflict.
+# expect: max_in_flight is set alongside serial
+
+jobs:
+- name: deploy
+  serial: true
+  max_in_flight: 5
+  plan:
+  - task: work
+    run: echo working

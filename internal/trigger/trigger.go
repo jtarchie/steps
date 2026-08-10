@@ -138,6 +138,14 @@ func Watch(
 		return fmt.Errorf("watch: %w", err)
 	}
 
+	// Synced next to the serial groups and for the same reason: ClaimNextJob
+	// admits in one atomic statement, so a job's concurrency has to be
+	// readable from SQL rather than consulted in Go afterwards.
+	err = st.SyncMaxInFlight(ctx, cfg.MaxInFlightByJob())
+	if err != nil {
+		return fmt.Errorf("watch: %w", err)
+	}
+
 	var wg sync.WaitGroup
 
 	// The webhook listener runs alongside the poll loop, never instead of it:

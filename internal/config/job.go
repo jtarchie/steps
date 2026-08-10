@@ -57,6 +57,19 @@ type Job struct {
 	// absorbed, which is the opposite of the intent. 0 (the default) means no
 	// breaker.
 	MaxConsecutiveFailures int `yaml:"max_consecutive_failures,omitempty"`
+	// MaxInFlight caps how many builds of this job run at once under
+	// `steps watch`. Mirrors Concourse's job-level max_in_flight
+	// (concourse-ci.org/docs/jobs/), including that serial:/serial_groups:
+	// take precedence by forcing the effective value to 1.
+	//
+	// 0/unset is unlimited, as in Concourse — bounded in practice by
+	// `steps watch --max-concurrent`, which is the worker pool this runner
+	// has instead of Concourse's workers.
+	//
+	// The same word appears on an across: step meaning cell concurrency.
+	// That is Concourse's own overload, not one invented here, and the two
+	// live on different things: a job field and a step field.
+	MaxInFlight int `yaml:"max_in_flight,omitempty"`
 	// Interruptible decides what a `steps watch` SHUTDOWN does to a build of
 	// this job that is already running. Mirrors Concourse's interruptible:
 	// (concourse-ci.org/docs/jobs/), including its default of false.

@@ -629,21 +629,21 @@ func TestConformanceSerialGroupsBlockAcrossJobs(t *testing.T) {
 	}
 }
 
-// TestConformanceEveryJobIsSerialRegardlessOfConfig pins a real DIVERGENCE
-// from Concourse, so it is a known property rather than a surprise.
+// TestConformanceMaxInFlightAdmitsUpToTheLimit verifies job-level
+// max_in_flight matches Concourse: it caps how many builds of one job run at
+// once, rather than the flat one-at-a-time this runner used to enforce.
 //
-// Concourse: serial: defaults to FALSE, and a job may run several builds
-// concurrently up to max_in_flight; serial: true is what forces one at a time
-// (concourse-ci.org/docs/jobs/).
+// Concourse doc: concourse-ci.org/docs/jobs/ — "max_in_flight: Specifies a
+// maximum number of concurrent builds", with serial:/serial_groups: taking
+// precedence and forcing 1.
 //
-// steps: ClaimNextJob refuses a pending row whose job already has a running
-// row, unconditionally — see TestStoreClaimSerializesSameJob. So every job is
-// serial here, serial: true adds a group of one that changes nothing on its
-// own, and "three builds of this job at once" is not expressible.
+// steps claim under test: config.Job.EffectiveMaxInFlight, Store.SyncMaxInFlight,
+// and ClaimNextJob's admission predicate.
 //
-// That is also why there is no job-level max_in_flight: there would be nowhere
-// for a value above 1 to take effect. Recorded in docs/conformance.md.
-func TestConformanceEveryJobIsSerialRegardlessOfConfig(t *testing.T) {
+// This test replaces the guarantee TestConformanceEveryJobIsSerialRegardlessOfConfig
+// used to pin, which is why that one is gone: every job being serial was the
+// divergence, not the design.
+func TestConformanceMaxInFlightAdmitsUpToTheLimit(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -651,18 +651,74 @@ func TestConformanceEveryJobIsSerialRegardlessOfConfig(t *testing.T) {
 
 	defer func() { _ = store.Close() }()
 
-	// No serial: and no serial_groups: anywhere — the Concourse default, where
-	// two builds of one job MAY overlap.
-	err := store.SyncSerialGroups(context.Background(), map[string][]string{})
+	err := store.SyncMaxInFlight(context.Background(), map[string]int{"build": 2})
 	if err != nil {
-		t.Fatalf("SyncSerialGroups: %v", err)
+		t.Fatalf("SyncMaxInFlight: %v", err)
 	}
 
+	// Three changes queue up. Only one row may be PENDING per job at a time,
+	// so each is claimed before the next is enqueued — which is exactly how a
+	// real watcher reaches two concurrent builds of one job.
 	mustEnqueueJob(t, store, "build", "resource-a")
-	mustClaimJob(t, store, "build")
+	first, _ := mustClaimJob(t, store, "build")
 
 	mustEnqueueJob(t, store, "build", "resource-b")
+	mustClaimJob(t, store, "build")
 
-	// Concourse would allow this second build to start. steps does not.
+	// Two running, limit is two: the third must wait.
+	mustEnqueueJob(t, store, "build", "resource-c")
+	assertQueueEmpty(t, store)
+
+	// One finishes, so a slot opens.
+	err = store.CompleteJob(context.Background(), first, "done", nil)
+	if err != nil {
+		t.Fatalf("CompleteJob: %v", err)
+	}
+
+	mustClaimJob(t, store, "build")
+}
+
+// TestConformanceSerialForcesOneInFlight pins the precedence rule: serial:
+// wins over any max_in_flight, which is why config rejects setting both.
+func TestConformanceSerialForcesOneInFlight(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	// What EffectiveMaxInFlight produces for a serial job.
+	err := store.SyncMaxInFlight(context.Background(), map[string]int{"deploy": 1})
+	if err != nil {
+		t.Fatalf("SyncMaxInFlight: %v", err)
+	}
+
+	mustEnqueueJob(t, store, "deploy", "resource-a")
+	mustClaimJob(t, store, "deploy")
+
+	mustEnqueueJob(t, store, "deploy", "resource-b")
+	assertQueueEmpty(t, store)
+}
+
+// TestMaxInFlightDefaultsToOneForAnUnknownJob covers the row that is not
+// there: a job removed from the pipeline between enqueue and claim.
+//
+// COALESCE defaults it to 1 rather than to unlimited, because serializing
+// something nobody can describe is the conservative reading — and because the
+// alternative would turn a config typo into unbounded concurrency.
+func TestMaxInFlightDefaultsToOneForAnUnknownJob(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	// Nothing synced at all.
+	mustEnqueueJob(t, store, "ghost", "resource-a")
+	mustClaimJob(t, store, "ghost")
+
+	mustEnqueueJob(t, store, "ghost", "resource-b")
 	assertQueueEmpty(t, store)
 }

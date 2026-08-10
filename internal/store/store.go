@@ -129,6 +129,18 @@ CREATE TABLE IF NOT EXISTS approvals (
     reason       TEXT
 );
 
+-- How many builds of each job may run at once. Synced from config at startup,
+-- for the reason job_serial_groups is: Store.ClaimNextJob decides admission in
+-- one atomic UPDATE, so every input it needs has to be readable from SQL.
+--
+-- serial:/serial_groups: have already been folded in by the time a row is
+-- written (see config.Job.EffectiveMaxInFlight), so this column is the final
+-- answer rather than one of several things to combine here.
+CREATE TABLE IF NOT EXISTS job_concurrency (
+    job_name      TEXT PRIMARY KEY,
+    max_in_flight INTEGER NOT NULL
+);
+
 -- Which serial groups each job belongs to. Synced from config at startup; it
 -- lives in the database so the claim can stay a single atomic statement
 -- rather than a read-then-claim with a race in the middle.
@@ -529,12 +541,16 @@ func (s *Store) EnqueueJob(ctx context.Context, jobName, reason string) error {
 // ClaimNextJob atomically transitions the oldest claimable pending row to
 // running and returns its id/jobName; found=false when nothing is claimable.
 //
-// Two rows are not claimable. One whose job already has a running row — this
-// serializes builds of the same job (a version change enqueued mid-run runs
-// only after the in-flight build finishes, never concurrently with it), even
-// under a worker pool. And one whose job shares a serial_groups: entry with a
-// job that is currently running, which is what stops two different jobs
-// mutating the same deploy target at once.
+// Two rows are not claimable. One whose job already has max_in_flight builds
+// running — see config.Job.EffectiveMaxInFlight, which has already folded
+// serial:/serial_groups: down to 1 by the time the row is synced. And one
+// whose job shares a serial_groups: entry with a DIFFERENT job that is
+// currently running, which is what stops two jobs mutating the same deploy
+// target at once.
+//
+// A job with no row defaults to 1, not to unlimited. A missing row means the
+// job left the pipeline between enqueue and claim, and serializing something
+// nobody can describe is the conservative reading.
 //
 // Both conditions are inside the single UPDATE...RETURNING rather than checked
 // beforehand, so two workers can never claim conflicting rows — a
@@ -551,9 +567,12 @@ func (s *Store) ClaimNextJob(ctx context.Context) (int64, string, bool, error) {
 		WHERE id = (
 			SELECT id FROM trigger_queue AS tq
 			WHERE tq.status = 'pending'
-			  AND NOT EXISTS (
-			      SELECT 1 FROM trigger_queue AS r
+			  AND (
+			      SELECT COUNT(*) FROM trigger_queue AS r
 			      WHERE r.job_name = tq.job_name AND r.status = 'running'
+			  ) < COALESCE(
+			      (SELECT c.max_in_flight FROM job_concurrency AS c WHERE c.job_name = tq.job_name),
+			      1
 			  )
 			  AND NOT EXISTS (
 			      SELECT 1
@@ -877,6 +896,39 @@ func (s *Store) SyncSerialGroups(ctx context.Context, groups map[string][]string
 	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("could not sync serial groups: %w", err)
+	}
+
+	return nil
+}
+
+// SyncMaxInFlight replaces the recorded per-job concurrency with what the
+// pipeline currently declares, for the reason SyncSerialGroups replaces rather
+// than merges: a limit removed from the YAML must stop applying, and a stale
+// row would throttle a job with nothing in the pipeline to explain why.
+func (s *Store) SyncMaxInFlight(ctx context.Context, limits map[string]int) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("could not sync job concurrency: %w", err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	_, err = tx.ExecContext(ctx, `DELETE FROM job_concurrency`)
+	if err != nil {
+		return fmt.Errorf("could not clear job concurrency: %w", err)
+	}
+
+	for jobName, limit := range limits {
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO job_concurrency (job_name, max_in_flight) VALUES (?, ?)`, jobName, limit)
+		if err != nil {
+			return fmt.Errorf("could not record concurrency for job %q: %w", jobName, err)
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("could not sync job concurrency: %w", err)
 	}
 
 	return nil
