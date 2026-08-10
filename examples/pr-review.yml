@@ -342,6 +342,7 @@ jobs:
         # spends turns navigating instead of thinking, and that is exactly how
         # this step failed its first live run.
         context_paths: [pr/pr.diff, pr/pr.json]
+        timeout: 20m
         context: write
       - agent: lens
         prompt: |
@@ -359,6 +360,7 @@ jobs:
         # spends turns navigating instead of thinking, and that is exactly how
         # this step failed its first live run.
         context_paths: [pr/pr.diff, pr/pr.json]
+        timeout: 20m
         context: write
       - agent: lens
         prompt: |
@@ -376,6 +378,7 @@ jobs:
         # spends turns navigating instead of thinking, and that is exactly how
         # this step failed its first live run.
         context_paths: [pr/pr.diff, pr/pr.json]
+        timeout: 20m
         context: write
 
   # ── phase 3: compile the work list ───────────────────────────────────────
@@ -384,6 +387,7 @@ jobs:
   # id it would have to go look up.
   - agent: compiler
     inputs: [pr]
+    timeout: 20m
     context: write
     prompt: |
       Merge the three lens proposals in your context into one deduplicated list.
@@ -504,6 +508,7 @@ jobs:
   # an agent grading its own work is not a gate.
   - agent: falsifier
     inputs: [pr]
+    timeout: 20m
     context: write
     prompt: |
       Every `finding_*` in your context is a CLAIM, not a fact. Try to
@@ -519,6 +524,7 @@ jobs:
   # without turning every finding into a stop sign.
   - agent: gatekeeper
     inputs: [pr]
+    timeout: 20m
     context: write
     prompt: |
       For each confirmed finding in your context, decide whether it must be
@@ -532,6 +538,7 @@ jobs:
   # anatomy step for a second pass; max_visits: 2 up there is what bounds it.
   - agent: synthesizer
     inputs: [pr]
+    timeout: 20m
     outputs: [review]
     verdicts: [complete, blind-spots]
     to:
