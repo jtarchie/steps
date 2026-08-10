@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>steps — {{.Nav.Current}}</title>
+<title>{{with .TitleMark}}{{.}} {{end}}{{with .Title}}{{.}} — {{end}}steps</title>
+<link rel="icon" id="favicon" href="{{favicon .TitleMark}}">
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -107,6 +108,37 @@
       e.preventDefault(); open();
     }
   });
+})();
+
+// Keep relative times honest. The server renders the text once; a page left
+// open — which is the whole point of the live view — would otherwise keep
+// claiming a run started "4s ago" an hour later. Thresholds mirror
+// formatDuration in render.go so a reload never visibly reformats anything.
+(function () {
+  function fmt(ms) {
+    if (ms <= 0) return '—';
+    if (ms < 1000) return Math.round(ms) + 'ms';
+    if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+    var m = Math.floor(ms / 60000);
+    var s = Math.floor(ms / 1000) % 60;
+    if (m < 60) return m + 'm ' + String(s).padStart(2, '0') + 's';
+    return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
+  }
+
+  function tick() {
+    var now = Date.now();
+    document.querySelectorAll('time[data-ago]').forEach(function (node) {
+      node.textContent = fmt(now - Date.parse(node.dataset.ago)) + ' ago';
+    });
+    document.querySelectorAll('time[data-elapsed-since]').forEach(function (node) {
+      node.textContent = fmt(now - Date.parse(node.dataset.elapsedSince));
+    });
+  }
+
+  // A second only when something is actively counting; otherwise half a
+  // minute is plenty for text measured in minutes and hours.
+  var live = document.querySelector('time[data-elapsed-since]') !== null;
+  setInterval(tick, live ? 1000 : 30000);
 })();
 </script>
 {{block "scripts" .}}{{end}}

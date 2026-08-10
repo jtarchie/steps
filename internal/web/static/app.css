@@ -410,3 +410,28 @@ td.faint, .faint { color: var(--faint); }
   .stephead .kind { width: 56px; }
   .subtrace { margin-left: 12px; }
 }
+
+/* A step is addressable: the anchor stays out of the way until the row is
+ * hovered or focused, so "look at this step" is a pastable URL rather than
+ * a description of where to click. */
+.stephead .anchor {
+  color: var(--faint);
+  opacity: 0;
+  text-decoration: none;
+  font-weight: 400;
+}
+.stephead:hover .anchor,
+.stephead .anchor:focus-visible { opacity: 1; }
+.stephead .anchor:hover { color: var(--fg); }
+.step:target > .stephead { background: var(--panel2); box-shadow: inset 0 0 0 1px var(--line); }
+
+/* The trigger-to-run waiting room. Deliberately sparse: it exists only for
+ * the seconds between a click and a run id, and anything more would be
+ * furniture the reader never gets to use. */
+.waiting {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 18px 20px;
+}
+.waitline { margin: 0 0 6px; color: var(--fg); }
+.waiting p:last-child { margin-bottom: 0; }

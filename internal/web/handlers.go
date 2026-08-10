@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 
@@ -113,6 +114,7 @@ func (s *Server) handleJob(c echo.Context) error {
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "job", map[string]any{
 		"Nav":      s.nav(c),
+		"Title":    job.Name,
 		"Job":      view,
 		"Runs":     runs,
 		"Versions": versions,
@@ -151,8 +153,10 @@ func (s *Server) handleRun(c echo.Context) error {
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "run", map[string]any{
-		"Nav": s.nav(c),
-		"Run": view,
+		"Nav":       s.nav(c),
+		"Run":       view,
+		"Title":     view.Run.JobName,
+		"TitleMark": statusMark(view.Run.Status),
 	})
 }
 
@@ -331,13 +335,89 @@ func (s *Server) handleTrigger(c echo.Context) error {
 		reason = "manual re-run, forced (web)"
 	}
 
+	// Stamped BEFORE enqueueing: the run this click causes must start at or
+	// after this instant, and a stamp taken afterwards could miss a run the
+	// drainer started in between.
+	since := time.Now().UTC()
+
 	_, err = s.runner.Enqueue(c.Request().Context(), pipeline, name, reason, force)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
+	// Follow, do not return to the list. The natural loop is trigger then
+	// watch; sending the browser back to a table it must poll by hand leaves
+	// the person to do the waiting the UI is for.
 	//nolint:wrapcheck // echo's redirect error is returned verbatim
-	return c.Redirect(http.StatusSeeOther, fmt.Sprintf("/p/%s/jobs/%s", pipeline.Slug, name))
+	return c.Redirect(http.StatusSeeOther, fmt.Sprintf("/p/%s/jobs/%s/follow?since=%d",
+		pipeline.Slug, name, since.UnixMilli()))
+}
+
+// handleFollow is the waiting room between enqueueing a job and its run
+// existing. A queued job has no run id until a worker claims it, so the page
+// reports what the queue is doing and forwards itself the moment the run
+// appears.
+func (s *Server) handleFollow(c echo.Context) error {
+	pipeline := pipelineOf(c)
+	name := c.Param("job")
+
+	_, err := pipeline.Cfg.FindJob(name)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no job %q in this pipeline", name))
+	}
+
+	//nolint:wrapcheck // render errors surface through the shared error handler
+	return c.Render(http.StatusOK, "follow", map[string]any{
+		"Nav":       s.nav(c),
+		"Title":     name,
+		"TitleMark": statusMark("running"),
+		"Job":       name,
+		"Since":     c.QueryParam("since"),
+	})
+}
+
+// handleLatestRun answers the follow page: has a run of this job started
+// since the given millisecond stamp, and what is the queue doing meanwhile.
+func (s *Server) handleLatestRun(c echo.Context) error {
+	pipeline := pipelineOf(c)
+	ctx := c.Request().Context()
+	name := c.Param("job")
+
+	millis, _ := strconv.ParseInt(c.QueryParam("since"), 10, 64)
+	since := time.UnixMilli(millis).UTC()
+
+	run, ok, err := pipeline.Store.FirstRunSince(ctx, name, since)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	if ok {
+		//nolint:wrapcheck // echo's JSON error is returned verbatim
+		return c.JSON(http.StatusOK, map[string]any{
+			"run": run.ID,
+			"url": fmt.Sprintf("/p/%s/runs/%s", pipeline.Slug, run.ID),
+		})
+	}
+
+	// No run yet. Say why, so a job held by a serial group or sitting behind
+	// a busy drainer reads as queued rather than as nothing happening.
+	queue, err := pipeline.Store.ListTriggerQueue(ctx, 25)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	state := "waiting"
+
+	for _, row := range queue {
+		if row.JobName == name && (row.Status == "pending" || row.Status == "running") {
+			state = row.Status
+
+			break
+		}
+	}
+
+	//nolint:wrapcheck // echo's JSON error is returned verbatim
+	return c.JSON(http.StatusOK, map[string]any{"run": nil, "state": state})
 }
 
 // handleDecideApproval records a human decision, through the same row the

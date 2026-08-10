@@ -1,0 +1,48 @@
+{{define "page"}}
+<h1 class="prompt"><b>steps run {{.Job}}</b></h1>
+<p class="metaline">queued<span class="sep">·</span>waiting for a worker to claim it</p>
+
+<div class="waiting">
+  <p class="waitline"><span class="cursor">▍</span> <span id="follow-state">queued</span></p>
+  <p class="faint" id="follow-hint">This forwards to the run as soon as it starts.</p>
+  <p><a href="/p/{{.Nav.Current}}/jobs/{{.Job}}">← back to {{.Job}}</a></p>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+(function () {
+  var since = {{.Since}};
+  var url = '/p/{{.Nav.Current}}/jobs/{{.Job}}/latest-run?since=' + encodeURIComponent(since);
+  var state = document.getElementById('follow-state');
+  var hint = document.getElementById('follow-hint');
+
+  // Give up after two minutes rather than spinning forever: past that, either
+  // nothing is draining the queue or the job is held behind something the
+  // page cannot see, and the job page says more than a spinner does.
+  var deadline = Date.now() + 120000;
+
+  var words = { pending: 'queued', running: 'starting', waiting: 'waiting for the queue' };
+
+  function poll() {
+    fetch(url).then(function (r) { return r.json(); }).then(function (data) {
+      if (data.run) { window.location.replace(data.url); return; }
+
+      state.textContent = words[data.state] || 'queued';
+
+      if (Date.now() > deadline) {
+        state.textContent = 'still queued';
+        hint.textContent = 'Nothing has claimed it yet. Is a runner draining this queue?';
+        return;
+      }
+
+      setTimeout(poll, 700);
+    }).catch(function () {
+      state.textContent = 'lost contact with the server';
+    });
+  }
+
+  poll();
+})();
+</script>
+{{end}}

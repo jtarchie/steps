@@ -138,6 +138,8 @@ func (s *Server) routes() error {
 	group.GET("/approvals", s.handleApprovals)
 	group.GET("/resources", s.handleResources)
 	group.GET("/search", s.handleSearch)
+	group.GET("/jobs/:job/follow", s.handleFollow)
+	group.GET("/jobs/:job/latest-run", s.handleLatestRun)
 
 	group.POST("/jobs/:job/trigger", s.handleTrigger)
 	group.POST("/approvals/:id", s.handleDecideApproval)

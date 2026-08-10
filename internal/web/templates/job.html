@@ -51,8 +51,8 @@
       <tr>
         <td><a class="hash" href="/p/{{$.Nav.Current}}/runs/{{.ID}}">{{short .ID}}</a></td>
         <td><span class="st st-{{statusWord .Status}}">{{statusWord .Status}}</span></td>
-        <td class="dim">{{ago .StartedAt}}</td>
-        <td class="num dim">{{duration .Duration}}</td>
+        <td class="dim">{{agoTag .StartedAt}}</td>
+        <td class="num dim">{{elapsedTag .}}</td>
         <td class="faint">{{.Workspace}}</td>
       </tr>
       {{else}}

@@ -83,6 +83,17 @@ func (r *renderer) Render(w io.Writer, name string, data any, _ echo.Context) er
 
 	values["Page"] = name
 
+	// Title and TitleMark are optional per page, but the layout always reads
+	// them — and `favicon` takes a string, so a missing key would reach it as
+	// a nil interface and fail the render rather than degrade.
+	if _, ok := values["Title"]; !ok {
+		values["Title"] = ""
+	}
+
+	if _, ok := values["TitleMark"]; !ok {
+		values["TitleMark"] = ""
+	}
+
 	err := tmpl.ExecuteTemplate(w, "layout", values)
 	if err != nil {
 		return fmt.Errorf("web: could not render %q: %w", name, err)
@@ -109,6 +120,8 @@ func templateFuncs() template.FuncMap {
 	return template.FuncMap{
 		"duration":   formatDuration,
 		"ago":        formatAgo,
+		"agoTag":     agoTag,
+		"elapsedTag": elapsedTag,
 		"stamp":      formatStamp,
 		"short":      shortID,
 		"statusWord": statusWord,
@@ -120,8 +133,12 @@ func templateFuncs() template.FuncMap {
 		// from a 16-high baseline. Arithmetic in the template rather than
 		// pre-baked coordinates in the model, so the chart stays a
 		// presentation detail.
-		"mul2":  func(n int) int { return n * 8 },
-		"sub16": func(n int) int { return 16 - n },
+		"mul2":    func(n int) int { return n * 8 },
+		"sub16":   func(n int) int { return 16 - n },
+		"slug":    slugify,
+		"mark":    statusMark,
+		"favicon": faviconFor,
+		"rfc3339": func(t time.Time) string { return t.UTC().Format(time.RFC3339) },
 	}
 }
 
@@ -323,4 +340,106 @@ func transcriptEvents(raw string, ok bool) []transcriptEvent {
 	}
 
 	return decoded
+}
+
+// statusMark is the one-glyph status a browser tab can carry. It prefixes the
+// document title and selects the favicon, so a run left in a background tab
+// reports its outcome without being reopened — the single most common way a
+// CI page is actually used.
+func statusMark(status string) string {
+	switch statusWord(status) {
+	case "passed":
+		return "✓"
+	case "failed", "errored", "aborted":
+		return "✗"
+	case "running":
+		return "◐"
+	default:
+		return ""
+	}
+}
+
+// faviconDots maps a status mark to a self-contained SVG data URI. Inline
+// rather than files: three flat discs cost less as data URIs than as three
+// more embedded assets and three more requests, and the page is already
+// committed to shipping its own chrome.
+var faviconDots = map[string]string{
+	"✓": faviconSVG("%2384c06d"),
+	"✗": faviconSVG("%23e0645a"),
+	"◐": faviconSVG("%23d9a94a"),
+	"":  faviconSVG("%2383887b"),
+}
+
+// faviconSVG builds a filled-circle favicon in the given (URL-escaped) color.
+func faviconSVG(color string) string {
+	return "data:image/svg+xml," +
+		"%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E" +
+		"%3Ccircle cx='8' cy='8' r='6' fill='" + color + "'/%3E%3C/svg%3E"
+}
+
+// faviconFor resolves a status mark to its icon, falling back to the neutral
+// dot for pages that carry no status at all.
+func faviconFor(marker string) template.URL {
+	icon, ok := faviconDots[marker]
+	if !ok {
+		icon = faviconDots[""]
+	}
+
+	//nolint:gosec // G203: the value is one of four constants built above, never input
+	return template.URL(icon)
+}
+
+// slugify renders a step name as a URL fragment: lowercase, with every run of
+// non-alphanumerics collapsed to a single dash. An across: cell named
+// review[security] becomes review-security, so a step is linkable by name
+// rather than by position alone.
+func slugify(name string) string {
+	var out strings.Builder
+
+	dashed := false
+
+	for _, r := range strings.ToLower(name) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			out.WriteRune(r)
+
+			dashed = false
+
+			continue
+		}
+
+		if !dashed && out.Len() > 0 {
+			out.WriteByte('-')
+
+			dashed = true
+		}
+	}
+
+	return strings.TrimSuffix(out.String(), "-")
+}
+
+// agoTag renders a relative timestamp as a <time> element carrying the
+// absolute instant, so the shared ticker can keep re-rendering it. Without
+// it, "4s ago" is baked at render time and is a lie by the time anyone reads
+// it — most visibly on a page that never reloads.
+func agoTag(t time.Time) template.HTML {
+	if t.IsZero() {
+		return `<span class="dim">—</span>`
+	}
+
+	//nolint:gosec // G203: both interpolations are machine-formatted, not input
+	return template.HTML(fmt.Sprintf(`<time data-ago=%q>%s</time>`,
+		t.UTC().Format(time.RFC3339Nano), template.HTMLEscapeString(formatAgo(t))))
+}
+
+// elapsedTag renders a duration that is still accumulating: a finished run
+// gets a fixed value, a running one gets the start instant for the ticker to
+// count from.
+func elapsedTag(run store.RunRow) template.HTML {
+	if !run.FinishedAt.IsZero() || run.StartedAt.IsZero() {
+		return template.HTML(template.HTMLEscapeString(formatDuration(run.Duration()))) //nolint:gosec // G203: escaped above
+	}
+
+	//nolint:gosec // G203: both interpolations are machine-formatted, not input
+	return template.HTML(fmt.Sprintf(`<time data-elapsed-since=%q>%s</time>`,
+		run.StartedAt.UTC().Format(time.RFC3339Nano), template.HTMLEscapeString(formatDuration(run.Duration()))))
 }

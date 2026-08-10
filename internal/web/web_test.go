@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -322,4 +323,174 @@ func appendEvents(t *testing.T, st *store.Store, runID string, rows []store.RunE
 func writeFileRaw(path, body string) error {
 	//nolint:wrapcheck // test fixture: the error is reported by the caller
 	return os.WriteFile(path, []byte(body), 0o600)
+}
+
+// TestRunPageTitleCarriesStatus covers the background-tab case: the title and
+// favicon report the outcome, so a run left in another tab does not have to
+// be reopened to know how it went.
+func TestRunPageTitleCarriesStatus(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	for _, tc := range []struct{ id, status, mark string }{
+		{"t-ok", "succeeded", "✓"},
+		{"t-bad", "failed", "✗"},
+		{"t-live", "running", "◐"},
+	} {
+		err := pipeline.Store.StartRun(ctx, tc.id, "build", "")
+		if err != nil {
+			t.Fatalf("StartRun: %v", err)
+		}
+
+		if tc.status != "running" {
+			err = pipeline.Store.FinishRun(ctx, tc.id, tc.status)
+			if err != nil {
+				t.Fatalf("FinishRun: %v", err)
+			}
+		}
+
+		_, body := get(t, server, "/p/demo/runs/"+tc.id)
+
+		want := "<title>" + tc.mark + " build — steps</title>"
+		if !strings.Contains(body, want) {
+			t.Errorf("%s: title missing %q", tc.status, want)
+		}
+
+		if !strings.Contains(body, `rel="icon"`) {
+			t.Errorf("%s: no favicon link", tc.status)
+		}
+	}
+}
+
+// TestStepAnchors pins that every step is addressable by a stable fragment,
+// so pointing someone at one is a URL rather than a description.
+func TestStepAnchors(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	err := pipeline.Store.StartRun(ctx, "anchored", "build", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "anchored", []store.RunEventRow{
+		{Type: events.TypeStepStarted, JobName: "build", StepIndex: 0, StepName: "review[security]", StepKind: "agent"},
+		{Type: events.TypeStepFinished, JobName: "build", StepIndex: 0, StepName: "review[security]", StepKind: "agent", Status: "succeeded"},
+	})
+
+	_, body := get(t, server, "/p/demo/runs/anchored")
+
+	// An across: cell's brackets must survive into a usable fragment.
+	if !strings.Contains(body, `id="step-0-review-security"`) {
+		t.Error("step has no anchor id")
+	}
+
+	if !strings.Contains(body, `href="#step-0-review-security"`) {
+		t.Error("step has no anchor link")
+	}
+}
+
+// TestFollowRedirectAndPolling covers the trigger-to-run handoff: triggering
+// lands on the follow page, which reports no run until one starts and then
+// hands over the run's URL.
+func TestFollowRedirectAndPolling(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	// A read-only server refuses the trigger, so drive the follow page and
+	// its endpoint directly — they are what the redirect targets.
+	code, body := get(t, server, "/p/demo/jobs/build/follow?since=0")
+	if code != http.StatusOK {
+		t.Fatalf("follow page = %d", code)
+	}
+
+	if !strings.Contains(body, "forwards to the run") {
+		t.Error("follow page does not explain what it is waiting for")
+	}
+
+	since := time.Now().UTC().Add(-time.Second).UnixMilli()
+
+	_, empty := get(t, server, fmt.Sprintf("/p/demo/jobs/build/latest-run?since=%d", since))
+	if !strings.Contains(empty, `"run":null`) {
+		t.Errorf("expected no run yet, got %s", empty)
+	}
+
+	err := pipeline.Store.StartRun(ctx, "followed", "build", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	_, found := get(t, server, fmt.Sprintf("/p/demo/jobs/build/latest-run?since=%d", since))
+	if !strings.Contains(found, `"run":"followed"`) || !strings.Contains(found, "/p/demo/runs/followed") {
+		t.Errorf("expected the started run, got %s", found)
+	}
+
+	// A run that started BEFORE the click must not be mistaken for its result.
+	later := time.Now().UTC().Add(time.Hour).UnixMilli()
+
+	_, stale := get(t, server, fmt.Sprintf("/p/demo/jobs/build/latest-run?since=%d", later))
+	if !strings.Contains(stale, `"run":null`) {
+		t.Errorf("a prior run was reported as this trigger's result: %s", stale)
+	}
+}
+
+// TestRelativeTimesAreMachineReadable pins the contract the ticker depends
+// on: rendered times carry the absolute instant, so a page left open can keep
+// them honest instead of freezing at render time.
+func TestRelativeTimesAreMachineReadable(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	err := pipeline.Store.StartRun(ctx, "ticking", "build", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/jobs/build")
+	if !strings.Contains(body, "<time data-ago=") {
+		t.Error("run history has no machine-readable timestamps")
+	}
+
+	// A running run counts up; a finished one is fixed.
+	if !strings.Contains(body, "data-elapsed-since=") {
+		t.Error("a running run does not carry its start instant for the ticker")
+	}
+
+	err = pipeline.Store.FinishRun(ctx, "ticking", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	_, done := get(t, server, "/p/demo/jobs/build")
+	if strings.Contains(done, "data-elapsed-since=") {
+		t.Error("a finished run is still counting up")
+	}
+}
+
+// TestSlugify covers the anchor-name rules directly, including the shapes
+// across: cells and hook labels actually produce.
+func TestSlugify(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ in, want string }{
+		{"compile", "compile"},
+		{"review[security]", "review-security"},
+		{"Deploy To Prod", "deploy-to-prod"},
+		{"unit-tests", "unit-tests"},
+		{"a//b", "a-b"},
+		{"...", ""},
+		{"", ""},
+	} {
+		if got := slugify(tc.in); got != tc.want {
+			t.Errorf("slugify(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
 }

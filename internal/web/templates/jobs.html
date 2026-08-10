@@ -29,8 +29,8 @@
           {{if .HasRun}}<a class="st st-{{statusWord .Latest.Status}}" href="/p/{{$.Nav.Current}}/runs/{{.Latest.ID}}">{{statusWord .Latest.Status}}</a>
           {{else}}<span class="faint">never run</span>{{end}}
         </td>
-        <td class="dim">{{if .HasRun}}{{ago .Latest.StartedAt}}{{else}}—{{end}}</td>
-        <td class="num dim">{{if .HasRun}}{{duration .Latest.Duration}}{{else}}—{{end}}</td>
+        <td class="dim">{{if .HasRun}}{{agoTag .Latest.StartedAt}}{{else}}—{{end}}</td>
+        <td class="num dim">{{if .HasRun}}{{elapsedTag .Latest}}{{else}}—{{end}}</td>
         <td class="dim">
           {{range .Upstream}}<a href="/p/{{$.Nav.Current}}/jobs/{{.Job}}">{{.Job}}</a> <span class="res">[{{.Resource}}]</span> {{else}}<span class="faint">—</span>{{end}}
         </td>
@@ -41,6 +41,7 @@
   </table>
 </div>
 
+<div id="queue-region">
 {{if .Queue}}
 <h2 class="eyebrow">Trigger queue</h2>
 <div class="tablewrap">
@@ -52,26 +53,66 @@
         <td><a href="/p/{{$.Nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a></td>
         <td class="dim">{{.Reason}}</td>
         <td><span class="st st-{{.Status}}">{{.Status}}</span></td>
-        <td class="dim">{{ago .EnqueuedAt}}</td>
+        <td class="dim">{{agoTag .EnqueuedAt}}</td>
       </tr>
       {{end}}
     </tbody>
   </table>
 </div>
 {{end}}
+</div>
 {{end}}
 
 {{define "scripts"}}
 <script>
-document.querySelectorAll('.viewtoggle button').forEach(function (btn) {
-  btn.addEventListener('click', function () {
-    var graph = btn.dataset.view === 'graph';
-    document.getElementById('jobs-graph').hidden = !graph;
-    document.getElementById('jobs-list').style.display = graph ? 'none' : '';
-    document.querySelectorAll('.viewtoggle button').forEach(function (b) {
-      b.setAttribute('aria-pressed', String(b === btn));
+(function () {
+  document.querySelectorAll('.viewtoggle button').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var graph = btn.dataset.view === 'graph';
+      document.getElementById('jobs-graph').hidden = !graph;
+      document.getElementById('jobs-list').style.display = graph ? 'none' : '';
+      document.querySelectorAll('.viewtoggle button').forEach(function (b) {
+        b.setAttribute('aria-pressed', String(b === btn));
+      });
     });
   });
-});
+
+  // Refresh the board in place. The page is its own API: fetching it and
+  // swapping only the two regions that carry state keeps the list/graph
+  // toggle, the scroll position, and any open menu — all of which a whole
+  // page reload would throw away — while a job left running stops reading as
+  // running forever.
+  var REFRESH = 2500;
+
+  function swap(from, selector) {
+    var next = from.querySelector(selector);
+    var current = document.querySelector(selector);
+    if (next && current) current.innerHTML = next.innerHTML;
+  }
+
+  function refresh() {
+    if (document.hidden) return;
+
+    fetch(window.location.pathname, { headers: { 'Accept': 'text/html' } })
+      .then(function (r) { return r.text(); })
+      .then(function (html) {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        swap(doc, '#jobs-list tbody');
+        swap(doc, '#jobs-graph');
+
+        // The queue section appears and disappears with its contents, so it
+        // is replaced wholesale rather than by inner swap.
+        var nextQueue = doc.querySelector('#queue-region');
+        var queue = document.querySelector('#queue-region');
+        if (nextQueue && queue) queue.innerHTML = nextQueue.innerHTML;
+      })
+      .catch(function () { /* a missed refresh costs nothing; the next one covers it */ });
+  }
+
+  setInterval(refresh, REFRESH);
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) refresh();
+  });
+})();
 </script>
 {{end}}

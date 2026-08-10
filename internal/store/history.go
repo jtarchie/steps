@@ -661,3 +661,38 @@ func (s *Store) FindRunRow(ctx context.Context, id string) (RunRow, bool, error)
 
 	return row, true, nil
 }
+
+// FirstRunSince returns the oldest run of a job started at or after `since`,
+// with ok reporting whether one exists yet.
+//
+// It backs the trigger-and-follow handoff: a queued job has no run id until
+// the worker claims it and RunJob mints one, so the browser asks this until
+// the run it caused appears. Oldest-first rather than newest, so a burst of
+// triggers hands each caller the run its own click produced.
+func (s *Store) FirstRunSince(ctx context.Context, jobName string, since time.Time) (RunRow, bool, error) {
+	var (
+		row                   RunRow
+		startedAt, finishedAt string
+	)
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, job_name, workspace, status, started_at, COALESCE(finished_at, '')
+		FROM runs
+		WHERE job_name = ? AND started_at >= ?
+		ORDER BY started_at, rowid
+		LIMIT 1
+	`, jobName, since.UTC().Format(time.RFC3339Nano)).
+		Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RunRow{}, false, nil
+	}
+
+	if err != nil {
+		return RunRow{}, false, fmt.Errorf("could not look for a run of %q: %w", jobName, err)
+	}
+
+	row.StartedAt = parseTimestamp(startedAt)
+	row.FinishedAt = parseTimestamp(finishedAt)
+
+	return row, true, nil
+}

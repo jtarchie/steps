@@ -7,7 +7,7 @@
       run <span class="hash">{{short $run.Run.ID}}</span><span class="sep">·</span>
       <span class="st st-{{statusWord $run.Run.Status}}">{{statusWord $run.Run.Status}}</span><span class="sep">·</span>
       {{stamp $run.Run.StartedAt}}<span class="sep">·</span>
-      <span id="run-duration">{{duration $run.Run.Duration}}</span>
+      <span id="run-duration">{{elapsedTag $run.Run}}</span>
       {{if $run.Run.Workspace}}<span class="sep">·</span><span class="faint">{{$run.Run.Workspace}}</span>{{end}}
     </p>
   </div>
@@ -33,11 +33,12 @@
 <div class="transcript" id="transcript">
   {{range $run.Steps}}
   {{$detail := .HasDetail $run.JobError}}
-  <div class="step {{if .Skipped}}skipped{{else if .Failed}}failed{{else if .Running}}running{{else}}passed{{end}}{{if and $detail (or .Failed .Turns)}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{.Index}}/{{.Name}}">
+  <div id="step-{{.Index}}-{{slug .Name}}" class="step {{if .Skipped}}skipped{{else if .Failed}}failed{{else if .Running}}running{{else}}passed{{end}}{{if and $detail (or .Failed .Turns)}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{.Index}}/{{.Name}}">
     <div class="stephead"{{if $detail}} role="button" tabindex="0"{{end}}>
       <span class="chev{{if $detail}} chev-icon{{end}}"></span>
       <span class="kind">{{.Kind}}</span>
       <span class="name">{{.Name}}</span>
+      <a class="anchor" href="#step-{{.Index}}-{{slug .Name}}" title="Link to this step" aria-label="Link to this step">#</a>
       {{if .Reason}}<span class="note">{{.Reason}}</span>{{end}}
       {{if .Verdict}}<span class="note">verdict: {{.Verdict}}</span>{{end}}
       <span class="dur">
@@ -208,6 +209,33 @@
   var retries = 0;
   var maxRetries = 6;
 
+  // A shared link names a step; open it so the reader lands on the content
+  // rather than on a collapsed row they have to click.
+  function openHashTarget() {
+    if (!window.location.hash) return;
+    var target = document.querySelector(window.location.hash);
+    if (target && target.classList.contains('step')) target.classList.add('open');
+  }
+
+  openHashTarget();
+  window.addEventListener('hashchange', openHashTarget);
+
+  // The tab is the status display for a run nobody is looking at. Update it
+  // the moment the run ends, before the reload, so a background tab reports
+  // the outcome without being reopened.
+  function markTitle(status) {
+    var mark = status === 'succeeded' ? '✓' : status === 'running' ? '◐' : '✗';
+    document.title = document.title.replace(/^[✓✗◐]\s*/, '');
+    document.title = mark + ' ' + document.title;
+
+    var dot = mark === '✓' ? '%2384c06d' : mark === '◐' ? '%23d9a94a' : '%23e0645a';
+    var icon = document.getElementById('favicon');
+    if (icon) {
+      icon.href = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E" +
+        "%3Ccircle cx='8' cy='8' r='6' fill='" + dot + "'/%3E%3C/svg%3E";
+    }
+  }
+
   function connect() {
     source = new EventSource(eventsURL + '?after=' + last);
 
@@ -216,9 +244,15 @@
       onEvent(msg);
     });
 
-    source.addEventListener('done', function () {
+    source.addEventListener('done', function (msg) {
       source.onerror = null;
       source.close();
+
+      // Mark the tab before reloading: if the tab is backgrounded the reload
+      // may be deferred, and the whole point is that it reports the outcome
+      // without being looked at.
+      try { markTitle(JSON.parse(msg.data).status); } catch (err) { /* status is a nicety */ }
+
       window.location.reload();
     });
 
