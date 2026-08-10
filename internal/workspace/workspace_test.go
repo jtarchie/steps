@@ -748,3 +748,82 @@ func TestNewInvocationTokenIsUnique(t *testing.T) {
 		seen[token] = true
 	}
 }
+
+// TestValidateArtifactFlowPutProducesItsVersion covers the artifact-flow half
+// of the implicit get a put runs (see internal/pipeline's fetchPutVersion).
+//
+// A put used to be artifact-neutral here. Now it PRODUCES an artifact named
+// after itself — the version it published, fetched by the implicit get — so a
+// later step may declare it as an input without a get: of its own. That is the
+// entire user-visible point of the implicit get, and it has to be reflected
+// statically or a valid plan fails validation.
+func TestValidateArtifactFlowPutProducesItsVersion(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{Workspace: &config.WorkspaceConfig{Strategy: "copy"}}
+	job := &config.Job{
+		Name: "build",
+		Plan: []config.Step{
+			{Put: "release"},
+			{Task: "verify", Run: "true", Inputs: config.Inputs("release")},
+		},
+	}
+
+	err := ValidateArtifactFlow(cfg, job)
+	if err != nil {
+		t.Errorf("a put's produced version must be available to later steps as an artifact, got %v", err)
+	}
+}
+
+// TestValidateArtifactFlowNoGetProducesNothing is the inverse, and the reason
+// the rule above is gated rather than unconditional.
+//
+// no_get: skips the implicit get, so there is no artifact. A later step naming
+// it has to fail HERE — before anything runs — rather than at run time against
+// a directory nobody created, which is the whole job of static flow validation.
+func TestValidateArtifactFlowNoGetProducesNothing(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{Workspace: &config.WorkspaceConfig{Strategy: "copy"}}
+	job := &config.Job{
+		Name: "build",
+		Plan: []config.Step{
+			{Put: "release", NoGet: true},
+			{Task: "verify", Run: "true", Inputs: config.Inputs("release")},
+		},
+	}
+
+	err := ValidateArtifactFlow(cfg, job)
+	if err == nil {
+		t.Fatal("expected an error: no_get: skips the fetch, so the put's artifact never exists")
+	}
+}
+
+// TestValidateArtifactFlowPutFailureHooksSeePreView pins which view a put's
+// hooks get, now that a put publishes an artifact.
+//
+// A failure-path hook runs because the put FAILED, which means its implicit get
+// never ran and the artifact does not exist. Handing that hook the post-put
+// view would let it declare an input that is guaranteed to be missing exactly
+// when the hook fires.
+func TestValidateArtifactFlowPutFailureHooksSeePreView(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{Workspace: &config.WorkspaceConfig{Strategy: "copy"}}
+	job := &config.Job{
+		Name: "build",
+		Plan: []config.Step{
+			{
+				Put: "release",
+				Hooks: config.Hooks{
+					OnFailure: &config.Step{Task: "cleanup", Run: "true", Inputs: config.Inputs("release")},
+				},
+			},
+		},
+	}
+
+	err := ValidateArtifactFlow(cfg, job)
+	if err == nil {
+		t.Fatal("expected an error: a put's on_failure hook runs when the implicit get never happened, so the artifact is not available to it")
+	}
+}

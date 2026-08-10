@@ -745,6 +745,14 @@
           "type": "object",
           "description": "get/put only: passed to the resource command this step runs, as {{ .params.* }} — a put's reach out:, a get's reach in: (how to fetch, e.g. git depth/submodules)."
         },
+        "get_params": {
+          "type": "object",
+          "description": "put only: params for the implicit get a put runs after out: succeeds."
+        },
+        "no_get": {
+          "type": "boolean",
+          "description": "put only: skip the implicit get after out:, when nothing later reads the produced version."
+        },
         "agent": {
           "type": "string"
         },

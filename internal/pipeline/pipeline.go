@@ -1482,12 +1482,72 @@ func runPutStep(ctx context.Context, cfg *config.Config, jobName string, i int, 
 		return "", wrapped
 	}
 
+	// Before RecordNode, deliberately: the implicit get is part of the step, so
+	// a node recorded "succeeded" while the fetch that step promised failed
+	// would be a lie the rest of the run reads as truth.
+	err = fetchPutVersion(ctx, cfg, step, *resource, *resourceType, result, bw)
+	if err != nil {
+		wrapped := fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
+		recordStepFailure(ctx, st, node, jobName, wrapped)
+
+		return "", wrapped
+	}
+
 	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", result, nil)
 	if err != nil {
 		return "", fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
 
 	return hash, nil
+}
+
+// fetchPutVersion runs the implicit get that follows a successful put, so the
+// version the put just produced is available to later steps as an artifact
+// named after the put.
+//
+// Concourse: "When the step succeeds, the version by the step will be
+// immediately fetched via an additional implicit get step. This is so that
+// later steps in your plan can use the artifact that was produced."
+// (concourse-ci.org/docs/steps/put/)
+//
+// Two ways it does nothing, and they are different:
+//
+//   - no_get: true — the author said not to. Concourse's own escape hatch for
+//     a put at the end of a plan whose output nothing reads.
+//   - the out: command printed no version. steps allows that (RunOut returns
+//     nil rather than erroring, unlike Concourse, which expects a version),
+//     and there is nothing to fetch without one. Logged rather than failed,
+//     because the put itself succeeded and inventing a failure here would
+//     break every read-only-ish resource type that publishes without
+//     versioning what it published.
+func fetchPutVersion(
+	ctx context.Context, cfg *config.Config, step config.Step,
+	resource config.Resource, resourceType config.ResourceType,
+	version map[string]any, bw workspace.BuildWorkspace,
+) error {
+	if step.NoGet {
+		slog.Debug("job.put.no_get", "resource", step.Put)
+
+		return nil
+	}
+
+	if len(version) == 0 {
+		slog.Info("job.put.no_version", "resource", step.Put,
+			"detail", "out: printed no version, so there is nothing for the implicit get to fetch")
+
+		return nil
+	}
+
+	fmt.Printf("get: %s (implicit, version: %v)\n", step.Put, version)
+
+	err := resourceDir(ctx, cfg, step.Put, resourceType, resource.Source, version, step.GetParams, bw, func(dir string) error {
+		return rsrc.RunIn(ctx, cfg, resourceType, resource.Source, version, step.GetParams, dir)
+	})
+	if err != nil {
+		return fmt.Errorf("implicit get after put: %w", err)
+	}
+
+	return nil
 }
 
 // executePut materializes a put step's input view, runs its resource's out:

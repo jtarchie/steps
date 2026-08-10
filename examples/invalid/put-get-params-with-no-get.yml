@@ -1,0 +1,22 @@
+# get_params configures the implicit get; no_get skips it. Setting both means
+# one of the two lines does nothing, and which one is not obvious from reading.
+# expect: get_params is set alongside no_get
+
+resource_types:
+- name: dummy
+  config:
+    check: 'echo ''[{"ref":"v1"}]'''
+    in: "true"
+    out: 'echo ''{"ref":"v1"}'''
+
+resources:
+- name: thing
+  type: dummy
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - put: thing
+    no_get: true
+    get_params: { depth: 1 }

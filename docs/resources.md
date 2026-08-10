@@ -95,13 +95,13 @@ jobs:
   - get: repo          # same resource, full history
 ```
 
-**Optional params need `dig`.** Templates render with `missingkey=error` ([templating.md](templating.md)), so a bare `{{ .params.depth }}` in an `in:` command makes `depth` *mandatory* on every get of that type — the same contract `out:` and `source:` already have. Use sprig's `dig` to give a param a default instead:
+**Optional params take the same shape as an optional `source:` field** (see [Shell safety](#shell-safety) below). Templates render with `missingkey=error`, so a bare `{{ .params.depth }}` makes `depth` *mandatory* on every get of that type:
 
 ```yaml
-in: git clone --depth {{ dig "depth" "50" .params }} {{ .source.uri | shellquote }} .
+in: git clone --depth {{ index .params "depth" | default "50" }} {{ .source.uri | shellquote }} .
 ```
 
-`dig` takes the key, the fallback, and the map, so a get that sets `depth:` gets its value and one that doesn't gets `50`. It works on an absent key and on a get with no `params:` block at all.
+That works on an absent key and on a get with no `params:` block at all.
 
 **Params change the fetch, so they change the hash.** Two gets of one version differing in `params:` are two different fetches: they get distinct cache entries and neither is reused for the other. A get with no `params:` hashes exactly as it did before the field existed, so adding this to a pipeline invalidates nothing that does not use it.
 
@@ -114,6 +114,28 @@ Runs when a `put` step executes. Optional: a type with no `out:` is read-only, a
 - **Sees**: `{{ .source }}` and `{{ .params }}` (the put step's `params:`).
 - **Working directory** is the put step's read view, composed from its `inputs:`.
 - **May print** a single JSON **object** — the version it produced. Printing nothing is fine and not an error.
+
+### The implicit get after a put
+
+When a put succeeds, `steps` immediately fetches the version it produced, so later steps can use it — the artifact is named after the put:
+
+```yaml
+- put: release            # out: publishes and prints {"ref": "v1.4.2"}
+- task: verify
+  inputs: [release]       # ...and here it is, already fetched
+  run: cat release/ref
+```
+
+This mirrors Concourse. The fetch runs the resource type's `in:` exactly as a `get` step would, so a type needs no extra support for it.
+
+- **`get_params:`** passes params to that fetch, the way a get step's own `params:` do:
+  ```yaml
+  - put: image
+    get_params: { skip_download: true }
+  ```
+- **`no_get: true`** skips it, for a put at the end of a plan whose output nothing reads. The artifact is then never produced, and a later step naming it is a validation error rather than a run-time surprise. Setting `get_params:` alongside `no_get:` is a load error — one of the two lines would do nothing.
+- **A put whose `out:` printed no version fetches nothing and still succeeds.** There is no version to fetch, and since printing nothing is legal here (unlike Concourse, which expects a version), failing would break every resource type that publishes without versioning what it published.
+- **The fetch happens before the step is recorded**, so a put whose implicit get fails is a failed step rather than a green one missing its artifact.
 
 ## Shell safety
 
