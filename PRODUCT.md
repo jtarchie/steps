@@ -4,9 +4,9 @@
 
 ## Platform
 
-cli
+adaptive
 
-steps is a terminal-only Go CLI. It has no GUI, TUI widget layer, or web/HTML frontend, and none is planned — "design" work on this product means CLI output, YAML ergonomics, and docs, never pages or components.
+steps is a Go CLI first: the terminal is where pipelines are authored, run, and debugged, and every capability is reachable there. Since `steps web`, it also ships a local browser UI over the same sqlite state — a read-and-operate view (run transcripts, the job dependency graph, live runs, trigger/approve/resume) rather than a second product. Design work therefore covers both CLI output and YAML ergonomics AND the web surface; the web UI is a second front end on one model, never a second model.
 
 ## Users
 
@@ -22,12 +22,12 @@ Unlike Concourse or GitHub Actions (no agent-native step type) and unlike LangCh
 
 ## Operating Context
 
-Entirely terminal: `steps run|watch|test|mcp`, no GUI or web frontend. Pipelines are authored as YAML; resources are fetched via shell commands or MCP; tasks run on the host shell or in Docker; agent steps call LLM providers (OpenAI-compatible APIs, OpenRouter, local models) with tool-calling. State persists in SQLite (WAL mode). Typical workflows: authoring pipeline YAML, running/testing pipelines locally, running `steps watch` for downstream triggers, resource steps backed by `gh`/git, and optionally MCP servers with OAuth.
+Primarily terminal: `steps run|watch|test|mcp`, plus `steps web` for a local browser view of the same state. Pipelines are authored as YAML; resources are fetched via shell commands or MCP; tasks run on the host shell or in Docker; agent steps call LLM providers (OpenAI-compatible APIs, OpenRouter, local models) with tool-calling. State persists in SQLite (WAL mode). Typical workflows: authoring pipeline YAML, running/testing pipelines locally, running `steps watch` for downstream triggers, resource steps backed by `gh`/git, and optionally MCP servers with OAuth.
 
 ## Capabilities and Constraints
 
-- No HTML/web/GUI surface exists or is planned; do not evaluate this product against web design conventions.
-- User-facing "interface" is entirely CLI output (log lines, diagnostics), YAML pipeline syntax, and `--help`/usage text.
+- The primary interface is CLI output (log lines, diagnostics), YAML pipeline syntax, and `--help`/usage text.
+- `steps web` adds a local, single-user browser UI: loopback by default, no authentication (it shares the trust domain of the shell that started it), and no capability the CLI lacks. It never becomes a hosted multi-tenant service without an auth story that does not exist today.
 - Undecided: whether a richer terminal UI (progress bars, interactive prompts, etc.) is ever in scope, versus staying plain-log output only.
 
 ## Brand Commitments
@@ -46,7 +46,7 @@ Project name is "steps," lowercase. No logo or visual identity beyond the name. 
 
 1. Agent steps are first-class: same caching and testing guarantees as any other pipeline step, never a special-cased bolt-on.
 2. Deterministic and cheaply re-runnable: unchanged steps skip via content-addressed (merkle) hashing.
-3. The entire product surface is terminal: CLI output, YAML authoring, and docs — never a GUI or web frontend.
+3. One model, two front ends: the web UI reads and writes the same sqlite state and runs jobs through the same `pipeline.RunJob` as the CLI — never a parallel execution path or a second source of truth.
 4. Self-verifying by default: pipelines should be testable (`assert:`/`steps test`) like code, not just runnable.
 5. Trust boundaries are explicit and load-bearing: pipeline-authored execution and model-directed execution are deliberately held to different trust levels throughout.
 

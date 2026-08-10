@@ -1,0 +1,37 @@
+{{define "page"}}
+<h1 class="prompt"><b>steps resources</b></h1>
+<p class="metaline">{{len .Resources}} resources<span class="sep">·</span>versions recorded by check</p>
+
+<div class="tablewrap">
+  <table>
+    <thead><tr><th>Resource</th><th>Type</th><th>Latest version</th><th>Checked</th></tr></thead>
+    <tbody>
+      {{range .Resources}}
+      {{$seen := index $.Checked .Name}}
+      <tr>
+        <td>{{.Name}}</td>
+        <td class="dim">{{.Type}}</td>
+        <td class="dim">{{if $seen}}{{$seen.Version}}{{else}}<span class="faint">never checked</span>{{end}}</td>
+        <td class="dim">{{if $seen}}{{ago $seen.CheckedAt}}{{else}}—{{end}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+<h2 class="eyebrow">Circuit breaker</h2>
+{{range .Paused}}
+<div class="approval">
+  <div class="meta">{{.Name}} · {{.Consecutive}} consecutive failures · paused {{.PausedAt}}</div>
+  <div class="msg">Out of rotation — will not auto-trigger until resumed.</div>
+  {{if not $.Nav.ReadOnly}}
+  <form class="decide" method="post" action="/p/{{$.Nav.Current}}/jobs/{{.Name}}/resume">
+    <button class="btn primary" type="submit">Resume</button>
+    <span class="meta">resets the consecutive-failure count</span>
+  </form>
+  {{end}}
+</div>
+{{else}}
+<p class="faint">No jobs are paused.</p>
+{{end}}
+{{end}}

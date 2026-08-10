@@ -11,9 +11,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
 	rsrc "github.com/jtarchie/steps/internal/resource"
@@ -98,9 +100,30 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 		ctx = withResume(ctx, resume)
 	}
 
+	// Publish the run's identity where packages that cannot import this one
+	// can still stamp it on their events — internal/agent, tagging every
+	// conversation turn with the run it belongs to.
+	ctx = events.WithRunID(ctx, resume.id)
+
+	// Every run records its own story, whether or not anything is watching.
+	ctx, closeBus := attachEventBus(ctx, st)
+	defer closeBus()
+
+	// Recorded for every build, not only a rooted one: the row is this run's
+	// identity — what its events, its history entry, and its resume all key
+	// on — and a workspace backend that exposes no root directory is no
+	// reason for the run itself to go unrecorded. Non-rooted builds simply
+	// record an empty workspace.
+	workspaceRoot := ""
 	if rooted, ok := bw.(workspace.RootedBuild); ok {
-		_ = st.StartRun(ctx, resume.id, job.Name, rooted.Root())
+		workspaceRoot = rooted.Root()
 	}
+
+	_ = st.StartRun(ctx, resume.id, job.Name, workspaceRoot)
+
+	jobStarted := time.Now()
+
+	publishJobStarted(ctx, job.Name)
 
 	// Carry an execution log through this invocation so a job's assert.execution
 	// can self-verify what ran (plan steps and hooks). The dispatch points and
@@ -168,6 +191,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 		// look at, and they are what a resume continues from.
 		_ = st.FinishRun(context.WithoutCancel(ctx), resume.id, "failed")
 
+		publishJobFinished(ctx, job.Name, jobStarted, finalErr)
 		reportResumable(resume.id, bw)
 
 		return finalErr
@@ -176,6 +200,8 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	workspace.CloseBuild(bw, job.Name)
 
 	_ = st.FinishRun(context.WithoutCancel(ctx), resume.id, "succeeded")
+
+	publishJobFinished(ctx, job.Name, jobStarted, nil)
 
 	recordPassedVersions(ctx, st, job.Name, fetched)
 
@@ -442,7 +468,7 @@ func executeNonGetStep(
 	}
 
 	if disposition == stepChainSkipped {
-		reportChainSkipped(jobName, steps[*i+1:])
+		reportChainSkipped(ctx, jobName, *i+1, steps[*i+1:])
 
 		return true, nil
 	}
@@ -478,19 +504,24 @@ func executeNonGetStep(
 // — it never resolves a get step's version or does any of the work runSteps
 // is skipping, so it can't reintroduce the resource checks caching exists to
 // avoid.
-func reportChainSkipped(jobName string, steps []config.Step) {
-	for _, step := range steps {
-		name := executedStepName(step)
-		if name == "" {
-			name = step.Get // executedStepName covers task/put/agent only
-		}
-
+// reportChainSkipped announces the steps a chain-skip swallowed. firstIndex
+// is the plan index of the first of them, so each can be published under the
+// position it holds in the plan.
+//
+// They are published, not only printed: a transcript that shows the step
+// where the cache hit and then simply STOPS reads as a truncated run. The
+// steps after it did not vanish — they were skipped for the same reason — and
+// a reader has to be able to see that rather than infer it.
+func reportChainSkipped(ctx context.Context, jobName string, firstIndex int, steps []config.Step) {
+	for offset, step := range steps {
+		name := eventStepName(step)
 		if name == "" {
 			continue
 		}
 
 		fmt.Printf("skip: %s (chain)\n", name)
 		slog.Info("job.skip", "job", jobName, "step", name, "reason", "chain")
+		publishStepSkipped(ctx, jobName, firstIndex+offset, step, "", skipReason(stepChainSkipped))
 	}
 }
 
@@ -586,6 +617,10 @@ func skipCompletedStep(ctx context.Context, jobName string, i *int) bool {
 // by its own on_success/ensure hook, the true (failed) outcome is recorded so
 // the store and skip-cache reflect it.
 func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string, handoff *agent.Handoff) (string, stepDisposition, nonGetOutcome, error) {
+	started := time.Now()
+
+	publishStepStarted(ctx, jobName, i, step)
+
 	hash, disposition, no, err := dispatchNonGetStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash, handoff)
 
 	// Record what ran (not a cached chain, not a guard-skipped step) for a
@@ -593,6 +628,15 @@ func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i in
 	// [step, its hooks...].
 	if disposition == stepRan {
 		recordStepExecution(ctx, step)
+	}
+
+	// A skip and a run are different events, not one event with a flag: the
+	// whole point of the transcript is that a replayed step is visibly
+	// distinct from a step that paid to execute.
+	if disposition == stepRan {
+		publishStepFinished(ctx, jobName, i, step, hash, started, err)
+	} else {
+		publishStepSkipped(ctx, jobName, i, step, hash, skipReason(disposition))
 	}
 
 	// Neither kind of skip fires hooks: the step did not run, so it has no
@@ -860,13 +904,24 @@ func runGetStep(
 		if skippable[hash] {
 			fmt.Printf("skip: %s (version: %v)\n", resource.Name, version)
 			slog.Info("job.skip", "job", jobName, "index", i, "kind", "get", "resource", resource.Name, "hash", hash)
+			publishStepSkipped(ctx, jobName, i, step, hash, skipReason(stepChainSkipped))
 
 			continue
 		}
 
 		node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindGet, StepIndex: i, Resource: resource.Name, Content: content}
 
+		// A fan-out get publishes per VERSION: each one triggers its own build
+		// of the remaining plan, so each is its own start/finish pair rather
+		// than one event for the step as a whole.
+		getStarted := time.Now()
+
+		publishStepStarted(ctx, jobName, i, step)
+
 		err = runTriggeredBuild(ctx, cfg, jobName, i, step, *resource, *resourceType, version, remainder, pinned, provider, st, skippable, node, chainUnskippable, cache)
+
+		publishStepFinished(ctx, jobName, i, step, hash, getStarted, err)
+
 		if err != nil {
 			buildErrs = append(buildErrs, fmt.Errorf("step %d (get %q) version %v: %w", i, step.Get, version, err))
 
@@ -964,17 +1019,30 @@ func runGetStepInPlaceResult(
 	pinned map[string]string, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool,
 	parentHash *string, cache *rsrc.Cache,
 ) (bool, error) {
+	started := time.Now()
+
+	publishStepStarted(ctx, jobName, i, step)
+
 	newParentHash, disposition, err := runGetStepInPlace(ctx, cfg, jobName, i, step, pinned, bw, st, skippable, *parentHash, cache)
 	if err != nil {
+		publishStepFinished(ctx, jobName, i, step, newParentHash, started, err)
+
 		return true, err
 	}
+
 	if disposition == stepChainSkipped {
-		reportChainSkipped(jobName, steps[i+1:])
+		publishStepSkipped(ctx, jobName, i, step, newParentHash, skipReason(disposition))
+		reportChainSkipped(ctx, jobName, i+1, steps[i+1:])
+
 		return true, nil
 	}
+
+	publishStepFinished(ctx, jobName, i, step, newParentHash, started, nil)
+
 	if newParentHash != "" {
 		*parentHash = newParentHash
 	}
+
 	return false, nil
 }
 

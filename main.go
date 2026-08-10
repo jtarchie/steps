@@ -29,11 +29,13 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
 	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/trigger"
+	"github.com/jtarchie/steps/internal/web"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -59,6 +61,7 @@ type CLI struct {
 	Approvals ApprovalsCmd     `cmd:""                                  help:"list approval: steps waiting for a decision"`
 	Approve   ApproveCmd       `cmd:""                                  help:"approve a waiting approval: step"`
 	Reject    RejectCmd        `cmd:""                                  help:"reject a waiting approval: step"`
+	Web       WebCmd           `cmd:""                                  help:"serve the pipeline UI over the same state the CLI writes"`
 }
 
 // buildVersion is the version string steps --version prints. Overridden at
@@ -1063,6 +1066,111 @@ func loadWithVars(path string, flags map[string]string, varsFile string) (*confi
 	}
 
 	return cfg, nil
+}
+
+// WebCmd serves the pipeline UI.
+//
+// One or more pipeline files: state is per-pipeline by construction
+// (.steps/state.db lives beside each YAML), so serving several means opening
+// several stores, and the UI routes them under /p/<name>/.
+//
+// It binds loopback by default and has no authentication, because there is
+// nothing to authenticate against — this is the local runner's own front end,
+// in the same trust domain as the shell that started it. Binding it to a
+// routable address publishes trigger and approval controls to anyone who can
+// reach the port; --listen exists for the person who has decided that is what
+// they want, not as a default.
+type WebCmd struct {
+	Pipeline      []string          `arg:""                                                     help:"path(s) to pipeline YAML files"`
+	Listen        string            `default:"127.0.0.1:8088"                                   help:"address to serve on"`
+	ReadOnly      bool              `help:"serve without trigger, approval, or resume controls" name:"read-only"`
+	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                 help:"leave build workspaces on disk instead of deleting them"`
+	Var           map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..." name:"var"`
+	VarsFile      string            `help:"YAML file of pipeline vars"                          name:"vars-file"`
+}
+
+// Run loads every named pipeline, opens its store, and serves until canceled.
+func (w *WebCmd) Run() error {
+	ctx, cancel := withSignalCancel(context.Background())
+	defer cancel()
+
+	pipelines, providers, cleanup, err := w.load()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	var runner web.Runner
+
+	local := web.NewLocalRunner(providers)
+	if !w.ReadOnly {
+		runner = local
+	}
+
+	server, err := web.New(pipelines, runner)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	// The drainer runs regardless of --read-only: a row queued by a separate
+	// `steps watch` against the same database is still work this process can
+	// do. What --read-only withholds is the UI's ability to ADD work.
+	go local.Drain(ctx, pipelines)
+
+	fmt.Printf("steps web: http://%s\n", w.Listen)
+
+	err = server.Start(ctx, w.Listen)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	return nil
+}
+
+// load opens every pipeline named on the command line, along with its store,
+// workspace provider, and event bus.
+func (w *WebCmd) load() ([]*web.Pipeline, map[string]workspace.Provider, func(), error) {
+	var (
+		pipelines []*web.Pipeline
+		closers   []func()
+	)
+
+	providers := map[string]workspace.Provider{}
+
+	cleanup := func() {
+		for _, close := range closers {
+			close()
+		}
+	}
+
+	for _, path := range w.Pipeline {
+		cfg, err := loadWithVars(path, w.Var, w.VarsFile)
+		if err != nil {
+			cleanup()
+
+			return nil, nil, nil, err
+		}
+
+		st, provider, closeOne, err := setup(cfg, path, w.KeepWorkspace)
+		if err != nil {
+			cleanup()
+
+			return nil, nil, nil, err
+		}
+
+		closers = append(closers, closeOne)
+
+		slug := web.Slugify(path)
+		bus := events.New(pipeline.StoreSink(st))
+		closers = append(closers, bus.Close)
+
+		providers[slug] = provider
+		pipelines = append(pipelines, &web.Pipeline{
+			Slug: slug, Path: path, Cfg: cfg, Store: st, Bus: bus,
+		})
+	}
+
+	return pipelines, providers, cleanup, nil
 }
 
 // ApprovalsCmd lists approval: steps waiting for a decision.

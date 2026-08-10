@@ -1,0 +1,66 @@
+{{define "page"}}
+<h1 class="prompt"><b>steps node {{short .Node.Hash}}</b></h1>
+<p class="metaline">
+  {{.Node.Kind}} {{.Node.Resource}}<span class="sep">·</span>
+  <span class="st st-{{statusWord .Node.Status}}">{{statusWord .Node.Status}}</span><span class="sep">·</span>
+  executed {{ago .Node.CreatedAt}}<span class="sep">·</span>job {{.Node.JobName}}
+</p>
+
+{{if .Node.Error}}<div class="errblock"><span class="lbl">error:</span> {{.Node.Error}}</div>{{end}}
+
+<h2 class="eyebrow">Content <span class="unbold">— what this hash is made of</span></h2>
+<pre class="contentmap">{{.Content}}</pre>
+<p class="chain">
+  <span class="rail">parent</span>
+  {{if .Node.ParentHash}}<a class="hash" href="/p/{{.Nav.Current}}/nodes/{{.Node.ParentHash}}">{{short .Node.ParentHash}}</a>{{else}}<span class="rail">∅ root</span>{{end}}
+  <span class="rail">→</span> <b>{{short .Node.Hash}}</b>
+</p>
+
+{{if .Result}}
+<h2 class="eyebrow">Result</h2>
+<pre class="contentmap">{{.Result}}</pre>
+{{end}}
+
+{{if .Transcript}}
+<h2 class="eyebrow">Conversation <span class="unbold">— the full exchange, sub-agents nested</span></h2>
+<div class="transcript"><div class="step open"><div class="stepbody flush">
+  {{template "turns" .Transcript}}
+</div></div></div>
+{{end}}
+
+<h2 class="eyebrow">Runs using this node</h2>
+<div class="tablewrap">
+  <table>
+    <thead><tr><th>Run</th><th>Job</th><th>Status</th><th>Started</th></tr></thead>
+    <tbody>
+      {{range .Runs}}
+      <tr>
+        <td><a class="hash" href="/p/{{$.Nav.Current}}/runs/{{.ID}}">{{short .ID}}</a></td>
+        <td>{{.JobName}}</td>
+        <td><span class="st st-{{statusWord .Status}}">{{statusWord .Status}}</span></td>
+        <td class="dim">{{ago .StartedAt}}</td>
+      </tr>
+      {{else}}
+      <tr><td colspan="4" class="faint">No run events reference this node yet.</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+<p class="callout"><b>Why was this skipped?</b> This page is the cache's receipt: the content above produced the hash, and every run listed reused it instead of executing again.</p>
+{{end}}
+
+{{define "turns"}}
+{{range .}}
+  {{if eq .Type "text"}}
+  <div class="turn model"><span class="who">model</span><span class="what">{{.Text}}</span></div>
+  {{else if eq .Type "call"}}
+  <div class="turn tool"><span class="who">tool</span><span class="what"><code>{{.Name}}</code> <span class="args">{{.ArgsJSON}}</span></span></div>
+  {{else if eq .Type "result"}}
+  <div class="turn tool"><span class="who">result</span><span class="what"><code>{{.Name}}</code> <span class="args">{{.Content}}</span></span></div>
+  {{else if eq .Type "subagent"}}
+  <div class="turn tool"><span class="who">delegate</span><span class="what"><code>{{.Agent}}</code> {{.Request}}</span></div>
+  <div class="subtrace">{{template "turns" .Events}}</div>
+  {{end}}
+{{end}}
+{{end}}

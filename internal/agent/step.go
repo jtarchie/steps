@@ -16,6 +16,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/shell"
@@ -486,6 +487,14 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	fmt.Printf("agent: %s%s\n", name, fallbackBanner(prepared))
 
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindAgent, StepIndex: i, Resource: name, Content: content}
+
+	// Give the conversation its live identity, so every turn it takes is
+	// publishable as belonging to this run, job, and step. Set here rather
+	// than in prepareAgentStep because only RunStep knows the plan index —
+	// a hook or fix conversation has none, and publishes nothing.
+	prepared.conv.recorder = &transcriptRecorder{live: liveContext{
+		bus: events.FromContext(ctx), runID: events.RunID(ctx), job: jobName, stepIndex: i, stepName: name,
+	}}
 
 	res, err := runPrepared(ctx, prepared)
 	res.model = fallbackModel(prepared)

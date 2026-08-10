@@ -1,0 +1,26 @@
+{{define "page"}}
+<h1 class="prompt"><b>steps approvals</b></h1>
+<p class="metaline">the row is the audit trail — a decision here is the same record `steps approve` writes</p>
+
+{{range .Approvals}}
+<div class="approval {{if ne .Status "pending"}}decided{{end}}">
+  <div class="meta">{{.JobName}} · requested {{.RequestedAt}}{{if .DecidedAt}} · decided {{.DecidedAt}} by {{.DecidedBy}}{{end}}</div>
+  <div class="msg">{{.Message}}</div>
+  {{if eq .Status "pending"}}
+    {{if $.Nav.ReadOnly}}
+    <div class="meta">This server is read-only. Decide with <code>steps approve {{.ID}}</code>.</div>
+    {{else}}
+    <form class="decide" method="post" action="/p/{{$.Nav.Current}}/approvals/{{.ID}}">
+      <input type="text" name="reason" placeholder="reason (recorded)" aria-label="Decision reason">
+      <button class="btn primary" type="submit" name="decision" value="approve">Approve</button>
+      <button class="btn danger" type="submit" name="decision" value="reject">Reject</button>
+    </form>
+    {{end}}
+  {{else}}
+  <div class="meta"><span class="stamp st-{{if eq .Status "approved"}}passed{{else}}failed{{end}}">{{.Status}}</span>{{if .Reason}} — "{{.Reason}}"{{end}}</div>
+  {{end}}
+</div>
+{{else}}
+<p class="faint">No approvals requested yet.</p>
+{{end}}
+{{end}}

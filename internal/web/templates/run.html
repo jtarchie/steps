@@ -1,0 +1,167 @@
+{{define "page"}}
+{{$run := .Run}}
+<div class="pagehead">
+  <div>
+    <h1 class="prompt"><b>steps run {{$run.Run.JobName}}</b></h1>
+    <p class="metaline">
+      run <span class="hash">{{short $run.Run.ID}}</span><span class="sep">·</span>
+      <span class="st st-{{statusWord $run.Run.Status}}">{{statusWord $run.Run.Status}}</span><span class="sep">·</span>
+      {{stamp $run.Run.StartedAt}}<span class="sep">·</span>
+      <span id="run-duration">{{duration $run.Run.Duration}}</span>
+      {{if $run.Run.Workspace}}<span class="sep">·</span><span class="faint">{{$run.Run.Workspace}}</span>{{end}}
+    </p>
+  </div>
+  {{if not .Nav.ReadOnly}}
+  <div class="actions">
+    <form method="post" action="/p/{{.Nav.Current}}/jobs/{{$run.Run.JobName}}/trigger">
+      <input type="hidden" name="force" value="1">
+      <button class="btn" type="submit">↻ Re-run</button>
+    </form>
+  </div>
+  {{end}}
+</div>
+
+{{if $run.JobError}}
+<div class="errblock"><span class="lbl">job error:</span> {{$run.JobError}}</div>
+{{end}}
+
+{{if $run.Changed}}
+<p class="diffnote">vs last green <a class="hash" href="/p/{{.Nav.Current}}/runs/{{$run.ComparedTo}}">{{short $run.ComparedTo}}</a>:
+  {{range $run.Changed}}<span class="chg">{{.}}</span> {{end}}changed content — everything else replayed from cache</p>
+{{end}}
+
+<div class="transcript" id="transcript">
+  {{range $run.Steps}}
+  {{$detail := .HasDetail $run.JobError}}
+  <div class="step {{if .Skipped}}skipped{{else if .Failed}}failed{{else if .Running}}running{{else}}passed{{end}}{{if and $detail (or .Failed .Turns)}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{.Index}}/{{.Name}}">
+    <div class="stephead"{{if $detail}} role="button" tabindex="0"{{end}}>
+      <span class="chev{{if $detail}} chev-icon{{end}}"></span>
+      <span class="kind">{{.Kind}}</span>
+      <span class="name">{{.Name}}</span>
+      {{if .Reason}}<span class="note">{{.Reason}}</span>{{end}}
+      {{if .Verdict}}<span class="note">verdict: {{.Verdict}}</span>{{end}}
+      <span class="dur">
+        {{if and (not .Skipped) (not .Running)}}{{duration .Duration}}{{end}}
+        {{if .Hash}} · <a class="hash" href="/p/{{$.Nav.Current}}/nodes/{{.Hash}}">{{short .Hash}}</a>{{end}}
+        {{if .Running}}<span class="cursor">▍</span>{{end}}
+      </span>
+    </div>
+    <div class="stepbody">
+      {{with .DistinctError $run.JobError}}<div class="log"><span class="err">{{.}}</span></div>{{end}}
+      {{if .Reason}}<div class="log">{{.Reason}}{{if .Hash}} · content hash {{short .Hash}}{{end}}</div>{{end}}
+
+      {{range .Turns}}
+      <div class="turn {{if eq .Type "agent_call"}}tool{{else if eq .Type "agent_result"}}tool{{else if eq .Type "agent_subagent"}}tool{{else}}model{{end}} {{if .Nested}}nested{{end}}">
+        <span class="who">
+          {{if eq .Type "agent_text"}}model
+          {{else if eq .Type "agent_call"}}tool
+          {{else if eq .Type "agent_result"}}result
+          {{else}}delegate{{end}}
+        </span>
+        <span class="what">
+          {{if .Name}}<code>{{.Name}}</code> {{end}}
+          {{if .Text}}{{.Text}}{{end}}
+          {{if .Detail}}<span class="args">{{firstLine .Detail}}</span>{{end}}
+        </span>
+      </div>
+      {{end}}
+
+      {{if .Response}}<div class="response">{{trim .Response}}</div>{{end}}
+      {{if .Note}}<div class="agentmeta">note: {{.Note}}</div>{{end}}
+    </div>
+  </div>
+  {{else}}
+  <div class="step"><div class="stephead"><span class="faint">This run recorded no steps.</span></div></div>
+  {{end}}
+</div>
+
+{{if $run.HasSkipped}}
+<p class="callout"><b>Folded = cached.</b> A step whose content hash was unchanged replays from the merkle store and never re-executes — so this page shows exactly what this run paid for.</p>
+{{end}}
+{{end}}
+
+{{define "scripts"}}
+{{if .Run.Running}}
+<script>
+(function () {
+  var transcript = document.getElementById('transcript');
+  var last = 0;
+  document.querySelectorAll('[data-step]').forEach(function () { });
+
+  function stepEl(key) { return transcript.querySelector('[data-step="' + CSS.escape(key) + '"]'); }
+
+  var source = new EventSource(window.location.pathname + '/events?after=0');
+
+  source.addEventListener('event', function (msg) {
+    var e = JSON.parse(msg.data);
+    last = e.seq;
+    var key = e.step_index + '/' + e.step_name;
+
+    if (e.type === 'step_started') {
+      if (stepEl(key)) return;
+      var div = document.createElement('div');
+      div.className = 'step running open';
+      div.dataset.step = key;
+      div.innerHTML = '<div class="stephead" role="button" tabindex="0">' +
+        '<span class="chev chev-icon"></span><span class="kind">' + e.step_kind + '</span>' +
+        '<span class="name">' + e.step_name + '</span>' +
+        '<span class="dur"><span class="cursor">▍</span></span></div><div class="stepbody"></div>';
+      transcript.appendChild(div);
+      return;
+    }
+
+    var el = stepEl(key);
+
+    if (e.type === 'step_finished' || e.type === 'step_skipped') {
+      if (!el) return;
+      el.className = 'step ' + (e.type === 'step_skipped' ? 'skipped'
+        : (e.status === 'succeeded' ? 'passed' : 'failed'));
+      var dur = el.querySelector('.dur');
+      if (dur) dur.innerHTML = (e.type === 'step_skipped' ? '' : e.duration) +
+        (e.hash ? ' · <a class="hash" href="../nodes/' + e.hash + '">' + e.hash.slice(0, 7) + '</a>' : '');
+      if (e.text && e.type === 'step_finished' && e.status !== 'succeeded') {
+        el.querySelector('.stepbody').innerHTML += '<div class="log"><span class="err">' + e.text + '</span></div>';
+      }
+      if (e.text && e.type === 'step_skipped') {
+        var head = el.querySelector('.stephead .name');
+        head.insertAdjacentHTML('afterend', '<span class="note">' + e.text + '</span>');
+      }
+      return;
+    }
+
+    if (e.agent) {
+      // A sub-agent's turns carry the child's name; hang them on whichever
+      // agent step is still open, matching the server-side assembly.
+      var target = el || transcript.querySelector('.step.running:last-of-type') ||
+        Array.from(transcript.querySelectorAll('.step.running')).pop();
+      if (!target) return;
+      var who = e.type === 'agent_text' ? 'model'
+        : e.type === 'agent_call' ? 'tool'
+        : e.type === 'agent_result' ? 'result' : 'delegate';
+      var body = target.querySelector('.stepbody');
+      var turn = document.createElement('div');
+      turn.className = 'turn ' + (e.type === 'agent_text' ? 'model' : 'tool') + (e.depth > 0 ? ' nested' : '');
+      turn.innerHTML = '<span class="who">' + who + '</span><span class="what">' +
+        (e.name ? '<code>' + e.name + '</code> ' : '') +
+        (e.text ? escapeHTML(e.text) : '') +
+        (e.detail ? '<span class="args">' + escapeHTML(e.detail.split('\n')[0]) + '</span>' : '') +
+        '</span>';
+      body.appendChild(turn);
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+  });
+
+  source.addEventListener('done', function () {
+    source.close();
+    window.location.reload();
+  });
+
+  function escapeHTML(s) {
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+})();
+</script>
+{{end}}
+{{end}}

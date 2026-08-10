@@ -152,6 +152,12 @@ type agentConversation struct {
 	// usage.go). Never nil — a step with no budget still counts, because the
 	// report is worth having on its own.
 	usage *stepUsage
+	// recorder captures this conversation's transcript and publishes it live.
+	// nil means runAgentConversation makes its own, which records but
+	// publishes nowhere — the shape a test or a plain terminal run gets. A
+	// sub-agent is handed a child recorder so its work is visible while it
+	// happens (see transcriptRecorder.childRecorder).
+	recorder *transcriptRecorder
 }
 
 // syntheticToolExchange builds the call/result message pair that makes
@@ -265,7 +271,11 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 	// — success, transport error, loop detection, turn exhaustion — carries
 	// whatever was captured up to that point. It rides in conv.env because
 	// the env already reaches every toolImpl (see toolEnv.transcript).
-	rec := &transcriptRecorder{}
+	rec := conv.recorder
+	if rec == nil {
+		rec = &transcriptRecorder{}
+	}
+
 	conv.env.transcript = rec
 
 	res, err := runConversationLoop(ctx, llm, conv)

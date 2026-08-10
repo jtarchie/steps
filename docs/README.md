@@ -19,6 +19,7 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 
 | Page | What it covers |
 |---|---|
+| [web.md](web.md) | The browser UI: run transcripts, the dependency graph, live runs, triggering |
 | [agents-internals.md](agents-internals.md) | How agent steps work underneath: transport, tool-call repair, compaction, caching |
 | [conformance.md](conformance.md) | Which Concourse behaviors steps matches, which it doesn't, and which are verified |
 
@@ -28,6 +29,7 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 steps run <pipeline>        run one job (--resume <id> continues a failed one)
 steps watch <pipeline>      poll trigger: true resources, run affected jobs
 steps test <pipeline>       run every job and check assert: directives
+steps web <pipeline>...     serve the browser UI over the same state
 steps validate <pipeline>   check the file, and that this machine can run it
 steps plan <pipeline>       show what a run would execute vs skip
 steps runs <pipeline>       show what past runs recorded

@@ -116,6 +116,11 @@ linters:
             - "github.com/jtarchie/steps/internal/outcome"
             - "github.com/jtarchie/steps/internal/store"
             - "github.com/jtarchie/steps/internal/trigger"
+            # web is the UI front end: main constructs it and hands it loaded
+            # pipelines, exactly as it does trigger.Watch. events is the leaf
+            # both need in order to wire a bus to a store sink.
+            - "github.com/jtarchie/steps/internal/events"
+            - "github.com/jtarchie/steps/internal/web"
             - "github.com/jtarchie/steps/internal/workspace"
         # Leaves: no internal deps, stdlib only.
         Shell:
@@ -133,6 +138,15 @@ linters:
         Retry:
           files:
             - "**/internal/retry/**"
+          allow:
+            - "$gostd"
+        # events is the run-event bus: a stdlib-only leaf every execution
+        # package may publish to and the web layer subscribes to. It must stay
+        # a leaf — the moment it imports config or store, the packages that
+        # publish would inherit that edge and the graph stops being acyclic.
+        Events:
+          files:
+            - "**/internal/events/**"
           allow:
             - "$gostd"
         # outcome classifies a step/job error (failed/errored/aborted) for
@@ -217,6 +231,7 @@ linters:
             - "github.com/achetronic/adk-utils-go"
             - "github.com/modelcontextprotocol/go-sdk/mcp"
             - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/mcp"
             - "github.com/jtarchie/steps/internal/merkle"
             - "github.com/jtarchie/steps/internal/outcome"
@@ -234,6 +249,7 @@ linters:
             - "$gostd"
             - "github.com/jtarchie/steps/internal/agent"
             - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/merkle"
             - "github.com/jtarchie/steps/internal/outcome"
             - "github.com/jtarchie/steps/internal/resource"
@@ -259,5 +275,20 @@ linters:
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/pipeline"
             - "github.com/jtarchie/steps/internal/resource"
+            - "github.com/jtarchie/steps/internal/store"
+            - "github.com/jtarchie/steps/internal/workspace"
+        # web serves the UI. Like trigger, it sits above pipeline and reaches
+        # execution territory only through pipeline.RunJob — never into
+        # agent/resource/merkle directly, which is what keeps the UI a second
+        # front end on one model rather than a second model.
+        Web:
+          files:
+            - "**/internal/web/**"
+          allow:
+            - "$gostd"
+            - "github.com/labstack/echo/v4"
+            - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/events"
+            - "github.com/jtarchie/steps/internal/pipeline"
             - "github.com/jtarchie/steps/internal/store"
             - "github.com/jtarchie/steps/internal/workspace"

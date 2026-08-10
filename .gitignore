@@ -12,3 +12,4 @@
 .impeccable/config.local.json
 # Local credentials for running the examples/self-build experiment (direnv)
 .envrc
+.DS_Store

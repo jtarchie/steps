@@ -1,0 +1,78 @@
+{{define "page"}}
+<div class="pagehead">
+  <div>
+    <h1 class="prompt"><b>steps run {{.Job.Name}}</b></h1>
+    <p class="metaline">
+      {{len .Runs}} runs recorded
+      {{if .Job.Paused}}<span class="sep">·</span><span class="st-failed">paused after {{.Job.Failures}} failures</span>{{end}}
+    </p>
+  </div>
+  {{if not .Nav.ReadOnly}}
+  <div class="actions">
+    <form method="post" action="/p/{{.Nav.Current}}/jobs/{{.Job.Name}}/trigger">
+      <button class="btn primary" type="submit">▶ Trigger</button>
+    </form>
+    <form method="post" action="/p/{{.Nav.Current}}/jobs/{{.Job.Name}}/trigger">
+      <input type="hidden" name="force" value="1">
+      <button class="btn" type="submit">↻ Re-run (forced)</button>
+    </form>
+  </div>
+  {{end}}
+</div>
+
+{{if .Job.Upstream}}
+<h2 class="eyebrow">Depends on</h2>
+<p class="deps">
+  {{range .Job.Upstream}}<a href="/p/{{$.Nav.Current}}/jobs/{{.Job}}">{{.Job}}</a>
+  <span class="arrow">must be green for</span> <span class="res">{{.Resource}}</span><br>{{end}}
+</p>
+{{end}}
+
+{{if .Job.Downstream}}
+<h2 class="eyebrow">Feeds</h2>
+<p class="deps">
+  {{range .Job.Downstream}}<a href="/p/{{$.Nav.Current}}/jobs/{{.Job}}">{{.Job}}</a>
+  <span class="arrow">waits on</span> <span class="res">{{.Resource}}</span> <span class="arrow">from this job</span><br>{{end}}
+</p>
+{{end}}
+
+<h2 class="eyebrow">Run history
+  {{if .Spark}}
+  <svg class="spark" width="{{mul2 (len .Spark)}}" height="16" viewBox="0 0 {{mul2 (len .Spark)}} 16" aria-label="Duration trend">
+    {{range $i, $bar := .Spark}}<rect x="{{mul2 $i}}" y="{{sub16 $bar.Height}}" width="6" height="{{$bar.Height}}" class="{{if $bar.Failed}}bad{{else}}ok{{end}}"><title>{{$bar.Title}}</title></rect>{{end}}
+  </svg>
+  {{end}}
+</h2>
+<div class="tablewrap">
+  <table>
+    <thead><tr><th>Run</th><th>Status</th><th>Started</th><th class="num">Duration</th><th>Workspace</th></tr></thead>
+    <tbody>
+      {{range .Runs}}
+      <tr>
+        <td><a class="hash" href="/p/{{$.Nav.Current}}/runs/{{.ID}}">{{short .ID}}</a></td>
+        <td><span class="st st-{{statusWord .Status}}">{{statusWord .Status}}</span></td>
+        <td class="dim">{{ago .StartedAt}}</td>
+        <td class="num dim">{{duration .Duration}}</td>
+        <td class="faint">{{.Workspace}}</td>
+      </tr>
+      {{else}}
+      <tr><td colspan="5" class="faint">No runs recorded yet.</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+{{if .Versions}}
+<h2 class="eyebrow">Green versions <span class="unbold">— what this job has passed against</span></h2>
+<div class="tablewrap">
+  <table class="kv">
+    <thead><tr><th>Resource</th><th>Version</th><th>Recorded</th></tr></thead>
+    <tbody>
+      {{range .Versions}}
+      <tr><td>{{.Resource}}</td><td class="dim">{{.Version}}</td><td class="dim">{{ago .RecordedAt}}</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+{{end}}

@@ -1,0 +1,77 @@
+{{define "page"}}
+<h1 class="prompt"><b>steps jobs</b>
+  <span class="viewtoggle" role="group" aria-label="View">
+    <button aria-pressed="true" data-view="list">list</button>
+    <button aria-pressed="false" data-view="graph">graph</button>
+  </span>
+</h1>
+<p class="metaline">{{len .Jobs}} jobs<span class="sep">·</span>{{.Nav.CurrentPath}}</p>
+
+<pre class="dag" id="jobs-graph" hidden>
+{{- range .Jobs}}
+{{if .HasRun}}<span class="st-{{statusWord .Latest.Status}}">●</span>{{else}}<span class="rail">○</span>{{end}} <a class="jobref" href="/p/{{$.Nav.Current}}/jobs/{{.Name}}">{{.Name}}</a>
+{{- range .Downstream}}
+<span class="rail">   └─</span><span class="res">[{{.Resource}}]</span><span class="rail">──▶</span> <a class="jobref" href="/p/{{$.Nav.Current}}/jobs/{{.Job}}">{{.Job}}</a>
+{{- end}}
+{{end}}
+<span class="rail"># edges are get-step passed: constraints — [resource] must be green upstream first</span></pre>
+
+<div class="tablewrap" id="jobs-list">
+  <table>
+    <thead>
+      <tr><th>Job</th><th>Latest run</th><th>Started</th><th class="num">Duration</th><th>Depends on</th><th>Breaker</th></tr>
+    </thead>
+    <tbody>
+      {{range .Jobs}}
+      <tr>
+        <td><a href="/p/{{$.Nav.Current}}/jobs/{{.Name}}">{{.Name}}</a></td>
+        <td>
+          {{if .HasRun}}<a class="st st-{{statusWord .Latest.Status}}" href="/p/{{$.Nav.Current}}/runs/{{.Latest.ID}}">{{statusWord .Latest.Status}}</a>
+          {{else}}<span class="faint">never run</span>{{end}}
+        </td>
+        <td class="dim">{{if .HasRun}}{{ago .Latest.StartedAt}}{{else}}—{{end}}</td>
+        <td class="num dim">{{if .HasRun}}{{duration .Latest.Duration}}{{else}}—{{end}}</td>
+        <td class="dim">
+          {{range .Upstream}}<a href="/p/{{$.Nav.Current}}/jobs/{{.Job}}">{{.Job}}</a> <span class="res">[{{.Resource}}]</span> {{else}}<span class="faint">—</span>{{end}}
+        </td>
+        <td>{{if .Paused}}<span class="st-failed">{{.Failures}} consecutive</span>{{else}}<span class="faint">—</span>{{end}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+{{if .Queue}}
+<h2 class="eyebrow">Trigger queue</h2>
+<div class="tablewrap">
+  <table>
+    <thead><tr><th>Job</th><th>Reason</th><th>Status</th><th>Enqueued</th></tr></thead>
+    <tbody>
+      {{range .Queue}}
+      <tr>
+        <td><a href="/p/{{$.Nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a></td>
+        <td class="dim">{{.Reason}}</td>
+        <td><span class="st st-{{.Status}}">{{.Status}}</span></td>
+        <td class="dim">{{ago .EnqueuedAt}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+{{end}}
+
+{{define "scripts"}}
+<script>
+document.querySelectorAll('.viewtoggle button').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var graph = btn.dataset.view === 'graph';
+    document.getElementById('jobs-graph').hidden = !graph;
+    document.getElementById('jobs-list').style.display = graph ? 'none' : '';
+    document.querySelectorAll('.viewtoggle button').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b === btn));
+    });
+  });
+});
+</script>
+{{end}}

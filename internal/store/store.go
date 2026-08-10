@@ -136,6 +136,32 @@ CREATE TABLE IF NOT EXISTS job_breaker (
     paused_at   TEXT
 );
 
+-- Everything a run did, in the order it did it: the persisted side of the
+-- run-event bus (internal/events). It is what makes a finished run read back
+-- exactly as it read live — a post-hoc view rebuilt from a different source
+-- than the live one drifts, and the drift surfaces mid-incident.
+--
+-- Deliberately append-only and run-scoped, unlike content-addressed nodes:
+-- two runs sharing a cached node still have their own separate stories about
+-- reaching it.
+CREATE TABLE IF NOT EXISTS run_events (
+    seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id     TEXT NOT NULL,
+    job_name   TEXT NOT NULL,
+    type       TEXT NOT NULL,
+    step_index INTEGER NOT NULL,
+    step_name  TEXT NOT NULL,
+    step_kind  TEXT NOT NULL,
+    status     TEXT NOT NULL,
+    hash       TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    detail     TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, seq);
+
 -- Full agent conversation transcripts, one row per agent node, kept OUT of
 -- nodes.result deliberately: result is loaded by planners and routed-to
 -- successors on every run and must stay bounded, while a transcript is read
@@ -200,7 +226,38 @@ func OpenStore(path string) (*Store, error) {
 		return nil, fmt.Errorf("could not migrate state db %q: %w", path, err)
 	}
 
+	err = addColumns(ctx, db)
+	if err != nil {
+		_ = db.Close()
+
+		return nil, fmt.Errorf("could not migrate state db %q: %w", path, err)
+	}
+
 	return &Store{db: db}, nil
+}
+
+// addedColumns are columns added to tables that already shipped. The schema
+// above is all CREATE TABLE IF NOT EXISTS, which silently does nothing to a
+// database created by an earlier version — so a new column on an OLD table
+// needs its own ALTER, or the field exists only for people who deleted their
+// state.db.
+var addedColumns = []struct{ table, column, decl string }{
+	{"runs", "finished_at", "TEXT"},
+}
+
+// addColumns applies addedColumns, treating "duplicate column name" as
+// success. SQLite has no ADD COLUMN IF NOT EXISTS, and probing PRAGMA
+// table_info first would be the same check with an extra round trip and a
+// race between the check and the alter.
+func addColumns(ctx context.Context, db *sql.DB) error {
+	for _, add := range addedColumns {
+		_, err := db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", add.table, add.column, add.decl))
+		if err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("could not add %s.%s: %w", add.table, add.column, err)
+		}
+	}
+
+	return nil
 }
 
 // Close closes the underlying database connection.
@@ -954,11 +1011,17 @@ type Run struct {
 }
 
 // StartRun records a run and the workspace its steps will share.
+//
+// The timestamps on this table are RFC3339Nano, not RFC3339 like the rest of
+// the schema: a run's duration is derived from them, and at whole-second
+// resolution every run faster than a second reports a duration of zero —
+// which is most task-only runs. RFC3339 parses the fractional form, so
+// reading stays uniform.
 func (s *Store) StartRun(ctx context.Context, id, jobName, workspaceDir string) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO runs (id, job_name, workspace, status, started_at) VALUES (?, ?, ?, 'running', ?)
 		ON CONFLICT (id) DO UPDATE SET status = 'running', workspace = excluded.workspace
-	`, id, jobName, workspaceDir, time.Now().UTC().Format(time.RFC3339))
+	`, id, jobName, workspaceDir, time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return fmt.Errorf("could not record run %q: %w", id, err)
 	}
@@ -966,9 +1029,13 @@ func (s *Store) StartRun(ctx context.Context, id, jobName, workspaceDir string) 
 	return nil
 }
 
-// FinishRun records how a run ended.
+// FinishRun records how a run ended, and when. The timestamp is what makes a
+// run's duration answerable at all: started_at alone leaves every finished
+// run looking like it is still going.
 func (s *Store) FinishRun(ctx context.Context, id, status string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE runs SET status = ? WHERE id = ?`, status, id)
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE runs SET status = ?, finished_at = ? WHERE id = ?`,
+		status, time.Now().UTC().Format(time.RFC3339Nano), id)
 	if err != nil {
 		return fmt.Errorf("could not finish run %q: %w", id, err)
 	}

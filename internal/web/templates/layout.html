@@ -1,0 +1,115 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>steps — {{.Nav.Current}}</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<div class="statusline">
+  <div class="brand"><b>steps</b> web</div>
+  <nav class="tabs" aria-label="Sections">
+    <a class="tab" {{if eq .Page "jobs"}}aria-current="page"{{end}} href="/p/{{.Nav.Current}}">jobs</a>
+    <a class="tab" {{if eq .Page "approvals"}}aria-current="page"{{end}} href="/p/{{.Nav.Current}}/approvals">approvals{{if .Nav.PendingApprovals}}<span class="badge">●{{.Nav.PendingApprovals}}</span>{{end}}</a>
+    <a class="tab" {{if eq .Page "resources"}}aria-current="page"{{end}} href="/p/{{.Nav.Current}}/resources">resources</a>
+  </nav>
+  <div class="right">
+    <span class="pipeswitch">
+      <button class="pipebtn" id="pipebtn" aria-haspopup="listbox" aria-expanded="false">{{.Nav.Current}} ▾</button>
+      <div class="pipemenu" id="pipemenu" role="listbox">
+        {{range .Nav.Pipelines}}
+        <a role="option" {{if eq .Slug $.Nav.Current}}aria-selected="true"{{end}} href="/p/{{.Slug}}">{{.Slug}} <span class="hint">{{.Jobs}} jobs</span></a>
+        {{end}}
+      </div>
+    </span>
+    {{if .Nav.ReadOnly}}<span class="ro">read-only</span>{{end}}
+    <span><kbd>/</kbd> jump</span>
+  </div>
+</div>
+
+<main>
+{{template "page" .}}
+</main>
+
+<div class="palette-backdrop" id="palette-backdrop"></div>
+<div class="palette" id="palette" role="dialog" aria-label="Jump to">
+  <input id="palette-input" type="text" placeholder="jump to job, run, pipeline…" autocomplete="off">
+  <ul id="palette-list"></ul>
+</div>
+
+<script>
+(function () {
+  var pipebtn = document.getElementById('pipebtn');
+  var pipemenu = document.getElementById('pipemenu');
+  pipebtn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    var open = pipemenu.classList.toggle('open');
+    pipebtn.setAttribute('aria-expanded', String(open));
+  });
+  document.addEventListener('click', function () { pipemenu.classList.remove('open'); });
+
+  document.querySelectorAll('.step[data-toggle] > .stephead').forEach(function (head) {
+    var toggle = function () { head.parentElement.classList.toggle('open'); };
+    head.addEventListener('click', function (e) { if (!e.target.closest('a')) toggle(); });
+    head.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+    });
+  });
+
+  var backdrop = document.getElementById('palette-backdrop');
+  var palette = document.getElementById('palette');
+  var input = document.getElementById('palette-input');
+  var list = document.getElementById('palette-list');
+  var hits = [];
+  var sel = 0;
+
+  function draw() {
+    list.innerHTML = hits.map(function (h, i) {
+      return '<li class="' + (i === sel ? 'sel' : '') + '" data-url="' + h.url + '">' +
+        '<span class="kind">' + h.kind + '</span><span>' + h.name + '</span>' +
+        '<span class="hint">' + (h.hint || '') + '</span></li>';
+    }).join('');
+    list.querySelectorAll('li').forEach(function (li) {
+      li.addEventListener('click', function () { window.location = li.dataset.url; });
+    });
+  }
+
+  var pending;
+  function search() {
+    clearTimeout(pending);
+    pending = setTimeout(function () {
+      fetch('/p/{{.Nav.Current}}/search?q=' + encodeURIComponent(input.value))
+        .then(function (r) { return r.json(); })
+        .then(function (data) { hits = data || []; sel = 0; draw(); });
+    }, 80);
+  }
+
+  function open() {
+    backdrop.classList.add('open'); palette.classList.add('open');
+    input.value = ''; input.focus(); search();
+  }
+  function close() {
+    backdrop.classList.remove('open'); palette.classList.remove('open');
+  }
+
+  backdrop.addEventListener('click', close);
+  input.addEventListener('input', search);
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowDown') { sel = Math.min(sel + 1, hits.length - 1); draw(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { sel = Math.max(sel - 1, 0); draw(); e.preventDefault(); }
+    else if (e.key === 'Enter' && hits[sel]) { window.location = hits[sel].url; }
+    else if (e.key === 'Escape') { close(); }
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === '/' && !palette.classList.contains('open') && !e.target.closest('input, textarea')) {
+      e.preventDefault(); open();
+    }
+  });
+})();
+</script>
+{{block "scripts" .}}{{end}}
+</body>
+</html>
+{{end}}

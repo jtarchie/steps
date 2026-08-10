@@ -8,6 +8,7 @@ import (
 
 	"google.golang.org/genai"
 
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -40,8 +41,73 @@ type transcriptEvent struct {
 // toolEnv so a sub-agent tool can attach its child's nested transcript. All
 // methods are nil-safe: a toolImpl invoked outside a conversation (tests,
 // direct calls) carries no recorder.
+//
+// It is also where a live view is fed from: each recorded event is
+// simultaneously published to whatever run-event bus the context carries
+// (see internal/events). One recorder feeding both means a conversation
+// watched live and the same conversation read back afterwards cannot
+// disagree about what happened.
 type transcriptRecorder struct {
 	events []transcriptEvent
+	// live carries the bus plus the identity every published event needs.
+	// Zero value publishes nowhere, which is what a test or a terminal run
+	// gets.
+	live liveContext
+}
+
+// liveContext is what the recorder needs in order to publish an event that
+// means something to a reader: which run, job, and step the conversation
+// belongs to.
+//
+// It holds the BUS, not the context that carried it. A context stored in a
+// struct outlives the call it belongs to and quietly carries a cancellation
+// nobody expects; the bus is the only thing actually needed here, and
+// resolving it once at construction is both cheaper and honest about the
+// lifetime.
+type liveContext struct {
+	bus       *events.Bus
+	runID     string
+	job       string
+	stepIndex int
+	stepName  string
+	// depth is how deep in the sub-agent tree this conversation sits. A
+	// child's events are published too — a delegation that takes a minute is
+	// the thing a watcher most wants to see progressing — and depth is how a
+	// reader tells them from the parent's own.
+	depth int
+}
+
+// publish sends one recorded event to the bus, if there is one.
+func (r *transcriptRecorder) publish(eventType, text, name, detail string) {
+	if r == nil || r.live.bus == nil {
+		return
+	}
+
+	r.live.bus.Publish(events.Event{
+		Type:      eventType,
+		RunID:     r.live.runID,
+		Job:       r.live.job,
+		StepIndex: r.live.stepIndex,
+		StepName:  r.live.stepName,
+		StepKind:  "agent",
+		Text:      text,
+		Name:      name,
+		Detail:    detail,
+		// Depth rides in Status rather than growing the event for one
+		// consumer: a reader only ever asks "is this nested", and the field
+		// is unused for agent traffic otherwise.
+		Status: depthLabel(r.live.depth),
+	})
+}
+
+// depthLabel renders sub-agent nesting depth, empty at the top level so the
+// common case carries nothing.
+func depthLabel(depth int) string {
+	if depth <= 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("depth:%d", depth)
 }
 
 // text records the model's visible text for a turn, including text that
@@ -53,6 +119,7 @@ func (r *transcriptRecorder) text(text string) {
 	}
 
 	r.events = append(r.events, transcriptEvent{Type: "text", Text: text})
+	r.publish(events.TypeAgentText, text, "", "")
 }
 
 // call records one model-authored tool call, with over-long argument values
@@ -62,7 +129,24 @@ func (r *transcriptRecorder) call(name string, args map[string]any) {
 		return
 	}
 
-	r.events = append(r.events, transcriptEvent{Type: "call", Name: name, Args: truncateArgs(args)})
+	bounded := truncateArgs(args)
+	r.events = append(r.events, transcriptEvent{Type: "call", Name: name, Args: bounded})
+	r.publish(events.TypeAgentCall, "", name, renderArgs(bounded))
+}
+
+// renderArgs renders a call's arguments for the live stream. The stored
+// event keeps the map; the wire wants one string.
+func renderArgs(args map[string]any) string {
+	if len(args) == 0 {
+		return ""
+	}
+
+	data, err := json.Marshal(args)
+	if err != nil {
+		return ""
+	}
+
+	return truncateToolOutputLimit(string(data), maxRecordedResultBytes)
 }
 
 // results records the tool results a turn produced, in order.
@@ -76,11 +160,13 @@ func (r *transcriptRecorder) results(parts []*genai.Part) {
 			continue
 		}
 
+		content := renderResultContent(part.FunctionResponse.Response)
 		r.events = append(r.events, transcriptEvent{
 			Type:    "result",
 			Name:    part.FunctionResponse.Name,
-			Content: renderResultContent(part.FunctionResponse.Response),
+			Content: content,
 		})
+		r.publish(events.TypeAgentResult, "", part.FunctionResponse.Name, content)
 	}
 }
 
@@ -88,12 +174,29 @@ func (r *transcriptRecorder) results(parts []*genai.Part) {
 // conversation's own events, nested. Called by preparedSubAgent.run with the
 // PARENT's recorder, for failed children too — a child that died mid-task is
 // the one whose trace is needed most.
-func (r *transcriptRecorder) subagent(agent, request string, events []transcriptEvent) {
+func (r *transcriptRecorder) subagent(agent, request string, nested []transcriptEvent) {
 	if r == nil {
 		return
 	}
 
-	r.events = append(r.events, transcriptEvent{Type: "subagent", Agent: agent, Request: request, Events: events})
+	r.events = append(r.events, transcriptEvent{Type: "subagent", Agent: agent, Request: request, Events: nested})
+	r.publish(events.TypeAgentSubagent, request, agent, "")
+}
+
+// childRecorder returns a recorder for a delegated conversation: its own
+// event list, publishing to the same bus one level deeper. This is what makes
+// a sub-agent's work visible while it happens rather than only in the parent's
+// summary of it afterwards.
+func (r *transcriptRecorder) childRecorder(agentName string) *transcriptRecorder {
+	if r == nil {
+		return &transcriptRecorder{}
+	}
+
+	child := &transcriptRecorder{live: r.live}
+	child.live.depth = r.live.depth + 1
+	child.live.stepName = agentName
+
+	return child
 }
 
 // renderResultContent flattens a tool's FunctionResponse map to a bounded
