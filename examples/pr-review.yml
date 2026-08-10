@@ -426,7 +426,15 @@ jobs:
     - var: dim
       from: dimensions
       label: id
-    max_in_flight: 4
+    # Width 2, and the reason is the block budget's blind first batch: admission
+    # sees only FINISHED cells' spend, so the first max_in_flight cells are
+    # always admitted against a total of ~0. At width 4 on a large PR that blind
+    # batch alone overshot the whole allowance (four reviewers at 1-2M tokens
+    # each), the ceiling never bound, and the job backstop killed the run at
+    # full price instead. At 2, the third admission is decided against real
+    # spend and the matrix can actually do what its budget: promises — stop,
+    # keep the survivors, and let the plan continue.
+    max_in_flight: 2
     # Three tries, as pr-af's MaxRetries. For a hosted agent this is the
     # RETRYING TRANSPORT, not a re-run of the conversation — it re-issues one
     # request that failed in transit, which is exactly the failure that killed a
