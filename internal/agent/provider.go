@@ -56,7 +56,7 @@ func buildSystemMessage(persona, dir string) string {
 // so a bad one — missing, or escaping the workspace — should fail the step
 // loudly before a token is spent, rather than surface as a surprise
 // mid-conversation. A file that is merely too BIG is not that: see below.
-func loadContextBlocks(dir string, paths []string) ([]contextBlock, error) {
+func loadContextBlocks(dir string, paths []string, limit int) ([]contextBlock, error) {
 	if len(paths) == 0 {
 		return nil, nil
 	}
@@ -88,15 +88,19 @@ func loadContextBlocks(dir string, paths []string) ([]contextBlock, error) {
 		// what fits, and say plainly that there is more and how to reach it.
 		// Losing the tail of a diff costs a reviewer some context; failing the
 		// step costs the entire review.
+		if limit <= 0 {
+			limit = config.DefaultMaxContextBytes
+		}
+
 		content := string(data)
-		if len(data) > maxReadFileBytes {
-			content = string(data[:maxReadFileBytes]) + fmt.Sprintf(
+		if len(data) > limit {
+			content = string(data[:limit]) + fmt.Sprintf(
 				"\n\n[truncated: %s is %d bytes, and the first %d are shown. "+
 					"Use read_file with start_line/end_line to page through the rest.]",
-				p, len(data), maxReadFileBytes)
+				p, len(data), limit)
 
 			slog.Warn("agent.context_path_truncated", "path", p,
-				"bytes", len(data), "limit", maxReadFileBytes)
+				"bytes", len(data), "limit", limit)
 		}
 
 		blocks = append(blocks, contextBlock{path: p, content: content})

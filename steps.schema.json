@@ -310,6 +310,11 @@
           "items": {
             "$ref": "#/$defs/toolSpec"
           }
+        },
+        "max_context_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How much of one context_paths: file reaches the model at conversation start. Default 100000. Over it the file is truncated with a pointer to read_file paging, never refused."
         }
       }
     },

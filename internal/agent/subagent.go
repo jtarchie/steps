@@ -129,7 +129,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	// c.ri.ContextPaths is always empty here — loadContextBlocks still
 	// resolves nil/empty safely. A bad path arrives as ordinary tool-result
 	// data, the same contract every child failure honours.
-	contextBlocks, err := loadContextBlocks(env.dir, c.ri.ContextPaths)
+	contextBlocks, err := loadContextBlocks(env.dir, c.ri.ContextPaths, c.ri.MaxContextBytes)
 	if err != nil {
 		return map[string]any{"error": fmt.Sprintf("%s: %s", c.ri.AgentName, err)}
 	}

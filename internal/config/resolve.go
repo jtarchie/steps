@@ -148,6 +148,9 @@ type ResolvedInvocation struct {
 	// the step, not the agent definition, since concrete input paths are
 	// only known at the step level.
 	ContextPaths []string
+	// MaxContextBytes is the resolved per-file cap for ContextPaths (see
+	// Agent.MaxContextBytes); never 0 — resolution substitutes the default.
+	MaxContextBytes int
 	// Generation dials, mirroring Agent's own fields once resolved. Kept flat
 	// here (rather than a nested type) so this package doesn't need to depend
 	// on anything LLM-client-specific — internal/agent assembles its own
@@ -279,6 +282,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		CLI:                  target.CLI,
 		Persona:              agent.System,
 		ContextPaths:         step.ContextPaths,
+		MaxContextBytes:      resolveMaxContextBytes(agent.MaxContextBytes),
 		Temperature:          agent.Temperature,
 		TopP:                 agent.TopP,
 		MaxTokens:            agent.MaxTokens,

@@ -109,7 +109,7 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 
 	prompt := buildFixPrompt(fix, rt, failureOutput, spillDir)
 
-	contextBlocks, err := loadContextBlocks(dir, ri.ContextPaths)
+	contextBlocks, err := loadContextBlocks(dir, ri.ContextPaths, ri.MaxContextBytes)
 	if err != nil {
 		return fmt.Errorf("fix agent %q: %w", fix.Agent, err)
 	}

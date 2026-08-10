@@ -88,6 +88,23 @@ type Agent struct {
 	// compaction log reports a derived window instead of an assumed one.
 	// compact_after_tokens:, when also set, still wins outright.
 	ContextWindow int `yaml:"context_window,omitempty"`
+	// MaxContextBytes caps how much of a context_paths: file is handed to the
+	// model at conversation start. 0 takes DefaultMaxContextBytes.
+	//
+	// It exists because the byte budget priming borrows was chosen for a
+	// different job: context_paths is delivered as a synthetic read_file
+	// result, so it inherited read_file's tool budget, and that number is sized
+	// against the spill mechanics (it sits above maxToolOutputBytes so a
+	// spilled output can be read back whole). Nothing in that reasoning is
+	// about how much evidence a step should open holding — and on a model whose
+	// context_window: is 1M, the inherited 100KB is about 2.5% of the window.
+	//
+	// Over the limit the file is TRUNCATED with a pointer, never refused, so
+	// raising this buys context rather than turning a warning into an error.
+	// Operational, like CompactAfterTokens, and excluded from the hash for the
+	// same reason: it governs how much of a conversation's own history and
+	// evidence is carried, not what the step is asking for.
+	MaxContextBytes int `yaml:"max_context_bytes,omitempty"`
 	// Fallback lists alternate sources to use when the primary is
 	// UNREACHABLE, in order. See AgentFallback.
 	Fallback []AgentFallback `yaml:"fallback,omitempty"`
@@ -606,4 +623,36 @@ func ensureTrailingSlash(rawURL string) string {
 	}
 
 	return rawURL + "/"
+}
+
+// DefaultMaxContextBytes is how much of one context_paths: file reaches the
+// model when an agent sets no max_context_bytes:.
+//
+// 100,000 is what priming used before the knob existed — read_file's own tool
+// budget, inherited because a context file is delivered as a synthetic
+// read_file result. Keeping it as the default is what makes this field free to
+// add: every pipeline that does not set it is handed exactly what it was
+// handed before.
+const DefaultMaxContextBytes = 100_000
+
+// resolveMaxContextBytes substitutes the default for an unset ceiling, so
+// nothing downstream has to nil-check a number.
+func resolveMaxContextBytes(configured int) int {
+	if configured <= 0 {
+		return DefaultMaxContextBytes
+	}
+
+	return configured
+}
+
+// validateMaxContextBytes rejects a negative ceiling. Zero is the documented
+// "take the default", so only a negative is meaningless here.
+func (c *Config) validateMaxContextBytes() error {
+	for _, agent := range c.Agents {
+		if agent.MaxContextBytes < 0 {
+			return fmt.Errorf("agent %q: max_context_bytes must be a positive number of bytes (omit it for the default of %d)", agent.Name, DefaultMaxContextBytes)
+		}
+	}
+
+	return nil
 }

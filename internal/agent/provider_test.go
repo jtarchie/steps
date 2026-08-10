@@ -88,7 +88,7 @@ func TestLoadContextBlocks(t *testing.T) {
 	t.Run("nil paths resolve to nil", func(t *testing.T) {
 		t.Parallel()
 
-		blocks, err := loadContextBlocks(t.TempDir(), nil)
+		blocks, err := loadContextBlocks(t.TempDir(), nil, 0)
 		if err != nil || blocks != nil {
 			t.Errorf("got (%v, %v), want (nil, nil)", blocks, err)
 		}
@@ -109,7 +109,7 @@ func TestLoadContextBlocks(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		blocks, err := loadContextBlocks(dir, []string{"repo/CLAUDE.md"})
+		blocks, err := loadContextBlocks(dir, []string{"repo/CLAUDE.md"}, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -126,7 +126,7 @@ func TestLoadContextBlocksErrors(t *testing.T) {
 	t.Run("missing file is a preparation error", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := loadContextBlocks(t.TempDir(), []string{"repo/MISSING.md"})
+		_, err := loadContextBlocks(t.TempDir(), []string{"repo/MISSING.md"}, 0)
 		if err == nil {
 			t.Fatal("expected an error for a missing context file")
 		}
@@ -139,7 +139,7 @@ func TestLoadContextBlocksErrors(t *testing.T) {
 	t.Run("paths escaping the workspace are rejected", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := loadContextBlocks(t.TempDir(), []string{"../../etc/passwd"})
+		_, err := loadContextBlocks(t.TempDir(), []string{"../../etc/passwd"}, 0)
 		if err == nil {
 			t.Fatal("expected an error for an escaping context path")
 		}
@@ -164,7 +164,7 @@ func TestContextPathTruncatesInsteadOfFailing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blocks, err := loadContextBlocks(dir, []string{"big.diff"})
+	blocks, err := loadContextBlocks(dir, []string{"big.diff"}, 0)
 	if err != nil {
 		t.Fatalf("an oversized context path failed the step: %v", err)
 	}
@@ -179,5 +179,34 @@ func TestContextPathTruncatesInsteadOfFailing(t *testing.T) {
 
 	if !strings.Contains(blocks[0].content, "read_file") {
 		t.Error("the notice does not say how to reach the rest")
+	}
+}
+
+// TestContextPathHonoursAConfiguredLimit pins that max_context_bytes: actually
+// moves the ceiling, in both directions from the default.
+func TestContextPathHonoursAConfiguredLimit(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(dir, "diff"), []byte(strings.Repeat("x", 5000)), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Under the default, so it arrives whole.
+	blocks, err := loadContextBlocks(dir, []string{"diff"}, 0)
+	if err != nil || strings.Contains(blocks[0].content, "[truncated:") {
+		t.Errorf("a 5KB file was truncated under the default ceiling: err=%v", err)
+	}
+
+	// A tighter ceiling truncates it.
+	blocks, err = loadContextBlocks(dir, []string{"diff"}, 1000)
+	if err != nil {
+		t.Fatalf("loadContextBlocks: %v", err)
+	}
+
+	if !strings.Contains(blocks[0].content, "[truncated:") {
+		t.Error("a configured ceiling below the file size did not truncate")
 	}
 }

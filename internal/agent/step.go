@@ -227,7 +227,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	spillDir := newToolOutputSpillDir(dir, step.Agent)
 
-	contextBlocks, err := prepareContextBlocks(dir, withHandoffNotePath(step, dir, ri.ContextPaths), decls)
+	contextBlocks, err := prepareContextBlocks(dir, withHandoffNotePath(step, dir, ri.ContextPaths), ri.MaxContextBytes, decls)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 		closeAll(closers)
@@ -661,8 +661,8 @@ func assertAgentResponse(assert *config.Assert, res conversationResult) error {
 // prepareContextBlocks loads context_paths files and validates that read_file
 // is declared when context paths are present. Extracted from prepareAgentStep
 // to keep its cyclomatic complexity under the linter budget.
-func prepareContextBlocks(dir string, paths []string, decls *genai.Tool) ([]contextBlock, error) {
-	blocks, err := loadContextBlocks(dir, paths)
+func prepareContextBlocks(dir string, paths []string, limit int, decls *genai.Tool) ([]contextBlock, error) {
+	blocks, err := loadContextBlocks(dir, paths, limit)
 	if err != nil {
 		return nil, err
 	}
