@@ -431,6 +431,13 @@ jobs:
     # everything else healthy. It cannot buy more turns or more time, and is not
     # the answer to either.
     attempts: 3
+    # An agent step's default deadline is 10 minutes (agentStepTimeout). A deep
+    # review of a 100KB diff at 50 turns does not reliably fit it — and cannot
+    # at all when the provider is returning 500s and each retry backs off before
+    # trying again, which is how three cells died here at once. 20 minutes is
+    # per ATTEMPT; the job's own 1h timeout: above is what stops this becoming
+    # unbounded.
+    timeout: 20m
     # The ceiling that belongs HERE rather than on the job. This is the only
     # step whose cost nobody could know when this file was written — the
     # compiler decided how many cells there are, minutes ago. When it runs out,
