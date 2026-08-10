@@ -685,7 +685,40 @@ func drainOne(
 
 	fmt.Printf("trigger: running %s\n", jobName)
 
-	return true, finalizeRun(ctx, st, job, id, pipeline.RunJob(ctx, cfg, job, pinned, provider, st, force))
+	runCtx, release := buildContext(ctx, job)
+	defer release()
+
+	return true, finalizeRun(ctx, st, job, id, pipeline.RunJob(runCtx, cfg, job, pinned, provider, st, force))
+}
+
+// nonInterruptibleGrace bounds how long a shutdown waits for a build that did
+// not opt into interruption.
+//
+// A bound rather than an open-ended wait, because the alternative is a watcher
+// that cannot be stopped: a job with no timeout: of its own and a hung command
+// would hold shutdown forever, and "kill -9 the supervisor" is not a shutdown
+// story. Ten minutes is longer than any deploy this is meant to protect and
+// short enough that an operator waiting on it does not assume the process is
+// wedged. A job that needs longer should say so with its own timeout:, which
+// still applies inside RunJob.
+const nonInterruptibleGrace = 10 * time.Minute
+
+// buildContext gives a triggered build the cancellation behaviour its job
+// asked for, mirroring Concourse's interruptible: — see config.Job.
+//
+// interruptible: true (or an already-dead ctx) keeps today's behaviour: the
+// build shares the watcher's context and dies with it.
+//
+// The default detaches from cancellation and takes a deadline instead, so a
+// SIGTERM during a deploy lets that deploy finish rather than leaving the
+// outside world half-changed. Watch's own WaitGroup then holds shutdown until
+// the worker returns, which is what makes the wait real rather than advisory.
+func buildContext(ctx context.Context, job *config.Job) (context.Context, context.CancelFunc) {
+	if job.Interruptible {
+		return ctx, func() {}
+	}
+
+	return context.WithTimeout(context.WithoutCancel(ctx), nonInterruptibleGrace)
 }
 
 // finalizeRun records a completed triggered run: its queue row, its breaker

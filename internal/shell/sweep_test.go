@@ -13,7 +13,7 @@ import (
 func TestDockerStartArgsCarriesOwnershipLabels(t *testing.T) {
 	t.Parallel()
 
-	args := dockerStartArgs("alpine", "steps-abc", "", nil, "", "")
+	args := dockerStartArgs("alpine", "steps-abc", "", nil, "", "", false, 0, 0)
 
 	want := map[string]string{
 		dockerOwnerLabel: "steps",

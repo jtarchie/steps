@@ -57,6 +57,22 @@ type Job struct {
 	// absorbed, which is the opposite of the intent. 0 (the default) means no
 	// breaker.
 	MaxConsecutiveFailures int `yaml:"max_consecutive_failures,omitempty"`
+	// Interruptible decides what a `steps watch` SHUTDOWN does to a build of
+	// this job that is already running. Mirrors Concourse's interruptible:
+	// (concourse-ci.org/docs/jobs/), including its default of false.
+	//
+	//   false (default)  shutdown WAITS for the build to finish, bounded by
+	//                    nonInterruptibleGrace. A deploy half-applied because
+	//                    someone restarted the watcher is the case this
+	//                    exists for.
+	//   true             the build is cancelled with everything else, which
+	//                    is what every job did before this field existed.
+	//
+	// Scoped to `steps watch` deliberately. `steps run` is a person at a
+	// terminal, and ctrl-C there must always mean now — a foreground run that
+	// ignored an interrupt for ten minutes would be a worse bug than the one
+	// this prevents. See internal/trigger's drainOne.
+	Interruptible bool `yaml:"interruptible,omitempty"`
 	// Line is the job's source line in the pipeline file, filled in after
 	// decoding (see stampLines). Never written in YAML and never hashed.
 	Line int `yaml:"-"`

@@ -129,6 +129,13 @@
           "type": "string",
           "description": "Container network for docker's --network (e.g. \"none\" to cut off egress entirely, \"host\", or a named network). Requires image: \u2014 a host-executed command uses the host's network."
         },
+        "privileged": {
+          "type": "boolean",
+          "description": "Run the container with docker's --privileged. Requires image: \u2014 a host command already runs with whatever privileges started steps."
+        },
+        "container_limits": {
+          "$ref": "#/$defs/containerLimits"
+        },
         "config": {
           "type": "object",
           "additionalProperties": false,
@@ -273,6 +280,13 @@
         "network": {
           "type": "string",
           "description": "Container network for docker's --network (e.g. \"none\" to cut off egress entirely, \"host\", or a named network). Requires image: \u2014 a host-executed command uses the host's network."
+        },
+        "privileged": {
+          "type": "boolean",
+          "description": "Run the container with docker's --privileged. Requires image: \u2014 a host command already runs with whatever privileges started steps."
+        },
+        "container_limits": {
+          "$ref": "#/$defs/containerLimits"
         },
         "system": {
           "type": "string"
@@ -555,6 +569,13 @@
           "type": "string",
           "description": "Container network for docker's --network (e.g. \"none\" to cut off egress entirely, \"host\", or a named network). Requires image: \u2014 a host-executed command uses the host's network."
         },
+        "privileged": {
+          "type": "boolean",
+          "description": "Run the container with docker's --privileged. Requires image: \u2014 a host command already runs with whatever privileges started steps."
+        },
+        "container_limits": {
+          "$ref": "#/$defs/containerLimits"
+        },
         "timeout": {
           "type": "string",
           "description": "Go duration, e.g. 2m."
@@ -668,6 +689,10 @@
           },
           "description": "Locks this job holds while it runs. Two jobs sharing a group never run at the same time."
         },
+        "interruptible": {
+          "type": "boolean",
+          "description": "If true, a steps watch shutdown cancels a running build of this job. Default false: shutdown waits for it to finish (bounded). Does not affect steps run, where ctrl-C is always immediate."
+        },
         "max_consecutive_failures": {
           "type": "integer",
           "minimum": 1,
@@ -743,7 +768,7 @@
         },
         "params": {
           "type": "object",
-          "description": "get/put only: passed to the resource command this step runs, as {{ .params.* }} — a put's reach out:, a get's reach in: (how to fetch, e.g. git depth/submodules)."
+          "description": "get/put only: passed to the resource command this step runs, as {{ .params.* }} \u2014 a put's reach out:, a get's reach in: (how to fetch, e.g. git depth/submodules)."
         },
         "get_params": {
           "type": "object",
@@ -892,7 +917,7 @@
         "do": {
           "type": "array",
           "minItems": 1,
-          "description": "Run several steps one after another, as a single plan step — so a hook on the block covers the whole group.",
+          "description": "Run several steps one after another, as a single plan step \u2014 so a hook on the block covers the whole group.",
           "items": {
             "$ref": "#/$defs/step"
           }
@@ -1005,6 +1030,13 @@
         "network": {
           "type": "string",
           "description": "Container network for docker's --network (e.g. \"none\" to cut off egress entirely, \"host\", or a named network). Requires image: \u2014 a host-executed command uses the host's network."
+        },
+        "privileged": {
+          "type": "boolean",
+          "description": "Run the container with docker's --privileged. Requires image: \u2014 a host command already runs with whatever privileges started steps."
+        },
+        "container_limits": {
+          "$ref": "#/$defs/containerLimits"
         },
         "when": {
           "$ref": "#/$defs/whenSpec"
@@ -1271,6 +1303,23 @@
               "description": "How many cached versions to keep, least-recently-used evicted first. 0 takes the default."
             }
           }
+        }
+      }
+    },
+    "containerLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Cap the container's CPU and memory. Requires image:. At least one of cpu/memory must be set.",
+      "properties": {
+        "cpu": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "docker --cpu-shares: a RELATIVE weight against other containers (1024 is the default), not a core count or a percentage."
+        },
+        "memory": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "docker --memory, in bytes. A container over it is OOM-killed, which surfaces as exit code 137."
         }
       }
     }

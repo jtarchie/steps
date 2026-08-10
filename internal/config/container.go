@@ -11,26 +11,28 @@ import "fmt"
 // written once against a single walk, rather than each rule repeating the
 // four loops over ResourceTypes/Agents/Tasks/steps.
 type containerSettings struct {
-	Image   string
-	Env     []string
-	User    string
-	Network string
+	Image      string
+	Env        []string
+	User       string
+	Network    string
+	Privileged bool
+	Limits     *ContainerLimits
 }
 
 func (rt ResourceType) containerSettings() containerSettings {
-	return containerSettings{Image: rt.Image, Env: rt.Env, User: rt.User, Network: rt.Network}
+	return containerSettings{Image: rt.Image, Env: rt.Env, User: rt.User, Network: rt.Network, Privileged: rt.Privileged, Limits: rt.Limits}
 }
 
 func (a Agent) containerSettings() containerSettings {
-	return containerSettings{Image: a.Image, Env: a.Env, User: a.User, Network: a.Network}
+	return containerSettings{Image: a.Image, Env: a.Env, User: a.User, Network: a.Network, Privileged: a.Privileged, Limits: a.Limits}
 }
 
 func (t Task) containerSettings() containerSettings {
-	return containerSettings{Image: t.Image, Env: t.Env, User: t.User, Network: t.Network}
+	return containerSettings{Image: t.Image, Env: t.Env, User: t.User, Network: t.Network, Privileged: t.Privileged, Limits: t.Limits}
 }
 
 func (s Step) containerSettings() containerSettings {
-	return containerSettings{Image: s.Image, Env: s.Env, User: s.User, Network: s.Network}
+	return containerSettings{Image: s.Image, Env: s.Env, User: s.User, Network: s.Network, Privileged: s.Privileged, Limits: s.Limits}
 }
 
 // visitContainerSettings calls fn for every entity that can carry execution

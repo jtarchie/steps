@@ -49,6 +49,14 @@ type Task struct {
 	// Network is the container network this task's run: joins (docker's
 	// --network); "none" cuts off egress entirely. Requires Image.
 	Network string `yaml:"network,omitempty"`
+	// Privileged runs this command's container with `docker run --privileged`.
+	// Mirrors Concourse's privileged: (concourse-ci.org/docs/steps/task/).
+	// Container-only, like Network — a host command has nothing to elevate,
+	// so it is a load error without image:.
+	Privileged bool `yaml:"privileged,omitempty"`
+	// Limits caps the container's CPU and memory. Mirrors Concourse's
+	// container_limits:; container-only for the same reason Privileged is.
+	Limits *ContainerLimits `yaml:"container_limits,omitempty"`
 	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
 	// (default) means no timeout. Inherited by task steps unless overridden.
 	Timeout string `yaml:"timeout,omitempty"`

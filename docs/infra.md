@@ -53,6 +53,27 @@ agents:
 
 This is not a full sandbox — see [workspace.md](workspace.md) on the same point for the filesystem. A command can still reach the host filesystem by absolute path, and `network: host` opts back out entirely.
 
+## Container privileges and limits (`privileged:`, `container_limits:`)
+
+Both sit wherever `image:` does — a `resource_types:` entry, a `tasks:`/`agents:` entry, or a step overriding one — and both **require `image:`**. A host-executed command has no cgroup to cap and no privilege to raise, so accepting either there would promise something it does not do; that is a load error, like `network:` without an image.
+
+```yaml
+tasks:
+- name: integration
+  image: docker:27-dind
+  privileged: true              # docker-in-docker needs it
+  container_limits:
+    cpu: 512                    # --cpu-shares
+    memory: 2147483648          # --memory, in BYTES (2 GiB)
+  run: ./run-integration.sh
+```
+
+- **`cpu:` is a share weight, not a core count.** It maps to docker's `--cpu-shares`, a *relative* weight against other containers competing for CPU — 1024 is the default, so 512 means "half the share of a default container when both are contending", and it caps nothing at all on an idle machine. The name matches Concourse rather than being renamed to something more honest, so a pipeline moving between the two means the same thing in both.
+- **`memory:` is bytes**, and it is a hard cap. A container over it is OOM-killed by the kernel, which surfaces as **exit code 137** — worth knowing, since that reads as an ordinary command failure rather than as a limit being enforced.
+- **Setting `container_limits:` with neither `cpu:` nor `memory:` is a load error.** It would cap nothing while reading as if it did.
+- **A step's `privileged: true` wins over its task/agent, and there is no way back down.** Like `image:`, which has no spelling for "force host execution": a step needing the narrower grant does not reference that task.
+- **Neither is valid on `get`/`put` steps** — a put's execution shape comes from its resource type, and a get has no task/agent to override. Set them on the `resource_types:` entry instead.
+
 ## Container user (`user:`)
 
 On Linux, a bind mount carries host uids straight through. A container running as root — which most images do — therefore writes **root-owned files into the step's working directory**, and three things break, none of them obviously related to each other:
@@ -257,6 +278,26 @@ jobs:
 - **The lock is taken inside the claim**, in one atomic statement, rather than checked beforehand. A read-then-claim would have a race exactly where the lock is supposed to be.
 - **"Queued" and "blocked on a lock" look different.** A blocked job says who is holding it (`waiting: lock held by deploy-prod`); otherwise a held job is indistinguishable from an idle watcher, and an operator cannot tell a stuck pipeline from a busy one.
 - **Membership is synced from the pipeline on every `steps watch` startup.** A group removed from the YAML stops holding a lock immediately — a stale one would keep two jobs apart forever with nothing in the pipeline to explain why.
+
+## `interruptible:` — what a shutdown does to a running build
+
+`steps watch` gets SIGTERM (a restart, a redeploy, a machine going down) while a job is mid-deploy. Whether that build is allowed to finish is the question this answers.
+
+```yaml
+jobs:
+- name: deploy-prod
+  plan: [...]
+  # default: shutdown WAITS for a running build to finish
+
+- name: nightly-report
+  interruptible: true       # ...this one can just die
+  plan: [...]
+```
+
+- **The default is to wait**, matching Concourse. Half-applying a deploy because someone restarted the watcher is the failure this exists to prevent.
+- **The wait is bounded** (`nonInterruptibleGrace`, 10 minutes). An unbounded wait is a watcher that cannot be stopped, and "kill -9 the supervisor" is not a shutdown story. A job needing longer should carry its own `timeout:`, which still applies.
+- **`interruptible: true` restores the older behaviour**: the build shares the watcher's context and is cancelled with it. Its queue row stays `running`, so the next startup's stale-row recovery re-queues it — nothing is lost, it is just re-run.
+- **This affects `steps watch` only.** `steps run` is a person at a terminal, and ctrl-C there is always immediate; a foreground run that ignored an interrupt for ten minutes would be a worse bug than the one this prevents.
 
 ## Webhook-triggered checks
 

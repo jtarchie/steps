@@ -28,7 +28,7 @@ func TestDockerStartArgsMountsCwd(t *testing.T) {
 
 	resolvedCwd := t.TempDir()
 
-	args := dockerStartArgs("alpine", "steps-abc", resolvedCwd, nil, "", "")
+	args := dockerStartArgs("alpine", "steps-abc", resolvedCwd, nil, "", "", false, 0, 0)
 
 	if !slices.Contains(args, "-v") {
 		t.Fatalf("args = %v, want a -v mount", args)
@@ -52,7 +52,7 @@ func TestDockerStartArgsMountsCwd(t *testing.T) {
 func TestDockerStartArgsEmptyCwdMountsNothing(t *testing.T) {
 	t.Parallel()
 
-	args := dockerStartArgs("alpine", "steps-abc", "", nil, "", "")
+	args := dockerStartArgs("alpine", "steps-abc", "", nil, "", "", false, 0, 0)
 
 	if slices.Contains(args, "-v") || slices.Contains(args, "-w") {
 		t.Errorf("args = %v, want no mount or workdir for an empty cwd", args)
@@ -65,7 +65,7 @@ func TestDockerStartArgsEmptyCwdMountsNothing(t *testing.T) {
 func TestDockerStartArgsImageIsPositional(t *testing.T) {
 	t.Parallel()
 
-	args := dockerStartArgs("--privileged", "steps-abc", "", nil, "", "")
+	args := dockerStartArgs("--privileged", "steps-abc", "", nil, "", "", false, 0, 0)
 
 	sep := slices.Index(args, "--")
 	if sep < 0 {
@@ -89,7 +89,7 @@ func TestDockerStartArgsImageIsPositional(t *testing.T) {
 func TestDockerStartArgsKeepaliveIsBounded(t *testing.T) {
 	t.Parallel()
 
-	args := dockerStartArgs("alpine", "steps-abc", "", nil, "", "")
+	args := dockerStartArgs("alpine", "steps-abc", "", nil, "", "", false, 0, 0)
 
 	if slices.Contains(args, "--rm") {
 		t.Errorf("args = %v, did not want --rm — it would destroy the postmortem a failed start needs", args)
@@ -138,7 +138,7 @@ func TestDockerNeverPassesDashT(t *testing.T) {
 	t.Parallel()
 
 	for _, args := range [][]string{
-		dockerStartArgs("alpine", "steps-abc", t.TempDir(), nil, "", ""),
+		dockerStartArgs("alpine", "steps-abc", t.TempDir(), nil, "", "", false, 0, 0),
 		dockerExecArgs("steps-abc", "echo hi", true),
 		dockerExecArgs("steps-abc", "echo hi", false),
 	} {
@@ -820,7 +820,7 @@ func TestValidateDockerMissingBinary(t *testing.T) {
 func TestDockerStartArgsPassesEnvByNameNotValue(t *testing.T) {
 	t.Setenv("STEPS_TEST_SECRET", "hunter2")
 
-	args := dockerStartArgs("alpine", "steps-abc", "", []string{"STEPS_TEST_SECRET"}, "", "")
+	args := dockerStartArgs("alpine", "steps-abc", "", []string{"STEPS_TEST_SECRET"}, "", "", false, 0, 0)
 
 	i := slices.Index(args, "-e")
 	if i < 0 || i+1 >= len(args) {
@@ -841,7 +841,7 @@ func TestDockerStartArgsPassesEnvByNameNotValue(t *testing.T) {
 func TestDockerStartArgsNoEnvAddsNoFlags(t *testing.T) {
 	t.Parallel()
 
-	if args := dockerStartArgs("alpine", "steps-abc", "", nil, "", ""); slices.Contains(args, "-e") {
+	if args := dockerStartArgs("alpine", "steps-abc", "", nil, "", "", false, 0, 0); slices.Contains(args, "-e") {
 		t.Errorf("args = %v, did not want an -e flag when env: is unset", args)
 	}
 }
@@ -852,7 +852,7 @@ func TestDockerStartArgsNoEnvAddsNoFlags(t *testing.T) {
 func TestDockerStartArgsEnvPrecedesTheImage(t *testing.T) {
 	t.Parallel()
 
-	args := dockerStartArgs("alpine", "steps-abc", "", []string{"A", "B"}, "", "")
+	args := dockerStartArgs("alpine", "steps-abc", "", []string{"A", "B"}, "", "", false, 0, 0)
 
 	sep := slices.Index(args, "--")
 	if sep < 0 {
@@ -868,7 +868,7 @@ func TestDockerStartArgsEnvPrecedesTheImage(t *testing.T) {
 func TestDockerStartArgsUserIsPassedThrough(t *testing.T) {
 	t.Parallel()
 
-	args := dockerStartArgs("alpine", "steps-abc", "", nil, "root", "")
+	args := dockerStartArgs("alpine", "steps-abc", "", nil, "root", "", false, 0, 0)
 
 	i := slices.Index(args, "--user")
 	if i < 0 || i+1 >= len(args) {
@@ -883,7 +883,7 @@ func TestDockerStartArgsUserIsPassedThrough(t *testing.T) {
 func TestDockerStartArgsNoUserAddsNoFlag(t *testing.T) {
 	t.Parallel()
 
-	if args := dockerStartArgs("alpine", "steps-abc", "", nil, "", ""); slices.Contains(args, "--user") {
+	if args := dockerStartArgs("alpine", "steps-abc", "", nil, "", "", false, 0, 0); slices.Contains(args, "--user") {
 		t.Errorf("args = %v, did not want a --user flag when none was resolved", args)
 	}
 }
@@ -933,7 +933,7 @@ func TestDefaultContainerUserIsPlatformSpecific(t *testing.T) {
 func TestDockerStartArgsNetworkIsPassedThrough(t *testing.T) {
 	t.Parallel()
 
-	args := dockerStartArgs("alpine", "steps-abc", "", nil, "", "none")
+	args := dockerStartArgs("alpine", "steps-abc", "", nil, "", "none", false, 0, 0)
 
 	i := slices.Index(args, "--network")
 	if i < 0 || i+1 >= len(args) {
@@ -953,7 +953,7 @@ func TestDockerStartArgsNetworkIsPassedThrough(t *testing.T) {
 func TestDockerStartArgsNoNetworkAddsNoFlag(t *testing.T) {
 	t.Parallel()
 
-	if args := dockerStartArgs("alpine", "steps-abc", "", nil, "", ""); slices.Contains(args, "--network") {
+	if args := dockerStartArgs("alpine", "steps-abc", "", nil, "", "", false, 0, 0); slices.Contains(args, "--network") {
 		t.Errorf("args = %v, did not want a --network flag when none was set", args)
 	}
 }
@@ -1051,5 +1051,47 @@ func TestDockerRunnerCloseToleratesAnAlreadyGoneContainer(t *testing.T) {
 
 	if containerAlreadyGone([]byte("Error response from daemon: permission denied")) {
 		t.Error("containerAlreadyGone treated an unrelated failure as success")
+	}
+}
+
+// TestDockerStartArgsPrivilegedAndLimits pins the three flags container
+// isolation is actually configured with, and — more importantly — that each is
+// OMITTED rather than passed as a zero when unset.
+//
+// Passing --cpu-shares 0 would mean the same thing to docker as omitting it,
+// but it would show up in `docker inspect` as a configured limit of zero,
+// which reads as a misconfiguration rather than as "no limit asked for".
+func TestDockerStartArgsPrivilegedAndLimits(t *testing.T) {
+	t.Parallel()
+
+	args := dockerStartArgs("alpine", "steps-abc", "", nil, "", "", true, 512, 1<<30)
+
+	if !slices.Contains(args, "--privileged") {
+		t.Errorf("args = %v, want --privileged", args)
+	}
+
+	for flag, want := range map[string]string{
+		"--cpu-shares": "512",
+		"--memory":     "1073741824",
+	} {
+		i := slices.Index(args, flag)
+		if i < 0 {
+			t.Errorf("args = %v, want %s", args, flag)
+
+			continue
+		}
+
+		if args[i+1] != want {
+			t.Errorf("%s = %q, want %q", flag, args[i+1], want)
+		}
+	}
+
+	// Unset: every one of them absent, not present-and-zero.
+	bare := dockerStartArgs("alpine", "steps-abc", "", nil, "", "", false, 0, 0)
+
+	for _, flag := range []string{"--privileged", "--cpu-shares", "--memory"} {
+		if slices.Contains(bare, flag) {
+			t.Errorf("bare args = %v, want no %s when unset", bare, flag)
+		}
 	}
 }

@@ -224,6 +224,15 @@ type Step struct {
 	// agent's Network for this step only (non-empty-wins, like Image).
 	// Invalid on get/put steps, for the same reason Image is.
 	Network string `yaml:"network,omitempty"`
+	// Privileged, on a task or agent step, overrides the referenced task's/
+	// agent's Privileged for this step only. True-wins, like Image's
+	// non-empty-wins: there is no way to force UNprivileged from a step when
+	// the task/agent asked for it, matching how every other execution setting
+	// inherits. Invalid on get/put steps, for the reason Image is.
+	Privileged bool `yaml:"privileged,omitempty"`
+	// Limits, on a task or agent step, overrides the referenced task's/agent's
+	// container_limits: for this step only (set-wins, like Image).
+	Limits *ContainerLimits `yaml:"container_limits,omitempty"`
 	// When, on a task/put/agent step, gates whether the step runs at all: an
 	// explicit command whose exit code decides (0 runs, nonzero skips). See
 	// WhenSpec. Invalid on get steps — a get fans the remainder of the plan

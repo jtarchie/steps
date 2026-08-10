@@ -124,6 +124,15 @@ type RunnerSpec struct {
 	// Empty takes docker's own default. Meaningless for host execution, which
 	// config rejects at load time rather than silently ignoring.
 	Network string
+	// Privileged runs the container with `docker run --privileged`. Ignored
+	// for host execution, which config rejects at load time.
+	Privileged bool
+	// CPUShares is `docker run --cpu-shares`: a relative weight, not a core
+	// count. Zero omits the flag.
+	CPUShares int
+	// MemoryBytes is `docker run --memory`, in bytes. Zero omits the flag.
+	// A container over it is OOM-killed, which surfaces as exit 137.
+	MemoryBytes int64
 }
 
 // NewRunner returns a DockerRunner scoped to spec, or a HostRunner when
@@ -157,6 +166,9 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 			envNames:    spec.Env,
 			user:        containerUser(spec.User),
 			network:     spec.Network,
+			privileged:  spec.Privileged,
+			cpuShares:   spec.CPUShares,
+			memoryBytes: spec.MemoryBytes,
 		},
 	}, nil
 }

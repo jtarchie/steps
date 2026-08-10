@@ -1,0 +1,11 @@
+# privileged: describes a container too. A host command already runs with
+# whatever privileges started steps, so this would promise an elevation it
+# does not perform.
+# expect: privileged requires image:
+
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: echo working
+    privileged: true

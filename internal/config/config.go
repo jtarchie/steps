@@ -124,6 +124,7 @@ func (c *Config) validate() error {
 		c.validateEnvRules,
 		c.validateUserRules,
 		c.validateNetworkRules,
+		c.validateLimitsRules,
 		c.validateTimeouts,
 		c.validateAgentCompaction,
 		c.validateAgentModels,

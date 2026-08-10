@@ -1,0 +1,11 @@
+# container_limits: describes a container. A host-executed command has no
+# cgroup to cap, so accepting this would promise a limit it cannot enforce —
+# and a limit believed to be in force is worse than one visibly absent.
+# expect: container_limits requires image:
+
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: echo working
+    container_limits: { memory: 1073741824 }

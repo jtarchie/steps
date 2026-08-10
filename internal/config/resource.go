@@ -28,8 +28,16 @@ type ResourceType struct {
 	// --network); "none" cuts off egress entirely. Requires Image — and note
 	// that most resource types exist to reach the network, so this is rarely
 	// what you want on one.
-	Network string             `yaml:"network,omitempty"`
-	Config  ResourceTypeConfig `yaml:"config"`
+	Network string `yaml:"network,omitempty"`
+	// Privileged runs this command's container with `docker run --privileged`.
+	// Mirrors Concourse's privileged: (concourse-ci.org/docs/steps/task/).
+	// Container-only, like Network — a host command has nothing to elevate,
+	// so it is a load error without image:.
+	Privileged bool `yaml:"privileged,omitempty"`
+	// Limits caps the container's CPU and memory. Mirrors Concourse's
+	// container_limits:; container-only for the same reason Privileged is.
+	Limits *ContainerLimits   `yaml:"container_limits,omitempty"`
+	Config ResourceTypeConfig `yaml:"config"`
 }
 
 // ResourceTypeConfig holds the check/in/out shell command templates.

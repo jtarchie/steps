@@ -204,7 +204,8 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
-	runner, err := shell.NewRunner(shell.RunnerSpec{Image: ri.Image, Cwd: dir, Env: ri.Env, User: ri.User, Network: ri.Network})
+	runner, err := shell.NewRunner(shell.RunnerSpec{Image: ri.Image, Cwd: dir, Env: ri.Env, User: ri.User, Network: ri.Network,
+		Privileged: ri.Privileged, CPUShares: cpuShares(ri.Limits), MemoryBytes: memoryBytes(ri.Limits)})
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 		closeAll(closers)

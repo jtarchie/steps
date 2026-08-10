@@ -38,6 +38,12 @@ type ResolvedTask struct {
 	// Network is the container network this task's commands join. See
 	// Task.Network/Step.Network.
 	Network string
+	// Privileged runs this task's container with --privileged. See
+	// Task.Privileged/Step.Privileged.
+	Privileged bool
+	// Limits caps this task's container CPU/memory. See
+	// Task.Limits/Step.Limits.
+	Limits *ContainerLimits
 	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
 	// means no timeout. Step.Timeout overrides Task.Timeout when set.
 	Timeout string
@@ -73,6 +79,18 @@ func resolveTaskRuntime(task *Task, step Step) containerSettings {
 		settings.Network = step.Network
 	}
 
+	// True-wins rather than set-wins: there is no spelling for "force
+	// unprivileged from a step whose task asked for it", matching how image:
+	// has no spelling for "force host execution". A step that needs the
+	// narrower grant does not reference that task.
+	if step.Privileged {
+		settings.Privileged = true
+	}
+
+	if step.Limits != nil {
+		settings.Limits = step.Limits
+	}
+
 	return settings
 }
 
@@ -86,7 +104,8 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 	if step.Run != "" {
 		return ResolvedTask{
 			Name: step.Task, Run: step.Run, Fix: step.Fix,
-			Inputs: step.InputNames(), Outputs: step.Outputs, Image: step.Image, Env: step.Env, User: step.User, Network: step.Network, Timeout: step.Timeout,
+			Inputs: step.InputNames(), Outputs: step.Outputs, Image: step.Image, Env: step.Env, User: step.User, Network: step.Network,
+			Privileged: step.Privileged, Limits: step.Limits, Timeout: step.Timeout,
 			InputMapping: step.InputMapping, OutputMapping: step.OutputMapping,
 			Assert: step.Assert,
 		}, nil
@@ -121,7 +140,8 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 
 	return ResolvedTask{
 		Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs,
-		Image: runtime.Image, Env: runtime.Env, User: runtime.User, Network: runtime.Network, Timeout: timeout,
+		Image: runtime.Image, Env: runtime.Env, User: runtime.User, Network: runtime.Network,
+		Privileged: runtime.Privileged, Limits: runtime.Limits, Timeout: timeout,
 		InputMapping: step.InputMapping, OutputMapping: step.OutputMapping, Assert: step.Assert,
 	}, nil
 }
@@ -195,6 +215,12 @@ type ResolvedInvocation struct {
 	// Network is the container network this step's commands join. See
 	// Agent.Network/Step.Network.
 	Network string
+	// Privileged runs this step's container with --privileged. See
+	// Agent.Privileged/Step.Privileged.
+	Privileged bool
+	// Limits caps this step's container CPU/memory. See
+	// Agent.Limits/Step.Limits.
+	Limits *ContainerLimits
 	// Image, when non-empty, runs this step's run_shell/custom-tool commands
 	// in a container from this image instead of on the host. See
 	// Agent.Image/Step.Image.
@@ -225,6 +251,18 @@ func resolveAgentRuntime(agent *Agent, step Step) (settings containerSettings) {
 
 	if step.Network != "" {
 		settings.Network = step.Network
+	}
+
+	// True-wins rather than set-wins: there is no spelling for "force
+	// unprivileged from a step whose task asked for it", matching how image:
+	// has no spelling for "force host execution". A step that needs the
+	// narrower grant does not reference that task.
+	if step.Privileged {
+		settings.Privileged = true
+	}
+
+	if step.Limits != nil {
+		settings.Limits = step.Limits
 	}
 
 	return settings
@@ -300,6 +338,8 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		Env:                  runtime.Env,
 		User:                 runtime.User,
 		Network:              runtime.Network,
+		Privileged:           runtime.Privileged,
+		Limits:               runtime.Limits,
 	}, nil
 }
 

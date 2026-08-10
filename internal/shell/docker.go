@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -99,6 +100,11 @@ type dockerSession struct {
 	user string
 	// network is the --network value; empty takes docker's own default.
 	network string
+	// privileged adds --privileged.
+	privileged bool
+	// cpuShares/memoryBytes are --cpu-shares and --memory; zero omits each.
+	cpuShares   int
+	memoryBytes int64
 
 	mu sync.Mutex
 	// attempted records that start has been tried, so a failure is sticky:
@@ -147,7 +153,8 @@ func (s *dockerSession) ensure(ctx context.Context) (name, stderr string, err er
 		return "", "", err
 	}
 
-	args := dockerStartArgs(s.image, containerName, s.resolvedCwd, s.envNames, s.user, s.network)
+	args := dockerStartArgs(s.image, containerName, s.resolvedCwd, s.envNames, s.user, s.network,
+		s.privileged, s.cpuShares, s.memoryBytes)
 
 	slog.Debug("shell.docker.session_start", "image", s.image, "container", containerName, "cwd", s.resolvedCwd)
 
@@ -515,7 +522,10 @@ func dockerCommand(ctx context.Context, args []string) *exec.Cmd {
 // name. config.validateImageValues rejects such a value at LoadConfig time
 // too; this is defense in depth for any image string that reaches here by
 // another path.
-func dockerStartArgs(image, name, resolvedCwd string, envNames []string, user, network string) []string {
+func dockerStartArgs(
+	image, name, resolvedCwd string, envNames []string, user, network string,
+	privileged bool, cpuShares int, memoryBytes int64,
+) []string {
 	args := []string{"run", "-d", "--init", "--name", name}
 
 	// Labels are how a container survives its creator. If this process is
@@ -539,6 +549,21 @@ func dockerStartArgs(image, name, resolvedCwd string, envNames []string, user, n
 
 	if network != "" {
 		args = append(args, "--network", network)
+	}
+
+	if privileged {
+		args = append(args, "--privileged")
+	}
+
+	// Zero omits the flag entirely rather than passing 0, which docker reads
+	// as "no limit" — the same thing, but spelled in a way that makes a
+	// misconfiguration look deliberate in `docker inspect`.
+	if cpuShares > 0 {
+		args = append(args, "--cpu-shares", strconv.Itoa(cpuShares))
+	}
+
+	if memoryBytes > 0 {
+		args = append(args, "--memory", strconv.FormatInt(memoryBytes, 10))
 	}
 
 	// `-e NAME` (no value) tells the docker CLI to forward the value from its

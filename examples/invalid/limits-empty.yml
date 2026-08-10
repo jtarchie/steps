@@ -1,0 +1,11 @@
+# A container_limits: block with neither cpu nor memory caps nothing, while
+# reading as if it did. Omit it, or give it a limit.
+# expect: container_limits sets neither cpu nor memory
+
+jobs:
+- name: build
+  plan:
+  - task: work
+    image: alpine:3
+    run: echo working
+    container_limits: {}

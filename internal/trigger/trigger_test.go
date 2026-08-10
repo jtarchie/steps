@@ -807,6 +807,10 @@ resources:
   source: {}
 jobs:
 - name: build
+  # interruptible: true is what this test is ABOUT: it exercises the path
+  # where a shutdown cancels a build mid-run. Jobs default to waiting
+  # instead (Concourse's default), so the interruption has to be asked for.
+  interruptible: true
   plan:
   - get: thing
     trigger: true
@@ -899,6 +903,10 @@ resources:
   source: {}
 jobs:
 - name: build
+  # interruptible: true is what this test is ABOUT: it exercises the path
+  # where a shutdown cancels a build mid-run. Jobs default to waiting
+  # instead (Concourse's default), so the interruption has to be asked for.
+  interruptible: true
   plan:
   - get: thing
     trigger: true
@@ -983,5 +991,84 @@ func assertTaskCounter(t *testing.T, path, want string) {
 
 	if string(data) != want {
 		t.Errorf("task counter = %q, want %q", data, want)
+	}
+}
+
+// TestConformanceNonInterruptibleBuildSurvivesShutdown verifies interruptible:
+// matches Concourse, including its default.
+//
+// Concourse doc: concourse-ci.org/docs/jobs/ — interruptible defaults to false,
+// and when true "workers won't wait for this job's builds during shutdown".
+// So the DEFAULT is that shutdown waits, which is what this pins: a deploy
+// half-applied because someone restarted the watcher is the case the field
+// exists for.
+//
+// The counterpart is TestDrainOneLeavesCanceledJobReRunnableAfterSimulatedRestart,
+// which sets interruptible: true and asserts the opposite.
+//
+// Scoped to `steps watch`: `steps run` is a person at a terminal and ctrl-C
+// there is always immediate. See config.Job.Interruptible.
+func TestConformanceNonInterruptibleBuildSurvivesShutdown(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	versionsPath := filepath.Join(dir, "versions.json")
+	writeVersions(t, versionsPath, `[{"ref":"v1"}]`)
+	marker := filepath.Join(dir, "finished.txt")
+
+	// No interruptible: line at all — the default, which must WAIT.
+	cfg := loadConfig(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+resource_types:
+- name: dummy
+  config:
+    check: cat %s
+    in: "true"
+resources:
+- name: thing
+  type: dummy
+  source: {}
+jobs:
+- name: build
+  plan:
+  - get: thing
+    trigger: true
+  - task: work
+    inputs: []
+    run: sleep 1 && echo finished >> %s
+`, versionsPath, marker))
+
+	st := mustOpenStore(t, dir)
+
+	err := st.EnqueueJob(context.Background(), "build", "thing")
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+
+	provider, err := workspace.NewProvider(nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Cancelled while the task is mid-sleep — the shutdown this is about.
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err = drainOne(ctx, cfg, provider, st, nil, false)
+	if err != nil {
+		t.Errorf("drainOne returned %v, want nil — a non-interruptible build must be allowed to finish", err)
+	}
+
+	// The marker only exists if the task ran to completion despite the cancel.
+	_, statErr := os.Stat(marker)
+	if statErr != nil {
+		t.Error("the build did not finish: a job that did not opt into interruptible: must survive a shutdown, or a deploy can be left half-applied")
 	}
 }
