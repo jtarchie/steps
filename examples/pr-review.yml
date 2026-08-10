@@ -20,9 +20,11 @@
 # bounded loop back for a second pass, the human approval before anything is
 # posted — is ordinary control flow.
 #
-# What you get that a bespoke service does not have for free: every reviewer
-# cell is independently hashed and cached, so re-reviewing after a push re-runs
-# only the cells whose inputs actually changed.
+# What you get that a bespoke service does not have for free: the fetch is
+# content-addressed, so an unchanged PR head is not fetched again, and every
+# cell is independently recorded, budgeted, and reported — a failed reviewer
+# is one cell, not the run. The reviewers themselves rerun on every pass:
+# agent steps are never cached, which is what the matrix budget bounds.
 #
 #   steps validate examples/pr-review.yml
 #   steps plan     examples/pr-review.yml          # note: the matrix width is unknown here, by design
