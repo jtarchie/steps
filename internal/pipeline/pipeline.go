@@ -621,6 +621,10 @@ func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i in
 
 	publishStepStarted(ctx, jobName, i, step)
 
+	// Carried so the frames that hold a command's captured output can publish
+	// it against the right step (see withStepIdentity).
+	ctx = withStepIdentity(ctx, i, step)
+
 	hash, disposition, no, err := dispatchNonGetStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash, handoff)
 
 	// Record what ran (not a cached chain, not a guard-skipped step) for a
@@ -1232,7 +1236,11 @@ func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedT
 	case rt.Fix != nil:
 		return runFixTask(ctx, cfg, runner, rt, workspaceDir)
 	default:
-		err := runner.Run(ctx, rt.Run)
+		stdout, stderr, err := runner.RunStreamedCapture(ctx, rt.Run, maxPublishedOutputBytes)
+		if err == nil {
+			publishOutputForCurrentStep(ctx, rt.Name, stdout, stderr)
+		}
+
 		if err != nil {
 			// Check for context cancellation/timeout first, before classifying
 			// as a task failure. A canceled context (job abort) or timeout should
@@ -1330,6 +1338,8 @@ func runAssertedTask(ctx context.Context, runner shell.Runner, rt config.Resolve
 	if mismatch != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, outcome.Fail(mismatch))
 	}
+
+	publishOutputForCurrentStep(ctx, rt.Name, stdout, stderr)
 
 	return nil
 }

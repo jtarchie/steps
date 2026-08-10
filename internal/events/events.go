@@ -34,6 +34,11 @@ const (
 	TypeStepStarted  = "step_started"
 	TypeStepFinished = "step_finished"
 	TypeStepSkipped  = "step_skipped"
+	// TypeStepOutput carries what a step printed. Published once when the
+	// step ends rather than streamed line by line: a transcript wants the
+	// output, and one bounded event per step costs a row instead of
+	// thousands.
+	TypeStepOutput = "step_output"
 	// Agent conversation traffic, mirroring the persisted transcript's own
 	// event vocabulary (see internal/agent/transcript.go) so a live view and
 	// a stored transcript render through the same code path.

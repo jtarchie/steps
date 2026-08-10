@@ -50,6 +50,7 @@
     <div class="stepbody">
       {{with .DistinctError $run.JobError}}<div class="log"><span class="err">{{.}}</span></div>{{end}}
       {{if .Reason}}<div class="log">{{.Reason}}{{if .Hash}} · content hash {{short .Hash}}{{end}}</div>{{end}}
+      {{if .Output}}<div class="log output">{{.Output}}</div>{{end}}
 
       {{range .Turns}}
       <div class="turn {{if eq .Type "agent_call"}}tool{{else if eq .Type "agent_result"}}tool{{else if eq .Type "agent_subagent"}}tool{{else}}model{{end}} {{if .Nested}}nested{{end}}">
@@ -197,6 +198,14 @@
 
     if (e.type === 'step_finished' || e.type === 'step_skipped') {
       if (node) finishStep(e, node);
+      return;
+    }
+
+    if (e.type === 'step_output') {
+      if (node && e.text) {
+        node.querySelector('.stepbody').appendChild(el('div', 'log output', e.text));
+        node.classList.add('open');
+      }
       return;
     }
 

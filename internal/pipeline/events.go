@@ -9,6 +9,7 @@ package pipeline
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -127,6 +128,75 @@ func publishStepSkipped(ctx context.Context, jobName string, i int, step config.
 		Status:    "skipped",
 		Hash:      hash,
 		Text:      reason,
+	})
+}
+
+// stepIdentityKey carries which plan step is currently executing, so the
+// frames that actually hold a command's output can publish it without five
+// intermediate signatures growing a parameter to carry the index down. It is
+// the same context-threading the package already uses for resume state, the
+// execution log, and the force flag.
+type stepIdentityKey struct{}
+
+type stepIdentity struct {
+	index int
+	step  config.Step
+}
+
+// withStepIdentity tags ctx with the step about to run. Set per dispatch, so
+// concurrent branches of an in_parallel or across each carry their own.
+func withStepIdentity(ctx context.Context, i int, step config.Step) context.Context {
+	return context.WithValue(ctx, stepIdentityKey{}, stepIdentity{index: i, step: step})
+}
+
+// publishOutputForCurrentStep publishes a command's output against whichever
+// step the context says is running. A no-op off the plan walk — a hook or a
+// fix command has no plan index, and inventing one would attach its output to
+// an unrelated step.
+func publishOutputForCurrentStep(ctx context.Context, jobName, stdout, stderr string) {
+	identity, ok := ctx.Value(stepIdentityKey{}).(stepIdentity)
+	if !ok {
+		return
+	}
+
+	publishStepOutput(ctx, jobName, identity.index, identity.step, stdout, stderr)
+}
+
+// maxPublishedOutputBytes bounds what one step contributes to a run's event
+// log. Generous enough for the output a person actually reads, small enough
+// that a runaway command cannot turn the transcript into a copy of its own
+// stdout.
+const maxPublishedOutputBytes = 16_000
+
+// publishStepOutput records what a step printed.
+//
+// Only for a step that SUCCEEDED: a failure already folds its output into the
+// error the transcript leads with (see taskFailureOutput), and publishing it
+// again would print the same text twice on the page someone reaches while
+// triaging. Empty output publishes nothing.
+func publishStepOutput(ctx context.Context, jobName string, i int, step config.Step, stdout, stderr string) {
+	combined := strings.TrimRight(stdout, "\n")
+
+	if trimmed := strings.TrimRight(stderr, "\n"); trimmed != "" {
+		if combined != "" {
+			combined += "\n"
+		}
+
+		combined += trimmed
+	}
+
+	if combined == "" {
+		return
+	}
+
+	events.Publish(ctx, events.Event{
+		Type:      events.TypeStepOutput,
+		RunID:     runIDFrom(ctx),
+		Job:       jobName,
+		StepIndex: i,
+		StepName:  eventStepName(step),
+		StepKind:  stepKindName(step),
+		Text:      combined,
 	})
 }
 

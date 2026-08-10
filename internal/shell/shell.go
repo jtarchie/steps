@@ -24,6 +24,17 @@ import (
 type Runner interface {
 	// Run streams stdout/stderr live; any nonzero exit is a Go error.
 	Run(ctx context.Context, command string) error
+	// RunStreamedCapture behaves exactly like Run — same streaming, same
+	// inherited stdin, same error on a nonzero exit — and additionally
+	// returns what it streamed, each stream capped at maxBytes.
+	//
+	// It exists because a task's output had exactly one destination: the
+	// terminal watching it. Anything reading a run afterwards (the web UI's
+	// transcript) had nothing to show for a step that succeeded. Distinct
+	// from RunCaptureFullLimitedStreamed, which captures with stdin
+	// DETACHED — correct for a model-directed command, wrong for a task the
+	// pipeline author wrote.
+	RunStreamedCapture(ctx context.Context, command string, maxBytes int) (stdout, stderr string, err error)
 	// RunCapture captures stdout while also streaming stderr live; any
 	// nonzero exit is a Go error.
 	RunCapture(ctx context.Context, command string) ([]byte, error)
@@ -625,6 +636,21 @@ func processStarted(err error) bool {
 // streaming stdout/stderr live to the terminal, prefixed per line when
 // WithLabel was used.
 func (h HostRunner) Run(ctx context.Context, command string) error {
+	_, _, err := h.runStreamed(ctx, command, 0)
+
+	return err
+}
+
+// RunStreamedCapture is Run, keeping what it streamed. See Runner.
+func (h HostRunner) RunStreamedCapture(ctx context.Context, command string, maxBytes int) (string, string, error) {
+	return h.runStreamed(ctx, command, maxBytes)
+}
+
+// runStreamed is the shared body of Run and RunStreamedCapture. maxBytes <= 0
+// captures nothing, which makes Run byte-identical to before it grew a
+// sibling — no buffering, no allocation, for the callers that never wanted
+// the output back.
+func (h HostRunner) runStreamed(ctx context.Context, command string, maxBytes int) (stdout, stderr string, err error) {
 	slog.Debug("shell.run", "command", command, "cwd", h.cwd)
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
@@ -638,17 +664,30 @@ func (h HostRunner) Run(ctx context.Context, command string) error {
 	cmd.Stdout = stdoutW
 	cmd.Stderr = stderrW
 
-	err := cmd.Run()
+	var outCapture, errCapture captureWriter
+
+	if maxBytes > 0 {
+		outCapture = newCaptureWriter(maxBytes, "")
+		errCapture = newCaptureWriter(maxBytes, "")
+		cmd.Stdout = io.MultiWriter(stdoutW, outCapture)
+		cmd.Stderr = io.MultiWriter(stderrW, errCapture)
+	}
+
+	runErr := cmd.Run()
 	flushStdout()
 	flushStderr()
 
-	slog.Debug("shell.run", "command", command, "cwd", h.cwd, "exit_code", exitCodeOf(err))
+	slog.Debug("shell.run", "command", command, "cwd", h.cwd, "exit_code", exitCodeOf(runErr))
 
-	if err != nil {
-		return fmt.Errorf("command %q failed: %w", command, wrapIfCanceled(ctx, err))
+	if outCapture != nil {
+		stdout, stderr = outCapture.result(), errCapture.result()
 	}
 
-	return nil
+	if runErr != nil {
+		return stdout, stderr, fmt.Errorf("command %q failed: %w", command, wrapIfCanceled(ctx, runErr))
+	}
+
+	return stdout, stderr, nil
 }
 
 // RunCapture runs command via `sh -c command` with h.cwd as its working

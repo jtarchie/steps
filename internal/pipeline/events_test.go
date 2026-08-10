@@ -172,3 +172,118 @@ jobs:
 
 	return cfg, job, st, provider
 }
+
+// TestRunJobPublishesTaskOutput covers the gap a transcript had until now: a
+// step that SUCCEEDED showed nothing, so "what did it print" had no answer
+// short of scrolling back through the terminal that ran it.
+func TestRunJobPublishesTaskOutput(t *testing.T) {
+	t.Parallel()
+
+	collected := runFixturePipeline(t, `
+jobs:
+  - name: build
+    plan:
+      - task: speak
+        run: echo hello from the task
+      - task: quiet
+        run: "true"
+`, false)
+
+	outputs := map[string]string{}
+
+	for _, event := range collected {
+		if event.Type == events.TypeStepOutput {
+			outputs[event.StepName] = event.Text
+		}
+	}
+
+	if got := outputs["speak"]; got != "hello from the task" {
+		t.Errorf("speak output = %q, want %q", got, "hello from the task")
+	}
+
+	// A step that printed nothing publishes nothing: an empty log block is
+	// worse than no log block.
+	if _, ok := outputs["quiet"]; ok {
+		t.Errorf("a silent task published an output event: %q", outputs["quiet"])
+	}
+}
+
+// TestFailedTaskDoesNotDoublePublishOutput pins the triage rule: a failing
+// command's output already reaches the reader inside the error, so publishing
+// it again would print the same text twice on the page they reach while
+// working out what broke.
+func TestFailedTaskDoesNotDoublePublishOutput(t *testing.T) {
+	t.Parallel()
+
+	collected := runFixturePipeline(t, `
+jobs:
+  - name: build
+    plan:
+      - task: boom
+        run: echo about to fail && exit 2
+`, true)
+
+	for _, event := range collected {
+		if event.Type == events.TypeStepOutput {
+			t.Errorf("a failed task published a separate output event: %q", event.Text)
+		}
+	}
+}
+
+// runFixturePipeline runs a one-off pipeline and returns everything it
+// published. wantFailure says which outcome the fixture is written to produce,
+// so a fixture that stops failing (or starts) is caught rather than silently
+// changing what the assertions see.
+func runFixturePipeline(t *testing.T, yaml string, wantFailure bool) []events.Event {
+	t.Helper()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fixture.yml")
+
+	err := os.WriteFile(path, []byte(yaml), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	defer func() { _ = st.Close() }()
+
+	provider, err := workspace.NewProvider(nil, false)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+
+	defer func() { _ = provider.Close() }()
+
+	job, err := cfg.FindJob("build")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var collected []events.Event
+
+	bus := events.New(func(e events.Event) { collected = append(collected, e) })
+
+	runErr := RunJob(events.WithBus(context.Background(), bus), cfg, job, nil, provider, st, false)
+
+	bus.Close()
+
+	if wantFailure && runErr == nil {
+		t.Fatal("expected the fixture pipeline to fail")
+	}
+
+	if !wantFailure && runErr != nil {
+		t.Fatalf("RunJob: %v", runErr)
+	}
+
+	return collected
+}

@@ -435,3 +435,8 @@ td.faint, .faint { color: var(--faint); }
 }
 .waitline { margin: 0 0 6px; color: var(--fg); }
 .waiting p:last-child { margin-bottom: 0; }
+
+/* A step's own output, as it came out. Slightly brighter than the log block
+ * around it: this is the thing a reader opened the step to see, not the
+ * annotation about it. */
+.log.output { color: var(--fg); }

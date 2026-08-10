@@ -37,6 +37,9 @@ type stepView struct {
 	// Result is the node's recorded result, decoded — the verdict, the
 	// response, the trajectory. Nil when the step recorded none.
 	Result map[string]any
+	// Output is what the step printed. Empty for a failed step, whose output
+	// the error already carries.
+	Output string
 }
 
 // Running reports a step that started and has not reported an end.
@@ -56,6 +59,7 @@ func (s stepView) Failed() bool {
 // isn't is worse than no chevron.
 func (s stepView) HasDetail(jobError string) bool {
 	return len(s.Turns) > 0 ||
+		s.Output != "" ||
 		s.DistinctError(jobError) != "" ||
 		s.Response() != "" ||
 		s.Note() != "" ||
@@ -158,6 +162,8 @@ func buildRunView(run store.RunRow, rows []store.RunEventRow, results map[string
 			openStep(&view, index, row)
 		case events.TypeStepFinished, events.TypeStepSkipped:
 			closeStep(&view, index, row, results)
+		case events.TypeStepOutput:
+			attachOutput(&view, index, row)
 		default:
 			// Agent conversation traffic; anything unrecognized is ignored
 			// rather than rendered, so an event type added later cannot break
@@ -169,6 +175,19 @@ func buildRunView(run store.RunRow, rows []store.RunEventRow, results map[string
 	}
 
 	return view
+}
+
+// attachOutput hangs a step's printed output on it. The event can arrive
+// before the step finishes, so the step is opened if it is not on the list
+// yet — the same tolerance closeStep has for a chain-skipped step.
+func attachOutput(view *runView, index map[string]int, row store.RunEventRow) {
+	position, seen := index[stepKey(row)]
+	if !seen {
+		openStep(view, index, row)
+		position = index[stepKey(row)]
+	}
+
+	view.Steps[position].Output = row.Text
 }
 
 // isAgentTraffic reports conversation events, which hang under a step rather

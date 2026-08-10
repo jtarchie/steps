@@ -494,3 +494,66 @@ func TestSlugify(t *testing.T) {
 		}
 	}
 }
+
+// TestTranscriptShowsTaskOutput covers the question a reader asks right after
+// "did it pass": what did it print. A succeeding step used to expand onto
+// nothing.
+func TestTranscriptShowsTaskOutput(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	err := pipeline.Store.StartRun(ctx, "noisy", "build", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "noisy", []store.RunEventRow{
+		{Type: events.TypeStepStarted, JobName: "build", StepIndex: 0, StepName: "compile", StepKind: "task"},
+		{Type: events.TypeStepOutput, JobName: "build", StepIndex: 0, StepName: "compile", StepKind: "task", Text: "compiling 42 files"},
+		{Type: events.TypeStepFinished, JobName: "build", StepIndex: 0, StepName: "compile", StepKind: "task", Status: "succeeded", DurationMS: 30},
+		{Type: events.TypeStepStarted, JobName: "build", StepIndex: 1, StepName: "silent", StepKind: "task"},
+		{Type: events.TypeStepFinished, JobName: "build", StepIndex: 1, StepName: "silent", StepKind: "task", Status: "succeeded", DurationMS: 5},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "noisy", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/runs/noisy")
+
+	if !strings.Contains(body, "compiling 42 files") {
+		t.Error("transcript does not show what the task printed")
+	}
+
+	// A step with output is expandable; one without is not, so a chevron never
+	// promises detail that is not there.
+	if !strings.Contains(openingTag(t, body, "step-0-compile"), "data-toggle") {
+		t.Error("a step with output is not expandable")
+	}
+
+	if strings.Contains(openingTag(t, body, "step-1-silent"), "data-toggle") {
+		t.Error("a step with no output is expandable onto nothing")
+	}
+}
+
+// openingTag returns just the opening tag of the element with the given id.
+// Scoped deliberately: a looser search runs on into the page's own scripts,
+// which mention the very attributes being asserted on.
+func openingTag(t *testing.T, body, id string) string {
+	t.Helper()
+
+	start := strings.Index(body, `id="`+id+`"`)
+	if start < 0 {
+		t.Fatalf("no element with id %q on the page", id)
+	}
+
+	end := strings.Index(body[start:], ">")
+	if end < 0 {
+		t.Fatalf("element %q has no closing bracket", id)
+	}
+
+	return body[start : start+end]
+}

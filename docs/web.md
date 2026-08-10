@@ -41,9 +41,15 @@ the things a scrollback cannot give you:
 - **A failed run leads with the error**, and says what changed since the last
   green run of that job — computed by comparing content hashes, so it names
   the steps whose inputs, command, or prompt actually moved.
+- **A task step expands into what it printed.** Output is captured while it
+  still streams to the terminal, bounded at 16KB per step, and recorded only
+  for a step that succeeded — a failure's output already reaches you inside
+  the error the page leads with. A step that printed nothing is not
+  expandable at all, so a chevron never promises detail that is not there.
 - **An agent step expands into its conversation**: the model's text each turn,
   every tool call, and any sub-agent delegation nested underneath.
-- **Every hash is a link** to the node page.
+- **Every hash is a link** to the node page, and **every step has one too** —
+  the `#` beside its name is a URL you can paste at someone.
 
 ## Live runs
 
@@ -60,6 +66,23 @@ pipeline appears here as it happens.
 Recording is the runner's job, not the UI's: **every** run persists its events
 (`run_events`), whether or not anything is watching. A job started from a
 terminal leaves the same record as one started from the browser.
+
+## Following a run you started
+
+Triggering does not drop you back on a list to refresh. A trigger lands on a
+short waiting page that reports what the queue is doing and forwards itself to
+the live transcript the moment a worker picks the job up — a queued job has no
+run id until then, which is why there is a waiting room rather than a
+redirect.
+
+While a run is live, the browser tab carries its status: `◐` running, `✓`
+passed, `✗` failed, with a matching favicon dot. The title updates the instant
+the run ends, so a run left in a background tab reports its outcome without
+being reopened.
+
+The jobs board refreshes itself every couple of seconds, in place — it keeps
+your list/graph choice and scroll position rather than reloading the page —
+and pauses while the tab is hidden.
 
 ## Triggering, approving, resuming
 

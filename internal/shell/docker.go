@@ -370,17 +370,31 @@ func (d DockerRunner) dockerExec(
 // Run runs command in the step's container, streaming stdout/stderr live and
 // wiring the host's stdin through (-i). Any nonzero exit is a Go error.
 func (d DockerRunner) Run(ctx context.Context, command string) error {
+	_, _, err := d.runStreamed(ctx, command, 0)
+
+	return err
+}
+
+// RunStreamedCapture is Run, keeping what it streamed. See shell.Runner.
+func (d DockerRunner) RunStreamedCapture(ctx context.Context, command string, maxBytes int) (string, string, error) {
+	return d.runStreamed(ctx, command, maxBytes)
+}
+
+// runStreamed is the shared body of Run and RunStreamedCapture. dockerExec
+// already returns what it streamed, so Run was discarding it; the only thing
+// maxBytes changes is whether that buffering is bounded.
+func (d DockerRunner) runStreamed(ctx context.Context, command string, maxBytes int) (stdout, stderr string, err error) {
 	slog.Debug("shell.docker.run", "image", d.Image, "command", command, "cwd", d.session.resolvedCwd)
 
-	_, _, runErr := d.dockerExec(ctx, command, true, true, true, 0, "")
+	stdout, stderr, runErr := d.dockerExec(ctx, command, true, true, true, maxBytes, "")
 
 	slog.Debug("shell.docker.run", "image", d.Image, "command", command, "exit_code", exitCodeOf(runErr))
 
 	if runErr != nil {
-		return fmt.Errorf("command %q failed in image %q: %w", command, d.Image, wrapIfCanceled(ctx, runErr))
+		return stdout, stderr, fmt.Errorf("command %q failed in image %q: %w", command, d.Image, wrapIfCanceled(ctx, runErr))
 	}
 
-	return nil
+	return stdout, stderr, nil
 }
 
 // RunCapture runs command in the step's container, capturing stdout and
