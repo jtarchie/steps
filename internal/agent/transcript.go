@@ -187,14 +187,20 @@ func (r *transcriptRecorder) subagent(agent, request string, nested []transcript
 // event list, publishing to the same bus one level deeper. This is what makes
 // a sub-agent's work visible while it happens rather than only in the parent's
 // summary of it afterwards.
-func (r *transcriptRecorder) childRecorder(agentName string) *transcriptRecorder {
+//
+// It keeps the PARENT's step identity. A consumer groups events by the step
+// they belong to, and a child's turns belong to the step that delegated them;
+// republishing them under the child agent's name detaches them from that
+// step, which under a concurrent fan-out lands them on whichever sibling cell
+// happened to be running. Depth marks the nesting, and the delegation event
+// itself already names the agent.
+func (r *transcriptRecorder) childRecorder() *transcriptRecorder {
 	if r == nil {
 		return &transcriptRecorder{}
 	}
 
 	child := &transcriptRecorder{live: r.live}
 	child.live.depth = r.live.depth + 1
-	child.live.stepName = agentName
 
 	return child
 }

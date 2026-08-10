@@ -1158,11 +1158,13 @@ func (w *WebCmd) load() ([]*web.Pipeline, map[string]workspace.Provider, func(),
 			return nil, nil, nil, err
 		}
 
-		closers = append(closers, closeOne)
-
 		slug := web.Slugify(path)
 		bus := events.New(pipeline.StoreSink(st))
-		closers = append(closers, bus.Close)
+
+		// Bus first, store second: cleanup runs these in order, and the bus
+		// drains its queued events INTO the store. Closing the store first
+		// would throw away the tail of whatever run was in flight.
+		closers = append(closers, bus.Close, closeOne)
 
 		providers[slug] = provider
 		pipelines = append(pipelines, &web.Pipeline{

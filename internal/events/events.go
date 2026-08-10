@@ -96,6 +96,9 @@ type Bus struct {
 
 	sink     chan Event
 	sinkDone chan struct{}
+	// closed guards against publishing to a sink Close has already closed.
+	// Both are read and written under mu.
+	closed bool
 }
 
 // New returns a bus. When sink is non-nil it is called for every published
@@ -105,13 +108,18 @@ func New(sink func(Event)) *Bus {
 	bus := &Bus{subs: map[int64]chan Event{}}
 
 	if sink != nil {
-		bus.sink = make(chan Event, sinkBuffer)
+		// The goroutine ranges over its OWN copy of the channel, never over
+		// bus.sink: Close nils that field before closing the channel, and a
+		// `range bus.sink` evaluated after the nil would range over nil and
+		// block forever, leaving Close waiting on a sinkDone that never comes.
+		queue := make(chan Event, sinkBuffer)
+		bus.sink = queue
 		bus.sinkDone = make(chan struct{})
 
 		go func() {
 			defer close(bus.sinkDone)
 
-			for event := range bus.sink {
+			for event := range queue {
 				sink(event)
 			}
 		}()
@@ -135,14 +143,23 @@ func (b *Bus) Publish(event Event) {
 	}
 
 	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.closed {
+		return
+	}
+
 	for _, ch := range b.subs {
 		select {
 		case ch <- event:
 		default: // slow subscriber: drop rather than stall the run
 		}
 	}
-	b.mu.Unlock()
 
+	// Sent under the same lock Close takes, because the alternative is a
+	// send on a channel Close is concurrently closing — a panic, not a lost
+	// event. The send is still non-blocking, so holding the lock costs a
+	// bounded push and never waits on the sink's writer.
 	if b.sink != nil {
 		select {
 		case b.sink <- event:
@@ -181,16 +198,36 @@ func (b *Bus) Subscribe() (<-chan Event, func()) {
 	}
 }
 
-// Close drains and stops the sink goroutine. Subscribers are left alone —
-// each owns its own cancel.
+// Close drains and stops the sink goroutine, and makes every later Publish a
+// no-op. Subscribers are left alone — each owns its own cancel.
+//
+// Idempotent, and safe against concurrent publishers: a run still finishing
+// when the process shuts down would otherwise be sending on the very channel
+// this closes.
 func (b *Bus) Close() {
-	if b == nil || b.sink == nil {
+	if b == nil {
 		return
 	}
 
-	close(b.sink)
-	<-b.sinkDone
+	b.mu.Lock()
+
+	if b.closed {
+		b.mu.Unlock()
+
+		return
+	}
+
+	b.closed = true
+	sink := b.sink
 	b.sink = nil
+	b.mu.Unlock()
+
+	if sink == nil {
+		return
+	}
+
+	close(sink)
+	<-b.sinkDone
 }
 
 // busKey is the context key for the bus. Unexported and of a private type,

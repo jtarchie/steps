@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -166,12 +167,20 @@ func (s *Server) assembleRun(c echo.Context, run store.RunRow) (runView, error) 
 		return runView{}, fmt.Errorf("web: %w", err)
 	}
 
+	// Deduped: a hash repeats across a run's events (and across the steps a
+	// chain-skip swallowed), and each repeat would add a redundant bind
+	// parameter to the IN clause below.
+	seen := map[string]bool{}
 	hashes := make([]string, 0, len(rows))
 
 	for _, row := range rows {
-		if row.Hash != "" {
-			hashes = append(hashes, row.Hash)
+		if row.Hash == "" || seen[row.Hash] {
+			continue
 		}
+
+		seen[row.Hash] = true
+
+		hashes = append(hashes, row.Hash)
 	}
 
 	nodes, err := pipeline.Store.NodesByHash(ctx, hashes)
@@ -350,9 +359,13 @@ func (s *Server) handleDecideApproval(c echo.Context) error {
 		status = "rejected"
 	}
 
+	// A decision that no longer matches a pending row is a resubmission — a
+	// double click, or a refresh re-POSTing the form. The first one recorded
+	// the audit trail correctly, so settle on it rather than reporting a 500
+	// for work that succeeded.
 	err = pipeline.Store.DecideApproval(c.Request().Context(), id, status, "web", c.FormValue("reason"))
 	if err != nil {
-		return fmt.Errorf("web: %w", err)
+		slog.Info("web.approval_not_pending", "id", id, "error", err)
 	}
 
 	//nolint:wrapcheck // echo's redirect error is returned verbatim

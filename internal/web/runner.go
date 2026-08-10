@@ -37,13 +37,13 @@ type LocalRunner struct {
 	// flag on restart degrades to an ordinary (cached) run, which is the safe
 	// direction.
 	mu     sync.Mutex
-	forced map[int64]bool
+	forced map[string]bool
 }
 
 // NewLocalRunner builds a runner over per-pipeline workspace providers, keyed
 // by pipeline slug.
 func NewLocalRunner(providers map[string]workspace.Provider) *LocalRunner {
-	return &LocalRunner{providers: providers, forced: map[int64]bool{}}
+	return &LocalRunner{providers: providers, forced: map[string]bool{}}
 }
 
 // Enqueue puts a job on the pipeline's queue.
@@ -68,15 +68,11 @@ func (r *LocalRunner) Enqueue(ctx context.Context, target *Pipeline, jobName, re
 	return 0, nil
 }
 
-// jobKey hashes a pipeline/job pair into the map key. A string map would
-// serve equally; this keeps the field's type honest about being an id set.
-func jobKey(slug, jobName string) int64 {
-	var sum int64
-	for _, r := range slug + "\x00" + jobName {
-		sum = sum*31 + int64(r)
-	}
-
-	return sum
+// jobKey identifies a job within a pipeline. A plain string, not a hash: two
+// job names colliding would consume the wrong force flag, re-running one job
+// from scratch while the job actually asked for quietly runs cached.
+func jobKey(slug, jobName string) string {
+	return slug + "\x00" + jobName
 }
 
 // takeForce consumes a pending force flag for a job.

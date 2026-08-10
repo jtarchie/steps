@@ -168,3 +168,41 @@ func assertReceivesInOrder(t *testing.T, ch <-chan Event) {
 		}
 	}
 }
+
+// TestPublishDuringCloseIsSafe covers the shutdown path: `steps web` closes
+// its bus while a job it started is still publishing. Before the close flag,
+// the concurrent send raced Close's close(sink) and panicked with "send on a
+// closed channel", taking the process down instead of shutting it down.
+func TestPublishDuringCloseIsSafe(t *testing.T) {
+	t.Parallel()
+
+	for range 50 {
+		bus := New(func(Event) {})
+
+		var wg sync.WaitGroup
+
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+
+			for range 200 {
+				bus.Publish(Event{Type: TypeStepStarted})
+			}
+		}()
+
+		go func() {
+			defer wg.Done()
+
+			bus.Close()
+		}()
+
+		wg.Wait()
+
+		// Idempotent: a second Close must not double-close the sink.
+		bus.Close()
+
+		// And a publish after close is a no-op, not a panic.
+		bus.Publish(Event{Type: TypeStepFinished})
+	}
+}

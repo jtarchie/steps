@@ -85,82 +85,156 @@
 <script>
 (function () {
   var transcript = document.getElementById('transcript');
+  var eventsURL = window.location.pathname + '/events';
+  // The sequence already applied. It is what a reconnect resumes from: the
+  // browser retries an EventSource against its ORIGINAL url, so without
+  // taking the retry over ourselves a dropped connection would replay the
+  // whole run and duplicate every turn.
   var last = 0;
-  document.querySelectorAll('[data-step]').forEach(function () { });
+  var source;
+
+  // Every node is built with createElement + textContent rather than
+  // innerHTML: step names come from pipeline YAML, error text is command
+  // output, and a tool name is chosen by the model — all of it untrusted
+  // enough that the server-rendered path escapes it, and this path must not
+  // be the one that doesn't.
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined && text !== null && text !== '') node.textContent = text;
+    return node;
+  }
 
   function stepEl(key) { return transcript.querySelector('[data-step="' + CSS.escape(key) + '"]'); }
 
-  var source = new EventSource(window.location.pathname + '/events?after=0');
+  function startStep(e, key) {
+    if (stepEl(key)) return;
+    var div = el('div', 'step running open');
+    div.dataset.step = key;
 
-  source.addEventListener('event', function (msg) {
+    var head = el('div', 'stephead');
+    head.setAttribute('role', 'button');
+    head.setAttribute('tabindex', '0');
+    head.appendChild(el('span', 'chev chev-icon'));
+    head.appendChild(el('span', 'kind', e.step_kind));
+    head.appendChild(el('span', 'name', e.step_name));
+
+    var dur = el('span', 'dur');
+    dur.appendChild(el('span', 'cursor', '▍'));
+    head.appendChild(dur);
+
+    div.appendChild(head);
+    div.appendChild(el('div', 'stepbody'));
+    transcript.appendChild(div);
+  }
+
+  function finishStep(e, node) {
+    var skipped = e.type === 'step_skipped';
+    node.className = 'step ' + (skipped ? 'skipped' : (e.status === 'succeeded' ? 'passed' : 'failed'));
+
+    var dur = node.querySelector('.dur');
+    if (dur) {
+      dur.textContent = skipped ? '' : e.duration;
+      if (e.hash) {
+        dur.appendChild(document.createTextNode(' · '));
+        var link = el('a', 'hash', e.hash.slice(0, 7));
+        link.href = '../nodes/' + encodeURIComponent(e.hash);
+        dur.appendChild(link);
+      }
+    }
+
+    if (e.text && !skipped && e.status !== 'succeeded') {
+      var log = el('div', 'log');
+      log.appendChild(el('span', 'err', e.text));
+      node.querySelector('.stepbody').appendChild(log);
+    }
+
+    if (e.text && skipped) {
+      var name = node.querySelector('.stephead .name');
+      name.insertAdjacentElement('afterend', el('span', 'note', e.text));
+    }
+  }
+
+  function addTurn(e, node) {
+    // A turn normally matches its own step. The fallback covers a delegated
+    // conversation whose events arrive before its parent step is on the page.
+    var target = node || Array.from(transcript.querySelectorAll('.step.running')).pop();
+    if (!target) return;
+
+    var who = e.type === 'agent_text' ? 'model'
+      : e.type === 'agent_call' ? 'tool'
+      : e.type === 'agent_result' ? 'result' : 'delegate';
+
+    var turn = el('div', 'turn ' + (e.type === 'agent_text' ? 'model' : 'tool') + (e.depth > 0 ? ' nested' : ''));
+    turn.appendChild(el('span', 'who', who));
+
+    var what = el('span', 'what');
+    if (e.name) {
+      what.appendChild(el('code', null, e.name));
+      what.appendChild(document.createTextNode(' '));
+    }
+    if (e.text) what.appendChild(document.createTextNode(e.text));
+    if (e.detail) what.appendChild(el('span', 'args', e.detail.split('\n')[0]));
+
+    turn.appendChild(what);
+    target.querySelector('.stepbody').appendChild(turn);
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+
+  function onEvent(msg) {
     var e = JSON.parse(msg.data);
+    // A replayed event (a reconnect that overlapped, a server that resent)
+    // must not be applied twice.
+    if (e.seq <= last) return;
     last = e.seq;
+
     var key = e.step_index + '/' + e.step_name;
 
-    if (e.type === 'step_started') {
-      if (stepEl(key)) return;
-      var div = document.createElement('div');
-      div.className = 'step running open';
-      div.dataset.step = key;
-      div.innerHTML = '<div class="stephead" role="button" tabindex="0">' +
-        '<span class="chev chev-icon"></span><span class="kind">' + e.step_kind + '</span>' +
-        '<span class="name">' + e.step_name + '</span>' +
-        '<span class="dur"><span class="cursor">▍</span></span></div><div class="stepbody"></div>';
-      transcript.appendChild(div);
-      return;
-    }
+    if (e.type === 'step_started') { startStep(e, key); return; }
 
-    var el = stepEl(key);
+    var node = stepEl(key);
 
     if (e.type === 'step_finished' || e.type === 'step_skipped') {
-      if (!el) return;
-      el.className = 'step ' + (e.type === 'step_skipped' ? 'skipped'
-        : (e.status === 'succeeded' ? 'passed' : 'failed'));
-      var dur = el.querySelector('.dur');
-      if (dur) dur.innerHTML = (e.type === 'step_skipped' ? '' : e.duration) +
-        (e.hash ? ' · <a class="hash" href="../nodes/' + e.hash + '">' + e.hash.slice(0, 7) + '</a>' : '');
-      if (e.text && e.type === 'step_finished' && e.status !== 'succeeded') {
-        el.querySelector('.stepbody').innerHTML += '<div class="log"><span class="err">' + e.text + '</span></div>';
-      }
-      if (e.text && e.type === 'step_skipped') {
-        var head = el.querySelector('.stephead .name');
-        head.insertAdjacentHTML('afterend', '<span class="note">' + e.text + '</span>');
-      }
+      if (node) finishStep(e, node);
       return;
     }
 
-    if (e.agent) {
-      // A sub-agent's turns carry the child's name; hang them on whichever
-      // agent step is still open, matching the server-side assembly.
-      var target = el || transcript.querySelector('.step.running:last-of-type') ||
-        Array.from(transcript.querySelectorAll('.step.running')).pop();
-      if (!target) return;
-      var who = e.type === 'agent_text' ? 'model'
-        : e.type === 'agent_call' ? 'tool'
-        : e.type === 'agent_result' ? 'result' : 'delegate';
-      var body = target.querySelector('.stepbody');
-      var turn = document.createElement('div');
-      turn.className = 'turn ' + (e.type === 'agent_text' ? 'model' : 'tool') + (e.depth > 0 ? ' nested' : '');
-      turn.innerHTML = '<span class="who">' + who + '</span><span class="what">' +
-        (e.name ? '<code>' + e.name + '</code> ' : '') +
-        (e.text ? escapeHTML(e.text) : '') +
-        (e.detail ? '<span class="args">' + escapeHTML(e.detail.split('\n')[0]) + '</span>' : '') +
-        '</span>';
-      body.appendChild(turn);
-      window.scrollTo(0, document.body.scrollHeight);
-    }
-  });
-
-  source.addEventListener('done', function () {
-    source.close();
-    window.location.reload();
-  });
-
-  function escapeHTML(s) {
-    var d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
+    if (e.agent) addTurn(e, node);
   }
+
+  // Reconnects back off and eventually stop. Left open after the server goes
+  // away — Ctrl-C on `steps web` with the tab still up — a fixed-interval
+  // retry would hammer a dead port for as long as the tab lives.
+  var retries = 0;
+  var maxRetries = 6;
+
+  function connect() {
+    source = new EventSource(eventsURL + '?after=' + last);
+
+    source.addEventListener('event', function (msg) {
+      retries = 0;
+      onEvent(msg);
+    });
+
+    source.addEventListener('done', function () {
+      source.onerror = null;
+      source.close();
+      window.location.reload();
+    });
+
+    source.onerror = function () {
+      // Take the retry over so it resumes from `last` instead of the
+      // browser's automatic retry against ?after=0.
+      source.close();
+
+      if (retries >= maxRetries) return;
+
+      setTimeout(connect, 1000 * Math.pow(2, retries));
+      retries++;
+    };
+  }
+
+  connect();
 })();
 </script>
 {{end}}

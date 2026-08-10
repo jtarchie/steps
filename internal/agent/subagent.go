@@ -151,7 +151,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		// A child recorder off the parent's: the delegation's turns publish
 		// live, one level deeper, instead of surfacing only when the child
 		// finishes and the parent summarizes it.
-		recorder: env.transcript.childRecorder(c.ri.AgentName),
+		recorder: env.transcript.childRecorder(),
 		// A sub-agent gets its OWN budget, from its own agents: entry — it is
 		// a separate invocation of a separate agent. Its spend is reported
 		// under its own name and rolls up into the job total like any other.

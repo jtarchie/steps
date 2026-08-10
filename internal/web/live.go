@@ -63,9 +63,18 @@ func (s *Server) handleRunEvents(c echo.Context) error {
 	for {
 		var err error
 
+		before := after
+
 		after, err = s.flushEvents(c, runID, after)
 		if err != nil {
 			return fmt.Errorf("web: %w", err)
+		}
+
+		// Activity re-arms the deadline: it bounds SILENCE, not the run. Armed
+		// once and never reset, it would cut the stream on every job longer
+		// than the timeout — which is the case a live view exists for.
+		if after != before {
+			deadline.Reset(liveIdleTimeout)
 		}
 
 		// Once the run is over and its events are all delivered, say so and
