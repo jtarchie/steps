@@ -8,6 +8,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/pipeline"
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // passedPipeline builds the shape the story describes: one job tests a
@@ -105,7 +106,7 @@ func TestPassedReleasesOnceUpstreamHasPassedThatVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = st.RecordPassedVersion(ctx, "test", "repo", string(encoded))
+	err = st.RecordPassedVersion(ctx, "test", "repo", string(encoded), "b1")
 	if err != nil {
 		t.Fatalf("RecordPassedVersion: %v", err)
 	}
@@ -118,6 +119,27 @@ func TestPassedReleasesOnceUpstreamHasPassedThatVersion(t *testing.T) {
 	if !contains(enqueued, "deploy") {
 		t.Errorf("enqueued = %v, want deploy released now that v2 passed test", enqueued)
 	}
+}
+
+// passedAllUpstream mirrors what jobReadyFor does now: ask each named upstream
+// job whether it has one build green against the whole constrained set. The
+// per-resource question this replaced could not express the set at all.
+func passedAllUpstream(t *testing.T, st *store.Store, upstream []string, resource string, version map[string]any) bool {
+	t.Helper()
+
+	for _, jobName := range upstream {
+		passed, err := pipeline.VersionSetPassedUpstream(context.Background(), st, jobName,
+			map[string]map[string]any{resource: version})
+		if err != nil {
+			t.Fatalf("VersionSetPassedUpstream(%q): %v", jobName, err)
+		}
+
+		if !passed {
+			return false
+		}
+	}
+
+	return true
 }
 
 // TestVersionPassedUpstreamRequiresEveryJob verifies passed: [a, b] means
@@ -134,29 +156,23 @@ func TestVersionPassedUpstreamRequiresEveryJob(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = st.RecordPassedVersion(ctx, "unit", "repo", string(encoded))
+	err = st.RecordPassedVersion(ctx, "unit", "repo", string(encoded), "b1")
 	if err != nil {
 		t.Fatalf("RecordPassedVersion: %v", err)
 	}
 
-	passed, err := pipeline.VersionPassedUpstream(ctx, st, []string{"unit", "lint"}, "repo", version)
-	if err != nil {
-		t.Fatalf("VersionPassedUpstream: %v", err)
-	}
+	passed := passedAllUpstream(t, st, []string{"unit", "lint"}, "repo", version)
 
 	if passed {
 		t.Error("a version green in one of two required jobs satisfied the constraint")
 	}
 
-	err = st.RecordPassedVersion(ctx, "lint", "repo", string(encoded))
+	err = st.RecordPassedVersion(ctx, "lint", "repo", string(encoded), "b1")
 	if err != nil {
 		t.Fatalf("RecordPassedVersion: %v", err)
 	}
 
-	passed, err = pipeline.VersionPassedUpstream(ctx, st, []string{"unit", "lint"}, "repo", version)
-	if err != nil {
-		t.Fatalf("VersionPassedUpstream: %v", err)
-	}
+	passed = passedAllUpstream(t, st, []string{"unit", "lint"}, "repo", version)
 
 	if !passed {
 		t.Error("a version green in both required jobs did not satisfy the constraint")
@@ -175,15 +191,12 @@ func TestPassedIsPerVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = st.RecordPassedVersion(ctx, "test", "repo", string(encoded))
+	err = st.RecordPassedVersion(ctx, "test", "repo", string(encoded), "b1")
 	if err != nil {
 		t.Fatalf("RecordPassedVersion: %v", err)
 	}
 
-	passed, err := pipeline.VersionPassedUpstream(ctx, st, []string{"test"}, "repo", map[string]any{"ref": "v2"})
-	if err != nil {
-		t.Fatalf("VersionPassedUpstream: %v", err)
-	}
+	passed := passedAllUpstream(t, st, []string{"test"}, "repo", map[string]any{"ref": "v2"})
 
 	if passed {
 		t.Error("a job green on v1 released v2; passed: is per version, not per job")
@@ -236,7 +249,7 @@ func TestPassedReleasesOnALaterPoll(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = st.RecordPassedVersion(ctx, "test", "repo", string(encoded))
+	err = st.RecordPassedVersion(ctx, "test", "repo", string(encoded), "b1")
 	if err != nil {
 		t.Fatalf("RecordPassedVersion: %v", err)
 	}
@@ -320,7 +333,7 @@ func TestPassedOnANonTriggeringGetStillReleases(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = st.RecordPassedVersion(ctx, "build", "artifacts", string(encoded))
+	err = st.RecordPassedVersion(ctx, "build", "artifacts", string(encoded), "b1")
 	if err != nil {
 		t.Fatalf("RecordPassedVersion: %v", err)
 	}
@@ -332,5 +345,123 @@ func TestPassedOnANonTriggeringGetStillReleases(t *testing.T) {
 
 	if !contains(enqueued, "deploy") {
 		t.Errorf("enqueued = %v, want deploy released once build passed the artifacts version", enqueued)
+	}
+}
+
+// TestConformancePassedRequiresVersionsToPassTogether pins the correlation
+// property, which is the whole reason passed: exists on a fan-in.
+//
+// Concourse resolves passed: across a whole plan at once, against its versions
+// DB, so the versions a downstream job runs with must have been green in the
+// SAME upstream build (atc/scheduler/algorithm — its own unit tests need a
+// real Postgres, which is why this is a transcribed scenario rather than a
+// port; see docs/conformance.md).
+//
+// steps asked a weaker question until this test existed: "has this version
+// been green in that job", per resource, independently. Two versions that each
+// passed upstream in DIFFERENT builds satisfied it — so a downstream deploy
+// could run a repo/config pair that was individually fine and jointly never
+// tested. That is the bug this pins, and it was confirmed against the real
+// store before being fixed.
+//
+// The scenario, which is the smallest one that distinguishes the two rules:
+//
+//	upstream build 1: repo=r2, config=c1  -> green
+//	upstream build 2: repo=r1, config=c2  -> green
+//
+// r2 and c2 have each been green upstream. They have never been green
+// together, so a downstream job constrained on both must NOT be released.
+func TestConformancePassedRequiresVersionsToPassTogether(t *testing.T) {
+	t.Parallel()
+
+	st := mustOpenStore(t, t.TempDir())
+	ctx := context.Background()
+
+	record := func(buildID, resource, ref string) {
+		t.Helper()
+
+		encoded, err := json.Marshal(map[string]any{"ref": ref})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = st.RecordPassedVersion(ctx, "upstream", resource, string(encoded), buildID)
+		if err != nil {
+			t.Fatalf("RecordPassedVersion: %v", err)
+		}
+	}
+
+	record("build-1", "repo", "r2")
+	record("build-1", "config", "c1")
+	record("build-2", "repo", "r1")
+	record("build-2", "config", "c2")
+
+	crossed := map[string]map[string]any{
+		"repo":   {"ref": "r2"},
+		"config": {"ref": "c2"},
+	}
+
+	passed, err := pipeline.VersionSetPassedUpstream(ctx, st, "upstream", crossed)
+	if err != nil {
+		t.Fatalf("VersionSetPassedUpstream: %v", err)
+	}
+
+	if passed {
+		t.Error("a combination that never passed upstream together satisfied the constraint — each version passed in a different build, and a fan-in accepting that runs code nothing validated")
+	}
+
+	// The control: a pair that DID pass together must still be released, or
+	// the fix would just be a constraint nobody can satisfy.
+	together := map[string]map[string]any{
+		"repo":   {"ref": "r1"},
+		"config": {"ref": "c2"},
+	}
+
+	passed, err = pipeline.VersionSetPassedUpstream(ctx, st, "upstream", together)
+	if err != nil {
+		t.Fatalf("VersionSetPassedUpstream: %v", err)
+	}
+
+	if !passed {
+		t.Error("a combination that was green together in build-2 was refused")
+	}
+}
+
+// TestConformancePassedRowsWithoutABuildCannotCorrelate covers the upgrade
+// path, which is the one place this change can surprise someone.
+//
+// Rows written before build_id existed carry ”, and no correlated lookup can
+// match them. So a multi-resource fan-in is held until its upstream job runs
+// once more and writes a correlated set. That is the conservative direction —
+// passed: is a gate, and waving through a combination nobody can prove was
+// green together is the failure this whole change exists to prevent.
+//
+// A single-resource constraint is unaffected either way, which is why most
+// pipelines will not notice: one row is trivially its own coherent set.
+func TestConformancePassedRowsWithoutABuildCannotCorrelate(t *testing.T) {
+	t.Parallel()
+
+	st := mustOpenStore(t, t.TempDir())
+	ctx := context.Background()
+
+	encoded, err := json.Marshal(map[string]any{"ref": "v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The empty build id is exactly what the ALTER leaves on a pre-upgrade row.
+	err = st.RecordPassedVersion(ctx, "upstream", "repo", string(encoded), "")
+	if err != nil {
+		t.Fatalf("RecordPassedVersion: %v", err)
+	}
+
+	passed, err := pipeline.VersionSetPassedUpstream(ctx, st, "upstream",
+		map[string]map[string]any{"repo": {"ref": "v1"}})
+	if err != nil {
+		t.Fatalf("VersionSetPassedUpstream: %v", err)
+	}
+
+	if passed {
+		t.Error("a row with no build id satisfied a correlated lookup; it cannot vouch for a combination, so it must not")
 	}
 }

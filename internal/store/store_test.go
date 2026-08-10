@@ -571,3 +571,98 @@ func TestNodeTranscriptReplace(t *testing.T) {
 		t.Errorf("replaced transcript = %q", got)
 	}
 }
+
+// TestConformanceSerialGroupsBlockAcrossJobs verifies serial_groups: matches
+// Concourse — two jobs sharing a group never run at the same time, while jobs
+// sharing no group are unaffected.
+//
+// Concourse doc: concourse-ci.org/docs/jobs/ — serial_groups is "a list of
+// tags" ensuring jobs with matching tags do not run simultaneously. Written
+// spec page, not a source reading.
+//
+// steps claim under test: internal/config's SerialGroupsByJob, and
+// ClaimNextJob's serial-group predicate.
+//
+// The third job is the control. Without it this would also pass against an
+// implementation that simply refused to run any two jobs concurrently, which
+// is a different (and much worse) product.
+func TestConformanceSerialGroupsBlockAcrossJobs(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	err := store.SyncSerialGroups(context.Background(), map[string][]string{
+		"deploy-staging": {"deploy"},
+		"deploy-prod":    {"deploy"},
+		// "lint" belongs to no group at all.
+	})
+	if err != nil {
+		t.Fatalf("SyncSerialGroups: %v", err)
+	}
+
+	mustEnqueueJob(t, store, "deploy-staging", "resource-a")
+	mustEnqueueJob(t, store, "deploy-prod", "resource-a")
+	mustEnqueueJob(t, store, "lint", "resource-a")
+
+	id, first := mustClaimJob(t, store, "deploy-staging")
+
+	// lint shares no group, so it is claimable while a deploy runs.
+	_, third := mustClaimJob(t, store, "lint")
+	if third != "lint" {
+		t.Errorf("claimed %q, want lint — a job in no serial group must not be blocked by one that is", third)
+	}
+
+	// deploy-prod shares "deploy" with the running deploy-staging, so it is not.
+	assertQueueEmpty(t, store)
+
+	err = store.CompleteJob(context.Background(), id, "done", nil)
+	if err != nil {
+		t.Fatalf("CompleteJob: %v", err)
+	}
+
+	_, second := mustClaimJob(t, store, "deploy-prod")
+	if second != "deploy-prod" {
+		t.Errorf("claimed %q, want deploy-prod once %q finished", second, first)
+	}
+}
+
+// TestConformanceEveryJobIsSerialRegardlessOfConfig pins a real DIVERGENCE
+// from Concourse, so it is a known property rather than a surprise.
+//
+// Concourse: serial: defaults to FALSE, and a job may run several builds
+// concurrently up to max_in_flight; serial: true is what forces one at a time
+// (concourse-ci.org/docs/jobs/).
+//
+// steps: ClaimNextJob refuses a pending row whose job already has a running
+// row, unconditionally — see TestStoreClaimSerializesSameJob. So every job is
+// serial here, serial: true adds a group of one that changes nothing on its
+// own, and "three builds of this job at once" is not expressible.
+//
+// That is also why there is no job-level max_in_flight: there would be nowhere
+// for a value above 1 to take effect. Recorded in docs/conformance.md.
+func TestConformanceEveryJobIsSerialRegardlessOfConfig(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	// No serial: and no serial_groups: anywhere — the Concourse default, where
+	// two builds of one job MAY overlap.
+	err := store.SyncSerialGroups(context.Background(), map[string][]string{})
+	if err != nil {
+		t.Fatalf("SyncSerialGroups: %v", err)
+	}
+
+	mustEnqueueJob(t, store, "build", "resource-a")
+	mustClaimJob(t, store, "build")
+
+	mustEnqueueJob(t, store, "build", "resource-b")
+
+	// Concourse would allow this second build to start. steps does not.
+	assertQueueEmpty(t, store)
+}

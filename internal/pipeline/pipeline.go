@@ -203,7 +203,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 
 	publishJobFinished(ctx, job.Name, jobStarted, nil)
 
-	recordPassedVersions(ctx, st, job.Name, fetched)
+	recordPassedVersions(ctx, st, job.Name, resume.id, fetched)
 
 	slog.Info("job.done", "job", job.Name)
 

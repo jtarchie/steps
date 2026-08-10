@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"runtime/debug"
 	"slices"
 	"sort"
@@ -426,23 +427,17 @@ func jobAlreadyRanThese(
 	ctx context.Context, st *store.Store, jobName string,
 	constraints map[string][]string, observed map[string]observedResource,
 ) (bool, error) {
-	for resource := range constraints {
-		obs, seen := observed[resource]
-		if !seen {
-			return false, nil
-		}
-
-		passed, err := pipeline.VersionPassedUpstream(ctx, st, []string{jobName}, resource, obs.version)
-		if err != nil {
-			return false, fmt.Errorf("passed: constraint for job %q: %w", jobName, err)
-		}
-
-		if !passed {
-			return false, nil
-		}
+	want, complete := observedSetFor(constraints, observed)
+	if !complete {
+		return false, nil
 	}
 
-	return true, nil
+	passed, err := pipeline.VersionSetPassedUpstream(ctx, st, jobName, want)
+	if err != nil {
+		return false, fmt.Errorf("passed: constraint for job %q: %w", jobName, err)
+	}
+
+	return passed, nil
 }
 
 // jobReadyFor reports whether every passed: constraint the job declares is
@@ -456,30 +451,77 @@ func jobAlreadyRanThese(
 // A job held back is not an error and not a lost trigger: the version stays
 // current, so the next poll after the upstream job goes green enqueues it.
 func jobReadyFor(ctx context.Context, st *store.Store, job *config.Job, observed map[string]observedResource) (bool, error) {
-	for resource, upstream := range job.PassedConstraints() {
-		obs, seen := observed[resource]
-		if !seen {
-			// The constrained resource was not checked this poll (it carries
-			// no trigger: true), so there is no version to judge. Holding the
-			// job back is the conservative reading, and the one that matches
-			// "only run against a version that passed".
+	// Inverted from resource -> upstream jobs into upstream job -> the set of
+	// constrained resources naming it. That inversion IS the fix: each
+	// upstream job is asked once, about every version it vouches for at once,
+	// so a combination that passed only in pieces is refused. Asking per
+	// resource could never see the combination at all.
+	for _, upstreamJob := range upstreamJobsOf(job) {
+		constrained := map[string][]string{}
+
+		for resource, upstream := range job.PassedConstraints() {
+			if slices.Contains(upstream, upstreamJob) {
+				constrained[resource] = upstream
+			}
+		}
+
+		want, complete := observedSetFor(constrained, observed)
+		if !complete {
+			// A constrained resource was not checked this poll (it carries no
+			// trigger: true), so there is no version to judge. Holding the job
+			// back is the conservative reading, and the one that matches "only
+			// run against a version that passed".
 			return false, nil
 		}
 
-		passed, err := pipeline.VersionPassedUpstream(ctx, st, upstream, resource, obs.version)
+		passed, err := pipeline.VersionSetPassedUpstream(ctx, st, upstreamJob, want)
 		if err != nil {
 			return false, fmt.Errorf("passed: constraint for job %q: %w", job.Name, err)
 		}
 
 		if !passed {
-			fmt.Printf("trigger: %s waiting — no version of %s has passed %v yet\n", job.Name, resource, upstream)
-			slog.Info("trigger.waiting_on_passed", "job", job.Name, "resource", resource, "upstream", upstream)
+			names := slices.Sorted(maps.Keys(want))
+
+			fmt.Printf("trigger: %s waiting — %s has not gone green against this combination of %v yet\n", job.Name, upstreamJob, names)
+			slog.Info("trigger.waiting_on_passed", "job", job.Name, "upstream", upstreamJob, "resources", names)
 
 			return false, nil
 		}
 	}
 
 	return true, nil
+}
+
+// upstreamJobsOf lists every job named by any of this job's passed:
+// constraints, in a stable order.
+func upstreamJobsOf(job *config.Job) []string {
+	seen := map[string]bool{}
+
+	for _, upstream := range job.PassedConstraints() {
+		for _, name := range upstream {
+			seen[name] = true
+		}
+	}
+
+	return slices.Sorted(maps.Keys(seen))
+}
+
+// observedSetFor collects the currently observed version of every constrained
+// resource. complete is false when any of them was not checked this poll —
+// there is then no set to ask about, and the caller holds the job back.
+func observedSetFor(constraints map[string][]string, observed map[string]observedResource) (want map[string]map[string]any, complete bool) {
+	want = make(map[string]map[string]any, len(constraints))
+
+	for resource := range constraints {
+		obs, seen := observed[resource]
+		if !seen {
+			return nil, false
+		}
+
+		want[resource] = obs.version
+	}
+
+	return want, true
 }
 
 // checkResource runs resourceName's check command and reports its latest

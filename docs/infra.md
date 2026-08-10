@@ -130,7 +130,7 @@ steps watch pipeline.yml --interval 30s --max-concurrent 1
 - **Cold start seeds a baseline, never triggers.** A resource checked for the first time just records its current version — it's never itself "dirty" on that first check. This keeps a fresh (or freshly lost) state database from mass-re-running every job the moment `watch` starts.
 - **Dedup, ordering, and per-job serialization**: a resource going dirty twice before a worker claims the row enqueues its affected job once, not twice — but a job already running can still get a fresh pending row queued behind it, so a version change mid-run isn't dropped. Claiming a job never overlaps two runs of the same job, even with `--max-concurrent > 1`.
 - **Graceful-shutdown carve-out**: a job interrupted by SIGINT/SIGTERM mid-run is *not* marked failed (that would drop it forever, since only a new version change re-triggers it) — its row is left "running" and gets reset to "pending" on the next `watch` startup, recovering both a hard crash and an interrupted shutdown the same way. A job that reaches a genuine terminal state (done, or a real failure with the context still live) is finalized even if a SIGINT races the completion.
-- **No `passed:`-style version-set gating across jobs** — that Concourse concept doesn't exist here; any dirty resource simply enqueues every job with a matching `trigger: true` get step.
+- **Downstream-trigger fan-out is version-set-blind on its own** — a dirty resource enqueues every job with a matching `trigger: true` get step. `passed:` (below) is what adds version gating on top, including requiring versions to have gone green together.
 - **CLI**: `steps run <pipeline.yml> [--job x] [--force]` (unchanged) and `steps watch <pipeline.yml> [--interval 30s] [--max-concurrent 1] [--force]`. The pre-existing flat invocation (`steps pipeline.yml --job x`) keeps parsing identically.
 
 ## Get renaming (`resource:`)
@@ -213,6 +213,18 @@ How it works, and what each choice buys:
 - **A job records the versions it fetched only when the whole job succeeds.** `passed:` means "that job ran green against this exact version", and a job that failed after its `get` proves nothing about what it fetched.
 - **Per version, not per job.** A job green on `v1` does not release `v2`. That is the entire point — "the tests passed at some point" is exactly the claim that lets a bad commit deploy.
 - **`passed: [a, b]` means both**, not either.
+- **Versions must have passed TOGETHER.** When a job constrains two resources on the same upstream job, the versions it runs with must have been green in the *same* upstream build — not merely each green at some point. Two versions that passed in different builds have never been proven to work together, and a fan-in that accepts them deploys a combination nothing tested:
+
+  ```
+  upstream build 1:  repo=r2  config=c1   ok
+  upstream build 2:  repo=r1  config=c2   ok
+
+  deploy (repo + config, both passed: [upstream])
+    r2 + c2  ->  held      # each was green, never together
+    r1 + c2  ->  released  # green together in build 2
+  ```
+
+  This is what Concourse's scheduler does, and `steps` did not do it until the correlation was added — see [conformance.md](conformance.md). **Upgrade note:** rows recorded before this cannot vouch for a combination, so a multi-resource fan-in waits for one more upstream run after upgrading. Single-resource constraints, the common case, are unaffected.
 - **A held-back job is not a lost trigger.** The version stays current, so the next poll after the upstream job goes green enqueues it. Nothing needs to be re-pushed.
 - **Load-time checks.** `passed:` is get-only, may not name its own job, and may not name a job that never gets the same resource — that last one would be a deadlock spelled as a typo, since no version of a resource a job never fetches can ever pass there.
 

@@ -58,46 +58,62 @@ func recordFetchedVersion(ctx context.Context, resource string, version map[stri
 // Per JOB, not per step: passed: means "that job ran green against this exact
 // version", and a job that failed after its get proves nothing about the
 // version it fetched.
-func recordPassedVersions(ctx context.Context, st *store.Store, jobName string, fetched *fetchedVersions) {
+// buildID ties the whole set together: every version this run fetched is
+// recorded against one id, so a downstream fan-in can ask whether they were
+// green TOGETHER rather than merely each-at-some-point.
+//
+// Known narrowing: a job using get: version: every fans out into several
+// builds within one invocation and records them all under this single id, so
+// versions from different fanned-out builds look correlated. That is no more
+// permissive than the uncorrelated behaviour this replaced — it is the exact
+// old behaviour for that one shape — and strictly stricter everywhere else.
+func recordPassedVersions(ctx context.Context, st *store.Store, jobName, buildID string, fetched *fetchedVersions) {
 	fetched.mu.Lock()
 	defer fetched.mu.Unlock()
 
 	recCtx := context.WithoutCancel(ctx)
 
 	for resource, version := range fetched.by {
-		err := st.RecordPassedVersion(recCtx, jobName, resource, version)
+		err := st.RecordPassedVersion(recCtx, jobName, resource, version, buildID)
 		if err != nil {
 			slog.Warn("job.passed_unrecorded", "job", jobName, "resource", resource, "error", err)
 		}
 	}
 }
 
-// VersionPassedUpstream reports whether every job a constraint names has
-// already succeeded against this exact version.
+// VersionSetPassedUpstream reports whether upstreamJob has one build in which
+// every (resource, version) pair in versions was green at once.
 //
-// Exported for internal/trigger, which is where the constraint actually bites:
-// a version that has not passed upstream must not enqueue the downstream job
-// at all, rather than starting it and discovering the problem later.
-func VersionPassedUpstream(ctx context.Context, st *store.Store, upstream []string, resource string, version map[string]any) (bool, error) {
-	encoded, err := json.Marshal(version)
+// It takes a SET rather than one resource at a time, which is the whole
+// correction. Asking per resource admits a downstream job running against a
+// combination of versions that each passed upstream in different builds and
+// never passed together — a fan-in of "the repo" and "the config" that were
+// individually fine and jointly untested. Concourse resolves passed: across a
+// whole plan at once for this reason; see docs/conformance.md.
+//
+// Exported for internal/trigger, which is where the constraint bites: a set
+// that has not passed upstream must not enqueue the downstream job at all,
+// rather than starting it and discovering the problem later.
+func VersionSetPassedUpstream(ctx context.Context, st *store.Store, upstreamJob string, versions map[string]map[string]any) (bool, error) {
+	want := make(map[string]string, len(versions))
+
+	for resource, version := range versions {
+		encoded, err := json.Marshal(version)
+		if err != nil {
+			// An unrenderable version cannot be matched against anything, so
+			// the safe answer is "not yet" — passed: exists to hold work back.
+			return false, nil //nolint:nilerr // deliberately conservative; the constraint is a gate, not a hint
+		}
+
+		want[resource] = string(encoded)
+	}
+
+	passed, err := st.HasPassedVersionSet(ctx, upstreamJob, want)
 	if err != nil {
-		// An unrenderable version cannot be matched against anything, so the
-		// safe answer is "not yet" — passed: exists to hold work back.
-		return false, nil //nolint:nilerr // deliberately conservative; the constraint is a gate, not a hint
+		return false, err //nolint:wrapcheck // HasPassedVersionSet already names the job
 	}
 
-	for _, jobName := range upstream {
-		passed, lookupErr := st.HasPassedVersion(ctx, jobName, resource, string(encoded))
-		if lookupErr != nil {
-			return false, lookupErr //nolint:wrapcheck // HasPassedVersion already names the job
-		}
-
-		if !passed {
-			return false, nil
-		}
-	}
-
-	return true, nil
+	return passed, nil
 }
 
 // PassedConstraintsFor is config.Job.PassedConstraints, re-exported so

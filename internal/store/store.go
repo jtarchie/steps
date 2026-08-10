@@ -63,12 +63,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_job
     ON trigger_queue(job_name) WHERE status = 'pending';
 
 -- Which resource versions each job has SUCCESSFULLY run against. It is what
--- passed: reads: "has this exact version been green in that job yet".
+-- passed: reads.
+--
+-- build_id is what makes the question the RIGHT one. Without it this table
+-- answers "has this version been green in that job", per resource and
+-- independently — which admits a downstream job running against a COMBINATION
+-- of versions that each passed upstream but never passed TOGETHER. Concourse
+-- resolves passed: across the whole plan at once for exactly this reason.
+--
+-- With it, the question becomes "is there one build of that job where all of
+-- these versions were green at once", which is what a fan-in actually needs.
 CREATE TABLE IF NOT EXISTS job_versions (
     job_name      TEXT NOT NULL,
     resource_name TEXT NOT NULL,
     version_json  TEXT NOT NULL,
     recorded_at   TEXT NOT NULL,
+    build_id      TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (job_name, resource_name, version_json)
 );
 
@@ -243,6 +253,15 @@ func OpenStore(path string) (*Store, error) {
 // state.db.
 var addedColumns = []struct{ table, column, decl string }{
 	{"runs", "finished_at", "TEXT"},
+	// Rows written before this column existed carry '', which no correlated
+	// lookup can match (HasPassedVersionSet ignores them). That is the
+	// conservative direction and the right one: passed: is a GATE, so the
+	// upgrade holds a multi-resource fan-in back until its upstream job runs
+	// once more and writes a correlated set, rather than waving through a
+	// combination nobody can prove was ever green together. A single-resource
+	// constraint — the common case — is unaffected, since one row is trivially
+	// its own coherent set.
+	{"job_versions", "build_id", "TEXT NOT NULL DEFAULT ''"},
 }
 
 // addColumns applies addedColumns, treating "duplicate column name" as
@@ -800,12 +819,17 @@ func (s *Store) NodeTranscript(ctx context.Context, hash string) (string, bool, 
 
 // RecordPassedVersion records that jobName completed successfully against this
 // exact version of a resource. It is what a downstream job's passed: reads.
-func (s *Store) RecordPassedVersion(ctx context.Context, jobName, resourceName, versionJSON string) error {
+func (s *Store) RecordPassedVersion(ctx context.Context, jobName, resourceName, versionJSON, buildID string) error {
+	// On conflict the build_id is UPDATED rather than left alone: re-running a
+	// job against versions it has already passed should refresh which build
+	// vouches for them, or the row would keep pointing at the oldest build
+	// that saw it and a newer coherent set would be invisible.
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO job_versions (job_name, resource_name, version_json, recorded_at)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT (job_name, resource_name, version_json) DO NOTHING
-	`, jobName, resourceName, versionJSON, time.Now().UTC().Format(time.RFC3339))
+		INSERT INTO job_versions (job_name, resource_name, version_json, recorded_at, build_id)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (job_name, resource_name, version_json)
+		DO UPDATE SET build_id = excluded.build_id, recorded_at = excluded.recorded_at
+	`, jobName, resourceName, versionJSON, time.Now().UTC().Format(time.RFC3339), buildID)
 	if err != nil {
 		return fmt.Errorf("could not record a passed version for job %q: %w", jobName, err)
 	}
@@ -813,20 +837,12 @@ func (s *Store) RecordPassedVersion(ctx context.Context, jobName, resourceName, 
 	return nil
 }
 
-// HasPassedVersion reports whether jobName has already succeeded against this
-// exact version of a resource.
-func (s *Store) HasPassedVersion(ctx context.Context, jobName, resourceName, versionJSON string) (bool, error) {
-	var count int
-
-	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM job_versions WHERE job_name = ? AND resource_name = ? AND version_json = ?`,
-		jobName, resourceName, versionJSON).Scan(&count)
-	if err != nil {
-		return false, fmt.Errorf("could not read passed versions for job %q: %w", jobName, err)
-	}
-
-	return count > 0, nil
-}
+// HasPassedVersion is deliberately absent: the per-resource question it asked
+// ("has this version been green in that job") is the one that admitted a
+// downstream fan-in running a combination of versions that each passed
+// upstream in different builds. HasPassedVersionSet replaced it, and the
+// uncorrelated form is not kept alongside — an available answer to the wrong
+// question is how the bug comes back.
 
 // SyncSerialGroups replaces the recorded job/serial-group membership with
 // what the pipeline currently declares.
@@ -1105,4 +1121,58 @@ func (s *Store) CompletedRunSteps(ctx context.Context, runID string) (map[int]st
 	}
 
 	return done, nil
+}
+
+// HasPassedVersionSet reports whether jobName has one build in which EVERY
+// (resource, version) pair in want was green at the same time.
+//
+// This is the correlated question, and the difference from asking per-resource
+// is the whole point. Two versions that each passed upstream in different
+// builds have never been proven to work TOGETHER, and a downstream fan-in that
+// accepts them is running a combination nothing validated. Concourse resolves
+// passed: across a whole plan at once for this reason; see docs/conformance.md.
+//
+// Rows written before build_id existed carry ” and are excluded, so they can
+// never satisfy a correlated match. Conservative on purpose: passed: is a gate.
+//
+// An empty want is vacuously true — there is no constraint to satisfy.
+func (s *Store) HasPassedVersionSet(ctx context.Context, jobName string, want map[string]string) (bool, error) {
+	if len(want) == 0 {
+		return true, nil
+	}
+
+	// One OR-group per wanted pair, then a GROUP BY that demands a single
+	// build_id matched all of them. COUNT(DISTINCT resource_name) rather than
+	// COUNT(*) so a resource appearing twice under one build cannot stand in
+	// for a resource that is missing.
+	clauses := make([]string, 0, len(want))
+	args := []any{jobName}
+
+	for resourceName, versionJSON := range want {
+		clauses = append(clauses, "(resource_name = ? AND version_json = ?)")
+		args = append(args, resourceName, versionJSON)
+	}
+
+	args = append(args, len(want))
+
+	query := `
+		SELECT 1 FROM job_versions
+		WHERE job_name = ? AND build_id <> ''
+		  AND (` + strings.Join(clauses, " OR ") + `)
+		GROUP BY build_id
+		HAVING COUNT(DISTINCT resource_name) = ?
+		LIMIT 1`
+
+	var found int
+
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("could not check passed versions for job %q: %w", jobName, err)
+	}
+
+	return true, nil
 }
