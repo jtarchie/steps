@@ -297,6 +297,37 @@ A work item is usually more than a name. A finding has a file, a line, a claim; 
 
 **Planning.** A static matrix expands at load, so `steps plan` shows every cell. A runtime one cannot: its width is not knowable until the step that fills its source has run. It hashes its *declaration* at plan time — the axes including the source key, plus the unexpanded template — which means the planner cannot predict what that block, or anything downstream of it, will do. The cells themselves hash at run time and cache per cell exactly as static cells do.
 
+### A ceiling that degrades: `budget:`
+
+A runtime fan-out is the one step whose cost nobody could know when they wrote the pipeline — its width is decided mid-run, usually by a model. `budget:` on the block caps what its cells spend **together**:
+
+```yaml
+- across:
+  - var: dim
+    from: dimensions
+  budget:
+    tokens: 1200000
+  agent: reviewer
+```
+
+```
+budget: across stopped after 8 of 12 cells (spent 1,203,551 of 1,200,000 tokens)
+```
+
+- **It stops, it does not fail.** When the allowance is gone the matrix starts no further cell, the cells already running finish and keep what they recorded, and **the plan carries on**. That is the opposite of the job and agent ceilings, and deliberately so: those are backstops against a runaway, where failing is right. Here, "review eight of the twelve dimensions and publish" beats "spend the same money and publish nothing" — which is what a job-level failure would have done, since the step that publishes is usually an agent too.
+- **Checked before a cell starts, never mid-cell.** A cell that has begun runs to completion. Under `max_in_flight:` the check sits in the admitting loop, before a slot is taken, so in-flight cells are never cut off.
+- **A rerun finishes the work.** The cells that ran are recorded and the ones that never started recorded nothing, so running again with a larger allowance picks up where the last one stopped rather than paying for the whole matrix again.
+- **Tokens only.** `usd` is enforced inside a CLI agent's own subprocess, against itself — it cannot see what the matrix's other cells have spent, so a dollar figure here would cap nothing. Rejected at load.
+- **Measured as a delta on the job's own accumulator**, so a cell's retries and sub-agents count for free. Not hashed, like every other operational limit.
+- **It is not a hard cap, and under `max_in_flight:` the overshoot is a whole batch.** The ceiling bounds what gets *started*, not what a running cell can cost. Serially that means one cell of overshoot. Concurrently it means up to `max_in_flight` of them: the first batch is admitted before any of it has reported a single token, because there is nothing to report yet. After that each admission waits for a slot — which frees only when a cell finishes and rolls its usage up — so later decisions read fresh totals. Size the allowance knowing the first batch is free, put a `budget:` on the agent to bound one cell, and keep the job's as the backstop.
+- **A `max_in_flight:` at or above the cell count makes it bind nothing at all**, and the run says so:
+
+  ```
+  budget: warning — max_in_flight (8) covers all 6 cells, so this block's budget of 3,600,000 tokens cannot stop anything
+  ```
+
+  There is no serialization point in that shape: every cell is admitted before any has reported a token, so there is never a total to decide against. That is inherent to bounding what gets *started* rather than what a running cell may cost — not something a different check order fixes — so the block says it out loud rather than letting the number look like a ceiling. A matrix whose width is decided at run time can land here on one run and not the next, which is why it is a run-time warning and not a load error.
+
 ### Concurrent cells: `max_in_flight:`
 
 Serial cells are the right default for a hand-written matrix. They are the wrong default for a runtime fan-out, where the cells are N independent agents an earlier step decided on, and running them one at a time costs N times one cell's wall clock for nothing.

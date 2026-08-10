@@ -8,6 +8,8 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -49,42 +51,95 @@ func buildSystemMessage(persona, dir string) string {
 // loadContextBlocks reads an agent's declared context_paths out of the
 // step's working directory at preparation time. Every path is confined to
 // the workspace by resolveAgentPath — the same guard the file tools use —
-// and capped at maxReadFileBytes, the size read_file already treats as the
-// largest sane in-context document. A missing, escaping, or oversized file
-// is a hard preparation error: context_paths is operator-authored config,
-// so a bad one should fail the step loudly before a token is spent, not
-// surface as a surprise mid-conversation.
-func loadContextBlocks(dir string, paths []string) ([]contextBlock, error) {
+// and capped at limit bytes apiece (max_context_bytes:, default
+// config.DefaultMaxContextBytes). A missing or escaping file is a hard
+// preparation error: context_paths is operator-authored config, so a bad one
+// should fail the step loudly before a token is spent, rather than surface as
+// a surprise mid-conversation. A file that is merely too BIG is not that —
+// see loadContextBlock.
+func loadContextBlocks(dir string, paths []string, limit int) ([]contextBlock, error) {
 	if len(paths) == 0 {
 		return nil, nil
+	}
+
+	// Resolved once, not per path: config guarantees a nonzero MaxContextBytes
+	// on every production call (see resolveMaxContextBytes), so this only
+	// covers a direct caller that passed 0 — and reassigning it inside the loop
+	// made the ceiling depend on which iteration first saw an unset one.
+	if limit <= 0 {
+		limit = config.DefaultMaxContextBytes
 	}
 
 	blocks := make([]contextBlock, 0, len(paths))
 
 	for _, p := range paths {
-		resolved, err := resolveAgentPath(dir, p)
+		block, err := loadContextBlock(dir, p, limit)
 		if err != nil {
-			return nil, fmt.Errorf("context path %q: %w", p, err)
+			return nil, err
 		}
 
-		info, err := os.Stat(resolved)
-		if err != nil {
-			return nil, fmt.Errorf("context path %q: %w", p, err)
-		}
-
-		if info.Size() > maxReadFileBytes {
-			return nil, fmt.Errorf("context path %q is %d bytes, over the %d-byte limit", p, info.Size(), maxReadFileBytes)
-		}
-
-		data, err := os.ReadFile(resolved) //nolint:gosec // resolveAgentPath confines to dir
-		if err != nil {
-			return nil, fmt.Errorf("context path %q: %w", p, err)
-		}
-
-		blocks = append(blocks, contextBlock{path: p, content: string(data)})
+		blocks = append(blocks, block)
 	}
 
 	return blocks, nil
+}
+
+// loadContextBlock reads one context file, capped at limit bytes.
+//
+// An oversized file is TRUNCATED, not refused.
+//
+// It used to fail the step, on the reasoning that context_paths: is
+// operator-authored config and a bad one should be loud. But the operator
+// authors a PATH, not a size: `pr/pr.diff` is a perfectly correct path that
+// fails the moment the pull request it names grows past the limit — which is
+// nothing they did, and is likeliest exactly when the review matters most. A
+// matrix cell's path is model-authored now besides.
+//
+// So it degrades the way read_file does for the same reason: hand over what
+// fits, and say plainly that there is more and how to reach it. Losing the
+// tail of a diff costs a reviewer some context; failing the step costs the
+// entire review.
+//
+// Only limit bytes are ever READ. Slurping the whole file to keep a prefix of
+// it made a multi-megabyte diff cost its full size in memory to deliver 100KB
+// — and then paid for a second copy of it, since the truncating branch
+// converted the entire buffer to a string before slicing. The size in the
+// notice comes from a stat instead, which is where it was always available.
+func loadContextBlock(dir, path string, limit int) (contextBlock, error) {
+	resolved, err := resolveAgentPath(dir, path)
+	if err != nil {
+		return contextBlock{}, fmt.Errorf("context path %q: %w", path, err)
+	}
+
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return contextBlock{}, fmt.Errorf("context path %q: %w", path, err)
+	}
+
+	file, err := os.Open(resolved) //nolint:gosec // resolveAgentPath confines to dir
+	if err != nil {
+		return contextBlock{}, fmt.Errorf("context path %q: %w", path, err)
+	}
+	defer func() { _ = file.Close() }() // read-only; nothing to report on close
+
+	data, err := io.ReadAll(io.LimitReader(file, int64(limit)))
+	if err != nil {
+		return contextBlock{}, fmt.Errorf("context path %q: %w", path, err)
+	}
+
+	content := string(data)
+
+	if info.Size() > int64(limit) {
+		content += fmt.Sprintf(
+			"\n\n[truncated: %s is %d bytes, and the first %d are shown. "+
+				"Use read_file with start_line/end_line to page through the rest.]",
+			path, info.Size(), limit)
+
+		slog.Warn("agent.context_path_truncated", "path", path,
+			"bytes", info.Size(), "limit", limit)
+	}
+
+	return contextBlock{path: path, content: content}, nil
 }
 
 // lookupAPIKey reads the API key from the OS environment variable named by

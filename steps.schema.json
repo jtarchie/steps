@@ -87,7 +87,12 @@
           "description": "Pipeline-wide run-context settings.",
           "properties": {
             "fidelity": {
-              "enum": ["off", "truncate", "compact", "summary"],
+              "enum": [
+                "off",
+                "truncate",
+                "compact",
+                "summary"
+              ],
               "description": "Default recap detail for every agent step. A step's own context.fidelity wins. Default compact."
             }
           }
@@ -111,7 +116,9 @@
         },
         "env": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Host environment variable NAMES this entity's commands may see, on top of the built-in allowlist. Names only \u2014 a KEY=VALUE literal is rejected, since a value would be hashed into the state database in cleartext."
         },
         "user": {
@@ -254,7 +261,9 @@
         },
         "env": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Host environment variable NAMES this entity's commands may see, on top of the built-in allowlist. Names only \u2014 a KEY=VALUE literal is rejected, since a value would be hashed into the state database in cleartext."
         },
         "user": {
@@ -286,17 +295,26 @@
         },
         "max_turns": {
           "type": "integer",
-          "description": "Tool-calling turns per attempt. Default 8."
+          "description": "Tool-calling turns per attempt. Default 30."
         },
         "compact_after_tokens": {
           "type": "integer",
           "description": "Compact the conversation past this size. 0 disables."
+        },
+        "context_window": {
+          "type": "integer",
+          "description": "This model's context window, for a model steps does not recognize or a host that serves a smaller one. Compaction fires at 80% of it."
         },
         "tools": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/toolSpec"
           }
+        },
+        "max_context_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How much of one context_paths: file reaches the model at conversation start. Default 100000; 0 takes that default. Over it the file is truncated with a pointer to read_file paging, never refused."
         }
       }
     },
@@ -524,7 +542,9 @@
         },
         "env": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Host environment variable NAMES this entity's commands may see, on top of the built-in allowlist. Names only \u2014 a KEY=VALUE literal is rejected, since a value would be hashed into the state database in cleartext."
         },
         "user": {
@@ -638,7 +658,7 @@
         },
         "serial": {
           "type": "boolean",
-          "description": "State that two builds of this job must never run at once. Always true in practice — this records that a pipeline depends on it."
+          "description": "State that two builds of this job must never run at once. Always true in practice \u2014 this records that a pipeline depends on it."
         },
         "serial_groups": {
           "type": "array",
@@ -667,6 +687,10 @@
         },
         "ensure": {
           "$ref": "#/$defs/step"
+        },
+        "timeout": {
+          "type": "string",
+          "description": "Wall-clock deadline for the whole job, e.g. \"45m\". Checked BETWEEN steps: the running step finishes and no further step starts, so it composes with a step's own timeout: rather than racing it. Fails the job. Not hashed."
         }
       }
     },
@@ -748,6 +772,11 @@
             "type": "string"
           }
         },
+        "max_context_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Per-file cap for this step's context_paths:, overriding the agent's max_context_bytes:. 0 defers to the agent."
+        },
         "verdicts": {
           "type": "array",
           "items": {
@@ -778,7 +807,7 @@
           "properties": {
             "message": {
               "type": "string",
-              "description": "What is being asked. Required — an approval nobody can read is one nobody can answer responsibly."
+              "description": "What is being asked. Required \u2014 an approval nobody can read is one nobody can answer responsibly."
             },
             "timeout": {
               "type": "string",
@@ -849,7 +878,7 @@
         "max_in_flight": {
           "type": "integer",
           "minimum": 1,
-          "description": "across: steps only. How many cells may run at once. Unset or 1 runs them serially in declaration order; above 1 requires a top-level workspace: strategy. Not hashed — changing it never re-runs a cached cell.",
+          "description": "across: steps only. How many cells may run at once. Unset or 1 runs them serially in declaration order; above 1 requires a top-level workspace: strategy. Not hashed \u2014 changing it never re-runs a cached cell.",
           "default": 1
         },
         "in_parallel": {
@@ -948,7 +977,9 @@
         },
         "env": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Host environment variable NAMES this entity's commands may see, on top of the built-in allowlist. Names only \u2014 a KEY=VALUE literal is rejected, since a value would be hashed into the state database in cleartext."
         },
         "user": {
@@ -967,7 +998,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Route by outcome: success/failure, or a verdict name. Each value is a step name in the same get-segment, or the reserved target \"next\" — continue in declaration order, which is the only way to land on a container (in_parallel/race/across/ensemble/approval), since those have no name."
+          "description": "Route by outcome: success/failure, or a verdict name. Each value is a step name in the same get-segment, or the reserved target \"next\" \u2014 continue in declaration order, which is the only way to land on a container (in_parallel/race/across/ensemble/approval), since those have no name."
         },
         "max_visits": {
           "type": "integer",
@@ -990,6 +1021,21 @@
         },
         "ensure": {
           "$ref": "#/$defs/step"
+        },
+        "budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "across: steps only. Caps what every cell of the matrix spends TOGETHER. On exhaustion the matrix stops starting new cells and the plan continues \u2014 unlike a job or agent budget, which fails. Not hashed.",
+          "required": [
+            "tokens"
+          ],
+          "properties": {
+            "tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Provider-reported tokens the whole matrix may spend. usd is not valid here."
+            }
+          }
         }
       }
     },
@@ -1029,7 +1075,12 @@
               "description": "Grant the set_context tool, which records a fact for later steps."
             },
             "fidelity": {
-              "enum": ["off", "truncate", "compact", "summary"],
+              "enum": [
+                "off",
+                "truncate",
+                "compact",
+                "summary"
+              ],
               "description": "How much of the recorded context this step is shown. Defaults to compact; off opts out entirely."
             },
             "qualify": {

@@ -6,7 +6,7 @@ How an `agent` step in a pipeline actually runs, and the features around custom 
 
 An agent step runs a tool-calling conversation loop:
 
-1. Parse the agent's config: model/endpoint, system prompt, granted tools, `max_turns` (default 8).
+1. Parse the agent's config: model/endpoint, system prompt, granted tools, `max_turns` (default 30).
 2. Build a system message combining the agent's persona with working-directory context (any `context_paths:` files are delivered as synthetic `read_file` tool results — see below).
 3. Loop, up to `max_turns`:
    - Send the conversation + tool definitions to the model.
@@ -14,6 +14,8 @@ An agent step runs a tool-calling conversation loop:
    - Cap any tool output at 32,000 bytes before it goes back to the model, so a noisy command can't blow out the context window — output over that is saved to a file under the step's working directory instead of being dropped, with a short pointer message taking its place (see [compaction](agents-internals.md#compacting-long-conversations)); `read_file` is the exception on both counts — it reads up to 100,000 bytes (a spilled file exists precisely so the model can pull it back, so its read budget is deliberately larger than the spill threshold) and degrades to a plain truncation with `start_line`/`end_line` paging rather than spilling a file back out to another file.
    - Append the tool results and continue.
 4. Exit when the model stops requesting tools, `max_turns` is exceeded, or [loop detection](agents-internals.md#loop-detection) kills a stuck conversation.
+   - A spent turn budget **ends** the conversation rather than destroying it: the runner makes one final request with the tools withheld, asking the model to answer from what it already gathered, and records the answer with `wrapped_up: true` so a degraded answer is tellable from a confident one. Tools are withheld rather than the model being asked politely to stop, because a model that spent every turn calling tools has already demonstrated it will not.
+   - If that final request *itself* fails — a 5xx, or a token ceiling breached by it — the step reports **that** failure, unmarked, so it classifies as `errored` and fires `on_error`. A provider outage on the last request is not the model declining to answer, and the two must not collapse into one message.
 5. Print the model's final response text to the terminal, followed by its verdict and note if the step declares `verdicts:` — this happens whether the run succeeded or hit its turn budget, since a turn-exhausted attempt's partial response is still available.
 6. Record the step's output.
 
@@ -241,9 +243,26 @@ jobs:
 
 The point is not convenience but **guarantee**: conventions every invocation must follow (build/lint/test commands, package-dependency rules) are present from the first turn, instead of costing a `read_file` round trip the model might not bother with.
 
-Paths are relative to the step's working directory and confined to its workspace (`resolveAgentPath`, the same guard the file tools use), so in practice the file lives inside a declared input — `repo/CLAUDE.md` inside the `repo` get. They are read at **run time** (per attempt), which is exactly what distinguishes them from `system_file:`: `system_file:` is the pipeline author's own persona, resolved once at `LoadConfig`; `context_paths:` is content that arrives with a fetched artifact and can change between runs. A missing, escaping, or over-100KB file fails the step at preparation, before a token is spent — it is operator-authored config, so a bad one is a loud error, not a surprise mid-conversation.
+Paths are relative to the step's working directory and confined to its workspace (`resolveAgentPath`, the same guard the file tools use), so in practice the file lives inside a declared input — `repo/CLAUDE.md` inside the `repo` get. They are read at **run time** (per attempt), which is exactly what distinguishes them from `system_file:`: `system_file:` is the pipeline author's own persona, resolved once at `LoadConfig`; `context_paths:` is content that arrives with a fetched artifact and can change between runs. A missing or escaping file fails the step at preparation, before a token is spent — it is operator-authored config, so a bad one is a loud error, not a surprise mid-conversation. A file that is merely too big (over `max_context_bytes:`, default 100KB) is **truncated** instead, with a note saying so and pointing at `read_file`'s `start_line`/`end_line` to page the rest: the author writes a path, not a size, and `pr/pr.diff` is a correct path that would otherwise start failing the day the pull request under review grew — which is exactly when the review matters.
 
 `context_paths` is a step-level field, not agent-level — the agent definition (`agents:`) has no notion of which inputs are available. It is only valid on `agent` steps and requires `read_file` to be in the tool grant (which it is by default). Sub-agents and fix agents do not inherit the parent step's `context_paths`; the parent is expected to provide all necessary context via the sub-agent's `request` argument or the fix agent's prompt.
+
+`max_context_bytes:` is spelled on **either**, and the step's wins:
+
+```yaml
+agents:
+- name: reviewer
+  max_context_bytes: 100000    # what every step of this agent gets by default
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    context_paths: [pr/pr.diff]
+    max_context_bytes: 400000  # ...except this one, which is handed the diff
+```
+
+That precedence exists because `context_paths:` is itself step-level: two steps sharing one agent routinely hand it different evidence — a large diff to the reviewer, a small manifest to the gatekeeper — and without a step-level ceiling the only way to give them different ones is to duplicate the whole agent under a second name for the sake of one number. `context_window:` deliberately has no step spelling for the mirror-image reason: it describes the *model*, and the model belongs to the agent.
 
 **In an `across:` matrix**, each entry renders `{{ .vars.<name> }}` per cell, so a cell arrives already holding the code it was assigned instead of spending its first turns navigating to it:
 
@@ -645,7 +664,7 @@ These are load errors, not silent no-ops, because a setting that reads as config
 | `source.endpoint:` | there is no request to aim anywhere |
 | `temperature:`, `top_p:`, `max_tokens:`, `reasoning_effort:` | the CLI chooses its own sampling |
 | `source.string_tool_choice:` | no `tool_choice` on the wire to spell |
-| `compact_after_tokens:` | the CLI compacts its own conversation |
+| `compact_after_tokens:`, `context_window:` | the CLI compacts its own conversation, against a window it resolves itself |
 | `budget.tokens:` | nothing counts tokens until the subprocess exits (use `budget.usd:`) |
 | `image:` (agent or step) | the CLI runs its tools on the host |
 | `required:`, `max_calls:`, `args:` on a tool | enforced by the turn loop the CLI replaces |

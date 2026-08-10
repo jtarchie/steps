@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -465,6 +466,32 @@ func openStateDB(t *testing.T, pipelinePath string) *sql.DB {
 	})
 
 	return db
+}
+
+// storeTranscript returns the persisted conversation transcript JSON for the
+// node with this resource name, "" when none was recorded — the on-demand
+// record RunStep saves alongside nodes.result (see docs/agents-internals.md,
+// "Transcript persistence").
+func storeTranscript(t *testing.T, pipelinePath, resource string) string {
+	t.Helper()
+
+	db := openStateDB(t, pipelinePath)
+
+	var transcript string
+
+	err := db.QueryRowContext(t.Context(), `
+		SELECT nt.transcript FROM node_transcripts nt
+		JOIN nodes n ON n.hash = nt.hash
+		WHERE n.resource = ?`, resource).Scan(&transcript)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ""
+	}
+
+	if err != nil {
+		t.Fatalf("query transcript for %q: %v", resource, err)
+	}
+
+	return transcript
 }
 
 // storeNodes returns every node the run recorded, in step order — the

@@ -6,6 +6,8 @@ This guide covers two operational limits available on all step types (get/task/p
 
 ## When to Use Attempts
 
+**Agent steps default to `attempts: 3`** (tasks and puts stay at 1). The asymmetry is the domain's: a task that failed will fail again — same command, same tree — so a retry hides a real failure. A model call that failed usually says nothing about the step and everything about the provider's minute, and under one attempt a single 503 destroyed a six-reviewer fan-out whose other five cells were healthy. For a hosted agent the retries happen in the transport with backoff, re-issuing only what can recover (connection errors, 5xx); `attempts: 1` turns them off.
+
 Use `attempts:` to retry transient failures:
 - Flaky network calls (e.g., GitHub API rate limits)
 - Temporary service unavailability
@@ -44,6 +46,26 @@ Do NOT set timeouts too aggressively — a legitimate long-running operation sho
 - Total is not capped at 30 seconds
 
 To implement a total timeout across all attempts, set a longer task-level timeout and a short step-level timeout — but this is rarely needed.
+
+### A whole job can have one too
+
+`timeout:` on a **job** is a wall-clock ceiling on the entire run — the same ceiling `budget:` gives in tokens, in the other unit. It exists because per-step timeouts do not add up to one: a job whose width is decided at run time (an `across:` block over what an earlier step recorded) can run twelve cells that each finish comfortably inside their own deadline and still take all afternoon.
+
+```yaml
+jobs:
+- name: review
+  timeout: 45m
+  budget:
+    tokens: 2000000
+  plan:
+  - ...
+```
+
+- **Checked between steps, never during one.** The step that is running finishes and keeps its work; the deadline decides only whether the *next* one starts. So a job timeout and a step timeout compose rather than race, and a job never reports a deadline breach against work that was still making progress. The price is that a job may overrun by one step's duration — the honest cost of not cutting work off mid-flight. **And that bound is only as tight as your steps are**: a step with no `timeout:` of its own is unbounded, so a job deadline plus one hanging unbounded step overruns without limit. Give long steps their own `timeout:` if you want the job's to be a hard ceiling.
+- **A fan-out is checked per unit of work, not per block.** A whole `across:` matrix or `in_parallel:` block is one step of the plan, so without this a runtime fan-out — the case this exists for — would never be revisited once it started, and a twelve-cell matrix could overrun by twelve cells. Both stop admitting when the deadline passes (one shared check, `deadlineStopsFanOut`), and the job still fails. The bound is what is *admitted*, so a block that started everything at once — `max_in_flight:`/`limit:` at or above the number of units — has nothing left to stop.
+- **It fails the job**, and does so as a job-level *failure* (the same class as exceeding `max_visits:`), so the job's own `on_failure` and `ensure` fire. That is where a "this took too long" notification belongs.
+- **It does not degrade**, unlike [`budget:` on an `across:` block](control-flow.md#a-ceiling-that-degrades-budget). Same reasoning as the job's token ceiling: a job-level limit is a backstop against a run that has gone wrong, and stopping loudly is the right answer. Degrading belongs on the block whose width nobody knew when they wrote the pipeline.
+- **Never hashed**, like every operational limit — adding one invalidates no cache.
 
 ### An expired timeout is not retried
 

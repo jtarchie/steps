@@ -179,7 +179,7 @@ func withSubAgents(cfg *config.Config, names []string) []string {
 // refusal to a possibly less suitable model.
 func failOver(ctx context.Context, agent *config.Agent, primary config.ResolvedInvocation, settings *config.Preflight) bool {
 	for i := range agent.Fallback {
-		candidate, err := primary.WithSource(agent.Fallback[i].Source, agent.CompactAfterTokens)
+		candidate, err := primary.WithSource(agent.Fallback[i].Source, agent)
 		if err != nil {
 			continue // an unresolvable fallback is already a load error
 		}

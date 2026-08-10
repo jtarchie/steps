@@ -135,6 +135,18 @@ CREATE TABLE IF NOT EXISTS job_breaker (
     consecutive INTEGER NOT NULL,
     paused_at   TEXT
 );
+
+-- Full agent conversation transcripts, one row per agent node, kept OUT of
+-- nodes.result deliberately: result is loaded by planners and routed-to
+-- successors on every run and must stay bounded, while a transcript is read
+-- on demand ("what did this step actually say and do"). Same hash key as
+-- nodes; replaces on re-record like nodes does.
+CREATE TABLE IF NOT EXISTS node_transcripts (
+    hash       TEXT PRIMARY KEY,
+    job_name   TEXT NOT NULL,
+    transcript TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 `
 
 // Store is the sqlite-backed persistence layer for job-run/node state.
@@ -690,6 +702,45 @@ func (s *Store) HasNodeSucceeded(ctx context.Context, jobName, hash string) (boo
 	return count > 0, nil
 }
 
+// SaveNodeTranscript stores (or replaces) an agent node's full conversation
+// transcript, a JSON array of events. Kept in its own table so nodes.result —
+// which planners and routed-to successors load on every run — stays bounded;
+// a transcript is read on demand instead.
+func (s *Store) SaveNodeTranscript(ctx context.Context, hash, jobName, transcript string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO node_transcripts (hash, job_name, transcript, created_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (hash) DO UPDATE SET
+			job_name = excluded.job_name,
+			transcript = excluded.transcript,
+			created_at = excluded.created_at
+	`, hash, jobName, transcript, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		return fmt.Errorf("could not save transcript for node %q: %w", hash, err)
+	}
+
+	return nil
+}
+
+// NodeTranscript returns the stored transcript JSON for a node hash, with ok
+// reporting whether one exists — mirroring LastCheckedVersion's shape rather
+// than inventing a sentinel error for the common "never recorded" case.
+func (s *Store) NodeTranscript(ctx context.Context, hash string) (string, bool, error) {
+	var transcript string
+
+	err := s.db.QueryRowContext(ctx,
+		`SELECT transcript FROM node_transcripts WHERE hash = ?`, hash).Scan(&transcript)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+
+	if err != nil {
+		return "", false, fmt.Errorf("could not read transcript for node %q: %w", hash, err)
+	}
+
+	return transcript, true, nil
+}
+
 // RecordPassedVersion records that jobName completed successfully against this
 // exact version of a resource. It is what a downstream job's passed: reads.
 func (s *Store) RecordPassedVersion(ctx context.Context, jobName, resourceName, versionJSON string) error {
@@ -906,7 +957,7 @@ type Run struct {
 func (s *Store) StartRun(ctx context.Context, id, jobName, workspaceDir string) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO runs (id, job_name, workspace, status, started_at) VALUES (?, ?, ?, 'running', ?)
-		ON CONFLICT (id) DO UPDATE SET status = 'running'
+		ON CONFLICT (id) DO UPDATE SET status = 'running', workspace = excluded.workspace
 	`, id, jobName, workspaceDir, time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		return fmt.Errorf("could not record run %q: %w", id, err)

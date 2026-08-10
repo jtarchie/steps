@@ -136,6 +136,11 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	usage := agent.NewRunUsage(jobBudgetTokens(job))
 	ctx = agent.WithRunUsage(ctx, usage)
 
+	// The same ceiling in the other unit. Installed alongside the budget for
+	// the same reason: a wall-clock bound on a job is by definition a sum
+	// across its steps, so it belongs to the run rather than to any one step.
+	ctx = withJobDeadline(ctx, job)
+
 	defer reportJobUsage(job.Name, usage)
 
 	// Everything from here on has a workspace to run job-level hooks in, so
@@ -340,6 +345,14 @@ func runSteps(
 	// index — forward to skip ahead, or backward to loop. Without any to:, the
 	// default nextIndex of i+1 reproduces today's straight-line behavior exactly.
 	for i := 0; i < len(steps); {
+		// Between steps, never during one: the step that was running has
+		// finished and kept its work, and this decides only whether another
+		// starts. See deadline.go.
+		err := jobDeadlinePassed(ctx, jobName)
+		if err != nil {
+			return err
+		}
+
 		step := steps[i]
 
 		if step.Get != "" && !allowGetTrigger {
@@ -358,6 +371,15 @@ func runSteps(
 		if returned {
 			return err
 		}
+	}
+
+	// Once more after the last step. The check above runs BEFORE a step, so a
+	// deadline that passed during the final one — or during a fan-out that
+	// stopped admitting cells because of it — would otherwise never be looked
+	// at again, and the job would report success having overrun.
+	err := jobDeadlinePassed(ctx, jobName)
+	if err != nil {
+		return err
 	}
 
 	return recordChainSucceeded(ctx, st, jobName, parentHash, chainUnskippable)
@@ -1451,7 +1473,31 @@ func runTriggeredBuild(
 		return fmt.Errorf("could not create workspace for %q: %w", resource.Name, err)
 	}
 
-	defer workspace.CloseBuild(bw, resource.Name)
+	// Torn down only when the build SUCCEEDS. A failed build's tree is what a
+	// resume continues in — the same reason RunJob keeps the workspace on
+	// failure rather than closing it — and destroying it here is what made an
+	// isolated run unresumable in practice even once the provider allowed it:
+	// the run row pointed at a directory that had just been deleted.
+	buildOK := false
+
+	defer func() {
+		if buildOK {
+			workspace.CloseBuild(bw, resource.Name)
+		}
+	}()
+
+	// Re-point the run at THIS build. A get fans the rest of the plan out per
+	// version into a build of its own, and that is where the artifacts and
+	// every subsequent step live — the job-level build recorded at RunJob
+	// holds none of it. Recording the job's build and resuming into it would
+	// hand a resumed run an empty tree and call it a recovery.
+	//
+	// StartRun upserts, so this is the same row with a better answer.
+	if rooted, ok := bw.(workspace.RootedBuild); ok {
+		if resume := resumeFrom(ctx); resume != nil {
+			_ = st.StartRun(ctx, resume.id, jobName, rooted.Root())
+		}
+	}
 
 	recordExecution(ctx, resource.Name)
 
@@ -1476,7 +1522,10 @@ func runTriggeredBuild(
 		return fmt.Errorf("could not record node %q: %w", node.Hash, err)
 	}
 
-	return runSteps(ctx, cfg, jobName, remainder, pinned, provider, bw, st, skippable, node.Hash, chainUnskippable, cache, false)
+	err = runSteps(ctx, cfg, jobName, remainder, pinned, provider, bw, st, skippable, node.Hash, chainUnskippable, cache, false)
+	buildOK = err == nil
+
+	return err
 }
 
 // fetchGetStep places one version of a resource into bw's resource directory,
@@ -1570,6 +1619,20 @@ func fetchGetStep(ctx context.Context, cfg *config.Config, artifact string, reso
 }
 
 // jobBudgetTokens is a job's cumulative agent-token ceiling, or 0 for none.
+// stepBudgetTokens is an across: block's token ceiling, or 0 when it has none.
+//
+// Alongside jobBudgetTokens rather than exported from config: the agent and job
+// ceilings are read through private helpers there and a private one here, and
+// exporting an accessor for this one alone both commits config's public API for
+// a single entity and leaves two nil-checks to drift apart.
+func stepBudgetTokens(step config.Step) int {
+	if step.Budget == nil {
+		return 0
+	}
+
+	return step.Budget.Tokens
+}
+
 func jobBudgetTokens(job *config.Job) int {
 	if job.Budget == nil {
 		return 0

@@ -37,7 +37,13 @@ workspace:
   strategy: copy
 
 defaults:
-  model: openrouter/qwen/qwen3.7-flash
+  # opencode's Go provider (https://opencode.ai/docs/go/): the `opencode/`
+  # prefix supplies the base URL and the OPENCODE_API_KEY env var name, so a
+  # model here is just the model. glm-5.2 is the open model pr-af's own
+  # benchmark leads with, which makes it the honest default for a pipeline
+  # shaped after theirs. Swap per run without editing this file:
+  #   STEPS_MODEL=opencode/kimi-k3 steps run examples/pr-review.yml --job review
+  model: opencode/glm-5.2
   # Every agent below opens with a rendered recap of what earlier steps
   # recorded. summary keeps values whole — a finding's claim is the thing the
   # next agent has to reason about, so truncating it defeats the point.
@@ -58,14 +64,33 @@ resource_types:
         --jq '[.[] | {ref: ((.number|tostring) + "@" + .headRefOid)}]'
     # The version's ref carries the head SHA, so a new push is a new version —
     # and therefore a new build, rather than a cache hit on the PR number.
+    # Fetches the diff AND the code it changed, at the exact commit under
+    # review. The code is the half that is easy to forget: every reviewer here
+    # is told to read the source rather than trust the patch, and a first live
+    # run proved what happens without it — the reviewers were handed a
+    # directory containing three files, and a lens said so in its own output
+    # ("the actual source tree isn't checked out here"). A diff shows WHAT
+    # changed; only the tree shows what else calls it.
     in: |
       set -e
       ref={{ .version.ref | shellquote }}
       number="${ref%%@*}"
+      sha="${ref##*@}"
       gh pr diff --repo {{ .source.repo | shellquote }} "$number" > pr.diff
       gh pr view --repo {{ .source.repo | shellquote }} "$number" \
         --json title,body,files,baseRefName > pr.json
       printf '%s' "$number" > pr.number
+
+      # Checked out INTO this artifact, so a path the compiler names reads
+      # `pr/internal/thing.go` — the same prefix the diff and metadata use.
+      # `checkout <sha> -- .` restores the tree without moving HEAD, which is
+      # what keeps the three files above from being clobbered.
+      git init -q .
+      git remote add origin "https://github.com/{{ .source.repo }}.git"
+      git fetch -q --no-tags --depth 1 origin "$sha" 2>/dev/null \
+        || git fetch -q --no-tags origin
+      git checkout -q --force "$sha" -- . 2>/dev/null \
+        || git checkout -q --force FETCH_HEAD -- .
 
 - name: github-review
   config:
@@ -77,7 +102,7 @@ resource_types:
     out: |
       set -e
       test -s review/findings.json || { echo "no findings file"; exit 1; }
-      gh pr review --repo {{ .source.repo | shellquote }} "$(cat review/number)" \
+      gh pr review --repo {{ .source.repo | shellquote }} "$(cat pr/pr.number)" \
         --comment --body-file review/summary.md
 
 resources:
@@ -105,24 +130,44 @@ agents:
              to callers?"
       bad:  "Check for concurrency issues"
 
-    Each dimension you propose must carry the file paths and line ranges you
-    found while investigating, plus the verification steps its reviewer should
-    run. A dimension derived only from reading the diff is not good enough —
-    if your reasoning is "visible in the patch", you have not looked yet.
+    The diff is already in your context. Plan from it. You may open a file it
+    names to confirm something specific, but you are NOT the step that reads
+    the codebase — the reviewers are, and each one opens holding the file you
+    assign it. Exploring here spends the run's budget on planning and leaves
+    none for reviewing.
 
-    Read the diff to learn WHAT changed, then read the actual source to learn
-    how the changed code fits the codebase around it: callers, error paths,
-    data flow.
+    Each dimension must carry the file it centres on and what its reviewer
+    should check there.
+
+    Answer within a handful of turns. If you find yourself opening a third
+    file, you are reviewing rather than planning: name the dimension and let
+    the reviewer do it.
 
     If the change carries no risk on your lens, propose NOTHING. Do not pad.
+  # 12, not the 50 the reviewers get. Measured, not guessed: at 8 turns and no
+  # repo these lenses cost ~80K each; at 50 turns with the repo checked out
+  # they cost 523K, 1.79M and 1.22M and took the whole job's purse before a
+  # single reviewer ran. A lens proposes dimensions from a diff it is already
+  # holding — it is not the step that reads the codebase.
   max_turns: 8
-  tools: [read_file, list_dir, search_files]
+  # No agent-level budget here, deliberately. One was set as a "backstop" and
+  # it became the failure: 400K against a lens that opens holding a 100KB diff
+  # and re-sends it every turn is not a backstop, it is a tripwire — a run died
+  # at 410,982 with the whole review discarded, because a budget breach is a
+  # hard stop with nothing salvaged (unlike a spent TURN budget, which now ends
+  # the conversation with an answer).
+  #
+  # What actually bounds this step is above: 8 turns, and read_file with no way
+  # to go looking. The job's own ceiling is the backstop, which is what a
+  # backstop should be — one number, far away, that means something has gone
+  # wrong rather than that a step did its job thoroughly.
+  tools: [read_file]
 
 - name: compiler
   system: |
     You merge overlapping review dimensions into one list. Two proposals that
     would send a reviewer to the same lines are one dimension, not two.
-  max_turns: 8
+  max_turns: 50
   tools: [read_file]
 
 - name: reviewer
@@ -172,7 +217,7 @@ agents:
                   contract violation, a race under realistic load
       suggestion  it works, but could be more robust
       nitpick     cosmetic
-  max_turns: 20
+  max_turns: 50
   tools: [read_file, list_dir, search_files, run_shell]
 
 - name: falsifier
@@ -195,8 +240,36 @@ agents:
     Also ask, for each survivor: is this the intended behaviour? Is it already
     mitigated somewhere else? A finding you cannot knock down survives — say
     what made it survive.
-  max_turns: 20
+  max_turns: 50
   tools: [read_file, list_dir, search_files, run_shell]
+
+- name: gatekeeper
+  system: |
+    You are the release manager. For each finding you answer ONE question,
+    and it is not the question severity answers.
+
+      severity   how bad is this?
+      you        must it be fixed BEFORE this ships?
+
+    Those come apart in both directions. A pedantic `critical` in unreachable
+    code can ship. A subtle `important` on a hot path cannot.
+
+    Apply a TIGHT bar. Blocking only if it breaks the build or tests, is a
+    security hole reachable from a real user-facing path, causes data loss or
+    corruption, breaks a public contract real callers depend on with no
+    migration, or regresses behaviour that worked before this change.
+
+    NOT blocking: style, naming, refactors, missing tests, defensive
+    programming with no demonstrated reachable exploit, performance that does
+    not change correctness, documentation, or "should also handle X" when X is
+    not currently reachable.
+
+    When you cannot decide, answer NOT blocking. That asymmetry is deliberate:
+    a real blocker that slips through is caught by the human reading the
+    review, while an advisory nit that blocks a merge teaches the team to
+    ignore the whole tool.
+  max_turns: 50
+  tools: [read_file, list_dir, search_files]
 
 - name: synthesizer
   system: |
@@ -207,11 +280,27 @@ agents:
     Explain WHY each finding is a problem, not just what is wrong. Quote the
     exact code or call path as evidence. Give the fix concisely: what to
     change, where, and the tradeoff if there is more than one way.
-  max_turns: 16
+  max_turns: 50
   tools: [read_file, list_dir, write_file]
 
 jobs:
 - name: review
+  # The one directive this pipeline should not ship without. Every other
+  # example has a cost you can read off the file; here a model decides how many
+  # reviewers run, so the bill is not knowable when you write it. The matrix's
+  # own 1000-item cap bounds the COUNT, not the spend.
+  #
+  # Job-level, so it is cumulative across every agent step — the step that
+  # trips it is rarely the one that cost the most. Counted from the provider's
+  # reported usage, never an estimate. Never hashed, so adding it invalidates
+  # nothing.
+  #
+  # And the wall clock, which the token ceiling does not bound: a fan-out of
+  # slow agents can sit inside every per-step deadline and still take all
+  # afternoon. 1h is pr-af's own MaxDurationSeconds.
+  timeout: 1h
+  budget:
+    tokens: 8000000
   plan:
   - get: pr
     trigger: true
@@ -233,6 +322,20 @@ jobs:
   # Independent questions with no ordering between them. Each records under a
   # scope only it touches, merged at the join under a key naming the branch —
   # so all three survive instead of the last one winning.
+  #
+  # All three are HANDED the diff rather than sent to find it, via
+  # context_paths: below. The reference implementation embeds diff_patches
+  # directly in the prompt context for the same reason: a lens that has to
+  # read_file its way to the diff spends turns navigating instead of thinking,
+  # and that is exactly how this step failed its first live run.
+  #
+  # max_context_bytes: is raised on each because a lens is the step that must
+  # see the WHOLE change — it decides what gets reviewed at all, so a diff
+  # silently cut at the 100KB default means whole sections of a large PR are
+  # never assigned a dimension, and a large PR is exactly when that matters.
+  # It is the step-level spelling, overriding what the agent would otherwise
+  # give every one of its steps: the reviewers below open holding one source
+  # file and have no use for the same allowance.
   - in_parallel:
       steps:
       - agent: lens
@@ -247,6 +350,9 @@ jobs:
           NOT yours: type signatures and calling conventions (mechanical),
           pattern consistency and architectural fit (systemic).
         inputs: [pr]
+        context_paths: [pr/pr.diff, pr/pr.json]
+        max_context_bytes: 400000
+        timeout: 20m
         context: write
       - agent: lens
         prompt: |
@@ -258,6 +364,9 @@ jobs:
           NOT yours: whether the behaviour is right (semantic), whether it
           fits the surrounding architecture (systemic).
         inputs: [pr]
+        context_paths: [pr/pr.diff, pr/pr.json]
+        max_context_bytes: 400000
+        timeout: 20m
         context: write
       - agent: lens
         prompt: |
@@ -269,6 +378,9 @@ jobs:
           NOT yours: whether an individual function is correct (mechanical) or
           behaves differently (semantic).
         inputs: [pr]
+        context_paths: [pr/pr.diff, pr/pr.json]
+        max_context_bytes: 400000
+        timeout: 20m
         context: write
 
   # ── phase 3: compile the work list ───────────────────────────────────────
@@ -277,6 +389,7 @@ jobs:
   # id it would have to go look up.
   - agent: compiler
     inputs: [pr]
+    timeout: 20m
     context: write
     prompt: |
       Merge the three lens proposals in your context into one deduplicated list.
@@ -293,7 +406,9 @@ jobs:
       `path` is one file, not a list. A dimension that genuinely needs two
       files read up front is two dimensions.
 
-      At most eight. Fewer is better than overlapping.
+      At most SIX. That is their "standard" depth; a very large change
+      justifies up to twelve, a trivial one three. Fewer is better than
+      overlapping.
 
   # ── phase 4: one ephemeral reviewer per dimension, concurrently ──────────
   # The matrix's width is not in this file — `from: dimensions` takes it from
@@ -313,30 +428,89 @@ jobs:
     - var: dim
       from: dimensions
       label: id
-    max_in_flight: 4
-    agent: reviewer
-    inputs: [pr]
-    # qualify: this matrix records a fact PER CELL, so each cell's findings
-    # come back under a key naming it rather than the cells overwriting one
-    # another. Stated rather than inferred from max_in_flight:, so the key
-    # names a downstream step reads do not change if the concurrency does.
-    context: { write: true, qualify: true }
-    context_paths: ["{{ .vars.dim.path }}"]
-    prompt: |
-      Review this change through one dimension only: {{ .vars.dim.focus }}
+    # Width 2, and the reason is the block budget's blind first batch: admission
+    # sees only FINISHED cells' spend, so the first max_in_flight cells are
+    # always admitted against a total of ~0. At width 4 on a large PR that blind
+    # batch alone overshot the whole allowance (four reviewers at 1-2M tokens
+    # each), the ceiling never bound, and the job backstop killed the run at
+    # full price instead. At 2, the third admission is decided against real
+    # spend and the matrix can actually do what its budget: promises — stop,
+    # keep the survivors, and let the plan continue.
+    max_in_flight: 2
+    # Three tries, as pr-af's MaxRetries. For a hosted agent this is the
+    # RETRYING TRANSPORT, not a re-run of the conversation — it re-issues one
+    # request that failed in transit, which is exactly the failure that killed a
+    # six-reviewer fan-out here: a bare 503 from the provider, mid-cell, with
+    # everything else healthy. It cannot buy more turns or more time, and is not
+    # the answer to either.
+    # An agent step's default deadline is 10 minutes (agentStepTimeout). A deep
+    # review of a 100KB diff at 50 turns does not reliably fit it — and cannot
+    # at all when the provider is returning 500s and each retry backs off before
+    # trying again, which is how three cells died here at once. 20 minutes is
+    # per ATTEMPT; the job's own 1h timeout: above is what stops this becoming
+    # unbounded.
+    # The ceiling that belongs HERE rather than on the job. This is the only
+    # step whose cost nobody could know when this file was written — the
+    # compiler decided how many cells there are, minutes ago. When it runs out,
+    # the matrix stops starting reviewers, the ones that finished keep their
+    # findings, and the plan carries on to the falsifier and the synthesizer.
+    #
+    # A job-level ceiling could not do that: it fails, and the step that
+    # publishes is an agent too, so a breach would spend the money and post
+    # nothing. The job budget above stays as the backstop for a runaway.
+    #
+    # Re-running with a larger figure resumes rather than restarting: the cells
+    # that never started recorded nothing.
+    # NOTE the interaction with max_in_flight: above. A ceiling is checked when
+    # a cell is admitted, and the first max_in_flight cells are admitted before
+    # any of them has reported a token — so with a width at or above the cell
+    # count, this bounds nothing at all. At 8 it was decorative for a six-cell
+    # matrix. At 4 the last two cells are decided against real spend.
+    budget:
+      tokens: 3600000
+    # ONE reviewer failing must not cost the whole review.
+    #
+    # This is the reference implementation's own shape, and the reason the fan-
+    # out exists at all: a dimension whose model returns nothing usable
+    # contributes an empty set and the review is assembled from whatever
+    # survived — only if EVERY dimension fails does it give up
+    # (allDimensionsSchemaFailed). Without this, a matrix here is the opposite
+    # of redundant: five reviewers means five chances to lose the entire run,
+    # and that is exactly how several runs ended.
+    #
+    # try: tolerates a task-level failure — a reviewer that answered nothing,
+    # or never satisfied a required tool. An infrastructure error still stops
+    # the run, which is also what theirs does: their per-dimension error
+    # propagates, and it is the retry/backoff underneath that makes those rare.
+    try:
+      agent: reviewer
+      inputs: [pr]
+      # On the wrapped step, not the wrapper: try: only decides whether the
+      # plan stops, and this describes the operation it wraps. (attempts: is
+      # not set — agent steps now default to 3, with backoff, which is what
+      # absorbs a provider's bad minute.)
+      timeout: 20m
+      # qualify: this matrix records a fact PER CELL, so each cell's findings
+      # come back under a key naming it rather than the cells overwriting one
+      # another. Stated rather than inferred from max_in_flight:, so the key
+      # names a downstream step reads do not change if the concurrency does.
+      context: { write: true, qualify: true }
+      context_paths: ["{{ .vars.dim.path }}"]
+      prompt: |
+        Review this change through one dimension only: {{ .vars.dim.focus }}
 
-      {{ .vars.dim.path }} is already in your context — you have its current
-      contents above, so reason over them directly rather than re-reading it.
-      Open these only if that is insufficient: {{ .vars.dim.scope }}
+        {{ .vars.dim.path }} is already in your context — you have its current
+        contents above, so reason over them directly rather than re-reading it.
+        Open these only if that is insufficient: {{ .vars.dim.scope }}
 
-      Other dimensions are being reviewed at the same time as yours — the
-      recap in your context lists them. A finding that clearly belongs to
-      another dimension is theirs, not yours; do not duplicate it.
+        Other dimensions are being reviewed at the same time as yours — the
+        recap in your context lists them. A finding that clearly belongs to
+        another dimension is theirs, not yours; do not duplicate it.
 
-      Read the code before you claim anything about it. Record each finding
-      with set_context under a key starting `finding_`, as a JSON object with
-      severity, file, line, claim, and the evidence chain you actually
-      traced.
+        Read the code before you claim anything about it. Record each finding
+        with set_context under a key starting `finding_`, as a JSON object with
+        severity, file, line, claim, and the evidence chain you actually
+        traced.
 
   # ── phase 5: the falsifiability gate ─────────────────────────────────────
   # The reviewers proposed; this one tries to knock each proposal down. It is a
@@ -344,6 +518,7 @@ jobs:
   # an agent grading its own work is not a gate.
   - agent: falsifier
     inputs: [pr]
+    timeout: 20m
     context: write
     prompt: |
       Every `finding_*` in your context is a CLAIM, not a fact. Try to
@@ -352,12 +527,28 @@ jobs:
       id, severity, file, line, claim — and record `blind_spots` as a short
       note on anything the dimensions never looked at.
 
+  # ── the merge gate ───────────────────────────────────────────────────────
+  # Severity and "must this block the merge" are different questions, and
+  # answering them in one pass makes a reviewer's alarm calibration decide
+  # whether a PR ships. Separating them is what lets the review stay useful
+  # without turning every finding into a stop sign.
+  - agent: gatekeeper
+    inputs: [pr]
+    timeout: 20m
+    context: write
+    prompt: |
+      For each confirmed finding in your context, decide whether it must be
+      fixed before this PR merges. Record the answer with set_context under
+      `blocking`, as a JSON array of the finding ids that block — and only
+      those. An empty array is a legitimate answer and the common one.
+
   # ── phases 6 & 7: synthesize, and decide whether that was enough ─────────
   # The verdict is a required tool call with a fixed vocabulary, so routing
   # never depends on parsing prose. blind-spots sends the run back to the
   # anatomy step for a second pass; max_visits: 2 up there is what bounds it.
   - agent: synthesizer
     inputs: [pr]
+    timeout: 20m
     outputs: [review]
     verdicts: [complete, blind-spots]
     to:
@@ -369,9 +560,17 @@ jobs:
       any that are worse together than apart into a single compound risk.
 
       Write review/summary.md (what a human reads) and review/findings.json
-      (the structured list). Copy pr/pr.number to review/number.
+      (the structured list). Nothing else — the PR number is the pipeline's to
+      know, not yours.
 
-      Then call verdict. This is a coverage question, answered by comparison,
+      Then call verdict. ⚠️ Answering `blind-spots` re-runs every reviewer, not
+      just the uncovered ones: agent steps are never cached, so a second pass
+      pays for the whole matrix again. The reference implementation runs only
+      the gap dimensions; expressing that here means a second across: block
+      over a `gap_dimensions` key, guarded by when:, rather than this loop.
+      Weigh that against the budget above before routing back.
+
+      This is a coverage question, answered by comparison,
       not by taste: the anatomy step recorded which files the change touches,
       and the recap names every dimension that was reviewed. Answer
       `blind-spots` when a cluster of changed files has no dimension covering
@@ -389,12 +588,13 @@ jobs:
   # example predates that and kept the leaf, because a real check beats a
   # fall-through.
   - task: check-draft
-    inputs: [review]
+    inputs: [pr, review]
     run: |
       set -e
-      test -s review/summary.md   || { echo "no review summary was written" >&2; exit 1; }
+      test -s review/summary.md    || { echo "no review summary was written" >&2; exit 1; }
       test -s review/findings.json || { echo "no findings file was written" >&2; exit 1; }
-      test -s review/number       || { echo "no PR number was recorded" >&2; exit 1; }
+
+      test -s pr/pr.number         || { echo "the PR number was never fetched" >&2; exit 1; }
 
   # ── the gate before anything is public ───────────────────────────────────
   # Posting a review is not undoable. This is where a person looks first — the
@@ -403,8 +603,13 @@ jobs:
       message: "Review drafted in review/summary.md — post it to the PR?"
       timeout: 24h
 
+  # Both artifacts: the review to post, and the pr the number came from. That
+  # number was a model's job for one run — the synthesizer wrote both documents
+  # and skipped the clerical copy, and the whole review died at check-draft over
+  # a file the resource had already fetched. Anything a command can do is a
+  # thing to stop asking a model for.
   - put: pr-review
-    inputs: [review]
+    inputs: [pr, review]
 
   # Best-effort: a failing notification must not fail a review that succeeded.
   on_failure:

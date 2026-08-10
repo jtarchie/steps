@@ -204,6 +204,16 @@ func runHappyPath(t *testing.T, workspaceBlock string) {
 	assertSucceeded(t, nodes, "agent", "reviewer")
 	assertSucceeded(t, nodes, "put", "results")
 
+	// The agent node also persisted its full transcript (node_transcripts),
+	// carrying what the bounded trajectory in nodes.result drops: the model's
+	// mid-conversation text and the tool results.
+	transcript := storeTranscript(t, path, "reviewer")
+	for _, want := range []string{`"type":"call"`, `"name":"write_file"`, `"type":"result"`, `"type":"text"`, "I have finished reviewing."} {
+		if !strings.Contains(transcript, want) {
+			t.Errorf("agent transcript missing %s; got %q", want, transcript)
+		}
+	}
+
 	// The routed-past escalate step records no node at all — the same
 	// contract a cached or when:-skipped step has.
 	for _, node := range nodes {
@@ -447,14 +457,15 @@ func testSadPathProviderUnreachable(t *testing.T) {
 	assertLineCount(t, filepath.Join(dir, "task.log"), 1)
 
 	// ── retry layer ───────────────────────────────────────────────────
-	// The step declares no attempts:, so a failing turn costs exactly ONE
-	// provider request. It used to cost three: the client retried twice
-	// underneath, invisibly and unconfigurably, and `attempts: 6` meant up
-	// to eighteen requests rather than six. Pinned here because a
-	// dependency bump or a change to requests.go's header handling would
-	// restore that multiplication silently, and spend is the only place it
-	// would show up.
-	const wantRequests = 1
+	// The step declares no attempts:, so it gets the default retry budget
+	// (defaultAgentAttempts = 3) and a total outage costs exactly THREE
+	// provider requests — the resolved attempts, nothing more. The invariant
+	// pinned here is the absence of MULTIPLICATION: the SDK's own retries
+	// used to stack underneath, invisibly and unconfigurably, so `attempts:
+	// 6` meant up to eighteen requests rather than six. A dependency bump or
+	// a change to requests.go's header handling would restore that silently,
+	// and spend is the only place it would show up.
+	const wantRequests = 3
 
 	if got := fake.requestCount(); got != wantRequests {
 		t.Errorf("provider requests = %d, want %d — attempts: is the whole retry budget", got, wantRequests)

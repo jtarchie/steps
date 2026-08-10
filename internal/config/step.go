@@ -116,6 +116,25 @@ type Step struct {
 	// substituting {{ .vars.<name> }} into its fields. Expanded at load, so
 	// each cell is an ordinary plan step. See AcrossVar.
 	Across []AcrossVar `yaml:"across,omitempty"`
+	// Budget caps what every cell of an across: block may spend TOGETHER, and
+	// unlike the job and agent ceilings it DEGRADES rather than failing: when
+	// the matrix has spent its allowance, no further cell is started, the ones
+	// already finished keep their work, and the plan carries on.
+	//
+	// That difference is the point. A job ceiling is a backstop against a
+	// runaway, so failing is right. A runtime fan-out is the one step whose
+	// cost nobody could know when they wrote the pipeline — its width is
+	// decided mid-run, usually by a model — and there, "review eight of the
+	// twelve dimensions and publish" beats "spend the same money and publish
+	// nothing".
+	//
+	// Cells that never started are simply not run: they record nothing, so a
+	// rerun with a larger ceiling picks up exactly where this one stopped
+	// (finished cells are cached, unstarted ones are not).
+	//
+	// across: steps only, tokens only. Never hashed, like every other
+	// operational limit — adding one must not invalidate a cached cell.
+	Budget *Budget `yaml:"budget,omitempty"`
 	// MaxInFlight bounds how many across: cells run at once. Unset or 1 keeps
 	// the serial declaration-order walk this modifier has always had; anything
 	// higher runs that many cells concurrently, and a value at or above the
@@ -203,9 +222,24 @@ type Step struct {
 	// turn. Paths are relative to the step's working directory and confined
 	// to its workspace (resolveAgentPath); in practice each file lives
 	// inside a declared input, e.g. ["repo/CLAUDE.md"]. Only valid on agent
-	// steps. A missing, escaping, or over-100KB file fails the step at
-	// preparation, before a token is spent.
+	// steps. A missing or escaping file fails the step at preparation, before
+	// a token is spent; one merely over MaxContextBytes is truncated, with a
+	// note saying so.
 	ContextPaths []string `yaml:"context_paths,omitempty"`
+	// MaxContextBytes overrides the agent's max_context_bytes: for this step
+	// only, capping how much of each ContextPaths file is handed over. 0 (the
+	// common case) defers to the agent's, which itself falls back to
+	// DefaultMaxContextBytes.
+	//
+	// It belongs here as well as on the agent because context_paths: is itself
+	// a step-level field: two steps sharing one agents: entry routinely hand
+	// it different evidence — a 400KB diff to the reviewer, a small manifest
+	// to the gatekeeper — and without a step-level ceiling the only way to
+	// give them different ones is to duplicate the whole agent under a second
+	// name for the sake of one number. (context_window: has no step spelling
+	// for the mirror-image reason: it describes the MODEL, and the model is
+	// the agent's.) Operational, like the agent's, and likewise never hashed.
+	MaxContextBytes int `yaml:"max_context_bytes,omitempty"`
 	// Hooks are the step's on_success/on_failure/on_error/on_abort/ensure
 	// reaction steps (see Hooks). Inlined so they sit alongside the step's
 	// own fields in YAML.

@@ -227,7 +227,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	spillDir := newToolOutputSpillDir(dir, step.Agent)
 
-	contextBlocks, err := prepareContextBlocks(dir, withHandoffNotePath(step, dir, ri.ContextPaths), decls)
+	contextBlocks, err := prepareContextBlocks(dir, withHandoffNotePath(step, dir, ri.ContextPaths), ri.MaxContextBytes, decls)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 		closeAll(closers)
@@ -301,7 +301,7 @@ func resolveWithFailover(cfg *config.Config, step config.Step) (primary, effecti
 		return primary, primary, nil //nolint:nilerr // it resolved a moment ago; not worth failing a step over
 	}
 
-	effective, err = primary.WithSource(source, agent.CompactAfterTokens)
+	effective, err = primary.WithSource(source, agent)
 	if err != nil {
 		return primary, primary, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
@@ -492,6 +492,11 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 
 	printAgentResponse(res)
 
+	// One call site covers every outcome — success, run failure, assert
+	// failure, capture failure — because a failed step's transcript is the one
+	// that gets read. Best-effort by design (see saveAgentTranscript).
+	saveAgentTranscript(ctx, st, hash, jobName, res)
+
 	previous := &PreviousRun{
 		Agent: step.Agent, Response: res.text, Verdict: res.verdict, Note: res.note,
 		Turns: res.turns, Trajectory: exportTrajectory(res.trajectory),
@@ -540,6 +545,14 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 // cyclomatic complexity under the linter budget.
 func agentResultRecord(res conversationResult) map[string]any {
 	result := map[string]any{"response": res.text, "turns": res.turns}
+
+	if res.wrappedUp {
+		// The same reason fallback_model is recorded: an answer produced
+		// against a spent budget is not the answer the step would have given,
+		// and afterwards it is indistinguishable from a confident one unless
+		// the record says so.
+		result["wrapped_up"] = true
+	}
 
 	if res.model != "" {
 		// Recorded only when a fallback served the run: a run's output has to
@@ -653,8 +666,8 @@ func assertAgentResponse(assert *config.Assert, res conversationResult) error {
 // prepareContextBlocks loads context_paths files and validates that read_file
 // is declared when context paths are present. Extracted from prepareAgentStep
 // to keep its cyclomatic complexity under the linter budget.
-func prepareContextBlocks(dir string, paths []string, decls *genai.Tool) ([]contextBlock, error) {
-	blocks, err := loadContextBlocks(dir, paths)
+func prepareContextBlocks(dir string, paths []string, limit int, decls *genai.Tool) ([]contextBlock, error) {
+	blocks, err := loadContextBlocks(dir, paths, limit)
 	if err != nil {
 		return nil, err
 	}

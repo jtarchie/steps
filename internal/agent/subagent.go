@@ -129,7 +129,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	// c.ri.ContextPaths is always empty here — loadContextBlocks still
 	// resolves nil/empty safely. A bad path arrives as ordinary tool-result
 	// data, the same contract every child failure honours.
-	contextBlocks, err := loadContextBlocks(env.dir, c.ri.ContextPaths)
+	contextBlocks, err := loadContextBlocks(env.dir, c.ri.ContextPaths, c.ri.MaxContextBytes)
 	if err != nil {
 		return map[string]any{"error": fmt.Sprintf("%s: %s", c.ri.AgentName, err)}
 	}
@@ -163,6 +163,11 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	// composeSessionID).
 	res, runErr := runAgentConversation(withRequestCounter(ctx, &requestCounter{}), c.llm, conv)
 	printAgentResponse(res)
+
+	// Nest the child's transcript into the PARENT's recorder (env.transcript
+	// is the caller's), before the error branch: a failed child's trace is
+	// the one worth reading afterwards.
+	env.transcript.subagent(c.ri.AgentName, request, res.transcript)
 
 	if runErr != nil {
 		return map[string]any{"error": runErr.Error()}

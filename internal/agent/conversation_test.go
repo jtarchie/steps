@@ -13,6 +13,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/retry"
 	"github.com/jtarchie/steps/internal/shell"
 )
@@ -890,4 +891,99 @@ func hasDanglingFunctionCall(contents []*genai.Content) bool {
 	}
 
 	return false
+}
+
+// TestOutOfTurnsSurfacesAWrapUpFailure pins the classification of a wrap-up
+// request that itself fails.
+//
+// When the turn budget runs out, the runner takes the tools away and asks the
+// model to answer from what it gathered. If THAT request fails — a 503, or a
+// token ceiling breached by it — the cause has to survive: the error is
+// infrastructure, so it must stay unmarked (→ errored, firing on_error), not
+// be replaced by an outcome.Fail claiming the model "produced none". It used
+// to be swallowed entirely, reporting a provider outage as a task failure.
+func TestOutOfTurnsSurfacesAWrapUpFailure(t *testing.T) {
+	t.Parallel()
+
+	// Every turn calls a tool, so the loop runs the budget out; the wrap-up
+	// request that follows is the one that errors. Each command differs, or
+	// the loop detector would end the conversation before the turns do.
+	responses := make([]*model.LLMResponse, testMaxTurns)
+	for i := range responses {
+		responses[i] = distinctShellCall(i)
+	}
+
+	errs := make([]error, testMaxTurns+1)
+	errs[testMaxTurns] = errors.New("provider is down")
+
+	fake := &fakeLLM{responses: responses, errs: errs}
+
+	_, err := runAgentConversation(context.Background(), fake, newTestConversation(t, "investigate", t.TempDir()))
+	if err == nil {
+		t.Fatal("expected an error when the wrap-up request fails")
+	}
+
+	if !strings.Contains(err.Error(), "provider is down") {
+		t.Errorf("the wrap-up failure's cause was swallowed; got %v", err.Error())
+	}
+
+	var failure *outcome.Failure
+	if errors.As(err, &failure) {
+		t.Error("a failed wrap-up request classified as a task failure; it is infrastructure and must classify as errored")
+	}
+}
+
+// TestOutOfTurnsAnswersWithoutTools is the success half: the wrap-up answer
+// becomes the result, and is marked so a degraded answer is tellable from a
+// confident one.
+func TestOutOfTurnsAnswersWithoutTools(t *testing.T) {
+	t.Parallel()
+
+	responses := make([]*model.LLMResponse, testMaxTurns+1)
+	for i := range responses[:testMaxTurns] {
+		responses[i] = distinctShellCall(i)
+	}
+
+	responses[testMaxTurns] = &model.LLMResponse{Content: &genai.Content{
+		Role:  genai.RoleModel,
+		Parts: []*genai.Part{{Text: "what I found before running out"}},
+	}}
+
+	fake := &fakeLLM{responses: responses}
+
+	res, err := runAgentConversation(context.Background(), fake, newTestConversation(t, "investigate", t.TempDir()))
+	if err != nil {
+		t.Fatalf("a spent turn budget destroyed the work instead of ending it: %v", err)
+	}
+
+	if res.text != "what I found before running out" {
+		t.Errorf("text = %q, want the wrap-up answer", res.text)
+	}
+
+	if !res.wrappedUp {
+		t.Error("the answer is not marked as produced against a spent budget")
+	}
+
+	// The last request must offer no tools — a model that spent every turn
+	// calling them has already shown it will not stop when merely asked.
+	last := fake.requests[len(fake.requests)-1]
+	if last.Config != nil && len(last.Config.Tools) > 0 {
+		t.Error("the wrap-up request still offered tools")
+	}
+}
+
+// distinctShellCall is a run_shell turn whose command is unique to i, so a
+// test that needs the TURN budget to run out is not ended early by the loop
+// detector (which fails a conversation repeating one identical call).
+func distinctShellCall(i int) *model.LLMResponse {
+	return &model.LLMResponse{Content: &genai.Content{
+		Role: genai.RoleModel,
+		Parts: []*genai.Part{
+			{FunctionCall: &genai.FunctionCall{
+				ID:   fmt.Sprintf("call%d", i),
+				Name: "run_shell",
+				Args: map[string]any{"command": fmt.Sprintf("echo step-%d", i)},
+			}},
+		},
+	}}
 }

@@ -1,0 +1,16 @@
+# A cli resolves its own model's context window and compacts against it. Saying
+# what the window is here would describe a conversation nothing in steps owns.
+# expect: context_window is not supported with a cli source
+
+agents:
+- name: reviewer
+  source:
+    model: "@claude/sonnet"
+  context_window: 200000
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: Review something.

@@ -21,7 +21,7 @@ Transport-level only, like the OpenRouter caching levers: no config surface, no 
 
 The result is part of the hash so that *productive* repetition never trips the detector: re-reading a file after an edit returns different bytes, and a verify command's output changes as the tree is fixed. Only call-and-result-both-identical accumulates.
 
-The reaction is two-strike. The first time one interaction exceeds 5 copies in the window, the conversation gets a warning message naming the tool and telling the model to change approach — the window is **not** reset, so the warning is the model's only chance. A second detection (i.e. it repeated the same interaction once more) fails the attempt as a task failure (`failed`, not `errored`, for hook dispatch) with "agent stuck in a loop". Unlike crush's window — which only starts counting after 10 full turns — any count over the threshold triggers, so an agent with the default 8 `max_turns` is protected exactly like one with 200. The detector is scoped to the conversation, which now runs exactly once per step.
+The reaction is two-strike. The first time one interaction exceeds 5 copies in the window, the conversation gets a warning message naming the tool and telling the model to change approach — the window is **not** reset, so the warning is the model's only chance. A second detection (i.e. it repeated the same interaction once more) fails the attempt as a task failure (`failed`, not `errored`, for hook dispatch) with "agent stuck in a loop". Unlike crush's window — which only starts counting after 10 full turns — any count over the threshold triggers, so an agent with the default 30 `max_turns` is protected exactly like one with 200. The detector is scoped to the conversation, which now runs exactly once per step.
 
 ## OpenRouter prompt caching
 
@@ -197,23 +197,29 @@ The 20% headroom is load-bearing, not padding: the size estimate covers the conv
 
 **The window comes from the model.** `internal/config/agent.go`'s `contextWindows` table maps a model-name fragment to that model's window, so a 1M-context model compacts at 800,000 rather than at a tenth of its capacity. A model the table does not recognize keeps the conservative 102,400 (80% of an assumed 128K) — the safe direction to be wrong in, and no behavior change for anything that was already correct.
 
+Matching is on a *normalized* name — lowercased, with `.` folded to `-` — because the same model arrives spelled `claude-sonnet-4-5` from Anthropic and opencode but `claude-sonnet-4.5` from OpenRouter. Table fragments are therefore always written in the dashed form. Entries are ordered most-specific-first, since some families split: `gpt-5.4` is ~1M but its own `-mini`/`-nano` stayed at 400K.
+
+The numbers come from [models.dev](https://models.dev/api.json) (`.<provider>.models.<id>.limit.context`), the catalog opencode itself resolves against. Within a family the entry is pinned to the *smallest* window that family is served with, so a new sibling lands low rather than high. The Anthropic block is the visible consequence of that rule: every current Claude is natively 1M, but they are enumerated individually and the `claude` family entry stays at 200K, so a release newer than the table is under-budgeted rather than over-budgeted.
+
 That default used to be unconditional, and being wrong by 10x for a frontier model was invisible: nothing logged the budget in force, so the first symptom was a stall warning that read like a bug in the agent loop. Every agent step now states it:
 
 ```
 INF agent.compaction_budget agent=coder model=google/gemini-2.5-pro compact_after_tokens=800000 context_window=1000000
-INF agent.compaction_budget agent=coder model=some-local-build compact_after_tokens=102400 context_window=unknown assumed_window="128000 (set compact_after_tokens: if your model differs)"
+INF agent.compaction_budget agent=coder model=some-local-build compact_after_tokens=102400 context_window=unknown assumed_window="128000 (set context_window: if your model differs)"
 ```
 
-The table is deliberately short: an entry is only worth adding for a model whose window is confidently known and materially different from 128K. An operator always outranks it by setting `compact_after_tokens:` directly, which is also the answer for any model it has never heard of.
-
-**Small-context and local models must lower it.** A local build's name tells the table nothing, so it gets the 102,400 default — close to an entire typical context window, and a 32K-token local model (LM Studio, Ollama) will overflow long before that ever triggers. Set a budget comfortably under the model's real window, e.g. `compact_after_tokens: 20000` for a 32K model:
+**`context_window:` is the escape hatch, and usually the right one.** No table keyed on a model name can express a *host* that serves a known model with a smaller window than it has natively, and none of them will have heard of a local build or a release newer than they are. Stating the window keeps the 80% arithmetic applying and makes the log line above report a derived window instead of an assumed one:
 
 ```yaml
 - name: reviewer
   source: { model: lmstudio/qwen2.5-coder }
   max_turns: 60
-  compact_after_tokens: 20000     # the 32K default would never fire in time
+  context_window: 32000    # -> compacts at 25,600
 ```
+
+`compact_after_tokens:` still outranks it, and overrides the budget outright rather than describing the model. Prefer `context_window:` unless you specifically want a budget that is not 80% of the window. Neither is available on a `@cli/` agent, which resolves its own window and compacts its own conversation.
+
+**Small-context and local models must set one of the two.** A local build's name tells the table nothing, so it gets the 102,400 default — close to an entire typical context window, and a 32K-token local model (LM Studio, Ollama) will overflow long before that ever triggers.
 
 **The count is a local estimate, not accounting.** It's the same `len(text)/4` heuristic used elsewhere, applied to the conversation's own content — never the provider's real token-usage data. "`steps` tracks no token usage anywhere" (see the OpenRouter section above) still holds; this is a size heuristic that decides *when to compact*, not a usage figure anything reports.
 
@@ -237,3 +243,14 @@ It is rejected on **built-ins**, which already carry their own output contract (
 **Compaction is lossy.** Tool results are truncated to 4000 bytes apiece in the summarization prompt, and everything older than the retained window survives only as prose in the summary — not verbatim. Separately, and independently of compaction: any tool result too large to return inline (over 32,000 bytes — `run_shell`/a custom tool, an MCP tool's text or structured content, a sub-agent's final answer, a `previous_run` field or trajectory arg, a `fix:` loop's failure output) is instead saved to a file under the step's working directory, with a short `<persistent_file>` pointer message (path, size, a preview) taking its place in the conversation. That pointer message is well under 4000 bytes, so it survives compaction's own truncation intact — a compacted agent can still `read_file` whatever it had already gathered before compaction, even though the raw conversation turn that produced it is gone. `read_file` itself is the exception to the spill-to-file treatment: it reads up to 100,000 bytes in a single call — deliberately larger than the 32,000-byte spill threshold, so a spilled file can always be pulled back whole in one read rather than looping the model on a truncated prefix — and an oversized *file* read degrades to a plain truncation (spilling a file read back out to another file would be a pointless loop) with `start_line`/`end_line` to page through the rest.
 
 **Not part of the merkle hash.** Like `timeout:`/`attempts:`, `compact_after_tokens:` is operational — it changes how a conversation manages its own context budget, not the result it's aiming for — so it never enters a step's hashed content and cannot invalidate a cached step, in either direction.
+
+## Transcript persistence
+
+Every agent step persists two records with different bounds, because they serve different readers:
+
+- **`nodes.result`** carries the bounded summary — response, turn count, verdict/note, and the *trajectory* (tool calls only: name, args truncated to 2,048 bytes per value, ok flag). Planners and routed-to successors load this on every run, so it must stay small.
+- **`node_transcripts`** carries the full exchange, keyed by the same node hash: the model's visible text each turn (including commentary accompanying tool calls, which the trajectory drops), every tool call, every tool result (truncated to 4,096 bytes apiece — the model may have seen up to 32,000), and sub-agent delegations with the child conversation's own events nested inside. It is read on demand ("what did this step actually say and do"), never on the run path.
+
+The transcript is saved for **every** outcome — success, run failure, assert failure, capture failure — from one call site in `RunStep`, because a failed step's transcript is the one a human reconstructs from. The write is best-effort on a detached context, like `recordAgentFailure`: an auxiliary record must neither mask the step's own outcome nor be dropped because the step was aborted. Re-recording the same hash replaces the row, matching `nodes`.
+
+Two paths never write one: `RunHook`/`RunFix` (the no-record contract — the enclosing step records the aggregate outcome), and CLI-backed conversations (`cli.go` delegates the loop to a subprocess; its trajectory comes back over the bridge, but there is no in-process turn stream to transcribe).

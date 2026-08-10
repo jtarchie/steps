@@ -108,7 +108,13 @@ func runAcrossCells(
 		results = make([]branchResult, len(cells))
 	}
 
+	spend := newBlockBudget(ctx, step)
+
 	for index, cell := range cells {
+		if stopAdmitting(ctx, jobName, spend, index, len(cells)) {
+			break
+		}
+
 		cellCtx := ctx
 
 		if qualified {
@@ -164,12 +170,32 @@ func runAcrossCellsConcurrently(
 		results[index] = branchResult{index: index, name: executedStepName(cells[index])}
 	}
 
+	spend := newBlockBudget(ctx, step)
+	spend.warnIfUnbindable(jobName, step.MaxInFlight, len(cells))
+
 	for index := range cells {
+		// Checked in the PARENT, before a slot is taken, so the block stops
+		// admitting new cells while the ones already in flight run to
+		// completion and keep what they recorded. Checking inside the goroutine
+		// would instead race every cell that had already been admitted.
 		// Acquired in the parent, before the goroutine starts, so cells are
 		// ADMITTED in declaration order — under a limit especially, "which
 		// cells go first" is otherwise whichever goroutines the scheduler
 		// happened to run, which is nothing a pipeline author can reason about.
+		//
+		// BEFORE the ceiling check, not after. Acquiring blocks until a cell
+		// finishes and rolls its usage up, so the check that follows reads
+		// spend that includes it. Checked first instead, every admission until
+		// the limit saturates sees a total of ~0 — the cells it is deciding
+		// against are still running — so a matrix could launch max_in_flight
+		// cells before the ceiling meant anything at all.
 		slot.acquire()
+
+		if stopAdmitting(ctx, jobName, spend, index, len(cells)) {
+			slot.release()
+
+			break
+		}
 
 		wg.Add(1)
 
@@ -216,6 +242,118 @@ func runAcrossCellsConcurrently(
 	mergeBranchesContext(ctx, st, results)
 
 	return errors.Join(failures...)
+}
+
+// blockBudget is an across: block's token allowance: what its cells may spend
+// TOGETHER, and how much of it is left.
+//
+// Measured as a delta against the job's own accumulator rather than a counter
+// of its own — every agent step already rolls its provider-reported usage up
+// into RunUsage, so the matrix's spend is simply what the job's total moved by
+// while the block ran. No new plumbing, and it counts a cell's retries and
+// sub-agents for free, since those roll up the same way.
+//
+// A zero budget (the common case) is a nil ceiling that never trips.
+type blockBudget struct {
+	usage   *agent.RunUsage
+	start   int
+	ceiling int
+}
+
+func newBlockBudget(ctx context.Context, step config.Step) *blockBudget {
+	ceiling := stepBudgetTokens(step)
+	if ceiling <= 0 {
+		return &blockBudget{}
+	}
+
+	usage := agent.RunUsageFrom(ctx)
+	if usage == nil {
+		// No accumulator means no agent step can report anything, so there is
+		// nothing to meter. Not an error: a matrix of tasks with a budget is
+		// pointless, not wrong.
+		return &blockBudget{}
+	}
+
+	return &blockBudget{usage: usage, start: usage.Total(), ceiling: ceiling}
+}
+
+// exhausted reports whether the block has spent its allowance.
+//
+// Checked BEFORE a cell is started, never mid-cell: a cell that has begun runs
+// to completion and keeps what it recorded. That is the whole difference
+// between this and the job ceiling — the job's is a backstop and fails, this
+// one stops handing out new work.
+func (b *blockBudget) exhausted() bool {
+	return b.usage != nil && b.spent() >= b.ceiling
+}
+
+// warnIfUnbindable says so when this block's width makes its own ceiling
+// decorative.
+//
+// An admission-time ceiling can only see what FINISHED cells spent, and a cell
+// only finishes once a slot is contended for. So when max_in_flight is at or
+// above the cell count there is no serialization point anywhere in the block:
+// newLimiter hands out a limiter that never blocks, every cell is admitted
+// against a total of ~0, and the budget bounds precisely nothing. That is
+// inherent to bounding what gets STARTED rather than what a running cell may
+// cost — not something a different check order fixes — so the honest move is
+// to be loud about it rather than let an author believe a ceiling is in force.
+//
+// The matrix's width is usually decided at run time (from:), which is why this
+// cannot be a load-time error: whether the configuration binds is not knowable
+// until the cells exist.
+func (b *blockBudget) warnIfUnbindable(jobName string, maxInFlight, cells int) {
+	if !b.unbindable(maxInFlight, cells) {
+		return
+	}
+
+	fmt.Printf("budget: warning — max_in_flight (%d) covers all %d cells, so this block's budget of %s tokens cannot stop anything\n",
+		maxInFlight, cells, humanCount(b.ceiling))
+
+	slog.Warn("across.budget.unbindable",
+		"job", jobName, "max_in_flight", maxInFlight, "cells", cells, "budget_tokens", b.ceiling,
+		"detail", "every cell is admitted before any has reported usage; lower max_in_flight, or rely on the job budget as the backstop")
+}
+
+// unbindable reports whether this block's own ceiling can stop nothing: it has
+// one, and the width covers every cell, so no admission ever reads a nonzero
+// total. Mirrors newLimiter's own "limit >= branches means no limiter at all".
+func (b *blockBudget) unbindable(maxInFlight, cells int) bool {
+	return b.usage != nil && maxInFlight >= cells
+}
+
+func (b *blockBudget) spent() int {
+	if b.usage == nil {
+		return 0
+	}
+
+	return b.usage.Total() - b.start
+}
+
+// report announces that the matrix stopped early. Loudly, because a truncated
+// fan-out that says nothing reads exactly like a complete one that found less:
+// the cells that never ran recorded nothing, so their silence is
+// indistinguishable from a clean result unless this says otherwise.
+func (b *blockBudget) report(jobName string, ran, total int) {
+	fmt.Printf("budget: across stopped after %d of %d cells (spent %s of %s tokens)\n",
+		ran, total, humanCount(b.spent()), humanCount(b.ceiling))
+
+	slog.Warn("across.budget.exhausted",
+		"job", jobName, "cells_run", ran, "cells_total", total,
+		"spent_tokens", b.spent(), "budget_tokens", b.ceiling)
+}
+
+// stopAdmitting reports whether this matrix should start no further cell:
+// either it has spent its own allowance, or the JOB's wall-clock deadline has
+// passed (see deadlineStopsFanOut, which in_parallel: shares).
+func stopAdmitting(ctx context.Context, jobName string, spend *blockBudget, ran, total int) bool {
+	if spend.exhausted() {
+		spend.report(jobName, ran, total)
+
+		return true
+	}
+
+	return deadlineStopsFanOut(ctx, jobName, "across", "cells", ran, total)
 }
 
 // runAcrossCell runs one cell unless its exact content already succeeded.

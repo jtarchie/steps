@@ -58,9 +58,47 @@ func (c *Config) validateBudgets() error {
 		if job.MaxConsecutiveFailures < 0 {
 			return fmt.Errorf("job %q: max_consecutive_failures must not be negative (omit it for no circuit breaker)", job.Name)
 		}
+
+		err = validateStepBudgets(job)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+// validateStepBudgets checks the block-scoped budget: an across: step may cap
+// what its cells spend together.
+//
+// Only there, and only in tokens. Not on an ordinary step, because an agent
+// step already has its own ceiling and a task spends nothing — a budget there
+// would be a field that reads like it does something and does not. Not in
+// dollars, because USD is a ceiling only a CLI agent's own subprocess can
+// enforce (see validateCLIAgents), and it enforces it against ITSELF: a
+// subprocess cannot know what the other cells of a matrix have already spent,
+// so a dollar budget on a block would silently cap nothing.
+func validateStepBudgets(job Job) error {
+	return job.visitSteps(func(label string, step *Step) error {
+		if step.Budget == nil {
+			return nil
+		}
+
+		if len(step.Across) == 0 {
+			return fmt.Errorf("%s: budget is only valid on an across: step, where it caps what the cells spend together; an agent's own ceiling goes on the agent, and a whole job's on the job", label)
+		}
+
+		err := validateBudget(label, step.Budget)
+		if err != nil {
+			return err
+		}
+
+		if step.Budget.USD != 0 {
+			return fmt.Errorf("%s: budget.usd is not valid on an across: step — a dollar ceiling is enforced inside a CLI agent's own subprocess, which cannot see what the matrix's other cells have spent; use budget.tokens", label)
+		}
+
+		return nil
+	})
 }
 
 // budgetTokens is a budget's token ceiling, or 0 for no token budget.

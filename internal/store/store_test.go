@@ -508,3 +508,66 @@ func TestStoreResetStaleRunning(t *testing.T) {
 
 	mustClaimJob(t, store, "build")
 }
+
+// TestNodeTranscriptRoundTrip covers the transcript store: absent before any
+// save, returned verbatim after, and replaced (not duplicated) on a re-save
+// under the same hash — the same replace-on-re-record shape nodes has.
+func TestNodeTranscriptRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+
+	ctx := context.Background()
+
+	_, ok, err := store.NodeTranscript(ctx, "abc123")
+	if err != nil {
+		t.Fatalf("NodeTranscript (empty): %v", err)
+	}
+
+	if ok {
+		t.Fatal("expected no transcript before any save")
+	}
+
+	err = store.SaveNodeTranscript(ctx, "abc123", "build", `[{"type":"text","text":"hi"}]`)
+	if err != nil {
+		t.Fatalf("SaveNodeTranscript: %v", err)
+	}
+
+	got, ok, err := store.NodeTranscript(ctx, "abc123")
+	if err != nil || !ok {
+		t.Fatalf("NodeTranscript: ok=%v err=%v", ok, err)
+	}
+
+	if got != `[{"type":"text","text":"hi"}]` {
+		t.Errorf("transcript = %q", got)
+	}
+}
+
+// TestNodeTranscriptReplace pins that a re-save under the same hash replaces
+// the row rather than duplicating or erroring — the same replace-on-re-record
+// shape nodes has.
+func TestNodeTranscriptReplace(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+
+	ctx := context.Background()
+
+	for _, transcript := range []string{`[{"type":"text","text":"hi"}]`, `[{"type":"text","text":"replaced"}]`} {
+		err := store.SaveNodeTranscript(ctx, "abc123", "build", transcript)
+		if err != nil {
+			t.Fatalf("SaveNodeTranscript: %v", err)
+		}
+	}
+
+	got, ok, err := store.NodeTranscript(ctx, "abc123")
+	if err != nil || !ok {
+		t.Fatalf("NodeTranscript: ok=%v err=%v", ok, err)
+	}
+
+	if got != `[{"type":"text","text":"replaced"}]` {
+		t.Errorf("replaced transcript = %q", got)
+	}
+}

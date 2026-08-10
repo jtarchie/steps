@@ -148,6 +148,9 @@ type ResolvedInvocation struct {
 	// the step, not the agent definition, since concrete input paths are
 	// only known at the step level.
 	ContextPaths []string
+	// MaxContextBytes is the resolved per-file cap for ContextPaths (see
+	// Agent.MaxContextBytes); never 0 — resolution substitutes the default.
+	MaxContextBytes int
 	// Generation dials, mirroring Agent's own fields once resolved. Kept flat
 	// here (rather than a nested type) so this package doesn't need to depend
 	// on anything LLM-client-specific — internal/agent assembles its own
@@ -229,8 +232,8 @@ func resolveAgentRuntime(agent *Agent, step Step) (settings containerSettings) {
 
 // ResolveAgentInvocation resolves the agent named by step against c,
 // applying provider-prefix resolution, tool-grant merging, and defaulting
-// (step.Attempts defaults to 1 — retries are a per-task concern, not part of
-// the agent's config; agent.MaxTurns defaults to defaultMaxAgentTurns;
+// (step.Attempts defaults to defaultAgentAttempts;
+// agent.MaxTurns defaults to defaultMaxAgentTurns;
 // agent.CompactAfterTokens, when nil, defaults to defaultCompactAfterTokens —
 // unlike every other field resolved here, an explicit zero value is
 // meaningfully different from "unset" and is preserved as 0, not defaulted).
@@ -262,10 +265,10 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 
 	attempts := step.Attempts
 	if attempts <= 0 {
-		attempts = 1
+		attempts = defaultAgentAttempts
 	}
 
-	compactAfterTokens, contextWindow := resolveCompactionBudget(target.ModelName, agent.CompactAfterTokens)
+	compactAfterTokens, contextWindow := resolveCompactionBudget(target.ModelName, agent.ContextWindow, agent.CompactAfterTokens)
 
 	runtime := resolveAgentRuntime(agent, step)
 
@@ -279,6 +282,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		CLI:                  target.CLI,
 		Persona:              agent.System,
 		ContextPaths:         step.ContextPaths,
+		MaxContextBytes:      resolveMaxContextBytes(step.MaxContextBytes, agent.MaxContextBytes),
 		Temperature:          agent.Temperature,
 		TopP:                 agent.TopP,
 		MaxTokens:            agent.MaxTokens,
@@ -309,10 +313,20 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 // invocation and runs this one, so which source actually served a run is
 // availability, not content, and a fallback firing on one run cannot
 // invalidate a cache entry.
-func (ri ResolvedInvocation) WithSource(source AgentSource, explicitCompactAfterTokens *int) (ResolvedInvocation, error) {
+// It takes the whole agent, not just its compact_after_tokens:, because the
+// compaction budget is now derived from two of the agent's own fields and a
+// second positional override would be one more blank to count at every call
+// site — the same argument agentTarget's doc comment makes. A nil agent means
+// "no explicit overrides", which is what the two nil-able knobs it reads
+// already mean individually.
+func (ri ResolvedInvocation) WithSource(source AgentSource, agent *Agent) (ResolvedInvocation, error) {
 	target, err := resolveAgentTarget(source)
 	if err != nil {
 		return ResolvedInvocation{}, fmt.Errorf("fallback source: %w", err)
+	}
+
+	if agent == nil {
+		agent = &Agent{}
 	}
 
 	ri.BaseURL = target.BaseURL
@@ -326,9 +340,9 @@ func (ri ResolvedInvocation) WithSource(source AgentSource, explicitCompactAfter
 
 	// The compaction budget follows the model that will actually serve the
 	// conversation — a 200K fallback must not inherit a 1M primary's budget.
-	// An explicit compact_after_tokens: still wins, since the operator set it
-	// for this agent, not for one of its endpoints.
-	ri.CompactAfterTokens, ri.ContextWindow = resolveCompactionBudget(target.ModelName, explicitCompactAfterTokens)
+	// An explicit compact_after_tokens:/context_window: still wins, since the
+	// operator set those for this agent, not for one of its endpoints.
+	ri.CompactAfterTokens, ri.ContextWindow = resolveCompactionBudget(target.ModelName, agent.ContextWindow, agent.CompactAfterTokens)
 
 	return ri, nil
 }

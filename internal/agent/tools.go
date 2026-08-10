@@ -95,6 +95,12 @@ type toolEnv struct {
 	dir      string
 	runner   shell.Runner
 	spillDir string
+	// transcript is the enclosing conversation's recorder, set by
+	// runAgentConversation. It rides in the env because the env is what
+	// already reaches every toolImpl — the sub-agent tool uses it to nest the
+	// child conversation's transcript into the parent's. Nil outside a
+	// conversation; the recorder's methods are nil-safe.
+	transcript *transcriptRecorder
 }
 
 // toolImpl executes one resolved tool against env, given the model's args.

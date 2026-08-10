@@ -824,3 +824,43 @@ jobs:
 		t.Errorf("unexpected error: %v", err)
 	}
 }
+
+// TestLoadConfigAgentFileMergesContextCeilings pins that BOTH byte/window
+// ceilings survive a file: include. context_window: was merged and
+// max_context_bytes: was not — the field sitting next to it on Agent, added in
+// the same change — so an included ceiling was silently replaced by the
+// compiled-in default, with nothing to say it had been ignored.
+func TestLoadConfigAgentFileMergesContextCeilings(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+agents:
+- name: reviewer
+  file: agents/reviewer.yml
+jobs:
+- name: build
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: look at it
+`)
+	writeSibling(t, path, "agents/reviewer.yml", `
+source: { model: lmstudio/qwen }
+context_window: 64000
+max_context_bytes: 5000
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	agent := cfg.Agents[0]
+	if got, want := agent.ContextWindow, 64_000; got != want {
+		t.Errorf("ContextWindow = %d, want %d", got, want)
+	}
+
+	if got, want := agent.MaxContextBytes, 5000; got != want {
+		t.Errorf("MaxContextBytes = %d, want %d (the document's ceiling was dropped)", got, want)
+	}
+}

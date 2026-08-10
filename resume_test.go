@@ -128,10 +128,16 @@ jobs:
 	}
 }
 
-// TestResumeRefusedUnderWorkspaceIsolation covers the honest refusal: an
-// isolating strategy tears down a directory per step, so there is nothing left
-// to continue in, and resuming anyway would run against empty inputs.
-func TestResumeRefusedUnderWorkspaceIsolation(t *testing.T) {
+// TestResumeUnknownRunUnderIsolation: a run id nothing recorded is refused
+// under an isolating strategy exactly as it is under the shared one.
+//
+// This replaces a test that pinned the OPPOSITE contract — that --resume was
+// refused outright under any workspace: strategy. That refusal was written
+// when an isolating build tore its tree down per step; what it actually cost
+// was recovery for the one shape that needs it most, since max_in_flight:
+// REQUIRES isolation. Continuing an isolated run is now supported (see
+// resume_isolation_test.go); an unknown id is still an error.
+func TestResumeUnknownRunUnderIsolation(t *testing.T) {
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 workspace:
@@ -145,13 +151,9 @@ jobs:
     run: "true"
 `)
 
-	err := run([]string{"run", path, "--resume", "anything"})
+	err := run([]string{"run", path, "--resume", "NOSUCHRUN"})
 	if err == nil {
-		t.Fatal("resume was accepted under workspace isolation")
-	}
-
-	if !strings.Contains(err.Error(), "shared workspace") {
-		t.Errorf("error does not explain why: %v", err)
+		t.Fatal("resume accepted a run id nothing recorded")
 	}
 }
 

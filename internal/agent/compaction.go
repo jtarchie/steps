@@ -577,4 +577,4 @@ func logCompactionBudget(ri config.ResolvedInvocation) {
 
 // defaultContextWindowNote describes the fallback in the one place a log line
 // needs to name it. internal/config owns the number itself.
-const defaultContextWindowNote = "128000 (set compact_after_tokens: if your model differs)"
+const defaultContextWindowNote = "128000 (set context_window: if your model differs)"

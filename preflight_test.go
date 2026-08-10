@@ -170,7 +170,12 @@ func TestPreflightNamesTheEndpointContrast(t *testing.T) {
 
 	// The fake answers in script order, and preflight probes agents in plan
 	// order: `healthy` first, then `broken`.
-	fake := newFakeLLM(t, says("probe ok"), failsWith(http.StatusInternalServerError))
+	// The broken probe 500s through the default retry budget — a real outage
+	// does not recover between backoffs, and the script must outlast it.
+	fake := newFakeLLM(t, says("probe ok"),
+		failsWith(http.StatusInternalServerError),
+		failsWith(http.StatusInternalServerError),
+		failsWith(http.StatusInternalServerError))
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
 agents:
