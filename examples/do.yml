@@ -1,0 +1,107 @@
+# yaml-language-server: $schema=../steps.schema.json
+#
+# ─── do: — several steps as one ─────────────────────────────────────────────
+#
+# A plan is already sequential, so `do:` is not about ordering. It is about
+# CONTAINMENT: the block is a single plan step, so one hook on it observes the
+# whole group's outcome.
+#
+# Without it, "roll back if any of these three failed" has two spellings and
+# both are worse — repeat the hook on all three steps (and keep them in sync),
+# or hoist it to the job (where it also fires for failures that have nothing
+# to do with the group).
+#
+# Every job here is modelless and self-verifying:
+#
+#   steps test examples/do.yml
+
+jobs:
+# ── the point: one hook, three steps ────────────────────────────────────────
+- name: rollback-covers-the-group
+  plan:
+  - do:
+    - task: migrate
+      run: echo migrated
+    - task: deploy
+      run: echo deployed
+    - task: smoke-test
+      run: exit 1          # the third step is the one that fails
+    on_failure:
+      task: rollback       # ...and the hook still fires, for the BLOCK
+      run: echo "rolled back the whole group"
+  assert:
+    # The block itself records nothing — it is a container, like in_parallel:.
+    # Its children record themselves, in order, and the hook lands after the
+    # child that failed.
+    execution: [migrate, deploy, smoke-test, rollback]
+    outcome: failed
+
+# ── a failing step stops the block ──────────────────────────────────────────
+# Sequential containment means the steps after a failure do not run. That is
+# deliberately unlike across:, which runs every cell: a matrix asks which
+# combinations work, while a do: block is one piece of work spelled in several
+# steps, and deploying after the migration failed is not a partial answer.
+- name: stops-at-the-first-failure
+  plan:
+  - do:
+    - task: first
+      run: echo first
+    - task: breaks
+      run: exit 1
+    - task: never-runs
+      run: echo unreachable
+  assert:
+    execution: [first, breaks]
+    outcome: failed
+
+# ── artifacts flow through, because the steps are sequential ────────────────
+# A do: child may consume an earlier child's output exactly as two consecutive
+# plan steps do — the thing a CONCURRENT block has to forbid, since branches
+# have no order to consume along. What the block produces stays visible after
+# it, too.
+- name: artifacts-flow-in-order
+  plan:
+  - do:
+    - task: produce
+      outputs: [built]
+      # mkdir -p because this example uses the default SHARED workspace, which
+      # does not materialize an output directory for you. Under
+      # workspace: strategy: copy the directory is created from outputs:.
+      run: mkdir -p built && echo artifact > built/file.txt
+    - task: consume-inside
+      inputs: [built]
+      run: test -s built/file.txt
+  - task: consume-after
+    inputs: [built]
+    run: test -s built/file.txt
+  assert:
+    execution: [produce, consume-inside, consume-after]
+    outcome: succeeded
+
+# ── a green block runs its on_success, once ─────────────────────────────────
+- name: success-hook-fires-once
+  plan:
+  - do:
+    - task: a
+      run: echo a
+    - task: b
+      run: echo b
+    on_success:
+      task: announce
+      run: echo "the whole group passed"
+  assert:
+    execution: [a, b, announce]
+    outcome: succeeded
+
+# ── try: still works inside, and tolerates only its own step ────────────────
+- name: try-inside-is-tolerated
+  plan:
+  - do:
+    - try:                 # tolerated here, exactly as it is in a plain plan
+        task: best-effort
+        run: exit 1
+    - task: still-runs
+      run: echo reached
+  assert:
+    execution: [best-effort, still-runs]
+    outcome: succeeded

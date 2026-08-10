@@ -1,0 +1,21 @@
+# A get fans the REMAINDER OF THE PLAN out, once per version. Inside a block
+# that fan-out has nowhere to go — the same reason try: and the concurrent
+# blocks reject one.
+# expect: a get step is not valid inside do
+
+resource_types:
+- name: dummy
+  config:
+    check: 'echo ''[{"ref":"v1"}]'''
+    in: "true"
+
+resources:
+- name: thing
+  type: dummy
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - do:
+    - get: thing

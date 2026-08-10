@@ -1,0 +1,8 @@
+# A do: block with no steps is a container around nothing. Silently running
+# zero steps is the worst reading of what is almost certainly a typo.
+# expect: do must list at least one step
+
+jobs:
+- name: build
+  plan:
+  - do: []

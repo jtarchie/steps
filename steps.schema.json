@@ -881,6 +881,14 @@
           "description": "across: steps only. How many cells may run at once. Unset or 1 runs them serially in declaration order; above 1 requires a top-level workspace: strategy. Not hashed \u2014 changing it never re-runs a cached cell.",
           "default": 1
         },
+        "do": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Run several steps one after another, as a single plan step — so a hook on the block covers the whole group.",
+          "items": {
+            "$ref": "#/$defs/step"
+          }
+        },
         "in_parallel": {
           "type": "object",
           "additionalProperties": false,

@@ -1,0 +1,11 @@
+# A do: block runs nothing of its own, so an operation field on it is a step's
+# field on a thing that is not a step. It belongs on one of the steps inside.
+# expect: inputs is not valid on a do step
+
+jobs:
+- name: build
+  plan:
+  - do:
+    - task: work
+      run: echo working
+    inputs: [repo]

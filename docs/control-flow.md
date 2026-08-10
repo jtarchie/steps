@@ -1,8 +1,9 @@
 # Control Flow
 
-Three distinct, easy-to-conflate mechanisms for shaping how a job's plan executes, plus the self-verification (`assert:`) that makes fixtures out of them. All are opt-in; a pipeline that uses none of this hashes and behaves exactly as if the feature didn't exist. See `examples/flow.yml` — every job there is a self-verifying, modelless `steps test` fixture; run it with `steps test examples/flow.yml`.
+Four distinct, easy-to-conflate mechanisms for shaping how a job's plan executes, plus the self-verification (`assert:`) that makes fixtures out of them. All are opt-in; a pipeline that uses none of this hashes and behaves exactly as if the feature didn't exist. See `examples/flow.yml` — every job there is a self-verifying, modelless `steps test` fixture; run it with `steps test examples/flow.yml`.
 
-- **`try:`** (tolerate) wraps a step so its failure doesn't stop the plan — best-effort notifications, cleanup, or metrics pushes.
+- **`do:`** (group) runs several steps as one, so a single hook covers the whole group.
+- **`try:`** (tolerate) wraps a step so its failure does not stop the plan — best-effort notifications, cleanup, or metrics pushes.
 - **`when:`** (guard) runs *before* a step and decides whether it runs at all.
 - **`to:`** (route) runs *after* a step and decides which step runs next — including jumping backward to form a loop.
 - **Hooks** (`on_success`/`on_failure`/etc.) *react* to a step's outcome with a nested side-step, and never change control flow — you can't build a loop with a hook.
@@ -145,6 +146,36 @@ Every agent step is otherwise a fresh, hermetic conversation — a step reached 
 - **`assert.tool_calls`**, on an agent step only: an ordered list of `{name, args}` entries the model's tool calls must satisfy, as an ordered subsequence (extra calls are fine) with subset-matched `args`. Values compare as strings. The trajectory records every call the model requested with its own arguments, *before* any `max_calls:` budget check or `args:` pinning — so a budget-rejected call still appears, and a pinned value is deliberately not matchable (asserting on a pinned key is caught at load time). `stdout` and `tool_calls` are ANDed when both are set.
 - **`steps test <pipeline.yml>`** runs every job in declaration order (forced, so the execution log is deterministic), prints per-job PASS/FAIL, and checks the pipeline-level `assert.execution`. This is the self-verifying-fixture entry point.
 - There's no modelless agent fixture for `assert.tool_calls` in `examples/` — a `steps test` fixture can't point an agent at a stub, since `source.endpoint:` is a credential boundary and isn't templatable. It's covered instead by unit tests plus the end-to-end tests in `e2e_test.go`, which drive a scripted OpenAI-compatible endpoint (`fakeprovider_test.go`) through a real `run()` and assert on the trajectory, the verdict route, and the recorded outcome. Likewise no `on_error`/`on_abort` fixture yet (would need a docker bad-image task / a per-task `timeout:` directive) — the classification and dispatch machinery already supports both, only the deterministic triggers are missing.
+
+## `do:` — several steps as one
+
+A plan is already sequential, so `do:` is not about ordering. It is about **containment**: the block is a single plan step, so one hook on it observes the whole group's outcome.
+
+```yaml
+- do:
+  - task: migrate
+    run: ./migrate.sh
+  - task: deploy
+    run: ./deploy.sh
+  - task: smoke-test
+    run: ./smoke.sh
+  on_failure:
+    task: rollback           # fires if ANY of the three failed
+    run: ./rollback.sh
+```
+
+Without it that rollback has two spellings and both are worse: repeat the hook on all three steps and keep them in sync, or hoist it to the job, where it also fires for failures that have nothing to do with the group.
+
+`examples/do.yml` is the runnable version — every job there is a modelless, self-verifying `steps test` fixture.
+
+- **A failing step stops the block**, and the block reports that failure. Deliberately unlike `across:`, which runs every cell: a matrix asks which combinations work, while a `do:` block is one piece of work spelled in several steps — deploying after the migration failed is not a partial answer, it is a worse outcome.
+- **The block records nothing of its own.** It is a container, like `in_parallel:`; its children record themselves in declaration order, so `assert.execution` names the children and then the hook.
+- **Artifacts flow through in order.** A child may consume an earlier child's output exactly as two consecutive plan steps do — the thing a *concurrent* block has to forbid, since branches have no order to consume along. What the block produces stays visible to steps after it.
+- **The block takes no operation fields.** `inputs:`, `run:`, `image:`, `prompt:` and friends belong on the steps inside; a block fetches nothing and runs nothing of its own.
+- **`try:` works inside**, tolerating only its own step, exactly as it does in a plain plan.
+- **A `get:` is not valid inside**, for the reason it is not valid inside `try:` or a concurrent block: a get fans the remainder of the plan out per version, and inside a block that fan-out has nowhere to go.
+- **`to:`, `max_visits:` and `handoff:` belong on the block, not on its children.** A child has no plan position to be routed to, so those would load cleanly and never fire — the exact defect this codebase already paid for once with `to:` on the step a `try:` wraps. They are load errors on a child, naming the fix.
+- **Caching**: the block hashes its children's content in declaration order. Sequence *is* its meaning, so two blocks with the same children in a different order are correctly two different nodes, and moving a step into or out of a block changes its identity.
 
 ## `in_parallel:` — several steps at once
 

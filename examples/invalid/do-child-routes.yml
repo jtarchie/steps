@@ -1,0 +1,15 @@
+# to: routes between PLAN steps, and a step inside a do: block has no plan
+# position — the block is the positioned step. Rejected rather than accepted
+# and silently never fired, which is the defect this codebase already paid for
+# once with to: on the step a try: wraps.
+# expect: to: is not valid on do step
+
+jobs:
+- name: build
+  plan:
+  - do:
+    - task: work
+      run: echo working
+      to: { success: other }
+  - task: other
+    run: echo other

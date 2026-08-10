@@ -897,6 +897,8 @@ func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step co
 		}
 
 		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
+	case step.Do != nil:
+		return validateDoArtifactFlow(cfg, jobName, i, step, available)
 	default:
 		// A concurrent block (in_parallel:, race:, ensemble:) validates its
 		// branches; anything else declares no artifacts of its own.
@@ -912,6 +914,28 @@ func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step co
 
 		return validateBlockArtifactFlow(cfg, jobName, i, step, branches, available)
 	}
+}
+
+// validateDoArtifactFlow walks a do: block's children, which are TRANSPARENT
+// here — deliberately unlike the concurrent blocks blockBranches serves.
+//
+// A do:'s children run in sequence, so a later child may consume an earlier
+// one's output exactly as two consecutive plan steps do. That is the very
+// thing a concurrent block must forbid (branches have no order to consume
+// along), which is why this cannot go through the shared branch walk: the
+// children thread the SAME available map in declaration order, and what they
+// produce stays visible to the steps after the block.
+func validateDoArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+	pre := maps.Clone(available)
+
+	for childIndex := range step.Do {
+		err := validateStepArtifactFlow(cfg, jobName, childIndex, step.Do[childIndex], available)
+		if err != nil {
+			return err
+		}
+	}
+
+	return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
 }
 
 // blockBranches returns a concurrent block's branches, or nil for an ordinary

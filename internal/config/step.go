@@ -99,6 +99,19 @@ type Step struct {
 	// agent step being wrapped, since that is what internal/agent reads. Also
 	// valid as a hook body, where it tolerates the hook's failure the same way.
 	Try *Step `yaml:"try,omitempty"`
+	// Do runs several steps one after another, as a single plan step.
+	//
+	// Sequential execution is what a plan does anyway, so the ordering is not
+	// the point — the containment is. A hook on the block observes the whole
+	// group's outcome, which is the only way to say "roll back if any of these
+	// three failed" without repeating the hook on each step or hoisting it to
+	// the job. Mirrors Concourse's do: (concourse-ci.org/docs/steps/do/).
+	//
+	// The block is a container like in_parallel:/race:: it takes no operation
+	// fields of its own (no inputs:, run:, image: — those belong on the steps
+	// inside), and it carries hooks, when:, try: and to: as any positioned
+	// step does.
+	Do []Step `yaml:"do,omitempty"`
 	// InParallel runs several steps at the same time instead of one after
 	// another. See InParallel.
 	InParallel *InParallel `yaml:"in_parallel,omitempty"`
@@ -575,6 +588,11 @@ const (
 	StepKindLoadVar StepKind = "load_var"
 	// StepKindApproval waits for a human decision.
 	StepKindApproval StepKind = "approval"
+	// StepKindDo is a block of steps that run one after another AS ONE STEP.
+	// Its value is entirely in that last part: a hook on the block covers
+	// every step inside it, which is the one thing a plain run of sibling
+	// steps cannot express (see Step.Do).
+	StepKindDo StepKind = "do"
 )
 
 // Kind reports which single kind of step s is. ok is false when zero, or
@@ -596,6 +614,7 @@ func (s Step) Kind() (kind StepKind, ok bool) {
 		{StepKindEnsemble, s.Ensemble != nil},
 		{StepKindLoadVar, s.LoadVar != ""},
 		{StepKindApproval, s.Approval != nil},
+		{StepKindDo, s.Do != nil},
 	} {
 		if !candidate.set {
 			continue
@@ -807,6 +826,19 @@ func visitStepTree(label string, step *Step, fn func(label string, step *Step) e
 			if err != nil {
 				return err
 			}
+		}
+	}
+
+	// A do: block's children are visited too, but deliberately NOT through
+	// branchesOf: that function means "concurrent branches", and its other
+	// callers (context scoping, handoff-note fan-in/broadcast) attach
+	// concurrency semantics to whatever it returns. A do: block is sequential,
+	// so its children behave like ordinary consecutive plan steps — which is
+	// the entire reason those semantics must not reach them.
+	for i := range step.Do {
+		err = visitStepTree(fmt.Sprintf("%s (do step %d)", label, i), &step.Do[i], fn)
+		if err != nil {
+			return err
 		}
 	}
 

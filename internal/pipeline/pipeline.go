@@ -735,10 +735,25 @@ func dispatchByKind(
 		}
 
 		return stepOut.Hash, stepRan, no, nil
+	default:
+		return dispatchContainerKind(ctx, cfg, jobName, kind, i, step, bw, st, parentHash, handoff)
+	}
+}
+
+// dispatchContainerKind dispatches the block kinds — the ones that run other
+// steps rather than doing work themselves. Split from dispatchByKind so
+// neither switch has to carry both halves.
+func dispatchContainerKind(
+	ctx context.Context, cfg *config.Config, jobName string, kind config.StepKind, i int, step config.Step,
+	bw workspace.BuildWorkspace, st *store.Store, parentHash string, handoff *agent.Handoff,
+) (string, stepDisposition, nonGetOutcome, error) {
+	switch kind { //nolint:exhaustive // the leaf kinds are handled by dispatchByKind; default catches config.StepKindGet, which never reaches here
 	case config.StepKindTry:
 		return runTryStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
 	case config.StepKindInParallel:
 		return runParallelStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
+	case config.StepKindDo:
+		return runDoStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
 	case config.StepKindRace:
 		return runRaceStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
 	case config.StepKindEnsemble:

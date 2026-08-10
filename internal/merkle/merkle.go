@@ -35,6 +35,8 @@ const (
 	NodeKindParallel NodeKind = "in_parallel"
 	// NodeKindRace is a race: block.
 	NodeKindRace NodeKind = "race"
+	// NodeKindDo is a do: block — steps run in sequence as one node.
+	NodeKindDo NodeKind = "do"
 	// NodeKindEnsemble is an ensemble: block.
 	NodeKindEnsemble NodeKind = "ensemble"
 	// NodeKindAcross is an across: matrix.
@@ -466,6 +468,8 @@ func stepContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 		return TryNodeContent(cfg, step)
 	case config.StepKindInParallel:
 		return ParallelNodeContent(cfg, step)
+	case config.StepKindDo:
+		return DoNodeContent(cfg, step)
 	case config.StepKindRace:
 		return RaceNodeContent(cfg, step)
 	case config.StepKindEnsemble:
@@ -509,6 +513,28 @@ func ParallelNodeContent(cfg *config.Config, step config.Step) (map[string]any, 
 	}
 
 	return withHooks(cfg, step, withWhen(step, withRouting(step, content)))
+}
+
+// DoNodeContent hashes a do: block: its children's own content, in
+// declaration order.
+//
+// There is no limit/fail_fast counterpart to fold in, as ParallelNodeContent
+// has — a do: block has no settings. Sequence IS its meaning, so the ordered
+// list of children is the whole of its identity, and two blocks with the same
+// children in a different order are correctly two different nodes.
+func DoNodeContent(cfg *config.Config, step config.Step) (map[string]any, error) {
+	steps := make([]any, 0, len(step.Do))
+
+	for i := range step.Do {
+		childContent, err := stepContentMap(cfg, step.Do[i])
+		if err != nil {
+			return nil, fmt.Errorf("do step %d: %w", i, err)
+		}
+
+		steps = append(steps, childContent)
+	}
+
+	return withHooks(cfg, step, withWhen(step, withRouting(step, map[string]any{"do": steps})))
 }
 
 // TaskNodeContent and PutNodeContent fold in inputs/outputs only when ws is
@@ -1061,7 +1087,7 @@ func planKindNode(cfg *config.Config, step config.Step, i int, parentHash string
 		node, err := agentNode(cfg, step, i, parentHash)
 
 		return node, true, err
-	case config.StepKindTry, config.StepKindRace, config.StepKindInParallel, config.StepKindEnsemble:
+	case config.StepKindTry, config.StepKindRace, config.StepKindInParallel, config.StepKindEnsemble, config.StepKindDo:
 		// Every container is unskippable. Its branches run inside it rather
 		// than as chain nodes of their own, so the planner cannot reason about
 		// which of them a cached success covers — and a branch may be a put or
@@ -1253,6 +1279,8 @@ func planContainerNode(cfg *config.Config, step config.Step, kind config.StepKin
 	switch kind { //nolint:exhaustive // the caller dispatches only container kinds here
 	case config.StepKindTry:
 		return tryNode(cfg, step, i, parentHash)
+	case config.StepKindDo:
+		return doNode(cfg, step, i, parentHash)
 	case config.StepKindRace:
 		return raceNode(cfg, step, i, parentHash)
 	case config.StepKindEnsemble:
@@ -1260,6 +1288,21 @@ func planContainerNode(cfg *config.Config, step config.Step, kind config.StepKin
 	default: // config.StepKindInParallel
 		return parallelNode(cfg, step, i, parentHash)
 	}
+}
+
+// doNode builds the plan node for a do: block.
+func doNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, error) {
+	content, err := DoNodeContent(cfg, step)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (do): %w", i, err)
+	}
+
+	hash, err := HashNode(NodeKindDo, content, parentHash)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (do): %w", i, err)
+	}
+
+	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindDo, StepIndex: i, Content: content}, nil
 }
 
 // raceNode builds the plan node for a race: block.
