@@ -423,7 +423,14 @@ jobs:
     - var: dim
       from: dimensions
       label: id
-    max_in_flight: 8
+    max_in_flight: 4
+    # Three tries, as pr-af's MaxRetries. For a hosted agent this is the
+    # RETRYING TRANSPORT, not a re-run of the conversation — it re-issues one
+    # request that failed in transit, which is exactly the failure that killed a
+    # six-reviewer fan-out here: a bare 503 from the provider, mid-cell, with
+    # everything else healthy. It cannot buy more turns or more time, and is not
+    # the answer to either.
+    attempts: 3
     # The ceiling that belongs HERE rather than on the job. This is the only
     # step whose cost nobody could know when this file was written — the
     # compiler decided how many cells there are, minutes ago. When it runs out,
@@ -436,6 +443,11 @@ jobs:
     #
     # Re-running with a larger figure resumes rather than restarting: the cells
     # that never started recorded nothing.
+    # NOTE the interaction with max_in_flight: above. A ceiling is checked when
+    # a cell is admitted, and the first max_in_flight cells are admitted before
+    # any of them has reported a token — so with a width at or above the cell
+    # count, this bounds nothing at all. At 8 it was decorative for a six-cell
+    # matrix. At 4 the last two cells are decided against real spend.
     budget:
       tokens: 1800000
     agent: reviewer
