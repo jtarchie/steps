@@ -430,14 +430,12 @@ jobs:
     # six-reviewer fan-out here: a bare 503 from the provider, mid-cell, with
     # everything else healthy. It cannot buy more turns or more time, and is not
     # the answer to either.
-    attempts: 3
     # An agent step's default deadline is 10 minutes (agentStepTimeout). A deep
     # review of a 100KB diff at 50 turns does not reliably fit it — and cannot
     # at all when the provider is returning 500s and each retry backs off before
     # trying again, which is how three cells died here at once. 20 minutes is
     # per ATTEMPT; the job's own 1h timeout: above is what stops this becoming
     # unbounded.
-    timeout: 20m
     # The ceiling that belongs HERE rather than on the job. This is the only
     # step whose cost nobody could know when this file was written — the
     # compiler decided how many cells there are, minutes ago. When it runs out,
@@ -457,29 +455,48 @@ jobs:
     # matrix. At 4 the last two cells are decided against real spend.
     budget:
       tokens: 1800000
-    agent: reviewer
-    inputs: [pr]
-    # qualify: this matrix records a fact PER CELL, so each cell's findings
-    # come back under a key naming it rather than the cells overwriting one
-    # another. Stated rather than inferred from max_in_flight:, so the key
-    # names a downstream step reads do not change if the concurrency does.
-    context: { write: true, qualify: true }
-    context_paths: ["{{ .vars.dim.path }}"]
-    prompt: |
-      Review this change through one dimension only: {{ .vars.dim.focus }}
+    # ONE reviewer failing must not cost the whole review.
+    #
+    # This is the reference implementation's own shape, and the reason the fan-
+    # out exists at all: a dimension whose model returns nothing usable
+    # contributes an empty set and the review is assembled from whatever
+    # survived — only if EVERY dimension fails does it give up
+    # (allDimensionsSchemaFailed). Without this, a matrix here is the opposite
+    # of redundant: five reviewers means five chances to lose the entire run,
+    # and that is exactly how several runs ended.
+    #
+    # try: tolerates a task-level failure — a reviewer that answered nothing,
+    # or never satisfied a required tool. An infrastructure error still stops
+    # the run, which is also what theirs does: their per-dimension error
+    # propagates, and it is the retry/backoff underneath that makes those rare.
+    try:
+      agent: reviewer
+      inputs: [pr]
+      # On the wrapped step, not the wrapper: try: only decides whether the plan
+      # stops, and these describe the operation it wraps.
+      attempts: 3
+      timeout: 20m
+      # qualify: this matrix records a fact PER CELL, so each cell's findings
+      # come back under a key naming it rather than the cells overwriting one
+      # another. Stated rather than inferred from max_in_flight:, so the key
+      # names a downstream step reads do not change if the concurrency does.
+      context: { write: true, qualify: true }
+      context_paths: ["{{ .vars.dim.path }}"]
+      prompt: |
+        Review this change through one dimension only: {{ .vars.dim.focus }}
 
-      {{ .vars.dim.path }} is already in your context — you have its current
-      contents above, so reason over them directly rather than re-reading it.
-      Open these only if that is insufficient: {{ .vars.dim.scope }}
+        {{ .vars.dim.path }} is already in your context — you have its current
+        contents above, so reason over them directly rather than re-reading it.
+        Open these only if that is insufficient: {{ .vars.dim.scope }}
 
-      Other dimensions are being reviewed at the same time as yours — the
-      recap in your context lists them. A finding that clearly belongs to
-      another dimension is theirs, not yours; do not duplicate it.
+        Other dimensions are being reviewed at the same time as yours — the
+        recap in your context lists them. A finding that clearly belongs to
+        another dimension is theirs, not yours; do not duplicate it.
 
-      Read the code before you claim anything about it. Record each finding
-      with set_context under a key starting `finding_`, as a JSON object with
-      severity, file, line, claim, and the evidence chain you actually
-      traced.
+        Read the code before you claim anything about it. Record each finding
+        with set_context under a key starting `finding_`, as a JSON object with
+        severity, file, line, claim, and the evidence chain you actually
+        traced.
 
   # ── phase 5: the falsifiability gate ─────────────────────────────────────
   # The reviewers proposed; this one tries to knock each proposal down. It is a
