@@ -438,6 +438,16 @@ func TestFollowRedirectAndPolling(t *testing.T) {
 	if !strings.Contains(stale, `"run":null`) {
 		t.Errorf("a prior run was reported as this trigger's result: %s", stale)
 	}
+
+	// A missing or unparseable stamp credits nothing that already exists.
+	// Treating it as zero would match the job's whole history and hand back
+	// its OLDEST run as though it were the one just triggered.
+	for _, query := range []string{"", "?since=", "?since=banana", "?since=0"} {
+		_, body := get(t, server, "/p/demo/jobs/build/latest-run"+query)
+		if !strings.Contains(body, `"run":null`) {
+			t.Errorf("latest-run%q resolved to an existing run: %s", query, body)
+		}
+	}
 }
 
 // TestRelativeTimesAreMachineReadable pins the contract the ticker depends

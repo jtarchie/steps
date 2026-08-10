@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -208,24 +209,42 @@ jobs:
 	}
 }
 
-// TestFailedTaskDoesNotDoublePublishOutput pins the triage rule: a failing
-// command's output already reaches the reader inside the error, so publishing
-// it again would print the same text twice on the page they reach while
-// working out what broke.
-func TestFailedTaskDoesNotDoublePublishOutput(t *testing.T) {
+// TestFailedTaskPublishesItsOutput is the case the feature exists for: the
+// step someone opens a run page to investigate. Nothing else carries a
+// failing command's output — the error names the exit status and no more —
+// so suppressing it here would leave the transcript answering "what did it
+// print" only for the steps nobody needs to ask about.
+func TestFailedTaskPublishesItsOutput(t *testing.T) {
 	t.Parallel()
 
+	// The command GENERATES its output rather than echoing a literal, so the
+	// second assertion below cannot be satisfied by the command text itself
+	// appearing in the error.
 	collected := runFixturePipeline(t, `
 jobs:
   - name: build
     plan:
       - task: boom
-        run: echo about to fail && exit 2
+        run: seq 3; exit 2
 `, true)
+
+	var published string
 
 	for _, event := range collected {
 		if event.Type == events.TypeStepOutput {
-			t.Errorf("a failed task published a separate output event: %q", event.Text)
+			published = event.Text
+		}
+	}
+
+	if published != "1\n2\n3" {
+		t.Errorf("failed task output = %q, want %q", published, "1\n2\n3")
+	}
+
+	// The error is genuinely separate text, so showing both is not the same
+	// thing twice — which is what the suppression this replaced assumed.
+	for _, event := range collected {
+		if event.Type == events.TypeStepFinished && strings.Contains(event.Text, published) {
+			t.Errorf("the error already carried the output, so suppressing it would have been right: %q", event.Text)
 		}
 	}
 }

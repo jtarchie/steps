@@ -1237,9 +1237,12 @@ func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedT
 		return runFixTask(ctx, cfg, runner, rt, workspaceDir)
 	default:
 		stdout, stderr, err := runner.RunStreamedCapture(ctx, rt.Run, maxPublishedOutputBytes)
-		if err == nil {
-			publishOutputForCurrentStep(ctx, rt.Name, stdout, stderr)
-		}
+
+		// Published whether or not the command succeeded. A failing step is
+		// the one whose output is actually wanted, and nothing else carries
+		// it: the error this returns is "command %q failed: exit status N",
+		// with no trace of what the command said on its way out.
+		publishOutputForCurrentStep(ctx, rt.Name, stdout, stderr)
 
 		if err != nil {
 			// Check for context cancellation/timeout first, before classifying
@@ -1334,12 +1337,16 @@ func runAssertedTask(ctx context.Context, runner shell.Runner, rt config.Resolve
 
 	printTaskOutput(rt.Name, stdout, stderr)
 
+	// Before the assert is evaluated: a mismatch reports which expectation
+	// failed ("output does not contain %q") and never the output that missed
+	// it, so suppressing this on failure would hide exactly what the reader
+	// needs to see the mismatch for themselves.
+	publishOutputForCurrentStep(ctx, rt.Name, stdout, stderr)
+
 	mismatch := assertMismatch(rt.Assert, stdout, exitCode)
 	if mismatch != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, outcome.Fail(mismatch))
 	}
-
-	publishOutputForCurrentStep(ctx, rt.Name, stdout, stderr)
 
 	return nil
 }

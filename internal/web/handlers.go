@@ -383,12 +383,21 @@ func (s *Server) handleLatestRun(c echo.Context) error {
 	ctx := c.Request().Context()
 	name := c.Param("job")
 
-	millis, _ := strconv.ParseInt(c.QueryParam("since"), 10, 64)
+	// A missing or unparseable stamp means no run has been credited to this
+	// page yet, so nothing that already exists can be the answer. Falling back
+	// to zero would make FirstRunSince match the job's entire history and
+	// forward to its OLDEST run, presenting an ancient transcript as the one
+	// just triggered.
+	millis, err := strconv.ParseInt(c.QueryParam("since"), 10, 64)
+	if err != nil || millis <= 0 {
+		millis = time.Now().UTC().UnixMilli()
+	}
+
 	since := time.UnixMilli(millis).UTC()
 
-	run, ok, err := pipeline.Store.FirstRunSince(ctx, name, since)
-	if err != nil {
-		return fmt.Errorf("web: %w", err)
+	run, ok, findErr := pipeline.Store.FirstRunSince(ctx, name, since)
+	if findErr != nil {
+		return fmt.Errorf("web: %w", findErr)
 	}
 
 	if ok {
@@ -401,9 +410,9 @@ func (s *Server) handleLatestRun(c echo.Context) error {
 
 	// No run yet. Say why, so a job held by a serial group or sitting behind
 	// a busy drainer reads as queued rather than as nothing happening.
-	queue, err := pipeline.Store.ListTriggerQueue(ctx, 25)
-	if err != nil {
-		return fmt.Errorf("web: %w", err)
+	queue, queueErr := pipeline.Store.ListTriggerQueue(ctx, 25)
+	if queueErr != nil {
+		return fmt.Errorf("web: %w", queueErr)
 	}
 
 	state := "waiting"

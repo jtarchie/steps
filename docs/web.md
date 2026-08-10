@@ -42,10 +42,12 @@ the things a scrollback cannot give you:
   green run of that job — computed by comparing content hashes, so it names
   the steps whose inputs, command, or prompt actually moved.
 - **A task step expands into what it printed.** Output is captured while it
-  still streams to the terminal, bounded at 16KB per step, and recorded only
-  for a step that succeeded — a failure's output already reaches you inside
-  the error the page leads with. A step that printed nothing is not
-  expandable at all, so a chevron never promises detail that is not there.
+  still streams to the terminal and bounded at 16KB per step. Recorded
+  whichever way the step ended, and especially when it failed: the error a
+  task returns names the exit status, and an assert mismatch names the
+  expectation — neither carries the output that explains either. A step that
+  printed nothing is not expandable at all, so a chevron never promises detail
+  that is not there.
 - **An agent step expands into its conversation**: the model's text each turn,
   every tool call, and any sub-agent delegation nested underneath.
 - **Every hash is a link** to the node page, and **every step has one too** —

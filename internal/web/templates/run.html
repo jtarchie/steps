@@ -202,9 +202,14 @@
     }
 
     if (e.type === 'step_output') {
-      if (node && e.text) {
-        node.querySelector('.stepbody').appendChild(el('div', 'log output', e.text));
-        node.classList.add('open');
+      // Same fallback addTurn uses. The server-side assembler opens a step for
+      // an output event whose step it has not seen; dropping it here instead
+      // would mean the output appeared only after a reload, which is exactly
+      // the live-versus-replay drift this design refuses.
+      var target = node || Array.from(transcript.querySelectorAll('.step.running')).pop();
+      if (target && e.text) {
+        target.querySelector('.stepbody').appendChild(el('div', 'log output', e.text));
+        target.classList.add('open');
       }
       return;
     }

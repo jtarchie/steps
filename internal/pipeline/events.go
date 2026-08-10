@@ -168,12 +168,15 @@ func publishOutputForCurrentStep(ctx context.Context, jobName, stdout, stderr st
 // stdout.
 const maxPublishedOutputBytes = 16_000
 
-// publishStepOutput records what a step printed.
+// publishStepOutput records what a step printed, whichever way the step ended.
 //
-// Only for a step that SUCCEEDED: a failure already folds its output into the
-// error the transcript leads with (see taskFailureOutput), and publishing it
-// again would print the same text twice on the page someone reaches while
-// triaging. Empty output publishes nothing.
+// Especially when it failed. Nothing else carries a failing command's output:
+// the error a task returns is "command %q failed: exit status N", and an
+// assert mismatch names the expectation rather than the output that missed
+// it. (taskFailureOutput does fold output into text, but only into the prompt
+// runFixTask hands the fix agent — it never reaches the transcript.) A step
+// that printed nothing publishes nothing: an empty log block is worse than
+// no log block.
 func publishStepOutput(ctx context.Context, jobName string, i int, step config.Step, stdout, stderr string) {
 	combined := strings.TrimRight(stdout, "\n")
 
