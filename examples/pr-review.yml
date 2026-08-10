@@ -150,18 +150,17 @@ agents:
   # single reviewer ran. A lens proposes dimensions from a diff it is already
   # holding — it is not the step that reads the codebase.
   max_turns: 8
-  # And a hard backstop, because turns alone do not bound a conversation whose
-  # every turn re-sends a growing context. pr-af gives its meta-selector phase
-  # 15% of the purse; this is that ratio, per lens, against the job budget
-  # below. It FAILS rather than degrading — a per-agent ceiling has no way to
-  # stop halfway — so it is set where tripping it means something went wrong,
-  # not where it is a normal outcome.
-  budget:
-    tokens: 400000
-  # read_file only. list_dir and search_files are what let a planning step
-  # wander a checked-out repo, and with them a lens exhausted every turn
-  # ceiling it was given — 8, 12 and 50 — answering on none of them. Naming a
-  # path it already has is enough to confirm; searching is the reviewers' job.
+  # No agent-level budget here, deliberately. One was set as a "backstop" and
+  # it became the failure: 400K against a lens that opens holding a 100KB diff
+  # and re-sends it every turn is not a backstop, it is a tripwire — a run died
+  # at 410,982 with the whole review discarded, because a budget breach is a
+  # hard stop with nothing salvaged (unlike a spent TURN budget, which now ends
+  # the conversation with an answer).
+  #
+  # What actually bounds this step is above: 8 turns, and read_file with no way
+  # to go looking. The job's own ceiling is the backstop, which is what a
+  # backstop should be — one number, far away, that means something has gone
+  # wrong rather than that a step did its job thoroughly.
   tools: [read_file]
 
 - name: compiler
