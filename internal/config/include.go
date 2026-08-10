@@ -314,6 +314,10 @@ func mergeAgentDials(a *Agent, doc Agent) {
 	if a.ContextWindow == 0 {
 		a.ContextWindow = doc.ContextWindow
 	}
+
+	if a.MaxContextBytes == 0 {
+		a.MaxContextBytes = doc.MaxContextBytes
+	}
 }
 
 // resolveStepIncludes applies one step's own includes: run_file: (task steps

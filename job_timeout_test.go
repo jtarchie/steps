@@ -199,3 +199,52 @@ jobs:
 		t.Errorf("every cell ran despite the deadline: %v", ran)
 	}
 }
+
+// TestJobTimeoutBoundsAParallelBlock is the same regression one construct
+// over. in_parallel: had the identical hole across: was fixed for: the plan
+// walk checks the deadline between STEPS, and a whole in_parallel: block is
+// one of them, so nothing revisited a fan-out that ran long. Both admission
+// loops now ask deadlineStopsFanOut after taking a slot.
+//
+// limit: 1 makes the branches serial, so there is a second admission for the
+// deadline to stop — with every branch started at once there is nothing left
+// to decide, which is the honest bound of an admission-time check.
+func TestJobTimeoutBoundsAParallelBlock(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "branches.log")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+jobs:
+- name: fan
+  timeout: 1s
+  plan:
+  - in_parallel:
+      limit: 1
+      steps:
+      - task: a
+        inputs: []
+        run: |
+          sleep 1
+          echo a >> %[1]s
+      - task: b
+        inputs: []
+        run: |
+          sleep 1
+          echo b >> %[1]s
+      - task: c
+        inputs: []
+        run: |
+          sleep 1
+          echo c >> %[1]s
+`, log))
+
+	err := run([]string{path})
+	if err == nil {
+		t.Fatal("the job succeeded; a passed deadline must fail it")
+	}
+
+	ran := strings.Fields(readFileString(t, log))
+	if len(ran) >= 3 {
+		t.Errorf("every branch ran despite the deadline: %v", ran)
+	}
+}

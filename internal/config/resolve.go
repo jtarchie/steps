@@ -282,7 +282,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		CLI:                  target.CLI,
 		Persona:              agent.System,
 		ContextPaths:         step.ContextPaths,
-		MaxContextBytes:      resolveMaxContextBytes(agent.MaxContextBytes),
+		MaxContextBytes:      resolveMaxContextBytes(step.MaxContextBytes, agent.MaxContextBytes),
 		Temperature:          agent.Temperature,
 		TopP:                 agent.TopP,
 		MaxTokens:            agent.MaxTokens,

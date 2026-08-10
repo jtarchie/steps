@@ -28,6 +28,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -82,4 +83,34 @@ func jobDeadlinePassed(ctx context.Context, jobName string) error {
 	return outcome.Fail(fmt.Errorf(
 		"job %q exceeded its timeout of %s (%s elapsed); the running step was allowed to finish, and no further step was started",
 		jobName, deadline.timeout, elapsed.Round(time.Second)))
+}
+
+// deadlineStopsFanOut reports whether a concurrent block should start no
+// further unit of work because the job's wall-clock ceiling has passed, and
+// says so once when it does.
+//
+// Shared by every fan-out rather than written per construct, because the hole
+// it closes is a property of the plan walk, not of any one block: the walk
+// checks the deadline BETWEEN steps, and a whole across: matrix or
+// in_parallel: block is ONE step of it. So a fan-out that runs long is never
+// revisited, and a job timeout could not bound the very shape it exists for —
+// the defect this repo's own review pipeline found in across:, which
+// in_parallel: had identically. Both admission loops ask here, at the same
+// point (after a slot is acquired, before the work starts), which turns
+// "overrun by at most one step" into "overrun by at most one cell/branch".
+//
+// It never fails the block itself. It stops admitting; the plan walk then
+// fails the job on its next iteration exactly as it already did, so a job
+// timeout still reports as a job timeout — and the money simply is not spent
+// in the meantime.
+func deadlineStopsFanOut(ctx context.Context, jobName, kind, unit string, ran, total int) bool {
+	if jobDeadlinePassed(ctx, jobName) == nil {
+		return false
+	}
+
+	fmt.Printf("timeout: %s stopped after %d of %d %s (the job's deadline passed)\n", kind, ran, total, unit)
+	slog.Warn("fanout.deadline.passed",
+		"job", jobName, "kind", kind, "ran", ran, "total", total)
+
+	return true
 }

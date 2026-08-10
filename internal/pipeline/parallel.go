@@ -119,7 +119,14 @@ func runBranches(
 		slot.acquire()
 
 		// Under fail_fast a branch that has not started yet never should.
-		if branchCtx.Err() != nil {
+		//
+		// Nor should one the job no longer has time for: the plan walk checks
+		// the deadline between STEPS, and this whole block is one of them, so
+		// without asking here a job timeout: cannot bound a parallel fan-out
+		// at all — the same hole across: had, closed the same way and with the
+		// same helper. Asked after acquiring, so the answer reflects branches
+		// that have actually finished.
+		if branchCtx.Err() != nil || deadlineStopsFanOut(ctx, jobName, "in_parallel", "branches", index, len(branches)) {
 			slot.release()
 
 			break

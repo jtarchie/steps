@@ -492,6 +492,11 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 
 	printAgentResponse(res)
 
+	// One call site covers every outcome — success, run failure, assert
+	// failure, capture failure — because a failed step's transcript is the one
+	// that gets read. Best-effort by design (see saveAgentTranscript).
+	saveAgentTranscript(ctx, st, hash, jobName, res)
+
 	previous := &PreviousRun{
 		Agent: step.Agent, Response: res.text, Verdict: res.verdict, Note: res.note,
 		Turns: res.turns, Trajectory: exportTrajectory(res.trajectory),

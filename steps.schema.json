@@ -313,8 +313,8 @@
         },
         "max_context_bytes": {
           "type": "integer",
-          "minimum": 1,
-          "description": "How much of one context_paths: file reaches the model at conversation start. Default 100000. Over it the file is truncated with a pointer to read_file paging, never refused."
+          "minimum": 0,
+          "description": "How much of one context_paths: file reaches the model at conversation start. Default 100000; 0 takes that default. Over it the file is truncated with a pointer to read_file paging, never refused."
         }
       }
     },
@@ -771,6 +771,11 @@
           "items": {
             "type": "string"
           }
+        },
+        "max_context_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Per-file cap for this step's context_paths:, overriding the agent's max_context_bytes:. 0 defers to the agent."
         },
         "verdicts": {
           "type": "array",

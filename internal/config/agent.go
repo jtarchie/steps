@@ -654,22 +654,54 @@ func ensureTrailingSlash(rawURL string) string {
 // handed before.
 const DefaultMaxContextBytes = 100_000
 
-// resolveMaxContextBytes substitutes the default for an unset ceiling, so
-// nothing downstream has to nil-check a number.
-func resolveMaxContextBytes(configured int) int {
-	if configured <= 0 {
-		return DefaultMaxContextBytes
+// resolveMaxContextBytes picks the ceiling in force: the STEP's if it set one,
+// else the agent's, else the default — so nothing downstream has to nil-check a
+// number or know the precedence.
+//
+// Step wins because it is the narrower statement about the same conversation:
+// context_paths: is step-level, so the step is what knows how much evidence it
+// is handing over.
+func resolveMaxContextBytes(step, agent int) int {
+	if step > 0 {
+		return step
 	}
 
-	return configured
+	if agent > 0 {
+		return agent
+	}
+
+	return DefaultMaxContextBytes
 }
 
-// validateMaxContextBytes rejects a negative ceiling. Zero is the documented
-// "take the default", so only a negative is meaningless here.
+// validateMaxContextBytes rejects a negative ceiling, on an agent or on a
+// step, and a step-level one on anything that is not an agent step. Zero is the
+// documented "take the default"/"defer to the agent", so only a negative is
+// meaningless here.
 func (c *Config) validateMaxContextBytes() error {
 	for _, agent := range c.Agents {
 		if agent.MaxContextBytes < 0 {
 			return fmt.Errorf("agent %q: max_context_bytes must be a positive number of bytes (omit it for the default of %d)", agent.Name, DefaultMaxContextBytes)
+		}
+	}
+
+	for _, job := range c.Jobs {
+		err := job.visitSteps(func(label string, step *Step) error {
+			if step.MaxContextBytes == 0 {
+				return nil
+			}
+
+			if step.MaxContextBytes < 0 {
+				return fmt.Errorf("%s: max_context_bytes must be a positive number of bytes (omit it to take the agent's)", label)
+			}
+
+			if step.Agent == "" {
+				return fmt.Errorf("%s: max_context_bytes is only valid on agent steps", label)
+			}
+
+			return nil
+		})
+		if err != nil {
+			return err
 		}
 	}
 

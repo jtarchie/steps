@@ -164,6 +164,11 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	res, runErr := runAgentConversation(withRequestCounter(ctx, &requestCounter{}), c.llm, conv)
 	printAgentResponse(res)
 
+	// Nest the child's transcript into the PARENT's recorder (env.transcript
+	// is the caller's), before the error branch: a failed child's trace is
+	// the one worth reading afterwards.
+	env.transcript.subagent(c.ri.AgentName, request, res.transcript)
+
 	if runErr != nil {
 		return map[string]any{"error": runErr.Error()}
 	}

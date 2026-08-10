@@ -171,6 +171,7 @@ func runAcrossCellsConcurrently(
 	}
 
 	spend := newBlockBudget(ctx, step)
+	spend.warnIfUnbindable(jobName, step.MaxInFlight, len(cells))
 
 	for index := range cells {
 		// Checked in the PARENT, before a slot is taken, so the block stops
@@ -286,6 +287,41 @@ func (b *blockBudget) exhausted() bool {
 	return b.usage != nil && b.spent() >= b.ceiling
 }
 
+// warnIfUnbindable says so when this block's width makes its own ceiling
+// decorative.
+//
+// An admission-time ceiling can only see what FINISHED cells spent, and a cell
+// only finishes once a slot is contended for. So when max_in_flight is at or
+// above the cell count there is no serialization point anywhere in the block:
+// newLimiter hands out a limiter that never blocks, every cell is admitted
+// against a total of ~0, and the budget bounds precisely nothing. That is
+// inherent to bounding what gets STARTED rather than what a running cell may
+// cost — not something a different check order fixes — so the honest move is
+// to be loud about it rather than let an author believe a ceiling is in force.
+//
+// The matrix's width is usually decided at run time (from:), which is why this
+// cannot be a load-time error: whether the configuration binds is not knowable
+// until the cells exist.
+func (b *blockBudget) warnIfUnbindable(jobName string, maxInFlight, cells int) {
+	if !b.unbindable(maxInFlight, cells) {
+		return
+	}
+
+	fmt.Printf("budget: warning — max_in_flight (%d) covers all %d cells, so this block's budget of %s tokens cannot stop anything\n",
+		maxInFlight, cells, humanCount(b.ceiling))
+
+	slog.Warn("across.budget.unbindable",
+		"job", jobName, "max_in_flight", maxInFlight, "cells", cells, "budget_tokens", b.ceiling,
+		"detail", "every cell is admitted before any has reported usage; lower max_in_flight, or rely on the job budget as the backstop")
+}
+
+// unbindable reports whether this block's own ceiling can stop nothing: it has
+// one, and the width covers every cell, so no admission ever reads a nonzero
+// total. Mirrors newLimiter's own "limit >= branches means no limiter at all".
+func (b *blockBudget) unbindable(maxInFlight, cells int) bool {
+	return b.usage != nil && maxInFlight >= cells
+}
+
 func (b *blockBudget) spent() int {
 	if b.usage == nil {
 		return 0
@@ -309,19 +345,7 @@ func (b *blockBudget) report(jobName string, ran, total int) {
 
 // stopAdmitting reports whether this matrix should start no further cell:
 // either it has spent its own allowance, or the JOB's wall-clock deadline has
-// passed.
-//
-// The deadline half is not redundant with the check in the plan walk. A whole
-// across: block is ONE iteration of that loop, so a matrix that runs long is
-// never revisited by it — which made a job timeout unable to bound the runtime
-// fan-out it was built for, the exact case the feature exists to catch. Asking
-// here turns "overrun by at most one step" into "at most one CELL", which is
-// what the docs were always claiming.
-//
-// The deadline does not fail the block. It stops admitting, and the plan walk
-// fails the job on its next iteration exactly as it already did — so a job
-// timeout still reports as a job timeout, and the money is simply not spent in
-// the meantime.
+// passed (see deadlineStopsFanOut, which in_parallel: shares).
 func stopAdmitting(ctx context.Context, jobName string, spend *blockBudget, ran, total int) bool {
 	if spend.exhausted() {
 		spend.report(jobName, ran, total)
@@ -329,14 +353,7 @@ func stopAdmitting(ctx context.Context, jobName string, spend *blockBudget, ran,
 		return true
 	}
 
-	if jobDeadlinePassed(ctx, jobName) != nil {
-		fmt.Printf("timeout: across stopped after %d of %d cells (the job's deadline passed)\n", ran, total)
-		slog.Warn("across.deadline.passed", "job", jobName, "cells_run", ran, "cells_total", total)
-
-		return true
-	}
-
-	return false
+	return deadlineStopsFanOut(ctx, jobName, "across", "cells", ran, total)
 }
 
 // runAcrossCell runs one cell unless its exact content already succeeded.

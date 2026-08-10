@@ -113,6 +113,12 @@ type conversationResult struct {
 	// call (see handoffnote.go); nil when the step declares no handoff_note:
 	// or the model never wrote one. RunStep renders it to disk after the run.
 	handoffNote map[string]string
+	// transcript is the full ordered exchange — model text, tool calls,
+	// results, nested sub-agent traces — attached by runAgentConversation on
+	// every exit path. Persisted to node_transcripts (see saveAgentTranscript),
+	// never into nodes.result, which stays bounded to the trajectory. Empty
+	// for a CLI-delegated conversation (cli.go), which never enters the loop.
+	transcript []transcriptEvent
 }
 
 // agentConversation is one runnable attempt's inputs.
@@ -255,6 +261,23 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 // defaultCompactAfterTokens), unlike every other value-gated field in this
 // package.
 func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversation) (conversationResult, error) {
+	// The recorder is attached here, not inside the loop, so every exit path
+	// — success, transport error, loop detection, turn exhaustion — carries
+	// whatever was captured up to that point. It rides in conv.env because
+	// the env already reaches every toolImpl (see toolEnv.transcript).
+	rec := &transcriptRecorder{}
+	conv.env.transcript = rec
+
+	res, err := runConversationLoop(ctx, llm, conv)
+	res.transcript = rec.events
+
+	return res, err
+}
+
+// runConversationLoop is runAgentConversation's body, split out so the
+// transcript attaches once at the boundary instead of at each of the loop's
+// several return sites.
+func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversation) (conversationResult, error) {
 	// Whatever happens below, report what this conversation spent and roll it
 	// into the job total.
 	conv.usage = attachUsage(ctx, conv.usage)
@@ -301,6 +324,8 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 		req.Contents = append(req.Contents, resp.Content)
 
 		calls, text := collectParts(resp.Content)
+		conv.env.transcript.text(text)
+
 		if len(calls) == 0 {
 			if conv.finishOrForce(req, satisfied) {
 				return conversationResult{text: text, turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note, handoffNote: handoffNote}, nil
@@ -315,10 +340,12 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 
 		for _, call := range calls {
 			trajectory = append(trajectory, recordedToolCall{name: call.Name, args: call.Args})
+			conv.env.transcript.call(call.Name, call.Args)
 		}
 
 		parts := toolResponseParts(ctx, calls, conv.env, conv.tools.registry, conv.tools.maxCalls, callCounts)
 		markTrajectoryResults(trajectory[turnStart:], parts)
+		conv.env.transcript.results(parts)
 
 		if choice, n := conv.trackToolResults(parts, satisfied); choice != "" {
 			verdict, note = choice, n // last successful verdict (and its note) wins across turns
@@ -371,12 +398,28 @@ func (conv agentConversation) outOfTurns(
 	// spent every turn calling tools has already demonstrated it will not stop
 	// when asked.
 	text, err := conv.answerWithoutTools(ctx, llm, req)
-	if err == nil && strings.TrimSpace(text) != "" {
+
+	// The wrap-up request FAILING is not the model declining to answer, and the
+	// two must not collapse into one message and one class. A 503 on this last
+	// request, or a token ceiling breached by it, is infrastructure — it has to
+	// stay unmarked so it classifies as `errored` and fires on_error, exactly
+	// as the identical failure would one turn earlier inside the loop. Wrapping
+	// it in outcome.Fail below (which is what "err == nil &&" used to fall
+	// through to) reported a provider outage as a task-level failure, and threw
+	// away the cause with it.
+	if err != nil {
+		slog.Warn("agent.turns_exhausted_wrapup_failed", "max_turns", conv.maxTurns, "error", err)
+
+		return exhausted, fmt.Errorf("agent exceeded %d turns, and the request asking it to answer from what it had failed: %w", conv.maxTurns, err)
+	}
+
+	if strings.TrimSpace(text) != "" {
 		slog.Warn("agent.turns_exhausted_answered", "max_turns", conv.maxTurns,
 			"detail", "the turn budget ran out; the model answered from what it had rather than finishing on its own")
 
 		exhausted.text = text
 		exhausted.wrappedUp = true
+		conv.env.transcript.text(text)
 
 		return exhausted, nil
 	}

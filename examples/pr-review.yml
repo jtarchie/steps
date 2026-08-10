@@ -322,6 +322,20 @@ jobs:
   # Independent questions with no ordering between them. Each records under a
   # scope only it touches, merged at the join under a key naming the branch —
   # so all three survive instead of the last one winning.
+  #
+  # All three are HANDED the diff rather than sent to find it, via
+  # context_paths: below. The reference implementation embeds diff_patches
+  # directly in the prompt context for the same reason: a lens that has to
+  # read_file its way to the diff spends turns navigating instead of thinking,
+  # and that is exactly how this step failed its first live run.
+  #
+  # max_context_bytes: is raised on each because a lens is the step that must
+  # see the WHOLE change — it decides what gets reviewed at all, so a diff
+  # silently cut at the 100KB default means whole sections of a large PR are
+  # never assigned a dimension, and a large PR is exactly when that matters.
+  # It is the step-level spelling, overriding what the agent would otherwise
+  # give every one of its steps: the reviewers below open holding one source
+  # file and have no use for the same allowance.
   - in_parallel:
       steps:
       - agent: lens
@@ -336,12 +350,8 @@ jobs:
           NOT yours: type signatures and calling conventions (mechanical),
           pattern consistency and architectural fit (systemic).
         inputs: [pr]
-        # Handed the diff rather than sent to find it. The reference
-        # implementation embeds diff_patches directly in this prompt's context
-        # for the same reason: a lens that has to read_file its way to the diff
-        # spends turns navigating instead of thinking, and that is exactly how
-        # this step failed its first live run.
         context_paths: [pr/pr.diff, pr/pr.json]
+        max_context_bytes: 400000
         timeout: 20m
         context: write
       - agent: lens
@@ -354,12 +364,8 @@ jobs:
           NOT yours: whether the behaviour is right (semantic), whether it
           fits the surrounding architecture (systemic).
         inputs: [pr]
-        # Handed the diff rather than sent to find it. The reference
-        # implementation embeds diff_patches directly in this prompt's context
-        # for the same reason: a lens that has to read_file its way to the diff
-        # spends turns navigating instead of thinking, and that is exactly how
-        # this step failed its first live run.
         context_paths: [pr/pr.diff, pr/pr.json]
+        max_context_bytes: 400000
         timeout: 20m
         context: write
       - agent: lens
@@ -372,12 +378,8 @@ jobs:
           NOT yours: whether an individual function is correct (mechanical) or
           behaves differently (semantic).
         inputs: [pr]
-        # Handed the diff rather than sent to find it. The reference
-        # implementation embeds diff_patches directly in this prompt's context
-        # for the same reason: a lens that has to read_file its way to the diff
-        # spends turns navigating instead of thinking, and that is exactly how
-        # this step failed its first live run.
         context_paths: [pr/pr.diff, pr/pr.json]
+        max_context_bytes: 400000
         timeout: 20m
         context: write
 

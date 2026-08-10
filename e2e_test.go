@@ -204,6 +204,16 @@ func runHappyPath(t *testing.T, workspaceBlock string) {
 	assertSucceeded(t, nodes, "agent", "reviewer")
 	assertSucceeded(t, nodes, "put", "results")
 
+	// The agent node also persisted its full transcript (node_transcripts),
+	// carrying what the bounded trajectory in nodes.result drops: the model's
+	// mid-conversation text and the tool results.
+	transcript := storeTranscript(t, path, "reviewer")
+	for _, want := range []string{`"type":"call"`, `"name":"write_file"`, `"type":"result"`, `"type":"text"`, "I have finished reviewing."} {
+		if !strings.Contains(transcript, want) {
+			t.Errorf("agent transcript missing %s; got %q", want, transcript)
+		}
+	}
+
 	// The routed-past escalate step records no node at all — the same
 	// contract a cached or when:-skipped step has.
 	for _, node := range nodes {
