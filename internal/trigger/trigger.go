@@ -464,10 +464,12 @@ func jobReadyFor(ctx context.Context, st *store.Store, job *config.Job, observed
 	// upstream job is asked once, about every version it vouches for at once,
 	// so a combination that passed only in pieces is refused. Asking per
 	// resource could never see the combination at all.
+	constraints := job.PassedConstraints()
+
 	for _, upstreamJob := range upstreamJobsOf(job) {
 		constrained := map[string][]string{}
 
-		for resource, upstream := range job.PassedConstraints() {
+		for resource, upstream := range constraints {
 			if slices.Contains(upstream, upstreamJob) {
 				constrained[resource] = upstream
 			}
@@ -714,19 +716,49 @@ const nonInterruptibleGrace = 10 * time.Minute
 // buildContext gives a triggered build the cancellation behaviour its job
 // asked for, mirroring Concourse's interruptible: — see config.Job.
 //
-// interruptible: true (or an already-dead ctx) keeps today's behaviour: the
-// build shares the watcher's context and dies with it.
+// interruptible: true keeps the older behaviour: the build shares the
+// watcher's context and dies with it.
 //
-// The default detaches from cancellation and takes a deadline instead, so a
-// SIGTERM during a deploy lets that deploy finish rather than leaving the
-// outside world half-changed. Watch's own WaitGroup then holds shutdown until
-// the worker returns, which is what makes the wait real rather than advisory.
+// The default detaches from cancellation so a SIGTERM during a deploy lets
+// that deploy finish rather than leaving the outside world half-changed.
+// Watch's own WaitGroup then holds shutdown until the worker returns, which is
+// what makes the wait real rather than advisory.
+//
+// The grace is armed BY the shutdown, not at build start. Spelling this as a
+// plain WithTimeout on the detached context would put a 10-minute ceiling on
+// every build of every job that did not opt out — turning a shutdown
+// courtesy into the shortest job timeout in the product, and killing any
+// ordinary 25-minute build that had run fine the day before.
 func buildContext(ctx context.Context, job *config.Job) (context.Context, context.CancelFunc) {
 	if job.Interruptible {
 		return ctx, func() {}
 	}
 
-	return context.WithTimeout(context.WithoutCancel(ctx), nonInterruptibleGrace)
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan struct{})
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			// Shutdown reached us. Now the build has a bounded time to
+			// finish, because a watcher that cannot be stopped is not a
+			// shutdown story either.
+			timer := time.NewTimer(nonInterruptibleGrace)
+			defer timer.Stop()
+
+			select {
+			case <-timer.C:
+				cancel()
+			case <-done:
+			}
+		case <-done:
+		}
+	}()
+
+	return runCtx, func() {
+		close(done)
+		cancel()
+	}
 }
 
 // finalizeRun records a completed triggered run: its queue row, its breaker

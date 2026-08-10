@@ -30,6 +30,31 @@ func (l *ContainerLimits) set() bool {
 	return l != nil && (l.CPU > 0 || l.Memory > 0)
 }
 
+// CPUShares and MemoryBytes unpack an optional limits block into the
+// zero-means-omit form the shell runner takes, nil included — so every
+// construction site reads the same and none of them needs a nil branch.
+//
+// Methods on the type rather than a helper copied into each consuming
+// package: they were duplicated verbatim in internal/pipeline and
+// internal/agent, which is two places for a future default to be added and
+// one of them to be missed.
+func (l *ContainerLimits) CPUShares() int {
+	if l == nil {
+		return 0
+	}
+
+	return l.CPU
+}
+
+// MemoryBytes is CPUShares' counterpart for --memory. See its doc comment.
+func (l *ContainerLimits) MemoryBytes() int64 {
+	if l == nil {
+		return 0
+	}
+
+	return l.Memory
+}
+
 // validateLimitsRules groups the container_limits:/privileged: load-time
 // checks, mirroring validateNetworkRules.
 func (c *Config) validateLimitsRules() error {

@@ -90,7 +90,7 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 	defer closeAll(closers)
 
 	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: dir, Env: rt.Env, User: rt.User, Network: rt.Network,
-		Privileged: rt.Privileged, CPUShares: cpuShares(rt.Limits), MemoryBytes: memoryBytes(rt.Limits)})
+		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()})
 	if err != nil {
 		return fmt.Errorf("fix agent %q: %w", fix.Agent, err)
 	}

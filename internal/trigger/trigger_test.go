@@ -1072,3 +1072,59 @@ jobs:
 		t.Error("the build did not finish: a job that did not opt into interruptible: must survive a shutdown, or a deploy can be left half-applied")
 	}
 }
+
+// TestBuildContextHasNoDeadlineUntilShutdown pins the difference between a
+// shutdown grace and a job timeout.
+//
+// The first cut of buildContext spelled the grace as a plain WithTimeout on
+// the detached context, which armed it at build START. Since not-interruptible
+// is the default, that put a 10-minute ceiling on every build of every job —
+// an ordinary 25-minute suite that had run fine the day before would be
+// aborted with DeadlineExceeded, and nothing in the pipeline would explain it.
+//
+// The grace must be armed by the shutdown, so a build running while the
+// watcher is healthy has no deadline of its own at all.
+func TestBuildContextHasNoDeadlineUntilShutdown(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runCtx, release := buildContext(ctx, &config.Job{Name: "deploy"})
+	defer release()
+
+	deadline, ok := runCtx.Deadline()
+	if ok {
+		t.Errorf("a build under a healthy watcher has a deadline of %s; the grace must be armed by shutdown, not by build start", time.Until(deadline))
+	}
+
+	// And it must not inherit the watcher's cancellation either — that is the
+	// whole point of not being interruptible.
+	cancel()
+
+	select {
+	case <-runCtx.Done():
+		t.Error("a non-interruptible build was cancelled the moment the watcher was")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// TestBuildContextInterruptibleSharesTheWatcherContext is the other half: a
+// job that opted in dies with the watcher, immediately.
+func TestBuildContextInterruptibleSharesTheWatcherContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runCtx, release := buildContext(ctx, &config.Job{Name: "report", Interruptible: true})
+	defer release()
+
+	cancel()
+
+	select {
+	case <-runCtx.Done():
+	case <-time.After(time.Second):
+		t.Error("an interruptible build outlived the watcher's cancellation")
+	}
+}

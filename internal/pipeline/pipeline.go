@@ -1238,7 +1238,7 @@ func recordStepFailure(ctx context.Context, st *store.Store, node merkle.Node, j
 // verdict. A green run never constructs the agent.
 func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, workspaceDir string) error {
 	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Env: rt.Env, User: rt.User, Network: rt.Network,
-		Privileged: rt.Privileged, CPUShares: cpuShares(rt.Limits), MemoryBytes: memoryBytes(rt.Limits)})
+		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()})
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}

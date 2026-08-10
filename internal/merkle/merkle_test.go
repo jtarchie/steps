@@ -1210,3 +1210,73 @@ func TestResourceCacheKeyParams(t *testing.T) {
 		t.Error("an empty params: map changed the cache key; existing cached fetches would be discarded")
 	}
 }
+
+// TestIsolationSettingsAffectHash guards against a wrong cache HIT, which is
+// the direction that actually hurts.
+//
+// privileged: and container_limits: change what a command is ALLOWED to do,
+// exactly as image:/user:/network: change where it runs — and those are all
+// hashed. Leaving these two out meant a task cached while privileged could be
+// SKIPPED after that line was removed, reporting green for a narrower
+// configuration that had never executed.
+func TestIsolationSettingsAffectHash(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{Tasks: []config.Task{{Name: "unit", Run: "true", Image: "alpine"}}}
+
+	hashFor := func(t *testing.T, task config.Task) string {
+		t.Helper()
+
+		local := &config.Config{Tasks: []config.Task{task}}
+
+		rt, err := local.ResolveTask(config.Step{Task: task.Name})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		content, err := TaskNodeContent(local, config.Step{Task: task.Name}, rt)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		hash, err := HashNode(NodeKindTask, content, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return hash
+	}
+
+	base := cfg.Tasks[0]
+	plain := hashFor(t, base)
+
+	privileged := base
+	privileged.Privileged = true
+
+	if hashFor(t, privileged) == plain {
+		t.Error("privileged: did not change the task hash; removing it later would reuse a cached success for a configuration that never ran")
+	}
+
+	capped := base
+	capped.Limits = &config.ContainerLimits{Memory: 1 << 26}
+
+	if hashFor(t, capped) == plain {
+		t.Error("container_limits did not change the task hash; tightening a limit would never re-run the step under it")
+	}
+
+	tighter := base
+	tighter.Limits = &config.ContainerLimits{Memory: 1 << 24}
+
+	if hashFor(t, capped) == hashFor(t, tighter) {
+		t.Error("two different memory limits hashed alike")
+	}
+
+	// The compatibility half: a task using neither must hash exactly as it did
+	// before these fields existed.
+	unset := base
+	unset.Limits = nil
+
+	if hashFor(t, unset) != plain {
+		t.Error("a task setting neither field changed hash; adding this feature must not invalidate existing caches")
+	}
+}

@@ -205,7 +205,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	}
 
 	runner, err := shell.NewRunner(shell.RunnerSpec{Image: ri.Image, Cwd: dir, Env: ri.Env, User: ri.User, Network: ri.Network,
-		Privileged: ri.Privileged, CPUShares: cpuShares(ri.Limits), MemoryBytes: memoryBytes(ri.Limits)})
+		Privileged: ri.Privileged, CPUShares: ri.Limits.CPUShares(), MemoryBytes: ri.Limits.MemoryBytes()})
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 		closeAll(closers)

@@ -137,6 +137,8 @@ This mirrors Concourse. The fetch runs the resource type's `in:` exactly as a `g
 - **A put whose `out:` printed no version fetches nothing and still succeeds.** There is no version to fetch, and since printing nothing is legal here (unlike Concourse, which expects a version), failing would break every resource type that publishes without versioning what it published.
 - **The fetch happens before the step is recorded**, so a put whose implicit get fails is a failed step rather than a green one missing its artifact.
 
+> ⚠️ **Putting to a resource you also `get:` re-fetches into the same directory.** The implicit get's artifact is named after the put, so `get: repo` … `put: repo` runs `in:` a second time with the already-populated `repo/` as its working directory — mixing two fetches, or failing outright for an `in:` that expects an empty directory (a plain `git clone .` does). Set `no_get: true` on that put, or give the put its own resource name.
+
 ## Shell safety
 
 Anything interpolated into a command is text substitution, so quote it:

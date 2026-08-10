@@ -84,6 +84,34 @@ func sortedEnv(env []string) []string {
 	return out
 }
 
+// withIsolation folds the two settings that change what a containerized
+// command is ALLOWED to do into content.
+//
+// They are identity for the same reason image:/user:/network: are, and the
+// consequence of leaving them out is a wrong cache HIT rather than a miss: a
+// task cached while privileged: true would be skipped after that line is
+// removed, so the narrower configuration is reported green having never run.
+// Tightening container_limits.memory has the same shape — the new limit would
+// never be exercised.
+//
+// Value-gated like everything else here, so a pipeline using neither hashes
+// byte-identically to before they existed.
+func withIsolation(privileged bool, limits *config.ContainerLimits, content map[string]any) {
+	if privileged {
+		content["privileged"] = true
+	}
+
+	if limits != nil {
+		if limits.CPU > 0 {
+			content["cpu_shares"] = limits.CPU
+		}
+
+		if limits.Memory > 0 {
+			content["memory_bytes"] = limits.Memory
+		}
+	}
+}
+
 // GetNodeContent builds the content map hashed for a get node. It, along
 // with TaskNodeContent, PutNodeContent, and AgentContentMap below, is shared
 // between planning (this file) and real execution (internal/pipeline,
@@ -134,6 +162,8 @@ func GetNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 	if resourceType.Network != "" {
 		content["network"] = resourceType.Network
 	}
+
+	withIsolation(resourceType.Privileged, resourceType.Limits, content)
 
 	err := withMCPResourceStage(cfg, resourceType, "in", content)
 	if err != nil {
@@ -585,6 +615,8 @@ func TaskNodeContent(cfg *config.Config, step config.Step, rt config.ResolvedTas
 		content["network"] = rt.Network
 	}
 
+	withIsolation(rt.Privileged, rt.Limits, content)
+
 	if rt.Assert != nil {
 		content["assert"] = assertContent(rt.Assert)
 	}
@@ -684,6 +716,8 @@ func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 	if resourceType.Network != "" {
 		content["network"] = resourceType.Network
 	}
+
+	withIsolation(resourceType.Privileged, resourceType.Limits, content)
 
 	err := withMCPResourceStage(cfg, resourceType, "out", content)
 	if err != nil {
@@ -900,6 +934,8 @@ func subAgentInvocationContent(cfg *config.Config, name string) (map[string]any,
 		content["network"] = ri.Network
 	}
 
+	withIsolation(ri.Privileged, ri.Limits, content)
+
 	return content, nil
 }
 
@@ -964,6 +1000,8 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 	if ri.Network != "" {
 		content["network"] = ri.Network
 	}
+
+	withIsolation(ri.Privileged, ri.Limits, content)
 
 	// Which CLI runs the conversation, when one does — value-gated so every
 	// pre-existing HTTP agent hashes exactly as it did before CLI sources
@@ -1548,6 +1586,8 @@ func ResourceCacheKey(cfg *config.Config, resourceType config.ResourceType, sour
 	if resourceType.Network != "" {
 		content["network"] = resourceType.Network
 	}
+
+	withIsolation(resourceType.Privileged, resourceType.Limits, content)
 
 	err := withMCPResourceStage(cfg, resourceType, "in", content)
 	if err != nil {

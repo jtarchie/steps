@@ -58,8 +58,16 @@ func runDoStep(
 		// so it gets its own when: guard, hooks, recorded execution and
 		// published events, exactly as it would in the plan. The block adds
 		// containment, not a different kind of execution.
+		//
+		// The BLOCK's plan index is passed, not the child's position, matching
+		// every other block runner (see recordCompletedStep's doc, which states
+		// the convention). A child's position is not a plan index: passing it
+		// would publish this block's events under indices belonging to the
+		// unrelated plan steps that really do sit at 0, 1, 2 — and the run
+		// transcript would attribute a do: child's output to whichever step
+		// happened to share its number.
 		childHash, _, _, childErr := runNonGetStep(
-			ctx, cfg, jobName, childIndex, child, bw, st, nil, childParent, handoff)
+			ctx, cfg, jobName, i, child, bw, st, nil, childParent, handoff)
 
 		// A try: child tolerates its own failure here, for the reason a try:
 		// branch does inside a concurrent block (see runBranches): the plan

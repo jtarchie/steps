@@ -118,7 +118,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	}
 
 	runner, err := shell.NewRunner(shell.RunnerSpec{Image: c.ri.Image, Cwd: env.dir, Env: c.ri.Env, User: c.ri.User, Network: c.ri.Network,
-		Privileged: c.ri.Privileged, CPUShares: cpuShares(c.ri.Limits), MemoryBytes: memoryBytes(c.ri.Limits)})
+		Privileged: c.ri.Privileged, CPUShares: c.ri.Limits.CPUShares(), MemoryBytes: c.ri.Limits.MemoryBytes()})
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
