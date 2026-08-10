@@ -654,8 +654,8 @@ func TestResolveAgentInvocation(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if ri.Attempts != 1 {
-			t.Errorf("attempts = %d, want 1", ri.Attempts)
+		if ri.Attempts != defaultAgentAttempts {
+			t.Errorf("attempts = %d, want the default of %d", ri.Attempts, defaultAgentAttempts)
 		}
 
 		if ri.MaxTurns != defaultMaxAgentTurns {

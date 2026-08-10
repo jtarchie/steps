@@ -471,9 +471,10 @@ jobs:
     try:
       agent: reviewer
       inputs: [pr]
-      # On the wrapped step, not the wrapper: try: only decides whether the plan
-      # stops, and these describe the operation it wraps.
-      attempts: 3
+      # On the wrapped step, not the wrapper: try: only decides whether the
+      # plan stops, and this describes the operation it wraps. (attempts: is
+      # not set — agent steps now default to 3, with backoff, which is what
+      # absorbs a provider's bad minute.)
       timeout: 20m
       # qualify: this matrix records a fact PER CELL, so each cell's findings
       # come back under a key naming it rather than the cells overwriting one

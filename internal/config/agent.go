@@ -192,6 +192,25 @@ type AgentFallback struct {
 // visible in the budget.
 const defaultMaxAgentTurns = 30
 
+// defaultAgentAttempts is how many times one agent step's requests may be
+// tried when the step sets no attempts: of its own. For a hosted agent this
+// feeds the retrying TRANSPORT — a failed request is re-issued with backoff —
+// not a re-run of the conversation.
+//
+// It used to be 1, on the reasoning that "retries are a per-task concern": in
+// CI a retry hides a real failure, since the same command against the same
+// tree fails the same way. That is exactly backwards for a model call. A 503
+// says nothing about the step and everything about the provider's minute, and
+// under attempts=1 a single one destroyed a six-reviewer fan-out whose other
+// five cells were healthy — twice, in two consecutive live runs.
+//
+// 3 matches the reference this was measured against (pr-af's
+// PR_AF_AI_MAX_RETRIES, its floor for EVERY model call), and the transport
+// only retries what can recover: connection errors and 5xx-class statuses,
+// never a request the provider marked unretryable. Like attempts: itself it
+// is never hashed — a retry policy does not change what a step is asking for.
+const defaultAgentAttempts = 3
+
 // defaultCompactAfterTokens is the conversation-size budget (in estimated
 // tokens — see estimateContentTokens in internal/agent/compaction.go) an
 // agent that sets no compact_after_tokens: gets: 80% of a 128K context

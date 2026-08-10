@@ -6,6 +6,8 @@ This guide covers two operational limits available on all step types (get/task/p
 
 ## When to Use Attempts
 
+**Agent steps default to `attempts: 3`** (tasks and puts stay at 1). The asymmetry is the domain's: a task that failed will fail again — same command, same tree — so a retry hides a real failure. A model call that failed usually says nothing about the step and everything about the provider's minute, and under one attempt a single 503 destroyed a six-reviewer fan-out whose other five cells were healthy. For a hosted agent the retries happen in the transport with backoff, re-issuing only what can recover (connection errors, 5xx); `attempts: 1` turns them off.
+
 Use `attempts:` to retry transient failures:
 - Flaky network calls (e.g., GitHub API rate limits)
 - Temporary service unavailability

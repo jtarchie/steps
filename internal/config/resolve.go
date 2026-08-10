@@ -232,8 +232,8 @@ func resolveAgentRuntime(agent *Agent, step Step) (settings containerSettings) {
 
 // ResolveAgentInvocation resolves the agent named by step against c,
 // applying provider-prefix resolution, tool-grant merging, and defaulting
-// (step.Attempts defaults to 1 — retries are a per-task concern, not part of
-// the agent's config; agent.MaxTurns defaults to defaultMaxAgentTurns;
+// (step.Attempts defaults to defaultAgentAttempts;
+// agent.MaxTurns defaults to defaultMaxAgentTurns;
 // agent.CompactAfterTokens, when nil, defaults to defaultCompactAfterTokens —
 // unlike every other field resolved here, an explicit zero value is
 // meaningfully different from "unset" and is preserved as 0, not defaulted).
@@ -265,7 +265,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 
 	attempts := step.Attempts
 	if attempts <= 0 {
-		attempts = 1
+		attempts = defaultAgentAttempts
 	}
 
 	compactAfterTokens, contextWindow := resolveCompactionBudget(target.ModelName, agent.ContextWindow, agent.CompactAfterTokens)
