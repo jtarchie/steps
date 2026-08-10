@@ -39,9 +39,18 @@ type Step struct {
 	// as a rerun tool, then the command is re-run to decide the step. A green
 	// run never constructs the agent. See FixSpec.
 	Fix *FixSpec `yaml:"fix,omitempty"`
-	// Put names a resource to run its out command against; Params are
-	// passed through to the out command as {{ params.x }}.
-	Put    string         `yaml:"put,omitempty"`
+	// Put names a resource to run its out command against.
+	Put string `yaml:"put,omitempty"`
+	// Params are passed through to the resource command this step runs, as
+	// {{ .params.x }}: a put's reach out:, a get's reach in:. Mirrors
+	// Concourse, where params on a get are how a resource is told HOW to
+	// fetch (git's depth:/submodules:, s3's unpack:) — see
+	// concourse-ci.org/docs/steps/get/ and docs/conformance.md.
+	//
+	// A get's params fold into its node hash (see merkle.GetNodeContent):
+	// they change what lands in the artifact, so two gets of one version
+	// differing in params are two different fetches and must not share a
+	// cache entry.
 	Params map[string]any `yaml:"params,omitempty"`
 	// Agent names an agents: entry this step invokes. Prompt is the task
 	// given to the model (not templated — freeform text is likely to contain
@@ -735,34 +744,45 @@ func (c *Config) resolveTaskReference(step *Step) error {
 }
 
 // validateStepFieldPlacement rejects the three kind-specific fields that had
-// no placement check: trigger: and version: (get-only) and params: (put-only).
+// no placement check: trigger: and version: (get-only) and params:
+// (get/put-only).
 //
 // Every other kind-specific field already errors when written on the wrong
 // kind. These three were silently ignored instead, so `trigger: true` on a
 // task step — a plausible reading of "run this when something changes" —
 // looked accepted and did nothing.
+//
+// params: is valid on BOTH resource-facing kinds, matching Concourse: a put's
+// params reach out:, a get's reach in: (concourse-ci.org/docs/steps/get/).
+// A get's params are how a resource is told HOW to fetch — git's depth: and
+// submodules:, s3's unpack: — which is per-get rather than per-resource, and
+// so cannot live in source: without forcing two resources for two fetch
+// styles of one repository.
 func (c *Config) validateStepFieldPlacement() error {
 	for _, job := range c.Jobs {
-		err := job.visitSteps(func(label string, step *Step) error {
-			isGet, isPut := step.Get != "", step.Put != ""
-
-			switch {
-			case step.Trigger && !isGet:
-				return fmt.Errorf("%s: trigger is only valid on get steps", label)
-			case step.Version != nil && !isGet:
-				return fmt.Errorf("%s: version is only valid on get steps", label)
-			case step.Params != nil && !isPut:
-				return fmt.Errorf("%s: params is only valid on put steps", label)
-			default:
-				return nil
-			}
-		})
+		err := job.visitSteps(checkStepFieldPlacement)
 		if err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// checkStepFieldPlacement is validateStepFieldPlacement's per-step half.
+func checkStepFieldPlacement(label string, step *Step) error {
+	isGet, isPut := step.Get != "", step.Put != ""
+
+	switch {
+	case step.Trigger && !isGet:
+		return fmt.Errorf("%s: trigger is only valid on get steps", label)
+	case step.Version != nil && !isGet:
+		return fmt.Errorf("%s: version is only valid on get steps", label)
+	case step.Params != nil && !isGet && !isPut:
+		return fmt.Errorf("%s: params is only valid on get and put steps", label)
+	default:
+		return nil
+	}
 }
 
 func visitStepTree(label string, step *Step, fn func(label string, step *Step) error) error {

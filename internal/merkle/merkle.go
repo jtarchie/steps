@@ -103,6 +103,15 @@ func GetNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 		content["artifact"] = step.Get
 	}
 
+	// A get's params: change what in: puts in the artifact — a depth: 1 clone
+	// and a full one are the same version and different bytes — so two gets of
+	// one version differing in params are two different fetches and must not
+	// share a cache entry. Value-gated like the rest: a get with no params:
+	// hashes byte-identically to before the field existed.
+	if len(step.Params) > 0 {
+		content["params"] = step.Params
+	}
+
 	if resourceType.Image != "" {
 		content["image"] = resourceType.Image
 	}
@@ -1453,11 +1462,20 @@ func stepResourceName(step config.Step) string {
 // settings that decide what environment it runs in. An MCP-backed resource
 // type folds in its check/in tool identity through withMCPResourceStage, the
 // same as the node content does.
-func ResourceCacheKey(cfg *config.Config, resourceType config.ResourceType, source, version map[string]any) (string, error) {
+func ResourceCacheKey(cfg *config.Config, resourceType config.ResourceType, source, version, params map[string]any) (string, error) {
 	content := map[string]any{
 		"in_template": resourceType.Config.In,
 		"source":      source,
 		"version":     version,
+	}
+
+	// Params must key the cross-build cache for the same reason they enter the
+	// get node's hash (see GetNodeContent): a shallow fetch and a full one of
+	// one version are different bytes, and reusing one for the other is a
+	// wrong answer that looks like a cache hit. Value-gated, so a pipeline
+	// with no get params: keeps every entry it has already cached.
+	if len(params) > 0 {
+		content["params"] = params
 	}
 
 	if resourceType.Image != "" {

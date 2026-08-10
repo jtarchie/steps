@@ -1118,3 +1118,95 @@ func TestTaskEnvHashesNamesNotValues(t *testing.T) {
 		t.Errorf("content = %s, want the variable's NAME to be hashed", rendered)
 	}
 }
+
+// TestGetParamsAffectHash pins the cache-correctness half of get params:.
+//
+// Params change what in: puts in the artifact — a shallow clone and a full one
+// are the same VERSION and different bytes — so two gets differing only in
+// params must be two cache entries. Reusing one for the other is a wrong
+// answer that presents as a hit, which is the worst shape a caching bug takes.
+//
+// The third case is the compatibility guarantee: a get with no params: must
+// hash byte-identically to how it hashed before the field existed, or adding
+// this feature would silently invalidate every cached fetch in every existing
+// pipeline.
+func TestGetParamsAffectHash(t *testing.T) {
+	t.Parallel()
+
+	rt := config.ResourceType{Config: config.ResourceTypeConfig{In: "true"}}
+	source := map[string]any{"uri": "https://example.com/repo.git"}
+	version := map[string]any{"ref": "v1"}
+
+	hashFor := func(t *testing.T, step config.Step) string {
+		t.Helper()
+
+		content, err := GetNodeContent(&config.Config{}, step, rt, source, version)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		hash, err := HashNode(NodeKindGet, content, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return hash
+	}
+
+	none := hashFor(t, config.Step{Get: "repo"})
+	shallow := hashFor(t, config.Step{Get: "repo", Params: map[string]any{"depth": "1"}})
+	deep := hashFor(t, config.Step{Get: "repo", Params: map[string]any{"depth": "full"}})
+	empty := hashFor(t, config.Step{Get: "repo", Params: map[string]any{}})
+
+	if shallow == deep {
+		t.Error("two gets of one version with different params hashed alike; a shallow fetch would be reused for a full one")
+	}
+
+	if none == shallow {
+		t.Error("adding params to a get did not change its hash")
+	}
+
+	if none != empty {
+		t.Error("an empty params: map changed the hash; a get that declares nothing must hash as it did before params existed")
+	}
+}
+
+// TestResourceCacheKeyParams is the same guarantee one level down, on the
+// CROSS-BUILD resource cache. That cache is keyed on content rather than on a
+// node's position in a plan, so it is shared between jobs and between builds —
+// which makes a params-blind key worse here than on a node: one job's shallow
+// fetch would be served to every other job's full one.
+func TestResourceCacheKeyParams(t *testing.T) {
+	t.Parallel()
+
+	rt := config.ResourceType{Config: config.ResourceTypeConfig{In: "true"}}
+	source := map[string]any{"uri": "https://example.com/repo.git"}
+	version := map[string]any{"ref": "v1"}
+
+	keyFor := func(t *testing.T, params map[string]any) string {
+		t.Helper()
+
+		key, err := ResourceCacheKey(&config.Config{}, rt, source, version, params)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return key
+	}
+
+	none := keyFor(t, nil)
+	shallow := keyFor(t, map[string]any{"depth": "1"})
+	deep := keyFor(t, map[string]any{"depth": "full"})
+
+	if shallow == deep {
+		t.Error("differing params produced one cache key; a shallow fetch would be reused for a full one across builds")
+	}
+
+	if none == shallow {
+		t.Error("adding params did not change the cache key")
+	}
+
+	if got := keyFor(t, map[string]any{}); none != got {
+		t.Error("an empty params: map changed the cache key; existing cached fetches would be discarded")
+	}
+}

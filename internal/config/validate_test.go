@@ -259,7 +259,7 @@ jobs:
     prompt: x
     params: { branch: main }
 `,
-			want: "params is only valid on put steps",
+			want: "params is only valid on get and put steps",
 		},
 	}
 

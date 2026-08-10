@@ -1624,7 +1624,7 @@ func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, step config.S
 		fmt.Printf("get: %s (version: %v, attempt %d/%d)\n", artifact, version, attempt, total)
 		slog.Info("job.get.in.attempt", "artifact", artifact, "attempt", attempt, "total_attempts", total)
 	}, func(attemptCtx context.Context) error {
-		return fetchGetStep(attemptCtx, cfg, artifact, resource, resourceType, version, bw)
+		return fetchGetStep(attemptCtx, cfg, artifact, resource, resourceType, version, step.Params, bw)
 	})
 	if err != nil {
 		return fmt.Errorf("get %q: %w", artifact, err)
@@ -1646,7 +1646,7 @@ func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, step config.S
 // did before the cache existed.
 func resourceDir(
 	ctx context.Context, cfg *config.Config, artifact string,
-	resourceType config.ResourceType, source, version map[string]any,
+	resourceType config.ResourceType, source, version, params map[string]any,
 	bw workspace.BuildWorkspace, fetch func(dir string) error,
 ) error {
 	caching, ok := bw.(workspace.CachingBuild)
@@ -1661,7 +1661,7 @@ func resourceDir(
 
 	// A key this package cannot compute is not a reason to fail the fetch —
 	// an empty key simply means "do not cache this one".
-	key, err := merkle.ResourceCacheKey(cfg, resourceType, source, version)
+	key, err := merkle.ResourceCacheKey(cfg, resourceType, source, version, params)
 	if err != nil {
 		slog.Debug("job.get.cache_key_failed", "artifact", artifact, "error", err)
 
@@ -1677,11 +1677,11 @@ func resourceDir(
 	return err //nolint:wrapcheck // see above: the error is the caller-classified fetch error, passed through deliberately
 }
 
-func fetchGetStep(ctx context.Context, cfg *config.Config, artifact string, resource config.Resource, resourceType config.ResourceType, version map[string]any, bw workspace.BuildWorkspace) error {
+func fetchGetStep(ctx context.Context, cfg *config.Config, artifact string, resource config.Resource, resourceType config.ResourceType, version, params map[string]any, bw workspace.BuildWorkspace) error {
 	fmt.Printf("get: %s (version: %v)\n", artifact, version)
 
-	err := resourceDir(ctx, cfg, artifact, resourceType, resource.Source, version, bw, func(dir string) error {
-		return rsrc.RunIn(ctx, cfg, resourceType, resource.Source, version, dir)
+	err := resourceDir(ctx, cfg, artifact, resourceType, resource.Source, version, params, bw, func(dir string) error {
+		return rsrc.RunIn(ctx, cfg, resourceType, resource.Source, version, params, dir)
 	})
 	if err != nil {
 		// A canceled ctx (per-attempt timeout, or a job-level abort) must

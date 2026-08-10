@@ -222,7 +222,7 @@ func TestRunInMCPDefaultsToVersionJSON(t *testing.T) {
 	rt := mcpResourceType("list_issues") // In left nil
 	destDir := t.TempDir()
 
-	err := RunIn(context.Background(), cfg, rt, map[string]any{"team": "ENG"}, map[string]any{"id": "1"}, destDir)
+	err := RunIn(context.Background(), cfg, rt, map[string]any{"team": "ENG"}, map[string]any{"id": "1"}, nil, destDir)
 	if err != nil {
 		t.Fatalf("RunIn: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestRunInMCPMaterializesToolResult(t *testing.T) {
 	rt.Config.MCP.In = &config.MCPToolCall{Tool: "get_issue"}
 	destDir := t.TempDir()
 
-	err := RunIn(context.Background(), cfg, rt, map[string]any{"team": "ENG"}, map[string]any{"id": "1"}, destDir)
+	err := RunIn(context.Background(), cfg, rt, map[string]any{"team": "ENG"}, map[string]any{"id": "1"}, nil, destDir)
 	if err != nil {
 		t.Fatalf("RunIn: %v", err)
 	}

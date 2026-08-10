@@ -65,9 +65,45 @@ Runs when a plan is built, and on every `steps watch` poll.
 
 Runs when a `get` step executes.
 
-- **Sees**: `{{ .source }}` and `{{ .version }}` (one object from `check`'s array).
+- **Sees**: `{{ .source }}`, `{{ .version }}` (one object from `check`'s array), and `{{ .params }}` (the get step's `params:`).
 - **Working directory** is the artifact directory itself, already created and empty. Write the contents there — `.`, not a subdirectory named after the resource.
 - **Exit non-zero** to fail the step.
+
+`params:` on a get is how a resource is told *how* to fetch, as opposed to `source:`, which says *what* to fetch:
+
+```yaml
+- get: repo
+  params:
+    depth: 1
+```
+
+The distinction matters because `source:` belongs to the resource and `params:` belongs to the step, so one repository can be fetched shallowly in a job that only needs the tip and fully in a job that walks history — without declaring it twice:
+
+```yaml
+resources:
+- name: repo
+  type: git
+  source: { uri: https://github.com/you/repo.git }
+
+jobs:
+- name: quick
+  plan:
+  - get: repo
+    params: { depth: 1 }
+- name: changelog
+  plan:
+  - get: repo          # same resource, full history
+```
+
+**Optional params need `dig`.** Templates render with `missingkey=error` ([templating.md](templating.md)), so a bare `{{ .params.depth }}` in an `in:` command makes `depth` *mandatory* on every get of that type — the same contract `out:` and `source:` already have. Use sprig's `dig` to give a param a default instead:
+
+```yaml
+in: git clone --depth {{ dig "depth" "50" .params }} {{ .source.uri | shellquote }} .
+```
+
+`dig` takes the key, the fallback, and the map, so a get that sets `depth:` gets its value and one that doesn't gets `50`. It works on an absent key and on a get with no `params:` block at all.
+
+**Params change the fetch, so they change the hash.** Two gets of one version differing in `params:` are two different fetches: they get distinct cache entries and neither is reused for the other. A get with no `params:` hashes exactly as it did before the field existed, so adding this to a pipeline invalidates nothing that does not use it.
 
 The fetched directory is named after the `get:`, so `get: repo` puts it in `repo/`, and later steps read `repo/...`. See [workspace.md](workspace.md) for what a step can and can't see.
 

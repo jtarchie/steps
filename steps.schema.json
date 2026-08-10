@@ -743,7 +743,7 @@
         },
         "params": {
           "type": "object",
-          "description": "put only: passed to the out command as {{ .params.* }}."
+          "description": "get/put only: passed to the resource command this step runs, as {{ .params.* }} — a put's reach out:, a get's reach in: (how to fetch, e.g. git depth/submodules)."
         },
         "agent": {
           "type": "string"

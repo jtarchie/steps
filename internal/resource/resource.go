@@ -133,20 +133,28 @@ func matchesPin(version map[string]any, pinned map[string]string) bool {
 	return true
 }
 
-// RunIn renders rt.Config.In against {"source": source, "version": version}
-// and executes it with cwd = destDir (caller ensures destDir exists).
+// RunIn renders rt.Config.In against {"source": source, "version": version,
+// "params": params} and executes it with cwd = destDir (caller ensures
+// destDir exists).
+//
+// params is the get step's own params:, mirroring Concourse, where a get's
+// params tell the resource HOW to fetch — git's depth:/submodules:, s3's
+// unpack: (concourse-ci.org/docs/steps/get/; see docs/conformance.md). It is
+// nil for a get that declares none, which renders as an empty map so
+// {{ .params.x }} on an unset key is empty rather than an error — the same
+// treatment out: already gives a put with no params:.
 //
 // When rt.Config.MCP is set, this calls mcpRunIn instead — see its doc
 // comment for the in:-omitted default (writing version.json) and the
 // materialization convention when in: is set.
-func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, source, version map[string]any, destDir string) error {
+func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, source, version, params map[string]any, destDir string) error {
 	if rt.Config.MCP != nil {
-		return mcpRunIn(ctx, cfg, rt, source, version, destDir)
+		return mcpRunIn(ctx, cfg, rt, source, version, params, destDir)
 	}
 
-	slog.Debug("resource.in", "resource_type", rt.Name, "source", source, "version", version, "dest_dir", destDir)
+	slog.Debug("resource.in", "resource_type", rt.Name, "source", source, "version", version, "params", params, "dest_dir", destDir)
 
-	command, err := template.Render(rt.Config.In, map[string]any{"source": source, "version": version})
+	command, err := template.Render(rt.Config.In, map[string]any{"source": source, "version": version, "params": params})
 	if err != nil {
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}

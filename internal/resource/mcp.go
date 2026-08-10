@@ -157,8 +157,8 @@ func firstTextContent(content []sdkmcp.Content) string {
 // destDir (see materializeContent) — a fixed convention, since unlike an
 // arbitrary shell script an MCP result is a small fixed set of content
 // blocks, not a tree the tool itself writes.
-func mcpRunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, source, version map[string]any, destDir string) error {
-	slog.Debug("resource.in", "resource_type", rt.Name, "source", source, "version", version, "dest_dir", destDir)
+func mcpRunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, source, version, params map[string]any, destDir string) error {
+	slog.Debug("resource.in", "resource_type", rt.Name, "source", source, "version", version, "params", params, "dest_dir", destDir)
 
 	err := writeJSONFile(filepath.Join(destDir, "version.json"), version)
 	if err != nil {
@@ -171,7 +171,17 @@ func mcpRunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, s
 		return nil
 	}
 
-	result, err := callMCPResourceTool(ctx, cfg, rt.Config.MCP.Server, rt.Config.MCP.In.Tool, map[string]any{"source": source, "version": version})
+	args := map[string]any{"source": source, "version": version}
+
+	// Value-gated, like every other optional field folded into a rendered
+	// payload: a get with no params: sends byte-identical arguments to what it
+	// sent before this field existed, so an mcp-backed resource type written
+	// against the old shape keeps working untouched.
+	if len(params) > 0 {
+		args["params"] = params
+	}
+
+	result, err := callMCPResourceTool(ctx, cfg, rt.Config.MCP.Server, rt.Config.MCP.In.Tool, args)
 	if err != nil {
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
