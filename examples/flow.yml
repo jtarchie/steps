@@ -34,6 +34,8 @@ assert:
     - failing
     # run_file: job
     - external-run-file
+    # classification job
+    - timeout-fires-on-error
 
 jobs:
 # ─── when: (conditional steps) ──────────────────────────────────────────────
@@ -237,3 +239,30 @@ jobs:
     run_file: tasks/hello.sh
   assert:
     execution: [hello]
+
+# ─── on_error: an operational limit, not the command saying no ──────────────
+# Classification decides WHICH hook fires, and the distinction it draws is the
+# one worth having a fixture for: on_failure means the work said no, on_error
+# means the work never got to answer.
+#
+# A per-attempt timeout: is the deterministic trigger. It cancels the ATTEMPT's
+# context, not the job's, so outcome.Classify sees a live job context and an
+# error that is not a task-level Failure — which is Errored. That is what
+# distinguishes it from `exit 1` two jobs above, and it needs no docker daemon
+# and no bad image, which is why this fixture exists at all now.
+- name: timeout-fires-on-error
+  plan:
+  - task: too-slow
+    run: sleep 30
+    timeout: 1s
+    on_error:
+      task: report-outage
+      run: echo "the step never finished"
+    on_failure:
+      task: never-runs
+      run: echo "a timeout is not the command failing"
+  assert:
+    # report-outage, and NOT never-runs: proving the two hooks are actually
+    # distinguished rather than both firing on anything non-green.
+    execution: [too-slow, report-outage]
+    outcome: failed

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/outcome"
@@ -226,5 +228,93 @@ jobs:
 		if runErr != nil {
 			t.Errorf("job %q: RunJob returned %v, want nil", job.Name, runErr)
 		}
+	}
+}
+
+// TestConformanceAbortFiresOnAbortHook covers the last of the five hook
+// modifiers to have no deterministic trigger.
+//
+// on_error got one as a YAML fixture (examples/flow.yml's
+// timeout-fires-on-error, where a per-attempt timeout: classifies as Errored).
+// on_abort cannot be one: it requires a CANCELLED JOB CONTEXT — SIGINT/SIGTERM
+// mid-run — which a pipeline file has no way to ask for. So it lives here,
+// where the context is ours to cancel.
+//
+// Concourse doc: concourse-ci.org/docs/steps/ (the on_abort hook, "if the step
+// is aborted"). steps claim under test: internal/pipeline/hooks.go's
+// five-modifier claim, and internal/outcome's Classify, which returns Aborted
+// whenever ctx.Err() != nil regardless of the underlying error.
+//
+// The load-bearing assertion is that on_abort fires and on_failure does NOT:
+// a cancelled build reports a killed process as an *exec.ExitError, so a
+// classifier that only looked at the error — not at the context — would call
+// it a task failure and run the wrong hook.
+func TestConformanceAbortFiresOnAbortHook(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "hooks-fired.txt")
+	path := filepath.Join(dir, "pipeline.yml")
+
+	pipelineYAML := fmt.Sprintf(`
+jobs:
+- name: build
+  plan:
+  - task: slow
+    run: sleep 30
+    on_abort:
+      task: note-abort
+      run: echo aborted >> %s
+    on_failure:
+      task: note-failure
+      run: echo failed >> %s
+`, marker, marker)
+
+	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provider, err := workspace.NewProvider(nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := store.OpenStore(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Cancelled while the step is in flight, which is what SIGINT does. The
+	// hook itself still runs: hooks reached after cancellation get a grace
+	// period on a context detached from the cancelled one, or an abort could
+	// never have a reaction at all.
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+
+	runErr := RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
+	if runErr == nil {
+		t.Fatal("RunJob returned nil; want a non-nil error for an aborted run")
+	}
+
+	if got := outcome.Classify(ctx, runErr); got != outcome.Aborted {
+		t.Errorf("outcome.Classify(runErr) = %q, want %q", got, outcome.Aborted)
+	}
+
+	fired, err := os.ReadFile(marker) //nolint:gosec // a t.TempDir()-scoped marker this test wrote itself
+	if err != nil {
+		t.Fatalf("no hook wrote the marker file, so neither hook fired: %v", err)
+	}
+
+	got := strings.TrimSpace(string(fired))
+	if got != "aborted" {
+		t.Errorf("hook marker = %q, want %q — an aborted step must fire on_abort and not on_failure", got, "aborted")
 	}
 }
