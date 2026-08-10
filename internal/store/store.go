@@ -312,6 +312,9 @@ var addedColumns = []struct{ table, column, decl string }{
 	// constraint — the common case — is unaffected, since one row is trivially
 	// its own coherent set.
 	{"job_versions", "build_id", "TEXT NOT NULL DEFAULT ''"},
+	// The run a replay forked from. Empty for an ordinary run, which is every
+	// run recorded before replay existed.
+	{"runs", "parent_run_id", "TEXT NOT NULL DEFAULT ''"},
 }
 
 // addColumns applies addedColumns, treating "duplicate column name" as
@@ -1431,4 +1434,42 @@ func (s *Store) RunCostTotals(ctx context.Context, limit int) ([]RunTotals, erro
 	}
 
 	return out, nil
+}
+
+// RecordRunParent notes that a run was forked from another by a replay.
+//
+// Kept as its own statement rather than a StartRun parameter: every existing
+// caller of StartRun records an ordinary run, and threading an almost-always
+// empty argument through them would put replay's vocabulary in the path of
+// code that has nothing to do with it.
+func (s *Store) RecordRunParent(ctx context.Context, runID, parentID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE runs SET parent_run_id = ? WHERE id = ?`, parentID, runID)
+	if err != nil {
+		return fmt.Errorf("could not record the parent of run %q: %w", runID, err)
+	}
+
+	return nil
+}
+
+// CopyRunContext seeds a replayed run with the facts the source run recorded.
+//
+// This is half of what makes a replay start where it does: the workspace
+// carries the files earlier steps produced, and these rows carry what they
+// concluded. Without them a replayed agent step would open with an empty
+// recap and reason from nothing.
+//
+// written_by is preserved rather than rewritten to the new run: the fact was
+// established by that step in the source run, and rewriting the provenance
+// would make a replayed run claim work it did not do.
+func (s *Store) CopyRunContext(ctx context.Context, srcRunID, dstRunID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO run_context (run_id, key, value, written_by, written_at)
+		SELECT ?, key, value, written_by, written_at FROM run_context WHERE run_id = ?
+		ON CONFLICT (run_id, key) DO NOTHING
+	`, dstRunID, srcRunID)
+	if err != nil {
+		return fmt.Errorf("could not copy the run context of %q: %w", srcRunID, err)
+	}
+
+	return nil
 }

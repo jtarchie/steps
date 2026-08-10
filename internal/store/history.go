@@ -215,7 +215,14 @@ type RunRow struct {
 	Status     string
 	StartedAt  time.Time
 	FinishedAt time.Time
+	// ParentRunID is the run a replay forked from, empty for an ordinary run.
+	// It is what lets a tuning session read as a session rather than as a pile
+	// of unrelated runs that happen to share a job.
+	ParentRunID string
 }
+
+// Replayed reports a run forked from another by --replay.
+func (r RunRow) Replayed() bool { return r.ParentRunID != "" }
 
 // Duration is how long the run took, or how long it has been going when it
 // has not finished. Zero when the run never started.
@@ -645,9 +652,9 @@ func (s *Store) FindRunRow(ctx context.Context, id string) (RunRow, bool, error)
 	)
 
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, job_name, workspace, status, started_at, COALESCE(finished_at, '')
+		SELECT id, job_name, workspace, status, started_at, COALESCE(finished_at, ''), COALESCE(parent_run_id, '')
 		FROM runs WHERE id = ?
-	`, id).Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt)
+	`, id).Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt, &row.ParentRunID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RunRow{}, false, nil
 	}

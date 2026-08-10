@@ -25,6 +25,11 @@
 <div class="errblock"><span class="lbl">job error:</span> {{$run.JobError}}</div>
 {{end}}
 
+{{if $run.Run.Replayed}}
+<p class="diffnote">replayed from <a class="hash" href="/p/{{.Nav.Current}}/runs/{{$run.Run.ParentRunID}}">{{short $run.Run.ParentRunID}}</a>
+  — the steps before the replay point were restored from that run, not re-executed</p>
+{{end}}
+
 {{if $run.Changed}}
 <p class="diffnote">vs last green <a class="hash" href="/p/{{.Nav.Current}}/runs/{{$run.ComparedTo}}">{{short $run.ComparedTo}}</a>:
   {{range $run.Changed}}<span class="chg">{{.}}</span> {{end}}changed content — everything else replayed from cache</p>

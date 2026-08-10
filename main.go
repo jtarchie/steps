@@ -80,7 +80,61 @@ type RunCmd struct {
 	NoPreflight   bool              `help:"skip the pre-run health check of the job's models and MCP servers" name:"no-preflight"`
 	Var           map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."               name:"var"`
 	Resume        string            `help:"continue a failed run from the step that failed"                   name:"resume"`
+	Replay        string            `help:"fork a recorded run and re-run it from --from onward"              name:"replay"`
+	From          string            `help:"with --replay, the step name to re-run from"                       name:"from"`
 	VarsFile      string            `help:"YAML file of pipeline vars"                                        name:"vars-file"`
+}
+
+// applyContinuation handles the flags that point this invocation at a previous
+// run, and reports which job to run.
+//
+// --resume resolves its job here; --replay only resolves its NAME here,
+// because preparing it needs the job's plan to turn --from into a position —
+// see applyReplay, which runs after selectJob.
+func (r *RunCmd) applyContinuation(
+	ctx context.Context, st *store.Store, provider workspace.Provider, jobName string,
+) (context.Context, string, error) {
+	if r.Resume != "" && r.Replay != "" {
+		return ctx, "", errors.New("--resume and --replay cannot be combined: one continues a failed run in place, the other forks a recorded one from a step you name")
+	}
+
+	var err error
+
+	if r.Resume != "" {
+		ctx, jobName, err = applyResume(ctx, st, provider, r.Resume, jobName)
+		if err != nil {
+			return ctx, "", err
+		}
+	}
+
+	if r.Replay != "" && jobName == "" {
+		jobName, err = pipeline.ResumeJobName(ctx, st, r.Replay)
+		if err != nil {
+			return ctx, "", fmt.Errorf("could not replay: %w", err)
+		}
+	}
+
+	return ctx, jobName, nil
+}
+
+// applyReplay forks a recorded run once the job is known.
+func (r *RunCmd) applyReplay(
+	ctx context.Context, st *store.Store, provider workspace.Provider, job *config.Job,
+) (context.Context, error) {
+	if r.Replay == "" {
+		return ctx, nil
+	}
+
+	if r.From == "" {
+		return ctx, errors.New("--replay needs --from <step>: a replay re-runs from a step you name, and without one it would just re-run the whole plan")
+	}
+
+	ctx, _, err := pipeline.PrepareReplay(ctx, st, provider, r.Replay, r.From, job)
+	if err != nil {
+		return ctx, fmt.Errorf("could not replay: %w", err)
+	}
+
+	return ctx, nil
 }
 
 // Run loads the pipeline, selects a job, and runs it once via
@@ -104,14 +158,17 @@ func (r *RunCmd) Run() error {
 
 	jobName := r.Job
 
-	if r.Resume != "" {
-		ctx, jobName, err = applyResume(ctx, st, provider, r.Resume, jobName)
-		if err != nil {
-			return err
-		}
+	ctx, jobName, err = r.applyContinuation(ctx, st, provider, jobName)
+	if err != nil {
+		return err
 	}
 
 	job, err := selectJob(cfg, jobName)
+	if err != nil {
+		return err
+	}
+
+	ctx, err = r.applyReplay(ctx, st, provider, job)
 	if err != nil {
 		return err
 	}

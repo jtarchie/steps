@@ -128,3 +128,14 @@ func copyTree(ctx context.Context, src, dst string) error {
 
 	return fmt.Errorf("copy %q to %q: %w", src, dst, lastErr)
 }
+
+// CopyTree duplicates a directory tree, exported for the one caller outside
+// this package: a replay forks the workspace of the run it re-executes, rather
+// than editing the baseline it is being compared against.
+//
+// Same implementation the copy strategy uses for step isolation, so a replay
+// inherits its platform-specific fast paths (clonefile, reflink) instead of
+// growing a second, slower copier.
+func CopyTree(ctx context.Context, src, dst string) error {
+	return copyTree(ctx, src, dst)
+}

@@ -26,13 +26,14 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 ## Commands
 
 ```
-steps run <pipeline>        run one job (--resume <id> continues a failed one)
+steps run <pipeline>        run one job (--resume <id> continues a failed one,
+                            --replay <id> --from <step> re-runs one step of one)
 steps watch <pipeline>      poll trigger: true resources, run affected jobs
 steps test <pipeline>       run every job and check assert: directives
 steps web <pipeline>...     serve the browser UI over the same state
 steps validate <pipeline>   check the file, and that this machine can run it
 steps plan <pipeline>       show what a run would execute vs skip
-steps runs <pipeline>       show what past runs recorded
+steps runs <pipeline>       show what past runs recorded (--cost for spend)
 steps preflight <pipeline>  check a job's models and MCP servers are live
 steps jobs <pipeline>       list jobs the circuit breaker paused, or resume one
 steps approvals <pipeline>  list approval: steps waiting for a decision
@@ -104,3 +105,19 @@ That gives completion and inline errors while you type. `steps validate` remains
 ## Examples
 
 [`examples/`](../examples/) holds runnable, self-contained pipelines, several of which verify themselves under `steps test`. Its [`invalid/`](../examples/invalid/) subdirectory is the inverse: pipelines that must be **rejected** at load, each naming the error it has to produce. That's where a rule like "`trigger:` is only valid on `get` steps" gets a file you can read, rather than living only as an error-substring assertion in a Go test.
+
+## Re-running one step: `--replay`
+
+Agent steps are never content-cached, and unskippable propagates forward — so editing the *last* agent step's prompt re-runs every step before it, at full price. That is the single most expensive thing about authoring an agent pipeline, and it is an iteration-loop problem rather than a model-cost one.
+
+```bash
+steps run pipeline.yml --replay r-8f2a1c --from synthesizer
+```
+
+That forks the recorded run and executes from `synthesizer` onward. It does **not** consult the merkle cache: state comes from the source run's workspace (the artifacts and files earlier steps produced are already on disk), its recorded `run_context`, and its step record. A step before the replay point does not re-execute because the record says it ran — which is why this works even though agent steps are unskippable, and why it is unrelated to whether a step is cacheable.
+
+- **It forks, never mutates.** The source run stays exactly as it was, so the thing you are comparing against still exists — and two prompt variants become two runs you can read side by side. `steps runs --cost` prices both.
+- **`--from` names a step**, matched against the *current* plan. The pipeline has almost certainly changed since the source run; that is why you are replaying.
+- **A source run that never completed an earlier step is refused**, naming it. Its outputs are not in the forked workspace, so replaying past it would run against state that never existed.
+- **It needs the source workspace**, so the run being replayed must have been kept (`--keep-workspace`). A reaped tree is a clear error, not a silent full re-run.
+- **Isolated workspaces are not supported yet** — the same limitation `--resume` has, tracked in [#59](https://github.com/jtarchie/steps/issues/59). That is exactly the mode a concurrent fan-out is forced into, so the shape that most wants replay cannot use it yet.
