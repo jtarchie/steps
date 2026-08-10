@@ -195,6 +195,13 @@ func (p *sharedProvider) Reuse(dir string) { p.reuse = dir }
 // find them.
 func (b *sharedBuild) Root() string { return b.root }
 
+// Root is where this build's files are, so a failed isolated run can be
+// recorded and reported the way a shared one already was. Without it the
+// RootedBuild assertion in RunJob failed, StartRun was never called, and an
+// isolated run left no row to resume from — while still printing an id
+// promising exactly that.
+func (b *isolatingBuild) Root() string { return b.root }
+
 func (*sharedProvider) Close() error { return nil }
 
 type sharedBuild struct {
@@ -313,6 +320,9 @@ type isolatingProvider struct {
 	root     string
 	ownsRoot bool
 	keep     bool
+	// reuse, when set, is an existing build directory a resumed run continues
+	// in instead of creating a new one (see Reuse).
+	reuse string
 	// token distinguishes this invocation's build directories from any other's
 	// — see newInvocationToken.
 	token string
@@ -399,7 +409,50 @@ func (p *isolatingProvider) sweepStaleBuilds() {
 	}
 }
 
+// Reuse continues a previous run in an existing build tree.
+//
+// Every NewBuild answers with that tree, exactly as the shared provider does:
+// a resumed run is one run continuing, and splitting it back into fresh
+// per-build directories would hide the artifacts it is resuming FOR.
+func (p *isolatingProvider) Reuse(dir string) { p.reuse = dir }
+
+// retainedBuild names a build directory from THIS invocation that is still on
+// disk, or "" when every build was closed. Scoped to the invocation's own
+// token so another process's builds under a shared root are never mistaken for
+// ours.
+func (p *isolatingProvider) retainedBuild() string {
+	entries, err := os.ReadDir(p.root)
+	if err != nil {
+		return ""
+	}
+
+	prefix := buildDirPrefix + p.token + "-"
+
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), prefix) {
+			return filepath.Join(p.root, entry.Name())
+		}
+	}
+
+	return ""
+}
+
 func (p *isolatingProvider) NewBuild(ctx context.Context, label string) (BuildWorkspace, error) {
+	if p.reuse != "" {
+		// The tree already has its artifacts/ and steps/ from the run being
+		// continued; per-step directories under steps/ are rebuilt per step
+		// anyway, which is what makes an isolating strategy resumable at all.
+		slog.Debug("workspace.reuse", "dir", p.reuse, "backend", "isolating")
+
+		return &isolatingBuild{
+			backend: p.backend, root: p.reuse,
+			artifacts: filepath.Join(p.reuse, "artifacts"),
+			stepsDir:  filepath.Join(p.reuse, "steps"),
+			keep:      true, // never tear down a tree we did not create
+			cache:     p.cache,
+		}, nil
+	}
+
 	// The token comes before the counter because the counter alone is not
 	// unique: it restarts at 1 in every process, so a crashed run's leftover
 	// b-1-<label> would collide with the next run's — MkdirAll succeeds on the
@@ -442,6 +495,22 @@ func (p *isolatingProvider) Close() error {
 	}
 
 	if keepWorkspace(p.keep, p.root) {
+		return nil
+	}
+
+	// A build that was never closed was kept ON PURPOSE — the pipeline skips
+	// CloseBuild when a build failed, so its tree is what --resume continues
+	// in. Removing the root here would delete it, which is what made an
+	// isolated run unresumable no matter what the provider allowed: the run
+	// row survived, pointing at a directory this line had just erased.
+	//
+	// The shared provider has no equivalent problem because its Close is a
+	// no-op; this brings the two to the same behaviour rather than giving
+	// isolation a special case.
+	if p.retainedBuild() != "" {
+		fmt.Printf("workspace kept: %s\n", p.root)
+		slog.Debug("workspace.kept_for_resume", "dir", p.root)
+
 		return nil
 	}
 
@@ -1167,9 +1236,11 @@ var errUnsupportedPlatform = errors.New("unsupported platform")
 
 // Resumable is a Provider that can continue a previous run's workspace.
 //
-// Only the shared (default) provider implements it: an isolating strategy
-// builds a directory per step and tears it down, so there is no tree left to
-// continue in.
+// Both providers implement it. The shared one continues in its single
+// directory. An isolating one continues in the BUILD tree: what it tears down
+// per step is the step's own view, which a resume does not need — the
+// artifacts finished steps produced live at the build root, and per-step views
+// are materialized from them every time a step runs, resumed or not.
 type Resumable interface {
 	Reuse(dir string)
 	Provider

@@ -1198,11 +1198,10 @@ func applyResume(
 ) (context.Context, string, error) {
 	resumable, ok := provider.(workspace.Resumable)
 	if !ok {
-		// An isolating strategy builds and tears down a directory per STEP,
-		// so there is no tree left behind to continue in. Refusing is the only
-		// honest answer: resuming anyway would run the remaining steps against
-		// empty inputs and call it a recovery.
-		return ctx, "", errors.New("--resume needs the default shared workspace; a workspace: strategy tears down each step's directory, leaving nothing to continue from")
+		// Every provider is resumable today; this stays as the honest answer
+		// for one that is not, rather than resuming into a tree that cannot
+		// hold the previous run's artifacts and calling it a recovery.
+		return ctx, "", errors.New("--resume is not supported by this workspace provider")
 	}
 
 	ctx, dir, err := pipeline.PrepareResume(ctx, st, runID)
