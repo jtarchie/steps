@@ -440,3 +440,22 @@ td.faint, .faint { color: var(--faint); }
  * around it: this is the thing a reader opened the step to see, not the
  * annotation about it. */
 .log.output { color: var(--fg); }
+
+/* Spend: what a run's agent steps cost.
+   Sits above the transcript because "what did this cost" is a question asked
+   of the whole run, not of one step -- and because the cache percentage is
+   the only place prompt caching reports whether it did anything. */
+.spend { margin: 1rem 0; border: 1px solid var(--line); border-radius: 4px; }
+.spendhead { display: flex; flex-wrap: wrap; gap: .75rem; align-items: baseline;
+             padding: .5rem .75rem; border-bottom: 1px solid var(--line); }
+.spendtotal { font-weight: 600; }
+.spendmeta { color: var(--dim); font-size: .9em; }
+/* Marked, not hidden: an absent price is a fact about the provider, and
+   rendering it as $0.00 would say the run was free. */
+.unpriced { font-style: italic; }
+.spendwarn { color: var(--yellow); font-size: .9em; }
+.spendtable { width: 100%; border-collapse: collapse; font-size: .9em; }
+.spendtable th { text-align: left; color: var(--dim); font-weight: 500; padding: .35rem .75rem; }
+.spendtable td { padding: .35rem .75rem; border-top: 1px solid var(--line); }
+.spendtable .num { text-align: right; font-variant-numeric: tabular-nums; }
+.spendtable .model { color: var(--dim); }

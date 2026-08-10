@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -407,6 +408,8 @@ type RunsCmd struct {
 	Limit    int    `default:"20"                                            help:"maximum number of rows to show"`
 	Steps    bool   `help:"show individual steps instead of job outcomes"`
 	Queue    bool   `help:"show the watch trigger queue instead of job runs"`
+	Cost     bool   `help:"show what each run's agent steps spent"`
+	RunID    string `help:"with --cost, break one run down per step"         name:"run"`
 }
 
 // Run opens the pipeline's state store read-only and prints the requested
@@ -432,6 +435,10 @@ func (r *RunsCmd) Run() error {
 	ctx := context.Background()
 
 	switch {
+	case r.Cost && r.RunID != "":
+		return r.printRunCost(ctx, st)
+	case r.Cost:
+		return r.printCostTotals(ctx, st)
 	case r.Queue:
 		return r.printQueue(ctx, st)
 	case r.Steps:
@@ -1329,4 +1336,141 @@ func applyResume(
 	}
 
 	return ctx, jobName, nil
+}
+
+// printCostTotals lists what each recorded run's agent steps spent.
+//
+// The cache column is the one worth having: it is the only place prompt
+// caching reports whether it did anything, and a run that suddenly drops from
+// 60% to 0% is the visible half of a bill that doubled.
+func (r *RunsCmd) printCostTotals(ctx context.Context, st *store.Store) error {
+	totals, err := st.RunCostTotals(ctx, r.Limit)
+	if err != nil {
+		return fmt.Errorf("could not read usage: %w", err)
+	}
+
+	if len(totals) == 0 {
+		fmt.Println("no agent usage recorded yet")
+
+		return nil
+	}
+
+	fmt.Printf("%-12s  %12s  %7s  %10s  %6s\n", "RUN", "TOKENS", "CACHED", "COST", "STEPS")
+
+	for _, total := range totals {
+		fmt.Printf("%-12s  %12s  %6s%%  %10s  %6d\n",
+			total.RunID, humanTokens(total.Tokens), cachePercent(total.Tokens, total.Cached),
+			renderCost(total.CostUSD, total.Unpriced), total.Steps)
+	}
+
+	fmt.Printf("\nbreak one down with: steps runs %s --cost --run <id>\n", r.Pipeline)
+
+	return nil
+}
+
+// printRunCost breaks one run down per agent step.
+func (r *RunsCmd) printRunCost(ctx context.Context, st *store.Store) error {
+	usage, err := st.RunUsage(ctx, r.RunID)
+	if err != nil {
+		return fmt.Errorf("could not read usage: %w", err)
+	}
+
+	if len(usage) == 0 {
+		fmt.Printf("no agent usage recorded for run %s\n", r.RunID)
+
+		return nil
+	}
+
+	fmt.Printf("%-28s  %12s  %7s  %9s  %s\n", "STEP", "TOKENS", "CACHED", "DURATION", "FINISH")
+
+	for _, step := range usage {
+		fmt.Printf("%-28s  %12s  %6s%%  %9s  %s\n",
+			truncateName(step.StepName, 28), humanTokens(step.Total),
+			cachePercent(step.Total, step.Cached),
+			(time.Duration(step.DurationMS) * time.Millisecond).Round(time.Second),
+			finishNote(step))
+	}
+
+	return nil
+}
+
+// humanTokens groups a token count with thin separators, so 4102338 reads as
+// a number rather than a smear of digits.
+func humanTokens(n int) string {
+	digits := strconv.Itoa(n)
+	if len(digits) <= 3 {
+		return digits
+	}
+
+	var out strings.Builder
+
+	lead := len(digits) % 3
+	if lead > 0 {
+		out.WriteString(digits[:lead])
+	}
+
+	for i := lead; i < len(digits); i += 3 {
+		if out.Len() > 0 {
+			out.WriteString(",")
+		}
+
+		out.WriteString(digits[i : i+3])
+	}
+
+	return out.String()
+}
+
+// cachePercent renders the share of a step's tokens the provider served from
+// cache, or "-" when it reported no usage at all (0 of 0 is not 0%).
+func cachePercent(total, cached int) string {
+	if total <= 0 {
+		return "-"
+	}
+
+	return strconv.Itoa(cached * 100 / total)
+}
+
+// renderCost shows a dollar figure only when something actually reported one,
+// and marks it partial when some steps did not.
+//
+// Never $0.00 for an unreported cost: no provider path reports dollars today,
+// so a zero here would say every run was free rather than that nobody priced
+// it. See the agent_usage schema comment.
+func renderCost(cost *float64, unpriced int) string {
+	if cost == nil {
+		return "unpriced"
+	}
+
+	rendered := fmt.Sprintf("$%.2f", *cost)
+	if unpriced > 0 {
+		rendered += fmt.Sprintf("+%d?", unpriced)
+	}
+
+	return rendered
+}
+
+// finishNote says how a step's last response ended, calling out the one value
+// that is a defect rather than an outcome.
+//
+// A response cut off by max_tokens reads exactly like a model that had little
+// to say — and a truncated verdict or JSON body is the failure mode that
+// wastes a whole downstream step. Naming it here is the cheapest place to
+// notice.
+func finishNote(step store.AgentUsage) string {
+	switch {
+	case step.FinishReason == "":
+		return "-"
+	case strings.EqualFold(step.FinishReason, "length"), strings.EqualFold(step.FinishReason, "max_tokens"):
+		return step.FinishReason + "  <-- truncated"
+	default:
+		return step.FinishReason
+	}
+}
+
+func truncateName(name string, width int) string {
+	if len(name) <= width {
+		return name
+	}
+
+	return name[:width-1] + "…"
 }

@@ -30,6 +30,32 @@
   {{range $run.Changed}}<span class="chg">{{.}}</span> {{end}}changed content — everything else replayed from cache</p>
 {{end}}
 
+{{if $run.HasSpend}}
+{{$spend := $run.Spend}}
+<section class="spend">
+  <div class="spendhead">
+    <span class="lbl">spend</span>
+    <span class="spendtotal">{{$spend.Tokens}} tokens</span>
+    <span class="spendmeta">{{$spend.CachePercent}}% cached</span>
+    <span class="spendmeta">{{$spend.Steps}} agent step(s)</span>
+    <span class="spendmeta unpriced" title="No provider path reports a dollar figure yet, so this is deliberately not shown as $0.00">unpriced</span>
+    {{if $spend.Truncated}}<span class="spendwarn">{{$spend.Truncated}} response(s) truncated</span>{{end}}
+  </div>
+  <table class="spendtable">
+    <tr><th>step</th><th>tokens</th><th>cached</th><th>model served</th><th>finish</th></tr>
+    {{range $run.UsageRows}}
+    <tr>
+      <td>{{.StepName}}</td>
+      <td class="num">{{.Total}}</td>
+      <td class="num">{{.CachePercent}}%</td>
+      <td class="model">{{if .ModelServed}}{{.ModelServed}}{{else}}{{.ModelReq}}{{end}}</td>
+      <td>{{if .Truncated}}<span class="spendwarn">{{.FinishReason}} — truncated</span>{{else}}{{.FinishReason}}{{end}}</td>
+    </tr>
+    {{end}}
+  </table>
+</section>
+{{end}}
+
 <div class="transcript" id="transcript">
   {{range $run.Steps}}
   {{$detail := .HasDetail $run.JobError}}

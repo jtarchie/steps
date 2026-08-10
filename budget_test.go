@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // budgetPipeline renders a one-agent pipeline with an optional agent budget,
@@ -154,5 +157,93 @@ jobs:
 		if !strings.Contains(message, want) {
 			t.Errorf("error does not report the running total (missing %q): %v", want, err)
 		}
+	}
+}
+
+// TestAgentUsageIsPersisted covers the whole point of recording spend: that it
+// is still answerable after the process exits.
+//
+// Before this, usage was a fmt.Printf and nothing else — so "what did this run
+// cost" and "which step is the sink" were answerable only by scrolling
+// terminal scrollback, which is how every ceiling in examples/pr-review.yml
+// came to be derived by hand.
+func TestAgentUsageIsPersisted(t *testing.T) {
+	dir := t.TempDir()
+
+	fake := newFakeLLM(t,
+		callsTool("run_shell", map[string]any{"command": "true"}).spending(60),
+		says("done").spending(40),
+	)
+
+	path := budgetPipeline(t, dir, fake.URL, "", "")
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	err := run([]string{"run", path, "--job", "publish"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	st, err := store.OpenStore(statePath(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	ctx := context.Background()
+
+	totals, err := st.RunCostTotals(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(totals) != 1 {
+		t.Fatalf("recorded %d runs of usage, want 1", len(totals))
+	}
+
+	if totals[0].Tokens != 100 {
+		t.Errorf("recorded %d tokens, want 100 (the provider reported 60 + 40)", totals[0].Tokens)
+	}
+
+	// Unpriced, not $0.00: nothing in the request path reports dollars, and a
+	// zero would say the run was free rather than that nobody priced it.
+	if totals[0].CostUSD != nil {
+		t.Errorf("cost = %v, want nil — no provider path reports a dollar figure yet", *totals[0].CostUSD)
+	}
+
+	assertRecordedStepUsage(t, st, totals[0].RunID)
+}
+
+// assertRecordedStepUsage checks the per-step row behind the rollup: the
+// metadata is what makes a token count actionable afterwards.
+func assertRecordedStepUsage(t *testing.T, st *store.Store, runID string) {
+	t.Helper()
+
+	usage, err := st.RunUsage(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(usage) != 1 {
+		t.Fatalf("recorded %d agent steps, want 1", len(usage))
+	}
+
+	step := usage[0]
+	if step.Total != 100 || step.Prompt == 0 {
+		t.Errorf("step usage = %+v, want the provider's reported prompt/total", step)
+	}
+
+	if step.ModelReq == "" {
+		t.Error("the requested model was not recorded, so a run cannot say what it asked for")
+	}
+
+	if step.NodeHash == "" {
+		t.Error("the node hash was not recorded, so spend cannot be tied back to the step that caused it")
+	}
+
+	// The raw block is the future-proofing: the schema has no versioning, so a
+	// field not captured now could never be backfilled.
+	if step.RawMeta == "" {
+		t.Error("the provider's usage block was not kept")
 	}
 }

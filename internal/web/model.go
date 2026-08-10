@@ -123,6 +123,87 @@ type runView struct {
 	Changed []string
 	// ComparedTo is the run Changed was computed against.
 	ComparedTo string
+	// Usage is what this run's agent steps spent, in step order. Empty for a
+	// run with no agent steps, which is what keeps the panel off a page that
+	// has nothing to say about spend.
+	Usage []store.AgentUsage
+}
+
+// Spend rolls this run's agent usage up for the page header.
+type spendSummary struct {
+	Tokens    int
+	Cached    int
+	Steps     int
+	Truncated int
+}
+
+// CachePercent is the share of tokens the provider served from cache.
+//
+// The number prompt caching reports about itself, and the only place the
+// feature is observable at all: the requests carry their headers either way.
+func (s spendSummary) CachePercent() int {
+	if s.Tokens <= 0 {
+		return 0
+	}
+
+	return s.Cached * 100 / s.Tokens
+}
+
+// Spend summarises what this run's agent steps cost.
+func (r runView) Spend() spendSummary {
+	var summary spendSummary
+
+	for _, step := range r.Usage {
+		summary.Tokens += step.Total
+		summary.Cached += step.Cached
+		summary.Steps++
+
+		if truncatedFinish(step.FinishReason) {
+			summary.Truncated++
+		}
+	}
+
+	return summary
+}
+
+// HasSpend keeps the panel off a run that never called a model.
+func (r runView) HasSpend() bool { return len(r.Usage) > 0 }
+
+// truncatedFinish reports a response cut off by the model's output limit
+// rather than by having finished.
+//
+// Worth singling out because it is indistinguishable from a short answer
+// otherwise, and a truncated verdict or JSON body wastes every step
+// downstream of it.
+func truncatedFinish(reason string) bool {
+	return strings.EqualFold(reason, "length") || strings.EqualFold(reason, "max_tokens")
+}
+
+// Truncated reports whether this step's last response was cut off.
+func (u usageView) Truncated() bool { return truncatedFinish(u.FinishReason) }
+
+// usageView is one agent step's spend as the template reads it.
+type usageView struct {
+	store.AgentUsage
+}
+
+// CachePercent is this step's own cache hit rate.
+func (u usageView) CachePercent() int {
+	if u.Total <= 0 {
+		return 0
+	}
+
+	return u.Cached * 100 / u.Total
+}
+
+// UsageRows wraps the raw rows for the template.
+func (r runView) UsageRows() []usageView {
+	rows := make([]usageView, 0, len(r.Usage))
+	for _, step := range r.Usage {
+		rows = append(rows, usageView{AgentUsage: step})
+	}
+
+	return rows
 }
 
 // Running reports a run still in flight, which is what decides whether the

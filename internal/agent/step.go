@@ -497,10 +497,23 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 		bus: events.FromContext(ctx), runID: events.RunID(ctx), job: jobName, stepIndex: i, stepName: name,
 	}}
 
+	stepStarted := time.Now()
+
 	res, err := runPrepared(ctx, prepared)
 	res.model = fallbackModel(prepared)
 
 	printAgentResponse(res)
+
+	// Before the error branches below, so a step that FAILED still records
+	// what it spent. A failed agent step is often the expensive one, and
+	// leaving it out would under-report exactly the runs worth investigating —
+	// the same reason stepUsage.finish rolls a failed step into the job total.
+	saveAgentUsage(ctx, st, saveUsageArgs{
+		jobName: jobName, stepIndex: i, stepName: name, nodeHash: hash,
+		modelRequested: prepared.primary.ModelName,
+		usage:          prepared.conv.usage.snapshot(),
+		duration:       time.Since(stepStarted),
+	})
 
 	// One call site covers every outcome — success, run failure, assert
 	// failure, capture failure — because a failed step's transcript is the one

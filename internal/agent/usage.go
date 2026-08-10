@@ -20,16 +20,28 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"google.golang.org/adk/v2/model"
+
+	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/store"
 )
 
-// StepUsage is one agent step's spend.
+// StepUsage is one agent step's spend, plus the provider metadata that
+// explains it.
+//
+// Tokens are what a budget measures. The rest is what makes a number
+// actionable afterwards: which model actually answered, how much of the prompt
+// was served from cache, and whether the response was cut off. Those were
+// invisible until this existed, which is why every ceiling in
+// examples/pr-review.yml had to be derived from terminal scrollback.
 type StepUsage struct {
 	// Step is the agent name the step ran under.
 	Step string
@@ -40,6 +52,30 @@ type StepUsage struct {
 	Prompt     int
 	Completion int
 	Total      int
+	// Cached is the part of Prompt the provider served from its cache.
+	//
+	// This is the number that says whether prompt caching (see openrouter.go)
+	// is doing anything. Without it the feature is faith-based: the requests
+	// carry the headers either way, and nothing reports whether they landed.
+	Cached int
+	// Reasoning is tokens a reasoning model spent thinking. Some providers
+	// fold these into Completion and some do not, so a total that does not
+	// reconcile with prompt+completion is usually this.
+	Reasoning int
+	// ModelServed is the model the provider says answered, which is not always
+	// the one requested: openrouter/auto and router models resolve at request
+	// time, and providers substitute. Empty when nothing reported one.
+	ModelServed string
+	// FinishReason is why the last response ended. "length" (or whatever the
+	// provider spells it) means the answer was TRUNCATED by max_tokens, which
+	// is otherwise indistinguishable from a model that simply said little —
+	// and a truncated JSON or verdict is a failure that reads as a bad answer.
+	FinishReason string
+	// Raw is the provider's own usage block, as JSON, for the fields nobody
+	// has asked for yet. The store has no schema versioning, so a field not
+	// captured today cannot be backfilled tomorrow; keeping the block whole
+	// costs a column and buys every future question about spend.
+	Raw string
 }
 
 // RunUsage accumulates spend across every agent step of one job, in execution
@@ -157,10 +193,15 @@ type stepUsage struct {
 	// run is the job-level accumulator this step rolls up into, nil outside a
 	// job run. Held so a job ceiling can stop work mid-step instead of after
 	// the step has already spent past it.
-	run        *RunUsage
-	prompt     int
-	completion int
-	total      int
+	run          *RunUsage
+	prompt       int
+	completion   int
+	total        int
+	cached       int
+	reasoning    int
+	served       string
+	finishReason string
+	raw          string
 }
 
 // record folds one response's usage in and reports whether this invocation's
@@ -180,6 +221,25 @@ func (s *stepUsage) record(resp *model.LLMResponse) (exceeded bool) {
 	s.prompt += int(resp.UsageMetadata.PromptTokenCount)
 	s.completion += int(resp.UsageMetadata.CandidatesTokenCount)
 	s.total += int(resp.UsageMetadata.TotalTokenCount)
+	s.cached += int(resp.UsageMetadata.CachedContentTokenCount)
+	s.reasoning += int(resp.UsageMetadata.ThoughtsTokenCount)
+
+	// Last response wins for these two rather than accumulating: they describe
+	// the response that just arrived, and it is the LAST one that says how the
+	// conversation actually ended. A "length" from turn 3 that a later turn
+	// recovered from is not what the step finished on.
+	if resp.ModelVersion != "" {
+		s.served = resp.ModelVersion
+	}
+
+	if resp.FinishReason != "" {
+		s.finishReason = string(resp.FinishReason)
+	}
+
+	encoded, err := json.Marshal(resp.UsageMetadata)
+	if err == nil {
+		s.raw = string(encoded)
+	}
 
 	if s.budget > 0 && s.total > s.budget {
 		return true
@@ -245,7 +305,11 @@ func (s *stepUsage) snapshot() StepUsage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return StepUsage{Step: s.name, Prompt: s.prompt, Completion: s.completion, Total: s.total}
+	return StepUsage{
+		Step: s.name, Prompt: s.prompt, Completion: s.completion, Total: s.total,
+		Cached: s.cached, Reasoning: s.reasoning,
+		ModelServed: s.served, FinishReason: s.finishReason, Raw: s.raw,
+	}
 }
 
 // budgetExceededError is the failure a breached ceiling produces.
@@ -284,4 +348,62 @@ func logStepUsage(usage StepUsage, budget int) {
 	}
 
 	slog.Info("agent.usage", fields...)
+}
+
+// saveUsageArgs is what a recorded agent step's spend needs beyond the tokens
+// themselves: which step it was, in which run, and how long it took.
+type saveUsageArgs struct {
+	jobName        string
+	stepIndex      int
+	stepName       string
+	nodeHash       string
+	modelRequested string
+	usage          StepUsage
+	duration       time.Duration
+}
+
+// saveAgentUsage persists one agent step's spend.
+//
+// Best-effort, like saveAgentTranscript: a bookkeeping write must never turn a
+// step that did its work into a failed one. A dropped row costs a line in a
+// cost report; a failed step costs the run.
+//
+// Only real agent STEPS reach here. Sub-agents and fix agents record no node,
+// no job_run and no transcript, and their spend already rolls into the parent
+// step's total through the shared accumulator — giving them rows of their own
+// would double-count every job report.
+func saveAgentUsage(ctx context.Context, st *store.Store, args saveUsageArgs) {
+	if st == nil {
+		return
+	}
+
+	runID := events.RunID(ctx)
+	if runID == "" {
+		return
+	}
+
+	// A provider that reported nothing at all gets a row of zeros rather than
+	// no row: "we ran this step and learned nothing about what it cost" and
+	// "this step never ran" are different facts, and a missing row reads as
+	// the second one.
+	err := st.RecordAgentUsage(context.WithoutCancel(ctx), store.AgentUsage{
+		RunID:        runID,
+		StepIndex:    args.stepIndex,
+		StepName:     args.stepName,
+		JobName:      args.jobName,
+		NodeHash:     args.nodeHash,
+		ModelReq:     args.modelRequested,
+		ModelServed:  args.usage.ModelServed,
+		Prompt:       args.usage.Prompt,
+		Completion:   args.usage.Completion,
+		Total:        args.usage.Total,
+		Cached:       args.usage.Cached,
+		Reasoning:    args.usage.Reasoning,
+		FinishReason: args.usage.FinishReason,
+		DurationMS:   args.duration.Milliseconds(),
+		RawMeta:      args.usage.Raw,
+	})
+	if err != nil {
+		slog.Warn("agent.usage_unrecorded", "job", args.jobName, "step", args.stepName, "error", err)
+	}
 }

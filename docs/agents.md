@@ -534,7 +534,26 @@ jobs:
   plan: [...]
 ```
 
-**Reporting happens whether or not you set one**, which is the point: it carries no risk, and it is what tells you which ceilings are even sensible. Every job that ran an agent step prints what it cost.
+**Reporting happens whether or not you set one**, which is the point: it carries no risk, and it is what tells you which ceilings are even sensible. Every job that ran an agent step prints what it cost — **and records it**, so the question survives the terminal:
+
+```
+$ steps runs pipeline.yml --cost
+RUN                 TOKENS   CACHED        COST   STEPS
+r-8f2a1c         4,102,338      38%    unpriced       9
+
+$ steps runs pipeline.yml --cost --run r-8f2a1c
+STEP                                TOKENS   CACHED   DURATION  FINISH
+lens [semantic]                    412,880      61%       1m02s  stop
+reviewer [dim=api]               1,204,551      22%      14m30s  length  <-- truncated
+```
+
+Three columns there answer questions nothing else could:
+
+- **CACHED** is the only place prompt caching reports whether it worked. The requests carry their headers either way, so without this the feature is faith-based.
+- **FINISH** distinguishes a model that had little to say from one that was **cut off** by its output limit. A truncated verdict or JSON body wastes every step downstream of it, and it otherwise reads as an ordinary short answer.
+- **COST** says `unpriced` rather than `$0.00`. No provider path reports a dollar figure yet; a zero would say the run was free instead of that nobody priced it. The column exists for when one does — deliberately not computed from a bundled price table, which would go stale every time any provider changed rates.
+
+The served model, reasoning tokens, and the provider's whole raw usage block are recorded too. The last one is future-proofing with a reason: the state schema has no versioning, so a field not captured today could never be backfilled.
 
 ```
 usage: 341,204 tokens across 4 agent step(s)

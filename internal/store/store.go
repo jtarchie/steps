@@ -184,6 +184,44 @@ CREATE TABLE IF NOT EXISTS run_events (
 );
 CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, seq);
 
+-- What each agent step spent, and the provider metadata that explains it.
+--
+-- Keyed by (run_id, step_index) rather than by node hash, unlike
+-- node_transcripts: a transcript is "what did this step say", which replaces
+-- on re-record, while spend is a HISTORY. Agent steps re-run constantly, and
+-- what each run cost is the entire question this table exists to answer.
+--
+-- cost_usd is nullable and stays NULL today: nothing in the request path
+-- reports a dollar figure yet. It is here rather than computed from a price
+-- table because a bundled table goes stale every time any provider changes
+-- rates, and a confidently wrong number is worse than an absent one — see
+-- docs/agents.md. Reporting says "unpriced", never $0.00.
+--
+-- raw_meta keeps the provider's whole usage block. The schema has no
+-- versioning beyond addedColumns, so a field not captured today cannot be
+-- backfilled tomorrow.
+CREATE TABLE IF NOT EXISTS agent_usage (
+    run_id            TEXT NOT NULL,
+    step_index        INTEGER NOT NULL,
+    step_name         TEXT NOT NULL,
+    job_name          TEXT NOT NULL,
+    node_hash         TEXT NOT NULL,
+    model_requested   TEXT NOT NULL,
+    model_served      TEXT NOT NULL,
+    prompt_tokens     INTEGER NOT NULL,
+    completion_tokens INTEGER NOT NULL,
+    total_tokens      INTEGER NOT NULL,
+    cached_tokens     INTEGER NOT NULL,
+    reasoning_tokens  INTEGER NOT NULL,
+    cost_usd          REAL,
+    finish_reason     TEXT NOT NULL,
+    duration_ms       INTEGER NOT NULL,
+    raw_meta          TEXT NOT NULL,
+    created_at        TEXT NOT NULL,
+    PRIMARY KEY (run_id, step_index)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_usage_run ON agent_usage(run_id);
+
 -- Full agent conversation transcripts, one row per agent node, kept OUT of
 -- nodes.result deliberately: result is loaded by planners and routed-to
 -- successors on every run and must stay bounded, while a transcript is read
@@ -1227,4 +1265,170 @@ func (s *Store) HasPassedVersionSet(ctx context.Context, jobName string, want ma
 	}
 
 	return true, nil
+}
+
+// AgentUsage is one agent step's recorded spend, as it goes in and comes back
+// out of agent_usage.
+//
+// CostUSD is a pointer because absent and zero are different answers: no
+// provider path reports a dollar figure today, and rendering an unreported
+// cost as $0.00 would make an unpriced run look free.
+type AgentUsage struct {
+	RunID        string
+	StepIndex    int
+	StepName     string
+	JobName      string
+	NodeHash     string
+	ModelReq     string
+	ModelServed  string
+	Prompt       int
+	Completion   int
+	Total        int
+	Cached       int
+	Reasoning    int
+	CostUSD      *float64
+	FinishReason string
+	DurationMS   int64
+	RawMeta      string
+}
+
+// RecordAgentUsage stores what one agent step spent.
+//
+// Replaces on conflict: a step re-executed within one run (a to: route sending
+// the plan back over it) reports the spend of the attempt that finished last,
+// which is the one whose result the run actually used.
+func (s *Store) RecordAgentUsage(ctx context.Context, usage AgentUsage) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO agent_usage (
+			run_id, step_index, step_name, job_name, node_hash,
+			model_requested, model_served,
+			prompt_tokens, completion_tokens, total_tokens,
+			cached_tokens, reasoning_tokens, cost_usd,
+			finish_reason, duration_ms, raw_meta, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (run_id, step_index) DO UPDATE SET
+			step_name = excluded.step_name,
+			model_served = excluded.model_served,
+			prompt_tokens = excluded.prompt_tokens,
+			completion_tokens = excluded.completion_tokens,
+			total_tokens = excluded.total_tokens,
+			cached_tokens = excluded.cached_tokens,
+			reasoning_tokens = excluded.reasoning_tokens,
+			cost_usd = excluded.cost_usd,
+			finish_reason = excluded.finish_reason,
+			duration_ms = excluded.duration_ms,
+			raw_meta = excluded.raw_meta,
+			created_at = excluded.created_at
+	`,
+		usage.RunID, usage.StepIndex, usage.StepName, usage.JobName, usage.NodeHash,
+		usage.ModelReq, usage.ModelServed,
+		usage.Prompt, usage.Completion, usage.Total,
+		usage.Cached, usage.Reasoning, usage.CostUSD,
+		usage.FinishReason, usage.DurationMS, usage.RawMeta,
+		time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		return fmt.Errorf("could not record agent usage for run %q: %w", usage.RunID, err)
+	}
+
+	return nil
+}
+
+// RunUsage is every agent step's spend for one run, in step order.
+func (s *Store) RunUsage(ctx context.Context, runID string) ([]AgentUsage, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT run_id, step_index, step_name, job_name, node_hash,
+		       model_requested, model_served,
+		       prompt_tokens, completion_tokens, total_tokens,
+		       cached_tokens, reasoning_tokens, cost_usd,
+		       finish_reason, duration_ms, raw_meta
+		FROM agent_usage WHERE run_id = ? ORDER BY step_index
+	`, runID)
+	if err != nil {
+		return nil, fmt.Errorf("could not read usage for run %q: %w", runID, err)
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	var out []AgentUsage
+
+	for rows.Next() {
+		var usage AgentUsage
+
+		err = rows.Scan(&usage.RunID, &usage.StepIndex, &usage.StepName, &usage.JobName, &usage.NodeHash,
+			&usage.ModelReq, &usage.ModelServed,
+			&usage.Prompt, &usage.Completion, &usage.Total,
+			&usage.Cached, &usage.Reasoning, &usage.CostUSD,
+			&usage.FinishReason, &usage.DurationMS, &usage.RawMeta)
+		if err != nil {
+			return nil, fmt.Errorf("could not read usage for run %q: %w", runID, err)
+		}
+
+		out = append(out, usage)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("could not read usage for run %q: %w", runID, err)
+	}
+
+	return out, nil
+}
+
+// RunTotals is the per-run rollup `steps runs --cost` lists.
+type RunTotals struct {
+	RunID    string
+	Tokens   int
+	Cached   int
+	CostUSD  *float64
+	Steps    int
+	Unpriced int
+}
+
+// RunCostTotals rolls agent_usage up per run, newest first.
+//
+// Unpriced counts the steps with no reported cost, so a partial dollar total
+// can be shown AS partial rather than presented as the whole bill.
+func (s *Store) RunCostTotals(ctx context.Context, limit int) ([]RunTotals, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT run_id,
+		       SUM(total_tokens), SUM(cached_tokens),
+		       SUM(COALESCE(cost_usd, 0)), COUNT(*),
+		       SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END)
+		FROM agent_usage
+		GROUP BY run_id
+		ORDER BY MAX(created_at) DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("could not roll up usage: %w", err)
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	var out []RunTotals
+
+	for rows.Next() {
+		var (
+			totals RunTotals
+			cost   float64
+		)
+
+		err = rows.Scan(&totals.RunID, &totals.Tokens, &totals.Cached, &cost, &totals.Steps, &totals.Unpriced)
+		if err != nil {
+			return nil, fmt.Errorf("could not roll up usage: %w", err)
+		}
+
+		if totals.Unpriced < totals.Steps {
+			totals.CostUSD = &cost
+		}
+
+		out = append(out, totals)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("could not roll up usage: %w", err)
+	}
+
+	return out, nil
 }

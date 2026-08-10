@@ -192,7 +192,16 @@ func (s *Server) assembleRun(c echo.Context, run store.RunRow) (runView, error) 
 		return runView{}, fmt.Errorf("web: %w", err)
 	}
 
-	return buildRunView(run, rows, nodes), nil
+	view := buildRunView(run, rows, nodes)
+
+	// Best-effort: a run page that cannot show spend is worth more than one
+	// that 500s over it. A run predating this table simply has none.
+	usage, err := pipeline.Store.RunUsage(ctx, run.ID)
+	if err == nil {
+		view.Usage = usage
+	}
+
+	return view, nil
 }
 
 // attachDiff fills in what changed since the last green run of this job.
