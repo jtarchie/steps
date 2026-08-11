@@ -89,14 +89,17 @@ func TestVerdictsBustAgentHash(t *testing.T) {
 	base := mustAgentHash(t, cfg, config.Step{Agent: "reviewer", Prompt: "x"})
 	withVerdicts := mustAgentHash(t, cfg, config.Step{
 		Agent: "reviewer", Prompt: "x",
-		Verdicts:  []string{"approve", "revise"},
-		To:        map[string]string{"approve": "reviewer", "revise": "reviewer"},
+		Verdicts:  []config.VerdictRoute{{Name: "approve", Target: "reviewer"}, {Name: "revise", Target: "reviewer"}},
 		MaxVisits: 2,
 	})
 	reordered := mustAgentHash(t, cfg, config.Step{
 		Agent: "reviewer", Prompt: "x",
-		Verdicts:  []string{"revise", "approve"},
-		To:        map[string]string{"approve": "reviewer", "revise": "reviewer"},
+		Verdicts:  []config.VerdictRoute{{Name: "revise", Target: "reviewer"}, {Name: "approve", Target: "reviewer"}},
+		MaxVisits: 2,
+	})
+	retargeted := mustAgentHash(t, cfg, config.Step{
+		Agent: "reviewer", Prompt: "x",
+		Verdicts:  []config.VerdictRoute{{Name: "approve", Target: "next"}, {Name: "revise", Target: "reviewer"}},
 		MaxVisits: 2,
 	})
 
@@ -106,6 +109,13 @@ func TestVerdictsBustAgentHash(t *testing.T) {
 
 	if withVerdicts == reordered {
 		t.Error("reordering verdicts (an enum) should change the hash")
+	}
+
+	// The targets moved INTO the hashed list when they moved out of to:, so
+	// this is the case that would silently regress if VerdictRoute were ever
+	// hashed by name alone.
+	if withVerdicts == retargeted {
+		t.Error("changing a verdict's target should change the hash")
 	}
 }
 

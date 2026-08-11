@@ -62,11 +62,10 @@ jobs:
     # boundary, so the rule moves to the exit. A step that declared verdicts:
     # and finished without calling the verdict tool has FAILED — which is
     # stricter than asking for one and hoping.
-    verdicts: [accurate, stale]
-    to:
-      accurate: celebrate
-      stale: flag
-      failure: flag
+    verdicts:
+      - accurate: celebrate
+      - stale: flag
+      - failure: flag
   - task: flag
     inputs: []
     run: echo "the docs need work"

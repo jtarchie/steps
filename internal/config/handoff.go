@@ -245,7 +245,12 @@ func validateHandoffSegment(job Job, segment []int) error {
 	targeted := map[string]bool{}
 
 	for segPos, idx := range segment {
-		for _, target := range job.Plan[idx].To {
+		// RouteEntries covers both spellings a target can arrive by — a
+		// verdict's own target and a binary to: — so a handoff receiving from
+		// a verdict route is not reported as unreachable.
+		for _, entry := range job.Plan[idx].RouteEntries() {
+			target := entry.Target
+
 			// `next` names no step, but the step it lands on is as much a
 			// route target as a named one — it can be arrived at by a verdict,
 			// so it can want a handoff. Resolve it to that step's name, or

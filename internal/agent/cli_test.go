@@ -434,7 +434,7 @@ func TestCLIContinuationPrompt(t *testing.T) {
 	t.Parallel()
 
 	prepared := cliPrepared(t, []string{"read_file"})
-	prepared.step.Verdicts = []string{"approve", "reject"}
+	prepared.step.Verdicts = []config.VerdictRoute{{Name: "approve"}, {Name: "reject"}}
 
 	state := newCLIStepState()
 	state.trajectory = []recordedToolCall{{name: "Read"}, {name: "Bash"}}

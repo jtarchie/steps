@@ -816,10 +816,7 @@
           "description": "Per-file cap for this step's context_paths:, overriding the agent's max_context_bytes:. 0 defers to the agent."
         },
         "verdicts": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
+          "$ref": "#/$defs/verdicts"
         },
         "handoff": {
           "$ref": "#/$defs/handoffSpec"
@@ -971,12 +968,8 @@
               }
             },
             "verdicts": {
-              "type": "array",
-              "minItems": 1,
-              "items": {
-                "type": "string"
-              },
-              "description": "The vocabulary every member votes in, in precedence order for decide: any."
+              "$ref": "#/$defs/verdicts",
+              "description": "The vocabulary every member votes in, in precedence order for decide: any, and where the block's decision routes."
             },
             "decide": {
               "type": "string",
@@ -1144,6 +1137,26 @@
         }
       ]
     },
+    "verdicts": {
+      "type": "array",
+      "minItems": 1,
+      "description": "An agent's outcome vocabulary AND its routing, in one ordered list. Order is significant: it is the enum the model is offered, and an ensemble's decide: any precedence. An entry is either a bare name (record the verdict and carry on) or a single name: target pair (record it and route). failure: is the reserved catch for a step that errored or emitted nothing, and must name a target. Mutually exclusive with to:.",
+      "items": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "minProperties": 1,
+            "maxProperties": 1,
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "handoffSpec": {
       "description": "What this agent step exchanges with the steps around it. context/tool look backward along a route; note looks forward along the plan.",
       "oneOf": [
@@ -1237,6 +1250,10 @@
         },
         "code": {
           "type": "integer"
+        },
+        "verdict": {
+          "type": "string",
+          "description": "Agent steps only. The verdict the model must have emitted, matched exactly against the step's declared verdicts:."
         },
         "tool_calls": {
           "type": "array",

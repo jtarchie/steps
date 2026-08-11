@@ -660,11 +660,11 @@ func truncateArgs(args map[string]any) map[string]any {
 	return out
 }
 
-// assertAgentResponse checks an agent step's assert (stdout and/or
+// assertAgentResponse checks an agent step's assert (stdout, verdict and/or
 // tool_calls — an agent has no exit code) against what the conversation
 // produced. Every field that is set must pass; a mismatch on any is a
 // task-level failure so the step fails and its on_failure hook fires. A nil
-// assert, or one with neither field set, is a no-op.
+// assert, or one with no field set, is a no-op.
 func assertAgentResponse(assert *config.Assert, res conversationResult) error {
 	if assert == nil {
 		return nil
@@ -673,6 +673,14 @@ func assertAgentResponse(assert *config.Assert, res conversationResult) error {
 	if assert.Stdout != nil && !strings.Contains(res.text, *assert.Stdout) {
 		//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
 		return outcome.Fail(fmt.Errorf("assert.stdout: response does not contain %q", *assert.Stdout))
+	}
+
+	// An empty res.verdict here means the model finished without calling the
+	// required verdict tool, which the conversation loop already treats as a
+	// failure — so this reports the mismatch rather than shadowing that error.
+	if assert.Verdict != nil && res.verdict != *assert.Verdict {
+		//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
+		return outcome.Fail(fmt.Errorf("assert.verdict: want %q, got %q", *assert.Verdict, res.verdict))
 	}
 
 	if len(assert.ToolCalls) > 0 {

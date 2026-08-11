@@ -50,11 +50,10 @@ jobs:
   - agent: reviewer
     inputs: []
     prompt: Review the diff.
-    verdicts: [approve, reject]
-    to:
-      approve: celebrate
-      reject: escalate
-      failure: escalate
+    verdicts:
+      - approve: celebrate
+      - reject: escalate
+      - failure: escalate
   - task: escalate
     inputs: []
     run: |
@@ -358,9 +357,8 @@ jobs:
     inputs: []
     outputs: []
     prompt: Review cell {{ .vars.cell }}.
-    verdicts: [approve]
-    to:
-      approve: next
+    verdicts:
+      - approve: next
   - task: record
     inputs: []
     run: echo joined >> %s

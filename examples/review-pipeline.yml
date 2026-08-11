@@ -75,17 +75,16 @@ jobs:
       go build ./... 2>&1 | head -20              >> ../report/BUILD.md || true
 
   # The agent decides what happens next. verdicts: declares the vocabulary it
-  # must choose from, and to: routes on the choice — so the model picks a
-  # branch, and the pipeline (not the prompt) decides what each branch means.
+  # must choose from AND where each choice goes — so the model picks a branch,
+  # and the pipeline (not the prompt) decides what each branch means.
   - agent: reviewer
     prompt: |
       Read report/BUILD.md. Check its claims against the repository in repo/.
       Then call the verdict tool: `publish` if the report is accurate and the
       build is clean, `investigate` if anything looks wrong or unverifiable.
-    verdicts: [publish, investigate]
-    to:
-      publish: reports
-      investigate: explain
+    verdicts:
+      - publish: reports
+      - investigate: explain
 
   # Reached only on the publish verdict.
   - put: reports

@@ -5,7 +5,6 @@ package config
 
 import (
 	"fmt"
-	"slices"
 )
 
 // The decision rules an ensemble can use. Anything else in decide: is read as
@@ -46,8 +45,11 @@ type Ensemble struct {
 	// declared once here rather than repeated per member.
 	Agents []Step `yaml:"agents"`
 	// Verdicts is the vocabulary every member votes in, in order of
-	// precedence for decide: any.
-	Verdicts []string `yaml:"verdicts"`
+	// precedence for decide: any — and, on the block, where the combined
+	// decision sends the plan. Same list shape as a lone agent's (see
+	// VerdictRoute); it sits here rather than on the step because the members
+	// vote in it and the block routes on what they conclude.
+	Verdicts []VerdictRoute `yaml:"verdicts"`
 	// Decide is the rule (majority/unanimous/any) or the name of an agent
 	// that judges the members' answers.
 	Decide string `yaml:"decide"`
@@ -171,7 +173,37 @@ func (c *Config) validateEnsembleDecision(label string, ensemble *Ensemble) erro
 	return nil
 }
 
-// EnsembleVerdictsFor returns a copy of the vocabulary an ensemble votes in.
-func (e *Ensemble) EnsembleVerdictsFor() []string {
-	return slices.Clone(e.Verdicts)
+// VoteNames is the vocabulary an ensemble's members vote in, as plain names in
+// declaration order: what decide: any walks in precedence order, and what a
+// judge is told it may pick.
+func (e *Ensemble) VoteNames() []string {
+	votes := e.EnsembleVerdictsFor()
+	names := make([]string, 0, len(votes))
+
+	for _, route := range votes {
+		names = append(names, route.Name)
+	}
+
+	return names
+}
+
+// EnsembleVerdictsFor returns that vocabulary as verdict entries, stripped of
+// the block's routing.
+//
+// A member emits a vote; the BLOCK decides where that sends the plan. Handing
+// members the targets too would make each one's recorded identity depend on
+// routing it can neither see nor take — and would put the reserved failure
+// catch, which no model may choose, in front of the voters.
+func (e *Ensemble) EnsembleVerdictsFor() []VerdictRoute {
+	votes := make([]VerdictRoute, 0, len(e.Verdicts))
+
+	for _, route := range e.Verdicts {
+		if route.Name == verdictFailureKey {
+			continue
+		}
+
+		votes = append(votes, VerdictRoute{Name: route.Name})
+	}
+
+	return votes
 }

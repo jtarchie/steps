@@ -57,6 +57,55 @@ func TestAssertReject(t *testing.T) {
 		want     string
 	}{
 		{
+			name: "assert.verdict on a step that declares none",
+			pipeline: `
+agents:
+- name: c
+  source: { model: lmstudio/qwen }
+jobs:
+- name: build
+  plan:
+  - agent: c
+    inputs: []
+    prompt: x
+    assert:
+      verdict: approve
+`,
+			want: "the step declares no verdicts:",
+		},
+		{
+			name: "assert.verdict outside the declared vocabulary",
+			pipeline: `
+agents:
+- name: c
+  source: { model: lmstudio/qwen }
+jobs:
+- name: build
+  plan:
+  - agent: c
+    inputs: []
+    prompt: x
+    verdicts: [approve, revise]
+    assert:
+      verdict: aprove
+`,
+			want: `assert.verdict "aprove" is not one of the declared verdicts`,
+		},
+		{
+			name: "assert.verdict on a task",
+			pipeline: `
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    run: "true"
+    assert:
+      verdict: approve
+`,
+			want: "assert.verdict is only valid on agent steps",
+		},
+		{
 			name: "pipeline assert with stdout",
 			pipeline: `
 assert:
@@ -68,7 +117,7 @@ jobs:
     inputs: []
     run: "true"
 `,
-			want: "stdout/code are only valid on task/agent step asserts",
+			want: "stdout/code/verdict are only valid on task/agent step asserts",
 		},
 		{
 			name: "job assert with code",
@@ -82,7 +131,7 @@ jobs:
   assert:
     code: 0
 `,
-			want: "stdout/code are only valid on task/agent step asserts",
+			want: "stdout/code/verdict are only valid on task/agent step asserts",
 		},
 		{
 			name: "step assert with execution",

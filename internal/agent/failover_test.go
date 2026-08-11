@@ -81,7 +81,7 @@ func TestEnsembleMembersHashIndependently(t *testing.T) {
 	}}
 
 	member := func(name, prompt string) config.Step {
-		return config.Step{Agent: name, Prompt: prompt, Verdicts: []string{"approve", "reject"}}
+		return config.Step{Agent: name, Prompt: prompt, Verdicts: []config.VerdictRoute{{Name: "approve"}, {Name: "reject"}}}
 	}
 
 	hashOf := func(t *testing.T, step config.Step) string {

@@ -93,11 +93,10 @@ jobs:
     inputs: [repo, prep]
     outputs: [report]
     prompt: Review the notes and summarize them.
-    verdicts: [approve, reject]
-    to:
-      approve: results
-      reject: escalate
-      failure: escalate
+    verdicts:
+      - approve: results
+      - reject: escalate
+      - failure: escalate
     assert:
       tool_calls:
       - name: read_file

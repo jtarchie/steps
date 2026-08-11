@@ -10,12 +10,68 @@ import (
 )
 
 // reservedRouteKeys are the outcome keys with fixed meaning in a step's to:
-// map: a verdict may not reuse one, and in binary (non-verdict) mode they are
-// the only keys allowed. Keeping the set closed here is what reserves the rest
-// of the key space for a future exit-code routing extension.
+// map, and the only keys it may carry — to: is binary mode now that verdict
+// routing lives in the verdicts: list itself. Keeping the set closed here is
+// what reserves the rest of the key space for a future exit-code routing
+// extension.
 //
 //nolint:gochecknoglobals // static, read-only lookup table
-var reservedRouteKeys = map[string]bool{"success": true, "failure": true}
+var reservedRouteKeys = map[string]bool{"success": true, verdictFailureKey: true}
+
+// Routes reports whether this step can send the plan somewhere other than the
+// next step in declaration order — a to: map, or a verdicts: entry that names
+// a target. A verdicts: list of bare names routes nothing: it records what the
+// model decided and carries on.
+func (s Step) Routes() bool {
+	if s.To != nil {
+		return true
+	}
+
+	for _, route := range s.VerdictRoutes() {
+		if route.Target != "" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// RouteFor resolves the target an outcome key sends the plan to, looking in
+// the verdicts: list first and the to: map second (a step has one or the
+// other; validateStepRouting rejects both at once). ok is false when the key
+// routes nowhere — an unmatched outcome, or a bare verdict — and the caller
+// falls through in declaration order.
+func (s Step) RouteFor(key string) (target string, ok bool) {
+	for _, route := range s.VerdictRoutes() {
+		if route.Name == key {
+			return route.Target, route.Target != ""
+		}
+	}
+
+	target, ok = s.To[key]
+
+	return target, ok
+}
+
+// RouteEntries returns every (outcome key, target) pair this step routes by,
+// from whichever of verdicts:/to: it declares — the input to target
+// resolution, which treats both the same way. Bare verdicts are omitted: they
+// name no target to resolve.
+func (s Step) RouteEntries() []VerdictRoute {
+	entries := make([]VerdictRoute, 0, len(s.To))
+
+	for _, route := range s.VerdictRoutes() {
+		if route.Target != "" {
+			entries = append(entries, route)
+		}
+	}
+
+	for _, key := range slices.Sorted(maps.Keys(s.To)) {
+		entries = append(entries, VerdictRoute{Name: key, Target: s.To[key]})
+	}
+
+	return entries
+}
 
 // RouteTargetNext is the reserved to: TARGET — the value side, where every
 // other entry is a step name — meaning "continue in declaration order".
@@ -77,17 +133,22 @@ func stepName(step Step) string {
 }
 
 // validateStepTransitions enforces the to:/max_visits:/verdicts: rules at load
-// time: routing fields are invalid on get and hook steps; within any plan
+// time: routing fields are invalid on get and hook steps; a verdicts: list is
+// agent-only, well formed, and never accompanied by to:; and within any plan
 // segment (bounded by get steps) that uses routing, step names must be unique,
-// every to: target must resolve within the segment, a backward target requires
-// max_visits, and an agent's verdict vocabulary must be complete and
-// consistent with its to: keys. Also validates handoff: (validateHandoffSteps),
-// since it's meaningless without a to: route targeting the step it's set on.
+// every target must resolve within the segment, and a backward target requires
+// max_visits. Also validates handoff: (validateHandoffSteps), since it's
+// meaningless without a route targeting the step it's set on.
 func (c *Config) validateStepTransitions() error {
 	for i := range c.Jobs {
 		job := c.Jobs[i]
 
 		err := job.visitSteps(rejectRoutingOnGet)
+		if err != nil {
+			return err
+		}
+
+		err = job.visitSteps(validateVerdictShape)
 		if err != nil {
 			return err
 		}
@@ -168,10 +229,10 @@ func validateSegment(job Job, segment []int) error {
 	usesRouting := false
 
 	for _, idx := range segment {
-		// Unwrap for verdicts:, which sits on the agent step a try: may wrap —
-		// otherwise a wrapped `verdicts:` with no to: skips this whole check
-		// and reaches run time with a synthesized verdict tool routing nowhere.
-		if job.Plan[idx].To != nil || len(job.Plan[idx].Unwrap().Verdicts) > 0 {
+		// Step.Routes looks through a try: wrapper and into an ensemble block,
+		// so a wrapped verdicts: still brings its segment under these rules
+		// rather than reaching run time with targets nobody resolved.
+		if job.Plan[idx].Routes() {
 			usesRouting = true
 
 			break
@@ -240,34 +301,15 @@ func segmentPositions(job Job, segment []int) (map[string]int, error) {
 	return pos, nil
 }
 
-// validateStepRouting validates one step's to:/verdicts:/max_visits: against
-// its segment (pos maps each segment step name to its segment-relative
-// position). segPos is this step's own position.
+// validateStepRouting validates one step's route targets against its segment
+// (pos maps each segment step name to its segment-relative position). segPos is
+// this step's own position. The shape of verdicts: itself — names, agent-only,
+// the to: conflict — is checked for every step by validateVerdictShape, since a
+// list of bare verdicts routes nothing and would never reach here.
 func validateStepRouting(job Job, planIdx, segPos int, step Step, pos map[string]int) error {
 	label := fmt.Sprintf("job %q step %d", job.Name, planIdx)
 
-	// try: is transparent to routing: to:/max_visits: sit on the wrapper,
-	// which is the step with a position in the plan, while verdicts: stays on
-	// the agent step it wraps — that is what internal/agent reads to
-	// synthesize the required verdict tool. Unwrapping here is what lets a
-	// tolerated agent still route on its verdict instead of being rejected
-	// with "to: key %q is not valid (expected success or failure)".
-	inner := step.Unwrap()
-
-	// An ensemble's verdicts live on the block, since every member votes in
-	// the same vocabulary, and the block routes on the DECISION. Treat them as
-	// the step's own for routing, or a to: naming a real verdict would be
-	// rejected as "expected success or failure".
-	if inner.Ensemble != nil {
-		inner.Verdicts = inner.Ensemble.Verdicts
-	}
-
-	if len(inner.Verdicts) > 0 {
-		err := validateVerdictMode(label, step, inner)
-		if err != nil {
-			return err
-		}
-	} else if step.To != nil {
+	if len(step.VerdictRoutes()) == 0 {
 		for key := range step.To {
 			if !reservedRouteKeys[key] {
 				return fmt.Errorf("%s: to: key %q is not valid (expected success or failure)", label, key)
@@ -278,69 +320,60 @@ func validateStepRouting(job Job, planIdx, segPos int, step Step, pos map[string
 	return validateRouteTargets(label, segPos, step, pos)
 }
 
-// validateVerdictMode enforces the verdict-mode shape: agent-only, well-formed
-// verdict names, and a complete, consistent mapping between the declared
-// verdicts and the to: keys. step is the plan-positioned step (which carries
-// to:); inner is what it runs (which carries agent:/verdicts:). The two are the
-// same step unless a try: wraps it.
-func validateVerdictMode(label string, step, inner Step) error {
+// validateVerdictShape enforces everything about a verdicts: list that needs no
+// segment context: it belongs on an agent, it does not coexist with to:, and
+// each entry is well formed.
+//
+// It runs over every step rather than only routing segments because a list of
+// bare verdicts is legal and common — an agent that classifies, records what it
+// decided, and lets the plan carry on — and it must still be checked.
+func validateVerdictShape(label string, step *Step) error {
+	routes := step.VerdictRoutes()
+	if len(routes) == 0 {
+		return nil
+	}
+
+	inner := step.Unwrap()
+
 	// An ensemble is the one non-agent step that produces a verdict: its
 	// members are agents and the block routes on their combined decision.
 	if inner.Agent == "" && inner.Ensemble == nil {
 		return fmt.Errorf("%s: verdicts is only valid on agent steps", label)
 	}
 
-	if step.To == nil {
-		return fmt.Errorf("%s: verdicts requires a to: map", label)
+	// The hard cutover. Verdict targets used to live in a parallel to: map
+	// that had to agree with this list key for key; they live in the list
+	// itself now, so a step carrying both is the old spelling and gets told
+	// the new one rather than a puzzle about which key is unexpected.
+	if step.To != nil {
+		return fmt.Errorf("%s: to: is not valid on a step with verdicts:; a verdict's target now lives in the verdicts: list itself — write\n  verdicts:\n    - %s: <step name, or %s>\n    - %s: <step name>   # the reserved catch for an errored step",
+			label, routes[0].Name, RouteTargetNext, verdictFailureKey)
 	}
 
-	declared, err := validateVerdictNames(label, step, inner)
-	if err != nil {
-		return err
-	}
-
-	return validateVerdictToKeys(label, step, declared)
+	return validateVerdictEntries(label, routes)
 }
 
-// validateVerdictNames checks each declared verdict is non-empty, unique, not a
-// reserved key, and has a to: target; it returns the set of declared names.
-func validateVerdictNames(label string, step, inner Step) (map[string]bool, error) {
-	declared := make(map[string]bool, len(inner.Verdicts))
+// validateVerdictEntries checks each entry is non-empty, unique, not the
+// reserved success key, and — for the reserved failure catch — routed.
+func validateVerdictEntries(label string, routes []VerdictRoute) error {
+	declared := make(map[string]bool, len(routes))
 
-	for _, verdict := range inner.Verdicts {
+	for _, route := range routes {
 		switch {
-		case verdict == "":
-			return nil, fmt.Errorf("%s: verdicts must not contain an empty name", label)
-		case reservedRouteKeys[verdict]:
-			return nil, fmt.Errorf("%s: verdict %q collides with a reserved key (success/failure)", label, verdict)
-		case declared[verdict]:
-			return nil, fmt.Errorf("%s: verdict %q is declared more than once", label, verdict)
+		case route.Name == "":
+			return fmt.Errorf("%s: verdicts must not contain an empty name", label)
+		case route.Name == "success":
+			return fmt.Errorf("%s: verdict %q collides with a reserved key; a verdict already IS this step's success, so name it for the decision it reports", label, route.Name)
+		case declared[route.Name]:
+			return fmt.Errorf("%s: verdict %q is declared more than once", label, route.Name)
+		// A bare `failure` would mean "the step errored, carry on regardless",
+		// which is precisely try:. Two spellings of tolerance is how one of
+		// them drifts, so this one is refused.
+		case route.Name == verdictFailureKey && route.Target == "":
+			return fmt.Errorf("%s: verdict %q is the reserved catch for an errored step and must name a target — to tolerate the failure and carry on, wrap the step in a try", label, route.Name)
 		}
 
-		declared[verdict] = true
-
-		_, routed := step.To[verdict]
-		if !routed {
-			return nil, fmt.Errorf("%s: verdict %q has no to: target", label, verdict)
-		}
-	}
-
-	return declared, nil
-}
-
-// validateVerdictToKeys checks every to: key in verdict mode is either the
-// reserved failure catch or a declared verdict — and rejects a generic success
-// key, since a verdict replaces it.
-func validateVerdictToKeys(label string, step Step, declared map[string]bool) error {
-	for key := range step.To {
-		switch {
-		case key == "success":
-			return fmt.Errorf("%s: to: success is not valid in verdict mode (a verdict replaces generic success)", label)
-		case key == "failure":
-			continue // reserved catch for "never produced a verdict"
-		case !declared[key]:
-			return fmt.Errorf("%s: to: key %q is not a declared verdict", label, key)
-		}
+		declared[route.Name] = true
 	}
 
 	return nil
@@ -352,17 +385,17 @@ func validateVerdictToKeys(label string, step Step, declared map[string]bool) er
 func validateRouteTargets(label string, segPos int, step Step, pos map[string]int) error {
 	backward := false
 
-	for key, target := range step.To {
+	for _, entry := range step.RouteEntries() {
 		// The one target that is not a name. It is the position after this
 		// step, so it always exists (falling off the end of a segment is what
 		// an unrouted step does anyway) and is always forward.
-		if target == RouteTargetNext {
+		if entry.Target == RouteTargetNext {
 			continue
 		}
 
-		targetPos, ok := pos[target]
+		targetPos, ok := pos[entry.Target]
 		if !ok {
-			return fmt.Errorf("%s: to: %s routes to %q, which is not a step in the same segment%s", label, key, target, suggestion(target, append(slices.Sorted(maps.Keys(pos)), RouteTargetNext)))
+			return fmt.Errorf("%s: %s routes to %q, which is not a step in the same segment%s", label, entry.Name, entry.Target, suggestion(entry.Target, append(slices.Sorted(maps.Keys(pos)), RouteTargetNext)))
 		}
 
 		if targetPos <= segPos {

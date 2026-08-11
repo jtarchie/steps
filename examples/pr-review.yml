@@ -550,10 +550,9 @@ jobs:
     inputs: [pr]
     timeout: 20m
     outputs: [review]
-    verdicts: [complete, blind-spots]
-    to:
-      complete: check-draft
-      blind-spots: anatomy
+    verdicts:
+      - complete: check-draft
+      - blind-spots: anatomy
     max_visits: 2                # bounds the loop: at most one second pass
     prompt: |
       Write the review from the `confirmed` findings in your context. Cluster

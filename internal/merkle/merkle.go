@@ -244,7 +244,11 @@ func withRouting(step config.Step, content map[string]any) map[string]any {
 	}
 
 	if len(step.Verdicts) != 0 {
-		content["verdicts"] = step.Verdicts // order-significant: it is the emitted enum
+		// Order-significant: it is the emitted enum. A []VerdictRoute marshals
+		// as an array of {name, target} objects, so the order survives into the
+		// hash the way a map's keys could not — which is the whole reason the
+		// targets live in this list rather than in a to: map beside it.
+		content["verdicts"] = step.Verdicts
 	}
 
 	// A computed Label is the name the step is known by (see config.Step.Label),
@@ -1306,7 +1310,7 @@ func planTaskNode(cfg *config.Config, step config.Step, i int, parentHash string
 
 	node, err := taskNode(cfg, step, rt, i, parentHash)
 
-	return node, rt.Fix != nil || step.When != nil || step.To != nil, err
+	return node, rt.Fix != nil || step.When != nil || step.Routes(), err
 }
 
 // parallelNode builds the plan node for an in_parallel: block.

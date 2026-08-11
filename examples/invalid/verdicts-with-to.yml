@@ -1,0 +1,31 @@
+# A verdict's target lives in the verdicts: list itself. The old spelling —
+# the vocabulary in verdicts: and the routing in a parallel to: map that had to
+# agree with it key for key — is refused rather than translated, because the
+# two lists could disagree: a typo in either one produced a verdict routing
+# nowhere or a route no verdict could reach, and the load error had to explain
+# which of the two the author meant.
+#
+# One ordered list means there is nothing to disagree with, and it keeps the
+# order — which is the emitted tool enum, and an ensemble's decide: any
+# precedence, neither of which a YAML map can express.
+# expect: to: is not valid on a step with verdicts:
+
+agents:
+- name: reviewer
+  source:
+    model: openai/gpt-4o
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: Review it.
+    verdicts: [approve, revise]
+    to:
+      approve: ship
+      revise: reviewer
+    max_visits: 2
+  - task: ship
+    inputs: []
+    run: echo shipping

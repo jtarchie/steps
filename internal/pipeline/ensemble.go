@@ -199,7 +199,7 @@ func applyDecisionRule(ensemble *config.Ensemble, votes []memberVote) (string, e
 	case config.DecideAny:
 		// verdicts: is ordered, so "any" means the first listed verdict
 		// anybody chose — the "one objection is enough" shape.
-		for _, verdict := range ensemble.Verdicts {
+		for _, verdict := range ensemble.VoteNames() {
 			if tally[verdict] > 0 {
 				return verdict, nil
 			}
@@ -281,7 +281,7 @@ func judgePrompt(ensemble *config.Ensemble, votes []memberVote) string {
 		out.WriteString("\n")
 	}
 
-	fmt.Fprintf(&out, "\nThe verdicts available to you are: %s.\n", strings.Join(ensemble.Verdicts, ", "))
+	fmt.Fprintf(&out, "\nThe verdicts available to you are: %s.\n", strings.Join(ensemble.VoteNames(), ", "))
 
 	return out.String()
 }

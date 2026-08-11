@@ -52,7 +52,7 @@ func TestNextPendingHandoffFromAgentCarriesPrevious(t *testing.T) {
 	t.Parallel()
 
 	steps := []config.Step{
-		{Agent: "critic", Verdicts: []string{"approve", "revise"}, To: map[string]string{"approve": "publish", "revise": "writer"}, MaxVisits: 3},
+		{Agent: "critic", Verdicts: []config.VerdictRoute{{Name: "approve", Target: "publish"}, {Name: "revise", Target: "writer"}}, MaxVisits: 3},
 		{Agent: "writer"},
 		{Agent: "publish"},
 	}
@@ -90,7 +90,7 @@ func TestNextPendingHandoffVisitPreviewsNextExecution(t *testing.T) {
 	t.Parallel()
 
 	steps := []config.Step{
-		{Agent: "critic", Verdicts: []string{"revise"}, To: map[string]string{"revise": "writer"}, MaxVisits: 5},
+		{Agent: "critic", Verdicts: []config.VerdictRoute{{Name: "revise", Target: "writer"}}, MaxVisits: 5},
 		{Agent: "writer"},
 	}
 

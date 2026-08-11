@@ -19,7 +19,7 @@ An agent step runs a tool-calling conversation loop:
 5. Print the model's final response text to the terminal, followed by its verdict and note if the step declares `verdicts:` — this happens whether the run succeeded or hit its turn budget, since a turn-exhausted attempt's partial response is still available.
 6. Record the step's output.
 
-Two tools can be synthesized onto a step's grant beyond what `tools:` lists: a required `verdict` tool (`verdicts:` on the step) and a read-only `previous_run` tool (`handoff: {tool: true}`) — both documented in [control-flow.md](control-flow.md)'s "Step transitions" and "Handoff context" sections, since both exist to serve `to:` routing rather than the tool-calling loop itself.
+Two tools can be synthesized onto a step's grant beyond what `tools:` lists: a required `verdict` tool (`verdicts:` on the step) and a read-only `previous_run` tool (`handoff: {tool: true}`) — both documented in [control-flow.md](control-flow.md)'s "Step transitions" and "Handoff context" sections, since both exist to serve routing rather than the tool-calling loop itself.
 
 ## Built-in tools
 
@@ -657,7 +657,7 @@ The tradeoff to know about: steps' path confinement is expressed in the CLI's vo
 
 ### Verdicts are enforced at exit
 
-A hosted agent that tries to finish without its required verdict gets forced into one more call via `tool_choice`. There is no such lever across a process boundary, so the rule moves to the exit instead: **a step that declared `verdicts:` and finished without calling the verdict tool has failed.** The failure is routable, so `failure:` in your `to:` map catches it.
+A hosted agent that tries to finish without its required verdict gets forced into one more call via `tool_choice`. There is no such lever across a process boundary, so the rule moves to the exit instead: **a step that declared `verdicts:` and finished without calling the verdict tool has failed.** The failure is routable, so a `failure:` entry in your `verdicts:` list catches it.
 
 The verdict itself is captured in the parent process the moment the tool is called, over the bridge — the CLI is never trusted to report what it decided.
 
@@ -708,16 +708,15 @@ A single model has blind spots. Ask one reviewer "is this correct?" and you get 
 
 ```yaml
 - ensemble:
-    verdicts: [reject, approve]     # the vocabulary EVERY member votes in
+    verdicts:                       # the vocabulary EVERY member votes in,
+      - reject: revise              # and where the BLOCK's decision goes
+      - approve: publish
     decide: majority                # or: unanimous, any, or an agent name
     member_errors: fail             # or: exclude
     agents:
     - {agent: reviewer-a, prompt: "Review the diff for correctness."}
     - {agent: reviewer-b, prompt: "Review the diff for correctness."}
     - {agent: reviewer-c, prompt: "Review the diff for correctness."}
-  to:
-    approve: publish
-    reject: revise
 ```
 
 ### ⚠️ N agents cost N times one
@@ -728,7 +727,7 @@ Three reviewers cost three reviews, every run. This is the step where a job-leve
 
 - **`majority`** — the verdict more than half the voters chose.
 - **`unanimous`** — every voter agreed, or the block fails saying they did not.
-- **`any`** — the first verdict in `verdicts:` that anybody chose. `verdicts:` is an *ordered* list, so listing them most-to-least severe gives you "one objection is enough".
+- **`any`** — the first verdict in `verdicts:` that anybody chose. `verdicts:` is an *ordered* list, so listing them most-to-least severe gives you "one objection is enough". (This precedence is one of the two reasons verdict targets live in the list rather than a `to:` map — a map has no order.)
 - **an agent name** — that agent judges, receiving every member's vote and note. It is an ordinary agent step, so its reasoning is recorded, inspectable and cached like any other; a judge that is also a voting member is a load error, because it would be marking its own homework.
 
 ### Two things that are never silent
@@ -739,5 +738,5 @@ Three reviewers cost three reviews, every run. This is the step where a job-leve
 ### The rest
 
 - Members run **concurrently**, and each is its own merkle node: editing one member's prompt re-runs only that member.
-- `verdicts:` and `to:` live on the **block**, not on members. Every member votes in one vocabulary, and the block routes on the *decision* — a member routing on its own vote would leave the block half-taken.
+- `verdicts:` lives on the **block**, not on members: it carries both the vocabulary and the block's routing. Every member votes in one vocabulary, and the block routes on the *decision* — a member routing on its own vote would leave the block half-taken. Members are handed the names only, minus the reserved `failure:` catch, which no model may choose.
 - Every member's vote and note is recorded with the step's result, so a run's record says what was decided *and what it was decided from*.

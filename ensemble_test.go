@@ -29,7 +29,9 @@ jobs:
 - name: review
   plan:
   - ensemble:
-      verdicts: [reject, approve]
+      verdicts:
+        - reject: revise
+        - approve: publish
       decide: %[2]s
 %[5]s      agents:
       - agent: reviewer-a
@@ -41,9 +43,6 @@ jobs:
       - agent: reviewer-c
         inputs: []
         prompt: Review it.
-    to:
-      approve: publish
-      reject: revise
   - task: revise
     inputs: []
     run: echo revised >> %[3]s

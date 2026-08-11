@@ -57,11 +57,10 @@ jobs:
     prompt: |
       Read repo/README.md, then look at the actual code in repo/internal.
       Decide whether the README describes what the code does.
-    verdicts: [accurate, stale]
-    to:
-      accurate: celebrate
-      stale: flag
-      failure: flag
+    verdicts:
+      - accurate: celebrate
+      - stale: flag
+      - failure: flag
   - task: flag
     inputs: []
     run: echo "the docs need work"

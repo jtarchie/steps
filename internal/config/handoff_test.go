@@ -57,8 +57,9 @@ jobs:
     inputs: []
     prompt: revise it
     handoff: true
-    verdicts: [approve, revise]
-    to: { approve: done, revise: writer }
+    verdicts:
+      - approve: done
+      - revise: writer
     max_visits: 3
   - task: done
     inputs: []
@@ -111,8 +112,9 @@ jobs:
     inputs: []
     prompt: revise it
     handoff: ` + tc.yaml + `
-    verdicts: [approve, revise]
-    to: { approve: done, revise: writer }
+    verdicts:
+      - approve: done
+      - revise: writer
     max_visits: 3
   - task: done
     inputs: []
@@ -171,8 +173,9 @@ jobs:
     inputs: []
     prompt: revise it
     handoff: false
-    verdicts: [approve, revise]
-    to: { approve: done, revise: writer }
+    verdicts:
+      - approve: done
+      - revise: writer
     max_visits: 2
   - task: done
     inputs: []
@@ -193,8 +196,9 @@ jobs:
     inputs: []
     prompt: revise it
     handoff: { context: false }
-    verdicts: [approve, revise]
-    to: { approve: done, revise: writer }
+    verdicts:
+      - approve: done
+      - revise: writer
     max_visits: 2
   - task: done
     inputs: []
@@ -272,8 +276,9 @@ jobs:
   - agent: critic
     inputs: []
     prompt: judge it
-    verdicts: [approve, revise]
-    to: { approve: done, revise: writer }
+    verdicts:
+      - approve: done
+      - revise: writer
     max_visits: 3
   - task: done
     inputs: []

@@ -310,9 +310,9 @@ func cliContinuationPrompt(state *cliStepState, prepared preparedAgentStep) stri
 	out.WriteString("Your conversation and your working directory are both intact. " +
 		"Continue from where you stopped — do not start the task over, and do not repeat work you have already done.")
 
-	if len(prepared.step.Verdicts) > 0 {
+	if names := prepared.step.VerdictNames(); len(names) > 0 {
 		fmt.Fprintf(&out, " When you are done, call the %s tool with one of: %s.",
-			verdictToolName, strings.Join(prepared.step.Verdicts, ", "))
+			verdictToolName, strings.Join(names, ", "))
 	}
 
 	return out.String()
@@ -721,7 +721,7 @@ func checkCLIObligations(prepared preparedAgentStep, run cliRunResult, satisfied
 	if missing[0] == prepared.conv.verdictTool {
 		//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
 		return outcome.Fail(fmt.Errorf("agent %q: finished without calling the %s tool; declared verdicts: %s",
-			prepared.ri.AgentName, verdictToolName, strings.Join(prepared.step.Verdicts, ", ")))
+			prepared.ri.AgentName, verdictToolName, strings.Join(prepared.step.VerdictNames(), ", ")))
 	}
 
 	//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error

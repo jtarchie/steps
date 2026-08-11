@@ -91,10 +91,9 @@ jobs:
   - agent: synthesizer
     inputs: []
     outputs: [review]
-    verdicts: [complete, blind-spots]
-    to:
-      complete: check-draft
-      blind-spots: compiler      # backward: another pass over the dimensions
+    verdicts:
+      - complete: check-draft
+      - blind-spots: compiler    # backward: another pass over the dimensions
     max_visits: 2                # which is bounded, at one extra pass
     prompt: Write the review from the confirmed findings.
 

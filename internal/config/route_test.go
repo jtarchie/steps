@@ -21,12 +21,11 @@ jobs:
   - agent: critic
     inputs: []
     prompt: judge it
-    verdicts: [approve, revise, escalate]
-    to:
-      approve: publish
-      revise: draft
-      escalate: publish
-      failure: publish
+    verdicts:
+      - approve: publish
+      - revise: draft
+      - escalate: publish
+      - failure: publish
     max_visits: 3
   - task: publish
     inputs: []
@@ -40,16 +39,24 @@ jobs:
 	}
 
 	critic := cfg.Jobs[0].Plan[1]
-	if critic.To["revise"] != "draft" {
-		t.Errorf("to[revise] = %q, want draft", critic.To["revise"])
+
+	target, routed := critic.RouteFor("revise")
+	if !routed || target != "draft" {
+		t.Errorf("RouteFor(revise) = %q/%v, want draft/true", target, routed)
 	}
 
 	if critic.MaxVisits != 3 {
 		t.Errorf("max_visits = %d, want 3", critic.MaxVisits)
 	}
 
-	if len(critic.Verdicts) != 3 {
-		t.Errorf("verdicts = %v, want 3 entries", critic.Verdicts)
+	// Four entries, but only three the model may choose from: failure: is the
+	// runtime's catch, not a choice, so it never reaches the tool enum.
+	if len(critic.Verdicts) != 4 {
+		t.Errorf("verdicts = %v, want 4 entries", critic.Verdicts)
+	}
+
+	if got := strings.Join(critic.VerdictNames(), ","); got != "approve,revise,escalate" {
+		t.Errorf("VerdictNames() = %q, want the declared order without failure", got)
 	}
 }
 
@@ -208,8 +215,9 @@ jobs:
   - task: work
     inputs: []
     run: "true"
-    verdicts: [a, b]
-    to: { a: work, b: work }
+    verdicts:
+      - a: work
+      - b: work
     max_visits: 2
 `,
 			want: "verdicts is only valid on agent steps",
@@ -226,13 +234,15 @@ jobs:
   - agent: c
     inputs: []
     prompt: x
-    verdicts: [success]
-    to: { success: c }
+    verdicts:
+      - success: c
 `,
 			want: "collides with a reserved key",
 		},
 		{
-			name: "declared verdict not routed",
+			// The hard cutover: the old spelling put the vocabulary in
+			// verdicts: and the routing in a to: map beside it.
+			name: "verdicts alongside to",
 			pipeline: `
 agents:
 - name: c
@@ -244,15 +254,15 @@ jobs:
     inputs: []
     prompt: x
     verdicts: [approve, revise]
-    to: { approve: done }
+    to: { approve: done, revise: done }
   - task: done
     inputs: []
     run: "true"
 `,
-			want: `verdict "revise" has no to: target`,
+			want: "to: is not valid on a step with verdicts:",
 		},
 		{
-			name: "to key not a declared verdict",
+			name: "duplicate verdict",
 			pipeline: `
 agents:
 - name: c
@@ -263,16 +273,17 @@ jobs:
   - agent: c
     inputs: []
     prompt: x
-    verdicts: [approve]
-    to: { approve: done, bogus: done }
+    verdicts:
+      - approve: done
+      - approve: next
   - task: done
     inputs: []
     run: "true"
 `,
-			want: `key "bogus" is not a declared verdict`,
+			want: `verdict "approve" is declared more than once`,
 		},
 		{
-			name: "success key in verdict mode",
+			name: "bare failure catch",
 			pipeline: `
 agents:
 - name: c
@@ -283,13 +294,69 @@ jobs:
   - agent: c
     inputs: []
     prompt: x
-    verdicts: [approve]
-    to: { approve: done, success: done }
+    verdicts:
+      - approve
+      - failure
+`,
+			want: "must name a target",
+		},
+		{
+			name: "verdict target outside the segment",
+			pipeline: `
+agents:
+- name: c
+  source: { model: lmstudio/qwen }
+jobs:
+- name: j
+  plan:
+  - agent: c
+    inputs: []
+    prompt: x
+    verdicts:
+      - approve: nowhere
+`,
+			want: "not a step in the same segment",
+		},
+		{
+			name: "verdict routes backward without max_visits",
+			pipeline: `
+agents:
+- name: c
+  source: { model: lmstudio/qwen }
+jobs:
+- name: j
+  plan:
+  - task: draft
+    inputs: []
+    run: "true"
+  - agent: c
+    inputs: []
+    prompt: x
+    verdicts:
+      - revise: draft
+`,
+			want: "max_visits must be set",
+		},
+		{
+			name: "verdicts entry is a multi-key mapping",
+			pipeline: `
+agents:
+- name: c
+  source: { model: lmstudio/qwen }
+jobs:
+- name: j
+  plan:
+  - agent: c
+    inputs: []
+    prompt: x
+    verdicts:
+      - approve: done
+        revise: done
   - task: done
     inputs: []
     run: "true"
 `,
-			want: "success is not valid in verdict mode",
+			want: "must be either a name on its own",
 		},
 	}
 
@@ -436,10 +503,9 @@ func TestRouteTargetNext(t *testing.T) {
   - agent: critic
     inputs: []
     prompt: judge it
-    verdicts: [approve, revise]
-    to:
-      approve: next
-      revise: draft
+    verdicts:
+      - approve: next
+      - revise: draft
     max_visits: 2
   - approval:
       message: "publish it?"
@@ -560,10 +626,9 @@ jobs:
   - agent: critic
     inputs: []
     prompt: judge it
-    verdicts: [approve, revise]
-    to:
-      approve: done
-      revise: next
+    verdicts:
+      - approve: done
+      - revise: next
     max_visits: 2
   - agent: fixer
     inputs: []

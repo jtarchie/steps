@@ -156,8 +156,7 @@ func TestResolveTransitionVerdictRoutes(t *testing.T) {
 	steps := []config.Step{{Agent: "writer"}, {Agent: "critic"}, {Agent: "publish"}}
 	step := config.Step{
 		Agent:     "critic",
-		Verdicts:  []string{"approve", "revise"},
-		To:        map[string]string{"approve": "publish", "revise": "writer"},
+		Verdicts:  []config.VerdictRoute{{Name: "approve", Target: "publish"}, {Name: "revise", Target: "writer"}},
 		MaxVisits: 3,
 	}
 
@@ -226,7 +225,7 @@ func TestResolveTransitionNextIsPositional(t *testing.T) {
 	t.Parallel()
 
 	steps := []config.Step{
-		{Agent: "critic", Verdicts: []string{"approve"}, To: map[string]string{"approve": config.RouteTargetNext}},
+		{Agent: "critic", Verdicts: []config.VerdictRoute{{Name: "approve", Target: config.RouteTargetNext}}},
 		{Approval: &config.Approval{Message: "publish it?"}}, // no name of its own
 		{Put: "release"},
 	}

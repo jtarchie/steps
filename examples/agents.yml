@@ -361,13 +361,14 @@ jobs:
       Call verdict with approve, revise, or escalate — pass a short `note`
       explaining your reasoning; it's what the writer sees if you send it back
       for revision.
-    verdicts: [approve, revise, escalate]
-    # Targets are step NAMES (an agent step's name is its agent: value).
-    to:
-      approve:  publisher     # forward — ship it
-      revise:   writer        # backward — bounded revise loop
-      escalate: escalator     # forward — human hand-off
-      failure:  escalator     # reserved: critic never decided
+    # The vocabulary AND the routing, in one ordered list. Targets are step
+    # NAMES (an agent step's name is its agent: value); the order is the enum
+    # the model is offered.
+    verdicts:
+      - approve:  publisher   # forward — ship it
+      - revise:   writer      # backward — bounded revise loop
+      - escalate: escalator   # forward — human hand-off
+      - failure:  escalator   # reserved: critic never decided
     max_visits: 3
   - agent: publisher
     inputs: [draft]

@@ -1,12 +1,15 @@
 package config
 
 // The assert: directive in all three of its positions — pipeline (job
-// names), job (step names), and step (stdout/exit code/tool-call trajectory).
+// names), job (step names), and step (stdout/exit code/verdict/tool-call
+// trajectory).
 
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
+	"strings"
 )
 
 // Assert is a self-verification directive, in one of two shapes depending on
@@ -33,6 +36,15 @@ type Assert struct {
 	Outcome string  `yaml:"outcome,omitempty"`
 	Stdout  *string `yaml:"stdout,omitempty"`
 	Code    *int    `yaml:"code,omitempty"`
+	// Verdict, on an agent step that declares verdicts:, asserts which one the
+	// model emitted — an exact match against the declared vocabulary.
+	//
+	// It exists because a verdict is the one agent outcome a fixture could not
+	// pin directly: stdout: tests the prose around the decision, and
+	// tool_calls: could only assert that the verdict tool was CALLED, not what
+	// it chose. A classifier whose whole product is the choice was therefore
+	// untestable at the one place it matters.
+	Verdict *string `yaml:"verdict,omitempty"`
 	// ToolCalls, on an agent step, asserts the ordered trajectory of tool
 	// calls the model made (see ExpectedToolCall). Agent-only: a task step
 	// runs no tools. Every entry must appear, in order, as a subsequence of
@@ -223,8 +235,8 @@ func validateAssertOutcome(label, outcome string) error {
 // requireExecutionOnly rejects an execution-level assert (Config/Job) that
 // carries the step-only stdout:/code: fields.
 func requireExecutionOnly(label string, assert *Assert) error {
-	if assert.Stdout != nil || assert.Code != nil {
-		return fmt.Errorf("%s: stdout/code are only valid on task/agent step asserts, not an execution assert", label)
+	if assert.Stdout != nil || assert.Code != nil || assert.Verdict != nil {
+		return fmt.Errorf("%s: stdout/code/verdict are only valid on task/agent step asserts, not an execution assert", label)
 	}
 
 	return nil
@@ -288,14 +300,47 @@ func validateStepAssert(label string, step *Step) error {
 			return fmt.Errorf("%s (agent %q): assert.code is not valid on agent steps (no exit code); use assert.stdout", label, step.Agent)
 		}
 
+		err := validateAssertVerdict(fmt.Sprintf("%s (agent %q)", label, step.Agent), step)
+		if err != nil {
+			return err
+		}
+
 		return validateExpectedToolCalls(fmt.Sprintf("%s (agent %q)", label, step.Agent), step.Assert.ToolCalls)
 	default: // StepKindTask
 		if len(step.Assert.ToolCalls) > 0 {
 			return fmt.Errorf("%s: assert.tool_calls is only valid on agent steps (a task runs no tools)", label)
 		}
 
+		if step.Assert.Verdict != nil {
+			return fmt.Errorf("%s: assert.verdict is only valid on agent steps (a task emits no verdict)", label)
+		}
+
 		return nil
 	}
+}
+
+// validateAssertVerdict rejects an assert.verdict that the step could never
+// satisfy: one on an agent that declares no verdicts:, and one naming a
+// verdict outside the declared vocabulary. Both are load errors rather than
+// run-time failures because both are unconditional — the assert cannot match
+// on any run, against any model.
+func validateAssertVerdict(context string, step *Step) error {
+	want := step.Assert.Verdict
+	if want == nil {
+		return nil
+	}
+
+	names := step.VerdictNames()
+	if len(names) == 0 {
+		return fmt.Errorf("%s: assert.verdict is set, but the step declares no verdicts: — there is no decision to assert on", context)
+	}
+
+	if !slices.Contains(names, *want) {
+		return fmt.Errorf("%s: assert.verdict %q is not one of the declared verdicts (%s)%s",
+			context, *want, strings.Join(names, ", "), suggestion(*want, names))
+	}
+
+	return nil
 }
 
 // validateExpectedToolCalls rejects an assert.tool_calls entry with no name —

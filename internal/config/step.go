@@ -238,14 +238,14 @@ type Step struct {
 	// WhenSpec. Invalid on get steps — a get fans the remainder of the plan
 	// out per version, so a conditional get has no coherent meaning.
 	When *WhenSpec `yaml:"when,omitempty"`
-	// To, on a task/put/agent step, routes to another step in the SAME
-	// get-segment based on this step's outcome, keyed by outcome name:
-	// "success"/"failure" for a task/put/verdict-less agent, or a verdict name
-	// for an agent that declares Verdicts. An open map (not a fixed struct) so
-	// verdict keys — and, later, exit-code keys — need no new type. "success"
-	// and "failure" are reserved keys. Invalid on get steps and hook steps.
-	// Absent, the plan falls through in declaration order exactly as before.
-	// See validateStepTransitions and internal/pipeline's resolveTransition.
+	// To, on a task/put/verdict-less agent step, routes to another step in the
+	// SAME get-segment based on this step's binary outcome: "success" and
+	// "failure" are the only keys, and both are reserved. An open map (not a
+	// fixed struct) so a later exit-code routing extension needs no new type.
+	// Invalid on get steps, hook steps, and any step declaring Verdicts —
+	// which carry their own targets. Absent, the plan falls through in
+	// declaration order exactly as before. See validateStepTransitions and
+	// internal/pipeline's resolveTransition.
 	To map[string]string `yaml:"to,omitempty"`
 	// MaxVisits caps how many times THIS step may execute in one run. It is
 	// required (LoadConfig) whenever any To target routes backward (a target
@@ -253,11 +253,15 @@ type Step struct {
 	// unbounded, which is only legal when every To target is strictly forward.
 	MaxVisits int `yaml:"max_visits,omitempty"`
 	// Verdicts, on an agent step, declares the outcome vocabulary the model
-	// emits. Its presence turns on verdict mode: internal/agent synthesizes a
-	// required `verdict` tool whose enum is exactly these, the model must call
-	// it, and To routes on the chosen value. Every declared verdict must have a
-	// To entry, and no verdict may be named with a reserved key. Agent-only.
-	Verdicts []string `yaml:"verdicts,omitempty"`
+	// emits AND where each outcome sends the plan. Its presence turns on
+	// verdict mode: internal/agent synthesizes a required `verdict` tool whose
+	// enum is exactly these names, and the model must call it. An entry may be
+	// a bare name (record the verdict, carry on) or a `name: target` pair
+	// (record it and jump); `failure:` is the reserved catch for a step that
+	// errored or emitted nothing. Order is significant — it is the tool enum,
+	// and an ensemble's decide: any precedence. Agent-only, and mutually
+	// exclusive with To. See VerdictRoute.
+	Verdicts []VerdictRoute `yaml:"verdicts,omitempty"`
 	// ContextPaths lists files whose contents are injected at conversation
 	// start as synthetic read_file tool results — the agent sees the file
 	// contents as if it had called read_file itself, without consuming a

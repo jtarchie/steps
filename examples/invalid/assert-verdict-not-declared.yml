@@ -1,0 +1,23 @@
+# assert.verdict pins which decision a classifier reached, so it can only name
+# one the step could actually reach. `escalate` is not in this agent's
+# vocabulary, so the assert could never match — on any run, against any model.
+#
+# That makes it a load error rather than a run-time failure: an assertion that
+# cannot pass is a typo in the fixture, and finding out costs a whole agent
+# step otherwise.
+# expect: is not one of the declared verdicts
+
+agents:
+- name: reviewer
+  source:
+    model: openai/gpt-4o
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: Review it.
+    verdicts: [approve, revise]
+    assert:
+      verdict: escalate

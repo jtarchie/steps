@@ -289,7 +289,7 @@ agents:
     model: lmstudio/qwen2.5-coder
 `
 
-	t.Run("verdicts on the wrapped agent route from the wrapper's to:", func(t *testing.T) {
+	t.Run("verdicts on the wrapped agent route from inside the wrapper", func(t *testing.T) {
 		t.Parallel()
 
 		path := writeConfig(t, agents+`
@@ -299,8 +299,9 @@ jobs:
   - try:
       agent: reviewer
       prompt: judge it
-      verdicts: [pass, fail]
-    to: {pass: ship, fail: reviewer}
+      verdicts:
+        - pass: ship
+        - fail: reviewer
     max_visits: 2
   - task: ship
     run: echo shipped
@@ -311,13 +312,31 @@ jobs:
 		}
 	})
 
-	t.Run("wrapped verdicts with no to: is still rejected", func(t *testing.T) {
+	t.Run("a wrapped verdict target is still resolved against the segment", func(t *testing.T) {
 		t.Parallel()
 
 		// validateSegment's "does this segment use routing at all" gate reads
-		// verdicts: off the plan step. Without unwrapping there, a wrapped
-		// agent declaring verdicts: skipped verdict validation entirely and
-		// reached run time with a synthesized verdict tool routing nowhere.
+		// the targets off the plan step. Without looking through the wrapper
+		// there, a wrapped agent's routes skipped validation entirely and
+		// reached run time aimed at a step that does not exist.
+		path := writeConfig(t, agents+`
+jobs:
+- name: build
+  plan:
+  - try:
+      agent: reviewer
+      prompt: judge it
+      verdicts:
+        - pass: nowhere
+`)
+		wantLoadError(t, path, "not a step in the same segment")
+	})
+
+	t.Run("wrapped verdicts with no targets classify and carry on", func(t *testing.T) {
+		t.Parallel()
+
+		// The routing-free spelling: the tolerated agent still emits a verdict
+		// (and still gets the required tool), the plan just continues.
 		path := writeConfig(t, agents+`
 jobs:
 - name: build
@@ -327,7 +346,15 @@ jobs:
       prompt: judge it
       verdicts: [pass, fail]
 `)
-		wantLoadError(t, path, "verdicts requires a to: map")
+
+		cfg, err := LoadConfig(path)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+
+		if got := cfg.Jobs[0].Plan[0].VerdictNames(); len(got) != 2 {
+			t.Errorf("VerdictNames() = %v, want the wrapped agent's two verdicts", got)
+		}
 	})
 
 	t.Run("handoff on the wrapped agent is accepted", func(t *testing.T) {

@@ -50,7 +50,7 @@ func outcomeKey(ctx context.Context, stepErr error, verdict string) (key string,
 // "failure"); runSteps surfaces it into the routed-to step's Handoff (see
 // internal/agent's Handoff.RouteKey) rather than discarding it as before.
 func resolveTransition(ctx context.Context, steps []config.Step, i int, step config.Step, stepErr error, verdict string, visits map[int]int) (nextIndex int, routed bool, key string, exhaustedErr error) {
-	if step.To == nil {
+	if !step.Routes() {
 		return 0, false, "", nil
 	}
 
@@ -59,7 +59,10 @@ func resolveTransition(ctx context.Context, steps []config.Step, i int, step con
 		return 0, false, "", nil
 	}
 
-	target, ok := step.To[matchedKey]
+	// A verdict the author declared but gave no target — the classify-and-carry-on
+	// spelling — routes nowhere, exactly like an unmatched key: the plan falls
+	// through in declaration order and the verdict stays on the record.
+	target, ok := step.RouteFor(matchedKey)
 	if !ok {
 		return 0, false, "", nil
 	}
@@ -96,7 +99,7 @@ func resolveTransition(ctx context.Context, steps []config.Step, i int, step con
 // failure) instead of routing. routedKey, non-empty only when the step
 // actually routed, is what runSteps uses to build the next step's Handoff.
 func applyRouting(ctx context.Context, steps []config.Step, i int, step config.Step, disposition stepDisposition, verdict string, stepErr error, visits map[int]int) (nextIndex int, routedKey string, consumedErr, exhaustedErr error) {
-	if step.To == nil || disposition != stepRan {
+	if !step.Routes() || disposition != stepRan {
 		return i + 1, "", stepErr, nil
 	}
 
@@ -177,7 +180,7 @@ func unskippableReason(step config.Step) string {
 		return "try step"
 	case step.When != nil:
 		return "when: guard"
-	case step.To != nil:
+	case step.Routes():
 		return "to: routing"
 	default:
 		return ""

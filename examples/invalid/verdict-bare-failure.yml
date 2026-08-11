@@ -1,0 +1,23 @@
+# failure: is the reserved catch for a step that errored or emitted no verdict
+# at all. Written bare — with no target — it would mean "the step failed, carry
+# on regardless", which is exactly what try: already says.
+#
+# Refused rather than accepted as a synonym: two spellings of tolerance is how
+# one of them drifts, and try: is the one that survives a step failing for a
+# reason that has nothing to do with its verdicts.
+# expect: must name a target
+
+agents:
+- name: reviewer
+  source:
+    model: openai/gpt-4o
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: Review it.
+    verdicts:
+      - approve
+      - failure
