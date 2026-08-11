@@ -112,7 +112,7 @@ jobs:
 // with no key here fails this test rather than silently skipping the check,
 // which is how pointing pr-review.yml at opencode's Go models was caught.
 func TestValidateExamples(t *testing.T) {
-	for _, key := range []string{"OPENROUTER_API_KEY", "OPENCODE_API_KEY"} {
+	for _, key := range []string{"OPENROUTER_API_KEY", "OPENCODE_API_KEY", "ANTHROPIC_API_KEY"} {
 		t.Setenv(key, "test-key-not-used-for-any-call")
 	}
 

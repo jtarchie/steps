@@ -1,0 +1,20 @@
+# A containerized cli agent reaches its steps-provided tools — including the
+# verdict tool that routes the job — over a connection back to the steps
+# process. network: none severs exactly that, so the step could never report a
+# verdict, let alone succeed.
+# expect: the cli reaches its steps-provided tools
+
+agents:
+- name: reviewer
+  source:
+    model: "@claude/sonnet"
+  image: alpine:3
+  network: none
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: Review something.
+    verdicts: [ok, bad]

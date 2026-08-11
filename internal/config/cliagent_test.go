@@ -276,3 +276,100 @@ func TestBudgetSpellingFollowsTheRunner(t *testing.T) {
 		})
 	}
 }
+
+// TestCLIAgentContainerRules covers what image: means for a CLI agent now
+// that it containerizes the CLI process itself: allowed, including with the
+// step-level override, but not together with network: none, which would
+// sever the connection the CLI's steps-provided tools come back over.
+func TestCLIAgentContainerRules(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		agentImage    string
+		agentNetwork  string
+		stepImage     string
+		stepNetwork   string
+		wantErrSubstr string
+	}{
+		{
+			name:       "image on a cli agent",
+			agentImage: "alpine:3",
+		},
+		{
+			name:      "image on a step using a cli agent",
+			stepImage: "alpine:3",
+		},
+		{
+			// Credentials are deliberately NOT a load-time concern: which
+			// route is available depends on the machine, and a pipeline must
+			// not stop loading because it moved to a Mac. Preflight answers
+			// that question instead.
+			name:       "image without api_key_env still loads",
+			agentImage: "alpine:3",
+		},
+		{
+			name:         "a narrower network is fine",
+			agentImage:   "alpine:3",
+			agentNetwork: "my-compose-net",
+		},
+		{
+			name:          "network none on a containerized cli agent",
+			agentImage:    "alpine:3",
+			agentNetwork:  "none",
+			wantErrSubstr: "the cli reaches its steps-provided tools",
+		},
+		{
+			name:          "network none set on the step instead",
+			agentImage:    "alpine:3",
+			stepNetwork:   "none",
+			wantErrSubstr: "the cli reaches its steps-provided tools",
+		},
+		{
+			name:          "image on the step, network none on the agent",
+			agentNetwork:  "none",
+			stepImage:     "alpine:3",
+			wantErrSubstr: "the cli reaches its steps-provided tools",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Config{
+				Agents: []Agent{{
+					Name:    "reviewer",
+					Source:  AgentSource{Model: "@claude/sonnet"},
+					Image:   tt.agentImage,
+					Network: tt.agentNetwork,
+				}},
+				Jobs: []Job{{Name: "review", Plan: []Step{{
+					Agent:   "reviewer",
+					Prompt:  "go",
+					Inputs:  &InputSpec{},
+					Image:   tt.stepImage,
+					Network: tt.stepNetwork,
+				}}}},
+			}
+
+			err := cfg.validate()
+
+			if tt.wantErrSubstr == "" {
+				if err != nil {
+					t.Fatalf("validate: %v", err)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("expected an error containing %q", tt.wantErrSubstr)
+			}
+
+			if !strings.Contains(err.Error(), tt.wantErrSubstr) {
+				t.Errorf("error = %q, want it to contain %q", err, tt.wantErrSubstr)
+			}
+		})
+	}
+}

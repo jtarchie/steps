@@ -493,7 +493,7 @@ func dockerCommand(ctx context.Context, args []string) *exec.Cmd {
 // resolvedCwd] -- image sh -c sleep <lifetime>`.
 //
 // resolvedCwd is already an absolute, symlink-free path (see
-// resolveMountPath, called once by NewRunner at construction) mounted at that
+// ResolveMountPath, called once by NewRunner at construction) mounted at that
 // identical host path so host-side readers of the same directory (agent
 // read_file/list_dir, workspace Capture) stay coherent. An empty resolvedCwd
 // (only resource check: today) mounts nothing and runs in the image's default
@@ -528,16 +528,29 @@ func dockerStartArgs(
 ) []string {
 	args := []string{"run", "-d", "--init", "--name", name}
 
+	args = append(args, containerArgs(resolvedCwd, envNames, user, network, privileged, cpuShares, memoryBytes)...)
+
+	return append(args, "--", image, "sh", "-c", keepAliveCommand())
+}
+
+// containerArgs is the flag block shared by every container this package
+// starts — the session container (dockerStartArgs) and a one-shot foreground
+// run (DockerRunArgv): ownership labels, working-directory mount, user,
+// network, privilege, limits, and env forwarding.
+func containerArgs(
+	resolvedCwd string, envNames []string, user, network string,
+	privileged bool, cpuShares int, memoryBytes int64,
+) []string {
 	// Labels are how a container survives its creator. If this process is
 	// SIGKILLed, nothing runs Close, and the only thing left is a container
 	// with a name and no explanation — the keepalive expiring 24h later was
 	// the sole cleanup. These let the NEXT run recognize it as ours and whose
 	// it was; see SweepOrphanedContainers.
-	args = append(args,
-		"--label", dockerOwnerLabel+"=steps",
+	args := []string{
+		"--label", dockerOwnerLabel + "=steps",
 		"--label", fmt.Sprintf("%s=%d", dockerPIDLabel, os.Getpid()),
-		"--label", dockerHostLabel+"="+ownerHostname(),
-	)
+		"--label", dockerHostLabel + "=" + ownerHostname(),
+	}
 
 	if resolvedCwd != "" {
 		args = append(args, "-v", resolvedCwd+":"+resolvedCwd, "-w", resolvedCwd)
@@ -576,7 +589,7 @@ func dockerStartArgs(
 		args = append(args, "-e", name)
 	}
 
-	return append(args, "--", image, "sh", "-c", keepAliveCommand())
+	return args
 }
 
 // keepAliveCommand is what the session container runs so it stays up between
@@ -601,14 +614,16 @@ func dockerExecArgs(name, command string, stdin bool) []string {
 	return append(args, "--", name, "sh", "-c", command)
 }
 
-// resolveMountPath returns cwd as an absolute path with symlinks resolved,
+// ResolveMountPath returns cwd as an absolute path with symlinks resolved,
 // so the host path handed to `docker run -v` matches the real filesystem
 // location Docker Desktop (or the daemon) actually shares. Rejects a
 // resolved path containing ':' — docker's own `-v host:container` volume
 // spec splits on that character, so a path containing one would be silently
 // misparsed into the wrong mount (or rejected by docker with a confusing
-// error) rather than failing clearly here.
-func resolveMountPath(cwd string) (string, error) {
+// error) rather than failing clearly here. Exported for internal/agent's
+// containerized CLI run (DockerRunArgv), which must mount the same directory
+// at the same resolved path the step's session container uses.
+func ResolveMountPath(cwd string) (string, error) {
 	abs, err := filepath.Abs(cwd)
 	if err != nil {
 		return "", fmt.Errorf("%w", err)

@@ -142,3 +142,15 @@ func TestPreflightCLIFailsOverToHostedProvider(t *testing.T) {
 		t.Errorf("running invocation = {CLI: %q, BaseURL: %q}, want the hosted path", running.CLI, running.BaseURL)
 	}
 }
+
+// TestPreflightCLICacheKeySeparatesImages: an image-less CLI target is
+// answered by a PATH lookup and an image-bearing one by starting that image,
+// so a shared cache key would let one answer stand in for the other.
+func TestPreflightCLICacheKeySeparatesImages(t *testing.T) {
+	host := config.ResolvedInvocation{CLI: "claude", ModelName: "sonnet"}
+	containerized := config.ResolvedInvocation{CLI: "claude", ModelName: "sonnet", Image: "my/claude:1"}
+
+	if cliProbeKey(host) == cliProbeKey(containerized) {
+		t.Errorf("a containerized and a host cli target share cache key %q", cliProbeKey(host))
+	}
+}

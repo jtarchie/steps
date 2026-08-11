@@ -119,7 +119,29 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		return conversationResult{}, fmt.Errorf("agent %q: %w", prepared.ri.AgentName, err)
 	}
 
-	defer cleanupCLISession(session)
+	// A containerized step gets a private $HOME for the CLI (see
+	// newCLIStepHome), created once per STEP rather than per attempt: a
+	// retried attempt resumes the same session, and the transcript it resumes
+	// lives in that home. Removing the directory afterwards is the
+	// containerized equivalent of cleanupCLISession — the transcript never
+	// touches the host's own ~/.claude at all.
+	var stepHome string
+
+	if prepared.ri.Image != "" {
+		stepHome, err = newCLIStepHome()
+		if err != nil {
+			return conversationResult{}, fmt.Errorf("agent %q: %w", prepared.ri.AgentName, err)
+		}
+
+		defer func() {
+			removeErr := os.RemoveAll(stepHome)
+			if removeErr != nil {
+				slog.Debug("agent.cli.step_home_cleanup_failed", "path", stepHome, "error", removeErr)
+			}
+		}()
+	} else {
+		defer cleanupCLISession(session)
+	}
 
 	// One state for the whole step, not one per attempt: the attempts share a
 	// conversation now, so what an attempt observed stays true for the ones
@@ -135,6 +157,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		plan := cliAttempt{
 			session: session,
 			resume:  attempt > 0,
+			home:    stepHome,
 			// The turn budget is per STEP, not per attempt — the hosted path
 			// counts turns in one conversation that request retries never
 			// reset, and a resumed session is the same conversation. The CLI
@@ -194,6 +217,10 @@ type cliAttempt struct {
 	resume   bool
 	maxTurns int
 	prompt   string
+	// home is the per-step directory a containerized CLI gets as its $HOME
+	// (empty on the host path). Per-step, not per-attempt: a resumed attempt
+	// needs the transcript the previous one wrote there.
+	home string
 }
 
 // cliStepState is everything a step has observed across its attempts.
@@ -351,7 +378,7 @@ func runCLIAttempt(
 	plan cliAttempt,
 	state *cliStepState,
 ) error {
-	bridge, err := newCLIBridge(ctx, prepared.conv, nativeToolNames(prepared.conv, runtime))
+	bridge, err := newCLIBridge(ctx, prepared.conv, nativeToolNames(prepared.conv, runtime), prepared.ri.Image != "")
 	if err != nil {
 		return err
 	}
@@ -380,6 +407,136 @@ func runCLIAttempt(
 	return checkCLIObligations(prepared, run, state.satisfied)
 }
 
+// cliContainerHome is the container-side path a containerized CLI gets as its
+// $HOME. A fixed path of our own rather than the image's user home: the
+// container may run as a uid the image never heard of (see
+// shell.defaultContainerUser's Linux default), so no image-defined home can be
+// assumed writable.
+const cliContainerHome = "/steps-home"
+
+// newCLIStepHome creates the host directory a containerized CLI gets as its
+// $HOME, with the .claude subdirectory ALREADY created. Pre-creating it
+// host-side is load-bearing: docker creates missing bind-mount targets as
+// root, and on Linux the container runs as the host uid:gid by default — a
+// root-owned .claude would be unwritable by the process that has to write its
+// transcript into it. A directory made here arrives owned by the right user.
+//
+// Note nothing seeds a ~/.claude.json (onboarding/trust state) into it: the
+// CLI is always invoked with --print (see cliArgs), and the trust dialog is
+// documented as skipped in non-interactive mode. If --print ever stopped
+// being passed, a fresh $HOME would block on an interactive prompt inside a
+// container nothing can answer — that connection is why this comment exists.
+func newCLIStepHome() (string, error) {
+	home, err := os.MkdirTemp("", "steps-cli-home-*")
+	if err != nil {
+		return "", fmt.Errorf("creating cli home: %w", err)
+	}
+
+	err = os.Mkdir(filepath.Join(home, ".claude"), 0o700)
+	if err != nil {
+		_ = os.RemoveAll(home)
+
+		return "", fmt.Errorf("creating cli home: %w", err)
+	}
+
+	return home, nil
+}
+
+// buildCLICommand constructs the subprocess for one CLI attempt: the binary
+// itself on the host, or a `docker run` of it when the step resolved an
+// image. Everything the caller wires afterwards (stdin, stdout parsing,
+// stderr, WaitDelay) is identical either way — only what the process IS
+// differs.
+func buildCLICommand(
+	ctx context.Context, prepared preparedAgentStep, binary string, args []string, stepHome string,
+) (*exec.Cmd, error) {
+	if prepared.ri.Image == "" {
+		cmd := exec.CommandContext(ctx, binary, args...) //nolint:gosec // binary comes from the static cliProviders table
+		cmd.Dir = prepared.conv.env.dir
+		cmd.Env = cliEnv(prepared.ri)
+
+		return cmd, nil
+	}
+
+	resolvedCwd, err := shell.ResolveMountPath(prepared.conv.env.dir)
+	if err != nil {
+		return nil, fmt.Errorf("agent %q: resolving workspace for container: %w", prepared.ri.AgentName, err)
+	}
+
+	spec := shell.DockerRunSpec{
+		Image:       prepared.ri.Image,
+		Argv:        append([]string{binary}, args...),
+		ResolvedCwd: resolvedCwd,
+		EnvNames:    prepared.ri.Env,
+		User:        prepared.ri.User,
+		Network:     prepared.ri.Network,
+		Privileged:  prepared.ri.Privileged,
+		CPUShares:   prepared.ri.Limits.CPUShares(),
+		MemoryBytes: prepared.ri.Limits.MemoryBytes(),
+		ExtraMounts: []shell.Mount{{HostPath: stepHome, ContainerPath: cliContainerHome}},
+		// A literal -e HOME=value is fine precisely because a path is not a
+		// secret — the value-free `-e NAME` convention exists to keep secret
+		// VALUES out of the docker client's argv.
+		ExtraEnv: map[string]string{"HOME": cliContainerHome},
+	}
+
+	// A subscription login lives at ~/.claude/.credentials.json on Linux (on
+	// macOS it lives in the Keychain and this file simply does not exist).
+	// Mount exactly that one file, read-only: the rest of the operator's
+	// ~/.claude (history, transcripts, settings) is not the container's
+	// business, and read-only bounds a hostile image to reading the one token
+	// it was deliberately given. The cost: a token refresh cannot write back
+	// through the mount, so an expired token heals on the next host-side use,
+	// not here.
+	if credentials, ok := hostCLICredentials(); ok {
+		spec.ExtraMounts = append(spec.ExtraMounts, shell.Mount{
+			HostPath:      credentials,
+			ContainerPath: cliContainerHome + "/.claude/.credentials.json",
+			ReadOnly:      true,
+		})
+	}
+
+	// The api_key_env: value crosses under the CLI's own name, forwarded
+	// value-free (`-e ANTHROPIC_API_KEY` is in EnvNames' effect via the env
+	// below) — the docker client's environment carries it, its argv never
+	// does. The client otherwise inherits this process's environment, which
+	// is what makes the pipeline env: names in EnvNames resolvable at all
+	// (matching how the session container's docker client behaves).
+	env := os.Environ()
+
+	if prepared.ri.APIKeyEnv != "" {
+		spec.EnvNames = append(append([]string{}, spec.EnvNames...), "ANTHROPIC_API_KEY")
+
+		if key := os.Getenv(prepared.ri.APIKeyEnv); key != "" {
+			env = append(env, "ANTHROPIC_API_KEY="+key)
+		}
+	}
+
+	//nolint:gosec // running a pipeline-defined image is the point; the image is load-validated and sits after "--"
+	cmd := exec.CommandContext(ctx, "docker", shell.DockerRunArgv(spec)...)
+	cmd.Env = env
+
+	return cmd, nil
+}
+
+// hostCLICredentials reports the host path of the CLI's on-disk credentials
+// file, if there is one.
+func hostCLICredentials() (string, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", false
+	}
+
+	path := filepath.Join(home, ".claude", ".credentials.json")
+
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+
+	return path, true
+}
+
 // execCLI spawns the CLI and reads its transcript off stdout as it runs.
 func execCLI(
 	ctx context.Context,
@@ -391,12 +548,15 @@ func execCLI(
 	binary := config.CLIBinary(prepared.ri.CLI)
 	args := cliArgs(prepared, runtime, mcpConfig, plan)
 
-	slog.Debug("agent.cli.exec", "agent", prepared.ri.AgentName, "binary", binary, "args", args, "dir", prepared.conv.env.dir)
+	slog.Debug("agent.cli.exec", "agent", prepared.ri.AgentName, "binary", binary, "args", args,
+		"dir", prepared.conv.env.dir, "image", prepared.ri.Image)
 
-	cmd := exec.CommandContext(ctx, binary, args...) //nolint:gosec // binary comes from the static cliProviders table
-	cmd.Dir = prepared.conv.env.dir
+	cmd, err := buildCLICommand(ctx, prepared, binary, args, plan.home)
+	if err != nil {
+		return cliRunResult{}, err
+	}
+
 	cmd.Stdin = strings.NewReader(plan.prompt)
-	cmd.Env = cliEnv(prepared.ri)
 	cmd.Stderr = &cliStderrLogger{agent: prepared.ri.AgentName}
 	cmd.WaitDelay = cliWaitDelay
 
@@ -719,23 +879,96 @@ func (w *cliStderrLogger) Write(p []byte) (int, error) {
 // probeCLI answers preflight's question for a CLI target: is the binary
 // there?
 //
-// That is deliberately all it asks. The HTTP probe sends a real request
-// because an endpoint can be reachable and still reject the model or the key;
-// a CLI has no equivalent failure that a cheap check would catch, and
-// spawning one to find out would put a process launch in the path of every
-// `steps watch` poll. A CLI that is installed but broken fails at the step,
-// with the CLI's own error, which is a better message than a probe would
-// synthesize.
-func probeCLI(ri config.ResolvedInvocation) error {
+// On the host path that is deliberately all it asks. The HTTP probe sends a
+// real request because an endpoint can be reachable and still reject the
+// model or the key; a host CLI has no equivalent failure that a cheap check
+// would catch, and spawning one to find out would put a process launch in the
+// path of every `steps watch` poll. A CLI that is installed but broken fails
+// at the step, with the CLI's own error, which is a better message than a
+// probe would synthesize.
+//
+// A CONTAINERIZED CLI inverts that trade, so it gets two more checks — see
+// probeCLIImage and probeCLICredentials for why each earns its cost.
+func probeCLI(ctx context.Context, ri config.ResolvedInvocation, timeout time.Duration) error {
 	binary := config.CLIBinary(ri.CLI)
 	if binary == "" {
 		return fmt.Errorf("agent %q: no runtime for cli %q", ri.AgentName, ri.CLI)
 	}
 
-	_, err := exec.LookPath(binary)
+	if ri.Image == "" {
+		_, err := exec.LookPath(binary)
+		if err != nil {
+			return fmt.Errorf("agent %q: cli %q is not on PATH: %w", ri.AgentName, binary, err)
+		}
+
+		return nil
+	}
+
+	err := probeCLICredentials(ri)
 	if err != nil {
-		return fmt.Errorf("agent %q: cli %q is not on PATH: %w", ri.AgentName, binary, err)
+		return err
+	}
+
+	return probeCLIImage(ctx, ri, binary, timeout)
+}
+
+// probeCLIImage checks that the image actually contains the CLI. Unlike the
+// host case, "installed but broken" is not the failure mode worth worrying
+// about here — "the operator pointed image: at something that never had the
+// CLI in it" is, and it is both easy to do and invisible until a step runs.
+// The cost of asking is one short container start, paid once per (image, cli,
+// model) per cache window rather than per poll.
+func probeCLIImage(ctx context.Context, ri config.ResolvedInvocation, binary string, timeout time.Duration) error {
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var errBuf bytes.Buffer
+
+	//nolint:gosec // image is validated at load (no leading '-') and binary comes from the static cliProviders table
+	cmd := exec.CommandContext(probeCtx, "docker", "run", "--rm", "--", ri.Image, binary, "--version")
+	cmd.Stderr = &errBuf
+
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf("agent %q: image %q cannot run %q (%s): %w",
+			ri.AgentName, ri.Image, binary, strings.TrimSpace(errBuf.String()), err)
 	}
 
 	return nil
+}
+
+// probeCLICredentials checks that a containerized CLI has some way to
+// authenticate, because neither route is guaranteed to exist and the failure
+// is otherwise reported from inside a container as whatever the CLI says
+// about being logged out.
+//
+// Two routes, and which one is available is a property of the MACHINE, not of
+// the pipeline — which is exactly why this is a preflight check and not a
+// load-time one (a pipeline must not stop loading because it moved to a Mac).
+// On Linux a subscription login leaves ~/.claude/.credentials.json, which the
+// run mounts read-only. On macOS it lives in the Keychain, which cannot be
+// mounted into a container at all, so there api_key_env: is the only route.
+func probeCLICredentials(ri config.ResolvedInvocation) error {
+	if _, ok := hostCLICredentials(); ok {
+		return nil
+	}
+
+	if ri.APIKeyEnv != "" && os.Getenv(ri.APIKeyEnv) != "" {
+		return nil
+	}
+
+	return fmt.Errorf("agent %q: a containerized cli agent has no way to authenticate: "+
+		"there is no ~/.claude/.credentials.json to mount (on macOS the subscription login lives in the Keychain, "+
+		"which a container cannot read) and source.api_key_env is %s",
+		ri.AgentName, describeMissingKeyEnv(ri.APIKeyEnv))
+}
+
+// describeMissingKeyEnv distinguishes "you never named a variable" from "you
+// named one that is not exported" — different mistakes with different fixes.
+func describeMissingKeyEnv(name string) string {
+	if name == "" {
+		return "unset"
+	}
+
+	return fmt.Sprintf("%q, which is not exported", name)
 }

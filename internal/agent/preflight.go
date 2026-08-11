@@ -301,13 +301,22 @@ func preflightEnabled(agent *config.Agent, settings *config.Preflight) bool {
 	return settings.Enabled()
 }
 
+// cliProbeKey is the probe cache key for a CLI target. Image is part of it
+// because it changes what the probe ASKS: an image-less target is answered by
+// a PATH lookup on this host, an image-bearing one by starting that image and
+// checking credentials. A shared key would let either answer stand in for the
+// other.
+func cliProbeKey(ri config.ResolvedInvocation) string {
+	return "cli|" + ri.CLI + "|" + ri.ModelName + "|" + ri.Image
+}
+
 func probeModelCached(ctx context.Context, ri config.ResolvedInvocation, settings *config.Preflight) error {
 	// A CLI target is keyed on its own axis: "" is a perfectly ordinary
 	// BaseURL for a CLI source, so a shared key space would let a CLI agent
 	// and an endpoint-less HTTP one collide.
 	key := "model|" + ri.BaseURL + "|" + ri.ModelName
 	if ri.CLI != "" {
-		key = "cli|" + ri.CLI + "|" + ri.ModelName
+		key = cliProbeKey(ri)
 	}
 
 	now := time.Now()
@@ -331,7 +340,7 @@ func probeModelCached(ctx context.Context, ri config.ResolvedInvocation, setting
 // that bypassed any of them would pass for a run that could not start.
 func probeModel(ctx context.Context, ri config.ResolvedInvocation, timeout time.Duration) error {
 	if ri.CLI != "" {
-		return probeCLI(ri)
+		return probeCLI(ctx, ri, timeout)
 	}
 
 	apiKey, err := lookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)

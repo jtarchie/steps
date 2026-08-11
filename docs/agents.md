@@ -685,10 +685,14 @@ These are load errors, not silent no-ops, because a setting that reads as config
 | `source.string_tool_choice:` | no `tool_choice` on the wire to spell |
 | `compact_after_tokens:`, `context_window:` | the CLI compacts its own conversation, against a window it resolves itself |
 | `budget.tokens:` | nothing counts tokens until the subprocess exits (use `budget.usd:`) |
-| `image:` (agent or step) | the CLI runs its tools on the host |
 | `required:`, `max_calls:`, `args:` on a tool | enforced by the turn loop the CLI replaces |
 | sub-agent tools, in either direction | a sub-agent nests inside a turn loop there is none of |
 | a CLI agent as a task's `fix:` agent | same reason |
+| `network: none` together with `image:` | the CLI reaches its steps-provided tools (the verdict tool among them) over a connection back to this process |
+
+### Containerizing a CLI agent
+
+`image:` **is** supported, and it does more here than for a hosted agent: it containerizes the CLI process itself, so its native tools (`Read`, `Bash`, `Edit`) are confined to the container rather than running on the host with only the working directory as a fence. Credentials are the part that needs a decision — a Linux subscription login is bind-mounted in read-only, but macOS keeps it in the Keychain where no container can reach it, so `source.api_key_env:` is the portable answer. See [infra.md](infra.md) for the mechanics and `examples/cli-agent-image.yml` for a worked example.
 
 ### Budgets are in dollars
 
@@ -696,7 +700,7 @@ A CLI agent takes `budget: {usd: 0.50}` rather than `budget: {tokens:}`. The two
 
 A job-level `budget:` stays in tokens, since it is cumulative across mixed step kinds, and it still counts what a CLI agent spent — the CLI reports its usage on exit, and it is folded into the job total.
 
-`fallback:` works in both directions. A CLI agent can fall back to a hosted provider (useful when the binary is not installed on some machines), and a hosted agent can fall back to a CLI. Preflight checks a CLI target by looking for its binary on `PATH`; `steps preflight` reports a missing one before the run starts.
+`fallback:` works in both directions. A CLI agent can fall back to a hosted provider (useful when the binary is not installed on some machines), and a hosted agent can fall back to a CLI. Preflight checks a CLI target by looking for its binary on `PATH`; `steps preflight` reports a missing one before the run starts. A *containerized* CLI target is checked differently, since the host's `PATH` says nothing about it: preflight runs `docker run --rm <image> claude --version` and checks that credentials are reachable by at least one route.
 
 ## Ensembles: asking several agents the same question
 

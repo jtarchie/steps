@@ -34,6 +34,21 @@ agents:
 - **Caching hashing**: `image` folds into the relevant node content whenever it's non-empty — unlike `inputs:`/`outputs:` (see [workspace.md](workspace.md)), an image change alters what a command actually executes against regardless of workspace mode, so the gate is on the value itself.
 - **Known caveats** (documented, not solved): there's no way to override a step back to host execution once its task/agent sets an image.
 
+### CLI agents
+
+For a [CLI-backed agent](agents.md) (`source.model: "@claude/..."`), `image:` containerizes **the CLI process itself**, not just the tools steps serves it. That's a bigger difference than it sounds: most of a CLI agent's tools are its own natives (`Read`, `Bash`, `Edit`), which never route through steps, so without a container the working directory is their only fence. The CLI runs as a one-shot `docker run --rm` for the length of the step.
+
+- **The tool bridge has to stay reachable.** A CLI agent's non-native tools — custom `run:` tools, `mcp_servers:` grants, and the synthesized verdict/handoff/context tools — reach the CLI over a loopback MCP server the steps process hosts. From inside a container that means `host.docker.internal`, which steps makes resolvable everywhere by adding `--add-host host.docker.internal:host-gateway` (Docker Desktop resolves it natively; this is what makes Linux Docker Engine work the same way). The bridge binds all interfaces for a containerized step instead of loopback only; its bearer token is what authorizes a call, unchanged.
+- **`network: none` is therefore rejected at load time** for a containerized CLI agent. Cutting egress doesn't just narrow what the agent reaches, it severs the channel the step's own verdict comes back on. (On an HTTP agent, `network: none` remains a perfectly good sandbox — nothing there depends on egress.)
+- **`$HOME` is a fresh per-step directory**, bind-mounted from a host temp dir and deleted when the step ends — which is also what removes the CLI's session transcript, so a containerized run leaves nothing in your own `~/.claude`. Nothing else of yours is mounted: no history, no transcripts, no settings, no `~/.claude.json`.
+- **Credentials, the one platform-dependent part.** A subscription login is stored differently per OS, and only one of the two can cross into a container:
+  - On **Linux**, it's `~/.claude/.credentials.json`, which steps bind-mounts **read-only** into the container's `$HOME`. Just that file. One consequence of read-only: a token refresh inside the container can't write back, so an expired token heals on your next host-side `claude` use, not here.
+  - On **macOS**, it's in the login Keychain, which a container cannot read at all. There, `source.api_key_env:` is the only route.
+
+  Setting `api_key_env:` works on both, and is the portable choice. Preflight checks that at least one route exists and says which are missing, rather than letting the CLI fail from inside the container with a logged-out error.
+- **Preflight also checks the image has the CLI**, via `docker run --rm <image> claude --version`. Pointing `image:` at something that never had the CLI installed is easy to do and otherwise invisible until the step runs. With `--no-preflight` it still fails, just later and as an ordinary exit-127 step failure.
+- **A step can end up with two containers**: the CLI's own, and the session container that serves any bridged `run:`/MCP tools. Same image, same bind-mounted workspace — so files stay consistent — but different processes. Only relevant if you grant a CLI agent custom tools.
+
 ## Container network (`network:`)
 
 `image:` isolates a command's filesystem view but not its network — a containerized `run_shell` an agent wrote has the same egress the host does. For a step whose commands are model-generated, that is usually the isolation you actually wanted:

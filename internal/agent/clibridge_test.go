@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -80,7 +81,7 @@ func TestCLIBridgeServesNonNativeTools(t *testing.T) {
 	// read_file is served by the CLI natively, so the bridge must not
 	// re-export it — offering the same capability twice under two names would
 	// leave the model choosing between them.
-	bridge, err := newCLIBridge(t.Context(), bridgeConversation(decls, registry, nil), map[string]bool{"read_file": true})
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(decls, registry, nil), map[string]bool{"read_file": true}, false)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
 	}
@@ -127,6 +128,7 @@ func TestCLIBridgeExecutesAndCapturesVerdict(t *testing.T) {
 		t.Context(),
 		bridgeConversation([]*genai.FunctionDeclaration{decl}, map[string]toolImpl{verdictToolName: impl}, map[string]bool{verdictToolName: true}),
 		nil,
+		false,
 	)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
@@ -172,6 +174,7 @@ func TestCLIBridgeReportsToolFailureAsError(t *testing.T) {
 		t.Context(),
 		bridgeConversation([]*genai.FunctionDeclaration{decl}, map[string]toolImpl{verdictToolName: impl}, nil),
 		nil,
+		false,
 	)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
@@ -202,7 +205,7 @@ func TestCLIBridgeReportsToolFailureAsError(t *testing.T) {
 func TestCLIBridgeWriteConfig(t *testing.T) {
 	t.Parallel()
 
-	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil)
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil, false)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
 	}
@@ -286,6 +289,7 @@ func TestCLIBridgeRejectsUnauthenticatedCallers(t *testing.T) {
 		t.Context(),
 		bridgeConversation([]*genai.FunctionDeclaration{decl}, map[string]toolImpl{verdictToolName: impl}, nil),
 		nil,
+		false,
 	)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
@@ -341,7 +345,7 @@ func TestCLIBridgeRejectsUnauthenticatedCallers(t *testing.T) {
 func TestCLIBridgeHandoffNoteAbsentWhenUnwritten(t *testing.T) {
 	t.Parallel()
 
-	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil)
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil, false)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
 	}
@@ -350,5 +354,56 @@ func TestCLIBridgeHandoffNoteAbsentWhenUnwritten(t *testing.T) {
 
 	if _, _, note, _, _ := bridge.observed(); note != nil {
 		t.Errorf("handoff note = %v, want nil when write_handoff was never called", note)
+	}
+}
+
+// TestCLIBridgeContainerizedIsReachableFromAContainer covers the two things a
+// containerized child needs that a host child does not: a bind it can
+// actually reach (a container is not on the host's loopback), and a URL
+// naming the host rather than the wildcard address that bind produced.
+func TestCLIBridgeContainerizedIsReachableFromAContainer(t *testing.T) {
+	t.Parallel()
+
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil, true)
+	if err != nil {
+		t.Fatalf("newCLIBridge: %v", err)
+	}
+
+	t.Cleanup(func() { _ = bridge.Close(t.Context()) })
+
+	if !strings.HasPrefix(bridge.url, "http://"+cliBridgeContainerHost+":") {
+		t.Errorf("url = %q, want it to name %s", bridge.url, cliBridgeContainerHost)
+	}
+
+	// A wildcard bind is not a destination: if the URL kept it, every bridged
+	// tool call from the container would go nowhere.
+	if strings.Contains(bridge.url, "0.0.0.0") {
+		t.Errorf("url = %q, must not hand the child the wildcard address", bridge.url)
+	}
+
+	host, _, err := net.SplitHostPort(bridge.listener.Addr().String())
+	if err != nil {
+		t.Fatalf("SplitHostPort: %v", err)
+	}
+
+	if host == "127.0.0.1" {
+		t.Errorf("listener bound %q, which a container cannot reach", host)
+	}
+}
+
+// TestCLIBridgeHostPathStaysLoopback is the other half: nothing widens for a
+// step that never asked for a container.
+func TestCLIBridgeHostPathStaysLoopback(t *testing.T) {
+	t.Parallel()
+
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil, false)
+	if err != nil {
+		t.Fatalf("newCLIBridge: %v", err)
+	}
+
+	t.Cleanup(func() { _ = bridge.Close(t.Context()) })
+
+	if !strings.HasPrefix(bridge.url, "http://127.0.0.1:") {
+		t.Errorf("url = %q, want loopback for a host-run cli", bridge.url)
 	}
 }

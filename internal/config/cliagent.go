@@ -203,7 +203,6 @@ func checkCLIAgentSettings(agent Agent) error {
 		// enforces mid-run. Only the token spelling is unenforceable here,
 		// since nothing counts tokens until the subprocess has already exited.
 		{budgetTokens(agent.Budget) > 0, "budget.tokens", "nothing counts tokens until the subprocess exits; use budget.usd, which the cli enforces mid-run"},
-		{agent.Image != "", "image", "the cli runs its tools on the host"},
 	}
 
 	for _, u := range unsupported {
@@ -261,7 +260,12 @@ func (c *Config) checkCLIAgentReferences() error {
 		return err
 	}
 
-	return c.checkNoCLIFixAgents(isCLI)
+	err = c.checkNoCLIFixAgents(isCLI)
+	if err != nil {
+		return err
+	}
+
+	return c.checkCLIContainerNetwork()
 }
 
 // checkNoCLISubAgents rejects a CLI agent named by any sub-agent grant. A
@@ -280,9 +284,9 @@ func (c *Config) checkNoCLISubAgents(isCLI func(string) bool) error {
 	return nil
 }
 
-// checkNoCLIFixAgents rejects a CLI agent as a fix: agent (declared on a task
-// or inline on a step), and image: on a step that uses one. RunFix builds its
-// conversation on the same turn loop a sub-agent does.
+// checkNoCLIFixAgents rejects a CLI agent as a fix: agent, declared on a task
+// or inline on a step. RunFix builds its conversation on the same turn loop a
+// sub-agent does.
 func (c *Config) checkNoCLIFixAgents(isCLI func(string) bool) error {
 	for _, task := range c.Tasks {
 		if task.Fix != nil && task.Fix.Agent != "" && isCLI(task.Fix.Agent) {
@@ -304,16 +308,69 @@ func (c *Config) checkNoCLIFixAgents(isCLI func(string) bool) error {
 }
 
 // checkCLIStepReferences rejects a step's own inline fix: agent being a CLI
-// one, and image: on a step whose agent is.
+// one.
 func checkCLIStepReferences(label string, step *Step, isCLI func(string) bool) error {
 	if step.Fix != nil && step.Fix.Agent != "" && isCLI(step.Fix.Agent) {
 		return fmt.Errorf("%s: fix: names agent %q, which has a cli source (%s...); a cli agent cannot run as a fix agent",
 			label, step.Fix.Agent, CLISourcePrefix)
 	}
 
-	if step.Image != "" && step.Agent != "" && isCLI(step.Agent) {
-		return fmt.Errorf("%s: image is not supported on a step using agent %q, which has a cli source (%s...); the cli runs its tools on the host",
-			label, step.Agent, CLISourcePrefix)
+	return nil
+}
+
+// checkCLIContainerNetwork rejects `network: none` on a containerized CLI
+// agent step.
+//
+// A CLI agent's non-native tools — the synthesized verdict/handoff/context
+// tools among them, not just custom run: ones — reach the child over a
+// loopback MCP server this process hosts (see internal/agent's clibridge).
+// Containerizing the CLI means that connection has to cross out of the
+// container, so cutting the container's network does not merely narrow what
+// the agent can reach: it removes the channel the step's own verdict comes
+// back on. That is a step which cannot possibly succeed, and it is worth
+// saying so at load rather than after the run burns its budget.
+//
+// This is distinct from the same setting on an HTTP agent, where `network:
+// none` is a perfectly coherent (and useful) way to sandbox model-written
+// commands — nothing there depends on egress.
+func (c *Config) checkCLIContainerNetwork() error {
+	for i := range c.Agents {
+		agent := &c.Agents[i]
+		if !agentUsesCLI(*agent) {
+			continue
+		}
+
+		err := c.visitAgentSteps(agent.Name, func(label string, step *Step) error {
+			settings := resolveAgentRuntime(agent, *step)
+			if settings.Image != "" && settings.Network == noNetwork {
+				return fmt.Errorf("%s: network %q is not supported on a containerized agent %q, which has a cli source (%s...); "+
+					"the cli reaches its steps-provided tools (including the verdict tool) over a connection back to this process, which %q severs",
+					label, settings.Network, agent.Name, CLISourcePrefix, noNetwork)
+			}
+
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// visitAgentSteps calls fn for every step that runs the named agent.
+func (c *Config) visitAgentSteps(name string, fn func(label string, step *Step) error) error {
+	for _, job := range c.Jobs {
+		err := job.visitSteps(func(label string, step *Step) error {
+			if step.Agent != name {
+				return nil
+			}
+
+			return fn(label, step)
+		})
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

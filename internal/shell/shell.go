@@ -138,7 +138,7 @@ type RunnerSpec struct {
 // NewRunner returns a DockerRunner scoped to spec, or a HostRunner when
 // spec.Image is empty — the single decision point every shell-out caller
 // (task, agent, resource) funnels through. For a DockerRunner, Cwd is
-// resolved and validated once here (see resolveMountPath). HostRunner never
+// resolved and validated once here (see ResolveMountPath). HostRunner never
 // errors — cwd needs no resolution for host execution. The returned runner
 // has no label (see WithLabel) until a caller that wants prefixed output
 // opts in explicitly.
@@ -152,7 +152,7 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 	if spec.Cwd != "" {
 		var err error
 
-		resolvedCwd, err = resolveMountPath(spec.Cwd)
+		resolvedCwd, err = ResolveMountPath(spec.Cwd)
 		if err != nil {
 			return nil, fmt.Errorf("resolve working directory %q: %w", spec.Cwd, err)
 		}

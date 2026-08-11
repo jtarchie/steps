@@ -21,7 +21,7 @@ import (
 // top-level functions (rather than t.Run subtests of one function) to stay
 // under the linter's per-function cyclomatic-complexity budget.
 // dockerStartArgs takes an already-resolved cwd (resolution happens once in
-// NewRunner, not here — see resolveMountPath) so these tests pass a plain
+// NewRunner, not here — see ResolveMountPath) so these tests pass a plain
 // absolute path directly rather than exercising resolution.
 func TestDockerStartArgsMountsCwd(t *testing.T) {
 	t.Parallel()
@@ -186,7 +186,7 @@ func TestNewContainerNameIsUnique(t *testing.T) {
 
 // TestResolveMountPathRejectsColonInPath guards against docker's `-v
 // host:container` volume spec silently misparsing a host path that itself
-// contains a ':' (a valid POSIX path character) — resolveMountPath (called
+// contains a ':' (a valid POSIX path character) — ResolveMountPath (called
 // once by NewRunner at construction) must fail loudly instead of letting
 // dockerStartArgs build an argument docker would misinterpret.
 func TestResolveMountPathRejectsColonInPath(t *testing.T) {
@@ -200,7 +200,7 @@ func TestResolveMountPathRejectsColonInPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = resolveMountPath(cwd)
+	_, err = ResolveMountPath(cwd)
 	if err == nil {
 		t.Error("expected an error for a working directory containing ':'")
 	}
@@ -208,7 +208,7 @@ func TestResolveMountPathRejectsColonInPath(t *testing.T) {
 
 // TestNewRunnerRejectsColonInPath confirms the colon rejection surfaces
 // through NewRunner (where it's actually triggered in production), not just
-// the internal resolveMountPath helper.
+// the internal ResolveMountPath helper.
 func TestNewRunnerRejectsColonInPath(t *testing.T) {
 	t.Parallel()
 
@@ -290,7 +290,7 @@ func TestNewRunnerResolvesCwdOnce(t *testing.T) {
 		t.Fatal("expected a DockerRunner")
 	}
 
-	want, err := resolveMountPath(dir)
+	want, err := ResolveMountPath(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

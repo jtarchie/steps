@@ -8,6 +8,11 @@ import (
 	"strings"
 )
 
+// noNetwork is docker's "no egress at all" network. Named because two rules
+// turn on it specifically (see validateNetworkNeedsImage and
+// checkCLIContainerNetwork) rather than on network: in general.
+const noNetwork = "none"
+
 // validateNetworkRules groups the network:-related load-time checks, mirroring
 // validateImageRules.
 func (c *Config) validateNetworkRules() error {

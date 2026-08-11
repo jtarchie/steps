@@ -76,10 +76,24 @@ type cliBridge struct {
 	calls []recordedToolCall
 }
 
+// cliBridgeContainerHost is how a containerized child names the host its
+// parent is listening on. Docker Desktop resolves it natively; on Linux
+// Docker Engine it resolves because the run adds
+// --add-host host.docker.internal:host-gateway (see shell.DockerRunArgv).
+const cliBridgeContainerHost = "host.docker.internal"
+
 // newCLIBridge starts a bridge serving every tool in conv's registry except
 // those named in skip — the built-ins the CLI runs natively (see
 // cliRuntime.natives). The caller must Close it.
-func newCLIBridge(ctx context.Context, conv agentConversation, skip map[string]bool) (*cliBridge, error) {
+//
+// containerized says the child will run in a container rather than as a host
+// subprocess, which changes only where the bridge is reachable FROM: a
+// container reaches its host over the docker gateway address, not over the
+// host's own loopback, so binding 127.0.0.1 would leave every bridged tool
+// call refused. The bearer token is unchanged and is what actually
+// authorizes a request — widening the bind widens who may DIAL the port, not
+// what they may do with it, and only for the length of one attempt.
+func newCLIBridge(ctx context.Context, conv agentConversation, skip map[string]bool, containerized bool) (*cliBridge, error) {
 	bridge := &cliBridge{
 		satisfied: map[string]bool{},
 		token:     rand.Text(),
@@ -107,8 +121,14 @@ func newCLIBridge(ctx context.Context, conv agentConversation, skip map[string]b
 	var listenConfig net.ListenConfig
 
 	// Loopback only, ephemeral port: reachable by the child this process
-	// spawned and by nothing else on the network.
-	listener, err := listenConfig.Listen(ctx, "tcp", "127.0.0.1:0")
+	// spawned and by nothing else on the network. A containerized child is
+	// not on this loopback, so that case binds all interfaces instead.
+	address := "127.0.0.1:0"
+	if containerized {
+		address = "0.0.0.0:0"
+	}
+
+	listener, err := listenConfig.Listen(ctx, "tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("cli bridge: listen: %w", err)
 	}
@@ -125,7 +145,7 @@ func newCLIBridge(ctx context.Context, conv agentConversation, skip map[string]b
 	}
 
 	bridge.listener = listener
-	bridge.url = "http://" + listener.Addr().String()
+	bridge.url = bridgeURL(listener.Addr().String(), containerized)
 	bridge.server = httpServer
 
 	// The goroutine closes over its OWN reference rather than reading
@@ -139,6 +159,25 @@ func newCLIBridge(ctx context.Context, conv agentConversation, skip map[string]b
 	}()
 
 	return bridge, nil
+}
+
+// bridgeURL is the address to TELL the child, which is not always the one
+// bound: a containerized child cannot dial the host's loopback, and the
+// wildcard address a containerized bridge binds is not a destination at all.
+// A bind address that will not split is passed through as-is rather than
+// guessed at — the child then fails to connect with a URL that at least says
+// what happened.
+func bridgeURL(bound string, containerized bool) string {
+	if !containerized {
+		return "http://" + bound
+	}
+
+	_, port, err := net.SplitHostPort(bound)
+	if err != nil {
+		return "http://" + bound
+	}
+
+	return "http://" + net.JoinHostPort(cliBridgeContainerHost, port)
 }
 
 // handler adapts one toolImpl to MCP. The adaptation is deliberately thin —
