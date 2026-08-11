@@ -126,6 +126,10 @@ type agentConversation struct {
 	system        string
 	prompt        string
 	contextBlocks []contextBlock
+	// upstream is what named earlier steps decided, delivered as synthetic
+	// read_step results because this step declared context: { from: ... }.
+	// See upstream.go.
+	upstream []contextBlock
 	// recap is the rendered run-context recap delivered as a synthetic
 	// read_context result before anything else, or "" when the run recorded
 	// nothing or the step opted out with fidelity: off. See recap.go.
@@ -197,12 +201,19 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 	}
 	conv.params.applyTo(cfg)
 
-	contents := make([]*genai.Content, 0, 3+len(conv.contextBlocks)*2)
+	contents := make([]*genai.Content, 0, 3+(len(conv.contextBlocks)+len(conv.upstream))*2)
 
 	// The recap comes first: it is what happened BEFORE this step, and the
 	// context_paths files below are what this step was handed to work on.
 	if conv.recap != "" {
 		contents = append(contents, syntheticToolExchange("recap", readContextToolName, nil, conv.recap)...)
+	}
+
+	// Then the decisions this step asked upstream steps for: like the recap,
+	// they are what happened BEFORE this step rather than what it works on.
+	for i, block := range conv.upstream {
+		contents = append(contents, syntheticToolExchange(
+			fmt.Sprintf("upstream_%d", i), readStepToolName, map[string]any{"step": block.path}, block.content)...)
 	}
 
 	for i, block := range conv.contextBlocks {

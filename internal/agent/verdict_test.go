@@ -22,7 +22,7 @@ func verdictConversation(t *testing.T, dir string, verdicts []string) agentConve
 
 	required := map[string]bool{}
 
-	verdictTool, err := injectVerdictTool(verdicts, decls, registry, required)
+	verdictTool, err := injectVerdictTool(verdicts, false, decls, registry, required)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestVerdictNeverEmittedFails(t *testing.T) {
 func TestVerdictToolSchemaEnum(t *testing.T) {
 	t.Parallel()
 
-	decl, _ := buildVerdictTool([]string{"approve", "revise", "escalate"})
+	decl, _ := buildVerdictTool([]string{"approve", "revise", "escalate"}, false)
 
 	choice := decl.Parameters.Properties["choice"]
 	if choice == nil {
@@ -133,7 +133,7 @@ func TestInjectVerdictToolNameCollision(t *testing.T) {
 	decls := &genai.Tool{}
 	registry := map[string]toolImpl{verdictToolName: func(context.Context, map[string]any, toolEnv) map[string]any { return nil }}
 
-	_, err := injectVerdictTool([]string{"approve"}, decls, registry, map[string]bool{})
+	_, err := injectVerdictTool([]string{"approve"}, false, decls, registry, map[string]bool{})
 	if err == nil {
 		t.Error("expected a conflict error for a pre-existing verdict tool")
 	}

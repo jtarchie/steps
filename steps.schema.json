@@ -1129,6 +1129,18 @@
               ],
               "description": "How much of the recorded context this step is shown. Defaults to compact; off opts out entirely."
             },
+            "from": {
+              "type": "object",
+              "minProperties": 1,
+              "description": "What this step reads from named earlier steps of the same job. The key is a step name, the value how much of its outcome to deliver. Demanding note or full makes that step's verdict note required.",
+              "additionalProperties": {
+                "enum": [
+                  "verdict",
+                  "note",
+                  "full"
+                ]
+              }
+            },
             "qualify": {
               "type": "boolean",
               "description": "On an across: step, record a fact PER CELL: each cell writes to its own scope and the join merges them under keys naming the cell. Required by max_in_flight > 1, and applied serially too, so the key names never depend on scheduling."

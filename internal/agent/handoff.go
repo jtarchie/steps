@@ -167,7 +167,7 @@ func injectSynthesizedTools(
 	ctx context.Context, cfg *config.Config, step config.Step, in synthesisInputs,
 	decls *genai.Tool, registry map[string]toolImpl, required map[string]bool,
 ) (synthesizedTools, error) {
-	verdictTool, err := injectVerdictTool(step.VerdictNames(), decls, registry, required)
+	verdictTool, err := injectVerdictTool(step.VerdictNames(), step.NoteRequired, decls, registry, required)
 	if err != nil {
 		return synthesizedTools{}, err
 	}

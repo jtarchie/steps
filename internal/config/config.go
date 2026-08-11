@@ -138,6 +138,7 @@ func (c *Config) validate() error {
 		c.validateMaxContextBytes,
 		c.validateHandoffNoteSteps,
 		c.validateContextSteps,
+		c.validateContextFrom,
 		c.validateStepTransitions,
 		c.validateAsserts,
 		c.validateBudgets,

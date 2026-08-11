@@ -25,7 +25,7 @@ const verdictToolName = "verdict"
 // capture it. An out-of-vocabulary choice (shouldn't happen given the enum,
 // but defensively) comes back as {"error": ...} data so the model can re-call
 // — the same failure-as-data contract as every other tool.
-func buildVerdictTool(verdicts []string) (*genai.FunctionDeclaration, toolImpl) {
+func buildVerdictTool(verdicts []string, noteRequired bool) (*genai.FunctionDeclaration, toolImpl) {
 	decl := &genai.FunctionDeclaration{
 		Name:        verdictToolName,
 		Description: "Emit your decision. Call this exactly once with your final verdict — it is how the pipeline decides which step runs next.",
@@ -33,9 +33,9 @@ func buildVerdictTool(verdicts []string) (*genai.FunctionDeclaration, toolImpl) 
 			Type: genai.TypeObject,
 			Properties: map[string]*genai.Schema{
 				"choice": {Type: genai.TypeString, Enum: append([]string{}, verdicts...), Description: "Your verdict — must be one of the allowed values."},
-				"note":   {Type: genai.TypeString, Description: "Optional: a short reason for the audit log."},
+				"note":   {Type: genai.TypeString, Description: noteDescription(noteRequired)},
 			},
-			Required: []string{"choice"},
+			Required: requiredVerdictArgs(noteRequired),
 		},
 	}
 
@@ -67,7 +67,7 @@ func buildVerdictTool(verdicts []string) (*genai.FunctionDeclaration, toolImpl) 
 // step's already-built tool set when the step declares verdicts:, and returns
 // the tool's name (or "" when verdict mode is off). A pre-existing tool of the
 // same name is a conflict — rejected here rather than silently shadowed.
-func injectVerdictTool(verdicts []string, decls *genai.Tool, registry map[string]toolImpl, required map[string]bool) (string, error) {
+func injectVerdictTool(verdicts []string, noteRequired bool, decls *genai.Tool, registry map[string]toolImpl, required map[string]bool) (string, error) {
 	if len(verdicts) == 0 {
 		return "", nil
 	}
@@ -76,10 +76,32 @@ func injectVerdictTool(verdicts []string, decls *genai.Tool, registry map[string
 		return "", fmt.Errorf("declares verdicts: but already defines a tool named %q", verdictToolName)
 	}
 
-	decl, impl := buildVerdictTool(verdicts)
+	decl, impl := buildVerdictTool(verdicts, noteRequired)
 	decls.FunctionDeclarations = append(decls.FunctionDeclarations, decl)
 	registry[verdictToolName] = impl
 	required[verdictToolName] = true
 
 	return verdictToolName, nil
+}
+
+// noteDescription tells the model whether the note is optional, which is
+// decided by whether any later step declared context: { from: { this: note } }.
+func noteDescription(required bool) string {
+	if required {
+		return "Required: a short reason. A later step of this pipeline reads it."
+	}
+
+	return "Optional: a short reason for the audit log."
+}
+
+// requiredVerdictArgs is the verdict tool's required-argument list. The note
+// joins it when a downstream reader demanded one — the demand IS the
+// obligation, and it is enforced in the tool schema so the model cannot
+// satisfy the call without it.
+func requiredVerdictArgs(noteRequired bool) []string {
+	if noteRequired {
+		return []string{"choice", "note"}
+	}
+
+	return []string{"choice"}
 }

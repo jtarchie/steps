@@ -60,6 +60,12 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
+	// One register of step decisions per job run, for context: from: readers.
+	// Installed here rather than in runSteps because a get: version: every
+	// fan-out re-enters runSteps per version, and a decision made before the
+	// get is still this run's.
+	ctx = agent.WithOutcomes(ctx)
+
 	// Docker comes first, and BEFORE preflight, because preflight can now ask
 	// docker questions of its own: a containerized CLI agent is probed by
 	// running its image (see internal/agent's probeCLIImage). Probing first
@@ -582,6 +588,21 @@ func nextPendingHandoff(jobName string, step config.Step, steps []config.Step, r
 	}
 }
 
+// recordStepOutcome registers an agent step's decision under the name it is
+// known by, so a later step that declared context: from: can be handed it.
+func recordStepOutcome(ctx context.Context, step config.Step, out agent.StepOutcome) {
+	if out.Verdict == "" {
+		return
+	}
+
+	up := agent.Upstream{Verdict: out.Verdict, Note: out.Note}
+	if out.Previous != nil {
+		up.Response = out.Previous.Response
+	}
+
+	agent.RecordOutcome(ctx, executedStepName(step), up)
+}
+
 // recordCompletedStep marks a plan step as one a resume will not repeat.
 //
 // On success only: a failed step is exactly the one a resume must run again.
@@ -736,6 +757,12 @@ func dispatchByKind(
 	case config.StepKindAgent:
 		stepOut, err := agent.RunStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
 		no := nonGetOutcome{verdict: stepOut.Verdict, note: stepOut.Note, previous: stepOut.Previous}
+
+		// Register what this step decided, for any step that declared
+		// context: { from: { <this step>: ... } }. Recorded even when the run
+		// failed: a later visit of a revise loop reads the verdict that sent
+		// it back, and a failed step simply has no verdict to register.
+		recordStepOutcome(ctx, step, stepOut)
 
 		if err != nil {
 			return "", stepRan, no, fmt.Errorf("agent step: %w", err)
@@ -1197,6 +1224,15 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 		return nil, fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 	defer workspace.CloseSpace(space, rt.Name)
+
+	// A shell command cannot be handed a synthetic tool result, so a task that
+	// declared context: from: gets each demanded decision as a file it can
+	// read (config.UpstreamPath). Written before the command runs, and only
+	// for senders that have actually run.
+	err = deliverUpstreamFiles(ctx, space.Dir(), step)
+	if err != nil {
+		return nil, fmt.Errorf("task %q: %w", rt.Name, err)
+	}
 
 	err = retryWithTimeout(ctx, step.Attempts, rt.Timeout, func(attempt, total int) {
 		fmt.Printf("task: %s (attempt %d/%d)\n", executedStepName(step), attempt, total)

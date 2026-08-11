@@ -32,6 +32,11 @@ type ContextSpec struct {
 	// means "not stated here" and falls through to defaults.context.fidelity
 	// and then to FidelityCompact — see ResolveContextFidelity.
 	Fidelity ContextFidelity
+	// From is what this step reads from named earlier steps: their verdict,
+	// and optionally the note and response that came with it. Declared on the
+	// READER — nothing arrives unasked — and the demand is what makes the
+	// sender's note required. See contextfrom.go.
+	From map[string]FromLevel
 	// Qualify, on an across: step, says the matrix records PER-CELL facts:
 	// each cell writes to a scope only it touches, and the join merges them
 	// under keys naming the cell (`reviewer [dim=api].finding`) instead of the
@@ -154,30 +159,7 @@ func (c *ContextSpec) UnmarshalYAML(value *yaml.Node) error {
 
 		return nil
 	case yaml.MappingNode:
-		err := rejectUnknownKeys(value, "step context", "write", "fidelity", "qualify")
-		if err != nil {
-			return err
-		}
-
-		var m struct {
-			Write    bool            `yaml:"write"`
-			Fidelity ContextFidelity `yaml:"fidelity"`
-			Qualify  bool            `yaml:"qualify"`
-		}
-
-		err = value.Decode(&m)
-		if err != nil {
-			return fmt.Errorf("step context: %w", err)
-		}
-
-		err = validateFidelity("step context", m.Fidelity, value.Line)
-		if err != nil {
-			return err
-		}
-
-		c.Write, c.Fidelity, c.Qualify = m.Write, m.Fidelity, m.Qualify
-
-		return nil
+		return c.unmarshalMapping(value)
 	default:
 		return fmt.Errorf("step context at line %d must be %q or a {write, fidelity, qualify} mapping", value.Line, contextWriteScalar)
 	}
@@ -192,7 +174,7 @@ func (c *ContextSpec) UnmarshalYAML(value *yaml.Node) error {
 // reading it as "enables nothing" would reject the one spelling a step most
 // wants.
 func (c *ContextSpec) Enabled() bool {
-	return c.Write || c.Fidelity != "" || c.Qualify
+	return c.Write || c.Fidelity != "" || c.Qualify || len(c.From) > 0
 }
 
 // WritesContext reports whether this step is granted the set_context tool.
@@ -344,7 +326,7 @@ func checkContextStep(label string, step *Step) error {
 	}
 
 	if !step.Context.Enabled() {
-		return fmt.Errorf("%s: context enables nothing (set write, fidelity and/or qualify)", label)
+		return fmt.Errorf("%s: context enables nothing (set write, from, fidelity and/or qualify)", label)
 	}
 
 	return nil
@@ -468,6 +450,43 @@ func rejectSharedBranchTaskWrite(label string, step *Step) error {
 	if step.Task != "" && step.WritesContext() {
 		return fmt.Errorf("%s: a task cannot write context inside a concurrent block under the shared workspace — every branch writes into one %s/ directory, so concurrent branches would overwrite each other's files. Set workspace.strategy (copy or btrfs), or record the facts from an agent step instead", label, ContextDir)
 	}
+
+	return nil
+}
+
+// unmarshalMapping decodes the {write, fidelity, qualify, from} form. Split
+// from UnmarshalYAML so neither half carries the other's branching.
+func (c *ContextSpec) unmarshalMapping(value *yaml.Node) error {
+	err := rejectUnknownKeys(value, "step context", "write", "fidelity", "qualify", "from")
+	if err != nil {
+		return err
+	}
+
+	var m struct {
+		Write    bool            `yaml:"write"`
+		Fidelity ContextFidelity `yaml:"fidelity"`
+		Qualify  bool            `yaml:"qualify"`
+		From     yaml.Node       `yaml:"from"`
+	}
+
+	err = value.Decode(&m)
+	if err != nil {
+		return fmt.Errorf("step context: %w", err)
+	}
+
+	err = validateFidelity("step context", m.Fidelity, value.Line)
+	if err != nil {
+		return err
+	}
+
+	if !m.From.IsZero() {
+		c.From, err = decodeContextFrom(&m.From)
+		if err != nil {
+			return err
+		}
+	}
+
+	c.Write, c.Fidelity, c.Qualify = m.Write, m.Fidelity, m.Qualify
 
 	return nil
 }

@@ -124,7 +124,7 @@ func TestCLIBridgeServesNonNativeTools(t *testing.T) {
 func TestCLIBridgeExecutesAndCapturesVerdict(t *testing.T) {
 	t.Parallel()
 
-	decl, impl := buildVerdictTool([]string{"approve", "reject"})
+	decl, impl := buildVerdictTool([]string{"approve", "reject"}, false)
 
 	bridge, err := newCLIBridge(
 		t.Context(),
@@ -170,7 +170,7 @@ func TestCLIBridgeExecutesAndCapturesVerdict(t *testing.T) {
 func TestCLIBridgeReportsToolFailureAsError(t *testing.T) {
 	t.Parallel()
 
-	decl, impl := buildVerdictTool([]string{"approve"})
+	decl, impl := buildVerdictTool([]string{"approve"}, false)
 
 	bridge, err := newCLIBridge(
 		t.Context(),
@@ -285,7 +285,7 @@ func assertPrivateFile(t *testing.T, path string) {
 func TestCLIBridgeRejectsUnauthenticatedCallers(t *testing.T) {
 	t.Parallel()
 
-	decl, impl := buildVerdictTool([]string{"approve"})
+	decl, impl := buildVerdictTool([]string{"approve"}, false)
 
 	bridge, err := newCLIBridge(
 		t.Context(),

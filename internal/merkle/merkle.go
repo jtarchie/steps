@@ -268,6 +268,22 @@ func withRouting(step config.Step, content map[string]any) map[string]any {
 		content["label"] = step.Label
 	}
 
+	// What a step READS from other steps is part of what it is. It matters
+	// most for a TASK, which is skippable: a cached command never runs, so a
+	// task whose from: changed would otherwise replay an outcome produced
+	// without the decision it now asks for. (An agent step is unconditionally
+	// unskippable already; this keeps both kinds honest by one rule.)
+	if senders := step.FromSenders(); len(senders) > 0 {
+		from := step.ContextFrom()
+		levels := make([]string, 0, len(senders))
+
+		for _, sender := range senders {
+			levels = append(levels, sender+"="+string(from[sender]))
+		}
+
+		content["context_from"] = levels
+	}
+
 	return content
 }
 
@@ -1310,7 +1326,7 @@ func planTaskNode(cfg *config.Config, step config.Step, i int, parentHash string
 
 	node, err := taskNode(cfg, step, rt, i, parentHash)
 
-	return node, rt.Fix != nil || step.When != nil || step.Routes(), err
+	return node, rt.Fix != nil || step.When != nil || step.Routes() || step.ReadsFrom(), err
 }
 
 // parallelNode builds the plan node for an in_parallel: block.

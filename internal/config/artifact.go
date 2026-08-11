@@ -31,6 +31,13 @@ func ValidateArtifactName(name string) error {
 		return fmt.Errorf("invalid artifact name %q: reserved for handoff notes", name)
 	}
 
+	// Reserved for the same reason: a task reading context: from: is handed
+	// each demanded step's outcome as a file under this directory (see
+	// UpstreamDir).
+	if name == UpstreamDir {
+		return fmt.Errorf("invalid artifact name %q: reserved for delivered step outcomes", name)
+	}
+
 	// Reserved for the same reason: a context: write task records facts by
 	// writing files into this directory of its working space (see ContextDir),
 	// and an artifact of the same name would materialize over them.

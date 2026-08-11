@@ -384,6 +384,38 @@ Still rejected: `handoff: { context: true }` and `{ tool: true }`, both inside a
 
 **Relation to `handoff:`**: `handoff:` carries context *backward* along a `to:`/`verdicts:` route (a rejected step learning why, via `previous_run`). `handoff: { note: true }` carries it *forward* along the normal path. They compose — the self-build coder uses both.
 
+## Reading another step's decision (`context: { from: ... }`)
+
+A verdict is the one thing every judging step produces, and until now the only way to see one downstream was `handoff:` — which delivers on a **routed entry** and to an **agent** only. A classifier that simply falls through, or a shell command that wants to branch on what a model decided, had no way to ask.
+
+`from:` is that ask, and it is declared on the **reader**:
+
+```yaml
+- agent: reviewer
+  prompt: Review the change.
+  verdicts: [approve, revise]      # no routing needed — this one just decides
+
+- agent: editor
+  prompt: Apply the review.
+  context:
+    from:
+      reviewer: note               # verdict | note | full
+
+- task: gate
+  context:
+    from:
+      reviewer: verdict
+  run: '[ "$(grep ^verdict: upstream/reviewer)" = "verdict: approve" ]'
+```
+
+- **Levels.** `verdict` is the name it chose; `note` adds the reason it gave; `full` adds its final response text.
+- **The demand creates the obligation.** Asking for a `verdict` costs the sender nothing — a step declaring `verdicts:` already must emit one. Asking for a `note` or `full` makes that sender's note **required**: it joins the verdict tool's required arguments, so the model cannot satisfy the call without writing one. A note nobody demanded is one a model may reasonably skip, and afterwards "chose not to" is indistinguishable from "forgot".
+- **Nothing arrives unasked.** No `from:`, no delivery. An agent reader receives each decision as a synthetic `read_step` result at turn zero (like `context_paths:`, no turn spent asking); a task reader receives a file per sender at `upstream/<step>`, since a shell command has no conversation.
+- **A sender that has not run yet is simply absent** — no error, nothing delivered. That is what makes the revise loop work: the writer at the top of the loop reads the critic *below* it, gets nothing on the first pass, and gets the verdict that sent it back on every pass after. The question is asked of the run ("has that step decided?") rather than of the route, which is why the two steps need no routing relationship at all.
+- **Validated at load**: the named step must exist in the job and must declare `verdicts:` (it has no decision to hand on otherwise), and a step may not read itself. Naming a step that comes *later* in the plan is legal — that is the loop.
+- **Trust**: a delivered note or response is upstream model-authored text, so it is fenced as data with a tag that cannot occur inside it, the same treatment a delivered handoff note gets.
+- **Caching**: the `from:` declaration folds into the reading step's hash, and makes a *task* reader's chain unskippable — a cached command never runs, so a task whose `from:` changed must not replay an outcome produced without the decision it now asks for.
+
 ## The run context store (`context: write`)
 
 A handoff note is a whole document addressed to one specific successor. The run context store is the other shape: individual named facts, recorded once and readable by every later step in the run.

@@ -1,0 +1,30 @@
+# context: from: names the steps whose decisions this one wants. The name is a
+# step in the same job, and it is resolved at LOAD — a reader pointing at a
+# step that does not exist would otherwise run to completion having silently
+# received nothing, which is indistinguishable from a sender that had not run
+# yet (the legitimate case, and the reason absence is tolerated at run time).
+#
+# Checking the name is what lets absence stay legal without hiding a typo.
+# expect: which is not a step in this job
+
+agents:
+- name: reviewer
+  source:
+    model: openai/gpt-4o
+- name: editor
+  source:
+    model: openai/gpt-4o
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    inputs: []
+    prompt: Review it.
+    verdicts: [approve, revise]
+  - agent: editor
+    inputs: []
+    prompt: Edit it.
+    context:
+      from:
+        reviwer: note

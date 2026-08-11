@@ -341,6 +341,12 @@ type Step struct {
 	// record a fact for the steps that come after it. Agent-only, never a hook,
 	// and not yet valid inside a concurrent block — see validateContextSteps.
 	Context *ContextSpec `yaml:"context,omitempty"`
+	// NoteRequired is COMPUTED at load (never written in YAML): some other
+	// step declared context: { from: { <this step>: note|full } }, so this
+	// step's verdict note stops being optional. The obligation lives here
+	// rather than on the reader because internal/agent builds the sender's
+	// tool set and never sees the reader. See validateContextFrom.
+	NoteRequired bool `yaml:"-"`
 	// InputMapping/OutputMapping rename a task step's declared inputs/outputs
 	// onto plan-artifact names, mirroring Concourse's input_mapping/
 	// output_mapping (see docs/conformance.md;
