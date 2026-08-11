@@ -80,37 +80,36 @@ type cliBridge struct {
 }
 
 // bridgeReach says where the child will dial this bridge FROM, which decides
-// both what address to bind and what address to advertise. The three cases
-// are genuinely different networks, and getting one wrong means every
-// bridged tool call — including the verdict — is refused.
+// both what address to bind and what address to advertise. Getting it wrong
+// means every bridged tool call — including the verdict — is refused.
 type bridgeReach int
 
 const (
 	// reachHost: the child is a subprocess on this machine. Loopback, which
 	// is reachable by it and by nothing else on the network.
 	reachHost bridgeReach = iota
-	// reachGateway: the child is in a container with its own network
-	// namespace, so it arrives via the docker gateway rather than this
-	// host's loopback. Requires binding all interfaces.
+	// reachGateway: the child is in a container, and reaches us by the
+	// docker gateway rather than this machine's loopback. Requires binding
+	// all interfaces.
+	//
+	// This covers `network: host` too, which looks like it should be the
+	// loopback case and is not: when the daemon runs in a VM (Docker
+	// Desktop, colima) that "host" is the VM, so a bridge on this machine's
+	// loopback is unreachable from the container — verified against colima,
+	// where host.docker.internal resolves under host networking and 127.0.0.1
+	// does not answer. A daemon sharing this kernel would make loopback work,
+	// but steps cannot tell the two apart from here, and the gateway route
+	// is correct for both.
 	reachGateway
-	// reachSharedNetns: the child is in a container started with
-	// `--network host`, which shares THIS namespace — so loopback works
-	// exactly as it does for a host subprocess, and no bind is widened.
-	// shell.DockerRunArgv correspondingly omits --add-host there, so the
-	// gateway name would not even resolve.
-	reachSharedNetns
 )
 
 // cliBridgeReach classifies a step's child by the runtime it resolved.
 func cliBridgeReach(ri config.ResolvedInvocation) bridgeReach {
-	switch {
-	case ri.Image == "":
+	if ri.Image == "" {
 		return reachHost
-	case ri.Network == "host":
-		return reachSharedNetns
-	default:
-		return reachGateway
 	}
+
+	return reachGateway
 }
 
 // newCLIBridge starts a bridge serving every tool in conv's registry except

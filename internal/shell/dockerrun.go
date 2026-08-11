@@ -9,14 +9,10 @@ package shell
 
 import "sort"
 
-const (
-	// hostNetwork is docker's share-the-host-namespace network mode.
-	hostNetwork = "host"
-	// hostGatewayMapping makes the host reachable from inside the container
-	// by a name that works on Docker Desktop and Linux Docker Engine alike.
-	// HostGatewayName is the container-side spelling callers must dial.
-	hostGatewayMapping = HostGatewayName + ":host-gateway"
-)
+// hostGatewayMapping makes the host reachable from inside the container by a
+// name that works on Docker Desktop and Linux Docker Engine alike.
+// HostGatewayName is the container-side spelling callers must dial.
+const hostGatewayMapping = HostGatewayName + ":host-gateway"
 
 // HostGatewayName is how a containerized process names the host its parent is
 // listening on. Exported because the parent has to hand the child a URL built
@@ -90,14 +86,17 @@ func DockerRunArgv(spec DockerRunSpec) []string {
 		args = append(args, "--name", spec.Name)
 	}
 
-	// Under host networking the container shares this namespace outright, so
-	// the parent is already reachable on loopback and there is no gateway to
-	// map — docker rejects extra host-to-IP mappings against that network
-	// mode, which would fail the run at container start over a flag it did
-	// not need.
-	if spec.Network != hostNetwork {
-		args = append(args, "--add-host", hostGatewayMapping)
-	}
+	// Unconditionally, including under `network: host`. Two things were
+	// checked against a real daemon (docker 28.4.0) rather than assumed:
+	// docker accepts this alongside --network host rather than rejecting it,
+	// and the mapping still resolves there. It is also still NEEDED there,
+	// which is the counterintuitive part — when the daemon runs in a VM
+	// (Docker Desktop, colima) "host" networking means the VM's namespace,
+	// not this machine's, so a server bound on this loopback is unreachable
+	// from such a container (verified: it is). Treating host networking as
+	// "loopback already works" is only true when the daemon shares this
+	// kernel, which steps cannot tell from here.
+	args = append(args, "--add-host", hostGatewayMapping)
 
 	args = append(args, containerArgs(spec.ResolvedCwd, spec.EnvNames, spec.User, spec.Network,
 		spec.Privileged, spec.CPUShares, spec.MemoryBytes)...)

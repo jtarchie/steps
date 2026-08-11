@@ -60,29 +60,14 @@ func TestDockerRunArgvAlwaysAddsHostGateway(t *testing.T) {
 	for _, spec := range []DockerRunSpec{
 		{Image: "alpine", Argv: []string{"claude"}},
 		{Image: "alpine", Argv: []string{"claude"}, Network: "bridge"},
+		// Including host networking: when the daemon is in a VM, that "host"
+		// is the VM, so this machine's loopback is still not reachable.
+		{Image: "alpine", Argv: []string{"claude"}, Network: "host"},
 	} {
 		args := DockerRunArgv(spec)
 		if got := argAfter(args, "--add-host"); got != "host.docker.internal:host-gateway" {
 			t.Errorf("--add-host = %q, want host.docker.internal:host-gateway (args %v)", got, args)
 		}
-	}
-}
-
-// TestDockerRunArgvOmitsHostGatewayUnderHostNetwork: docker rejects extra
-// host-to-IP mappings against host networking, so emitting one there would
-// fail the run at container start over a flag it does not need — a container
-// sharing the host namespace already reaches the parent on loopback.
-func TestDockerRunArgvOmitsHostGatewayUnderHostNetwork(t *testing.T) {
-	t.Parallel()
-
-	args := DockerRunArgv(DockerRunSpec{Image: "alpine", Argv: []string{"claude"}, Network: "host"})
-
-	if slices.Contains(args, "--add-host") {
-		t.Errorf("args = %v, did not want --add-host with --network host", args)
-	}
-
-	if got := argAfter(args, "--network"); got != "host" {
-		t.Errorf("--network = %q, want host", got)
 	}
 }
 

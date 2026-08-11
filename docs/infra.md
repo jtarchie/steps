@@ -34,6 +34,20 @@ agents:
 - **Caching hashing**: `image` folds into the relevant node content whenever it's non-empty — unlike `inputs:`/`outputs:` (see [workspace.md](workspace.md)), an image change alters what a command actually executes against regardless of workspace mode, so the gate is on the value itself.
 - **Known caveats** (documented, not solved): there's no way to override a step back to host execution once its task/agent sets an image.
 
+### `TMPDIR` when the daemon runs in a VM
+
+On macOS the docker daemon runs inside a Linux VM (Docker Desktop, colima, Rancher), and **only some host paths are shared into it** — your home directory is, macOS's own `$TMPDIR` (`/var/folders/…`) is not.
+
+steps builds each run's workspace under `$TMPDIR` and bind-mounts it into the container. If `$TMPDIR` isn't shared, that mount does not fail: **docker silently creates an empty directory** at the mount target. The container then runs against a workspace that has none of your inputs and writes results nowhere the host can see — typically surfacing as `can't create out/result.txt: nonexistent directory`, or as a step that "succeeds" and produces no outputs.
+
+Point `TMPDIR` at a shared path before running:
+
+```bash
+export TMPDIR="$HOME/.steps-tmp" && mkdir -p "$TMPDIR"
+```
+
+Native Linux is unaffected — the daemon shares the kernel and sees every path directly. The same constraint applies to a CLI agent's container `$HOME` and to the credentials file it mounts; a credentials file whose host path isn't shared arrives as a *directory*, and the CLI reports being logged out.
+
 ### CLI agents
 
 For a [CLI-backed agent](agents.md) (`source.model: "@claude/..."`), `image:` containerizes **the CLI process itself**, not just the tools steps serves it. That's a bigger difference than it sounds: most of a CLI agent's tools are its own natives (`Read`, `Bash`, `Edit`), which never route through steps, so without a container the working directory is their only fence. The CLI runs as a one-shot `docker run --rm` for the length of the step.
