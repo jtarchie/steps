@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -378,7 +379,7 @@ func runCLIAttempt(
 	plan cliAttempt,
 	state *cliStepState,
 ) error {
-	bridge, err := newCLIBridge(ctx, prepared.conv, nativeToolNames(prepared.conv, runtime), prepared.ri.Image != "")
+	bridge, err := newCLIBridge(ctx, prepared.conv, nativeToolNames(prepared.conv, runtime), cliBridgeReach(prepared.ri))
 	if err != nil {
 		return err
 	}
@@ -414,12 +415,29 @@ func runCLIAttempt(
 // assumed writable.
 const cliContainerHome = "/steps-home"
 
+// cliStepHomeMode is the permission the containerized $HOME and its .claude
+// subdirectory get.
+//
+// 0777 rather than the 0700 a private directory would normally take, because
+// the process that must write here is NOT necessarily the user that created
+// it: user: can name any uid, and the Linux default is the host uid:gid,
+// neither of which this process can chown to without privileges it does not
+// have. A 0700 directory owned by the steps user is unwritable by a
+// container running as anyone else, and the CLI then fails trying to write
+// its own transcript.
+//
+// The exposure is bounded and short: the directory is a fresh per-step temp
+// dir removed when the step ends, holding only what the CLI writes there.
+// The credentials file mounted into it is a separate host path with its own
+// (unchanged, 0600) permissions — this mode does not touch it.
+const cliStepHomeMode = 0o777
+
 // newCLIStepHome creates the host directory a containerized CLI gets as its
 // $HOME, with the .claude subdirectory ALREADY created. Pre-creating it
 // host-side is load-bearing: docker creates missing bind-mount targets as
-// root, and on Linux the container runs as the host uid:gid by default — a
-// root-owned .claude would be unwritable by the process that has to write its
-// transcript into it. A directory made here arrives owned by the right user.
+// root, and a root-owned .claude would be unwritable by the process that has
+// to write its transcript into it. A directory made here arrives with a mode
+// the container's uid can use, whatever that uid turns out to be.
 //
 // Note nothing seeds a ~/.claude.json (onboarding/trust state) into it: the
 // CLI is always invoked with --print (see cliArgs), and the trust dialog is
@@ -432,11 +450,19 @@ func newCLIStepHome() (string, error) {
 		return "", fmt.Errorf("creating cli home: %w", err)
 	}
 
-	err = os.Mkdir(filepath.Join(home, ".claude"), 0o700)
-	if err != nil {
-		_ = os.RemoveAll(home)
+	// Explicitly chmod: MkdirTemp always makes 0700, and Mkdir's mode is
+	// masked by the process umask, so neither reaches the mode on its own.
+	for _, dir := range []string{home, filepath.Join(home, ".claude")} {
+		err = os.MkdirAll(dir, cliStepHomeMode)
+		if err == nil {
+			err = os.Chmod(dir, cliStepHomeMode)
+		}
 
-		return "", fmt.Errorf("creating cli home: %w", err)
+		if err != nil {
+			_ = os.RemoveAll(home)
+
+			return "", fmt.Errorf("creating cli home: %w", err)
+		}
 	}
 
 	return home, nil
@@ -449,22 +475,34 @@ func newCLIStepHome() (string, error) {
 // differs.
 func buildCLICommand(
 	ctx context.Context, prepared preparedAgentStep, binary string, args []string, stepHome string,
-) (*exec.Cmd, error) {
+) (*exec.Cmd, string, error) {
 	if prepared.ri.Image == "" {
 		cmd := exec.CommandContext(ctx, binary, args...) //nolint:gosec // binary comes from the static cliProviders table
 		cmd.Dir = prepared.conv.env.dir
 		cmd.Env = cliEnv(prepared.ri)
 
-		return cmd, nil
+		return cmd, "", nil
 	}
 
 	resolvedCwd, err := shell.ResolveMountPath(prepared.conv.env.dir)
 	if err != nil {
-		return nil, fmt.Errorf("agent %q: resolving workspace for container: %w", prepared.ri.AgentName, err)
+		return nil, "", fmt.Errorf("agent %q: resolving workspace for container: %w", prepared.ri.AgentName, err)
+	}
+
+	// Named so it can always be reclaimed. Killing the docker CLIENT does
+	// nothing to the container it started, so a step that times out could
+	// otherwise leave the CLI running — still spending, and still writing
+	// into the bind-mounted workspace the next step is about to read. A name
+	// this process generated is one it can `docker rm -f` knowing nothing
+	// else could own it.
+	name, err := shell.NewContainerName()
+	if err != nil {
+		return nil, "", fmt.Errorf("agent %q: %w", prepared.ri.AgentName, err)
 	}
 
 	spec := shell.DockerRunSpec{
 		Image:       prepared.ri.Image,
+		Name:        name,
 		Argv:        append([]string{binary}, args...),
 		ResolvedCwd: resolvedCwd,
 		EnvNames:    prepared.ri.Env,
@@ -497,26 +535,52 @@ func buildCLICommand(
 	}
 
 	// The api_key_env: value crosses under the CLI's own name, forwarded
-	// value-free (`-e ANTHROPIC_API_KEY` is in EnvNames' effect via the env
-	// below) — the docker client's environment carries it, its argv never
-	// does. The client otherwise inherits this process's environment, which
-	// is what makes the pipeline env: names in EnvNames resolvable at all
-	// (matching how the session container's docker client behaves).
+	// value-free (`-e ANTHROPIC_API_KEY`) — the docker client's environment
+	// carries it, its argv never does. The client otherwise inherits this
+	// process's environment, which is what makes the pipeline env: names in
+	// EnvNames resolvable at all (matching how the session container's docker
+	// client behaves).
+	//
+	// Both halves are conditioned on the variable actually being EXPORTED,
+	// not merely named. Forwarding the name alone would hand the container
+	// whatever ANTHROPIC_API_KEY this process happens to have — so a pipeline
+	// naming an unset api_key_env: would silently authenticate with the
+	// operator's personal key instead of failing. The host path cannot do
+	// that (shell.HostEnv's allowlist excludes it), and the two must agree.
 	env := os.Environ()
 
-	if prepared.ri.APIKeyEnv != "" {
-		spec.EnvNames = append(append([]string{}, spec.EnvNames...), "ANTHROPIC_API_KEY")
-
-		if key := os.Getenv(prepared.ri.APIKeyEnv); key != "" {
-			env = append(env, "ANTHROPIC_API_KEY="+key)
-		}
+	if key := lookupCLIKey(prepared.ri); key != "" {
+		spec.EnvNames = append(append([]string{}, spec.EnvNames...), cliAPIKeyEnv)
+		env = append(env, cliAPIKeyEnv+"="+key)
 	}
 
 	//nolint:gosec // running a pipeline-defined image is the point; the image is load-validated and sits after "--"
 	cmd := exec.CommandContext(ctx, "docker", shell.DockerRunArgv(spec)...)
 	cmd.Env = env
 
-	return cmd, nil
+	// A canceled context kills the docker client, which does NOT stop the
+	// container. SIGTERM first, mirroring shell.dockerCommand, so the client
+	// can detach cleanly; the container itself is torn down by name, by
+	// execCLI's deferred RemoveContainer.
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+
+	return cmd, name, nil
+}
+
+// cliAPIKeyEnv is the variable the claude CLI reads its key from, whatever
+// the pipeline chose to call its own.
+//
+//nolint:gosec // an environment variable NAME, not a credential
+const cliAPIKeyEnv = "ANTHROPIC_API_KEY"
+
+// lookupCLIKey returns the value of the pipeline's api_key_env:, or "" when
+// none was named or the named variable is not exported.
+func lookupCLIKey(ri config.ResolvedInvocation) string {
+	if ri.APIKeyEnv == "" {
+		return ""
+	}
+
+	return os.Getenv(ri.APIKeyEnv)
 }
 
 // hostCLICredentials reports the host path of the CLI's on-disk credentials
@@ -551,9 +615,20 @@ func execCLI(
 	slog.Debug("agent.cli.exec", "agent", prepared.ri.AgentName, "binary", binary, "args", args,
 		"dir", prepared.conv.env.dir, "image", prepared.ri.Image)
 
-	cmd, err := buildCLICommand(ctx, prepared, binary, args, plan.home)
+	cmd, container, err := buildCLICommand(ctx, prepared, binary, args, plan.home)
 	if err != nil {
 		return cliRunResult{}, err
+	}
+
+	// The container outlives its client, so removing it is this function's
+	// job on EVERY exit path — a timeout, a cancel, a parse failure. The
+	// context is stripped of cancellation for the same reason
+	// shell.dockerSession.close builds its own: the cases where teardown
+	// matters most are exactly the ones where the caller's context is
+	// already dead. A normal exit has nothing to remove (--rm got there
+	// first) and this is a no-op against an absent container.
+	if container != "" {
+		defer shell.RemoveContainer(context.WithoutCancel(ctx), container)
 	}
 
 	cmd.Stdin = strings.NewReader(plan.prompt)
@@ -918,6 +993,13 @@ func probeCLI(ctx context.Context, ri config.ResolvedInvocation, timeout time.Du
 // CLI in it" is, and it is both easy to do and invisible until a step runs.
 // The cost of asking is one short container start, paid once per (image, cli,
 // model) per cache window rather than per poll.
+//
+// --pull=never is what keeps that cost bounded. RunJob pulls every image
+// before it reaches preflight, so the image is already local; without the
+// flag, an image that somehow is not would be pulled inside this probe's
+// timeout, turning a slow download into "the image cannot run the cli" —
+// blaming the image for the network. A genuinely absent image fails here
+// with docker saying exactly that, which is the truth.
 func probeCLIImage(ctx context.Context, ri config.ResolvedInvocation, binary string, timeout time.Duration) error {
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -925,7 +1007,7 @@ func probeCLIImage(ctx context.Context, ri config.ResolvedInvocation, binary str
 	var errBuf bytes.Buffer
 
 	//nolint:gosec // image is validated at load (no leading '-') and binary comes from the static cliProviders table
-	cmd := exec.CommandContext(probeCtx, "docker", "run", "--rm", "--", ri.Image, binary, "--version")
+	cmd := exec.CommandContext(probeCtx, "docker", "run", "--rm", "--pull=never", "--", ri.Image, binary, "--version")
 	cmd.Stderr = &errBuf
 
 	err := cmd.Run()

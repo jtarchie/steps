@@ -167,9 +167,9 @@ func TestNewContainerNameIsUnique(t *testing.T) {
 	seen := map[string]bool{}
 
 	for range 100 {
-		name, err := newContainerName()
+		name, err := NewContainerName()
 		if err != nil {
-			t.Fatalf("newContainerName: %v", err)
+			t.Fatalf("NewContainerName: %v", err)
 		}
 
 		if !strings.HasPrefix(name, "steps-") {
@@ -177,7 +177,7 @@ func TestNewContainerNameIsUnique(t *testing.T) {
 		}
 
 		if seen[name] {
-			t.Fatalf("newContainerName returned %q twice", name)
+			t.Fatalf("NewContainerName returned %q twice", name)
 		}
 
 		seen[name] = true

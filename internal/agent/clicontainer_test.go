@@ -68,7 +68,7 @@ func TestBuildCLICommandHostPathUnchanged(t *testing.T) {
 	prepared := cliPrepared(t, []string{"read_file"})
 	prepared.conv.env.dir = t.TempDir()
 
-	cmd, err := buildCLICommand(t.Context(), prepared, "claude", []string{"--print"}, "")
+	cmd, _, err := buildCLICommand(t.Context(), prepared, "claude", []string{"--print"}, "")
 	if err != nil {
 		t.Fatalf("buildCLICommand: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestBuildCLICommandContainerRunsDocker(t *testing.T) {
 
 	prepared := containerPrepared(t)
 
-	cmd, err := buildCLICommand(t.Context(), prepared, "claude", []string{"--print", "--model", "sonnet"}, t.TempDir())
+	cmd, _, err := buildCLICommand(t.Context(), prepared, "claude", []string{"--print", "--model", "sonnet"}, t.TempDir())
 	if err != nil {
 		t.Fatalf("buildCLICommand: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestBuildCLICommandMountsHomeAndSetsIt(t *testing.T) {
 	prepared := containerPrepared(t)
 	stepHome := t.TempDir()
 
-	cmd, err := buildCLICommand(t.Context(), prepared, "claude", nil, stepHome)
+	cmd, _, err := buildCLICommand(t.Context(), prepared, "claude", nil, stepHome)
 	if err != nil {
 		t.Fatalf("buildCLICommand: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestBuildCLICommandMountsCredentialsWhenPresent(t *testing.T) {
 
 	prepared := containerPrepared(t)
 
-	cmd, err := buildCLICommand(t.Context(), prepared, "claude", nil, t.TempDir())
+	cmd, _, err := buildCLICommand(t.Context(), prepared, "claude", nil, t.TempDir())
 	if err != nil {
 		t.Fatalf("buildCLICommand: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestBuildCLICommandOmitsCredentialsWhenAbsent(t *testing.T) {
 
 	prepared := containerPrepared(t)
 
-	cmd, err := buildCLICommand(t.Context(), prepared, "claude", nil, t.TempDir())
+	cmd, _, err := buildCLICommand(t.Context(), prepared, "claude", nil, t.TempDir())
 	if err != nil {
 		t.Fatalf("buildCLICommand: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestBuildCLICommandDoesNotMountTheWholeClaudeDir(t *testing.T) {
 
 	prepared := containerPrepared(t)
 
-	cmd, err := buildCLICommand(t.Context(), prepared, "claude", nil, t.TempDir())
+	cmd, _, err := buildCLICommand(t.Context(), prepared, "claude", nil, t.TempDir())
 	if err != nil {
 		t.Fatalf("buildCLICommand: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestBuildCLICommandForwardsAPIKeyByNameOnly(t *testing.T) {
 	prepared := containerPrepared(t)
 	prepared.ri.APIKeyEnv = "MY_KEY"
 
-	cmd, err := buildCLICommand(t.Context(), prepared, "claude", nil, t.TempDir())
+	cmd, _, err := buildCLICommand(t.Context(), prepared, "claude", nil, t.TempDir())
 	if err != nil {
 		t.Fatalf("buildCLICommand: %v", err)
 	}
@@ -257,8 +257,8 @@ func TestNewCLIStepHomePreCreatesClaudeDir(t *testing.T) {
 		t.Fatalf(".claude is not a directory")
 	}
 
-	if perm := info.Mode().Perm(); perm != 0o700 {
-		t.Errorf(".claude mode = %o, want 700 (it holds a credentials mount)", perm)
+	if perm := info.Mode().Perm(); perm != cliStepHomeMode {
+		t.Errorf(".claude mode = %o, want %o (the container uid need not be ours)", perm, cliStepHomeMode)
 	}
 }
 
@@ -325,4 +325,70 @@ func TestProbeCLICredentialsRoutes(t *testing.T) {
 			t.Errorf("error %q does not name the variable that is missing", err)
 		}
 	})
+}
+
+// TestBuildCLICommandNamesTheContainer covers the property that makes a
+// timed-out step recoverable. Killing the docker client does not stop the
+// container it started, so without a name of our own there is nothing to
+// `docker rm -f` — the CLI would keep running, keep spending, and keep
+// writing into the workspace the next step is about to read.
+func TestBuildCLICommandNamesTheContainer(t *testing.T) {
+	isolateHome(t)
+
+	prepared := containerPrepared(t)
+
+	cmd, container, err := buildCLICommand(t.Context(), prepared, "claude", nil, t.TempDir())
+	if err != nil {
+		t.Fatalf("buildCLICommand: %v", err)
+	}
+
+	if container == "" {
+		t.Fatal("no container name returned; a canceled step could not reclaim it")
+	}
+
+	if !strings.Contains(strings.Join(cmd.Args, " "), "--name "+container) {
+		t.Errorf("args = %v, want --name %s", cmd.Args, container)
+	}
+
+	// Cancellation must reach the client as SIGTERM rather than an immediate
+	// kill, matching shell.dockerCommand, so it can detach cleanly.
+	if cmd.Cancel == nil {
+		t.Error("cmd.Cancel is nil; a canceled context would SIGKILL the docker client outright")
+	}
+
+	// The host path has no container, so nothing to name or reclaim.
+	hostPrepared := cliPrepared(t, []string{"read_file"})
+	hostPrepared.conv.env.dir = t.TempDir()
+
+	_, hostContainer, err := buildCLICommand(t.Context(), hostPrepared, "claude", nil, "")
+	if err != nil {
+		t.Fatalf("buildCLICommand (host): %v", err)
+	}
+
+	if hostContainer != "" {
+		t.Errorf("host path returned container %q, want none", hostContainer)
+	}
+}
+
+// TestBuildCLICommandDoesNotForwardAmbientKey: naming an api_key_env: that
+// nobody exported must not silently fall through to whatever key this
+// process happens to carry. Doing so would authenticate the run against the
+// operator's personal account while the pipeline says otherwise, and the
+// host path cannot do it (shell.HostEnv's allowlist excludes the variable),
+// so the two paths would disagree.
+func TestBuildCLICommandDoesNotForwardAmbientKey(t *testing.T) {
+	isolateHome(t)
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ambient-personal-key")
+
+	prepared := containerPrepared(t)
+	prepared.ri.APIKeyEnv = "NOT_EXPORTED"
+
+	cmd, _, err := buildCLICommand(t.Context(), prepared, "claude", nil, t.TempDir())
+	if err != nil {
+		t.Fatalf("buildCLICommand: %v", err)
+	}
+
+	if strings.Contains(strings.Join(cmd.Args, " "), "-e ANTHROPIC_API_KEY") {
+		t.Errorf("args = %v, forwarded the ambient key for an unexported api_key_env", cmd.Args)
+	}
 }

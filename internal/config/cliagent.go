@@ -376,9 +376,63 @@ func (c *Config) visitAgentSteps(name string, fn func(label string, step *Step) 
 	return nil
 }
 
+// StepsForAgent returns every step that runs the named agent.
+//
+// It exists because a step is what an agent's runtime is actually resolved
+// AGAINST: image:, network: and the rest merge the agent's own settings with
+// the step's overrides (see resolveAgentRuntime), so any question of the form
+// "does this agent run in a container" has no answer at the agent alone. A
+// caller with no step to hand — preflight for a sub-agent, which no step
+// names — gets an empty slice and should fall back to a bare Step.
+func (c *Config) StepsForAgent(name string) []Step {
+	var steps []Step
+
+	_ = c.visitAgentSteps(name, func(_ string, step *Step) error {
+		steps = append(steps, *step)
+
+		return nil
+	})
+
+	return steps
+}
+
+// AgentRunsOnHost reports whether any step running this agent executes it
+// outside a container — i.e. whether this machine needs the agent's own
+// binary at all.
+//
+// An agent named by no step answers true: that is the sub-agent/unused case,
+// where there is no step-level override to find and the agent's own settings
+// are the whole story.
+func (c *Config) AgentRunsOnHost(name string) bool {
+	agent, err := c.FindAgent(name)
+	if err != nil {
+		return true
+	}
+
+	steps := c.StepsForAgent(name)
+	if len(steps) == 0 {
+		return agent.Image == ""
+	}
+
+	for _, step := range steps {
+		if resolveAgentRuntime(agent, step).Image == "" {
+			return true
+		}
+	}
+
+	return false
+}
+
 // checkCLIBinaries reports CLI agents whose executable is not on PATH — the
 // same class of check as checkMCPCommands, answered before a run rather than
 // at the step that needed it.
+//
+// A CONTAINERIZED cli agent is exempt: its binary lives in the image, which
+// is the entire point of setting image: on it, and demanding the host have
+// one too would reject exactly the machine the feature exists for (a CI
+// runner with docker and no CLI installed). Whether the image really has the
+// binary is a question only docker can answer, so it belongs to preflight
+// (see internal/agent's probeCLIImage), not to this microsecond check.
 func (c *Config) checkCLIBinaries() []Problem {
 	var problems []Problem
 
@@ -391,6 +445,10 @@ func (c *Config) checkCLIBinaries() []Problem {
 		}
 
 		seen[name] = true
+
+		if !c.AgentRunsOnHost(name) {
+			continue
+		}
 
 		target, err := resolveCLITarget(agent.Source)
 		if err != nil {

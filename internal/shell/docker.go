@@ -146,7 +146,7 @@ func (s *dockerSession) ensure(ctx context.Context) (name, stderr string, err er
 
 	s.attempted = true
 
-	containerName, err := newContainerName()
+	containerName, err := NewContainerName()
 	if err != nil {
 		s.startErr = err
 
@@ -196,7 +196,7 @@ func (s *dockerSession) ensure(ctx context.Context) (name, stderr string, err er
 		// The corpse has told us what we needed; take it away now rather than
 		// leaving it for the next run's sweep. s.name is deliberately left
 		// unset, so close has nothing to do for this session.
-		removeContainer(ctx, containerName)
+		RemoveContainer(ctx, containerName)
 
 		return "", s.startOut, s.startErr
 	}
@@ -232,8 +232,11 @@ func (s *dockerSession) checkAlive(ctx context.Context, name string) error {
 		s.image, exitCode, keepAliveCommand(), containerLogTail(ctx, name))
 }
 
-// removeContainer deletes a container by name, best-effort.
-func removeContainer(ctx context.Context, name string) {
+// RemoveContainer deletes a container by name, best-effort. Exported so
+// internal/agent can reclaim the one-shot container behind its containerized
+// CLI run: that run has no session to Close, and killing the docker client
+// does not stop the container, so its caller owns teardown.
+func RemoveContainer(ctx context.Context, name string) {
 	//nolint:gosec // name is a hex string this package generated
 	out, err := exec.CommandContext(ctx, "docker", "rm", "-f", name).CombinedOutput()
 	if err != nil && !containerAlreadyGone(out) {
@@ -300,11 +303,15 @@ func containerAlreadyGone(dockerOutput []byte) bool {
 	return strings.Contains(string(dockerOutput), "No such container")
 }
 
-// newContainerName mints a random, collision-free container name. Random
+// NewContainerName mints a random, collision-free container name. Random
 // rather than derived from the step's name: two runs of the same step (a
 // watch loop, a retried attempt) must never contend for one name, and a name
 // we generated is one Close can remove knowing nothing else could own it.
-func newContainerName() (string, error) {
+//
+// Exported alongside RemoveContainer for internal/agent's one-shot CLI run,
+// which needs the same "name it so you can always reclaim it" property
+// without a session to hold the name for it.
+func NewContainerName() (string, error) {
 	var buf [8]byte
 
 	_, err := rand.Read(buf[:])

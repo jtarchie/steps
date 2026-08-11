@@ -68,6 +68,37 @@ func TestDockerRunArgvAlwaysAddsHostGateway(t *testing.T) {
 	}
 }
 
+// TestDockerRunArgvOmitsHostGatewayUnderHostNetwork: docker rejects extra
+// host-to-IP mappings against host networking, so emitting one there would
+// fail the run at container start over a flag it does not need — a container
+// sharing the host namespace already reaches the parent on loopback.
+func TestDockerRunArgvOmitsHostGatewayUnderHostNetwork(t *testing.T) {
+	t.Parallel()
+
+	args := DockerRunArgv(DockerRunSpec{Image: "alpine", Argv: []string{"claude"}, Network: "host"})
+
+	if slices.Contains(args, "--add-host") {
+		t.Errorf("args = %v, did not want --add-host with --network host", args)
+	}
+
+	if got := argAfter(args, "--network"); got != "host" {
+		t.Errorf("--network = %q, want host", got)
+	}
+}
+
+// TestDockerRunArgvNamesTheContainer covers what makes a run reclaimable:
+// killing the docker client does not stop the container, so a caller whose
+// context is canceled can only tear it down by name.
+func TestDockerRunArgvNamesTheContainer(t *testing.T) {
+	t.Parallel()
+
+	args := DockerRunArgv(DockerRunSpec{Image: "alpine", Argv: []string{"claude"}, Name: "steps-abc"})
+
+	if got := argAfter(args, "--name"); got != "steps-abc" {
+		t.Errorf("--name = %q, want steps-abc", got)
+	}
+}
+
 // TestDockerRunArgvIsForegroundAndSelfRemoving distinguishes this from the
 // session container: the run's lifetime is the process's lifetime.
 func TestDockerRunArgvIsForegroundAndSelfRemoving(t *testing.T) {
@@ -104,7 +135,7 @@ func TestDockerRunArgvCarriesContainerSettings(t *testing.T) {
 		ResolvedCwd: dir,
 		EnvNames:    []string{"CUSTOM"},
 		User:        "1000:1000",
-		Network:     "host",
+		Network:     "my-compose-net",
 		Privileged:  true,
 		CPUShares:   512,
 		MemoryBytes: 1 << 30,
@@ -114,7 +145,7 @@ func TestDockerRunArgvCarriesContainerSettings(t *testing.T) {
 		"-v":           dir + ":" + dir,
 		"-w":           dir,
 		"--user":       "1000:1000",
-		"--network":    "host",
+		"--network":    "my-compose-net",
 		"--cpu-shares": "512",
 		"--memory":     "1073741824",
 		"--add-host":   "host.docker.internal:host-gateway",

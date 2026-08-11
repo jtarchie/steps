@@ -60,11 +60,13 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
-	err = preflight(ctx, cfg, job)
-	if err != nil {
-		return err
-	}
-
+	// Docker comes first, and BEFORE preflight, because preflight can now ask
+	// docker questions of its own: a containerized CLI agent is probed by
+	// running its image (see internal/agent's probeCLIImage). Probing first
+	// meant that probe hit an unvalidated daemon and an unpulled image — so a
+	// missing daemon was reported as "this image cannot run the cli", and a
+	// cold image was pulled inside the 30s probe timeout instead of here,
+	// which is the very cost this block exists to move to startup.
 	if cfg.UsesImages() {
 		err = shell.ValidateDocker(ctx)
 		if err != nil {
@@ -84,6 +86,11 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 		if err != nil {
 			return fmt.Errorf("job %q: %w", job.Name, err)
 		}
+	}
+
+	err = preflight(ctx, cfg, job)
+	if err != nil {
+		return err
 	}
 
 	bw, err := provider.NewBuild(ctx, job.Name)

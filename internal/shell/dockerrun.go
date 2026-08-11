@@ -9,6 +9,21 @@ package shell
 
 import "sort"
 
+const (
+	// hostNetwork is docker's share-the-host-namespace network mode.
+	hostNetwork = "host"
+	// hostGatewayMapping makes the host reachable from inside the container
+	// by a name that works on Docker Desktop and Linux Docker Engine alike.
+	// HostGatewayName is the container-side spelling callers must dial.
+	hostGatewayMapping = HostGatewayName + ":host-gateway"
+)
+
+// HostGatewayName is how a containerized process names the host its parent is
+// listening on. Exported because the parent has to hand the child a URL built
+// from it, and the name and the --add-host mapping that makes it resolve must
+// not drift apart.
+const HostGatewayName = "host.docker.internal"
+
 // Mount is one extra bind mount for DockerRunArgv, beyond the working
 // directory that ResolvedCwd already mounts.
 type Mount struct {
@@ -26,6 +41,13 @@ type DockerRunSpec struct {
 	// argument values never need shell-quoting.
 	Image string
 	Argv  []string
+	// Name is the container's --name. It is what makes the run RECLAIMABLE:
+	// killing the docker client does not stop the container it started, so a
+	// caller whose context is canceled can only tear the container down if it
+	// knows its name. Mint one with NewContainerName and remove it with
+	// RemoveContainer. Empty lets docker name it, which should be reserved
+	// for runs nobody needs to interrupt.
+	Name string
 	// ResolvedCwd is bind-mounted at its own path and set as the workdir,
 	// exactly like a session container (see dockerStartArgs). Callers resolve
 	// it with ResolveMountPath. Empty mounts nothing.
@@ -62,7 +84,20 @@ type DockerRunSpec struct {
 // it natively) — it is how a containerized child reaches a server the parent
 // bound on the host, regardless of platform, without claiming --network host.
 func DockerRunArgv(spec DockerRunSpec) []string {
-	args := []string{"run", "--rm", "-i", "--init", "--add-host", "host.docker.internal:host-gateway"}
+	args := []string{"run", "--rm", "-i", "--init"}
+
+	if spec.Name != "" {
+		args = append(args, "--name", spec.Name)
+	}
+
+	// Under host networking the container shares this namespace outright, so
+	// the parent is already reachable on loopback and there is no gateway to
+	// map — docker rejects extra host-to-IP mappings against that network
+	// mode, which would fail the run at container start over a flag it did
+	// not need.
+	if spec.Network != hostNetwork {
+		args = append(args, "--add-host", hostGatewayMapping)
+	}
 
 	args = append(args, containerArgs(spec.ResolvedCwd, spec.EnvNames, spec.User, spec.Network,
 		spec.Privileged, spec.CPUShares, spec.MemoryBytes)...)

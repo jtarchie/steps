@@ -113,28 +113,75 @@ func Preflight(ctx context.Context, cfg *config.Config, agentNames []string, set
 			continue
 		}
 
-		ri, err := cfg.ResolveAgentInvocation(config.Step{Agent: name})
+		// Resolved against the STEPS that run this agent, not against a bare
+		// one. Container settings merge agent and step (resolveAgentRuntime),
+		// so a step-level `image:` is invisible to a synthetic step — and a
+		// CLI probe reads ri.Image to decide whether to look on this host's
+		// PATH or inside the image. Getting that backwards checked the wrong
+		// thing entirely.
+		for _, ri := range agentInvocations(cfg, name) {
+			// Every agent gets its own decision, even when several share a
+			// model. Deduping by (endpoint, model) and skipping the later
+			// agents left them with no failover recorded while preflight
+			// reported zero problems — the run then died mid-plan against the
+			// dead primary, which is exactly the failure preflight exists to
+			// move earlier. probeModelCached already collapses the network
+			// cost to one request.
+			probeErr := probeModelCached(ctx, ri, settings)
+			if probeErr == nil {
+				healthyEndpoints[ri.BaseURL] = true
+			} else if !failOver(ctx, agent, ri, settings) {
+				failures = append(failures, modelFailure{name: name, ri: ri, err: probeErr})
+			}
+
+			problems = append(problems, probeAgentServers(ctx, cfg, ri, settings, seenServer)...)
+		}
+	}
+
+	return append(problems, renderModelFailures(failures, healthyEndpoints)...)
+}
+
+// agentInvocations resolves one agent once per DISTINCT way a step runs it.
+//
+// Usually that is a single invocation: most agents are referenced by steps
+// that override nothing about the runtime. It is more when steps disagree —
+// one running the agent on the host and another under an image: — and those
+// are genuinely different questions to ask about this machine, so each gets
+// probed. Duplicates are collapsed here rather than left to the probe cache,
+// so a job with twenty identical steps does not walk twenty invocations.
+//
+// An agent no step names (a sub-agent, or one preflighted by name alone)
+// falls back to a bare step, which is what this always did.
+func agentInvocations(cfg *config.Config, name string) []config.ResolvedInvocation {
+	steps := cfg.StepsForAgent(name)
+	if len(steps) == 0 {
+		steps = []config.Step{{Agent: name}}
+	}
+
+	var (
+		invocations []config.ResolvedInvocation
+		seen        = map[string]bool{}
+	)
+
+	for _, step := range steps {
+		ri, err := cfg.ResolveAgentInvocation(step)
 		if err != nil {
 			continue // an unresolvable agent is already a load error
 		}
 
-		// Every agent gets its own decision, even when several share a model.
-		// Deduping by (endpoint, model) and skipping the later agents left
-		// them with no failover recorded while preflight reported zero
-		// problems — the run then died mid-plan against the dead primary,
-		// which is exactly the failure preflight exists to move earlier.
-		// probeModelCached already collapses the network cost to one request.
-		probeErr := probeModelCached(ctx, ri, settings)
-		if probeErr == nil {
-			healthyEndpoints[ri.BaseURL] = true
-		} else if !failOver(ctx, agent, ri, settings) {
-			failures = append(failures, modelFailure{name: name, ri: ri, err: probeErr})
+		// Keyed on what a probe actually varies over. Two steps differing
+		// only in prompt or inputs ask this machine the same question.
+		key := ri.BaseURL + "|" + ri.ModelName + "|" + ri.CLI + "|" + ri.Image
+		if seen[key] {
+			continue
 		}
 
-		problems = append(problems, probeAgentServers(ctx, cfg, ri, settings, seenServer)...)
+		seen[key] = true
+
+		invocations = append(invocations, ri)
 	}
 
-	return append(problems, renderModelFailures(failures, healthyEndpoints)...)
+	return invocations
 }
 
 // withSubAgents expands a job's agent list to include the sub-agents those

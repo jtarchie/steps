@@ -11,6 +11,8 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/genai"
+
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 // bridgeAuth attaches the bridge's bearer token to every request, standing in
@@ -81,7 +83,7 @@ func TestCLIBridgeServesNonNativeTools(t *testing.T) {
 	// read_file is served by the CLI natively, so the bridge must not
 	// re-export it — offering the same capability twice under two names would
 	// leave the model choosing between them.
-	bridge, err := newCLIBridge(t.Context(), bridgeConversation(decls, registry, nil), map[string]bool{"read_file": true}, false)
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(decls, registry, nil), map[string]bool{"read_file": true}, reachHost)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
 	}
@@ -128,7 +130,7 @@ func TestCLIBridgeExecutesAndCapturesVerdict(t *testing.T) {
 		t.Context(),
 		bridgeConversation([]*genai.FunctionDeclaration{decl}, map[string]toolImpl{verdictToolName: impl}, map[string]bool{verdictToolName: true}),
 		nil,
-		false,
+		reachHost,
 	)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
@@ -174,7 +176,7 @@ func TestCLIBridgeReportsToolFailureAsError(t *testing.T) {
 		t.Context(),
 		bridgeConversation([]*genai.FunctionDeclaration{decl}, map[string]toolImpl{verdictToolName: impl}, nil),
 		nil,
-		false,
+		reachHost,
 	)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
@@ -205,7 +207,7 @@ func TestCLIBridgeReportsToolFailureAsError(t *testing.T) {
 func TestCLIBridgeWriteConfig(t *testing.T) {
 	t.Parallel()
 
-	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil, false)
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil, reachHost)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
 	}
@@ -289,7 +291,7 @@ func TestCLIBridgeRejectsUnauthenticatedCallers(t *testing.T) {
 		t.Context(),
 		bridgeConversation([]*genai.FunctionDeclaration{decl}, map[string]toolImpl{verdictToolName: impl}, nil),
 		nil,
-		false,
+		reachHost,
 	)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
@@ -345,7 +347,7 @@ func TestCLIBridgeRejectsUnauthenticatedCallers(t *testing.T) {
 func TestCLIBridgeHandoffNoteAbsentWhenUnwritten(t *testing.T) {
 	t.Parallel()
 
-	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil, false)
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil, reachHost)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
 	}
@@ -364,15 +366,15 @@ func TestCLIBridgeHandoffNoteAbsentWhenUnwritten(t *testing.T) {
 func TestCLIBridgeContainerizedIsReachableFromAContainer(t *testing.T) {
 	t.Parallel()
 
-	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil, true)
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil, reachGateway)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
 	}
 
 	t.Cleanup(func() { _ = bridge.Close(t.Context()) })
 
-	if !strings.HasPrefix(bridge.url, "http://"+cliBridgeContainerHost+":") {
-		t.Errorf("url = %q, want it to name %s", bridge.url, cliBridgeContainerHost)
+	if !strings.HasPrefix(bridge.url, "http://"+shell.HostGatewayName+":") {
+		t.Errorf("url = %q, want it to name %s", bridge.url, shell.HostGatewayName)
 	}
 
 	// A wildcard bind is not a destination: if the URL kept it, every bridged
@@ -396,7 +398,7 @@ func TestCLIBridgeContainerizedIsReachableFromAContainer(t *testing.T) {
 func TestCLIBridgeHostPathStaysLoopback(t *testing.T) {
 	t.Parallel()
 
-	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil, false)
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil, reachHost)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
 	}
