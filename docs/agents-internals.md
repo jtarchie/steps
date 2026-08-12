@@ -125,7 +125,7 @@ The server is **stateless** (`StreamableHTTPOptions{Stateless: true}`). It serve
 
 Adaptation is thin because the tool contract already fits: a `toolImpl` never returns a Go error, so the only translation is which result shape becomes `IsError` — and `requiredCallSucceeded`, the same predicate the HTTP loop uses, already answers that.
 
-The bridge is also where verdicts are captured. Every successful call is inspected for the `verdict`/`note` keys and the `handoff_note` payload, in the parent's memory, at the moment the tool runs. Nothing depends on the CLI reporting what it decided.
+The bridge is also where verdicts are captured. Every successful call is inspected for the `verdict`/`note` keys, in the parent's memory, at the moment the tool runs. Nothing depends on the CLI reporting what it decided.
 
 ### Enforcing required tools without `tool_choice`
 

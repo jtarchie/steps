@@ -69,21 +69,6 @@ jobs:
 			want: `step when at line 7: unknown key "runs" (did you mean "run"?)`,
 		},
 		{
-			name: "handoff mapping",
-			pipeline: `
-agents:
-- name: a
-  source: { model: lmstudio/qwen }
-jobs:
-- name: j
-  plan:
-  - agent: a
-    prompt: x
-    handoff: { contxt: true }
-`,
-			want: `step handoff at line 10: unknown key "contxt" (did you mean "context"?)`,
-		},
-		{
 			name: "prompt_file mapping",
 			pipeline: `
 agents:

@@ -28,20 +28,13 @@ import (
 // value in one axis re-runs only the cells that value appears in.
 func runAcrossStep(
 	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, parentHash string, handoff *agent.Handoff,
+	bw workspace.BuildWorkspace, st *store.Store, parentHash string,
 ) (string, stepDisposition, nonGetOutcome, error) {
 	label := fmt.Sprintf("job %q step %d", jobName, i)
 
-	// A from: axis takes its values from what an earlier step recorded, so the
-	// matrix's width is only knowable here — see acrossruntime.go.
-	runtime, err := resolveRuntimeAxes(ctx, st, agent.ContextReadScopes(ctx), step)
+	cells, err := config.ExpandAcross(label, step)
 	if err != nil {
-		return "", stepRan, nonGetOutcome{}, fmt.Errorf("%s: %w", label, err)
-	}
-
-	cells, err := config.ExpandAcrossValues(label, step, runtime)
-	if err != nil {
-		return "", stepRan, nonGetOutcome{}, err //nolint:wrapcheck // ExpandAcrossValues already carries the job/step label
+		return "", stepRan, nonGetOutcome{}, err //nolint:wrapcheck // ExpandAcross already carries the job/step label
 	}
 
 	content, err := merkle.AcrossNodeContent(cfg, step, cells)
@@ -61,7 +54,7 @@ func runAcrossStep(
 	// The block hash folds in every cell's content, so parenting cells under
 	// it would make one cell's edit change every cell's identity — which is
 	// precisely the whole-matrix re-run this feature exists to avoid.
-	cellErr := runAcrossCells(ctx, cfg, jobName, i, step, cells, bw, st, parentHash, handoff)
+	cellErr := runAcrossCells(ctx, cfg, jobName, i, step, cells, bw, st, parentHash)
 
 	status := "succeeded"
 	if cellErr != nil {
@@ -87,26 +80,13 @@ func runAcrossStep(
 // serializing it costs N times one cell's wall clock for nothing.
 func runAcrossCells(
 	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, cells []config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, cellParent string, handoff *agent.Handoff,
+	bw workspace.BuildWorkspace, st *store.Store, cellParent string,
 ) error {
 	if step.MaxInFlight > 1 {
-		return runAcrossCellsConcurrently(ctx, cfg, jobName, i, step, cells, bw, st, cellParent, handoff)
+		return runAcrossCellsConcurrently(ctx, cfg, jobName, i, step, cells, bw, st, cellParent)
 	}
 
-	// context qualify: is a property of the MATRIX, not of the scheduling, so
-	// a serial qualified matrix scopes and merges exactly as the concurrent
-	// walk does. That is what makes the two spellings of one pipeline record
-	// the same key names — the reason max_in_flight: is safe to add and remove.
-	qualified := step.Unwrap().QualifiesContext()
-
-	var (
-		failures []error
-		results  []branchResult // only the qualified walk has a join to merge
-	)
-
-	if qualified {
-		results = make([]branchResult, len(cells))
-	}
+	var failures []error
 
 	spend := newBlockBudget(ctx, step)
 
@@ -115,15 +95,7 @@ func runAcrossCells(
 			break
 		}
 
-		cellCtx := ctx
-
-		if qualified {
-			results[index] = branchResult{index: index, name: executedStepName(cell)}
-			cellCtx = agent.WithContextScope(ctx,
-				branchContextScope(agent.ContextWriteScope(ctx), index, results[index].name))
-		}
-
-		skipped, err := runAcrossCell(cellCtx, cfg, jobName, i, cell, bw, st, cellParent, handoff)
+		skipped, err := runAcrossCell(ctx, cfg, jobName, i, cell, bw, st, cellParent)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("cell %q: %w", executedStepName(cell), err))
 
@@ -138,25 +110,21 @@ func runAcrossCells(
 		}
 	}
 
-	if qualified {
-		mergeBranchesContext(ctx, st, results)
-	}
-
 	return errors.Join(failures...)
 }
 
 // runAcrossCellsConcurrently runs up to max_in_flight cells at a time.
 //
 // It borrows in_parallel:'s machinery wholesale — the same limiter, the same
-// per-branch execution log merged in declaration order, the same per-branch
-// context scopes merged at the join — because a cell running beside its
-// siblings has exactly the hazards a branch does. What it deliberately does NOT
-// borrow is fail_fast: a matrix asks which combinations work, and cancelling
-// the siblings of the first red cell answers that for exactly one cell. Every
-// cell runs, every failure is reported, same as the serial walk.
+// per-branch execution log merged in declaration order — because a cell
+// running beside its siblings has exactly the hazards a branch does. What it
+// deliberately does NOT borrow is fail_fast: a matrix asks which combinations
+// work, and cancelling the siblings of the first red cell answers that for
+// exactly one cell. Every cell runs, every failure is reported, same as the
+// serial walk.
 func runAcrossCellsConcurrently(
 	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, cells []config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, cellParent string, handoff *agent.Handoff,
+	bw workspace.BuildWorkspace, st *store.Store, cellParent string,
 ) error {
 	var (
 		wg      sync.WaitGroup
@@ -209,15 +177,7 @@ func runAcrossCellsConcurrently(
 			runCtx, cellLog := forkExecLog(ctx)
 			logs[index] = cellLog
 
-			// Each cell writes context into a scope only it touches, merged at
-			// the join under a key naming the cell. Serial cells keep the
-			// plain last-wins the docs describe, because sequential writers
-			// resolve in an order readable off the pipeline; concurrent ones do
-			// not, which is the same reason in_parallel: branches are scoped.
-			runCtx = agent.WithContextScope(runCtx,
-				branchContextScope(agent.ContextWriteScope(ctx), index, results[index].name))
-
-			skipped, err := runAcrossCell(runCtx, cfg, jobName, i, cells[index], bw, st, cellParent, handoff)
+			skipped, err := runAcrossCell(runCtx, cfg, jobName, i, cells[index], bw, st, cellParent)
 			results[index].err, skips[index] = err, skipped
 		}()
 	}
@@ -238,8 +198,6 @@ func runAcrossCellsConcurrently(
 			fmt.Printf("skip: %s (unchanged)\n", result.name)
 		}
 	}
-
-	mergeBranchesContext(ctx, st, results)
 
 	return errors.Join(failures...)
 }
@@ -298,10 +256,6 @@ func (b *blockBudget) exhausted() bool {
 // inherent to bounding what gets STARTED rather than what a running cell may
 // cost — not something a different check order fixes — so the honest move is
 // to be loud about it rather than let an author believe a ceiling is in force.
-//
-// The matrix's width is usually decided at run time (from:), which is why this
-// cannot be a load-time error: whether the configuration binds is not knowable
-// until the cells exist.
 func (b *blockBudget) warnIfUnbindable(jobName string, maxInFlight, cells int) {
 	if !b.unbindable(maxInFlight, cells) {
 		return
@@ -359,7 +313,7 @@ func stopAdmitting(ctx context.Context, jobName string, spend *blockBudget, ran,
 // runAcrossCell runs one cell unless its exact content already succeeded.
 func runAcrossCell(
 	ctx context.Context, cfg *config.Config, jobName string, i int, cell config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, cellParent string, handoff *agent.Handoff,
+	bw workspace.BuildWorkspace, st *store.Store, cellParent string,
 ) (bool, error) {
 	cellHash, cacheable, err := merkle.CellHash(cfg, cell, cellParent)
 	if err != nil {
@@ -377,7 +331,7 @@ func runAcrossCell(
 		}
 	}
 
-	_, _, _, err = runNonGetStep(ctx, cfg, jobName, i, cell, bw, st, nil, cellParent, handoff)
+	_, _, _, err = runNonGetStep(ctx, cfg, jobName, i, cell, bw, st, nil, cellParent)
 
 	return false, err
 }

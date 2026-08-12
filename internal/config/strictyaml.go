@@ -39,8 +39,8 @@ func strictUnmarshal(data []byte, out any) error {
 // It exists because KnownFields does not reach through a custom
 // yaml.Unmarshaler: a type with its own UnmarshalYAML decodes its mapping via
 // yaml.Node.Decode, which starts a fresh, non-strict decoder. Without this,
-// the scalar-or-mapping fields (when:, handoff:, prompt_file:, fix:, and every
-// tools: entry) would be the one place in a pipeline where a misspelled key is
+// the scalar-or-mapping fields (when:, prompt_file:, fix:, and every tools:
+// entry) would be the one place in a pipeline where a misspelled key is
 // silently ignored — precisely the fields whose mapping form a user reaches
 // for when they want to be explicit.
 func rejectUnknownKeys(node *yaml.Node, context string, allowed ...string) error {

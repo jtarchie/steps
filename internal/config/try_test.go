@@ -1,7 +1,6 @@
 package config
 
 import (
-	"slices"
 	"testing"
 )
 
@@ -276,9 +275,9 @@ jobs:
 }
 
 // TestTryIsTransparentToAgentFields covers the other half of the division:
-// verdicts:/handoff: stay on the agent step, since that is what internal/agent
-// reads. Both used to be accepted-and-ignored or rejected outright, which left
-// no working way to combine try: with either.
+// verdicts: stays on the agent step, since that is what internal/agent reads.
+// It used to be accepted-and-ignored or rejected outright, which left no
+// working way to combine try: with it.
 func TestTryIsTransparentToAgentFields(t *testing.T) {
 	t.Parallel()
 
@@ -354,83 +353,6 @@ jobs:
 
 		if got := cfg.Jobs[0].Plan[0].VerdictNames(); len(got) != 2 {
 			t.Errorf("VerdictNames() = %v, want the wrapped agent's two verdicts", got)
-		}
-	})
-
-	t.Run("handoff on the wrapped agent is accepted", func(t *testing.T) {
-		t.Parallel()
-
-		path := writeConfig(t, agents+`
-jobs:
-- name: build
-  plan:
-  - task: judge
-    run: "true"
-    to: {failure: reviewer, success: done}
-  - try:
-      agent: reviewer
-      prompt: fix it
-      handoff: {context: true}
-  - task: done
-    run: echo done
-`)
-		_, err := LoadConfig(path)
-		if err != nil {
-			t.Fatalf("LoadConfig: %v", err)
-		}
-	})
-
-	t.Run("handoff on the wrapper is rejected", func(t *testing.T) {
-		t.Parallel()
-
-		path := writeConfig(t, agents+`
-jobs:
-- name: build
-  plan:
-  - task: judge
-    run: "true"
-    to: {failure: reviewer, success: done}
-  - try:
-      agent: reviewer
-      prompt: fix it
-    handoff: {context: true}
-  - task: done
-    run: echo done
-`)
-		wantLoadError(t, path, "handoff is only valid on agent steps")
-	})
-
-	t.Run("handoff_note is wired onto the wrapped agent", func(t *testing.T) {
-		t.Parallel()
-
-		path := writeConfig(t, `
-agents:
-- name: reviewer
-  source:
-    model: lmstudio/qwen2.5-coder
-- name: planner
-  source:
-    model: lmstudio/qwen2.5-coder
-jobs:
-- name: build
-  plan:
-  - agent: planner
-    prompt: plan it
-    handoff: {note: true}
-  - try:
-      agent: reviewer
-      prompt: review it
-`)
-		cfg, err := LoadConfig(path)
-		if err != nil {
-			t.Fatalf("LoadConfig: %v", err)
-		}
-
-		// The runtime hands internal/agent the WRAPPED step, so that is where
-		// the computed receiver has to land.
-		got := cfg.Jobs[0].Plan[1].Try.HandoffNoteFrom
-		if !slices.Equal(got, []string{"planner"}) {
-			t.Errorf("wrapped agent HandoffNoteFrom = %v, want [planner]", got)
 		}
 	})
 }

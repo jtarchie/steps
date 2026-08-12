@@ -180,7 +180,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 
 	// Cap the child's answer like every other tool result — a chatty child with
 	// no max_tokens must not flood the parent's context past maxToolOutputBytes.
-	// Spills to a file (like shellToolResult/MCP/previous_run) rather than
-	// dropping the overflow, using the parent's own spill directory.
+	// Spills to a file (like shellToolResult/MCP) rather than dropping the
+	// overflow, using the parent's own spill directory.
 	return map[string]any{"result": spillOrTruncate(res.text, env.spillDir)}
 }

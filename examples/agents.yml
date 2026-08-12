@@ -123,16 +123,6 @@ agents:
   max_turns: 20       # the fix<->re-run loop budget (turns carry memory)
   tools: [read_file, list_dir, search_files, edit_file, write_file, run_shell]
 
-# The fan-in-review cast. Each needs read_file, because a delivered handoff
-# note arrives as a synthetic read_file result — a receiver without that grant
-# is a load error rather than a silently empty conversation.
-- name: planner
-  system: You decide what a review should look for, and hand that plan on.
-- name: security-reviewer
-  system: You review for security issues and report what you found.
-- name: perf-reviewer
-  system: You review for performance issues and report what you found.
-
 # Sub-agent delegation: `lead` grants `summarizer` as a callable tool, so it can
 # offload bulk reading to a cheaper model instead of pulling a whole file in.
 - name: summarizer
@@ -245,70 +235,6 @@ jobs:
         go vet failed (output below). Code is under ./repo. Fix with minimal
         edits, then re-run the `vet` tool. Do not silence vet with //nolint.
 
-# ─── run context store (needs a model) ──────────────────────────────────────
-# context: write grants a set_context(key, value) tool. The investigator
-# records named facts while it still holds the context; every later step in the
-# run can read them back. A handoff note is a whole document addressed to the
-# NEXT agent; a context key is one fact addressed to all of them.
-#
-# The tool is never required — the agent is offered somewhere to put a
-# conclusion, not made to produce one. Writing a key twice replaces it.
-- name: record-facts
-  plan:
-  - get: notes
-  - agent: lead
-    dir: notes
-    context: write
-    prompt: |
-      Read NOTES.txt. Record what it is about with set_context under the key
-      `subject`, then reply with one sentence describing the file.
-  # Reading is automatic: this step declares no context: at all and still opens
-  # with a recap of what lead recorded, delivered as a synthetic read_context
-  # result. fidelity: controls how much of each value it sees — off opts out
-  # entirely, summary shows values in full. Default is compact.
-  - agent: summarizer
-    prompt: |
-      Using the recorded `subject` fact, write one sentence for a changelog.
-  - agent: summarizer
-    context: { fidelity: "off" }
-    prompt: |
-      Write a haiku about pipelines. You are shown no recorded facts.
-
-# ─── handoff notes across a concurrent block (needs a model) ────────────────
-# A note is a shift-change report: the departing agent writes it WHILE IT STILL
-# HOLDS the context, and the next agent gets it automatically. Unlike a context
-# key (one fact for everyone), a note is a whole document for whoever comes
-# next.
-#
-# Both directions cross an in_parallel: block. planner's note is broadcast into
-# every branch — a note is read-only, so one report with many readers is free.
-# Each branch then writes its own, and synthesizer receives ALL of them, as
-# separate documents in declaration order: which reviewer said what is part of
-# what they said, so merging them into one file would destroy the answer.
-#
-# Each delivered note arrives fenced and labelled as data rather than
-# instructions. Several model-authored documents landing in one conversation is
-# the widest injection surface here.
-- name: fan-in-review
-  plan:
-  - agent: planner
-    handoff: { note: true }
-    prompt: |
-      Decide what a review of this pipeline should look for. Write your
-      handoff note for the reviewers who run next.
-  - in_parallel:
-      steps:
-      - agent: security-reviewer
-        handoff: { note: true }
-        prompt: Review for security issues, following the plan you were handed.
-      - agent: perf-reviewer
-        handoff: { note: true }
-        prompt: Review for performance issues, following the plan you were handed.
-  - agent: summarizer
-    prompt: |
-      You were handed one note per reviewer. Combine them into a single
-      verdict, saying which reviewer raised what.
-
 # ─── sub-agent delegation (needs a local model; otherwise offline) ───────────
 - name: delegate
   plan:
@@ -337,23 +263,25 @@ jobs:
 - name: judge
   plan:
   - get: project
-  # handoff: {tool: true} — writer is the target of critic's `revise:` route,
-  # so on a revise loop it gets a <transition_context> block (which step/
-  # verdict sent it here, which visit this is) appended to its prompt, plus a
-  # previous_run tool to pull critic's full response/note on demand. Neither
-  # fires on the FIRST execution (nothing routed here yet) — see docs/control-
-  # flow.md's "Handoff context" section.
+  # context: { from: { critic: full } } — writer names critic even though
+  # critic sits LATER in the plan: this is the revise loop, where writer is
+  # entered a second time via critic's `revise:` route. On the first pass
+  # critic hasn't run yet, so the demand resolves to nothing; on a revise
+  # pass it arrives as a synthetic read_step result carrying critic's verdict,
+  # note, and full response. See docs/agents.md's "Reading another step's
+  # decision" section.
   - agent: writer
     inputs: [project]
     outputs: [draft]
+    context:
+      from:
+        critic: full
     prompt: >
       Read the files under project/ (README.md, main.go, CHANGELOG.md), then
       write a two-sentence summary of what this project does to
-      draft/summary.md (create the draft directory first with run_shell). If a
-      transition context block is present below, you are revising after a
-      critique — call previous_run to see the critic's full reasoning and note
-      before you rewrite.
-    handoff: { tool: true }
+      draft/summary.md (create the draft directory first with run_shell). If
+      you were handed a prior decision from critic, you are revising after a
+      critique — use its note and response before you rewrite.
   - agent: critic
     inputs: [project, draft]
     prompt: >

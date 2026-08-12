@@ -19,7 +19,7 @@ An agent step runs a tool-calling conversation loop:
 5. Print the model's final response text to the terminal, followed by its verdict and note if the step declares `verdicts:` — this happens whether the run succeeded or hit its turn budget, since a turn-exhausted attempt's partial response is still available.
 6. Record the step's output.
 
-Two tools can be synthesized onto a step's grant beyond what `tools:` lists: a required `verdict` tool (`verdicts:` on the step) and a read-only `previous_run` tool (`handoff: {tool: true}`) — both documented in [control-flow.md](control-flow.md)'s "Step transitions" and "Handoff context" sections, since both exist to serve routing rather than the tool-calling loop itself.
+One tool can be synthesized onto a step's grant beyond what `tools:` lists: a required `verdict` tool (`verdicts:` on the step) — documented in [control-flow.md](control-flow.md)'s "Step transitions" section, since it exists to serve routing rather than the tool-calling loop itself.
 
 ## Built-in tools
 
@@ -269,124 +269,21 @@ That precedence exists because `context_paths:` is itself step-level: two steps 
 ```yaml
 - across:
   - var: dim
-    from: dimensions      # [{id: api, focus: "boundaries", scope: "repo/api.go"}, …]
-    label: id
+    values: [api, storage]
   agent: reviewer
-  context_paths: ["{{ .vars.dim.scope }}"]
-  prompt: "Review {{ .vars.dim.focus }}"
+  context_paths: ["repo/{{ .vars.dim }}.go"]
+  prompt: "Review the {{ .vars.dim }} package"
 ```
 
-One path per entry: a field renders to one string, and a space-separated `scope` is not split into several paths. An item that needs three files carries three fields, or the axis carries three items. A `{{ .vars.x }}` naming an axis the matrix does not declare is a **load** error for both matrix spellings, exactly as it is in `prompt:` — the error names the entry (`context_paths[0]`), not just the list. A bare `{{ .vars.dim }}` where the item is an object is refused for the usual reason: an object has no single rendering as a path.
+One path per entry, rendered per cell. A `{{ .vars.x }}` naming an axis the matrix does not declare is a **load** error for both matrix spellings, exactly as it is in `prompt:` — the error names the entry (`context_paths[0]`), not just the list.
 
 **Caching**: the *paths* (not contents) enter the step's hashed content — the files live inside the workspace, so their content is already chained through the input artifacts' own hashes. A matrix cell hashes the path it rendered to, which is what makes two cells reviewing different files two different steps.
 
 **How it works**: At preparation time, each `context_paths` file is read and confined by `resolveAgentPath`. At conversation start, `buildAgentRequest` prepends a simulated `read_file` tool call + result pair for each path before the user prompt — the same `{"content": …}` response shape the real `read_file` tool uses. This keeps the context visible to the model without consuming a turn or injecting content into the system message.
 
-## Authored handoff notes
-
-Enabled with `handoff: { note: true }`.
-
-Agents in a plan are a relay: each works alone, and the next one starts with none of its predecessor's context. Left to files-by-convention, every agent re-researches what the one before it already knew. `handoff: { note: true }` makes the departing agent write a shift-change report *while it still holds the context*, and delivers it to the next agent automatically.
-
-It is the **forward** half of [`handoff:`](control-flow.md#handoff-context-handoff); `context:`/`tool:` are the backward half, and the two compose on one step.
-
-```yaml
-- agent: planner
-  handoff: { note: true }   # the entire configuration surface
-- agent: coder
-  handoff: { note: true }
-- task: build-check         # non-agent steps are stepped over
-- agent: reviewer           # receives the coder's note
-```
-
-The receiver is **computed, not declared**: the next `agent` step in the same get-segment. There is nothing else to configure — no schema, no addressing, no opt-in on the receiving side.
-
-**The form is fixed** (three required string fields, owned by `steps`, not the pipeline):
-
-| field | what it asks for |
-|---|---|
-| `done` | factual inventory of what was done, with file:line — explicitly *not* a self-grade |
-| `facts` | what the next agent needs, including **dead ends** — what was read and ruled out, so the search isn't repeated |
-| `watch_out` | risks, uncertainties, and any deviation from instructions, with the reason |
-
-A synthesized **required** `write_handoff` tool carries them. Required means the same thing it does for `verdicts:`: the model's turn is constrained via `tool_choice` when it tries to finish without having called it (see `forceRequiredTool`), so the note cannot be silently skipped. A step may require both a verdict and a note — the required-tool machinery forces one per turn until all are satisfied.
-
-The rendered note (`handoff/<step>.md` in the build workspace) opens with a provenance header and ends with a section the author could not have written:
-
-```markdown
-> Model-authored by agent "coder" (job "self-build") — claims to verify, not facts.
-> The final section is computed by the runner and is the only part the author could not write.
-
-## done
-...
-## Files touched (computed from the run, not authored)
-read_file: internal/pipeline/pipeline.go, internal/config/config.go
-edit_file: internal/pipeline/pipeline.go
-other tools: run_shell x18, verify_gate x11
-```
-
-**What crosses, and what deliberately does not.** Only the three authored fields plus the computed section. The sender's raw response, its conversation, and its tool-call *arguments* stay behind. That is a security boundary, not tidiness: a response can quote shell or MCP output the receiver has no grant for, and an argument can be an arbitrary model-authored string. So the computed section carries **path arguments of file tools only** — every other tool contributes a name and a count (`run_shell x18`), never its command line — and it counts only calls that **succeeded**, since a `write_file` the model requested but that failed touched nothing and listing it would make the one mechanical section into just another claim. Authored fields have their markdown headings demoted, so a sender cannot forge the computed heading. Every part is size-capped — each authored field, and the computed section too — with a budget that is arithmetic rather than hopeful: three fields plus the computed section plus the header sum to well under the receiver's context-file limit, so a runaway sender can never fail the *innocent* step. An oversized field is truncated inline rather than spilled to a file, because the spill directory belongs to the sending step and is deleted the moment it returns.
-
-The receiver is expected to treat the authored part as claims — the built-in `reviewer` persona states the trust order explicitly (deterministic output > the code > model-authored prose).
-
-**Delivery** reuses the `context_paths` machinery exactly: the note is prepended to the receiver's context paths, so it arrives as a synthetic `read_file` result at conversation start — zero turns, guaranteed presence, and re-readable from disk if the conversation is later compacted. Because the path is re-resolved on *every* dispatch rather than captured once, a `to:`-driven redo of the receiver always picks up the newest note. A missing note (the sender was guard-skipped, or never ran) is skipped silently rather than failing the receiver — the one place this differs from `context_paths`, where a missing file is a hard error because the author named it explicitly.
-
-### Notes across a concurrent block
-
-A note chain reaches into `in_parallel:` and `race:` blocks, in both directions:
-
-```yaml
-- agent: planner
-  handoff: { note: true }     # broadcast into every branch below
-- in_parallel:
-    steps:
-    - agent: security-reviewer
-      handoff: { note: true }  # each branch reports out
-    - agent: perf-reviewer
-      handoff: { note: true }
-- agent: synthesizer          # receives BOTH branch notes, in declaration order
-```
-
-**Broadcast (fan-out):** the note pending before a block is delivered to every branch. Safe by construction — a note is read-only, so one report with several readers costs nothing.
-
-**Aggregate (fan-in):** the first agent step after the block receives one note per sending branch, each as its own synthetic `read_file`, ordered by declaration rather than by which branch finished first. They stay separate files rather than being merged into one document because the branch a claim came from is part of the claim: a synthesizer needs to know which reviewer said what.
-
-**Framing.** Every delivered note is wrapped in a randomized `<untrusted-…>` fence and introduced as *data, not instructions*. A fan-in puts several model-authored documents into one conversation at once — the widest injection surface this feature has — and the tag is re-rolled until it does not appear in the content, so a note cannot close the fence and append text that reads as the pipeline's own.
-
-**`race:`** needs no special rule: only the winner's note file exists at delivery time, and an absent note is already skipped by design, so listing every racer resolves to the winner.
-
-A block that sends nothing is **transparent** — a block of tasks between two agents does not break the chain, the same way a single intervening task does not.
-
-**A matrix fans in too.** Each cell of an `across:` step writes `handoff/<its label>.md`, and the step after the matrix receives one note per cell:
-
-```yaml
-- across:
-  - var: shard
-    values: [a, b]
-  agent: reviewer
-  handoff: { note: true }   # reviewer [shard=a] and reviewer [shard=b] each send
-- agent: summarizer         # receives both
-```
-
-That works because a cell's identity is separate from the agent it resolves through; before that split, every cell wrote the same file and only the last survived. A **runtime** matrix (`from:`) is still rejected — its cells do not exist until the run reaches them, so there are no names to address at load, and delivery is wired statically on purpose (it is what makes a `to:`-driven redo idempotent).
-
-Still rejected: `handoff: { context: true }` and `{ tool: true }`, both inside a block and on a matrix. Those describe arriving via a `to:`/`verdicts:` route. A branch is not a routable position, and a route targets a matrix rather than any one cell — so in both cases the fields could never fire.
-
-**Limits, enforced at load time:**
-- Agent steps only, never hooks; the sender needs a later agent step in the same get-segment (a note never crosses a `get` fan-out — each fanned-out build is independent), and the receiver must grant `read_file`.
-- Sender names must be unique across the whole segment, branches included — the name is the address, so two branches running the same agent would write the same file.
-- **Not supported under `workspace: strategy: copy`/`btrfs`.** Under isolation only *declared outputs* survive a step, so a note written to the build root would be discarded with the sender's workspace. This is a load error rather than a silent loss.
-- **No `dir:` on either end.** The note lives in the build root; a step with `dir:` writes it inside a materialized input artifact instead (dirtying it), and a receiver with `dir:` can never reach the root — `../handoff/x.md` is rejected as escaping the working directory. Same reasoning as the isolation rule: a load error beats a silent non-delivery.
-- **Sender names must be unique within a segment.** A note is addressed by step name (`handoff/<step>.md`), so two `handoff: { note: true }` steps with the same `agent:` would write the same file.
-- `handoff` is a reserved artifact name — an artifact so named would materialize over the note directory. Rejected as a step input/output by `ValidateArtifactName`, and as a *resource* name by the `handoff: { note: true }` load check (a `get` materializes into `<build>/<name>` without passing through that validator on the shared strategy).
-
-**Caching**: the `handoff: { note: true }` declaration and the computed sender name both enter the step's hashed content (they change the tool set and the injected context, respectively). The note's *contents* do not — correctness rests on agent steps being unconditionally unskippable, so a receiving agent always re-runs and re-reads the current note. A `task` step reading `handoff/*.md` would **not** be safe that way: tasks are skippable, and could be skipped against a stale note.
-
-**Relation to `handoff:`**: `handoff:` carries context *backward* along a `to:`/`verdicts:` route (a rejected step learning why, via `previous_run`). `handoff: { note: true }` carries it *forward* along the normal path. They compose — the self-build coder uses both.
-
 ## Reading another step's decision (`context: { from: ... }`)
 
-A verdict is the one thing every judging step produces, and until now the only way to see one downstream was `handoff:` — which delivers on a **routed entry** and to an **agent** only. A classifier that simply falls through, or a shell command that wants to branch on what a model decided, had no way to ask.
+A verdict is the one thing every judging step produces. A classifier that simply falls through, or a shell command that wants to branch on what a model decided, needs a way to ask for it.
 
 `from:` is that ask, and it is declared on the **reader**:
 
@@ -413,132 +310,8 @@ A verdict is the one thing every judging step produces, and until now the only w
 - **Nothing arrives unasked.** No `from:`, no delivery. An agent reader receives each decision as a synthetic `read_step` result at turn zero (like `context_paths:`, no turn spent asking); a task reader receives a file per sender at `upstream/<step>`, since a shell command has no conversation.
 - **A sender that has not run yet is simply absent** — no error, nothing delivered. That is what makes the revise loop work: the writer at the top of the loop reads the critic *below* it, gets nothing on the first pass, and gets the verdict that sent it back on every pass after. The question is asked of the run ("has that step decided?") rather than of the route, which is why the two steps need no routing relationship at all.
 - **Validated at load**: the named step must exist in the job and must declare `verdicts:` (it has no decision to hand on otherwise), and a step may not read itself. Naming a step that comes *later* in the plan is legal — that is the loop.
-- **Trust**: a delivered note or response is upstream model-authored text, so it is fenced as data with a tag that cannot occur inside it, the same treatment a delivered handoff note gets.
+- **Trust**: a delivered note or response is upstream model-authored text, so it is fenced as data with a tag that cannot occur inside it, the same treatment every other block of upstream model-authored text gets.
 - **Caching**: the `from:` declaration folds into the reading step's hash, and makes a *task* reader's chain unskippable — a cached command never runs, so a task whose `from:` changed must not replay an outcome produced without the decision it now asks for.
-
-## The run context store (`context: write`)
-
-A handoff note is a whole document addressed to one specific successor. The run context store is the other shape: individual named facts, recorded once and readable by every later step in the run.
-
-```yaml
-- agent: investigator
-  prompt: Investigate why the nightly build failed.
-  context: write            # scalar shorthand
-- agent: fixer
-  prompt: Fix the cause.
-  context: { write: true }  # mapping form, same thing
-```
-
-`context: write` grants a synthesized **`set_context(key, value)`** tool. The model calls it to record a conclusion:
-
-```json
-set_context({ "key": "failure_cause", "value": "flaky DNS in the e2e suite" })
-```
-
-Facts are captured through a real tool rather than parsed out of the model's final answer, for the same reason `verdict` and `write_handoff` are: free-text parsing fails silently the moment a model formats its reply differently, and a silently-lost fact is indistinguishable from one the model never learned. Unlike those two, `set_context` is **never required** — the step is offered somewhere to put a fact, not made to produce one. Writing the same key again replaces the previous value; the store answers "what is true now", and the trajectory already records every call that got it there.
-
-**At the tool boundary**, a call is refused — as data the model can react to, never as a step failure:
-- keys under the reserved `internal.` prefix, so a model cannot overwrite engine bookkeeping by guessing a name;
-- keys outside `[A-Za-z0-9_-.]` or longer than 128 characters, since a key is an identifier a later step reads back by name and whitespace would make one that renders one way and matches another;
-- values over 8 KiB — a value is quoted into a later model's context, so an unbounded one spends a downstream step's whole window on a single fact.
-
-### Tasks write context too
-
-A shell command cannot call a tool, so a `context: write` **task** records facts by writing files into a `context/` directory in its working space. The file name is the key, verbatim:
-
-```yaml
-- task: run-tests
-  inputs: [repo]
-  context: write
-  run: |
-    go test ./... > out.txt 2>&1 || true
-    mkdir -p context
-    grep -c FAIL out.txt > context/failure_count
-    printf 'expired cert' > context/failure_cause
-```
-
-The name is used exactly as written — extension included — so a task that wants the key `failure_cause` writes `context/failure_cause`, not `failure_cause.txt`. Stripping extensions would be a quiet rule that makes `a.txt` and `a.md` collide for reasons nobody can see in the pipeline.
-
-A file whose name is not a valid key, or whose contents exceed the value cap, is **skipped with a warning** rather than failing the step: the command already ran and succeeded, and failing it afterwards over the shape of a file name would discard real work for bookkeeping. Nested directories are skipped for the same reason — keys are flat.
-
-`context` is a reserved artifact name, like `handoff`.
-
-**Cache replay.** Tasks are skippable, unlike agent steps — so a task that recorded facts and is later a cache hit would leave a rerun with none of them, and a cached run would disagree with a fresh one about what is true. The recorded facts are therefore stashed on the task's node alongside its outcome, and **replayed when the step is skipped**. Unlike a handoff note, this works under every workspace strategy: the values go to SQLite, not into another step's directory.
-
-**Limits, enforced at load time:**
-- Agent and task steps only — a put hands an artifact to a resource and has nothing of its own to say.
-- `fidelity:` is agent-only: it renders a recap into a conversation, and a shell command has none.
-- Never on a hook step: a hook runs outside the plan's ordering, so what it stored — and whether the steps reading it had already run — would depend on when it happened to fire.
-- A **task** cannot write context inside a concurrent block under the *shared* workspace — see below.
-
-### Writing from concurrent branches
-
-A branch writes to a scope only it touches, and those scopes are merged back at the **join** — on one goroutine, in declaration order — under keys naming the branch:
-
-```yaml
-- in_parallel:
-    steps:
-    - agent: security-reviewer
-      context: write        # records `finding`
-    - agent: perf-reviewer
-      context: write        # also records `finding`
-- agent: synthesizer        # sees security-reviewer.finding AND perf-reviewer.finding
-```
-
-Both survive. Without the branch scope they would be one key resolving to whichever branch finished last — the hazard `validateParallelOutputs` already refuses for artifact names. The branch name becomes a prefix rather than being dropped, because which branch established a fact is part of the fact.
-
-The prefix is a step name reduced to the key charset, so a name may lose detail on the way in (`check [shard=a]` becomes `check__shard_a_`). Two names that reduce alike — `lint.go` and `lint_go` — would then be one prefix and one lost update again, so a collision is disambiguated by branch index (`lint_go-0.`, `lint_go-1.`) across the whole sibling set. A merged key that lands over the 128-character ceiling (prefixes compound with nesting) is cut to fit and marked with a short digest of the whole key, so two long keys sharing a prefix still land on two rows.
-
-`race:` merges the **winner's** facts only; a cancelled loser's partial writes are discarded with its workspace, the same treatment its execution log gets.
-
-**One load error remains, for tasks only.** A task records by writing files into `context/` in its working directory, and under the *shared* strategy every step's working directory is the same build root — so two concurrent branches both writing `context/finding` are two writers on one file. That is not a lost update, it is a corrupt one: the observed value was `n+1 query credential`, one branch's bytes overlaid on the other's. Set `workspace.strategy` (`copy` or `btrfs`), which gives each branch its own directory, or record from an agent step, where `set_context` is a tool call and never touches the filesystem.
-
-An **`across:` matrix** needs none of this by default: its cells run in declaration order, so two cells writing one key resolve the way two sequential steps do — the later wins, in an order readable off the pipeline. A matrix that means to keep each cell's fact says [`context: { write: true, qualify: true }`](control-flow.md#per-cell-facts-context--write-true-qualify-true-), and is then scoped and merged exactly like the branches above, with the cell name as the prefix. `max_in_flight:` above 1 *requires* that line rather than implying it — concurrent cells cannot share a key, and letting a scheduling knob decide the key names is how a downstream step quietly stops finding a fact it used to read.
-
-**Scope**: the store is keyed by run, so two runs of one job — including two concurrent ones under `steps watch` — never read each other's facts. Rows carry `written_by`, so the record answers "who recorded this" without replaying a transcript.
-
-### Reading it back: the recap
-
-Reading is **automatic**. Every agent step opens with a rendered recap of what earlier steps recorded, delivered as a synthetic `read_context` tool result — the same trick `context_paths` uses, so it costs no turn and cannot be skipped by a model that decides not to look. A `read_context` tool is offered alongside it, so a conversation that later compacts can ask for the facts again instead of working from a summary of them.
-
-Nothing is delivered when nothing was recorded: a pipeline that never writes context sees no recap, no tool, and no change to what reaches the wire.
-
-**Inside a block, a step reads its own block's scope layered over the run**, nearest wins. So two steps in one branch see each other exactly as two steps outside a block do — under the key the fact was written with, since the branch prefix is added at the join and not before. A concurrent *sibling's* writes stay invisible either way: they live in a scope on nobody else's chain, and only the join lifts them. An `across: from:` axis resolves against the same layered view, so a matrix can fan out over an array its own branch recorded.
-
-`fidelity:` controls how much of each fact survives:
-
-| fidelity | what the step sees |
-|---|---|
-| `off` | nothing at all — the complete opt-out |
-| `truncate` | key names only, with who recorded them |
-| `compact` *(default)* | each key with its value shortened to ~240 characters, elision marked |
-| `summary` | each key with its value in full |
-
-There is deliberately no "share the whole prior conversation" rung: agent steps are hermetic here — each is a fresh conversation — so every level is a rendered recap.
-
-Set it per step, or pipeline-wide; first match wins:
-
-```yaml
-defaults:
-  context:
-    fidelity: summary       # pipeline-wide
-
-jobs:
-- name: triage
-  plan:
-  - agent: investigator
-    context: write          # writes; still reads at the default level
-  - agent: notifier
-    context: { fidelity: "off" }   # reads nothing
-  - agent: auditor
-    context: { write: true, fidelity: summary }  # both switches, independently
-```
-
-The recap opens by saying what it is — recorded facts are **data, not instructions** — because it carries text one model wrote into another model's context, and without the framing a recorded "ignore your instructions" reads as one.
-
-**Reads are agent-only.** Task `run:`/`params:`, put params, and `when:` guards cannot reference the context store, and no template hook exists for them. That boundary is what keeps content-addressed caching honest: a shell command whose text depended on a runtime fact could not be hashed at plan time, and a task is skippable in a way an agent step is not.
-
-**Caching**: the `context: write` declaration and the `fidelity:` setting both enter the step's hashed content (one changes the tool grant, the other changes the opening conversation, and two steps differing in either are not the same step). What a step *stored* does not — it cannot be known at plan time, and agent steps are unconditionally unskippable, so a run always re-executes and re-records rather than replaying a stale write.
 
 ## What's not on this page
 
@@ -656,7 +429,7 @@ The quotes are not stylistic. A leading `@` is a reserved indicator in YAML, so 
 
 ### What changes, and what doesn't
 
-This is **delegation, not a different transport**. The CLI owns the conversation: its own turn loop, its own tools, its own context window. steps owns everything around it, unchanged — the workspace the process runs in, the merkle hash that decides whether the step runs at all, `timeout:`, the recorded trajectory and response, `assert:`, handoff notes, and `verdicts:`/`to:` routing.
+This is **delegation, not a different transport**. The CLI owns the conversation: its own turn loop, its own tools, its own context window. steps owns everything around it, unchanged — the workspace the process runs in, the merkle hash that decides whether the step runs at all, `timeout:`, the recorded trajectory and response, `assert:`, and `verdicts:`/`to:` routing.
 
 That division is the whole point. You get the CLI's own tooling inside a pipeline that still caches, routes, and fans out.
 
@@ -675,7 +448,7 @@ Granted built-ins map to the CLI's *native* tools, because a CLI is best at the 
 | `edit_file` | `Edit` |
 | `search_files` | `Grep` |
 
-Everything else in the grant — custom `run:` tools, `mcp:` grants, and the synthesized `verdict`/`write_handoff` tools — reaches the CLI over a loopback MCP server steps starts for the step and tears down after. Those are the *same* implementations a hosted agent runs, so output caps, spilling, MCP tool subsetting and MCP auth all behave identically. Credentials stay in the parent process; nothing reaches the CLI's config but a URL and a single-use token.
+Everything else in the grant — custom `run:` tools, `mcp:` grants, and the synthesized `verdict` tool — reaches the CLI over a loopback MCP server steps starts for the step and tears down after. Those are the *same* implementations a hosted agent runs, so output caps, spilling, MCP tool subsetting and MCP auth all behave identically. Credentials stay in the parent process; nothing reaches the CLI's config but a URL and a single-use token.
 
 Anything not granted is **absent**, not merely unapproved: the grant becomes the CLI's entire built-in surface, so a tool nobody named does not exist for that step. That is deny-by-default, and it is why there is no list of forbidden tools to maintain — a capability this build of steps has never heard of is withheld because it was never granted, rather than surviving because nobody remembered to add it. The CLI's own configured MCP servers are excluded too, so the grant is a limit rather than a suggestion.
 

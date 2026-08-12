@@ -238,13 +238,12 @@ type cliAttempt struct {
 // events, so the calls a step actually made are the concatenation, not the
 // last slice.
 type cliStepState struct {
-	text        string
-	turns       int
-	trajectory  []recordedToolCall
-	verdict     string
-	note        string
-	handoffNote map[string]string
-	satisfied   map[string]bool
+	text       string
+	turns      int
+	trajectory []recordedToolCall
+	verdict    string
+	note       string
+	satisfied  map[string]bool
 }
 
 func newCLIStepState() *cliStepState {
@@ -253,7 +252,7 @@ func newCLIStepState() *cliStepState {
 
 // absorb folds one attempt's observations in.
 func (s *cliStepState) absorb(run cliRunResult, bridge *cliBridge) {
-	verdict, note, handoffNote, satisfied, bridgeCalls := bridge.observed()
+	verdict, note, satisfied, bridgeCalls := bridge.observed()
 
 	s.turns += run.turns
 	s.trajectory = append(s.trajectory, mergeCLITrajectory(run.trajectory, bridgeCalls)...)
@@ -269,10 +268,6 @@ func (s *cliStepState) absorb(run cliRunResult, bridge *cliBridge) {
 		s.verdict, s.note = verdict, note
 	}
 
-	if len(handoffNote) > 0 {
-		s.handoffNote = handoffNote
-	}
-
 	for name := range satisfied {
 		s.satisfied[name] = true
 	}
@@ -281,13 +276,12 @@ func (s *cliStepState) absorb(run cliRunResult, bridge *cliBridge) {
 // result is what the step reports, however many attempts it took.
 func (s *cliStepState) result(modelName string) conversationResult {
 	return conversationResult{
-		text:        s.text,
-		turns:       s.turns,
-		trajectory:  s.trajectory,
-		model:       modelName,
-		verdict:     s.verdict,
-		note:        s.note,
-		handoffNote: s.handoffNote,
+		text:       s.text,
+		turns:      s.turns,
+		trajectory: s.trajectory,
+		model:      modelName,
+		verdict:    s.verdict,
+		note:       s.note,
 	}
 }
 
@@ -847,18 +841,13 @@ func nativeToolNames(conv agentConversation, runtime cliRuntime) map[string]bool
 
 // renderCLIPrompt assembles what goes in on stdin.
 //
-// On the HTTP path the run-context recap and context_paths files arrive as
-// synthetic tool exchanges — messages fabricated into a transcript this
-// package owns. There is no transcript to fabricate into here, so the same
-// content is prepended to the prompt instead, in the same order, already
-// fenced as untrusted data by prepareContextBlocks.
+// On the HTTP path context_paths files arrive as synthetic tool exchanges —
+// messages fabricated into a transcript this package owns. There is no
+// transcript to fabricate into here, so the same content is prepended to the
+// prompt instead, in the same order, already fenced as untrusted data by
+// prepareContextBlocks.
 func renderCLIPrompt(conv agentConversation) string {
 	var out strings.Builder
-
-	if conv.recap != "" {
-		out.WriteString(conv.recap)
-		out.WriteString("\n\n")
-	}
 
 	// Fenced, one tag per block. On the hosted path this content arrives as a
 	// read_file tool RESULT — a structural boundary the model reads as data.

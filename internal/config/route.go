@@ -137,8 +137,7 @@ func stepName(step Step) string {
 // agent-only, well formed, and never accompanied by to:; and within any plan
 // segment (bounded by get steps) that uses routing, step names must be unique,
 // every target must resolve within the segment, and a backward target requires
-// max_visits. Also validates handoff: (validateHandoffSteps), since it's
-// meaningless without a route targeting the step it's set on.
+// max_visits.
 func (c *Config) validateStepTransitions() error {
 	for i := range c.Jobs {
 		job := c.Jobs[i]
@@ -164,7 +163,7 @@ func (c *Config) validateStepTransitions() error {
 		}
 	}
 
-	return c.validateHandoffSteps()
+	return nil
 }
 
 // rejectRoutingOnGet rejects to:/max_visits:/verdicts: on a get step (a get

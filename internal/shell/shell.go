@@ -191,7 +191,7 @@ const spillMaxBytes = 10 << 20 // 10 MiB
 // SpillPreviewBytes is how much of a spilled stream's head is echoed inline
 // in the pointer message, so the model has some immediate signal without
 // having to open the file first. Exported so internal/agent's one-shot spill
-// helper (for MCP/sub-agent/handoff/fix output, which already holds its full
+// helper (for MCP/sub-agent/fix output, which already holds its full
 // content as a string rather than streaming it) uses the same preview size as
 // spillWriter's own streaming spill path — one pointer-message shape across
 // every spilled-output site, not two that can drift apart.
@@ -442,9 +442,8 @@ func (w *spillWriter) resultFromFile() string {
 // was saved to, and a preview of its head. Shared by spillWriter (streaming
 // command output, via resultFromFile) and internal/agent's one-shot
 // spillOrTruncate (MCP tool text/structured content, a sub-agent's final
-// answer, a previous_run response/note/trajectory arg, a fix loop's failure
-// output — all of which already hold their full content as a string rather
-// than streaming it), so every spilled-output path produces byte-identical
+// answer, a fix loop's failure output — all of which already hold their full
+// content as a string rather than streaming it), so every spilled-output path produces byte-identical
 // wording rather than each inventing its own.
 func SpillPointerMessage(totalBytes int, path string, preview []byte) string {
 	msg := fmt.Sprintf(

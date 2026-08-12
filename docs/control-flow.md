@@ -76,7 +76,7 @@ The wrapper is **transparent**: the only thing it changes is whether the plan wa
 - **Only `outcome.Failed` is tolerated.** An infrastructure error (docker, transport, workspace) or an abort (Ctrl-C) still stops the run and exits non-zero — the same line `to:` routing draws. Tolerating those would report a green job for a canceled build and march the plan into steps whose context is already dead.
 - **`to:` routing sees the real outcome**, because toleration happens *after* routing. `to: {failure: cleanup}` on the wrapper is reachable. The target name is the wrapped step's own name (task/put/agent).
 - **Hooks on the wrapper** also observe the real outcome, so `on_failure` on a `try:` fires when the wrapped step failed.
-- **The wrapper is the plan-positioned step**, so `to:` and `max_visits:` belong on it and are rejected on the step it wraps (where they used to load fine and silently never fire). `verdicts:` (targets and all), `handoff:` and `handoff_note:` stay on the `agent:` step being wrapped, since that is what the agent runtime reads — a tolerated agent still routes on its verdict and still receives its transition context.
+- **The wrapper is the plan-positioned step**, so `to:` and `max_visits:` belong on it and are rejected on the step it wraps (where they used to load fine and silently never fire). `verdicts:` (targets and all) stays on the `agent:` step being wrapped, since that is what the agent runtime reads — a tolerated agent still routes on its verdict.
 - **`assert:` is rejected anywhere inside a `try:`**, on the wrapper and on the step it wraps alike. `assert:` is what makes a step a `steps test` fixture and `try:` swallows exactly the failure it reports, so such an assert could never fail a run — it would sit in a suite reporting PASS on the broken fixture it was written to catch.
 - **Composability:** `try:` nests (doubled `try:` is fine) and composes with `attempts:`/`timeout:` on the wrapped step — retry a few times, then shrug. Also works with `fix:` on a task — attempt repair, then tolerate if the fix doesn't stick.
 - **Artifacts flow through unchanged**: a wrapped task's `outputs:` are available to later steps exactly as if it were unwrapped (note that a *tolerated* step may not have produced them — a later `inputs:` on that artifact is a static contract, not a runtime guarantee).
@@ -110,45 +110,7 @@ A step routes to another step **in the same get-segment** based on its outcome, 
 - **Get-segment restriction**: a target must be within the same segment (the run of non-get steps between gets) — a jump can't cross a `get` anyway, since the plan re-enters over a truncated slice per version. `to:`/`verdicts:` are invalid on `get` steps and hook steps. Step names must be unique within a `to:`-using segment. `next` on the segment's **last** step resolves one past the end, which is where an unrouted final step goes anyway.
 - **Caching**: `to:`/`max_visits:`/`verdicts:` fold into the step's content hash; `verdicts:` matters because it changes the synthesized tool set, and its entries hash as an ordered array so a reorder AND a retarget each bust it. There's no structural cache change — the planner walks declaration order ignoring `to:` targets, because any routing step's chain is already unskippable, so its plan-time hash is never used for a skip.
 
-> **Consuming a verdict without routing on it.** A verdict is also readable downstream: a later step declaring `context: { from: { <step>: verdict|note|full } }` is handed what that step decided — as a synthetic `read_step` result for an agent, as a file for a task. Unlike `handoff:` below it needs no route between the two steps, which is what makes a bare-verdict classifier's decision usable. See [agents.md](agents.md#reading-another-steps-decision-context--from--).
-
-## Handoff context (`handoff:`)
-
-Every agent step is otherwise a fresh, hermetic conversation — a step reached via `to:`/`verdicts:` learns nothing about why it was invoked. `handoff:` opts an agent step into transition context on **routed entry only**: the step's first/unrouted execution is unaffected. Illustrated in `examples/agents.yml`'s `judge` job (needs a model).
-
-> `handoff:` has two directions, and each is a field rather than a separate key. `context:`/`tool:` look **backward**, along a route, for a step being sent back to redo something. `note:` looks **forward** — what this agent hands the next one on the normal path; see [authored handoff](agents.md#authored-handoff-notes) in the agents guide. Both compose on one step: `handoff: { tool: true, note: true }`.
->
-> In the mapping form every field defaults to off and means only itself. Only `context:`/`tool:` require a `to:` route to target this step; a note-only handoff needs none.
-
-```yaml
-- agent: writer
-  prompt: Draft a two-sentence summary...
-  handoff: true              # scalar shorthand: context block only
-# or
-  handoff: { tool: true }             # + a previous_run tool
-  handoff: { context: false, tool: true }  # tool only, no pushed block
-```
-
-- **Push (`context`, default `true` in the mapping form)**: when a `to:` transition lands on the step, a machine-assembled block is appended to its prompt (never mutating `prompt:` itself, in the same spirit as the fix agent's captured-failure-output idiom — see [agents.md](agents.md)):
-
-  ```
-  <transition_context>
-  entered via: revise (from step "critic")
-  visit: 2 of 3 for this step
-  position: step 1 of 4 in job "judge"
-  <note from="critic">
-  The second sentence overstates test coverage; tighten it.
-  </note>
-  </transition_context>
-  ```
-
-  The `<note>` element is present only when the routing step was a verdict agent that gave one (see `verdicts:`'s optional `note` arg in [agents.md](agents.md)) — a deliberate, authored "why," not a summary. `visit:` reads `(unbounded)` when the target has no `max_visits:` (an all-forward route). A note's content is truncated and sanitized (a literal `</note>` can't close the element early) — the same trust domain as any other upstream model-authored text.
-- **Pull (`tool`)**: synthesizes a read-only, non-required `previous_run` tool the model can call on demand, returning the routed-from **agent** step's recorded run — final response, verdict + note, turn count, and tool-call trajectory (optionally filtered to `section: response` or `section: trajectory`) — without any of it entering context unrequested. When there's nothing to report (first execution, or the routing step wasn't an agent), it answers `"no previous run: ..."` as data, never an error.
-- **Routed-entry only.** A step reached by falling through in declaration order (no `to:` involved) gets no block and no report from `previous_run` — `handoff:` is meaningless there and is rejected at load unless the step is the target of at least one `to:` route within its own get-segment. A `to: next` counts: the step it lands on is arrived at by a verdict exactly as a named target is, so it may declare `handoff:`.
-- **Agent-only**, and invalid on hook steps (a hook is a reaction, not a positioned step with predecessors).
-- A `to.failure` route from a **failed** agent still carries its partial response/trajectory into `previous_run` — the run is packaged from the last attempt's result regardless of outcome. A `to.failure` route from a task/put carries the from-step/key in the block, but `previous_run` reports "no previous run" (there's no agent run to describe).
-- A `when:` guard that skips the routed-to step still **consumes** the pending handoff — the transition happened; the guard just declined to run it. The next step to actually execute gets nothing from it.
-- **Caching**: only the *declaration* (`context`/`tool` booleans) folds into the step's content hash, value-gated like `image:`/`when:`/`to:` — a step without `handoff:` hashes byte-identically to before this feature existed. The runtime facts a block/tool report (which step routed here, the note, the visit count) are deliberately **excluded** from identity, the same treatment `attempts:` gets — they can't be known at plan time, and agent steps are already unconditionally unskippable, so this never causes a wrong cache hit.
+> **Consuming a verdict without routing on it.** A verdict is also readable downstream: a later step declaring `context: { from: { <step>: verdict|note|full } }` is handed what that step decided — as a synthetic `read_step` result for an agent, as a file for a task. It needs no route between the two steps, which is what makes a bare-verdict classifier's decision usable, and it also covers the revise-loop case: a step can name a step that comes *later* in the plan and is revisited via that step's `revise:` route. See [agents.md](agents.md#reading-another-steps-decision-context--from--).
 
 ## Assert (self-verification) + `steps test`
 
@@ -191,7 +153,7 @@ Without it that rollback has two spellings and both are worse: repeat the hook o
 - **The block takes no operation fields.** `inputs:`, `run:`, `image:`, `prompt:` and friends belong on the steps inside; a block fetches nothing and runs nothing of its own.
 - **`try:` works inside**, tolerating only its own step, exactly as it does in a plain plan.
 - **A `get:` is not valid inside**, for the reason it is not valid inside `try:` or a concurrent block: a get fans the remainder of the plan out per version, and inside a block that fan-out has nowhere to go.
-- **`to:`, `max_visits:` and `handoff:` belong on the block, not on its children.** A child has no plan position to be routed to, so those would load cleanly and never fire — the exact defect this codebase already paid for once with `to:` on the step a `try:` wraps. They are load errors on a child, naming the fix.
+- **`to:` and `max_visits:` belong on the block, not on its children.** A child has no plan position to be routed to, so those would load cleanly and never fire — the exact defect this codebase already paid for once with `to:` on the step a `try:` wraps. They are load errors on a child, naming the fix.
 - **Caching**: the block hashes its children's content in declaration order. Sequence *is* its meaning, so two blocks with the same children in a different order are correctly two different nodes, and moving a step into or out of a block changes its identity.
 
 ## `in_parallel:` — several steps at once
@@ -293,66 +255,14 @@ Cells that are puts or agents are never skipped, for the same reasons those step
 - **Cells are named for their coordinates** — `check [mode=fast suite=unit]` — unless you interpolate a variable into the name yourself. Without that every cell would share one name, which is unroutable and unreadable in a log.
 - **An empty axis, a duplicate `var:`, or a misspelled `{{ .vars.x }}` are load errors.** Each would otherwise mean silently running the wrong matrix.
 
-### Runtime fan-out: `from:`
-
-An axis can take its values from the **run context** instead of the pipeline text, so an earlier step decides how wide the matrix is:
-
-```yaml
-- agent: scanner
-  context: write
-  prompt: Record the findings worth investigating as a JSON array under `findings`.
-- across:
-  - var: finding
-    from: findings          # instead of values:
-  agent: investigator
-  prompt: "Investigate: {{ .vars.finding }}"
-```
-
-This is "the agent plans, the pipeline executes": one step produces a work list, and each item becomes its own cell — independently hashed, cached and reported — instead of one agent grinding through the whole list in a conversation that outgrows its window.
-
-`values:` and `from:` are mutually exclusive per axis, and an axis needs one of them; both are load errors. A runtime axis can sit beside a static one, and the product is taken as usual.
-
-**The source is a JSON array of strings**, or of flat objects (below). `from:` is the same axis with the list computed later, so a value interpolates through `{{ .vars.x }}` exactly as a static one does and a runtime cell hashes identically to the static cell it is indistinguishable from.
-
-**Because the array is produced during the run, usually by a model, nothing about it was reviewed by the author.** So: at most 1000 items (an unbounded array turns an upstream typo into an unbounded bill — the error says to filter at the source or split the run), a missing key or wrong shape fails the step naming the key, and an empty array is an error rather than a matrix that silently runs nothing.
-
-#### Items with structure
-
-A work item is usually more than a name. A finding has a file, a line, a claim; flattening it to an id means every cell starts by going to look up what it was handed. So a `from:` array may hold **flat objects**, and a cell names the fields it wants:
-
-```yaml
-- agent: reviewer
-  context: write
-  prompt: >
-    Record findings under `findings` as a JSON array of flat objects:
-    {"id", "file", "line", "claim"}.
-- across:
-  - var: finding
-    from: findings
-    label: id            # which field names each cell
-  agent: verifier
-  prompt: |
-    Falsify or confirm: {{ .vars.finding.claim }}
-    Evidence lives at {{ .vars.finding.file }}:{{ .vars.finding.line }}.
-```
-
-- **Name a field; a bare `{{ .vars.finding }}` is an error.** An object has no single rendering, and choosing one here (JSON? comma-joined?) is the invented rule that kept objects out of `from:` to begin with. Field access has no such problem, because the author names exactly what renders.
-- **`label:` says which field names a cell** — `verifier [finding=SQLI-42]`. Coordinates need a scalar: a cell's name is a routing target and an `assert.execution` entry. Without `label:` cells are named by 1-based position (`[finding=#3]`) — deterministic, but it tells a reader nothing. `label:` is invalid on a `values:` axis, where strings already name themselves.
-- **Fields must be scalars** (string, number, boolean). Numbers keep their own text, so `"line": 42` renders `42`. A nested object or a list is refused for the same reason a bare object is; record it under its own key, or flatten it where it is written.
-- **An array is homogeneous** — all strings or all objects. A mixed one means the step that recorded it disagreed with itself about what an item is, and half the cells would render a template the other half cannot.
-- **Every item must carry every field any template names**, and this is checked over the whole array *before any cell runs*. A malformed item fails the block loudly rather than failing cell 7 of 40 after six have already spent their model calls.
-- **Nothing about hashing changes**, which is the load-bearing part: a cell's identity is the step it *renders to*, so a field no template mentions never enters it — the same property strings already had.
-
-**Planning.** A static matrix expands at load, so `steps plan` shows every cell. A runtime one cannot: its width is not knowable until the step that fills its source has run. It hashes its *declaration* at plan time — the axes including the source key, plus the unexpanded template — which means the planner cannot predict what that block, or anything downstream of it, will do. The cells themselves hash at run time and cache per cell exactly as static cells do.
-
 ### A ceiling that degrades: `budget:`
 
-A runtime fan-out is the one step whose cost nobody could know when they wrote the pipeline — its width is decided mid-run, usually by a model. `budget:` on the block caps what its cells spend **together**:
+A wide matrix of agent cells is one whose total cost is easy to underestimate even when its width is right there in the pipeline text. `budget:` on the block caps what its cells spend **together**:
 
 ```yaml
 - across:
   - var: dim
-    from: dimensions
+    values: [api-boundaries, error-paths, concurrency]
   budget:
     tokens: 1200000
   agent: reviewer
@@ -374,11 +284,11 @@ budget: across stopped after 8 of 12 cells (spent 1,203,551 of 1,200,000 tokens)
   budget: warning — max_in_flight (8) covers all 6 cells, so this block's budget of 3,600,000 tokens cannot stop anything
   ```
 
-  There is no serialization point in that shape: every cell is admitted before any has reported a token, so there is never a total to decide against. That is inherent to bounding what gets *started* rather than what a running cell may cost — not something a different check order fixes — so the block says it out loud rather than letting the number look like a ceiling. A matrix whose width is decided at run time can land here on one run and not the next, which is why it is a run-time warning and not a load error.
+  There is no serialization point in that shape: every cell is admitted before any has reported a token, so there is never a total to decide against. That is inherent to bounding what gets *started* rather than what a running cell may cost — not something a different check order fixes — so the block says it out loud rather than letting the number look like a ceiling.
 
 ### Concurrent cells: `max_in_flight:`
 
-Serial cells are the right default for a hand-written matrix. They are the wrong default for a runtime fan-out, where the cells are N independent agents an earlier step decided on, and running them one at a time costs N times one cell's wall clock for nothing.
+Serial cells are the right default for a hand-written matrix. They are the wrong default for a wide one: N independent agent cells with no ordering between them cost N times one cell's wall clock to run one at a time, for nothing.
 
 ```yaml
 workspace:
@@ -386,7 +296,7 @@ workspace:
 
 - across:
   - var: dimension
-    from: dimensions
+    values: [api-boundaries, error-paths, concurrency, performance]
   max_in_flight: 4        # four cells at a time
   agent: reviewer
   prompt: "Review the diff through the {{ .vars.dimension }} lens."
@@ -399,34 +309,7 @@ workspace:
 - **Cells are admitted in declaration order.** Under a limit especially, "which cells go first" is otherwise whichever goroutines the scheduler happened to run.
 - **`assert.execution` stays deterministic**: each cell records into its own log, merged back in declaration order at the join — the same treatment `in_parallel:` branches get.
 - **There is no `fail_fast:`.** A matrix asks which combinations work; cancelling the siblings of the first red cell answers that for exactly one cell. Every cell runs and every failure is reported, exactly as in the serial walk.
-- **A matrix that records context must say `qualify:`** — see below. Concurrent cells cannot share a key, so this is a load error rather than a silent re-keying.
 - **Not hashed**, unlike `in_parallel:`'s `limit:`/`fail_fast:`. Those change which steps run at all; this changes only how many run at once, and the cell set is identical at any width — so widening a matrix whose cells are all cached re-runs nothing.
-
-### Per-cell facts: `context: { write: true, qualify: true }`
-
-Two cells recording the same key is the ordinary case for a fan-out — every reviewer records a `finding`. Serially that resolves the way two sequential steps do: the later wins, in an order readable off the pipeline. Concurrently there is no order, so each cell writes to a scope only it touches and the join merges them under a key naming the cell:
-
-```
-without qualify, serial   ->  finding
-with qualify              ->  reviewer [dim=api-boundaries].finding
-```
-
-`qualify:` is what says which of those the matrix means, **independently of scheduling**:
-
-```yaml
-- across:
-  - var: dim
-    from: dimensions
-    label: id
-  max_in_flight: 4
-  agent: reviewer
-  context: { write: true, qualify: true }
-```
-
-- **It applies serially too.** That is the entire point: the same pipeline records the same keys at `max_in_flight: 4` and with the line deleted, so turning concurrency on and off is invisible to every downstream step — which is what makes `max_in_flight:` safe to add and remove, and why it is not hashed.
-- **`max_in_flight > 1` with `context: write` requires it**, as a load error naming the fix. Before this, scheduling silently rewrote a data contract: a downstream agent's recap changed shape and any step reading a key by name stopped finding it, with nothing to report.
-- **It is `across:`-only, and needs `write:`.** An ordinary step is not a cell, and there is nothing to qualify without writes. A step inside an `in_parallel:` branch is qualified by its branch already, and always was — branches are heterogeneous steps with no serial spelling, so no rename was ever possible there.
-- **Unqualified stays last-wins**, as described in [agents.md](agents.md#writing-from-concurrent-branches). Prefixes are noise when there is no collision to disambiguate, so opting in is what turns them on.
 
 ## `approval:` — a human in the plan
 

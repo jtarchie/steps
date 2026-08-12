@@ -60,8 +60,8 @@ func assertCLIResultTrajectory(t *testing.T, result cliRunResult) {
 		t.Errorf("first call args = %v, want file_path main.go", result.trajectory[0].args)
 	}
 
-	// The failing tool_result has to reach the trajectory, or a handoff note's
-	// files-touched section would claim work that never landed.
+	// The failing tool_result has to reach the trajectory, or a record of the
+	// run would claim work that never landed.
 	if result.trajectory[1].name != "Bash" || result.trajectory[1].ok {
 		t.Errorf("second call = %+v, want a failed Bash", result.trajectory[1])
 	}

@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/store"
@@ -30,7 +29,7 @@ import (
 // failed is not a partial answer, it is a worse outcome.
 func runDoStep(
 	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, parentHash string, handoff *agent.Handoff,
+	bw workspace.BuildWorkspace, st *store.Store, parentHash string,
 ) (string, stepDisposition, nonGetOutcome, error) {
 	content, err := merkle.DoNodeContent(cfg, step)
 	if err != nil {
@@ -67,7 +66,7 @@ func runDoStep(
 		// transcript would attribute a do: child's output to whichever step
 		// happened to share its number.
 		childHash, _, _, childErr := runNonGetStep(
-			ctx, cfg, jobName, i, child, bw, st, nil, childParent, handoff)
+			ctx, cfg, jobName, i, child, bw, st, nil, childParent)
 
 		// A try: child tolerates its own failure here, for the reason a try:
 		// branch does inside a concurrent block (see runBranches): the plan

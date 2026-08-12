@@ -7,8 +7,8 @@ package agent
 // way it hands one to a model. What a CLI does accept is an MCP server. So
 // the parent process becomes one: every tool the step's grant produced that
 // the CLI has no native equivalent for — custom run: tools, mcp_servers:
-// grants, and the synthesized verdict/write_handoff/context tools — is
-// re-exported over a loopback MCP server the child connects back to.
+// grants, and the synthesized verdict/context tools — is re-exported over a
+// loopback MCP server the child connects back to.
 //
 // Two things fall out of this that are worth stating plainly. First, the tool
 // implementations are the SAME ones an HTTP agent runs: path confinement,
@@ -68,11 +68,10 @@ type cliBridge struct {
 
 	// mu guards everything below: tool calls arrive on the HTTP server's
 	// goroutines, and the driver reads the captures after the child exits.
-	mu          sync.Mutex
-	verdict     string
-	note        string
-	handoffNote map[string]string
-	satisfied   map[string]bool
+	mu        sync.Mutex
+	verdict   string
+	note      string
+	satisfied map[string]bool
 	// calls records every bridged tool call in order, so the step's
 	// trajectory includes tools the CLI's own stream reports only by their
 	// prefixed name.
@@ -262,10 +261,6 @@ func (b *cliBridge) capture(name string, args, result map[string]any) {
 		b.verdict = verdict
 		b.note, _ = result["note"].(string)
 	}
-
-	if note, isNote := result[handoffNoteResultKey].(map[string]string); isNote {
-		b.handoffNote = note
-	}
 }
 
 // authenticated rejects any request not carrying this bridge's token. The
@@ -286,13 +281,13 @@ func (b *cliBridge) authenticated(next http.Handler) http.Handler {
 	})
 }
 
-// observed reports what the child did: the captured verdict/note, the handoff
-// note, which required tools were satisfied, and every bridged call in order.
-func (b *cliBridge) observed() (verdict, note string, handoffNote map[string]string, satisfied map[string]bool, calls []recordedToolCall) {
+// observed reports what the child did: the captured verdict/note, which
+// required tools were satisfied, and every bridged call in order.
+func (b *cliBridge) observed() (verdict, note string, satisfied map[string]bool, calls []recordedToolCall) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	return b.verdict, b.note, maps.Clone(b.handoffNote), maps.Clone(b.satisfied), append([]recordedToolCall(nil), b.calls...)
+	return b.verdict, b.note, maps.Clone(b.satisfied), append([]recordedToolCall(nil), b.calls...)
 }
 
 // writeConfig writes the --mcp-config document pointing the CLI at this

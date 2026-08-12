@@ -15,7 +15,6 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
@@ -41,7 +40,7 @@ type branchResult struct {
 // containing a failing parallel step reported PASS.
 func runParallelStep(
 	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, parentHash string, handoff *agent.Handoff,
+	bw workspace.BuildWorkspace, st *store.Store, parentHash string,
 ) (string, stepDisposition, nonGetOutcome, error) {
 	content, err := merkle.ParallelNodeContent(cfg, step)
 	if err != nil {
@@ -58,7 +57,7 @@ func runParallelStep(
 	fmt.Printf("in_parallel: %d branches%s\n", len(branches), limitSuffix(step.InParallel.Limit))
 	slog.Debug("job.step", "job", jobName, "index", i, "kind", "in_parallel", "branches", len(branches))
 
-	results := runBranches(ctx, cfg, jobName, i, step, bw, st, hash, handoff)
+	results := runBranches(ctx, cfg, jobName, i, step, bw, st, hash)
 	blockErr := combineBranchErrors(ctx, results)
 
 	status := "succeeded"
@@ -85,7 +84,7 @@ func runParallelStep(
 // decides nothing about skipping.
 func runBranches(
 	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, blockHash string, handoff *agent.Handoff,
+	bw workspace.BuildWorkspace, st *store.Store, blockHash string,
 ) []branchResult {
 	branches := step.InParallel.Steps
 	results := make([]branchResult, len(branches))
@@ -108,9 +107,8 @@ func runBranches(
 	// author can reason about.
 	// Identity is stamped here, in the parent, rather than inside the
 	// goroutine: under fail_fast a branch may never start, and a zero-value
-	// result would then claim index 0 — which the context merge below reads
-	// as branch 0's scope. Every branch now carries its own index whether or
-	// not it ran; one that never ran simply has no rows to merge.
+	// result would then wrongly claim index 0. Every branch now carries its
+	// own index whether or not it ran.
 	for index := range branches {
 		results[index] = branchResult{index: index, name: executedStepName(branches[index])}
 	}
@@ -147,20 +145,7 @@ func runBranches(
 			runCtx, branchLog := forkExecLog(branchCtx)
 			logs[index] = branchLog
 
-			// Context writes go to a scope only this branch touches; they are
-			// merged back at the join below, in declaration order. Writing
-			// straight into the run would make two branches recording one key
-			// resolve to whichever finished last — the hazard
-			// validateParallelOutputs already refuses for artifact names.
-			//
-			// Derived from the ENCLOSING scope, not from the run: a nested
-			// block inside two different branches would otherwise compute the
-			// same scope for its own branch 0 and the two would overwrite each
-			// other's rows before either join saw them.
-			runCtx = agent.WithContextScope(runCtx,
-				branchContextScope(agent.ContextWriteScope(ctx), index, results[index].name))
-
-			_, _, _, err := runNonGetStep(runCtx, cfg, jobName, i, branch, bw, st, nil, blockHash, handoff)
+			_, _, _, err := runNonGetStep(runCtx, cfg, jobName, i, branch, bw, st, nil, blockHash)
 
 			// A try: branch tolerates its own failure HERE, because the plan
 			// walk never sees a branch — executeNonGetStep is where every
@@ -190,58 +175,7 @@ func runBranches(
 		}
 	}
 
-	mergeBranchesContext(ctx, st, results)
-
 	return results
-}
-
-// mergeBranchesContext folds every branch's recorded facts back into the scope
-// the block itself writes to, in declaration order, once they have all
-// finished.
-//
-// Into the ENCLOSING scope rather than into the run: a nested block runs
-// inside its own branch's goroutine, so merging straight into the run would
-// put two concurrent writers on the run's rows — the very race the branch
-// scopes exist to remove. Merging one level at a time means the outer join
-// carries the inner facts the rest of the way up, still single-threaded.
-//
-// Order and single-threadedness are the whole point: this is what turns
-// concurrent writes into a deterministic result. A failure to merge is logged
-// rather than raised — the branches' own outcomes are the block's outcome, and
-// losing a recorded fact must not turn a green block red.
-func mergeBranchesContext(ctx context.Context, st *store.Store, results []branchResult) {
-	enclosing := agent.ContextWriteScope(ctx)
-
-	// Resolved over the whole set before any of it is written: two branch names
-	// can sanitize to one prefix, and only something holding every sibling can
-	// tell.
-	prefixes := branchPrefixes(results)
-
-	for i, result := range results {
-		// An unnamed branch is one that IS a block: executedStepName has no
-		// name for a container. It still has to be merged, or the facts its
-		// own join lifted into it stay one level below the run and no later
-		// step ever sees them — and it still needs an identity, or two such
-		// branches collapse onto one key and the second silently wins.
-		err := mergeBranchContext(
-			context.WithoutCancel(ctx), st, enclosing,
-			branchContextScope(enclosing, result.index, result.name),
-			branchPrefixName(result), prefixes[i],
-		)
-		if err != nil {
-			slog.Warn("branch.context.merge_failed", "branch", result.name, "error", err)
-		}
-	}
-}
-
-// branchPrefixName is the name a branch's recorded facts are qualified by: its
-// step name, or its position when it has none (a nested block).
-func branchPrefixName(result branchResult) string {
-	if result.name != "" {
-		return result.name
-	}
-
-	return fmt.Sprintf("branch%d", result.index)
 }
 
 // combineBranchErrors turns the branches' outcomes into the block's own.
@@ -329,7 +263,7 @@ func limitSuffix(limit int) string {
 // workspace isolation and is documented as safe for read/generate-only agents.
 func runRaceStep(
 	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, parentHash string, handoff *agent.Handoff,
+	bw workspace.BuildWorkspace, st *store.Store, parentHash string,
 ) (string, stepDisposition, nonGetOutcome, error) {
 	content, err := merkle.RaceNodeContent(cfg, step)
 	if err != nil {
@@ -346,7 +280,7 @@ func runRaceStep(
 	fmt.Printf("race: %d branches\n", len(branches))
 	slog.Debug("job.step", "job", jobName, "index", i, "kind", "race", "branches", len(branches))
 
-	winner, results := raceBranches(ctx, cfg, jobName, i, branches, bw, st, hash, handoff)
+	winner, results := raceBranches(ctx, cfg, jobName, i, branches, bw, st, hash)
 	raceErr := raceOutcome(ctx, winner, results)
 
 	status := "succeeded"
@@ -367,7 +301,7 @@ func runRaceStep(
 // succeed (-1 if none did) along with every branch's result.
 func raceBranches(
 	ctx context.Context, cfg *config.Config, jobName string, i int, branches []config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, blockHash string, handoff *agent.Handoff,
+	bw workspace.BuildWorkspace, st *store.Store, blockHash string,
 ) (int, []branchResult) {
 	raceCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -392,13 +326,7 @@ func raceBranches(
 			runCtx, branchLog := forkExecLog(raceCtx)
 			logs[index] = branchLog
 
-			// Scoped like an in_parallel: branch, but only the winner's scope
-			// is merged below — a cancelled loser's partial facts are discarded
-			// with its workspace, the same treatment its exec log gets.
-			runCtx = agent.WithContextScope(runCtx,
-				branchContextScope(agent.ContextWriteScope(ctx), index, results[index].name))
-
-			_, _, _, err := runNonGetStep(runCtx, cfg, jobName, i, branch, bw, st, nil, blockHash, handoff)
+			_, _, _, err := runNonGetStep(runCtx, cfg, jobName, i, branch, bw, st, nil, blockHash)
 			results[index].err = err
 
 			if err != nil {
@@ -425,10 +353,6 @@ func raceBranches(
 	// artifacts are discarded.
 	if winner >= 0 && logs[winner] != nil {
 		mergeExecLog(ctx, logs[winner])
-	}
-
-	if winner >= 0 {
-		mergeBranchesContext(ctx, st, results[winner:winner+1])
 	}
 
 	return winner, results

@@ -77,8 +77,8 @@ func trajectoryNames(t *testing.T, result map[string]any) []string {
 }
 
 // What an agent actually did is now recorded. The trajectory used to live only
-// in memory — for a routed-to successor and the handoff note — so the most
-// useful question about an agent step had no answer once the run ended.
+// in memory, so the most useful question about an agent step had no answer
+// once the run ended.
 func TestAgentTrajectoryIsPersisted(t *testing.T) {
 	dir := t.TempDir()
 	fake := newFakeLLM(t,

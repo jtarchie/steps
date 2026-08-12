@@ -32,9 +32,9 @@ func toolDescription(name, fallback string) string {
 }
 
 // maxToolOutputBytes caps how much of a tool's textual output (command
-// stdout/stderr, an MCP tool's response, a sub-agent's final answer, a
-// previous_run field, a fix loop's failure output) is returned to the model
-// inline. A runaway command (cat a huge file, find /) or a chatty MCP
+// stdout/stderr, an MCP tool's response, a sub-agent's final answer, a fix
+// loop's failure output) is returned to the model inline. A runaway command
+// (cat a huge file, find /) or a chatty MCP
 // server/sub-agent would otherwise flood the model's context window (cost,
 // and possible context-limit failures). Anything beyond this is spilled to a
 // file under the step's spill directory instead of being dropped — see
@@ -208,7 +208,7 @@ var listDirDescription = fmt.Sprintf(
 const readFileDescription = "Read a UTF-8 text file's contents, given a path relative to the step's working directory." +
 	" Optionally pass start_line and/or end_line (1-indexed, inclusive) to read only a slice of a large file instead of" +
 	" its capped prefix — useful both for a file too big to read in one call and for output any tool spilled to a file" +
-	" when it exceeded the inline size limit (run_shell, an MCP tool, a sub-agent's answer, previous_run, ...) — see" +
+	" when it exceeded the inline size limit (run_shell, an MCP tool, a sub-agent's answer, ...) — see" +
 	" that tool's own result for the exact path."
 
 // writeFileDescription documents write_file's contract: it writes (or, with
@@ -727,10 +727,10 @@ func truncateToolOutputLimit(s string, limit int) string {
 // spillOrTruncate is the one-shot counterpart to shellToolResult's streaming
 // spill (RunCaptureFullLimitedStreamed/spillWriter in internal/shell): a
 // caller that already holds its full result as a string — an MCP tool's
-// text/structured content, a sub-agent's final answer, a previous_run
-// field/trajectory arg, a fix loop's failure output — uses this instead of
-// truncateToolOutput so oversized output is saved to a file the model can
-// read back, not dropped. content at or under maxToolOutputBytes passes
+// text/structured content, a sub-agent's final answer, a fix loop's failure
+// output — uses this instead of truncateToolOutput so oversized output is
+// saved to a file the model can read back, not dropped. content at or under
+// maxToolOutputBytes passes
 // through unchanged. Over that, with spillDir set, it writes the full
 // content to a new file under spillDir (same "output-*.txt" naming
 // convention spillWriter uses, so spilled files look uniform regardless of

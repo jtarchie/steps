@@ -93,7 +93,6 @@ func (c *Config) rejectOperationFields(label string, step *Step, kind string) er
 		{"trigger", step.Trigger},
 		{"version", step.Version != nil},
 		{"verdicts", len(step.Verdicts) > 0},
-		{"handoff", step.Handoff != nil},
 		{"assert", step.Assert != nil},
 	} {
 		if rejected.set {

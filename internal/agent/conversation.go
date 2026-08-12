@@ -105,14 +105,9 @@ type conversationResult struct {
 	verdict string
 	// note is the optional free-text note attached to that same successful
 	// verdict call (see buildVerdictTool); "" when there was none. It travels
-	// with the verdict it accompanied — internal/pipeline threads it into a
-	// routed-to step's Handoff (see handoff.go) as the sender's deliberate,
-	// authored "why".
+	// with the verdict it accompanied — a step that declared context: {
+	// from: { <this step>: note|full } } is handed it (see upstream.go).
 	note string
-	// handoffNote is the fields captured by the last SUCCESSFUL write_handoff
-	// call (see handoffnote.go); nil when the step declares no handoff_note:
-	// or the model never wrote one. RunStep renders it to disk after the run.
-	handoffNote map[string]string
 	// transcript is the full ordered exchange — model text, tool calls,
 	// results, nested sub-agent traces — attached by runAgentConversation on
 	// every exit path. Persisted to node_transcripts (see saveAgentTranscript),
@@ -130,10 +125,6 @@ type agentConversation struct {
 	// read_step results because this step declared context: { from: ... }.
 	// See upstream.go.
 	upstream []contextBlock
-	// recap is the rendered run-context recap delivered as a synthetic
-	// read_context result before anything else, or "" when the run recorded
-	// nothing or the step opted out with fidelity: off. See recap.go.
-	recap    string
 	env      toolEnv
 	tools    agentTools
 	params   agentGenParams
@@ -169,8 +160,8 @@ type agentConversation struct {
 // assistant turn requesting name(args), then the matching result.
 //
 // It is how anything reaches a conversation without costing a turn or
-// depending on the model choosing to ask — context_paths files and the run
-// context recap both arrive this way.
+// depending on the model choosing to ask — context_paths files and an
+// upstream step's decision both arrive this way.
 func syntheticToolExchange(callID, name string, args map[string]any, content string) []*genai.Content {
 	return []*genai.Content{
 		{
@@ -203,14 +194,9 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 
 	contents := make([]*genai.Content, 0, 3+(len(conv.contextBlocks)+len(conv.upstream))*2)
 
-	// The recap comes first: it is what happened BEFORE this step, and the
-	// context_paths files below are what this step was handed to work on.
-	if conv.recap != "" {
-		contents = append(contents, syntheticToolExchange("recap", readContextToolName, nil, conv.recap)...)
-	}
-
-	// Then the decisions this step asked upstream steps for: like the recap,
-	// they are what happened BEFORE this step rather than what it works on.
+	// The decisions this step asked upstream steps for come first: they are
+	// what happened BEFORE this step, and the context_paths files below are
+	// what this step was handed to work on.
 	for i, block := range conv.upstream {
 		contents = append(contents, syntheticToolExchange(
 			fmt.Sprintf("upstream_%d", i), readStepToolName, map[string]any{"step": block.path}, block.content)...)
@@ -316,9 +302,6 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	// that accompanied it. A model that revises its own verdict ends on its
 	// final one, and note travels with whichever choice won.
 	var verdict, note string
-	// handoffNote is the last successful write_handoff call's captured fields
-	// (nil until one lands).
-	var handoffNote map[string]string
 	// compactionSummary/compactionStalled are maybeCompact's running state,
 	// scoped to this conversation like everything above.
 	var compactionSummary string
@@ -339,7 +322,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 		// has already blown its ceiling must not go on to have side effects.
 		resp, err := conv.generateWithinBudget(ctx, llm, req)
 		if err != nil {
-			return conversationResult{turns: turn, trajectory: trajectory, verdict: verdict, note: note, handoffNote: handoffNote}, err
+			return conversationResult{turns: turn, trajectory: trajectory, verdict: verdict, note: note}, err
 		}
 
 		req.Contents = append(req.Contents, resp.Content)
@@ -349,7 +332,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 
 		if len(calls) == 0 {
 			if conv.finishOrForce(req, satisfied) {
-				return conversationResult{text: text, turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note, handoffNote: handoffNote}, nil
+				return conversationResult{text: text, turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note}, nil
 			}
 
 			continue
@@ -372,8 +355,6 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 			verdict, note = choice, n // last successful verdict (and its note) wins across turns
 		}
 
-		handoffNote = latestHandoffNote(parts, handoffNote) // last successful write wins, like the verdict above
-
 		req.Contents = append(req.Contents, &genai.Content{
 			Role:  genai.RoleUser,
 			Parts: parts,
@@ -381,7 +362,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 
 		detectErr := detector.respond(req, calls, parts)
 		if detectErr != nil {
-			return conversationResult{turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note, handoffNote: handoffNote}, detectErr
+			return conversationResult{turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note}, detectErr
 		}
 	}
 
@@ -389,7 +370,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	// ran but didn't finish its task), not infrastructure errors — mark them
 	// so hook dispatch classifies them as failed rather than errored. A
 	// transport error from generateOnce above stays unwrapped → errored.
-	exhausted := conversationResult{turns: conv.maxTurns, trajectory: trajectory, verdict: verdict, note: note, handoffNote: handoffNote}
+	exhausted := conversationResult{turns: conv.maxTurns, trajectory: trajectory, verdict: verdict, note: note}
 
 	return conv.outOfTurns(ctx, llm, req, exhausted, satisfied)
 }
@@ -637,6 +618,25 @@ func collectParts(content *genai.Content) (calls []*genai.FunctionCall, text str
 	}
 
 	return calls, b.String()
+}
+
+// markTrajectoryResults backfills the ok flag on one turn's freshly-recorded
+// calls from that turn's results. turn and parts are index-aligned:
+// toolResponseParts appends exactly one part per call, in order. A length
+// mismatch would mean that contract changed, so it degrades to leaving every
+// call marked unsuccessful rather than pairing a call with the wrong result.
+func markTrajectoryResults(turn []recordedToolCall, parts []*genai.Part) {
+	if len(turn) != len(parts) {
+		return
+	}
+
+	for i, part := range parts {
+		if part.FunctionResponse == nil {
+			continue
+		}
+
+		turn[i].ok = requiredCallSucceeded(part.FunctionResponse.Response)
+	}
 }
 
 // toolResponseParts executes each requested tool and packages the results as

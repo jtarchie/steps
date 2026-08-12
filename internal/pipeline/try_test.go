@@ -7,7 +7,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/outcome"
 )
@@ -109,24 +108,5 @@ func TestRecordStepExecutionSkipsTryWrapper(t *testing.T) {
 
 	if got := log.snapshot(); !slices.Equal(got, []string{"notify"}) {
 		t.Errorf("execution log = %v, want [notify]", got)
-	}
-}
-
-// TestHandoffForLooksThroughTry: handoff: sits on the agent step, which a try:
-// wrapper hides. Reading it off the wrapper (which is load-time forbidden from
-// carrying one) meant a tolerated agent was always entered with a nil Handoff
-// and answered a redo as if freshly started.
-func TestHandoffForLooksThroughTry(t *testing.T) {
-	t.Parallel()
-
-	pending := &agent.Handoff{JobName: "job", FromStep: "judge", RouteKey: "fail"}
-	step := tryStep(config.Step{Agent: "reviewer", Handoff: &config.HandoffSpec{Context: true}})
-
-	if handoffFor(step, pending) != pending {
-		t.Error("handoffFor must deliver the carry to an agent wrapped in try:")
-	}
-
-	if handoffFor(tryStep(config.Step{Agent: "reviewer"}), pending) != nil {
-		t.Error("a wrapped agent without handoff: must not receive the carry")
 	}
 }

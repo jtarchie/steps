@@ -152,7 +152,7 @@ func TestCLIBridgeExecutesAndCapturesVerdict(t *testing.T) {
 		t.Errorf("a valid verdict came back as an error: %v", result.Content)
 	}
 
-	verdict, note, _, satisfied, calls := bridge.observed()
+	verdict, note, satisfied, calls := bridge.observed()
 
 	if verdict != "approve" || note != "looks fine" {
 		t.Errorf("captured verdict/note = %q/%q, want approve/looks fine", verdict, note)
@@ -198,7 +198,7 @@ func TestCLIBridgeReportsToolFailureAsError(t *testing.T) {
 		t.Error("an out-of-vocabulary verdict was not reported as an error")
 	}
 
-	verdict, _, _, satisfied, _ := bridge.observed()
+	verdict, _, satisfied, _ := bridge.observed()
 	if verdict != "" || satisfied[verdictToolName] {
 		t.Error("a failed verdict call was captured as a decision")
 	}
@@ -336,26 +336,8 @@ func TestCLIBridgeRejectsUnauthenticatedCallers(t *testing.T) {
 	}
 
 	// Most importantly, nothing it tried was executed.
-	if verdict, _, _, _, calls := bridge.observed(); verdict != "" || len(calls) > 0 {
+	if verdict, _, _, calls := bridge.observed(); verdict != "" || len(calls) > 0 {
 		t.Errorf("unauthenticated calls were executed: verdict %q, calls %+v", verdict, calls)
-	}
-}
-
-// TestCLIBridgeHandoffNoteAbsentWhenUnwritten pins that a step which never
-// wrote a handoff note reports none, rather than an empty map that
-// agentResultRecord would record as though a note existed.
-func TestCLIBridgeHandoffNoteAbsentWhenUnwritten(t *testing.T) {
-	t.Parallel()
-
-	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil, reachHost)
-	if err != nil {
-		t.Fatalf("newCLIBridge: %v", err)
-	}
-
-	t.Cleanup(func() { _ = bridge.Close(t.Context()) })
-
-	if _, _, note, _, _ := bridge.observed(); note != nil {
-		t.Errorf("handoff note = %v, want nil when write_handoff was never called", note)
 	}
 }
 

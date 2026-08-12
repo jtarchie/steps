@@ -18,8 +18,6 @@ assert:
   execution:
     - matrix
     - named-cells
-    - runtime-cells
-    - object-cells
     - shared-task-cells
 
 jobs:
@@ -58,82 +56,6 @@ jobs:
     run: echo "testing {{ .vars.pkg }}"
   assert:
     execution: [test-agent, test-pipeline]
-    outcome: succeeded
-
-# ─── runtime fan-out: from: ─────────────────────────────────────────────────
-# An axis can take its values from the RUN CONTEXT instead of the pipeline
-# text, so an earlier step decides how wide the matrix is. Here a task records
-# the list; in a real pipeline it is usually an agent calling set_context, which
-# is the "agent plans, pipeline executes" shape — each item becomes its own
-# cell, hashed and cached and reported separately, instead of one agent
-# grinding through the whole list in a conversation that outgrows its window.
-#
-# The source is a JSON array of STRINGS — from: is the same axis with the list
-# computed later, so a value interpolates through {{ .vars.x }} exactly as a
-# static one does — or of flat OBJECTS, which the next job covers.
-#
-# The array is produced during the run, so nothing about it was reviewed when
-# this file was written: at most 1000 items, and a missing key, wrong shape, or
-# empty array fails the step naming the key rather than quietly running nothing.
-#
-# What this costs: `steps plan` cannot show these cells, because their number
-# is not knowable until scan has run. The block hashes its declaration at plan
-# time; the cells hash at run time and cache per cell as usual.
-- name: runtime-cells
-  plan:
-  - task: scan
-    inputs: []
-    context: write
-    run: |
-      mkdir -p context
-      printf '["alpha","beta"]' > context/findings
-  - across:
-    - var: finding
-      from: findings
-    task: "investigate-{{ .vars.finding }}"
-    inputs: []
-    run: echo "investigating {{ .vars.finding }}"
-  assert:
-    execution: [scan, investigate-alpha, investigate-beta]
-    outcome: succeeded
-
-# ─── runtime fan-out over OBJECTS ───────────────────────────────────────────
-# A from: array can hold flat objects instead of strings, so a work item can
-# carry structure — a finding with a file, a line and a claim — rather than
-# being flattened to an opaque id whose details the cell then has to go looking
-# for.
-#
-# A cell names the FIELDS it wants: {{ .vars.finding.file }}. A bare
-# {{ .vars.finding }} is an error, because an object has no single rendering and
-# picking one here would be a rule invented on the spot.
-#
-# label: says which field names each cell. Coordinates need a scalar — a cell's
-# name is a routing target and an assert.execution entry — and without label:
-# the cells are named by position (#1, #2), which is deterministic but says
-# nothing about what they are.
-#
-# Fields must be scalars (string, number, boolean). A nested object or list is
-# refused for the same reason a bare object is: there is no text it obviously
-# becomes. Every item must be the same shape and must carry every field the
-# template names — checked across the WHOLE array before any cell runs, so a
-# malformed item fails the block rather than cell 7 of 40.
-- name: object-cells
-  plan:
-  - task: scan
-    inputs: []
-    context: write
-    run: |
-      mkdir -p context
-      printf '[{"id":"SQLI-42","file":"users.py","line":42},{"id":"AUTH-7","file":"api.py","line":7}]' > context/findings
-  - across:
-    - var: finding
-      from: findings
-      label: id
-    task: verify
-    inputs: []
-    run: echo "verifying {{ .vars.finding.id }} at {{ .vars.finding.file }}:{{ .vars.finding.line }}"
-  assert:
-    execution: [scan, "verify [finding=SQLI-42]", "verify [finding=AUTH-7]"]
     outcome: succeeded
 
 # ─── a matrix over a REUSABLE task ──────────────────────────────────────────

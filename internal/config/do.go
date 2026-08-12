@@ -35,8 +35,7 @@ func (c *Config) validateDoBlock(label string, step *Step) error {
 
 	// "a do" reads correctly in rejectOperationFields' message: "... is not
 	// valid on a do step; set it on the step inside the block that it
-	// describes". handoff: is in that list, which is why validateDoChildPosition
-	// below only has to speak about the CHILDREN.
+	// describes".
 	err := c.rejectOperationFields(label, step, "a do")
 	if err != nil {
 		return err
@@ -66,10 +65,9 @@ func (c *Config) validateDoBlock(label string, step *Step) error {
 // validateDoChildPosition rejects the fields that describe a step's POSITION IN
 // A SEGMENT on a step that has no such position.
 //
-// to:/max_visits: route between plan steps, and handoff:'s backward half
-// (context:/tool:) describes arriving via one of those routes. A step inside a
-// do: block is not a routing target — the block is the plan-positioned step —
-// so all of these would load cleanly and then never fire.
+// to:/max_visits: route between plan steps. A step inside a do: block is not a
+// routing target — the block is the plan-positioned step — so either would
+// load cleanly and then never fire.
 //
 // That exact defect is one this codebase has already paid for once: to:/
 // max_visits: on the step a try: wraps "used to load fine and silently never
@@ -81,10 +79,6 @@ func validateDoChildPosition(label string, i int, child *Step) error {
 		return fmt.Errorf("%s: to: is not valid on do step %d (a step inside a do: block is not a routing target — put to: on the do: block itself)", label, i)
 	case child.MaxVisits != 0:
 		return fmt.Errorf("%s: max_visits: is not valid on do step %d (a step inside a do: block is not a routing target — put max_visits: on the do: block itself)", label, i)
-	case child.Handoff != nil && child.Handoff.Receives():
-		return fmt.Errorf("%s: handoff: context/tool is not valid on do step %d (both describe arriving via a to: route, and a step inside a do: block is never routed to)", label, i)
-	case child.WantsNote():
-		return fmt.Errorf("%s: handoff: note is not valid on do step %d (a note is addressed to the next agent step in the same segment, and a do: block's children are not segment positions)", label, i)
 	default:
 		return nil
 	}

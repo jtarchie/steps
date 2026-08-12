@@ -149,14 +149,8 @@ func (p preparedAgentStep) close(stepLabel string) {
 // prepareAgentStep resolves step's agent, materializes its (isolated or
 // shared) working directory, and builds the tools/LLM client it'll run
 // with. On error, any workspace.StepSpace already created is closed before
-// returning so the caller never has to. handoff is the transition context
-// (see Handoff) to seed the conversation with when step.Handoff enables it —
-// nil on a step's first/unrouted execution, or when the caller (RunHook)
-// never participates in routing at all.
-// st is the run-context seam: both halves of the context store are derived
-// from it here (the set_context writer and the recap read back), so callers
-// pass one thing and a nil store simply means "no context store on this path".
-func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace, handoff *Handoff, st *store.Store) (preparedAgentStep, error) {
+// returning so the caller never has to.
+func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) (preparedAgentStep, error) {
 	primary, ri, err := resolveWithFailover(cfg, step)
 	if err != nil {
 		return preparedAgentStep{}, err
@@ -194,9 +188,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	required := requiredToolNames(ri.ToolSpecs)
 
-	synthesized, err := injectSynthesizedTools(ctx, cfg, step,
-		synthesisInputs{handoff: handoff, store: st, readScopes: ContextReadScopes(ctx), writeScope: ContextWriteScope(ctx)},
-		decls, registry, required)
+	synthesized, err := injectSynthesizedTools(ctx, cfg, step, decls, registry, required)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 		closeAll(closers)
@@ -229,7 +221,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	spillDir := newToolOutputSpillDir(dir, step.Agent)
 
-	contextBlocks, err := prepareContextBlocks(dir, withHandoffNotePath(step, dir, ri.ContextPaths), ri.MaxContextBytes, decls)
+	contextBlocks, err := prepareContextBlocks(dir, ri.ContextPaths, ri.MaxContextBytes, decls)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 		closeAll(closers)
@@ -237,16 +229,11 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
-	// Delivered notes are model-authored, and a fan-in delivers several at
-	// once — the widest injection surface here, so each is fenced as data.
-	contextBlocks = fenceNoteBlocks(contextBlocks)
-
 	conv := agentConversation{
 		system:        buildSystemMessage(ri.Persona, dir),
-		prompt:        promptWithHandoff(step.Prompt, step.Handoff, handoff, spillDir),
+		prompt:        step.Prompt,
 		contextBlocks: contextBlocks,
 		upstream:      upstreamBlocks(ctx, step),
-		recap:         synthesized.recap,
 		env:           toolEnv{dir: dir, runner: runner, spillDir: spillDir},
 		tools:         agentTools{decls: decls, registry: registry, required: required, maxCalls: maxCallsByName(ri.ToolSpecs)},
 		params: agentGenParams{
@@ -412,19 +399,18 @@ func newToolOutputSpillDir(dir, stepLabel string) string {
 
 // StepOutcome is what RunStep reports about a completed agent step, beyond
 // any error: the merkle hash to use as the next step's parentHash, the
-// verdict (if any) internal/pipeline routes on, that verdict's note, and
-// this step's own run packaged as a PreviousRun for a possible routed-to
-// successor to pull via its previous_run tool. Previous is populated
-// whenever the conversation produced a result at all — including on a
-// failure/assert-failure path, so a to.failure-routed successor can still
-// pull a failed run's partial text/trajectory; it stays nil only when the
-// step never got as far as running a conversation (e.g. workspace
-// materialization failed).
+// verdict (if any) internal/pipeline routes on, that verdict's note, and the
+// model's final response text — recorded under this step's own name for a
+// later step that declared context: { from: { <this step>: full } } to read
+// (see upstream.go). Response is populated whenever the conversation
+// produced a result at all — including on a failure/assert-failure path — and
+// stays "" only when the step never got as far as running a conversation
+// (e.g. workspace materialization failed).
 type StepOutcome struct {
 	Hash     string
 	Verdict  string
 	Note     string
-	Previous *PreviousRun
+	Response string
 }
 
 // printAgentResponse echoes an agent step's conversation result to the
@@ -452,13 +438,10 @@ func printAgentResponse(res conversationResult) {
 
 // RunStep hashes step against parentHash (agent steps are never
 // skippable) and runs it, retrying the whole conversation up to the
-// resolved attempt count. handoff carries the transition context (see
-// Handoff) when step was entered via a to:/verdicts: route into a
-// handoff:-enabled step; nil otherwise. internal/pipeline routes the plan
-// on the returned StepOutcome.Verdict and threads StepOutcome.Previous/Note
-// into the next step's Handoff when this step itself routes somewhere.
-func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, parentHash string, handoff *Handoff) (StepOutcome, error) {
-	prepared, err := prepareAgentStep(ctx, cfg, step, bw, handoff, st)
+// resolved attempt count. internal/pipeline routes the plan on the returned
+// StepOutcome.Verdict.
+func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, parentHash string) (StepOutcome, error) {
+	prepared, err := prepareAgentStep(ctx, cfg, step, bw)
 	if err != nil {
 		return StepOutcome{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
@@ -521,24 +504,19 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	// that gets read. Best-effort by design (see saveAgentTranscript).
 	saveAgentTranscript(ctx, st, hash, jobName, res)
 
-	previous := &PreviousRun{
-		Agent: step.Agent, Response: res.text, Verdict: res.verdict, Note: res.note,
-		Turns: res.turns, Trajectory: exportTrajectory(res.trajectory),
-	}
-
 	if err != nil {
 		recordAgentFailure(ctx, st, node, jobName, res, err)
 
 		// A failed run emitted no clean verdict; the pipeline routes it via
 		// to["failure"] (or fails the job).
-		return StepOutcome{Previous: previous}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		return StepOutcome{Response: res.text}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
 	err = assertAgentResponse(step.Assert, res)
 	if err != nil {
 		recordAgentFailure(ctx, st, node, jobName, res, err)
 
-		return StepOutcome{Previous: previous}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		return StepOutcome{Response: res.text}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
 	err = prepared.space.Capture(ctx)
@@ -546,21 +524,15 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 		wrapped := fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 		recordAgentFailure(ctx, st, node, jobName, res, wrapped)
 
-		return StepOutcome{Previous: previous}, wrapped
+		return StepOutcome{Response: res.text}, wrapped
 	}
-
-	// Publish the handoff note only now, once the step has fully succeeded:
-	// a failed run, a failed assert, or a failed capture leaves the previous
-	// note (if any) in place rather than replacing it with one describing work
-	// that did not stand.
-	publishHandoffNote(prepared, jobName, res)
 
 	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", agentResultRecord(res), nil)
 	if err != nil {
-		return StepOutcome{Previous: previous}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		return StepOutcome{Response: res.text}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
-	return StepOutcome{Hash: hash, Verdict: res.verdict, Note: res.note, Previous: previous}, nil
+	return StepOutcome{Hash: hash, Verdict: res.verdict, Note: res.note, Response: res.text}, nil
 }
 
 // agentResultRecord builds the result map RunStep records for a succeeded
@@ -597,10 +569,6 @@ func agentResultRecord(res conversationResult) map[string]any {
 		result["note"] = res.note
 	}
 
-	if res.handoffNote != nil {
-		result["handoff_note"] = res.handoffNote
-	}
-
 	return result
 }
 
@@ -611,15 +579,12 @@ func agentResultRecord(res conversationResult) map[string]any {
 const maxRecordedArgBytes = 2048
 
 // recordedTrajectory converts a run's tool calls into the plain shape stored
-// in nodes.result. It is the persistence counterpart to exportTrajectory (see
-// handoff.go), which shapes the same calls for the previous_run tool and drops
-// the ok flag; here that flag is the point, since "it called write_file and it
-// failed" is a different story from "it called write_file".
+// in nodes.result — "it called write_file and it failed" is a different story
+// from "it called write_file", so the ok flag is the point.
 //
-// The trajectory used to die with the process — it existed only in memory, for
-// a routed-to successor and the handoff note's files-touched section. So the
-// most useful question about an agent step ("what did it actually do?") had no
-// answer once the run ended, and none at all for a step that failed.
+// The trajectory used to die with the process — it existed only in memory. So
+// the most useful question about an agent step ("what did it actually do?")
+// had no answer once the run ended, and none at all for a step that failed.
 func recordedTrajectory(calls []recordedToolCall) []map[string]any {
 	if len(calls) == 0 {
 		return nil
@@ -875,9 +840,7 @@ func runOneConversation(
 // is already outcome-marked where appropriate (see runAgentConversation), so
 // the caller's hook classification works unchanged.
 func RunHook(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) error {
-	// nil writer: a hook cannot declare context: (validateContextSteps rejects
-	// it), so there is never a set_context tool to serve here.
-	prepared, err := prepareAgentStep(ctx, cfg, step, bw, nil, nil)
+	prepared, err := prepareAgentStep(ctx, cfg, step, bw)
 	if err != nil {
 		return fmt.Errorf("agent %q: %w", step.Agent, err)
 	}

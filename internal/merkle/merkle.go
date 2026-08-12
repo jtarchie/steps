@@ -287,92 +287,6 @@ func withRouting(step config.Step, content map[string]any) map[string]any {
 	return content
 }
 
-// withHandoff folds a step's handoff: declaration into content, but only
-// when set — so a step with no handoff: hashes byte-identically to before
-// this field existed (the same value-gating as image:/when:/to:). Only the
-// declaration itself (whether context/tool are enabled) is part of a step's
-// identity: it changes what prompt suffix and tool set the step executes
-// with. The actual routed-from step/key/note/visit — runtime facts the
-// planner cannot know at plan time — are deliberately excluded from
-// identity, the same treatment Attempts gets; agent steps are already
-// unconditionally Unskippable (see planNonGetNode), so excluding them from
-// identity never causes a wrong skip.
-func withHandoff(step config.Step, content map[string]any) map[string]any {
-	if step.Handoff != nil {
-		content["handoff"] = map[string]any{"context": step.Handoff.Context, "tool": step.Handoff.Tool}
-	}
-
-	return withHandoffNote(step, content)
-}
-
-// withHandoffNote folds a step's handoff_note: participation into content,
-// but only when it participates — so an unrelated step hashes byte-identically
-// to before this field existed (the same value-gating as withHandoff).
-//
-// Both sides are identity: handoff_note adds a required write_handoff tool to
-// what the step executes with, and HandoffNoteFrom (computed at load, see
-// config.validateHandoffNoteSteps) adds an injected context block. The note's
-// CONTENT is excluded, like the routed handoff's runtime facts above — but for
-// a different reason than context_paths', which is chained through its input
-// artifacts' hashes. A note's content is chained through nothing: correctness
-// rests on agent steps being unconditionally Unskippable (see planNonGetNode),
-// so a receiving agent step always re-runs and always re-reads the current
-// note. A `task` reading handoff/*.md would NOT be safe that way — see
-// docs/agents.md.
-func withHandoffNote(step config.Step, content map[string]any) map[string]any {
-	if step.WantsNote() {
-		content["handoff_note"] = true
-	}
-
-	if len(step.HandoffNoteFrom) > 0 {
-		content["handoff_note_from"] = step.HandoffNoteFrom
-	}
-
-	return withContext(step, content)
-}
-
-// withContext folds a step's context: declaration into content, but only when
-// set — so a step without one hashes byte-identically to before this field
-// existed (the same value-gating as withHandoff).
-//
-// The declaration is identity because it changes the step's tool grant: a
-// context: write step is offered set_context and a plain one is not, and two
-// steps that differ only in what tools they hold are not the same step. What
-// the step actually STORED is excluded, for the reason the handoff note's
-// content is: it cannot be known at plan time, and agent steps are
-// unconditionally Unskippable (see planNonGetNode), so a run always re-executes
-// and re-records rather than replaying a stale write.
-// The fidelity is identity for the same reason: it decides how much of the
-// recorded context is rendered into the step's opening conversation, and two
-// steps shown different things are not the same step. The recorded FACTS are
-// excluded — a runtime value the planner cannot know, and one that agent steps
-// being Unskippable makes safe to leave out.
-// The qualify is identity for the third variant of the same reason: it decides
-// WHERE the step's writes land — its own per-cell scope, merged under a key
-// naming the cell, rather than the run scope under the plain key. Two steps
-// recording under different key names are not the same step. Without it,
-// adding qualify: to a matrix of task cells is a cache hit: the cells skip, no
-// per-cell scope is ever written, and the join merges nothing — so the author
-// gets the OLD unqualified key with no error, which is the silent key-shape
-// change qualify: exists to eliminate. Value-gated like the fidelity above, so
-// every pipeline that does not set it hashes byte-identically to before.
-func withContext(step config.Step, content map[string]any) map[string]any {
-	if step.Context != nil {
-		entry := map[string]any{"write": step.Context.Write}
-		if step.Context.Fidelity != "" {
-			entry["fidelity"] = string(step.Context.Fidelity)
-		}
-
-		if step.Context.Qualify {
-			entry["qualify"] = true
-		}
-
-		content["context"] = entry
-	}
-
-	return content
-}
-
 // withHooks folds a step's resolved hook content into content, but only when
 // the step actually carries hooks — so a step with no hooks hashes
 // byte-identically to before this field existed (the same value-gating as
@@ -641,12 +555,7 @@ func TaskNodeContent(cfg *config.Config, step config.Step, rt config.ResolvedTas
 		content["assert"] = assertContent(rt.Assert)
 	}
 
-	// A task's context: is identity too, and this is the step kind where it
-	// actually bites: an agent is never cacheable, so hashing its declaration
-	// alone would be a no-op, while a task CELL of a matrix is the one thing a
-	// rerun can skip. Without this, adding qualify: to a matrix of task cells
-	// was a cache hit that recorded nothing.
-	return withHooks(cfg, step, withWhen(step, withRouting(step, withContext(step, content))))
+	return withHooks(cfg, step, withWhen(step, withRouting(step, content)))
 }
 
 // assertContent builds the stable content map for a task/agent step's assert
@@ -1037,7 +946,7 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 		content["assert"] = assertContent(step.Assert)
 	}
 
-	return withHooks(cfg, step, withWhen(step, withHandoff(step, withRouting(step, content))))
+	return withHooks(cfg, step, withWhen(step, withRouting(step, content)))
 }
 
 // HashNode computes a Node's content-addressed hash: sha256 hex of the
@@ -1235,55 +1144,20 @@ func AcrossNodeContent(cfg *config.Config, step config.Step, cells []config.Step
 	return withHooks(cfg, step, withWhen(step, withRouting(step, map[string]any{"across": contents})))
 }
 
-// AcrossPlanContent is a matrix's content at PLAN time, where a runtime axis
-// has no values yet.
-//
-// A static matrix expands and hashes its cells exactly as before. A runtime
-// one hashes the axes as declared — including the source key, so pointing an
-// axis at a different key is a different block — plus the unexpanded template.
-// The marker keeps the two spellings apart: a runtime matrix must never
-// collide with a static one that happens to render the same way.
+// AcrossPlanContent is a matrix's content at PLAN time: every axis is static,
+// so it expands and hashes its cells exactly as at run time.
 func AcrossPlanContent(cfg *config.Config, step config.Step, i int) (map[string]any, error) {
-	if !config.HasRuntimeAxis(step) {
-		cells, err := config.ExpandAcross(fmt.Sprintf("step %d", i), step)
-		if err != nil {
-			return nil, fmt.Errorf("step %d (across): %w", i, err)
-		}
-
-		content, err := AcrossNodeContent(cfg, step, cells)
-		if err != nil {
-			return nil, fmt.Errorf("step %d (across): %w", i, err)
-		}
-
-		return content, nil
-	}
-
-	template, err := stepContentMap(cfg, acrossTemplate(step))
+	cells, err := config.ExpandAcross(fmt.Sprintf("step %d", i), step)
 	if err != nil {
 		return nil, fmt.Errorf("step %d (across): %w", i, err)
 	}
 
-	axes := make([]any, 0, len(step.Across))
-	for _, axis := range step.Across {
-		axes = append(axes, map[string]any{"var": axis.Var, "values": axis.Values, "from": axis.From})
-	}
-
-	content, err := withHooks(cfg, step, withWhen(step, withRouting(step, map[string]any{
-		"across_runtime": map[string]any{"axes": axes, "template": template},
-	})))
+	content, err := AcrossNodeContent(cfg, step, cells)
 	if err != nil {
 		return nil, fmt.Errorf("step %d (across): %w", i, err)
 	}
 
 	return content, nil
-}
-
-// acrossTemplate is the matrix step with its axes stripped: the body a cell is
-// rendered from, before any substitution.
-func acrossTemplate(step config.Step) config.Step {
-	step.Across = nil
-
-	return step
 }
 
 // CellHash is one across: cell's own content hash, plus whether the cell is
@@ -1391,14 +1265,6 @@ func raceNode(cfg *config.Config, step config.Step, i int, parentHash string) (N
 }
 
 // acrossNode builds the plan node for an across: matrix.
-//
-// A matrix with a from: axis takes its values from what an earlier step
-// records, so at PLAN time it has no cells to fold in: the array does not
-// exist yet. It hashes its declaration instead (see AcrossPlanContent), which
-// means the planner cannot predict what such a block — or anything downstream
-// of it — will do. That is honest rather than unfortunate: the width of the
-// matrix is genuinely not knowable until the run reaches it, and a plan that
-// claimed otherwise would be predicting a skip it cannot make good on.
 func acrossNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, error) {
 	content, err := AcrossPlanContent(cfg, step, i)
 	if err != nil {

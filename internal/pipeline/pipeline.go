@@ -343,13 +343,11 @@ const (
 // nonGetOutcome is what dispatchNonGetStep/runNonGetStep report about a
 // step's routing-relevant outcome, beyond its hash/disposition/error: the
 // verdict applyRouting keys on, and — for an agent step only — the verdict's
-// note and this step's own run (see agent.PreviousRun), both of which
-// runSteps threads into a routed-to successor's Handoff. Its zero value is
-// exactly right for task/put steps and any non-stepRan disposition.
+// note. Its zero value is exactly right for task/put steps and any
+// non-stepRan disposition.
 type nonGetOutcome struct {
-	verdict  string
-	note     string
-	previous *agent.PreviousRun
+	verdict string
+	note    string
 }
 
 // runSteps executes steps in order. A `get` step fans out: for each version
@@ -371,14 +369,6 @@ func runSteps(
 	// so each triggered build (and each version under get: version: every, which
 	// re-enters via a fresh runSteps) gets its own independent max_visits budget.
 	visits := map[int]int{}
-
-	// pending is the Handoff a routed transition builds for whichever step
-	// index it targets — consumed (and cleared) the moment that step is next
-	// dispatched, whether or not its handoff: actually uses it. nil means "no
-	// pending transition into the next step" (a straight fall-through, or the
-	// very first step), which is the overwhelmingly common case and costs
-	// nothing extra.
-	var pending *agent.Handoff
 
 	// A manual index loop (not range) so a to: transition can set the next
 	// index — forward to skip ahead, or backward to loop. Without any to:, the
@@ -406,7 +396,7 @@ func runSteps(
 			return runGetStep(ctx, cfg, jobName, i, step, steps[i+1:], pinned, provider, st, skippable, parentHash, chainUnskippable, cache)
 		}
 
-		returned, err := executeNonGetStep(ctx, cfg, jobName, &i, &parentHash, &chainUnskippable, &pending, step, steps, bw, st, skippable, visits)
+		returned, err := executeNonGetStep(ctx, cfg, jobName, &i, &parentHash, &chainUnskippable, step, steps, bw, st, skippable, visits)
 		if returned {
 			return err
 		}
@@ -436,7 +426,6 @@ func executeNonGetStep(
 	i *int,
 	parentHash *string,
 	chainUnskippable *bool,
-	pending **agent.Handoff,
 	step config.Step,
 	steps []config.Step,
 	bw workspace.BuildWorkspace,
@@ -459,7 +448,7 @@ func executeNonGetStep(
 		return false, nil
 	}
 
-	newParentHash, disposition, no, err := runNonGetStep(ctx, cfg, jobName, *i, step, bw, st, skippable, *parentHash, handoffFor(step, *pending))
+	newParentHash, disposition, no, err := runNonGetStep(ctx, cfg, jobName, *i, step, bw, st, skippable, *parentHash)
 
 	if disposition == stepRan {
 		visits[*i]++
@@ -467,7 +456,7 @@ func executeNonGetStep(
 
 	recordCompletedStep(ctx, st, *i, step, err)
 
-	nextIndex, routedKey, err, exhaustedErr := applyRouting(ctx, steps, *i, step, disposition, no.verdict, err, visits)
+	nextIndex, _, err, exhaustedErr := applyRouting(ctx, steps, *i, step, disposition, no.verdict, err, visits)
 	if exhaustedErr != nil {
 		return true, exhaustedErr
 	}
@@ -493,7 +482,6 @@ func executeNonGetStep(
 	}
 
 	if disposition == stepGuardSkipped {
-		*pending = nil
 		*i = nextIndex
 
 		return false, nil
@@ -503,7 +491,6 @@ func executeNonGetStep(
 		*parentHash = newParentHash
 	}
 
-	*pending = nextPendingHandoff(jobName, step, steps, routedKey, no, visits, nextIndex)
 	*i = nextIndex
 
 	return false, nil
@@ -538,56 +525,6 @@ func reportChainSkipped(ctx context.Context, jobName string, firstIndex int, ste
 	}
 }
 
-// handoffFor returns pending when step's own handoff: enables something —
-// the step is what actually consumes carried transition context — and nil
-// otherwise, so a step without handoff: never sees a pending value even when
-// one exists. Split out of runSteps to keep its cyclomatic complexity down.
-func handoffFor(step config.Step, pending *agent.Handoff) *agent.Handoff {
-	// Unwrap: handoff: sits on the agent step, which a try: wrapper hides —
-	// the wrapper itself never carries one (load-time rejected as "handoff is
-	// only valid on agent steps"), so without this a tolerated agent was
-	// reached with a nil Handoff and answered a redo as if freshly started.
-	inner := step.Unwrap()
-	if inner.Handoff != nil && inner.Handoff.Enabled() {
-		return pending
-	}
-
-	return nil
-}
-
-// nextPendingHandoff builds the Handoff a just-routed step hands to whichever
-// step index it targeted, or nil when the step didn't route (routedKey ==
-// ""). Split out of runSteps as a pure function so the carry's construction —
-// which fields come from where — is unit-testable without a live agent.
-// visits[nextIndex] is read BEFORE runSteps' next iteration would increment
-// it, so Visit correctly previews "this will be the Nth execution of
-// nextIndex".
-func nextPendingHandoff(jobName string, step config.Step, steps []config.Step, routedKey string, no nonGetOutcome, visits map[int]int, nextIndex int) *agent.Handoff {
-	if routedKey == "" {
-		return nil
-	}
-
-	// `to: <key>: next` on the LAST step of a plan slice routes one past the
-	// end — the same place an unrouted final step goes. There is no step there
-	// to hand anything to, and the field reads below would index out of range:
-	// a real panic, on exactly the pipeline whose last outcome says "carry on".
-	if nextIndex >= len(steps) {
-		return nil
-	}
-
-	return &agent.Handoff{
-		JobName:   jobName,
-		FromStep:  executedStepName(step),
-		RouteKey:  routedKey,
-		Note:      no.note,
-		Visit:     visits[nextIndex] + 1,
-		MaxVisits: steps[nextIndex].MaxVisits,
-		StepIndex: nextIndex,
-		PlanLen:   len(steps),
-		Previous:  no.previous,
-	}
-}
-
 // recordStepOutcome registers an agent step's decision under the name it is
 // known by, so a later step that declared context: from: can be handed it.
 func recordStepOutcome(ctx context.Context, step config.Step, out agent.StepOutcome) {
@@ -595,12 +532,7 @@ func recordStepOutcome(ctx context.Context, step config.Step, out agent.StepOutc
 		return
 	}
 
-	up := agent.Upstream{Verdict: out.Verdict, Note: out.Note}
-	if out.Previous != nil {
-		up.Response = out.Previous.Response
-	}
-
-	agent.RecordOutcome(ctx, executedStepName(step), up)
+	agent.RecordOutcome(ctx, executedStepName(step), agent.Upstream{Verdict: out.Verdict, Note: out.Note, Response: out.Response})
 }
 
 // recordCompletedStep marks a plan step as one a resume will not repeat.
@@ -644,7 +576,7 @@ func skipCompletedStep(ctx context.Context, jobName string, i *int) bool {
 // there is nothing for its observers to react to. When a green step is failed
 // by its own on_success/ensure hook, the true (failed) outcome is recorded so
 // the store and skip-cache reflect it.
-func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string, handoff *agent.Handoff) (string, stepDisposition, nonGetOutcome, error) {
+func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string) (string, stepDisposition, nonGetOutcome, error) {
 	started := time.Now()
 
 	publishStepStarted(ctx, jobName, i, step)
@@ -653,7 +585,7 @@ func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i in
 	// it against the right step (see withStepIdentity).
 	ctx = withStepIdentity(ctx, i, step)
 
-	hash, disposition, no, err := dispatchNonGetStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash, handoff)
+	hash, disposition, no, err := dispatchNonGetStep(ctx, cfg, jobName, i, step, bw, st, skippable, parentHash)
 
 	// Record what ran (not a cached chain, not a guard-skipped step) for a
 	// job's assert.execution, before hooks so the order reads
@@ -695,9 +627,8 @@ func runNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i in
 // fanning out or delegating the remainder of the plan. It first evaluates the
 // step's when: guard (see evaluateStepGuard): a false guard skips only this
 // step. stepChainSkipped is only ever returned for a cache-matched task step;
-// put/agent steps are never chain-skippable. handoff is threaded straight
-// into agent.RunStep — see runSteps' pending carry — and ignored by task/put.
-func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string, handoff *agent.Handoff) (string, stepDisposition, nonGetOutcome, error) {
+// put/agent steps are never chain-skippable.
+func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string) (string, stepDisposition, nonGetOutcome, error) {
 	shouldRun, err := evaluateStepGuard(ctx, cfg, step, bw)
 	if err != nil {
 		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (when): %w", i, err)
@@ -727,7 +658,7 @@ func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string,
 	// before resolving the kind is what keeps it off Step.Kind()'s table,
 	// where it would read as a second kind on every step that uses it.
 	if len(step.Across) > 0 {
-		return runAcrossStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
+		return runAcrossStep(ctx, cfg, jobName, i, step, bw, st, parentHash)
 	}
 
 	kind, ok := step.Kind()
@@ -735,7 +666,7 @@ func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string,
 		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}
 
-	return dispatchByKind(ctx, cfg, jobName, i, kind, step, bw, st, skippable, parentHash, handoff)
+	return dispatchByKind(ctx, cfg, jobName, i, kind, step, bw, st, skippable, parentHash)
 }
 
 // dispatchByKind routes a resolved non-get step to its runner. Split from the
@@ -743,7 +674,7 @@ func dispatchNonGetStep(ctx context.Context, cfg *config.Config, jobName string,
 // kinds it handles are the whole non-get set, which `exhaustive` enforces.
 func dispatchByKind(
 	ctx context.Context, cfg *config.Config, jobName string, i int, kind config.StepKind, step config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string, handoff *agent.Handoff,
+	bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool, parentHash string,
 ) (string, stepDisposition, nonGetOutcome, error) {
 	switch kind { //nolint:exhaustive // default covers config.StepKindGet — this is only called for non-get steps
 	case config.StepKindTask:
@@ -755,8 +686,8 @@ func dispatchByKind(
 
 		return hash, stepRan, nonGetOutcome{}, err
 	case config.StepKindAgent:
-		stepOut, err := agent.RunStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
-		no := nonGetOutcome{verdict: stepOut.Verdict, note: stepOut.Note, previous: stepOut.Previous}
+		stepOut, err := agent.RunStep(ctx, cfg, jobName, i, step, bw, st, parentHash)
+		no := nonGetOutcome{verdict: stepOut.Verdict, note: stepOut.Note}
 
 		// Register what this step decided, for any step that declared
 		// context: { from: { <this step>: ... } }. Recorded even when the run
@@ -770,7 +701,7 @@ func dispatchByKind(
 
 		return stepOut.Hash, stepRan, no, nil
 	default:
-		return dispatchContainerKind(ctx, cfg, jobName, kind, i, step, bw, st, parentHash, handoff)
+		return dispatchContainerKind(ctx, cfg, jobName, kind, i, step, bw, st, parentHash)
 	}
 }
 
@@ -779,19 +710,19 @@ func dispatchByKind(
 // neither switch has to carry both halves.
 func dispatchContainerKind(
 	ctx context.Context, cfg *config.Config, jobName string, kind config.StepKind, i int, step config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, parentHash string, handoff *agent.Handoff,
+	bw workspace.BuildWorkspace, st *store.Store, parentHash string,
 ) (string, stepDisposition, nonGetOutcome, error) {
 	switch kind { //nolint:exhaustive // the leaf kinds are handled by dispatchByKind; default catches config.StepKindGet, which never reaches here
 	case config.StepKindTry:
-		return runTryStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
+		return runTryStep(ctx, cfg, jobName, i, step, bw, st, parentHash)
 	case config.StepKindInParallel:
-		return runParallelStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
+		return runParallelStep(ctx, cfg, jobName, i, step, bw, st, parentHash)
 	case config.StepKindDo:
-		return runDoStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
+		return runDoStep(ctx, cfg, jobName, i, step, bw, st, parentHash)
 	case config.StepKindRace:
-		return runRaceStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
+		return runRaceStep(ctx, cfg, jobName, i, step, bw, st, parentHash)
 	case config.StepKindEnsemble:
-		return runEnsembleStep(ctx, cfg, jobName, i, step, bw, st, parentHash, handoff)
+		return runEnsembleStep(ctx, cfg, jobName, i, step, bw, st, parentHash)
 	default: // config.StepKindGet — dispatchNonGetStep is only called for non-get steps
 		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}
@@ -824,7 +755,7 @@ func recordChainSucceeded(ctx context.Context, st *store.Store, jobName, rootHas
 // infrastructure-errored inner step from being reported as a green job. An
 // earlier revision called dispatchNonGetStep and returned nil from here, which
 // cost all three at once.
-func runTryStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, parentHash string, handoff *agent.Handoff) (string, stepDisposition, nonGetOutcome, error) {
+func runTryStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st *store.Store, parentHash string) (string, stepDisposition, nonGetOutcome, error) {
 	content, err := merkle.TryNodeContent(cfg, step)
 	if err != nil {
 		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (try): %w", i, err)
@@ -844,7 +775,7 @@ func runTryStep(ctx context.Context, cfg *config.Config, jobName string, i int, 
 	// Run the inner step with the try node's hash as parent — the inner step
 	// chains under the try wrapper. No caching (nil skippable): try is always
 	// unskippable, so the inner step always runs.
-	_, disposition, innerNo, innerErr := runNonGetStep(ctx, cfg, jobName, i, inner, bw, st, nil, hash, handoff)
+	_, disposition, innerNo, innerErr := runNonGetStep(ctx, cfg, jobName, i, inner, bw, st, nil, hash)
 
 	// The wrapper's node status is what the plan did with the outcome, not
 	// what the inner step's outcome was (the inner step records that itself):
@@ -1125,14 +1056,6 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 		fmt.Printf("skip: %s (cached)\n", rt.Name)
 		slog.Info("job.skip", "job", jobName, "index", i, "kind", "task", "task", rt.Name, "reason", "cached", "hash", hash)
 
-		// The command did not run, so anything it recorded has to come back
-		// from what it recorded last time — otherwise a cached run reaches the
-		// agent steps with facts a fresh run would have had.
-		err = replayTaskContext(ctx, st, agent.ContextWriteScope(ctx), rt.Name, hash)
-		if err != nil {
-			return "", stepChainSkipped, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
-		}
-
 		return parentHash, stepChainSkipped, nil
 	}
 
@@ -1147,7 +1070,7 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindTask, StepIndex: i, Resource: name, Content: content}
 
-	collected, err := executeTask(ctx, cfg, step, rt, bw)
+	err = executeTask(ctx, cfg, step, rt, bw)
 	if err != nil {
 		wrapped := fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 		recordStepFailure(ctx, st, node, jobName, wrapped)
@@ -1155,14 +1078,7 @@ func runTaskStep(ctx context.Context, cfg *config.Config, jobName string, i int,
 		return "", stepRan, wrapped
 	}
 
-	// Recorded on the node as well as in the run context, so a later skip of
-	// this same step can replay it (see replayTaskContext).
-	err = recordTaskContext(ctx, st, agent.ContextWriteScope(ctx), rt.Name, collected)
-	if err != nil {
-		return "", stepRan, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
-	}
-
-	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", taskNodeResult(collected), nil)
+	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", nil, nil)
 	if err != nil {
 		return "", stepRan, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 	}
@@ -1211,17 +1127,14 @@ func retryWithTimeout(ctx context.Context, attempts int, timeoutStr string, mark
 }
 
 // executeTask materializes a task's (isolated or shared) working directory,
-// runs its command with retries and timeout, and captures its declared outputs
-// — with no merkle/store recording. Shared by runTaskStep (which records the
-// aggregate outcome) and hook execution (where the enclosing step/job records it).
-// A `context: write` task's recorded facts are collected here, before the
-// space closes — the values go to SQLite rather than to another step's
-// directory, so unlike a handoff note this works under every workspace
-// strategy.
-func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt config.ResolvedTask, bw workspace.BuildWorkspace) (map[string]string, error) {
+// runs its command with retries and timeout, and captures its declared
+// outputs — with no merkle/store recording. Shared by runTaskStep (which
+// records the aggregate outcome) and hook execution (where the enclosing
+// step/job records it).
+func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt config.ResolvedTask, bw workspace.BuildWorkspace) error {
 	space, err := bw.TaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs, rt.InputMapping, rt.OutputMapping)
 	if err != nil {
-		return nil, fmt.Errorf("task %q: %w", rt.Name, err)
+		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 	defer workspace.CloseSpace(space, rt.Name)
 
@@ -1231,7 +1144,7 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 	// for senders that have actually run.
 	err = deliverUpstreamFiles(ctx, space.Dir(), step)
 	if err != nil {
-		return nil, fmt.Errorf("task %q: %w", rt.Name, err)
+		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 
 	err = retryWithTimeout(ctx, step.Attempts, rt.Timeout, func(attempt, total int) {
@@ -1241,24 +1154,15 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 		return runTaskCommand(attemptCtx, cfg, rt, space.Dir())
 	})
 	if err != nil {
-		return nil, fmt.Errorf("task %q: %w", rt.Name, err)
+		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 
 	err = space.Capture(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("task %q: %w", rt.Name, err)
+		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 
-	if !step.WritesContext() {
-		return map[string]string{}, nil
-	}
-
-	collected, err := collectTaskContext(space.Dir())
-	if err != nil {
-		return nil, fmt.Errorf("task %q: %w", rt.Name, err)
-	}
-
-	return collected, nil
+	return nil
 }
 
 // recordStepFailure records a step's failed node and job_run, classifying the

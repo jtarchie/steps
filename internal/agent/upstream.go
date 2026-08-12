@@ -16,6 +16,7 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"strings"
 	"sync"
@@ -140,8 +141,7 @@ func upstreamBlocks(ctx context.Context, step config.Step) []contextBlock {
 		}
 
 		// Model-authored text (the note, the response) reaches a new model
-		// here, so it is fenced as data with a tag that cannot occur inside
-		// it — the same treatment a delivered handoff note gets.
+		// here, so it is fenced as data with a tag that cannot occur inside it.
 		tag := freshFenceTag(rendered)
 		blocks = append(blocks, contextBlock{
 			path:    sender,
@@ -150,4 +150,17 @@ func upstreamBlocks(ctx context.Context, step config.Step) []contextBlock {
 	}
 
 	return blocks
+}
+
+// freshFenceTag returns a fence tag that does not occur in content — a
+// randomized tag rather than a fixed one, since a fixed tag is one the
+// content could contain and close, appending text that reads as if the
+// pipeline itself had said it.
+func freshFenceTag(content string) string {
+	for {
+		candidate := "untrusted-" + strings.ToLower(rand.Text()[:16])
+		if !strings.Contains(content, candidate) {
+			return candidate
+		}
+	}
 }

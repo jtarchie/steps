@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/store"
@@ -35,7 +34,7 @@ type memberVote struct {
 // N times one — which is why this is the step a job budget: is worth setting.
 func runEnsembleStep(
 	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, parentHash string, handoff *agent.Handoff,
+	bw workspace.BuildWorkspace, st *store.Store, parentHash string,
 ) (string, stepDisposition, nonGetOutcome, error) {
 	content, err := merkle.EnsembleNodeContent(cfg, step)
 	if err != nil {
@@ -50,7 +49,7 @@ func runEnsembleStep(
 	fmt.Printf("ensemble: %d agents, decide %s\n", len(step.Ensemble.Agents), step.Ensemble.Decide)
 	slog.Debug("job.step", "job", jobName, "index", i, "kind", "ensemble", "members", len(step.Ensemble.Agents))
 
-	votes := runEnsembleMembers(ctx, cfg, jobName, i, step, bw, st, hash, handoff)
+	votes := runEnsembleMembers(ctx, cfg, jobName, i, step, bw, st, hash)
 
 	verdict, err := decideEnsemble(ctx, cfg, jobName, i, step, bw, st, hash, votes)
 
@@ -82,7 +81,7 @@ func runEnsembleStep(
 // member's hash.
 func runEnsembleMembers(
 	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, blockHash string, handoff *agent.Handoff,
+	bw workspace.BuildWorkspace, st *store.Store, blockHash string,
 ) []memberVote {
 	members := step.Ensemble.Agents
 	votes := make([]memberVote, len(members))
@@ -107,7 +106,7 @@ func runEnsembleMembers(
 			runCtx, memberLog := forkExecLog(ctx)
 			logs[index] = memberLog
 
-			_, _, out, err := runNonGetStep(runCtx, cfg, jobName, i, member, bw, st, nil, blockHash, handoff)
+			_, _, out, err := runNonGetStep(runCtx, cfg, jobName, i, member, bw, st, nil, blockHash)
 			votes[index].verdict, votes[index].note, votes[index].err = out.verdict, out.note, err
 		}()
 	}
@@ -252,7 +251,7 @@ func runEnsembleJudge(
 		Verdicts: step.Ensemble.EnsembleVerdictsFor(),
 	}
 
-	_, _, out, err := runNonGetStep(ctx, cfg, jobName, i, judgeStep, bw, st, nil, blockHash, nil)
+	_, _, out, err := runNonGetStep(ctx, cfg, jobName, i, judgeStep, bw, st, nil, blockHash)
 	if err != nil {
 		return "", fmt.Errorf("ensemble judge %q: %w", judgeStep.Agent, err)
 	}

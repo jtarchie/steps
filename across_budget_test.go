@@ -1,8 +1,8 @@
 package main
 
 // budget: on an across: block — the one ceiling that DEGRADES instead of
-// failing. When a runtime fan-out has spent its allowance, the matrix stops
-// starting cells, the finished ones keep their work, and the plan carries on.
+// failing. When a matrix has spent its allowance, it stops starting cells,
+// the finished ones keep their work, and the plan carries on.
 
 import (
 	"fmt"
@@ -32,23 +32,15 @@ defaults:
     disabled: true
 
 agents:
-- name: scout
-  source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
 - name: reviewer
   source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
 
 jobs:
 - name: fan
   plan:
-  - task: plan-work
-    inputs: []
-    context: write
-    run: |
-      mkdir -p context
-      printf '["a","b","c","d"]' > context/items
   - across:
     - var: item
-      from: items
+      values: [a, b, c, d]
     budget:
       tokens: 700
     agent: reviewer
@@ -104,15 +96,9 @@ agents:
 jobs:
 - name: fan
   plan:
-  - task: plan-work
-    inputs: []
-    context: write
-    run: |
-      mkdir -p context
-      printf '["a","b","c","d"]' > context/items
   - across:
     - var: item
-      from: items
+      values: [a, b, c, d]
     budget:
       tokens: %[2]d
     agent: reviewer
@@ -225,15 +211,9 @@ agents:
 jobs:
 - name: fan
   plan:
-  - task: plan-work
-    inputs: []
-    context: write
-    run: |
-      mkdir -p context
-      printf '["a","b","c","d","e","f"]' > context/items
   - across:
     - var: item
-      from: items
+      values: [a, b, c, d, e, f]
     max_in_flight: 2
     budget:
       tokens: 700

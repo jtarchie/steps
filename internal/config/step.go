@@ -106,8 +106,8 @@ type Step struct {
 	// and with try: itself (a doubled try: is legal, if pointless).
 	//
 	// The wrapper is the plan-positioned step, so to:/max_visits: belong on it
-	// and are rejected on the step it wraps; verdicts:/handoff: stay on the
-	// agent step being wrapped, since that is what internal/agent reads. Also
+	// and are rejected on the step it wraps; verdicts: stays on the agent step
+	// being wrapped, since that is what internal/agent reads. Also
 	// valid as a hook body, where it tolerates the hook's failure the same way.
 	Try *Step `yaml:"try,omitempty"`
 	// Do runs several steps one after another, as a single plan step.
@@ -294,52 +294,25 @@ type Step struct {
 	// code (see Assert). A matching assert makes a non-zero-exit task a
 	// success; a mismatch fails the step. Invalid on get/put steps.
 	Assert *Assert `yaml:"assert,omitempty"`
-	// Handoff, on an agent step, opts into transition context: when this step
-	// is entered via a to:/verdicts: transition, it receives a machine-
-	// assembled <transition_context> block (see HandoffSpec.Context) appended
-	// to its prompt and/or a synthesized previous_run tool (see
-	// HandoffSpec.Tool) it can call to pull the routed-from agent's recorded
-	// run on demand. Agent-only, and only valid on a step that is the target
-	// of at least one to: route within its own get-segment — see
-	// validateHandoffSteps. On the step's first/unrouted execution, no
-	// context block is appended and previous_run (if granted) answers "no
-	// previous run" as data.
-	Handoff *HandoffSpec `yaml:"handoff,omitempty"`
-	// HandoffNoteFrom is COMPUTED at load (never written in YAML): the names of
-	// the preceding steps in this step's get-segment whose handoff: {note:
-	// true} this step receives. Empty when there are none — the common case.
-	//
-	// Usually one: the nearest preceding sender. It is a LIST because a
-	// concurrent block has several branches that each send, and the step after
-	// the block receives all of them (see validateHandoffNoteSegment). Ordered
-	// by declaration so a fan-in reads its branches in the order the pipeline
-	// lists them, however they actually finished.
-	//
-	// Resolving the receiver statically rather than carrying it through
-	// internal/pipeline is what makes delivery idempotent: every dispatch of
-	// this step, first entry or a to:-driven redo, re-reads whatever notes are
-	// on disk, so a redo always sees the newest ones.
-	HandoffNoteFrom []string `yaml:"-"`
 	// Label is COMPUTED at expansion (never written in YAML): the name this
 	// step is KNOWN BY, when that differs from the name it is RESOLVED by.
 	//
 	// task:/agent:/put: each do two jobs — they identify the step (routing
-	// target, handoff note address, recorded node, assert.execution) and they
-	// look something up (FindTask, FindAgent, the resource). An across: matrix
-	// needs its cells to be distinguishable, so it used to append coordinates
-	// to the very field the lookup keys on: a cell over a shared tasks: entry
-	// then failed with `no task named "shared [shard=b]"`, and an agent cell
-	// could not be renamed at all, since FindAgent has no inline escape the way
-	// ResolveTask does. So every agent cell of a matrix answered to one name,
-	// which is why handoff: and context: are still rejected there.
+	// target, recorded node, assert.execution) and they look something up
+	// (FindTask, FindAgent, the resource). An across: matrix needs its cells to
+	// be distinguishable, so it used to append coordinates to the very field
+	// the lookup keys on: a cell over a shared tasks: entry then failed with
+	// `no task named "shared [shard=b]"`, and an agent cell could not be
+	// renamed at all, since FindAgent has no inline escape the way ResolveTask
+	// does. So every agent cell of a matrix answered to one name, which is why
+	// context: is still rejected there.
 	//
 	// Label carries the identity half, leaving the lookup half alone. Empty on
 	// an ordinary step, where the two names are the same thing — see stepName.
 	Label string `yaml:"-"`
-	// Context, on an agent step, opts into the run's shared key/value store:
-	// `context: write` grants a synthesized set_context tool the model calls to
-	// record a fact for the steps that come after it. Agent-only, never a hook,
-	// and not yet valid inside a concurrent block — see validateContextSteps.
+	// Context, on an agent or task step, opts into reading named earlier
+	// steps' decisions: `context: { from: { <step>: verdict|note|full } }`.
+	// Never a hook — see validateContextSteps and contextfrom.go.
 	Context *ContextSpec `yaml:"context,omitempty"`
 	// NoteRequired is COMPUTED at load (never written in YAML): some other
 	// step declared context: { from: { <this step>: note|full } }, so this
@@ -503,7 +476,7 @@ type FileRef struct {
 
 // UnmarshalYAML decodes a FileRef from either a scalar (a pipeline-relative
 // path) or a mapping ({artifact, path}) YAML node — the same scalar-or-mapping
-// idiom as WhenSpec/FixSpec/HandoffSpec.
+// idiom as WhenSpec/FixSpec.
 func (f *FileRef) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias kinds that can't appear here
 	case yaml.ScalarNode:
@@ -895,17 +868,17 @@ func visitStepTree(label string, step *Step, fn func(label string, step *Step) e
 
 // Unwrap returns the step a try: chain ultimately wraps — s itself when s is
 // not a try wrapper. Callers that care about what a plan step actually RUNS
-// (which agent, which verdicts:, which handoff:) go through this, since a try:
+// (which agent, which verdicts:) go through this, since a try:
 // wrapper carries none of those fields itself.
 func (s Step) Unwrap() Step {
 	return *unwrapStep(&s)
 }
 
 // unwrapStep is Unwrap for a caller that needs to MUTATE what it finds — see
-// validateHandoffNoteSegment, which stamps HandoffNoteFrom onto the agent step
-// a try: wraps rather than onto the wrapper the runtime never hands to an
-// agent. A free function rather than a second method, so Step keeps a single
-// receiver kind (.golangci.yml's recvcheck).
+// stampNoteObligations, which stamps NoteRequired onto the agent step a try:
+// wraps rather than onto the wrapper the runtime never hands to an agent. A
+// free function rather than a second method, so Step keeps a single receiver
+// kind (.golangci.yml's recvcheck).
 func unwrapStep(s *Step) *Step {
 	for s.Try != nil {
 		s = s.Try

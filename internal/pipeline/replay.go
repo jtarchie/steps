@@ -27,12 +27,12 @@ import (
 // state the run had reached when it got here" — which is the question you have
 // while tuning a prompt, and the one that costs a full plan to answer today.
 //
-// It does not consult the cache at all. State is restored from three places,
-// none of which is content-addressed: the source run's workspace (every
-// artifact a get fetched and every file a task wrote is already on disk), its
-// recorded run_context, and its step record. A step before the replay point
-// does not re-execute because the run record says it ran, not because a hash
-// matched — which is why this works even though agent steps are unskippable.
+// It does not consult the cache at all. State is restored from two places,
+// neither of which is content-addressed: the source run's workspace (every
+// artifact a get fetched and every file a task wrote is already on disk), and
+// its step record. A step before the replay point does not re-execute
+// because the run record says it ran, not because a hash matched — which is
+// why this works even though agent steps are unskippable.
 //
 // It FORKS rather than re-entering the source run. History stays immutable, so
 // the run being compared against is still there — and two prompt variants
@@ -76,11 +76,6 @@ func PrepareReplay(
 	dir, err := forkWorkspace(ctx, provider, source.Workspace, replayID)
 	if err != nil {
 		return ctx, "", err
-	}
-
-	err = st.CopyRunContext(ctx, sourceRunID, replayID)
-	if err != nil {
-		return ctx, "", err //nolint:wrapcheck // CopyRunContext already names the run
 	}
 
 	err = st.StartRun(ctx, replayID, job.Name, dir)
@@ -127,9 +122,9 @@ func replayIndex(job *config.Job, fromStep string) (int, error) {
 //
 // Each one is checked against what the source run actually recorded. A step the
 // source never completed cannot be restored — its outputs are not in the forked
-// workspace and its facts are not in the copied context — so replaying past it
-// would run the target step against state that never existed. Refusing names
-// the step rather than producing a confidently wrong run.
+// workspace — so replaying past it would run the target step against state
+// that never existed. Refusing names the step rather than producing a
+// confidently wrong run.
 func replayDoneSteps(
 	ctx context.Context, st *store.Store, sourceRunID string, job *config.Job, from int,
 ) (map[int]string, error) {

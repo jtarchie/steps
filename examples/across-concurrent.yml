@@ -4,10 +4,9 @@
 #
 # Cells are serial by default, and for a hand-written matrix that is usually
 # right: the value is mostly in not maintaining near-identical copies by hand.
-# It stops being right for a RUNTIME fan-out (see across.yml's from: axis),
-# where an earlier step decides the width and the cells are N independent
-# agents with no ordering between them. Serially that costs N times one cell's
-# wall clock for nothing.
+# It stops being right for a wide matrix of independent agent cells with no
+# ordering between them. Serially that costs N times one cell's wall clock
+# for nothing.
 #
 # This lives in its own file because it needs `workspace:`, which is a
 # pipeline-global block — it would force isolation on every job in
@@ -28,7 +27,6 @@ assert:
     - concurrent-cells
     - bounded-width
     - every-failure-reported
-    - per-cell-facts
 
 jobs:
 # Three cells, all three in flight. Each writes its start marker and then waits
@@ -99,41 +97,3 @@ jobs:
   assert:
     execution: [check-good, check-bad, check-alsobad]
     outcome: failed
-
-# ─── per-cell facts: qualify: ───────────────────────────────────────────────
-#
-# Every cell here records the SAME key. Serially that resolves the way two
-# sequential steps do — the later wins. Concurrently there is no order to
-# resolve by, so each cell writes to a scope only it touches and the join
-# merges them under a key naming the cell:
-#
-#   without qualify, serial   ->  finding
-#   with qualify              ->  record-alpha.finding, record-beta.finding
-#
-# qualify: is what states which of those the matrix means, and it holds whether
-# or not the cells are concurrent. That is the point: delete the max_in_flight
-# line below and the recorded keys are identical, so a downstream step reading
-# a key by name never notices the scheduling change. max_in_flight > 1 with
-# context write REQUIRES it — otherwise a scheduling knob would silently
-# rewrite a data contract, which is a bug nothing reports.
-- name: per-cell-facts
-  plan:
-  - across:
-    - var: cell
-      values: [alpha, beta]
-    max_in_flight: 2
-    task: "record-{{ .vars.cell }}"
-    inputs: []
-    context: { write: true, qualify: true }
-    run: |
-      mkdir -p context
-      printf '{{ .vars.cell }} found something' > context/finding
-  # What this job asserts is that both cells RAN and the pipeline stayed green.
-  # That both facts survived under distinct keys is a store-level property no
-  # assert: can reach from here — a task writes context but never reads it, and
-  # an agent reader would need a live model. It is pinned in Go instead, by
-  # TestAcrossQualifiedContextKeysDoNotDependOnScheduling, which runs this same
-  # matrix serially and concurrently and requires identical keys.
-  assert:
-    execution: [record-alpha, record-beta]
-    outcome: succeeded

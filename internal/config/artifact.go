@@ -24,25 +24,10 @@ func ValidateArtifactName(name string) error {
 		return fmt.Errorf("invalid artifact name %q: must match %s", name, artifactNamePattern.String())
 	}
 
-	// Reserved: handoff notes are rendered under this directory in the shared
-	// build root (see HandoffNoteDir), so an artifact of the same name would
-	// materialize over them.
-	if name == HandoffNoteDir {
-		return fmt.Errorf("invalid artifact name %q: reserved for handoff notes", name)
-	}
-
-	// Reserved for the same reason: a task reading context: from: is handed
-	// each demanded step's outcome as a file under this directory (see
-	// UpstreamDir).
+	// Reserved: a task reading context: from: is handed each demanded step's
+	// outcome as a file under this directory (see UpstreamDir).
 	if name == UpstreamDir {
 		return fmt.Errorf("invalid artifact name %q: reserved for delivered step outcomes", name)
-	}
-
-	// Reserved for the same reason: a context: write task records facts by
-	// writing files into this directory of its working space (see ContextDir),
-	// and an artifact of the same name would materialize over them.
-	if name == ContextDir {
-		return fmt.Errorf("invalid artifact name %q: reserved for recorded context", name)
 	}
 
 	return nil

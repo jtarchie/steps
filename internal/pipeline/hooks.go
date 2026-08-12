@@ -133,11 +133,7 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 			return fmt.Errorf("task %q: %w", step.Task, err)
 		}
 
-		// A hook cannot declare context: (validateContextSteps rejects it), so
-		// there is never anything collected to record here.
-		_, err = executeTask(ctx, scope.cfg, step, rt, scope.bw)
-
-		return err
+		return executeTask(ctx, scope.cfg, step, rt, scope.bw)
 	case config.StepKindPut:
 		_, err := executePut(ctx, scope.cfg, step, scope.bw)
 

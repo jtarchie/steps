@@ -100,22 +100,6 @@ CREATE TABLE IF NOT EXISTS run_steps (
     PRIMARY KEY (run_id, step_index)
 );
 
--- The run-scoped key/value store an agent step writes with set_context. Keyed
--- by run so two runs of one job — including two concurrent ones under
--- steps watch — never read each other's facts.
---
--- Last write wins on a key, which is why written_by and written_at are kept:
--- the row says who overwrote what, so a run's record answers "where did this
--- value come from" without replaying the transcript.
-CREATE TABLE IF NOT EXISTS run_context (
-    run_id     TEXT NOT NULL,
-    key        TEXT NOT NULL,
-    value      TEXT NOT NULL,
-    written_by TEXT NOT NULL,
-    written_at TEXT NOT NULL,
-    PRIMARY KEY (run_id, key)
-);
-
 -- Human decisions on approval: steps. The row IS the audit trail; it must not
 -- depend on external chat history.
 CREATE TABLE IF NOT EXISTS approvals (
@@ -1459,29 +1443,6 @@ func (s *Store) RecordRunParent(ctx context.Context, runID, parentID string) err
 	_, err := s.db.ExecContext(ctx, `UPDATE runs SET parent_run_id = ? WHERE id = ?`, parentID, runID)
 	if err != nil {
 		return fmt.Errorf("could not record the parent of run %q: %w", runID, err)
-	}
-
-	return nil
-}
-
-// CopyRunContext seeds a replayed run with the facts the source run recorded.
-//
-// This is half of what makes a replay start where it does: the workspace
-// carries the files earlier steps produced, and these rows carry what they
-// concluded. Without them a replayed agent step would open with an empty
-// recap and reason from nothing.
-//
-// written_by is preserved rather than rewritten to the new run: the fact was
-// established by that step in the source run, and rewriting the provenance
-// would make a replayed run claim work it did not do.
-func (s *Store) CopyRunContext(ctx context.Context, srcRunID, dstRunID string) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO run_context (run_id, key, value, written_by, written_at)
-		SELECT ?, key, value, written_by, written_at FROM run_context WHERE run_id = ?
-		ON CONFLICT (run_id, key) DO NOTHING
-	`, dstRunID, srcRunID)
-	if err != nil {
-		return fmt.Errorf("could not copy the run context of %q: %w", srcRunID, err)
 	}
 
 	return nil

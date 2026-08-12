@@ -7,7 +7,6 @@ package main
 import (
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -97,91 +96,6 @@ jobs:
 	mustRun(t, path)
 }
 
-// TestAcrossQualifiedContextKeysDoNotDependOnScheduling covers the hazard
-// concurrency introduces for the run context store — two cells recording the
-// same key — and the property that makes it safe to opt into.
-//
-// Cells that share a key have to be scoped, or the value that survives belongs
-// to whichever cell finished last. But which cells overlap is a SCHEDULING
-// decision, and key names are a data contract, so `context: qualify: true`
-// states the intent once and both spellings honour it: the same pipeline
-// records the same keys serially and at max_in_flight: 2. Turning concurrency
-// on or off is then invisible to every downstream step, which is the point of
-// max_in_flight: not being hashed.
-func TestAcrossQualifiedContextKeysDoNotDependOnScheduling(t *testing.T) {
-	pipeline := func(maxInFlight string) string {
-		return `
-workspace:
-  strategy: copy
-
-jobs:
-- name: fan
-  plan:
-  - across:
-    - var: cell
-      values: [alpha, beta]
-` + maxInFlight + `    task: "record-{{ .vars.cell }}"
-    inputs: []
-    context: { write: true, qualify: true }
-    run: |
-      mkdir -p context
-      printf '{{ .vars.cell }} found something' > context/finding
-`
-	}
-
-	want := []string{"record-alpha.finding", "record-beta.finding"}
-
-	for _, tc := range []struct{ name, maxInFlight string }{
-		{"serial", ""},
-		{"concurrent", "    max_in_flight: 2\n"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			path := writePipeline(t, t.TempDir(), pipeline(tc.maxInFlight))
-
-			mustRun(t, path)
-
-			got := runContextKeys(t, path)
-			if len(got) != len(want) {
-				t.Fatalf("run context keys = %v, want one per cell %v (a lost key means two cells shared a scope)", got, want)
-			}
-
-			for i := range want {
-				if got[i] != want[i] {
-					t.Errorf("key %d = %q, want %q", i, got[i], want[i])
-				}
-			}
-		})
-	}
-}
-
-// TestAcrossUnqualifiedSerialContextIsLastWins pins the other half: without
-// qualify:, a serial matrix keeps the plain last-wins a reader expects from
-// two sequential steps writing one key. Prefixes are noise when there is no
-// collision to disambiguate, so opting in has to be what turns them on.
-func TestAcrossUnqualifiedSerialContextIsLastWins(t *testing.T) {
-	path := writePipeline(t, t.TempDir(), `
-jobs:
-- name: fan
-  plan:
-  - across:
-    - var: cell
-      values: [alpha, beta]
-    task: "record-{{ .vars.cell }}"
-    inputs: []
-    context: write
-    run: |
-      mkdir -p context
-      printf '{{ .vars.cell }} found something' > context/finding
-`)
-
-	mustRun(t, path)
-
-	got := runContextKeys(t, path)
-	if len(got) != 1 || got[0] != "finding" {
-		t.Fatalf("run context keys = %v, want exactly [finding]", got)
-	}
-}
-
 // TestAcrossMaxInFlightReportsEveryFailure pins that concurrency does not
 // change what a failing cell means: a matrix asks which combinations work, so
 // every cell runs and every failure is reported. There is deliberately no
@@ -259,48 +173,4 @@ jobs:
 	path = writePipeline(t, dir, pipeline(2))
 	mustRun(t, path)
 	assertLineCount(t, log, 2)
-}
-
-// runContextKeys returns the keys recorded in the run context store, sorted, so
-// a test can assert on what a run established without going through an agent
-// (reads are agent-only by design).
-func runContextKeys(t *testing.T, pipelinePath string) []string {
-	t.Helper()
-
-	db := openStateDB(t, pipelinePath)
-
-	// Only the run's OWN scope. A concurrent cell records into a per-cell scope
-	// (branchContextScope spells it "<run>#<index>:<name>") and the join copies
-	// those rows up under a prefixed key; the originals are left where they are,
-	// the same as an in_parallel: branch's. Counting both would double every
-	// key and say nothing about whether the merge worked.
-	rows, err := db.QueryContext(t.Context(), `SELECT key FROM run_context WHERE run_id NOT LIKE '%#%'`)
-	if err != nil {
-		t.Fatalf("query run_context: %v", err)
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	var keys []string
-
-	for rows.Next() {
-		var key string
-
-		err = rows.Scan(&key)
-		if err != nil {
-			t.Fatalf("scan run_context: %v", err)
-		}
-
-		keys = append(keys, key)
-	}
-
-	err = rows.Err()
-	if err != nil {
-		t.Fatalf("iterate run_context: %v", err)
-	}
-
-	sort.Strings(keys)
-
-	return keys
 }

@@ -321,8 +321,8 @@ func checkCLIStepReferences(label string, step *Step, isCLI func(string) bool) e
 // checkCLIContainerNetwork rejects `network: none` on a containerized CLI
 // agent step.
 //
-// A CLI agent's non-native tools — the synthesized verdict/handoff/context
-// tools among them, not just custom run: ones — reach the child over a
+// A CLI agent's non-native tools — the synthesized verdict/context tools
+// among them, not just custom run: ones — reach the child over a
 // loopback MCP server this process hosts (see internal/agent's clibridge).
 // Containerizing the CLI means that connection has to cross out of the
 // container, so cutting the container's network does not merely narrow what

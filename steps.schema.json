@@ -80,22 +80,6 @@
               "description": "How long a verified target stays trusted, e.g. 5m. Keeps steps watch from probing every poll. Default 5m."
             }
           }
-        },
-        "context": {
-          "type": "object",
-          "additionalProperties": false,
-          "description": "Pipeline-wide run-context settings.",
-          "properties": {
-            "fidelity": {
-              "enum": [
-                "off",
-                "truncate",
-                "compact",
-                "summary"
-              ],
-              "description": "Default recap detail for every agent step. A step's own context.fidelity wins. Default compact."
-            }
-          }
         }
       }
     },
@@ -818,9 +802,6 @@
         "verdicts": {
           "$ref": "#/$defs/verdicts"
         },
-        "handoff": {
-          "$ref": "#/$defs/handoffSpec"
-        },
         "context": {
           "$ref": "#/$defs/contextSpec"
         },
@@ -869,24 +850,13 @@
         "across": {
           "type": "array",
           "minItems": 1,
-          "description": "Run this step once per combination of values, substituting {{ .vars.<name> }} into run/image/prompt/dir and the step's name. A values: axis expands at load; a from: axis expands at run time. Each cell caches independently.",
+          "description": "Run this step once per combination of values, substituting {{ .vars.<name> }} into run/image/prompt/dir and the step's name. Each cell caches independently.",
           "items": {
             "type": "object",
             "additionalProperties": false,
             "required": [
-              "var"
-            ],
-            "oneOf": [
-              {
-                "required": [
-                  "values"
-                ]
-              },
-              {
-                "required": [
-                  "from"
-                ]
-              }
+              "var",
+              "values"
             ],
             "properties": {
               "var": {
@@ -898,14 +868,6 @@
                 "items": {
                   "type": "string"
                 }
-              },
-              "from": {
-                "type": "string",
-                "description": "Run-context key holding a JSON array recorded by an earlier step: all strings, or all flat objects whose fields a cell names individually ({{ .vars.finding.file }}). Mutually exclusive with values."
-              },
-              "label": {
-                "type": "string",
-                "description": "from: axes holding objects only. Which field names each cell; absent, cells are named by their 1-based position (#3)."
               }
             }
           }
@@ -1106,48 +1068,26 @@
       ]
     },
     "contextSpec": {
-      "description": "What this agent step does with the run's shared key/value store. Reading is automatic; writing is opt-in.",
-      "oneOf": [
-        {
-          "const": "write",
-          "description": "Shorthand for { write: true }."
-        },
-        {
+      "description": "What this agent or task step reads from named earlier steps of the same job.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from"
+      ],
+      "properties": {
+        "from": {
           "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "write": {
-              "type": "boolean",
-              "description": "Grant the set_context tool, which records a fact for later steps."
-            },
-            "fidelity": {
-              "enum": [
-                "off",
-                "truncate",
-                "compact",
-                "summary"
-              ],
-              "description": "How much of the recorded context this step is shown. Defaults to compact; off opts out entirely."
-            },
-            "from": {
-              "type": "object",
-              "minProperties": 1,
-              "description": "What this step reads from named earlier steps of the same job. The key is a step name, the value how much of its outcome to deliver. Demanding note or full makes that step's verdict note required.",
-              "additionalProperties": {
-                "enum": [
-                  "verdict",
-                  "note",
-                  "full"
-                ]
-              }
-            },
-            "qualify": {
-              "type": "boolean",
-              "description": "On an across: step, record a fact PER CELL: each cell writes to its own scope and the join merges them under keys naming the cell. Required by max_in_flight > 1, and applied serially too, so the key names never depend on scheduling."
-            }
+          "minProperties": 1,
+          "description": "The key is a step name, the value how much of its outcome to deliver. Demanding note or full makes that step's verdict note required.",
+          "additionalProperties": {
+            "enum": [
+              "verdict",
+              "note",
+              "full"
+            ]
           }
         }
-      ]
+      }
     },
     "verdicts": {
       "type": "array",
@@ -1168,33 +1108,6 @@
           }
         ]
       }
-    },
-    "handoffSpec": {
-      "description": "What this agent step exchanges with the steps around it. context/tool look backward along a route; note looks forward along the plan.",
-      "oneOf": [
-        {
-          "type": "boolean",
-          "description": "Shorthand for { context: true }."
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "context": {
-              "type": "boolean",
-              "description": "Receive a <transition_context> block on routed entry."
-            },
-            "tool": {
-              "type": "boolean",
-              "description": "Receive a previous_run tool."
-            },
-            "note": {
-              "type": "boolean",
-              "description": "Write a handoff note for the next agent step."
-            }
-          }
-        }
-      ]
     },
     "fileRef": {
       "description": "A pipeline-relative path, or a file inside a declared input artifact.",

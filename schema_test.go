@@ -130,10 +130,6 @@ func TestSchemaRejectsInvalidPipelines(t *testing.T) {
 			pipeline: "jobs: [{name: j}]\n",
 		},
 		{
-			name:     "unknown handoff field",
-			pipeline: "jobs: [{name: j, plan: [{agent: a, prompt: x, handoff: {contxt: true}}]}]\n",
-		},
-		{
 			name:     "unknown workspace strategy",
 			pipeline: "workspace: {strategy: rsync}\njobs: [{name: j, plan: []}]\n",
 		},

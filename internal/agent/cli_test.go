@@ -239,7 +239,6 @@ func TestRenderCLIPrompt(t *testing.T) {
 	t.Parallel()
 
 	conv := agentConversation{
-		recap:         "RECAP: the run so far.",
 		contextBlocks: []contextBlock{{path: "repo/NOTES.md", content: "some notes"}},
 		prompt:        "Review the diff.",
 	}
@@ -248,16 +247,15 @@ func TestRenderCLIPrompt(t *testing.T) {
 
 	// Same content, same order as the HTTP path's synthetic tool exchanges —
 	// there is just no transcript to fabricate them into here.
-	recapAt := strings.Index(rendered, "RECAP")
 	blockAt := strings.Index(rendered, "repo/NOTES.md")
 	promptAt := strings.Index(rendered, "Review the diff.")
 
-	if recapAt < 0 || blockAt < 0 || promptAt < 0 {
+	if blockAt < 0 || promptAt < 0 {
 		t.Fatalf("rendered prompt is missing a section:\n%s", rendered)
 	}
 
-	if recapAt >= blockAt || blockAt >= promptAt {
-		t.Errorf("sections are out of order (recap %d, block %d, prompt %d):\n%s", recapAt, blockAt, promptAt, rendered)
+	if blockAt >= promptAt {
+		t.Errorf("sections are out of order (block %d, prompt %d):\n%s", blockAt, promptAt, rendered)
 	}
 
 	if !strings.Contains(rendered, "some notes") {
@@ -540,12 +538,6 @@ func TestCLIStepStateKeepsEarlierAnswer(t *testing.T) {
 	result := state.result("sonnet")
 	if result.text != "the real answer" || result.verdict != "reject" {
 		t.Errorf("result = {text: %q, verdict: %q}, want the earlier attempt's output preserved", result.text, result.verdict)
-	}
-
-	// Nothing was written, so nothing is reported -- an empty map here would
-	// read downstream as though a handoff note existed.
-	if result.handoffNote != nil {
-		t.Errorf("handoffNote = %v, want nil", result.handoffNote)
 	}
 }
 

@@ -972,6 +972,32 @@ func TestOutOfTurnsAnswersWithoutTools(t *testing.T) {
 	}
 }
 
+// TestMarkTrajectoryResults checks the success backfill, including the
+// length-mismatch degrade: pairing a call with the wrong result would
+// misattribute what actually happened.
+func TestMarkTrajectoryResults(t *testing.T) {
+	t.Parallel()
+
+	turn := []recordedToolCall{{name: "a"}, {name: "b"}}
+	parts := []*genai.Part{
+		{FunctionResponse: &genai.FunctionResponse{Name: "a", Response: map[string]any{"exit_code": 0}}},
+		{FunctionResponse: &genai.FunctionResponse{Name: "b", Response: map[string]any{"error": "nope"}}},
+	}
+
+	markTrajectoryResults(turn, parts)
+
+	if !turn[0].ok || turn[1].ok {
+		t.Errorf("ok flags = [%v %v], want [true false]", turn[0].ok, turn[1].ok)
+	}
+
+	mismatched := []recordedToolCall{{name: "a"}, {name: "b"}}
+	markTrajectoryResults(mismatched, parts[:1])
+
+	if mismatched[0].ok || mismatched[1].ok {
+		t.Error("a length mismatch must leave every call unmarked rather than mispairing")
+	}
+}
+
 // distinctShellCall is a run_shell turn whose command is unique to i, so a
 // test that needs the TURN budget to run out is not ended early by the loop
 // detector (which fails a conversation repeating one identical call).
