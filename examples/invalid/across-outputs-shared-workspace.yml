@@ -1,0 +1,18 @@
+# outputs: on an across: step means the block COLLECTS — each cell's outputs
+# are captured under the cell's own coordinates. Capture is the isolated
+# strategies' step; the shared strategy has none (every step writes straight
+# into one build root), so there is nothing to collect WITH, and allowing the
+# declaration would make the same pipeline change its file layout when
+# workspace: is toggled.
+# expect: requires workspace isolation
+
+jobs:
+- name: fan
+  plan:
+  - across:
+    - var: dim
+      values: [alpha, beta]
+    task: review
+    inputs: []
+    outputs: [findings]
+    run: printf 'x' > findings/report.txt

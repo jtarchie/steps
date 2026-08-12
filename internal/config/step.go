@@ -310,6 +310,14 @@ type Step struct {
 	// Label carries the identity half, leaving the lookup half alone. Empty on
 	// an ordinary step, where the two names are the same thing — see stepName.
 	Label string `yaml:"-"`
+	// OutputSubdir is COMPUTED at expansion (never written in YAML): this
+	// cell's coordinates as a path — one segment per axis value, declaration
+	// order ("alpha/fast"). A matrix that declares outputs: captures each
+	// cell's outputs under it (findings/alpha/fast/...), which is what lets N
+	// cells share one declared output name without clobbering each other; see
+	// CollectedOutputMapping. Empty on an ordinary step, and ignored on a cell
+	// that declares no outputs.
+	OutputSubdir string `yaml:"-"`
 	// Context, on an agent or task step, opts into reading named earlier
 	// steps' decisions: `context: { from: { <step>: verdict|note|full } }`.
 	// Never a hook — see validateContextSteps and contextfrom.go.

@@ -27,6 +27,7 @@ assert:
     - concurrent-cells
     - bounded-width
     - every-failure-reported
+    - collected-outputs
 
 jobs:
 # Three cells, all three in flight. Each writes its start marker and then waits
@@ -97,3 +98,38 @@ jobs:
   assert:
     execution: [check-good, check-bad, check-alsobad]
     outcome: failed
+
+# ─── collected outputs ───────────────────────────────────────────────────────
+# outputs: on a matrix means the block COLLECTS: each cell writes its declared
+# output exactly as any step does, and the capture lands under the cell's own
+# coordinates — so N cells share one artifact name without clobbering each
+# other, and the step after the block consumes the lot as ONE input:
+#
+#   findings/
+#     alpha/report.txt      # what cell [dim=alpha] wrote
+#     beta/report.txt       # what cell [dim=beta] wrote
+#
+# A failed cell contributes no directory (capture only runs on success), and a
+# task cell that produces outputs is never cell-cached — a skipped cell would
+# capture nothing, and the consumer would read a hole where its contribution
+# was. Axis values become directory names, so they must be name-shaped and
+# unique; both are checked before any cell runs.
+- name: collected-outputs
+  plan:
+  - across:
+    - var: dim
+      values: [alpha, beta]
+    max_in_flight: 2
+    task: review
+    inputs: []
+    outputs: [findings]
+    run: printf 'from {{ .vars.dim }}' > findings/report.txt
+  - task: merge
+    inputs: [findings]
+    run: |
+      test -s findings/alpha/report.txt
+      test -s findings/beta/report.txt
+      cat findings/*/report.txt
+  assert:
+    execution: ["review [dim=alpha]", "review [dim=beta]", merge]
+    outcome: succeeded

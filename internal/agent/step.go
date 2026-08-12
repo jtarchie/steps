@@ -156,7 +156,11 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, err
 	}
 
-	space, err := bw.TaskSpace(ctx, step.Agent, step.InputNames(), step.Outputs, nil, nil)
+	// The mapping is nil except for a cell of a collecting matrix, where each
+	// output is captured under the cell's own coordinates — see
+	// config.CollectedOutputMapping.
+	space, err := bw.TaskSpace(ctx, step.Agent, step.InputNames(), step.Outputs,
+		nil, config.CollectedOutputMapping(step.Outputs, nil, step.OutputSubdir))
 	if err != nil {
 		return preparedAgentStep{}, fmt.Errorf("workspace: %w", err)
 	}

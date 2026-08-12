@@ -3,25 +3,36 @@
 # authenticated against a real repo, and its pass/fail depends on what the
 # reviewers find, so it can never be a deterministic fixture
 #
-# ─── Deep PR review, as a pipeline ──────────────────────────────────────────
+# ─── Deep PR review: the adaptive-pipeline shape, as a pipeline ─────────────
 #
-# Three lenses read the diff at once — semantic, mechanical, systemic — each
-# proving its own findings against the checked-out code rather than trusting
-# the patch. A falsifier tries to knock every finding down, a gatekeeper
-# decides what actually blocks the merge, and a synthesizer writes the review
-# a human reads. A human approves before anything is posted.
+# The interesting agentic code reviewers do not run a fixed script. They read
+# the PR, decide what KINDS of review it needs, spawn one reviewer per kind,
+# make each one prove its findings against the code, and only then write
+# anything to GitHub. That shape is usually built as a bespoke service.
+#
+# Here it is a pipeline file, and the three pieces that make it possible are:
+#
+#   across: + from_file:   the width of the matrix is decided during the run,
+#                          by a step, not by whoever wrote this file
+#   max_in_flight:         those cells run at the same time
+#   outputs: on the block  everything the cells produced comes back as ONE
+#                          artifact, one directory per cell
 #
 # Data flows as files between phases (inputs:/outputs:, context_paths:), the
 # same way any other steps pipeline moves an artifact from one step to the
-# next — there is no hidden channel underneath it.
+# next — there is no hidden channel underneath it. What you get that a
+# bespoke service does not have for free: every phase is a recorded,
+# inspectable step, and a human approves before anything is posted.
 #
 #   steps validate examples/pr-review.yml
+#   steps plan     examples/pr-review.yml   # the matrix width is unknown here, by design
 #   PR_REPO=owner/name steps run examples/pr-review.yml --job review
 #
 # Needs: `gh` (authenticated, or GH_TOKEN set), and a model.
 
-# Required because the three lenses run concurrently — concurrent branches
-# writing declared outputs need their own directory each.
+# Required twice over: the planner and the reviewer cells run concurrently,
+# and a matrix that collects outputs needs a capture step to collect WITH —
+# the shared strategy has none.
 workspace:
   strategy: copy
 
@@ -101,10 +112,30 @@ resources:
 # prompt. run_shell is granted only where a finding has to be checked against
 # the actual repository.
 agents:
+# The planner decides what KINDS of review this change needs — it does not
+# review. Its output is the work list the matrix below fans out over.
+- name: planner
+  system: |
+    You decide what kinds of review a change needs — you do not review it.
+
+    A dimension is a SPECIFIC INVESTIGATION QUESTION, not a category.
+      good: "Does the migration from sync to async preserve error propagation
+             to callers?"
+      bad:  "Check for concurrency issues"
+
+    The diff is already in your context. Plan from it; you are not the step
+    that reads the codebase — the reviewers are, and each one opens holding
+    the brief you write it. If the change carries no risk on some axis,
+    propose nothing for it. Do not pad.
+  # A planner proposes from a diff it is already holding; 8 turns is planning,
+  # 50 would be reviewing.
+  max_turns: 8
+  tools: [read_file, write_file]
+
 - name: reviewer
   system: |
     You are a senior engineer reviewing one change through ONE assigned
-    lens. If the change carries no risk on your lens, write an empty
+    dimension. If the change carries no risk on it, write an empty
     findings array — do not pad.
 
     Read the target files properly: control flow, data flow, error paths, and
@@ -241,85 +272,84 @@ jobs:
   - get: pr
     trigger: true
 
-  # ── phase 1: three lenses at once, each proving its own findings ────────
-  # Independent questions with no ordering between them, each reading the
-  # same diff and writing its own findings file — three declared outputs, so
-  # none of them collide.
+  # ── phase 1: decide what to review ────────────────────────────────────────
+  # This is the step that decides how wide the next one is. It writes a work
+  # list — a JSON array of dimension ids — plus one brief per dimension, so
+  # each reviewer cell opens holding exactly what it was assigned.
   #
-  # context_paths: hands each lens the diff directly rather than sending it
-  # to find it: a lens that has to read_file its way to the diff spends turns
-  # navigating instead of thinking.
+  # context_paths: hands the planner the diff directly rather than sending it
+  # to find it, and max_context_bytes: is raised because the planner must see
+  # the WHOLE change — a diff silently cut at the 100KB default means whole
+  # sections of a large PR are never assigned a dimension at all.
+  - agent: planner
+    inputs: [pr]
+    outputs: [dims]
+    context_paths: [pr/pr.diff, pr/pr.json]
+    max_context_bytes: 400000
+    timeout: 20m
+    prompt: |
+      Decide the review dimensions for this change.
+
+      Write dims/index.json: a JSON array of dimension ids. Each id must be
+      short kebab-case (letters, digits, - _ .), unique, and there must be at
+      most SIX — fewer is better than overlapping. A trivial change justifies
+      one or two.
+
+      For each id, also write dims/<id>.md: what a reviewer taking this
+      dimension looks for (one paragraph), and the repo-relative paths under
+      pr/ to start from.
+
+  # ── phase 2: one ephemeral reviewer per dimension, concurrently ──────────
+  # The matrix's width is not in this file — `from_file:` takes it from what
+  # the planner just wrote. Each cell is its own merkle node, named for its
+  # dimension (reviewer [dim=api-boundaries]), and `outputs: [findings]` on
+  # the block means everything the cells produce comes back as ONE artifact:
   #
-  # max_context_bytes: is raised on each because a lens must see the WHOLE
-  # change — a diff silently cut at the 100KB default means whole sections of
-  # a large PR are never reviewed at all, and a large PR is exactly when that
-  # matters.
-  - in_parallel:
-      steps:
-      - agent: reviewer
-        prompt: |
-          Your lens is SEMANTIC: what does this code DO differently? If I ran
-          the old and new side by side, where would they diverge?
+  #   findings/<dimension>/report.json
+  #
+  # A failed cell contributes no directory — which is why each is try:-wrapped:
+  # ONE reviewer failing must not cost the whole review. The review is
+  # assembled from whatever survived, and the falsifier walks what is there.
+  - across:
+    - var: dim
+      from_file: dims/index.json
+    # Width 2 rather than "all at once", because the block budget's first
+    # batch is admitted blind — admission sees only FINISHED cells' spend. At
+    # 2, the third admission is decided against real numbers and the budget
+    # below can actually stop anything.
+    max_in_flight: 2
+    # The ceiling that belongs HERE rather than on the job: this is the one
+    # step whose cost nobody could know when this file was written — the
+    # planner decided how many cells there are, moments ago. When it runs
+    # out, the matrix stops starting reviewers, the finished ones keep their
+    # findings, and the plan carries on to the falsifier.
+    budget:
+      tokens: 3600000
+    try:
+      agent: reviewer
+      inputs: [pr, dims]
+      outputs: [findings]
+      timeout: 20m
+      context_paths: ["dims/{{ .vars.dim }}.md"]
+      prompt: |
+        Review this change through one dimension only. Your brief is already
+        in your context — it says what to look for and where to start under
+        pr/. Read the code before you claim anything about it.
 
-          Look at logic changes (any input, not just the happy path), API
-          contracts callers depend on, concurrency and shared state, security
-          implications, error handling, and data flow.
+        Write your findings to findings/report.json.
 
-          NOT yours: type signatures and calling conventions (mechanical),
-          pattern consistency and architectural fit (systemic).
-
-          Write your findings to semantic/findings.json.
-        inputs: [pr]
-        outputs: [semantic]
-        context_paths: [pr/pr.diff, pr/pr.json]
-        max_context_bytes: 400000
-        timeout: 20m
-      - agent: reviewer
-        prompt: |
-          Your lens is MECHANICAL: is the code correct as written? Types and
-          signatures, calling conventions, bounds and off-by-ones, resource
-          lifecycle, what decorators or wrappers inject that callers may not
-          account for.
-
-          NOT yours: whether the behaviour is right (semantic), whether it
-          fits the surrounding architecture (systemic).
-
-          Write your findings to mechanical/findings.json.
-        inputs: [pr]
-        outputs: [mechanical]
-        context_paths: [pr/pr.diff, pr/pr.json]
-        max_context_bytes: 400000
-        timeout: 20m
-      - agent: reviewer
-        prompt: |
-          Your lens is SYSTEMIC: what does this change do to the system around
-          it? Consistency with existing patterns, architectural fit,
-          migrations and rollout order, operational consequences, and what
-          downstream consumers assume.
-
-          NOT yours: whether an individual function is correct (mechanical) or
-          behaves differently (semantic).
-
-          Write your findings to systemic/findings.json.
-        inputs: [pr]
-        outputs: [systemic]
-        context_paths: [pr/pr.diff, pr/pr.json]
-        max_context_bytes: 400000
-        timeout: 20m
-
-  # ── phase 2: the falsifiability gate ─────────────────────────────────────
-  # The lenses proposed; this one tries to knock each proposal down. It is a
-  # separate step rather than an instruction in the reviewer's prompt because
-  # an agent grading its own work is not a gate. It reads all three findings
-  # files directly — declared inputs, not a recap.
+  # ── phase 3: the falsifiability gate ─────────────────────────────────────
+  # The reviewers proposed; this one tries to knock each proposal down. It is
+  # a separate step rather than an instruction in the reviewer's prompt
+  # because an agent grading its own work is not a gate. The collected
+  # artifact arrives as ONE input, one directory per dimension that ran.
   - agent: falsifier
-    inputs: [pr, semantic, mechanical, systemic]
+    inputs: [pr, findings]
     outputs: [confirmed]
     timeout: 20m
-    context_paths: [semantic/findings.json, mechanical/findings.json, systemic/findings.json]
     prompt: |
-      Every finding in the three findings.json files above is a CLAIM, not a
-      fact. Try to invalidate each one against the code under pr/.
+      List findings/ — each <dimension>/report.json in it is a set of CLAIMS,
+      not facts. Try to invalidate each one against the code under pr/.
 
       Write the survivors to confirmed/confirmed.json.
 

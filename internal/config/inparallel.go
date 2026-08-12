@@ -93,7 +93,16 @@ func (c *Config) validateParallelOutputs() error {
 			seen := map[string]bool{}
 
 			for i := range step.InParallel.Steps {
+				// Deduped PER BRANCH first: a do: block inside one branch may
+				// legally reuse a name across its own sequential children (a
+				// later one replaces an earlier one, in a defined order), and
+				// listing it twice would misreport that as a cross-branch race.
+				branch := map[string]bool{}
 				for _, name := range branchOutputs(&step.InParallel.Steps[i]) {
+					branch[name] = true
+				}
+
+				for name := range branch {
 					if seen[name] {
 						return fmt.Errorf("%s: duplicate output names across in_parallel branches: %q is produced by more than one branch, and concurrent branches have no order to resolve that with",
 							label, name)
@@ -137,6 +146,20 @@ func branchOutputs(step *Step) []string {
 		}
 
 		return branchOutputs(&step.Race.Steps[0])
+	}
+
+	// A do: block produces whatever its children do. It was the one container
+	// this walk fell through as a leaf, so a duplicate produced by a do: child
+	// in two branches went undetected — the exact miss the nested-block case
+	// above was added for.
+	if step.Do != nil {
+		var outputs []string
+
+		for i := range step.Do {
+			outputs = append(outputs, branchOutputs(&step.Do[i])...)
+		}
+
+		return outputs
 	}
 
 	if step.InParallel == nil {

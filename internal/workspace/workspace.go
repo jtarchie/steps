@@ -668,10 +668,14 @@ func (b *isolatingBuild) materializeSpace(ctx context.Context, dir string, input
 			return fmt.Errorf("output %q: %w", out, err)
 		}
 
-		// output_mapping is validated against the artifact name too, so a
-		// mapped output can't smuggle a bad name into the store on Capture.
+		// A mapped output can't smuggle a bad destination into the store on
+		// Capture. The PATH rule rather than the plain name rule, because a
+		// collecting matrix's cells legitimately capture under coordinates
+		// (findings/alpha/fast) — user-written mapping values are pinned to
+		// the strict name rule at load, so only machine-composed paths carry
+		// slashes here.
 		if mapped := mappedName(out, outputMapping); mapped != out {
-			err = config.ValidateArtifactName(mapped)
+			err = config.ValidateArtifactPath(mapped)
 			if err != nil {
 				return fmt.Errorf("output %q (mapped to %q): %w", out, mapped, err)
 			}

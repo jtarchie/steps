@@ -288,6 +288,33 @@ This is "the step plans, the pipeline executes": one step produces a work list, 
 
 A chain through any `across:` block is unskippable, which here is load-bearing rather than incidental: **the producing step re-runs every run**, so the file the axis reads is always the file this run wrote. That is what replaces the cache-replay machinery a store would have needed — and the cost is stated plainly: a task feeding a file axis never caches. The cells themselves still hash and cache individually, exactly as static cells do.
 
+### Collected outputs: `outputs:` on the matrix
+
+A matrix's cells are clones of one step, so they declare the same output names — which used to mean the last capture silently erased the others', and a race under `max_in_flight:`. `outputs:` on an `across:` step now means the block **collects**: each cell writes its declared output exactly as any step does, and the capture lands under the cell's own coordinates. Downstream consumes the lot as ONE artifact:
+
+```yaml
+- across:
+  - var: dim
+    from_file: dims/index.json
+  max_in_flight: 2
+  agent: reviewer
+  inputs: [pr, dims]
+  outputs: [findings]                    # the block collects
+  prompt: "Review the {{ .vars.dim }} dimension; write findings/report.json"
+
+- agent: falsifier
+  inputs: [findings]                     # findings/<dimension>/report.json, one per cell
+```
+
+The cell's own view is unchanged — it writes `findings/report.json` and never sees the coordinates. The directory layout is one segment per axis value, declaration order (`findings/alpha/fast/…` for a two-axis matrix), so it is derived entirely from declared things.
+
+- **Collision-proof by construction.** Each cell captures to its own destination, so N cells share one declared name without clobbering each other, serially or concurrently. This works for `values:` and `from_file:` alike — and for a `from_file:` matrix it is the only shape that can work at all, since per-cell artifact names cannot be load-validated when the width is decided mid-run.
+- **Axis values become directory names**, so on a collecting matrix they must match the artifact-name charset and be unique within their axis — a load error for `values:`, a read-time error naming the item for `from_file:` (the items are often model-authored). A non-collecting matrix keeps taking any value; interpolation has no path to protect.
+- **A failed or `try:`-tolerated cell contributes no directory** — capture only runs on success — and the consumer walks what survived, the same absence-tolerance `context: { from: ... }` has. `examples/pr-review.yml` leans on exactly this: one reviewer failing must not cost the whole review.
+- **Requires `workspace: strategy: copy`.** Collection *is* the capture step, and the shared strategy has none — cells write straight into one build root — so allowing the declaration there would make the same pipeline change its file layout when `workspace:` is toggled. `btrfs` is refused for now rather than silently corrupting: its snapshot-based capture can neither land under an uncreated parent nor survive nesting.
+- **Declared on the step, not inherited.** A `tasks:` entry declaring outputs while the matrix step doesn't is a load error naming the fix — the step is where a reader looks to see whether a matrix collects.
+- **A task cell that produces outputs is never cell-cached.** A skipped cell captures nothing, so a rerun would hand the consumer a directory with a hole where that cell's contribution was — and the store keeps no artifact bytes to replay. Re-running is the only honest answer, and it is stated here rather than discovered.
+
 ### A ceiling that degrades: `budget:`
 
 A wide matrix of agent cells is one whose total cost is easy to underestimate — especially when a step decided the width mid-run. `budget:` on the block caps what its cells spend **together**:

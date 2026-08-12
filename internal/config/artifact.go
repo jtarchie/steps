@@ -7,6 +7,7 @@ package config
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // artifactNamePattern constrains input/output/resource names used to build
@@ -109,11 +110,45 @@ func (c *Config) validateMappingPlacement(label string, step Step) error {
 	return nil
 }
 
+// ValidateArtifactPath accepts what a capture may materialize to: an artifact
+// name, optionally followed by /-separated segments inside it — a collecting
+// matrix captures a cell's output at findings/alpha/fast (see
+// CollectedOutputMapping). The first segment is a full artifact name,
+// reservations included; later segments need only the charset, since they
+// name directories inside an artifact rather than artifacts. Every segment
+// matching the pattern is what makes the path safe to join: no segment can be
+// empty, "..", or absolute.
+//
+// USER-authored mapping values never reach this looser rule — they are pinned
+// to ValidateArtifactName at load (see validateArtifactMappings), so the only
+// slash-carrying paths are machine-composed from already-validated parts.
+func ValidateArtifactPath(artifactPath string) error {
+	segments := strings.Split(artifactPath, "/")
+
+	err := ValidateArtifactName(segments[0])
+	if err != nil {
+		return err
+	}
+
+	for _, segment := range segments[1:] {
+		if !artifactNamePattern.MatchString(segment) {
+			return fmt.Errorf("invalid artifact path %q: segment %q must match %s", artifactPath, segment, artifactNamePattern.String())
+		}
+	}
+
+	return nil
+}
+
 // validateArtifactMappings enforces that a task step's input_mapping/
 // output_mapping keys are a subset of the resolved task's declared inputs/
 // outputs — a mapping key that names no declared input/output is a typo that
-// would otherwise silently do nothing. Placement rules (task-step-only,
-// workspace-only) are enforced in validateStepArtifactDecls.
+// would otherwise silently do nothing — and that every mapping VALUE is a
+// plain artifact name. The value check used to live only at run time
+// (materializeSpace); it has to stay strict here because the runtime seam now
+// accepts machine-composed paths with slashes (ValidateArtifactPath), and a
+// user-written mapping must not ride that loosening into another artifact's
+// directory. Placement rules (task-step-only, workspace-only) are enforced in
+// validateStepArtifactDecls.
 func (c *Config) validateArtifactMappings() error {
 	for _, job := range c.Jobs {
 		err := job.visitSteps(func(label string, step *Step) error {
@@ -141,7 +176,9 @@ func (c *Config) validateArtifactMappings() error {
 	return nil
 }
 
-// checkMappingKeys rejects a mapping key that names no declared artifact.
+// checkMappingKeys rejects a mapping key that names no declared artifact, and
+// a mapping value that is not a plain artifact name — see
+// validateArtifactMappings for why the value check is load-bearing here.
 func checkMappingKeys(label, field string, mapping map[string]string, declared []string) error {
 	if len(mapping) == 0 {
 		return nil
@@ -152,10 +189,15 @@ func checkMappingKeys(label, field string, mapping map[string]string, declared [
 		declaredSet[name] = true
 	}
 
-	for key := range mapping {
+	for key, value := range mapping {
 		if !declaredSet[key] {
 			return fmt.Errorf("%s: %s key %q is not a declared %s", label, field, key,
 				map[string]string{"input_mapping": "input", "output_mapping": "output"}[field])
+		}
+
+		err := ValidateArtifactName(value)
+		if err != nil {
+			return fmt.Errorf("%s: %s value for %q: %w", label, field, key, err)
 		}
 	}
 

@@ -1132,7 +1132,13 @@ func retryWithTimeout(ctx context.Context, attempts int, timeoutStr string, mark
 // records the aggregate outcome) and hook execution (where the enclosing
 // step/job records it).
 func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt config.ResolvedTask, bw workspace.BuildWorkspace) error {
-	space, err := bw.TaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs, rt.InputMapping, rt.OutputMapping)
+	// A cell of a collecting matrix captures each output under its own
+	// coordinates (findings -> findings/alpha) instead of the plain name, so
+	// N cells share one declared artifact without clobbering each other. An
+	// ordinary step passes its mapping through unchanged.
+	outputMapping := config.CollectedOutputMapping(rt.Outputs, rt.OutputMapping, step.OutputSubdir)
+
+	space, err := bw.TaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs, rt.InputMapping, outputMapping)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}

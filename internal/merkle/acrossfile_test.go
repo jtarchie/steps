@@ -115,6 +115,40 @@ func TestAcrossFileMatrixDoesNotCollideWithAStaticOne(t *testing.T) {
 	}
 }
 
+// TestCellHashTaskWithOutputsIsNotCacheable closes the cached-cell hole: a
+// skipped cell captures nothing, so a rerun would hand the consumer of the
+// collected artifact a directory this cell's contribution is missing from —
+// and the store keeps no artifact bytes to replay. Both spellings of the
+// declaration count, since executeTask captures the RESOLVED outputs.
+func TestCellHashTaskWithOutputsIsNotCacheable(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{Tasks: []config.Task{{Name: "declared", Run: "true", Outputs: []string{"findings"}}}}
+
+	cacheable := func(cell config.Step) bool {
+		t.Helper()
+
+		_, ok, err := CellHash(cfg, cell, "parent")
+		if err != nil {
+			t.Fatalf("CellHash: %v", err)
+		}
+
+		return ok
+	}
+
+	if !cacheable(config.Step{Task: "work", Run: "true", Inputs: config.Inputs()}) {
+		t.Error("a plain task cell must stay cacheable")
+	}
+
+	if cacheable(config.Step{Task: "work", Run: "true", Inputs: config.Inputs(), Outputs: []string{"findings"}}) {
+		t.Error("a task cell declaring outputs must not be cacheable; a skipped cell captures nothing")
+	}
+
+	if cacheable(config.Step{Task: "declared", Inputs: config.Inputs()}) {
+		t.Error("outputs inherited from the tasks: entry must count too; capture uses the resolved set")
+	}
+}
+
 // TestAcrossFileMatrixForcesItsProducerToRerun is the load-bearing cache
 // property, and the reason this feature needs no store-style replay.
 //

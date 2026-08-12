@@ -4,11 +4,11 @@ package main
 //
 // That example cannot be a fixture: it needs a live model, an authenticated
 // `gh`, and its pass/fail depends on what the reviewers find. What CAN be
-// pinned is the shape it is built out of — three lenses run concurrently as
-// agents, each writes its own findings file, a falsifier and gatekeeper read
-// those files and narrow them, and a verdict routes the run to the end.
-// That is the part that would break silently, so that is the part with a
-// test.
+// pinned is the shape it is built out of — a planner step decides the width
+// of a matrix, one reviewer cell per dimension runs concurrently, everything
+// they produce comes back as one collected artifact, and a verdict routes the
+// run to the end. That is the part that would break silently, so that is the
+// part with a test.
 //
 // The model is scripted and routed on content rather than position:
 // concurrent cells reach the provider in whatever order their goroutines are
@@ -23,9 +23,9 @@ import (
 	"time"
 )
 
-// TestEndToEndPRReviewShape drives the pipeline's spine end to end: three
-// lenses fan out concurrently, a falsifier and gatekeeper narrow their
-// findings, and a verdict routes the run to the end.
+// TestEndToEndPRReviewShape drives the pipeline's spine end to end: a planner
+// writes the work list, the matrix fans out over it concurrently, the cells'
+// findings come back as one artifact, and a verdict routes the run to the end.
 func TestEndToEndPRReviewShape(t *testing.T) {
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
@@ -42,13 +42,13 @@ defaults:
     disabled: true
 
 agents:
+- name: planner
+  source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
+  tools: [read_file, write_file]
 - name: reviewer
   source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
-  tools: [read_file, list_dir, write_file]
+  tools: [read_file, write_file]
 - name: falsifier
-  source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
-  tools: [read_file, list_dir, write_file]
-- name: gatekeeper
   source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
   tools: [read_file, list_dir, write_file]
 - name: synthesizer
@@ -58,39 +58,33 @@ agents:
 jobs:
 - name: review
   plan:
-  - in_parallel:
-      steps:
-      - agent: reviewer
-        inputs: []
-        outputs: [semantic]
-        prompt: Review through the semantic lens. Write semantic/findings.json.
-      - agent: reviewer
-        inputs: []
-        outputs: [mechanical]
-        prompt: Review through the mechanical lens. Write mechanical/findings.json.
-      - agent: reviewer
-        inputs: []
-        outputs: [systemic]
-        prompt: Review through the systemic lens. Write systemic/findings.json.
+  - agent: planner
+    inputs: []
+    outputs: [dims]
+    prompt: Decide the review dimensions; write dims/index.json and one brief per id.
+
+  - across:
+    - var: dim
+      from_file: dims/index.json
+    max_in_flight: 2
+    try:
+      agent: reviewer
+      inputs: [dims]
+      outputs: [findings]
+      context_paths: ["dims/{{ .vars.dim }}.md"]
+      prompt: Review through the {{ .vars.dim }} dimension; write findings/report.json.
 
   - agent: falsifier
-    inputs: [semantic, mechanical, systemic]
+    inputs: [findings]
     outputs: [confirmed]
-    context_paths: [semantic/findings.json, mechanical/findings.json, systemic/findings.json]
-    prompt: Try to invalidate every finding above. Write confirmed/confirmed.json.
-
-  - agent: gatekeeper
-    inputs: [confirmed]
-    outputs: [blocking]
-    context_paths: [confirmed/confirmed.json]
-    prompt: Decide what blocks the merge. Write blocking/blocking.json.
+    prompt: Invalidate every finding under findings/; write confirmed/confirmed.json.
 
   - agent: synthesizer
-    inputs: [confirmed, blocking]
+    inputs: [confirmed]
     outputs: [review]
     verdicts:
       - complete: check-draft
-      - blind-spots: gatekeeper    # backward: another pass at the gate
+      - blind-spots: falsifier     # backward: another pass at the gate
     max_visits: 2                  # which is bounded, at one extra pass
     prompt: Write the review from the confirmed findings.
 
@@ -101,37 +95,29 @@ jobs:
 
 	mustRun(t, path)
 
-	// ── all three lenses ran ─────────────────────────────────────────────────
+	// ── the fan-out was as wide as the planner said, and named per dimension —
+	// a number the pipeline text never mentions.
 	nodes := storeNodes(t, path)
-
-	reviewerRuns := 0
-
-	for _, node := range nodes {
-		if node.Resource == "reviewer" {
-			reviewerRuns++
-		}
-	}
-
-	if reviewerRuns != 3 {
-		t.Errorf("reviewer ran %d times, want 3 (one per lens)", reviewerRuns)
+	for _, id := range []string{"state-mutation", "api-boundaries"} {
+		assertSucceeded(t, nodes, "agent", "reviewer [dim="+id+"]")
 	}
 
 	// ── the verdict routed the run to the end ───────────────────────────────
 	// check-draft ran, so the synthesizer really did write the files it
 	// claimed — and the backward blind-spots route did NOT fire, which is
-	// what a second gatekeeper run would show.
+	// what a second falsifier run would show.
 	assertSucceeded(t, nodes, "task", "check-draft")
 
-	gatekeeperRuns := 0
+	falsifierRuns := 0
 
 	for _, node := range nodes {
-		if node.Resource == "gatekeeper" {
-			gatekeeperRuns++
+		if node.Resource == "falsifier" {
+			falsifierRuns++
 		}
 	}
 
-	if gatekeeperRuns != 1 {
-		t.Errorf("gatekeeper ran %d times, want 1; the verdict was complete, so the backward blind-spots route must not have fired", gatekeeperRuns)
+	if falsifierRuns != 1 {
+		t.Errorf("falsifier ran %d times, want 1; the verdict was complete, so the backward blind-spots route must not have fired", falsifierRuns)
 	}
 }
 
@@ -141,24 +127,35 @@ func reviewScript() func(capturedRequest) turn {
 	return func(req capturedRequest) turn {
 		// The model has already done what it was told to, so it answers
 		// rather than calling the same tool forever.
+		//
+		// Asking WHICH tool was called, rather than whether the history holds
+		// any tool traffic at all: a reviewer cell opens with a synthetic
+		// read_file pair delivering its brief, so "there are tool results" is
+		// already true before the model has done anything.
 		if modelHasCalled(req, "write_file", "verdict") {
 			return says("done")
 		}
 
 		switch {
-		case requestMentions(req, "semantic lens"):
-			return callsTool("write_file", map[string]any{"path": "semantic/findings.json", "content": `[{"id":"F-1","severity":"important"}]`})
-		case requestMentions(req, "mechanical lens"):
-			return callsTool("write_file", map[string]any{"path": "mechanical/findings.json", "content": `[]`})
-		case requestMentions(req, "systemic lens"):
-			return callsTool("write_file", map[string]any{"path": "systemic/findings.json", "content": `[]`})
+		// The planner decides the width of everything downstream.
+		case requestMentions(req, "decide the review dimensions"):
+			return callsTools(
+				call("write_file", map[string]any{"path": "dims/index.json", "content": `["state-mutation","api-boundaries"]`}),
+				call("write_file", map[string]any{"path": "dims/state-mutation.md", "content": "look at shared state"}),
+				call("write_file", map[string]any{"path": "dims/api-boundaries.md", "content": "look at the exported surface"}),
+			)
+
+		// One reviewer cell. Every cell writes the SAME path, which is the
+		// point: the block collects each under its own dimension.
+		case requestMentions(req, "review through the"):
+			return callsTool("write_file", map[string]any{"path": "findings/report.json", "content": `[{"id":"F-1"}]`})
+
 		case requestMentions(req, "invalidate every finding"):
-			return callsTool("write_file", map[string]any{"path": "confirmed/confirmed.json", "content": `[{"id":"F-1","severity":"important"}]`})
-		case requestMentions(req, "decide what blocks"):
-			return callsTool("write_file", map[string]any{"path": "blocking/blocking.json", "content": `[]`})
+			return callsTool("write_file", map[string]any{"path": "confirmed/confirmed.json", "content": `[{"id":"F-1"}]`})
+
 		case requestMentions(req, "write the review"):
 			return callsTools(
-				call("write_file", map[string]any{"path": "review/summary.md", "content": "# Review\n\none advisory finding\n"}),
+				call("write_file", map[string]any{"path": "review/summary.md", "content": "# Review\n\none confirmed finding\n"}),
 				call("write_file", map[string]any{"path": "review/findings.json", "content": `[{"id":"F-1"}]`}),
 				call("verdict", map[string]any{"choice": "complete"}),
 			)
@@ -168,8 +165,8 @@ func reviewScript() func(capturedRequest) turn {
 	}
 }
 
-// TestEndToEndPRReviewFanOutIsConcurrent proves the three lens cells really do
-// overlap, rather than the block merely producing the right answers serially.
+// TestEndToEndPRReviewFanOutIsConcurrent proves the reviewer cells really do
+// overlap, rather than the matrix merely producing the right answers serially.
 //
 // The provider is the observer: it holds each cell's request until it has
 // seen all three. Serially the first request waits out the barrier and the
@@ -186,11 +183,15 @@ func TestEndToEndPRReviewFanOutIsConcurrent(t *testing.T) {
 			return says("done")
 		}
 
-		if requestMentions(req, "lens") && !barrier.wait() {
+		if requestMentions(req, "decide the review dimensions") {
+			return callsTool("write_file", map[string]any{"path": "dims/index.json", "content": `["one","two","three"]`})
+		}
+
+		if requestMentions(req, "review through the") && !barrier.wait() {
 			t.Error("a reviewer cell reached the provider alone — the cells did not overlap")
 		}
 
-		return callsTool("write_file", map[string]any{"path": "findings.json", "content": "[]"})
+		return callsTool("write_file", map[string]any{"path": "findings/report.json", "content": "[]"})
 	})
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
@@ -202,6 +203,9 @@ defaults:
     disabled: true
 
 agents:
+- name: planner
+  source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
+  tools: [write_file]
 - name: reviewer
   source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
   tools: [write_file]
@@ -209,20 +213,18 @@ agents:
 jobs:
 - name: review
   plan:
-  - in_parallel:
-      steps:
-      - agent: reviewer
-        inputs: []
-        outputs: [semantic]
-        prompt: Review through the semantic lens.
-      - agent: reviewer
-        inputs: []
-        outputs: [mechanical]
-        prompt: Review through the mechanical lens.
-      - agent: reviewer
-        inputs: []
-        outputs: [systemic]
-        prompt: Review through the systemic lens.
+  - agent: planner
+    inputs: []
+    outputs: [dims]
+    prompt: Decide the review dimensions; write dims/index.json.
+  - across:
+    - var: dim
+      from_file: dims/index.json
+    max_in_flight: 3
+    agent: reviewer
+    inputs: [dims]
+    outputs: [findings]
+    prompt: "Review through the {{ .vars.dim }} dimension."
 `, fake.URL+"/v1/"))
 
 	mustRun(t, path)

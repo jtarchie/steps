@@ -120,6 +120,16 @@ func ExpandAcrossValues(label string, step Step, runtime map[string][]string) ([
 		return nil, err
 	}
 
+	// A collecting matrix turns axis values into directory names, so they get
+	// the checks a name that becomes a path needs — for values: at load, for
+	// from_file: here at dispatch, since the items are often model-authored.
+	if collectsOutputs(step) {
+		err = validateCollectedValues(label, axes)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	combos := combinations(axes)
 
 	cells := make([]Step, 0, len(combos))
@@ -150,9 +160,76 @@ type acrossAxis struct {
 }
 
 // acrossCombo is one cell's coordinates: the values its template renders
-// against.
+// against, and the same values in axis DECLARATION order — the path a
+// collecting matrix captures this cell's outputs under (see Step.OutputSubdir).
+// vars alone cannot carry that, since a map has no order.
 type acrossCombo struct {
 	vars map[string]string
+	segs []string
+}
+
+// collectsOutputs reports whether this matrix captures each cell's outputs
+// under a per-cell subdirectory — which it does exactly when the cell template
+// declares outputs: (through a try: wrapper, where the template's fields live).
+func collectsOutputs(step Step) bool {
+	return len(step.Unwrap().Outputs) > 0
+}
+
+// CollectedOutputMapping is the output mapping a collecting matrix's cell
+// captures through: each declared output, redirected under the cell's own
+// coordinates — findings -> findings/alpha/fast. Composed AFTER any
+// author-written output_mapping (mapping renames the artifact; the
+// coordinates say where inside it this cell lands), and nil when the cell is
+// not part of a collecting matrix, so every other step passes through
+// untouched.
+//
+// One function, called by both internal/pipeline (task cells) and
+// internal/agent (agent cells), so the two kinds of cell can never disagree
+// about where a capture lands.
+func CollectedOutputMapping(outputs []string, mapping map[string]string, subdir string) map[string]string {
+	if subdir == "" || len(outputs) == 0 {
+		return mapping
+	}
+
+	collected := make(map[string]string, len(outputs))
+
+	for _, out := range outputs {
+		name := out
+		if mapped, ok := mapping[out]; ok {
+			name = mapped
+		}
+
+		collected[out] = name + "/" + subdir
+	}
+
+	return collected
+}
+
+// validateCollectedValues enforces what a collecting matrix needs of its axis
+// values, which ordinary interpolation does not: each value becomes a path
+// segment of the collected artifact, so it must be directory-name-shaped, and
+// it must be unique within its axis — two cells with one value would capture
+// into one directory, the exact clobber collection exists to remove.
+func validateCollectedValues(label string, axes []acrossAxis) error {
+	for _, axis := range axes {
+		seen := make(map[string]bool, len(axis.values))
+
+		for _, value := range axis.values {
+			if !artifactNamePattern.MatchString(value) {
+				return fmt.Errorf("%s: across var %q value %q cannot name a directory of the collected output (must match %s); use short ids as values and put the detail in files",
+					label, axis.name, value, artifactNamePattern.String())
+			}
+
+			if seen[value] {
+				return fmt.Errorf("%s: across var %q lists %q twice; a collecting matrix captures each cell under its value, so two cells with one value would write one directory",
+					label, axis.name, value)
+			}
+
+			seen[value] = true
+		}
+	}
+
+	return nil
 }
 
 // resolveAxes substitutes the read values into any from_file: axis, leaving a
@@ -201,6 +278,11 @@ func (c *Config) validateAcross() error {
 				return nil
 			}
 
+			err = c.validateAcrossOutputs(label, step)
+			if err != nil {
+				return err
+			}
+
 			if HasRuntimeAxis(*step) {
 				err = validateAcrossAxes(label, step.Across)
 				if err != nil {
@@ -224,6 +306,55 @@ func (c *Config) validateAcross() error {
 		if err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+// validateAcrossOutputs enforces what a matrix that produces artifacts needs.
+//
+// Isolation, because collection IS the capture step: each cell's outputs are
+// materialized under its own coordinates (findings/alpha/...), and under the
+// shared strategy there is no capture at all — cells write straight into one
+// build root — so the same pipeline would change its file layout when
+// workspace: is toggled, which is the scheduling-rewrites-a-data-contract
+// surprise this codebase keeps refusing.
+//
+// And the outputs must be declared ON THE STEP, not inherited from a tasks:
+// entry: the step is where a reader looks to see whether a matrix collects,
+// and an inherited declaration would make N cells capture one artifact name
+// with nothing in this file saying so.
+func (c *Config) validateAcrossOutputs(label string, step *Step) error {
+	if collectsOutputs(*step) {
+		if c.Workspace == nil {
+			return fmt.Errorf("%s: an across: step with outputs: requires workspace isolation (set a top-level workspace: strategy); each cell's outputs are captured under its own coordinates, and the shared strategy has no capture step to do that with", label)
+		}
+
+		// ponytail: btrfs captures artifacts as subvolume snapshots, which can
+		// neither land under an uncreated parent nor survive being nested
+		// inside a later snapshot (nested subvolumes come out empty) — so a
+		// collected artifact would silently lose every cell's files on the
+		// consuming side. Supporting it means teaching that backend a
+		// flattening capture; until then, refuse rather than corrupt.
+		if c.Workspace.Strategy != "copy" {
+			return fmt.Errorf("%s: an across: step with outputs: is not supported under workspace strategy %q; use strategy: copy", label, c.Workspace.Strategy)
+		}
+
+		return nil
+	}
+
+	inner := step.Unwrap()
+	if inner.Task == "" {
+		return nil
+	}
+
+	rt, err := c.ResolveTask(inner)
+	if err != nil {
+		return nil //nolint:nilerr // validateStepReferences reports an unresolvable task
+	}
+
+	if len(rt.Outputs) > 0 {
+		return fmt.Errorf("%s: task %q declares outputs %v, so every cell of this matrix would capture the same artifact; declare outputs: on the across: step itself, which collects each cell's under its own coordinates", label, rt.Name, rt.Outputs)
 	}
 
 	return nil
@@ -461,13 +592,17 @@ func combinations(axes []acrossAxis) []acrossCombo {
 
 		for _, combo := range combos {
 			for _, value := range axis.values {
-				expanded := acrossCombo{vars: make(map[string]string, len(combo.vars)+1)}
+				expanded := acrossCombo{
+					vars: make(map[string]string, len(combo.vars)+1),
+					segs: make([]string, 0, len(combo.segs)+1),
+				}
 
 				for k, v := range combo.vars {
 					expanded.vars[k] = v
 				}
 
 				expanded.vars[axis.name] = value
+				expanded.segs = append(append(expanded.segs, combo.segs...), value)
 
 				next = append(next, expanded)
 			}
@@ -570,6 +705,12 @@ func renderCell(label string, cell *Step, combo acrossCombo) error {
 	}
 
 	nameCell(cell, templateName, combo.vars)
+
+	// The cell's coordinates as a capture path, stamped whether or not the
+	// matrix collects: it is pure bookkeeping derived from declared axes, and
+	// the consumers (executeTask, prepareAgentStep) apply it only to a cell
+	// that declares outputs.
+	cell.OutputSubdir = strings.Join(combo.segs, "/")
 
 	return nil
 }
