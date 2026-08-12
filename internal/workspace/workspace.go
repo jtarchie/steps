@@ -57,7 +57,9 @@ type BuildWorkspace interface {
 	// input plus an empty <output>/ directory for each named output. inputMapping/
 	// outputMapping rename a declared name to the plan-artifact name it draws
 	// from / is captured as (see config.Step.InputMapping); nil leaves names
-	// unmapped. Agent steps never map, so they pass nil.
+	// unmapped. Agent steps carry no author-written mapping, but a cell of a
+	// collecting matrix (task or agent) passes the machine-composed
+	// coordinate mapping config.CollectedOutputMapping builds.
 	TaskSpace(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string) (StepSpace, error)
 	// PutSpace composes a put step's read view from its declared inputs, or —
 	// when all is true (inputs: all) — from every artifact in the build store.
@@ -690,6 +692,45 @@ func (b *isolatingBuild) materializeSpace(ctx context.Context, dir string, input
 	return nil
 }
 
+// ArtifactResetter is the optional BuildWorkspace capability a collecting
+// across: block uses (see internal/pipeline): ResetArtifact replaces whatever
+// the store holds under name with a fresh empty directory, before any cell
+// captures. That is what (a) restores the "a later producer replaces an
+// earlier one's artifact" sequential contract that per-coordinate capture
+// alone cannot — each cell's Capture replaces only its own subdirectory — and
+// (b) guarantees the collected artifact EXISTS even when every cell failed or
+// the matrix expanded to zero cells, so the consumer walks what survived
+// (possibly nothing) instead of failing to materialize a missing input.
+//
+// Optional rather than on BuildWorkspace: only the isolating builds have an
+// artifact store to reset, and load validation already refuses a collecting
+// matrix without one.
+type ArtifactResetter interface {
+	ResetArtifact(ctx context.Context, name string) error
+}
+
+// ResetArtifact implements ArtifactResetter.
+func (b *isolatingBuild) ResetArtifact(ctx context.Context, name string) error {
+	err := config.ValidateArtifactName(name)
+	if err != nil {
+		return fmt.Errorf("reset artifact: %w", err)
+	}
+
+	dst := filepath.Join(b.artifacts, name)
+
+	err = b.backend.remove(dst)
+	if err != nil {
+		return fmt.Errorf("resetting artifact %q: %w", name, err)
+	}
+
+	err = b.backend.createEmpty(ctx, dst)
+	if err != nil {
+		return fmt.Errorf("resetting artifact %q: %w", name, err)
+	}
+
+	return nil
+}
+
 // mappedName renames name through mapping (declared name -> plan-artifact
 // name), returning name unchanged when unmapped.
 func mappedName(name string, mapping map[string]string) string {
@@ -736,8 +777,16 @@ type isolatingSpace struct {
 func (s *isolatingSpace) Dir() string { return s.dir }
 
 // Capture persists each declared output back into the build's artifact
-// store, replacing any artifact already there under that name (deterministic
-// since steps run sequentially — there is no concurrent writer to race). A
+// store, replacing whatever is already at its DESTINATION — the plain
+// artifact name for an ordinary step, a per-cell coordinate subdirectory
+// (findings/alpha) for a cell of a collecting matrix. Ordinary steps run
+// sequentially, so a plain-name capture has no concurrent writer to race;
+// collecting cells under max_in_flight: capture concurrently, and are safe
+// only because CollectedOutputMapping gives every cell a disjoint
+// destination and the block reset (ArtifactResetter) has already created
+// the shared parent. A collecting cell therefore replaces only its own
+// subdirectory — whole-artifact replacement for the block is the reset's
+// job, before any cell runs. A
 // declared output directory that no longer exists when the step finished is
 // an error: the step promised to produce it. rejectSymlinkSrc additionally
 // refuses a declared output that is itself a symlink: the step's own run:/

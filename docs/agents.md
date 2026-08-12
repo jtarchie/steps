@@ -348,7 +348,7 @@ r-8f2a1c         4,102,338      38%    unpriced       9
 
 $ steps runs pipeline.yml --cost --run r-8f2a1c
 STEP                                TOKENS   CACHED   DURATION  FINISH
-lens [semantic]                    412,880      61%       1m02s  stop
+reviewer [dim=state-mutation]      412,880      61%       1m02s  stop
 reviewer [dim=api]               1,204,551      22%      14m30s  length  <-- truncated
 ```
 

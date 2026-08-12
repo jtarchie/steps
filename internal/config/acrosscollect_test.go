@@ -123,6 +123,158 @@ func TestAcrossOutputsValidation(t *testing.T) {
 
 	cases := []struct{ name, pipeline, want string }{
 		{
+			name: "outputs on the try: wrapper is dead text, refused",
+			pipeline: `
+workspace:
+  strategy: copy
+jobs:
+- name: j
+  plan:
+  - across:
+    - var: dim
+      values: [a, b]
+    outputs: [findings]
+    try:
+      task: work
+      inputs: []
+      run: "true"
+`,
+			want: "outputs: on the try: wrapper",
+		},
+		{
+			name: "a hook on the cell declaring outputs is refused",
+			pipeline: `
+workspace:
+  strategy: copy
+jobs:
+- name: j
+  plan:
+  - across:
+    - var: dim
+      values: [a, b]
+    task: work
+    inputs: []
+    outputs: [findings]
+    run: "true"
+    on_success:
+      task: annotate
+      inputs: []
+      outputs: [notes]
+      run: "true"
+`,
+			want: `output "notes" is declared on the matrix cell's on_success hook`,
+		},
+		{
+			name: "a hook inheriting outputs from its tasks: entry is refused too",
+			pipeline: `
+workspace:
+  strategy: copy
+tasks:
+- name: annotate
+  run: "true"
+  inputs: []
+  outputs: [notes]
+jobs:
+- name: j
+  plan:
+  - across:
+    - var: dim
+      values: [a, b]
+    task: work
+    inputs: []
+    outputs: [findings]
+    run: "true"
+    ensure:
+      task: annotate
+`,
+			want: `output "notes" is declared on the matrix cell's ensure hook`,
+		},
+		{
+			name: "a do: child declaring outputs is refused",
+			pipeline: `
+workspace:
+  strategy: copy
+jobs:
+- name: j
+  plan:
+  - across:
+    - var: dim
+      values: [a, b]
+    do:
+    - task: work
+      inputs: []
+      outputs: [findings]
+      run: "true"
+`,
+			want: `output "findings" is declared on the matrix cell's do: step`,
+		},
+		{
+			name: "an in_parallel branch declaring outputs is refused",
+			pipeline: `
+workspace:
+  strategy: copy
+jobs:
+- name: j
+  plan:
+  - across:
+    - var: dim
+      values: [a, b]
+    in_parallel:
+      steps:
+      - task: work
+        inputs: []
+        outputs: [findings]
+        run: "true"
+`,
+			want: `output "findings" is declared on the matrix cell's in_parallel branch`,
+		},
+		{
+			name: "a collecting matrix wrapping another across: is refused",
+			pipeline: `
+workspace:
+  strategy: copy
+jobs:
+- name: j
+  plan:
+  - across:
+    - var: outer
+      values: [x, y]
+    try:
+      across:
+      - var: inner
+        values: [p, q]
+      task: work
+      inputs: []
+      outputs: [findings]
+      run: "true"
+`,
+			want: "cannot wrap another across: step",
+		},
+		{
+			name: "a hostile static value fails at load even beside a file axis",
+			pipeline: `
+workspace:
+  strategy: copy
+jobs:
+- name: j
+  plan:
+  - task: scan
+    inputs: []
+    outputs: [dims]
+    run: "true"
+  - across:
+    - var: mode
+      values: [has space]
+    - var: dim
+      from_file: dims/index.json
+    task: work
+    inputs: [dims]
+    outputs: [findings]
+    run: "true"
+`,
+			want: "cannot name a directory",
+		},
+		{
 			name: "no workspace",
 			pipeline: `
 jobs:

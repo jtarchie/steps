@@ -73,7 +73,7 @@ jobs:
     inputs: []
     outputs: [findings]
     run: |
-      if [ "{{ .vars.dim }}" = "slow" ]; then sleep 2; fi
+      if [ "{{ .vars.dim }}" = "slow" ]; then sleep 1; fi
       printf 'x' > findings/report.txt
   - task: collect
     inputs: [findings]
@@ -229,6 +229,88 @@ jobs:
 
 	mustRun(t, path)
 	assertLineCount(t, ran, 4)
+}
+
+// TestEndToEndAcrossCollectReplacesStaleArtifact: a collecting block owns its
+// artifact wholesale. An earlier step producing the same name is REPLACED —
+// per-cell capture alone would only overlay the coordinate directories onto
+// whatever was already stored, and a consumer that walks findings/ would read
+// the stale entries as cell contributions.
+func TestEndToEndAcrossCollectReplacesStaleArtifact(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "seen.log")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+workspace:
+  strategy: copy
+
+jobs:
+- name: fan
+  plan:
+  - task: seed
+    inputs: []
+    outputs: [findings]
+    run: printf 'stale' > findings/report.txt
+  - across:
+    - var: dim
+      values: [alpha, beta]
+    task: review
+    inputs: []
+    outputs: [findings]
+    run: printf 'from {{ .vars.dim }}' > findings/report.txt
+  - task: collect
+    inputs: [findings]
+    run: ls -1 findings/ >> %[1]s
+`, log))
+
+	mustRun(t, path)
+
+	got := readFileString(t, log)
+	if strings.Contains(got, "report.txt") {
+		t.Errorf("the seed step's stale top-level file survived into the collected artifact:\n%s", got)
+	}
+
+	for _, want := range []string{"alpha", "beta"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("collected artifact is missing cell %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestEndToEndAcrossCollectAllCellsFailedLeavesEmptyArtifact: absence
+// tolerance all the way down. Every try:-tolerated cell dying must hand the
+// consumer an EMPTY artifact to walk — not a missing input that kills the
+// consuming step's workspace materialization with a path error.
+func TestEndToEndAcrossCollectAllCellsFailedLeavesEmptyArtifact(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "seen.log")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+workspace:
+  strategy: copy
+
+jobs:
+- name: fan
+  plan:
+  - across:
+    - var: dim
+      values: [good, bad]
+    try:
+      task: review
+      inputs: []
+      outputs: [findings]
+      run: "false"
+  - task: collect
+    inputs: [findings]
+    run: |
+      echo "survivors=$(ls -1 findings/ | wc -l | tr -d ' ')" >> %[1]s
+`, log))
+
+	mustRun(t, path)
+
+	if got := readFileString(t, log); !strings.Contains(got, "survivors=0") {
+		t.Errorf("consumer saw %q, want an empty collected artifact when every cell failed", got)
+	}
 }
 
 // TestEndToEndAcrossCollectFromFile is the shape the feature was built for:

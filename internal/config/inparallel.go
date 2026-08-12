@@ -162,6 +162,20 @@ func branchOutputs(step *Step) []string {
 		return outputs
 	}
 
+	// An ensemble: block produces whatever its members do — members are
+	// ordinary agent steps and may declare outputs:. Same fall-through-as-a-
+	// leaf hole the do: case above closes: without this, a member's output
+	// duplicated in a sibling branch went undetected.
+	if step.Ensemble != nil {
+		var outputs []string
+
+		for i := range step.Ensemble.Agents {
+			outputs = append(outputs, branchOutputs(&step.Ensemble.Agents[i])...)
+		}
+
+		return outputs
+	}
+
 	if step.InParallel == nil {
 		return step.Outputs
 	}

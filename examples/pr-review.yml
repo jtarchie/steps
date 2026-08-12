@@ -72,7 +72,7 @@ resource_types:
         --json title,body,files,baseRefName > pr.json
       printf '%s' "$number" > pr.number
 
-      # Checked out INTO this artifact, so a path a lens names reads
+      # Checked out INTO this artifact, so a path a reviewer names reads
       # `pr/internal/thing.go` — the same prefix the diff and metadata use.
       # `checkout <sha> -- .` restores the tree without moving HEAD, which is
       # what keeps the three files above from being clobbered.

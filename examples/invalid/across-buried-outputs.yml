@@ -1,0 +1,26 @@
+# A matrix cell's outputs are collected — captured under the cell's own
+# coordinates — only at the collect position: the step the across: (or its
+# try:) runs. An output buried anywhere else a cell executes, here a hook,
+# gets none of that coordination: every cell would capture it at its plain
+# name, serially last-writer-wins and under max_in_flight: a race — the exact
+# clobber collection exists to remove. Refused rather than corrupted.
+# expect: a matrix cell's hooks and nested steps must not declare outputs
+
+workspace:
+  strategy: copy
+
+jobs:
+- name: fan
+  plan:
+  - across:
+    - var: dim
+      values: [alpha, beta]
+    task: review
+    inputs: []
+    outputs: [findings]
+    run: printf 'x' > findings/report.txt
+    on_success:
+      task: annotate
+      inputs: []
+      outputs: [notes]
+      run: printf 'x' > notes/note.txt

@@ -56,6 +56,18 @@ func runAcrossStep(
 
 	reportCellCount(jobName, i, step, len(cells))
 
+	// A collecting block owns its artifact wholesale: reset it to an empty
+	// directory before any cell captures. That is what keeps a stale
+	// same-named artifact — an earlier step's, or a wider expansion's from an
+	// earlier visit of this block — from silently merging into this run's
+	// collection, and what makes the artifact exist even when zero cells
+	// survive, so the consumer walks what survived (possibly nothing) rather
+	// than failing to materialize a missing input.
+	err = resetCollectedArtifacts(ctx, label, step, bw)
+	if err != nil {
+		return "", stepRan, nonGetOutcome{}, err
+	}
+
 	// Cells are parented on the block's OWN parent, not on the block hash.
 	// The block hash folds in every cell's content, so parenting cells under
 	// it would make one cell's edit change every cell's identity — which is
@@ -74,6 +86,33 @@ func runAcrossStep(
 	_ = st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), jobName, status, nil, cellErr)
 
 	return hash, stepRan, nonGetOutcome{}, cellErr
+}
+
+// resetCollectedArtifacts replaces each artifact a collecting matrix captures
+// into with a fresh empty directory — see the call site in runAcrossStep for
+// why. A no-op for a matrix that does not collect.
+func resetCollectedArtifacts(ctx context.Context, label string, step config.Step, bw workspace.BuildWorkspace) error {
+	artifacts := config.CollectedArtifacts(step)
+	if len(artifacts) == 0 {
+		return nil
+	}
+
+	resetter, ok := bw.(workspace.ArtifactResetter)
+	if !ok {
+		// Unreachable through LoadConfig: a collecting matrix requires an
+		// isolating workspace, and the isolating build implements the reset.
+		// A build that doesn't is a wiring bug, not a user error.
+		return fmt.Errorf("%s: collected outputs need a workspace that can reset artifacts; %T cannot", label, bw)
+	}
+
+	for _, name := range artifacts {
+		err := resetter.ResetArtifact(ctx, name)
+		if err != nil {
+			return fmt.Errorf("%s: %w", label, err)
+		}
+	}
+
+	return nil
 }
 
 // reportCellCount announces how wide the matrix turned out to be.
