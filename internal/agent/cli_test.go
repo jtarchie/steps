@@ -239,6 +239,7 @@ func TestRenderCLIPrompt(t *testing.T) {
 	t.Parallel()
 
 	conv := agentConversation{
+		upstream:      []contextBlock{{path: "critic", content: "<fence>\nverdict: revise\n</fence>"}},
 		contextBlocks: []contextBlock{{path: "repo/NOTES.md", content: "some notes"}},
 		prompt:        "Review the diff.",
 	}
@@ -246,16 +247,20 @@ func TestRenderCLIPrompt(t *testing.T) {
 	rendered := renderCLIPrompt(conv)
 
 	// Same content, same order as the HTTP path's synthetic tool exchanges —
-	// there is just no transcript to fabricate them into here.
+	// there is just no transcript to fabricate them into here. A CLI agent
+	// that declared context: from: must SEE what it demanded: it has no
+	// read_step tool to ask with, so dropping the block here means the step
+	// reasons from nothing and never says so.
+	upstreamAt := strings.Index(rendered, "verdict: revise")
 	blockAt := strings.Index(rendered, "repo/NOTES.md")
 	promptAt := strings.Index(rendered, "Review the diff.")
 
-	if blockAt < 0 || promptAt < 0 {
+	if upstreamAt < 0 || blockAt < 0 || promptAt < 0 {
 		t.Fatalf("rendered prompt is missing a section:\n%s", rendered)
 	}
 
-	if blockAt >= promptAt {
-		t.Errorf("sections are out of order (block %d, prompt %d):\n%s", blockAt, promptAt, rendered)
+	if upstreamAt >= blockAt || blockAt >= promptAt {
+		t.Errorf("sections are out of order (upstream %d, block %d, prompt %d):\n%s", upstreamAt, blockAt, promptAt, rendered)
 	}
 
 	if !strings.Contains(rendered, "some notes") {

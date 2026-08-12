@@ -1,0 +1,28 @@
+# context: from: hands a step an earlier step's decision — an agent gets it as
+# a tool result, a task as a file under upstream/. A put has neither, so a
+# context: on one would load clean and deliver nothing. Nested in a do: block
+# here, because the plan walk that resolves from: only visits the top level:
+# the kind check has to reach every step, or this is the shape that slips past.
+# expect: context is only valid on agent and task steps
+
+resource_types:
+- name: dummy
+  config:
+    check: "echo '[]'"
+    in: "true"
+    out: "true"
+
+resources:
+- name: results
+  type: dummy
+  source: {}
+
+jobs:
+- name: publish
+  plan:
+  - do:
+    - put: results
+      inputs: []
+      context:
+        from:
+          scan: verdict

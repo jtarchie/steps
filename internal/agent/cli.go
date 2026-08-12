@@ -841,13 +841,20 @@ func nativeToolNames(conv agentConversation, runtime cliRuntime) map[string]bool
 
 // renderCLIPrompt assembles what goes in on stdin.
 //
-// On the HTTP path context_paths files arrive as synthetic tool exchanges —
-// messages fabricated into a transcript this package owns. There is no
-// transcript to fabricate into here, so the same content is prepended to the
-// prompt instead, in the same order, already fenced as untrusted data by
-// prepareContextBlocks.
+// On the HTTP path the upstream steps' decisions and the context_paths files
+// arrive as synthetic tool exchanges — messages fabricated into a transcript
+// this package owns. There is no transcript to fabricate into here, so the
+// same content is prepended to the prompt instead, in the same order.
 func renderCLIPrompt(conv agentConversation) string {
 	var out strings.Builder
+
+	// The decisions this step asked upstream steps for come first, as they do
+	// on the HTTP path: they are what happened BEFORE this step, and the
+	// context_paths files below are what it works on. Already fenced by
+	// upstreamBlocks, so this adds no second wrapper.
+	for _, block := range conv.upstream {
+		fmt.Fprintf(&out, "%s:\n%s\n\n", block.path, block.content)
+	}
 
 	// Fenced, one tag per block. On the hosted path this content arrives as a
 	// read_file tool RESULT — a structural boundary the model reads as data.
