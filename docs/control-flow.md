@@ -255,9 +255,42 @@ Cells that are puts or agents are never skipped, for the same reasons those step
 - **Cells are named for their coordinates** — `check [mode=fast suite=unit]` — unless you interpolate a variable into the name yourself. Without that every cell would share one name, which is unroutable and unreadable in a log.
 - **An empty axis, a duplicate `var:`, or a misspelled `{{ .vars.x }}` are load errors.** Each would otherwise mean silently running the wrong matrix.
 
+### A width a step decides: `from_file:`
+
+An axis can take its values from a JSON array an earlier step wrote, so the matrix is as wide as that step said — "review each of these findings", where nobody knew the findings when the pipeline was authored:
+
+```yaml
+- task: scan
+  outputs: [findings]
+  run: |
+    mkdir -p findings
+    printf '["alpha","beta"]' > findings/items.json
+
+- across:
+  - var: item
+    from_file: findings/items.json    # instead of values:
+  agent: investigator
+  inputs: [findings]
+  prompt: "Investigate: {{ .vars.item }}"
+```
+
+This is "the step plans, the pipeline executes": one step produces a work list, and each item becomes its own cell — independently hashed, cached and reported — instead of one agent grinding through the whole list in a conversation that outgrows its window.
+
+**Nothing carries the list but an ordinary artifact.** The producer declares `outputs:` as it would for any other file, and there is nothing extra for it to opt into; the axis names a path inside that artifact. The first path component is the artifact, exactly as it is for `dir:`, and it must be fetched or produced earlier in the plan — a load error otherwise, checked where `dir:`'s identical rule is.
+
+- **A JSON array of strings.** Anything else — an object, a list of objects, numbers, unparsable text — fails the block naming the file. The array is written during the run, so a wrong shape is the likeliest failure there is, and the message has to say which file to go look at. An item that needs structure carries a *path*: the producer writes one file per item, the array holds the paths, and cells take `context_paths: ["{{ .vars.item }}"]` (which renders per cell). That composes out of pieces that already exist rather than adding an object vocabulary here.
+- **`values:` and `from_file:` are mutually exclusive per axis**, and an axis needs one of them; both are load errors. Otherwise a file axis is an ordinary axis: it may sit beside static axes (the product is taken as usual — "each finding × each of two models") or beside other file axes.
+- **An empty array runs nothing, and says so.** `across: 0 cells (findings/items.json is empty); nothing to run`, and the plan carries on. "The scan found nothing" is a legitimate success; a pipeline that wants an empty list to fail asserts that where the file is written, which is the step that knows what empty means.
+- **At most 1000 items**, and the file itself is capped at 1 MiB. Nobody reviewed the length of an array a model wrote, and an unbounded one turns an upstream typo into an unbounded bill.
+- **The path is confined at load**: absolute paths and any `..` that climbs out of the workspace are load errors, since the axis reads relative to a materialized artifact.
+
+**Planning and caching.** A static matrix expands at load, so `steps plan` shows every cell. A file matrix cannot: its width is not knowable until the step that writes the file has run. It hashes its *declaration* at plan time — the axes including the source path, plus the unexpanded template — under a marker that keeps it from ever colliding with a static matrix that happens to render the same way. Its templates are still checked at load (an unclosed brace or a `{{ .vars.x }}` naming no axis is a load error), because expansion is what would otherwise have caught them.
+
+A chain through any `across:` block is unskippable, which here is load-bearing rather than incidental: **the producing step re-runs every run**, so the file the axis reads is always the file this run wrote. That is what replaces the cache-replay machinery a store would have needed — and the cost is stated plainly: a task feeding a file axis never caches. The cells themselves still hash and cache individually, exactly as static cells do.
+
 ### A ceiling that degrades: `budget:`
 
-A wide matrix of agent cells is one whose total cost is easy to underestimate even when its width is right there in the pipeline text. `budget:` on the block caps what its cells spend **together**:
+A wide matrix of agent cells is one whose total cost is easy to underestimate — especially when a step decided the width mid-run. `budget:` on the block caps what its cells spend **together**:
 
 ```yaml
 - across:
@@ -288,7 +321,7 @@ budget: across stopped after 8 of 12 cells (spent 1,203,551 of 1,200,000 tokens)
 
 ### Concurrent cells: `max_in_flight:`
 
-Serial cells are the right default for a hand-written matrix. They are the wrong default for a wide one: N independent agent cells with no ordering between them cost N times one cell's wall clock to run one at a time, for nothing.
+Serial cells are the right default for a hand-written matrix. They are the wrong default for a wide one — especially a `from_file:` fan-out, where the cells are N independent agents an earlier step decided on and running them one at a time costs N times one cell's wall clock for nothing.
 
 ```yaml
 workspace:

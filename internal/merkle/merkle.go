@@ -1144,20 +1144,55 @@ func AcrossNodeContent(cfg *config.Config, step config.Step, cells []config.Step
 	return withHooks(cfg, step, withWhen(step, withRouting(step, map[string]any{"across": contents})))
 }
 
-// AcrossPlanContent is a matrix's content at PLAN time: every axis is static,
-// so it expands and hashes its cells exactly as at run time.
+// AcrossPlanContent is a matrix's content at PLAN time, where a from_file:
+// axis has no values yet.
+//
+// A static matrix expands and hashes its cells exactly as at run time. A
+// file-driven one hashes the axes as declared — including the source path, so
+// pointing an axis at a different file is a different block — plus the
+// unexpanded template. The marker keeps the two spellings apart: a file matrix
+// must never collide with a static one that happens to render the same way.
 func AcrossPlanContent(cfg *config.Config, step config.Step, i int) (map[string]any, error) {
-	cells, err := config.ExpandAcross(fmt.Sprintf("step %d", i), step)
+	if !config.HasRuntimeAxis(step) {
+		cells, err := config.ExpandAcross(fmt.Sprintf("step %d", i), step)
+		if err != nil {
+			return nil, fmt.Errorf("step %d (across): %w", i, err)
+		}
+
+		content, err := AcrossNodeContent(cfg, step, cells)
+		if err != nil {
+			return nil, fmt.Errorf("step %d (across): %w", i, err)
+		}
+
+		return content, nil
+	}
+
+	template, err := stepContentMap(cfg, acrossTemplate(step))
 	if err != nil {
 		return nil, fmt.Errorf("step %d (across): %w", i, err)
 	}
 
-	content, err := AcrossNodeContent(cfg, step, cells)
+	axes := make([]any, 0, len(step.Across))
+	for _, axis := range step.Across {
+		axes = append(axes, map[string]any{"var": axis.Var, "values": axis.Values, "from_file": axis.FromFile})
+	}
+
+	content, err := withHooks(cfg, step, withWhen(step, withRouting(step, map[string]any{
+		"across_runtime": map[string]any{"axes": axes, "template": template},
+	})))
 	if err != nil {
 		return nil, fmt.Errorf("step %d (across): %w", i, err)
 	}
 
 	return content, nil
+}
+
+// acrossTemplate is the matrix step with its axes stripped: the body a cell is
+// rendered from, before any substitution.
+func acrossTemplate(step config.Step) config.Step {
+	step.Across = nil
+
+	return step
 }
 
 // CellHash is one across: cell's own content hash, plus whether the cell is

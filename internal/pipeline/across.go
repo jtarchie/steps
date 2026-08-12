@@ -32,9 +32,16 @@ func runAcrossStep(
 ) (string, stepDisposition, nonGetOutcome, error) {
 	label := fmt.Sprintf("job %q step %d", jobName, i)
 
-	cells, err := config.ExpandAcross(label, step)
+	// A from_file: axis takes its values from a file an earlier step wrote, so
+	// the matrix's width is only knowable here — see acrossfile.go.
+	fromFile, err := resolveFileAxes(ctx, label, step, bw)
 	if err != nil {
-		return "", stepRan, nonGetOutcome{}, err //nolint:wrapcheck // ExpandAcross already carries the job/step label
+		return "", stepRan, nonGetOutcome{}, err
+	}
+
+	cells, err := config.ExpandAcrossValues(label, step, fromFile)
+	if err != nil {
+		return "", stepRan, nonGetOutcome{}, err //nolint:wrapcheck // ExpandAcrossValues already carries the job/step label
 	}
 
 	content, err := merkle.AcrossNodeContent(cfg, step, cells)
@@ -47,8 +54,7 @@ func runAcrossStep(
 		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (across): %w", i, err)
 	}
 
-	fmt.Printf("across: %d cells\n", len(cells))
-	slog.Debug("job.step", "job", jobName, "index", i, "kind", "across", "cells", len(cells))
+	reportCellCount(jobName, i, step, len(cells))
 
 	// Cells are parented on the block's OWN parent, not on the block hash.
 	// The block hash folds in every cell's content, so parenting cells under
@@ -68,6 +74,39 @@ func runAcrossStep(
 	_ = st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), jobName, status, nil, cellErr)
 
 	return hash, stepRan, nonGetOutcome{}, cellErr
+}
+
+// reportCellCount announces how wide the matrix turned out to be.
+//
+// A matrix that expands to NOTHING says so, naming the file it read: a
+// from_file: axis over an empty array is a legitimate success ("the scan found
+// nothing"), and the plan carries on — but a block that ran no cells and a
+// block whose cells all passed are otherwise the same silence. An author who
+// wants an empty list to fail asserts it where the file is written, which is
+// the step that knows what empty means.
+func reportCellCount(jobName string, i int, step config.Step, cells int) {
+	if cells > 0 {
+		fmt.Printf("across: %d cells\n", cells)
+		slog.Debug("job.step", "job", jobName, "index", i, "kind", "across", "cells", cells)
+
+		return
+	}
+
+	fmt.Printf("across: 0 cells (%s is empty); nothing to run\n", emptyAxisSource(step))
+	slog.Warn("across.empty", "job", jobName, "index", i, "source", emptyAxisSource(step))
+}
+
+// emptyAxisSource names what a zero-cell matrix read, for the line above. The
+// first file axis, since a static axis cannot be empty (load-time error) — so
+// an empty product is always some file's doing.
+func emptyAxisSource(step config.Step) string {
+	for _, axis := range step.Across {
+		if axis.Runtime() {
+			return axis.FromFile
+		}
+	}
+
+	return "the matrix"
 }
 
 // runAcrossCells runs each cell, skipping any that has already succeeded with

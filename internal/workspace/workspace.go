@@ -865,6 +865,21 @@ func ValidateArtifactFlow(cfg *config.Config, job *config.Job) error {
 // see only the pre-outputs view, since the step may have failed before
 // producing anything.
 func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+	// across: is a MODIFIER, so a from_file: axis can sit on a step of any
+	// kind. Checked before the kind dispatch, once, rather than in each arm —
+	// and here rather than at the top-level walk, so a matrix nested in a try:,
+	// a do:, or a branch is reached by the same recursion everything else is.
+	err := checkAcrossFromFileAvailable(jobName, i, step, available)
+	if err != nil {
+		return err
+	}
+
+	return validateStepKindArtifactFlow(cfg, jobName, i, step, available)
+}
+
+// validateStepKindArtifactFlow is validateStepArtifactFlow's kind dispatch,
+// split out so neither half carries the other's branch count.
+func validateStepKindArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
 	//kindswitch:ignore the container kinds are handled together in the default, via blockBranches
 	switch {
 	case step.Get != "":
@@ -1206,6 +1221,27 @@ func checkInputsAvailable(jobName string, i int, kind, name string, inputs []str
 		if !available[in] {
 			return fmt.Errorf("job %q step %d (%s %q): input %q is not a resource fetched or an output produced earlier in the plan",
 				jobName, i, kind, name, in)
+		}
+	}
+
+	return nil
+}
+
+// checkAcrossFromFileAvailable validates that every from_file: axis names an
+// available artifact by its first path component, exactly as dir: does — the
+// runner reads the file by materializing that artifact (see internal/pipeline's
+// readAcrossFile), so an axis pointing at something nothing produces would fail
+// mid-run, after the steps before it had already been paid for.
+func checkAcrossFromFileAvailable(jobName string, i int, step config.Step, available map[string]bool) error {
+	for _, axis := range step.Across {
+		if !axis.Runtime() {
+			continue
+		}
+
+		root := axis.SourceArtifact()
+		if !available[root] {
+			return fmt.Errorf("job %q step %d: across var %q reads %q, whose artifact %q is not a resource fetched or an output produced earlier in the plan",
+				jobName, i, axis.Var, axis.FromFile, root)
 		}
 	}
 

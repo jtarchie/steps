@@ -6,17 +6,80 @@ import (
 	"bytes"
 	"fmt"
 	"maps"
+	"path"
 	"slices"
 	"strings"
 	"text/template"
+	"text/template/parse"
 )
 
-// AcrossVar is one axis of a matrix: a variable name and the values it takes,
-// known when the pipeline is written.
+// AcrossVar is one axis of a matrix: a variable name and the values it takes.
+//
+// The values come from exactly one of two places. values: is the static list,
+// known when the pipeline is written. from_file: names a JSON file an earlier
+// step produced, so the matrix's width is decided during the run — "review
+// each of these findings", where nobody knew the findings when the pipeline
+// was authored.
 type AcrossVar struct {
 	Var    string   `yaml:"var"`
-	Values []string `yaml:"values"`
+	Values []string `yaml:"values,omitempty"`
+	// FromFile is a workspace-relative path to a JSON array of strings, whose
+	// first path component names the artifact holding it (`findings/items.json`
+	// requires an artifact `findings` fetched or produced earlier in the plan —
+	// the same rule dir: follows, checked by workspace.ValidateArtifactFlow).
+	//
+	// A file rather than a key in a store: the producing step already declares
+	// the artifact in its outputs:, so the value travels the way every other
+	// piece of inter-step data does, and there is nothing extra to opt into on
+	// the writing side. Mutually exclusive with Values.
+	FromFile string `yaml:"from_file,omitempty"`
 }
+
+// Runtime reports whether this axis takes its values from a file an earlier
+// step wrote, rather than from the pipeline text.
+func (a AcrossVar) Runtime() bool {
+	return a.FromFile != ""
+}
+
+// SourceArtifact is the artifact a from_file: axis reads from: the path's
+// first component, the way dir: names one. "" for a static axis.
+//
+// Defined here rather than in each consumer so the plan-time availability
+// check (internal/workspace) and the run-time read (internal/pipeline) can
+// never disagree about which artifact a path names.
+func (a AcrossVar) SourceArtifact() string {
+	if !a.Runtime() {
+		return ""
+	}
+
+	cleaned := path.Clean(a.FromFile)
+	if i := strings.Index(cleaned, "/"); i >= 0 {
+		return cleaned[:i]
+	}
+
+	return cleaned
+}
+
+// HasRuntimeAxis reports whether any axis of step's matrix is file-valued,
+// which is what makes the whole matrix un-expandable at load time.
+func HasRuntimeAxis(step Step) bool {
+	for _, axis := range step.Across {
+		if axis.Runtime() {
+			return true
+		}
+	}
+
+	return false
+}
+
+// MaxAcrossItems bounds how many items one from_file: axis may expand to.
+//
+// The array is produced during the run, often by a model, so its length is not
+// something the pipeline author reviewed. Each item becomes a cell with its own
+// hash, workspace and possibly its own model call, so an unbounded array turns
+// a typo upstream into an unbounded bill. Refusing with a message that says
+// what to do beats discovering it halfway through.
+const MaxAcrossItems = 1000
 
 // ExpandAcross renders an across: step into its cells: one step per
 // combination of values, with `{{ .vars.<name> }}` substituted into the
@@ -34,12 +97,29 @@ type AcrossVar struct {
 // copies. Put an in_parallel: inside a cell if a cell's own work should
 // overlap.
 func ExpandAcross(label string, step Step) ([]Step, error) {
+	return ExpandAcrossValues(label, step, nil)
+}
+
+// ExpandAcrossValues is ExpandAcross with the file axes already read: runtime
+// maps each from_file: axis's var name to the values it took this run.
+//
+// Two entry points rather than one because the two happen at different times.
+// A static matrix expands at load, so a malformed one costs a load rather than
+// a run; a file axis cannot exist until the step that writes it has run, so it
+// expands in internal/pipeline instead. Both share every rule below, which is
+// what keeps a file-driven cell hashing identically to the static cell it is
+// indistinguishable from.
+func ExpandAcrossValues(label string, step Step, runtime map[string][]string) ([]Step, error) {
 	err := validateAcrossAxes(label, step.Across)
 	if err != nil {
 		return nil, err
 	}
 
-	axes := resolveAxes(step.Across)
+	axes, err := resolveAxes(label, step.Across, runtime)
+	if err != nil {
+		return nil, err
+	}
+
 	combos := combinations(axes)
 
 	cells := make([]Step, 0, len(combos))
@@ -75,19 +155,38 @@ type acrossCombo struct {
 	vars map[string]string
 }
 
-// resolveAxes converts the declared axes into their resolved form.
-func resolveAxes(declared []AcrossVar) []acrossAxis {
+// resolveAxes substitutes the read values into any from_file: axis, leaving a
+// static axis untouched. A file axis with nothing supplied is a programming
+// error in the caller, not a config error — every run-time path reads every
+// file axis before expanding — so it says so plainly rather than expanding to
+// zero cells and looking like a matrix that ran.
+func resolveAxes(label string, declared []AcrossVar, runtime map[string][]string) ([]acrossAxis, error) {
 	axes := make([]acrossAxis, len(declared))
 
 	for i, axis := range declared {
-		axes[i] = acrossAxis{name: axis.Var, values: axis.Values}
+		if !axis.Runtime() {
+			axes[i] = acrossAxis{name: axis.Var, values: axis.Values}
+
+			continue
+		}
+
+		values, ok := runtime[axis.Var]
+		if !ok {
+			return nil, fmt.Errorf("%s: across var %q takes its values from %q, which was not read before expanding", label, axis.Var, axis.FromFile)
+		}
+
+		axes[i] = acrossAxis{name: axis.Var, values: values}
 	}
 
-	return axes
+	return axes, nil
 }
 
 // validateAcross checks every across: step in the pipeline at load, so a
 // malformed matrix costs a load rather than a run.
+//
+// A matrix with a from_file: axis is checked but not expanded: its width is
+// not known until the step that writes the file has run. The axis rules still
+// apply, so the shape mistakes a load can catch are still caught at load.
 func (c *Config) validateAcross() error {
 	for _, job := range c.Jobs {
 		err := job.visitSteps(func(label string, step *Step) error {
@@ -100,6 +199,22 @@ func (c *Config) validateAcross() error {
 
 			if len(step.Across) == 0 {
 				return nil
+			}
+
+			if HasRuntimeAxis(*step) {
+				err = validateAcrossAxes(label, step.Across)
+				if err != nil {
+					return err
+				}
+
+				// The templates are the one thing a file-driven matrix would
+				// otherwise never have checked. A static matrix gets them
+				// validated as a side effect of expanding here; a file one
+				// cannot expand until the step that writes its source has run,
+				// so without this an unclosed brace loads clean and fails
+				// mid-run — after the step that produced the array has already
+				// been paid for.
+				return validateAcrossTemplates(label, *step)
 			}
 
 			_, expandErr := ExpandAcross(label, *step)
@@ -147,8 +262,9 @@ func (c *Config) validateAcrossConcurrency(label string, step *Step) error {
 }
 
 // validateAcrossAxes rejects a matrix that cannot mean anything: no axes, an
-// axis with no name or no values, or two axes sharing a name (where one would
-// silently shadow the other).
+// axis with no name, an axis taking its values from nowhere or from two places
+// at once, or two axes sharing a name (where one would silently shadow the
+// other).
 func validateAcrossAxes(label string, axes []AcrossVar) error {
 	seen := map[string]bool{}
 
@@ -156,16 +272,182 @@ func validateAcrossAxes(label string, axes []AcrossVar) error {
 		switch {
 		case axis.Var == "":
 			return fmt.Errorf("%s: across[%d] has no var: name", label, i)
-		case len(axis.Values) == 0:
-			return fmt.Errorf("%s: across[%d] (%s) has no values:; an axis with nothing in it would expand to no steps at all", label, i, axis.Var)
+		case len(axis.Values) > 0 && axis.Runtime():
+			return fmt.Errorf("%s: across[%d] (%s) sets both values: and from_file:; an axis takes its values from one place or the other", label, i, axis.Var)
+		case len(axis.Values) == 0 && !axis.Runtime():
+			return fmt.Errorf("%s: across[%d] (%s) has no values: and no from_file:; an axis with nothing in it would expand to no steps at all", label, i, axis.Var)
 		case seen[axis.Var]:
 			return fmt.Errorf("%s: across declares var %q twice; the second would silently shadow the first", label, axis.Var)
+		}
+
+		err := checkFromFilePath(label, i, axis)
+		if err != nil {
+			return err
 		}
 
 		seen[axis.Var] = true
 	}
 
 	return nil
+}
+
+// checkFromFilePath rejects a from_file: that does not name a file inside an
+// artifact: an absolute path, or one that climbs out with "..". The path is
+// resolved against the step's materialized workspace at run time, so anything
+// escaping it names a file the pipeline does not own — a load error rather
+// than a run-time surprise.
+func checkFromFilePath(label string, i int, axis AcrossVar) error {
+	if !axis.Runtime() {
+		return nil
+	}
+
+	cleaned := path.Clean(axis.FromFile)
+
+	switch {
+	case path.IsAbs(axis.FromFile):
+		return fmt.Errorf("%s: across[%d] (%s) from_file %q is absolute; it must be a path inside an artifact, like findings/items.json", label, i, axis.Var, axis.FromFile)
+	case cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../"):
+		return fmt.Errorf("%s: across[%d] (%s) from_file %q escapes the workspace; it must be a path inside an artifact, like findings/items.json", label, i, axis.Var, axis.FromFile)
+	case !strings.Contains(cleaned, "/"):
+		return fmt.Errorf("%s: across[%d] (%s) from_file %q names no artifact; the first path component is the artifact holding the file, as in findings/items.json", label, i, axis.Var, axis.FromFile)
+	}
+
+	return nil
+}
+
+// validateAcrossTemplates checks a from_file: matrix's templates at load time.
+//
+// A static matrix expands during validation, so a malformed template is caught
+// as a side effect of rendering it. A file-driven matrix cannot expand until
+// the step that writes its source has run — so without this, an unclosed brace
+// or a misspelled axis name loads clean and fails mid-run, after the step that
+// produced the array has already been paid for.
+//
+// Two things are knowable without the values: whether the template PARSES, and
+// whether every `{{ .vars.x }}` names an axis this matrix actually declares.
+func validateAcrossTemplates(label string, step Step) error {
+	declared := make(map[string]bool, len(step.Across))
+	for _, axis := range step.Across {
+		declared[axis.Var] = true
+	}
+
+	// A try: cell keeps every renderable field on the step it wraps, so that is
+	// where the templates are — the same unwrap renderCell does.
+	cell := step
+
+	for _, field := range renderableFields(unwrapStep(&cell)) {
+		if !strings.Contains(*field.value, "{{") {
+			continue
+		}
+
+		parsed, err := template.New("across").Option("missingkey=error").Parse(*field.value)
+		if err != nil {
+			return fmt.Errorf("%s: across %s: could not parse the template: %w", label, field.name, err)
+		}
+
+		err = checkAxisReferences(label, field.name, parsed.Tree, declared)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkAxisReferences rejects a `{{ .vars.x }}` naming an axis the matrix does
+// not declare — the file-matrix half of the misspelling a static matrix catches
+// by expanding, where missingkey=error reports it.
+func checkAxisReferences(label, field string, tree *parse.Tree, declared map[string]bool) error {
+	if tree == nil || tree.Root == nil {
+		return nil
+	}
+
+	var unknown string
+
+	walkTemplateFields(tree.Root, func(node *parse.FieldNode) {
+		if unknown == "" && len(node.Ident) >= 2 && node.Ident[0] == "vars" && !declared[node.Ident[1]] {
+			unknown = node.Ident[1]
+		}
+	})
+
+	if unknown != "" {
+		// Sorted so the suggestion is drawn from the same list on every run.
+		return fmt.Errorf("%s: across %s: {{ .vars.%s }} names no axis of this matrix%s",
+			label, field, unknown, suggestion(unknown, slices.Sorted(maps.Keys(declared))))
+	}
+
+	return nil
+}
+
+// walkTemplateFields calls fn for every field reference in a parsed template.
+func walkTemplateFields(node parse.Node, fn func(*parse.FieldNode)) {
+	if field, ok := node.(*parse.FieldNode); ok {
+		fn(field)
+
+		return
+	}
+
+	for _, child := range templateChildren(node) {
+		walkTemplateFields(child, fn)
+	}
+}
+
+// templateChildren returns the nodes below one template node, so the walk above
+// is a plain recursion rather than a dispatch that has to remember to recurse
+// in every arm.
+func templateChildren(node parse.Node) []parse.Node {
+	switch n := node.(type) {
+	case *parse.ListNode:
+		// A nil list is the ordinary shape of an absent {{ else }} body, not an
+		// error — and it is a TYPED nil, so it must be caught here rather than
+		// by a nil check on the interface.
+		if n == nil {
+			return nil
+		}
+
+		return n.Nodes
+	case *parse.ActionNode:
+		return []parse.Node{n.Pipe}
+	case *parse.PipeNode:
+		if n == nil {
+			return nil
+		}
+
+		children := make([]parse.Node, 0, len(n.Cmds))
+		for _, cmd := range n.Cmds {
+			children = append(children, cmd)
+		}
+
+		return children
+	case *parse.CommandNode:
+		return n.Args
+	default:
+		return branchChildren(node)
+	}
+}
+
+// branchChildren returns the children of the three node kinds that carry a
+// condition and two bodies. They are split out because they are identical to
+// each other and to nothing else — {{ if }}, {{ range }} and {{ with }} all
+// embed parse.BranchNode, but it exposes no interface to dispatch on.
+//
+// Skipping them would leave a hole: a misspelled axis inside an {{ if }} body
+// would reach run time unchecked.
+func branchChildren(node parse.Node) []parse.Node {
+	var branch *parse.BranchNode
+
+	switch n := node.(type) {
+	case *parse.IfNode:
+		branch = &n.BranchNode
+	case *parse.RangeNode:
+		branch = &n.BranchNode
+	case *parse.WithNode:
+		branch = &n.BranchNode
+	default:
+		return nil
+	}
+
+	return []parse.Node{branch.Pipe, branch.List, branch.ElseList}
 }
 
 // combinations returns every combination of the axes' values, row-major: the

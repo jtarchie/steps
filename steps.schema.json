@@ -850,13 +850,24 @@
         "across": {
           "type": "array",
           "minItems": 1,
-          "description": "Run this step once per combination of values, substituting {{ .vars.<name> }} into run/image/prompt/dir and the step's name. Each cell caches independently.",
+          "description": "Run this step once per combination of values, substituting {{ .vars.<name> }} into run/image/prompt/dir and the step's name. A values: axis expands at load; a from_file: axis expands at run time. Each cell caches independently.",
           "items": {
             "type": "object",
             "additionalProperties": false,
             "required": [
-              "var",
-              "values"
+              "var"
+            ],
+            "oneOf": [
+              {
+                "required": [
+                  "values"
+                ]
+              },
+              {
+                "required": [
+                  "from_file"
+                ]
+              }
             ],
             "properties": {
               "var": {
@@ -868,6 +879,10 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "from_file": {
+                "type": "string",
+                "description": "Workspace-relative path to a JSON array of strings written by an earlier step, e.g. findings/items.json. The first path component names the artifact holding it. Mutually exclusive with values."
               }
             }
           }

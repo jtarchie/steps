@@ -84,6 +84,77 @@ func TestValidateArtifactFlowDir(t *testing.T) {
 	})
 }
 
+// TestAcrossFromFileArtifactMustBeAvailable checks an across: axis's
+// from_file: by its first path component, exactly as dir: is — the runner
+// reads it by materializing that artifact, so an axis pointing at something
+// nothing produces would otherwise fail mid-run.
+func TestAcrossFromFileArtifactMustBeAvailable(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+
+	axis := func(from string) []config.AcrossVar {
+		return []config.AcrossVar{{Var: "item", FromFile: from}}
+	}
+
+	t.Run("an earlier step's output passes", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{Name: "j", Plan: []config.Step{
+			{Task: "scan", Run: "true", Inputs: config.Inputs(), Outputs: []string{"findings"}},
+			{Across: axis("findings/items.json"), Task: "work", Run: "true", Inputs: config.Inputs("findings")},
+		}}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err != nil {
+			t.Fatalf("err = %v, want nil (findings is produced before the matrix)", err)
+		}
+	})
+
+	t.Run("a fetched resource passes", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{Name: "j", Plan: []config.Step{
+			{Get: "repo"},
+			{Across: axis("repo/matrix.json"), Task: "work", Run: "true", Inputs: config.Inputs("repo")},
+		}}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err != nil {
+			t.Fatalf("err = %v, want nil (repo is fetched before the matrix)", err)
+		}
+	})
+
+	t.Run("an artifact nothing produces errors", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{Name: "j", Plan: []config.Step{
+			{Across: axis("nowhere/items.json"), Task: "work", Run: "true", Inputs: config.Inputs()},
+		}}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err == nil || !strings.Contains(err.Error(), "not a resource fetched or an output produced earlier") {
+			t.Fatalf("err = %v, want a from_file-not-available error", err)
+		}
+	})
+
+	t.Run("a LATER step's output errors", func(t *testing.T) {
+		t.Parallel()
+
+		// The file has to exist by the time the matrix expands, so producing it
+		// afterwards is the same mistake as consuming any other artifact early.
+		job := &config.Job{Name: "j", Plan: []config.Step{
+			{Across: axis("findings/items.json"), Task: "work", Run: "true", Inputs: config.Inputs()},
+			{Task: "scan", Run: "true", Inputs: config.Inputs(), Outputs: []string{"findings"}},
+		}}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err == nil || !strings.Contains(err.Error(), "not a resource fetched or an output produced earlier") {
+			t.Fatalf("err = %v, want a from_file-not-available error", err)
+		}
+	})
+}
+
 // TestValidateArtifactFlowPromptFileArtifact checks a run-time prompt_file:
 // {artifact, path}'s artifact against both the plan (fetched/produced
 // somewhere) and the step's own declared inputs: (materialized into its
