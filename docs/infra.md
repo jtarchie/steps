@@ -131,7 +131,7 @@ tasks:
 
 ## Passing environment through (`env:`)
 
-Commands run with a deliberately narrow environment: a host command sees a fixed allowlist (`PATH`, `HOME`, locale, `SSH_AUTH_SOCK`, proxy settings — not the operator's credentials), and a containerized command sees only its image's own environment. That default is the trust boundary: an agent directing `run_shell` should not get read access to everything the operator happened to export.
+Commands run with a deliberately narrow environment: a host command sees a fixed allowlist (`PATH`, `HOME`, locale, proxy settings — not the operator's credentials, and not `SSH_AUTH_SOCK`, which a pipeline that needs git-over-ssh opts back in with `env: [SSH_AUTH_SOCK]`), and a containerized command sees only its image's own environment. That default is the trust boundary: an agent directing `run_shell` should not get read access to everything the operator happened to export.
 
 `env:` opts specific variables back in, by **name**:
 

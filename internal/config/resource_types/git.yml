@@ -20,6 +20,12 @@
 # branch is read as `index .source "branch"` rather than `.source.branch`
 # because templates render with missingkey=error: an absent optional key must
 # be asked for in a way that answers "nothing" instead of failing.
+# git-over-ssh needs the operator's ssh agent. SSH_AUTH_SOCK is not in the
+# baseline host env (it grants signing with every key the agent holds), so
+# the one resource type that inherently speaks ssh opts it in here, visibly.
+env:
+  - SSH_AUTH_SOCK
+
 config:
   # ls-remote is the cheapest possible "what is the head?" — no clone, no
   # working tree. An unknown branch prints nothing, which would otherwise be

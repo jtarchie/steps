@@ -512,13 +512,11 @@ func (HostRunner) Close() error { return nil }
 // command, and by extension any LLM directing run_shell/a custom tool/a
 // stdio MCP server, read access to the operator's full environment.
 //
-// This is a real (if narrow) behavior change: a host-executed command that
-// previously relied on some other exported variable (GOFLAGS, an assumed
-// GOPATH override, a custom cache directory, ...) for legitimate,
-// non-secret configuration will no longer see it. There is currently no
-// pass-through mechanism for a pipeline to opt a specific variable back in;
-// that would need its own config surface (and merkle-hash implications)
-// rather than belonging to this fix.
+// A host-executed command that relies on any other exported variable —
+// including SSH_AUTH_SOCK for git-over-ssh — opts it back in by name via
+// the pipeline's env: (see hostEnvWith). SSH_AUTH_SOCK is deliberately not
+// in the baseline: the socket grants signing with every key the operator's
+// agent holds, which is a credential capability, not plumbing.
 //
 //nolint:gochecknoglobals // static, read-only allowlist
 var hostEnvAllowlist = map[string]bool{
@@ -528,9 +526,6 @@ var hostEnvAllowlist = map[string]bool{
 	"LANG": true, "LC_ALL": true, "LC_CTYPE": true, "LC_MESSAGES": true, "TERM": true,
 	// Temp/user identity — needed by common CLI tools (mktemp, git, ssh).
 	"TMPDIR": true, "TMP": true, "TEMP": true, "USER": true, "LOGNAME": true, "SHELL": true,
-	// SSH agent forwarding — needed for git-over-ssh, not a secret itself
-	// (it's a socket path; the actual key material never touches env).
-	"SSH_AUTH_SOCK": true,
 	// Proxy configuration — operational routing, not credentials, and
 	// commonly required in restricted network environments.
 	"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true,
