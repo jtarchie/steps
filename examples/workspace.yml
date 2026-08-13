@@ -1,16 +1,14 @@
 # yaml-language-server: $schema=../steps.schema.json
 # steps-test: skip -- clones over the network, and the release jobs need a live
 # LLM (OPENROUTER_API_KEY)
-# Demonstrates opt-in Concourse-style workspace isolation. Without a
-# workspace: block, every step in a triggered build shares one mutable
-# directory and any task/agent can corrupt state for a later step — that's
-# still the default (every other example uses it). This pipeline opts in:
-# each task/agent step below only sees the named inputs:/outputs: it declares,
-# materialized as a fresh copy. It lives on its own because `workspace:` is a
-# pipeline-global block — it would force isolation on every job in a file, so
-# it can't be mixed into the multi-feature examples.
+# Demonstrates workspace isolation mechanics in depth. Isolation is not
+# optional — every pipeline runs this way: each task/agent step sees only the
+# named inputs:/outputs: it declares, materialized as a fresh copy, and only
+# declared outputs are captured back. The workspace: block below is TUNING
+# (which strategy materializes trees, where the root lives), not a switch;
+# an absent block means strategy: copy under a system temp root.
 workspace:
-  strategy: copy
+  strategy: copy   # the default, spelled out for the tour
   # For strategy: btrfs (Linux only; instant copy-on-write via subvolume
   # snapshots instead of copying file contents), root is required — the
   # system temp directory is commonly tmpfs, not btrfs:

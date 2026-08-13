@@ -44,6 +44,7 @@ jobs:
   plan:
   - get: repo
   - task: compile
+    inputs: [repo]     # a step sees only the artifacts it declares
     run: cd repo && go build ./...
 ```
 

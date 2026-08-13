@@ -385,18 +385,14 @@ func (c *Config) validateAcrossOutputs(label string, step *Step) error {
 	}
 
 	if collectsOutputs(*step) {
-		if c.Workspace == nil {
-			return fmt.Errorf("%s: an across: step with outputs: requires workspace isolation (set a top-level workspace: strategy); each cell's outputs are captured under its own coordinates, and the shared strategy has no capture step to do that with", label)
-		}
-
 		// ponytail: btrfs captures artifacts as subvolume snapshots, which can
 		// neither land under an uncreated parent nor survive being nested
 		// inside a later snapshot (nested subvolumes come out empty) — so a
 		// collected artifact would silently lose every cell's files on the
 		// consuming side. Supporting it means teaching that backend a
 		// flattening capture; until then, refuse rather than corrupt.
-		if c.Workspace.Strategy != "copy" {
-			return fmt.Errorf("%s: an across: step with outputs: is not supported under workspace strategy %q; use strategy: copy", label, c.Workspace.Strategy)
+		if c.Workspace.EffectiveStrategy() != "copy" {
+			return fmt.Errorf("%s: an across: step with outputs: is not supported under workspace strategy %q; use strategy: copy", label, c.Workspace.EffectiveStrategy())
 		}
 
 		return nil
@@ -569,13 +565,6 @@ func (c *Config) validateAcrossConcurrency(label string, step *Step) error {
 
 	if len(step.Across) == 0 {
 		return fmt.Errorf("%s: max_in_flight is only valid on an across: step; it bounds how many cells run at once", label)
-	}
-
-	// 1 is the serial default spelled out. It changes nothing, so it needs
-	// nothing — refusing it would make "be explicit about the default" an
-	// error.
-	if step.MaxInFlight > 1 && c.Workspace == nil {
-		return fmt.Errorf("%s: max_in_flight: %d requires workspace isolation (set a top-level workspace: strategy); concurrent cells are clones of one step writing the same paths, and would otherwise share one mutable directory", label, step.MaxInFlight)
 	}
 
 	return nil

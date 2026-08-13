@@ -96,8 +96,13 @@ func sanitizeLabel(label string) string {
 	return sanitized
 }
 
-// NewProvider builds the provider a pipeline's workspace: block
-// selects. ws == nil (no block present) is the default, unchanged behavior.
+// NewProvider builds the provider a pipeline's workspace: block selects.
+// Every provider isolates: a step's directory is materialized from its own
+// declared inputs:/outputs: and nothing else. ws == nil (no block present)
+// takes every default — strategy copy under a system temp root. (The old
+// shared single-mutable-directory mode, where every step saw everything, is
+// gone: an artifact a step never declared reaching it anyway was ambient
+// data flow, and every flow here is opt-in.)
 //
 // keep leaves each build's directory on disk instead of removing it at Close,
 // and prints where it is. A build workspace is otherwise destroyed
@@ -106,10 +111,10 @@ func sanitizeLabel(label string) string {
 // always already gone by the time the error reached the terminal.
 func NewProvider(ws *config.WorkspaceConfig, keep bool) (Provider, error) {
 	if ws == nil {
-		return &sharedProvider{keep: keep}, nil
+		ws = &config.WorkspaceConfig{}
 	}
 
-	switch ws.Strategy {
+	switch ws.EffectiveStrategy() {
 	case "copy":
 		return newCopyProvider(ws, keep)
 	case "btrfs":
@@ -150,108 +155,13 @@ func CloseSpace(space StepSpace, label string) {
 	}
 }
 
-// --- sharedProvider: today's single-mutable-directory behavior ---
-
-// sharedProvider is the default Provider used when no workspace:
-// block is configured. Every step in a build sees the same directory,
-// exactly as before this feature existed.
-type sharedProvider struct {
-	keep bool
-	// reuse, when set, is an existing workspace directory a resumed run
-	// continues in rather than starting fresh.
-	reuse string
-}
-
-func (*sharedProvider) Validate() error { return nil }
-
-func (p *sharedProvider) NewBuild(_ context.Context, _ string) (BuildWorkspace, error) {
-	if p.reuse != "" {
-		// A resumed run continues in the workspace the failed run left behind
-		// — the artifacts its finished steps produced are the whole reason to
-		// resume rather than start over.
-		slog.Debug("workspace.reuse", "dir", p.reuse)
-
-		return &sharedBuild{root: p.reuse, keep: p.keep}, nil
-	}
-
-	root, err := os.MkdirTemp("", "steps-*")
-	if err != nil {
-		return nil, fmt.Errorf("could not create workspace: %w", err)
-	}
-
-	slog.Debug("workspace.create", "dir", root)
-
-	return &sharedBuild{root: root, keep: p.keep}, nil
-}
-
-// Reuse points the provider at an existing workspace directory instead of
-// creating a fresh one, for a resumed run.
-//
-// Only the shared provider supports it. An isolating strategy builds and tears
-// down a directory per STEP, so there is no single tree left behind to
-// continue in — resuming one is a different feature, and pretending otherwise
-// would silently start the resumed steps against empty inputs.
-func (p *sharedProvider) Reuse(dir string) { p.reuse = dir }
-
-// Root reports where this build's files are, so a failed run can say where to
-// find them.
-func (b *sharedBuild) Root() string { return b.root }
-
 // Root is where this build's files are, so a failed isolated run can be
-// recorded and reported the way a shared one already was. Without it the
-// RootedBuild assertion in RunJob failed, StartRun was never called, and an
-// isolated run left no row to resume from — while still printing an id
-// promising exactly that.
+// recorded and reported. Without it the RootedBuild assertion in RunJob
+// failed, StartRun was never called, and a run left no row to resume from —
+// while still printing an id promising exactly that.
 func (b *isolatingBuild) Root() string { return b.root }
 
-func (*sharedProvider) Close() error { return nil }
-
-type sharedBuild struct {
-	root string
-	keep bool
-}
-
-func (b *sharedBuild) ResourceDir(_ context.Context, name string) (string, error) {
-	dir := filepath.Join(b.root, name)
-
-	err := os.MkdirAll(dir, 0o750)
-	if err != nil {
-		return "", fmt.Errorf("could not create resource dir %q: %w", dir, err)
-	}
-
-	return dir, nil
-}
-
-func (b *sharedBuild) TaskSpace(_ context.Context, _ string, _, _ []string, _, _ map[string]string) (StepSpace, error) {
-	return sharedSpace{dir: b.root}, nil
-}
-
-func (b *sharedBuild) PutSpace(_ context.Context, _ string, _ []string, _ bool) (StepSpace, error) {
-	return sharedSpace{dir: b.root}, nil
-}
-
-func (b *sharedBuild) Close() error {
-	if keepWorkspace(b.keep, b.root) {
-		return nil
-	}
-
-	slog.Debug("workspace.remove", "dir", b.root)
-
-	err := os.RemoveAll(b.root)
-	if err != nil {
-		return fmt.Errorf("could not remove workspace %q: %w", b.root, err)
-	}
-
-	return nil
-}
-
-type sharedSpace struct{ dir string }
-
-func (s sharedSpace) Dir() string                   { return s.dir }
-func (sharedSpace) Capture(_ context.Context) error { return nil }
-func (sharedSpace) Close() error                    { return nil }
-
-// --- isolatingProvider: shared lifecycle over a pluggable treeBackend ---
+// --- isolatingProvider: common lifecycle over a pluggable treeBackend ---
 
 // rejectSymlinkSrc enforces treeBackend.materialize's implicit precondition
 // that src is a real directory, not a symlink. This matters specifically
@@ -632,12 +542,13 @@ func (b *isolatingBuild) newSpace(ctx context.Context, label string, inputs, out
 		return nil, err
 	}
 
-	return &isolatingSpace{backend: b.backend, artifacts: b.artifacts, dir: dir, outputs: outputs, outputMapping: outputMapping}, nil
+	return &isolatingSpace{backend: b.backend, artifacts: b.artifacts, dir: dir, outputs: outputs, outputMapping: outputMapping, keep: b.keep}, nil
 }
 
 // materializeSpace populates an already-created step directory with a copy or
 // snapshot of each input under its declared name and an empty directory for
-// each output. inputMapping/outputMapping rename a declared name to the plan-
+// each output — except an output that is also an input, which keeps the
+// materialized content (read-modify-write; see validateArtifactNames). inputMapping/outputMapping rename a declared name to the plan-
 // artifact name it draws from / captures to: the directory on disk keeps the
 // declared name (what the task's run: expects), while the artifact copied in /
 // captured out uses the mapped name. On any error the caller (newSpace)
@@ -664,6 +575,17 @@ func (b *isolatingBuild) materializeSpace(ctx context.Context, dir string, input
 		}
 	}
 
+	return b.materializeOutputs(ctx, dir, inputs, outputs, outputMapping)
+}
+
+// materializeOutputs is materializeSpace's output half, split out to stay
+// within the linter's complexity budget.
+func (b *isolatingBuild) materializeOutputs(ctx context.Context, dir string, inputs, outputs []string, outputMapping map[string]string) error {
+	materialized := make(map[string]bool, len(inputs))
+	for _, in := range inputs {
+		materialized[in] = true
+	}
+
 	for _, out := range outputs {
 		err := config.ValidateArtifactName(out)
 		if err != nil {
@@ -681,6 +603,15 @@ func (b *isolatingBuild) materializeSpace(ctx context.Context, dir string, input
 			if err != nil {
 				return fmt.Errorf("output %q (mapped to %q): %w", out, mapped, err)
 			}
+		}
+
+		// An output that is also an input is read-modify-write: the input
+		// materialization already populated the directory with the artifact's
+		// current content, and Capture writes it back. Creating an empty
+		// directory here would clobber exactly the state the step declared
+		// it wants to carry forward.
+		if materialized[out] {
+			continue
 		}
 
 		err = b.backend.createEmpty(ctx, filepath.Join(dir, out))
@@ -772,6 +703,10 @@ type isolatingSpace struct {
 	dir           string
 	outputs       []string
 	outputMapping map[string]string
+	// keep mirrors the build's --keep-workspace: the step directory is left
+	// on disk at Close, so the files a failed step had just written — the
+	// first thing anyone wants to look at — survive to be read.
+	keep bool
 }
 
 func (s *isolatingSpace) Dir() string { return s.dir }
@@ -825,8 +760,13 @@ func (s *isolatingSpace) Capture(ctx context.Context) error {
 
 // Close removes the step's directory. s.dir is a plain directory (created
 // directly by newSpace) wrapping the backend's input/output subvolumes, so
-// it goes through backend.removeTree — see isolatingBuild.Close.
+// it goes through backend.removeTree — see isolatingBuild.Close. Under
+// --keep-workspace the directory stays, like everything else in the tree.
 func (s *isolatingSpace) Close() error {
+	if s.keep {
+		return nil
+	}
+
 	err := s.backend.removeTree(s.dir)
 	if err != nil {
 		return fmt.Errorf("could not remove step workspace %q: %w", s.dir, err)
@@ -1099,6 +1039,15 @@ func validateAgentArtifactFlow(cfg *config.Config, jobName string, i int, step c
 		return err
 	}
 
+	// ...and, since a step's directory is materialized from its own declared
+	// inputs, dir: must also BE one of them (or a declared output) — an
+	// available-but-undeclared artifact would flow-validate here and then be
+	// absent from the materialized space at run time.
+	err = checkDirDeclared(jobName, i, step)
+	if err != nil {
+		return err
+	}
+
 	err = checkPromptFileArtifactAvailable(jobName, i, step.Agent, step.PromptFile, step.InputNames(), available)
 	if err != nil {
 		return err
@@ -1288,6 +1237,32 @@ func checkAcrossFromFileAvailable(jobName string, i int, step config.Step, avail
 	}
 
 	return nil
+}
+
+// checkDirDeclared validates that an agent step's dir: artifact (its first
+// path component) is one of the step's own declared inputs: or outputs: —
+// only declared artifacts are materialized into the step's directory, so an
+// undeclared dir: would be a missing directory at run time.
+func checkDirDeclared(jobName string, i int, step config.Step) error {
+	root := firstPathComponent(step.Dir)
+	if root == "" || root == "." {
+		return nil
+	}
+
+	for _, name := range step.InputNames() {
+		if name == root {
+			return nil
+		}
+	}
+
+	for _, name := range step.Outputs {
+		if name == root {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("job %q step %d (agent %q): dir %q names artifact %q, which the step does not declare in inputs: or outputs: — only declared artifacts are materialized into its working directory",
+		jobName, i, step.Agent, step.Dir, root)
 }
 
 // checkDirAvailable validates that an agent step's dir:, when set, names an

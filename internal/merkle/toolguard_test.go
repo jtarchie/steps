@@ -105,17 +105,20 @@ func TestMaxOutputBytesHashStabilityWhenUnset(t *testing.T) {
 // started leaking into the content map unconditionally, and the answer is to
 // fix the leak, not the literal.
 //
-// It has been deliberately re-based once, when defaultMaxAgentTurns went from
-// 8 to 30: the fixture sets no max_turns:, max_turns IS hashed, and changing
-// what an unset one resolves to legitimately changes the conversation the step
-// produces. Re-basing is only correct when the invalidation is the intended
-// effect of the change, as it was there.
+// It has been deliberately re-based twice: when defaultMaxAgentTurns went
+// from 8 to 30 (the fixture sets no max_turns:, max_turns IS hashed, and
+// changing what an unset one resolves to legitimately changes the
+// conversation the step produces), and when the DSL audit removed the shared
+// workspace mode (inputs/outputs became unconditional hash content — every
+// step's executed view is now its declarations, so the global invalidation
+// was the point). Re-basing is only correct when the invalidation is the
+// intended effect of the change, as it was both times.
 func TestMaxOutputBytesHashIsPinned(t *testing.T) {
 	t.Parallel()
 
 	// Originally captured against the tree as it stood before
-	// max_output_bytes: was added; re-based at the max_turns default change.
-	const wantHash = "3b6a6810bccd6db74a0f1174d8842c9d6a3c4b7608b4bff5c434133b1e6b8652"
+	// max_output_bytes: was added; re-based as described above.
+	const wantHash = "ca3aacb1a8a3c2a04942a41dd0e6d05b130553d8dc4d876eabfb3a08cdd49210"
 
 	got := mustAgentHash(t, agentCfg([]config.ToolSpec{{Name: "post_review", Run: "gh pr review"}}, ""), config.Step{Agent: "reviewer", Prompt: "do it"})
 	if got != wantHash {

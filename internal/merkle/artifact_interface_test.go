@@ -50,40 +50,31 @@ func TestGetNodeContentAliasValueGated(t *testing.T) {
 	}
 }
 
-// TestPutInputsAllValueGated confirms inputs: all folds a distinct sentinel,
-// but only under a workspace: block (declarations are inert to the hash in
-// shared mode).
-func TestPutInputsAllValueGated(t *testing.T) {
+// TestPutInputsAllSentinel confirms inputs: all folds a distinct sentinel
+// into the hash — a view of everything-so-far and a view of nothing are
+// different views.
+func TestPutInputsAllSentinel(t *testing.T) {
 	t.Parallel()
 
 	rtype := config.ResourceType{Config: config.ResourceTypeConfig{Out: "true"}}
-	ws := &config.WorkspaceConfig{Strategy: "copy"}
 
-	shared, err := PutNodeContent(&config.Config{}, config.Step{Put: "r"}, rtype, nil, nil, nil, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if _, ok := shared["inputs"]; ok {
-		t.Errorf("shared-mode put folded inputs into the hash: %#v", shared)
-	}
-
-	withAll, err := PutNodeContent(&config.Config{Workspace: ws}, config.Step{Put: "r"}, rtype, nil, nil, nil, true)
+	withAll, err := PutNodeContent(&config.Config{}, config.Step{Put: "r"}, rtype, nil, nil, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if withAll["inputs"] != "all" {
-		t.Errorf(`workspace-mode put inputs: all folded %#v, want "all"`, withAll["inputs"])
+		t.Errorf(`put inputs: all folded %#v, want "all"`, withAll["inputs"])
 	}
 }
 
-// TestTaskMappingValueGated confirms input_mapping/output_mapping fold into the
-// hash only under a workspace: block and only when non-empty.
+// TestTaskMappingValueGated confirms input_mapping/output_mapping fold into
+// the hash when non-empty — they change what gets materialized where — and
+// stay absent when unmapped, so an unmapped task hashes as before the field
+// existed.
 func TestTaskMappingValueGated(t *testing.T) {
 	t.Parallel()
 
-	ws := &config.WorkspaceConfig{Strategy: "copy"}
 	base := config.ResolvedTask{Run: "true", Inputs: []string{"repo"}}
 	mapped := config.ResolvedTask{
 		Run: "true", Inputs: []string{"repo"},
@@ -96,16 +87,7 @@ func TestTaskMappingValueGated(t *testing.T) {
 		return hashOrFail(t, NodeKindTask, content, err)
 	}
 
-	// Shared mode: mapping is inert.
-	if taskHash(&config.Config{}, base) != taskHash(&config.Config{}, mapped) {
-		t.Error("mapping changed the shared-mode hash; declarations must be inert without workspace:")
-	}
-
-	// Workspace mode: mapping is load-bearing.
-	wsBase := taskHash(&config.Config{Workspace: ws}, base)
-	wsMapped := taskHash(&config.Config{Workspace: ws}, mapped)
-
-	if wsBase == wsMapped {
-		t.Error("mapping did not change the workspace-mode hash; it changes what gets materialized")
+	if taskHash(&config.Config{}, base) == taskHash(&config.Config{}, mapped) {
+		t.Error("mapping did not change the hash; it changes what gets materialized")
 	}
 }

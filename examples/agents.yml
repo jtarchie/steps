@@ -148,13 +148,15 @@ agents:
   tools:
   - mcp: github-mcp
     tools: [search_issues, get_issue]
-    # Narrow THIS grant's inline output budget below the global 32,000-byte
+    # Narrow THIS grant's inline output budget below the default 32,000-byte
     # cap: a search that returns a long ranked list costs context on every
-    # later turn, and the answer is the first few entries. It can only lower
-    # the cap, never raise it, and nothing is lost — overflow still spills to
-    # a file the model can read back. Valid on all three mcp grant forms
-    # (unlike description/required/max_calls), so one noisy tool in a subset
-    # doesn't have to be split into its own grant and a second connection.
+    # later turn, and the answer is the first few entries. Nothing is lost —
+    # overflow still spills to a file the model can read back. (An explicit
+    # value can also RAISE the budget, up to the 10MB spill ceiling, for a
+    # tool whose output the model needs whole.) Valid on all three mcp grant
+    # forms (unlike description/required/max_calls), so one noisy tool in a
+    # subset doesn't have to be split into its own grant and a second
+    # connection.
     max_output_bytes: 8000
 
 # Verdict routing: `critic` declares a verdict vocabulary and emits one via a
@@ -191,6 +193,7 @@ jobs:
   - get: prs
     trigger: true
   - agent: reviewer
+    inputs: [prs]     # dir: names an artifact; the step declares it to see it
     dir: prs
     attempts: 3       # whole-conversation restarts for non-tool failures
     prompt: |
@@ -240,6 +243,7 @@ jobs:
   plan:
   - get: notes
   - agent: lead
+    inputs: [notes]
     dir: notes
     prompt: |
       Summarize what NOTES.txt contains by delegating to the summarizer tool,

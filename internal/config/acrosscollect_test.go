@@ -275,7 +275,7 @@ jobs:
 			want: "cannot name a directory",
 		},
 		{
-			name: "no workspace",
+			name: "no workspace block defaults to copy and collects fine",
 			pipeline: `
 jobs:
 - name: j
@@ -288,7 +288,7 @@ jobs:
     outputs: [findings]
     run: "true"
 `,
-			want: "requires workspace isolation",
+			want: "",
 		},
 		{
 			name: "btrfs",

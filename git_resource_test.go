@@ -75,6 +75,7 @@ jobs:
   plan:
   - get: repo
   - task: copy
+    inputs: [repo]
     run: cp repo/README.md `+filepath.Join(dir, "fetched.txt")+`
 `)
 
@@ -109,6 +110,7 @@ jobs:
   plan:
   - get: repo
   - task: copy
+    inputs: [repo]
     run: cp repo/README.md `+filepath.Join(dir, "fetched.txt")+`
 `)
 

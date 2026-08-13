@@ -91,7 +91,9 @@ agents:
 # overrides it (mirroring how fix: overrides work).
 tasks:
 - name: inspect
-  run: mkdir -p built && (cd repo && wc -l $(find . -name '*.go')) > built/LINE_COUNTS.txt && cat /etc/os-release > built/BUILD_IMAGE.txt
+  inputs: [repo]
+  outputs: [built]
+  run: (cd repo && wc -l $(find . -name '*.go')) > built/LINE_COUNTS.txt && cat /etc/os-release > built/BUILD_IMAGE.txt
   image: golang:1.26
 
 # env: names host variables a containerized command may see. A container
@@ -144,6 +146,7 @@ jobs:
   - get: counter
     trigger: true
   - task: announce
+    inputs: [counter]
     run: echo "counter is now $(cat counter/ref)"
 
 # ─── MCP-backed downstream trigger (needs a real Linear account) ─────────────
@@ -159,6 +162,7 @@ jobs:
   - get: eng-bugs
     trigger: true
   - task: announce-issue
+    inputs: [eng-bugs]
     run: |
       echo "New Linear issue:"
       cat eng-bugs/version.json
@@ -181,4 +185,5 @@ jobs:
   - task: offline-check
   # run_shell/custom-tool calls below execute in python:3.12.
   - agent: reviewer
+    inputs: [repo]
     prompt: does the checked-out repo look like a normal Go project?

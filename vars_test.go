@@ -98,9 +98,11 @@ jobs:
   plan:
   - task: pick-tag
     inputs: []
-    run: printf 'v1.2.3\n' > version.txt
+    outputs: [meta]
+    run: printf 'v1.2.3\n' > meta/version.txt
   - load_var: tag
-    file: version.txt
+    file: meta/version.txt
+    inputs: [meta]
   - task: announce
     inputs: []
     run: echo "shipping ((tag))" >> %s

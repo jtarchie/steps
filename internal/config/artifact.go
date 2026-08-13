@@ -92,8 +92,7 @@ func (c *Config) validateStepArtifactDecls(label string, step Step) error {
 }
 
 // validateMappingPlacement enforces that input_mapping/output_mapping — which
-// physically rename a materialized directory — appear only on task steps and
-// only under a workspace: block.
+// physically rename a materialized directory — appear only on task steps.
 func (c *Config) validateMappingPlacement(label string, step Step) error {
 	if len(step.InputMapping) == 0 && len(step.OutputMapping) == 0 {
 		return nil
@@ -101,10 +100,6 @@ func (c *Config) validateMappingPlacement(label string, step Step) error {
 
 	if step.Task == "" {
 		return fmt.Errorf("%s: input_mapping/output_mapping are only valid on task steps", label)
-	}
-
-	if c.Workspace == nil {
-		return fmt.Errorf("%s: input_mapping/output_mapping require a top-level workspace: block", label)
 	}
 
 	return nil
@@ -206,28 +201,26 @@ func checkMappingKeys(label, field string, mapping map[string]string, declared [
 
 // validateArtifactNames checks every name in inputs/outputs against
 // artifactNamePattern (see workspace.go) and rejects duplicates within a
-// list or a name appearing in both — in-place propagation (an output
-// shadowing one of the same step's own inputs) isn't supported.
+// list. A name appearing in BOTH lists is legal and means read-modify-write:
+// the step's directory is materialized from the artifact's current content
+// (as an input) and captured back over it (as an output) — the way a revise
+// loop carries state between visits now that every step's view is only its
+// declarations.
 func validateArtifactNames(context string, inputs, outputs []string) error {
-	seen := map[string]string{}
-
 	check := func(names []string, kind string) error {
+		seen := map[string]bool{}
+
 		for _, name := range names {
 			err := ValidateArtifactName(name)
 			if err != nil {
 				return fmt.Errorf("%s: %w", context, err)
 			}
 
-			prevKind, ok := seen[name]
-			if ok {
-				if prevKind == kind {
-					return fmt.Errorf("%s: duplicate %s %q", context, kind, name)
-				}
-
-				return fmt.Errorf("%s: %q cannot be both an input and an output of the same step", context, name)
+			if seen[name] {
+				return fmt.Errorf("%s: duplicate %s %q", context, kind, name)
 			}
 
-			seen[name] = kind
+			seen[name] = true
 		}
 
 		return nil

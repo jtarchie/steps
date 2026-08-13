@@ -273,22 +273,26 @@ jobs:
 		wantLoadError(t, path, `duplicate input "repo"`)
 	})
 
-	t.Run("name in both inputs and outputs rejected", func(t *testing.T) {
+	t.Run("name in both inputs and outputs is read-modify-write", func(t *testing.T) {
 		t.Parallel()
 
 		path := writeConfig(t, `
-workspace:
-  strategy: copy
-
 jobs:
 - name: build
   plan:
+  - task: seed
+    run: echo hi
+    outputs: [repo]
   - task: build
     run: echo hi
     inputs: [repo]
     outputs: [repo]
 `)
-		wantLoadError(t, path, `"repo" cannot be both an input and an output`)
+
+		_, err := LoadConfig(path)
+		if err != nil {
+			t.Fatalf("a read-modify-write declaration (same name as input and output) must load: %v", err)
+		}
 	})
 }
 

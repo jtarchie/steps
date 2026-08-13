@@ -219,7 +219,6 @@ The rest of the rules:
 
 - **"First success" means completed without error** — not a judgment about output quality. A fast but mediocre answer still wins. Gate quality with a downstream `assert:`/`verdicts:` step; folding it in here would make the outcome depend on something no branch can observe about itself.
 - **The winner's outputs are the step's outputs**, so a downstream step never has to know which branch won. Every branch must therefore declare the *same* `outputs:` — a mismatch is a load error.
-- **Workspace isolation is required**, enforced at load. Losing branches are cancelled while they may be mid-write; under the shared single-directory workspace that lets a loser corrupt the winner's files, and there is no version of that which is safe.
 - **A race needs at least two branches.** One runner is a step with extra words.
 - **When every branch fails, the block fails** and reports all of them. A hedge is not a guarantee.
 
@@ -313,7 +312,7 @@ The cell's own view is unchanged — it writes `findings/report.json` and never 
 - **A failed or `try:`-tolerated cell contributes no directory** — capture only runs on success — and the consumer walks what survived, the same absence-tolerance `context: { from: ... }` has. `examples/pr-review.yml` leans on exactly this: one reviewer failing must not cost the whole review. This holds all the way down to nothing surviving: the block creates the artifact **empty** before its cells run, so a matrix whose cells all failed (or that expanded to zero cells) hands the consumer an empty directory, not a missing input.
 - **The block replaces the artifact wholesale, each run.** Before any cell captures, the collected artifact is reset to empty — so an earlier step's same-named artifact, or a wider expansion's directories from an earlier visit of the block (a backward verdict route after the planner narrowed its list), can never merge stale entries into this run's collection.
 - **The collect position is the only place a cell may declare outputs.** An output buried anywhere else a cell executes — a hook (`on_success:`/`ensure:`/...), or a step nested inside a `do:`/`in_parallel:`/`race:`/`ensemble:` body — would be captured at its plain name by every cell, the exact clobber collection removes, so it is a load error. So are `outputs:` on the `try:` wrapper itself (dead text the block never reads) and a collecting matrix wrapping another `across:` step (the inner matrix's coordinates would overwrite the outer cell's).
-- **Requires `workspace: strategy: copy`.** Collection *is* the capture step, and the shared strategy has none — cells write straight into one build root — so allowing the declaration there would make the same pipeline change its file layout when `workspace:` is toggled. `btrfs` is refused for now rather than silently corrupting: its snapshot-based capture can neither land under an uncreated parent nor survive nesting.
+- **Requires `strategy: copy` (the default).** `btrfs` is refused for now rather than silently corrupting: its snapshot-based capture can neither land under an uncreated parent nor survive nesting.
 - **Declared on the step, not inherited.** A `tasks:` entry declaring outputs while the matrix step doesn't is a load error naming the fix — the step is where a reader looks to see whether a matrix collects.
 - **A task cell that produces outputs is never cell-cached.** A skipped cell captures nothing, so a rerun would hand the consumer a directory with a hole where that cell's contribution was — and the store keeps no artifact bytes to replay. Re-running is the only honest answer, and it is stated here rather than discovered.
 
@@ -367,7 +366,6 @@ workspace:
 `examples/across-concurrent.yml` is the runnable version, self-verifying via `steps test`.
 
 - **Unset or `1` is the serial walk**, unchanged. This is opt-in, unlike `in_parallel:`'s `limit:` where an absent value means unbounded — each default matches the contract its own block already had. A value at or above the cell count is effectively unbounded.
-- **Workspace isolation is required above 1**, enforced at load, for the reason `race:` requires it. A matrix's cells are *clones of one step*: they declare the same `outputs:` and their commands write the same paths, so under the shared strategy two cells at once are two writers on one file — and what survives is neither cell's bytes.
 - **Cells are admitted in declaration order.** Under a limit especially, "which cells go first" is otherwise whichever goroutines the scheduler happened to run.
 - **`assert.execution` stays deterministic**: each cell records into its own log, merged back in declaration order at the join — the same treatment `in_parallel:` branches get.
 - **There is no `fail_fast:`.** A matrix asks which combinations work; cancelling the siblings of the first red cell answers that for exactly one cell. Every cell runs and every failure is reported, exactly as in the serial walk.

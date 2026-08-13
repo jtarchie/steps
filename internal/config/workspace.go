@@ -8,18 +8,21 @@ import (
 	"fmt"
 )
 
-// WorkspaceConfig opts a pipeline into Concourse-style per-step workspace
-// isolation: when set, task/agent/put steps materialize a directory built
-// from their own declared inputs:/outputs: (see Step, Task) instead of
-// sharing the build's directory with every other step. This is corruption
-// hygiene, not a security sandbox — a step's shell commands can still reach
-// outside the materialized directory via absolute paths, exactly as today.
+// WorkspaceConfig tunes the per-step workspace isolation every pipeline
+// runs under: task/agent/put steps materialize a directory built from their
+// own declared inputs:/outputs: (see Step, Task) — a step sees what it
+// declared and nothing else. Isolation is not optional (there is no shared
+// single-directory mode; an absent block simply takes every default here),
+// the block only chooses HOW trees are materialized and where. This is
+// corruption hygiene, not a security sandbox — a step's shell commands can
+// still reach outside the materialized directory via absolute paths.
 type WorkspaceConfig struct {
-	// Strategy is "copy" (portable; uses copy-on-write when the underlying
-	// filesystem supports it — APFS clonefile on macOS, reflink on Linux —
-	// and falls back to a plain recursive copy otherwise) or "btrfs" (Linux
-	// only; instant copy-on-write via btrfs subvolume snapshots).
-	Strategy string `yaml:"strategy"`
+	// Strategy is "copy" (the default; portable — uses copy-on-write when
+	// the underlying filesystem supports it, APFS clonefile on macOS,
+	// reflink on Linux, and falls back to a plain recursive copy otherwise)
+	// or "btrfs" (Linux only; instant copy-on-write via btrfs subvolume
+	// snapshots).
+	Strategy string `yaml:"strategy,omitempty"`
 	// Root is where isolated build workspaces are materialized. Optional for
 	// strategy: copy (defaults to the system temp directory); required for
 	// strategy: btrfs, since the system temp directory (often tmpfs) is
@@ -83,9 +86,20 @@ type WorkspaceOptions struct {
 }
 
 var (
-	workspaceStrategies = map[string]bool{"copy": true, "btrfs": true}
+	workspaceStrategies = map[string]bool{"": true, "copy": true, "btrfs": true}
 	compressionValues   = map[string]bool{"": true, "zstd": true, "lzo": true, "zlib": true, "none": true}
 )
+
+// EffectiveStrategy is the strategy a run materializes trees with: the
+// configured one, or "copy" for an absent block/field. Nil-safe, so callers
+// never branch on the block's presence.
+func (w *WorkspaceConfig) EffectiveStrategy() string {
+	if w == nil || w.Strategy == "" {
+		return "copy"
+	}
+
+	return w.Strategy
+}
 
 func (c *Config) validateWorkspace() error {
 	ws := c.Workspace
@@ -106,7 +120,7 @@ func (c *Config) validateWorkspace() error {
 	}
 
 	if ws.Options.Compression != "" && ws.Strategy != "btrfs" {
-		return fmt.Errorf("workspace.options.compression is only valid for strategy: btrfs, not %q", ws.Strategy)
+		return fmt.Errorf("workspace.options.compression is only valid for strategy: btrfs, not %q", ws.EffectiveStrategy())
 	}
 
 	return validateWorkspaceCache(ws)

@@ -34,10 +34,12 @@ jobs:
 - name: publish
   plan:
   - task: expensive
+    outputs: [artifact]
     run: |
       echo ran >> %[1]s
-      mkdir -p artifact && echo produced > artifact/file.txt
+      echo produced > artifact/file.txt
   - task: tuned
+    inputs: [artifact]
     run: |
       echo %[3]s >> %[2]s
       test -s artifact/file.txt

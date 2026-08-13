@@ -1223,16 +1223,14 @@
     "workspace": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "strategy"
-      ],
-      "description": "Opt into per-step isolation. Absent means every step in a build shares one directory.",
+      "description": "Tune the per-step isolation every pipeline runs under (a step sees only its declared inputs:). Absent takes every default: strategy copy under a system temp root.",
       "properties": {
         "strategy": {
           "enum": [
             "copy",
             "btrfs"
-          ]
+          ],
+          "description": "How step trees are materialized. Default copy; btrfs is Linux-only and requires root:."
         },
         "root": {
           "type": "string",

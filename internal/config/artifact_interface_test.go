@@ -201,20 +201,6 @@ jobs:
 func TestArtifactMappingValidation(t *testing.T) {
 	t.Parallel()
 
-	t.Run("mapping without a workspace: block errors", func(t *testing.T) {
-		t.Parallel()
-
-		wantLoadError(t, writeConfig(t, `
-jobs:
-- name: j
-  plan:
-  - task: work
-    run: "true"
-    inputs: [repo]
-    input_mapping: { repo: source }
-`), "require a top-level workspace: block")
-	})
-
 	t.Run("mapping on a non-task step errors", func(t *testing.T) {
 		t.Parallel()
 

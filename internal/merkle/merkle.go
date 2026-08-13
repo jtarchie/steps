@@ -501,35 +501,27 @@ func DoNodeContent(cfg *config.Config, step config.Step) (map[string]any, error)
 	return withHooks(cfg, step, withWhen(step, withRouting(step, map[string]any{"do": steps})))
 }
 
-// TaskNodeContent and PutNodeContent fold in inputs/outputs only when ws is
-// non-nil (workspace: configured), so a pipeline that never opts in hashes
-// byte-identically to before this field existed — switching a task between
-// shared and isolated execution of the same run: must invalidate its cache,
-// but the mere existence of the feature must not invalidate anyone else's.
-// image, by contrast, is folded in whenever it's non-empty, regardless of
-// ws: unlike inputs/outputs (whose relevance is gated by the workspace
-// feature existing at all), an image change alters what a run: command
-// actually executes against no matter which workspace mode is active — so
-// the gate is on the value itself. A pipeline that never sets image: still
-// hashes byte-identically to before this field existed.
+// TaskNodeContent and PutNodeContent fold in inputs/outputs unconditionally:
+// every step materializes its view from its declarations (there is no shared
+// mode), so the declarations ARE part of what the step executes against and
+// must bust its cache when they change.
 func TaskNodeContent(cfg *config.Config, step config.Step, rt config.ResolvedTask) (map[string]any, error) {
+	_ = cfg // kept for signature stability with the other *NodeContent builders
+
 	content := map[string]any{"run": rt.Run}
 
-	if cfg.Workspace != nil {
-		content["inputs"] = config.StableStrings(rt.Inputs)
-		content["outputs"] = config.StableStrings(rt.Outputs)
+	content["inputs"] = config.StableStrings(rt.Inputs)
+	content["outputs"] = config.StableStrings(rt.Outputs)
 
-		// input_mapping/output_mapping rename what gets materialized where, so
-		// they change the step's view and must bust its cache — but, like
-		// inputs/outputs, only under a workspace: block, and value-gated so an
-		// unmapped task hashes exactly as before this field existed.
-		if len(rt.InputMapping) > 0 {
-			content["input_mapping"] = rt.InputMapping // map[string]string — json.Marshal sorts keys, so the hash stays deterministic
-		}
+	// input_mapping/output_mapping rename what gets materialized where, so
+	// they change the step's view and must bust its cache — value-gated so an
+	// unmapped task hashes exactly as before the field existed.
+	if len(rt.InputMapping) > 0 {
+		content["input_mapping"] = rt.InputMapping // map[string]string — json.Marshal sorts keys, so the hash stays deterministic
+	}
 
-		if len(rt.OutputMapping) > 0 {
-			content["output_mapping"] = rt.OutputMapping
-		}
+	if len(rt.OutputMapping) > 0 {
+		content["output_mapping"] = rt.OutputMapping
 	}
 
 	if rt.Image != "" {
@@ -596,25 +588,22 @@ func assertContent(a *config.Assert) map[string]any {
 	return content
 }
 
-// PutNodeContent builds the content map hashed for a put node. image is
-// folded in whenever non-empty — see TaskNodeContent's doc comment for why
-// this differs from the inputs/ws gating. inputsAll folds the `inputs: all`
-// escape hatch as a distinct sentinel, but — like the name list — only under a
-// workspace: block, since without one declarations don't change what the step
-// sees and so must not affect its hash.
+// PutNodeContent builds the content map hashed for a put node. inputs fold
+// in unconditionally (see TaskNodeContent); inputsAll folds the `inputs: all`
+// escape hatch as a distinct sentinel.
 func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.ResourceType, source, params map[string]any, inputs []string, inputsAll bool) (map[string]any, error) {
+	_ = cfg // kept for signature stability with the other *NodeContent builders
+
 	content := map[string]any{
 		"out_template": resourceType.Config.Out,
 		"source":       source,
 		"params":       params,
 	}
 
-	if cfg.Workspace != nil {
-		if inputsAll {
-			content["inputs"] = "all"
-		} else {
-			content["inputs"] = config.StableStrings(inputs)
-		}
+	if inputsAll {
+		content["inputs"] = "all"
+	} else {
+		content["inputs"] = config.StableStrings(inputs)
 	}
 
 	if resourceType.Image != "" {
@@ -889,10 +878,8 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 		"tools":            toolsContent,
 	}
 
-	if cfg.Workspace != nil {
-		content["inputs"] = config.StableStrings(step.InputNames())
-		content["outputs"] = config.StableStrings(step.Outputs)
-	}
+	content["inputs"] = config.StableStrings(step.InputNames())
+	content["outputs"] = config.StableStrings(step.Outputs)
 
 	if len(ri.ContextPaths) > 0 {
 		// Paths, not file contents: the files live inside the step's

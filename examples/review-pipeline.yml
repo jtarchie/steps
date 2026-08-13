@@ -64,9 +64,10 @@ jobs:
 
   # An ordinary task. Its output is a file the agent will read.
   - task: build
+    inputs: [repo]
+    outputs: [report]
     run: |
       set -e
-      mkdir -p report
       cd repo
       echo "# Build report"                       >  ../report/BUILD.md
       echo                                        >> ../report/BUILD.md
@@ -78,6 +79,7 @@ jobs:
   # must choose from AND where each choice goes — so the model picks a branch,
   # and the pipeline (not the prompt) decides what each branch means.
   - agent: reviewer
+    inputs: [repo, report]
     prompt: |
       Read report/BUILD.md. Check its claims against the repository in repo/.
       Then call the verdict tool: `publish` if the report is accurate and the
@@ -86,8 +88,10 @@ jobs:
       - publish: reports
       - investigate: explain
 
-  # Reached only on the publish verdict.
+  # Reached only on the publish verdict. The put's read view is its declared
+  # inputs — here the report the build step captured.
   - put: reports
+    inputs: [report]
 
   # Reached only on the investigate verdict. Exits non-zero, so the job fails
   # and its on_failure hook fires — an unclean build should not look green.

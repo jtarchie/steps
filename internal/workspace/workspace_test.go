@@ -41,15 +41,17 @@ func TestSanitizeLabel(t *testing.T) {
 
 func ctxT() context.Context { return context.Background() }
 
-func TestSharedProviderReturnsBuildRootForEveryStep(t *testing.T) {
+// TestNilConfigDefaultsToCopyIsolation pins that an absent workspace: block
+// is copy isolation under a temp root — not a shared directory. The shared
+// single-mutable-directory mode is gone; every provider isolates.
+func TestNilConfigDefaultsToCopyIsolation(t *testing.T) {
 	t.Parallel()
 
-	p := &sharedProvider{}
-
-	err := p.Validate()
+	p, err := NewProvider(nil, false)
 	if err != nil {
-		t.Fatalf("Validate: %v", err)
+		t.Fatalf("NewProvider(nil): %v", err)
 	}
+	defer func() { _ = p.Close() }()
 
 	bw, err := p.NewBuild(ctxT(), "b1")
 	if err != nil {
@@ -62,32 +64,24 @@ func TestSharedProviderReturnsBuildRootForEveryStep(t *testing.T) {
 		t.Fatalf("ResourceDir: %v", err)
 	}
 
+	err = os.WriteFile(filepath.Join(resourceDir, "seed.txt"), []byte("hi"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	taskSpace, err := bw.TaskSpace(ctxT(), "01-build", []string{"repo"}, []string{"built"}, nil, nil)
 	if err != nil {
 		t.Fatalf("TaskSpace: %v", err)
 	}
+	defer CloseSpace(taskSpace, "01-build")
 
-	if taskSpace.Dir() != filepath.Dir(resourceDir) {
-		t.Errorf("TaskSpace().Dir() = %q, want the build root %q", taskSpace.Dir(), filepath.Dir(resourceDir))
+	if taskSpace.Dir() == filepath.Dir(resourceDir) {
+		t.Errorf("TaskSpace().Dir() = %q, want an isolated per-step dir, not the build root", taskSpace.Dir())
 	}
 
-	err = taskSpace.Capture(ctxT())
+	_, err = os.Stat(filepath.Join(taskSpace.Dir(), "repo", "seed.txt"))
 	if err != nil {
-		t.Errorf("shared StepSpace.Capture should be a no-op, got %v", err)
-	}
-
-	err = taskSpace.Close()
-	if err != nil {
-		t.Errorf("shared StepSpace.Close should be a no-op, got %v", err)
-	}
-
-	putSpace, err := bw.PutSpace(ctxT(), "02-put", nil, false)
-	if err != nil {
-		t.Fatalf("PutSpace: %v", err)
-	}
-
-	if putSpace.Dir() != taskSpace.Dir() {
-		t.Errorf("PutSpace().Dir() = %q, want the same shared root %q", putSpace.Dir(), taskSpace.Dir())
+		t.Errorf("declared input was not materialized: %v", err)
 	}
 }
 

@@ -59,7 +59,7 @@ Unlike every other tool, `search_files` **never spills**: its bound is arithmeti
 
 ## Working directory, inputs, and dir:
 
-An agent step's `dir:` sets its working directory *and* names the artifact it operates in (its first path component — `dir: repo/cmd` names `repo`), so it's flow-validated for availability like an input. Declaring `inputs:` (a resource an earlier `get` fetched or an output an earlier step produced) does the same. Both are optional, but when you declare one it's checked: an agent pointed at a directory nothing fetched — e.g. "summarize the repository" with no `get` — fails at plan time, before the model is ever called, rather than after burning a turn budget. See [workspace.md](workspace.md) for the full inputs/outputs model.
+An agent step's `dir:` sets its working directory *and* names the artifact it operates in (its first path component — `dir: repo/cmd` names `repo`). That artifact must be one of the step's own declared `inputs:` (or `outputs:`), since only declared artifacts are materialized into the working directory — and it's flow-validated for availability like any input, so an agent pointed at a directory nothing fetched — e.g. "summarize the repository" with no `get` — fails at plan time, before the model is ever called, rather than after burning a turn budget. See [workspace.md](workspace.md) for the full inputs/outputs model.
 
 ## Custom tool `required:` semantics
 
@@ -222,7 +222,7 @@ jobs:
 
 This is the one place a step's config can come from a fetched artifact, and it is deliberately narrow — task `run:` and a whole agent definition/persona cannot. Two reasons:
 
-- **A task's `run:` already reaches into a fetched artifact today.** `run: sh repo/ci/build.sh` works unchanged in both shared and isolated mode (isolated mode just needs `inputs: [repo]`), so an artifact-sourced task-config file would add nothing beyond what plain `run:` already does, while requiring the step to redeclare its own `inputs:`/`outputs:`/`image:` anyway.
+- **A task's `run:` already reaches into a fetched artifact today.** `run: sh repo/ci/build.sh` works with `inputs: [repo]` declared, so an artifact-sourced task-config file would add nothing beyond what plain `run:` already does, while requiring the step to redeclare its own `inputs:`/`outputs:`/`image:` anyway.
 - **An agent's connection is a credential boundary a fetched repo must never cross.** An `Agent`'s `source.endpoint:`/`api_key_env:` decide where a configured API key gets sent; letting a repo supply either would let it redirect that credential to an attacker-chosen server, walking straight around the `HostEnv()` allowlist and `validateAgentEndpoints` that exist to keep exactly that from happening. A prompt is just the task text the model already reads the repo to act on — no new credential exposure.
 
 The artifact named must be declared in the step's own `inputs:` (checked at `LoadConfig`, mirroring how `dir:`'s first path component is validated) and must be read out of the artifact's contents, which are untrusted — the same symlink-aware path confinement `read_file`/`list_dir` use (`resolveAgentPath`) applies here too. This form cannot be resolved at load time: `cache.PlanChains` hashes every step before any `get`'s `in:` has run, so the file doesn't exist yet at plan time. That costs nothing, though — an agent step's chain is already unconditionally unskippable (see "Top-level `tasks:` reuse" above and `internal/cache`'s `planNonGetNode`), so there is no caching to lose by resolving this after plan time.

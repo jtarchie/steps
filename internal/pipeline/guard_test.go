@@ -10,8 +10,9 @@ import (
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
-// guardTestBuild returns a real shared build workspace plus its root
-// directory, so a guard command can be exercised against actual files.
+// guardTestBuild returns a real build workspace plus the artifact-store
+// directory of a "facts" artifact, so a guard command exercised against a
+// step declaring `inputs: [facts]` sees actual files.
 func guardTestBuild(t *testing.T) (workspace.BuildWorkspace, string) {
 	t.Helper()
 
@@ -27,12 +28,12 @@ func guardTestBuild(t *testing.T) (workspace.BuildWorkspace, string) {
 
 	t.Cleanup(func() { workspace.CloseBuild(bw, "guard-test") })
 
-	space, err := bw.TaskSpace(context.Background(), "probe", nil, nil, nil, nil)
+	dir, err := bw.ResourceDir(context.Background(), "facts")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return bw, space.Dir()
+	return bw, dir
 }
 
 func TestEvaluateStepGuard(t *testing.T) {
@@ -56,8 +57,8 @@ func TestEvaluateStepGuard(t *testing.T) {
 		{name: "exit 0 runs the step", when: &config.WhenSpec{Run: "true"}, want: true},
 		{name: "exit 1 skips the step", when: &config.WhenSpec{Run: "false"}, want: false},
 		{name: "arbitrary nonzero exit skips", when: &config.WhenSpec{Run: "exit 7"}, want: false},
-		{name: "grep match runs", when: &config.WhenSpec{Run: "grep -q high risk.txt"}, want: true},
-		{name: "grep no-match skips (a legitimate false, not an error)", when: &config.WhenSpec{Run: "grep -q nope risk.txt"}, want: false},
+		{name: "grep match runs", when: &config.WhenSpec{Run: "grep -q high facts/risk.txt"}, want: true},
+		{name: "grep no-match skips (a legitimate false, not an error)", when: &config.WhenSpec{Run: "grep -q nope facts/risk.txt"}, want: false},
 		{name: "missing file skips rather than erroring", when: &config.WhenSpec{Run: "test -f absent.txt"}, want: false},
 	}
 
@@ -65,7 +66,10 @@ func TestEvaluateStepGuard(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			step := config.Step{Task: "t", Run: "true", When: tc.when}
+			// The guard's view is materialized from the step's declared
+			// inputs — isolation is always on, so an undeclared artifact is
+			// simply absent.
+			step := config.Step{Task: "t", Run: "true", Inputs: config.Inputs("facts"), When: tc.when}
 
 			got, err := evaluateStepGuard(context.Background(), cfg, step, bw)
 			if err != nil {

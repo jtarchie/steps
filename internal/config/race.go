@@ -45,14 +45,6 @@ func (c *Config) validateRaceBlock(label string, step *Step) error {
 		return fmt.Errorf("%s: race.steps needs at least two branches; a race with one runner is just a step", label)
 	}
 
-	// Workspace isolation, required. Losing branches are cancelled while they
-	// may be mid-write, and under the shared single-directory workspace that
-	// means a cancelled loser can corrupt the winner's files. There is no
-	// version of this that is safe without isolation.
-	if c.Workspace == nil {
-		return fmt.Errorf("%s: race: requires workspace isolation (set a top-level workspace: strategy); losing branches are cancelled mid-run and would otherwise share one mutable directory with the winner", label)
-	}
-
 	// Identical outputs, required. Downstream steps must not have to know
 	// which branch won — the winner's outputs ARE the step's outputs, so the
 	// branches have to agree on what those are.

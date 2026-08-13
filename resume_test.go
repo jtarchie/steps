@@ -79,9 +79,11 @@ jobs:
 - name: publish
   plan:
   - task: produce
-    run: echo from-the-first-run > artifact.txt
+    outputs: [made]
+    run: echo from-the-first-run > made/artifact.txt
   - task: consume
-    run: test -f %[2]s && cat artifact.txt >> %[1]s
+    inputs: [made]
+    run: test -f %[2]s && cat made/artifact.txt >> %[1]s
 `, seen, flag))
 
 	out := captureStdout(t, func() {

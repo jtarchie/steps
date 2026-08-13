@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -261,9 +262,31 @@ jobs:
 
 	kept := keptWorkspaceDir(t, out)
 
-	contents, err := os.ReadFile(filepath.Join(kept, "artifact.txt")) //nolint:gosec // path is parsed from this test's own run output
+	// The failed step's scratch file lives in its own step directory under
+	// the kept build tree (steps/<NN>-<name>/); walk rather than hardcode
+	// the layout.
+	var contents []byte
+
+	err := filepath.WalkDir(kept, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() != "artifact.txt" {
+			return err
+		}
+
+		data, readErr := os.ReadFile(path) //nolint:gosec // path is inside this test's own kept workspace
+		if readErr != nil {
+			return fmt.Errorf("reading kept file: %w", readErr)
+		}
+
+		contents = data
+
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("the failed step's file was not kept: %v", err)
+		t.Fatalf("walking the kept workspace: %v", err)
+	}
+
+	if contents == nil {
+		t.Fatal("the failed step's file was not kept anywhere under the workspace")
 	}
 
 	if !strings.Contains(string(contents), "work in progress") {

@@ -56,7 +56,21 @@ func TestValidateArtifactFlowDir(t *testing.T) {
 		Agents: []config.Agent{{Name: "r", Tools: []config.ToolSpec{{Builtin: "read_file"}}}},
 	}
 
-	t.Run("dir naming an available artifact passes", func(t *testing.T) {
+	t.Run("dir naming a declared available artifact passes", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{Name: "j", Plan: []config.Step{
+			{Get: "repo"},
+			{Agent: "r", Dir: "repo/cmd", Inputs: config.Inputs("repo")},
+		}}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err != nil {
+			t.Fatalf("err = %v, want nil (repo is available and declared; dir repo/cmd resolves to repo)", err)
+		}
+	})
+
+	t.Run("dir naming an available but undeclared artifact errors", func(t *testing.T) {
 		t.Parallel()
 
 		job := &config.Job{Name: "j", Plan: []config.Step{
@@ -65,8 +79,8 @@ func TestValidateArtifactFlowDir(t *testing.T) {
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
-		if err != nil {
-			t.Fatalf("err = %v, want nil (repo is available; dir repo/cmd resolves to repo)", err)
+		if err == nil {
+			t.Fatal("want an error: only declared artifacts are materialized, so an undeclared dir: is a missing directory at run time")
 		}
 	})
 

@@ -10,7 +10,7 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 | [control-flow.md](control-flow.md) | `when:` guards, hooks, `to:`/`max_visits:` routing, verdicts, `assert:` | medium |
 | [agents.md](agents.md) | Agent steps: tools, prompts, verdicts, `fix:`, sub-agents | long |
 | [attempts-timeout.md](attempts-timeout.md) | `attempts:` and `timeout:`, and how they interact | short |
-| [workspace.md](workspace.md) | `inputs:`/`outputs:` and opt-in per-step isolation | short |
+| [workspace.md](workspace.md) | `inputs:`/`outputs:`, per-step isolation (always on), read-modify-write artifacts | short |
 | [infra.md](infra.md) | Cross-job triggers (`steps watch`) and containerized execution (`image:`) | short |
 | [templating.md](templating.md) | `{{ }}` in resource commands and custom tools, and `shellquote` | short |
 | [mcp.md](mcp.md) | MCP servers as tool sources and as resource-type backends | medium |
@@ -120,4 +120,3 @@ That forks the recorded run and executes from `synthesizer` onward. It does **no
 - **`--from` names a step**, matched against the *current* plan. The pipeline has almost certainly changed since the source run; that is why you are replaying.
 - **A source run that never completed an earlier step is refused**, naming it. Its outputs are not in the forked workspace, so replaying past it would run against state that never existed.
 - **It needs the source workspace**, so the run being replayed must have been kept (`--keep-workspace`). A reaped tree is a clear error, not a silent full re-run.
-- **Isolated workspaces are not supported yet** — the same limitation `--resume` has, tracked in [#59](https://github.com/jtarchie/steps/issues/59). That is exactly the mode a concurrent fan-out is forced into, so the shape that most wants replay cannot use it yet.

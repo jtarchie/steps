@@ -44,14 +44,18 @@ jobs:
 # hooks fire, nothing records, and it's absent from the execution log (which is
 # how assert.execution can prove it was skipped).
 
-# Guard TRUE → the gated step runs.
+# Guard TRUE → the gated step runs. The guard's view is the step's own
+# declared inputs: — scout publishes what it learned as an artifact, and
+# deep-review declares it to read it.
 - name: gate-open
   plan:
   - task: scout
-    run: echo high > risk.txt
+    outputs: [findings]
+    run: echo high > findings/risk.txt
   - task: deep-review
+    inputs: [findings]
     run: echo "running the expensive review"
-    when: grep -q high risk.txt      # reads what scout wrote, same working dir
+    when: grep -q high findings/risk.txt
   - task: report
     run: echo done
   assert:
@@ -63,10 +67,12 @@ jobs:
 - name: gate-closed
   plan:
   - task: scout
-    run: echo low > risk.txt
+    outputs: [findings]
+    run: echo low > findings/risk.txt
   - task: deep-review
+    inputs: [findings]
     run: echo "THIS MUST NOT RUN"
-    when: grep -q high risk.txt
+    when: grep -q high findings/risk.txt
     on_failure:
       task: notify
       run: echo "THIS MUST NOT RUN EITHER"
@@ -98,16 +104,28 @@ jobs:
 
 # A converging revise loop: critique fails twice (routing back to draft), then
 # succeeds on its third run and falls through to publish.
+#
+# State across visits rides in an artifact: draft declares `wip` as BOTH input
+# and output (read-modify-write — the directory is materialized from the
+# artifact's current content and captured back over it), which is how a loop
+# carries anything between visits now that a step's view is only what it
+# declares. init seeds the artifact so draft's first visit has one to read.
 - name: converge
   plan:
+  - task: init
+    outputs: [wip]
+    run: echo 0 > wip/attempts
   - task: draft
-    run: echo drafting
-  - task: critique
+    inputs: [wip]
+    outputs: [wip]
     run: |
-      n=$(cat .attempts 2>/dev/null || echo 0)
-      n=$((n + 1)); echo "$n" > .attempts
-      echo "critique attempt $n"
-      test "$n" -ge 3                 # exit 0 only on the 3rd attempt
+      n=$(cat wip/attempts); n=$((n + 1)); echo "$n" > wip/attempts
+      echo "drafting attempt $n"
+  - task: critique
+    inputs: [wip]
+    run: |
+      echo "critique attempt $(cat wip/attempts)"
+      test "$(cat wip/attempts)" -ge 3   # exit 0 only on the 3rd attempt
     to:
       success: publish                # forward: done
       failure: draft                  # backward: revise
@@ -115,7 +133,7 @@ jobs:
   - task: publish
     run: echo published
   assert:
-    execution: [draft, critique, draft, critique, draft, critique, publish]
+    execution: [init, draft, critique, draft, critique, draft, critique, publish]
 
 # Exhaustion: flaky always fails and self-loops, hitting max_visits (2
 # executions). The loop exhausts → job fails → the JOB's on_failure fires. A
