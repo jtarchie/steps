@@ -319,70 +319,67 @@ jobs:
 	}
 }
 
-// TestConformancePutRunsImplicitGet verifies that a successful put fetches the
-// version it produced, so later steps can use it as an artifact named after
-// the put.
+// TestConformancePutProducesNoArtifact pins a DIVERGENCE from Concourse,
+// deliberately: a put runs out: and nothing else. Concourse follows a
+// successful put with an implicit get of the produced version
+// (concourse-ci.org/docs/steps/put/); steps removed that in the DSL audit —
+// an artifact appearing in the build that no step declared is ambient data
+// flow, and every flow here is opt-in. The spelling is an explicit get:
+// after the put. See docs/conformance.md and docs/resources.md.
 //
-// Concourse doc: concourse-ci.org/docs/steps/put/ — "When the step succeeds,
-// the version by the step will be immediately fetched via an additional
-// implicit get step. This is so that later steps in your plan can use the
-// artifact that was produced." Written spec page, not a source reading.
-//
-// steps claim under test: internal/pipeline's fetchPutVersion, config.Step's
-// GetParams/NoGet docs, docs/resources.md.
-//
-// The three jobs cover the behaviour and both of its off-switches, because the
-// off-switches are where an implementation drifts: one that fetched
-// unconditionally would pass a test for the happy path alone.
-func TestConformancePutRunsImplicitGet(t *testing.T) {
+// Three jobs: no artifact exists after a bare put; an explicit get after the
+// put is the opt-in fetch; and a put whose out: printed no version still
+// succeeds (the pre-existing divergence — RunOut allows a silent out:, relied
+// on by resource types that publish without versioning).
+func TestConformancePutProducesNoArtifact(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pipeline.yml")
 
-	// out: prints the version it published; in: writes that version's ref plus
-	// whatever get_params it was handed, so a task can prove both arrived.
 	pipelineYAML := `
 resource_types:
 - name: dummy
   config:
     check: printf '[{"ref":"v1"}]'
-    in: |
-      printf '%s' {{ .version.ref | shellquote }} > ./ref
-      printf '%s' {{ index .params "flavor" | default "none" | shellquote }} > ./flavor
+    in: printf '%s' {{ .version.ref | shellquote }} > ./ref
     out: printf '{"ref":"published-1"}'
+- name: silent
+  config:
+    check: printf '[{"ref":"v1"}]'
+    in: printf 'fetched' > ./marker
+    out: "true"
 
 resources:
 - name: thing
   type: dummy
   source: {}
+- name: quiet
+  type: silent
+  source: {}
 
 jobs:
-# The version the PUT produced is what the implicit get fetched — published-1,
-# not the v1 that check: reports. That distinction is the whole point: without
-# the implicit get there is no artifact at all, and with a naive one there is
-# an artifact holding the wrong version.
-- name: implicit-get-fetches-produced-version
+# A put fetches nothing and leaves no artifact behind.
+- name: put-produces-no-artifact
   plan:
   - put: thing
-  - task: read-it
-    inputs: [thing]
-    run: test "$(cat thing/ref)" = published-1
-
-# get_params reach that fetch's in:.
-- name: get-params-reach-the-implicit-get
-  plan:
-  - put: thing
-    get_params: { flavor: strawberry }
-  - task: read-it
-    inputs: [thing]
-    run: test "$(cat thing/flavor)" = strawberry
-
-# no_get: skips it, so nothing is fetched and no artifact exists.
-- name: no-get-skips-the-fetch
-  plan:
-  - put: thing
-    no_get: true
   - task: nothing-to-read
     run: test ! -d thing
+
+# The opt-in spelling: an explicit get after the put. It fetches the
+# resource's latest version like any other get (here what check: reports).
+- name: explicit-get-after-put
+  plan:
+  - put: thing
+  - get: thing
+  - task: read-it
+    inputs: [thing]
+    run: test "$(cat thing/ref)" = v1
+
+# A put whose out: printed no version still succeeds.
+- name: silent-out-still-succeeds
+  plan:
+  - put: quiet
+  - task: nothing-was-fetched
+    run: test ! -d quiet
 `
 
 	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
@@ -414,68 +411,5 @@ jobs:
 		if runErr != nil {
 			t.Errorf("job %q: RunJob returned %v, want nil", job.Name, runErr)
 		}
-	}
-}
-
-// TestConformancePutWithNoVersionSkipsImplicitGet covers the one place steps
-// must diverge from Concourse here, and why.
-//
-// Concourse expects an out: script to print the version it created. steps
-// explicitly allows printing nothing (docs/resources.md: "Printing nothing is
-// fine and not an error"; RunOut returns a nil version rather than erroring),
-// which predates this feature and is relied on by read-only-ish resource types
-// that publish without versioning what they published.
-//
-// So a put with no version has nothing to fetch. It must SUCCEED with no
-// artifact rather than failing — inventing a failure here would break those
-// resource types the moment the implicit get shipped.
-func TestConformancePutWithNoVersionSkipsImplicitGet(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
-
-	pipelineYAML := `
-resource_types:
-- name: silent
-  config:
-    check: printf '[{"ref":"v1"}]'
-    in: printf 'fetched' > ./marker
-    out: "true"
-
-resources:
-- name: thing
-  type: silent
-  source: {}
-
-jobs:
-- name: build
-  plan:
-  - put: thing
-  - task: nothing-was-fetched
-    run: test ! -d thing
-`
-
-	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := config.LoadConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	provider, err := workspace.NewProvider(nil, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	st, err := store.OpenStore(filepath.Join(dir, "state.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	runErr := RunJob(context.Background(), cfg, &cfg.Jobs[0], nil, provider, st, false)
-	if runErr != nil {
-		t.Errorf("RunJob returned %v, want nil — a put whose out: printed no version must succeed, not fail on a fetch it cannot make", runErr)
 	}
 }

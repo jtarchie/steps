@@ -65,9 +65,9 @@ func (c *Config) validateSerial() error {
 // Concourse documents serial:/serial_groups: as taking precedence and forcing
 // the value to 1, which means `max_in_flight: 5` beside `serial: true` is a
 // line that does nothing. This runner rejects that rather than silently
-// winning, the same way get_params: beside no_get: true is rejected — a
-// deliberate narrowing of a config Concourse would accept, on the grounds that
-// a number quietly overridden is worse than a load error naming the conflict.
+// winning — a deliberate narrowing of a config Concourse would accept, on the
+// grounds that a number quietly overridden is worse than a load error naming
+// the conflict.
 func checkJobMaxInFlight(job Job) error {
 	if job.MaxInFlight < 0 {
 		return fmt.Errorf("job %q: max_in_flight must be a positive number of concurrent builds (omit it for unlimited)", job.Name)

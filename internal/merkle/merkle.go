@@ -617,18 +617,6 @@ func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 		}
 	}
 
-	// The implicit get after a put is part of what the step DOES — it
-	// materializes an artifact later steps read — so both switches that change
-	// it are identity, not an operational limit. Value-gated: a put that
-	// spells neither hashes byte-identically to before they existed.
-	if len(step.GetParams) > 0 {
-		content["get_params"] = step.GetParams
-	}
-
-	if step.NoGet {
-		content["no_get"] = true
-	}
-
 	if resourceType.Image != "" {
 		content["image"] = resourceType.Image
 	}

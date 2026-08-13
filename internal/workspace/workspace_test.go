@@ -749,15 +749,13 @@ func TestNewInvocationTokenIsUnique(t *testing.T) {
 	}
 }
 
-// TestValidateArtifactFlowPutProducesItsVersion covers the artifact-flow half
-// of the implicit get a put runs (see internal/pipeline's fetchPutVersion).
-//
-// A put used to be artifact-neutral here. Now it PRODUCES an artifact named
-// after itself — the version it published, fetched by the implicit get — so a
-// later step may declare it as an input without a get: of its own. That is the
-// entire user-visible point of the implicit get, and it has to be reflected
-// statically or a valid plan fails validation.
-func TestValidateArtifactFlowPutProducesItsVersion(t *testing.T) {
+// TestValidateArtifactFlowPutProducesNothing pins that a put is
+// artifact-neutral: it publishes and fetches nothing (the implicit get was
+// removed in the DSL audit — every artifact in the build is one a step
+// declared). A later step naming the put as an input has to fail HERE —
+// before anything runs — rather than at run time against a directory nobody
+// created; the valid spelling is an explicit get: after the put.
+func TestValidateArtifactFlowPutProducesNothing(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{Workspace: &config.WorkspaceConfig{Strategy: "copy"}}
@@ -770,43 +768,36 @@ func TestValidateArtifactFlowPutProducesItsVersion(t *testing.T) {
 	}
 
 	err := ValidateArtifactFlow(cfg, job)
-	if err != nil {
-		t.Errorf("a put's produced version must be available to later steps as an artifact, got %v", err)
+	if err == nil {
+		t.Fatal("expected an error: a put produces no artifact, so the task's input never exists")
 	}
 }
 
-// TestValidateArtifactFlowNoGetProducesNothing is the inverse, and the reason
-// the rule above is gated rather than unconditional.
-//
-// no_get: skips the implicit get, so there is no artifact. A later step naming
-// it has to fail HERE — before anything runs — rather than at run time against
-// a directory nobody created, which is the whole job of static flow validation.
-func TestValidateArtifactFlowNoGetProducesNothing(t *testing.T) {
+// TestValidateArtifactFlowExplicitGetAfterPut is the opt-in spelling: the get
+// step after the put is what makes the artifact exist.
+func TestValidateArtifactFlowExplicitGetAfterPut(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{Workspace: &config.WorkspaceConfig{Strategy: "copy"}}
 	job := &config.Job{
 		Name: "build",
 		Plan: []config.Step{
-			{Put: "release", NoGet: true},
+			{Put: "release"},
+			{Get: "release"},
 			{Task: "verify", Run: "true", Inputs: config.Inputs("release")},
 		},
 	}
 
 	err := ValidateArtifactFlow(cfg, job)
-	if err == nil {
-		t.Fatal("expected an error: no_get: skips the fetch, so the put's artifact never exists")
+	if err != nil {
+		t.Errorf("an explicit get after the put must satisfy the task's input, got %v", err)
 	}
 }
 
-// TestValidateArtifactFlowPutFailureHooksSeePreView pins which view a put's
-// hooks get, now that a put publishes an artifact.
-//
-// A failure-path hook runs because the put FAILED, which means its implicit get
-// never ran and the artifact does not exist. Handing that hook the post-put
-// view would let it declare an input that is guaranteed to be missing exactly
-// when the hook fires.
-func TestValidateArtifactFlowPutFailureHooksSeePreView(t *testing.T) {
+// TestValidateArtifactFlowPutHooksSeeNoPutArtifact pins that a put's hooks
+// cannot name the put as an input either — a put produces no artifact on any
+// path, success or failure.
+func TestValidateArtifactFlowPutHooksSeeNoPutArtifact(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{Workspace: &config.WorkspaceConfig{Strategy: "copy"}}
@@ -824,6 +815,6 @@ func TestValidateArtifactFlowPutFailureHooksSeePreView(t *testing.T) {
 
 	err := ValidateArtifactFlow(cfg, job)
 	if err == nil {
-		t.Fatal("expected an error: a put's on_failure hook runs when the implicit get never happened, so the artifact is not available to it")
+		t.Fatal("expected an error: a put produces no artifact, so its hook cannot declare it as an input")
 	}
 }

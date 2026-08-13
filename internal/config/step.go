@@ -52,17 +52,6 @@ type Step struct {
 	// differing in params are two different fetches and must not share a
 	// cache entry.
 	Params map[string]any `yaml:"params,omitempty"`
-	// GetParams configures the implicit get: a put runs after its out:
-	// succeeds, mirroring Concourse (concourse-ci.org/docs/steps/put/). They
-	// reach that fetch's in: exactly as a get step's own params: do, and are
-	// meaningless without it — setting them alongside no_get: true is a load
-	// error rather than a line that quietly does nothing.
-	GetParams map[string]any `yaml:"get_params,omitempty"`
-	// NoGet skips the implicit get after a put. Concourse's own escape hatch,
-	// for a put at the end of a plan whose produced version nothing goes on to
-	// use: the fetch costs a round trip and a directory for an artifact
-	// nobody reads.
-	NoGet bool `yaml:"no_get,omitempty"`
 	// Agent names an agents: entry this step invokes. Prompt is the task
 	// given to the model (not templated — freeform text is likely to contain
 	// literal {{ }} that isn't meant as a template). Dir is the step's
@@ -811,21 +800,6 @@ func checkStepFieldPlacement(label string, step *Step) error {
 		return fmt.Errorf("%s: version is only valid on get steps", label)
 	case step.Params != nil && !isGet && !isPut:
 		return fmt.Errorf("%s: params is only valid on get and put steps", label)
-	default:
-		return checkImplicitGetFields(label, step, isPut)
-	}
-}
-
-// checkImplicitGetFields places the two switches on the implicit get a put
-// runs, and rejects the combination where one cancels the other.
-func checkImplicitGetFields(label string, step *Step, isPut bool) error {
-	switch {
-	case step.GetParams != nil && !isPut:
-		return fmt.Errorf("%s: get_params is only valid on put steps (it configures the implicit get a put runs; a get step spells its own fetch options params:)", label)
-	case step.NoGet && !isPut:
-		return fmt.Errorf("%s: no_get is only valid on put steps (it skips the implicit get a put runs)", label)
-	case step.NoGet && step.GetParams != nil:
-		return fmt.Errorf("%s: get_params is set alongside no_get: true, but no_get skips the very fetch get_params configures — remove one", label)
 	default:
 		return nil
 	}

@@ -115,29 +115,19 @@ Runs when a `put` step executes. Optional: a type with no `out:` is read-only, a
 - **Working directory** is the put step's read view, composed from its `inputs:`.
 - **May print** a single JSON **object** — the version it produced. Printing nothing is fine and not an error.
 
-### The implicit get after a put
+### A put publishes; it does not fetch
 
-When a put succeeds, `steps` immediately fetches the version it produced, so later steps can use it — the artifact is named after the put:
+A put step runs `out:` and nothing else — there is no implicit get afterward, so a put produces no artifact. (Concourse fetches the produced version automatically; steps deliberately does not: an artifact appearing in the build that no step declared is exactly the kind of ambient data flow this DSL rejects.) A plan that wants the just-published version writes the fetch it means:
 
 ```yaml
 - put: release            # out: publishes and prints {"ref": "v1.4.2"}
+- get: release            # fetch it back, explicitly
 - task: verify
-  inputs: [release]       # ...and here it is, already fetched
+  inputs: [release]
   run: cat release/ref
 ```
 
-This mirrors Concourse. The fetch runs the resource type's `in:` exactly as a `get` step would, so a type needs no extra support for it.
-
-- **`get_params:`** passes params to that fetch, the way a get step's own `params:` do:
-  ```yaml
-  - put: image
-    get_params: { skip_download: true }
-  ```
-- **`no_get: true`** skips it, for a put at the end of a plan whose output nothing reads. The artifact is then never produced, and a later step naming it is a validation error rather than a run-time surprise. Setting `get_params:` alongside `no_get:` is a load error — one of the two lines would do nothing.
-- **A put whose `out:` printed no version fetches nothing and still succeeds.** There is no version to fetch, and since printing nothing is legal here (unlike Concourse, which expects a version), failing would break every resource type that publishes without versioning what it published.
-- **The fetch happens before the step is recorded**, so a put whose implicit get fails is a failed step rather than a green one missing its artifact.
-
-> ⚠️ **Putting to a resource you also `get:` re-fetches into the same directory.** The implicit get's artifact is named after the put, so `get: repo` … `put: repo` runs `in:` a second time with the already-populated `repo/` as its working directory — mixing two fetches, or failing outright for an `in:` that expects an empty directory (a plain `git clone .` does). Set `no_get: true` on that put, or give the put its own resource name.
+The explicit get fetches the resource's **latest** version at that moment, like any other get — for almost every plan that is the version the put just published, but a concurrent publisher can race it. A put whose output nothing reads simply has no get after it.
 
 ## Shell safety
 

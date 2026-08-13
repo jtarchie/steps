@@ -1034,21 +1034,10 @@ func validatePutArtifactFlow(cfg *config.Config, jobName string, i int, step con
 		}
 	}
 
-	// Failure-path hooks see the view from BEFORE the put: if the step failed,
-	// its implicit get never ran and the artifact does not exist.
+	// A put is artifact-neutral: it publishes, it does not fetch. A plan that
+	// wants the just-published version as an artifact writes an explicit
+	// get step after the put — there is no implicit get.
 	pre := maps.Clone(available)
-
-	// A put PRODUCES an artifact named after itself — the version it just
-	// published, fetched by the implicit get (see fetchPutVersion). That is
-	// the whole point of the implicit get, and it is why this function no
-	// longer treats a put as artifact-neutral.
-	//
-	// no_get: skips the fetch, so it also skips the artifact: a later step
-	// naming it must fail here rather than at run time against a directory
-	// nobody created.
-	if !step.NoGet {
-		available[step.Put] = true
-	}
 
 	return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
 }
