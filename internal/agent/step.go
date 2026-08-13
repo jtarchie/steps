@@ -142,7 +142,16 @@ type preparedAgentStep struct {
 func (p preparedAgentStep) close(stepLabel string) {
 	closeAll(p.closers)
 	workspace.CloseSpace(p.space, stepLabel)
+	p.removeSpillDir()
+}
 
+// removeSpillDir deletes the step's tool-output spill directory. Called
+// explicitly BEFORE the space's Capture as well as from close: the spill dir
+// lives inside the working directory (read_file's confinement means the model
+// can only read spilled output back from there), so when dir: points inside a
+// declared output, a spill dir left in place until after capture would ship
+// scratch tool output inside the artifact.
+func (p preparedAgentStep) removeSpillDir() {
 	if p.spillDir != "" {
 		_ = os.RemoveAll(p.spillDir)
 	}
@@ -525,6 +534,8 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 		return StepOutcome{Response: res.text}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
+	prepared.removeSpillDir()
+
 	err = prepared.space.Capture(ctx)
 	if err != nil {
 		wrapped := fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
@@ -864,6 +875,8 @@ func RunHook(ctx context.Context, cfg *config.Config, step config.Step, bw works
 	if err != nil {
 		return fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
+
+	prepared.removeSpillDir()
 
 	err = prepared.space.Capture(ctx)
 	if err != nil {
