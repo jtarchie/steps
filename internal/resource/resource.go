@@ -38,7 +38,8 @@ func CheckVersions(ctx context.Context, cfg *config.Config, rt config.ResourceTy
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
 
-	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Env: rt.Env, User: rt.User, Network: rt.Network})
+	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Env: rt.Env, User: rt.User, Network: rt.Network,
+		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()})
 	if err != nil {
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
@@ -159,7 +160,8 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, sour
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
 
-	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: destDir, Env: rt.Env, User: rt.User, Network: rt.Network})
+	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: destDir, Env: rt.Env, User: rt.User, Network: rt.Network,
+		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()})
 	if err != nil {
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
@@ -201,7 +203,8 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, sou
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}
 
-	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: srcDir, Env: rt.Env, User: rt.User, Network: rt.Network})
+	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: srcDir, Env: rt.Env, User: rt.User, Network: rt.Network,
+		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()})
 	if err != nil {
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}

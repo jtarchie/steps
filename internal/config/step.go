@@ -820,6 +820,29 @@ func checkStepMaxTurns(label string, step *Step) error {
 	case step.MaxTurns > 0 && step.Agent == "":
 		return fmt.Errorf("%s: max_turns is only valid on agent steps (it bounds the tool-calling loop; a task has no turns)", label)
 	default:
+		return checkAgentOnlyFields(label, step)
+	}
+}
+
+// checkAgentOnlyFields rejects the agent-conversation fields on any other
+// step kind. Each of these previously parsed cleanly anywhere and was
+// silently ignored off an agent step — the pipeline read as if a prompt or a
+// tool selection were in force while nothing consumed it, the exact failure
+// placement validation exists to prevent (contrast context_paths/prompt_file,
+// which have always been placed).
+func checkAgentOnlyFields(label string, step *Step) error {
+	if step.Agent != "" {
+		return nil
+	}
+
+	switch {
+	case step.Prompt != "":
+		return fmt.Errorf("%s: prompt is only valid on agent steps (nothing else holds a conversation to prompt)", label)
+	case step.Dir != "":
+		return fmt.Errorf("%s: dir is only valid on agent steps (a task embeds a cd in its run:)", label)
+	case len(step.Tools) > 0:
+		return fmt.Errorf("%s: tools is only valid on agent steps (it selects from the agent's grant; a task's fix: carries its own tools)", label)
+	default:
 		return nil
 	}
 }

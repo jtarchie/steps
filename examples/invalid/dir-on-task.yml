@@ -1,0 +1,12 @@
+# dir: sets an agent conversation's working directory — the one step kind
+# with no run: string to embed a cd in. On a task it parsed cleanly and was
+# silently ignored, so the pipeline read as if the command ran somewhere it
+# did not.
+# expect: dir is only valid on agent steps
+
+jobs:
+- name: build
+  plan:
+  - task: compile
+    run: "true"
+    dir: repo

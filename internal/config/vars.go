@@ -23,8 +23,8 @@ var varPattern = regexp.MustCompile(`\(\(([a-zA-Z0-9_.\-]+)\)\)`) //nolint:goche
 // added.
 //
 // Unknown references are LEFT IN PLACE rather than blanked. They are either a
-// load_var: value that does not exist yet (see LoadVarNames) or a mistake, and
-// blanking them would turn both into a silently empty string in a command.
+// load_var: value that does not exist yet or a mistake, and blanking them
+// would turn both into a silently empty string in a command.
 func InterpolateVars(source []byte, vars map[string]string) []byte {
 	if len(vars) == 0 {
 		return source
@@ -69,22 +69,6 @@ func RenderVars(value string, vars map[string]string) string {
 	}
 
 	return string(InterpolateVars([]byte(value), vars))
-}
-
-// LoadVarNames lists the vars a job's plan produces at run time, in the order
-// the steps that produce them appear.
-func (j Job) LoadVarNames() []string {
-	var names []string
-
-	_ = j.visitSteps(func(_ string, step *Step) error {
-		if step.LoadVar != "" {
-			names = append(names, step.LoadVar)
-		}
-
-		return nil
-	})
-
-	return names
 }
 
 // validateVars rejects a ((name)) that nothing will ever supply, and a

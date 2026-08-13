@@ -684,8 +684,8 @@
         },
         "max_consecutive_failures": {
           "type": "integer",
-          "minimum": 1,
-          "description": "Pause this job under steps watch after this many consecutive failed triggered runs. Resume with: steps jobs resume <name>. Omit for no circuit breaker."
+          "minimum": 0,
+          "description": "Pause this job under steps watch after this many consecutive failed triggered runs. Resume with: steps jobs resume <name>. Omit (or 0) for no circuit breaker."
         },
         "on_success": {
           "$ref": "#/$defs/step"
@@ -708,8 +708,8 @@
         },
         "max_in_flight": {
           "type": "integer",
-          "minimum": 1,
-          "description": "Max concurrent builds of this job under steps watch. Omit for unlimited (bounded by --max-concurrent). Rejected alongside serial:/serial_groups:, which force 1."
+          "minimum": 0,
+          "description": "Max concurrent builds of this job under steps watch. Omit (or 0) for unlimited (bounded by --max-concurrent). Rejected alongside serial:/serial_groups:, which force 1."
         }
       }
     },
@@ -891,8 +891,8 @@
         },
         "max_in_flight": {
           "type": "integer",
-          "minimum": 1,
-          "description": "across: steps only. How many cells may run at once. Unset or 1 runs them serially in declaration order; above 1 requires a top-level workspace: strategy. Not hashed \u2014 changing it never re-runs a cached cell.",
+          "minimum": 0,
+          "description": "across: steps only. How many cells may run at once. Unset, 0 or 1 runs them serially in declaration order; above 1 requires a top-level workspace: strategy. Not hashed \u2014 changing it never re-runs a cached cell.",
           "default": 1
         },
         "do": {
