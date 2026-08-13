@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 //go:embed *.md
@@ -93,10 +94,113 @@ func Pages() []string {
 func Page(name string) ([]byte, error) {
 	body, err := content.ReadFile(name)
 	if err != nil {
-		return nil, fmt.Errorf("no doc page %q (see Pages)", name)
+		return nil, fmt.Errorf("no doc page %q", name)
 	}
 
 	return body, nil
+}
+
+// Group is a curated section of the corpus, in reading order — the same
+// order docs/README.md's own tables teach. Pages() stays alphabetical for
+// enumeration; Groups() is what a navigation surface should render, so the
+// rail agrees with the curriculum instead of sorting agents-internals ahead
+// of agents.
+type Group struct {
+	Title string
+	Pages []string
+}
+
+// Groups returns every page but the index, grouped and ordered for reading.
+// TestDocsGroupsComplete (root package) keeps this table complete: a new
+// page must be placed in a group, or the build is red.
+func Groups() []Group {
+	return []Group{
+		{Title: "Writing pipelines", Pages: []string{
+			"resources.md", "control-flow.md", "agents.md",
+			"attempts-timeout.md", "workspace.md", "infra.md",
+			"templating.md", "mcp.md", "complete.md",
+		}},
+		{Title: "Reference", Pages: []string{
+			"web.md", "agents-internals.md", "conformance.md",
+		}},
+	}
+}
+
+// Slug converts a heading's text to its GitHub-style anchor id: lowercased,
+// punctuation dropped, spaces hyphenated, underscores and hyphens kept.
+//
+// This is the algorithm the corpus's hand-written #fragment links were
+// authored against (the pages are read on GitHub too), so the web renderer
+// generates ids with THIS rather than goldmark's default — which folds "_"
+// into "-" and silently strands every anchor containing a field name like
+// max_visits. TestDocsAnchors holds the two in agreement.
+func Slug(heading string) string {
+	var out strings.Builder
+
+	for _, r := range strings.ToLower(heading) {
+		switch {
+		case r == ' ':
+			out.WriteByte('-')
+		case r == '-' || r == '_' ||
+			unicode.IsLetter(r) || unicode.IsDigit(r):
+			out.WriteRune(r)
+		}
+	}
+
+	return out.String()
+}
+
+// Heading is one heading on a page, with the anchor id it renders under.
+type Heading struct {
+	Level int
+	Text  string
+	ID    string
+}
+
+// Headings returns every heading on a page in order, each with its
+// GitHub-style id, deduplicated the way GitHub does (repeats get -1, -2,
+// ...). Fenced code blocks are skipped — a "# comment" inside one is not a
+// heading. This is the id set the web renderer emits and the anchor test
+// verifies against, so all three surfaces agree by construction.
+func Headings(body string) []Heading {
+	var (
+		headings []Heading
+		seen     = map[string]int{}
+		fence    bool
+	)
+
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "```") {
+			fence = !fence
+
+			continue
+		}
+
+		marks := len(line) - len(strings.TrimLeft(line, "#"))
+		if fence || marks == 0 || marks > 6 || !strings.HasPrefix(line[marks:], " ") {
+			continue
+		}
+
+		text := stripMarkdown(strings.TrimSpace(line[marks:]))
+		slug := Slug(text)
+
+		if n, dup := seen[slug]; dup {
+			seen[slug] = n + 1
+			slug = fmt.Sprintf("%s-%d", slug, n)
+		} else {
+			seen[slug] = 1
+		}
+
+		headings = append(headings, Heading{Level: marks, Text: text, ID: slug})
+	}
+
+	return headings
+}
+
+// stripMarkdown removes the inline markers a heading may carry (`code`,
+// **bold**, *em*) so slugging sees the text GitHub slugs.
+func stripMarkdown(text string) string {
+	return strings.NewReplacer("`", "", "*", "").Replace(text)
 }
 
 // Blocks extracts every ```yaml block from every page. An unterminated

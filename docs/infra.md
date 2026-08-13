@@ -69,7 +69,7 @@ Native Linux is unaffected. The same constraint applies to a CLI agent's contain
 
 ### CLI agents
 
-For a [CLI-backed agent](agents.md#cli-backed-agents) (`source.model: "@claude/..."`), `image:` containerizes **the CLI process itself**, not just the tools steps serves it. Most of a CLI agent's tools are its own natives (`Read`, `Bash`, `Edit`), which never route through steps, so without a container the working directory is their only fence. The CLI runs as a one-shot `docker run --rm` for the length of the step.
+For a [CLI-backed agent](agents.md#cli-backed-agents-claudesonnet) (`source.model: "@claude/..."`), `image:` containerizes **the CLI process itself**, not just the tools steps serves it. Most of a CLI agent's tools are its own natives (`Read`, `Bash`, `Edit`), which never route through steps, so without a container the working directory is their only fence. The CLI runs as a one-shot `docker run --rm` for the length of the step.
 
 - **The tool bridge stays reachable.** A CLI agent's non-native tools — custom `run:` tools, `mcp_servers:` grants, the synthesized verdict/context tools — reach the CLI over a loopback MCP server the steps process hosts. From inside a container that means `host.docker.internal`, which steps makes resolvable everywhere via `--add-host host.docker.internal:host-gateway`. Under `network: host` the container shares this namespace, so the bridge stays on loopback.
 - **The container is named, and removed on every exit path** — including `timeout:` and cancellation, where the CLI would otherwise keep running and spending.

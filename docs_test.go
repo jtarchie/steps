@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -310,6 +311,100 @@ func collectKeys(value any, keys map[string]bool) {
 	case []any:
 		for _, child := range typed {
 			collectKeys(child, keys)
+		}
+	}
+}
+
+// docLinkPattern matches [text](target) inline links. Good enough for this
+// corpus: the docs never nest brackets inside link text.
+var docLinkPattern = regexp.MustCompile(`\]\(([^)\s]+)\)`)
+
+// TestDocsAnchors is link integrity for the corpus: every relative .md link
+// must name an existing page, and every #fragment (same-page or cross-page)
+// must name a heading id that page actually renders. The ids come from
+// docs.Headings — the same GitHub-style slugs the web renderer emits — so a
+// broken anchor is a red build here instead of a silent jump-to-top in the
+// UI. (The YAML examples got this guarantee first; the anchors were the
+// untested half.)
+func TestDocsAnchors(t *testing.T) {
+	ids := map[string]map[string]bool{}
+
+	for _, page := range docs.Pages() {
+		body, err := docs.Page(page)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ids[page] = map[string]bool{}
+		for _, heading := range docs.Headings(string(body)) {
+			ids[page][heading.ID] = true
+		}
+	}
+
+	for _, page := range docs.Pages() {
+		body, _ := docs.Page(page)
+
+		for _, match := range docLinkPattern.FindAllStringSubmatch(string(body), -1) {
+			checkDocLink(t, ids, page, match[1])
+		}
+	}
+}
+
+// checkDocLink verifies one link target against the corpus's rendered ids.
+func checkDocLink(t *testing.T, ids map[string]map[string]bool, page, target string) {
+	t.Helper()
+
+	if strings.Contains(target, "://") || strings.HasPrefix(target, "..") {
+		return // external, or repo files outside the embed
+	}
+
+	targetPage, fragment, _ := strings.Cut(target, "#")
+	if targetPage == "" {
+		targetPage = page // same-page #fragment
+	}
+
+	pageIDs, exists := ids[targetPage]
+	if !exists {
+		t.Errorf("%s links to %q, which is not an embedded doc page", page, target)
+
+		return
+	}
+
+	if fragment != "" && !pageIDs[fragment] {
+		t.Errorf("%s links to %q, but %s has no heading with id %q", page, target, targetPage, fragment)
+	}
+}
+
+// TestDocsGroupsComplete keeps the curated navigation table (docs.Groups)
+// covering every page: a new page must be placed in a group, or the web
+// rail would silently omit it.
+func TestDocsGroupsComplete(t *testing.T) {
+	grouped := map[string]bool{}
+
+	for _, group := range docs.Groups() {
+		for _, page := range group.Pages {
+			if grouped[page] {
+				t.Errorf("docs.Groups lists %s twice", page)
+			}
+
+			grouped[page] = true
+		}
+	}
+
+	for _, page := range docs.Pages() {
+		if page == "README.md" {
+			continue // the index is the rail's "start here", not a group member
+		}
+
+		if !grouped[page] {
+			t.Errorf("docs.Groups has no group for %s — add it to the table in docs/docs.go", page)
+		}
+	}
+
+	for page := range grouped {
+		_, err := docs.Page(page)
+		if err != nil {
+			t.Errorf("docs.Groups names %s, which is not an embedded page", page)
 		}
 	}
 }

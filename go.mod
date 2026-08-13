@@ -6,6 +6,7 @@ require gopkg.in/yaml.v3 v3.0.1
 
 require (
 	github.com/achetronic/adk-utils-go v0.23.0
+	github.com/alecthomas/chroma/v2 v2.20.0
 	github.com/alecthomas/kong v1.16.1
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/frioux/leatherman v0.0.0-20260807130354-76519e141082
@@ -28,7 +29,6 @@ require (
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.23.0 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
-	github.com/alecthomas/chroma/v2 v2.20.0 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

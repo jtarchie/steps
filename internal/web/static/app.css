@@ -461,20 +461,31 @@ td.faint, .faint { color: var(--faint); }
 .spendtable .model { color: var(--dim); }
 
 /* /docs — the embedded documentation, rendered server-side. Prose pages in
- * a transcript UI: same ground, same rules, sans for the reading voice. */
-.docsnav { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 10px 0 20px; font-family: var(--sans); font-size: 12px; }
-.docsnav a { color: var(--dim); }
-.docsnav a:hover { color: var(--fg); }
+ * a transcript UI: same ground, same rules, sans for the reading voice.
+ * Code blocks carry the app's own palette via the "steps" chroma style
+ * (internal/web/docs.go), never a stock theme. */
+.docsnav { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin: 10px 0 8px; font-family: var(--sans); font-size: 12px; }
+.docsnav a, .docstoc a { color: var(--dim); }
+.docsnav a:hover, .docstoc a:hover { color: var(--fg); }
 .docsnav a[aria-current="page"] { color: var(--green); }
-.docs { max-width: 880px; font-family: var(--sans); line-height: 1.55; }
-.docs h1, .docs h2, .docs h3, .docs h4 { font-family: var(--mono); font-weight: 600; line-height: 1.25; }
+.docsgroup { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.docsgrouptitle { color: var(--faint); text-transform: uppercase; letter-spacing: .06em; font-size: 10px; }
+.docstoc { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 18px; padding: 6px 10px; border: 1px solid var(--line-soft); border-radius: 4px; font-family: var(--sans); font-size: 12px; }
+.docs { max-width: 880px; font-family: var(--sans); font-size: 14px; line-height: 1.6; }
+/* Prose keeps a readable measure; code and tables may use the full column. */
+.docs p, .docs ul, .docs ol, .docs blockquote { max-width: 72ch; }
+.docs h1, .docs h2, .docs h3, .docs h4 { font-family: var(--mono); font-weight: 600; line-height: 1.25; scroll-margin-top: 3.2rem; }
 .docs h1 { font-size: 1.4em; }
 .docs h2 { font-size: 1.15em; margin-top: 1.8em; border-bottom: 1px solid var(--line-soft); padding-bottom: .25em; }
 .docs h3 { font-size: 1em; margin-top: 1.4em; }
-.docs pre { border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; overflow-x: auto; font-size: .9em; }
+.docs h1 code, .docs h2 code, .docs h3 code, .docs h4 code { overflow-wrap: anywhere; }
+.docs pre { border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; overflow-x: auto; font-size: .92em; }
 .docs code { font-family: var(--mono); font-size: .95em; }
-.docs :not(pre) > code { background: var(--panel2); padding: 1px 4px; border-radius: 3px; }
-.docs table { border-collapse: collapse; font-size: .92em; }
+.docs :not(pre) > code { background: var(--panel2); padding: 1px 4px; border-radius: 3px; overflow-wrap: anywhere; }
+/* display:block turns the table into its own scroll container, so a wide
+ * conformance matrix pans inside the column instead of dragging the whole
+ * document sideways on a phone. */
+.docs table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: .92em; }
 .docs th, .docs td { border: 1px solid var(--line); padding: 5px 9px; text-align: left; vertical-align: top; }
 .docs th { color: var(--dim); font-weight: 500; }
 .docs blockquote { border-left: 2px solid var(--line); margin-left: 0; padding-left: 14px; color: var(--dim); }
