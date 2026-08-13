@@ -14,9 +14,11 @@ import (
 
 // maxRecordedResultBytes caps how much of a single tool result is persisted in
 // a transcript. Results are already bounded by maxToolOutputBytes for what the
-// model sees; this tighter cap keeps a transcript a readable record of the
-// exchange rather than a second copy of every tool's output.
-const maxRecordedResultBytes = 4096
+// model sees; this cap keeps a transcript from becoming a second full copy of
+// every tool's output while staying close enough to what the model actually
+// read (16KB vs the 32KB inline cap) that a transcript reader is rarely
+// looking at a truncation marker where the decisive evidence was.
+const maxRecordedResultBytes = 16_384
 
 // transcriptEvent is one entry in an agent conversation's persisted
 // transcript: the model's visible text for a turn, a tool call it made, the

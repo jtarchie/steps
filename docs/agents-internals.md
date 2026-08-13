@@ -71,7 +71,7 @@ Agent steps can set `timeout:` and `attempts:` to bound their execution:
   attempts: 2
 ```
 
-**Timeout** bounds the **entire conversation** (all turns, all tool calls, and any request retries within them) to a wall-clock deadline. The built-in `agentStepTimeout` is 10 minutes; `timeout:` (if set) overrides it. A timeout mid-conversation classifies as **errored**, not failed.
+**Timeout** bounds the **entire conversation** (all turns, all tool calls, and any request retries within them) to a wall-clock deadline. The built-in `agentStepTimeout` is 30 minutes; `timeout:` (if set) overrides it. A timeout mid-conversation classifies as **errored**, not failed.
 
 **Attempts** retries the failing **request**, in `requests.go`'s transport. The conversation runs exactly once and carries on from where it was, so nothing accumulated is lost. Tool failures never trigger it at all — they come back to the model as data.
 

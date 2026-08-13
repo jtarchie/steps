@@ -28,8 +28,10 @@ import (
 // all attempts and turns). config.ResolveAgentInvocation's MaxTurns bounds
 // the number of turns, but a single hung endpoint could otherwise block
 // indefinitely — the OpenAI client sets no default request timeout and
-// relies entirely on ctx.
-const agentStepTimeout = 10 * time.Minute
+// relies entirely on ctx. 30 minutes: a 30-turn conversation on a slow or
+// reasoning-heavy model routinely outlives the previous 10, and a step
+// that wants a tighter leash sets timeout: itself.
+const agentStepTimeout = 30 * time.Minute
 
 // agentTimeout resolves the per-attempt conversation deadline: the
 // invocation's timeout: when it parses to a positive duration, otherwise the
@@ -579,8 +581,10 @@ func agentResultRecord(res conversationResult) map[string]any {
 // maxRecordedArgBytes caps how much of a single tool argument is persisted.
 // The trajectory is a record of what the agent did, not a copy of what it
 // wrote: a write_file call's whole content would balloon nodes.result for no
-// diagnostic gain, since the file itself is the artifact.
-const maxRecordedArgBytes = 2048
+// diagnostic gain, since the file itself is the artifact. 16KB keeps most
+// real arguments (an edit_file old/new pair, a run_shell script) whole for
+// the replay/audit reader; only bulk file bodies get cut.
+const maxRecordedArgBytes = 16_384
 
 // recordedTrajectory converts a run's tool calls into the plain shape stored
 // in nodes.result — "it called write_file and it failed" is a different story

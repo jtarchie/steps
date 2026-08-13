@@ -232,9 +232,9 @@ Retries the resource's out command up to 3 times, with a 5-minute deadline per a
 
 Bounds the agent's entire conversation (including all tool calls) to 10 minutes. If the agent hasn't finished by then, the step times out and is classified as errored — and any remaining `attempts:` are skipped, since a restarted conversation would get the same 10 minutes.
 
-> **An `agent:` step that sets no `timeout:` still gets one: 10 minutes** (`agentStepTimeout`, `internal/agent/step.go`). This is the single exception to the explicit-only rule below, and it exists because the OpenAI client sets no request timeout of its own and relies entirely on `ctx` — without a fallback, one hung endpoint blocks the run forever.
+> **An `agent:` step that sets no `timeout:` still gets one: 30 minutes** (`agentStepTimeout`, `internal/agent/step.go`). This is the single exception to the explicit-only rule below, and it exists because the OpenAI client sets no request timeout of its own and relies entirely on `ctx` — without a fallback, one hung endpoint blocks the run forever.
 >
-> **Deleting a `timeout:` from an agent step therefore does not remove its deadline — it may shorten it.** Removing `timeout: 45m` leaves 10m, not "no limit". A long-running agent (a coding agent over 100+ turns) needs an explicit generous value; omit it only if 10 minutes is genuinely enough. The symptom when it isn't is `agent: generate content: context deadline exceeded`, classified not-retryable, because a fresh conversation would hit the same wall.
+> **Deleting a `timeout:` from an agent step therefore does not remove its deadline — it may shorten it.** Removing `timeout: 45m` leaves 30m, not "no limit". A long-running agent (a coding agent over 100+ turns) needs an explicit generous value; omit it only if 30 minutes is genuinely enough. The symptom when it isn't is `agent: generate content: context deadline exceeded`, classified not-retryable, because a fresh conversation would hit the same wall.
 >
 > `task:`/`put:`/`get:` steps have no such default: unset means no deadline (`retryWithTimeout` applies one only when `timeout > 0`).
 

@@ -296,16 +296,48 @@ func TestExecSearchFilesErrors(t *testing.T) {
 // tool's whole reason to exist: a fully saturated content-mode result must
 // still be small enough that it can never do what an uncapped fuzzy search
 // did to a real run's context window.
+//
+// The bound is the content BYTE budget, not the result count: addMatches
+// stops keeping matches once the budget is spent, so the worst case is the
+// budget itself plus the one match that almost fit — regardless of how the
+// line-length and result-count ceilings are tuned.
 func TestSearchWorstCaseFitsInlineBudget(t *testing.T) {
 	t.Parallel()
 
-	// Every kept line at its maximum size, plus generous room for the path,
-	// line number, and JSON scaffolding around each.
-	const perMatchOverhead = 120
-
-	worst := maxSearchContentResults * (maxSearchLineBytes + perMatchOverhead)
+	worst := maxSearchContentBudgetBytes + maxSearchLineBytes + searchMatchOverheadBytes
 	if worst >= maxToolOutputBytes {
 		t.Errorf("worst-case content result is ~%d bytes, at or over the %d inline cap; the bound must hold by arithmetic, not by truncation", worst, maxToolOutputBytes)
+	}
+}
+
+// TestSearchContentByteBudgetStopsKeeping drives addMatches past the byte
+// budget and checks it stops keeping matches while total still counts them.
+func TestSearchContentByteBudgetStopsKeeping(t *testing.T) {
+	t.Parallel()
+
+	var r searchResult
+
+	line := strings.Repeat("x", maxSearchLineBytes)
+	perMatch := maxSearchLineBytes + searchMatchOverheadBytes
+	fits := maxSearchContentBudgetBytes / perMatch
+
+	matches := make([]searchMatch, fits+10)
+	for i := range matches {
+		matches[i] = searchMatch{path: "big.txt", line: i + 1, text: line}
+	}
+
+	r.addMatches(matches, len(matches), maxSearchContentResults)
+
+	if len(r.matches) != fits {
+		t.Errorf("kept %d matches, want %d — the byte budget must stop collection", len(r.matches), fits)
+	}
+
+	if r.total != len(matches) {
+		t.Errorf("total = %d, want %d — total reports the true scale even past the budget", r.total, len(matches))
+	}
+
+	if r.contentBytes > maxSearchContentBudgetBytes {
+		t.Errorf("contentBytes = %d, over the %d budget", r.contentBytes, maxSearchContentBudgetBytes)
 	}
 }
 

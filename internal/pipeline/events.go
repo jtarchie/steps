@@ -163,10 +163,12 @@ func publishOutputForCurrentStep(ctx context.Context, jobName, stdout, stderr st
 }
 
 // maxPublishedOutputBytes bounds what one step contributes to a run's event
-// log. Generous enough for the output a person actually reads, small enough
-// that a runaway command cannot turn the transcript into a copy of its own
+// log. Generous enough for the output a person actually reads — 32KB, the
+// same bound a tool result gets inline, so a failing command's tail is not
+// cut shorter in the UI than the model itself would have seen — while a
+// runaway command still cannot turn the transcript into a copy of its own
 // stdout.
-const maxPublishedOutputBytes = 16_000
+const maxPublishedOutputBytes = 32_000
 
 // publishStepOutput records what a step printed, whichever way the step ended.
 //

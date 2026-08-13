@@ -34,24 +34,38 @@ import (
 // file tools'; and regexp + filepath.WalkDir are stdlib, so the package's
 // depguard import allow-list is untouched.
 const (
-	// Hard ceilings a model cannot raise with head_limit. The content
-	// ceiling is set so a fully saturated result — every kept line at
-	// maxSearchLineBytes, plus a generous allowance for each match's path,
-	// line number and JSON scaffolding — still lands well under
-	// maxToolOutputBytes. TestSearchWorstCaseFitsInlineBudget pins that,
-	// since the arithmetic is the entire guarantee this tool offers.
+	// Hard ceilings a model cannot raise with head_limit. Content mode is
+	// additionally bounded by maxSearchContentBudgetBytes below — the count
+	// ceiling alone no longer guarantees the inline fit, the byte budget
+	// does. TestSearchWorstCaseFitsInlineBudget pins that, since the
+	// arithmetic is the entire guarantee this tool offers.
 	maxSearchPathResults    = 200
-	maxSearchContentResults = 80
+	maxSearchContentResults = 200
 
 	// Defaults when head_limit is omitted. Lower than the ceilings, since
 	// the common case is orienting ("where does this live?"), not surveying.
 	defaultSearchPathResults    = 50
-	defaultSearchContentResults = 30
+	defaultSearchContentResults = 50
 
 	// maxSearchLineBytes bounds a single returned matching line. A minified
 	// bundle or a generated table can carry lines of tens of KB, any one of
-	// which would blow the whole result budget on its own.
-	maxSearchLineBytes = 200
+	// which would blow the whole result budget on its own. 500 bytes keeps
+	// nearly every real source line whole — the previous 200 cut most
+	// matching lines mid-statement, which mattered for edit_file old_strings
+	// copied from results.
+	maxSearchLineBytes = 500
+
+	// maxSearchContentBudgetBytes bounds the TOTAL bytes of kept content
+	// matches (line text plus searchMatchOverheadBytes each). This is what
+	// lets both the line bound and the result ceiling be generous: short
+	// typical lines can fill all maxSearchContentResults slots, while
+	// maximum-length lines saturate the byte budget after ~45 matches —
+	// either way the result fits inline, by construction.
+	maxSearchContentBudgetBytes = 28_000
+
+	// searchMatchOverheadBytes is the per-match allowance for the path, line
+	// number, and JSON scaffolding around the line text.
+	searchMatchOverheadBytes = 120
 
 	// maxSearchFileBytes skips files too large to be worth scanning line by
 	// line. A match inside a 2MB file is nearly always a generated artifact.
@@ -129,6 +143,9 @@ type searchResult struct {
 	total        int
 	filesScanned int
 	budgetHit    bool
+	// contentBytes accumulates the kept matches' line text plus per-match
+	// overhead, enforcing maxSearchContentBudgetBytes (see addMatches).
+	contentBytes int
 }
 
 // execSearchFiles validates a search_files call and runs it. Argument errors
@@ -348,16 +365,20 @@ func (r *searchResult) addCount(rel string, count, headLimit int) {
 }
 
 // addMatches records a file's matching lines. total advances by the file's
-// full count even when only some lines are kept.
+// full count even when only some lines are kept. A match is kept only while
+// both the head limit and the content byte budget hold — the byte budget is
+// what keeps a saturated result inline regardless of line lengths.
 func (r *searchResult) addMatches(matches []searchMatch, count, headLimit int) {
 	r.total += count
 
 	for _, m := range matches {
-		if len(r.matches) >= headLimit {
+		cost := len(m.text) + searchMatchOverheadBytes
+		if len(r.matches) >= headLimit || r.contentBytes+cost > maxSearchContentBudgetBytes {
 			return
 		}
 
 		r.matches = append(r.matches, m)
+		r.contentBytes += cost
 	}
 }
 

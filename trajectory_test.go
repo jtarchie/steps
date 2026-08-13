@@ -178,7 +178,7 @@ jobs:
 // did, not a second copy of everything it wrote.
 func TestTrajectoryArgsAreTruncated(t *testing.T) {
 	dir := t.TempDir()
-	huge := strings.Repeat("x", 10_000)
+	huge := strings.Repeat("x", 50_000)
 	fake := newFakeLLM(t,
 		callsTool("write_file", map[string]any{"path": "big.txt", "content": huge}),
 		says("Written."),
