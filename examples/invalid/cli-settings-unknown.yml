@@ -1,0 +1,15 @@
+# The only settings: value is "project" — the repo's checked-in .claude/
+# scope. The operator's personal user scope is exactly what a pipeline step
+# must never inherit, so there is no spelling that loads it.
+# expect: settings "user" is not supported
+agents:
+- name: builder
+  source:
+    model: "@claude/sonnet"
+  settings: user
+
+jobs:
+- name: build
+  plan:
+  - agent: builder
+    prompt: Build the thing.

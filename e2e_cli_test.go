@@ -89,8 +89,10 @@ func TestE2ECLIAgentInvocation(t *testing.T) {
 		"--max-turns|12|",
 		"--append-system-prompt|You review code.",
 		"--strict-mcp-config|",
-		// A pipeline step must not inherit the operator's personal ~/.claude.
-		"--setting-sources|project|",
+		// A pipeline step must not inherit the operator's personal ~/.claude,
+		// nor the repo's .claude/ scope without a settings: declaration —
+		// empty means the child loads no configuration scopes at all.
+		"--setting-sources||",
 		// The built-in surface is an allow-list of exactly what was granted.
 		"--tools|Bash,Read|",
 	} {

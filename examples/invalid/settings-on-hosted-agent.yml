@@ -1,0 +1,17 @@
+# settings: opts a CLI subprocess into the repo's checked-in .claude/ scope.
+# A hosted (HTTP) agent has no CLI to configure, so accepting it here would
+# let the pipeline read as if repo config shaped the agent while nothing
+# loaded it. Rejected rather than silently ignored.
+# expect: settings is only supported with a cli source
+
+agents:
+- name: reviewer
+  source:
+    model: openrouter/anthropic/claude-sonnet-4
+  settings: project
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    prompt: Review something.

@@ -780,13 +780,14 @@ func cliArgs(prepared preparedAgentStep, runtime cliRuntime, mcpConfig string, p
 	// servers, handing the step tools the pipeline never granted.
 	args = append(args, "--mcp-config", mcpConfig, "--strict-mcp-config")
 
-	// A pipeline step is not a personal session. Without this the subprocess
-	// inherits the operator's whole ~/.claude — settings, hooks, plugins,
-	// skills, output styles — so the same pipeline behaves differently per
-	// machine and a user hook can fire inside a step that never declared one.
-	// Project scope stays: it is checked in beside the pipeline, reviewable,
-	// and identical everywhere the repo goes.
-	args = append(args, "--setting-sources", "project")
+	// A pipeline step is not a personal session. With no settings: declared
+	// the subprocess loads NO configuration scopes — not the operator's
+	// ~/.claude (settings, hooks, plugins, skills, output styles, which would
+	// make the same pipeline behave differently per machine), and not the
+	// repo's own .claude/ either: project config shaping an agent is a
+	// capability the pipeline opts into with `settings: project`, checked in
+	// and reviewable beside the pipeline.
+	args = append(args, "--setting-sources", prepared.ri.CLISettings)
 
 	return args
 }

@@ -143,9 +143,9 @@ The child's tool surface is set by `--tools` and its permissions by `--allowedTo
 
 ### Configuration scope, and what is still not hashed
 
-`--setting-sources project` keeps a pipeline step out of the operator's personal configuration. Without it the subprocess inherits all of `~/.claude` — settings, hooks, plugins, skills, output styles — none of which appears in the merkle hash, so the same pipeline would behave differently per machine and a user hook could fire inside a step that never declared one.
+`--setting-sources` is passed empty by default: the subprocess loads **no configuration scopes** — not the operator's `~/.claude` (settings, hooks, plugins, skills, output styles — none of which appears in the merkle hash, so the same pipeline would behave differently per machine and a user hook could fire inside a step that never declared one), and not the repo's `.claude/` either. Repo config shaping an agent is a capability, so the pipeline opts into it: `settings: project` on the agent entry passes `--setting-sources project`.
 
-Project-level configuration deliberately still loads, and it is **also not hashed**. Folding it in would mean reading files that may sit outside the step's declared inputs, and the honest boundary is the same one this package already draws around the CLI's version: steps hashes *which* thing was asked for, not the state of everything on the other side of the call. A repo's `CLAUDE.md` changing does not invalidate a cached CLI agent step; if that matters for a given pipeline, name the file in `context_paths:`, which is hashed.
+When project scope is opted in, its *contents* are still **not hashed** — but the opt-in itself is (`cli_settings`), so granting or revoking the scope invalidates the cache. Folding the contents in would mean reading files that may sit outside the step's declared inputs, and the honest boundary is the same one this package already draws around the CLI's version: steps hashes *which* thing was asked for, not the state of everything on the other side of the call. A repo's `CLAUDE.md` changing does not invalidate a cached CLI agent step; if that matters for a given pipeline, name the file in `context_paths:`, which is hashed.
 
 ### Reading the transcript back
 

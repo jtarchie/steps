@@ -940,6 +940,9 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 	// wire, only which thing was asked.
 	if ri.CLI != "" {
 		content["cli"] = ri.CLI
+		// Which CLI setting scopes load — a project .claude/ shapes the
+		// conversation, so opting in (or out) must invalidate the cache.
+		content["cli_settings"] = ri.CLISettings
 	}
 
 	if step.Assert != nil {

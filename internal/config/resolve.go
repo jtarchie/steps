@@ -162,8 +162,13 @@ type ResolvedInvocation struct {
 	// cliagent.go). BaseURL is empty in that case, and ModelName is the model
 	// the CLI is asked for (e.g. "sonnet"). Hashed as `cli`, so moving an
 	// agent between a CLI and a hosted provider invalidates its cache.
-	CLI     string
-	Persona string
+	CLI string
+	// CLISettings is the CLI configuration scope the subprocess loads (see
+	// Agent.Settings): "" loads none, CLISettingsProject loads the repo's
+	// checked-in .claude/ scope. Hashed as `cli_settings` — repo config
+	// shaping the agent is part of what the step asked for.
+	CLISettings string
+	Persona     string
 	// ContextPaths mirrors Step.ContextPaths once resolved — populated from
 	// the step, not the agent definition, since concrete input paths are
 	// only known at the step level.
@@ -318,6 +323,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		APIKeyEnv:            target.APIKeyEnv,
 		RequiresKey:          target.RequiresKey,
 		CLI:                  target.CLI,
+		CLISettings:          agent.Settings,
 		Persona:              agent.System,
 		ContextPaths:         step.ContextPaths,
 		MaxContextBytes:      resolveMaxContextBytes(step.MaxContextBytes, agent.MaxContextBytes),

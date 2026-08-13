@@ -127,8 +127,17 @@ type Agent struct {
 	Budget *Budget `yaml:"budget,omitempty"`
 	// Tools is the grant: the built-in tools this agent may use plus any
 	// reusable custom tool definitions. A step selects a subset by name and
-	// may add its own inline custom tools. Empty grants all built-ins.
+	// may add its own inline custom tools. Empty grants the read-only
+	// built-ins (DefaultAgentToolSpecs).
 	Tools []ToolSpec `yaml:"tools,omitempty"`
+	// Settings opts a CLI-backed agent into the CLI's own configuration
+	// scopes. The only accepted value is "project" — load the repo's
+	// checked-in project scope (.claude/ settings, CLAUDE.md, hooks).
+	// Absent, the subprocess loads no settings at all: a pipeline step is
+	// not a personal session, and repo config shaping an agent is a
+	// capability the pipeline must declare, not inherit. Rejected on hosted
+	// (HTTP) agents, where there is no CLI to configure.
+	Settings string `yaml:"settings,omitempty"`
 }
 
 // AgentSource selects the model and how to reach it. Model may carry a

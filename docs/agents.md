@@ -454,9 +454,16 @@ Anything not granted is **absent**, not merely unapproved: the grant becomes the
 
 ### A step is not your session
 
-A CLI agent step runs with **project-level configuration only**. The repo's own `CLAUDE.md` and settings still apply — they travel with the code, and an agent working in a repo should see that repo's conventions — but your personal `~/.claude` does not: no user settings, hooks, plugins, skills, or output styles.
+A CLI agent step runs with **no configuration scopes by default**. Your personal `~/.claude` never applies — no user settings, hooks, plugins, skills, or output styles — and the repo's own `.claude/` scope (its `CLAUDE.md`, settings, hooks) loads only when the agent opts in:
 
-This is deliberate. A pipeline whose behavior depends on who ran it is not a pipeline, and a personal `PreToolUse` hook firing inside a step nobody declared it on is a surprise nothing in the YAML would explain. It is also markedly cheaper: dropping user-level config out of the system prompt cut a trivial one-step pipeline from ~76K prompt tokens to ~25K in a measured run.
+```yaml
+agents:
+- name: builder
+  source: { model: "@claude/sonnet" }
+  settings: project      # load the repo's checked-in .claude/ scope
+```
+
+This is deliberate. A pipeline whose behavior depends on who ran it is not a pipeline, and a personal `PreToolUse` hook firing inside a step nobody declared it on is a surprise nothing in the YAML would explain. Repo config gets the same treatment as every other capability — declared, not inherited — and the opt-in is hashed, so granting or revoking it invalidates the step's cache. It is also markedly cheaper: dropping user-level config out of the system prompt cut a trivial one-step pipeline from ~76K prompt tokens to ~25K in a measured run.
 
 The tradeoff to know about: steps' path confinement is expressed in the CLI's vocabulary now, and the working directory is the fence rather than per-call validation. A grant including `run_shell` makes that distinction academic anyway — it does on the hosted path too.
 

@@ -179,17 +179,26 @@ func TestCLIToolPermissionsEmptyGrant(t *testing.T) {
 }
 
 // TestCLIArgsIsolatesUserConfig pins that a pipeline step does not inherit the
-// operator's personal setup. Without this the same pipeline behaves
-// differently per machine, and a user hook fires inside a step that never
-// declared one — neither of which is visible in the merkle hash.
+// operator's personal setup, and does not load the repo's .claude/ scope
+// either unless the agent opted in with settings: project. Without this the
+// same pipeline behaves differently per machine, and a user hook fires inside
+// a step that never declared one — neither of which is visible in the merkle
+// hash.
 func TestCLIArgsIsolatesUserConfig(t *testing.T) {
 	t.Parallel()
 
 	prepared := cliPrepared(t, []string{"read_file"})
 	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
 
+	if got := argValue(args, "--setting-sources"); got != "" {
+		t.Errorf("--setting-sources = %q, want empty (no scope loads without a settings: declaration)", got)
+	}
+
+	prepared.ri.CLISettings = config.CLISettingsProject
+	args = cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
+
 	if got := argValue(args, "--setting-sources"); got != "project" {
-		t.Errorf("--setting-sources = %q, want project (user-level config must not reach a pipeline step)", got)
+		t.Errorf("--setting-sources = %q, want project once the agent declares settings: project", got)
 	}
 }
 

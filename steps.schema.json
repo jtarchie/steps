@@ -309,6 +309,11 @@
             "$ref": "#/$defs/toolSpec"
           }
         },
+        "settings": {
+          "type": "string",
+          "enum": ["project"],
+          "description": "CLI sources only: opt the subprocess into the repo's checked-in .claude/ project scope (settings, CLAUDE.md, hooks). Absent, it loads no configuration scopes at all."
+        },
         "max_context_bytes": {
           "type": "integer",
           "minimum": 0,

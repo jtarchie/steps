@@ -30,6 +30,11 @@ import (
 // namespaces cannot collide as either table grows.
 const CLISourcePrefix = "@"
 
+// CLISettingsProject is the only accepted value of Agent.Settings: the CLI
+// subprocess loads the repo's checked-in project scope (.claude/ settings,
+// CLAUDE.md, hooks). Absent, it loads no settings at all.
+const CLISettingsProject = "project"
+
 // cliProvider is a coding-agent CLI steps knows how to drive.
 type cliProvider struct {
 	// binary is the executable name looked up on PATH.
@@ -122,7 +127,17 @@ func (c *Config) validateCLIAgents() error {
 	for i := range c.Agents {
 		agent := c.Agents[i]
 		if !agentUsesCLI(agent) {
+			if agent.Settings != "" {
+				return fmt.Errorf("agent %q: settings is only supported with a cli source (%s...); a hosted provider has no CLI configuration to load — remove it",
+					agent.Name, CLISourcePrefix)
+			}
+
 			continue
+		}
+
+		if agent.Settings != "" && agent.Settings != CLISettingsProject {
+			return fmt.Errorf("agent %q: settings %q is not supported; the only value is %q (load the repo's checked-in .claude/ scope) — absent loads none",
+				agent.Name, agent.Settings, CLISettingsProject)
 		}
 
 		err := checkCLIAgentSettings(agent)
