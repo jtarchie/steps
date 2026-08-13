@@ -184,6 +184,33 @@ func CollectedOutputs(step Step) []string {
 	return step.Unwrap().Outputs
 }
 
+// validateCollectedNotAlsoInput refuses read-modify-write on a COLLECTED
+// output. An ordinary step may name one artifact as both input and output —
+// the directory materializes from what the artifact holds and is captured
+// back over it. A collecting matrix cannot: the block resets each collected
+// artifact to empty before any cell runs (see internal/pipeline's
+// resetCollectedArtifacts, which is what makes per-coordinate capture
+// replace rather than merge), so every cell would materialize an empty
+// directory where the author expected the previous content. Refused rather
+// than silently emptied.
+func validateCollectedNotAlsoInput(label string, step Step) error {
+	inner := step.Unwrap()
+
+	collected := make(map[string]bool, len(inner.Outputs))
+	for _, out := range inner.Outputs {
+		collected[out] = true
+	}
+
+	for _, in := range inner.InputNames() {
+		if collected[in] {
+			return fmt.Errorf("%s: %q is both an input and a collected output of an across: step; the block empties a collected artifact before its cells run, so every cell would see an empty %q — read from a differently-named artifact",
+				label, in, in)
+		}
+	}
+
+	return nil
+}
+
 // CollectedArtifacts returns the store-level artifact names a collecting
 // matrix's cells capture into: the collected outputs, renamed through any
 // author-written output_mapping — the same rename CollectedOutputMapping
@@ -367,12 +394,9 @@ func (c *Config) validateAcross() error {
 
 // validateAcrossOutputs enforces what a matrix that produces artifacts needs.
 //
-// Isolation, because collection IS the capture step: each cell's outputs are
-// materialized under its own coordinates (findings/alpha/...), and under the
-// shared strategy there is no capture at all — cells write straight into one
-// build root — so the same pipeline would change its file layout when
-// workspace: is toggled, which is the scheduling-rewrites-a-data-contract
-// surprise this codebase keeps refusing.
+// strategy: copy, because collection IS the capture step: each cell's outputs
+// are materialized under its own coordinates (findings/alpha/...), which the
+// btrfs backend's snapshot capture cannot express.
 //
 // And the outputs must be declared ON THE STEP, not inherited from a tasks:
 // entry: the step is where a reader looks to see whether a matrix collects,
@@ -395,7 +419,7 @@ func (c *Config) validateAcrossOutputs(label string, step *Step) error {
 			return fmt.Errorf("%s: an across: step with outputs: is not supported under workspace strategy %q; use strategy: copy", label, c.Workspace.EffectiveStrategy())
 		}
 
-		return nil
+		return validateCollectedNotAlsoInput(label, *step)
 	}
 
 	inner := step.Unwrap()
@@ -546,14 +570,12 @@ func (c *Config) stepProducedOutputs(step Step) []string {
 }
 
 // validateAcrossConcurrency checks max_in_flight: — that it describes a matrix
-// at all, and that a concurrent one has somewhere safe to run.
+// at all, and that its value counts something.
 //
-// The isolation requirement is race:'s, for the same reason. A matrix's cells
-// are one step's clones: they declare the same outputs: and their commands
-// write the same paths, so under the shared strategy — where every step's
-// working directory IS the build root — two cells running at once are two
-// writers on one file. Serial cells never collide, which is why this is a
-// requirement of the concurrency and not of across:.
+// Concurrent cells are safe by construction now that every step materializes
+// its own directory: a matrix's cells are one step's clones, declaring the
+// same outputs: and writing the same paths, and each cell writes its own
+// copy.
 func (c *Config) validateAcrossConcurrency(label string, step *Step) error {
 	if step.MaxInFlight == 0 {
 		return nil

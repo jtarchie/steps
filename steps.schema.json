@@ -892,7 +892,7 @@
         "max_in_flight": {
           "type": "integer",
           "minimum": 0,
-          "description": "across: steps only. How many cells may run at once. Unset, 0 or 1 runs them serially in declaration order; above 1 requires a top-level workspace: strategy. Not hashed \u2014 changing it never re-runs a cached cell.",
+          "description": "across: steps only. How many cells may run at once. Unset, 0 or 1 runs them serially in declaration order. Not hashed \u2014 changing it never re-runs a cached cell.",
           "default": 1
         },
         "do": {

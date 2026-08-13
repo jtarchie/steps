@@ -506,8 +506,6 @@ func DoNodeContent(cfg *config.Config, step config.Step) (map[string]any, error)
 // mode), so the declarations ARE part of what the step executes against and
 // must bust its cache when they change.
 func TaskNodeContent(cfg *config.Config, step config.Step, rt config.ResolvedTask) (map[string]any, error) {
-	_ = cfg // kept for signature stability with the other *NodeContent builders
-
 	content := map[string]any{"run": rt.Run}
 
 	content["inputs"] = config.StableStrings(rt.Inputs)
@@ -592,8 +590,6 @@ func assertContent(a *config.Assert) map[string]any {
 // in unconditionally (see TaskNodeContent); inputsAll folds the `inputs: all`
 // escape hatch as a distinct sentinel.
 func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.ResourceType, source, params map[string]any, inputs []string, inputsAll bool) (map[string]any, error) {
-	_ = cfg // kept for signature stability with the other *NodeContent builders
-
 	content := map[string]any{
 		"out_template": resourceType.Config.Out,
 		"source":       source,
@@ -855,8 +851,7 @@ func subAgentInvocationContent(cfg *config.Config, name string) (map[string]any,
 // result, so a pipeline gains or loses compaction without invalidating any
 // cached step; the API key and its env var name are excluded (nothing
 // secret-adjacent belongs in hashed content). inputs/outputs are folded in
-// only when ws is non-nil (workspace: configured) — see TaskNodeContent's
-// doc comment for why.
+// unconditionally — see TaskNodeContent's doc comment for why.
 func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInvocation) (map[string]any, error) {
 	toolsContent, err := toolSpecsContent(cfg, ri.ToolSpecs)
 	if err != nil {

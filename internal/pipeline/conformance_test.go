@@ -327,15 +327,60 @@ jobs:
 // flow, and every flow here is opt-in. The spelling is an explicit get:
 // after the put. See docs/conformance.md and docs/resources.md.
 //
-// Three jobs: no artifact exists after a bare put; an explicit get after the
-// put is the opt-in fetch; and a put whose out: printed no version still
-// succeeds (the pre-existing divergence — RunOut allows a silent out:, relied
-// on by resource types that publish without versioning).
+// Two runnable jobs plus a load-time assertion. The load-time half is the one
+// that actually pins the divergence: `inputs: [thing]` after a bare put must
+// be REFUSED, because the put produced no artifact. (Asserting `test ! -d
+// thing` inside a task would prove nothing — under per-step isolation an
+// undeclared artifact never appears in a step's directory whether the put
+// produced one or not.) The runnable jobs cover the opt-in spelling and the
+// pre-existing silent-out: divergence, where RunOut allows an out: that
+// prints no version, relied on by resource types that publish without
+// versioning.
+// assertConsumingABarePutIsRefused is the load-bearing half of
+// TestConformancePutProducesNoArtifact: a put publishes and produces nothing,
+// so a later step naming it as an input must be refused at plan time. This is
+// what would break if the implicit get came back. Split out to keep the test
+// itself inside the linter's complexity budget.
+func assertConsumingABarePutIsRefused(t *testing.T, dir, resourcesYAML string) {
+	t.Helper()
+
+	badPath := filepath.Join(dir, "consumes-a-put.yml")
+
+	err := os.WriteFile(badPath, []byte(resourcesYAML+`
+jobs:
+- name: consume-what-the-put-did-not-produce
+  plan:
+  - put: thing
+  - task: read-it
+    inputs: [thing]
+    run: "true"
+`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	badCfg, err := config.LoadConfig(badPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The flow check runs per job (RunJob calls it before any step executes,
+	// and `steps validate` calls it for every job), not at LoadConfig.
+	err = workspace.ValidateArtifactFlow(badCfg, &badCfg.Jobs[0])
+	if err == nil {
+		t.Fatal("a task consuming a bare put's resource validated; a put produces no artifact, so this must be a plan-time error")
+	}
+
+	if !strings.Contains(err.Error(), `input "thing" is not a resource fetched`) {
+		t.Errorf("error = %v, want it to name the unavailable input", err)
+	}
+}
+
 func TestConformancePutProducesNoArtifact(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pipeline.yml")
 
-	pipelineYAML := `
+	const resourcesYAML = `
 resource_types:
 - name: dummy
   config:
@@ -355,15 +400,12 @@ resources:
 - name: quiet
   type: silent
   source: {}
+`
 
+	assertConsumingABarePutIsRefused(t, dir, resourcesYAML)
+
+	pipelineYAML := resourcesYAML + `
 jobs:
-# A put fetches nothing and leaves no artifact behind.
-- name: put-produces-no-artifact
-  plan:
-  - put: thing
-  - task: nothing-to-read
-    run: test ! -d thing
-
 # The opt-in spelling: an explicit get after the put. It fetches the
 # resource's latest version like any other get (here what check: reports).
 - name: explicit-get-after-put
@@ -378,8 +420,8 @@ jobs:
 - name: silent-out-still-succeeds
   plan:
   - put: quiet
-  - task: nothing-was-fetched
-    run: test ! -d quiet
+  - task: nothing-to-do
+    run: "true"
 `
 
 	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)

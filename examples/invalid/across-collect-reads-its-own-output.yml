@@ -1,0 +1,21 @@
+# An ordinary step may declare one artifact as both input and output —
+# read-modify-write: the directory materializes from what the artifact holds
+# and is captured back over it. A COLLECTING matrix cannot. The block empties
+# each collected artifact before any cell runs (that is what makes per-cell
+# capture replace rather than merge stale coordinates), so every cell would
+# materialize an empty findings/ where the author expected the seeded content.
+# expect: is both an input and a collected output
+
+jobs:
+- name: fan-out
+  plan:
+  - task: seed
+    outputs: [findings]
+    run: echo seeded > findings/base.txt
+  - across:
+    - var: dim
+      values: [a, b]
+    task: work
+    inputs: [findings]
+    outputs: [findings]
+    run: echo "{{ .vars.dim }}" >> findings/base.txt

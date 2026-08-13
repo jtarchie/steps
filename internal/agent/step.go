@@ -141,20 +141,67 @@ type preparedAgentStep struct {
 // failure than the ordinary case this runs in.
 func (p preparedAgentStep) close(stepLabel string) {
 	closeAll(p.closers)
+
+	// Under --keep-workspace the step's directory survives for a postmortem,
+	// and the spilled tool outputs are exactly what the kept transcript's
+	// pointer messages name — deleting them would keep the scene and throw
+	// away the evidence. A spill dir that would have ridden into an artifact
+	// is already gone by now (removeSpillDirIfCaptured, before Capture).
+	kept := workspace.Kept(p.space)
+
 	workspace.CloseSpace(p.space, stepLabel)
-	p.removeSpillDir()
+
+	if !kept {
+		p.removeSpillDir()
+	}
 }
 
-// removeSpillDir deletes the step's tool-output spill directory. Called
-// explicitly BEFORE the space's Capture as well as from close: the spill dir
-// lives inside the working directory (read_file's confinement means the model
-// can only read spilled output back from there), so when dir: points inside a
-// declared output, a spill dir left in place until after capture would ship
-// scratch tool output inside the artifact.
+// removeSpillDir deletes the step's tool-output spill directory.
 func (p preparedAgentStep) removeSpillDir() {
 	if p.spillDir != "" {
 		_ = os.RemoveAll(p.spillDir)
 	}
+}
+
+// removeSpillDirIfCaptured deletes the spill directory when — and only when —
+// leaving it would put scratch tool output inside a captured artifact.
+//
+// The spill dir has to live inside the agent's working directory: read_file is
+// confined there, and reading spilled output back is the entire point of
+// spilling rather than truncating. Usually that is the step directory's own
+// root, which Capture never copies. But dir: may point INSIDE a declared
+// output (`dir: built`, `outputs: [built]`), and then the spill dir sits in
+// the very tree that is about to be captured — so it goes, before Capture, on
+// the success path.
+//
+// Everywhere else it survives until close, which honors --keep-workspace: a
+// kept failed step is being kept for a postmortem, and the spilled files are
+// exactly what its transcript's pointer messages name.
+func (p preparedAgentStep) removeSpillDirIfCaptured() {
+	if p.spillDir == "" || !p.spillDirWouldBeCaptured() {
+		return
+	}
+
+	p.removeSpillDir()
+}
+
+// spillDirWouldBeCaptured reports whether the spill directory lies inside one
+// of the step's declared output directories.
+func (p preparedAgentStep) spillDirWouldBeCaptured() bool {
+	for _, out := range p.step.Outputs {
+		outDir := filepath.Join(p.space.Dir(), out)
+
+		rel, err := filepath.Rel(outDir, p.spillDir)
+		if err != nil {
+			continue
+		}
+
+		if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // prepareAgentStep resolves step's agent, materializes its (isolated or
@@ -534,7 +581,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 		return StepOutcome{Response: res.text}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
-	prepared.removeSpillDir()
+	prepared.removeSpillDirIfCaptured()
 
 	err = prepared.space.Capture(ctx)
 	if err != nil {
@@ -876,7 +923,7 @@ func RunHook(ctx context.Context, cfg *config.Config, step config.Step, bw works
 		return fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
-	prepared.removeSpillDir()
+	prepared.removeSpillDirIfCaptured()
 
 	err = prepared.space.Capture(ctx)
 	if err != nil {

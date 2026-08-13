@@ -170,10 +170,8 @@ type Step struct {
 	// limit: where an absent value means unbounded — each default matches the
 	// contract its own block already had.
 	//
-	// Above 1 it requires workspace isolation, for the reason race: does:
-	// cells are one step's clones, so they write the same output names into
-	// the same working directory, and under the shared strategy concurrent
-	// cells are two writers on one file. See validateAcrossConcurrency.
+	// Cells are one step's clones — same output names, same paths — and each
+	// materializes its own directory, so concurrent cells never collide.
 	//
 	// NOT hashed, unlike in_parallel:'s limit:/fail_fast:. Those change which
 	// steps run at all; this only changes how many run at once, and the cell
@@ -332,9 +330,8 @@ type Step struct {
 	// a reusable tasks: entry with pinned input names can be pointed at
 	// whatever a job actually fetched/produced without editing the task. Keys
 	// must be a subset of the resolved task's declared inputs:/outputs:. Task
-	// steps only, and only meaningful under a workspace: block (mapping renames
-	// a materialized directory, which the shared single directory can't do) —
-	// both are load-time errors otherwise. Absent/empty leaves names unmapped.
+	// steps only (a load-time error elsewhere); mapping renames a materialized
+	// directory. Absent/empty leaves names unmapped.
 	InputMapping  map[string]string `yaml:"input_mapping,omitempty"`
 	OutputMapping map[string]string `yaml:"output_mapping,omitempty"`
 	// Resource, on a get step, names the resource to fetch when it differs from

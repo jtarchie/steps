@@ -55,9 +55,8 @@ func resolveFileAxes(ctx context.Context, label string, step config.Step, bw wor
 // it into the values that axis takes.
 //
 // The space is its own, and discarded: this reads a file, it does not run the
-// step. Under the shared strategy that space IS the build root and the
-// artifact is already there; under copy/btrfs it is materialized for the read
-// and released — either way the caller needs to know neither.
+// step. The artifact is materialized for the read and released, so nothing
+// the axis reads leaks into the cells that run afterward.
 func readAcrossFile(ctx context.Context, axis config.AcrossVar, bw workspace.BuildWorkspace) ([]string, error) {
 	artifact := axis.SourceArtifact()
 	label := "across-" + axis.Var

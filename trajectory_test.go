@@ -346,3 +346,131 @@ func keptWorkspaceDir(t *testing.T, out string) string {
 
 	return ""
 }
+
+// TestKeepWorkspaceKeepsSpilledToolOutput is the companion to the test above.
+// A tool result too large to return inline is written to a file under the
+// step's own directory and replaced in the conversation by a pointer naming
+// it. Under --keep-workspace the step directory is kept for a postmortem, so
+// deleting those files would keep the transcript's pointers and throw away
+// everything they point at.
+func TestKeepWorkspaceKeepsSpilledToolOutput(t *testing.T) {
+	dir := t.TempDir()
+
+	// Overflow the inline cap, so the result spills instead of being returned.
+	fake := newFakeLLM(t,
+		callsTool("run_shell", map[string]any{"command": "yes spilled-content | head -c 40000"}),
+		says("Done."),
+	)
+
+	path := writePipeline(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: worker
+  source:
+    model: openai/test-model
+    endpoint: `+fake.URL+`
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools: [run_shell]
+jobs:
+- name: work
+  plan:
+  - agent: worker
+    prompt: spill something
+    on_success:
+      task: fail-after-the-agent
+      run: exit 1
+`)
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	out := captureStdout(t, func() {
+		err := run([]string{path, "--keep-workspace"})
+		if err == nil {
+			t.Fatal("expected the hook to fail the job, so the workspace is kept on a failure path")
+		}
+	})
+
+	kept := keptWorkspaceDir(t, out)
+	t.Cleanup(func() { _ = os.RemoveAll(kept) })
+
+	var found bool
+
+	err := filepath.WalkDir(kept, func(path string, d os.DirEntry, err error) error {
+		if err != nil || !d.IsDir() || d.Name() != ".steps-agent-out" {
+			return err
+		}
+
+		entries, readErr := os.ReadDir(path)
+		if readErr != nil {
+			return fmt.Errorf("reading the spill dir: %w", readErr)
+		}
+
+		found = len(entries) > 0
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the kept workspace: %v", err)
+	}
+
+	if !found {
+		t.Error("no spilled tool output survived --keep-workspace; the transcript's pointer messages now name files that are gone")
+	}
+}
+
+// TestSpilledOutputDoesNotRideIntoAnArtifact is the constraint the keep
+// behavior above must not break. read_file is confined to the agent's working
+// directory, so spilled output has to live there — and when dir: points at an
+// artifact this step also captures (read-modify-write: declared as both an
+// input and an output), "there" is the very tree Capture copies into the
+// artifact store. Scratch tool output must not become part of what downstream
+// steps read, so that one case is removed before Capture regardless of
+// --keep-workspace.
+func TestSpilledOutputDoesNotRideIntoAnArtifact(t *testing.T) {
+	dir := t.TempDir()
+
+	fake := newFakeLLM(t,
+		callsTool("run_shell", map[string]any{"command": "yes spilled-content | head -c 40000"}),
+		says("Done."),
+	)
+
+	path := writePipeline(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: worker
+  source:
+    model: openai/test-model
+    endpoint: `+fake.URL+`
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools: [run_shell]
+jobs:
+- name: work
+  plan:
+  - task: seed
+    outputs: [built]
+    run: echo seeded > built/base.txt
+  - agent: worker
+    inputs: [built]
+    outputs: [built]
+    dir: built
+    prompt: spill something
+  - task: inspect
+    inputs: [built]
+    run: |
+      test -f built/base.txt
+      test ! -e built/.steps-agent-out
+`)
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	err := run([]string{path})
+	if err != nil {
+		t.Fatalf("run: %v — the captured artifact carries the agent's spill directory", err)
+	}
+}

@@ -39,12 +39,17 @@ Capturing a value the run itself produces:
 
 ```yaml
 - task: pick-tag
-  run: git describe --tags > version.txt
+  inputs: [repo]
+  outputs: [meta]
+  run: cd repo && git describe --tags > ../meta/version.txt
 - load_var: tag
-  file: version.txt
+  inputs: [meta]           # the load_var step reads from its own declared input
+  file: meta/version.txt
 - put: release
   params: { version: ((tag)) }
 ```
+
+The `inputs:` on the `load_var` step is not optional bookkeeping: a step's directory holds only the artifacts it declares, so a bare `file: version.txt` names nothing that exists. Both halves are checked at plan time — the file must sit inside a declared input, and that input must be something an earlier step produced.
 
 ### ⚠️ Vars are config, not secrets
 

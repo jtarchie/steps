@@ -372,7 +372,11 @@ func (r *searchResult) addMatches(matches []searchMatch, count, headLimit int) {
 	r.total += count
 
 	for _, m := range matches {
-		cost := len(m.text) + searchMatchOverheadBytes
+		// The path is part of what a match costs on the wire, and an
+		// unbounded one (a deep tree, a long generated filename) would
+		// otherwise be free — 200 cheap matches under long paths could then
+		// exceed the inline cap the budget exists to guarantee.
+		cost := len(m.text) + len(m.path) + searchMatchOverheadBytes
 		if len(r.matches) >= headLimit || r.contentBytes+cost > maxSearchContentBudgetBytes {
 			return
 		}

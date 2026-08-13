@@ -14,11 +14,10 @@
 #
 # Run: steps test examples/across-concurrent.yml  (no network, credentials, or model)
 
-# Required for max_in_flight > 1, and the reason is worth reading. A matrix's
-# cells are CLONES of one step: they declare the same outputs: and their
-# commands write the same paths. Under the default shared strategy every step's
-# working directory is the same build root, so two cells running at once are two
-# writers on one file. Isolation gives each cell its own directory.
+# strategy: copy is the default, stated here because this file is about
+# concurrency: a matrix's cells are CLONES of one step — same outputs:, same
+# paths — and what makes running them at once safe is that each materializes
+# its own directory.
 workspace:
   strategy: copy
 

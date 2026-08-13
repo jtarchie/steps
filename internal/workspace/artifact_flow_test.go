@@ -358,3 +358,71 @@ func TestValidateArtifactFlowTryWrappedHook(t *testing.T) {
 		}
 	})
 }
+
+// TestValidateArtifactFlowLoadVar pins that a load_var: step is checked like
+// every other consuming kind. It reads a file out of a directory materialized
+// from its OWN inputs, so a bare `file: version.txt` — the spelling every
+// pipeline used when a single shared directory held everything — names
+// nothing that can exist, and must fail at plan time rather than mid-run.
+func TestValidateArtifactFlowLoadVar(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+
+	producer := config.Step{Task: "pick-tag", Run: "true", Outputs: []string{"meta"}}
+
+	t.Run("file inside a declared input passes", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{Name: "j", Plan: []config.Step{
+			producer,
+			{LoadVar: "tag", VarFile: "meta/version.txt", Inputs: config.Inputs("meta")},
+		}}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err != nil {
+			t.Fatalf("err = %v, want nil (meta is produced and declared)", err)
+		}
+	})
+
+	t.Run("a bare file name is refused", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{Name: "j", Plan: []config.Step{
+			producer,
+			{LoadVar: "tag", VarFile: "version.txt"},
+		}}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err == nil {
+			t.Fatal("want an error: nothing but declared artifacts is materialized at the root of a step's directory")
+		}
+	})
+
+	t.Run("a file in an undeclared artifact is refused", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{Name: "j", Plan: []config.Step{
+			producer,
+			{LoadVar: "tag", VarFile: "meta/version.txt"},
+		}}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err == nil {
+			t.Fatal("want an error: meta exists in the plan but this step does not declare it")
+		}
+	})
+
+	t.Run("an input nothing produced is refused", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{Name: "j", Plan: []config.Step{
+			{LoadVar: "tag", VarFile: "meta/version.txt", Inputs: config.Inputs("meta")},
+		}}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err == nil {
+			t.Fatal("want an error: no step produced meta")
+		}
+	})
+}

@@ -30,9 +30,8 @@
 #
 # Needs: `gh` (authenticated, or GH_TOKEN set), and a model.
 
-# Required twice over: the planner and the reviewer cells run concurrently,
-# and a matrix that collects outputs needs a capture step to collect WITH —
-# the shared strategy has none.
+# strategy: copy is the default; a collecting matrix (the reviewer cells
+# below) requires it, so this file states it rather than relying on it.
 workspace:
   strategy: copy
 

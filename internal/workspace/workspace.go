@@ -81,6 +81,17 @@ type StepSpace interface {
 	Close() error
 }
 
+// Kept reports whether space survives its own Close (--keep-workspace), so a
+// caller that puts scratch state inside the step's directory can leave it in
+// place for the same postmortem the directory itself is being kept for — see
+// internal/agent's spill directory. False for a space that does not implement
+// the optional capability.
+func Kept(space StepSpace) bool {
+	kept, ok := space.(interface{ Kept() bool })
+
+	return ok && kept.Kept()
+}
+
 // labelSanitizePattern replaces anything outside this set with '_' when
 // building a step directory name from a task/agent/put/resource name, so an
 // unusual but otherwise-valid config name can never introduce a path
@@ -711,6 +722,9 @@ type isolatingSpace struct {
 
 func (s *isolatingSpace) Dir() string { return s.dir }
 
+// Kept implements the optional capability workspace.Kept reads.
+func (s *isolatingSpace) Kept() bool { return s.keep }
+
 // Capture persists each declared output back into the build's artifact
 // store, replacing whatever is already at its DESTINATION — the plain
 // artifact name for an ordinary step, a per-cell coordinate subdirectory
@@ -891,22 +905,11 @@ func validateStepKindArtifactFlow(cfg *config.Config, jobName string, i int, ste
 	case step.Agent != "":
 		return validateAgentArtifactFlow(cfg, jobName, i, step, available)
 	case step.Try != nil:
-		// try: only changes whether a FAILURE stops the plan; it changes
-		// nothing about artifacts, so the wrapped step's inputs are checked
-		// and its outputs published exactly as if it were unwrapped. Falling
-		// into the default below instead made a try-wrapped producer invisible
-		// here, and the next step naming its output failed static validation
-		// with "not a resource fetched or an output produced earlier".
-		pre := maps.Clone(available)
-
-		err := validateStepArtifactFlow(cfg, jobName, i, *step.Try, available)
-		if err != nil {
-			return err
-		}
-
-		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
+		return validateTryArtifactFlow(cfg, jobName, i, step, available)
 	case step.Do != nil:
 		return validateDoArtifactFlow(cfg, jobName, i, step, available)
+	case step.LoadVar != "":
+		return validateLoadVarArtifactFlow(cfg, jobName, i, step, available)
 	default:
 		// A concurrent block (in_parallel:, race:, ensemble:) validates its
 		// branches; anything else declares no artifacts of its own.
@@ -922,6 +925,78 @@ func validateStepKindArtifactFlow(cfg *config.Config, jobName string, i int, ste
 
 		return validateBlockArtifactFlow(cfg, jobName, i, step, branches, available)
 	}
+}
+
+// validateTryArtifactFlow walks the step a try: wraps.
+//
+// try: only changes whether a FAILURE stops the plan; it changes nothing about
+// artifacts, so the wrapped step's inputs are checked and its outputs
+// published exactly as if it were unwrapped. Treating it as an ordinary
+// container instead made a try-wrapped producer invisible here, and the next
+// step naming its output failed static validation with "not a resource
+// fetched or an output produced earlier".
+func validateTryArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+	pre := maps.Clone(available)
+
+	err := validateStepArtifactFlow(cfg, jobName, i, *step.Try, available)
+	if err != nil {
+		return err
+	}
+
+	return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
+}
+
+// validateLoadVarArtifactFlow checks a load_var: step the same way every other
+// consuming kind is checked: its declared inputs must exist, and the file: it
+// reads must live inside one of them.
+//
+// A load_var step produces no artifact — it captures a value into the run's
+// var map — but it READS one, out of a directory materialized from its own
+// inputs (see internal/pipeline's runLoadVarStep). Without this the classic
+// `task: pick-tag` / `load_var: tag, file: version.txt` pair validated clean
+// and then died mid-run on a file nothing had materialized.
+func validateLoadVarArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+	pre := maps.Clone(available)
+
+	err := checkInputsAvailable(jobName, i, "load_var", step.LoadVar, step.InputNames(), available)
+	if err != nil {
+		return err
+	}
+
+	err = checkVarFileDeclared(jobName, i, step)
+	if err != nil {
+		return err
+	}
+
+	return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
+}
+
+// checkVarFileDeclared validates that a load_var:'s file: names one of the
+// step's own declared inputs by its first path component — the counterpart of
+// checkDirDeclared for an agent's dir:. A bare `file: version.txt` names no
+// artifact at all, which under per-step isolation can only ever be a missing
+// file: nothing but declared artifacts is materialized at the root of a step's
+// directory.
+func checkVarFileDeclared(jobName string, i int, step config.Step) error {
+	root := firstPathComponent(step.VarFile)
+	if root == "" || root == "." {
+		return nil
+	}
+
+	inputs := step.InputNames()
+	for _, name := range inputs {
+		if name == root {
+			return nil
+		}
+	}
+
+	if len(inputs) == 0 {
+		return fmt.Errorf("job %q step %d (load_var %q): file %q is not inside a declared input; a step's directory holds only the artifacts it declares, so name the artifact holding it (file: <artifact>/%s, inputs: [<artifact>])",
+			jobName, i, step.LoadVar, step.VarFile, step.VarFile)
+	}
+
+	return fmt.Errorf("job %q step %d (load_var %q): file %q names artifact %q, which the step does not declare in inputs: — only declared artifacts are materialized into its working directory",
+		jobName, i, step.LoadVar, step.VarFile, root)
 }
 
 // validateDoArtifactFlow walks a do: block's children, which are TRANSPARENT

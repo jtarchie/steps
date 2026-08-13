@@ -298,9 +298,14 @@ func TestExecSearchFilesErrors(t *testing.T) {
 // did to a real run's context window.
 //
 // The bound is the content BYTE budget, not the result count: addMatches
-// stops keeping matches once the budget is spent, so the worst case is the
-// budget itself plus the one match that almost fit — regardless of how the
-// line-length and result-count ceilings are tuned.
+// charges every kept match its line text PLUS its path plus a fixed
+// scaffolding allowance, and stops before the budget is exceeded — so kept
+// bytes never exceed the budget, regardless of how the line-length and
+// result-count ceilings are tuned, or how deep the tree being searched is.
+// (Charging the path is what makes that true: 200 short matches under long
+// generated paths would otherwise be nearly free here and enormous on the
+// wire.) The margin below the cap covers the result envelope around the
+// matches.
 func TestSearchWorstCaseFitsInlineBudget(t *testing.T) {
 	t.Parallel()
 
@@ -317,13 +322,15 @@ func TestSearchContentByteBudgetStopsKeeping(t *testing.T) {
 
 	var r searchResult
 
+	const path = "big.txt"
+
 	line := strings.Repeat("x", maxSearchLineBytes)
-	perMatch := maxSearchLineBytes + searchMatchOverheadBytes
+	perMatch := maxSearchLineBytes + len(path) + searchMatchOverheadBytes
 	fits := maxSearchContentBudgetBytes / perMatch
 
 	matches := make([]searchMatch, fits+10)
 	for i := range matches {
-		matches[i] = searchMatch{path: "big.txt", line: i + 1, text: line}
+		matches[i] = searchMatch{path: path, line: i + 1, text: line}
 	}
 
 	r.addMatches(matches, len(matches), maxSearchContentResults)
