@@ -64,17 +64,19 @@ type ToolSpec struct {
 	// the machine chooses where." Values are plain strings; not templated.
 	// Invalid on builtins and sub-agent tools.
 	Args map[string]string
-	// MaxOutputBytes lowers the inline output budget for this one tool
-	// (0/unset = the global maxToolOutputBytes). It can only ever NARROW the
-	// cap, never widen it — a value at or above the global cap resolves back
-	// to the global cap.
+	// MaxOutputBytes sets the inline output budget for this one tool
+	// (0/unset = the global default, maxToolOutputBytes in internal/agent).
+	// An explicit value wins in either direction, bounded above by the spill
+	// ceiling (shell.SpillMaxBytes, 10MB).
 	//
-	// It exists for a tool whose output is known to be mostly noise: a fuzzy
-	// search that returns a ranked list where the answer is the first few
-	// entries, for instance, where the tail costs context on every
-	// subsequent turn and buys nothing. Narrowing loses no data — the
-	// overflow still spills to a file the model can read back — it only
-	// shrinks what lands in the conversation.
+	// Narrowing is for a tool whose output is known to be mostly noise: a
+	// fuzzy search that returns a ranked list where the answer is the first
+	// few entries, where the tail costs context on every subsequent turn and
+	// buys nothing. Narrowing loses no data — the overflow still spills to a
+	// file the model can read back — it only shrinks what lands in the
+	// conversation. Widening is the declared trade the other way: a bigger
+	// inline result instead of a spill pointer, for a tool whose output the
+	// model needs whole.
 	//
 	// Deliberately NOT valid on a built-in: those carry their own output
 	// contract (read_file pages, list_dir counts entries, search_files is

@@ -1596,11 +1596,12 @@ func TestOutputLimit(t *testing.T) {
 		specified int
 		want      int
 	}{
-		{"unset falls back to the global cap", 0, maxToolOutputBytes},
-		{"negative falls back to the global cap", -1, maxToolOutputBytes},
+		{"unset falls back to the global default", 0, maxToolOutputBytes},
+		{"negative falls back to the global default", -1, maxToolOutputBytes},
 		{"a lower value narrows", 4000, 4000},
-		{"the global cap itself", maxToolOutputBytes, maxToolOutputBytes},
-		{"above the global cap is clamped, never widened", maxToolOutputBytes * 10, maxToolOutputBytes},
+		{"the global default itself", maxToolOutputBytes, maxToolOutputBytes},
+		{"an explicit higher value widens", maxToolOutputBytes * 10, maxToolOutputBytes * 10},
+		{"the spill ceiling bounds widening", shell.SpillMaxBytes * 2, shell.SpillMaxBytes},
 	}
 
 	for _, tc := range cases {

@@ -57,7 +57,7 @@ const maxToolOutputBytes = 32_000
 // with start_line/end_line paging as the way to read further into anything
 // larger. It is intentionally much larger than maxToolOutputBytes so that a
 // spilled tool output (always just over maxToolOutputBytes, up to
-// spillMaxBytes) can be read back whole in one call rather than only ever
+// shell.SpillMaxBytes) can be read back whole in one call rather than only ever
 // yielding a truncated prefix — reading a file is an explicit, intentional
 // act by the model, unlike a command that floods output unbidden.
 const maxReadFileBytes = 100_000
@@ -716,7 +716,7 @@ func truncateToolOutput(s string) string {
 }
 
 // truncateToolOutputLimit is truncateToolOutput with an explicit budget, for
-// a grant that narrowed its own via max_output_bytes:.
+// a grant that tuned its own via max_output_bytes:.
 func truncateToolOutputLimit(s string, limit int) string {
 	if len(s) <= limit {
 		return s
@@ -817,18 +817,19 @@ func spillPreview(content string) []byte {
 // same way a task's run: step already is. When env.spillDir is set, output
 // beyond the cap is streamed to a file under it and the model gets a pointer
 // message instead of losing the overflow.
-// outputLimit resolves a grant's max_output_bytes: against the global cap. A
-// grant may only LOWER the inline budget: an unset value, or one at or above
-// maxToolOutputBytes, resolves to the global cap, so the knob can never be
-// used to widen what floods a conversation. Lowering it loses no data —
-// overflow still spills to a file the model can read back (see
+// outputLimit resolves a grant's max_output_bytes: — unset takes the global
+// default (maxToolOutputBytes), any explicit value wins in either direction,
+// bounded above by the spill ceiling. Raising it is a declared trade: the
+// pipeline author chose a bigger inline result over a spill pointer for a
+// tool whose output the model genuinely needs whole. Lowering it loses no
+// data — overflow still spills to a file the model can read back (see
 // spillOrTruncate) — it only shrinks what lands inline.
 func outputLimit(specified int) int {
-	if specified <= 0 || specified > maxToolOutputBytes {
+	if specified <= 0 {
 		return maxToolOutputBytes
 	}
 
-	return specified
+	return min(specified, shell.SpillMaxBytes)
 }
 
 func shellToolResult(ctx context.Context, command string, env toolEnv, limit int) map[string]any {
@@ -932,7 +933,7 @@ func readFileFull(resolved string) map[string]any {
 // output, which frequently has no newlines at all — is still readable
 // (byte-truncated to the budget) rather than failing the scan with a cryptic
 // "token too long"; a line even larger than this degrades to truncated=true,
-// still not a hard error. Matches internal/shell's spillMaxBytes, the largest
+// still not a hard error. Matches internal/shell's SpillMaxBytes, the largest
 // a spilled stream can be.
 const maxReadFileScanBytes = 10 << 20 // 10 MiB
 

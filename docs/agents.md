@@ -6,7 +6,7 @@ How an `agent` step in a pipeline actually runs, and the features around custom 
 
 An agent step runs a tool-calling conversation loop:
 
-1. Parse the agent's config: model/endpoint, system prompt, granted tools, `max_turns` (default 30).
+1. Parse the agent's config: model/endpoint, system prompt, granted tools, `max_turns` (default 30; a step may override it with its own `max_turns:` so one long-horizon step can buy more turns without every step of the same agent paying for them).
 2. Build a system message combining the agent's persona with working-directory context (any `context_paths:` files are delivered as synthetic `read_file` tool results — see below).
 3. Loop, up to `max_turns`:
    - Send the conversation + tool definitions to the model.

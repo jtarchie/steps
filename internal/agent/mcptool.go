@@ -157,7 +157,7 @@ func mcpToolImpl(client stepsmcp.Client, name string, limit int) toolImpl {
 
 // boundedStructuredContent caps a tool result's structured content at limit
 // — the grant's resolved inline budget (maxToolOutputBytes unless the grant
-// narrowed it via max_output_bytes:), the same bound spillOrTruncateLimit
+// tuned it via max_output_bytes:), the same bound spillOrTruncateLimit
 // enforces on text —
 // without this, a large structured payload would flood the model's context
 // window unbounded, bypassing the cap every other tool's output already

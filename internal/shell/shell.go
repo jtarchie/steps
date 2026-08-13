@@ -51,7 +51,7 @@ type Runner interface {
 	// matching internal/agent's truncateToolOutput format, and the overflow
 	// is dropped. When spillDir is a directory path, a stream that exceeds
 	// maxBytes is instead written in full to a new file under spillDir (up
-	// to spillMaxBytes, beyond which the file itself is marked truncated the
+	// to SpillMaxBytes, beyond which the file itself is marked truncated the
 	// same way), and the returned string is a short pointer message naming
 	// the file, its size, and a head preview — see spillWriter.
 	RunCaptureFullLimited(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error)
@@ -181,12 +181,12 @@ type captureWriter interface {
 	result() string
 }
 
-// spillMaxBytes bounds how much of an overflowing stream spillWriter will
+// SpillMaxBytes bounds how much of an overflowing stream spillWriter will
 // write to disk — a disk-exhaustion guard against a runaway model-directed
 // command, the same reason boundedWriter caps memory. A file that hits this
 // cap gets the same trailing "... [truncated N bytes]" marker a dropped
 // boundedWriter overflow gets, just applied to the file instead of memory.
-const spillMaxBytes = 10 << 20 // 10 MiB
+const SpillMaxBytes = 10 << 20 // 10 MiB
 
 // SpillPreviewBytes is how much of a spilled stream's head is echoed inline
 // in the pointer message, so the model has some immediate signal without
@@ -262,7 +262,7 @@ func (w *boundedWriter) result() string {
 
 // spillWriter buffers up to max bytes in head, exactly like boundedWriter,
 // but on overflow streams the FULL stream (head plus everything after,
-// itself capped at spillMaxBytes to bound disk use) to a new file under dir
+// itself capped at SpillMaxBytes to bound disk use) to a new file under dir
 // instead of dropping it. result() then returns a short pointer message —
 // the file's path, the stream's true total size, and a head preview —
 // rather than the raw content, so a caller (an agent's run_shell/custom
@@ -355,15 +355,15 @@ func (w *spillWriter) beginSpill() {
 }
 
 // writeToFile appends p to the already-open spill file, capping the file's
-// total size at spillMaxBytes — a disk-exhaustion guard, mirroring why
+// total size at SpillMaxBytes — a disk-exhaustion guard, mirroring why
 // boundedWriter caps memory. Bytes beyond the cap are silently dropped, like
 // boundedWriter's overflow; result reports that drop via the trailing marker.
 func (w *spillWriter) writeToFile(p []byte) {
-	if w.spillErr != nil || w.fileBytes >= spillMaxBytes {
+	if w.spillErr != nil || w.fileBytes >= SpillMaxBytes {
 		return
 	}
 
-	remaining := spillMaxBytes - w.fileBytes
+	remaining := SpillMaxBytes - w.fileBytes
 	if remaining < len(p) {
 		p = p[:remaining]
 	}
@@ -412,7 +412,7 @@ func (w *spillWriter) resultFromHead() string {
 }
 
 // resultFromFile is result() once spilling succeeded: it appends a
-// truncation marker to the file if spillMaxBytes cut it short, closes it,
+// truncation marker to the file if SpillMaxBytes cut it short, closes it,
 // and returns the pointer message the model actually sees in place of the
 // raw content — via the same SpillPointerMessage format every other spilled-
 // output path (internal/agent's one-shot spillOrTruncate) uses.

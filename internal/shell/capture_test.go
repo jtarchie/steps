@@ -271,7 +271,7 @@ func TestSpillWriterBeyondSpillMaxBytes(t *testing.T) {
 	dir := t.TempDir()
 	w := &spillWriter{max: 2, dir: dir}
 
-	total := spillMaxBytes + 100
+	total := SpillMaxBytes + 100
 	chunk := strings.Repeat("x", total)
 
 	_, _ = w.Write([]byte(chunk))
@@ -282,7 +282,7 @@ func TestSpillWriterBeyondSpillMaxBytes(t *testing.T) {
 	}
 
 	data := readOneSpillFile(t, dir)
-	if !strings.HasSuffix(data, fmt.Sprintf("\n... [truncated %d bytes]", total-spillMaxBytes)) {
+	if !strings.HasSuffix(data, fmt.Sprintf("\n... [truncated %d bytes]", total-SpillMaxBytes)) {
 		t.Errorf("spill file did not end with the expected truncation marker; last 100 bytes: %q",
 			data[max(0, len(data)-100):])
 	}

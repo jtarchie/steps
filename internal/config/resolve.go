@@ -301,7 +301,13 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		return ResolvedInvocation{}, fmt.Errorf("reasoning_effort %q must be one of low, medium, high", agent.ReasoningEffort)
 	}
 
-	maxTurns := agent.MaxTurns
+	// Step wins over agent entry, agent entry over the package default —
+	// the same shape timeout: resolution has.
+	maxTurns := step.MaxTurns
+	if maxTurns <= 0 {
+		maxTurns = agent.MaxTurns
+	}
+
 	if maxTurns <= 0 {
 		maxTurns = defaultMaxAgentTurns
 	}

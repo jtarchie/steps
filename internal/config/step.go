@@ -79,6 +79,12 @@ type Step struct {
 	Dir        string     `yaml:"dir,omitempty"`
 	Tools      []ToolSpec `yaml:"tools,omitempty"`
 	Attempts   int        `yaml:"attempts,omitempty"`
+	// MaxTurns overrides the agent entry's max_turns for this one step:
+	// tool-calling turns per attempt. 0/unset inherits the agent's value
+	// (which itself defaults to defaultMaxAgentTurns). Agent steps only —
+	// one long-horizon step can buy more turns without every step of the
+	// same agent paying for them.
+	MaxTurns int `yaml:"max_turns,omitempty"`
 	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
 	// (default) means no timeout. Valid on all step kinds (a get step's
 	// timeout bounds both its check and in commands); for task/put steps it
@@ -800,6 +806,19 @@ func checkStepFieldPlacement(label string, step *Step) error {
 		return fmt.Errorf("%s: version is only valid on get steps", label)
 	case step.Params != nil && !isGet && !isPut:
 		return fmt.Errorf("%s: params is only valid on get and put steps", label)
+	default:
+		return checkStepMaxTurns(label, step)
+	}
+}
+
+// checkStepMaxTurns places the step-level max_turns: override. Split from
+// checkStepFieldPlacement to stay under the linter's complexity budget.
+func checkStepMaxTurns(label string, step *Step) error {
+	switch {
+	case step.MaxTurns < 0:
+		return fmt.Errorf("%s: max_turns must be a positive number of tool-calling turns", label)
+	case step.MaxTurns > 0 && step.Agent == "":
+		return fmt.Errorf("%s: max_turns is only valid on agent steps (it bounds the tool-calling loop; a task has no turns)", label)
 	default:
 		return nil
 	}

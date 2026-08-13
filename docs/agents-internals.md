@@ -223,9 +223,9 @@ INF agent.compaction_budget agent=coder model=some-local-build compact_after_tok
 
 **The count is a local estimate, not accounting.** It's the same `len(text)/4` heuristic used elsewhere, applied to the conversation's own content — never the provider's real token-usage data. "`steps` tracks no token usage anywhere" (see the OpenRouter section above) still holds; this is a size heuristic that decides *when to compact*, not a usage figure anything reports.
 
-### Narrowing one tool's inline budget
+### Tuning one tool's inline budget
 
-The 32,000-byte cap is global, which is the right default but has no answer for a tool whose output is mostly noise by construction — a fuzzy search returning a ranked list where the answer is the first few entries and the tail costs context on every subsequent turn. `max_output_bytes:` on a grant lowers the budget for that one tool:
+The 32,000-byte cap is the default, which is right for most tools but has no answer at either extreme — a tool whose output is mostly noise by construction (a fuzzy search whose tail costs context on every subsequent turn), or one whose output the model genuinely needs whole (a structured report that loses its meaning as a spill pointer). `max_output_bytes:` on a grant sets that one tool's budget in either direction:
 
 ```yaml
 tools:
@@ -234,7 +234,7 @@ tools:
   max_output_bytes: 6000
 ```
 
-It can only **narrow**, never widen: a value at or above the global cap resolves back to the global cap. Narrowing loses no data either — overflow still spills to a file the model can read back — it only shrinks what lands inline.
+An explicit value wins over the default, bounded above by the 10MB spill ceiling. Narrowing loses no data — overflow still spills to a file the model can read back — it only shrinks what lands inline; widening is a declared trade of context for completeness.
 
 It is rejected on **built-ins**, which already carry their own output contract (`read_file` pages, `list_dir` counts entries, `search_files` is bounded by arithmetic); stacking a second, conflicting bound on a designed one is a bug surface rather than a knob. It is also rejected on **sub-agent tools**, whose result is another agent's considered answer rather than a data dump. It is valid on custom tools and on all three MCP grant forms — unlike `description`/`required`/`max_calls`, which stay single-`tool:`-only, because the tool worth capping is typically one noisy member of a `tools: [...]` subset and making it carry the cap in its own grant entry would open a second connection to the same server.
 

@@ -1,0 +1,11 @@
+# max_turns bounds an agent's tool-calling loop. A task runs one command and
+# has no turns, so accepting it here would read as a limit while limiting
+# nothing.
+# expect: max_turns is only valid on agent steps
+
+jobs:
+- name: build
+  plan:
+  - task: compile
+    run: "true"
+    max_turns: 10

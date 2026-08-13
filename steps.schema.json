@@ -785,6 +785,11 @@
         "attempts": {
           "type": "integer"
         },
+        "max_turns": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Agent steps only: tool-calling turns per attempt for this one step, overriding the agent entry's max_turns."
+        },
         "context_paths": {
           "type": "array",
           "items": {

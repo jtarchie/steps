@@ -126,7 +126,7 @@ func validateToolCallGuardShape(context string, spec ToolSpec) error {
 }
 
 // validateMaxOutputBytesShape enforces where max_output_bytes: may appear.
-// It narrows a tool's inline output budget, which only makes sense for a
+// It tunes a tool's inline output budget, which only makes sense for a
 // tool whose output volume is not already a designed property: a built-in
 // carries its own contract (read_file pages, list_dir counts, search_files
 // is bounded by arithmetic), and a sub-agent's result is a considered
