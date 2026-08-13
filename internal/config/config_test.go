@@ -574,18 +574,29 @@ func TestResolveEffectiveToolsSelection(t *testing.T) {
 		}
 	})
 
-	t.Run("empty agent grant treats all built-ins as granted", func(t *testing.T) {
+	t.Run("empty agent grant treats the read-only built-ins as granted", func(t *testing.T) {
 		t.Parallel()
 
-		got, err := resolveEffectiveTools(nil, []ToolSpec{{Builtin: "run_shell"}})
+		got, err := resolveEffectiveTools(nil, []ToolSpec{{Builtin: "search_files"}})
 		if err != nil {
-			t.Fatalf("a step should be able to select a built-in when the agent grants none explicitly: %v", err)
+			t.Fatalf("a step should be able to select a read-only built-in when the agent grants none explicitly: %v", err)
 		}
 
-		if len(got) != 1 || got[0].Builtin != "run_shell" {
-			t.Errorf("got %+v, want [run_shell]", got)
+		if len(got) != 1 || got[0].Builtin != "search_files" {
+			t.Errorf("got %+v, want [search_files]", got)
 		}
 	})
+}
+
+// Split from TestResolveEffectiveToolsSelection to stay under the linter's
+// per-function complexity budget.
+func TestResolveEffectiveToolsDefaultWithholdsRunShell(t *testing.T) {
+	t.Parallel()
+
+	_, err := resolveEffectiveTools(nil, []ToolSpec{{Builtin: "run_shell"}})
+	if err == nil {
+		t.Fatal("run_shell is not in the read-only default grant — a step must not be able to select it without the agent granting it")
+	}
 }
 
 func TestResolveEffectiveToolsBoundary(t *testing.T) {

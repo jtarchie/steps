@@ -349,7 +349,8 @@ func builtinAgentTools(image string) map[string]builtinTool {
 // declarations sent to the model, a name -> toolImpl execution registry,
 // and the connections (currently: MCP servers, one per granted server —
 // see buildMCPTools) that must be closed once the step ends. An empty
-// specs enables every built-in. A duplicate tool name (built-in vs custom
+// specs enables the read-only default set (config.DefaultAgentToolSpecs).
+// A duplicate tool name (built-in vs custom
 // vs sub-agent vs MCP) is an error, so the model never sees an ambiguous
 // function set — and, since resolving a later spec might still fail after
 // an earlier MCP spec already opened a connection, every closer collected

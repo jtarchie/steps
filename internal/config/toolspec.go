@@ -137,9 +137,11 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 }
 
 // DefaultAgentToolSpecs is used when an agent grants no tools — the default
-// is every built-in.
+// is the read-only built-ins. Anything that mutates state or reaches the
+// host (run_shell, write_file, edit_file) is a capability the agent must be
+// granted explicitly.
 func DefaultAgentToolSpecs() []ToolSpec {
-	return []ToolSpec{{Builtin: "read_file"}, {Builtin: "list_dir"}, {Builtin: "run_shell"}}
+	return []ToolSpec{{Builtin: "read_file"}, {Builtin: "list_dir"}, {Builtin: "search_files"}}
 }
 
 // MCPToolNameSep separates the server and tool names in a single-tool MCP
@@ -175,8 +177,9 @@ func ToolSpecName(spec ToolSpec) string {
 }
 
 // grantedToolIndex maps each tool an agent grants (by reference name) to its
-// spec. An agent that grants nothing is treated as granting every built-in,
-// so the simple "no tools: block" case still works.
+// spec. An agent that grants nothing is treated as granting the read-only
+// default set (DefaultAgentToolSpecs), so the simple "no tools: block" case
+// still works.
 func grantedToolIndex(agentTools []ToolSpec) map[string]ToolSpec {
 	specs := agentTools
 	if len(specs) == 0 {

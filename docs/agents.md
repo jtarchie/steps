@@ -23,13 +23,13 @@ One tool can be synthesized onto a step's grant beyond what `tools:` lists: a re
 
 ## Built-in tools
 
-`read_file`, `list_dir`, and `run_shell` are granted automatically whenever a step's `tools:` is absent (`config.DefaultAgentToolSpecs`) — this is the zero-config default every existing pipeline already gets. Three more built-ins exist but are deliberately **not** in that default set, because folding any of them in would change the resolved tool grant, and therefore the cache hash, of every agent step that declares no `tools:` block:
+`read_file`, `list_dir`, and `search_files` are granted automatically whenever a step's `tools:` is absent (`config.DefaultAgentToolSpecs`) — the zero-config default is **read-only**. The three built-ins that mutate state or reach the host are deliberately not in it; each is a capability the pipeline must grant explicitly:
 
 | tool | what it does |
 |---|---|
+| `run_shell` | Run a shell command in the working directory — unconfined within the step's host or container. |
 | `write_file` | Write (or with `append: true`, append) a UTF-8 text file. Replaces a whole file. |
 | `edit_file` | Replace an exact string in an existing file — change part of a file without re-emitting it. |
-| `search_files` | Search file contents by regex and/or paths by glob, with a hard result cap. |
 
 To grant them, list them explicitly alongside whichever others you still want:
 

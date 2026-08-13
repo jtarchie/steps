@@ -108,8 +108,8 @@ agents:
 # an exact old_string/new_string, so a small change stays a small change
 # instead of re-emitting a whole file through run_shell heredoc quoting.
 # search_files finds the failure site without a shell grep flooding the
-# conversation. Neither is in the default grant (adding one would change every
-# zero-config step's merkle hash), so both are listed explicitly.
+# conversation. The default grant is read-only (read_file, list_dir,
+# search_files), so edit_file and run_shell are listed explicitly.
 - name: fixer
   system: |
     You fix failing checks. The repo is under ./repo. Make the smallest change

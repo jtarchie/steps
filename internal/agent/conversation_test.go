@@ -132,12 +132,14 @@ func textResponse(text string) *model.LLMResponse {
 	return &model.LLMResponse{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: text}}}}
 }
 
-// newTestConversation builds an agentConversation with all built-in tools
-// for exercising the loop against a fakeLLM.
+// newTestConversation builds an agentConversation with the default grant
+// plus run_shell for exercising the loop against a fakeLLM.
 func newTestConversation(t *testing.T, prompt, dir string) agentConversation {
 	t.Helper()
 
-	decls, registry, _, err := buildAgentTools(context.Background(), nil, nil, "")
+	specs := append(config.DefaultAgentToolSpecs(), config.ToolSpec{Builtin: "run_shell"})
+
+	decls, registry, _, err := buildAgentTools(context.Background(), nil, specs, "")
 	if err != nil {
 		t.Fatal(err)
 	}

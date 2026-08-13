@@ -30,7 +30,7 @@ func testEnv(dir string) toolEnv {
 func TestBuildAgentToolsBuiltins(t *testing.T) {
 	t.Parallel()
 
-	t.Run("empty specs enables all built-ins", func(t *testing.T) {
+	t.Run("empty specs enables the read-only default set", func(t *testing.T) {
 		t.Parallel()
 
 		decls, registry, _, err := buildAgentTools(context.Background(), nil, nil, "")
@@ -42,10 +42,14 @@ func TestBuildAgentToolsBuiltins(t *testing.T) {
 			t.Errorf("got %d declarations, want 3", len(decls.FunctionDeclarations))
 		}
 
-		for _, name := range []string{"read_file", "list_dir", "run_shell"} {
+		for _, name := range []string{"read_file", "list_dir", "search_files"} {
 			if _, ok := registry[name]; !ok {
 				t.Errorf("registry missing %q", name)
 			}
+		}
+
+		if _, ok := registry["run_shell"]; ok {
+			t.Error("run_shell should not be granted by default — it must be selected explicitly")
 		}
 	})
 
@@ -79,10 +83,9 @@ func TestBuildAgentToolsBuiltins(t *testing.T) {
 // TestBuildAgentToolsWriteFile is split out from TestBuildAgentToolsBuiltins
 // to stay under the linter's per-function complexity budget. write_file is
 // deliberately not part of the default grant (see
-// config.DefaultAgentToolSpecs): folding a new builtin into "no tools: block
-// means every built-in" would change the resolved tool set — and therefore the
-// merkle hash — of every existing zero-config agent step. It must be selected
-// explicitly, like any other opt-in feature.
+// config.DefaultAgentToolSpecs): the default set is read-only, and anything
+// that mutates state must be selected explicitly, like any other opt-in
+// capability.
 func TestBuildAgentToolsWriteFile(t *testing.T) {
 	t.Parallel()
 
