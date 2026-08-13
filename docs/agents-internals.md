@@ -58,13 +58,13 @@ Both mutations are transport-level only:
 - **No merkle impact.** The session ID and cache marker never enter a step's hashed content, so enabling caching cannot invalidate a cached step, and the same pipeline hashes identically before and after.
 - **No effect on other providers.** A non-OpenRouter base URL gets no custom HTTP client at all, leaving `openai-go` to build its own exactly as it did before this existed.
 
-Cached-token accounting is deliberately not surfaced: `steps` tracks no token usage anywhere, so there is nowhere to report a hit rate. Check the OpenRouter activity dashboard to confirm caching is landing.
+Whether caching is landing is visible in `steps runs --cost`'s CACHED column — the provider's own reported cache figures, recorded per step (see [agents.md](agents.md#budgets-budgettokens)).
 
 ## Timeout and Attempts on Agent Steps
 
 Agent steps can set `timeout:` and `attempts:` to bound their execution:
 
-```yaml
+```yaml fragment
 - agent: reviewer
   prompt: "Review the PR"
   timeout: 10m
@@ -77,8 +77,9 @@ Agent steps can set `timeout:` and `attempts:` to bound their execution:
 
 A task step's `fix:` agent can also set `attempts:` and `timeout:` independently:
 
-```yaml
-- task: test.sh
+```yaml fragment
+- task: test
+  run: ./test.sh
   attempts: 3
   fix:
     agent: fixer
@@ -181,12 +182,18 @@ Every model response and every tool result is normally appended to an agent step
 
 `compact_after_tokens:` bounds this, on an `agents:` entry:
 
-```yaml
+```yaml test=internals-compaction
 agents:
 - name: coder
-  source: { model: openrouter/anthropic/claude-3.5-sonnet }
+  source: { model: openrouter/qwen/qwen3.7-flash }
   max_turns: 60
   compact_after_tokens: 40000    # smaller than the 102,400 default -- see below
+
+jobs:
+- name: build
+  plan:
+  - agent: coder
+    prompt: "Do the long-horizon work."
 ```
 
 Once a conversation's estimated size crosses the budget, the agent's own model is asked to summarize everything older than a recent window (roughly the most recent 30% of the budget), and the conversation continues from `[summary] + [recent turns]` instead of the full history. This can happen more than once in a very long conversation — each pass folds the previous summary into the new one. A summarization failure is logged and the turn proceeds uncompacted; it never aborts the attempt, the same failure-is-data treatment a tool failure gets.
@@ -210,11 +217,18 @@ INF agent.compaction_budget agent=coder model=some-local-build compact_after_tok
 
 **`context_window:` is the escape hatch, and usually the right one.** No table keyed on a model name can express a *host* that serves a known model with a smaller window than it has natively, and none of them will have heard of a local build or a release newer than they are. Stating the window keeps the 80% arithmetic applying and makes the log line above report a derived window instead of an assumed one:
 
-```yaml
+```yaml test=internals-context-window
+agents:
 - name: reviewer
   source: { model: lmstudio/qwen2.5-coder }
   max_turns: 60
   context_window: 32000    # -> compacts at 25,600
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    prompt: "Review the change."
 ```
 
 `compact_after_tokens:` still outranks it, and overrides the budget outright rather than describing the model. Prefer `context_window:` unless you specifically want a budget that is not 80% of the window. Neither is available on a `@cli/` agent, which resolves its own window and compacts its own conversation.
@@ -227,7 +241,7 @@ INF agent.compaction_budget agent=coder model=some-local-build compact_after_tok
 
 The 32,000-byte cap is the default, which is right for most tools but has no answer at either extreme — a tool whose output is mostly noise by construction (a fuzzy search whose tail costs context on every subsequent turn), or one whose output the model genuinely needs whole (a structured report that loses its meaning as a spill pointer). `max_output_bytes:` on a grant sets that one tool's budget in either direction:
 
-```yaml
+```yaml fragment
 tools:
 - mcp: gopls
   tools: [go_symbol_references]

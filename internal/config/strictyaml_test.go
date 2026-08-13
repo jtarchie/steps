@@ -146,31 +146,9 @@ jobs:
 	wantLoadError(t, path, "field runs not found")
 }
 
-// Every shipped example must load under strict decoding — the examples are
-// the schema's worked reference, so a stale key in one is a documentation bug.
-func TestExamplesLoad(t *testing.T) {
-	t.Parallel()
-
-	matches, err := filepath.Glob("../../examples/*.yml")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(matches) == 0 {
-		t.Fatal("no examples found to load")
-	}
-
-	for _, path := range matches {
-		t.Run(filepath.Base(path), func(t *testing.T) {
-			t.Parallel()
-
-			_, err := LoadConfig(path)
-			if err != nil {
-				t.Errorf("LoadConfig(%q): %v", path, err)
-			}
-		})
-	}
-}
+// The tested example corpus is docs/*.md; the root package's TestDocsExamples
+// loads every extracted block through LoadConfig, so strict decoding of the
+// shipped examples is exercised there.
 
 func TestClosestSuggestion(t *testing.T) {
 	t.Parallel()

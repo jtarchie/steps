@@ -1,34 +1,62 @@
-# Attempts and Timeout Guide
+# Attempts and Timeout
 
-This guide covers two operational limits available on all step types (get/task/put/agent):
-- **`attempts:`** — retry count for retrying unmodified commands
+Two operational limits available on all step types (get/task/put/agent):
+
+- **`attempts:`** — retry count for retrying unmodified operations
 - **`timeout:`** — wall-clock deadline per attempt
 
-## When to Use Attempts
+Neither is ever hashed: adding or changing them invalidates no cache.
 
-**Agent steps default to `attempts: 3`** (tasks and puts stay at 1). The asymmetry is the domain's: a task that failed will fail again — same command, same tree — so a retry hides a real failure. A model call that failed usually says nothing about the step and everything about the provider's minute, and under one attempt a single 503 destroyed a six-reviewer fan-out whose other five cells were healthy. For a hosted agent the retries happen in the transport with backoff, re-issuing only what can recover (connection errors, 5xx); `attempts: 1` turns them off.
+## When to use attempts
 
-Use `attempts:` to retry transient failures:
-- Flaky network calls (e.g., GitHub API rate limits)
-- Temporary service unavailability
-- Resource contention
+**Agent steps default to `attempts: 3`** (tasks and puts stay at 1). The asymmetry is the domain's: a task that failed will fail again — same command, same tree — so a retry hides a real failure. A model call that failed usually says nothing about the step and everything about the provider's minute, and under one attempt a single 503 destroyed a six-reviewer fan-out whose other five cells were healthy.
 
-Do NOT use `attempts:` for:
-- Internal bugs (retrying won't fix them)
-- Permanent failures (wrong credentials, missing resources)
-- Issues that need investigation (retrying hides the problem)
+```yaml test=attempts-transient
+agents:
+- name: reviewer
+  source: { model: openrouter/qwen/qwen3.7-flash }
 
-If a step fails reliably, fix the underlying issue instead of adding retries.
+jobs:
+- name: review
+  plan:
+  - agent: reviewer                # attempts: 3 is the agent default —
+    prompt: "Review the release."  # one 500 from the provider is absorbed
+```
 
-## When to Use Timeout
+Use `attempts:` for transient faults — flaky network calls, rate limits, temporary unavailability. Do **not** use it for internal bugs, permanent failures (wrong credentials, missing resources), or anything that needs investigation: if a step fails reliably, fix the underlying issue instead of adding retries.
 
-Use `timeout:` to prevent hung commands:
-- Long-running integration tests: `timeout: 30m`
-- Network requests: `timeout: 2m`
-- Resource fetches: `timeout: 5m`
+`attempts:` and `timeout:` sit on any step kind:
 
-Do NOT set timeouts too aggressively — a legitimate long-running operation should not be cut short:
 ```yaml
+resource_types:
+- name: upstream
+  config:
+    check: |
+      printf '[{"ref": "v1"}]'
+    in: echo {{ .version.ref | shellquote }} > ref
+
+resources:
+- name: release
+  type: upstream
+  source: {}
+
+jobs:
+- name: fetch
+  plan:
+  - get: release
+    attempts: 3        # retries check and in
+    timeout: 2m        # per attempt
+  - task: verify
+    inputs: [release]
+    timeout: 5m
+    run: cat release/ref
+```
+
+## When to use timeout
+
+Use `timeout:` to prevent hung commands — and don't set it aggressively; a legitimate long-running operation should not be cut short:
+
+```yaml fragment
 # DON'T: this will fail a 25-minute test
 - task: integration-test
   timeout: 10m
@@ -38,14 +66,7 @@ Do NOT set timeouts too aggressively — a legitimate long-running operation sho
   timeout: 1h
 ```
 
-## Timeout Semantics
-
-**Timeout is per-attempt**, not per-step total. With `attempts: 3` and `timeout: 30s`:
-- Each attempt gets 30 seconds
-- Total possible time: ~90 seconds (plus backoff between retries)
-- Total is not capped at 30 seconds
-
-To implement a total timeout across all attempts, set a longer task-level timeout and a short step-level timeout — but this is rarely needed.
+**Timeout is per-attempt**, not per-step total. With `attempts: 3` and `timeout: 30s`, each attempt gets 30 seconds and the total possible time is ~90 seconds plus backoff.
 
 ### A whole job can have one too
 
@@ -53,27 +74,27 @@ To implement a total timeout across all attempts, set a longer task-level timeou
 
 ```yaml
 jobs:
-- name: review
+- name: bounded
   timeout: 45m
   budget:
     tokens: 2000000
   plan:
-  - ...
+  - task: work
+    run: echo well inside the ceiling
 ```
 
-- **Checked between steps, never during one.** The step that is running finishes and keeps its work; the deadline decides only whether the *next* one starts. So a job timeout and a step timeout compose rather than race, and a job never reports a deadline breach against work that was still making progress. The price is that a job may overrun by one step's duration — the honest cost of not cutting work off mid-flight. **And that bound is only as tight as your steps are**: a step with no `timeout:` of its own is unbounded, so a job deadline plus one hanging unbounded step overruns without limit. Give long steps their own `timeout:` if you want the job's to be a hard ceiling.
-- **A fan-out is checked per unit of work, not per block.** A whole `across:` matrix or `in_parallel:` block is one step of the plan, so without this a runtime fan-out — the case this exists for — would never be revisited once it started, and a twelve-cell matrix could overrun by twelve cells. Both stop admitting when the deadline passes (one shared check, `deadlineStopsFanOut`), and the job still fails. The bound is what is *admitted*, so a block that started everything at once — `max_in_flight:`/`limit:` at or above the number of units — has nothing left to stop.
-- **It fails the job**, and does so as a job-level *failure* (the same class as exceeding `max_visits:`), so the job's own `on_failure` and `ensure` fire. That is where a "this took too long" notification belongs.
-- **It does not degrade**, unlike [`budget:` on an `across:` block](control-flow.md#a-ceiling-that-degrades-budget). Same reasoning as the job's token ceiling: a job-level limit is a backstop against a run that has gone wrong, and stopping loudly is the right answer. Degrading belongs on the block whose width nobody knew when they wrote the pipeline.
-- **Never hashed**, like every operational limit — adding one invalidates no cache.
+- **Checked between steps, never during one.** The step that is running finishes and keeps its work; the deadline decides only whether the *next* one starts. The price is that a job may overrun by one step's duration — **and that bound is only as tight as your steps are**: a step with no `timeout:` of its own is unbounded, so give long steps their own if you want the job's to be a hard ceiling.
+- **A fan-out is checked per unit of work, not per block.** An `across:` matrix or `in_parallel:` block stops admitting cells/branches when the deadline passes, and the job still fails. The bound is what is *admitted*, so a block that started everything at once (`max_in_flight:`/`limit:` at or above the unit count) has nothing left to stop.
+- **It fails the job**, as a job-level *failure* (the same class as exceeding `max_visits:`), so the job's own `on_failure` and `ensure` fire. That is where a "this took too long" notification belongs.
+- **It does not degrade**, unlike [`budget:` on an `across:` block](control-flow.md#a-ceiling-that-degrades-budget). A job-level limit is a backstop against a run that has gone wrong, and stopping loudly is the right answer.
 
 ### An expired timeout is not retried
 
-When an attempt exhausts its own `timeout:`, the step ends there — the remaining attempts are **skipped**. The same work against the same budget expires again, so retrying only doubles the wall clock and the bill. This matters most for `agent` steps, where a retry rebuilds the whole conversation from scratch and pays for it a second time.
+When an attempt exhausts its own `timeout:`, the step ends there — the remaining attempts are **skipped**. The same work against the same budget expires again, so retrying only doubles the wall clock and the bill. This matters most for `agent` steps, where a retried conversation would be rebuilt from scratch and paid for a second time.
 
 `attempts:` buys retries of a transient fault; it cannot buy more time. If a step legitimately needs longer, raise `timeout:`:
 
-```yaml
+```yaml fragment
 # DON'T: 2 x 20m of a review that needs 25m, then a failed job
 - agent: reviewer
   attempts: 2
@@ -89,62 +110,41 @@ A job-level abort (SIGINT/SIGTERM) is distinct and still stops everything immedi
 
 ## Interaction with `fix:`
 
-When a task step has both `attempts:` and `fix:`, the fix agent runs **once per exhausted attempt**:
+A task step can name a **fix agent** — invoked when the task fails, running *inside the failing task's own working directory* (the exact state the task failed in), after which the task re-runs. This example is real end to end: the task fails because a file is missing, the fix agent writes it, the re-run passes:
 
-```yaml
-- task: flaky-test
-  run: ./test.sh
-  attempts: 3
-  fix: fixer-agent
+```yaml test=attempts-fix
+agents:
+- name: fixer
+  source: { model: openrouter/qwen/qwen3.7-flash }
+  tools: [read_file, write_file, run_shell]
+
+jobs:
+- name: build
+  plan:
+  - task: check
+    run: test -f patched.txt      # fails until the fixer creates it
+    fix: fixer
 ```
 
-If the task fails on all 3 attempts:
-1. First attempt fails → fix agent invoked → task re-run
-2. Second attempt fails → fix agent invoked → task re-run
-3. Third attempt fails → fix agent invoked → task re-run
-4. Job fails with the error from attempt 3
-
-Each invocation of the fix agent gets its own `attempts:` budget (default 1; overridable with `fix: {attempts: ...}`).
+With both `attempts:` and `fix:`, the fix agent runs **once per exhausted attempt**: attempt fails → fix agent → re-run, repeated until an attempt passes or all are spent, and the job fails with the error from the last attempt. Each fix invocation gets its own `attempts:` budget (default 1; overridable with `fix: {attempts: ...}`).
 
 ## Interaction with `assert:`
 
-Only the **final attempt's output** is evaluated by `assert:`:
+Only the **final attempt's output** is evaluated by `assert:`. If attempt 1 prints the expected text but exits nonzero, the task retries — only the last attempt's stdout and code are checked. (See [control-flow.md](control-flow.md) for `assert:` itself.)
 
-```yaml
-- task: build
-  run: ./build.sh
-  attempts: 3
-  assert:
-    stdout: "Build successful"
-```
+## Hook firing
 
-If attempt 1 prints "Build successful" but then fails with exit 1, the assert does not match — the task retries. Only attempt 3's output is checked.
-
-## Hook Firing
-
-Hooks (`on_failure`, `on_error`, `ensure`) fire **once per exhausted step**, not per attempt:
-
-```yaml
-- task: deploy
-  run: ./deploy.sh
-  attempts: 3
-  on_failure:
-    - task: rollback
-```
-
-If the deploy fails on all 3 attempts, `on_failure` runs **once** with the error from attempt 3.
+Hooks (`on_failure`, `on_error`, `ensure`) fire **once per exhausted step**, not per attempt. If a deploy fails on all 3 attempts, `on_failure` runs once with the error from attempt 3.
 
 ## Logging
 
-The steps CLI logs "attempt N/M" markers for each retry:
+The CLI logs "attempt N/M" markers for each retry, in both CLI output and structured logs (`job.task.attempt`):
 
 ```
 task: build
 task: build (attempt 2/3)
 task: build (attempt 3/3)
 ```
-
-These markers appear in both CLI output and structured logs (`job.task.attempt`).
 
 ## What `attempts:` costs on an agent
 
@@ -164,85 +164,59 @@ WRN agent.request_retry       agent=coder model=deepseek-v4-pro attempt=2 attemp
 WRN agent.conversation_failed agent=coder provider_requests=3 error="... 500 ..."
 ```
 
-Two retry lines for three requests: the last failure is the one the step reports, with the total beside it. A successful turn logs nothing.
-
 Retryable failures are connection errors and HTTP 408, 409, 429, and 5xx. A 400 or a 401 is taken at its word — retrying a request the server rejected on its merits just pays to be told the same thing again.
 
 > ### ⚠️ Breaking change: `attempts:` on an agent used to restart the conversation
 >
-> It previously threw away every accumulated turn and started the conversation over from nothing. That was closer to *amnesia* than retry, and it cost three orders of magnitude more than the failure warranted — against a fault the transport layer had already retried and concluded was not transient.
+> It previously threw away every accumulated turn and started over from nothing — closer to *amnesia* than retry, and the restart was incoherent: the agent's **workspace survived but its memory did not**, so a restarted attempt inherited its own half-finished edits with no recollection of having made them. There is also no longer a hidden multiplier (the LLM client used to retry every request twice on its own, so `attempts: 6` meant up to **18** requests); `steps` now owns the retry outright.
 >
-> Worse, the restart was incoherent: the agent's **workspace survived but its memory did not**, so a restarted attempt inherited its own half-finished edits with no recollection of having made them. Pipelines needed prompt text (`run git status first, a dirty tree means a previous attempt was cut off`) to work around a config field. Across a real self-build experiment `attempts:` fired five times on agent steps and never once changed the outcome.
->
-> There is also no longer a hidden multiplier. The LLM client used to retry every request twice on its own, so the real cost was `attempts: × 3` — `attempts: 6` meant up to **18** requests, each re-sending the entire history. `steps` now owns the retry outright and switches the client's off, so `attempts:` is the whole budget.
->
-> **What to change:** nothing, in most pipelines — the new behavior is strictly cheaper and safer, and a bare `attempts: 2` now means "retry a failing request once" instead of "run this conversation twice". If you were relying on a restart to recover from a provider being *down*, that was never what it was good at: see `steps validate`'s preflight checks and agent source failover.
->
-> The retry that actually works for a bad *answer* is unchanged and unaffected: `to:` routing with `max_visits:`, which re-enters the agent with the reviewer's critique in context. That is a fresh conversation *with feedback*, which is strictly better than a blind restart.
+> **What to change:** nothing, in most pipelines — the new behavior is strictly cheaper and safer. The retry that actually works for a bad *answer* is unchanged: `to:` routing with `max_visits:`, which re-enters the agent with the reviewer's critique in context — a fresh conversation *with feedback*, strictly better than a blind restart.
 
-## Timeout Classification
+## Timeout classification
 
-Timeouts classify as **errored**, not **failed**:
-- Failed: task exit code nonzero (recoverable, possibly fixable)
-- Errored: timeout, infrastructure error, etc. (usually not fixable, abort immediately)
-
-This distinction affects hook dispatch: `on_error` fires for timeouts, `on_failure` does not.
-
-## Examples
-
-### Get Step with Retries
+Timeouts classify as **errored**, not **failed** — `on_error` fires, `on_failure` does not. Failed means the step itself said no (nonzero exit, red verdict); errored means the infrastructure did (timeout, docker, transport). This fixture pins it — the `assert:` block is what keeps a deliberately-erroring job green under `steps test` (see [control-flow.md](control-flow.md#assert-self-verification--steps-test)):
 
 ```yaml
-- get: flaky-resource
-  attempts: 3
-  timeout: 2m
+jobs:
+- name: deadline
+  plan:
+  - task: slow
+    run: sleep 5
+    timeout: 1s
+    on_error:
+      task: page
+      run: echo the deadline expired
+    on_failure:
+      task: wrong
+      run: echo this must not fire
+  assert:
+    execution: [slow, page]    # on_error fired, on_failure did not
+    outcome: failed
 ```
 
-Retries version checking (check command) and fetching (in command) up to 3 times, with a 2-minute deadline per attempt.
+## Agent steps: the one implicit deadline
 
-### Task Step with Timeout and Fix
+An `agent:` step's `timeout:` bounds the entire conversation, tool calls included:
 
-```yaml
-- task: integration-test
-  run: ./ci/integration.sh
-  attempts: 2
-  timeout: 30m
-  fix: test-fixer
+```yaml test=attempts-agent-timeout
+agents:
+- name: reviewer
+  source: { model: openrouter/qwen/qwen3.7-flash }
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    prompt: "Review the PR for safety issues."
+    timeout: 10m
 ```
 
-Runs the integration test with a 30-minute deadline per attempt. If it fails, invokes the fix agent once (with its own 1-attempt budget). Then re-runs the test. The final exit code is the step's verdict.
-
-### Put Step with Retries
-
-```yaml
-- put: publish-artifact
-  attempts: 3
-  timeout: 5m
-```
-
-Retries the resource's out command up to 3 times, with a 5-minute deadline per attempt.
-
-### Agent Step with Timeout
-
-```yaml
-- agent: reviewer
-  prompt: "Review the PR for safety issues"
-  timeout: 10m
-```
-
-Bounds the agent's entire conversation (including all tool calls) to 10 minutes. If the agent hasn't finished by then, the step times out and is classified as errored — and any remaining `attempts:` are skipped, since a restarted conversation would get the same 10 minutes.
-
-> **An `agent:` step that sets no `timeout:` still gets one: 30 minutes** (`agentStepTimeout`, `internal/agent/step.go`). This is the single exception to the explicit-only rule below, and it exists because the OpenAI client sets no request timeout of its own and relies entirely on `ctx` — without a fallback, one hung endpoint blocks the run forever.
+> **An `agent:` step that sets no `timeout:` still gets one: 30 minutes.** This is the single exception to the explicit-only rule below, and it exists because the OpenAI client sets no request timeout of its own — without a fallback, one hung endpoint blocks the run forever.
 >
-> **Deleting a `timeout:` from an agent step therefore does not remove its deadline — it may shorten it.** Removing `timeout: 45m` leaves 30m, not "no limit". A long-running agent (a coding agent over 100+ turns) needs an explicit generous value; omit it only if 30 minutes is genuinely enough. The symptom when it isn't is `agent: generate content: context deadline exceeded`, classified not-retryable, because a fresh conversation would hit the same wall.
+> **Deleting a `timeout:` from an agent step therefore does not remove its deadline — it may shorten it.** Removing `timeout: 45m` leaves 30m, not "no limit". A long-running agent (a coding agent over 100+ turns) needs an explicit generous value. The symptom when 30 minutes isn't enough is `agent: generate content: context deadline exceeded`, classified not-retryable, because a fresh conversation would hit the same wall.
 >
-> `task:`/`put:`/`get:` steps have no such default: unset means no deadline (`retryWithTimeout` applies one only when `timeout > 0`).
+> `task:`/`put:`/`get:` steps have no such default: unset means no deadline.
 
-## Why No Global Default?
+## Why no global default?
 
-The proposal recommends starting with **explicit-only** timeouts (no job-level or pipeline-level default) — with the one documented exception of the agent-step fallback above:
-- A missing timeout doesn't fail silently (a timeout without explicit config is a surprise)
-- Pipeline authors are forced to think about reasonable limits for each step
-- No surprise timeouts from a global setting they forgot about
-
-Future versions could add a `timeout:` field to the `job:` block or `pipeline:` level if needed, without hashing impact (timeout is an operational limit, not content).
+Timeouts are explicit-only (with the one agent-step exception above): a missing timeout doesn't fail silently, authors are forced to think about reasonable limits per step, and there are no surprise deadlines from a global setting somebody forgot about.

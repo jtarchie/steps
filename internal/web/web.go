@@ -128,6 +128,8 @@ func (s *Server) routes() error {
 
 	e.GET("/", s.handleIndex)
 	e.GET("/static/app.css", s.handleCSS)
+	e.GET("/docs", s.handleDocsIndex)
+	e.GET("/docs/:page", s.handleDocs)
 
 	group := e.Group("/p/:pipeline", s.resolvePipeline)
 	group.GET("", s.handleJobs)

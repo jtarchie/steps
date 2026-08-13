@@ -127,6 +127,7 @@ func templateFuncs() template.FuncMap {
 		"statusWord": statusWord,
 		"prettyJSON": prettyJSON,
 		"trim":       strings.TrimSpace,
+		"trimMD":     func(name string) string { return strings.TrimSuffix(name, ".md") },
 		"firstLine":  firstLine,
 		"sparkline":  sparkline,
 		// The sparkline's geometry: bars are 6 wide on an 8-unit pitch, drawn

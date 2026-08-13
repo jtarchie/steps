@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -76,33 +75,9 @@ func yamlAsJSONValue(t *testing.T, path string) any {
 	return value
 }
 
-// Every shipped example validates against the published schema. This is what
-// keeps the schema honest: it is hand-written, so nothing but a test stops it
-// drifting from what the loader actually accepts.
-//
-// The glob is deliberately non-recursive: examples/invalid/ is deliberately
-// schema-invalid (see TestExamplesInvalid) and must stay out of it.
-func TestExamplesMatchSchema(t *testing.T) {
-	schema := loadSchema(t)
-
-	matches, err := filepath.Glob("examples/*.yml")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(matches) == 0 {
-		t.Fatal("no examples found")
-	}
-
-	for _, path := range matches {
-		t.Run(filepath.Base(path), func(t *testing.T) {
-			err := schema.Validate(yamlAsJSONValue(t, path))
-			if err != nil {
-				t.Errorf("%s does not match steps.schema.json:\n%v", path, err)
-			}
-		})
-	}
-}
+// The tested example corpus lives in docs/*.md; every extracted block is
+// schema-validated by TestDocsExamples (docs_test.go), which is what keeps
+// the hand-written schema honest against the loader.
 
 // The schema rejects what the loader rejects. A schema that accepts everything
 // would validate cleanly and be worth nothing.

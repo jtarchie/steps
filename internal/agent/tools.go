@@ -512,7 +512,7 @@ func visibleParams(params []string, pinned map[string]string) []string {
 // to the closing "}}", so it also matches the project's own documented safe
 // idiom for passing a model-supplied value through a pipeline function —
 // {{ .args.repo | shellquote }} (see docs/templating.md's shellquote idiom
-// and examples/agents.yml's post_review tool) — not just the bare
+// and docs/agents.md's post_review tool) — not just the bare
 // form. [^}]* deliberately doesn't try to parse the pipeline itself (a
 // function name, further pipe stages, quoted literal arguments); it only
 // needs to not stop matching before the "}}" that ends the reference. A tool

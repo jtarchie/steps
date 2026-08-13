@@ -63,6 +63,7 @@ type CLI struct {
 	Approve   ApproveCmd       `cmd:""                                  help:"approve a waiting approval: step"`
 	Reject    RejectCmd        `cmd:""                                  help:"reject a waiting approval: step"`
 	Web       WebCmd           `cmd:""                                  help:"serve the pipeline UI over the same state the CLI writes"`
+	Docs      DocsCmd          `cmd:""                                  help:"read the docs in the terminal (no page name lists them)"`
 }
 
 // buildVersion is the version string steps --version prints. Overridden at
@@ -227,7 +228,8 @@ func (w *WatchCmd) Run() error {
 // recorded execution order is deterministic) and verifies its assert:
 // directives — each job's own assert.execution is checked inside RunJob, and a
 // top-level assert.execution of job names is checked here. It's the entry
-// point for a self-verifying fixture (see examples/flow.yml).
+// point for a self-verifying fixture — every runnable example in docs/*.md
+// is one (see docs_test.go).
 type TestCmd struct {
 	Pipeline string            `arg:""                                                     help:"path to the pipeline YAML file"`
 	Var      map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..." name:"var"`

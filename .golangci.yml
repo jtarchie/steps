@@ -79,15 +79,31 @@ linters:
           allow:
             - "$gostd"
             - "golang.org/x/tools"
+        # docs is the embedded documentation and its fenced-example
+        # extractor: a stdlib-only leaf, importable by main (steps docs) and
+        # internal/web (/docs) alike. Rendering (glamour, goldmark) lives in
+        # the importers, never here — this package is what the root docs
+        # tests walk, and a render dependency would drag terminal/HTML
+        # concerns into every consumer.
+        Docs:
+          files:
+            - "**/docs/**"
+          allow:
+            - "$gostd"
         Main:
           files:
             - "$all"
             - "!**/internal/**"
             - "!**/tools/**"
+            - "!**/docs/**"
           allow:
             - "$gostd"
             - "github.com/alecthomas/kong"
             - "github.com/lmittmann/tint"
+            # glamour renders the embedded docs (steps docs) for a terminal;
+            # the docs package itself stays render-free — see the Docs rule.
+            - "github.com/charmbracelet/glamour"
+            - "github.com/jtarchie/steps/docs"
             # Test-only, both of them: schema_test.go validates every shipped
             # example against steps.schema.json (the published editor schema)
             # and asserts its step properties still match config.Step's yaml
@@ -287,6 +303,15 @@ linters:
           allow:
             - "$gostd"
             - "github.com/labstack/echo/v4"
+            # goldmark (+ its chroma highlighting extension) renders the
+            # embedded docs package at /docs, server-side — the terminal twin
+            # (steps docs, via glamour) lives in main. docs itself stays a
+            # render-free leaf.
+            - "github.com/yuin/goldmark"
+            - "github.com/yuin/goldmark/extension"
+            - "github.com/yuin/goldmark/parser"
+            - "github.com/yuin/goldmark-highlighting/v2"
+            - "github.com/jtarchie/steps/docs"
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/pipeline"

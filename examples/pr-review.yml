@@ -3,64 +3,41 @@
 # authenticated against a real repo, and its pass/fail depends on what the
 # reviewers find, so it can never be a deterministic fixture
 #
-# ─── Deep PR review: the adaptive-pipeline shape, as a pipeline ─────────────
+# ─── Deep PR review ─────────────────────────────────────────────────────────
 #
-# The interesting agentic code reviewers do not run a fixed script. They read
-# the PR, decide what KINDS of review it needs, spawn one reviewer per kind,
-# make each one prove its findings against the code, and only then write
-# anything to GitHub. That shape is usually built as a bespoke service.
+# A planner reads the PR and decides what KINDS of review it needs. One
+# reviewer per kind runs concurrently, a falsifier challenges every finding,
+# a gatekeeper decides what blocks the merge, a synthesizer writes the
+# review — and a human approves before anything is posted to GitHub.
 #
-# Here it is a pipeline file, and the three pieces that make it possible are:
-#
-#   across: + from_file:   the width of the matrix is decided during the run,
-#                          by a step, not by whoever wrote this file
-#   max_in_flight:         those cells run at the same time
-#   outputs: on the block  everything the cells produced comes back as ONE
-#                          artifact, one directory per cell
-#
-# Data flows as files between phases (inputs:/outputs:, context_paths:), the
-# same way any other steps pipeline moves an artifact from one step to the
-# next — there is no hidden channel underneath it. What you get that a
-# bespoke service does not have for free: every phase is a recorded,
-# inspectable step, and a human approves before anything is posted.
+# Run it:
 #
 #   steps validate examples/pr-review.yml
-#   steps plan     examples/pr-review.yml   # the matrix width is unknown here, by design
 #   PR_REPO=owner/name steps run examples/pr-review.yml --job review
 #
 # Needs: `gh` (authenticated, or GH_TOKEN set), and a model.
 
-# strategy: copy is the default; a collecting matrix (the reviewer cells
-# below) requires it, so this file states it rather than relying on it.
 workspace:
-  strategy: copy
+  strategy: copy    # the default, stated because the collecting matrix below requires it
 
 defaults:
-  # opencode's Go provider (https://opencode.ai/docs/go/): the `opencode/`
-  # prefix supplies the base URL and the OPENCODE_API_KEY env var name, so a
-  # model here is just the model. glm-5.2 is the open model pr-af's own
-  # benchmark leads with, which makes it the honest default for a pipeline
-  # shaped after theirs. Swap per run without editing this file:
+  # Swap per run without editing this file:
   #   STEPS_MODEL=opencode/kimi-k3 steps run examples/pr-review.yml --job review
   model: opencode/glm-5.2
 
 # ─── the PR, in and out ─────────────────────────────────────────────────────
-# Both directions are `gh` — what "a PR" and "a review" mean is specific to
-# your host, so it is a resource type you own rather than something built in.
 resource_types:
 - name: github-pr
   config:
-    # One version per open PR, newest first. Each becomes a candidate build.
+    # One version per open PR. The ref carries the head SHA, so a new push is
+    # a new version — a new build, not a cache hit on the PR number.
     check: |
       set -e
       gh pr list --repo {{ .source.repo | shellquote }} --state open \
         --json number,headRefOid \
         --jq '[.[] | {ref: ((.number|tostring) + "@" + .headRefOid)}]'
-    # The version's ref carries the head SHA, so a new push is a new version —
-    # and therefore a new build, rather than a cache hit on the PR number.
-    # Fetches the diff AND the code it changed, at the exact commit under
-    # review. The code is the half that is easy to forget: every reviewer here
-    # is told to read the source rather than trust the patch.
+    # Fetches the diff, the metadata, AND the code at the commit under review
+    # — the reviewers are told to read the source, not trust the patch.
     in: |
       set -e
       ref={{ .version.ref | shellquote }}
@@ -71,10 +48,8 @@ resource_types:
         --json title,body,files,baseRefName > pr.json
       printf '%s' "$number" > pr.number
 
-      # Checked out INTO this artifact, so a path a reviewer names reads
-      # `pr/internal/thing.go` — the same prefix the diff and metadata use.
-      # `checkout <sha> -- .` restores the tree without moving HEAD, which is
-      # what keeps the three files above from being clobbered.
+      # `checkout <sha> -- .` restores the tree without moving HEAD, so the
+      # three files above survive.
       git init -q .
       git remote add origin "https://github.com/{{ .source.repo }}.git"
       git fetch -q --no-tags --depth 1 origin "$sha" 2>/dev/null \
@@ -86,9 +61,6 @@ resource_types:
   config:
     check: 'echo ''[{"ref":"latest"}]'''
     in: "true"
-    # Posts the synthesized findings. `--json` output from the synthesizer is
-    # what the loop below is for: nothing reaches this step until a falsifier
-    # has tried to knock each finding down.
     out: |
       set -e
       test -s review/findings.json || { echo "no findings file"; exit 1; }
@@ -106,13 +78,9 @@ resources:
     repo: ((pr_repo))
 
 # ─── the reviewers ──────────────────────────────────────────────────────────
-# Read-only, deliberately. Withholding the write tools is what makes "this
-# agent reviews, it does not edit" a guarantee rather than a request in a
-# prompt. run_shell is granted only where a finding has to be checked against
-# the actual repository.
+# All read-only: withholding the write tools is what makes "this agent
+# reviews, it does not edit" a guarantee rather than a request in a prompt.
 agents:
-# The planner decides what KINDS of review this change needs — it does not
-# review. Its output is the work list the matrix below fans out over.
 - name: planner
   system: |
     You decide what kinds of review a change needs — you do not review it.
@@ -126,8 +94,6 @@ agents:
     that reads the codebase — the reviewers are, and each one opens holding
     the brief you write it. If the change carries no risk on some axis,
     propose nothing for it. Do not pad.
-  # A planner proposes from a diff it is already holding; 8 turns is planning,
-  # 50 would be reviewing.
   max_turns: 8
   tools: [read_file, write_file]
 
@@ -257,29 +223,17 @@ agents:
 
 jobs:
 - name: review
-  # Job-level, cumulative across every agent step — the step that trips it is
-  # rarely the one that cost the most. Counted from the provider's reported
-  # usage, never an estimate. Never hashed, so adding it invalidates nothing.
-  #
-  # And the wall clock, which the token ceiling does not bound: three slow
-  # agents can sit inside every per-step deadline and still take all
-  # afternoon. 1h is pr-af's own MaxDurationSeconds.
-  timeout: 1h
+  timeout: 1h            # wall-clock ceiling on the whole run
   budget:
-    tokens: 8000000
+    tokens: 8000000      # cumulative across every agent step
   plan:
   - get: pr
     trigger: true
 
   # ── phase 1: decide what to review ────────────────────────────────────────
-  # This is the step that decides how wide the next one is. It writes a work
-  # list — a JSON array of dimension ids — plus one brief per dimension, so
-  # each reviewer cell opens holding exactly what it was assigned.
-  #
-  # context_paths: hands the planner the diff directly rather than sending it
-  # to find it, and max_context_bytes: is raised because the planner must see
-  # the WHOLE change — a diff silently cut at the 100KB default means whole
-  # sections of a large PR are never assigned a dimension at all.
+  # Writes a work list (a JSON array of dimension ids) plus one brief per
+  # dimension. context_paths: hands the planner the whole diff up front;
+  # max_context_bytes: is raised so a large PR is never silently truncated.
   - agent: planner
     inputs: [pr]
     outputs: [dims]
@@ -298,32 +252,18 @@ jobs:
       dimension looks for (one paragraph), and the repo-relative paths under
       pr/ to start from.
 
-  # ── phase 2: one ephemeral reviewer per dimension, concurrently ──────────
-  # The matrix's width is not in this file — `from_file:` takes it from what
-  # the planner just wrote. Each cell is its own merkle node, named for its
-  # dimension (reviewer [dim=api-boundaries]), and `outputs: [findings]` on
-  # the block means everything the cells produce comes back as ONE artifact:
-  #
-  #   findings/<dimension>/report.json
-  #
-  # A failed cell contributes no directory — which is why each is try:-wrapped:
-  # ONE reviewer failing must not cost the whole review. The review is
-  # assembled from whatever survived, and the falsifier walks what is there.
+  # ── phase 2: one reviewer per dimension, concurrently ────────────────────
+  # `from_file:` takes the matrix's width from what the planner just wrote.
+  # `outputs: [findings]` on the block collects every cell's output into one
+  # artifact: findings/<dimension>/report.json. Each cell is try:-wrapped so
+  # one reviewer failing doesn't cost the whole review — a failed cell just
+  # contributes no directory.
   - across:
     - var: dim
       from_file: dims/index.json
-    # Width 2 rather than "all at once", because the block budget's first
-    # batch is admitted blind — admission sees only FINISHED cells' spend. At
-    # 2, the third admission is decided against real numbers and the budget
-    # below can actually stop anything.
     max_in_flight: 2
-    # The ceiling that belongs HERE rather than on the job: this is the one
-    # step whose cost nobody could know when this file was written — the
-    # planner decided how many cells there are, moments ago. When it runs
-    # out, the matrix stops starting reviewers, the finished ones keep their
-    # findings, and the plan carries on to the falsifier.
     budget:
-      tokens: 3600000
+      tokens: 3600000    # when spent, no further cells start; the plan carries on
     try:
       agent: reviewer
       inputs: [pr, dims]
@@ -338,10 +278,8 @@ jobs:
         Write your findings to findings/report.json.
 
   # ── phase 3: the falsifiability gate ─────────────────────────────────────
-  # The reviewers proposed; this one tries to knock each proposal down. It is
-  # a separate step rather than an instruction in the reviewer's prompt
-  # because an agent grading its own work is not a gate. The collected
-  # artifact arrives as ONE input, one directory per dimension that ran.
+  # A separate step rather than an instruction in the reviewer's prompt: an
+  # agent grading its own work is not a gate.
   - agent: falsifier
     inputs: [pr, findings]
     outputs: [confirmed]
@@ -352,11 +290,7 @@ jobs:
 
       Write the survivors to confirmed/confirmed.json.
 
-  # ── the merge gate ───────────────────────────────────────────────────────
-  # Severity and "must this block the merge" are different questions, and
-  # answering them in one pass makes a reviewer's alarm calibration decide
-  # whether a PR ships. Separating them is what lets the review stay useful
-  # without turning every finding into a stop sign.
+  # ── phase 4: what actually blocks the merge ──────────────────────────────
   - agent: gatekeeper
     inputs: [pr, confirmed]
     outputs: [blocking]
@@ -368,7 +302,7 @@ jobs:
 
       Write blocking/blocking.json.
 
-  # ── synthesize, and write the review ─────────────────────────────────────
+  # ── phase 5: write the review ────────────────────────────────────────────
   - agent: synthesizer
     inputs: [pr, confirmed, blocking]
     outputs: [review]
@@ -382,8 +316,7 @@ jobs:
       (the structured list). Nothing else — the PR number is the pipeline's
       to know, not yours.
 
-  # The deterministic check that the synthesizer actually wrote the files it
-  # claimed, run BEFORE a person is asked to look.
+  # A deterministic check that the files exist, before a person is asked to look.
   - task: check-draft
     inputs: [pr, review]
     run: |
@@ -393,14 +326,11 @@ jobs:
 
       test -s pr/pr.number         || { echo "the PR number was never fetched" >&2; exit 1; }
 
-  # ── the gate before anything is public ───────────────────────────────────
-  # Posting a review is not undoable. This is where a person looks first — the
-  # step prints the message and the command to answer it.
+  # ── a human approves before anything is public ───────────────────────────
   - approval:
       message: "Review drafted in review/summary.md — post it to the PR?"
       timeout: 24h
 
-  # Both artifacts: the review to post, and the pr the number came from.
   - put: pr-review
     inputs: [pr, review]
 

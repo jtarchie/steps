@@ -25,6 +25,7 @@ never share a database here either.
 | `…/nodes/:hash` | What a merkle hash is made of, and every run that reused it: the cache's receipt |
 | `…/approvals` | Pending `approval:` steps, and the decisions already made |
 | `…/resources` | Latest checked version per resource, and any job the circuit breaker has paused |
+| `/docs` | These docs, rendered with syntax-highlighted examples — the same pages `steps docs` shows in a terminal |
 
 Press `/` anywhere for a jump palette over pipelines, jobs, and recent runs.
 

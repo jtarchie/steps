@@ -99,39 +99,34 @@ jobs:
 	}
 }
 
-// Every shipped example validates, so `steps validate examples/<x>.yml` is a
-// working first command for a reader who just copied one.
-//
-// The dummy keys are load-bearing: validate now checks that the credentials a
-// pipeline names are actually present, and the agent examples name one.
-// Setting them here (rather than passing --syntax-only) keeps the full path
-// under test — the examples would otherwise only ever be checked with half of
-// validate switched off.
-//
-// One per PROVIDER any example reaches for. An example that names a provider
-// with no key here fails this test rather than silently skipping the check,
-// which is how pointing pr-review.yml at opencode's Go models was caught.
-func TestValidateExamples(t *testing.T) {
+// Every shipped example passes FULL validate (credential checks included) in
+// TestDocsExamples, which sets one dummy key per provider the docs reach for
+// and validates each run-mode block's original text — the same coverage the
+// old examples/ glob gave, against the corpus that replaced it.
+
+// TestValidatePRReviewExample keeps the one surviving standalone example
+// honest. examples/pr-review.yml is the capstone people run against a real
+// model and a real repo — it can never be a deterministic fixture (its
+// pass/fail depends on what the reviewers find), so it lives outside docs/'s
+// executed corpus. Schema + full validate is the half that CAN be pinned
+// statically; its deterministic SHAPE (planner-decided matrix width,
+// concurrent cells, collected outputs, synthesizer fan-in) is pinned
+// separately by e2e_pr_review_test.go against the fake provider.
+func TestValidatePRReviewExample(t *testing.T) {
 	for _, key := range []string{"OPENROUTER_API_KEY", "OPENCODE_API_KEY", "ANTHROPIC_API_KEY"} {
 		t.Setenv(key, "test-key-not-used-for-any-call")
 	}
 
-	matches, err := filepath.Glob("examples/*.yml")
+	const path = "examples/pr-review.yml"
+
+	err := loadSchema(t).Validate(yamlAsJSONValue(t, path))
 	if err != nil {
-		t.Fatal(err)
+		t.Errorf("%s does not match steps.schema.json:\n%v", path, err)
 	}
 
-	if len(matches) == 0 {
-		t.Fatal("no examples found")
-	}
-
-	for _, path := range matches {
-		t.Run(filepath.Base(path), func(t *testing.T) {
-			err := run([]string{"validate", path})
-			if err != nil {
-				t.Errorf("validate %s: %v", path, err)
-			}
-		})
+	err = run([]string{"validate", path})
+	if err != nil {
+		t.Errorf("validate %s: %v", path, err)
 	}
 }
 

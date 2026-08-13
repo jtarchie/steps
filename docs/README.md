@@ -2,18 +2,21 @@
 
 Read the page for what you're doing. Nothing here needs to be read in order, except that [resources.md](resources.md) is the one most people need second, right after the quick start.
 
+**Every YAML example in these docs is a complete pipeline, extracted and executed by the test suite** (`docs_test.go`). An example that needs docker, the network, or real credentials says so; everything else runs exactly as shown, and a doc example that stops working fails the build. Read them via `steps docs` in a terminal, `/docs` in the [web UI](web.md), or the files themselves.
+
 ## Writing pipelines
 
 | Page | What it covers | Length |
 |---|---|---|
 | [resources.md](resources.md) | Resources and resource types: the built-in `git`, the `check`/`in`/`out` contract, `version:`, `trigger:` | short |
-| [control-flow.md](control-flow.md) | `when:` guards, hooks, `to:`/`max_visits:` routing, verdicts, `assert:` | medium |
-| [agents.md](agents.md) | Agent steps: tools, prompts, verdicts, `fix:`, sub-agents | long |
+| [control-flow.md](control-flow.md) | `when:` guards, hooks, `to:`/`verdicts:` routing, `do:`/`in_parallel:`/`race:`/`across:`, `assert:`, approvals | long |
+| [agents.md](agents.md) | Agent steps: tools, prompts, verdicts, sub-agents, `fix:`, budgets, failover, CLI agents, ensembles | long |
 | [attempts-timeout.md](attempts-timeout.md) | `attempts:` and `timeout:`, and how they interact | short |
 | [workspace.md](workspace.md) | `inputs:`/`outputs:`, per-step isolation (always on), read-modify-write artifacts | short |
-| [infra.md](infra.md) | Cross-job triggers (`steps watch`) and containerized execution (`image:`) | short |
-| [templating.md](templating.md) | `{{ }}` in resource commands and custom tools, and `shellquote` | short |
+| [infra.md](infra.md) | Containerized execution (`image:`) and cross-job triggers (`steps watch`) | medium |
+| [templating.md](templating.md) | `{{ }}` in resource commands and custom tools, `shellquote`, `((var))`, `load_var:` | short |
 | [mcp.md](mcp.md) | MCP servers as tool sources and as resource-type backends | medium |
+| [complete.md](complete.md) | A full pipeline putting the pieces together | short |
 
 ## Reference
 
@@ -40,6 +43,7 @@ steps approvals <pipeline>  list approval: steps waiting for a decision
 steps approve <pipeline> <id>
 steps reject <pipeline> <id>
 steps mcp tools|login       inspect or authorize mcp_servers: entries
+steps docs [page]           read these docs in the terminal
 ```
 
 Two of these answer most "why is it doing that?" questions: `steps plan` explains what the cache would skip, and `steps runs --steps` shows what previous runs actually did.
@@ -59,9 +63,9 @@ steps: error: pipeline.yml cannot run here:
   mcp "gopls"    command "gopls" not found on PATH
 ```
 
-`steps preflight` answers the run-time version of the same question: not "is this pipeline runnable" but "is it runnable *right now*". It sends a minimal request to every model the job reaches and starts every MCP server it grants, confirming the tools the pipeline names actually exist on them.
+`steps preflight` answers the run-time version of the same question: not "is this pipeline runnable" but "is it runnable *right now*". It sends a minimal request to every model the job reaches and starts every MCP server it grants.
 
-**`steps run` does this automatically, before any step executes.** A plan like `plan -> code -> check -> review -> publish` used to discover a dead model half an hour in, with everything before it paid for and thrown away; under `steps watch` nobody is even there to notice. Now it fails in seconds, saying explicitly that nothing ran:
+**`steps run` does this automatically, before any step executes.** A plan like `plan -> code -> check -> review -> publish` used to discover a dead model half an hour in, with everything before it paid for and thrown away. Now it fails in seconds, saying explicitly that nothing ran:
 
 ```
 $ steps run pipeline.yml --job self-build
@@ -70,11 +74,9 @@ steps: error: job "self-build": preflight failed, no steps were run:
     (other models on this endpoint responded — the model itself looks unavailable, not the endpoint or the key)
 ```
 
-That last line is the diagnostic a human reached for by hand: the same account, key and endpoint served another model fine, so the problem is the model.
-
 Tuning, all optional:
 
-```yaml
+```yaml fragment
 defaults:
   preflight:
     disabled: false   # true skips it entirely
@@ -86,37 +88,31 @@ agents:
   preflight: false    # opt one agent out — e.g. a local model slow to WAKE
 ```
 
-The cache is what makes this usable under `steps watch`: without it every poll interval would pay for a probe request against every model. `--no-preflight` skips it for one invocation.
+The cache is what makes this usable under `steps watch`: without it every poll interval would pay for a probe request against every model. `--no-preflight` skips it for one invocation. **What it does not do:** preflight catches "broken before we start", not "breaks halfway through" — failing over mid-run is [`fallback:`](agents.md#failover-fallback)'s territory.
 
-**What it does not do:** preflight catches "broken before we start", not "breaks halfway through". In the incident it was built for, the model answered a test request two minutes before the run started and failed 36 minutes in — a preflight would have passed. Failing over mid-run is a separate feature.
-
-Add `--syntax-only` to `steps validate` to check the file alone. That is the right flag for a pre-commit hook or a CI lint of a pipeline that build has no intention of running — it should not need that pipeline's production credentials on hand.
+Add `--syntax-only` to `steps validate` to check the file alone — the right flag for a pre-commit hook or a CI lint that should not need the pipeline's production credentials on hand.
 
 ## Editor support
 
-[`steps.schema.json`](../steps.schema.json) is a JSON Schema for the pipeline format. Point your editor at it with a modeline on the first line of a pipeline, as every example does:
+[`steps.schema.json`](../steps.schema.json) is a JSON Schema for the pipeline format. Point your editor at it with a modeline on the first line of a pipeline:
 
-```yaml
+```yaml fragment
 # yaml-language-server: $schema=./steps.schema.json
 ```
 
 That gives completion and inline errors while you type. `steps validate` remains the authority — it checks rules a schema can't express, like whether a `to:` target exists in the same segment — but the schema catches misspelled keys at the keystroke rather than the run.
 
-## Examples
-
-[`examples/`](../examples/) holds runnable, self-contained pipelines, several of which verify themselves under `steps test`. Its [`invalid/`](../examples/invalid/) subdirectory is the inverse: pipelines that must be **rejected** at load, each naming the error it has to produce. That's where a rule like "`trigger:` is only valid on `get` steps" gets a file you can read, rather than living only as an error-substring assertion in a Go test.
-
 ## Re-running one step: `--replay`
 
-Agent steps are never content-cached, and unskippable propagates forward — so editing the *last* agent step's prompt re-runs every step before it, at full price. That is the single most expensive thing about authoring an agent pipeline, and it is an iteration-loop problem rather than a model-cost one.
+Agent steps are never content-cached, and unskippable propagates forward — so editing the *last* agent step's prompt re-runs every step before it, at full price. That is the single most expensive thing about authoring an agent pipeline.
 
 ```bash
 steps run pipeline.yml --replay r-8f2a1c --from synthesizer
 ```
 
-That forks the recorded run and executes from `synthesizer` onward. It does **not** consult the merkle cache: state comes from the source run's workspace (the artifacts and files earlier steps produced are already on disk), its recorded `run_context`, and its step record. A step before the replay point does not re-execute because the record says it ran — which is why this works even though agent steps are unskippable, and why it is unrelated to whether a step is cacheable.
+That forks the recorded run and executes from `synthesizer` onward. It does **not** consult the merkle cache: state comes from the source run's workspace (the artifacts earlier steps produced are already on disk), its recorded `run_context`, and its step record.
 
-- **It forks, never mutates.** The source run stays exactly as it was, so the thing you are comparing against still exists — and two prompt variants become two runs you can read side by side. `steps runs --cost` prices both.
+- **It forks, never mutates.** The source run stays exactly as it was, so the thing you are comparing against still exists — two prompt variants become two runs you can read side by side. `steps runs --cost` prices both.
 - **`--from` names a step**, matched against the *current* plan. The pipeline has almost certainly changed since the source run; that is why you are replaying.
-- **A source run that never completed an earlier step is refused**, naming it. Its outputs are not in the forked workspace, so replaying past it would run against state that never existed.
+- **A source run that never completed an earlier step is refused**, naming it.
 - **It needs the source workspace**, so the run being replayed must have been kept (`--keep-workspace`). A reaped tree is a clear error, not a silent full re-run.

@@ -1,0 +1,8 @@
+{{define "page"}}
+<div class="docsnav">
+  {{range .Pages}}<a {{if eq . $.Name}}aria-current="page"{{end}} href="/docs/{{.}}">{{trimMD .}}</a>{{end}}
+</div>
+<article class="docs">
+{{.HTML}}
+</article>
+{{end}}

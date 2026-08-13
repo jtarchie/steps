@@ -324,15 +324,15 @@ func slicesEqual(a, b []string) bool {
 	return true
 }
 
-// TestExampleWorkspaceLoadsCleanly guards examples/workspace.yml against
+// TestExampleWorkspaceLoadsCleanly guards testdata/workspace.yml against
 // silently drifting out of sync with the workspace: schema/validation rules
 // it's meant to demonstrate.
 func TestExampleWorkspaceLoadsCleanly(t *testing.T) {
 	t.Parallel()
 
-	_, err := LoadConfig(filepath.Join("..", "..", "examples", "workspace.yml"))
+	_, err := LoadConfig(filepath.Join("testdata", "workspace.yml"))
 	if err != nil {
-		t.Fatalf("LoadConfig(examples/workspace.yml): %v", err)
+		t.Fatalf("LoadConfig(testdata/workspace.yml): %v", err)
 	}
 }
 

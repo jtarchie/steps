@@ -5,14 +5,14 @@ import (
 	"testing"
 )
 
-// TestExampleFlowLoadsCleanly guards examples/flow.yml (hooks, when:, and to:,
-// consolidated) against schema drift.
+// TestExampleFlowLoadsCleanly guards testdata/flow.yml (hooks, when:, and
+// to:, consolidated — plus a run_file: include) against schema drift.
 func TestExampleFlowLoadsCleanly(t *testing.T) {
 	t.Parallel()
 
-	_, err := LoadConfig(filepath.Join("..", "..", "examples", "flow.yml"))
+	_, err := LoadConfig(filepath.Join("testdata", "flow.yml"))
 	if err != nil {
-		t.Fatalf("LoadConfig(examples/flow.yml): %v", err)
+		t.Fatalf("LoadConfig(testdata/flow.yml): %v", err)
 	}
 }
 

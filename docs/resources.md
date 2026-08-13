@@ -2,7 +2,9 @@
 
 A **resource** is something outside the pipeline that has versions: a git branch, a queue of pull requests, a build artifact, a counter in a file. A **resource type** is the code that knows how to talk to one.
 
-```yaml
+Every example on this page (and every other page) is a complete pipeline, verified by the test suite. Blocks that need the network or real credentials say so; everything else runs as shown.
+
+```yaml noexec
 resources:
 - name: repo          # the artifact directory a get creates, and the name steps use
   type: git           # which resource type
@@ -15,6 +17,7 @@ jobs:
   plan:
   - get: repo         # fetch it — the contents land in ./repo
   - task: compile
+    inputs: [repo]
     run: cd repo && go build ./...
 ```
 
@@ -31,21 +34,30 @@ It fetches the exact commit the plan pinned, shallowly, so a branch that moves m
 
 ## Writing a resource type
 
-A resource type is three shell commands. Each is a [template](templating.md) and each runs `sh -c`.
+A resource type is three shell commands. Each is a [template](templating.md) and each runs `sh -c`. This one is self-contained, so it runs anywhere:
 
 ```yaml
 resource_types:
-- name: counter
-  # image: alpine:3          # optional — run these in a container instead of on the host
+- name: greetings
+  # image: alpine:3   # optional — run these in a container instead of on the host
   config:
     check: |
-      printf '[{"ref": "%s"}]' "$(cat {{ .source.path }})"
+      printf '[{"word": "hello"}, {"word": "hola"}]'
     in: |
-      echo {{ .version.ref | shellquote }} > ./ref
-    out: |
-      next=$(( $(cat {{ .source.path }}) + 1 ))
-      echo "$next" > {{ .source.path }}
-      printf '{"ref": "%s"}' "$next"
+      echo {{ .version.word | shellquote }} > word.txt
+
+resources:
+- name: greeting
+  type: greetings
+  source: {}
+
+jobs:
+- name: speak
+  plan:
+  - get: greeting
+  - task: shout
+    inputs: [greeting]
+    run: tr a-z A-Z < greeting/word.txt
 ```
 
 ### `check` — what versions exist?
@@ -69,43 +81,46 @@ Runs when a `get` step executes.
 - **Working directory** is the artifact directory itself, already created and empty. Write the contents there — `.`, not a subdirectory named after the resource.
 - **Exit non-zero** to fail the step.
 
-`params:` on a get is how a resource is told *how* to fetch, as opposed to `source:`, which says *what* to fetch:
+`params:` on a get is how a resource is told *how* to fetch, as opposed to `source:`, which says *what* to fetch. The distinction matters because `source:` belongs to the resource and `params:` belongs to the step, so one resource can be fetched differently by different jobs without being declared twice:
 
 ```yaml
-- get: repo
-  params:
-    depth: 1
-```
+resource_types:
+- name: notes
+  config:
+    check: |
+      printf '[{"ref": "v1"}]'
+    in: |
+      head -n {{ index .params "lines" | default "100" }} <<'EOF' > notes.txt
+      first line
+      second line
+      EOF
 
-The distinction matters because `source:` belongs to the resource and `params:` belongs to the step, so one repository can be fetched shallowly in a job that only needs the tip and fully in a job that walks history — without declaring it twice:
-
-```yaml
 resources:
-- name: repo
-  type: git
-  source: { uri: https://github.com/you/repo.git }
+- name: log
+  type: notes
+  source: {}
 
 jobs:
 - name: quick
   plan:
-  - get: repo
-    params: { depth: 1 }
-- name: changelog
+  - get: log
+    params: { lines: 1 }     # this job fetches a truncated view
+  - task: show
+    inputs: [log]
+    run: wc -l < log/notes.txt
+- name: full
   plan:
-  - get: repo          # same resource, full history
+  - get: log                 # same resource, whole thing
+  - task: show
+    inputs: [log]
+    run: wc -l < log/notes.txt
 ```
 
-**Optional params take the same shape as an optional `source:` field** (see [Shell safety](#shell-safety) below). Templates render with `missingkey=error`, so a bare `{{ .params.depth }}` makes `depth` *mandatory* on every get of that type:
-
-```yaml
-in: git clone --depth {{ index .params "depth" | default "50" }} {{ .source.uri | shellquote }} .
-```
-
-That works on an absent key and on a get with no `params:` block at all.
+**Optional params take the same shape as an optional `source:` field** (see [Shell safety](#shell-safety) below). Templates render with `missingkey=error`, so a bare `{{ .params.lines }}` makes `lines` *mandatory* on every get of that type; `{{ index .params "lines" | default "100" }}` works on an absent key and on a get with no `params:` block at all.
 
 **Params change the fetch, so they change the hash.** Two gets of one version differing in `params:` are two different fetches: they get distinct cache entries and neither is reused for the other. A get with no `params:` hashes exactly as it did before the field existed, so adding this to a pipeline invalidates nothing that does not use it.
 
-The fetched directory is named after the `get:`, so `get: repo` puts it in `repo/`, and later steps read `repo/...`. See [workspace.md](workspace.md) for what a step can and can't see.
+The fetched directory is named after the `get:`, so `get: log` puts it in `log/`, and later steps read `log/...`. See [workspace.md](workspace.md) for what a step can and can't see.
 
 ### `out` — publish something
 
@@ -120,11 +135,33 @@ Runs when a `put` step executes. Optional: a type with no `out:` is read-only, a
 A put step runs `out:` and nothing else — there is no implicit get afterward, so a put produces no artifact. (Concourse fetches the produced version automatically; steps deliberately does not: an artifact appearing in the build that no step declared is exactly the kind of ambient data flow this DSL rejects.) A plan that wants the just-published version writes the fetch it means:
 
 ```yaml
-- put: release            # out: publishes and prints {"ref": "v1.4.2"}
-- get: release            # fetch it back, explicitly
-- task: verify
-  inputs: [release]
-  run: cat release/ref
+resource_types:
+- name: release
+  config:
+    check: |
+      printf '[{"ref": "v1.4.2"}]'
+    in: echo {{ .version.ref | shellquote }} > ref
+    out: |
+      cat notes/summary.txt        # "publish" the summary an earlier step wrote
+      printf '{"ref": "v1.4.2"}'
+
+resources:
+- name: releases
+  type: release
+  source: {}
+
+jobs:
+- name: publish
+  plan:
+  - task: summarize
+    outputs: [notes]
+    run: echo 'what changed' > notes/summary.txt
+  - put: releases              # out: publishes and prints the version
+    inputs: [notes]
+  - get: releases              # fetch it back, explicitly
+  - task: verify
+    inputs: [releases]
+    run: cat releases/ref
 ```
 
 The explicit get fetches the resource's **latest** version at that moment, like any other get — for almost every plan that is the version the put just published, but a concurrent publisher can race it. A put whose output nothing reads simply has no get after it.
@@ -133,7 +170,7 @@ The explicit get fetches the resource's **latest** version at that moment, like 
 
 Anything interpolated into a command is text substitution, so quote it:
 
-```yaml
+```yaml fragment
 check: git ls-remote {{ .source.uri | shellquote }}     # good
 check: git ls-remote {{ .source.uri }}                  # a uri with a space or ; breaks or worse
 ```
@@ -142,26 +179,81 @@ check: git ls-remote {{ .source.uri }}                  # a uri with a space or 
 
 Templates render with `missingkey=error`, so reading an optional field that wasn't set fails the render. Ask for optional fields in a way that can answer "nothing":
 
-```yaml
+```yaml fragment
 {{ index .source "branch" | default "HEAD" }}     # optional
 {{ .source.uri }}                                 # required — failing is correct
 ```
 
 ## `version:` on a get step
 
+By default a get fetches the **latest** version `check` reported. `version: every` runs the rest of the plan once per version — the only fan-out point in a plan — and a mapping pins one exact version:
+
 ```yaml
-- get: repo                    # default: the latest version
-- get: repo
-  version: every               # run the rest of the plan once per version
-- get: repo
-  version: { ref: 9fceb02 }    # pin to exactly this one
+resource_types:
+- name: builds
+  config:
+    check: |
+      printf '[{"number": "87"}, {"number": "88"}]'
+    in: echo {{ .version.number | shellquote }} > number.txt
+
+resources:
+- name: build
+  type: builds
+  source: {}
+
+jobs:
+- name: latest-only
+  plan:
+  - get: build                     # default: "88", the newest
+  - task: show
+    inputs: [build]
+    run: cat build/number.txt
+- name: each-in-turn
+  plan:
+  - get: build
+    version: every                 # the rest of the plan runs per version
+  - task: show
+    inputs: [build]
+    run: cat build/number.txt
+- name: pinned
+  plan:
+  - get: build
+    version: { number: "87" }      # exactly this one
+  - task: show
+    inputs: [build]
+    run: cat build/number.txt
 ```
 
-`every` is the only fan-out point in a plan. A failing version does not stop the remaining ones from being attempted.
+Under `every`, a failing version does not stop the remaining ones from being attempted.
 
 ## `trigger: true`
 
-Marks a `get` as something `steps watch` should poll. When its version changes, the jobs containing it run automatically. Valid only on `get` steps — setting it anywhere else is a load-time error, demonstrated by [examples/invalid/trigger-on-task.yml](../examples/invalid/trigger-on-task.yml). See [infra.md](infra.md).
+Marks a `get` as something `steps watch` should poll. When its version changes, the jobs containing it run automatically. Valid only on `get` steps — setting it anywhere else is a load-time error.
+
+```yaml
+resource_types:
+- name: ticker
+  config:
+    check: |
+      printf '[{"tick": "1"}]'
+    in: echo {{ .version.tick | shellquote }} > tick.txt
+
+resources:
+- name: clock
+  type: ticker
+  source: {}
+
+jobs:
+- name: on-change
+  plan:
+  - get: clock
+    trigger: true      # steps watch polls this; a new version runs the job
+  - task: react
+    inputs: [clock]
+    run: cat clock/tick.txt
+```
+
+See [infra.md](infra.md) for the watch loop, webhooks, and cross-job triggering.
 
 ## MCP-backed types
 
@@ -169,9 +261,4 @@ A resource type can call an MCP server instead of running shell commands — the
 
 ## Checking your work
 
-```bash
-steps validate pipeline.yml   # does it parse and hang together?
-steps plan pipeline.yml       # runs check; shows what would be fetched vs cached
-```
-
-`steps plan` is the fastest way to see whether a `check` you just wrote returns what you expect, since it resolves versions without running the rest of the job.
+`steps validate pipeline.yml` answers "does it parse and hang together"; `steps plan pipeline.yml` runs `check` and shows what would be fetched vs cached — the fastest way to see whether a `check` you just wrote returns what you expect, since it resolves versions without running the rest of the job.

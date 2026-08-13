@@ -1,12 +1,12 @@
 # MCP Servers
 
-MCP (Model Context Protocol) servers are a third kind of external system, alongside LLM providers (`agents:`) and shell-backed resource types (`resource_types:`): a reusable, named connection (`mcp_servers:`) that an agent's `tools:` grant can draw tools from, and/or a resource type's `check`/`in`/`out` can call instead of shelling out. See `examples/agents.yml`'s `triager` job for the agent-tool-grant half and `examples/infra.yml`'s `notify-linear` job for the resource-type half.
+MCP (Model Context Protocol) servers are a third kind of external system, alongside LLM providers (`agents:`) and shell-backed resource types (`resource_types:`): a reusable, named connection (`mcp_servers:`) that an agent's `tools:` grant can draw tools from, and/or a resource type's `check`/`in`/`out` can call instead of shelling out.
 
-**Two transports**: Streamable HTTP (`endpoint:`) or a local subprocess over stdio (`command:`, see "Local (stdio) servers" below). A resource type's `out:` is optional and, when set, receives only `{source, params}` — it cannot read step working-directory files the way a shell `out:` can.
+**Two transports**: Streamable HTTP (`endpoint:`) or a local subprocess over stdio (`command:`). The examples on this page validate but are not executed by the docs suite — they need real servers and credentials.
 
 ## Declaring a server
 
-```yaml
+```yaml noexec
 mcp_servers:
 - name: github
   endpoint: https://api.githubcopilot.com/mcp/
@@ -15,120 +15,165 @@ mcp_servers:
 - name: linear
   endpoint: https://mcp.linear.app/mcp
   auth: { type: oauth }
+
+agents:
+- name: triager
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  tools:
+  - mcp: github
+    tool: search_issues
+
+jobs:
+- name: triage
+  plan:
+  - agent: triager
+    prompt: "Find open issues labeled 'crash' and summarize them."
 ```
 
 - `name` is how `agents:` tool grants and `resource_types:` `mcp:` blocks reference this server — declared once, shared by any number of consumers, the same "reusable top-level block" idiom as `agents:`/`resources:`.
-- `endpoint` is validated at `LoadConfig` the same way `AgentSource.Endpoint` is (`validateMCPServers`, mirroring `validateAgentEndpoints`): it must not embed userinfo (`https://user:token@host/`), since it's folded into cache-hashed content — use `auth.api_key_env` for a credential, never the endpoint itself.
+- `endpoint` must not embed userinfo (`https://user:token@host/`), since it's folded into cache-hashed content — use `auth.api_key_env` for a credential, never the endpoint itself. Checked at load.
 - `auth.type` is `"none"` (default, when `auth:` is omitted entirely), `"bearer"`, or `"oauth"`. `"bearer"` requires `api_key_env` — a static token read from that OS environment variable at run time, exactly like an LLM `agents:` entry's `api_key_env` (the value is never stored in YAML or hashed; only the env var *name* is).
 
 ## Local (stdio) servers
 
-```yaml
+```yaml noexec
 mcp_servers:
 - name: gopls
   command: gopls          # looked up on PATH; argv, never `sh -c`
   args: [mcp]             # optional
-  cwd: repo               # optional. Relative -> resolved against the agent
-                          # step's own working directory (here, the `repo`
-                          # input). Absolute -> used verbatim. Unset ->
-                          # inherits the directory steps was invoked from.
-                          # no auth: — a stdio server has no request to authenticate
+  cwd: repo               # optional — see below
+
+agents:
+- name: coder
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  tools:
+  - read_file
+  - mcp: gopls
+
+resources:
+- name: repo
+  type: git
+  source: { uri: https://github.com/jtarchie/ci.git }
+
+jobs:
+- name: analyze
+  plan:
+  - get: repo
+  - agent: coder
+    inputs: [repo]
+    dir: repo
+    prompt: "Find unused exported functions."
 ```
 
 A `command:` server is a local subprocess `steps` spawns and speaks newline-delimited JSON to over stdin/stdout, instead of connecting over HTTP.
 
-- **Exactly one of `endpoint:`/`command:`.** Setting both, or neither, is a `LoadConfig` error. `args:`/`cwd:` are only valid alongside `command:`.
+- **Exactly one of `endpoint:`/`command:`.** Setting both, or neither, is a load error. `args:`/`cwd:` are only valid alongside `command:`.
 - **`command:`/`args:` is explicit argv, never a shell.** `command: gopls mcp` is wrong — the whole string is looked up as one executable name; use `args: [mcp]`. There is no globbing, piping, or `&&`.
-- **`cwd:` is relative to the agent step's working directory, or absolute.** An **absolute** path is used verbatim — a fixed location on the host, identical for every step. A **relative** path is resolved against the working directory of the agent step whose tools are being built, which is what lets a server be pointed at an input artifact: `cwd: repo` aims a language server at the same materialized tree the agent's own file tools read and edit. Without it, a pipeline that fetches its source with a `get:` would have to keep the server aimed at some other checkout, and every path the server returned would name a file the agent cannot open. **Unset** inherits the directory `steps` was invoked from.
+- **`cwd:` is relative to the agent step's working directory, or absolute.** An **absolute** path is used verbatim. A **relative** path is resolved against the working directory of the agent step whose tools are being built, which is what lets a server be pointed at an input artifact: `cwd: repo` aims a language server at the same materialized tree the agent's own file tools read and edit. **Unset** inherits the directory `steps` was invoked from.
 
-  A relative `cwd:` is rejected at load time for a server backing a **resource type's** `mcp:` config: a `check`/`in`/`out` has no agent step to resolve against, so the path would silently resolve against wherever `steps` itself was invoked from. Those need an absolute `cwd:`.
-- **Auth is `none` only.** `auth:` set to anything but `""`/`none` alongside `command:` is a load-time error: a stdio server has no HTTP request to attach a bearer token to, and the oauth token file (see below) is keyed on `endpoint:`, which a stdio server doesn't have. `steps mcp login` therefore never applies to a stdio server.
-- **Environment is filtered, not inherited.** The subprocess sees only the same host-command allowlist every other host-executed command in this codebase gets (`PATH`, `HOME`, locale, `TMPDIR`/`USER`/`SHELL`, proxy vars) — **not** the operator's full environment, and specifically not any configured agent's `api_key_env` secret, nor `SSH_AUTH_SOCK` (a credential capability a pipeline must opt into by name). There is currently no pass-through mechanism for stdio servers, so **a stdio server that needs a credential or any other ambient variable (e.g. `GOFLAGS`, `GOPRIVATE`) is not supported yet** — that would need its own `env_from:`-style config surface.
-- **Lifecycle**: for an agent tool grant, one subprocess is spawned per agent step per grant and reaped when the step ends (stdin closed, then a grace period, then `SIGTERM`, then `SIGKILL` — handled by the underlying SDK transport, not a custom process manager). For a resource-type `mcp:` backend, a fresh subprocess is spawned **per** `check`/`in`/`out` call — including every `steps watch` poll interval — since this package never pools connections; fine for a fast-starting binary, a poor fit for one that's slow to start.
-- **Diagnostics**: the subprocess's stderr is logged at debug level (`--log-level=debug` / `STEPS_LOG_LEVEL=debug`), under the key `mcp.stdio.stderr` with the server's name attached — the only way to see why a stdio server failed to start.
-- `steps mcp tools <pipeline> <server>` (below) works identically for a stdio server and is the recommended first smoke test after declaring one.
+  A relative `cwd:` is rejected at load time for a server backing a **resource type's** `mcp:` config: a `check`/`in`/`out` has no agent step to resolve against. Those need an absolute `cwd:`.
+- **Auth is `none` only.** A stdio server has no HTTP request to attach a bearer token to; `auth:` set to anything else alongside `command:` is a load-time error, and `steps mcp login` never applies.
+- **Environment is filtered, not inherited.** The subprocess sees only the same host-command allowlist every other host-executed command gets (`PATH`, `HOME`, locale, `TMPDIR`/`USER`/`SHELL`, proxy vars) — **not** the operator's full environment, and specifically not any configured agent's `api_key_env` secret, nor `SSH_AUTH_SOCK`. There is currently no pass-through mechanism for stdio servers, so **a stdio server that needs a credential or any other ambient variable (e.g. `GOFLAGS`, `GOPRIVATE`) is not supported yet**.
+- **Lifecycle**: for an agent tool grant, one subprocess is spawned per agent step per grant and reaped when the step ends. For a resource-type `mcp:` backend, a fresh subprocess is spawned **per** `check`/`in`/`out` call — including every `steps watch` poll — fine for a fast-starting binary, a poor fit for one that's slow to start.
+- **Diagnostics**: the subprocess's stderr is logged at debug level (`--log-level=debug`), under `mcp.stdio.stderr` with the server's name attached — the only way to see why a stdio server failed to start.
 
 ## Discovering a server's tools: `steps mcp tools`
 
 Before writing a tool reference or a resource type's `mcp:` block, find out what a server actually exposes — its tool names and argument schemas are not something to guess:
 
 ```bash
-steps mcp tools examples/agents.yml github
+steps mcp tools pipeline.yml github
 ```
 
-This connects (per the server's configured auth) and prints each tool's name, description, and argument schema. It works for any auth type, and doubles as a connectivity/auth smoke test.
+This connects (per the server's configured auth) and prints each tool's name, description, and argument schema. It works for any auth type — stdio included — and doubles as a connectivity/auth smoke test.
 
 ## Granting MCP tools to an agent
 
 A `tools:` entry can reference an MCP server in three progressively broader forms, all sharing one connection to the server:
 
-```yaml
+```yaml noexec
+mcp_servers:
+- name: github
+  endpoint: https://api.githubcopilot.com/mcp/
+  auth: { type: bearer, api_key_env: GITHUB_PAT }
+
 agents:
 - name: triager
-  source: { model: openrouter/anthropic/claude-3.5-sonnet, api_key_env: OPENROUTER_API_KEY }
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
   tools:
   - mcp: github
-    tool: search_issues           # one tool — may also set description/required/max_calls
+    tool: search_issues            # one tool — may also set description/required/max_calls
     max_calls: 5
   - mcp: github
-    tools: [get_issue, list_pulls] # a named subset — each keeps its own server-advertised description
-  # - mcp: github                  # bare form: every tool the server exposes
+    tools: [get_issue, list_pulls] # a named subset — each keeps its server-advertised description
+
+jobs:
+- name: triage
+  plan:
+  - agent: triager
+    prompt: "Triage today's crash reports."
 ```
 
-- **Single tool** (`tool:`): the only form that may also set `description:` (overriding the server's own), `required:`, or `max_calls:` — the same semantics as a custom tool (see [agents.md](agents.md)'s call-guards section). Its model-facing function name is `<server>__<tool>` (double underscore — a dot, which "server.tool" would naturally suggest, is rejected by OpenAI's function-name charset).
-- **Named subset** (`tools:`): a list of tool names, each exposed under its own `<server>__<tool>` name with the server's own description. `description:`/`required:`/`max_calls:` are load-time errors here — they're single-tool concepts.
-- **Bare form** (neither set): every tool the server currently exposes, discovered via `steps mcp tools` at your own pace — not something `steps` re-checks automatically (see the cache caveat below).
-- **`args:` is invalid on every MCP form** — an MCP tool's arguments are schema-shaped by the remote server, not a flat string template, so there's nothing to pin the way a custom tool's `run:` template arguments can be.
-- **Grant, not inline**: like a sub-agent tool, an MCP grant must live on the `agents:` entry (or a `fix:`'s own `tools:` override — MCP tools *are* allowed in a fix agent's grant, unlike sub-agents) and be selected by bare name (`tools: [github]` on a step) — a step cannot introduce `{mcp: ..., tool: ...}` inline. This is enforced at `LoadConfig` and again at the tool-grant merge point.
-- **Caching hashing**: a server's endpoint/auth type/`api_key_env` name (never a value) — or, for a stdio server, its `command`/`args`/`cwd` (note `args` is hashed in order, since argv order is semantic, unlike the sorted `tools: [...]` list below) — and the granted tool name(s) fold into the step's hash — editing any of these busts the cache. The bare "all tools" form hashes as a static marker, since cache-time planning has no live connection to the server to enumerate its current tools; use the explicit `tools: [...]` form if you want a server's tool list changing to bust the cache on its own.
-- **Tool results**: translated to the same map shape every other tool returns — a transport failure or a tool result with `isError: true` becomes `{"error": ...}`; a successful call becomes `{"structured_content": ..., "content": ...}` (the joined text content).
+- **Single tool** (`tool:`): the only form that may also set `description:` (overriding the server's own), `required:`, or `max_calls:` — the same semantics as a custom tool (see [agents.md](agents.md)). Its model-facing function name is `<server>__<tool>` (double underscore — a dot is rejected by OpenAI's function-name charset).
+- **Named subset** (`tools:`): a list of tool names, each exposed under its own `<server>__<tool>` name. `description:`/`required:`/`max_calls:` are load-time errors here — they're single-tool concepts.
+- **Bare form** (`- mcp: github`, neither set): every tool the server currently exposes.
+- **`args:` is invalid on every MCP form** — an MCP tool's arguments are schema-shaped by the remote server, so there's nothing to pin the way a custom tool's `run:` template arguments can be.
+- **Grant, not inline**: like a sub-agent tool, an MCP grant must live on the `agents:` entry (or a `fix:`'s own `tools:` override) and be selected by bare name (`tools: [github]`) on a step — a step cannot introduce `{mcp: ..., tool: ...}` inline.
+- **Cache hashing**: a server's endpoint/auth type/`api_key_env` name (never a value) — or, for a stdio server, its `command`/`args`/`cwd` — and the granted tool name(s) fold into the step's hash. The bare "all tools" form hashes as a static marker, since plan-time hashing has no live connection to enumerate the server's tools; use the explicit `tools: [...]` form if you want the server's tool list changing to bust the cache.
+- **Tool results**: translated to the same map shape every other tool returns — a transport failure or a result with `isError: true` becomes `{"error": ...}`; a successful call becomes `{"structured_content": ..., "content": ...}`.
 
 ## Backing a resource type with MCP
 
-```yaml
+```yaml noexec
+mcp_servers:
+- name: linear
+  endpoint: https://mcp.linear.app/mcp
+  auth: { type: oauth }
+
 resource_types:
 - name: linear-issues
   config:
     mcp:
       server: linear
       check:
-        tool: list_issues   # called with {source} as arguments; must return
-                             # an oldest-first JSON array of version objects
-      # in:                 # optional — omitted here, so get just writes
-      #   tool: get_issue    # version.json (see below); no MCP call
+        tool: list_issues    # called with {source}; must return an oldest-first
+                             # JSON array of version objects
       out:
-        tool: create_issue  # optional — enables `put`; called with {source, params}
+        tool: create_issue   # optional — enables `put`; called with {source, params}
 
 resources:
 - name: eng-bugs
   type: linear-issues
-  source:                   # passed directly as list_issues' arguments —
-    team: ENG                # this is the "criteria config" for detecting new issues
+  source:                    # passed directly as list_issues' arguments
+    team: ENG
     label: bug
-    state: Backlog
+
+jobs:
+- name: react
+  plan:
+  - get: eng-bugs
+    trigger: true
+  - task: record
+    inputs: [eng-bugs]
+    run: cat eng-bugs/version.json
 ```
 
-- **`check:` is required**, `in:`/`out:` are both optional. `mcp:` is mutually exclusive with the shell `check:`/`in:`/`out:` strings — a resource type sets one style or the other, checked at `LoadConfig`.
-- **`check`** is called with `{"source": source}`, mirroring the shell backend's own template data shape. Its result must be an oldest-first JSON array of version objects, accepted either as the tool result's structured content or a single text content block containing that same array — as close a mirror of the shell path's "stdout is a JSON array" convention as an RPC result allows.
-- **`in`, when omitted** (the common case — the motivating use case here is detecting new issues, not fetching their full content): `get` just writes the selected version object to `<resource>/version.json`. No MCP call. **When set**, `in`'s tool is called with `{"source": source, "version": version}`, and its result is materialized into the get step's directory: structured content (if present) as `result.json`, and each content block as `content-N.<ext>` (text as `.txt`; image/audio by MIME type; anything else as a best-effort `content-N.json`). `version.json` is always written either way, so a job can always rely on it being there.
-- **`out`, when set**, is called with `{"source": source, "params": params}` — `params:` on the `put` step carries the payload (e.g. the fields of an issue to create), symmetric with how `check` uses `source:`. Its result is parsed into the produced version object the same way `check` parses one array element. A `put` targeting an MCP-backed type with no `out:` configured is a load-time error, not a silent no-op — it names the missing tool and suggests the agent-tool path (above) as an alternative for a response that needs a model's judgment rather than a fixed payload.
-- **Detect vs. respond**: a resource-type `check` polling for new versions and feeding `trigger:` is the natural fit for *detecting* something (new Linear issues, a new PR). An open-ended *response* — read context, decide, comment — is usually a better fit as an agent step granted the same server's tools (above), where the model drives; a deterministic `out:` put (exact fields, no judgment involved) is the resource-type path. Both are legitimate; pick per how much judgment the response needs.
+- **`check:` is required**, `in:`/`out:` are both optional. `mcp:` is mutually exclusive with the shell `check:`/`in:`/`out:` strings — a resource type sets one style or the other.
+- **`check`** is called with `{"source": source}`. Its result must be an oldest-first JSON array of version objects, accepted either as structured content or a single text block containing that array — as close a mirror of the shell path's "stdout is a JSON array" convention as an RPC result allows.
+- **`in`, when omitted** (the common case — detecting new issues, not fetching their content): `get` just writes the selected version object to `<resource>/version.json`, no MCP call. **When set**, `in`'s tool is called with `{"source", "version"}` and its result is materialized into the get's directory: structured content as `result.json`, each content block as `content-N.<ext>`. `version.json` is always written either way.
+- **`out`, when set**, is called with `{"source", "params"}` — `params:` on the `put` step carries the payload. A `put` targeting an MCP-backed type with no `out:` is a load-time error naming the missing tool.
+- **Detect vs. respond**: a resource-type `check` feeding `trigger:` is the natural fit for *detecting* something (new issues, a new PR). An open-ended *response* — read context, decide, comment — is usually better as an agent step granted the same server's tools, where the model drives; a deterministic `out:` put (exact fields, no judgment) is the resource-type path.
 
-## Authorizing an oauth-configured server: `steps mcp login`
+## Authorizing an oauth server: `steps mcp login`
 
-A bearer-configured server (`api_key_env`) needs no login step — it reads its token from the environment at run time. An oauth-configured server needs a one-time interactive authorization:
+A bearer-configured server needs no login step — it reads its token from the environment at run time. An oauth-configured server needs a one-time interactive authorization:
 
 ```bash
-steps mcp login examples/infra.yml linear
+steps mcp login pipeline.yml linear
 ```
 
-This runs the OAuth 2.1 authorization-code + PKCE flow: discovers the server's protected-resource and authorization-server metadata, dynamically registers a client, opens your browser (falling back to printing the URL if that fails — useful over SSH or on a headless box), and on success prints where the token was saved.
+This runs the OAuth 2.1 authorization-code + PKCE flow: discovers the server's metadata, dynamically registers a client, opens your browser (falling back to printing the URL — useful over SSH), and prints where the token was saved.
 
-- **Per-user, not per-pipeline**: the resulting token is saved to `${XDG_CONFIG_HOME:-~/.config}/steps/mcp/<server-name>.json` (`0600`, directory `0700`) — deliberately outside any pipeline's own `.steps/` directory. An OAuth token is a per-user-per-service credential, not a per-pipeline execution artifact: logging in once authorizes that server for **every** pipeline that references a server by the same name, and it keeps this file out of the plan-time hashing / `.steps/state.db` call chain entirely (no pipeline path is threaded through it).
-- **Silent refresh, no re-prompting**: `steps run`/`steps watch` never run an interactive flow themselves — they load the persisted token and refresh it silently as needed, writing the refreshed (and, for providers that rotate it, the new refresh) token back to the same file. If the token can't be refreshed (revoked, or never logged in), the error names the exact `steps mcp login` command to run.
-- **Trust boundary**: like `AgentSource.APIKeyEnv`, nothing token-shaped is ever cache-hashed or written to `.steps/state.db` — the token file is a separate, non-hashed mechanism, the same treatment this repo already gives LLM provider credentials.
-
-## Command surface
-
-- `steps mcp tools <pipeline> <server>` — list a server's tools and argument schemas. Any auth type.
-- `steps mcp login <pipeline> <server>` — interactively authorize an `auth: {type: oauth}` server. The only interactive command in this group; `run`/`watch` never prompt.
+- **Per-user, not per-pipeline**: the token lands in `${XDG_CONFIG_HOME:-~/.config}/steps/mcp/<server-name>.json` (`0600`) — deliberately outside any pipeline's `.steps/`. Logging in once authorizes that server for **every** pipeline referencing it by the same name.
+- **Silent refresh, no re-prompting**: `steps run`/`steps watch` never run an interactive flow — they load the persisted token and refresh it silently. If it can't be refreshed, the error names the exact `steps mcp login` command to run.
+- **Trust boundary**: nothing token-shaped is ever cache-hashed or written to `.steps/state.db` — the same treatment as LLM provider credentials.

@@ -459,3 +459,23 @@ td.faint, .faint { color: var(--faint); }
 .spendtable td { padding: .35rem .75rem; border-top: 1px solid var(--line); }
 .spendtable .num { text-align: right; font-variant-numeric: tabular-nums; }
 .spendtable .model { color: var(--dim); }
+
+/* /docs — the embedded documentation, rendered server-side. Prose pages in
+ * a transcript UI: same ground, same rules, sans for the reading voice. */
+.docsnav { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 10px 0 20px; font-family: var(--sans); font-size: 12px; }
+.docsnav a { color: var(--dim); }
+.docsnav a:hover { color: var(--fg); }
+.docsnav a[aria-current="page"] { color: var(--green); }
+.docs { max-width: 880px; font-family: var(--sans); line-height: 1.55; }
+.docs h1, .docs h2, .docs h3, .docs h4 { font-family: var(--mono); font-weight: 600; line-height: 1.25; }
+.docs h1 { font-size: 1.4em; }
+.docs h2 { font-size: 1.15em; margin-top: 1.8em; border-bottom: 1px solid var(--line-soft); padding-bottom: .25em; }
+.docs h3 { font-size: 1em; margin-top: 1.4em; }
+.docs pre { border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; overflow-x: auto; font-size: .9em; }
+.docs code { font-family: var(--mono); font-size: .95em; }
+.docs :not(pre) > code { background: var(--panel2); padding: 1px 4px; border-radius: 3px; }
+.docs table { border-collapse: collapse; font-size: .92em; }
+.docs th, .docs td { border: 1px solid var(--line); padding: 5px 9px; text-align: left; vertical-align: top; }
+.docs th { color: var(--dim); font-weight: 500; }
+.docs blockquote { border-left: 2px solid var(--line); margin-left: 0; padding-left: 14px; color: var(--dim); }
+.docs img { max-width: 100%; }
