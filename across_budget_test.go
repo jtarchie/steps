@@ -170,6 +170,22 @@ func TestAcrossBudgetRejectsWhatItCannotEnforce(t *testing.T) {
 			wantErr: "budget.reserve_per_cell is only valid on an across: step",
 		},
 		{
+			// A reservation only decides anything when a cell is admitted while
+			// another is still running and has reported nothing. Serial settles
+			// before admitting, so the field would bind nothing.
+			name: "a reservation on a serial matrix, where it decides nothing",
+			step: `  - across:
+    - var: item
+      values: [a, b]
+    agent: reviewer
+    inputs: []
+    prompt: "{{ .vars.item }}"
+    budget:
+      tokens: 500
+      reserve_per_cell: 100`,
+			wantErr: "budget.reserve_per_cell needs max_in_flight: above 1",
+		},
+		{
 			name: "a negative reservation",
 			step: `  - across:
     - var: item
@@ -177,6 +193,7 @@ func TestAcrossBudgetRejectsWhatItCannotEnforce(t *testing.T) {
     agent: reviewer
     inputs: []
     prompt: "{{ .vars.item }}"
+    max_in_flight: 2
     budget:
       tokens: 500
       reserve_per_cell: -1`,

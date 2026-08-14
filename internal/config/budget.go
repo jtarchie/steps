@@ -132,6 +132,20 @@ func validateStepBudgets(job Job) error {
 			return fmt.Errorf("%s: budget.reserve_per_cell must be a positive number of tokens (omit it to reserve the cell agent's own budget.tokens, or nothing)", label)
 		}
 
+		// A reservation only decides anything when a cell must be admitted
+		// while another is still running and has reported nothing. The serial
+		// walk settles each cell before admitting the next, so the reservation
+		// is always zero at the check and admission is the plain spent() rule
+		// it was before reservations existed — accurate already, because
+		// serial always knows the real spend.
+		//
+		// Rejected rather than ignored for the same reason the field is
+		// rejected on an agent and a job: config that reads like a spending
+		// control and binds nothing is the failure mode worth failing loudly.
+		if step.Budget.ReservePerCell > 0 && step.MaxInFlight <= 1 {
+			return fmt.Errorf("%s: budget.reserve_per_cell needs max_in_flight: above 1 — cells run one at a time here, so each one's real spend is known before the next is admitted and a reservation would decide nothing", label)
+		}
+
 		return nil
 	})
 }
