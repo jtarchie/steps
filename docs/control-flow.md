@@ -484,26 +484,28 @@ budget: across stopped after 1 of 3 cells (spent 2,000 of 1,000 tokens)
 
 Admission can only see what **finished** cells reported, and a cell only finishes once something waits for its slot. So on its own the ceiling is blind to the cells it is deciding against: the first `max_in_flight:` cells are admitted against a total of ~0, and at a width covering every cell there is no serialization point anywhere in the block, so the budget bounds *nothing*.
 
-A reservation fixes that by charging the allowance up front for work not yet reported:
+A reservation narrows that by charging the allowance up front for work not yet reported:
 
 ```yaml fragment
 - across:
   - var: dim
     from: dimensions
-  max_in_flight: 6            # real concurrency, not throttled to make the budget work
+  max_in_flight: 3            # a real serialization point: wave 2 sees wave 1's spend
   budget:
     tokens: 3600000
-    reserve_per_cell: 600000  # what admission assumes an unfinished cell will cost
+    reserve_per_cell: 900000  # deliberately ABOVE the ~600K a cell is expected to cost
   agent: reviewer
 ```
 
-Six cells at 600K reserved exactly covers the 3.6M allowance, so the sixth is admitted at the line and a seventh is not. Cells that come in **under** their reservation release the difference and let later cells through — the common case, and the reason this is a reservation and not a hard pre-allocation.
+Cells that come in **under** their reservation release the difference and let later cells through — the common case, and the reason this is a reservation and not a hard pre-allocation.
+
+> **Reserve high, not accurate.** The reservation is a ceiling on the unknown, not an estimate. Reserving the allowance divided by the cell count is the trap: at a width covering every cell, nothing has reported when the last cell is admitted, so the most any admission can see is what the *other* cells hold — and `cells - 1` reservations that only add up to the allowance can never reach it. Every cell then starts by construction, whatever it goes on to spend. The run warns when your numbers land there, but the reliable shape is a width **below** the cell count, so real spend gates the later waves.
 
 - **Where the number comes from**, first match winning: the block's `reserve_per_cell:`, then the cell agent's own `budget.tokens` (you already declared what one invocation may cost, so a block often needs no new config at all), then nothing — and with nothing, the block admits exactly as it did before reservations existed, warning included.
 - **A too-large reservation under-admits**, stopping the matrix earlier than the allowance strictly required. That is the safe direction, and a rerun with a larger allowance resumes where it stopped.
 - **Across-only.** The same field on an agent's or a job's `budget:` is a load error: neither admits anything, so a reservation there would read like configuration and bind nothing.
 - **A CLI agent supplies no reservation.** Its ceiling is `budget.usd`, metered in dollars inside its own subprocess, which cannot be compared against a token allowance — such a block needs an explicit `reserve_per_cell:` to bind.
-- **The warning survives for the one case that still cannot bind**: a budget with no reservation source at a width covering every cell.
+- **The run warns when the numbers cannot bind**: a width covering every cell whose reservations (`cells - 1` of them, since nothing has reported yet) never reach the ceiling. A missing reservation is the degenerate case of that same test.
 
 ### Concurrent cells: `max_in_flight:`
 

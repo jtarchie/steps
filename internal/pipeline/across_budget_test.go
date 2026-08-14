@@ -10,14 +10,14 @@ import (
 
 // TestBlockBudgetUnbindable pins when a block's own ceiling is decorative.
 //
-// A budget with a reservation binds at any width — admission consumes the
-// allowance up front. The hole the warning survives for is a budget with NO
-// reservation source at a width covering every cell: admission only ever sees
-// FINISHED cells' spend, a cell only finishes once something waits for its
-// slot, and at that width there is no such wait anywhere in the block
-// (newLimiter hands back a limiter that never blocks). Every cell is admitted
-// against a total of ~0 and the budget stops nothing, so the run says so out
-// loud instead of letting the number look like a ceiling.
+// Two things have to hold. The width has to cover every cell — otherwise a
+// slot is contended for, a cell finishes and reports, and admission decides on
+// real spend. AND the reservations have to be too small to reach the ceiling
+// by themselves: nothing has reported when the last cell is admitted, so the
+// most any admission can see is what the other cells hold, and (cells-1)
+// reservations that never reach the ceiling admit everyone by construction.
+//
+// A reservation existing is NOT enough, which is the trap this pins.
 func TestBlockBudgetUnbindable(t *testing.T) {
 	t.Parallel()
 
@@ -39,9 +39,18 @@ func TestBlockBudgetUnbindable(t *testing.T) {
 		{"a width equal to the cell count cannot bind", budgeted(0), 6, 6, true},
 		{"a width above the cell count cannot bind", budgeted(0), 8, 6, true},
 		{"no budget is never reported", &blockBudget{}, 8, 6, false},
-		// With a reservation the width no longer matters: admission takes the
-		// allowance before any cell reports, so the ceiling binds.
-		{"a reservation binds at any width", budgeted(200), 8, 6, false},
+		// A reservation big enough that the cells holding it reach the ceiling
+		// binds at any width: 5 * 200 = 1000 refuses the sixth.
+		{"a reservation that reaches the ceiling binds", budgeted(200), 8, 6, false},
+		// The trap. Reserving the allowance divided by the cell count admits
+		// every cell BY CONSTRUCTION — 5 * 166 = 830 never reaches 1000 — so
+		// the ceiling is arithmetically incapable of refusing anyone, however
+		// much they go on to spend. This is the case that shipped in
+		// examples/pr-review.yml (6 cells, 600K reserved, 3.6M ceiling) with
+		// the warning suppressed because a reservation merely existed.
+		{"a reservation too small to reach the ceiling cannot bind", budgeted(1000 / 6), 6, 6, true},
+		// One cell can never be refused: it is admitted against nothing.
+		{"a single cell cannot bind", budgeted(200), 4, 1, true},
 	}
 
 	for _, test := range tests {
@@ -139,5 +148,35 @@ func TestBlockBudgetAdmitsWithoutReservationAsBefore(t *testing.T) {
 
 	if spend.admit() {
 		t.Error("admitted a cell after the ceiling was spent outright")
+	}
+}
+
+// TestBlockBudgetRealSpendCatchesAnOverrun is the cost-safety property the
+// reservation alone does NOT provide, and the reason a width below the cell
+// count matters.
+//
+// A reservation is an assumption. When cells overrun it, what stops the block
+// is the next wave reading their REAL spend — which only exists because the
+// width forced them to finish first. Mirrors examples/pr-review.yml: three at
+// a time, 900K reserved, each actually costing 1.2M against a 3.6M ceiling.
+func TestBlockBudgetRealSpendCatchesAnOverrun(t *testing.T) {
+	t.Parallel()
+
+	spend, usage := newTestBlockBudget(t, 3_600_000, 900_000)
+
+	for i := range 3 {
+		if !spend.admit() {
+			t.Fatalf("wave-1 cell %d refused with nothing spent", i)
+		}
+	}
+
+	// Each overruns its reservation by a third.
+	for range 3 {
+		usage.Add(agent.StepUsage{Total: 1_200_000})
+		spend.settle()
+	}
+
+	if spend.admit() {
+		t.Error("admitted a second wave after the first spent the whole allowance; the overrun went uncaught")
 	}
 }

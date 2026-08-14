@@ -440,32 +440,43 @@ func (b *blockBudget) settle() {
 // warnIfUnbindable says so when this block's width makes its own ceiling
 // decorative.
 //
-// With a reservation this cannot happen: admission consumes the allowance up
-// front, so the ceiling binds at any width. The warning survives for the one
-// case that still has the old hole — a budget with NO reservation source (the
-// cell's agent declares no budget.tokens and the block sets no
-// reserve_per_cell) at a width covering every cell. There, admission still
-// only sees what finished cells reported, no cell ever finishes before the
-// last is admitted, and the ceiling bounds precisely nothing.
+// A reservation does not automatically fix that, which is the trap worth
+// being loud about: at a width covering every cell NOTHING reports before the
+// last cell is admitted, so the whole decision runs on reservations, and the
+// most the ceiling ever sees is what the other cells hold. Reserve the
+// allowance divided by the cell count and every cell is admitted by
+// construction, whatever they go on to spend — a budget that reads like a
+// ceiling and is arithmetically incapable of refusing anyone.
 func (b *blockBudget) warnIfUnbindable(jobName string, maxInFlight, cells int) {
 	if !b.unbindable(maxInFlight, cells) {
 		return
 	}
 
-	fmt.Printf("budget: warning — max_in_flight (%d) covers all %d cells and no reservation is set, so this block's budget of %s tokens cannot stop anything\n",
-		maxInFlight, cells, humanCount(b.ceiling))
+	fmt.Printf("budget: warning — max_in_flight (%d) covers all %d cells and %s reserved per cell cannot reach the %s ceiling, so this block's budget cannot stop anything\n",
+		maxInFlight, cells, humanCount(b.reserve), humanCount(b.ceiling))
 
 	slog.Warn("across.budget.unbindable",
-		"job", jobName, "max_in_flight", maxInFlight, "cells", cells, "budget_tokens", b.ceiling,
-		"detail", "every cell is admitted before any has reported usage; set budget.reserve_per_cell (or a budget.tokens on the cell's agent), lower max_in_flight, or rely on the job budget as the backstop")
+		"job", jobName, "max_in_flight", maxInFlight, "cells", cells,
+		"budget_tokens", b.ceiling, "reserve_per_cell", b.reserve,
+		"detail", "every cell is admitted before any has reported usage; raise budget.reserve_per_cell above the allowance divided by the cell count, lower max_in_flight so real spend gates later cells, or rely on the job budget as the backstop")
 }
 
-// unbindable reports whether this block's own ceiling can stop nothing: it has
-// one, nothing is reserved on admission, and the width covers every cell, so
-// no admission ever reads a nonzero total. Mirrors newLimiter's own
-// "limit >= branches means no limiter at all".
+// unbindable reports whether this block's own ceiling can stop nothing.
+//
+// Two conditions together. The width has to cover every cell — otherwise a
+// slot is contended for, a cell finishes and reports, and admission decides on
+// real spend (newLimiter's own "limit >= branches means no limiter at all").
+// And the reservations have to be too small to reach the ceiling on their own:
+// with no cell reporting, the largest total any admission can see is what the
+// other cells hold, so the ceiling can refuse someone only when
+// (cells-1) * reserve reaches it. A zero reservation is the degenerate case of
+// that same test, and is why this reported true before reservations existed.
 func (b *blockBudget) unbindable(maxInFlight, cells int) bool {
-	return b.usage != nil && b.reserve <= 0 && maxInFlight >= cells
+	if b.usage == nil || cells <= 0 || maxInFlight < cells {
+		return false
+	}
+
+	return (cells-1)*b.reserve < b.ceiling
 }
 
 func (b *blockBudget) spent() int {
@@ -480,13 +491,34 @@ func (b *blockBudget) spent() int {
 // fan-out that says nothing reads exactly like a complete one that found less:
 // the cells that never ran recorded nothing, so their silence is
 // indistinguishable from a clean result unless this says otherwise.
+//
+// It reports what admission actually decided on — spend PLUS the reservations
+// still standing — not spend alone. Under max_in_flight the cells that
+// consumed the allowance are typically still running and have reported
+// nothing, so "spent 0 of 3,600,000" would name the one number that had no
+// part in the decision and read like a stop that never should have happened.
 func (b *blockBudget) report(jobName string, ran, total int) {
-	fmt.Printf("budget: across stopped after %d of %d cells (spent %s of %s tokens)\n",
-		ran, total, humanCount(b.spent()), humanCount(b.ceiling))
+	spent, reserved := b.committed()
+
+	fmt.Printf("budget: across stopped after %d of %d cells (%s of %s tokens committed: %s spent, %s reserved by cells still running)\n",
+		ran, total, humanCount(spent+reserved), humanCount(b.ceiling), humanCount(spent), humanCount(reserved))
 
 	slog.Warn("across.budget.exhausted",
 		"job", jobName, "cells_run", ran, "cells_total", total,
-		"spent_tokens", b.spent(), "budget_tokens", b.ceiling)
+		"spent_tokens", spent, "reserved_tokens", reserved, "budget_tokens", b.ceiling)
+}
+
+// committed is what admission weighed: reported spend, and the allowance held
+// by cells that have not reported yet.
+func (b *blockBudget) committed() (spent, reserved int) {
+	if b.usage == nil {
+		return 0, 0
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.spent(), b.reserved
 }
 
 // stopAdmitting reports whether this matrix should start no further cell:
