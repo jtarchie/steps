@@ -113,6 +113,9 @@ linters:
             # documentation artifact, and this is what stops it drifting.
             - "github.com/santhosh-tekuri/jsonschema/v6"
             - "gopkg.in/yaml.v3"
+            # goleak is test-only too: goleak_test.go's TestMain fails a
+            # package's tests if any leaves a goroutine running.
+            - "go.uber.org/goleak"
             - "github.com/modelcontextprotocol/go-sdk/mcp"
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/pipeline"
@@ -167,6 +170,9 @@ linters:
             - "**/internal/events/**"
           allow:
             - "$gostd"
+            # goleak is test-only: goleak_test.go's TestMain fails this
+            # package's tests if any leaves a goroutine running.
+            - "go.uber.org/goleak"
         # outcome classifies a step/job error (failed/errored/aborted) for
         # hook dispatch; a leaf with no internal dependencies.
         Outcome:
@@ -218,6 +224,9 @@ linters:
             - "github.com/modelcontextprotocol/go-sdk/mcp"
             - "github.com/modelcontextprotocol/go-sdk/oauthex"
             - "golang.org/x/oauth2"
+            # goleak is test-only: stdio_test.go's TestMain fails this
+            # package's tests if any leaves a goroutine running.
+            - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/config"
             # shell is imported only for HostEnv: a stdio (command:) mcp
             # server is a host-executed subprocess and must see exactly the
@@ -248,6 +257,9 @@ linters:
             - "google.golang.org/genai"
             - "github.com/achetronic/adk-utils-go"
             - "github.com/modelcontextprotocol/go-sdk/mcp"
+            # goleak is test-only: goleak_test.go's TestMain fails this
+            # package's tests if any leaves a goroutine running.
+            - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/mcp"
@@ -265,6 +277,9 @@ linters:
             - "**/internal/pipeline/**"
           allow:
             - "$gostd"
+            # goleak is test-only: goleak_test.go's TestMain fails this
+            # package's tests if any leaves a goroutine running.
+            - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/agent"
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/events"
@@ -290,6 +305,9 @@ linters:
             # mcp-backed resource type) — trigger's own non-test code never
             # imports it, reaching MCP only indirectly via resource.CheckVersions.
             - "github.com/modelcontextprotocol/go-sdk/mcp"
+            # goleak is test-only: goleak_test.go's TestMain fails this
+            # package's tests if any leaves a goroutine running.
+            - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/pipeline"
             - "github.com/jtarchie/steps/internal/resource"
@@ -304,6 +322,9 @@ linters:
             - "**/internal/web/**"
           allow:
             - "$gostd"
+            # goleak is test-only: goleak_test.go's TestMain fails this
+            # package's tests if any leaves a goroutine running.
+            - "go.uber.org/goleak"
             - "github.com/labstack/echo/v4"
             # goldmark (+ its chroma highlighting extension) renders the
             # embedded docs package at /docs, server-side — the terminal twin

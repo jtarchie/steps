@@ -10,9 +10,9 @@ Trust these instructions. Only search the codebase if something here is missing 
 
 ## Build, test, lint — validated commands, in order
 
-Prerequisites: Go 1.26.5 (`go version`) and golangci-lint v2.12+ (`golangci-lint version`; `brew install golangci-lint`). SQLite is vendored (`modernc.org/sqlite`, pure Go, no cgo/system SQLite needed).
+Prerequisites: Go 1.26.6 (`go version`) and golangci-lint v2.12+ (`golangci-lint version`; `brew install golangci-lint`). SQLite is vendored (`modernc.org/sqlite`, pure Go, no cgo/system SQLite needed). Two more tools join the sequence below, both `go install`-able and neither needing network/Docker/credentials to *run* (govulncheck fetches the vuln DB, which needs network once per invocation): `go install golang.org/x/vuln/cmd/govulncheck@latest` and `go install go.uber.org/nilaway/cmd/nilaway@latest`.
 
-Run this exact sequence after any code change — each step is fast and none require network access, Docker, or credentials:
+Run this exact sequence after any code change — each step is fast and none require Docker or credentials (govulncheck needs network to fetch the vuln DB, cached locally after the first run):
 
 ```bash
 go fmt ./...        # ~0.3s. Auto-formats; most editors already do this.
@@ -35,11 +35,22 @@ go test ./...        # ~11s wall (parallel, default), ~26s with -p 1 (serialized
                       # it is not required for correctness (verified with -race -count=50
                       # soak testing under CPU load, 2026-07-15: no flakes either way).
 go build -v          # ~2.5s warm cache. Produces ./steps (~56MB).
+govulncheck ./...    # ~5s (first run also fetches the vuln DB over network). Reports known
+                      # CVEs actually reachable from the build — stdlib CVEs are pinned to
+                      # the Go *patch* version (`go version`), not this repo's code, so a
+                      # finding here is usually fixed by `brew upgrade go`, not an edit.
+                      # MUST report 0 vulnerabilities before a change is done.
+nilaway -exclude-test-files=true ./... || true
+                      # ~4s. Uber's nil-flow analyzer, advisory only — never gates a change,
+                      # deliberately not added to golangci-lint's run. It has a real false-
+                      # positive rate (e.g. flags slicing a possibly-nil slice, which Go
+                      # allows), so triage each finding rather than chasing zero.
 ```
 
-All of them always pass clean on a fresh checkout. If any of them fails, that is a real regression — do not work around it with `--no-verify`-style shortcuts or by skipping a step.
+All of them always pass clean on a fresh checkout (nilaway is advisory, so "clean" means golangci-lint/kindswitch/test/build/govulncheck are all clean — nilaway's own output is read, not gated on). If any of the gating ones fails, that is a real regression — do not work around it with `--no-verify`-style shortcuts or by skipping a step.
 
 **Test suite specifics:**
+- Every package that spawns a goroutine (`internal/pipeline`, `internal/trigger`, `internal/web`, `internal/events`, `internal/agent`, `internal/mcp`, and the root package) has a `goleak_test.go` `TestMain` (`go.uber.org/goleak`) — `go test ./...` fails if a test leaves a goroutine running. One known, deliberate exception: `goleak.IgnoreTopFunction("github.com/modelcontextprotocol/go-sdk/mcp.(*streamableServerConn).Read")` in those TestMains — the go-sdk's server-side streamable-HTTP read loop does not exit when a client sends the session-termination DELETE, verified in isolation against go-sdk@v1.7.0 both with and without the client's standalone SSE stream. Not steps' leak to fix; re-check when the SDK bumps past v1.7.0. A new package that spawns a goroutine in production code needs the same `TestMain` (copy an existing `goleak_test.go`, adjust the doc comment).
 - The default `go test ./...` needs no network, no Docker daemon, and no credentials. A handful of heavyweight integration tests (Docker- and btrfs-backed workspace isolation) are gated behind explicit opt-in env vars and skip cleanly otherwise: `STEPS_TEST_DOCKER=1` (pulls a real image, needs a Docker daemon) and `STEPS_TEST_BTRFS_ROOT=<dir>` (needs a real btrfs filesystem, Linux only). Don't set these unless you're specifically working on the Docker/btrfs workspace backends — they're slow and non-hermetic by design.
 - `go test ./... -run TestName` runs a single test; every package's tests also pass individually.
 - No test requires an LLM API key or a live model — `internal/agent`'s conversation loop is tested against a fake/mock provider seam, not a real model.

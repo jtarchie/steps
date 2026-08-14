@@ -86,6 +86,7 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = st.Close() })
 
 	ctx := context.Background()
 	job := &cfg.Jobs[0]
@@ -223,6 +224,7 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = st.Close() })
 
 	ctx := context.Background()
 
@@ -298,6 +300,7 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = st.Close() })
 
 	// Cancelled while the step is in flight, which is what SIGINT does. The
 	// hook itself still runs: hooks reached after cancellation get a grace
@@ -454,6 +457,7 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = st.Close() })
 
 	ctx := context.Background()
 
@@ -608,6 +612,7 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = st.Close() })
 
 	return cfg, st
 }

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.uber.org/goleak"
 
 	"github.com/jtarchie/steps/internal/config"
 )
@@ -25,13 +26,23 @@ const stdioServerMarker = "-steps-mcp-stdio-test-server"
 // is an argv element, not an env var, because commandTransport assigns
 // cmd.Env = shell.HostEnv(), which filters out any STEPS_*-style env
 // marker; only argv survives that filter unmodified.
+//
+// Otherwise it enforces that no goroutines leak from mcp tests: stdio and
+// HTTP transports each run background read loops that must exit when their
+// client/session closes.
+//
+// streamableServerConn.Read is ignored: it's the go-sdk's server-side
+// streamable-HTTP read loop, which does not exit when a client sends the
+// session-termination DELETE (verified in isolation, both with and without
+// the client's standalone SSE stream — go-sdk@v1.7.0, no fix in a later
+// release as of this writing). Not steps' leak to fix.
 func TestMain(m *testing.M) {
 	if slices.Contains(os.Args[1:], stdioServerMarker) {
 		_ = echoServer().Run(context.Background(), &sdkmcp.StdioTransport{})
 		os.Exit(0)
 	}
 
-	os.Exit(m.Run())
+	goleak.VerifyTestMain(m, goleak.IgnoreTopFunction("github.com/modelcontextprotocol/go-sdk/mcp.(*streamableServerConn).Read"))
 }
 
 // stdioEchoServer returns an MCPServer that, when connected to, re-execs

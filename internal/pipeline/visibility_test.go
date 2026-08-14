@@ -123,6 +123,7 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = st.Close() })
 
 	var runErr error
 

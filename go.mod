@@ -1,6 +1,6 @@
 module github.com/jtarchie/steps
 
-go 1.26.5
+go 1.26.6
 
 require gopkg.in/yaml.v3 v3.0.1
 
@@ -17,6 +17,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/yuin/goldmark v1.8.5
 	github.com/yuin/goldmark-highlighting/v2 v2.0.0-20230729083705-37449abec8cc
+	go.uber.org/goleak v1.3.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/tools v0.48.0
