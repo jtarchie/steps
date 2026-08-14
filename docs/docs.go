@@ -12,7 +12,9 @@
 //	                       docker, the network, or real credentials)
 //	```yaml fragment       rendered only; not a complete pipeline
 //
-// proposals/ is deliberately outside the embed: sketches are not promises.
+// Everything here is reference material for what steps DOES. A proposal for
+// what it might do is a GitHub issue, not a page: sketches are not promises,
+// and one living next to the docs reads like one.
 package docs
 
 import (
