@@ -574,7 +574,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 		return StepOutcome{Response: res.text}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
-	err = assertAgentResponse(step.Assert, res)
+	err = assertAgentResponse(step.Assert, res, prepared.space.Dir())
 	if err != nil {
 		recordAgentFailure(ctx, st, node, jobName, res, err)
 
@@ -692,12 +692,14 @@ func truncateArgs(args map[string]any) map[string]any {
 	return out
 }
 
-// assertAgentResponse checks an agent step's assert (stdout, verdict and/or
-// tool_calls — an agent has no exit code) against what the conversation
-// produced. Every field that is set must pass; a mismatch on any is a
-// task-level failure so the step fails and its on_failure hook fires. A nil
-// assert, or one with no field set, is a no-op.
-func assertAgentResponse(assert *config.Assert, res conversationResult) error {
+// assertAgentResponse checks an agent step's assert (stdout, verdict,
+// tool_calls, and/or files — an agent has no exit code) against what the
+// conversation produced. Every field that is set must pass; a mismatch on
+// any is a task-level failure so the step fails and its on_failure hook
+// fires. A nil assert, or one with no field set, is a no-op. dir is the
+// step's own working directory (prepared.space.Dir()), checked for
+// assert.files: before RunStep captures it into the artifact store.
+func assertAgentResponse(assert *config.Assert, res conversationResult, dir string) error {
 	if assert == nil {
 		return nil
 	}
@@ -720,6 +722,38 @@ func assertAgentResponse(assert *config.Assert, res conversationResult) error {
 		if err != nil {
 			//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
 			return outcome.Fail(err)
+		}
+	}
+
+	err := assertFilesMismatch(assert.Files, dir)
+	if err != nil {
+		//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
+		return outcome.Fail(err)
+	}
+
+	return nil
+}
+
+// assertFilesMismatch reports the first assert.files entry that isn't a
+// non-empty regular file under dir, or nil when every entry checks out. See
+// internal/pipeline's own copy (the task-step counterpart) for why this
+// isn't shared: the two packages have no common leaf below internal/config
+// worth adding one for.
+func assertFilesMismatch(files []string, dir string) error {
+	for _, rel := range files {
+		full := filepath.Join(dir, rel)
+
+		info, err := os.Stat(full)
+		if err != nil {
+			return fmt.Errorf("assert.files: %s does not exist", rel)
+		}
+
+		if info.IsDir() {
+			return fmt.Errorf("assert.files: %s is a directory, not a file", rel)
+		}
+
+		if info.Size() == 0 {
+			return fmt.Errorf("assert.files: %s is empty", rel)
 		}
 	}
 

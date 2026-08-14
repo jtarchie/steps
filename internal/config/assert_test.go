@@ -117,7 +117,7 @@ jobs:
     inputs: []
     run: "true"
 `,
-			want: "stdout/code/verdict are only valid on task/agent step asserts",
+			want: "stdout/code/verdict/files are only valid on task/agent step asserts",
 		},
 		{
 			name: "job assert with code",
@@ -131,7 +131,7 @@ jobs:
   assert:
     code: 0
 `,
-			want: "stdout/code/verdict are only valid on task/agent step asserts",
+			want: "stdout/code/verdict/files are only valid on task/agent step asserts",
 		},
 		{
 			name: "step assert with execution",
@@ -185,6 +185,36 @@ jobs:
 			want: "assert.code is not valid on agent steps",
 		},
 		{
+			name: "assert.files escapes the artifact via ..",
+			pipeline: `
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    outputs: [answer]
+    run: "true"
+    assert:
+      files: ["../etc/passwd"]
+`,
+			want: "invalid artifact",
+		},
+		{
+			name: "assert.files names no declared output",
+			pipeline: `
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    outputs: [answer]
+    run: "true"
+    assert:
+      files: [reply.md]
+`,
+			want: `names artifact "reply.md", which is not one of this step's outputs (answer)`,
+		},
+		{
 			name: "assert on a hook step with execution",
 			pipeline: `
 jobs:
@@ -210,5 +240,34 @@ jobs:
 			path := writeConfig(t, tt.pipeline)
 			wantLoadError(t, path, tt.want)
 		})
+	}
+}
+
+// TestAssertFilesResolvesTaskOutputs proves assert.files checks a path's
+// first segment against the step's EFFECTIVE outputs — inherited from a
+// named tasks: entry when the step declares none of its own — not just
+// step.Outputs read raw. A step that references a task by name and adds no
+// outputs: override would otherwise see an empty list and reject every path.
+func TestAssertFilesResolvesTaskOutputs(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+tasks:
+- name: draft
+  inputs: []
+  outputs: [answer]
+  run: "true"
+
+jobs:
+- name: build
+  plan:
+  - task: draft
+    assert:
+      files: [answer/reply.md]
+`)
+
+	_, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v, want a step referencing a named task to inherit its outputs: for assert.files", err)
 	}
 }

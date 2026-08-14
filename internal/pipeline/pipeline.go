@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -1246,7 +1247,7 @@ func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedT
 
 	switch {
 	case rt.Assert != nil:
-		return runAssertedTask(ctx, runner, rt)
+		return runAssertedTask(ctx, runner, rt, workspaceDir)
 	case rt.Fix != nil:
 		return runFixTask(ctx, cfg, runner, rt, workspaceDir)
 	default:
@@ -1334,8 +1335,10 @@ func runFixTask(ctx context.Context, cfg *config.Config, runner shell.Runner, rt
 // a matching stdout substring and exit code make the task a success even on a
 // non-zero exit; a mismatch is a task-level failure with a got-vs-want reason.
 // assert takes over the success determination, so a task's fix: is not
-// consulted when an assert is present.
-func runAssertedTask(ctx context.Context, runner shell.Runner, rt config.ResolvedTask) error {
+// consulted when an assert is present. workspaceDir is where assert.files:
+// entries are checked — the task's own working directory, read before the
+// caller (executeTask) captures it into the artifact store.
+func runAssertedTask(ctx context.Context, runner shell.Runner, rt config.ResolvedTask, workspaceDir string) error {
 	stdout, stderr, exitCode, err := runner.RunCaptureFull(ctx, rt.Run)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
@@ -1357,7 +1360,7 @@ func runAssertedTask(ctx context.Context, runner shell.Runner, rt config.Resolve
 	// needs to see the mismatch for themselves.
 	publishOutputForCurrentStep(ctx, rt.Name, stdout, stderr)
 
-	mismatch := assertMismatch(rt.Assert, stdout, exitCode)
+	mismatch := assertMismatch(rt.Assert, stdout, exitCode, workspaceDir)
 	if mismatch != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, outcome.Fail(mismatch))
 	}
@@ -1365,15 +1368,44 @@ func runAssertedTask(ctx context.Context, runner shell.Runner, rt config.Resolve
 	return nil
 }
 
-// assertMismatch returns a reason when captured stdout/exit code don't satisfy
-// assert, or nil when they match. Code is exact; Stdout is a substring test.
-func assertMismatch(assert *config.Assert, stdout string, exitCode int) error {
+// assertMismatch returns a reason when captured stdout/exit code/output files
+// don't satisfy assert, or nil when they match. Code is exact; Stdout is a
+// substring test; Files is checked against workspaceDir (see
+// assertFilesMismatch).
+func assertMismatch(assert *config.Assert, stdout string, exitCode int, workspaceDir string) error {
 	if assert.Code != nil && *assert.Code != exitCode {
 		return fmt.Errorf("assert.code: want %d, got %d", *assert.Code, exitCode)
 	}
 
 	if assert.Stdout != nil && !strings.Contains(stdout, *assert.Stdout) {
 		return fmt.Errorf("assert.stdout: output does not contain %q", *assert.Stdout)
+	}
+
+	return assertFilesMismatch(assert.Files, workspaceDir)
+}
+
+// assertFilesMismatch reports the first assert.files entry that isn't a
+// non-empty regular file under dir, or nil when every entry checks out. dir
+// is the step's own working directory, read before capture — see
+// runAssertedTask and RunStep (internal/agent/step.go) for the agent-step
+// counterpart. Paths are already validated as artifact-relative at load time
+// (config.validateAssertFiles), so no further sanitizing is needed here.
+func assertFilesMismatch(files []string, dir string) error {
+	for _, rel := range files {
+		full := filepath.Join(dir, rel)
+
+		info, err := os.Stat(full)
+		if err != nil {
+			return fmt.Errorf("assert.files: %s does not exist", rel)
+		}
+
+		if info.IsDir() {
+			return fmt.Errorf("assert.files: %s is a directory, not a file", rel)
+		}
+
+		if info.Size() == 0 {
+			return fmt.Errorf("assert.files: %s is empty", rel)
+		}
 	}
 
 	return nil

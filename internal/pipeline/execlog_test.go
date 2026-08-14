@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -56,7 +58,54 @@ func TestAssertMismatch(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := assertMismatch(&tt.assert, tt.stdout, tt.exitCode)
+			err := assertMismatch(&tt.assert, tt.stdout, tt.exitCode, "")
+			if tt.match && err != nil {
+				t.Errorf("expected match, got %v", err)
+			}
+
+			if !tt.match && err == nil {
+				t.Error("expected a mismatch error, got nil")
+			}
+		})
+	}
+}
+
+func TestAssertFilesMismatch(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	err := os.MkdirAll(filepath.Join(dir, "answer"), 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(filepath.Join(dir, "answer", "reply.md"), []byte("hi"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(filepath.Join(dir, "answer", "empty.md"), nil, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name  string
+		files []string
+		match bool
+	}{
+		{"present and non-empty", []string{"answer/reply.md"}, true},
+		{"missing", []string{"answer/missing.md"}, false},
+		{"present but empty", []string{"answer/empty.md"}, false},
+		{"directory, not a file", []string{"answer"}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := assertFilesMismatch(tt.files, dir)
 			if tt.match && err != nil {
 				t.Errorf("expected match, got %v", err)
 			}

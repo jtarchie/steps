@@ -1194,7 +1194,7 @@
     "assert": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Position decides which fields are legal: execution on a job/pipeline, outcome on a job, stdout/code on a task step, stdout/tool_calls on an agent step.",
+      "description": "Position decides which fields are legal: execution on a job/pipeline, outcome on a job, stdout/code/files on a task step, stdout/verdict/tool_calls/files on an agent step.",
       "properties": {
         "execution": {
           "type": "array",
@@ -1240,6 +1240,13 @@
               }
             }
           }
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Task/agent steps only. Every listed path must exist as a non-empty file among the step's outputs when it finishes -- checks what the step WROTE, not just what it said. Artifact-relative: the first path segment must name one of the step's outputs:."
         }
       }
     },

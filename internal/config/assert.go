@@ -50,6 +50,12 @@ type Assert struct {
 	// runs no tools. Every entry must appear, in order, as a subsequence of
 	// the observed calls.
 	ToolCalls []ExpectedToolCall `yaml:"tool_calls,omitempty"`
+	// Files, on a task or agent step, asserts that every listed path exists
+	// as a non-empty file in the step's own outputs — the one thing no other
+	// assert field checks: what the step WROTE rather than what it SAID. Each
+	// path is artifact-relative (ValidateArtifactPath), and its first
+	// component must name one of the step's declared outputs:.
+	Files []string `yaml:"files,omitempty"`
 }
 
 // The two legal values of a job's assert.outcome.
@@ -99,6 +105,11 @@ func (c *Config) validateAsserts() error {
 			}
 
 			stepErr = validateStepAssert(label, step)
+			if stepErr != nil {
+				return stepErr
+			}
+
+			stepErr = c.validateAssertFiles(label, step)
 			if stepErr != nil {
 				return stepErr
 			}
@@ -233,10 +244,10 @@ func validateAssertOutcome(label, outcome string) error {
 }
 
 // requireExecutionOnly rejects an execution-level assert (Config/Job) that
-// carries the step-only stdout:/code: fields.
+// carries the step-only stdout:/code:/files: fields.
 func requireExecutionOnly(label string, assert *Assert) error {
-	if assert.Stdout != nil || assert.Code != nil || assert.Verdict != nil {
-		return fmt.Errorf("%s: stdout/code/verdict are only valid on task/agent step asserts, not an execution assert", label)
+	if assert.Stdout != nil || assert.Code != nil || assert.Verdict != nil || len(assert.Files) > 0 {
+		return fmt.Errorf("%s: stdout/code/verdict/files are only valid on task/agent step asserts, not an execution assert", label)
 	}
 
 	return nil
@@ -354,4 +365,64 @@ func validateExpectedToolCalls(context string, expected []ExpectedToolCall) erro
 	}
 
 	return nil
+}
+
+// validateAssertFiles rejects an assert.files entry whose path isn't
+// artifact-relative (ValidateArtifactPath — no ../, no absolute path, no
+// empty segment), or whose first component doesn't name one of the step's
+// own outputs:. The latter is what makes a bare filename like "reply.md" a
+// load error rather than a path that can never resolve to anything a step
+// captures: context_paths and a put's params: file follow the same
+// artifact-relative rule.
+func (c *Config) validateAssertFiles(label string, step *Step) error {
+	if step.Assert == nil || len(step.Assert.Files) == 0 {
+		return nil
+	}
+
+	outputs, err := c.stepOutputs(*step)
+	if err != nil {
+		return fmt.Errorf("%s: %w", label, err)
+	}
+
+	declared := make(map[string]bool, len(outputs))
+	for _, name := range outputs {
+		declared[name] = true
+	}
+
+	for i, path := range step.Assert.Files {
+		if strings.TrimSpace(path) == "" {
+			return fmt.Errorf("%s: assert.files[%d] must not be empty", label, i)
+		}
+
+		err := ValidateArtifactPath(path)
+		if err != nil {
+			return fmt.Errorf("%s: assert.files[%d]: %w", label, i, err)
+		}
+
+		name, _, _ := strings.Cut(path, "/")
+		if !declared[name] {
+			return fmt.Errorf("%s: assert.files[%d] %q names artifact %q, which is not one of this step's outputs (%s)",
+				label, i, path, name, strings.Join(outputs, ", "))
+		}
+	}
+
+	return nil
+}
+
+// stepOutputs resolves the declared output artifact names for a task or
+// agent step. An agent's outputs: is authoritative on the step itself — an
+// agents: entry declares no outputs of its own, unlike tasks: — but a task
+// step may inherit its whole outputs: list from a named tasks: entry, so
+// that side goes through ResolveTask rather than reading step.Outputs raw.
+func (c *Config) stepOutputs(step Step) ([]string, error) {
+	if step.Agent != "" {
+		return step.Outputs, nil
+	}
+
+	rt, err := c.ResolveTask(step)
+	if err != nil {
+		return nil, err
+	}
+
+	return rt.Outputs, nil
 }

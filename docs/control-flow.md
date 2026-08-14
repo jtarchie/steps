@@ -234,6 +234,22 @@ jobs:
 
   Naming a verdict outside the declared list, or setting it on a step with no `verdicts:`, is a load error: the assert could never match on any run.
 - **`assert.tool_calls`**, on an agent step only: an ordered list of `{name, args}` entries the model's tool calls must satisfy, as an ordered subsequence (extra calls are fine) with subset-matched `args`. Values compare as strings. The trajectory records every call the model requested with its own arguments, *before* any `max_calls:` budget check or `args:` pinning — so a budget-rejected call still appears, and a pinned value is deliberately not matchable (asserting on a pinned key is caught at load time). `stdout`, `verdict` and `tool_calls` are ANDed when all are set.
+- **`assert.files`**, on a task or agent step: every listed path must exist as a **non-empty** file among the step's captured outputs, checked in the step's own working directory before capture. It's the one assert that checks what a step *wrote* rather than what it *said* — an agent (or a task's `run:`) that reports success in prose without producing anything is otherwise undetectable by `stdout:`/`code:` alone. Each path is artifact-relative: the first segment must name one of the step's `outputs:`, the same rule `context_paths:` follows.
+
+```yaml
+jobs:
+- name: wrote-something
+  plan:
+  - task: draft
+    run: |
+      mkdir -p answer
+      echo "the answer is 42" > answer/reply.md
+    outputs: [answer]
+    assert:
+      files: [answer/reply.md]
+```
+
+  A missing file, an empty file, or a path naming a directory instead of a file all fail the assert — a load error catches a path that names no declared output before the pipeline ever runs.
 - **`steps test <pipeline.yml>`** runs every job in declaration order (forced, so the execution log is deterministic), prints per-job PASS/FAIL, and checks the pipeline-level `assert.execution`. It is how every example in these docs is verified.
 
 ## `do:` — several steps as one

@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -179,7 +181,7 @@ func TestAssertAgentResponseToolCalls(t *testing.T) {
 			expect("post_review", map[string]string{"action": "comment"}),
 		}}
 
-		err := assertAgentResponse(assert, res)
+		err := assertAgentResponse(assert, res, "")
 		if err != nil {
 			t.Errorf("expected the assert to pass, got %v", err)
 		}
@@ -190,7 +192,7 @@ func TestAssertAgentResponseToolCalls(t *testing.T) {
 
 		assert := &config.Assert{ToolCalls: []config.ExpectedToolCall{expect("never_called", nil)}}
 
-		err := assertAgentResponse(assert, res)
+		err := assertAgentResponse(assert, res, "")
 		if err == nil {
 			t.Error("expected a mismatch failure")
 		}
@@ -203,7 +205,7 @@ func TestAssertAgentResponseToolCalls(t *testing.T) {
 		matching := []config.ExpectedToolCall{expect("read_file", nil)}
 
 		// Both satisfied -> pass.
-		err := assertAgentResponse(&config.Assert{Stdout: &stdout, ToolCalls: matching}, res)
+		err := assertAgentResponse(&config.Assert{Stdout: &stdout, ToolCalls: matching}, res, "")
 		if err != nil {
 			t.Errorf("both satisfied should pass, got %v", err)
 		}
@@ -211,7 +213,7 @@ func TestAssertAgentResponseToolCalls(t *testing.T) {
 		// stdout satisfied, tool_calls not -> fail.
 		bad := []config.ExpectedToolCall{expect("never_called", nil)}
 
-		err = assertAgentResponse(&config.Assert{Stdout: &stdout, ToolCalls: bad}, res)
+		err = assertAgentResponse(&config.Assert{Stdout: &stdout, ToolCalls: bad}, res, "")
 		if err == nil {
 			t.Error("a tool_calls mismatch must fail even when stdout matches")
 		}
@@ -219,7 +221,7 @@ func TestAssertAgentResponseToolCalls(t *testing.T) {
 		// tool_calls satisfied, stdout not -> fail.
 		missing := "not in the response"
 
-		err = assertAgentResponse(&config.Assert{Stdout: &missing, ToolCalls: matching}, res)
+		err = assertAgentResponse(&config.Assert{Stdout: &missing, ToolCalls: matching}, res, "")
 		if err == nil {
 			t.Error("a stdout mismatch must fail even when tool_calls match")
 		}
@@ -228,9 +230,45 @@ func TestAssertAgentResponseToolCalls(t *testing.T) {
 	t.Run("nil assert is a no-op", func(t *testing.T) {
 		t.Parallel()
 
-		err := assertAgentResponse(nil, res)
+		err := assertAgentResponse(nil, res, "")
 		if err != nil {
 			t.Errorf("nil assert should pass, got %v", err)
+		}
+	})
+}
+
+func TestAssertAgentResponseFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	err := os.MkdirAll(filepath.Join(dir, "answer"), 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(filepath.Join(dir, "answer", "reply.md"), []byte("hi"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res := conversationResult{text: "wrote the reply"}
+
+	t.Run("present and non-empty passes", func(t *testing.T) {
+		t.Parallel()
+
+		err := assertAgentResponse(&config.Assert{Files: []string{"answer/reply.md"}}, res, dir)
+		if err != nil {
+			t.Errorf("expected the assert to pass, got %v", err)
+		}
+	})
+
+	t.Run("missing file fails", func(t *testing.T) {
+		t.Parallel()
+
+		err := assertAgentResponse(&config.Assert{Files: []string{"answer/missing.md"}}, res, dir)
+		if err == nil {
+			t.Error("expected a mismatch failure for a file the step never wrote")
 		}
 	})
 }
