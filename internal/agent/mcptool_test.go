@@ -430,3 +430,57 @@ func TestMCPToolImplTransportError(t *testing.T) {
 		t.Errorf("error = %#v, want the transport error surfaced as data, not a panic/Go error", result["error"])
 	}
 }
+
+// TestCheckProviderToolName covers the half of a tool's function name that no
+// pipeline author writes. With a bare `{mcp: server}` grant the names come
+// entirely from the server, so a name the provider rejects surfaced as a 400
+// on every request for the step, naming neither the server nor the tool.
+func TestCheckProviderToolName(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("x", 64)
+
+	tests := []struct {
+		name    string
+		server  string
+		remote  string
+		wantErr string
+	}{
+		{name: "ordinary name", server: "linear", remote: "search_issues"},
+		{name: "hyphens and digits are fine", server: "linear", remote: "search-issues-2"},
+		{name: "a dot the provider rejects", server: "linear", remote: "search.files", wantErr: "not a valid function name"},
+		{name: "a space", server: "linear", remote: "search files", wantErr: "not a valid function name"},
+		{name: "too long once joined", server: "linear", remote: long, wantErr: "the limit is 64"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			joined := test.server + config.MCPToolNameSep + test.remote
+
+			err := checkProviderToolName(test.server, test.remote, joined)
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatalf("checkProviderToolName(%q): %v", joined, err)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("checkProviderToolName(%q) = nil, want an error", joined)
+			}
+
+			if !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("error = %v, want it to mention %q", err, test.wantErr)
+			}
+
+			// Both halves have to be named, since the joined string appears
+			// nowhere in the pipeline the author would go looking at.
+			if !strings.Contains(err.Error(), test.server) || !strings.Contains(err.Error(), test.remote) {
+				t.Fatalf("error = %v, want it to name both %q and the tool", err, test.server)
+			}
+		})
+	}
+}

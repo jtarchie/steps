@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 
 	"google.golang.org/genai"
@@ -57,6 +58,13 @@ func buildMCPTools(ctx context.Context, cfg *config.Config, spec config.ToolSpec
 	for _, tool := range selected {
 		name := spec.MCP + config.MCPToolNameSep + tool.Name
 
+		err = checkProviderToolName(spec.MCP, tool.Name, name)
+		if err != nil {
+			_ = client.Close()
+
+			return nil, nil, nil, err
+		}
+
 		decls = append(decls, &genai.FunctionDeclaration{
 			Name:                 name,
 			Description:          mcpToolDescription(spec, tool),
@@ -67,6 +75,48 @@ func buildMCPTools(ctx context.Context, cfg *config.Config, spec config.ToolSpec
 	}
 
 	return decls, registry, client, nil
+}
+
+// maxProviderToolName is the function-name length OpenAI and most
+// OpenAI-compatible providers accept.
+const maxProviderToolName = 64
+
+// providerToolName matches the character set those same providers allow in a
+// function name — the constraint config.MCPToolNameSep's doc comment cites as
+// the reason the separator is "__" rather than ".".
+//
+//nolint:gochecknoglobals // compiled once, read-only
+var providerToolName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// checkProviderToolName rejects a joined server__tool name the provider will
+// not accept, naming both halves.
+//
+// The server half is written by the pipeline author and validated at load.
+// The remote half is not: it is whatever the MCP server advertises, and with
+// a bare `{mcp: server}` grant the author never types those names at all. A
+// server exposing `search.files`, or a name long enough to push the pair past
+// the limit, therefore produced a 400 on every request for the whole step —
+// from the provider, naming neither the MCP server nor the offending tool,
+// about a string nothing in the pipeline mentions.
+//
+// Checked at step preparation rather than first call, matching how the rest
+// of this file treats a bad grant.
+func checkProviderToolName(server, remote, joined string) error {
+	if !providerToolName.MatchString(joined) {
+		return fmt.Errorf(
+			"mcp server %q advertises tool %q, which cannot be offered to the model: %q is not a valid function name "+
+				"(providers allow only letters, digits, underscore and hyphen). Grant specific tools with mcp_tools: to skip it",
+			server, remote, joined)
+	}
+
+	if len(joined) > maxProviderToolName {
+		return fmt.Errorf(
+			"mcp server %q advertises tool %q, which cannot be offered to the model: %q is %d characters and the limit is %d. "+
+				"Grant specific tools with mcp_tools: to skip it",
+			server, remote, joined, len(joined), maxProviderToolName)
+	}
+
+	return nil
 }
 
 // mcpToolDescription returns spec.Description when the single-tool form
