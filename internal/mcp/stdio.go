@@ -23,7 +23,15 @@ import (
 // subprocesses that inherit the stderr fd; if one survives its parent, the
 // pipe never closes and Wait — i.e. Close, i.e. a step's own teardown —
 // would hang forever without this.
-const stdioWaitDelay = 5 * time.Second
+//
+// It has to be SHORTER than that terminate grace period, not equal to it.
+// The SDK's Close escalates on a 5s timer — close stdin, wait, SIGTERM,
+// wait, SIGKILL, wait — and then gives up with "unresponsive subprocess". A
+// delay of 5s ties that final wait, so whether teardown of a forking server
+// reports an error came down to which timer fired first, for a subprocess
+// that had in fact already died. Two seconds always wins, and matches what
+// internal/shell picked for the same job.
+const stdioWaitDelay = 2 * time.Second
 
 // commandTransport builds the SDK transport for a stdio (command:) server:
 // an explicit argv subprocess (never a shell — Args is never passed through
@@ -37,6 +45,7 @@ func commandTransport(ctx context.Context, srv config.MCPServer) *sdkmcp.Command
 	cmd.Env = shell.HostEnv()                                 // same trust boundary as every other host-executed command
 	cmd.Stderr = &stderrLogger{server: srv.Name}
 	cmd.WaitDelay = stdioWaitDelay
+	setProcessGroup(cmd)
 
 	slog.Debug("mcp.stdio.spawn", "server", srv.Name, "command", srv.Command, "args", srv.Args, "cwd", srv.Cwd)
 
