@@ -1,0 +1,160 @@
+package pipeline
+
+// The `get: version: every` cursor: which versions a job has already fanned
+// out over, so a second trigger does not redo the first one's work.
+//
+// Why this is not the merkle cache's job, since that is the first place anyone
+// looks: the version IS part of a get node's hashed content, so a chain re-run
+// against a version it already ran hashes identically and is skipped. But
+// route.go's unskippableReason deliberately never skips an `agent:` or a
+// `put:` — one is non-deterministic, the other's whole worth is an effect on
+// the outside world — so a plan containing either re-executes for every
+// version the check still returns. The cache avoids recomputing a VALUE; it
+// was never a mechanism for avoiding repeating an EFFECT. That belongs one
+// layer up, in deciding which versions to fan out over at all.
+//
+// Concourse does the same thing with a per-job cursor over versions the job
+// has not built (atc/db/versions_db.go's NextEveryVersion) — with one
+// deliberate difference here: Concourse's cursor advances regardless of build
+// status, this one advances only on success, so a failed version is retried
+// exactly as the merkle cache retries any failed chain. See docs/conformance.md
+// for the divergence and runGetStep for the reasoning.
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+
+	"github.com/jtarchie/steps/internal/config"
+	rsrc "github.com/jtarchie/steps/internal/resource"
+	"github.com/jtarchie/steps/internal/store"
+)
+
+// versionCursor answers "has this job already taken this version", for the
+// resources one job's plan fans out over.
+type versionCursor struct {
+	// consumed is resource name -> set of version JSONs. Loaded once per run,
+	// before planning, so the plan-time and run-time views cannot drift apart
+	// mid-run as versions are consumed.
+	consumed map[string]map[string]bool
+}
+
+// loadVersionCursor reads the consumed set for every resource this job fans
+// out over. A job with no `version: every` get reads nothing and allocates
+// nothing, which is nearly every job.
+//
+// A store failure is returned rather than swallowed: guessing "nothing is
+// consumed" would re-run every visible version — the exact behaviour this
+// exists to stop — and guessing the opposite would silently skip real work.
+func loadVersionCursor(ctx context.Context, st *store.Store, job *config.Job) (*versionCursor, error) {
+	var resources []string
+
+	seen := map[string]bool{}
+
+	for _, step := range job.Plan {
+		if step.Get == "" || !fansOutOverEveryVersion(step) {
+			continue
+		}
+
+		name := step.GetResourceName()
+		if seen[name] {
+			continue
+		}
+
+		seen[name] = true
+
+		resources = append(resources, name)
+	}
+
+	if len(resources) == 0 {
+		return nil, nil //nolint:nilnil // "no cursor needed" is the common case, and a nil *versionCursor is a valid receiver
+	}
+
+	cursor := &versionCursor{consumed: make(map[string]map[string]bool, len(resources))}
+
+	for _, name := range resources {
+		consumed, err := st.ConsumedVersions(ctx, job.Name, name)
+		if err != nil {
+			return nil, err //nolint:wrapcheck // ConsumedVersions already names the job
+		}
+
+		cursor.consumed[name] = consumed
+	}
+
+	return cursor, nil
+}
+
+// fansOutOverEveryVersion reports whether a get step uses version: every —
+// the only mode that runs the rest of the plan once per version.
+func fansOutOverEveryVersion(step config.Step) bool {
+	mode, _ := rsrc.VersionMode(step)
+
+	return mode == "every"
+}
+
+// has reports whether this job has already taken the version. A nil cursor
+// (no version: every in the plan, or --force) has taken nothing.
+func (c *versionCursor) has(resourceName string, version map[string]any) bool {
+	if c == nil {
+		return false
+	}
+
+	key, ok := encodeVersion(version)
+	if !ok {
+		// An unencodable version cannot be matched against the table, so it
+		// cannot be suppressed either. Running it again is the recoverable
+		// failure; skipping work that was never recorded is not.
+		return false
+	}
+
+	return c.consumed[resourceName][key]
+}
+
+// take records that this job is DONE with a version — called only where the
+// version's build succeeded (or was skipped because an identical chain already
+// had). A failed version is deliberately left unconsumed so it is retried,
+// which is what the merkle cache does for every other kind of re-run; see the
+// call site in runGetStep for why that beats Concourse's advance-regardless
+// cursor here.
+//
+// It records on a context detached from the build's, so a version whose build
+// finished during a shutdown is not re-taken later purely because the process
+// was on its way out.
+//
+// Best-effort by design: failing to record must not turn a succeeded build
+// into a failed one. The cost of a lost row is that the version is taken once
+// more later, which is the direction this errs on everywhere.
+func (c *versionCursor) take(ctx context.Context, st *store.Store, jobName, resourceName string, version map[string]any) {
+	if c == nil {
+		return
+	}
+
+	key, ok := encodeVersion(version)
+	if !ok {
+		return
+	}
+
+	err := st.RecordConsumedVersion(context.WithoutCancel(ctx), jobName, resourceName, key)
+	if err != nil {
+		slog.Warn("job.cursor_unrecorded", "job", jobName, "resource", resourceName, "error", err)
+
+		return
+	}
+
+	if c.consumed[resourceName] == nil {
+		c.consumed[resourceName] = map[string]bool{}
+	}
+
+	c.consumed[resourceName][key] = true
+}
+
+// encodeVersion renders a version the same way passed: does (json.Marshal,
+// whose map keys are sorted), so both tables key on identical strings.
+func encodeVersion(version map[string]any) (string, bool) {
+	encoded, err := json.Marshal(version)
+	if err != nil {
+		return "", false
+	}
+
+	return string(encoded), true
+}

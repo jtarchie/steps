@@ -39,7 +39,14 @@ func Explain(ctx context.Context, cfg *config.Config, job *config.Job, pinned ma
 		return nil, fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
-	chains, err := merkle.PlanChains(ctx, cfg, job.Name, job.Plan, pinned, rsrc.NewCache())
+	// Same cursor a run would use, so `steps plan` does not list versions a
+	// version: every fan-out has already taken and would not run.
+	cursor, err := loadVersionCursor(ctx, st, job)
+	if err != nil {
+		return nil, fmt.Errorf("job %q: %w", job.Name, err)
+	}
+
+	chains, err := merkle.PlanChains(ctx, cfg, job.Name, job.Plan, pinned, rsrc.NewCache(rsrc.WithConsumed(cursor.has)))
 	if err != nil {
 		return nil, fmt.Errorf("job %q: planning: %w", job.Name, err)
 	}

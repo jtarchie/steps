@@ -226,6 +226,17 @@ jobs:
 
 Under `every`, a failing version does not stop the remaining ones from being attempted.
 
+### `every` takes each version once
+
+A check reports what *exists*, not what is new — the same twenty Slack messages, the same page of builds, on every poll. So `every` remembers: once a version's fan-out has **succeeded**, that version is not taken again, and a later run fans out only over what is left. Without that, a plan ending in a `put:` or an `agent:` — the two steps the cache deliberately never skips, because their worth is an effect rather than an artifact — repeats every effect it has ever performed each time anything new shows up.
+
+- **Recorded per (job, resource)**, so another job reading the same resource keeps its own place.
+- **A failed version stays available** and is retried on the next run, exactly as the cache retries any failed chain. A version that fails forever is what `max_consecutive_failures:` is for.
+- **`--force` ignores it**, along with every other piece of persisted state — which means it re-runs versions that already succeeded, effects included.
+- **It can only suppress, never resurrect.** steps keeps no version history: whatever `check` returns *now* is the whole universe. A version that scrolled out of the check's window while nothing was watching is gone, so a check should return a window wide enough to cover the gaps you care about.
+
+`steps plan` reads the same record, so it lists only the versions a run would actually take.
+
 ## `trigger: true`
 
 Marks a `get` as something `steps watch` should poll. When its version changes, the jobs containing it run automatically. Valid only on `get` steps — setting it anywhere else is a load-time error.

@@ -722,3 +722,52 @@ func TestMaxInFlightDefaultsToOneForAnUnknownJob(t *testing.T) {
 	mustEnqueueJob(t, store, "ghost", "resource-b")
 	assertQueueEmpty(t, store)
 }
+
+// TestConsumedVersionsRoundTrip covers the get: version: every cursor: what a
+// job has taken is what it reads back, per (job, resource).
+func TestConsumedVersionsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	ctx := context.Background()
+
+	consumed, err := st.ConsumedVersions(ctx, "answer", "mentions")
+	if err != nil {
+		t.Fatalf("ConsumedVersions: %v", err)
+	}
+
+	if len(consumed) != 0 {
+		t.Fatalf("a fresh store reports %v consumed, want none", consumed)
+	}
+
+	err = st.RecordConsumedVersion(ctx, "answer", "mentions", `{"ts":"1"}`)
+	if err != nil {
+		t.Fatalf("RecordConsumedVersion: %v", err)
+	}
+
+	// Re-recording is a no-op, not an error: a resumed or replayed run must
+	// not fail on a version it already took.
+	err = st.RecordConsumedVersion(ctx, "answer", "mentions", `{"ts":"1"}`)
+	if err != nil {
+		t.Fatalf("RecordConsumedVersion (again): %v", err)
+	}
+
+	consumed, err = st.ConsumedVersions(ctx, "answer", "mentions")
+	if err != nil {
+		t.Fatalf("ConsumedVersions: %v", err)
+	}
+
+	if !consumed[`{"ts":"1"}`] || len(consumed) != 1 {
+		t.Errorf("consumed = %v, want exactly the recorded version", consumed)
+	}
+
+	// Scoped per job and per resource — another job has taken nothing.
+	other, err := st.ConsumedVersions(ctx, "other-job", "mentions")
+	if err != nil {
+		t.Fatalf("ConsumedVersions: %v", err)
+	}
+
+	if len(other) != 0 {
+		t.Errorf("another job reports %v consumed; the cursor is per job", other)
+	}
+}

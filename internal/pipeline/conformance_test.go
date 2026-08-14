@@ -455,3 +455,133 @@ jobs:
 		}
 	}
 }
+
+// TestConformanceGetVersionEveryTakesEachVersionOnce pins the cursor that
+// version: every needs and, until now, did not have.
+//
+// Concourse's fan-out walks versions the job has not built
+// (atc/db/versions_db.go's NextEveryVersion, github.com/concourse/concourse
+// @ v8.2.4 — read from source, not a spec page); steps re-ran everything the
+// check still returned. Harmless while the plan is cacheable, and NOT harmless
+// with a put: or an agent: in it, which route.go's unskippableReason never
+// skips: found in the wild as a Slack bot re-answering every mention still in
+// its check's window, once per new mention.
+//
+// The put: below is the point. Replace it with a task and the merkle cache
+// alone would pass this test.
+func TestConformanceGetVersionEveryTakesEachVersionOnce(t *testing.T) {
+	dir := t.TempDir()
+	posted := filepath.Join(dir, "posted.txt")
+	versionsFile := filepath.Join(dir, "versions.json")
+
+	cfg, st := everyVersionFixture(t, dir, posted, versionsFile)
+	ctx := context.Background()
+	job := &cfg.Jobs[0]
+
+	writeEveryVersions(t, versionsFile, `[{"ref":"v1"}]`)
+	mustRunEvery(ctx, t, cfg, job, st, false)
+	assertConformanceLineCount(t, posted, 1)
+
+	// A second version appears, exactly as a second Slack mention does. The
+	// check still returns the first one, because a check reports what exists.
+	writeEveryVersions(t, versionsFile, `[{"ref":"v1"},{"ref":"v2"}]`)
+	mustRunEvery(ctx, t, cfg, job, st, false)
+
+	// Two posts total, not three: v1 was already taken. Before the cursor
+	// this was 3, and grew by one every time anything new arrived.
+	assertConformanceLineCount(t, posted, 2)
+
+	// A third run with nothing new posts nothing at all, and still succeeds:
+	// "no new versions" is idle, not broken.
+	mustRunEvery(ctx, t, cfg, job, st, false)
+	assertConformanceLineCount(t, posted, 2)
+
+	// `steps plan` reads the same cursor, so it does not advertise work a run
+	// would not do — the planner and the executor share one filtered view by
+	// construction (see resource.WithConsumed).
+	rows, err := Explain(ctx, cfg, job, nil, st)
+	if err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+
+	if len(rows) != 0 {
+		t.Errorf("Explain lists %d step(s) with every version already taken: %+v", len(rows), rows)
+	}
+
+	// --force is the documented way back: it ignores the cursor along with
+	// every other piece of persisted state, so both versions run again.
+	mustRunEvery(ctx, t, cfg, job, st, true)
+	assertConformanceLineCount(t, posted, 4)
+}
+
+// everyVersionFixture builds the pipeline the test above runs: a get with
+// version: every feeding a put, whose out: appends to a file. The put is the
+// point — replace it with a task and the merkle cache alone would pass.
+func everyVersionFixture(t *testing.T, dir, posted, versionsFile string) (*config.Config, *store.Store) {
+	t.Helper()
+
+	path := filepath.Join(dir, "pipeline.yml")
+	pipelineYAML := fmt.Sprintf(`
+resource_types:
+- name: dummy
+  config:
+    check: cat %s
+    in: echo {{ .version.ref | shellquote }} > ./ref
+    out: cat thing/ref >> %s
+
+resources:
+- name: thing
+  type: dummy
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: thing
+    version: every
+  - put: thing
+    inputs: [thing]
+`, versionsFile, posted)
+
+	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeEveryVersions(t, versionsFile, `[]`)
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := store.OpenStore(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return cfg, st
+}
+
+func writeEveryVersions(t *testing.T, path, versions string) {
+	t.Helper()
+
+	err := os.WriteFile(path, []byte(versions), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustRunEvery(ctx context.Context, t *testing.T, cfg *config.Config, job *config.Job, st *store.Store, force bool) {
+	t.Helper()
+
+	provider, err := workspace.NewProvider(nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = RunJob(ctx, cfg, job, nil, provider, st, force)
+	if err != nil {
+		t.Fatalf("RunJob(force=%v): %v", force, err)
+	}
+}

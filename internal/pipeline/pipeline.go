@@ -230,17 +230,33 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 func runJobPlan(ctx context.Context, cfg *config.Config, job *config.Job, pinned map[string]string, provider workspace.Provider, bw workspace.BuildWorkspace, st *store.Store, skipCache bool) error {
 	skippable := map[string]bool{}
 
+	// Which versions this job has already fanned out over, read ONCE before
+	// planning so the planner and the executor judge the same set. --force
+	// (skipCache) reads none: "re-run every step" has to include the versions
+	// a previous run took, or the flag cannot recover from a bad build.
+	var (
+		cursor *versionCursor
+		err    error
+	)
+
+	if !skipCache {
+		cursor, err = loadVersionCursor(ctx, st, job)
+		if err != nil {
+			return fmt.Errorf("job %q: %w", job.Name, err)
+		}
+	}
+
 	// cache is scoped to this one RunJob invocation (never shared across
 	// concurrent invocations — see resource.NewCache) and threaded into both
 	// the plan-time and run-time get-step resolution below, so a get step's
 	// check command runs at most once per job run instead of once during
 	// planning and again during execution.
-	cache := rsrc.NewCache()
+	cache := rsrc.NewCache(rsrc.WithConsumed(cursor.has))
 
 	if !skipCache {
-		chains, err := merkle.PlanChains(ctx, cfg, job.Name, job.Plan, pinned, cache)
-		if err != nil {
-			return fmt.Errorf("job %q: planning: %w", job.Name, err)
+		chains, planErr := merkle.PlanChains(ctx, cfg, job.Name, job.Plan, pinned, cache)
+		if planErr != nil {
+			return fmt.Errorf("job %q: planning: %w", job.Name, planErr)
 		}
 
 		skippable, err = buildSkippableIndex(ctx, st, job.Name, chains)
@@ -249,7 +265,7 @@ func runJobPlan(ctx context.Context, cfg *config.Config, job *config.Job, pinned
 		}
 	}
 
-	return runSteps(ctx, cfg, job.Name, job.Plan, pinned, provider, bw, st, skippable, "", false, cache, true)
+	return runSteps(ctx, cfg, job.Name, job.Plan, pinned, provider, bw, st, skippable, "", false, cache, cursor, true)
 }
 
 // computeChainSkippable reports, per chain, whether it's already covered by a
@@ -361,7 +377,7 @@ type nonGetOutcome struct {
 func runSteps(
 	ctx context.Context, cfg *config.Config, jobName string, steps []config.Step, pinned map[string]string,
 	provider workspace.Provider, bw workspace.BuildWorkspace, st *store.Store, skippable map[string]bool,
-	parentHash string, chainUnskippable bool, cache *rsrc.Cache,
+	parentHash string, chainUnskippable bool, cache *rsrc.Cache, cursor *versionCursor,
 	allowGetTrigger bool,
 ) error {
 	// visits counts how many times each step index has executed this
@@ -393,7 +409,7 @@ func runSteps(
 			continue
 		}
 		if step.Get != "" {
-			return runGetStep(ctx, cfg, jobName, i, step, steps[i+1:], pinned, provider, st, skippable, parentHash, chainUnskippable, cache)
+			return runGetStep(ctx, cfg, jobName, i, step, steps[i+1:], pinned, provider, st, skippable, parentHash, chainUnskippable, cache, cursor)
 		}
 
 		returned, err := executeNonGetStep(ctx, cfg, jobName, &i, &parentHash, &chainUnskippable, step, steps, bw, st, skippable, visits)
@@ -841,7 +857,7 @@ func tolerateTryFailure(ctx context.Context, jobName string, step config.Step, e
 func runGetStep(
 	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, remainder []config.Step,
 	pinned map[string]string, provider workspace.Provider, st *store.Store, skippable map[string]bool,
-	parentHash string, chainUnskippable bool, cache *rsrc.Cache,
+	parentHash string, chainUnskippable bool, cache *rsrc.Cache, cursor *versionCursor,
 ) error {
 	resource, resourceType, versions, err := fetchGetVersions(ctx, cfg, step, pinned, cache)
 	if err != nil {
@@ -890,6 +906,11 @@ func runGetStep(
 			slog.Info("job.skip", "job", jobName, "index", i, "kind", "get", "resource", resource.Name, "hash", hash)
 			publishStepSkipped(ctx, jobName, i, step, hash, skipReason(stepChainSkipped))
 
+			// Taken, even though nothing ran: the cache skipped it because
+			// this exact chain already succeeded, which is the definition of
+			// a version this job is done with.
+			cursor.take(ctx, st, jobName, resource.Name, version)
+
 			continue
 		}
 
@@ -902,15 +923,27 @@ func runGetStep(
 
 		publishStepStarted(ctx, jobName, i, step)
 
-		err = runTriggeredBuild(ctx, cfg, jobName, i, step, *resource, *resourceType, version, remainder, pinned, provider, st, skippable, node, chainUnskippable, cache)
+		err = runTriggeredBuild(ctx, cfg, jobName, i, step, *resource, *resourceType, version, remainder, pinned, provider, st, skippable, node, chainUnskippable, cache, cursor)
 
 		publishStepFinished(ctx, jobName, i, step, hash, getStarted, err)
 
+		// Consumed on SUCCESS only — a deliberate divergence from Concourse's
+		// cursor, which advances regardless of build status (see
+		// docs/conformance.md). Two reasons. The merkle cache already retries
+		// a failed chain and skips a succeeded one, so consuming a failure
+		// would make version: every behave differently from every other
+		// re-run in the system. And the failure modes are lopsided: a version
+		// dropped on a transient error is recoverable only with --force,
+		// which re-runs the versions that already succeeded too (posting the
+		// same Slack reply twice, in the case this was built for), while a
+		// version retried too often is bounded by max_consecutive_failures.
 		if err != nil {
 			buildErrs = append(buildErrs, fmt.Errorf("step %d (get %q) version %v: %w", i, step.Get, version, err))
 
 			continue
 		}
+
+		cursor.take(ctx, st, jobName, resource.Name, version)
 	}
 
 	return errors.Join(buildErrs...)
@@ -1520,7 +1553,7 @@ func runTriggeredBuild(
 	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, resource config.Resource,
 	resourceType config.ResourceType, version map[string]any, remainder []config.Step, pinned map[string]string,
 	provider workspace.Provider, st *store.Store, skippable map[string]bool, node merkle.Node,
-	chainUnskippable bool, cache *rsrc.Cache,
+	chainUnskippable bool, cache *rsrc.Cache, cursor *versionCursor,
 ) error {
 	bw, err := provider.NewBuild(ctx, resource.Name)
 	if err != nil {
@@ -1576,7 +1609,7 @@ func runTriggeredBuild(
 		return fmt.Errorf("could not record node %q: %w", node.Hash, err)
 	}
 
-	err = runSteps(ctx, cfg, jobName, remainder, pinned, provider, bw, st, skippable, node.Hash, chainUnskippable, cache, false)
+	err = runSteps(ctx, cfg, jobName, remainder, pinned, provider, bw, st, skippable, node.Hash, chainUnskippable, cache, cursor, false)
 	buildOK = err == nil
 
 	return err

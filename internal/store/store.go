@@ -82,6 +82,26 @@ CREATE TABLE IF NOT EXISTS job_versions (
     PRIMARY KEY (job_name, resource_name, version_json)
 );
 
+-- Which versions a job has already FANNED OUT over under get: version: every.
+--
+-- Deliberately not job_versions above, which looks like it would fit: that
+-- table answers "did this job go GREEN on this version" for passed:, while
+-- this one answers "is this job DONE with this version" (see
+-- internal/pipeline/cursor.go for why a failed build leaves it unconsumed).
+-- Same shape, different question — and an available answer to the wrong
+-- question is how the passed: bug came back once already.
+--
+-- A SET rather than a high-water mark, because versions have no stable total
+-- order across checks: a check returns a list, and a resource may backfill.
+-- "Everything before X" is a claim the data does not support; membership is.
+CREATE TABLE IF NOT EXISTS job_version_cursor (
+    job_name      TEXT NOT NULL,
+    resource_name TEXT NOT NULL,
+    version_json  TEXT NOT NULL,
+    consumed_at   TEXT NOT NULL,
+    PRIMARY KEY (job_name, resource_name, version_json)
+);
+
 -- One row per run invocation, with the steps it got through. It is what
 -- --resume reads: not "has this content succeeded before" (that is the merkle
 -- cache) but "did THIS run already do this step".
@@ -886,6 +906,81 @@ func (s *Store) RecordPassedVersion(ctx context.Context, jobName, resourceName, 
 	`, jobName, resourceName, versionJSON, time.Now().UTC().Format(time.RFC3339), buildID)
 	if err != nil {
 		return fmt.Errorf("could not record a passed version for job %q: %w", jobName, err)
+	}
+
+	return nil
+}
+
+// consumedVersionCap bounds job_version_cursor per (job, resource). The rows
+// exist to suppress versions a check can still return, so the bound has to be
+// a count rather than an age: a version that is old but still visible must
+// stay suppressed for as long as the check keeps offering it. A thousand is
+// far past any check window anyone polls (Slack's is 20 messages, GitHub's a
+// page) while keeping the table from growing forever.
+const consumedVersionCap = 1000
+
+// ConsumedVersions returns the set of version JSONs jobName has already fanned
+// out over for resourceName under `get: version: every` — the cursor that
+// stops the same version being taken twice.
+func (s *Store) ConsumedVersions(ctx context.Context, jobName, resourceName string) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT version_json FROM job_version_cursor WHERE job_name = ? AND resource_name = ?`,
+		jobName, resourceName)
+	if err != nil {
+		return nil, fmt.Errorf("could not read consumed versions for job %q: %w", jobName, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	consumed := map[string]bool{}
+
+	for rows.Next() {
+		var versionJSON string
+
+		err = rows.Scan(&versionJSON)
+		if err != nil {
+			return nil, fmt.Errorf("could not read consumed versions for job %q: %w", jobName, err)
+		}
+
+		consumed[versionJSON] = true
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("could not read consumed versions for job %q: %w", jobName, err)
+	}
+
+	return consumed, nil
+}
+
+// RecordConsumedVersion marks one version as taken by jobName. The caller
+// (internal/pipeline's versionCursor) records only versions whose build
+// succeeded, so a failure is retried — a documented divergence from
+// Concourse's cursor, which advances regardless of build status (see
+// docs/conformance.md). Re-recording is a no-op rather than an error, so a
+// resumed or replayed run cannot fail on a version it already took.
+func (s *Store) RecordConsumedVersion(ctx context.Context, jobName, resourceName, versionJSON string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO job_version_cursor (job_name, resource_name, version_json, consumed_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (job_name, resource_name, version_json) DO NOTHING
+	`, jobName, resourceName, versionJSON, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("could not record a consumed version for job %q: %w", jobName, err)
+	}
+
+	// Pruned here rather than on a timer: this is the only writer, so it is
+	// the only place the bound can be enforced without a background loop.
+	_, err = s.db.ExecContext(ctx, `
+		DELETE FROM job_version_cursor
+		WHERE job_name = ? AND resource_name = ? AND rowid NOT IN (
+			SELECT rowid FROM job_version_cursor
+			WHERE job_name = ? AND resource_name = ?
+			ORDER BY consumed_at DESC, rowid DESC
+			LIMIT ?
+		)
+	`, jobName, resourceName, jobName, resourceName, consumedVersionCap)
+	if err != nil {
+		return fmt.Errorf("could not prune consumed versions for job %q: %w", jobName, err)
 	}
 
 	return nil
