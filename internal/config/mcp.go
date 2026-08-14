@@ -152,11 +152,23 @@ func (s MCPServer) IsStdio() bool {
 // (PKCE, code exchange, silent refresh) is unchanged. A client ID is a
 // public application identifier, so it lives in YAML like an endpoint does;
 // the SECRET follows the api_key_env convention and is only ever named.
+// CallbackPort pins the loopback port `steps mcp login` listens on for the
+// browser redirect, and exists for the same authorization servers ClientID
+// does. `steps mcp login` otherwise takes an ephemeral port, which is what
+// RFC 8252 §7.3 asks servers to allow for native apps — but the MCP
+// authorization spec requires the opposite ("authorization servers MUST
+// validate exact redirect URIs against pre-registered values"), and the
+// providers that need a pre-registered client are generally the ones
+// enforcing it. Against those, an ephemeral port cannot match whatever
+// redirect URI was registered in a dashboard, so login fails no matter how
+// the client was configured. Setting this makes the redirect URI predictable,
+// so `http://127.0.0.1:<port>/callback` can be registered once.
 type MCPServerAuth struct {
 	Type            string   `yaml:"type"`
 	APIKeyEnv       string   `yaml:"api_key_env,omitempty"`
 	ClientID        string   `yaml:"client_id,omitempty"`
 	ClientSecretEnv string   `yaml:"client_secret_env,omitempty"`
+	CallbackPort    int      `yaml:"callback_port,omitempty"`
 	Scopes          []string `yaml:"scopes,omitempty"`
 }
 
@@ -258,6 +270,10 @@ func validateMCPServerClientCredentials(srv MCPServer) error {
 			return fmt.Errorf("mcp server %q: client_secret_env is only valid with auth.type: oauth", srv.Name)
 		}
 
+		if srv.Auth.CallbackPort != 0 {
+			return fmt.Errorf("mcp server %q: callback_port is only valid with auth.type: oauth", srv.Name)
+		}
+
 		return nil
 	}
 
@@ -267,6 +283,27 @@ func validateMCPServerClientCredentials(srv MCPServer) error {
 
 	if strings.Contains(srv.Auth.ClientSecretEnv, "=") {
 		return fmt.Errorf("mcp server %q: client_secret_env %q must be a variable NAME, not a KEY=VALUE pair — the value is read from the environment at login time", srv.Name, srv.Auth.ClientSecretEnv)
+	}
+
+	return validateMCPCallbackPort(srv)
+}
+
+// validateMCPCallbackPort bounds the pinned loopback port to something this
+// process can actually bind. Rejected rather than clamped: the value's whole
+// purpose is matching a redirect URI registered somewhere else by hand, so a
+// port outside the range is a typo, and quietly using a different one would
+// produce a redirect URI mismatch far from its cause.
+func validateMCPCallbackPort(srv MCPServer) error {
+	const minPort, maxPort = 1024, 65535
+
+	if srv.Auth.CallbackPort == 0 {
+		return nil
+	}
+
+	if srv.Auth.CallbackPort < minPort || srv.Auth.CallbackPort > maxPort {
+		return fmt.Errorf(
+			"mcp server %q: callback_port %d is out of range — use an unprivileged port between %d and %d",
+			srv.Name, srv.Auth.CallbackPort, minPort, maxPort)
 	}
 
 	return nil

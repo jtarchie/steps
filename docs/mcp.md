@@ -406,6 +406,7 @@ mcp_servers:
     type: oauth
     client_id: "1234567890.9876543210"   # public app identifier
     client_secret_env: SLACK_CLIENT_SECRET
+    callback_port: 3118                  # register http://127.0.0.1:3118/callback
 
 agents:
 - name: responder
@@ -421,6 +422,7 @@ jobs:
 ```
 
 - **`client_id:` skips registration; everything else is identical.** PKCE, the loopback callback, the code exchange, the token file, and silent refresh at run/watch time all behave exactly as they do for a dynamically-registered client.
+- **`callback_port:` pins the redirect URI, and these servers usually need it.** By default `steps mcp login` listens on an ephemeral port, which is what [RFC 8252 §7.3](https://www.rfc-editor.org/rfc/rfc8252#section-7.3) asks servers to allow for native apps. The MCP authorization spec requires the opposite — authorization servers *must* validate redirect URIs against pre-registered values exactly — and the providers that make you pre-register a client are generally the ones enforcing it. A port that changes every run can never match what you typed into a dashboard, so the login fails with a redirect URI mismatch no matter how `client_id:` is set. Pin the port, register `http://127.0.0.1:<port>/callback` once, and the two agree. It's `oauth`-only, and must be between 1024 and 65535.
 - **The ID is in the YAML, the secret is not.** A client ID is a public application identifier, like an endpoint — so it's written literally and its *value* is folded into the cache hash, because pointing a server at a different registered app changes who the calls are made as. The secret follows the `api_key_env:` convention: `client_secret_env:` names an environment variable, and only the name is ever hashed or stored.
 - **`client_secret_env:` alone is a load error.** A secret with no ID names a credential for a client that would still be dynamically registered — configured-looking, bound to nothing. Both fields are `oauth`-only; setting either under `bearer`/`none` is rejected at load.
 - **A named-but-unset secret variable fails the login**, saying which variable — rather than attempting a public-client exchange the server answers with an opaque 401.

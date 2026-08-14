@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -685,7 +686,7 @@ func TestLoginPreregisteredSecretEnvUnset(t *testing.T) {
 func TestLoopbackCallbackRejectsUnrecognizedRequests(t *testing.T) {
 	t.Parallel()
 
-	cb, err := newLoopbackCallback(context.Background())
+	cb, err := newLoopbackCallback(context.Background(), 0)
 	if err != nil {
 		t.Fatalf("newLoopbackCallback: %v", err)
 	}
@@ -729,7 +730,7 @@ func TestLoopbackCallbackRejectsUnrecognizedRequests(t *testing.T) {
 func TestLoopbackCallbackDoesNotBlockOnASecondRedirect(t *testing.T) {
 	t.Parallel()
 
-	cb, err := newLoopbackCallback(context.Background())
+	cb, err := newLoopbackCallback(context.Background(), 0)
 	if err != nil {
 		t.Fatalf("newLoopbackCallback: %v", err)
 	}
@@ -851,6 +852,64 @@ func TestLoginRejectsAMismatchedIss(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "attacker.example.com") {
 		t.Fatalf("Login error does not name the unexpected issuer: %v", err)
+	}
+}
+
+// TestLoginHonoursCallbackPort proves the redirect URI is predictable when
+// auth.callback_port is set, which is the entire point of the field: an
+// authorization server that validates redirect URIs exactly cannot be
+// pre-registered against a port the kernel picks fresh every run.
+func TestLoginHonoursCallbackPort(t *testing.T) {
+	// Not t.Parallel(): uses t.Setenv (via TokenPath's os.UserConfigDir()).
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	// Borrow a port the OS says is free, release it, then require Login to
+	// bind that exact one. Asking for a hardcoded port would flake against
+	// whatever else is running on the machine.
+	var lc net.ListenConfig
+
+	probe, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("probe listen: %v", err)
+	}
+
+	port := probe.Addr().(*net.TCPAddr).Port //nolint:forcetypeassert // net.Listen("tcp", ...) always yields a *net.TCPAddr
+
+	err = probe.Close()
+	if err != nil {
+		t.Fatalf("probe close: %v", err)
+	}
+
+	fake := newFakeOAuthServer(t)
+
+	srv := config.MCPServer{
+		Name:     "pinned",
+		Endpoint: fake.server.URL + "/mcp",
+		Auth:     config.MCPServerAuth{Type: "oauth", CallbackPort: port},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var query url.Values
+
+	err = Login(ctx, srv, capturingBrowserOpen(t, &query))
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	want := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+	if got := query.Get("redirect_uri"); got != want {
+		t.Fatalf("redirect_uri = %q, want %q", got, want)
+	}
+
+	// The registration has to name the same URI, or a server that stores it
+	// would reject the very redirect this pinning exists to make matchable.
+	uris, _ := fake.registration["redirect_uris"].([]any)
+	if len(uris) != 1 || uris[0] != want {
+		t.Fatalf("registered redirect_uris = %v, want exactly [%q]", uris, want)
 	}
 }
 

@@ -116,6 +116,39 @@ jobs: [{ name: j, plan: [] }]
 			want: "must be a variable NAME",
 		},
 		{
+			name: "callback_port without oauth",
+			pipeline: `
+mcp_servers:
+- name: slack
+  endpoint: https://mcp.slack.com/mcp
+  auth: { type: bearer, api_key_env: SLACK_TOKEN, callback_port: 3118 }
+jobs: [{ name: j, plan: [] }]
+`,
+			want: "callback_port is only valid with auth.type: oauth",
+		},
+		{
+			name: "callback_port in the privileged range",
+			pipeline: `
+mcp_servers:
+- name: slack
+  endpoint: https://mcp.slack.com/mcp
+  auth: { type: oauth, client_id: "123.456", callback_port: 80 }
+jobs: [{ name: j, plan: [] }]
+`,
+			want: "out of range",
+		},
+		{
+			name: "callback_port above the port space",
+			pipeline: `
+mcp_servers:
+- name: slack
+  endpoint: https://mcp.slack.com/mcp
+  auth: { type: oauth, client_id: "123.456", callback_port: 70000 }
+jobs: [{ name: j, plan: [] }]
+`,
+			want: "out of range",
+		},
+		{
 			name: "duplicate name",
 			pipeline: `
 mcp_servers:

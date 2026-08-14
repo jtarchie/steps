@@ -523,6 +523,12 @@
               "type": "string",
               "description": "oauth only, requires client_id. Names the environment variable holding the registered client's secret."
             },
+            "callback_port": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 65535,
+              "description": "oauth only. Pins the loopback port `steps mcp login` receives the browser redirect on, so http://127.0.0.1:<port>/callback can be pre-registered with an authorization server that requires an exact redirect URI match. Defaults to an ephemeral port."
+            },
             "scopes": {
               "type": "array",
               "items": {

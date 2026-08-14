@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -40,7 +41,7 @@ import (
 // oauthTokenSource in oauth.go, which is what run/watch actually use — this
 // function is never called from there, only from the CLI's login command).
 func Login(ctx context.Context, srv config.MCPServer, open func(url string) error) error {
-	cb, err := newLoopbackCallback(ctx)
+	cb, err := newLoopbackCallback(ctx, srv.Auth.CallbackPort)
 	if err != nil {
 		return err
 	}
@@ -385,19 +386,38 @@ func (cb *loopbackCallback) deliver(res callbackResult) bool {
 	}
 }
 
-func newLoopbackCallback(ctx context.Context) (*loopbackCallback, error) {
+// newLoopbackCallback binds the local port the browser redirect comes back
+// to. Port 0 — an ephemeral port — is the default because it always binds and
+// never collides, which is what RFC 8252 §7.3 asks authorization servers to
+// allow for exactly this reason.
+//
+// The MCP authorization spec asks for the opposite ("authorization servers
+// MUST validate exact redirect URIs against pre-registered values"), and a
+// server enforcing that cannot be logged into with a port that changes every
+// run: nothing registered in a dashboard will ever match. auth.callback_port
+// pins it for those, which are largely the same servers auth.client_id exists
+// for. A pinned port can be in use, and that error is worth reporting plainly
+// rather than falling back to an ephemeral one that produces a redirect URI
+// mismatch further along, where the cause is no longer visible.
+func newLoopbackCallback(ctx context.Context, port int) (*loopbackCallback, error) {
 	var lc net.ListenConfig
 
-	listener, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+	listener, err := lc.Listen(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if err != nil {
+		if port != 0 {
+			return nil, fmt.Errorf("mcp: listen for oauth callback on auth.callback_port %d: %w", port, err)
+		}
+
 		return nil, fmt.Errorf("mcp: listen for oauth callback: %w", err)
 	}
 
-	port := listener.Addr().(*net.TCPAddr).Port //nolint:forcetypeassert // net.Listen("tcp", ...) always yields a *net.TCPAddr
+	// Read back rather than reused: with port 0 the kernel chose it, and with
+	// a pinned port this is the same number, so one path builds the URL.
+	bound := listener.Addr().(*net.TCPAddr).Port //nolint:forcetypeassert // net.Listen("tcp", ...) always yields a *net.TCPAddr
 
 	cb := &loopbackCallback{
 		listener:    listener,
-		redirectURL: fmt.Sprintf("http://127.0.0.1:%d/callback", port),
+		redirectURL: fmt.Sprintf("http://127.0.0.1:%d/callback", bound),
 		result:      make(chan callbackResult, 1),
 	}
 
