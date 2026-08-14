@@ -30,6 +30,19 @@ type Problem struct {
 	Target string
 	// Detail says what about it is wrong, and where possible how to fix it.
 	Detail string
+	// Transient marks a problem that WAITING could fix — a server that did
+	// not answer, a token that needs refreshing — as opposed to one no amount
+	// of time will change, like a tool the server does not expose or required
+	// arguments the pipeline never sends.
+	//
+	// It exists because the same problem deserves opposite reactions from the
+	// two callers. `steps run` refuses either way: a person is waiting, and
+	// starting a run that cannot finish wastes their time and money. `steps
+	// watch` is a daemon, and quitting because a VPN was not up yet — or
+	// because a token needed the refresh the next poll would have done — is
+	// how a watcher that should have recovered on its own ends up dead all
+	// weekend.
+	Transient bool
 }
 
 func (p Problem) Error() string { return p.Target + ": " + p.Detail }

@@ -213,12 +213,34 @@ func preflightTriggers(ctx context.Context, cfg *config.Config, resources []stri
 		return nil
 	}
 
-	var out strings.Builder
+	// A watcher is a daemon, so only a problem that WAITING cannot fix earns
+	// an exit. A server that did not answer, or a token a refresh would have
+	// renewed, is said once and then left to the poll loop, which retries by
+	// its very nature — quitting there is how a watcher that should have come
+	// back on its own is found dead on Monday. A tool the server does not
+	// expose still exits: no interval will grow it one.
+	var (
+		out      strings.Builder
+		terminal bool
+	)
 
 	out.WriteString("watch: preflight failed, nothing was polled:")
 
 	for _, problem := range problems {
+		if problem.Transient {
+			fmt.Printf("watch: %s: %s (transient — polling anyway)\n", problem.Target, problem.Detail)
+			slog.Warn("watch.preflight_transient", "target", problem.Target, "detail", problem.Detail)
+
+			continue
+		}
+
+		terminal = true
+
 		fmt.Fprintf(&out, "\n  %s: %s", problem.Target, problem.Detail)
+	}
+
+	if !terminal {
+		return nil
 	}
 
 	return errors.New(out.String())

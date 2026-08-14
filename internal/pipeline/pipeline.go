@@ -932,27 +932,30 @@ func runGetStep(
 
 		publishStepStarted(ctx, jobName, i, step)
 
+		// Taken BEFORE the build, not after it succeeds — Concourse's own
+		// rule, and the reason to follow it rather than reason from first
+		// principles. NextEveryVersion (atc/db/versions_db.go) reads
+		// build_resource_config_version_inputs, a table of the versions a
+		// build was CREATED with, and applies no filter on build status at
+		// all: a version consumed by a failed build is consumed, and the
+		// cursor moves on. Re-running one is an explicit act there
+		// (concourse/concourse#413), which here is --force or --resume.
+		//
+		// The tempting alternative — take it only on success, so a failure is
+		// retried — was tried and reverted. It makes a version that fails
+		// forever re-run forever, on every trigger, with an agent's bill
+		// attached, and it means "every version, once" quietly is not true.
+		cursor.take(ctx, st, jobName, resource.Name, version)
+
 		err = runTriggeredBuild(ctx, cfg, jobName, i, step, *resource, *resourceType, version, remainder, pinned, provider, st, skippable, node, chainUnskippable, cache, cursor)
 
 		publishStepFinished(ctx, jobName, i, step, hash, getStarted, err)
 
-		// Consumed on SUCCESS only — a deliberate divergence from Concourse's
-		// cursor, which advances regardless of build status (see
-		// docs/conformance.md). Two reasons. The merkle cache already retries
-		// a failed chain and skips a succeeded one, so consuming a failure
-		// would make version: every behave differently from every other
-		// re-run in the system. And the failure modes are lopsided: a version
-		// dropped on a transient error is recoverable only with --force,
-		// which re-runs the versions that already succeeded too (posting the
-		// same Slack reply twice, in the case this was built for), while a
-		// version retried too often is bounded by max_consecutive_failures.
 		if err != nil {
 			buildErrs = append(buildErrs, fmt.Errorf("step %d (get %q) version %v: %w", i, step.Get, version, err))
 
 			continue
 		}
-
-		cursor.take(ctx, st, jobName, resource.Name, version)
 	}
 
 	return errors.Join(buildErrs...)

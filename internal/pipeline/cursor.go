@@ -14,11 +14,12 @@ package pipeline
 // layer up, in deciding which versions to fan out over at all.
 //
 // Concourse does the same thing with a per-job cursor over versions the job
-// has not built (atc/db/versions_db.go's NextEveryVersion) — with one
-// deliberate difference here: Concourse's cursor advances regardless of build
-// status, this one advances only on success, so a failed version is retried
-// exactly as the merkle cache retries any failed chain. See docs/conformance.md
-// for the divergence and runGetStep for the reasoning.
+// has not built: NextEveryVersion (atc/db/versions_db.go) reads the versions a
+// build was CREATED with (build_resource_config_version_inputs) and filters on
+// build status nowhere, so a version taken by a failed build stays taken. This
+// follows that exactly — see runGetStep, and docs/conformance.md for the one
+// divergence that remains (steps keeps no version history, so this can only
+// suppress a version, never resurrect one that scrolled out of view).
 
 import (
 	"context"
@@ -126,20 +127,17 @@ func (c *versionCursor) has(resourceName string, version map[string]any) bool {
 	return c.consumed[resourceName][key]
 }
 
-// take records that this job is DONE with a version — called only where the
-// version's build succeeded (or was skipped because an identical chain already
-// had). A failed version is deliberately left unconsumed so it is retried,
-// which is what the merkle cache does for every other kind of re-run; see the
-// call site in runGetStep for why that beats Concourse's advance-regardless
-// cursor here.
+// take records that this job has taken a version — called as its build
+// STARTS, whatever that build then does, which is Concourse's rule (see the
+// call site in runGetStep for the source it comes from).
 //
 // It records on a context detached from the build's, so a version whose build
-// finished during a shutdown is not re-taken later purely because the process
-// was on its way out.
+// was already under way is not handed out again purely because the process was
+// on its way out.
 //
-// Best-effort by design: failing to record must not turn a succeeded build
-// into a failed one. The cost of a lost row is that the version is taken once
-// more later, which is the direction this errs on everywhere.
+// Best-effort by design: failing to record must not turn a running build into
+// a failed one. The cost of a lost row is that the version is taken once more
+// later, which is the direction this errs on everywhere.
 func (c *versionCursor) take(ctx context.Context, st *store.Store, jobName, resourceName string, version map[string]any) {
 	if c == nil {
 		return

@@ -105,12 +105,23 @@ jobs:
 		t.Errorf("outcome.Classify(runErr) = %q, want %q", got, outcome.Failed)
 	}
 
-	// A second invocation (skipCache=false) must skip the already-succeeded
-	// v1/v3 chains and retry only v2 — proving the fan-out fix composes
-	// correctly with the merkle skip-cache instead of just asserting it in
-	// prose.
+	// A second invocation runs NOTHING: v1 and v3 succeeded, and v2 — the one
+	// that failed — has been taken all the same.
+	//
+	// This is the half that used to assert the opposite (that v2 is retried),
+	// which was this repo's own interpretation rather than Concourse's.
+	// NextEveryVersion picks the next version above the highest check_order in
+	// build_resource_config_version_inputs — the versions a build was CREATED
+	// with — and applies no filter on build status anywhere, so a version
+	// consumed by a failed build is consumed. Re-running one is deliberate and
+	// manual there (concourse/concourse#413) as it is here: --force, --resume,
+	// or a new version.
 	_ = RunJob(ctx, cfg, job, nil, provider, st, false)
-	assertConformanceLineCount(t, taskCounter, 4)
+	assertConformanceLineCount(t, taskCounter, 3)
+
+	// And --force is that manual act: it re-runs all three.
+	_ = RunJob(ctx, cfg, job, nil, provider, st, true)
+	assertConformanceLineCount(t, taskCounter, 6)
 }
 
 func assertConformanceLineCount(t *testing.T, path string, want int) {

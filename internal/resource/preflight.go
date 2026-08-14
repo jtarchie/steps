@@ -138,9 +138,14 @@ func preflightResource(
 
 	tools, err := listToolsCached(ctx, cfg, mcp.Server, settings)
 	if err != nil {
+		// Transient: not answering is a fact about right now. The stage
+		// problems below are facts about the pipeline — a tool that is not
+		// there, arguments that cannot satisfy it — and no amount of waiting
+		// changes either one.
 		return []config.Problem{{
-			Target: fmt.Sprintf("mcp %q", mcp.Server),
-			Detail: fmt.Sprintf("resource %q could not reach its server: %v", name, err),
+			Target:    fmt.Sprintf("mcp %q", mcp.Server),
+			Detail:    fmt.Sprintf("resource %q could not reach its server: %v", name, err),
+			Transient: true,
 		}}
 	}
 

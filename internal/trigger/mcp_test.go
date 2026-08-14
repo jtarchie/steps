@@ -162,3 +162,40 @@ func TestPollOnceMCPBackedResource(t *testing.T) {
 		t.Fatalf("changed poll enqueued %v, want [build]", enqueued)
 	}
 }
+
+// TestWatchStartsDespiteATransientOutage is the other half of the rule the
+// test above pins. A tool the server does not expose is fatal: no interval
+// grows one. A server that does not answer is NOT — a watcher that quits
+// because a VPN was not up yet, or because a token needed the refresh the
+// next poll would have done, is found dead on Monday having recovered from
+// nothing.
+func TestWatchStartsDespiteATransientOutage(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// A port nothing is listening on: the shape of every outage worth
+	// surviving — unreachable now, fine in a minute.
+	cfg := loadConfig(t, dir, mcpTriggerPipeline("http://127.0.0.1:1/mcp"))
+	st := mustOpenStore(t, dir)
+
+	provider, err := workspace.NewProvider(cfg.Workspace, false)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+
+	defer func() { _ = provider.Close() }()
+
+	// Cancelled immediately: Watch must get PAST preflight and into its loop,
+	// where the cancellation stops it. A preflight exit would return the
+	// unreachable-server error instead.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Watch gets past preflight and then stops on the cancelled context, so
+	// the assertion is about WHICH error comes back: anything but the
+	// preflight refusal means the unreachable server did not stop it.
+	err = Watch(ctx, cfg, provider, st, nil, time.Minute, 1, false, "")
+	if err != nil && strings.Contains(err.Error(), "preflight") {
+		t.Fatalf("Watch: %v; a transient outage must not stop the watcher starting", err)
+	}
+}
