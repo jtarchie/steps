@@ -787,3 +787,87 @@ func TestLoginRejectsAMismatchedIss(t *testing.T) {
 		t.Fatalf("Login error does not name the unexpected issuer: %v", err)
 	}
 }
+
+// TestResolveIss covers the cases the two Login tests above cannot reach,
+// because both run against a fake whose two discoveries agree.
+//
+// The interesting axis is issAdvertised. It used to select whether the issuer
+// was compared AT ALL — an advertised flag handed the decision to the SDK,
+// which checks against the authorization server IT resolved rather than the
+// one this flow registered a client with. Those are the same server right up
+// until the moment it matters.
+func TestResolveIss(t *testing.T) {
+	t.Parallel()
+
+	const issuer = "https://as.example"
+
+	tests := []struct {
+		name      string
+		req       authRequest
+		got       string
+		want      string
+		wantError bool
+	}{{
+		name: "advertised and matching is forwarded for the SDK to check too",
+		req:  authRequest{issuer: issuer, issAdvertised: true},
+		got:  issuer,
+		want: issuer,
+	}, {
+		// Previously returned the attacker's iss unexamined, on the assumption
+		// the SDK held the same expected issuer.
+		name:      "advertised and mismatched is refused here",
+		req:       authRequest{issuer: issuer, issAdvertised: true},
+		got:       "https://attacker.example",
+		wantError: true,
+	}, {
+		name: "unadvertised and matching is verified then withheld",
+		req:  authRequest{issuer: issuer},
+		got:  issuer,
+		want: "",
+	}, {
+		name:      "unadvertised and mismatched is refused",
+		req:       authRequest{issuer: issuer},
+		got:       "https://attacker.example",
+		wantError: true,
+	}, {
+		name: "absent iss stays absent",
+		req:  authRequest{issuer: issuer},
+		got:  "",
+		want: "",
+	}, {
+		// RFC 8414 treats these as the same server; an exact compare failed
+		// the login outright and blamed the server for a mix-up attack.
+		name: "trailing slash on the discovered issuer is not a mix-up",
+		req:  authRequest{issuer: issuer + "/"},
+		got:  issuer,
+		want: "",
+	}, {
+		name: "trailing slash on the returned iss is not a mix-up",
+		req:  authRequest{issuer: issuer, issAdvertised: true},
+		got:  issuer + "/",
+		want: issuer + "/",
+	}}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := test.req.resolveIss(test.got)
+			if test.wantError {
+				if err == nil {
+					t.Fatalf("resolveIss(%q) = %q, want an error", test.got, got)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("resolveIss(%q): %v", test.got, err)
+			}
+
+			if got != test.want {
+				t.Fatalf("resolveIss(%q) = %q, want %q", test.got, got, test.want)
+			}
+		})
+	}
+}

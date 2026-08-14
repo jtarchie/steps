@@ -196,7 +196,29 @@ func preregisteredClient(srv config.MCPServer) (*oauthex.ClientRegistrationRespo
 // this package decides rather than the SDK: the scopes to request, and how
 // to treat the iss that comes back (see fetch).
 func buildAuthorizationHandler(cb *loopbackCallback, open func(string) error, reg *oauthex.ClientRegistrationResponse, req authRequest) (*auth.AuthorizationCodeHandler, error) {
-	preregistered := &oauthex.ClientCredentials{ClientID: reg.ClientID}
+	preregistered := &oauthex.ClientCredentials{
+		ClientID: reg.ClientID,
+		// Issuer is what binds these credentials to the authorization server
+		// they were obtained from, and leaving it unset is what let the two
+		// discoveries below drift apart in silence.
+		//
+		// discoverAndRegister resolves an authorization server from srv's
+		// well-known paths; the SDK then resolves one AGAIN inside Authorize,
+		// preferring the resource_metadata URL named by the 401 challenge
+		// (auth/authorization_code.go's protectedResourceMetadataURLs). A
+		// server that answers the challenge with one authorization server
+		// while publishing another therefore gets a client registered — and a
+		// client secret sent — at the first, and the code exchanged at the
+		// second, with the token file recording the first's token endpoint.
+		// Every later refresh then goes to a server that never issued the
+		// token, fails, and is reported as needing a login that will
+		// "succeed" and leave the same state again.
+		//
+		// The SDK already has the check that catches this and only runs it
+		// when Issuer is non-empty. Setting it costs one field and converts
+		// the whole divergence from silent to a named error.
+		Issuer: req.issuer,
+	}
 	if reg.ClientSecret != "" {
 		preregistered.ClientSecretAuth = &oauthex.ClientSecretAuth{ClientSecret: reg.ClientSecret}
 	}
@@ -457,19 +479,42 @@ type authRequest struct {
 // that would only reject it; an iss that does NOT match is exactly the
 // attack the parameter exists to catch, and fails the login by name.
 func (a authRequest) resolveIss(got string) (string, error) {
-	if a.issAdvertised || got == "" {
-		// The SDK's own check is correct and sufficient here: it has the same
-		// flag and the same expected issuer.
-		return got, nil
-	}
-
-	if got != a.issuer {
+	// Checked before the advertised split, not inside one branch of it. The
+	// SDK has the same flag and an expected issuer, but not necessarily the
+	// SAME expected issuer — it rediscovers, and may land on a different
+	// authorization server (see buildAuthorizationHandler). Deferring to it
+	// on the advertised path meant the one case where the two disagree was
+	// the one case nothing compared against the issuer this flow actually
+	// registered with.
+	if got != "" && !issuersEqual(got, a.issuer) {
 		return "", fmt.Errorf(
 			"authorization response came from issuer %q, but this flow was started against %q — refusing to exchange the code",
 			got, a.issuer)
 	}
 
+	if a.issAdvertised {
+		// Forwarded so the SDK checks it too, against whatever it resolved. If
+		// that differs from what this flow registered against, its comparison
+		// is the one that fails, by name, instead of the code being exchanged
+		// somewhere unexpected.
+		return got, nil
+	}
+
+	// Verified above and withheld here: the SDK rejects an iss it did not see
+	// advertised, which is the Metabase case in the doc comment.
 	return "", nil
+}
+
+// issuersEqual compares two OAuth 2.0 issuer identifiers the way the SDK does
+// (internal/authutil.IssuersEqual): ignoring a trailing slash, which
+// RFC 8414 treats as the same server.
+//
+// Reimplemented rather than imported because the SDK keeps it in internal/.
+// An exact == here fails a login outright, accusing the server of a mix-up
+// attack, whenever protected-resource metadata lists "https://as.example/"
+// and the redirect carries iss=https://as.example.
+func issuersEqual(a, b string) bool {
+	return strings.TrimSuffix(a, "/") == strings.TrimSuffix(b, "/")
 }
 
 // withScopes replaces the scope parameter of the authorization URL the SDK
