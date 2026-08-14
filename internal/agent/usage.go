@@ -92,8 +92,13 @@ type StepUsage struct {
 // would be misleading — the step that trips it is rarely the one that cost the
 // most. Steps keeps the per-step breakdown for exactly that reason.
 type RunUsage struct {
-	mu     sync.Mutex
-	steps  []StepUsage
+	mu    sync.Mutex
+	steps []StepUsage
+	// prior is what EARLIER attempts of this same run already spent, read
+	// back from agent_usage when resuming (see NewResumedRunUsage). It counts
+	// against the ceiling but is not a step of this invocation, so it is held
+	// apart from steps rather than faked in as one.
+	prior  int
 	budget int
 }
 
@@ -101,6 +106,25 @@ type RunUsage struct {
 // (0 for none).
 func NewRunUsage(budgetTokens int) *RunUsage {
 	return &RunUsage{budget: budgetTokens}
+}
+
+// NewResumedRunUsage is NewRunUsage for a run continuing a previous attempt:
+// prior is what that attempt already spent.
+//
+// Without it a budget is a per-ATTEMPT ceiling wearing the name of a per-run
+// one. A job stopped at 7M of an 8M allowance resumed with a fresh 8M, so
+// each resume bought another full budget — and the runs most likely to need
+// resuming are the expensive ones, which is where it costs most.
+func NewResumedRunUsage(budgetTokens, prior int) *RunUsage {
+	return &RunUsage{budget: budgetTokens, prior: prior}
+}
+
+// Prior is what earlier attempts of this run spent, 0 for a fresh run.
+func (u *RunUsage) Prior() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	return u.prior
 }
 
 // Add records one step's spend and reports whether the job's ceiling is now
@@ -167,8 +191,11 @@ func (u *RunUsage) Budget() int {
 	return u.budget
 }
 
+// total is this run's cumulative spend: what earlier attempts spent plus what
+// this invocation has. Every ceiling check reads through here, so a resumed
+// run's budget picks up where the last attempt left it rather than restarting.
 func (u *RunUsage) total() int {
-	sum := 0
+	sum := u.prior
 	for _, step := range u.steps {
 		sum += step.Total
 	}

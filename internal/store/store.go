@@ -1434,6 +1434,28 @@ func (s *Store) RecordAgentUsage(ctx context.Context, usage AgentUsage) error {
 	return nil
 }
 
+// RunTokensSpent is the total tokens already recorded against a run.
+//
+// Read when RESUMING, so a job budget continues from what earlier attempts of
+// the same run spent instead of restarting at zero. Summed in SQL rather than
+// by walking RunUsage: the caller wants one number, and a resumed run may
+// carry hundreds of step rows.
+//
+// A run with no agent steps yet returns 0, which is also what a fresh run's
+// id yields — both mean "nothing spent", so there is nothing to distinguish.
+func (s *Store) RunTokensSpent(ctx context.Context, runID string) (int, error) {
+	var total int
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(total_tokens), 0) FROM agent_usage WHERE run_id = ?
+	`, runID).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("could not read spend for run %q: %w", runID, err)
+	}
+
+	return total, nil
+}
+
 // RunUsage is every agent step's spend for one run, in step order.
 func (s *Store) RunUsage(ctx context.Context, runID string) ([]AgentUsage, error) {
 	rows, err := s.db.QueryContext(ctx, `

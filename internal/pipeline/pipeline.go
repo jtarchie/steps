@@ -170,7 +170,12 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	// Account for what this job's agent steps spend, and enforce the job's
 	// cumulative ceiling if it set one. Installed here, not per step, because
 	// a job budget is by definition the sum across steps.
-	usage := agent.NewRunUsage(jobBudgetTokens(job))
+	//
+	// A RESUMED run continues from what its earlier attempts already spent
+	// (agent_usage, keyed by the run id this invocation reuses). Starting at
+	// zero would make budget: a per-attempt ceiling wearing the name of a
+	// per-run one, and buy another full allowance on every resume.
+	usage := agent.NewResumedRunUsage(jobBudgetTokens(job), priorSpend(ctx, st, resume))
 	ctx = agent.WithRunUsage(ctx, usage)
 
 	// The same ceiling in the other unit. Installed alongside the budget for
@@ -1779,6 +1784,32 @@ func jobBudgetTokens(job *config.Job) int {
 	return job.Budget.Tokens
 }
 
+// priorSpend is what earlier attempts of this run already spent, for a resumed
+// run; 0 for a fresh one.
+//
+// Best-effort by design: a store that cannot answer must not stop the run.
+// Failing open costs at most one budget's overshoot on a resume, where failing
+// closed would refuse to continue work that has already been paid for.
+func priorSpend(ctx context.Context, st *store.Store, resume *resumeState) int {
+	if st == nil || resume == nil || !resume.resuming {
+		return 0
+	}
+
+	spent, err := st.RunTokensSpent(ctx, resume.id)
+	if err != nil {
+		slog.Warn("run.resume.prior_spend_unavailable", "run", resume.id, "error", err,
+			"detail", "the job budget will start from zero for this attempt")
+
+		return 0
+	}
+
+	if spent > 0 {
+		slog.Info("run.resume.prior_spend", "run", resume.id, "tokens", spent)
+	}
+
+	return spent
+}
+
 // reportJobUsage prints what a job's agent steps cost, with the per-step
 // breakdown.
 //
@@ -1789,19 +1820,33 @@ func jobBudgetTokens(job *config.Job) int {
 // steps prints nothing.
 func reportJobUsage(jobName string, usage *agent.RunUsage) {
 	steps := usage.Steps()
-	if len(steps) == 0 {
+	prior := usage.Prior()
+
+	if len(steps) == 0 && prior == 0 {
 		return
 	}
 
 	total := usage.Total()
 
-	fmt.Printf("usage: %s tokens across %d agent step(s)\n", humanCount(total), len(steps))
+	// The per-step lines below are THIS attempt's, so a resumed run says what
+	// the earlier attempts contributed rather than printing a total the
+	// listed steps do not add up to.
+	if prior > 0 {
+		fmt.Printf("usage: %s tokens across %d agent step(s) this attempt, %s total for the run (%s from earlier attempts)\n",
+			humanCount(total-prior), len(steps), humanCount(total), humanCount(prior))
+	} else {
+		fmt.Printf("usage: %s tokens across %d agent step(s)\n", humanCount(total), len(steps))
+	}
 
 	for _, step := range steps {
 		fmt.Printf("  %-16s %s\n", step.Step, humanCount(step.Total))
 	}
 
 	fields := []any{"job", jobName, "total_tokens", total, "agent_steps", len(steps)}
+	if prior > 0 {
+		fields = append(fields, "prior_tokens", prior, "attempt_tokens", total-prior)
+	}
+
 	if budget := usage.Budget(); budget > 0 {
 		fields = append(fields, "budget_tokens", budget)
 	}
