@@ -130,7 +130,7 @@ jobs:
 // would look like a ceiling and be none.
 func TestAcrossBudgetRejectsWhatItCannotEnforce(t *testing.T) {
 	cases := []struct {
-		name, step, wantErr string
+		name, step, extraAgent, wantErr string
 	}{
 		{
 			name: "on a step with no across:",
@@ -153,6 +153,35 @@ func TestAcrossBudgetRejectsWhatItCannotEnforce(t *testing.T) {
       usd: 1.5`,
 			wantErr: "budget.usd is not valid on an across: step",
 		},
+		{
+			// Budget is one type shared by agents, jobs and across: steps, so
+			// reserve_per_cell parses in all three positions. Only the block
+			// admits anything, so the other two are rejected rather than
+			// reading like configuration that binds nothing.
+			name: "a reservation on an agent, which admits nothing",
+			step: `  - agent: reserver
+    inputs: []
+    prompt: hi`,
+			extraAgent: `- name: reserver
+  source: { model: openai/test-model, api_key_env: STEPS_TEST_AGENT_API_KEY }
+  budget:
+    tokens: 500
+    reserve_per_cell: 100`,
+			wantErr: "budget.reserve_per_cell is only valid on an across: step",
+		},
+		{
+			name: "a negative reservation",
+			step: `  - across:
+    - var: item
+      values: [a, b]
+    agent: reviewer
+    inputs: []
+    prompt: "{{ .vars.item }}"
+    budget:
+      tokens: 500
+      reserve_per_cell: -1`,
+			wantErr: "budget.reserve_per_cell must be a positive number of tokens",
+		},
 	}
 
 	for _, tc := range cases {
@@ -162,6 +191,7 @@ func TestAcrossBudgetRejectsWhatItCannotEnforce(t *testing.T) {
 agents:
 - name: reviewer
   source: { model: openai/test-model, api_key_env: STEPS_TEST_AGENT_API_KEY }
+`+tc.extraAgent+`
 
 jobs:
 - name: fan
@@ -226,5 +256,100 @@ jobs:
 
 	if got := fake.requestCount(); got >= 6 {
 		t.Errorf("every cell ran (%d requests); the ceiling never bound under concurrency", got)
+	}
+}
+
+// TestAcrossBudgetBindsAtFullWidth is the case a spent()-only ceiling could
+// never bind, and the reason budget.reserve_per_cell: exists.
+//
+// max_in_flight covers every cell, so newLimiter hands back a limiter that
+// never blocks and no cell finishes before the last one is admitted. Without a
+// reservation every admission reads a total of ~0 and all six cells start —
+// the block's ceiling bounding precisely nothing. Reserving 400 per cell means
+// the 700 allowance is consumed after two, and the third is refused.
+func TestAcrossBudgetBindsAtFullWidth(t *testing.T) {
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	dir := t.TempDir()
+	fake := newRepeatingFakeLLM(t, says("reviewed").spending(400))
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+workspace:
+  strategy: copy
+
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: reviewer
+  source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
+
+jobs:
+- name: fan
+  plan:
+  - across:
+    - var: item
+      values: [a, b, c, d, e, f]
+    max_in_flight: 6
+    budget:
+      tokens: 700
+      reserve_per_cell: 400
+    agent: reviewer
+    inputs: []
+    prompt: "Review {{ .vars.item }}"
+`, fake.URL+"/v1/"))
+
+	mustRun(t, path)
+
+	// Two admitted (0 + 400 reserved, then 400 + 400 >= 700 refuses the third),
+	// whichever order the cells happen to finish in.
+	if got := fake.requestCount(); got >= 6 {
+		t.Errorf("every cell ran (%d requests); the ceiling did not bind at a width covering the matrix", got)
+	}
+}
+
+// TestAcrossBudgetReservesTheCellAgentsOwnBudget proves the reservation does
+// not require new config: an agent that already declares what one invocation
+// may cost supplies the number, so a block inherits a binding ceiling without
+// naming reserve_per_cell: at all.
+func TestAcrossBudgetReservesTheCellAgentsOwnBudget(t *testing.T) {
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	dir := t.TempDir()
+	fake := newRepeatingFakeLLM(t, says("reviewed").spending(400))
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+workspace:
+  strategy: copy
+
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: reviewer
+  source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
+  budget:
+    tokens: 400
+
+jobs:
+- name: fan
+  plan:
+  - across:
+    - var: item
+      values: [a, b, c, d, e, f]
+    max_in_flight: 6
+    budget:
+      tokens: 700
+    agent: reviewer
+    inputs: []
+    prompt: "Review {{ .vars.item }}"
+`, fake.URL+"/v1/"))
+
+	mustRun(t, path)
+
+	if got := fake.requestCount(); got >= 6 {
+		t.Errorf("every cell ran (%d requests); the cell agent's own budget.tokens was not used as the reservation", got)
 	}
 }

@@ -166,7 +166,7 @@ func runAcrossCells(
 
 	var failures []error
 
-	spend := newBlockBudget(ctx, step)
+	spend := newBlockBudget(ctx, cfg, step, cells)
 
 	for index, cell := range cells {
 		if stopAdmitting(ctx, jobName, spend, index, len(cells)) {
@@ -174,6 +174,11 @@ func runAcrossCells(
 		}
 
 		skipped, err := runAcrossCell(ctx, cfg, jobName, i, cell, bw, st, cellParent)
+
+		// Settled here rather than deferred: the serial walk holds one cell at
+		// a time, and its spend is in the accumulator the moment this returns.
+		spend.settle()
+
 		if err != nil {
 			failures = append(failures, fmt.Errorf("cell %q: %w", executedStepName(cell), err))
 
@@ -216,7 +221,7 @@ func runAcrossCellsConcurrently(
 		results[index] = branchResult{index: index, name: executedStepName(cells[index])}
 	}
 
-	spend := newBlockBudget(ctx, step)
+	spend := newBlockBudget(ctx, cfg, step, cells)
 	spend.warnIfUnbindable(jobName, step.MaxInFlight, len(cells))
 
 	for index := range cells {
@@ -248,6 +253,10 @@ func runAcrossCellsConcurrently(
 		go func() {
 			defer wg.Done()
 			defer slot.release()
+			// Runs before the slot is released (defers are LIFO), so the next
+			// cell admitted in the parent reads a settled reservation and this
+			// cell's real spend rather than both at once.
+			defer spend.settle()
 
 			// Cells finish in whatever order they finish, so recording as they
 			// go would make assert.execution nondeterministic. Each records
@@ -290,13 +299,31 @@ func runAcrossCellsConcurrently(
 // sub-agents for free, since those roll up the same way.
 //
 // A zero budget (the common case) is a nil ceiling that never trips.
+//
+// Admission RESERVES against the ceiling rather than only reading what
+// finished cells reported. spent() alone can see a cell's cost only after it
+// ends, so the first max_in_flight cells were always admitted against a total
+// of ~0 — and at a width covering every cell there is no serialization point
+// anywhere in the block, so the ceiling bounded nothing at all. Reserving on
+// admit and settling on completion makes overshoot a function of how wrong
+// the reservation is, instead of how many cells got a free pass.
 type blockBudget struct {
 	usage   *agent.RunUsage
 	start   int
 	ceiling int
+	// reserve is what one unfinished cell is assumed to cost; 0 means no
+	// reservation source was found, which reduces admission to exactly the
+	// spent()-only rule this had before.
+	reserve int
+
+	// mu guards reserved alone. spent() reads through RunUsage, which has its
+	// own lock; reserved is written by finishing CELL goroutines and read by
+	// the admitting parent, so it needs one of its own.
+	mu       sync.Mutex
+	reserved int
 }
 
-func newBlockBudget(ctx context.Context, step config.Step) *blockBudget {
+func newBlockBudget(ctx context.Context, cfg *config.Config, step config.Step, cells []config.Step) *blockBudget {
 	ceiling := stepBudgetTokens(step)
 	if ceiling <= 0 {
 		return &blockBudget{}
@@ -310,48 +337,135 @@ func newBlockBudget(ctx context.Context, step config.Step) *blockBudget {
 		return &blockBudget{}
 	}
 
-	return &blockBudget{usage: usage, start: usage.Total(), ceiling: ceiling}
+	return &blockBudget{
+		usage: usage, start: usage.Total(), ceiling: ceiling,
+		reserve: cellReserve(cfg, step, cells),
+	}
 }
 
-// exhausted reports whether the block has spent its allowance.
+// cellReserve is what admission assumes one unfinished cell will spend, in
+// precedence order: the block's own reserve_per_cell:, then the cell agent's
+// budget.tokens (the author already declared what one invocation may cost),
+// then nothing — which leaves the block admitting exactly as it did before
+// reservations existed, warning included.
+//
+// The block's own field wins, which inverts the order issue #62 proposed. Its
+// way round, an agent with a budget.tokens would silently shadow a
+// reserve_per_cell: written right there on the block — config that reads like
+// it binds something and does not, which is the shape this codebase rejects
+// at load everywhere else. The explicit, more local declaration wins instead,
+// and the common case the issue is really describing (an agent budget, no
+// reserve_per_cell:) is unaffected either way.
+//
+// Resolved ONCE for the block rather than per cell: agent: is not among the
+// fields a matrix renders per cell (see config.renderableFields), so every
+// cell of a block resolves to the same agent and the same ceiling.
+//
+// A CLI agent yields nothing here. Its ceiling is budget.usd, which meters
+// dollars inside its own subprocess and cannot be compared against a token
+// allowance — so such a block needs an explicit reserve_per_cell: to bind.
+func cellReserve(cfg *config.Config, step config.Step, cells []config.Step) int {
+	if step.Budget != nil && step.Budget.ReservePerCell > 0 {
+		return step.Budget.ReservePerCell
+	}
+
+	if len(cells) == 0 {
+		return 0
+	}
+
+	// A try: cell keeps the agent on the step it wraps, not on the wrapper.
+	body := cells[0]
+	if body.Try != nil {
+		body = *body.Try
+	}
+
+	if body.Agent == "" {
+		return 0
+	}
+
+	ri, err := cfg.ResolveAgentInvocation(body)
+	if err != nil {
+		// An unresolvable agent is a run-time failure the cell itself will
+		// report far more clearly; refusing to reserve here just leaves the
+		// block admitting as it always did.
+		return 0
+	}
+
+	return ri.BudgetTokens
+}
+
+// admit reports whether another cell may start, taking its reservation when
+// it may.
 //
 // Checked BEFORE a cell is started, never mid-cell: a cell that has begun runs
 // to completion and keeps what it recorded. That is the whole difference
 // between this and the job ceiling — the job's is a backstop and fails, this
 // one stops handing out new work.
-func (b *blockBudget) exhausted() bool {
-	return b.usage != nil && b.spent() >= b.ceiling
+//
+// Refusing takes no reservation, so a refused cell cannot hold allowance the
+// cells still running might come in under.
+func (b *blockBudget) admit() bool {
+	if b.usage == nil {
+		return true
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.spent()+b.reserved >= b.ceiling {
+		return false
+	}
+
+	b.reserved += b.reserve
+
+	return true
+}
+
+// settle releases a finished cell's reservation. Its real spend is already in
+// the job accumulator by now — stepUsage.finish rolls it up before the
+// conversation returns — so spent() picks it up with no double count. Calling
+// this any earlier would open a window where neither the reservation nor the
+// actual spend is counted, and a cell could be admitted against it.
+func (b *blockBudget) settle() {
+	if b.usage == nil {
+		return
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.reserved -= b.reserve
 }
 
 // warnIfUnbindable says so when this block's width makes its own ceiling
 // decorative.
 //
-// An admission-time ceiling can only see what FINISHED cells spent, and a cell
-// only finishes once a slot is contended for. So when max_in_flight is at or
-// above the cell count there is no serialization point anywhere in the block:
-// newLimiter hands out a limiter that never blocks, every cell is admitted
-// against a total of ~0, and the budget bounds precisely nothing. That is
-// inherent to bounding what gets STARTED rather than what a running cell may
-// cost — not something a different check order fixes — so the honest move is
-// to be loud about it rather than let an author believe a ceiling is in force.
+// With a reservation this cannot happen: admission consumes the allowance up
+// front, so the ceiling binds at any width. The warning survives for the one
+// case that still has the old hole — a budget with NO reservation source (the
+// cell's agent declares no budget.tokens and the block sets no
+// reserve_per_cell) at a width covering every cell. There, admission still
+// only sees what finished cells reported, no cell ever finishes before the
+// last is admitted, and the ceiling bounds precisely nothing.
 func (b *blockBudget) warnIfUnbindable(jobName string, maxInFlight, cells int) {
 	if !b.unbindable(maxInFlight, cells) {
 		return
 	}
 
-	fmt.Printf("budget: warning — max_in_flight (%d) covers all %d cells, so this block's budget of %s tokens cannot stop anything\n",
+	fmt.Printf("budget: warning — max_in_flight (%d) covers all %d cells and no reservation is set, so this block's budget of %s tokens cannot stop anything\n",
 		maxInFlight, cells, humanCount(b.ceiling))
 
 	slog.Warn("across.budget.unbindable",
 		"job", jobName, "max_in_flight", maxInFlight, "cells", cells, "budget_tokens", b.ceiling,
-		"detail", "every cell is admitted before any has reported usage; lower max_in_flight, or rely on the job budget as the backstop")
+		"detail", "every cell is admitted before any has reported usage; set budget.reserve_per_cell (or a budget.tokens on the cell's agent), lower max_in_flight, or rely on the job budget as the backstop")
 }
 
 // unbindable reports whether this block's own ceiling can stop nothing: it has
-// one, and the width covers every cell, so no admission ever reads a nonzero
-// total. Mirrors newLimiter's own "limit >= branches means no limiter at all".
+// one, nothing is reserved on admission, and the width covers every cell, so
+// no admission ever reads a nonzero total. Mirrors newLimiter's own
+// "limit >= branches means no limiter at all".
 func (b *blockBudget) unbindable(maxInFlight, cells int) bool {
-	return b.usage != nil && maxInFlight >= cells
+	return b.usage != nil && b.reserve <= 0 && maxInFlight >= cells
 }
 
 func (b *blockBudget) spent() int {
@@ -376,16 +490,24 @@ func (b *blockBudget) report(jobName string, ran, total int) {
 }
 
 // stopAdmitting reports whether this matrix should start no further cell:
-// either it has spent its own allowance, or the JOB's wall-clock deadline has
-// passed (see deadlineStopsFanOut, which in_parallel: shares).
+// either the JOB's wall-clock deadline has passed (see deadlineStopsFanOut,
+// which in_parallel: shares), or the block cannot afford another cell.
+//
+// The deadline is checked FIRST so a deadline stop takes no reservation:
+// admit() consumes allowance as its way of saying yes, and a cell refused for
+// time would otherwise leave a reservation behind that nothing ever settles.
 func stopAdmitting(ctx context.Context, jobName string, spend *blockBudget, ran, total int) bool {
-	if spend.exhausted() {
+	if deadlineStopsFanOut(ctx, jobName, "across", "cells", ran, total) {
+		return true
+	}
+
+	if !spend.admit() {
 		spend.report(jobName, ran, total)
 
 		return true
 	}
 
-	return deadlineStopsFanOut(ctx, jobName, "across", "cells", ran, total)
+	return false
 }
 
 // runAcrossCell runs one cell unless its exact content already succeeded.

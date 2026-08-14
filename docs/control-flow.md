@@ -478,7 +478,32 @@ budget: across stopped after 1 of 3 cells (spent 2,000 of 1,000 tokens)
 - **A rerun finishes the work.** The cells that ran are recorded; running again with a larger allowance picks up where the last one stopped.
 - **Tokens only.** `usd` is enforced inside a CLI agent's own subprocess, against itself — it cannot see what the matrix's other cells have spent. Rejected at load.
 - **Measured as a delta on the job's own accumulator**, so a cell's retries and sub-agents count. Not hashed, like every other operational limit.
-- **It is not a hard cap, and under `max_in_flight:` the overshoot is a whole batch**: the ceiling bounds what gets *started*, and the first batch is admitted before any of it has reported a token. Size the allowance knowing that, put a `budget:` on the agent to bound one cell, and keep the job's as the backstop. A `max_in_flight:` at or above the cell count makes the block budget bind nothing at all, and the run warns out loud.
+- **It is not a hard cap.** A cell that overruns is not cut off mid-flight. What bounds the overshoot is the reservation below, not the ceiling itself.
+
+#### Making it bind at any width: `reserve_per_cell:`
+
+Admission can only see what **finished** cells reported, and a cell only finishes once something waits for its slot. So on its own the ceiling is blind to the cells it is deciding against: the first `max_in_flight:` cells are admitted against a total of ~0, and at a width covering every cell there is no serialization point anywhere in the block, so the budget bounds *nothing*.
+
+A reservation fixes that by charging the allowance up front for work not yet reported:
+
+```yaml fragment
+- across:
+  - var: dim
+    from: dimensions
+  max_in_flight: 6            # real concurrency, not throttled to make the budget work
+  budget:
+    tokens: 3600000
+    reserve_per_cell: 600000  # what admission assumes an unfinished cell will cost
+  agent: reviewer
+```
+
+Six cells at 600K reserved exactly covers the 3.6M allowance, so the sixth is admitted at the line and a seventh is not. Cells that come in **under** their reservation release the difference and let later cells through — the common case, and the reason this is a reservation and not a hard pre-allocation.
+
+- **Where the number comes from**, first match winning: the block's `reserve_per_cell:`, then the cell agent's own `budget.tokens` (you already declared what one invocation may cost, so a block often needs no new config at all), then nothing — and with nothing, the block admits exactly as it did before reservations existed, warning included.
+- **A too-large reservation under-admits**, stopping the matrix earlier than the allowance strictly required. That is the safe direction, and a rerun with a larger allowance resumes where it stopped.
+- **Across-only.** The same field on an agent's or a job's `budget:` is a load error: neither admits anything, so a reservation there would read like configuration and bind nothing.
+- **A CLI agent supplies no reservation.** Its ceiling is `budget.usd`, metered in dollars inside its own subprocess, which cannot be compared against a token allowance — such a block needs an explicit `reserve_per_cell:` to bind.
+- **The warning survives for the one case that still cannot bind**: a budget with no reservation source at a width covering every cell.
 
 ### Concurrent cells: `max_in_flight:`
 

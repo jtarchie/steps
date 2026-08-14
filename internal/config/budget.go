@@ -31,6 +31,23 @@ type Budget struct {
 	// on exit — too late for a token counter here to stop anything — while the
 	// CLI has a real circuit breaker of its own that takes dollars.
 	USD float64 `yaml:"usd,omitempty"`
+	// ReservePerCell is what an across: block's admission control ASSUMES one
+	// not-yet-finished cell will spend, so Tokens binds at any max_in_flight.
+	//
+	// Admission can only see what FINISHED cells reported, so without a
+	// reservation the first max_in_flight cells are always admitted against a
+	// total of ~0 — and when the width covers every cell there is no
+	// serialization point at all and the ceiling bounds nothing. Reserving on
+	// admit and settling on completion closes that: overshoot becomes bounded
+	// by how wrong the reservation is rather than by how many cells got a free
+	// pass.
+	//
+	// Across-only, like Tokens on a step. Unset falls back to the cell agent's
+	// own budget.tokens (the author already declared what one invocation may
+	// cost), and with neither the block behaves exactly as it did before this
+	// existed. Deliberately no global default: a guessed reservation that
+	// silently under-admits is worse than an honest warning.
+	ReservePerCell int `yaml:"reserve_per_cell,omitempty"`
 }
 
 // set reports whether this budget caps anything at all.
@@ -43,14 +60,28 @@ func (b *Budget) set() bool {
 // the first turn, which nobody means.
 func (c *Config) validateBudgets() error {
 	for _, agent := range c.Agents {
-		err := validateBudget(fmt.Sprintf("agent %q", agent.Name), agent.Budget)
+		label := fmt.Sprintf("agent %q", agent.Name)
+
+		err := validateBudget(label, agent.Budget)
+		if err != nil {
+			return err
+		}
+
+		err = rejectReservePerCell(label, agent.Budget)
 		if err != nil {
 			return err
 		}
 	}
 
 	for _, job := range c.Jobs {
-		err := validateBudget(fmt.Sprintf("job %q", job.Name), job.Budget)
+		label := fmt.Sprintf("job %q", job.Name)
+
+		err := validateBudget(label, job.Budget)
+		if err != nil {
+			return err
+		}
+
+		err = rejectReservePerCell(label, job.Budget)
 		if err != nil {
 			return err
 		}
@@ -97,8 +128,29 @@ func validateStepBudgets(job Job) error {
 			return fmt.Errorf("%s: budget.usd is not valid on an across: step — a dollar ceiling is enforced inside a CLI agent's own subprocess, which cannot see what the matrix's other cells have spent; use budget.tokens", label)
 		}
 
+		if step.Budget.ReservePerCell < 0 {
+			return fmt.Errorf("%s: budget.reserve_per_cell must be a positive number of tokens (omit it to reserve the cell agent's own budget.tokens, or nothing)", label)
+		}
+
 		return nil
 	})
+}
+
+// rejectReservePerCell refuses reserve_per_cell: anywhere but an across:
+// block's budget.
+//
+// Budget is one type shared by agents, jobs and across: steps, so the field
+// parses in all three positions; only the block has an admission decision for
+// it to inform. An agent's budget caps one invocation and a job's is a
+// backstop — neither admits anything — so a reservation there would read like
+// configuration and bind nothing, which is the failure mode this codebase
+// rejects at load everywhere else.
+func rejectReservePerCell(label string, budget *Budget) error {
+	if budget == nil || budget.ReservePerCell == 0 {
+		return nil
+	}
+
+	return fmt.Errorf("%s: budget.reserve_per_cell is only valid on an across: step, where it is what admission assumes an unfinished cell will spend", label)
 }
 
 // budgetTokens is a budget's token ceiling, or 0 for no token budget.

@@ -1082,6 +1082,11 @@
               "type": "integer",
               "minimum": 1,
               "description": "Provider-reported tokens the whole matrix may spend. usd is not valid here."
+            },
+            "reserve_per_cell": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "What admission assumes an unfinished cell will spend, so tokens: binds at any max_in_flight -- without it the first max_in_flight cells are admitted against a total of ~0, and a width covering every cell bounds nothing. Omit to reserve the cell agent's own budget.tokens instead; with neither, the block admits as it did before this existed."
             }
           }
         }

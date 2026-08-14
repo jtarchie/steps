@@ -261,9 +261,15 @@ jobs:
   - across:
     - var: dim
       from_file: dims/index.json
-    max_in_flight: 2
+    # Width 6 — the planner writes at most six dimensions, so the whole matrix
+    # runs at once. That is only safe because the budget reserves on admission:
+    # without reserve_per_cell:, a width covering every cell means no cell ever
+    # finishes before the last is admitted, every admission reads a spend of ~0,
+    # and the ceiling below bounds nothing at all.
+    max_in_flight: 6
     budget:
-      tokens: 3600000    # when spent, no further cells start; the plan carries on
+      tokens: 3600000        # when spent, no further cells start; the plan carries on
+      reserve_per_cell: 600000  # six cells at 600K exactly covers the allowance
     try:
       agent: reviewer
       inputs: [pr, dims]
