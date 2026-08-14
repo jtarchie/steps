@@ -136,15 +136,16 @@ resource_types:
     mcp:
       server: linear
       check:
-        tool: list_issues    # called with {source}; must return an oldest-first
-                             # JSON array of version objects
+        tool: list_issues    # called with the source below as its arguments;
+                             # must return an oldest-first JSON array of
+                             # version objects
       out:
-        tool: create_issue   # optional — enables `put`; called with {source, params}
+        tool: create_issue   # optional — enables `put`; called with the put's params:
 
 resources:
 - name: eng-bugs
   type: linear-issues
-  source:                    # passed directly as list_issues' arguments
+  source:                    # IS list_issues' argument object (see args: below)
     team: ENG
     label: bug
 
@@ -159,9 +160,92 @@ jobs:
 ```
 
 - **`check:` is required**, `in:`/`out:` are both optional. `mcp:` is mutually exclusive with the shell `check:`/`in:`/`out:` strings — a resource type sets one style or the other.
-- **`check`** is called with `{"source": source}`. Its result must be an oldest-first JSON array of version objects, accepted either as structured content or a single text block containing that array — as close a mirror of the shell path's "stdout is a JSON array" convention as an RPC result allows.
-- **`in`, when omitted** (the common case — detecting new issues, not fetching their content): `get` just writes the selected version object to `<resource>/version.json`, no MCP call. **When set**, `in`'s tool is called with `{"source", "version"}` and its result is materialized into the get's directory: structured content as `result.json`, each content block as `content-N.<ext>`. `version.json` is always written either way.
-- **`out`, when set**, is called with `{"source", "params"}` — `params:` on the `put` step carries the payload. A `put` targeting an MCP-backed type with no `out:` is a load-time error naming the missing tool.
+- **The arguments are the remote tool's own schema.** A tool publishes the parameters it takes and rejects a call that omits a required one, so steps sends exactly what you name and wraps it in nothing: `check` and `in` send the resource's `source:`, `out` sends the put's `params:`. Run `steps mcp tools <pipeline> <server>` to see what a tool actually requires before writing either.
+- **`check`**'s result must be an oldest-first JSON array of version objects, accepted either as structured content or a single text block containing that array — as close a mirror of the shell path's "stdout is a JSON array" convention as an RPC result allows.
+- **`in`, when omitted** (the common case — detecting new issues, not fetching their content): `get` just writes the selected version object to `<resource>/version.json`, no MCP call. **When set**, its result is materialized into the get's directory: structured content as `result.json`, each content block as `content-N.<ext>`. `version.json` is always written either way.
+- **`out`, when set**, is what a `put` calls; `params:` on the step carries the payload. A `put` targeting an MCP-backed type with no `out:` is a load-time error naming the missing tool.
+
+### Naming the arguments: `args:`
+
+`source:` and `params:` only work as arguments when their keys already match the tool's parameters. When they don't — or when the value the tool needs lives on the **version** a check produced, which is the usual shape for `in:` — name the mapping instead. Every string in it is a template over exactly what that stage has, the same as a shell `check`/`in`/`out` command: `check` renders against `{source}`, `in` against `{source, version, params}`, `out` against `{source, params}`.
+
+```yaml noexec
+mcp_servers:
+- name: slack
+  endpoint: https://mcp.slack.com/mcp
+  auth: { type: oauth }
+
+resource_types:
+- name: slack-thread
+  config:
+    mcp:
+      server: slack
+      check:
+        tool: slack_search_public_and_private   # source: is already {query: ...}
+      in:
+        tool: slack_read_thread                 # needs the version's fields
+        args:
+          channel_id: "{{ .version.channel }}"
+          message_ts: "{{ .version.ts }}"
+      out:
+        tool: slack_send_message
+        args:
+          channel_id: "{{ .params.channel }}"
+          thread_ts: "{{ .params.thread_ts }}"
+          message: "{{ .params.text }}"         # the tool calls it `message`
+
+resources:
+- name: mentions
+  type: slack-thread
+  source:
+    query: "to:me is:thread"
+
+jobs:
+- name: answer
+  plan:
+  - get: mentions
+    trigger: true
+```
+
+- **`args:` replaces the default payload entirely** — it is the argument object, not an addition to it.
+- **Non-string values pass through untouched**, so `limit: 20` reaches the tool as the number 20. Templates nest through mappings and lists.
+- **A template naming a field that isn't there fails the step**, exactly as a shell command's template does — a typo'd `{{ .version.chanel }}` is not quietly nothing. That includes naming a stage's missing half: `{{ .version.x }}` in `check.args:` fails, because a check has no version yet.
+- **A templated value is always a string.** `limit: 20` stays the number 20, but `limit: "{{ .source.limit }}"` sends `"20"`. Numbers lifted out of a version keep their exact digits — an issue id of `123456789` renders as `123456789`, not in exponent form.
+- **`{file: ...}` markers in a `put`'s `params:` are resolved first**, so `{{ .params.text }}` renders the file's contents.
+
+#### Upgrading a resource type written before `args:`
+
+steps used to wrap every call in an envelope of its own: `check` was called with `{"source": source}`, `in` with `{"source": source, "version": version}`, and `out` with `{"source": source, "params": params}`. No third-party server has ever declared parameters by those names, which is why an off-the-shelf tool could not be called at all — but a server written *for* steps could read them, and those are the ones this changes:
+
+| stage | was called with | now called with (no `args:`) |
+|---|---|---|
+| `check` | `{source}` | the source itself |
+| `in` | `{source, version}` | the source itself — **the version is gone** |
+| `out` | `{source, params}` | the params themselves — **the source is gone** |
+
+An `in:` reading `arguments.version.id` now receives the source and no version, and a tool whose parameters are all optional will accept that and quietly do the wrong thing. Name what the tool takes instead:
+
+```yaml fragment
+in:
+  tool: get_issue
+  args:
+    issue_id: "{{ .version.id }}"
+```
+
+The old envelope cannot be restored verbatim — a template renders a string, so there is no `{{ .source }}` that emits the whole object; enumerate the fields the tool needs (`args: { source: { team: "{{ .source.team }}" } }`) or, better, give the tool real parameters. `args:` is part of a step's hash, so adding a mapping re-runs the affected `get`/`put` rather than reusing what the old envelope fetched.
+
+### Preflight checks this before anything runs
+
+Both ways an MCP call is wrong — a tool the server doesn't expose, and required arguments the call will never send — are answerable from the server's published tool list, without calling anything. So they are: `steps run` checks the resources its job touches before the first step, `steps preflight` asks the same question on demand, and **`steps watch` checks every `trigger:` resource before its first poll and exits if one can't work**. That last one is the point: a poll loop's reaction to a permanent misconfiguration is to log it and try again on the next interval, forever, with nothing enqueued and nothing red.
+
+```
+watch: preflight failed, nothing was polled:
+  resource "mentions": check tool "slack_search_public_and_private" requires [query], which this call does not send (it sends: [to])
+    (the resource's source: IS the argument object when mcp.check.args: is unset — name it there, or map it in mcp.check.args:)
+```
+
+`--no-preflight` skips it, as it does for models.
+
 
 ### Sending a file's contents: `{file: ...}` in `params:`
 

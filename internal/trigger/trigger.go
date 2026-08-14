@@ -18,6 +18,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -110,22 +111,19 @@ func Watch(
 	force bool,
 	listenAddr string,
 ) error {
-	if len(Resources(cfg)) == 0 {
-		return errors.New("no get step in any job sets trigger: true; nothing for watch to poll")
-	}
-
-	if interval <= 0 {
-		return fmt.Errorf("watch: interval must be positive, got %s", interval)
-	}
-
 	if maxConcurrent < 1 {
 		maxConcurrent = 1
+	}
+
+	err := watchable(ctx, cfg, interval)
+	if err != nil {
+		return err
 	}
 
 	// Recover any row a prior crash (or an interrupted graceful shutdown
 	// mid-run — see drainOne) left stuck "running", so it isn't stranded
 	// forever: only a new version change would otherwise ever re-queue it.
-	err := st.ResetStaleRunning(ctx)
+	err = st.ResetStaleRunning(ctx)
 	if err != nil {
 		return fmt.Errorf("watch: %w", err)
 	}
@@ -178,6 +176,52 @@ func Watch(
 	wg.Wait()
 
 	return nil
+}
+
+// watchable reports whether there is anything to watch and whether what
+// there is can be checked at all — every reason to refuse to start, gathered
+// in one place so Watch's own body is the loop it exists to run.
+func watchable(ctx context.Context, cfg *config.Config, interval time.Duration) error {
+	resources := Resources(cfg)
+	if len(resources) == 0 {
+		return errors.New("no get step in any job sets trigger: true; nothing for watch to poll")
+	}
+
+	if interval <= 0 {
+		return fmt.Errorf("watch: interval must be positive, got %s", interval)
+	}
+
+	return preflightTriggers(ctx, cfg, resources)
+}
+
+// preflightTriggers proves every trigger resource can actually be checked,
+// before anything is polled or written.
+//
+// A trigger resource whose check can never succeed — an mcp: tool the server
+// does not expose, or one whose required arguments this pipeline never sends
+// — is a permanent misconfiguration, and the poll loop's own reaction to it
+// (log the error, wait, try again) hides that for as long as the watcher
+// runs: nothing red, nothing running, nothing enqueued, forever. Say it once,
+// at the top, and exit non-zero.
+//
+// Only what is knowable without running anything, so a shell-backed check —
+// whose correctness is whatever the command does — reports nothing here and
+// still fails per-poll the way it always has.
+func preflightTriggers(ctx context.Context, cfg *config.Config, resources []string) error {
+	problems := pipeline.PreflightResources(ctx, cfg, resources)
+	if len(problems) == 0 {
+		return nil
+	}
+
+	var out strings.Builder
+
+	out.WriteString("watch: preflight failed, nothing was polled:")
+
+	for _, problem := range problems {
+		fmt.Fprintf(&out, "\n  %s: %s", problem.Target, problem.Detail)
+	}
+
+	return errors.New(out.String())
 }
 
 // runPoller calls pollOnce immediately and then once per interval tick,

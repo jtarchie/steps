@@ -6,9 +6,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // mcpTriggerServer builds an httptest.Server exposing one "list_versions"
@@ -54,6 +58,62 @@ jobs:
   - get: thing
     trigger: true
 `, endpoint)
+}
+
+// TestWatchRefusesToStartOnAnUnsatisfiableCheck is the whole reason watch
+// preflights: before this, a trigger resource whose check tool can never
+// succeed produced one ERR line per interval, forever — no job enqueued, no
+// non-zero exit, nothing to notice. The tool below requires a `query` the
+// resource's source: does not have, which no amount of retrying will fix.
+func TestWatchRefusesToStartOnAnUnsatisfiableCheck(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ts := mcpSearchServer(t)
+	cfg := loadConfig(t, dir, strings.Replace(
+		mcpTriggerPipeline(ts.URL), "tool: list_versions", "tool: search_versions", 1))
+	st := mustOpenStore(t, dir)
+
+	provider, err := workspace.NewProvider(cfg.Workspace, false)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+
+	defer func() { _ = provider.Close() }()
+
+	err = Watch(context.Background(), cfg, provider, st, nil, time.Minute, 1, false, "")
+	if err == nil {
+		t.Fatal("Watch: want an immediate error, not a poll loop logging the same failure forever")
+	}
+
+	if !strings.Contains(err.Error(), "query") {
+		t.Errorf("error = %v, want it to name the argument the tool requires", err)
+	}
+}
+
+// mcpSearchServer exposes one tool that DECLARES a required argument, like
+// every real server's tools do.
+func mcpSearchServer(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	srv := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "test", Version: "v0"}, nil)
+
+	srv.AddTool(&sdkmcp.Tool{
+		Name: "search_versions",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"query": map[string]any{"type": "string"}},
+			"required":   []string{"query"},
+		},
+	}, func(_ context.Context, _ *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+		return &sdkmcp.CallToolResult{StructuredContent: []map[string]any{{"id": "1"}}}, nil
+	})
+
+	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return srv }, nil)
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	return ts
 }
 
 // TestPollOnceMCPBackedResource proves the claim documented on

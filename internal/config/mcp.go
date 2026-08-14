@@ -24,9 +24,38 @@ type MCPResourceConfig struct {
 	Out    *MCPToolCall `yaml:"out,omitempty"`
 }
 
-// MCPToolCall names the remote tool a resource-type lifecycle stage calls.
+// MCPToolCall names the remote tool a resource-type lifecycle stage calls,
+// and (optionally) shapes the arguments it is called with.
+//
+// Args is the argument object sent to Tool. Every string leaf in it is a
+// template rendered over exactly the data the shell path's command for that
+// same stage gets — {source} for check, {source, version, params} for in,
+// {source, params} for out — so a value the remote tool requires can be
+// lifted out of whichever of them holds it. Naming one a stage does not have
+// (a {{ .version }} in check:) fails the step rather than rendering empty:
+//
+//	in:
+//	  tool: slack_read_thread
+//	  args:
+//	    channel_id: "{{ .version.channel }}"
+//	    message_ts: "{{ .version.ts }}"
+//
+// This exists because an MCP tool's arguments are its own published schema,
+// not ours: `slack_read_thread` requires `channel_id`/`message_ts` at the top
+// level and will reject anything else. Before args:, steps sent a fixed
+// envelope ({"source": source}, {"source", "version"}, {"source", "params"}),
+// which no third-party server has ever declared a parameter for — so the
+// mcp: backend could only ever talk to a server written against steps'
+// envelope. Naming the mapping is what makes an off-the-shelf server usable.
+//
+// When Args is omitted the arguments are the stage's natural payload, sent
+// verbatim: source for check and in, params for out. That covers the common
+// case where the resource's source: IS the tool's argument object (a `check`
+// whose source is `{query: ...}`), and it is why `in:` needs args: whenever
+// its tool wants fields that live on the VERSION rather than the source.
 type MCPToolCall struct {
-	Tool string `yaml:"tool"`
+	Tool string         `yaml:"tool"`
+	Args map[string]any `yaml:"args,omitempty"`
 }
 
 // MCPServer is a reusable, named MCP server connection: configured once

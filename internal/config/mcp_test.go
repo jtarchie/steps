@@ -534,6 +534,44 @@ jobs: [{ name: j, plan: [] }]
 		wantLoadError(t, path, "mutually exclusive")
 	})
 
+	t.Run("args mapping loads as the tool's argument object", func(t *testing.T) {
+		t.Parallel()
+
+		pipeline := mcpServerBlock + `
+resource_types:
+- name: linear-issues
+  config:
+    mcp:
+      server: github
+      check: { tool: search_issues, args: { query: "team:{{ .source.team }}", limit: 20 } }
+      in:
+        tool: get_issue
+        args:
+          issue_id: "{{ .version.id }}"
+          include: [comments]
+jobs: [{ name: j, plan: [] }]
+`
+		cfg, err := LoadConfig(writeConfig(t, pipeline))
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+
+		mcp := cfg.ResourceTypes[0].Config.MCP
+		if mcp.Check.Args["query"] != "team:{{ .source.team }}" {
+			t.Errorf("check args = %+v", mcp.Check.Args)
+		}
+
+		// Non-string leaves keep their YAML type — the tool's schema, not
+		// ours, decides what a number is.
+		if mcp.Check.Args["limit"] != 20 {
+			t.Errorf("limit = %#v, want the number 20", mcp.Check.Args["limit"])
+		}
+
+		if mcp.In.Args["issue_id"] != "{{ .version.id }}" {
+			t.Errorf("in args = %+v", mcp.In.Args)
+		}
+	})
+
 	t.Run("check tool required", func(t *testing.T) {
 		t.Parallel()
 

@@ -85,18 +85,54 @@ func mcpFixtureServer(t *testing.T) *httptest.Server {
 			}, nil
 		})
 
+	// Reads `title` off the TOP level of its arguments, like every real MCP
+	// tool reads its own published parameters — the fixture would not be
+	// testing the contract if it went looking inside an envelope.
 	srv.AddTool(&sdkmcp.Tool{Name: "create_issue", InputSchema: map[string]any{"type": "object"}},
 		func(_ context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
 			var args map[string]any
 
 			_ = json.Unmarshal(req.Params.Arguments, &args)
 
-			params, _ := args["params"].(map[string]any)
-
 			return &sdkmcp.CallToolResult{
-				StructuredContent: map[string]any{"id": "new-1", "title": params["title"]},
+				StructuredContent: map[string]any{"id": "new-1", "title": args["title"], "team": args["team"]},
 			}, nil
 		})
+
+	// A check tool that reports what it was called with, as a version array,
+	// so a test can assert on the arguments a check sends.
+	srv.AddTool(&sdkmcp.Tool{Name: "list_issues_echo", InputSchema: map[string]any{"type": "object"}},
+		func(_ context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+			var args map[string]any
+
+			_ = json.Unmarshal(req.Params.Arguments, &args)
+
+			return &sdkmcp.CallToolResult{StructuredContent: []map[string]any{{"sent": args}}}, nil
+		})
+
+	// Two tools that DECLARE a required argument, the way every real server's
+	// tools do — what preflight reads to decide whether a call can ever work.
+	srv.AddTool(&sdkmcp.Tool{
+		Name: "search_issues",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"query": map[string]any{"type": "string"}},
+			"required":   []string{"query"},
+		},
+	}, func(_ context.Context, _ *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+		return &sdkmcp.CallToolResult{StructuredContent: []map[string]any{{"id": "1"}}}, nil
+	})
+
+	srv.AddTool(&sdkmcp.Tool{
+		Name: "post_issue",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"message": map[string]any{"type": "string"}},
+			"required":   []string{"message"},
+		},
+	}, func(_ context.Context, _ *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+		return &sdkmcp.CallToolResult{StructuredContent: map[string]any{"id": "new-1"}}, nil
+	})
 
 	srv.AddTool(&sdkmcp.Tool{Name: "create_issue_unparsable", InputSchema: map[string]any{"type": "object"}},
 		func(_ context.Context, _ *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
@@ -286,9 +322,11 @@ func TestRunInMCPMaterializesToolResult(t *testing.T) {
 		t.Fatalf("unmarshal result.json: %v", err)
 	}
 
+	// No args: on the in:, so the arguments are the resource's source:,
+	// verbatim — nothing wrapped around it and nothing added to it.
 	echoed, ok := result["echoed"].(map[string]any)
-	if !ok || echoed["version"] == nil {
-		t.Errorf("result.json = %+v, want the echoed {source, version} args", result)
+	if !ok || echoed["team"] != "ENG" || len(echoed) != 1 {
+		t.Errorf("result.json = %+v, want source sent verbatim as the arguments", result)
 	}
 
 	text, err := os.ReadFile(filepath.Join(destDir, "content-0.txt")) //nolint:gosec // test-owned temp file
@@ -315,6 +353,143 @@ func TestRunOutMCP(t *testing.T) {
 
 	if result["id"] != "new-1" || result["title"] != "Triage needed" {
 		t.Errorf("result = %+v", result)
+	}
+}
+
+// TestCheckVersionsMCPSendsSourceVerbatim pins the contract that decides
+// whether an off-the-shelf MCP server is usable at all: a remote tool's
+// arguments are its OWN published schema, so a check with no args: sends the
+// source as the argument object and wraps it in nothing. Sending
+// {"source": source} instead means a tool requiring `query` never sees one,
+// no matter what the pipeline author writes.
+func TestCheckVersionsMCPSendsSourceVerbatim(t *testing.T) {
+	t.Parallel()
+
+	cfg := mcpFixtureConfig(t)
+	rt := mcpResourceType("list_issues_echo")
+
+	versions, err := CheckVersions(context.Background(), cfg, rt, map[string]any{"query": "to:me"})
+	if err != nil {
+		t.Fatalf("CheckVersions: %v", err)
+	}
+
+	sent, ok := versions[0]["sent"].(map[string]any)
+	if !ok || sent["query"] != "to:me" {
+		t.Fatalf("arguments = %+v, want the source itself", versions[0]["sent"])
+	}
+}
+
+// TestCheckVersionsMCPArgsTemplate covers the other half: a tool whose
+// parameter names differ from the source's own keys is reached by naming the
+// mapping, rendered over the same {source} the shell path templates against.
+func TestCheckVersionsMCPArgsTemplate(t *testing.T) {
+	t.Parallel()
+
+	cfg := mcpFixtureConfig(t)
+	rt := mcpResourceType("list_issues_echo")
+	rt.Config.MCP.Check.Args = map[string]any{
+		"query": "in:{{ .source.channel }} is:thread",
+		"limit": 20,
+	}
+
+	versions, err := CheckVersions(context.Background(), cfg, rt, map[string]any{"channel": "eng"})
+	if err != nil {
+		t.Fatalf("CheckVersions: %v", err)
+	}
+
+	sent, _ := versions[0]["sent"].(map[string]any)
+	if sent["query"] != "in:eng is:thread" {
+		t.Errorf("query = %#v, want the rendered template", sent["query"])
+	}
+
+	// A non-string leaf is the tool's own type, not a string: `limit: 20`
+	// must arrive as a number.
+	if sent["limit"] != float64(20) {
+		t.Errorf("limit = %#v, want the number 20 passed through untouched", sent["limit"])
+	}
+}
+
+// TestRunInMCPArgsTemplate is the case in: exists for: the fields the tool
+// needs (which thread, which issue) live on the VERSION a check produced, not
+// on the source.
+func TestRunInMCPArgsTemplate(t *testing.T) {
+	t.Parallel()
+
+	cfg := mcpFixtureConfig(t)
+	rt := mcpResourceType("list_issues")
+	rt.Config.MCP.In = &config.MCPToolCall{
+		Tool: "get_issue",
+		Args: map[string]any{"issue_id": "{{ .version.id }}", "team": "{{ .source.team }}"},
+	}
+	destDir := t.TempDir()
+
+	err := RunIn(context.Background(), cfg, rt, map[string]any{"team": "ENG"}, map[string]any{"id": "42"}, nil, destDir)
+	if err != nil {
+		t.Fatalf("RunIn: %v", err)
+	}
+
+	resultData, err := os.ReadFile(filepath.Join(destDir, "result.json")) //nolint:gosec // test-owned temp file
+	if err != nil {
+		t.Fatalf("read result.json: %v", err)
+	}
+
+	var result map[string]any
+
+	err = json.Unmarshal(resultData, &result)
+	if err != nil {
+		t.Fatalf("unmarshal result.json: %v", err)
+	}
+
+	echoed, _ := result["echoed"].(map[string]any)
+	if echoed["issue_id"] != "42" || echoed["team"] != "ENG" {
+		t.Errorf("arguments = %+v, want the version and source fields the mapping names", echoed)
+	}
+}
+
+// TestRunInMCPArgsMissingKeyErrors: a mapping that names a field the version
+// does not carry is a typo, and a typo must fail loudly rather than silently
+// send nothing — the same rule template.Render enforces for a shell check.
+func TestRunInMCPArgsMissingKeyErrors(t *testing.T) {
+	t.Parallel()
+
+	cfg := mcpFixtureConfig(t)
+	rt := mcpResourceType("list_issues")
+	rt.Config.MCP.In = &config.MCPToolCall{
+		Tool: "get_issue",
+		Args: map[string]any{"issue_id": "{{ .version.nope }}"},
+	}
+
+	err := RunIn(context.Background(), cfg, rt, map[string]any{}, map[string]any{"id": "42"}, nil, t.TempDir())
+	if err == nil {
+		t.Fatal("RunIn: want an error naming the unresolvable args template")
+	}
+
+	if !strings.Contains(err.Error(), "args") {
+		t.Errorf("error = %v, want it to name args", err)
+	}
+}
+
+// TestRunOutMCPArgsTemplate: the put's params: are the payload, and args: is
+// how they reach a tool whose parameter names differ (Slack's send tool takes
+// `message`, not `text`).
+func TestRunOutMCPArgsTemplate(t *testing.T) {
+	t.Parallel()
+
+	cfg := mcpFixtureConfig(t)
+	rt := mcpResourceType("list_issues")
+	rt.Config.MCP.Out = &config.MCPToolCall{
+		Tool: "create_issue",
+		Args: map[string]any{"title": "{{ .params.text }}", "team": "{{ .source.team }}"},
+	}
+
+	result, err := RunOut(context.Background(), cfg, rt,
+		map[string]any{"team": "ENG"}, map[string]any{"text": "Triage needed"}, t.TempDir())
+	if err != nil {
+		t.Fatalf("RunOut: %v", err)
+	}
+
+	if result["title"] != "Triage needed" || result["team"] != "ENG" {
+		t.Errorf("result = %+v, want the mapping's arguments to have reached the tool", result)
 	}
 }
 
@@ -489,5 +664,53 @@ func TestResolveParamFilesPathRules(t *testing.T) {
 				t.Errorf("error = %v, want it to mention %q", err, test.want)
 			}
 		})
+	}
+}
+
+// TestRunInMCPArgsKeepNumbersExact: a version comes off the wire through
+// encoding/json, so every number in it is a float64 — and text/template
+// prints a float64 with %v, which reaches for exponent notation well inside
+// the range of ordinary identifiers. Without normalization the documented
+// `issue_id: "{{ .version.id }}"` sends "1.23456789e+08" for issue 123456789
+// and a Slack message_ts as "1.717171717123456e+09", which no server accepts.
+func TestRunInMCPArgsKeepNumbersExact(t *testing.T) {
+	t.Parallel()
+
+	cfg := mcpFixtureConfig(t)
+	rt := mcpResourceType("list_issues")
+	rt.Config.MCP.In = &config.MCPToolCall{
+		Tool: "get_issue",
+		Args: map[string]any{"issue_id": "{{ .version.id }}", "thread_ts": "{{ .version.ts }}"},
+	}
+	destDir := t.TempDir()
+
+	// Exactly the shape json.Unmarshal produces for a version object.
+	var version map[string]any
+
+	err := json.Unmarshal([]byte(`{"id": 123456789, "ts": 1717171717.123456}`), &version)
+	if err != nil {
+		t.Fatalf("unmarshal version: %v", err)
+	}
+
+	err = RunIn(context.Background(), cfg, rt, map[string]any{}, version, nil, destDir)
+	if err != nil {
+		t.Fatalf("RunIn: %v", err)
+	}
+
+	resultData, err := os.ReadFile(filepath.Join(destDir, "result.json")) //nolint:gosec // test-owned temp file
+	if err != nil {
+		t.Fatalf("read result.json: %v", err)
+	}
+
+	var result map[string]any
+
+	err = json.Unmarshal(resultData, &result)
+	if err != nil {
+		t.Fatalf("unmarshal result.json: %v", err)
+	}
+
+	echoed, _ := result["echoed"].(map[string]any)
+	if echoed["issue_id"] != "123456789" || echoed["thread_ts"] != "1717171717.123456" {
+		t.Errorf("arguments = %+v, want the version's digits verbatim, not %%v's exponent form", echoed)
 	}
 }

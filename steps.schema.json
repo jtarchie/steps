@@ -175,6 +175,11 @@
       "properties": {
         "tool": {
           "type": "string"
+        },
+        "args": {
+          "type": "object",
+          "description": "The argument object sent to the tool, replacing the default payload (source for check/in, the put's params for out). String values are templates over {source, version, params}.",
+          "additionalProperties": true
         }
       }
     },

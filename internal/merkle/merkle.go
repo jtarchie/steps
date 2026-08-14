@@ -173,15 +173,22 @@ func GetNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 	return withHooks(cfg, step, withWhen(step, withRouting(step, content)))
 }
 
-// withMCPResourceStage folds an mcp-backed resource type's server identity
-// and the named lifecycle stage's tool name into content, mirroring
-// in_template/out_template's role for the shell backend — but only when
-// that stage's *MCPToolCall is actually set (In and Out are both optional;
-// an unset In means get falls back to writing version.json, with nothing
-// template-shaped to hash, exactly like check: is never hashed for the
+// withMCPResourceStage folds an mcp-backed resource type's server identity,
+// the named lifecycle stage's tool name AND its args: mapping into content,
+// mirroring in_template/out_template's role for the shell backend — but only
+// when that stage's *MCPToolCall is actually set (In and Out are both
+// optional; an unset In means get falls back to writing version.json, with
+// nothing template-shaped to hash, exactly like check: is never hashed for the
 // shell backend either). A resource type with no mcp: block is unaffected
 // (byte-identical to before this field existed), same as every other
 // value-gated field in this file.
+//
+// args: belongs here for the same reason in_template does: it is what the
+// call actually ASKS FOR. Hashing the tool name alone would let a fixed
+// mapping — `{{ .version.channel }}` corrected to `{{ .version.thread }}` —
+// hash identically to the broken one it replaced, so the get is skipped as
+// unchanged and the previously fetched (wrong) artifact is reused. Also
+// value-gated, so a stage that names no args: keeps every hash it already has.
 func withMCPResourceStage(cfg *config.Config, resourceType config.ResourceType, stage string, content map[string]any) error {
 	if resourceType.Config.MCP == nil {
 		return nil
@@ -207,6 +214,10 @@ func withMCPResourceStage(cfg *config.Config, resourceType config.ResourceType, 
 
 	content["mcp_"+stage+"_tool"] = call.Tool
 	content["mcp_server"] = server
+
+	if len(call.Args) > 0 {
+		content["mcp_"+stage+"_args"] = call.Args
+	}
 
 	return nil
 }

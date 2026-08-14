@@ -10,12 +10,14 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/jtarchie/steps/internal/config"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
+	"github.com/jtarchie/steps/internal/template"
 )
 
 // callMCPResourceTool connects to the mcp_servers: entry named serverName
@@ -50,16 +52,155 @@ func callMCPResourceTool(ctx context.Context, cfg *config.Config, serverName, to
 	return result, nil
 }
 
-// mcpCheckVersions calls rt.Config.MCP.Check.Tool with {"source": source} as
-// arguments — mirroring the shell path's {"source": source} template data
-// shape — and parses the result the same way CheckVersions's doc comment
-// documents for the shell path: an oldest-first JSON array of version
-// objects, accepted either as the tool result's StructuredContent or a
-// single text content block containing that same JSON array.
+// mcpCallArgs builds the argument object one lifecycle stage calls its tool
+// with: call.Args when set, with every string leaf rendered as a template
+// over data (whatever that stage has to template against — {source} for
+// check, {source, params} for out, {source, version, params} for in, exactly
+// mirroring the shell path's command templates); otherwise fallback,
+// verbatim.
+//
+// The arguments ARE the remote tool's own published schema — see
+// config.MCPToolCall — so this returns exactly what the author named and
+// wraps it in nothing.
+func mcpCallArgs(call config.MCPToolCall, data, fallback map[string]any) (map[string]any, error) {
+	if call.Args == nil {
+		return fallback, nil
+	}
+
+	rendered, err := renderArgValue("args", call.Args, exactNumberData(data))
+	if err != nil {
+		return nil, err
+	}
+
+	args, ok := rendered.(map[string]any)
+	if !ok {
+		// renderArgValue preserves shape, so a map in is a map out; this is
+		// unreachable, and returning the un-rendered args would be worse.
+		return nil, fmt.Errorf("args for tool %q did not render as an object", call.Tool)
+	}
+
+	return args, nil
+}
+
+// renderArgValue renders every string leaf of an args: value, recursing
+// through maps and slices so a template works at whatever depth the remote
+// tool's schema nests to. Non-string scalars (numbers, booleans, null) pass
+// through untouched — a `limit: 20` is a number to the tool, not a string.
+//
+// path names the leaf being rendered (`args.channel_id`, `args.include[0]`)
+// so a failed template says WHICH one, and is wrapped exactly once — at the
+// leaf that produced the error rather than again at every level above it.
+func renderArgValue(path string, value any, data map[string]any) (any, error) {
+	switch typed := value.(type) {
+	case string:
+		rendered, err := template.Render(typed, data)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+
+		return rendered, nil
+	case map[string]any:
+		return renderArgMap(path, typed, data)
+	case map[any]any:
+		// yaml.v3 decodes a mapping whose keys are not ALL strings into
+		// map[any]any — an unquoted `on:`, a filter keyed by a year. Left in
+		// that shape it is both un-rendered (its templates would reach the
+		// server as the literal text `{{ .version.ts }}`) and un-marshalable
+		// by encoding/json, so normalize the keys and treat it as the object
+		// the author obviously meant.
+		normalized := make(map[string]any, len(typed))
+		for key, inner := range typed {
+			normalized[fmt.Sprint(key)] = inner
+		}
+
+		return renderArgMap(path, normalized, data)
+	case []any:
+		out := make([]any, len(typed))
+
+		for i, inner := range typed {
+			converted, err := renderArgValue(fmt.Sprintf("%s[%d]", path, i), inner, data)
+			if err != nil {
+				return nil, err
+			}
+
+			out[i] = converted
+		}
+
+		return out, nil
+	default:
+		return value, nil
+	}
+}
+
+// renderArgMap renders every value of one args: object, keyed path-wise.
+func renderArgMap(path string, value, data map[string]any) (any, error) {
+	out := make(map[string]any, len(value))
+
+	for key, inner := range value {
+		converted, err := renderArgValue(path+"."+key, inner, data)
+		if err != nil {
+			return nil, err
+		}
+
+		out[key] = converted
+	}
+
+	return out, nil
+}
+
+// exactNumberData returns a copy of a stage's template data with every
+// float64 leaf replaced by a json.Number holding its exact decimal spelling.
+//
+// A version object reaches here through encoding/json, so every number in it
+// is a float64 — and text/template prints a float64 with %v, which switches
+// to exponent form well inside the range of ordinary identifiers. Without
+// this, the documented `issue_id: "{{ .version.id }}"` sends
+// "1.23456789e+08" for issue 123456789, and a Slack `message_ts` goes out as
+// "1.717171717123456e+09". No server accepts either. json.Number is a string
+// type, so a template prints its digits verbatim.
+func exactNumberData(data map[string]any) map[string]any {
+	out := make(map[string]any, len(data))
+
+	for key, value := range data {
+		out[key] = exactNumbers(value)
+	}
+
+	return out
+}
+
+func exactNumbers(value any) any {
+	switch typed := value.(type) {
+	case float64:
+		return json.Number(strconv.FormatFloat(typed, 'f', -1, 64))
+	case map[string]any:
+		return exactNumberData(typed)
+	case []any:
+		out := make([]any, len(typed))
+		for i, inner := range typed {
+			out[i] = exactNumbers(inner)
+		}
+
+		return out
+	default:
+		return value
+	}
+}
+
+// mcpCheckVersions calls rt.Config.MCP.Check.Tool with the resource's
+// source: as its arguments (or with check.args:, rendered — see
+// mcpCallArgs), and parses the result the same way CheckVersions's doc
+// comment documents for the shell path: an oldest-first JSON array of
+// version objects, accepted either as the tool result's StructuredContent or
+// a single text content block containing that same JSON array.
 func mcpCheckVersions(ctx context.Context, cfg *config.Config, rt config.ResourceType, source map[string]any) ([]map[string]any, error) {
 	slog.Debug("resource.check", "resource_type", rt.Name, "source", source, "mcp_tool", rt.Config.MCP.Check.Tool)
 
-	result, err := callMCPResourceTool(ctx, cfg, rt.Config.MCP.Server, rt.Config.MCP.Check.Tool, map[string]any{"source": source})
+	args, err := mcpCallArgs(*rt.Config.MCP.Check, map[string]any{"source": source}, source)
+	if err != nil {
+		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
+	}
+
+	result, err := callMCPResourceTool(ctx, cfg, rt.Config.MCP.Server, rt.Config.MCP.Check.Tool, args)
 	if err != nil {
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
@@ -154,9 +295,10 @@ func firstTextContent(content []sdkmcp.Content) string {
 // whether In is set — so a job can always rely on it being there. When
 // rt.Config.MCP.In is nil, that's the whole job: no MCP call, which is all
 // the common detect-and-notify case (the motivating Linear trigger use
-// case) needs. When In is set, it additionally calls that tool with
-// {source, version} merged as arguments and materializes the result into
-// destDir (see materializeContent) — a fixed convention, since unlike an
+// case) needs. When In is set, it additionally calls that tool — with the
+// resource's source: as the argument object, or with in.args: rendered over
+// {source, version, params}; see mcpCallArgs — and materializes the result
+// into destDir (see materializeContent), a fixed convention, since unlike an
 // arbitrary shell script an MCP result is a small fixed set of content
 // blocks, not a tree the tool itself writes.
 func mcpRunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, source, version, params map[string]any, destDir string) error {
@@ -173,14 +315,17 @@ func mcpRunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, s
 		return nil
 	}
 
-	args := map[string]any{"source": source, "version": version}
-
-	// Value-gated, like every other optional field folded into a rendered
-	// payload: a get with no params: sends byte-identical arguments to what it
-	// sent before this field existed, so an mcp-backed resource type written
-	// against the old shape keeps working untouched.
-	if len(params) > 0 {
-		args["params"] = params
+	// source verbatim when in: names no args:, which is only right for a tool
+	// whose arguments the source already spells. The fields an in: usually
+	// needs — which thread, which issue — live on the VERSION, and reaching
+	// them is what args: is for.
+	args, err := mcpCallArgs(
+		*rt.Config.MCP.In,
+		map[string]any{"source": source, "version": version, "params": params},
+		source,
+	)
+	if err != nil {
+		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
 
 	result, err := callMCPResourceTool(ctx, cfg, rt.Config.MCP.Server, rt.Config.MCP.In.Tool, args)
@@ -274,11 +419,11 @@ func writeFile(path string, data []byte) error {
 }
 
 // mcpRunOut implements RunOut's mcp:-backed path — the deterministic put:
-// calls rt.Config.MCP.Out.Tool with {source, params} merged as arguments
-// (params carries the put's payload, symmetric with how check uses
-// source:), and parses the result into the produced version object the
-// same way mcpCheckVersions parses one array element: StructuredContent,
-// or a single text content block of JSON.
+// calls rt.Config.MCP.Out.Tool with the put's own params: as the argument
+// object (symmetric with how check uses source:), or with out.args: rendered
+// over {source, params} — see mcpCallArgs — and parses the result into the
+// produced version object the same way mcpCheckVersions parses one array
+// element: StructuredContent, or a single text content block of JSON.
 //
 // A shell out: runs with cwd = srcDir and reads the workspace itself; an
 // MCP out: is a tool call with no working directory, so a {file: path}
@@ -294,7 +439,20 @@ func mcpRunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, 
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}
 
-	result, err := callMCPResourceTool(ctx, cfg, rt.Config.MCP.Server, rt.Config.MCP.Out.Tool, map[string]any{"source": source, "params": resolved})
+	// The put's params: are the payload, so they are the arguments when out:
+	// names no args:. A tool whose parameter names differ from the ones the
+	// put step spells (or one that needs a source field too) gets an args:
+	// mapping instead.
+	args, err := mcpCallArgs(
+		*rt.Config.MCP.Out,
+		map[string]any{"source": source, "params": resolved},
+		resolved,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
+	}
+
+	result, err := callMCPResourceTool(ctx, cfg, rt.Config.MCP.Server, rt.Config.MCP.Out.Tool, args)
 	if err != nil {
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}

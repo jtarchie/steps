@@ -319,3 +319,72 @@ func TestMCPPutNodeContentFoldsInTool(t *testing.T) {
 		t.Errorf("PutNodeContent = %+v, want an mcp_out_tool key", contentWithOut)
 	}
 }
+
+// getHashWithInArgs hashes a get node for a resource type whose in: names the
+// given args: mapping.
+func getHashWithInArgs(t *testing.T, args map[string]any) string {
+	t.Helper()
+
+	cfg, step := mcpResourceCfg("list_issues", "get_issue", false)
+
+	rt, err := cfg.FindResourceType("linear-issues")
+	if err != nil {
+		t.Fatalf("FindResourceType: %v", err)
+	}
+
+	rt.Config.MCP.In.Args = args
+
+	content, err := GetNodeContent(cfg, step, *rt, map[string]any{"team": "ENG"}, map[string]any{"id": "1"})
+	if err != nil {
+		t.Fatalf("GetNodeContent: %v", err)
+	}
+
+	hash, err := HashNode(NodeKindGet, content, "")
+	if err != nil {
+		t.Fatalf("HashNode: %v", err)
+	}
+
+	return hash
+}
+
+// TestMCPInArgsBustTheHash: args: is the MCP backend's equivalent of the
+// shell backend's in_template — it decides what the call asks for. Without it
+// in the hash, correcting a wrong mapping leaves the node identical, so the
+// get is skipped and the artifact fetched by the BROKEN mapping is reused.
+func TestMCPInArgsBustTheHash(t *testing.T) {
+	t.Parallel()
+
+	none := getHashWithInArgs(t, nil)
+	wrong := getHashWithInArgs(t, map[string]any{"issue_id": "{{ .version.channel }}"})
+	fixed := getHashWithInArgs(t, map[string]any{"issue_id": "{{ .version.thread }}"})
+
+	if none == wrong {
+		t.Error("adding an args: mapping should change the get node hash")
+	}
+
+	if wrong == fixed {
+		t.Error("changing an args: mapping should change the get node hash")
+	}
+}
+
+// TestMCPArgsOmittedFromHashWhenUnset proves the value-gating: a stage that
+// names no args: hashes byte-identically to before the field existed.
+func TestMCPArgsOmittedFromHashWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	cfg, step := mcpResourceCfg("list_issues", "get_issue", false)
+
+	rt, err := cfg.FindResourceType("linear-issues")
+	if err != nil {
+		t.Fatalf("FindResourceType: %v", err)
+	}
+
+	content, err := GetNodeContent(cfg, step, *rt, map[string]any{"team": "ENG"}, map[string]any{"id": "1"})
+	if err != nil {
+		t.Fatalf("GetNodeContent: %v", err)
+	}
+
+	if _, present := content["mcp_in_args"]; present {
+		t.Error("an unset args: must not appear in the hashed content")
+	}
+}

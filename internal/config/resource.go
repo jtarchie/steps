@@ -141,6 +141,77 @@ func (c *Config) FindResource(name string) (*Resource, error) {
 	return nil, notFound("resource", name, names(c.Resources, func(r Resource) string { return r.Name }))
 }
 
+// ResourceNames lists every resource this job's plan touches — the resource
+// a get fetches (GetResourceName, so an aliased get names the real one) and
+// the resource a put publishes to — across plan steps and hooks alike, in
+// plan order, deduplicated.
+//
+// The mirror of AgentNames, and it exists for the same reason: preflight
+// checks only what THIS job needs. A pipeline with ten resources whose job
+// touches two connects to two.
+func (j Job) ResourceNames() []string {
+	var names []string
+
+	seen := map[string]bool{}
+
+	add := func(name string) {
+		if name == "" || seen[name] {
+			return
+		}
+
+		seen[name] = true
+		names = append(names, name)
+	}
+
+	_ = j.visitSteps(func(_ string, step *Step) error {
+		add(step.GetResourceName())
+		add(step.Put)
+
+		return nil
+	})
+
+	return names
+}
+
+// PutSteps returns every step in this job's plan and hooks that publishes to
+// the named resource.
+//
+// Preflight needs it to answer a question that is a property of the STEP, not
+// of the resource: an mcp out: with no args: sends the put's own params: as
+// the tool's arguments, so whether the tool's required arguments will be
+// there depends on which put is asking. Mirrors StepsForAgent.
+//
+// Job-scoped is the useful scope for a `steps run`: whether THIS job can work
+// cannot depend on how some other job spells its own put to a resource this
+// one only gets. Config.PutSteps is the whole-pipeline form, for `steps
+// watch`, which is going to run every job.
+func (j Job) PutSteps(resource string) []Step {
+	var steps []Step
+
+	_ = j.visitSteps(func(_ string, step *Step) error {
+		if step.Put == resource {
+			steps = append(steps, *step)
+		}
+
+		return nil
+	})
+
+	return steps
+}
+
+// PutSteps returns every step in the pipeline that publishes to the named
+// resource, across every job's plan and hooks — the whole-pipeline form of
+// Job.PutSteps, whose doc comment explains when each scope is the right one.
+func (c *Config) PutSteps(resource string) []Step {
+	steps := make([]Step, 0, len(c.Jobs))
+
+	for i := range c.Jobs {
+		steps = append(steps, c.Jobs[i].PutSteps(resource)...)
+	}
+
+	return steps
+}
+
 // FindResourceType returns the resource type with the given name, or an error if not found.
 func (c *Config) FindResourceType(name string) (*ResourceType, error) {
 	slog.Debug("resource_type.find", "name", name)

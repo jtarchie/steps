@@ -1770,8 +1770,33 @@ func preflightDisabled(ctx context.Context) bool {
 // run. The CLI layer reaches internal/agent through here rather than directly,
 // keeping the dependency direction the depguard rules describe.
 func Preflight(ctx context.Context, cfg *config.Config, job *config.Job) []config.Problem {
-	names := job.AgentNames()
-	if len(names) == 0 {
+	settings := preflightSettings(cfg)
+	if !settings.Enabled() {
+		return nil
+	}
+
+	var problems []config.Problem
+
+	if names := job.AgentNames(); len(names) > 0 {
+		problems = agent.Preflight(ctx, cfg, names, settings)
+	}
+
+	// The resources a job touches are the other half of "can this job work at
+	// all": an mcp-backed resource type calls a remote tool exactly as an
+	// agent does, and gets it wrong in exactly the same two ways — a tool that
+	// is not there, and arguments that do not satisfy it.
+	return append(problems, rsrc.Preflight(ctx, cfg, job, job.ResourceNames(), settings)...)
+}
+
+// PreflightResources probes the mcp-backed resource types behind the named
+// resources — the question `steps watch` must answer before its first poll,
+// where there is no single job to preflight.
+//
+// It lives here rather than in trigger for the same reason Preflight does:
+// the CLI and watch layers reach internal/resource through pipeline, and the
+// --no-preflight flag is carried on the context that arrives here.
+func PreflightResources(ctx context.Context, cfg *config.Config, names []string) []config.Problem {
+	if preflightDisabled(ctx) {
 		return nil
 	}
 
@@ -1780,7 +1805,9 @@ func Preflight(ctx context.Context, cfg *config.Config, job *config.Job) []confi
 		return nil
 	}
 
-	return agent.Preflight(ctx, cfg, names, settings)
+	// No job: watch is going to run every one of them, so every put in the
+	// pipeline is fair game to judge (see rsrc.Preflight).
+	return rsrc.Preflight(ctx, cfg, nil, names, settings)
 }
 
 // preflight proves the models and MCP servers this job's plan needs are
@@ -1827,4 +1854,7 @@ func preflightSettings(cfg *config.Config) *config.Preflight {
 // ResetPreflightCache forgets everything preflight has verified in this
 // process. Tests use it to stay independent of each other; nothing in a real
 // run needs it, since the cache is bounded by its own TTL.
-func ResetPreflightCache() { agent.ResetProbeCache() }
+func ResetPreflightCache() {
+	agent.ResetProbeCache()
+	rsrc.ResetPreflightCache()
+}
