@@ -263,3 +263,28 @@ func TestListToolsStopsOnAnEndlessCursor(t *testing.T) {
 		})
 	}
 }
+
+// TestConnectOutlivesTheHandshakeDeadline is what the timeout above must not
+// cost. The deadline covers negotiating the connection, not the session that
+// negotiation produces — if it leaked into the session, every MCP tool call
+// made more than handshakeTimeout after connecting would fail.
+func TestConnectOutlivesTheHandshakeDeadline(t *testing.T) {
+	t.Parallel()
+
+	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return echoServer() }, nil)
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	client, err := Connect(context.Background(), config.MCPServer{Name: "echo", Endpoint: ts.URL})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	// Connect has returned, so its internal deadline has been cancelled by the
+	// deferred cancel. A session that captured it would fail here.
+	_, err = client.CallTool(context.Background(), "echo", map[string]any{"text": "still alive"})
+	if err != nil {
+		t.Fatalf("CallTool after the handshake deadline was cancelled: %v", err)
+	}
+}

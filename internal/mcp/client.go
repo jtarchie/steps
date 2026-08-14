@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/oauth2"
@@ -42,6 +43,25 @@ type Client interface {
 type sessionClient struct {
 	session *sdkmcp.ClientSession
 }
+
+// handshakeTimeout bounds connecting to a server and negotiating a protocol
+// version with it — not any work done afterwards.
+//
+// Only preflight ever imposed a deadline on an MCP call, and preflight runs
+// once at startup. The production paths (internal/agent's buildMCPTools,
+// internal/resource's check/in/out) pass the caller's context straight
+// through, and a step only carries a deadline if the pipeline author wrote
+// `timeout:` — which trigger polling has no way to set at all. A server that
+// accepts a connection and then never answers `initialize`, or a subprocess
+// that spawns and says nothing, therefore blocked a `steps watch` poll loop
+// for as long as the process lived, with the resource simply never checked
+// again. Preflight passing at startup says nothing about an hour later.
+//
+// Generous on purpose: a cold `npx` may fetch a package before the server it
+// starts says anything. This is the boundary between slow and hung, not a
+// performance budget. Tool CALLS are deliberately not bounded here — those
+// can be legitimately long-running, and `timeout:` is where a step says so.
+const handshakeTimeout = 60 * time.Second
 
 // maxToolPages bounds how many times ListTools will follow a NextCursor.
 //
@@ -71,8 +91,14 @@ func (c *sessionClient) ListTools(ctx context.Context) ([]*sdkmcp.Tool, error) {
 	// page limit to notice for us.
 	seen := make(map[string]struct{})
 
+	// Bounded for the same reason as the handshake: listing tools is protocol
+	// setup, and a server that accepts the request and never answers should
+	// not be able to hold a step or a watch poll open indefinitely.
+	listCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	defer cancel()
+
 	for page := range maxToolPages {
-		result, err := c.session.ListTools(ctx, &sdkmcp.ListToolsParams{Cursor: cursor})
+		result, err := c.session.ListTools(listCtx, &sdkmcp.ListToolsParams{Cursor: cursor})
 		if err != nil {
 			return nil, fmt.Errorf("mcp: list tools: %w", err)
 		}
@@ -125,6 +151,9 @@ func (c *sessionClient) Close() error {
 // (config.validateMCPServerTransport rejects any other auth.type at load
 // time), since there is no HTTP request to attach a token to.
 func Connect(ctx context.Context, srv config.MCPServer) (Client, error) {
+	// The OUTER ctx, deliberately: for a stdio server this is what binds the
+	// subprocess lifetime, and for an oauth one it is what the token source
+	// refreshes against. Both have to outlive the handshake below.
 	transport, err := newTransport(ctx, srv)
 	if err != nil {
 		return nil, err
@@ -132,7 +161,10 @@ func Connect(ctx context.Context, srv config.MCPServer) (Client, error) {
 
 	client := sdkmcp.NewClient(clientImplementation, nil)
 
-	session, err := client.Connect(ctx, transport, nil)
+	handshakeCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	defer cancel()
+
+	session, err := client.Connect(handshakeCtx, transport, nil)
 	if err != nil {
 		return nil, fmt.Errorf("mcp: connect to %q: %w", srv.Name, err)
 	}
