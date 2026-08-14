@@ -557,7 +557,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	saveAgentUsage(ctx, st, saveUsageArgs{
 		jobName: jobName, stepIndex: i, stepName: name, nodeHash: hash,
 		modelRequested: prepared.primary.ModelName,
-		usage:          prepared.conv.usage.snapshot(),
+		usage:          prepared.conv.usage.persistedSnapshot(),
 		duration:       time.Since(stepStarted),
 	})
 

@@ -316,17 +316,22 @@ type blockBudget struct {
 	// spent()-only rule this had before.
 	reserve int
 
-	// mu guards reserved alone. spent() reads through RunUsage, which has its
-	// own lock; reserved is written by finishing CELL goroutines and read by
-	// the admitting parent, so it needs one of its own.
+	// mu guards reserved/inFlight, and settled broadcasts on it when a cell
+	// releases its reservation. spent() reads through RunUsage, which has its
+	// own lock; these are written by finishing CELL goroutines and read by the
+	// admitting parent, so they need one of their own.
 	mu       sync.Mutex
+	settled  *sync.Cond
 	reserved int
+	// inFlight is how many admitted cells have not settled yet. It is what
+	// tells admit whether waiting can possibly help.
+	inFlight int
 }
 
 func newBlockBudget(ctx context.Context, cfg *config.Config, step config.Step, cells []config.Step) *blockBudget {
 	ceiling := stepBudgetTokens(step)
 	if ceiling <= 0 {
-		return &blockBudget{}
+		return newIdleBlockBudget()
 	}
 
 	usage := agent.RunUsageFrom(ctx)
@@ -334,13 +339,26 @@ func newBlockBudget(ctx context.Context, cfg *config.Config, step config.Step, c
 		// No accumulator means no agent step can report anything, so there is
 		// nothing to meter. Not an error: a matrix of tasks with a budget is
 		// pointless, not wrong.
-		return &blockBudget{}
+		return newIdleBlockBudget()
 	}
 
-	return &blockBudget{
+	budget := &blockBudget{
 		usage: usage, start: usage.Total(), ceiling: ceiling,
 		reserve: cellReserve(cfg, step, cells),
 	}
+	budget.settled = sync.NewCond(&budget.mu)
+
+	return budget
+}
+
+// newIdleBlockBudget is the no-ceiling budget every unbudgeted block gets:
+// admit always says yes and settle does nothing. It still carries a live cond
+// so the zero value can never be waited on by mistake.
+func newIdleBlockBudget() *blockBudget {
+	budget := &blockBudget{}
+	budget.settled = sync.NewCond(&budget.mu)
+
+	return budget
 }
 
 // cellReserve is what admission assumes one unfinished cell will spend, in
@@ -395,15 +413,22 @@ func cellReserve(cfg *config.Config, step config.Step, cells []config.Step) int 
 }
 
 // admit reports whether another cell may start, taking its reservation when
-// it may.
+// it may — WAITING while only reservations stand in the way.
 //
-// Checked BEFORE a cell is started, never mid-cell: a cell that has begun runs
-// to completion and keeps what it recorded. That is the whole difference
-// between this and the job ceiling — the job's is a backstop and fails, this
-// one stops handing out new work.
+// The distinction is the whole correctness of this: a refusal caused by
+// SPEND is permanent, because spend only grows; a refusal caused by
+// RESERVATIONS is temporary, because in-flight cells release theirs as they
+// finish. Treating the second as permanent truncated matrices that were
+// nowhere near their ceiling — six cells costing ten tokens each against an
+// allowance of 3,600 stopped after four, having spent forty.
 //
-// Refusing takes no reservation, so a refused cell cannot hold allowance the
-// cells still running might come in under.
+// So this blocks until the reservations clear rather than giving up, and
+// returns false only when spend alone has reached the ceiling (or nothing is
+// in flight to release anything, which cannot happen while reserve > 0 but is
+// the honest guard against waiting forever).
+//
+// A cell that has begun still runs to completion and keeps what it recorded:
+// this bounds what STARTS, exactly as before.
 func (b *blockBudget) admit() bool {
 	if b.usage == nil {
 		return true
@@ -412,13 +437,24 @@ func (b *blockBudget) admit() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if b.spent()+b.reserved >= b.ceiling {
-		return false
+	for {
+		if b.spent() >= b.ceiling {
+			return false
+		}
+
+		if b.spent()+b.reserved < b.ceiling {
+			b.reserved += b.reserve
+			b.inFlight++
+
+			return true
+		}
+
+		if b.inFlight == 0 {
+			return false
+		}
+
+		b.settled.Wait()
 	}
-
-	b.reserved += b.reserve
-
-	return true
 }
 
 // settle releases a finished cell's reservation. Its real spend is already in
@@ -435,48 +471,47 @@ func (b *blockBudget) settle() {
 	defer b.mu.Unlock()
 
 	b.reserved -= b.reserve
+	b.inFlight--
+
+	// Wakes whoever is waiting for exactly this: the allowance this cell was
+	// holding is now either free again or replaced by what it really spent.
+	b.settled.Broadcast()
 }
 
 // warnIfUnbindable says so when this block's width makes its own ceiling
 // decorative.
 //
-// A reservation does not automatically fix that, which is the trap worth
-// being loud about: at a width covering every cell NOTHING reports before the
-// last cell is admitted, so the whole decision runs on reservations, and the
-// most the ceiling ever sees is what the other cells hold. Reserve the
-// allowance divided by the cell count and every cell is admitted by
-// construction, whatever they go on to spend — a budget that reads like a
-// ceiling and is arithmetically incapable of refusing anyone.
+// A reservation fixes it at any width, because admit pauses once the
+// reservations fill instead of truncating: the block waits, cells finish, and
+// the next admission decides on what they really spent. What cannot bind is a
+// block with NO reservation source at a width covering every cell — there,
+// nothing reports before the last cell is admitted and the ceiling sees a
+// running total of ~0 for every decision it makes.
 func (b *blockBudget) warnIfUnbindable(jobName string, maxInFlight, cells int) {
 	if !b.unbindable(maxInFlight, cells) {
 		return
 	}
 
-	fmt.Printf("budget: warning — max_in_flight (%d) covers all %d cells and %s reserved per cell cannot reach the %s ceiling, so this block's budget cannot stop anything\n",
-		maxInFlight, cells, humanCount(b.reserve), humanCount(b.ceiling))
+	fmt.Printf("budget: warning — max_in_flight (%d) covers all %d cells and nothing is reserved per cell, so this block's budget of %s tokens cannot stop anything\n",
+		maxInFlight, cells, humanCount(b.ceiling))
 
 	slog.Warn("across.budget.unbindable",
 		"job", jobName, "max_in_flight", maxInFlight, "cells", cells,
 		"budget_tokens", b.ceiling, "reserve_per_cell", b.reserve,
-		"detail", "every cell is admitted before any has reported usage; raise budget.reserve_per_cell above the allowance divided by the cell count, lower max_in_flight so real spend gates later cells, or rely on the job budget as the backstop")
+		"detail", "every cell is admitted before any has reported usage; set budget.reserve_per_cell (or a budget.tokens on the cell's agent) so admission pauses for real numbers, lower max_in_flight, or rely on the job budget as the backstop")
 }
 
-// unbindable reports whether this block's own ceiling can stop nothing.
+// unbindable reports whether this block's own ceiling can stop nothing: it
+// has one, nothing is reserved on admission, and the width covers every cell,
+// so no admission ever reads a nonzero total. Mirrors newLimiter's own
+// "limit >= branches means no limiter at all".
 //
-// Two conditions together. The width has to cover every cell — otherwise a
-// slot is contended for, a cell finishes and reports, and admission decides on
-// real spend (newLimiter's own "limit >= branches means no limiter at all").
-// And the reservations have to be too small to reach the ceiling on their own:
-// with no cell reporting, the largest total any admission can see is what the
-// other cells hold, so the ceiling can refuse someone only when
-// (cells-1) * reserve reaches it. A zero reservation is the degenerate case of
-// that same test, and is why this reported true before reservations existed.
+// Any positive reservation binds at any width, because admit WAITS once the
+// reservations fill rather than truncating: the block pauses, cells finish,
+// and the next admission decides on real spend. Only a block with no
+// reservation source at all can admit every cell blind.
 func (b *blockBudget) unbindable(maxInFlight, cells int) bool {
-	if b.usage == nil || cells <= 0 || maxInFlight < cells {
-		return false
-	}
-
-	return (cells-1)*b.reserve < b.ceiling
+	return b.usage != nil && b.reserve <= 0 && maxInFlight >= cells
 }
 
 func (b *blockBudget) spent() int {

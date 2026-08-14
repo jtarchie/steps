@@ -379,13 +379,18 @@ func (c *Config) validateAssertFiles(label string, step *Step) error {
 		return nil
 	}
 
-	// Only task and agent steps have outputs: to resolve against. A block step
-	// (do:, in_parallel:, ...) carrying an assert is already rejected by its
-	// own validator; resolving outputs for it here would just join a bogus
-	// `task "": no task named ""` onto that clearer message.
+	// Only task and agent steps produce outputs to check. Every other kind is
+	// REJECTED rather than skipped: returning nil here made assert.files a
+	// silent no-op on load_var:, approval: and the block kinds, so `validate`
+	// passed, the assert never ran, and `steps test` reported PASS on a
+	// fixture that checked nothing.
 	kind, ok := step.Kind()
-	if !ok || (kind != StepKindTask && kind != StepKindAgent) {
-		return nil
+	if !ok {
+		return fmt.Errorf("%s: assert.files needs a task or agent step; this step's kind is unrecognized", label)
+	}
+
+	if kind != StepKindTask && kind != StepKindAgent {
+		return fmt.Errorf("%s: assert.files is only valid on a task or agent step, not %s — nothing else captures outputs to check", label, kind)
 	}
 
 	outputs, err := c.stepOutputs(*step)

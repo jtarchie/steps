@@ -261,18 +261,17 @@ jobs:
   - across:
     - var: dim
       from_file: dims/index.json
-    # Width 3 — the planner writes at most six dimensions, so the matrix runs
-    # in two waves. The width is what makes the ceiling below bind on real
-    # numbers: a width covering every cell means no cell ever finishes before
-    # the last is admitted, so every admission would decide on reservations
-    # alone and none of the six could ever be refused.
-    max_in_flight: 3
+    # Width 6 — the planner writes at most six dimensions, so the whole matrix
+    # can run at once. The budget still binds: once the reservations below fill
+    # the allowance, admission PAUSES rather than dropping cells, and the next
+    # cell in is decided on what the finished ones really spent.
+    max_in_flight: 6
     budget:
       tokens: 3600000        # when spent, no further cells start; the plan carries on
-      # What admission charges a cell that has not reported yet, so the first
-      # wave is bounded too. Deliberately larger than the 600K a cell is
-      # expected to cost: this is a ceiling on the unknown, and reserving low
-      # is how a matrix admits its way past the allowance.
+      # What admission charges a cell that has not reported yet. Six of these
+      # exceeds the allowance, which is the point: the matrix runs three or
+      # four wide, then waits for real numbers instead of committing the whole
+      # purse to cells nobody has measured.
       reserve_per_cell: 900000
     try:
       agent: reviewer

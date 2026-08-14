@@ -1,6 +1,15 @@
 package agent
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/jtarchie/steps/internal/config"
+)
+
+// invocationWithBudget is a child agent declaring its own token ceiling.
+func invocationWithBudget(tokens int) config.ResolvedInvocation {
+	return config.ResolvedInvocation{AgentName: "helper", BudgetTokens: tokens}
+}
 
 // TestDelegatedBudgetDrawsOnTheParent pins the guarantee that makes an agent's
 // budget: a bound on its whole delegation subtree rather than on one
@@ -111,5 +120,56 @@ func TestDelegatedSpendCountsAgainstTheParentsOwnCeiling(t *testing.T) {
 	exceeded := usage.record(response(50, 50))
 	if !exceeded {
 		t.Error("record reported no breach; delegated spend must count against the step's own ceiling")
+	}
+}
+
+// TestUnboundedParentStillDelegates is the regression for the worst shape this
+// could have shipped in: an agent with no budget: at all could not delegate.
+//
+// 0 means UNBOUNDED throughout this package, and delegatedBudget hands the
+// child's own budget back when the parent has no ceiling — so an unbudgeted
+// child got 0, which allowanceFrom read as "exhausted" and refused. Every
+// pipeline that declares no budgets, which is most of them, lost delegation
+// entirely and the model was told its parent's budget was spent.
+func TestUnboundedParentStillDelegates(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		child preparedSubAgent
+		want  int
+	}{
+		{"unbudgeted child stays unbounded", preparedSubAgent{}, 0},
+		{"budgeted child keeps its own ceiling", preparedSubAgent{ri: invocationWithBudget(750)}, 750},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			allowance, err := tc.child.allowanceFrom(&stepUsage{delegateFraction: 0.10})
+			if err != nil {
+				t.Fatalf("delegation from an unbounded parent was refused: %v", err)
+			}
+
+			if allowance != tc.want {
+				t.Errorf("allowance = %d, want %d", allowance, tc.want)
+			}
+		})
+	}
+}
+
+// TestExhaustedParentIsStillRefused is the control: the refusal must survive
+// for the case it was written for, or the fix above would have removed the
+// ceiling instead of the false positive.
+func TestExhaustedParentIsStillRefused(t *testing.T) {
+	t.Parallel()
+
+	parent := &stepUsage{budget: 1000, delegateFraction: 0.10}
+	parent.chargeDelegated(1000)
+
+	_, err := preparedSubAgent{}.allowanceFrom(parent)
+	if err == nil {
+		t.Error("a delegation from a spent parent was funded")
 	}
 }

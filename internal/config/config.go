@@ -140,6 +140,7 @@ func (c *Config) validate() error {
 		c.validateContextFrom,
 		c.validateStepTransitions,
 		c.validateAsserts,
+		c.validateDelegateBudgets,
 		c.validateBudgets,
 		c.validatePreflight,
 		c.validateInParallel,

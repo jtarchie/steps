@@ -1392,11 +1392,22 @@ type AgentUsage struct {
 
 // RecordAgentUsage stores what one agent step spent.
 //
-// Replaces on conflict: a step re-executed within one run (a to: route sending
-// the plan back over it) reports the spend of the attempt that finished last,
-// which is the one whose result the run actually used. The conflict is on the
-// node hash, so two DIFFERENT steps sharing a plan index — the cells of a
-// matrix, the members of an ensemble — never collide.
+// ACCUMULATES the token counts on conflict, and replaces the descriptive
+// fields.
+//
+// A step can execute more than once against the same node hash: a to: route
+// sending the plan back over it, or a resumed run re-running the step its
+// predecessor died on. You paid for every one of those attempts, so the
+// counts are a running total — replacing them reported the last attempt as
+// though it were the whole bill, and made this table unusable as the ledger a
+// resumed run reads its prior spend from (RunTokensSpent).
+//
+// The descriptive columns still take the newest value: model_served,
+// finish_reason and raw_meta describe ONE response and cannot be summed, and
+// the last attempt is the one whose result the run actually used.
+//
+// The conflict is on the node hash, so two DIFFERENT steps sharing a plan
+// index — the cells of a matrix, the members of an ensemble — never collide.
 func (s *Store) RecordAgentUsage(ctx context.Context, usage AgentUsage) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO agent_usage (
@@ -1410,14 +1421,14 @@ func (s *Store) RecordAgentUsage(ctx context.Context, usage AgentUsage) error {
 			step_index = excluded.step_index,
 			step_name = excluded.step_name,
 			model_served = excluded.model_served,
-			prompt_tokens = excluded.prompt_tokens,
-			completion_tokens = excluded.completion_tokens,
-			total_tokens = excluded.total_tokens,
-			cached_tokens = excluded.cached_tokens,
-			reasoning_tokens = excluded.reasoning_tokens,
-			cost_usd = excluded.cost_usd,
+			prompt_tokens = agent_usage.prompt_tokens + excluded.prompt_tokens,
+			completion_tokens = agent_usage.completion_tokens + excluded.completion_tokens,
+			total_tokens = agent_usage.total_tokens + excluded.total_tokens,
+			cached_tokens = agent_usage.cached_tokens + excluded.cached_tokens,
+			reasoning_tokens = agent_usage.reasoning_tokens + excluded.reasoning_tokens,
+			cost_usd = agent_usage.cost_usd + excluded.cost_usd,
 			finish_reason = excluded.finish_reason,
-			duration_ms = excluded.duration_ms,
+			duration_ms = agent_usage.duration_ms + excluded.duration_ms,
 			raw_meta = excluded.raw_meta,
 			created_at = excluded.created_at
 	`,

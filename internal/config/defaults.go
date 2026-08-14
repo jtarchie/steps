@@ -55,6 +55,46 @@ type Defaults struct {
 // noticing, which is far past what any sensible plan asks for.
 const DefaultDelegateBudgetPercent = 10
 
+// validateDelegateBudgets rejects a delegation share that is not a
+// percentage.
+//
+// Above 100 a child would be handed more than its parent has left, which is
+// the opposite of the bound this exists to create; at or below 0 the whole
+// inheritance silently reverts to every agent running unbounded. Both read as
+// configuration and bind nothing, which is what this package rejects at load
+// everywhere else. The schema says 1..100 too, but nothing enforces a schema
+// at run time — `steps run` never reads it.
+func (c *Config) validateDelegateBudgets() error {
+	if c.Defaults != nil {
+		err := validateDelegatePercent("defaults", c.Defaults.DelegateBudgetPercent)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, agent := range c.Agents {
+		err := validateDelegatePercent(fmt.Sprintf("agent %q", agent.Name), agent.DelegateBudgetPercent)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateDelegatePercent(label string, percent *int) error {
+	if percent == nil {
+		return nil
+	}
+
+	if *percent < 1 || *percent > 100 {
+		return fmt.Errorf("%s: delegate_budget_percent must be between 1 and 100 (it is the share of an agent's REMAINING allowance one sub-agent call may take; omit it for the default of %d)",
+			label, DefaultDelegateBudgetPercent)
+	}
+
+	return nil
+}
+
 // DelegateBudgetFraction is the share of the named agent's remaining
 // allowance that one of its sub-agent calls may take: the agent's own
 // override, else the pipeline default, else DefaultDelegateBudgetPercent.

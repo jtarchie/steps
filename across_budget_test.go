@@ -271,8 +271,8 @@ jobs:
 
 	mustRun(t, path)
 
-	if got := fake.requestCount(); got >= 6 {
-		t.Errorf("every cell ran (%d requests); the ceiling never bound under concurrency", got)
+	if got := fake.requestCount(); got != 2 {
+		t.Errorf("cells run = %d, want exactly 2 (a 700 allowance covers two 400-token cells)", got)
 	}
 }
 
@@ -319,10 +319,12 @@ jobs:
 
 	mustRun(t, path)
 
-	// Two admitted (0 + 400 reserved, then 400 + 400 >= 700 refuses the third),
-	// whichever order the cells happen to finish in.
-	if got := fake.requestCount(); got >= 6 {
-		t.Errorf("every cell ran (%d requests); the ceiling did not bind at a width covering the matrix", got)
+	// Exactly two: 0 + 400 reserved admits the first, 400 + 400 >= 700 refuses
+	// the third, and the finished cells' real spend (400 apiece) keeps it
+	// refused. An inequality here would pass at one cell and at zero, which is
+	// how an over-truncating budget hid.
+	if got := fake.requestCount(); got != 2 {
+		t.Errorf("cells run = %d, want exactly 2 (a 700 allowance covers two 400-token cells)", got)
 	}
 }
 
@@ -366,7 +368,7 @@ jobs:
 
 	mustRun(t, path)
 
-	if got := fake.requestCount(); got >= 6 {
-		t.Errorf("every cell ran (%d requests); the cell agent's own budget.tokens was not used as the reservation", got)
+	if got := fake.requestCount(); got != 2 {
+		t.Errorf("cells run = %d, want exactly 2: the cell agent's own budget.tokens (400) is the reservation", got)
 	}
 }

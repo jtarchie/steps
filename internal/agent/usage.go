@@ -324,6 +324,19 @@ func (s *stepUsage) addTokens(prompt, completion int) {
 	s.total += prompt + completion
 }
 
+// hasCeiling reports whether this invocation declares a token budget at all.
+//
+// The distinction matters more than it looks: 0 means UNBOUNDED everywhere in
+// this file, so a caller that reads "no allowance" off a zero cannot tell an
+// agent with no budget from one that has spent all of it. Conflating the two
+// refused every delegation on every pipeline that set no budgets.
+func (s *stepUsage) hasCeiling() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.budget > 0
+}
+
 // remaining is what this invocation may still spend under its OWN ceiling,
 // counting what its delegations have already taken. math.MaxInt when it
 // declares no ceiling — "no budget" is unbounded, not zero.
@@ -406,8 +419,16 @@ func (s *stepUsage) delegatedBudget(own int) int {
 func (s *stepUsage) exceededError() error {
 	spent := s.snapshot()
 
-	if s.budget > 0 && spent.Total > s.budget {
-		return budgetExceededError("agent "+strconv.Quote(spent.Step), spent.Total, s.budget)
+	s.mu.Lock()
+	delegated := s.delegated
+	s.mu.Unlock()
+
+	// Tested the same way record() trips it, delegated included. Without that
+	// a breach CAUSED by delegation fell through to the job branch and
+	// reported "job budget exceeded: cap 0 tokens" — a ceiling that does not
+	// exist — for an agent that had spent its own allowance on helpers.
+	if s.budget > 0 && spent.Total+delegated > s.budget {
+		return budgetExceededError(agentBudgetLabel(spent.Step, delegated), spent.Total+delegated, s.budget)
 	}
 
 	if s.run != nil {
@@ -415,7 +436,19 @@ func (s *stepUsage) exceededError() error {
 			s.run.Budget(), s.run.Total()+spent.Total, s.run.runningTotals(spent))
 	}
 
-	return fmt.Errorf("agent budget exceeded (spent %d tokens), but neither an agent nor a job ceiling explains why", spent.Total)
+	return fmt.Errorf("agent budget exceeded (spent %d tokens), but neither an agent nor a job ceiling explains why", spent.Total+delegated)
+}
+
+// agentBudgetLabel names the breaching agent, saying so when its sub-agents
+// are what spent the allowance — otherwise the number in the message looks
+// unrelated to anything the agent itself did.
+func agentBudgetLabel(step string, delegated int) string {
+	label := "agent " + strconv.Quote(step)
+	if delegated > 0 {
+		label += " (including " + strconv.Itoa(delegated) + " tokens spent by its sub-agents)"
+	}
+
+	return label
 }
 
 // finish reports the step's spend and rolls it into the job total. Called once
@@ -439,6 +472,30 @@ func (s *stepUsage) finish() {
 	if parent := s.parentOf(); parent != nil {
 		parent.chargeDelegated(spent.Total)
 	}
+}
+
+// persistedSnapshot is what the step's agent_usage ROW records: its own spend
+// plus everything its sub-agents spent.
+//
+// Deliberately not snapshot(). That one feeds the in-memory RunUsage, which
+// each sub-agent already adds to under its own name, so folding delegated in
+// there would count the subtree twice. Nothing persists a row for a
+// sub-agent, though, so without this the durable record — what `steps cost`
+// reports, and what a resumed run reads its prior spend from — omitted every
+// delegated token. A run that delegates heavily restored most of its
+// allowance on resume.
+//
+// It also makes the reported number the more useful one: what this step cost,
+// helpers included.
+func (s *stepUsage) persistedSnapshot() StepUsage {
+	spent := s.snapshot()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	spent.Total += s.delegated
+
+	return spent
 }
 
 // snapshot is what the step contributes to the job's total.

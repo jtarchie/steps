@@ -120,9 +120,13 @@ type preparedSubAgent struct {
 // otherwise answerable only by reading the token log.
 //
 // No parent accumulator (a sub-agent invoked outside a conversation, which
-// only tests do) leaves the child on its own declared budget, as before.
+// only tests do) leaves the child on its own declared budget, as before. So
+// does a parent with NO ceiling: there is no allowance to take a fraction of,
+// and 0 means unbounded rather than empty — reading it as empty refused every
+// delegation on every pipeline that declares no budgets, which is most of
+// them, while telling the model its parent's budget was spent.
 func (c preparedSubAgent) allowanceFrom(parent *stepUsage) (int, error) {
-	if parent == nil {
+	if parent == nil || !parent.hasCeiling() {
 		return c.ri.BudgetTokens, nil
 	}
 

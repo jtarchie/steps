@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
@@ -42,15 +43,10 @@ func TestBlockBudgetUnbindable(t *testing.T) {
 		// A reservation big enough that the cells holding it reach the ceiling
 		// binds at any width: 5 * 200 = 1000 refuses the sixth.
 		{"a reservation that reaches the ceiling binds", budgeted(200), 8, 6, false},
-		// The trap. Reserving the allowance divided by the cell count admits
-		// every cell BY CONSTRUCTION — 5 * 166 = 830 never reaches 1000 — so
-		// the ceiling is arithmetically incapable of refusing anyone, however
-		// much they go on to spend. This is the case that shipped in
-		// examples/pr-review.yml (6 cells, 600K reserved, 3.6M ceiling) with
-		// the warning suppressed because a reservation merely existed.
-		{"a reservation too small to reach the ceiling cannot bind", budgeted(1000 / 6), 6, 6, true},
-		// One cell can never be refused: it is admitted against nothing.
-		{"a single cell cannot bind", budgeted(200), 4, 1, true},
+		// Even a reservation far too small to reach the ceiling on its own
+		// binds, because admission PAUSES once it is committed and the next
+		// decision is made on what the finished cells really spent.
+		{"a small reservation still binds", budgeted(1000 / 6), 6, 6, false},
 	}
 
 	for _, test := range tests {
@@ -79,13 +75,16 @@ func newTestBlockBudget(t *testing.T, ceiling, reserve int) (*blockBudget, *agen
 
 // TestBlockBudgetReservesOnAdmit is the case a spent()-only ceiling could
 // never bind: nothing has finished, so nothing has reported, and without a
-// reservation every cell is admitted against a total of ~0. With one, the
-// allowance is consumed up front and the block stops admitting at the line.
+// reservation every cell is admitted against a total of ~0.
+//
+// With one, the allowance is consumed up front. A cell that cannot fit is not
+// refused outright — its reservation may yet be released — so this drives the
+// PERMANENT half: once real spend reaches the ceiling, admission is over.
 func TestBlockBudgetReservesOnAdmit(t *testing.T) {
 	t.Parallel()
 
-	// Room for exactly three cells at 200 apiece; the fourth crosses.
-	spend, _ := newTestBlockBudget(t, 600, 200)
+	// Room for exactly three cells at 200 apiece.
+	spend, usage := newTestBlockBudget(t, 600, 200)
 
 	for i := range 3 {
 		if !spend.admit() {
@@ -93,8 +92,54 @@ func TestBlockBudgetReservesOnAdmit(t *testing.T) {
 		}
 	}
 
+	// They finish having spent the whole allowance.
+	for range 3 {
+		usage.Add(agent.StepUsage{Total: 200})
+		spend.settle()
+	}
+
 	if spend.admit() {
-		t.Error("the fourth cell was admitted; three reservations of 200 already cover the 600 ceiling")
+		t.Error("a fourth cell was admitted after the allowance was spent outright")
+	}
+}
+
+// TestBlockBudgetAdmitWaitsForAReservation pins the difference between the two
+// kinds of refusal, which is the whole correctness of admission.
+//
+// Spend only grows, so a spend-driven refusal is permanent. Reservations are
+// released as cells finish, so a reservation-driven one is not — treating it
+// as permanent truncated matrices nowhere near their ceiling. This admits to
+// capacity, then proves the next admission BLOCKS until a settle rather than
+// coming back false.
+func TestBlockBudgetAdmitWaitsForAReservation(t *testing.T) {
+	t.Parallel()
+
+	spend, usage := newTestBlockBudget(t, 600, 200)
+
+	for range 3 {
+		spend.admit()
+	}
+
+	admitted := make(chan bool, 1)
+	go func() { admitted <- spend.admit() }()
+
+	select {
+	case got := <-admitted:
+		t.Fatalf("admit returned %v immediately; it must wait while only reservations stand in the way", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// A cell finishes far under its reservation, which frees the allowance.
+	usage.Add(agent.StepUsage{Total: 5})
+	spend.settle()
+
+	select {
+	case got := <-admitted:
+		if !got {
+			t.Error("admit refused after a reservation was released with almost nothing spent")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("admit never woke after settle")
 	}
 }
 
@@ -110,10 +155,6 @@ func TestBlockBudgetSettleReleasesUnderspend(t *testing.T) {
 	// Three admitted, allowance fully reserved.
 	for range 3 {
 		spend.admit()
-	}
-
-	if spend.admit() {
-		t.Fatal("precondition: a fourth cell must be refused while three reservations stand")
 	}
 
 	// All three finish having spent 10 each, not the 200 assumed.
