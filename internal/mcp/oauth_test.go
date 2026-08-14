@@ -337,6 +337,48 @@ func TestOAuthTokenSourceUnexpiredWithNoRefreshTokenStillWorks(t *testing.T) {
 	}
 }
 
+// TestCheckRefreshableMatchesOAuth2ExpiryDelta pins checkRefreshable to the
+// same margin x/oauth2 applies, for a token that cannot be refreshed.
+//
+// The interesting case is the one in between: a token that has not expired by
+// the wall clock but HAS by x/oauth2's reckoning. Reporting that as fine
+// hands the caller a credential x/oauth2 immediately refuses, with an error
+// that is neither actionable nor terminal — so the run fails on a message
+// about a state this check is supposed to own, and a watcher never stops
+// retrying it.
+func TestCheckRefreshableMatchesOAuth2ExpiryDelta(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		expiry    time.Time
+		wantNeeds bool
+	}{
+		{"comfortably live", time.Now().Add(time.Hour), false},
+		{"inside oauth2's expiry delta", time.Now().Add(expiryDelta / 2), true},
+		{"already expired", time.Now().Add(-time.Hour), true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			tf := &TokenFile{AccessToken: "access-token", Expiry: test.expiry}
+
+			err := tf.checkRefreshable()
+			if got := errors.Is(err, ErrNeedsLogin); got != test.wantNeeds {
+				t.Fatalf("checkRefreshable() needs-login = %v, want %v (err = %v)", got, test.wantNeeds, err)
+			}
+
+			// x/oauth2 is the authority this has to agree with: whatever it
+			// considers still valid is exactly what may be reported as fine.
+			if valid := tf.token().Valid(); valid == test.wantNeeds {
+				t.Fatalf("oauth2.Token.Valid() = %v, but checkRefreshable needs-login = %v — the two disagree", valid, test.wantNeeds)
+			}
+		})
+	}
+}
+
 // TestOAuthTokenSourceNeedsLoginWhenRefreshRejected covers the second way a
 // credential dies for good: the refresh token is present but the
 // authorization server refuses it (revoked, expired, or already rotated away

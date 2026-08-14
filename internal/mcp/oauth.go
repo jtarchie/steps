@@ -54,6 +54,26 @@ type TokenFile struct {
 	Expiry       time.Time `json:"expiry,omitempty"`
 }
 
+// expiryDelta mirrors x/oauth2's own defaultExpiryDelta (token.go), the
+// margin by which it treats a token as already expired so a request does not
+// leave with a credential that dies in flight.
+//
+// checkRefreshable has to use the SAME margin, because the two answer the
+// same question a few microseconds apart and disagreeing leaves a gap where
+// this file says "fine" and x/oauth2 says "expired". A token with no refresh
+// token and ten seconds left fell in that gap: it passed the check below,
+// then failed inside x/oauth2 with a bare "token expired and refresh token is
+// not set" — an error that names neither the server nor the fix, and that
+// carries no *oauth2.RetrieveError, so classifyRefreshError leaves it
+// transient and a watcher retries a permanently dead credential forever.
+// Any clock skew at or above the margin has the same shape.
+//
+// Kept as a local constant rather than read from x/oauth2, which does not
+// export it. If they ever diverge the direction that matters is this one
+// being the LARGER, which fails early and honestly rather than late and
+// silently.
+const expiryDelta = 10 * time.Second
+
 // checkRefreshable reports the one broken state a token file can be in that
 // is knowable without a single request: the access token has expired and
 // there is no refresh token to trade for a new one.
@@ -65,7 +85,7 @@ type TokenFile struct {
 // moment anything can be done about it — see Login, which refuses to report
 // success for a token that expires with nothing to renew it.
 func (t *TokenFile) checkRefreshable() error {
-	if t.RefreshToken != "" || t.Expiry.IsZero() || time.Now().Before(t.Expiry) {
+	if t.RefreshToken != "" || t.Expiry.IsZero() || time.Now().Before(t.Expiry.Add(-expiryDelta)) {
 		return nil
 	}
 
