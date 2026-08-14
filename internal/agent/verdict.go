@@ -67,19 +67,19 @@ func buildVerdictTool(verdicts []string, noteRequired bool) (*genai.FunctionDecl
 // step's already-built tool set when the step declares verdicts:, and returns
 // the tool's name (or "" when verdict mode is off). A pre-existing tool of the
 // same name is a conflict — rejected here rather than silently shadowed.
-func injectVerdictTool(verdicts []string, noteRequired bool, decls *genai.Tool, registry map[string]toolImpl, required map[string]bool) (string, error) {
+func injectVerdictTool(verdicts []string, noteRequired bool, tools agentTools) (string, error) {
 	if len(verdicts) == 0 {
 		return "", nil
 	}
 
-	if _, exists := registry[verdictToolName]; exists {
+	if _, exists := tools.registry[verdictToolName]; exists {
 		return "", fmt.Errorf("declares verdicts: but already defines a tool named %q", verdictToolName)
 	}
 
 	decl, impl := buildVerdictTool(verdicts, noteRequired)
-	decls.FunctionDeclarations = append(decls.FunctionDeclarations, decl)
-	registry[verdictToolName] = impl
-	required[verdictToolName] = true
+	tools.decls.FunctionDeclarations = append(tools.decls.FunctionDeclarations, decl)
+	tools.registry[verdictToolName] = impl
+	tools.required[verdictToolName] = true
 
 	return verdictToolName, nil
 }

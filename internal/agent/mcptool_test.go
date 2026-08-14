@@ -103,17 +103,17 @@ func TestBuildMCPToolsSingleForm(t *testing.T) {
 	srv := newCountingMCPServer(t)
 	cfg := &config.Config{MCPServers: []config.MCPServer{srv.server()}}
 
-	decls, registry, closer, err := buildAgentTools(context.Background(), cfg, []config.ToolSpec{{MCP: "test", MCPTool: "search_issues", Description: "override"}}, "")
+	built, closer, err := buildAgentTools(context.Background(), cfg, []config.ToolSpec{{MCP: "test", MCPTool: "search_issues", Description: "override"}}, "")
 	if err != nil {
 		t.Fatalf("buildAgentTools: %v", err)
 	}
 	defer closeAll(closer)
 
-	if len(decls.FunctionDeclarations) != 1 {
-		t.Fatalf("declarations = %+v, want 1", decls.FunctionDeclarations)
+	if len(built.decls.FunctionDeclarations) != 1 {
+		t.Fatalf("declarations = %+v, want 1", built.decls.FunctionDeclarations)
 	}
 
-	decl := decls.FunctionDeclarations[0]
+	decl := built.decls.FunctionDeclarations[0]
 	if decl.Name != "test__search_issues" {
 		t.Errorf("Name = %q, want test__search_issues", decl.Name)
 	}
@@ -126,9 +126,9 @@ func TestBuildMCPToolsSingleForm(t *testing.T) {
 		t.Error("ParametersJsonSchema is nil, want the server's advertised schema")
 	}
 
-	impl, ok := registry["test__search_issues"]
+	impl, ok := built.registry["test__search_issues"]
 	if !ok {
-		t.Fatal("registry missing test__search_issues")
+		t.Fatal("built.registry missing test__search_issues")
 	}
 
 	result := impl(context.Background(), map[string]any{"query": "bug"}, toolEnv{})
@@ -143,22 +143,22 @@ func TestBuildMCPToolsSubsetAndAllShareOneConnection(t *testing.T) {
 	srv := newCountingMCPServer(t)
 	cfg := &config.Config{MCPServers: []config.MCPServer{srv.server()}}
 
-	_, registry, closer, err := buildAgentTools(context.Background(), cfg, []config.ToolSpec{{MCP: "test"}}, "") // bare form: all tools
+	built, closer, err := buildAgentTools(context.Background(), cfg, []config.ToolSpec{{MCP: "test"}}, "") // bare form: all tools
 	if err != nil {
 		t.Fatalf("buildAgentTools: %v", err)
 	}
 	defer closeAll(closer)
 
-	if len(registry) != 2 {
-		t.Fatalf("registry = %+v, want 2 tools (search_issues, get_issue)", registry)
+	if len(built.registry) != 2 {
+		t.Fatalf("built.registry = %+v, want 2 tools (search_issues, get_issue)", built.registry)
 	}
 
-	if _, ok := registry["test__search_issues"]; !ok {
-		t.Error("registry missing test__search_issues")
+	if _, ok := built.registry["test__search_issues"]; !ok {
+		t.Error("built.registry missing test__search_issues")
 	}
 
-	if _, ok := registry["test__get_issue"]; !ok {
-		t.Error("registry missing test__get_issue")
+	if _, ok := built.registry["test__get_issue"]; !ok {
+		t.Error("built.registry missing test__get_issue")
 	}
 
 	if *srv.listCalls != 1 {
@@ -172,7 +172,7 @@ func TestBuildMCPToolsUnknownToolName(t *testing.T) {
 	srv := newCountingMCPServer(t)
 	cfg := &config.Config{MCPServers: []config.MCPServer{srv.server()}}
 
-	_, _, closer, err := buildAgentTools(context.Background(), cfg, []config.ToolSpec{{MCP: "test", MCPTool: "ghost_tool"}}, "")
+	_, closer, err := buildAgentTools(context.Background(), cfg, []config.ToolSpec{{MCP: "test", MCPTool: "ghost_tool"}}, "")
 	if err == nil {
 		closeAll(closer)
 		t.Fatal("buildAgentTools: expected an error for an unknown mcp tool name")
@@ -185,7 +185,7 @@ func TestBuildMCPToolsCloserClosesConnection(t *testing.T) {
 	srv := newCountingMCPServer(t)
 	cfg := &config.Config{MCPServers: []config.MCPServer{srv.server()}}
 
-	_, _, closer, err := buildAgentTools(context.Background(), cfg, []config.ToolSpec{{MCP: "test", MCPTool: "search_issues"}}, "")
+	_, closer, err := buildAgentTools(context.Background(), cfg, []config.ToolSpec{{MCP: "test", MCPTool: "search_issues"}}, "")
 	if err != nil {
 		t.Fatalf("buildAgentTools: %v", err)
 	}

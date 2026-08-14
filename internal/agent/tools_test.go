@@ -33,22 +33,22 @@ func TestBuildAgentToolsBuiltins(t *testing.T) {
 	t.Run("empty specs enables the read-only default set", func(t *testing.T) {
 		t.Parallel()
 
-		decls, registry, _, err := buildAgentTools(context.Background(), nil, nil, "")
+		built, _, err := buildAgentTools(context.Background(), nil, nil, "")
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		if len(decls.FunctionDeclarations) != 3 {
-			t.Errorf("got %d declarations, want 3", len(decls.FunctionDeclarations))
+		if len(built.decls.FunctionDeclarations) != 3 {
+			t.Errorf("got %d declarations, want 3", len(built.decls.FunctionDeclarations))
 		}
 
 		for _, name := range []string{"read_file", "list_dir", "search_files"} {
-			if _, ok := registry[name]; !ok {
-				t.Errorf("registry missing %q", name)
+			if _, ok := built.registry[name]; !ok {
+				t.Errorf("built.registry missing %q", name)
 			}
 		}
 
-		if _, ok := registry["run_shell"]; ok {
+		if _, ok := built.registry["run_shell"]; ok {
 			t.Error("run_shell should not be granted by default — it must be selected explicitly")
 		}
 	})
@@ -56,16 +56,16 @@ func TestBuildAgentToolsBuiltins(t *testing.T) {
 	t.Run("selecting a subset omits the rest", func(t *testing.T) {
 		t.Parallel()
 
-		decls, registry, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{{Builtin: "read_file"}}, "")
+		built, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{{Builtin: "read_file"}}, "")
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		if len(decls.FunctionDeclarations) != 1 {
-			t.Errorf("got %d declarations, want 1", len(decls.FunctionDeclarations))
+		if len(built.decls.FunctionDeclarations) != 1 {
+			t.Errorf("got %d declarations, want 1", len(built.decls.FunctionDeclarations))
 		}
 
-		if _, ok := registry["run_shell"]; ok {
+		if _, ok := built.registry["run_shell"]; ok {
 			t.Error("run_shell should not be registered when not selected")
 		}
 	})
@@ -73,7 +73,7 @@ func TestBuildAgentToolsBuiltins(t *testing.T) {
 	t.Run("unknown builtin errors", func(t *testing.T) {
 		t.Parallel()
 
-		_, _, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{{Builtin: "nope"}}, "")
+		_, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{{Builtin: "nope"}}, "")
 		if err == nil {
 			t.Error("expected an error for an unknown builtin tool")
 		}
@@ -92,12 +92,12 @@ func TestBuildAgentToolsWriteFile(t *testing.T) {
 	t.Run("not granted by default", func(t *testing.T) {
 		t.Parallel()
 
-		_, registry, _, err := buildAgentTools(context.Background(), nil, nil, "")
+		built, _, err := buildAgentTools(context.Background(), nil, nil, "")
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		if _, ok := registry["write_file"]; ok {
+		if _, ok := built.registry["write_file"]; ok {
 			t.Error("write_file should not be granted by default — it must be selected explicitly")
 		}
 	})
@@ -105,17 +105,17 @@ func TestBuildAgentToolsWriteFile(t *testing.T) {
 	t.Run("can be selected explicitly", func(t *testing.T) {
 		t.Parallel()
 
-		decls, registry, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{{Builtin: "write_file"}}, "")
+		built, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{{Builtin: "write_file"}}, "")
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		if len(decls.FunctionDeclarations) != 1 {
-			t.Errorf("got %d declarations, want 1", len(decls.FunctionDeclarations))
+		if len(built.decls.FunctionDeclarations) != 1 {
+			t.Errorf("got %d declarations, want 1", len(built.decls.FunctionDeclarations))
 		}
 
-		if _, ok := registry["write_file"]; !ok {
-			t.Error("registry missing write_file")
+		if _, ok := built.registry["write_file"]; !ok {
+			t.Error("built.registry missing write_file")
 		}
 	})
 }
@@ -135,12 +135,12 @@ func TestRunShellDescriptionMentionsTheImageOnlyWhenImageSet(t *testing.T) {
 	runShellDecl := func(t *testing.T, image string) *genai.FunctionDeclaration {
 		t.Helper()
 
-		decls, _, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{{Builtin: "run_shell"}}, image)
+		built, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{{Builtin: "run_shell"}}, image)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		return decls.FunctionDeclarations[0]
+		return built.decls.FunctionDeclarations[0]
 	}
 
 	hostDecl := runShellDecl(t, "")
@@ -168,18 +168,18 @@ func TestBuildAgentToolsCustom(t *testing.T) {
 	t.Run("custom tool infers params from its run template", func(t *testing.T) {
 		t.Parallel()
 
-		decls, registry, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{
+		built, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{
 			{Name: "post_review", Description: "post a review", Run: `gh pr review {{ .args.action }} -b "{{ .args.body }}"`},
 		}, "")
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		if len(decls.FunctionDeclarations) != 1 {
-			t.Fatalf("got %d declarations, want 1", len(decls.FunctionDeclarations))
+		if len(built.decls.FunctionDeclarations) != 1 {
+			t.Fatalf("got %d declarations, want 1", len(built.decls.FunctionDeclarations))
 		}
 
-		decl := decls.FunctionDeclarations[0]
+		decl := built.decls.FunctionDeclarations[0]
 		if decl.Name != "post_review" {
 			t.Errorf("name = %q, want post_review", decl.Name)
 		}
@@ -194,15 +194,15 @@ func TestBuildAgentToolsCustom(t *testing.T) {
 			t.Errorf("got %d params, want 2", len(decl.Parameters.Properties))
 		}
 
-		if _, ok := registry["post_review"]; !ok {
-			t.Error("registry missing post_review")
+		if _, ok := built.registry["post_review"]; !ok {
+			t.Error("built.registry missing post_review")
 		}
 	})
 
 	t.Run("duplicate tool name errors", func(t *testing.T) {
 		t.Parallel()
 
-		_, _, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{{Builtin: "read_file"}, {Name: "read_file", Run: "echo hi"}}, "")
+		_, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{{Builtin: "read_file"}, {Name: "read_file", Run: "echo hi"}}, "")
 		if err == nil {
 			t.Error("expected an error for a duplicate tool name")
 		}
@@ -211,7 +211,7 @@ func TestBuildAgentToolsCustom(t *testing.T) {
 	t.Run("custom tool missing name or run errors", func(t *testing.T) {
 		t.Parallel()
 
-		_, _, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{{Description: "no name or run"}}, "")
+		_, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{{Description: "no name or run"}}, "")
 		if err == nil {
 			t.Error("expected an error for a custom tool with no name/run")
 		}
@@ -230,14 +230,14 @@ func TestBuildAgentToolsCustom(t *testing.T) {
 func TestBuildAgentToolsCustomShellquotePiped(t *testing.T) {
 	t.Parallel()
 
-	decls, _, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{
+	built, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{
 		{Name: "post_review", Description: "post a review", Run: `gh pr review --{{ .args.action }} -b {{ .args.body | shellquote }}`},
 	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	decl := decls.FunctionDeclarations[0]
+	decl := built.decls.FunctionDeclarations[0]
 	for _, name := range []string{"action", "body"} {
 		if _, ok := decl.Parameters.Properties[name]; !ok {
 			t.Errorf("missing inferred param %q for a piped {{ .args.%s | shellquote }} reference", name, name)
@@ -1381,7 +1381,7 @@ func TestToolResponseParts(t *testing.T) {
 
 	dir := t.TempDir()
 
-	_, registry, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{
+	built, _, err := buildAgentTools(context.Background(), nil, []config.ToolSpec{
 		{Name: "fail_a", Run: "exit 1", Required: true},
 		{Name: "fail_b", Run: "exit 1", Required: true},
 		{Name: "ok", Run: "true"},
@@ -1396,7 +1396,7 @@ func TestToolResponseParts(t *testing.T) {
 		{ID: "3", Name: "ok"},
 	}
 
-	parts := toolResponseParts(context.Background(), calls, testEnv(dir), registry, nil, map[string]int{})
+	parts := toolResponseParts(context.Background(), calls, testEnv(dir), built.registry, nil, map[string]int{})
 
 	if len(parts) != 3 {
 		t.Fatalf("expected a response part for every call, even after a failed one, got %d", len(parts))

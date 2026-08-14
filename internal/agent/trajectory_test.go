@@ -321,7 +321,7 @@ func TestTrajectoryRecordsBudgetRejectedCall(t *testing.T) {
 
 	specs := []config.ToolSpec{{Name: "post_review", Run: "true", MaxCalls: 1}}
 
-	decls, registry, _, err := buildAgentTools(context.Background(), nil, specs, "")
+	built, _, err := buildAgentTools(context.Background(), nil, specs, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestTrajectoryRecordsBudgetRejectedCall(t *testing.T) {
 	conv := agentConversation{
 		prompt:   "review",
 		env:      toolEnv{dir: dir, runner: runner},
-		tools:    agentTools{decls: decls, registry: registry, required: requiredToolNames(specs), maxCalls: maxCallsByName(specs)},
+		tools:    built,
 		maxTurns: testMaxTurns,
 	}
 

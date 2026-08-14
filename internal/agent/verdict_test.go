@@ -15,14 +15,12 @@ import (
 func verdictConversation(t *testing.T, dir string, verdicts []string) agentConversation {
 	t.Helper()
 
-	decls, registry, _, err := buildAgentTools(context.Background(), nil, nil, "")
+	built, _, err := buildAgentTools(context.Background(), nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	required := map[string]bool{}
-
-	verdictTool, err := injectVerdictTool(verdicts, false, decls, registry, required)
+	verdictTool, err := injectVerdictTool(verdicts, false, built)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +33,7 @@ func verdictConversation(t *testing.T, dir string, verdicts []string) agentConve
 	return agentConversation{
 		prompt:      "judge it",
 		env:         toolEnv{dir: dir, runner: runner},
-		tools:       agentTools{decls: decls, registry: registry, required: required},
+		tools:       built,
 		maxTurns:    testMaxTurns,
 		verdictTool: verdictTool,
 	}
@@ -130,10 +128,13 @@ func TestVerdictToolSchemaEnum(t *testing.T) {
 func TestInjectVerdictToolNameCollision(t *testing.T) {
 	t.Parallel()
 
-	decls := &genai.Tool{}
-	registry := map[string]toolImpl{verdictToolName: func(context.Context, map[string]any, toolEnv) map[string]any { return nil }}
+	taken := agentTools{
+		decls:    &genai.Tool{},
+		registry: map[string]toolImpl{verdictToolName: func(context.Context, map[string]any, toolEnv) map[string]any { return nil }},
+		required: map[string]bool{},
+	}
 
-	_, err := injectVerdictTool([]string{"approve"}, false, decls, registry, map[string]bool{})
+	_, err := injectVerdictTool([]string{"approve"}, false, taken)
 	if err == nil {
 		t.Error("expected a conflict error for a pre-existing verdict tool")
 	}

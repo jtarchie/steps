@@ -331,6 +331,13 @@ func fetchGetVersions(ctx context.Context, cfg *config.Config, step config.Step,
 		return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
 	}
 
+	// A nil pair with no error would mean the resolver returned success
+	// without resolving anything. Nothing does that today; saying so here
+	// turns a would-be nil dereference in the caller into a named failure.
+	if resource == nil || resourceType == nil {
+		return nil, nil, nil, fmt.Errorf("get %q: resolved to no resource", step.Get)
+	}
+
 	return resource, resourceType, versions, nil
 }
 

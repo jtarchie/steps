@@ -139,7 +139,7 @@ func newTestConversation(t *testing.T, prompt, dir string) agentConversation {
 
 	specs := append(config.DefaultAgentToolSpecs(), config.ToolSpec{Builtin: "run_shell"})
 
-	decls, registry, _, err := buildAgentTools(context.Background(), nil, specs, "")
+	built, _, err := buildAgentTools(context.Background(), nil, specs, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func newTestConversation(t *testing.T, prompt, dir string) agentConversation {
 	return agentConversation{
 		prompt:   prompt,
 		env:      toolEnv{dir: dir, runner: runner},
-		tools:    agentTools{decls: decls, registry: registry},
+		tools:    built,
 		maxTurns: testMaxTurns,
 	}
 }
@@ -216,7 +216,7 @@ func requiredToolConversation(t *testing.T, dir string) agentConversation {
 
 	specs := []config.ToolSpec{{Name: "post_review", Run: "true", Required: true}}
 
-	decls, registry, _, err := buildAgentTools(context.Background(), nil, specs, "")
+	built, _, err := buildAgentTools(context.Background(), nil, specs, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func requiredToolConversation(t *testing.T, dir string) agentConversation {
 	return agentConversation{
 		prompt:   "review it",
 		env:      toolEnv{dir: dir, runner: runner},
-		tools:    agentTools{decls: decls, registry: registry, required: requiredToolNames(specs)},
+		tools:    built,
 		maxTurns: testMaxTurns,
 	}
 }
@@ -396,7 +396,7 @@ func TestRunAgentConversationRecoversFailedRequiredTool(t *testing.T) {
 		Required: true,
 	}}
 
-	decls, registry, _, err := buildAgentTools(context.Background(), nil, specs, "")
+	built, _, err := buildAgentTools(context.Background(), nil, specs, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +409,7 @@ func TestRunAgentConversationRecoversFailedRequiredTool(t *testing.T) {
 	conv := agentConversation{
 		prompt:   "review it",
 		env:      toolEnv{dir: dir, runner: runner},
-		tools:    agentTools{decls: decls, registry: registry, required: requiredToolNames(specs)},
+		tools:    built,
 		maxTurns: testMaxTurns,
 	}
 

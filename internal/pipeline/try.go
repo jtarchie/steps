@@ -78,7 +78,7 @@ func toleratedByTry(ctx context.Context, err error) bool {
 // routed on the failure has already consumed the error and prints nothing extra
 // here. Any non-try step, and any outcome try: doesn't cover, passes through.
 func tolerateTryFailure(ctx context.Context, jobName string, step config.Step, err error) error {
-	if step.Try == nil || !toleratedByTry(ctx, err) {
+	if err == nil || step.Try == nil || !toleratedByTry(ctx, err) {
 		return err
 	}
 

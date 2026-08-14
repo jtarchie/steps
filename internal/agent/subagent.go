@@ -53,7 +53,7 @@ func buildSubAgentTool(ctx context.Context, cfg *config.Config, spec config.Tool
 		return nil, nil, nil, fmt.Errorf("sub-agent %q: %w", spec.Agent, err)
 	}
 
-	childDecls, childRegistry, childClosers, err := buildAgentTools(ctx, cfg, ri.ToolSpecs, ri.Image)
+	childTools, childClosers, err := buildAgentTools(ctx, cfg, ri.ToolSpecs, ri.Image)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("sub-agent %q: %w", spec.Agent, err)
 	}
@@ -68,10 +68,7 @@ func buildSubAgentTool(ctx context.Context, cfg *config.Config, spec config.Tool
 	child := preparedSubAgent{
 		ri:       ri,
 		llm:      newAgentLLM(ri, apiKey),
-		decls:    childDecls,
-		registry: childRegistry,
-		required: requiredToolNames(ri.ToolSpecs),
-		maxCalls: maxCallsByName(ri.ToolSpecs),
+		tools:    childTools,
 		fraction: cfg.DelegateBudgetFraction(spec.Agent),
 	}
 
@@ -99,12 +96,9 @@ func buildSubAgentTool(ctx context.Context, cfg *config.Config, spec config.Tool
 // once per parent-step preparation (buildSubAgentTool), run once per parent
 // tool call (run).
 type preparedSubAgent struct {
-	ri       config.ResolvedInvocation
-	llm      model.LLM
-	decls    *genai.Tool
-	registry map[string]toolImpl
-	required map[string]bool
-	maxCalls map[string]int
+	ri    config.ResolvedInvocation
+	llm   model.LLM
+	tools agentTools
 	// fraction is how much of THIS agent's remaining allowance one of ITS
 	// own sub-agent calls may take (config.DelegateBudgetFraction), carried
 	// so a grandchild is sized against its immediate parent's setting.
@@ -183,7 +177,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		prompt:        request,
 		contextBlocks: contextBlocks,
 		env:           toolEnv{dir: env.dir, runner: runner, spillDir: env.spillDir},
-		tools:         agentTools{decls: c.decls, registry: c.registry, required: c.required, maxCalls: c.maxCalls},
+		tools:         c.tools,
 		params: agentGenParams{
 			temperature: c.ri.Temperature,
 			topP:        c.ri.TopP,

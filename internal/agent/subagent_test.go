@@ -19,16 +19,15 @@ import (
 func newTestSubAgent(t *testing.T, fake model.LLM) preparedSubAgent {
 	t.Helper()
 
-	decls, registry, _, err := buildAgentTools(context.Background(), nil, nil, "")
+	built, _, err := buildAgentTools(context.Background(), nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	return preparedSubAgent{
-		ri:       config.ResolvedInvocation{AgentName: "extra", MaxTurns: testMaxTurns},
-		llm:      fake,
-		decls:    decls,
-		registry: registry,
+		ri:    config.ResolvedInvocation{AgentName: "extra", MaxTurns: testMaxTurns},
+		llm:   fake,
+		tools: built,
 	}
 }
 
@@ -201,18 +200,18 @@ func TestBuildAgentToolsWithSubAgent(t *testing.T) {
 
 	specs := []config.ToolSpec{{Builtin: "read_file"}, {Agent: "extra", Description: "delegate a subtask"}}
 
-	decls, registry, _, err := buildAgentTools(context.Background(), cfg, specs, "")
+	built, _, err := buildAgentTools(context.Background(), cfg, specs, "")
 	if err != nil {
 		t.Fatalf("buildAgentTools: %v", err)
 	}
 
-	if _, ok := registry["extra"]; !ok {
-		t.Fatalf("registry missing sub-agent tool %q: %v", "extra", registry)
+	if _, ok := built.registry["extra"]; !ok {
+		t.Fatalf("built.registry missing sub-agent tool %q: %v", "extra", built.registry)
 	}
 
 	var declared bool
 
-	for _, d := range decls.FunctionDeclarations {
+	for _, d := range built.decls.FunctionDeclarations {
 		if d.Name == "extra" {
 			declared = true
 

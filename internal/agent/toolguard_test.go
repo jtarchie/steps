@@ -26,10 +26,12 @@ func TestResolveToolSpecPinnedArgsExcludedFromSchema(t *testing.T) {
 		Args: map[string]string{"repo": "jtarchie/ci"},
 	}
 
-	decl, _, _, err := resolveToolSpec(context.Background(), nil, spec, builtinAgentTools(""))
+	resolved, err := resolveToolSpec(context.Background(), nil, spec, builtinAgentTools(""))
 	if err != nil {
 		t.Fatalf("resolveToolSpec: %v", err)
 	}
+
+	decl := resolved.decls[0]
 
 	if _, present := decl.Parameters.Properties["repo"]; present {
 		t.Error("pinned key \"repo\" must not appear in the schema's properties")
@@ -304,7 +306,7 @@ func TestRunAgentConversationCallBudgetResetsAcrossAttempts(t *testing.T) {
 
 	specs := []config.ToolSpec{{Name: "post_review", Run: "true", Required: true, MaxCalls: 1}}
 
-	decls, registry, _, err := buildAgentTools(context.Background(), nil, specs, "")
+	built, _, err := buildAgentTools(context.Background(), nil, specs, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,14 +317,9 @@ func TestRunAgentConversationCallBudgetResetsAcrossAttempts(t *testing.T) {
 	}
 
 	conv := agentConversation{
-		prompt: "review it",
-		env:    toolEnv{dir: dir, runner: runner},
-		tools: agentTools{
-			decls:    decls,
-			registry: registry,
-			required: requiredToolNames(specs),
-			maxCalls: maxCallsByName(specs),
-		},
+		prompt:   "review it",
+		env:      toolEnv{dir: dir, runner: runner},
+		tools:    built,
 		maxTurns: testMaxTurns,
 	}
 
