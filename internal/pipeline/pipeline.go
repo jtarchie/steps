@@ -832,7 +832,14 @@ func tolerateTryFailure(ctx context.Context, jobName string, step config.Step, e
 	name := executedStepName(step)
 
 	fmt.Printf("try: %s failed (tried, continuing)\n", name)
-	slog.Info("job.try", "job", jobName, "step", name, "outcome", "tolerated", "error", err.Error())
+
+	// toleratedByTry only returns true when err != nil, so this is always
+	// reachable with a real error — the check is redundant by that contract,
+	// kept so this doesn't depend on a caller two functions away never
+	// changing it.
+	if err != nil {
+		slog.Info("job.try", "job", jobName, "step", name, "outcome", "tolerated", "error", err.Error())
+	}
 
 	return nil
 }

@@ -281,6 +281,15 @@ func (s *stepUsage) addTokens(prompt, completion int) {
 
 // exceededError describes whichever ceiling this step just breached — its own
 // or the job's — with the job case carrying the running per-step total.
+//
+// Only called after record() reports exceeded=true, which is true exactly
+// when one of the two branches below applies — so this never legitimately
+// falls through. It still never returns nil: record()'s two conditions and
+// this function's are meant to mirror each other exactly, but they're
+// checked in two places, and generateWithinBudget's caller trusts a non-nil
+// error here to know resp is nil. A future edit to one side without the
+// other should surface as a confusing error message, not a nil-pointer
+// panic three calls away.
 func (s *stepUsage) exceededError() error {
 	spent := s.snapshot()
 
@@ -288,12 +297,12 @@ func (s *stepUsage) exceededError() error {
 		return budgetExceededError("agent "+strconv.Quote(spent.Step), spent.Total, s.budget)
 	}
 
-	if s.run == nil {
-		return nil
+	if s.run != nil {
+		return fmt.Errorf("job budget exceeded: cap %d tokens, spent %d\n  running total: %s",
+			s.run.Budget(), s.run.Total()+spent.Total, s.run.runningTotals(spent))
 	}
 
-	return fmt.Errorf("job budget exceeded: cap %d tokens, spent %d\n  running total: %s",
-		s.run.Budget(), s.run.Total()+spent.Total, s.run.runningTotals(spent))
+	return fmt.Errorf("agent budget exceeded (spent %d tokens), but neither an agent nor a job ceiling explains why", spent.Total)
 }
 
 // finish reports the step's spend and rolls it into the job total. Called once
