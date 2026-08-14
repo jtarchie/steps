@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"os"
 
-	genaiopenai "github.com/achetronic/adk-utils-go/genai/openai"
+	genaiopenai "github.com/achetronic/adk-utils-go/genai/openai/completions"
 	"google.golang.org/adk/v2/model"
 
 	"github.com/jtarchie/steps/internal/config"
