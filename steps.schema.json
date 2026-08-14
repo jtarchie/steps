@@ -62,6 +62,12 @@
           "type": "string",
           "description": "source.model for any agent that names none."
         },
+        "delegate_budget_percent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "How much of an agent's REMAINING token allowance one sub-agent call may take, pipeline-wide. Default 10. A sub-agent draws on its parent's budget rather than adding to it, so an agent's budget.tokens bounds its whole delegation subtree. Per-agent override: delegate_budget_percent on the agent."
+        },
         "preflight": {
           "type": "object",
           "additionalProperties": false,
@@ -227,6 +233,12 @@
         },
         "budget": {
           "$ref": "#/$defs/budget"
+        },
+        "delegate_budget_percent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "How much of THIS agent's remaining allowance one of its sub-agent calls may take, overriding defaults.delegate_budget_percent. Never hashed, like the budget it divides."
         },
         "preflight": {
           "type": "boolean",

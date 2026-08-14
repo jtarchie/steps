@@ -38,6 +38,44 @@ type Defaults struct {
 	// semantics — it only decides how early a failure that WOULD happen is
 	// discovered.
 	Preflight *Preflight `yaml:"preflight,omitempty"`
+	// DelegateBudgetPercent is how much of an agent's REMAINING token
+	// allowance one sub-agent call may take, pipeline-wide (see
+	// Agent.DelegateBudgetPercent for the per-agent override, and
+	// DefaultDelegateBudgetPercent for the value when neither is set).
+	DelegateBudgetPercent *int `yaml:"delegate_budget_percent,omitempty"`
+}
+
+// DefaultDelegateBudgetPercent is how much of its remaining allowance an agent
+// hands to one sub-agent call when nothing says otherwise.
+//
+// A fraction of what REMAINS, so delegation cannot drain a parent outright:
+// successive calls take a tenth of a shrinking number and the parent always
+// keeps something to finish its own work with. Ten percent leaves room for
+// roughly a dozen helpers before the slices get small enough to be worth
+// noticing, which is far past what any sensible plan asks for.
+const DefaultDelegateBudgetPercent = 10
+
+// DelegateBudgetFraction is the share of the named agent's remaining
+// allowance that one of its sub-agent calls may take: the agent's own
+// override, else the pipeline default, else DefaultDelegateBudgetPercent.
+//
+// Keyed by name rather than by *Agent because every caller has the name and
+// an unresolvable one is not worth an error here — it means the agent could
+// not have run at all, which the step reports far more clearly.
+func (c *Config) DelegateBudgetFraction(agentName string) float64 {
+	percent := DefaultDelegateBudgetPercent
+
+	// defaults: is optional, so the block is nil on most pipelines.
+	if c.Defaults != nil && c.Defaults.DelegateBudgetPercent != nil {
+		percent = *c.Defaults.DelegateBudgetPercent
+	}
+
+	agent, err := c.FindAgent(agentName)
+	if err == nil && agent.DelegateBudgetPercent != nil {
+		percent = *agent.DelegateBudgetPercent
+	}
+
+	return float64(percent) / 100
 }
 
 // validateAgentModels rejects a step whose agent ends up with no model.

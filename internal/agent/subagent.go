@@ -72,6 +72,7 @@ func buildSubAgentTool(ctx context.Context, cfg *config.Config, spec config.Tool
 		registry: childRegistry,
 		required: requiredToolNames(ri.ToolSpecs),
 		maxCalls: maxCallsByName(ri.ToolSpecs),
+		fraction: cfg.DelegateBudgetFraction(spec.Agent),
 	}
 
 	decl := &genai.FunctionDeclaration{
@@ -104,6 +105,34 @@ type preparedSubAgent struct {
 	registry map[string]toolImpl
 	required map[string]bool
 	maxCalls map[string]int
+	// fraction is how much of THIS agent's remaining allowance one of ITS
+	// own sub-agent calls may take (config.DelegateBudgetFraction), carried
+	// so a grandchild is sized against its immediate parent's setting.
+	fraction float64
+}
+
+// allowanceFrom sizes this delegation against what the parent has left, and
+// refuses one the parent can no longer fund.
+//
+// Refusing rather than proceeding uncapped is the whole point: an agent that
+// has spent its allowance must not be able to buy more of it by delegating.
+// The error names both numbers, since "why did my helper not run" is
+// otherwise answerable only by reading the token log.
+//
+// No parent accumulator (a sub-agent invoked outside a conversation, which
+// only tests do) leaves the child on its own declared budget, as before.
+func (c preparedSubAgent) allowanceFrom(parent *stepUsage) (int, error) {
+	if parent == nil {
+		return c.ri.BudgetTokens, nil
+	}
+
+	allowance := parent.delegatedBudget(c.ri.BudgetTokens)
+	if allowance <= 0 {
+		return 0, fmt.Errorf("%s: the delegating agent has no token allowance left to fund this call (its budget: is spent, including what earlier delegations took) — finish without this helper",
+			c.ri.AgentName)
+	}
+
+	return allowance, nil
 }
 
 // run executes one child conversation for a parent tool call. env.dir is the
@@ -115,6 +144,16 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	request := stringArg(args, subAgentRequestParam)
 	if request == "" {
 		return map[string]any{"error": fmt.Sprintf("%s: missing required argument %q", c.ri.AgentName, subAgentRequestParam)}
+	}
+
+	// Sized before any work starts: a delegation the parent cannot fund is
+	// refused outright rather than run against a ceiling it has already
+	// crossed. The model sees the refusal as tool-result data and can finish
+	// without the helper, which is the same contract every other child
+	// failure honours.
+	allowance, err := c.allowanceFrom(env.usage)
+	if err != nil {
+		return map[string]any{"error": err.Error()}
 	}
 
 	runner, err := shell.NewRunner(shell.RunnerSpec{Image: c.ri.Image, Cwd: env.dir, Env: c.ri.Env, User: c.ri.User, Network: c.ri.Network,
@@ -153,10 +192,20 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		// live, one level deeper, instead of surfacing only when the child
 		// finishes and the parent summarizes it.
 		recorder: env.transcript.childRecorder(),
-		// A sub-agent gets its OWN budget, from its own agents: entry — it is
-		// a separate invocation of a separate agent. Its spend is reported
-		// under its own name and rolls up into the job total like any other.
-		usage: &stepUsage{name: c.ri.AgentName, budget: c.ri.BudgetTokens},
+		// A sub-agent DRAWS ON its parent's allowance rather than adding to
+		// it: its ceiling is a share of what the parent has left, capped by
+		// whatever it declared for itself, and its spend is charged back up
+		// the chain when it finishes (stepUsage.finish). That is what makes
+		// an agent's budget: a bound on the whole subtree instead of on one
+		// conversation in it — without it a capped agent could delegate its
+		// way past its own ceiling without ever exceeding it.
+		//
+		// It is still reported under its own name and still rolls into the
+		// job total exactly once, as before.
+		usage: &stepUsage{
+			name: c.ri.AgentName, budget: allowance, parent: env.usage,
+			delegateFraction: c.fraction,
+		},
 	}
 
 	fmt.Printf("agent: %s (sub-agent)\n", c.ri.AgentName)

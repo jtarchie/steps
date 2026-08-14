@@ -308,7 +308,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		toolChoiceStringOnly: ri.StringOnlyToolChoice,
 		verdictTool:          synthesized.verdictTool,
 		compactAfterTokens:   ri.CompactAfterTokens,
-		usage:                &stepUsage{name: ri.AgentName, budget: ri.BudgetTokens},
+		usage:                &stepUsage{name: ri.AgentName, budget: ri.BudgetTokens, delegateFraction: cfg.DelegateBudgetFraction(ri.AgentName)},
 	}
 
 	return preparedAgentStep{

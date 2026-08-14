@@ -420,6 +420,28 @@ jobs:
     prompt: "Write the release announcement."
 ```
 
+An agent's ceiling covers **the agent and everything it delegates to**. A sub-agent draws on its parent's remaining allowance rather than adding to it, so `budget.tokens` bounds the whole delegation subtree instead of one conversation in it — otherwise a capped agent could delegate its way past its own ceiling without ever exceeding it.
+
+- **Each call takes a share of what's LEFT**, 10% by default. A fraction of the remainder rather than of the original means delegation can never drain a parent outright: successive helpers take a tenth of a shrinking number, and the parent keeps something to finish its own work with.
+- **The tighter number wins.** A sub-agent that declares its own `budget.tokens` gets the smaller of that and the parent's share, so neither an inherited allowance nor a declared one can be exceeded.
+- **A parent with no ceiling changes nothing** — there is no allowance to take a fraction of, so its children run on their own declared budgets exactly as before.
+- **A delegation the parent cannot fund is refused**, and the model is told so as an ordinary tool result. It can then finish without the helper rather than the step dying.
+- **The share is tunable** with `delegate_budget_percent:`, pipeline-wide under `defaults:` or per agent:
+
+```yaml fragment
+defaults:
+  delegate_budget_percent: 10   # the default; every agent unless it says otherwise
+
+agents:
+- name: lead
+  budget:
+    tokens: 400000              # bounds `lead` AND every helper it calls
+  delegate_budget_percent: 25   # this one's helpers do the heavy lifting
+  tools: [{ agent: researcher }]
+```
+
+A run that resumes continues its **job** budget from what earlier attempts already spent, rather than starting the allowance over — otherwise `budget:` would be a per-attempt ceiling wearing the name of a per-run one, and every resume would buy another full one.
+
 **Reporting happens whether or not you set one**, which is the point: it is what tells you which ceilings are even sensible. Every job that ran an agent step prints what it cost — **and records it**, so the question survives the terminal:
 
 ```

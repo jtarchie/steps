@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -227,7 +228,21 @@ type stepUsage struct {
 	// run is the job-level accumulator this step rolls up into, nil outside a
 	// job run. Held so a job ceiling can stop work mid-step instead of after
 	// the step has already spent past it.
-	run          *RunUsage
+	run *RunUsage
+	// parent is the invocation that DELEGATED to this one, nil for a
+	// top-level step. A sub-agent spends its parent's allowance rather than
+	// adding to it (see delegatedBudget), so its spend is charged back up the
+	// chain when it finishes.
+	parent *stepUsage
+	// delegateFraction is how much of THIS invocation's remaining allowance
+	// one of its sub-agent calls may take (config.DelegateBudgetFraction).
+	// Zero outside a configured run, which leaves a child on its own budget.
+	delegateFraction float64
+	// delegated is what sub-agent invocations started by this step have
+	// spent. It counts against this step's own ceiling — a delegation draws
+	// on the parent's allowance — but is NOT rolled into the run total here,
+	// because each sub-agent's own stepUsage already does that exactly once.
+	delegated    int
 	prompt       int
 	completion   int
 	total        int
@@ -278,7 +293,10 @@ func (s *stepUsage) record(resp *model.LLMResponse) (exceeded bool) {
 		s.raw = string(encoded)
 	}
 
-	if s.budget > 0 && s.total > s.budget {
+	// delegated counts here: a step that handed most of its allowance to
+	// sub-agents has that much less for itself, or the ceiling would bound
+	// the parent's own turns while the subtree spent freely beside it.
+	if s.budget > 0 && s.total+s.delegated > s.budget {
 		return true
 	}
 
@@ -304,6 +322,74 @@ func (s *stepUsage) addTokens(prompt, completion int) {
 	s.prompt += prompt
 	s.completion += completion
 	s.total += prompt + completion
+}
+
+// remaining is what this invocation may still spend under its OWN ceiling,
+// counting what its delegations have already taken. math.MaxInt when it
+// declares no ceiling — "no budget" is unbounded, not zero.
+func (s *stepUsage) remaining() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.budget <= 0 {
+		return math.MaxInt
+	}
+
+	return max(s.budget-(s.total+s.delegated), 0)
+}
+
+// chargeDelegated books a finished sub-agent's spend against this step and
+// every step above it.
+//
+// Walking the whole chain is what makes the guarantee transitive: a
+// grandchild's tokens have to shrink the grandparent's allowance too, or a
+// deep enough delegation tree escapes the ceiling one level at a time.
+func (s *stepUsage) chargeDelegated(spent int) {
+	for step := s; step != nil; step = step.parentOf() {
+		step.mu.Lock()
+		step.delegated += spent
+		step.mu.Unlock()
+	}
+}
+
+// parentOf reads the delegating invocation under the lock.
+func (s *stepUsage) parentOf() *stepUsage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.parent
+}
+
+// delegatedBudget is the ceiling a sub-agent of this invocation gets: a
+// fraction of what the parent has LEFT, capped by whatever the sub-agent
+// declared for itself. The tighter of the two wins, so neither an inherited
+// allowance nor a declared one can be exceeded.
+//
+// A fraction of what remains rather than of the original allowance, so
+// delegation cannot drain a parent outright: each call takes a tenth of a
+// shrinking number, leaving the parent something to finish its own work with
+// however many helpers it asks for.
+//
+// A parent with no ceiling of its own has nothing to take a fraction OF, so
+// its children fall back to their own declared budgets — exactly the
+// behaviour before delegation drew on the parent at all.
+func (s *stepUsage) delegatedBudget(own int) int {
+	left := s.remaining()
+
+	s.mu.Lock()
+	fraction := s.delegateFraction
+	s.mu.Unlock()
+
+	if left == math.MaxInt || fraction <= 0 {
+		return own
+	}
+
+	share := int(float64(left) * fraction)
+	if own > 0 && own < share {
+		return own
+	}
+
+	return share
 }
 
 // exceededError describes whichever ceiling this step just breached — its own
@@ -343,6 +429,15 @@ func (s *stepUsage) finish() {
 
 	if s.run != nil {
 		_ = s.run.Add(spent)
+	}
+
+	// A delegation spends its parent's allowance. Charged once, here, rather
+	// than per response: sub-agent tool calls execute one at a time within a
+	// turn, so the parent's remaining is accurate by the time it decides
+	// whether to delegate again. The run total is untouched — s.run.Add above
+	// already counted these tokens exactly once.
+	if parent := s.parentOf(); parent != nil {
+		parent.chargeDelegated(spent.Total)
 	}
 }
 

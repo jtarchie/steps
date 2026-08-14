@@ -124,7 +124,17 @@ type Agent struct {
 	// Budget caps what one invocation of this agent may spend (see Budget).
 	// Per invocation, not per job: a job budget is the cumulative ceiling and
 	// lives on the job. Never hashed.
+	//
+	// The ceiling covers this agent AND everything it delegates to: a
+	// sub-agent draws on this allowance rather than adding to it, so the
+	// number bounds the whole subtree rather than one conversation in it.
 	Budget *Budget `yaml:"budget,omitempty"`
+	// DelegateBudgetPercent overrides how much of this agent's REMAINING
+	// allowance one sub-agent call may take, for agents whose helpers are
+	// unusually cheap or expensive relative to the parent. Pipeline-wide
+	// default in Defaults.DelegateBudgetPercent. Never hashed, like the
+	// budget it divides.
+	DelegateBudgetPercent *int `yaml:"delegate_budget_percent,omitempty"`
 	// Tools is the grant: the built-in tools this agent may use plus any
 	// reusable custom tool definitions. A step selects a subset by name and
 	// may add its own inline custom tools. Empty grants the read-only

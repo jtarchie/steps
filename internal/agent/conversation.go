@@ -290,6 +290,12 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	conv.usage = attachUsage(ctx, conv.usage)
 	defer conv.usage.finish()
 
+	// Publish this conversation's accumulator to its tools, so a sub-agent
+	// call can size the child's allowance against what THIS invocation has
+	// left. Set here rather than at env construction because attachUsage
+	// above is what guarantees a non-nil accumulator to hand over.
+	conv.env.usage = conv.usage
+
 	req := buildAgentRequest(conv)
 	satisfied := make(map[string]bool, len(conv.tools.required))
 	// callCounts is local to this call: one conversation, one budget per tool.

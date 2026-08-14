@@ -101,6 +101,12 @@ type toolEnv struct {
 	// child conversation's transcript into the parent's. Nil outside a
 	// conversation; the recorder's methods are nil-safe.
 	transcript *transcriptRecorder
+	// usage is the enclosing conversation's accumulator, set alongside
+	// transcript and riding here for the same reason. The sub-agent tool
+	// reads it to size the child's allowance out of what the parent has left,
+	// and to charge the child's spend back against it. Nil outside a
+	// conversation, which leaves a child on its own declared budget.
+	usage *stepUsage
 }
 
 // toolImpl executes one resolved tool against env, given the model's args.
