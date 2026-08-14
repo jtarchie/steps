@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -261,15 +262,43 @@ func (p *persistingTokenSource) Token() (*oauth2.Token, error) {
 }
 
 // classifyRefreshError marks a refresh failure the caller cannot wait out.
-// An *oauth2.RetrieveError is the authorization server ANSWERING and
-// refusing — a revoked, expired, or already-rotated-away refresh token —
-// which no retry improves. Anything else (a dial failure, a 502, a timeout)
-// is left unmarked, and so stays transient: those are the ones a watcher
-// should survive rather than exit over.
+// The authorization server ANSWERING and refusing — a revoked, expired, or
+// already-rotated-away refresh token — is what no retry improves. A dial
+// failure, a timeout, or a gateway that never reached the server is left
+// unmarked, and so stays transient: those are the ones a watcher should
+// survive rather than exit over.
+//
+// *oauth2.RetrieveError alone does NOT mean "answered and refused", which is
+// the trap this function was originally written into. x/oauth2 builds that
+// error before it parses anything and returns it for ANY non-2xx status
+// (internal/token.go: `failureStatus := r.StatusCode < 200 || r.StatusCode >
+// 299`), so an HTML 502 from a proxy, a 503 with Retry-After, and a
+// Cloudflare interstitial all arrive as RetrieveError too. Marking those
+// terminal is precisely the watcher-dead-on-Monday failure ErrNeedsLogin's
+// doc comment exists to prevent.
+//
+// So the test is for positive evidence of a refusal: a structured OAuth error
+// response per RFC 6749 §5.2 (ErrorCode set — x/oauth2 populates it from
+// either a JSON or form-encoded body), or the 400/401 that section says such
+// a response is delivered with, for a server that refuses with an empty body.
+// A 5xx, a 429, and a 408 are all excluded by construction: they are facts
+// about the infrastructure, not the credential.
 func classifyRefreshError(err error) error {
 	var retrieve *oauth2.RetrieveError
 
 	if !errors.As(err, &retrieve) {
+		return err
+	}
+
+	refused := retrieve.ErrorCode != ""
+	if retrieve.Response != nil {
+		switch retrieve.Response.StatusCode {
+		case http.StatusBadRequest, http.StatusUnauthorized:
+			refused = true
+		}
+	}
+
+	if !refused {
 		return err
 	}
 

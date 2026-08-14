@@ -437,3 +437,133 @@ func TestOAuthTokenSourceKeepsNetworkFailureWaitable(t *testing.T) {
 		t.Fatalf("error = %v, want an unreachable endpoint to stay waitable, not demand a re-login", err)
 	}
 }
+
+// TestOAuthTokenSourceKeepsServerErrorWaitable is the same boundary as the
+// test above, one step further in: the endpoint IS reachable and answers, but
+// with a gateway error rather than a verdict on the credential.
+//
+// x/oauth2 reports these as *oauth2.RetrieveError — the same type a genuine
+// invalid_grant arrives as — because it builds that error from the status
+// code before it has parsed a body. Treating the type alone as terminal made
+// a 502 from a proxy indistinguishable from a revoked refresh token, which is
+// the exact "watcher found dead on Monday for a blip that healed in a minute"
+// case ErrNeedsLogin's doc comment describes.
+func TestOAuthTokenSourceKeepsServerErrorWaitable(t *testing.T) {
+	// Not t.Parallel(): uses t.Setenv.
+	for _, status := range []int{
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusTooManyRequests,
+		http.StatusRequestTimeout,
+	} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			// Not t.Parallel(): uses t.Setenv.
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				// Deliberately not an OAuth error document: a proxy or load
+				// balancer answering for a token endpoint it could not reach
+				// has no idea what OAuth is.
+				w.Header().Set("Content-Type", "text/html")
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte("<html><body><h1>" + http.StatusText(status) + "</h1></body></html>"))
+			}))
+			t.Cleanup(ts.Close)
+
+			dir := t.TempDir()
+			t.Setenv("HOME", dir)
+			t.Setenv("XDG_CONFIG_HOME", dir)
+
+			path, err := TokenPath("linear")
+			if err != nil {
+				t.Fatalf("TokenPath: %v", err)
+			}
+
+			srv := config.MCPServer{Name: "linear", Endpoint: "https://mcp.linear.app/mcp", Auth: config.MCPServerAuth{Type: "oauth"}}
+
+			tf := &TokenFile{
+				Endpoint:     srv.Endpoint,
+				ClientID:     "client-id",
+				TokenURL:     ts.URL,
+				AccessToken:  "stale-access-token",
+				RefreshToken: "good-refresh-token",
+				Expiry:       time.Now().Add(-time.Hour),
+			}
+
+			err = tf.Save(path)
+			if err != nil {
+				t.Fatalf("Save: %v", err)
+			}
+
+			source, err := oauthTokenSource(context.Background(), srv)
+			if err != nil {
+				t.Fatalf("oauthTokenSource: %v", err)
+			}
+
+			_, err = source.Token()
+			if err == nil {
+				t.Fatalf("Token: want an error when the token endpoint answers %d", status)
+			}
+
+			if errors.Is(err, ErrNeedsLogin) {
+				t.Fatalf("error = %v, want a %d to stay waitable, not demand a re-login", err, status)
+			}
+		})
+	}
+}
+
+// TestOAuthTokenSourceNeedsLoginOnEmptyBodiedRefusal covers the other side of
+// the line drawn above: an authorization server that refuses with the status
+// RFC 6749 §5.2 prescribes but omits the error document. There is no
+// ErrorCode to read, so the status alone has to carry it — otherwise a
+// genuinely revoked credential would be retried forever instead of reported.
+func TestOAuthTokenSourceNeedsLoginOnEmptyBodiedRefusal(t *testing.T) {
+	// Not t.Parallel(): uses t.Setenv.
+	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			// Not t.Parallel(): uses t.Setenv.
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+			}))
+			t.Cleanup(ts.Close)
+
+			dir := t.TempDir()
+			t.Setenv("HOME", dir)
+			t.Setenv("XDG_CONFIG_HOME", dir)
+
+			path, err := TokenPath("linear")
+			if err != nil {
+				t.Fatalf("TokenPath: %v", err)
+			}
+
+			srv := config.MCPServer{Name: "linear", Endpoint: "https://mcp.linear.app/mcp", Auth: config.MCPServerAuth{Type: "oauth"}}
+
+			tf := &TokenFile{
+				Endpoint:     srv.Endpoint,
+				ClientID:     "client-id",
+				TokenURL:     ts.URL,
+				AccessToken:  "stale-access-token",
+				RefreshToken: "revoked-refresh-token",
+				Expiry:       time.Now().Add(-time.Hour),
+			}
+
+			err = tf.Save(path)
+			if err != nil {
+				t.Fatalf("Save: %v", err)
+			}
+
+			source, err := oauthTokenSource(context.Background(), srv)
+			if err != nil {
+				t.Fatalf("oauthTokenSource: %v", err)
+			}
+
+			_, err = source.Token()
+			if err == nil {
+				t.Fatalf("Token: want an error when the authorization server answers %d", status)
+			}
+
+			if !errors.Is(err, ErrNeedsLogin) {
+				t.Fatalf("error = %v, want a %d refusal to wrap ErrNeedsLogin", err, status)
+			}
+		})
+	}
+}
