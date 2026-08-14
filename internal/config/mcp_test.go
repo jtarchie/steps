@@ -83,6 +83,39 @@ jobs: [{ name: j, plan: [] }]
 			want: "only valid with auth.type: bearer",
 		},
 		{
+			name: "client_secret_env without client_id",
+			pipeline: `
+mcp_servers:
+- name: slack
+  endpoint: https://mcp.slack.com/mcp
+  auth: { type: oauth, client_secret_env: SLACK_CLIENT_SECRET }
+jobs: [{ name: j, plan: [] }]
+`,
+			want: "client_secret_env requires client_id",
+		},
+		{
+			name: "client_id without oauth",
+			pipeline: `
+mcp_servers:
+- name: slack
+  endpoint: https://mcp.slack.com/mcp
+  auth: { type: bearer, api_key_env: SLACK_TOKEN, client_id: "123.456" }
+jobs: [{ name: j, plan: [] }]
+`,
+			want: "client_id is only valid with auth.type: oauth",
+		},
+		{
+			name: "client_secret_env carrying a value",
+			pipeline: `
+mcp_servers:
+- name: slack
+  endpoint: https://mcp.slack.com/mcp
+  auth: { type: oauth, client_id: "123.456", client_secret_env: "SECRET=hunter2" }
+jobs: [{ name: j, plan: [] }]
+`,
+			want: "must be a variable NAME",
+		},
+		{
 			name: "duplicate name",
 			pipeline: `
 mcp_servers:

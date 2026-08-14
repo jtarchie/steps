@@ -769,6 +769,17 @@ func mcpServerContent(cfg *config.Config, name string) (map[string]any, error) {
 		content["api_key_env"] = srv.Auth.APIKeyEnv
 	}
 
+	// A client_id is a public application identifier, not a credential, so
+	// unlike the secret beside it the VALUE is hashed: pointing a server at
+	// a different registered app changes who the calls are made as.
+	if srv.Auth.ClientID != "" {
+		content["client_id"] = srv.Auth.ClientID
+	}
+
+	if srv.Auth.ClientSecretEnv != "" {
+		content["client_secret_env"] = srv.Auth.ClientSecretEnv
+	}
+
 	if len(srv.Auth.Scopes) != 0 {
 		content["scopes"] = srv.Auth.Scopes
 	}

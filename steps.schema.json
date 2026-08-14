@@ -506,6 +506,14 @@
               "type": "string",
               "description": "bearer only."
             },
+            "client_id": {
+              "type": "string",
+              "description": "oauth only. A pre-registered OAuth client ID, for an authorization server that does not support dynamic client registration."
+            },
+            "client_secret_env": {
+              "type": "string",
+              "description": "oauth only, requires client_id. Names the environment variable holding the registered client's secret."
+            },
             "scopes": {
               "type": "array",
               "items": {

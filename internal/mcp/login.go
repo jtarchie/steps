@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -62,8 +63,10 @@ func Login(ctx context.Context, srv config.MCPServer, open func(url string) erro
 }
 
 // discoverAndRegister fetches protected-resource and authorization-server
-// metadata for srv, then dynamically registers a client with redirectURL as
-// its sole redirect URI.
+// metadata for srv, then obtains the client credentials the flow runs as:
+// the pre-registered pair from auth.client_id when the config supplies one,
+// otherwise a client dynamically registered with redirectURL as its sole
+// redirect URI.
 func discoverAndRegister(ctx context.Context, srv config.MCPServer, redirectURL string) (*oauthex.AuthServerMeta, *oauthex.ClientRegistrationResponse, error) {
 	prm, err := discoverProtectedResourceMetadata(ctx, srv.Endpoint)
 	if err != nil {
@@ -83,8 +86,19 @@ func discoverAndRegister(ctx context.Context, srv config.MCPServer, redirectURL 
 		asm = fallbackAuthServerMeta(prm.AuthorizationServers[0])
 	}
 
+	if srv.Auth.ClientID != "" {
+		reg, credErr := preregisteredClient(srv)
+		if credErr != nil {
+			return nil, nil, credErr
+		}
+
+		return asm, reg, nil
+	}
+
 	if asm.RegistrationEndpoint == "" {
-		return nil, nil, fmt.Errorf("mcp server %q: authorization server does not support dynamic client registration", srv.Name)
+		return nil, nil, fmt.Errorf(
+			"mcp server %q: authorization server does not support dynamic client registration; register an application with it and set auth.client_id (plus auth.client_secret_env if it issued a secret)",
+			srv.Name)
 	}
 
 	reg, err := oauthex.RegisterClient(ctx, asm.RegistrationEndpoint, &oauthex.ClientRegistrationMetadata{
@@ -96,6 +110,30 @@ func discoverAndRegister(ctx context.Context, srv config.MCPServer, redirectURL 
 	}
 
 	return asm, reg, nil
+}
+
+// preregisteredClient builds the same ClientRegistrationResponse shape
+// RegisterClient would have returned, from the config's client_id and the
+// secret read out of client_secret_env — so every caller downstream
+// (buildAuthorizationHandler, persistLoginResult) stays unaware of which
+// way the credentials were obtained. A named-but-unset secret variable is
+// an error: proceeding would attempt a public-client exchange the server
+// will reject, reported as an opaque 401 far from its cause.
+func preregisteredClient(srv config.MCPServer) (*oauthex.ClientRegistrationResponse, error) {
+	reg := &oauthex.ClientRegistrationResponse{ClientID: srv.Auth.ClientID}
+
+	if srv.Auth.ClientSecretEnv == "" {
+		return reg, nil
+	}
+
+	secret := os.Getenv(srv.Auth.ClientSecretEnv)
+	if secret == "" {
+		return nil, fmt.Errorf("mcp server %q: $%s is not set (auth.client_secret_env)", srv.Name, srv.Auth.ClientSecretEnv)
+	}
+
+	reg.ClientSecret = secret
+
+	return reg, nil
 }
 
 // buildAuthorizationHandler constructs the auth.AuthorizationCodeHandler

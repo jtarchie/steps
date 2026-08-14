@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/url"
 	"path/filepath"
+	"strings"
 )
 
 // MCPResourceConfig backs a resource type's check/in/out with calls to a
@@ -113,10 +114,21 @@ func (s MCPServer) IsStdio() bool {
 // AgentSource.APIKeyEnv exactly: the credential is never stored in YAML),
 // or "oauth" (interactive authorization-code + PKCE via `steps mcp login`,
 // with silent refresh at run/watch time — see internal/mcp).
+//
+// ClientID/ClientSecretEnv are the oauth-only escape hatch for an
+// authorization server that does not offer dynamic client registration —
+// notably Slack's, which requires clients to be backed by a pre-registered
+// app with a fixed ID. Setting ClientID makes `steps mcp login` skip
+// registration and use those credentials directly; everything downstream
+// (PKCE, code exchange, silent refresh) is unchanged. A client ID is a
+// public application identifier, so it lives in YAML like an endpoint does;
+// the SECRET follows the api_key_env convention and is only ever named.
 type MCPServerAuth struct {
-	Type      string   `yaml:"type"`
-	APIKeyEnv string   `yaml:"api_key_env,omitempty"`
-	Scopes    []string `yaml:"scopes,omitempty"`
+	Type            string   `yaml:"type"`
+	APIKeyEnv       string   `yaml:"api_key_env,omitempty"`
+	ClientID        string   `yaml:"client_id,omitempty"`
+	ClientSecretEnv string   `yaml:"client_secret_env,omitempty"`
+	Scopes          []string `yaml:"scopes,omitempty"`
 }
 
 // FindMCPServer returns the mcp_servers: entry with the given name, or an
@@ -197,6 +209,35 @@ func validateMCPServerAuth(srv MCPServer) error {
 		}
 	default:
 		return fmt.Errorf("mcp server %q: auth.type must be one of none, bearer, oauth (got %q)", srv.Name, srv.Auth.Type)
+	}
+
+	return validateMCPServerClientCredentials(srv)
+}
+
+// validateMCPServerClientCredentials checks the pre-registered oauth client
+// fields. Both are oauth-only, and a secret with no ID names a credential
+// for a client that would still be dynamically registered — configured-
+// looking but bound to nothing, which is the failure mode this codebase
+// rejects at load time rather than at 3am.
+func validateMCPServerClientCredentials(srv MCPServer) error {
+	if srv.Auth.Type != "oauth" {
+		if srv.Auth.ClientID != "" {
+			return fmt.Errorf("mcp server %q: client_id is only valid with auth.type: oauth", srv.Name)
+		}
+
+		if srv.Auth.ClientSecretEnv != "" {
+			return fmt.Errorf("mcp server %q: client_secret_env is only valid with auth.type: oauth", srv.Name)
+		}
+
+		return nil
+	}
+
+	if srv.Auth.ClientSecretEnv != "" && srv.Auth.ClientID == "" {
+		return fmt.Errorf("mcp server %q: client_secret_env requires client_id (a secret alone still leaves the client dynamically registered)", srv.Name)
+	}
+
+	if strings.Contains(srv.Auth.ClientSecretEnv, "=") {
+		return fmt.Errorf("mcp server %q: client_secret_env %q must be a variable NAME, not a KEY=VALUE pair — the value is read from the environment at login time", srv.Name, srv.Auth.ClientSecretEnv)
 	}
 
 	return nil

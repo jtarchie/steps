@@ -177,3 +177,43 @@ This runs the OAuth 2.1 authorization-code + PKCE flow: discovers the server's m
 - **Per-user, not per-pipeline**: the token lands in `${XDG_CONFIG_HOME:-~/.config}/steps/mcp/<server-name>.json` (`0600`) — deliberately outside any pipeline's `.steps/`. Logging in once authorizes that server for **every** pipeline referencing it by the same name.
 - **Silent refresh, no re-prompting**: `steps run`/`steps watch` never run an interactive flow — they load the persisted token and refresh it silently. If it can't be refreshed, the error names the exact `steps mcp login` command to run.
 - **Trust boundary**: nothing token-shaped is ever cache-hashed or written to `.steps/state.db` — the same treatment as LLM provider credentials.
+
+### Servers without dynamic client registration
+
+The flow above discovers the authorization server, then *registers* a client with it on the fly. Some servers don't offer that — Slack's, for one, requires every client to be backed by a pre-registered app with a fixed ID. Against those, login fails during discovery, before your browser ever opens:
+
+```
+steps: error: mcp server "slack": authorization server does not support dynamic
+  client registration; register an application with it and set auth.client_id
+  (plus auth.client_secret_env if it issued a secret)
+```
+
+Register the application yourself, then name its credentials:
+
+```yaml noexec
+mcp_servers:
+- name: slack
+  endpoint: https://mcp.slack.com/mcp
+  auth:
+    type: oauth
+    client_id: "1234567890.9876543210"   # public app identifier
+    client_secret_env: SLACK_CLIENT_SECRET
+
+agents:
+- name: responder
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  tools:
+  - mcp: slack
+
+jobs:
+- name: respond
+  plan:
+  - agent: responder
+    prompt: "Summarize today's mentions."
+```
+
+- **`client_id:` skips registration; everything else is identical.** PKCE, the loopback callback, the code exchange, the token file, and silent refresh at run/watch time all behave exactly as they do for a dynamically-registered client.
+- **The ID is in the YAML, the secret is not.** A client ID is a public application identifier, like an endpoint — so it's written literally and its *value* is folded into the cache hash, because pointing a server at a different registered app changes who the calls are made as. The secret follows the `api_key_env:` convention: `client_secret_env:` names an environment variable, and only the name is ever hashed or stored.
+- **`client_secret_env:` alone is a load error.** A secret with no ID names a credential for a client that would still be dynamically registered — configured-looking, bound to nothing. Both fields are `oauth`-only; setting either under `bearer`/`none` is rejected at load.
+- **A named-but-unset secret variable fails the login**, saying which variable — rather than attempting a public-client exchange the server answers with an opaque 401.
+- **Omit both for any server that does support registration.** This is an escape hatch, not the normal path.
