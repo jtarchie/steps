@@ -585,6 +585,18 @@ func TestAssertAffectsHash(t *testing.T) {
 	if withCode0 == mustHash(t, &config.Assert{Code: &code1}) {
 		t.Error("changing assert.code did not change the task hash")
 	}
+
+	// Every assert field must bust the cache, not just the two oldest ones: a
+	// step cached from a run before the assert existed would otherwise be
+	// skipped, so the assert that was just added never runs.
+	if withCode0 == mustHash(t, &config.Assert{Code: &code0, Files: []string{"answer/reply.md"}}) {
+		t.Error("adding assert.files did not change the task hash")
+	}
+
+	verdict := "ship"
+	if withCode0 == mustHash(t, &config.Assert{Code: &code0, Verdict: &verdict}) {
+		t.Error("adding assert.verdict did not change the task hash")
+	}
 }
 
 // TestHookUnknownTaskErrors checks that a hook naming an undefined tasks:

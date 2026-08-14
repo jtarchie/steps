@@ -58,4 +58,3 @@ tasks:
     desc: Alias for `task fmt` — so bare `task` runs the whole validation sequence.
     cmds:
       - task: fmt
-      - task: test

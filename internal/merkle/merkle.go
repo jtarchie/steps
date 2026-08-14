@@ -614,6 +614,17 @@ func assertContent(a *config.Assert) map[string]any {
 		content["code"] = *a.Code
 	}
 
+	if a.Verdict != nil {
+		content["verdict"] = *a.Verdict
+	}
+
+	// files folds in for the same reason as every other field: a step cached
+	// from a run BEFORE the assert existed would otherwise be skipped, and the
+	// assert never evaluated on the run that added it.
+	if len(a.Files) > 0 {
+		content["files"] = config.StableStrings(a.Files)
+	}
+
 	// tool_calls folds in only when set, like every other assert field: it
 	// changes the step's success criteria, so it must bust the cache, but an
 	// assert without it hashes exactly as before this field existed. Each

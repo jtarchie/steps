@@ -379,17 +379,32 @@ func (c *Config) validateAssertFiles(label string, step *Step) error {
 		return nil
 	}
 
+	// Only task and agent steps have outputs: to resolve against. A block step
+	// (do:, in_parallel:, ...) carrying an assert is already rejected by its
+	// own validator; resolving outputs for it here would just join a bogus
+	// `task "": no task named ""` onto that clearer message.
+	kind, ok := step.Kind()
+	if !ok || (kind != StepKindTask && kind != StepKindAgent) {
+		return nil
+	}
+
 	outputs, err := c.stepOutputs(*step)
 	if err != nil {
 		return fmt.Errorf("%s: %w", label, err)
 	}
 
+	return checkAssertFilePaths(label, step.Assert.Files, outputs)
+}
+
+// checkAssertFilePaths is validateAssertFiles' per-path half, split out so
+// each function stays within the cyclomatic budget.
+func checkAssertFilePaths(label string, files, outputs []string) error {
 	declared := make(map[string]bool, len(outputs))
 	for _, name := range outputs {
 		declared[name] = true
 	}
 
-	for i, path := range step.Assert.Files {
+	for i, path := range files {
 		if strings.TrimSpace(path) == "" {
 			return fmt.Errorf("%s: assert.files[%d] must not be empty", label, i)
 		}
