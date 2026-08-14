@@ -934,11 +934,18 @@ func runOneConversation(
 }
 
 // RunHook runs an agent step as a hook: it resolves, materializes, runs the
-// conversation, and captures declared outputs exactly like RunStep, but
-// records no merkle node or job_run — the enclosing step/job records the
-// aggregate outcome (the same no-record contract as RunFix). A returned error
-// is already outcome-marked where appropriate (see runAgentConversation), so
-// the caller's hook classification works unchanged.
+// conversation, evaluates its assert, and captures declared outputs exactly
+// like RunStep, but records no merkle node or job_run — the enclosing
+// step/job records the aggregate outcome (the same no-record contract as
+// RunFix). A returned error is already outcome-marked where appropriate (see
+// runAgentConversation), so the caller's hook classification works unchanged.
+//
+// The assert runs here for the same reason a task hook's does (see
+// internal/pipeline's executeTask -> runAssertedTask): config.validateAsserts
+// deliberately walks hook steps, so an assert on an on_failure: agent is
+// checked and rejected at load like any other. Evaluating it at load and then
+// never running it made that promise a lie — the hook reported success on a
+// mismatch its own assert existed to catch.
 func RunHook(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) error {
 	prepared, err := prepareAgentStep(ctx, cfg, step, bw)
 	if err != nil {
@@ -953,6 +960,13 @@ func RunHook(ctx context.Context, cfg *config.Config, step config.Step, bw works
 
 	printAgentResponse(res)
 
+	if err != nil {
+		return fmt.Errorf("agent %q: %w", step.Agent, err)
+	}
+
+	// Before Capture, matching RunStep's order: assert.files reads the step's
+	// own working directory, which is what the conversation just wrote into.
+	err = assertAgentResponse(step.Assert, res, prepared.space.Dir())
 	if err != nil {
 		return fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
