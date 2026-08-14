@@ -77,9 +77,12 @@ func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 // classifies it as failed; a resource lookup or workspace error stays
 // unmarked → errored.
 func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) (map[string]any, error) {
+	// Named here, not left to the caller: runHookStep's put branch adds no
+	// context of its own, so an unwrapped lookup failure reaches a reader as a
+	// bare "no resource type named x" with nothing saying it came from a put.
 	resource, resourceType, err := findPutTarget(cfg, step.Put)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("put %q: %w", step.Put, err)
 	}
 
 	space, err := bw.PutSpace(ctx, step.Put, step.InputNames(), step.InputsAll())
