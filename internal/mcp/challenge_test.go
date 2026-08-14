@@ -3,7 +3,9 @@ package mcp
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
 )
@@ -161,5 +163,51 @@ func TestChallengeRepairClientRepairsInFlight(t *testing.T) {
 	_, err = oauthex.ParseWWWAuthenticate(resp.Header.Values("WWW-Authenticate"))
 	if err != nil {
 		t.Fatalf("ParseWWWAuthenticate on the response: %v", err)
+	}
+}
+
+// TestRepairChallengesDropsAnOversizedValue guards the bound on what reaches
+// the SDK's challenge parser.
+//
+// oauthex.splitChallenges rescans the header remainder per unresolvable
+// comma, so its cost grows with the square of the input, and Go accepts a
+// 10MB response header by default. This repair layer is the only thing
+// between the response and that parser, so it is the only place the size can
+// be judged before the cost is paid.
+func TestRepairChallengesDropsAnOversizedValue(t *testing.T) {
+	t.Parallel()
+
+	oversized := "Bearer " + strings.Repeat(",", maxChallengeBytes)
+
+	header := http.Header{}
+	header.Add("WWW-Authenticate", oversized)
+	header.Add("WWW-Authenticate", `Bearer realm="mcp" resource_metadata="https://example.test/prm"`)
+
+	start := time.Now()
+
+	repairChallenges(header)
+
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("repairChallenges took %s on an oversized header", elapsed)
+	}
+
+	got := header.Values("WWW-Authenticate")
+	if len(got) != 1 {
+		t.Fatalf("WWW-Authenticate = %q, want the oversized value dropped and the real one kept", got)
+	}
+
+	// The survivor is the legitimate challenge, repaired as usual — dropping
+	// one value must not cost the login the other value would have completed.
+	if !strings.Contains(got[0], "resource_metadata=") {
+		t.Fatalf("surviving challenge = %q, want the repairable one to be kept", got[0])
+	}
+
+	parsed, err := oauthex.ParseWWWAuthenticate(got)
+	if err != nil {
+		t.Fatalf("ParseWWWAuthenticate(%q): %v", got, err)
+	}
+
+	if len(parsed) == 0 {
+		t.Fatalf("ParseWWWAuthenticate(%q) returned no challenges", got)
 	}
 }

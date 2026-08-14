@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -42,6 +43,25 @@ func (rt *wwwAuthenticateRepair) RoundTrip(req *http.Request) (*http.Response, e
 	return resp, nil
 }
 
+// maxChallengeBytes bounds one WWW-Authenticate value, above which it is
+// dropped rather than parsed.
+//
+// The SDK's splitChallenges (oauthex/resource_meta.go) rescans the remainder
+// of the header for every comma it cannot resolve, which is quadratic: a
+// value that is mostly commas costs ~200ms at 200k of them and grows with the
+// square. Go allows a 10MB response header by default, so a server that wants
+// to can hand `steps mcp login` hours of CPU in a single 401.
+//
+// Bounding it here is not tidiness — this repair layer is the only thing
+// between the response and that parser, so it is the only place the size can
+// be judged before the cost is paid. 64KB is orders of magnitude past any
+// real challenge (they run to a few hundred bytes), so nothing legitimate is
+// near it, and a value above it is not a challenge worth trying to honour.
+// Dropping rather than truncating: half a challenge parses into something
+// that was never sent, and discovery has a well-known-URI path to fall back
+// to when a challenge is absent.
+const maxChallengeBytes = 64 << 10
+
 // repairChallenges replaces header's WWW-Authenticate values with
 // comma-separated ones, but only where that changes a value and the result
 // parses — using the SDK's own parser as the oracle, so a header broken in
@@ -68,12 +88,24 @@ func repairChallenges(header http.Header) {
 		return
 	}
 
-	repaired := make([]string, len(values))
+	repaired := make([]string, 0, len(values))
 	changed := false
 
-	for i, value := range values {
-		repaired[i] = repairChallenge(value)
-		changed = changed || repaired[i] != value
+	for _, value := range values {
+		if len(value) > maxChallengeBytes {
+			slog.Warn("mcp.challenge.oversized",
+				"bytes", len(value), "limit", maxChallengeBytes,
+				"detail", "dropping a WWW-Authenticate value too large to be a real challenge")
+
+			changed = true
+
+			continue
+		}
+
+		fixed := repairChallenge(value)
+		changed = changed || fixed != value
+
+		repaired = append(repaired, fixed)
 	}
 
 	if !changed {
