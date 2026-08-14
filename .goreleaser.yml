@@ -1,0 +1,75 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+# There is no CI workflow — the tag push is the only gate, so run the test
+# suite before anything is published.
+before:
+  hooks:
+    - go test ./...
+
+builds:
+  - id: steps
+    binary: steps
+    main: .
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.buildVersion={{.Version}}
+    flags:
+      - -trimpath
+
+archives:
+  - id: steps
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+      - Merge pull request
+
+# `brews:` (formulas) is deprecated as of goreleaser v2.16 — casks are the
+# supported way to ship pre-compiled binaries. Tap + install:
+#   brew tap jtarchie/steps https://github.com/jtarchie/steps
+#   brew install steps
+homebrew_casks:
+  - name: steps
+    binaries:
+      - steps
+    directory: Casks
+    repository:
+      owner: jtarchie
+      name: steps
+    homepage: "https://github.com/jtarchie/steps"
+    description: "Runs Concourse-style YAML pipelines with LLM agent steps built in"
+    skip_upload: auto
+    hooks:
+      post:
+        # The binary is unsigned, so Gatekeeper quarantines it on download and
+        # macOS refuses to run it. Strip the attribute at install time.
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/steps"]
+          end
+
+release:
+  github:
+    owner: jtarchie
+    name: steps
+  prerelease: auto

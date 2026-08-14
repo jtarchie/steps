@@ -4,6 +4,9 @@
 # `go build ./...` drops the tools/ checkers here
 /kindswitch
 
+# goreleaser build output
+/dist/
+
 # Persisted job-run state (sqlite)
 .steps/
 .scratch/

@@ -4,6 +4,15 @@ A CLI that runs Concourse-style YAML pipelines, with LLM agent steps built in.
 
 Pipelines fetch resources, run tasks, and can hand off to an `agent` step that talks to an LLM with tool-calling support (`read_file`, `list_dir`, `run_shell`, or your own custom tools). State is cached in SQLite, so unchanged steps are skipped on the next run.
 
+## Install
+
+```bash
+brew tap jtarchie/steps https://github.com/jtarchie/steps
+brew install steps
+```
+
+macOS only — the tap ships a cask, and Homebrew on Linux doesn't install casks. On Linux, grab the tarball for your arch from [releases](https://github.com/jtarchie/steps/releases).
+
 ## Build
 
 ```bash
