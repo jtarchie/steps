@@ -235,6 +235,8 @@ A check reports what *exists*, not what is new — the same twenty Slack message
 - **`--force` ignores it**, along with every other piece of persisted state — which means it re-runs versions already taken, effects included. It still RECORDS what it takes, so an ordinary run afterwards does not repeat the same work again. It still *records* what it took, so the ordinary run after a forced one does not repeat that work a second time.
 - **It can only suppress, never resurrect.** steps keeps no version history: whatever `check` returns *now* is the whole universe. A version that scrolled out of the check's window while nothing was watching is gone, so a check should return a window wide enough to cover the gaps you care about.
 
+- **Only the first `get:` in a plan may say `every`.** That is the one fan-out point; a later get runs *inside* one of those fan-outs, where it can only fetch a single version. Writing it there is a load error rather than a field that is accepted and ignored. (Concourse allows several — each input has its own cursor — because it resolves a whole input *set* per build instead of fanning out at one step. See [conformance](conformance.md).)
+
 `steps plan` reads the same record, so it lists only the versions a run would actually take.
 
 ## `trigger: true`

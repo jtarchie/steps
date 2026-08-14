@@ -71,12 +71,15 @@ func CheckVersions(ctx context.Context, cfg *config.Config, rt config.ResourceTy
 // field convention: unset or the string "latest" means latest, the string
 // "every" means every version, and a map means pinned to a specific version.
 func VersionMode(step config.Step) (mode string, pinned map[string]string) {
+	// The one mode config also has to recognize (to reject it where it cannot
+	// fan out — see validateVersionEvery), so both read the same predicate
+	// rather than each spelling the comparison.
+	if step.VersionEvery() {
+		return "every", nil
+	}
+
 	switch v := step.Version.(type) {
 	case string:
-		if v == "every" {
-			return "every", nil
-		}
-
 		return "latest", nil
 	case map[string]any:
 		m := make(map[string]string, len(v))

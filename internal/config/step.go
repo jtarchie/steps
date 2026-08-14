@@ -448,6 +448,16 @@ func (s Step) InputNames() []string {
 // InputsAll reports whether the step declared `inputs: all` (put steps only).
 func (s Step) InputsAll() bool { return s.Inputs != nil && s.Inputs.All }
 
+// VersionEvery reports whether this get declared `version: every` — the one
+// mode that runs the rest of the plan once per version. Every other spelling
+// (unset, "latest", a pinned mapping) resolves to a single version; see
+// resource.VersionMode, which reads this.
+func (s Step) VersionEvery() bool {
+	mode, ok := s.Version.(string)
+
+	return ok && mode == "every"
+}
+
 // GetResourceName is the name of the resource a get step fetches: Resource
 // when set (get: aliases the resource under a different name), else Get itself.
 // The fetched artifact, its directory, and the step's routing name are always

@@ -114,6 +114,56 @@ func validateResourceGet(label, get string, resourceType *ResourceType) error {
 		label, get, resourceType.Name)
 }
 
+// validateVersionEvery rejects `version: every` anywhere it cannot actually
+// fan out.
+//
+// A plan has exactly ONE fan-out point: the first get in it, which runs the
+// rest of the plan once per version (internal/pipeline's runGetStep). Every
+// later get executes INSIDE one of those runs, where the remainder is already
+// a single linear chain, so it resolves to a single version
+// (runGetStepInPlace) — and quietly to the OLDEST one, forever, since nothing
+// there advances the version cursor.
+//
+// That is a step doing nothing while looking like it does something, which is
+// the failure this codebase rejects at load rather than at 3am: same treatment
+// as a put: against a type with no out:, or a get: inside a do: block (also a
+// load error, and for the same reason — a fan-out with nowhere to go).
+//
+// Concourse has no such restriction: there, every input has its own cursor and
+// several can be `every` at once. steps models one fan-out point instead, so
+// the honest thing is to say so rather than accept the field and ignore it.
+// See docs/conformance.md.
+func (c *Config) validateVersionEvery() error {
+	for i := range c.Jobs {
+		job := &c.Jobs[i]
+
+		fanOut := -1
+
+		for k := range job.Plan {
+			if job.Plan[k].Get != "" {
+				fanOut = k
+
+				break
+			}
+		}
+
+		err := job.visitSteps(func(label string, step *Step) error {
+			if !step.VersionEvery() || (fanOut >= 0 && step == &job.Plan[fanOut]) {
+				return nil
+			}
+
+			return fmt.Errorf(
+				"%s: version: every is only valid on the FIRST get: in a job's plan, which is the one step that fans the rest of the plan out per version; here it would fetch a single version (the oldest, every time). Move it to that get, or drop version: every",
+				label)
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // validateGetResource enforces that a step's resource: is only set on get
 // steps and names an existing resource. The fetched resource is Resource when
 // set, else Get (see Step.Resource); two get steps may alias the same resource
