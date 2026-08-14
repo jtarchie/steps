@@ -10,7 +10,6 @@ import (
 	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/outcome"
-	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // hookGracePeriod bounds how long on_abort and ensure hooks may run after the
@@ -24,10 +23,9 @@ const hookGracePeriod = 60 * time.Second
 // `job "deploy"` or `step 2 (task "build")`), and the build workspace hook
 // steps materialize into.
 type hookScope struct {
-	cfg     *config.Config
-	jobName string
-	label   string
-	bw      workspace.BuildWorkspace
+	stepRunner
+
+	label string
 }
 
 // runHooks dispatches the Concourse-style hooks around a guarded outcome:
@@ -104,12 +102,7 @@ func runMatchedHook(ctx context.Context, scope hookScope, name string, step *con
 
 	hookErr := runHookStep(hookCtx, scope, *step)
 
-	nested := hookScope{
-		cfg:     scope.cfg,
-		jobName: scope.jobName,
-		label:   fmt.Sprintf("%s (%s hook)", scope.label, name),
-		bw:      scope.bw,
-	}
+	nested := scope.scope(fmt.Sprintf("%s (%s hook)", scope.label, name))
 
 	return runHooks(hookCtx, nested, step.Hooks, hookErr)
 }

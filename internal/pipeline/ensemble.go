@@ -14,8 +14,6 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
-	"github.com/jtarchie/steps/internal/store"
-	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // memberVote is one ensemble member's answer.
@@ -32,26 +30,23 @@ type memberVote struct {
 // A single model has blind spots: one reviewer's "approve" carries no signal
 // about how much to trust it. The cost is the obvious tradeoff — N agents cost
 // N times one — which is why this is the step a job budget: is worth setting.
-func runEnsembleStep(
-	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, parentHash string,
-) (string, stepDisposition, nonGetOutcome, error) {
-	content, err := merkle.EnsembleNodeContent(cfg, step)
+func runEnsembleStep(ctx context.Context, r stepRunner, i int, step config.Step, parentHash string) (stepResult, error) {
+	content, err := merkle.EnsembleNodeContent(r.cfg, step)
 	if err != nil {
-		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (ensemble): %w", i, err)
+		return stepResult{}, fmt.Errorf("step %d (ensemble): %w", i, err)
 	}
 
 	hash, err := merkle.HashNode(merkle.NodeKindEnsemble, content, parentHash)
 	if err != nil {
-		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (ensemble): %w", i, err)
+		return stepResult{}, fmt.Errorf("step %d (ensemble): %w", i, err)
 	}
 
 	fmt.Printf("ensemble: %d agents, decide %s\n", len(step.Ensemble.Agents), step.Ensemble.Decide)
-	slog.Debug("job.step", "job", jobName, "index", i, "kind", "ensemble", "members", len(step.Ensemble.Agents))
+	slog.Debug("job.step", "job", r.jobName, "index", i, "kind", "ensemble", "members", len(step.Ensemble.Agents))
 
-	votes := runEnsembleMembers(ctx, cfg, jobName, i, step, bw, st, hash)
+	votes := runEnsembleMembers(ctx, r, i, step, hash)
 
-	verdict, err := decideEnsemble(ctx, cfg, jobName, i, step, bw, st, hash, votes)
+	verdict, err := decideEnsemble(ctx, r, i, step, hash, votes)
 
 	status := "succeeded"
 	if err != nil {
@@ -62,15 +57,15 @@ func runEnsembleStep(
 		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindEnsemble,
 		StepIndex: i, Resource: executedStepName(step), Content: content,
 	}
-	_ = st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), jobName, status, ensembleRecord(votes, verdict), err)
+	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, status, ensembleRecord(votes, verdict), err)
 
 	if err != nil {
-		return "", stepRan, nonGetOutcome{}, err
+		return stepResult{}, err
 	}
 
 	fmt.Printf("ensemble decide: %s → %s\n", step.Ensemble.Decide, verdict)
 
-	return hash, stepRan, nonGetOutcome{verdict: verdict}, nil
+	return stepResult{hash: hash, verdict: verdict}, nil
 }
 
 // runEnsembleMembers runs every member concurrently and collects its vote.
@@ -79,10 +74,7 @@ func runEnsembleStep(
 // records its own node with its own content hash — which is what makes members
 // independently cacheable: editing one member's prompt changes only that
 // member's hash.
-func runEnsembleMembers(
-	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, blockHash string,
-) []memberVote {
+func runEnsembleMembers(ctx context.Context, r stepRunner, i int, step config.Step, blockHash string) []memberVote {
 	members := step.Ensemble.Agents
 	votes := make([]memberVote, len(members))
 	logs := make([]*execLog, len(members))
@@ -106,8 +98,8 @@ func runEnsembleMembers(
 			runCtx, memberLog := forkExecLog(ctx)
 			logs[index] = memberLog
 
-			_, _, out, err := runNonGetStep(runCtx, cfg, jobName, i, member, bw, st, nil, blockHash)
-			votes[index].verdict, votes[index].note, votes[index].err = out.verdict, out.note, err
+			res, err := runNonGetStep(runCtx, r, i, member, nil, blockHash)
+			votes[index].verdict, votes[index].note, votes[index].err = res.verdict, res.note, err
 		}()
 	}
 
@@ -124,8 +116,7 @@ func runEnsembleMembers(
 
 // decideEnsemble turns the members' votes into one verdict.
 func decideEnsemble(
-	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, blockHash string, votes []memberVote,
+	ctx context.Context, r stepRunner, i int, step config.Step, blockHash string, votes []memberVote,
 ) (string, error) {
 	counted, err := countableVotes(step.Ensemble, votes)
 	if err != nil {
@@ -133,7 +124,7 @@ func decideEnsemble(
 	}
 
 	if judge := step.Ensemble.JudgeAgent(); judge != "" {
-		return runEnsembleJudge(ctx, cfg, jobName, i, step, bw, st, blockHash, counted)
+		return runEnsembleJudge(ctx, r, i, step, blockHash, counted)
 	}
 
 	return applyDecisionRule(step.Ensemble, counted)
@@ -242,8 +233,7 @@ func renderTally(tally map[string]int) string {
 // recorded, inspectable and cached exactly like any other agent run, rather
 // than being a black box one level deeper than a single agent already was.
 func runEnsembleJudge(
-	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, blockHash string, votes []memberVote,
+	ctx context.Context, r stepRunner, i int, step config.Step, blockHash string, votes []memberVote,
 ) (string, error) {
 	judgeStep := config.Step{
 		Agent:    step.Ensemble.JudgeAgent(),
@@ -251,16 +241,16 @@ func runEnsembleJudge(
 		Verdicts: step.Ensemble.EnsembleVerdictsFor(),
 	}
 
-	_, _, out, err := runNonGetStep(ctx, cfg, jobName, i, judgeStep, bw, st, nil, blockHash)
+	res, err := runNonGetStep(ctx, r, i, judgeStep, nil, blockHash)
 	if err != nil {
 		return "", fmt.Errorf("ensemble judge %q: %w", judgeStep.Agent, err)
 	}
 
-	if out.verdict == "" {
+	if res.verdict == "" {
 		return "", fmt.Errorf("ensemble judge %q returned no verdict", judgeStep.Agent)
 	}
 
-	return out.verdict, nil
+	return res.verdict, nil
 }
 
 // judgePrompt renders what the members said, in declaration order.

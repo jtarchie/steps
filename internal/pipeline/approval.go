@@ -37,12 +37,10 @@ const (
 // Conflating the last two would make a silent expiry indistinguishable from a
 // rejection, and "the deploy was rejected" is a very different thing to read
 // in a log from "the deploy was never looked at".
-func runApprovalStep(
-	ctx context.Context, jobName string, i int, step config.Step, st *store.Store, parentHash string,
-) (string, stepDisposition, nonGetOutcome, error) {
-	id, err := st.RequestApproval(ctx, jobName, step.Approval.Message)
+func runApprovalStep(ctx context.Context, r stepRunner, i int, step config.Step, parentHash string) (stepResult, error) {
+	id, err := r.st.RequestApproval(ctx, r.jobName, step.Approval.Message)
 	if err != nil {
-		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (approval): %w", i, err)
+		return stepResult{}, fmt.Errorf("step %d (approval): %w", i, err)
 	}
 
 	timeout := approvalTimeout(step.Approval.Timeout)
@@ -54,15 +52,15 @@ func runApprovalStep(
 	fmt.Printf("approval %d: waiting up to %s — steps approve <pipeline> %d  |  steps reject <pipeline> %d\n",
 		id, timeout, id, id)
 	slog.Warn("job.approval_pending",
-		"job", jobName, "approval", id, "message", step.Approval.Message, "timeout", timeout.String())
+		"job", r.jobName, "approval", id, "message", step.Approval.Message, "timeout", timeout.String())
 
-	decision, err := awaitApproval(ctx, st, id, timeout)
+	decision, err := awaitApproval(ctx, r.st, id, timeout)
 
 	content := map[string]any{"approval": step.Approval.Message}
 
 	hash, hashErr := merkle.HashNode(merkle.NodeKindApproval, content, parentHash)
 	if hashErr != nil {
-		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (approval): %w", i, hashErr)
+		return stepResult{}, fmt.Errorf("step %d (approval): %w", i, hashErr)
 	}
 
 	node := merkle.Node{
@@ -75,15 +73,15 @@ func runApprovalStep(
 		status = "failed"
 	}
 
-	_ = st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), jobName, status, approvalRecord(decision), err)
+	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, status, approvalRecord(decision), err)
 
 	if err != nil {
-		return "", stepRan, nonGetOutcome{}, err
+		return stepResult{}, err
 	}
 
 	fmt.Printf("approval %d: approved by %s\n", id, decision.DecidedBy)
 
-	return hash, stepRan, nonGetOutcome{}, nil
+	return ran(hash), nil
 }
 
 // awaitApproval polls for the decision until one is made or the wait expires.

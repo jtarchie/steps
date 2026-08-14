@@ -14,7 +14,6 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
-	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -96,13 +95,10 @@ func renderStepVars(ctx context.Context, step config.Step) config.Step {
 // common way to produce one is `git describe > version.txt`, which leaves a
 // trailing newline that would otherwise be substituted into the middle of a
 // command.
-func runLoadVarStep(
-	ctx context.Context, jobName string, i int, step config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, parentHash string,
-) (string, stepDisposition, nonGetOutcome, error) {
-	space, err := bw.TaskSpace(ctx, step.LoadVar, step.InputNames(), nil, nil, nil)
+func runLoadVarStep(ctx context.Context, r stepRunner, i int, step config.Step, parentHash string) (stepResult, error) {
+	space, err := r.bw.TaskSpace(ctx, step.LoadVar, step.InputNames(), nil, nil, nil)
 	if err != nil {
-		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (load_var %q): workspace: %w", i, step.LoadVar, err)
+		return stepResult{}, fmt.Errorf("step %d (load_var %q): workspace: %w", i, step.LoadVar, err)
 	}
 
 	defer workspace.CloseSpace(space, step.LoadVar)
@@ -111,7 +107,7 @@ func runLoadVarStep(
 
 	body, err := os.ReadFile(path) //nolint:gosec // the path is a pipeline-declared file inside this step's own workspace
 	if err != nil {
-		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (load_var %q): %w", i, step.LoadVar, err)
+		return stepResult{}, fmt.Errorf("step %d (load_var %q): %w", i, step.LoadVar, err)
 	}
 
 	value := strings.TrimSpace(string(body))
@@ -121,20 +117,20 @@ func runLoadVarStep(
 	}
 
 	fmt.Printf("load_var: %s\n", step.LoadVar)
-	slog.Info("job.load_var", "job", jobName, "var", step.LoadVar, "bytes", len(value))
+	slog.Info("job.load_var", "job", r.jobName, "var", step.LoadVar, "bytes", len(value))
 
 	content := map[string]any{"load_var": step.LoadVar, "file": step.VarFile, "value": value}
 
 	hash, err := merkle.HashNode(merkle.NodeKindLoadVar, content, parentHash)
 	if err != nil {
-		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (load_var %q): %w", i, step.LoadVar, err)
+		return stepResult{}, fmt.Errorf("step %d (load_var %q): %w", i, step.LoadVar, err)
 	}
 
 	node := merkle.Node{
 		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindLoadVar,
 		StepIndex: i, Resource: step.LoadVar, Content: content,
 	}
-	_ = st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), jobName, "succeeded", nil, nil)
+	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, "succeeded", nil, nil)
 
-	return hash, stepRan, nonGetOutcome{}, nil
+	return ran(hash), nil
 }

@@ -8,8 +8,6 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
-	"github.com/jtarchie/steps/internal/store"
-	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // runDoStep runs a do: block's steps in declaration order, stopping at the
@@ -27,18 +25,15 @@ import (
 // matrix asks "which of these combinations work"; a do: block is one piece of
 // work spelled in several steps, and running the deploy after the migration
 // failed is not a partial answer, it is a worse outcome.
-func runDoStep(
-	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, parentHash string,
-) (string, stepDisposition, nonGetOutcome, error) {
-	content, err := merkle.DoNodeContent(cfg, step)
+func runDoStep(ctx context.Context, r stepRunner, i int, step config.Step, parentHash string) (stepResult, error) {
+	content, err := merkle.DoNodeContent(r.cfg, step)
 	if err != nil {
-		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (do): %w", i, err)
+		return stepResult{}, fmt.Errorf("step %d (do): %w", i, err)
 	}
 
 	hash, err := merkle.HashNode(merkle.NodeKindDo, content, parentHash)
 	if err != nil {
-		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (do): %w", i, err)
+		return stepResult{}, fmt.Errorf("step %d (do): %w", i, err)
 	}
 
 	fmt.Printf("do: %d steps\n", len(step.Do))
@@ -65,8 +60,7 @@ func runDoStep(
 		// unrelated plan steps that really do sit at 0, 1, 2 — and the run
 		// transcript would attribute a do: child's output to whichever step
 		// happened to share its number.
-		childHash, _, _, childErr := runNonGetStep(
-			ctx, cfg, jobName, i, child, bw, st, nil, childParent)
+		childRes, childErr := runNonGetStep(ctx, r, i, child, nil, childParent)
 
 		// A try: child tolerates its own failure here, for the reason a try:
 		// branch does inside a concurrent block (see runBranches): the plan
@@ -74,15 +68,15 @@ func runDoStep(
 		// one goes. Without it the same wrapper would be tolerated in a plain
 		// plan and propagate inside a do:, which is the case try: is most
 		// often reached for.
-		childErr = tolerateTryFailure(ctx, jobName, child, childErr)
+		childErr = tolerateTryFailure(ctx, r.jobName, child, childErr)
 		if childErr != nil {
-			return hash, stepRan, nonGetOutcome{}, childErr
+			return ran(hash), childErr
 		}
 
-		if childHash != "" {
-			childParent = childHash
+		if childRes.hash != "" {
+			childParent = childRes.hash
 		}
 	}
 
-	return hash, stepRan, nonGetOutcome{}, nil
+	return ran(hash), nil
 }

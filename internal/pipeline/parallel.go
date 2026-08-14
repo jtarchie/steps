@@ -18,8 +18,6 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
-	"github.com/jtarchie/steps/internal/store"
-	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // branchResult is one branch's outcome, kept with its index so the report
@@ -38,26 +36,23 @@ type branchResult struct {
 // counts. That distinction is the defect this step shipped with the first time
 // it was written: with fail_fast: false a child failure was swallowed and a job
 // containing a failing parallel step reported PASS.
-func runParallelStep(
-	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, parentHash string,
-) (string, stepDisposition, nonGetOutcome, error) {
-	content, err := merkle.ParallelNodeContent(cfg, step)
+func runParallelStep(ctx context.Context, r stepRunner, i int, step config.Step, parentHash string) (stepResult, error) {
+	content, err := merkle.ParallelNodeContent(r.cfg, step)
 	if err != nil {
-		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (in_parallel): %w", i, err)
+		return stepResult{}, fmt.Errorf("step %d (in_parallel): %w", i, err)
 	}
 
 	hash, err := merkle.HashNode(merkle.NodeKindParallel, content, parentHash)
 	if err != nil {
-		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (in_parallel): %w", i, err)
+		return stepResult{}, fmt.Errorf("step %d (in_parallel): %w", i, err)
 	}
 
 	branches := step.InParallel.Steps
 
 	fmt.Printf("in_parallel: %d branches%s\n", len(branches), limitSuffix(step.InParallel.Limit))
-	slog.Debug("job.step", "job", jobName, "index", i, "kind", "in_parallel", "branches", len(branches))
+	slog.Debug("job.step", "job", r.jobName, "index", i, "kind", "in_parallel", "branches", len(branches))
 
-	results := runBranches(ctx, cfg, jobName, i, step, bw, st, hash)
+	results := runBranches(ctx, r, i, step, hash)
 	blockErr := combineBranchErrors(ctx, results)
 
 	status := "succeeded"
@@ -69,9 +64,9 @@ func runParallelStep(
 		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindParallel,
 		StepIndex: i, Resource: executedStepName(step), Content: content,
 	}
-	_ = st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), jobName, status, nil, blockErr)
+	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, status, nil, blockErr)
 
-	return hash, stepRan, nonGetOutcome{}, blockErr
+	return ran(hash), blockErr
 }
 
 // runBranches executes every branch, bounded by limit, and collects one result
@@ -82,10 +77,7 @@ func runParallelStep(
 // one to be the parent of another. Caching is off inside the block (nil
 // skippable) — a branch's own steps still record their nodes, but the block
 // decides nothing about skipping.
-func runBranches(
-	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, blockHash string,
-) []branchResult {
+func runBranches(ctx context.Context, r stepRunner, i int, step config.Step, blockHash string) []branchResult {
 	branches := step.InParallel.Steps
 	results := make([]branchResult, len(branches))
 
@@ -124,7 +116,7 @@ func runBranches(
 		// at all — the same hole across: had, closed the same way and with the
 		// same helper. Asked after acquiring, so the answer reflects branches
 		// that have actually finished.
-		if branchCtx.Err() != nil || deadlineStopsFanOut(ctx, jobName, "in_parallel", "branches", index, len(branches)) {
+		if branchCtx.Err() != nil || deadlineStopsFanOut(ctx, r.jobName, "in_parallel", "branches", index, len(branches)) {
 			slot.release()
 
 			break
@@ -145,7 +137,7 @@ func runBranches(
 			runCtx, branchLog := forkExecLog(branchCtx)
 			logs[index] = branchLog
 
-			_, _, _, err := runNonGetStep(runCtx, cfg, jobName, i, branch, bw, st, nil, blockHash)
+			_, err := runNonGetStep(runCtx, r, i, branch, nil, blockHash)
 
 			// A try: branch tolerates its own failure HERE, because the plan
 			// walk never sees a branch — executeNonGetStep is where every
@@ -157,7 +149,7 @@ func runBranches(
 			//
 			// Before the fail_fast check, so a tolerated failure does not
 			// cancel its siblings either. It is not a failure any more.
-			err = tolerateTryFailure(runCtx, jobName, branch, err)
+			err = tolerateTryFailure(runCtx, r.jobName, branch, err)
 
 			results[index].err = err
 
@@ -261,26 +253,23 @@ func limitSuffix(limit int) string {
 // Losing branches are cancelled, which stops only FUTURE work: a loser that
 // already had a real-world side effect keeps it. That is why race: requires
 // workspace isolation and is documented as safe for read/generate-only agents.
-func runRaceStep(
-	ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, parentHash string,
-) (string, stepDisposition, nonGetOutcome, error) {
-	content, err := merkle.RaceNodeContent(cfg, step)
+func runRaceStep(ctx context.Context, r stepRunner, i int, step config.Step, parentHash string) (stepResult, error) {
+	content, err := merkle.RaceNodeContent(r.cfg, step)
 	if err != nil {
-		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (race): %w", i, err)
+		return stepResult{}, fmt.Errorf("step %d (race): %w", i, err)
 	}
 
 	hash, err := merkle.HashNode(merkle.NodeKindRace, content, parentHash)
 	if err != nil {
-		return "", stepRan, nonGetOutcome{}, fmt.Errorf("step %d (race): %w", i, err)
+		return stepResult{}, fmt.Errorf("step %d (race): %w", i, err)
 	}
 
 	branches := step.Race.Steps
 
 	fmt.Printf("race: %d branches\n", len(branches))
-	slog.Debug("job.step", "job", jobName, "index", i, "kind", "race", "branches", len(branches))
+	slog.Debug("job.step", "job", r.jobName, "index", i, "kind", "race", "branches", len(branches))
 
-	winner, results := raceBranches(ctx, cfg, jobName, i, branches, bw, st, hash)
+	winner, results := raceBranches(ctx, r, i, branches, hash)
 	raceErr := raceOutcome(ctx, winner, results)
 
 	status := "succeeded"
@@ -292,17 +281,14 @@ func runRaceStep(
 		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindRace,
 		StepIndex: i, Resource: executedStepName(step), Content: content,
 	}
-	_ = st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), jobName, status, nil, raceErr)
+	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, status, nil, raceErr)
 
-	return hash, stepRan, nonGetOutcome{}, raceErr
+	return ran(hash), raceErr
 }
 
 // raceBranches starts every branch and returns the index of the first to
 // succeed (-1 if none did) along with every branch's result.
-func raceBranches(
-	ctx context.Context, cfg *config.Config, jobName string, i int, branches []config.Step,
-	bw workspace.BuildWorkspace, st *store.Store, blockHash string,
-) (int, []branchResult) {
+func raceBranches(ctx context.Context, r stepRunner, i int, branches []config.Step, blockHash string) (int, []branchResult) {
 	raceCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -326,7 +312,7 @@ func raceBranches(
 			runCtx, branchLog := forkExecLog(raceCtx)
 			logs[index] = branchLog
 
-			_, _, _, err := runNonGetStep(runCtx, cfg, jobName, i, branch, bw, st, nil, blockHash)
+			_, err := runNonGetStep(runCtx, r, i, branch, nil, blockHash)
 			results[index].err = err
 
 			if err != nil {

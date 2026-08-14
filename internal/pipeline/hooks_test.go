@@ -41,7 +41,7 @@ func hookTestScope(t *testing.T, markerFile string) hookScope {
 		},
 	}
 
-	return hookScope{cfg: cfg, jobName: "test", label: "step 0", bw: bw}
+	return stepRunner{cfg: cfg, jobName: "test", bw: bw}.scope("step 0")
 }
 
 func readMarkers(t *testing.T, path string) []string {
@@ -158,7 +158,7 @@ func TestRunHooksEnsureFailsGreenOutcome(t *testing.T) {
 
 		t.Cleanup(func() { workspace.CloseBuild(bw, "test") })
 
-		return hookScope{cfg: cfg, jobName: "test", label: "step 0", bw: bw}
+		return stepRunner{cfg: cfg, jobName: "test", bw: bw}.scope("step 0")
 	}
 
 	hooks := config.Hooks{Ensure: &config.Step{Task: "boom"}}
