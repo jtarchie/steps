@@ -162,6 +162,50 @@ jobs:
 - **`check`** is called with `{"source": source}`. Its result must be an oldest-first JSON array of version objects, accepted either as structured content or a single text block containing that array — as close a mirror of the shell path's "stdout is a JSON array" convention as an RPC result allows.
 - **`in`, when omitted** (the common case — detecting new issues, not fetching their content): `get` just writes the selected version object to `<resource>/version.json`, no MCP call. **When set**, `in`'s tool is called with `{"source", "version"}` and its result is materialized into the get's directory: structured content as `result.json`, each content block as `content-N.<ext>`. `version.json` is always written either way.
 - **`out`, when set**, is called with `{"source", "params"}` — `params:` on the `put` step carries the payload. A `put` targeting an MCP-backed type with no `out:` is a load-time error naming the missing tool.
+
+### Sending a file's contents: `{file: ...}` in `params:`
+
+A shell `out:` runs with the put's read view as its working directory and reads what it needs. An MCP `out:` is a tool call with no working directory, so a value a *previous step wrote* needs a way in — otherwise the payload could only ever be text the pipeline author typed, which rules out publishing anything an agent produced.
+
+A `params:` mapping whose **only** key is `file` is replaced by that file's contents:
+
+```yaml noexec
+mcp_servers:
+- name: linear
+  endpoint: https://mcp.linear.app/mcp
+  auth: { type: oauth }
+
+resource_types:
+- name: linear-issues
+  config:
+    mcp:
+      server: linear
+      check: { tool: list_issues }
+      out: { tool: create_issue }
+
+resources:
+- name: eng-bugs
+  type: linear-issues
+  source: { team: ENG }
+
+jobs:
+- name: file-a-bug
+  plan:
+  - task: investigate
+    outputs: [report]
+    run: echo 'the retry loop never backs off' > report/body.md
+  - put: eng-bugs
+    inputs: [report]
+    params:
+      title: Retry loop spins
+      description: { file: report/body.md }   # <- contents, not the literal map
+```
+
+- **The path is relative to the put's read view**, so its first component names an artifact in the step's `inputs:` — the same path shape as `across:`'s `from_file:`. Absolute paths, `../` escapes, and a bare filename naming no artifact are all errors, as is a file that isn't there (which says so, and asks whether its artifact is in `inputs:`).
+- **Exactly one key, and a string value.** `{file: report.pdf, title: "Q3"}` is a real object a tool might genuinely define, so it passes through untouched. Only the single-key form is a marker — that strictness is what makes it safe to spell this inside free-form `params:` rather than beside it.
+- **It nests.** Markers are resolved at any depth, through mappings and lists alike, so a tool taking structured blocks can have one filled from a file.
+- **Contents are trimmed**, exactly as [`load_var:`](templating.md) trims. The usual way to produce one of these files is a redirect (`jq -r .id > meta/id`), whose trailing newline belongs to the writing rather than the value — untrimmed, the first id or timestamp you hand to an API is rejected.
+- **Shell `out:` is unaffected** — it already reads the workspace directly, and reinterpreting a `{file: ...}` param there would change what existing pipelines send.
 - **Detect vs. respond**: a resource-type `check` feeding `trigger:` is the natural fit for *detecting* something (new issues, a new PR). An open-ended *response* — read context, decide, comment — is usually better as an agent step granted the same server's tools, where the model drives; a deterministic `out:` put (exact fields, no judgment) is the resource-type path.
 
 ## Authorizing an oauth server: `steps mcp login`

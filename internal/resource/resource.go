@@ -193,7 +193,7 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, sour
 // ever reached with it set.
 func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, source, params map[string]any, srcDir string) (map[string]any, error) {
 	if rt.Config.MCP != nil {
-		return mcpRunOut(ctx, cfg, rt, source, params)
+		return mcpRunOut(ctx, cfg, rt, source, params, srcDir)
 	}
 
 	slog.Debug("resource.out", "resource_type", rt.Name, "source", source, "params", params, "src_dir", srcDir)

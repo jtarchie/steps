@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"mime"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -276,15 +278,23 @@ func writeFile(path string, data []byte) error {
 // (params carries the put's payload, symmetric with how check uses
 // source:), and parses the result into the produced version object the
 // same way mcpCheckVersions parses one array element: StructuredContent,
-// or a single text content block of JSON. Unlike the shell out: (which
-// runs with cwd = srcDir and can read the workspace), an MCP out: call
-// receives only {source, params} — it cannot read step working-directory
-// files; that remains the shell backend's job (documented v1 limitation,
-// see docs/mcp.md).
-func mcpRunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, source, params map[string]any) (map[string]any, error) {
-	slog.Debug("resource.out", "resource_type", rt.Name, "source", source, "params", params, "mcp_tool", rt.Config.MCP.Out.Tool)
+// or a single text content block of JSON.
+//
+// A shell out: runs with cwd = srcDir and reads the workspace itself; an
+// MCP out: is a tool call with no working directory, so a {file: path}
+// marker in params is how a value that a previous step WROTE reaches the
+// tool — see resolveParamFiles. Without it the payload could only ever be
+// what the pipeline author typed, which rules out posting anything an
+// agent produced.
+func mcpRunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, source, params map[string]any, srcDir string) (map[string]any, error) {
+	slog.Debug("resource.out", "resource_type", rt.Name, "source", source, "params", params, "mcp_tool", rt.Config.MCP.Out.Tool, "src_dir", srcDir)
 
-	result, err := callMCPResourceTool(ctx, cfg, rt.Config.MCP.Server, rt.Config.MCP.Out.Tool, map[string]any{"source": source, "params": params})
+	resolved, err := resolveParamFiles(params, srcDir)
+	if err != nil {
+		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
+	}
+
+	result, err := callMCPResourceTool(ctx, cfg, rt.Config.MCP.Server, rt.Config.MCP.Out.Tool, map[string]any{"source": source, "params": resolved})
 	if err != nil {
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}
@@ -294,6 +304,124 @@ func mcpRunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, 
 	slog.Info("resource.put", "resource_type", rt.Name, "result", version)
 
 	return version, nil
+}
+
+// paramFileKey is the sole key that turns a params: mapping into a
+// reference to a workspace file rather than a literal object.
+const paramFileKey = "file"
+
+// resolveParamFiles walks params and replaces every {file: <path>} marker
+// with that file's contents, read from srcDir — the put's read view,
+// composed from its inputs:, so the path names a declared artifact exactly
+// as everywhere else in the DSL.
+//
+// A mapping qualifies ONLY when `file` is its single key and its value is a
+// string. That strictness is the whole safety argument for spelling this
+// inside params instead of beside it: an MCP tool whose parameter genuinely
+// is an object with a `file` field alongside others (say {file, title})
+// keeps passing through untouched, so adding this feature cannot silently
+// reinterpret a payload that already worked.
+//
+// Contents are TRIMMED, exactly as load_var: trims (see pipeline/vars.go):
+// two features that read a file into a value must agree, and the common way
+// to produce one is a redirect (`jq -r .id > meta/id`) whose trailing
+// newline is an artifact of the writing, not part of the value. Untrimmed,
+// the first real use — an id or timestamp handed to an API — breaks.
+func resolveParamFiles(params map[string]any, srcDir string) (map[string]any, error) {
+	resolved, err := resolveParamValue(params, srcDir)
+	if err != nil {
+		return nil, err
+	}
+
+	converted, ok := resolved.(map[string]any)
+	if !ok {
+		return params, nil
+	}
+
+	return converted, nil
+}
+
+// resolveParamValue recurses through maps and slices so a marker works at
+// any depth a tool's argument schema nests to, not just the top level.
+func resolveParamValue(value any, srcDir string) (any, error) {
+	switch typed := value.(type) {
+	case map[string]any:
+		path, isMarker := paramFileMarker(typed)
+		if isMarker {
+			return readParamFile(path, srcDir)
+		}
+
+		out := make(map[string]any, len(typed))
+
+		for key, inner := range typed {
+			converted, err := resolveParamValue(inner, srcDir)
+			if err != nil {
+				return nil, err
+			}
+
+			out[key] = converted
+		}
+
+		return out, nil
+	case []any:
+		out := make([]any, len(typed))
+
+		for i, inner := range typed {
+			converted, err := resolveParamValue(inner, srcDir)
+			if err != nil {
+				return nil, err
+			}
+
+			out[i] = converted
+		}
+
+		return out, nil
+	default:
+		return value, nil
+	}
+}
+
+// paramFileMarker reports whether m is a {file: <string>} marker, and the
+// path it names.
+func paramFileMarker(m map[string]any) (string, bool) {
+	if len(m) != 1 {
+		return "", false
+	}
+
+	raw, ok := m[paramFileKey]
+	if !ok {
+		return "", false
+	}
+
+	path, ok := raw.(string)
+
+	return path, ok
+}
+
+// readParamFile reads one marker's file, confined to srcDir. The path rules
+// mirror across:'s from_file: — relative, non-escaping, and naming an
+// artifact as its first component — because it is the same kind of path:
+// one pointing into a step's own materialized view.
+func readParamFile(declared, srcDir string) (string, error) {
+	cleaned := path.Clean(declared)
+
+	switch {
+	case declared == "":
+		return "", errors.New("params file reference is empty; it must be a path inside an artifact, like answer/reply.md")
+	case path.IsAbs(declared):
+		return "", fmt.Errorf("params file %q is absolute; it must be a path inside an artifact, like answer/reply.md", declared)
+	case cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../"):
+		return "", fmt.Errorf("params file %q escapes the workspace; it must be a path inside an artifact, like answer/reply.md", declared)
+	case !strings.Contains(cleaned, "/"):
+		return "", fmt.Errorf("params file %q names no artifact; the first path component is the artifact holding the file, as in answer/reply.md", declared)
+	}
+
+	data, err := os.ReadFile(filepath.Join(srcDir, filepath.FromSlash(cleaned))) //nolint:gosec // confined above, joined under the put's own read view
+	if err != nil {
+		return "", fmt.Errorf("params file %q: %w (is its artifact in the put's inputs:?)", declared, err)
+	}
+
+	return strings.TrimSpace(string(data)), nil
 }
 
 // parseVersionObject extracts the produced version object from an out:

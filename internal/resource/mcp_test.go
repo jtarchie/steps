@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -351,5 +352,142 @@ func TestShellBackendUnaffectedByMCPBranch(t *testing.T) {
 
 	if len(versions) != 1 || versions[0]["ref"] != "1" {
 		t.Fatalf("versions = %+v", versions)
+	}
+}
+
+// writeParamFile creates dir/rel with the given contents under a fresh
+// temp root, returning that root — the stand-in for a put's read view.
+func writeParamFile(t *testing.T, rel, contents string) string {
+	t.Helper()
+
+	root := t.TempDir()
+
+	full := filepath.Join(root, filepath.FromSlash(rel))
+
+	err := os.MkdirAll(filepath.Dir(full), 0o750)
+	if err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	err = os.WriteFile(full, []byte(contents), 0o600)
+	if err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	return root
+}
+
+// TestRunOutMCPResolvesParamFile is the reason this feature exists: an MCP
+// out: has no working directory, so without the marker a put could only
+// ever send text the pipeline author typed — never a reply an agent wrote.
+func TestRunOutMCPResolvesParamFile(t *testing.T) {
+	t.Parallel()
+
+	body := "Deploys are gated on the release job.\n\nSee config/deploy.rb."
+	srcDir := writeParamFile(t, "answer/reply.md", body+"\n")
+
+	cfg := mcpFixtureConfig(t)
+	rt := mcpResourceType("list_issues")
+	rt.Config.MCP.Out = &config.MCPToolCall{Tool: "create_issue"}
+
+	result, err := RunOut(context.Background(), cfg, rt,
+		map[string]any{"team": "ENG"},
+		map[string]any{"title": map[string]any{"file": "answer/reply.md"}},
+		srcDir)
+	if err != nil {
+		t.Fatalf("RunOut: %v", err)
+	}
+
+	// Trimmed like load_var:, so a redirect's trailing newline never reaches
+	// an API that treats it as part of an id.
+	if result["title"] != body {
+		t.Errorf("title = %q, want the trimmed file contents %q", result["title"], body)
+	}
+}
+
+// TestRunOutMCPLeavesMultiKeyObjectAlone is the collision case that decides
+// whether spelling the marker INSIDE params is safe: a tool whose parameter
+// genuinely is an object carrying a `file` field alongside others must keep
+// passing through untouched.
+func TestRunOutMCPLeavesMultiKeyObjectAlone(t *testing.T) {
+	t.Parallel()
+
+	cfg := mcpFixtureConfig(t)
+	rt := mcpResourceType("list_issues")
+	rt.Config.MCP.Out = &config.MCPToolCall{Tool: "create_issue"}
+
+	result, err := RunOut(context.Background(), cfg, rt,
+		map[string]any{},
+		map[string]any{"title": map[string]any{"file": "report.pdf", "label": "Q3"}},
+		t.TempDir())
+	if err != nil {
+		t.Fatalf("RunOut: %v", err)
+	}
+
+	got, ok := result["title"].(map[string]any)
+	if !ok {
+		t.Fatalf("title = %#v, want the object passed through unread", result["title"])
+	}
+
+	if got["file"] != "report.pdf" || got["label"] != "Q3" {
+		t.Errorf("title = %+v, want both keys intact", got)
+	}
+}
+
+func TestResolveParamFilesNested(t *testing.T) {
+	t.Parallel()
+
+	srcDir := writeParamFile(t, "answer/reply.md", "hello")
+
+	resolved, err := resolveParamFiles(map[string]any{
+		"blocks": []any{
+			map[string]any{"type": "section", "text": map[string]any{"file": "answer/reply.md"}},
+		},
+	}, srcDir)
+	if err != nil {
+		t.Fatalf("resolveParamFiles: %v", err)
+	}
+
+	blocks, _ := resolved["blocks"].([]any)
+	if len(blocks) != 1 {
+		t.Fatalf("blocks = %#v", resolved["blocks"])
+	}
+
+	block, _ := blocks[0].(map[string]any)
+	if block["text"] != "hello" {
+		t.Errorf("nested marker not resolved: %+v", block)
+	}
+}
+
+func TestResolveParamFilesPathRules(t *testing.T) {
+	t.Parallel()
+
+	srcDir := writeParamFile(t, "answer/reply.md", "hello")
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "absolute", path: "/etc/passwd", want: "is absolute"},
+		{name: "escaping", path: "../../secrets.txt", want: "escapes the workspace"},
+		{name: "no artifact", path: "reply.md", want: "names no artifact"},
+		{name: "empty", path: "", want: "is empty"},
+		{name: "missing file", path: "answer/absent.md", want: "is its artifact in the put's inputs:?"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := resolveParamFiles(map[string]any{"text": map[string]any{"file": test.path}}, srcDir)
+			if err == nil {
+				t.Fatalf("resolveParamFiles(%q) succeeded, want an error", test.path)
+			}
+
+			if !strings.Contains(err.Error(), test.want) {
+				t.Errorf("error = %v, want it to mention %q", err, test.want)
+			}
+		})
 	}
 }
