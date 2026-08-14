@@ -741,10 +741,10 @@ func (m *MCPLoginCmd) Run() error {
 }
 
 // openBrowser launches the OS's default browser at url. Its caller
-// (internal/mcp's loopbackCallback.fetch) already falls back to printing
-// url to stdout on any error this returns, so this only needs to cover the
-// happy path per OS — a nil case (no known opener for GOOS) fails closed
-// into that same print-the-URL fallback rather than guessing.
+// (internal/mcp's loopbackCallback.fetch) prints url to stdout regardless
+// and reports any error this returns alongside it, so this only needs to
+// cover the happy path per OS — a nil case (no known opener for GOOS) fails
+// closed into "open the URL above" rather than guessing.
 func openBrowser(url string) error {
 	// A fire-and-forget subprocess launch (handing off to the OS's default-
 	// app opener, which returns almost immediately) with nothing meaningful

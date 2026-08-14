@@ -41,11 +41,13 @@ func echoServer() *sdkmcp.Server {
 }
 
 // requireBearer wraps handler, rejecting any request whose Authorization
-// header isn't exactly "Bearer <want>".
-func requireBearer(want string, handler http.Handler) http.Handler {
+// header isn't exactly "Bearer <want>". challenge supplies the 401's
+// WWW-Authenticate value, read per request so a test can model a server
+// that spells it unusually (see TestLoginSpaceSeparatedChallenge).
+func requireBearer(want string, challenge func() string, handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+want {
-			w.Header().Set("WWW-Authenticate", `Bearer`)
+			w.Header().Set("WWW-Authenticate", challenge())
 			w.WriteHeader(http.StatusUnauthorized)
 
 			return
@@ -95,7 +97,7 @@ func TestConnectListToolsCallTool(t *testing.T) {
 func TestConnectBearerAuth(t *testing.T) {
 	// Not t.Parallel(): uses t.Setenv.
 	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return echoServer() }, nil)
-	ts := httptest.NewServer(requireBearer("s3cr3t", handler))
+	ts := httptest.NewServer(requireBearer("s3cr3t", func() string { return "Bearer" }, handler))
 	t.Cleanup(ts.Close)
 
 	t.Setenv("TEST_MCP_TOKEN", "s3cr3t")
@@ -121,7 +123,7 @@ func TestConnectBearerAuth(t *testing.T) {
 func TestConnectBearerAuthWrongToken(t *testing.T) {
 	// Not t.Parallel(): uses t.Setenv.
 	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return echoServer() }, nil)
-	ts := httptest.NewServer(requireBearer("s3cr3t", handler))
+	ts := httptest.NewServer(requireBearer("s3cr3t", func() string { return "Bearer" }, handler))
 	t.Cleanup(ts.Close)
 
 	t.Setenv("TEST_MCP_TOKEN", "wrong")

@@ -164,7 +164,14 @@ func buildAuthorizationHandler(cb *loopbackCallback, open func(string) error, re
 // therefore proves the resulting token is valid; the session is closed
 // immediately after, since this connection only exists to drive the flow.
 func authorize(ctx context.Context, srv config.MCPServer, handler *auth.AuthorizationCodeHandler) (*oauth2.Token, error) {
-	transport := &sdkmcp.StreamableClientTransport{Endpoint: srv.Endpoint, OAuthHandler: handler}
+	transport := &sdkmcp.StreamableClientTransport{
+		Endpoint:     srv.Endpoint,
+		OAuthHandler: handler,
+		// challengeRepairClient, not the default: this is the one request
+		// whose 401 challenge gets parsed, and some servers spell it in a
+		// way the SDK's strict parser rejects (see challenge.go).
+		HTTPClient: challengeRepairClient(),
+	}
 
 	client := sdkmcp.NewClient(clientImplementation, nil)
 
@@ -299,13 +306,19 @@ func (cb *loopbackCallback) Close() {
 }
 
 // fetch returns an auth.AuthorizationCodeFetcher that opens url via open
-// (falling back to printing it on stdout if open errors) and blocks for
-// this listener's callback or ctx cancellation.
+// and blocks for this listener's callback or ctx cancellation. The URL is
+// always printed, not just when open fails: a browser that silently opens
+// the wrong profile, opens nothing visible, or is a headless/SSH session's
+// no-op looks identical to success from here, and the flow then just hangs
+// with nothing on screen to act on. Printing it unconditionally costs one
+// line and makes every one of those recoverable by hand.
 func (cb *loopbackCallback) fetch(open func(string) error) auth.AuthorizationCodeFetcher {
 	return func(ctx context.Context, args *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
+		fmt.Printf("\nAuthorize in your browser:\n\n  %s\n\n", args.URL)
+
 		err := open(args.URL)
 		if err != nil {
-			fmt.Printf("Open this URL to authorize: %s\n", args.URL)
+			fmt.Printf("(could not open a browser automatically: %v — open the URL above)\n", err)
 		}
 
 		select {

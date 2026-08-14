@@ -27,24 +27,34 @@ import (
 // supportsRegistration is read per request, so a test can flip it off to
 // model a server like Slack's that requires a pre-registered client: the
 // metadata then advertises no registration_endpoint and /register refuses.
+//
+// challenge is likewise read per request: it is the WWW-Authenticate value
+// the unauthorized MCP endpoint answers with, which real servers do not all
+// spell the same way.
 type fakeOAuthServer struct {
 	mux                  *http.ServeMux
 	server               *httptest.Server
 	issuedToken          string
 	supportsRegistration bool
+	challenge            string
 }
 
 func newFakeOAuthServer(t *testing.T) *fakeOAuthServer {
 	t.Helper()
 
-	f := &fakeOAuthServer{mux: http.NewServeMux(), issuedToken: "issued-access-token", supportsRegistration: true}
+	f := &fakeOAuthServer{
+		mux:                  http.NewServeMux(),
+		issuedToken:          "issued-access-token",
+		supportsRegistration: true,
+		challenge:            "Bearer",
+	}
 	f.server = httptest.NewServer(f.mux)
 	t.Cleanup(f.server.Close)
 
 	base := f.server.URL
 
 	mcpHandler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return echoServer() }, nil)
-	f.mux.Handle("/mcp", requireBearer(f.issuedToken, mcpHandler))
+	f.mux.Handle("/mcp", requireBearer(f.issuedToken, func() string { return f.challenge }, mcpHandler))
 
 	f.mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -203,6 +213,51 @@ func assertPersistedTokenWorks(t *testing.T, ctx context.Context, srv config.MCP
 
 	if len(tools) != 1 || tools[0].Name != "echo" {
 		t.Fatalf("ListTools after Login = %+v", tools)
+	}
+}
+
+// TestLoginSpaceSeparatedChallenge is the Metabase case: a server whose 401
+// separates WWW-Authenticate auth-params with spaces instead of commas.
+// The SDK's strict RFC 9110 parser rejects that header outright, which used
+// to abort login before the browser opened; see challenge.go.
+func TestLoginSpaceSeparatedChallenge(t *testing.T) {
+	// Not t.Parallel(): uses t.Setenv (via TokenPath's os.UserConfigDir()).
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	fake := newFakeOAuthServer(t)
+	fake.challenge = fmt.Sprintf(
+		`Bearer realm="mcp" resource_metadata="%s/.well-known/oauth-protected-resource/mcp"`,
+		fake.server.URL,
+	)
+
+	srv := config.MCPServer{
+		Name:     "spacey",
+		Endpoint: fake.server.URL + "/mcp",
+		Auth:     config.MCPServerAuth{Type: "oauth"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	err := Login(ctx, srv, fakeBrowserOpen(t))
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	path, err := TokenPath(srv.Name)
+	if err != nil {
+		t.Fatalf("TokenPath: %v", err)
+	}
+
+	tf, err := LoadTokenFile(path)
+	if err != nil {
+		t.Fatalf("LoadTokenFile: %v", err)
+	}
+
+	if tf.AccessToken != fake.issuedToken {
+		t.Errorf("persisted AccessToken = %q, want %q", tf.AccessToken, fake.issuedToken)
 	}
 }
 

@@ -216,8 +216,18 @@ A bearer-configured server needs no login step — it reads its token from the e
 steps mcp login pipeline.yml linear
 ```
 
-This runs the OAuth 2.1 authorization-code + PKCE flow: discovers the server's metadata, dynamically registers a client, opens your browser (falling back to printing the URL — useful over SSH), and prints where the token was saved.
+This runs the OAuth 2.1 authorization-code + PKCE flow: discovers the server's metadata, dynamically registers a client, opens your browser, and prints where the token was saved.
 
+- **The authorization URL is always printed**, whether or not the browser opened:
+
+  ```
+  Authorize in your browser:
+
+    https://auth.example.com/authorize?client_id=…&code_challenge=…
+  ```
+
+  A browser that opens the wrong profile, opens nothing visible, or isn't there at all (SSH, a container) is indistinguishable from success on this side — the flow would just sit and wait with nothing on screen. Copy the URL into any browser that can reach the loopback address printed in `redirect_uri` and the login completes normally.
+- **A slightly malformed `WWW-Authenticate` challenge is tolerated.** Some servers separate the challenge's parameters with spaces where the HTTP spec wants commas (Metabase's MCP endpoint does). The header still says exactly one thing, so steps normalizes it and continues rather than failing the login over punctuation.
 - **Per-user, not per-pipeline**: the token lands in `${XDG_CONFIG_HOME:-~/.config}/steps/mcp/<server-name>.json` (`0600`) — deliberately outside any pipeline's `.steps/`. Logging in once authorizes that server for **every** pipeline referencing it by the same name.
 - **Silent refresh, no re-prompting**: `steps run`/`steps watch` never run an interactive flow — they load the persisted token and refresh it silently. If it can't be refreshed, the error names the exact `steps mcp login` command to run.
 - **Trust boundary**: nothing token-shaped is ever cache-hashed or written to `.steps/state.db` — the same treatment as LLM provider credentials.
