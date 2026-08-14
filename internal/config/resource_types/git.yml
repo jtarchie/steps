@@ -32,7 +32,17 @@ config:
   # an empty version list (read as "no versions yet"), so it fails loudly.
   check: |
     set -e
-    ref=$(git ls-remote {{ .source.uri | shellquote }} {{ index .source "branch" | default "HEAD" | shellquote }} | cut -f1)
+    refs=$(git ls-remote {{ .source.uri | shellquote }} {{ index .source "branch" | default "HEAD" | shellquote }})
+    # ls-remote takes a PATTERN, not a name, and prints one line per match.
+    # Against a local clone `HEAD` also matches refs/remotes/origin/HEAD and
+    # `main` also matches refs/remotes/origin/main — a DIFFERENT sha, since
+    # the remote-tracking ref is only as fresh as the last fetch. So ask for
+    # the exact ref (or its refs/heads/ form) rather than taking whatever came
+    # first, and keep the first line as the fallback a tag or peeled ref
+    # leaves. Without this, two matches became two SHAs in one JSON string.
+    ref=$(printf '%s\n' "$refs" | awk -v want={{ index .source "branch" | default "HEAD" | shellquote }} '
+      $2 == want || $2 == "refs/heads/" want { print $1; exit }')
+    [ -n "$ref" ] || ref=$(printf '%s\n' "$refs" | awk 'NR == 1 { print $1 }')
     if [ -z "$ref" ]; then
       echo "git: no ref {{ index .source "branch" | default "HEAD" }} on {{ .source.uri }}" >&2
       exit 1
