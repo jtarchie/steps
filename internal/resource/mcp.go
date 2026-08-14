@@ -192,7 +192,16 @@ func exactNumbers(value any) any {
 // comment documents for the shell path: an oldest-first JSON array of
 // version objects, accepted either as the tool result's StructuredContent or
 // a single text content block containing that same JSON array.
+//
+// check: is optional (a publish-only type declares none — see
+// config.validateResourceGet), and a get against such a type is a load error,
+// so this is only ever reached with one set. The guard is there because
+// "unreachable" and "nil dereference" are one refactor apart.
 func mcpCheckVersions(ctx context.Context, cfg *config.Config, rt config.ResourceType, source map[string]any) ([]map[string]any, error) {
+	if rt.Config.MCP.Check == nil {
+		return nil, fmt.Errorf("check %q: this resource type sets no mcp.check.tool, so it can only be published to", rt.Name)
+	}
+
 	slog.Debug("resource.check", "resource_type", rt.Name, "source", source, "mcp_tool", rt.Config.MCP.Check.Tool)
 
 	args, err := mcpCallArgs(*rt.Config.MCP.Check, map[string]any{"source": source}, source)

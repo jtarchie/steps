@@ -155,7 +155,13 @@ func resourceStageProblems(
 ) []config.Problem {
 	target := fmt.Sprintf("resource %q", name)
 
-	problems := verifyStage(target, "check", *mcp.Check, sentArgNames(*mcp.Check, source), tools)
+	var problems []config.Problem
+
+	// Each stage is optional, and a publish-only type declares no check: at
+	// all (config.validateResourceGet rejects a get against one).
+	if mcp.Check != nil {
+		problems = verifyStage(target, "check", *mcp.Check, sentArgNames(*mcp.Check, source), tools)
+	}
 
 	if mcp.In != nil {
 		problems = append(problems, verifyStage(target, "in", *mcp.In, sentArgNames(*mcp.In, source), tools)...)

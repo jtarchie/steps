@@ -147,8 +147,12 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "server",
-        "check"
+        "server"
+      ],
+      "anyOf": [
+        { "required": ["check"] },
+        { "required": ["in"] },
+        { "required": ["out"] }
       ],
       "description": "Back check/in/out with MCP tool calls instead of shell commands. Mutually exclusive with check/in/out.",
       "properties": {

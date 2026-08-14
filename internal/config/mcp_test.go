@@ -572,7 +572,7 @@ jobs: [{ name: j, plan: [] }]
 		}
 	})
 
-	t.Run("check tool required", func(t *testing.T) {
+	t.Run("a block that does nothing at all", func(t *testing.T) {
 		t.Parallel()
 
 		pipeline := mcpServerBlock + `
@@ -583,7 +583,59 @@ resource_types:
 jobs: [{ name: j, plan: [] }]
 `
 		path := writeConfig(t, pipeline)
-		wantLoadError(t, path, "mcp.check.tool is required")
+		wantLoadError(t, path, "sets none of check/in/out")
+	})
+
+	// A publish-only type is the shape this rule exists for: the half of a
+	// workflow that posts a reply has no versions to discover, and naming a
+	// check tool nothing ever calls would be a ritual.
+	t.Run("publish-only type needs no check", func(t *testing.T) {
+		t.Parallel()
+
+		pipeline := mcpServerBlock + `
+resource_types:
+- name: slack-reply
+  config:
+    mcp: { server: github, out: { tool: send_message } }
+resources:
+- name: reply
+  type: slack-reply
+  source: {}
+jobs:
+- name: j
+  plan:
+  - task: t
+    outputs: [msg]
+    run: echo hi > msg/body
+  - put: reply
+    inputs: [msg]
+    params: { text: { file: msg/body } }
+`
+		_, err := LoadConfig(writeConfig(t, pipeline))
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+	})
+
+	t.Run("get against a publish-only type", func(t *testing.T) {
+		t.Parallel()
+
+		pipeline := mcpServerBlock + `
+resource_types:
+- name: slack-reply
+  config:
+    mcp: { server: github, out: { tool: send_message } }
+resources:
+- name: reply
+  type: slack-reply
+  source: {}
+jobs:
+- name: j
+  plan:
+  - get: reply
+`
+		path := writeConfig(t, pipeline)
+		wantLoadError(t, path, "sets no mcp.check.tool")
 	})
 
 	t.Run("unresolvable server", func(t *testing.T) {

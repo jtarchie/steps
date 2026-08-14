@@ -159,7 +159,7 @@ jobs:
     run: cat eng-bugs/version.json
 ```
 
-- **`check:` is required**, `in:`/`out:` are both optional. `mcp:` is mutually exclusive with the shell `check:`/`in:`/`out:` strings — a resource type sets one style or the other.
+- **Every stage is optional, but a block must do something.** A type declaring none of `check:`/`in:`/`out:` is a load error. A `get` against a type with no `check:` is one too, and so is a `put` against a type with no `out:` — which is what makes a **publish-only type** (all `out:`, no `check:`) a first-class shape: the half of a workflow that posts a reply has no versions to discover, and naming a check tool nothing ever calls would be a ritual. `mcp:` is mutually exclusive with the shell `check:`/`in:`/`out:` strings — a resource type sets one style or the other, which is how a pipeline **detects over HTTP and acts over MCP**: two resource types, one shell-backed and one MCP-backed.
 - **The arguments are the remote tool's own schema.** A tool publishes the parameters it takes and rejects a call that omits a required one, so steps sends exactly what you name and wraps it in nothing: `check` and `in` send the resource's `source:`, `out` sends the put's `params:`. Run `steps mcp tools <pipeline> <server>` to see what a tool actually requires before writing either.
 - **`check`**'s result must be an oldest-first JSON array of version objects, accepted either as structured content or a single text block containing that array — as close a mirror of the shell path's "stdout is a JSON array" convention as an RPC result allows.
 - **`in`, when omitted** (the common case — detecting new issues, not fetching their content): `get` just writes the selected version object to `<resource>/version.json`, no MCP call. **When set**, its result is materialized into the get's directory: structured content as `result.json`, each content block as `content-N.<ext>`. `version.json` is always written either way.
@@ -233,6 +233,63 @@ in:
 ```
 
 The old envelope cannot be restored verbatim — a template renders a string, so there is no `{{ .source }}` that emits the whole object; enumerate the fields the tool needs (`args: { source: { team: "{{ .source.team }}" } }`) or, better, give the tool real parameters. `args:` is part of a step's hash, so adding a mapping re-runs the affected `get`/`put` rather than reusing what the old envelope fetched.
+
+### When a tool returns prose: detect over HTTP, act over MCP
+
+A `check` needs a machine-readable list, and not every MCP tool has one to give. Many vendor servers answer with Markdown written for a model to read — Slack's search returns `{"results": "# Search Results for: …", …}`, with no `structuredContent` and no published `outputSchema`. There is no list in there to select, at any nesting depth, so no mapping can make that tool a `check`. (This is not a niche accident: until [SEP-2106](https://modelcontextprotocol.io/specification/) `structuredContent` was required to be a JSON *object*, so an array-returning tool was not even legal.)
+
+The split that does work: let the vendor's HTTP API do the **detecting**, where the response is JSON with stable ids, and let MCP do the **acting**, where prose in the response costs nothing. Two resource types, one of each style:
+
+```yaml noexec
+mcp_servers:
+- name: slack
+  endpoint: https://mcp.slack.com/mcp
+  auth: { type: oauth }
+
+resource_types:
+- name: slack-mentions          # DETECT: real JSON, stable {channel, ts}
+  env: [SLACK_BOT_TOKEN]
+  config:
+    check: |
+      curl -sS -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+        "https://slack.com/api/conversations.history?channel={{ .source.channel }}&limit=20" |
+      jq -c '[.messages[] | {channel: "{{ .source.channel }}", ts: .ts}] | reverse'
+
+- name: slack-reply             # ACT: publish-only, no check: to write
+  config:
+    mcp:
+      server: slack
+      out:
+        tool: slack_send_message
+        args:
+          channel_id: "{{ .params.channel }}"
+          message: "{{ .params.text }}"
+
+resources:
+- name: mentions
+  type: slack-mentions
+  source: { channel: C0123456789 }
+- name: reply
+  type: slack-reply
+  source: {}
+
+jobs:
+- name: answer
+  plan:
+  - get: mentions
+    trigger: true
+  - task: compose
+    inputs: [mentions]
+    outputs: [msg]
+    run: echo "on it" > msg/body
+  - put: reply
+    inputs: [msg]
+    params:
+      channel: C0123456789
+      text: { file: msg/body }
+```
+
+The rule of thumb: **a tool whose output a model was meant to read is an agent's tool, not a resource's.** Grant it to an `agent:` step, where prose is exactly right, and keep `check:` on something that returns ids.
 
 ### Preflight checks this before anything runs
 

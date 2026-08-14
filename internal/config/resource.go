@@ -96,6 +96,24 @@ func validateResourcePut(label, put string, resourceType *ResourceType) error {
 	return nil
 }
 
+// validateResourceGet rejects a get step against an mcp-backed resource type
+// that declares no check: — the mirror of validateResourcePut, and the reason
+// mcp.check: is optional at all.
+//
+// A publish-only type (post a reply, file an issue) has no versions to
+// discover, and naming a check tool it never calls would be a ritual, not a
+// declaration. So the rule moves to where a get actually appears: this type
+// cannot be fetched, and says so at load rather than at the first poll.
+func validateResourceGet(label, get string, resourceType *ResourceType) error {
+	if resourceType.Config.MCP == nil || resourceType.Config.MCP.Check != nil {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"%s: get %q targets mcp-backed resource type %q, which sets no mcp.check.tool; that type can only be published to (put:), so either add a check tool or fetch this from a type that has one",
+		label, get, resourceType.Name)
+}
+
 // validateGetResource enforces that a step's resource: is only set on get
 // steps and names an existing resource. The fetched resource is Resource when
 // set, else Get (see Step.Resource); two get steps may alias the same resource

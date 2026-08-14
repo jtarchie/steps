@@ -141,6 +141,35 @@ func TestPreflightJudgesOutAgainstThePutsPayload(t *testing.T) {
 	}
 }
 
+// TestPreflightHandlesAPublishOnlyType: a type that only publishes declares
+// no check:, and preflight judges the stages it actually has.
+func TestPreflightHandlesAPublishOnlyType(t *testing.T) {
+	t.Parallel()
+
+	mcp := &config.MCPResourceConfig{
+		Server: "test",
+		Out:    &config.MCPToolCall{Tool: "post_issue"},
+	}
+
+	problems := preflightOnce(t, preflightConfig(t, mcp, &config.Step{
+		Put:    "eng-bugs",
+		Params: map[string]any{"message": "hi"},
+	}))
+
+	if len(problems) != 0 {
+		t.Fatalf("problems = %+v, want none", problems)
+	}
+
+	problems = preflightOnce(t, preflightConfig(t, mcp, &config.Step{
+		Put:    "eng-bugs",
+		Params: map[string]any{"text": "hi"},
+	}))
+
+	if len(problems) != 1 || !strings.Contains(problems[0].Detail, "message") {
+		t.Fatalf("problems = %+v, want the out stage still judged", problems)
+	}
+}
+
 // TestPreflightIgnoresShellBackedResources: a shell check's correctness is
 // whatever the command does, and preflight must not invent an opinion.
 func TestPreflightIgnoresShellBackedResources(t *testing.T) {

@@ -466,20 +466,53 @@ func (c *Config) validateOneResourceTypeConfig(rt ResourceType) error {
 	return c.validateMCPResourceConfig(rt.Name, rt.Config.MCP)
 }
 
+// validateMCPStages checks the three lifecycle stages of one mcp: block: each
+// one it declares must name a tool, and it must declare at least one.
+//
+// Every stage is optional, including check:, because a PUBLISH-only type is a
+// real thing — the half of a workflow that posts a reply, files an issue,
+// sends a message. Requiring a check tool there would mean naming a tool
+// nothing ever calls, so the rule here is the weaker true one (a block that
+// does nothing at all is the error) and the get side is rejected where a get
+// actually appears (see validateResourceGet).
+func validateMCPStages(rtName string, mcp *MCPResourceConfig) error {
+	stages := []struct {
+		name string
+		call *MCPToolCall
+	}{
+		{"check", mcp.Check},
+		{"in", mcp.In},
+		{"out", mcp.Out},
+	}
+
+	declared := 0
+
+	for _, stage := range stages {
+		if stage.call == nil {
+			continue
+		}
+
+		declared++
+
+		if stage.call.Tool == "" {
+			return fmt.Errorf("resource_type %q: mcp.%s.tool must not be empty when mcp.%s is set", rtName, stage.name, stage.name)
+		}
+	}
+
+	if declared == 0 {
+		return fmt.Errorf("resource_type %q: mcp: sets none of check/in/out, so it can neither detect, fetch, nor publish anything", rtName)
+	}
+
+	return nil
+}
+
 // validateMCPResourceConfig checks one resource type's mcp: block — split
 // out of validateOneResourceTypeConfig to keep that function's branch count
 // down (cyclop).
 func (c *Config) validateMCPResourceConfig(rtName string, mcp *MCPResourceConfig) error {
-	if mcp.Check == nil || mcp.Check.Tool == "" {
-		return fmt.Errorf("resource_type %q: mcp.check.tool is required", rtName)
-	}
-
-	if mcp.In != nil && mcp.In.Tool == "" {
-		return fmt.Errorf("resource_type %q: mcp.in.tool must not be empty when mcp.in is set", rtName)
-	}
-
-	if mcp.Out != nil && mcp.Out.Tool == "" {
-		return fmt.Errorf("resource_type %q: mcp.out.tool must not be empty when mcp.out is set", rtName)
+	err := validateMCPStages(rtName, mcp)
+	if err != nil {
+		return err
 	}
 
 	srv, err := c.FindMCPServer(mcp.Server)
@@ -523,6 +556,38 @@ func (c *Config) validateMCPResourcePuts() error {
 			}
 
 			return validateResourcePut(label, step.Put, resourceType)
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return c.validateMCPResourceGets()
+}
+
+// validateMCPResourceGets rejects a get step against an mcp-backed resource
+// type with no check: — see validateResourceGet for the rule. Walks gets the
+// way validateMCPResourcePuts walks puts.
+func (c *Config) validateMCPResourceGets() error {
+	for _, job := range c.Jobs {
+		err := job.visitSteps(func(label string, step *Step) error {
+			if step.Get == "" {
+				return nil
+			}
+
+			name := step.GetResourceName()
+
+			resource, err := c.FindResource(name)
+			if err != nil {
+				return nil //nolint:nilerr // unresolvable get target is caught elsewhere at run time
+			}
+
+			resourceType, err := c.FindResourceType(resource.Type)
+			if err != nil {
+				return nil //nolint:nilerr // unresolvable resource type is caught elsewhere at run time
+			}
+
+			return validateResourceGet(label, name, resourceType)
 		})
 		if err != nil {
 			return err
