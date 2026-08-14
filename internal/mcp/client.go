@@ -43,6 +43,21 @@ type sessionClient struct {
 	session *sdkmcp.ClientSession
 }
 
+// maxToolPages bounds how many times ListTools will follow a NextCursor.
+//
+// The loop's exit condition is supplied by the server, which is the one party
+// here that is not trusted to be correct: a cursor that never empties, or one
+// that repeats, means the loop never ends and the slice never stops growing.
+// A deadline is not the answer, because response caching can serve a repeated
+// cursor without a network round trip at all — no request, nothing for a
+// cancelled context to interrupt, just an allocation loop until the process
+// dies.
+//
+// A thousand pages is far past any real server (page sizes are typically tens
+// to hundreds of tools) and reached in seconds by a broken one, so it
+// separates the two cases without having to guess at a legitimate ceiling.
+const maxToolPages = 1000
+
 // ListTools returns every tool the server exposes, following pagination
 // until the server stops returning a NextCursor.
 func (c *sessionClient) ListTools(ctx context.Context) ([]*sdkmcp.Tool, error) {
@@ -51,7 +66,12 @@ func (c *sessionClient) ListTools(ctx context.Context) ([]*sdkmcp.Tool, error) {
 		cursor string
 	)
 
-	for {
+	// Cursors already followed. A server that cycles A→B→A is not making
+	// progress, and noticing that is cheaper and clearer than waiting for the
+	// page limit to notice for us.
+	seen := make(map[string]struct{})
+
+	for page := range maxToolPages {
 		result, err := c.session.ListTools(ctx, &sdkmcp.ListToolsParams{Cursor: cursor})
 		if err != nil {
 			return nil, fmt.Errorf("mcp: list tools: %w", err)
@@ -63,8 +83,17 @@ func (c *sessionClient) ListTools(ctx context.Context) ([]*sdkmcp.Tool, error) {
 			return tools, nil
 		}
 
+		if _, repeated := seen[result.NextCursor]; repeated {
+			return nil, fmt.Errorf(
+				"mcp: list tools: server repeated pagination cursor %q after %d pages — it is not advancing",
+				result.NextCursor, page+1)
+		}
+
+		seen[result.NextCursor] = struct{}{}
 		cursor = result.NextCursor
 	}
+
+	return nil, fmt.Errorf("mcp: list tools: server did not finish paginating after %d pages", maxToolPages)
 }
 
 func (c *sessionClient) CallTool(ctx context.Context, name string, args map[string]any) (*sdkmcp.CallToolResult, error) {

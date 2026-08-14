@@ -3,8 +3,10 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -169,5 +171,95 @@ func TestListServerTools(t *testing.T) {
 
 	if len(tools) != 1 || tools[0].Name != "echo" {
 		t.Fatalf("ListServerTools = %+v", tools)
+	}
+}
+
+// paginatingServer returns an echo server whose tools/list always answers
+// with a NextCursor, modelling a server whose pagination never terminates.
+// nextCursor decides what that cursor is, so a test can pick between a cursor
+// that always advances and one that repeats.
+func paginatingServer(nextCursor func(page int) string) *sdkmcp.Server {
+	srv := echoServer()
+
+	page := 0
+
+	srv.AddReceivingMiddleware(func(next sdkmcp.MethodHandler) sdkmcp.MethodHandler {
+		return func(ctx context.Context, method string, req sdkmcp.Request) (sdkmcp.Result, error) {
+			// The cursors handed out below are invented, so the real handler
+			// would reject them as invalid params before the client's loop is
+			// ever the thing under test. Clear it on the way in: this fake's
+			// job is the NextCursor it returns, not honouring one.
+			if listReq, ok := req.(*sdkmcp.ListToolsRequest); ok && listReq.Params != nil {
+				listReq.Params.Cursor = ""
+			}
+
+			result, err := next(ctx, method, req)
+			if err != nil || method != "tools/list" {
+				return result, err
+			}
+
+			listed, ok := result.(*sdkmcp.ListToolsResult)
+			if !ok {
+				return result, err
+			}
+
+			page++
+			listed.NextCursor = nextCursor(page)
+
+			return listed, nil
+		}
+	})
+
+	return srv
+}
+
+// TestListToolsStopsOnAnEndlessCursor pins the bound on a loop whose exit
+// condition is supplied by the server being talked to.
+//
+// A cursor that never empties meant ListTools never returned and its slice
+// never stopped growing. A caller deadline is not a sufficient answer:
+// response caching can serve a repeated cursor without a network round trip,
+// leaving nothing for a cancelled context to interrupt.
+func TestListToolsStopsOnAnEndlessCursor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		nextCursor func(page int) string
+		wantErr    string
+	}{{
+		name:       "a cursor that always advances",
+		nextCursor: func(page int) string { return fmt.Sprintf("page-%d", page) },
+		wantErr:    "did not finish paginating",
+	}, {
+		name:       "a cursor that cycles",
+		nextCursor: func(page int) string { return fmt.Sprintf("page-%d", page%2) },
+		wantErr:    "not advancing",
+	}}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler := sdkmcp.NewStreamableHTTPHandler(
+				func(*http.Request) *sdkmcp.Server { return paginatingServer(test.nextCursor) }, nil)
+			ts := httptest.NewServer(handler)
+			t.Cleanup(ts.Close)
+
+			client, err := Connect(context.Background(), config.MCPServer{Name: "endless", Endpoint: ts.URL})
+			if err != nil {
+				t.Fatalf("Connect: %v", err)
+			}
+			t.Cleanup(func() { _ = client.Close() })
+
+			_, err = client.ListTools(context.Background())
+			if err == nil {
+				t.Fatal("ListTools returned no error for a server that never finishes paginating")
+			}
+
+			if !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("ListTools error = %v, want it to mention %q", err, test.wantErr)
+			}
+		})
 	}
 }
