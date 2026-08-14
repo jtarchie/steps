@@ -191,6 +191,27 @@ func (j Job) ResourceNames() []string {
 	return names
 }
 
+// GetsResource reports whether this job's plan or hooks fetch the named
+// resource, resolving aliases the way GetResourceName does.
+//
+// Preflight needs it to judge only the stages a job actually reaches: the
+// check:/in: tools are a get's concern, and a job that merely publishes to a
+// resource must not be blocked from running because that resource's check
+// tool is missing or its source does not satisfy it.
+func (j Job) GetsResource(resource string) bool {
+	found := false
+
+	_ = j.visitSteps(func(_ string, step *Step) error {
+		if step.Get != "" && step.GetResourceName() == resource {
+			found = true
+		}
+
+		return nil
+	})
+
+	return found
+}
+
 // PutSteps returns every step in this job's plan and hooks that publishes to
 // the named resource.
 //

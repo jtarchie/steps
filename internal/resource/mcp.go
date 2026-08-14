@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -170,6 +171,11 @@ func exactNumberData(data map[string]any) map[string]any {
 
 func exactNumbers(value any) any {
 	switch typed := value.(type) {
+	case json.Number:
+		// Already exact (decodeMapSlice read it with UseNumber). Returned
+		// as-is so its digits survive verbatim rather than being routed
+		// through float64 by the case below.
+		return typed
 	case float64:
 		return json.Number(strconv.FormatFloat(typed, 'f', -1, 64))
 	case map[string]any:
@@ -258,15 +264,42 @@ func firstParsableArray(content []sdkmcp.Content) ([]map[string]any, bool) {
 			continue
 		}
 
-		var versions []map[string]any
-
-		err := json.Unmarshal([]byte(tc.Text), &versions)
+		versions, err := decodeMapSlice([]byte(tc.Text))
 		if err == nil {
 			return versions, true
 		}
 	}
 
 	return nil, false
+}
+
+// decodeMapSlice parses a JSON array of objects with UseNumber, so an integer
+// wider than float64's 53 bits of mantissa keeps its exact digits.
+//
+// This is what makes exactNumbers' promise true rather than merely tidy. A
+// plain json.Unmarshal turns a Discord/Twitter-style snowflake id like
+// 1234567890123456789 into a float64 that cannot represent it, and every
+// later step — including exactNumbers — can only reformat the value it was
+// already given, so the tool receives a valid-looking but WRONG id. Reading
+// the digits as json.Number keeps them intact end to end.
+//
+// Note the limit of the fix: a tool answering with structuredContent rather
+// than a text block is decoded into `any` by the SDK itself before it reaches
+// this package, so its numbers are float64 by then and nothing here can
+// recover them. A tool with large ids should return them as JSON strings, or
+// as a text content block.
+func decodeMapSlice(data []byte) ([]map[string]any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+
+	var versions []map[string]any
+
+	err := decoder.Decode(&versions)
+	if err != nil {
+		return nil, fmt.Errorf("not a JSON array of objects: %w", err)
+	}
+
+	return versions, nil
 }
 
 // convertToMapSlice round-trips sc through JSON to normalize it into
@@ -279,9 +312,7 @@ func convertToMapSlice(sc any) ([]map[string]any, error) {
 		return nil, fmt.Errorf("could not marshal structured content: %w", err)
 	}
 
-	var versions []map[string]any
-
-	err = json.Unmarshal(data, &versions)
+	versions, err := decodeMapSlice(data)
 	if err != nil {
 		return nil, fmt.Errorf("structured content is not a JSON array of objects: %w", err)
 	}
@@ -441,6 +472,17 @@ func writeFile(path string, data []byte) error {
 // what the pipeline author typed, which rules out posting anything an
 // agent produced.
 func mcpRunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, source, params map[string]any, srcDir string) (map[string]any, error) {
+	// The mirror of mcpCheckVersions' guard, and needed for the same reason:
+	// out: is optional, and a put naming a type that declares none must fail
+	// as a step, not panic the whole run. It is reachable despite
+	// validateMCPResourcePuts, because a templated put: (`put:
+	// "reply-{{ .vars.region }}"`) cannot be resolved at load time — that
+	// validator's FindResource fails on the un-rendered name and deliberately
+	// swallows it, so the check never happens for those.
+	if rt.Config.MCP.Out == nil {
+		return nil, fmt.Errorf("out %q: this resource type sets no mcp.out.tool, so it cannot be published to", rt.Name)
+	}
+
 	slog.Debug("resource.out", "resource_type", rt.Name, "source", source, "params", params, "mcp_tool", rt.Config.MCP.Out.Tool, "src_dir", srcDir)
 
 	resolved, err := resolveParamFiles(params, srcDir)
@@ -502,7 +544,13 @@ func resolveParamFiles(params map[string]any, srcDir string) (map[string]any, er
 
 	converted, ok := resolved.(map[string]any)
 	if !ok {
-		return params, nil
+		// params itself was the marker — `params: {file: answer/reply.md}`
+		// rather than a field inside it. resolveParamValue turned it into the
+		// file's contents (a string), which is not a params mapping. Silently
+		// handing back the ORIGINAL params would send the literal path text
+		// to the tool and look like it worked, so name the mistake instead.
+		return nil, errors.New(
+			"params is a {file: ...} reference, but params must be a mapping of the tool's arguments; put the marker on one of them, as in params: {text: {file: answer/reply.md}}")
 	}
 
 	return converted, nil

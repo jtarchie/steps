@@ -216,10 +216,50 @@ func withMCPResourceStage(cfg *config.Config, resourceType config.ResourceType, 
 	content["mcp_server"] = server
 
 	if len(call.Args) > 0 {
-		content["mcp_"+stage+"_args"] = call.Args
+		// Normalized, not stored raw: yaml.v3 decodes a mapping whose keys
+		// are not all strings into map[any]any (`args: {filters: {2024:
+		// "yes"}}`, an unquoted `on:`), which encoding/json cannot marshal —
+		// so HashNode would fail the whole plan with "json: unsupported type"
+		// on a pipeline that loads, validates, and RUNS fine, since
+		// resource.renderArgValue handles exactly that shape. The hash has to
+		// accept every args: the runtime accepts.
+		content["mcp_"+stage+"_args"] = normalizeMapKeys(call.Args)
 	}
 
 	return nil
+}
+
+// normalizeMapKeys rewrites every map[any]any nested in value into a
+// map[string]any, so the result is marshalable by encoding/json. It mirrors
+// resource.renderArgValue's handling of the same shape; the two must agree,
+// because one decides what the call sends and the other what its cache key
+// is.
+func normalizeMapKeys(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, inner := range typed {
+			out[key] = normalizeMapKeys(inner)
+		}
+
+		return out
+	case map[any]any:
+		out := make(map[string]any, len(typed))
+		for key, inner := range typed {
+			out[fmt.Sprint(key)] = normalizeMapKeys(inner)
+		}
+
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, inner := range typed {
+			out[i] = normalizeMapKeys(inner)
+		}
+
+		return out
+	default:
+		return value
+	}
 }
 
 // withWhen folds a step's when: guard command into content, but only when the

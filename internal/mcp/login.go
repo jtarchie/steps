@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
@@ -255,11 +256,51 @@ type loopbackCallback struct {
 	server      *http.Server
 	redirectURL string
 	result      chan callbackResult
+
+	// mu guards want, the state of the authorization request currently in
+	// flight. handle runs on the server's goroutine and fetch on the login
+	// one, so the two need it even though only fetch ever writes.
+	mu   sync.Mutex
+	want string
 }
 
 type callbackResult struct {
-	code, state string
-	err         error
+	code, state, iss string
+	err              error
+}
+
+// expect records the state parameter of the request about to be opened, so
+// handle can tell the real redirect from anything else that reaches the
+// loopback port. The SDK regenerates state on every attempt, so this is set
+// per attempt rather than once per listener.
+func (cb *loopbackCallback) expect(state string) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	cb.want = state
+}
+
+// matches reports whether a callback's state is the one currently expected.
+// An empty expectation matches nothing: until fetch has opened a URL there is
+// no request outstanding, so anything arriving is not ours.
+func (cb *loopbackCallback) matches(state string) bool {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	return cb.want != "" && state == cb.want
+}
+
+// deliver hands a result to whoever is waiting, without ever blocking. The
+// channel holds one result and the waiter takes exactly one, so a send that
+// would block means a result is already queued — the flow is settled and this
+// request is a straggler, not the answer.
+func (cb *loopbackCallback) deliver(res callbackResult) bool {
+	select {
+	case cb.result <- res:
+		return true
+	default:
+		return false
+	}
 }
 
 func newLoopbackCallback(ctx context.Context) (*loopbackCallback, error) {
@@ -287,18 +328,69 @@ func newLoopbackCallback(ctx context.Context) (*loopbackCallback, error) {
 	return cb, nil
 }
 
+// handle receives the browser redirect. Two things it must NOT do, because
+// the port is on loopback and therefore reachable by anything else on the
+// machine (a stale tab, a prefetch, a port scan): treat an unrecognized
+// request as the answer, and block on the result channel.
+//
+// The state check is what makes it the answer — the SDK compares state again
+// after we return, but by then a stray request has already been consumed as
+// though it were the redirect, and the real one has nowhere to go. Rejecting
+// here keeps the flow waiting for the request that actually matches.
 func (cb *loopbackCallback) handle(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
+	if !cb.matches(q.Get("state")) {
+		http.Error(w, "Unrecognized authorization callback.", http.StatusBadRequest)
+
+		return
+	}
+
 	if errParam := q.Get("error"); errParam != "" {
-		cb.result <- callbackResult{err: fmt.Errorf("authorization server returned error: %s", errParam)}
+		cb.deliver(callbackResult{err: fmt.Errorf("authorization server returned error: %s", errParam)})
 		_, _ = fmt.Fprintln(w, "Authorization failed. You can close this window.")
 
 		return
 	}
 
-	cb.result <- callbackResult{code: q.Get("code"), state: q.Get("state")}
+	// iss is forwarded rather than dropped: RFC 9207 servers (Keycloak,
+	// Curity, most OAuth 2.1 ones) advertise
+	// authorization_response_iss_parameter_supported, and the SDK hard-fails
+	// the exchange when they do and no iss arrives — so dropping it makes
+	// login against those servers impossible, and loses the mix-up-attack
+	// defense against every other one.
+	delivered := cb.deliver(callbackResult{code: q.Get("code"), state: q.Get("state"), iss: q.Get("iss")})
+	if !delivered {
+		http.Error(w, "This authorization was already completed.", http.StatusConflict)
+
+		return
+	}
+
 	_, _ = fmt.Fprintln(w, "Authorization complete. You can close this window and return to steps.")
+}
+
+// stateFromAuthURL pulls the state parameter out of the authorization URL the
+// SDK built. auth.AuthorizationArgs carries only the URL, and state is the
+// only thing that distinguishes this attempt's redirect from any other
+// request that reaches the loopback port — so it is read back from where the
+// SDK put it. An unparsable URL yields "", which matches nothing, leaving the
+// flow to time out rather than accept a callback it cannot verify.
+func stateFromAuthURL(authURL string) string {
+	parsed, err := url.Parse(authURL)
+	if err != nil {
+		return ""
+	}
+
+	return parsed.Query().Get("state")
+}
+
+// drain discards a result left in the buffer by a previous attempt, so a
+// retry does not read the old attempt's redirect as its own.
+func (cb *loopbackCallback) drain() {
+	select {
+	case <-cb.result:
+	default:
+	}
 }
 
 func (cb *loopbackCallback) Close() {
@@ -314,12 +406,27 @@ func (cb *loopbackCallback) Close() {
 // line and makes every one of those recoverable by hand.
 func (cb *loopbackCallback) fetch(open func(string) error) auth.AuthorizationCodeFetcher {
 	return func(ctx context.Context, args *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
+		// Announced before the URL is opened, so handle can already tell this
+		// attempt's redirect from a straggler. The SDK generates a fresh
+		// state per attempt and may retry Authorize, so a result left over
+		// from a previous attempt is drained rather than mistaken for this
+		// one's — it would only ever fail the SDK's own state comparison.
+		cb.expect(stateFromAuthURL(args.URL))
+		cb.drain()
+
 		fmt.Printf("\nAuthorize in your browser:\n\n  %s\n\n", args.URL)
 
-		err := open(args.URL)
-		if err != nil {
-			fmt.Printf("(could not open a browser automatically: %v — open the URL above)\n", err)
-		}
+		// Opened on its own goroutine: cmd.Run waits for the opener to exit,
+		// and xdg-open with no registered handler (or a broken DISPLAY over
+		// SSH) can block indefinitely — which would make ctx.Done below
+		// unreachable and Ctrl-C useless. The URL is printed unconditionally
+		// above, so nothing is lost by not waiting.
+		go func() {
+			err := open(args.URL)
+			if err != nil {
+				fmt.Printf("(could not open a browser automatically: %v — open the URL above)\n", err)
+			}
+		}()
 
 		select {
 		case res := <-cb.result:
@@ -327,7 +434,7 @@ func (cb *loopbackCallback) fetch(open func(string) error) auth.AuthorizationCod
 				return nil, res.err
 			}
 
-			return &auth.AuthorizationResult{Code: res.code, State: res.state}, nil
+			return &auth.AuthorizationResult{Code: res.code, State: res.state, Iss: res.iss}, nil
 		case <-ctx.Done():
 			return nil, fmt.Errorf("authorization: %w", ctx.Err())
 		}

@@ -232,7 +232,7 @@ A check reports what *exists*, not what is new — the same twenty Slack message
 
 - **Recorded per (job, resource)**, so another job reading the same resource keeps its own place.
 - **A failed version stays available** and is retried on the next run, exactly as the cache retries any failed chain. A version that fails forever is what `max_consecutive_failures:` is for.
-- **`--force` ignores it**, along with every other piece of persisted state — which means it re-runs versions that already succeeded, effects included.
+- **`--force` ignores it**, along with every other piece of persisted state — which means it re-runs versions that already succeeded, effects included. It still *records* what it took, so the ordinary run after a forced one does not repeat that work a second time.
 - **It can only suppress, never resurrect.** steps keeps no version history: whatever `check` returns *now* is the whole universe. A version that scrolled out of the check's window while nothing was watching is gone, so a check should return a window wide enough to cover the gaps you care about.
 
 `steps plan` reads the same record, so it lists only the versions a run would actually take.

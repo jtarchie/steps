@@ -41,7 +41,7 @@ func Explain(ctx context.Context, cfg *config.Config, job *config.Job, pinned ma
 
 	// Same cursor a run would use, so `steps plan` does not list versions a
 	// version: every fan-out has already taken and would not run.
-	cursor, err := loadVersionCursor(ctx, st, job)
+	cursor, err := loadVersionCursor(ctx, st, job, true)
 	if err != nil {
 		return nil, fmt.Errorf("job %q: %w", job.Name, err)
 	}

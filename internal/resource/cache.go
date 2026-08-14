@@ -51,6 +51,11 @@ type cacheEntry struct {
 	resourceType *config.ResourceType
 	versions     []map[string]any
 	err          error
+	// suppressed counts versions the check DID return that the consumed
+	// filter removed. Kept so the caller can tell "the check found nothing"
+	// from "everything it found was already taken" — outwardly identical
+	// (an empty list) but wanting opposite reactions.
+	suppressed int
 }
 
 // NewCache returns an empty Cache, scoped to one RunJob invocation. Never
@@ -88,15 +93,39 @@ func (c *Cache) ResolveVersionsCached(
 	}
 
 	resource, resourceType, versions, err := ResolveVersions(ctx, cfg, step, pinned)
+
+	suppressed := 0
+
 	if err == nil {
+		found := len(versions)
 		versions = c.unconsumed(step, pinned, resource, versions)
+		suppressed = found - len(versions)
 	}
 
 	c.mu.Lock()
-	c.entries[step.Get] = cacheEntry{resource, resourceType, versions, err}
+	c.entries[step.Get] = cacheEntry{resource, resourceType, versions, err, suppressed}
 	c.mu.Unlock()
 
 	return resource, resourceType, versions, err
+}
+
+// Suppressed reports how many versions the consumed filter removed for a get
+// step already resolved through this cache.
+//
+// It exists so a caller seeing an empty version list can say WHICH empty it
+// is: a check that returned nothing (the source is gone, or broken) versus a
+// check whose every version this job had already taken (idle, and the normal
+// state of a watched resource between arrivals). Those want opposite
+// reactions, and the filter is what made them look alike.
+func (c *Cache) Suppressed(step config.Step) int {
+	if c == nil {
+		return 0
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.entries[step.Get].suppressed
 }
 
 // unconsumed drops the versions this job has already fanned out over, and only

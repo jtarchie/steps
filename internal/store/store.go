@@ -970,12 +970,18 @@ func (s *Store) RecordConsumedVersion(ctx context.Context, jobName, resourceName
 
 	// Pruned here rather than on a timer: this is the only writer, so it is
 	// the only place the bound can be enforced without a background loop.
+	//
+	// Ordered by rowid alone, NOT by consumed_at. consumed_at is RFC3339Nano
+	// text, whose fractional part Go writes with trailing zeros trimmed — so
+	// ".1Z" (100ms) sorts AFTER ".15Z" (150ms) lexically, and the newest rows
+	// are not reliably the ones kept at the eviction boundary. rowid is
+	// monotonic in insertion order, which is the order this actually means.
 	_, err = s.db.ExecContext(ctx, `
 		DELETE FROM job_version_cursor
 		WHERE job_name = ? AND resource_name = ? AND rowid NOT IN (
 			SELECT rowid FROM job_version_cursor
 			WHERE job_name = ? AND resource_name = ?
-			ORDER BY consumed_at DESC, rowid DESC
+			ORDER BY rowid DESC
 			LIMIT ?
 		)
 	`, jobName, resourceName, jobName, resourceName, consumedVersionCap)

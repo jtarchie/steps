@@ -44,7 +44,12 @@ config:
       $2 == want || $2 == "refs/heads/" want { print $1; exit }')
     [ -n "$ref" ] || ref=$(printf '%s\n' "$refs" | awk 'NR == 1 { print $1 }')
     if [ -z "$ref" ]; then
-      echo "git: no ref {{ index .source "branch" | default "HEAD" }} on {{ .source.uri }}" >&2
+      # shellquote here too, via printf's arguments rather than an echo of one
+      # interpolated double-quoted string: unquoted, a branch: or uri:
+      # containing $(...) or `...` EXECUTES, and this is the branch a bad
+      # branch: is guaranteed to reach. The ls-remote above quotes for the
+      # same reason; an error message is not an exception to it.
+      printf 'git: no ref %s on %s\n' {{ index .source "branch" | default "HEAD" | shellquote }} {{ .source.uri | shellquote }} >&2
       exit 1
     fi
     printf '[{"ref":"%s"}]\n' "$ref"

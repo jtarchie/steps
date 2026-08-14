@@ -37,6 +37,14 @@ type versionCursor struct {
 	// before planning, so the plan-time and run-time views cannot drift apart
 	// mid-run as versions are consumed.
 	consumed map[string]map[string]bool
+
+	// suppress is false under --force, which re-runs everything the cursor
+	// would otherwise filter out. It gates only `has`: the run still RECORDS
+	// what it took, because a forced run performs the effects just like any
+	// other, and a version it completed must not be taken a third time by the
+	// next ordinary run. Forcing is "ignore what was taken", not "forget what
+	// this run is doing".
+	suppress bool
 }
 
 // loadVersionCursor reads the consumed set for every resource this job fans
@@ -46,7 +54,11 @@ type versionCursor struct {
 // A store failure is returned rather than swallowed: guessing "nothing is
 // consumed" would re-run every visible version — the exact behaviour this
 // exists to stop — and guessing the opposite would silently skip real work.
-func loadVersionCursor(ctx context.Context, st *store.Store, job *config.Job) (*versionCursor, error) {
+//
+// suppress is false under --force. The cursor is still built and still
+// records, so the versions a forced run completes are marked taken; only the
+// filtering is switched off.
+func loadVersionCursor(ctx context.Context, st *store.Store, job *config.Job, suppress bool) (*versionCursor, error) {
 	var resources []string
 
 	seen := map[string]bool{}
@@ -70,7 +82,10 @@ func loadVersionCursor(ctx context.Context, st *store.Store, job *config.Job) (*
 		return nil, nil //nolint:nilnil // "no cursor needed" is the common case, and a nil *versionCursor is a valid receiver
 	}
 
-	cursor := &versionCursor{consumed: make(map[string]map[string]bool, len(resources))}
+	cursor := &versionCursor{
+		consumed: make(map[string]map[string]bool, len(resources)),
+		suppress: suppress,
+	}
 
 	for _, name := range resources {
 		consumed, err := st.ConsumedVersions(ctx, job.Name, name)
@@ -93,9 +108,10 @@ func fansOutOverEveryVersion(step config.Step) bool {
 }
 
 // has reports whether this job has already taken the version. A nil cursor
-// (no version: every in the plan, or --force) has taken nothing.
+// (no version: every in the plan) has taken nothing, and neither has one
+// under --force, which re-runs everything by design.
 func (c *versionCursor) has(resourceName string, version map[string]any) bool {
-	if c == nil {
+	if c == nil || !c.suppress {
 		return false
 	}
 

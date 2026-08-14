@@ -231,19 +231,17 @@ func runJobPlan(ctx context.Context, cfg *config.Config, job *config.Job, pinned
 	skippable := map[string]bool{}
 
 	// Which versions this job has already fanned out over, read ONCE before
-	// planning so the planner and the executor judge the same set. --force
-	// (skipCache) reads none: "re-run every step" has to include the versions
-	// a previous run took, or the flag cannot recover from a bad build.
-	var (
-		cursor *versionCursor
-		err    error
-	)
-
-	if !skipCache {
-		cursor, err = loadVersionCursor(ctx, st, job)
-		if err != nil {
-			return fmt.Errorf("job %q: %w", job.Name, err)
-		}
+	// planning so the planner and the executor judge the same set.
+	//
+	// --force (skipCache) stops the cursor SUPPRESSING versions — "re-run
+	// every step" has to include the ones a previous run took, or the flag
+	// cannot recover from a bad build — but the cursor is still built and
+	// still records. Skipping the recording too would mean a forced run
+	// performed every effect and remembered none of them, so the next
+	// ordinary run would perform them all over again.
+	cursor, err := loadVersionCursor(ctx, st, job, !skipCache)
+	if err != nil {
+		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
 	// cache is scoped to this one RunJob invocation (never shared across
@@ -874,8 +872,19 @@ func runGetStep(
 	// idle; "the check is broken or its source is gone" is not), so say which
 	// resource went empty and how much of the plan that silently dropped.
 	if len(versions) == 0 {
-		fmt.Printf("get: %s returned no versions; the %d step(s) after it did not run\n", resource.Name, len(remainder))
-		slog.Warn("job.get.no_versions", "job", jobName, "index", i, "resource", resource.Name, "skipped_steps", len(remainder))
+		// ...unless the check DID return versions and this job had already
+		// taken every one of them. That is the idle state of any watched
+		// version: every resource between arrivals — the overwhelmingly
+		// common case once the cursor exists — and warning on it would turn
+		// the alarm above into noise on every poll, hiding the dead source it
+		// was built to catch.
+		if taken := cache.Suppressed(step); taken > 0 {
+			fmt.Printf("get: %s has no new versions; all %d already taken\n", resource.Name, taken)
+			slog.Info("job.get.no_new_versions", "job", jobName, "index", i, "resource", resource.Name, "already_taken", taken)
+		} else {
+			fmt.Printf("get: %s returned no versions; the %d step(s) after it did not run\n", resource.Name, len(remainder))
+			slog.Warn("job.get.no_versions", "job", jobName, "index", i, "resource", resource.Name, "skipped_steps", len(remainder))
+		}
 	}
 
 	var buildErrs []error

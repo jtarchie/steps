@@ -512,6 +512,44 @@ func TestConformanceGetVersionEveryTakesEachVersionOnce(t *testing.T) {
 	// every other piece of persisted state, so both versions run again.
 	mustRunEvery(ctx, t, cfg, job, st, true)
 	assertConformanceLineCount(t, posted, 4)
+
+	// ...and having re-run them, it has TAKEN them. A forced run performs the
+	// effects like any other, so the ordinary run after it must post nothing.
+	mustRunEvery(ctx, t, cfg, job, st, false)
+	assertConformanceLineCount(t, posted, 4)
+}
+
+// TestGetVersionEveryForceRecordsWhatItTook pins the half of --force the test
+// above cannot see: a version FIRST encountered by a forced run.
+//
+// --force switches the cursor's suppression off, not its recording. When it
+// skipped recording too, a forced run performed every effect and remembered
+// none, so the next ordinary run performed them all again — the Slack bot
+// answering twice, reintroduced by the flag documented as the way to recover
+// from it. The versions already recorded before the force hid this, which is
+// why it needs a version the force is the first to see.
+func TestGetVersionEveryForceRecordsWhatItTook(t *testing.T) {
+	dir := t.TempDir()
+	posted := filepath.Join(dir, "posted.txt")
+	versionsFile := filepath.Join(dir, "versions.json")
+
+	cfg, st := everyVersionFixture(t, dir, posted, versionsFile)
+	ctx := context.Background()
+	job := &cfg.Jobs[0]
+
+	writeEveryVersions(t, versionsFile, `[{"ref":"v1"}]`)
+	mustRunEvery(ctx, t, cfg, job, st, false)
+	assertConformanceLineCount(t, posted, 1)
+
+	// v2 arrives and the operator forces: v1 re-posts (the accepted cost of
+	// --force) and v2 posts for the first time.
+	writeEveryVersions(t, versionsFile, `[{"ref":"v1"},{"ref":"v2"}]`)
+	mustRunEvery(ctx, t, cfg, job, st, true)
+	assertConformanceLineCount(t, posted, 3)
+
+	// v2 was taken by the forced run, so nothing is left to do.
+	mustRunEvery(ctx, t, cfg, job, st, false)
+	assertConformanceLineCount(t, posted, 3)
 }
 
 // everyVersionFixture builds the pipeline the test above runs: a get with

@@ -147,27 +147,42 @@ func preflightResource(
 	return resourceStageProblems(cfg, job, name, mcp, resource.Source, tools)
 }
 
-// resourceStageProblems checks each of the resource's three lifecycle stages
-// against the server's tool list.
+// resourceStageProblems checks the resource's lifecycle stages against the
+// server's tool list — but only the stages the preflighted job actually
+// reaches.
+//
+// Scoping matters as much here as it does for the out: payload below, and for
+// the same reason: preflight refuses to START the job, so judging a stage the
+// job never calls turns an irrelevant defect into a total block. A job whose
+// only step is `get: eng-bugs` would otherwise be stopped by a typo in the
+// out: tool it never publishes through, and a job whose only step is `put:
+// eng-bugs` by a check: tool whose required arguments its source does not
+// supply — a check that job never runs.
+//
+// job == nil means "no single job" (`steps watch`, which will run all of
+// them), and then every stage is fair game.
 func resourceStageProblems(
 	cfg *config.Config, job *config.Job, name string, mcp *config.MCPResourceConfig,
 	source map[string]any, tools []*sdkmcp.Tool,
 ) []config.Problem {
 	target := fmt.Sprintf("resource %q", name)
 
+	gets := job == nil || job.GetsResource(name)
+	puts := job == nil || len(job.PutSteps(name)) > 0
+
 	var problems []config.Problem
 
 	// Each stage is optional, and a publish-only type declares no check: at
 	// all (config.validateResourceGet rejects a get against one).
-	if mcp.Check != nil {
+	if mcp.Check != nil && gets {
 		problems = verifyStage(target, "check", *mcp.Check, sentArgNames(*mcp.Check, source), tools)
 	}
 
-	if mcp.In != nil {
+	if mcp.In != nil && gets {
 		problems = append(problems, verifyStage(target, "in", *mcp.In, sentArgNames(*mcp.In, source), tools)...)
 	}
 
-	if mcp.Out != nil {
+	if mcp.Out != nil && puts {
 		problems = append(problems, verifyOutStage(cfg, job, target, name, *mcp.Out, tools)...)
 	}
 
@@ -394,6 +409,15 @@ func listToolsCached(ctx context.Context, cfg *config.Config, server string, set
 	// reporting it as "the server did not answer" blames the wrong party.
 	if err != nil && probeCtx.Err() != nil && ctx.Err() == nil {
 		err = fmt.Errorf("did not answer within %s", settings.ProbeTimeout())
+	}
+
+	// A failure caused by the CALLER going away says nothing about the
+	// server, so it must not be remembered as though it did. Caching it would
+	// let one Ctrl-C — or one canceled job under --max-concurrent — make every
+	// other job touching this server fail with "context canceled" for the rest
+	// of the cache window, with a healthy server the whole time.
+	if err != nil && ctx.Err() != nil {
+		return tools, err
 	}
 
 	toolsCache.store(key, toolListEntry{at: now, tools: tools, err: err})
