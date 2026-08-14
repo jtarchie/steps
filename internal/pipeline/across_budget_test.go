@@ -26,7 +26,9 @@ func TestBlockBudgetUnbindable(t *testing.T) {
 		ctx := agent.WithRunUsage(context.Background(), agent.NewRunUsage(0))
 		step := config.Step{Budget: &config.Budget{Tokens: 1000, ReservePerCell: reserve}}
 
-		return newBlockBudget(ctx, &config.Config{}, step, nil)
+		_, budget := newBlockBudget(ctx, &config.Config{}, step, nil)
+
+		return budget
 	}
 
 	tests := []struct {
@@ -60,17 +62,18 @@ func TestBlockBudgetUnbindable(t *testing.T) {
 	}
 }
 
-// newTestBlockBudget builds a block budget over a fresh accumulator, and
-// returns it alongside the accumulator so a test can report spend the way a
-// finished cell does.
+// newTestBlockBudget builds a block budget over a fresh job accumulator, and
+// returns the SCOPED accumulator its cells run under — reporting through that
+// is what a finished cell does, and what the block measures.
 func newTestBlockBudget(t *testing.T, ceiling, reserve int) (*blockBudget, *agent.RunUsage) {
 	t.Helper()
 
-	usage := agent.NewRunUsage(0)
-	ctx := agent.WithRunUsage(context.Background(), usage)
+	ctx := agent.WithRunUsage(context.Background(), agent.NewRunUsage(0))
 	step := config.Step{Budget: &config.Budget{Tokens: ceiling, ReservePerCell: reserve}}
 
-	return newBlockBudget(ctx, &config.Config{}, step, nil), usage
+	cellCtx, budget := newBlockBudget(ctx, &config.Config{}, step, nil)
+
+	return budget, agent.RunUsageFrom(cellCtx)
 }
 
 // TestBlockBudgetReservesOnAdmit is the case a spent()-only ceiling could
@@ -219,5 +222,64 @@ func TestBlockBudgetRealSpendCatchesAnOverrun(t *testing.T) {
 
 	if spend.admit() {
 		t.Error("admitted a second wave after the first spent the whole allowance; the overrun went uncaught")
+	}
+}
+
+// TestBlockBudgetIgnoresConcurrentSiblings is the regression for a block
+// charged for work none of its cells did.
+//
+// spent() used to be a delta on the JOB's accumulator — "how much did the
+// job's number move while I ran" — so an agent step running concurrently
+// elsewhere in the plan (an in_parallel: branch beside the matrix) exhausted
+// the block's allowance before one of its own cells had spent a token. The
+// block then stopped admitting and blamed its cells.
+func TestBlockBudgetIgnoresConcurrentSiblings(t *testing.T) {
+	t.Parallel()
+
+	job := agent.NewRunUsage(0)
+	ctx := agent.WithRunUsage(context.Background(), job)
+	step := config.Step{Budget: &config.Budget{Tokens: 1500, ReservePerCell: 100}}
+
+	cellCtx, spend := newBlockBudget(ctx, &config.Config{}, step, nil)
+
+	// Something else in the job spends more than the block's whole allowance.
+	job.Add(agent.StepUsage{Step: "unrelated-sibling", Total: 2000})
+
+	if got := spend.spent(); got != 0 {
+		t.Errorf("block spent = %d after a sibling elsewhere spent 2000, want 0", got)
+	}
+
+	if !spend.admit() {
+		t.Error("the block refused a cell because of spend that was not its own")
+	}
+
+	// Its own cells still count, through the scoped accumulator they run under.
+	agent.RunUsageFrom(cellCtx).Add(agent.StepUsage{Step: "cell", Total: 1500})
+
+	if got := spend.spent(); got != 1500 {
+		t.Errorf("block spent = %d after one of its own cells spent 1500, want 1500", got)
+	}
+}
+
+// TestScopedCellSpendStillReachesTheJob is the other half: scoping the block's
+// view must not hide its cells from the job's ceiling, or a matrix would be a
+// way around the backstop.
+func TestScopedCellSpendStillReachesTheJob(t *testing.T) {
+	t.Parallel()
+
+	job := agent.NewRunUsage(1000)
+	ctx := agent.WithRunUsage(context.Background(), job)
+	step := config.Step{Budget: &config.Budget{Tokens: 5000}}
+
+	cellCtx, _ := newBlockBudget(ctx, &config.Config{}, step, nil)
+
+	exceeded := agent.RunUsageFrom(cellCtx).Add(agent.StepUsage{Step: "cell", Total: 1200})
+
+	if !exceeded {
+		t.Error("a cell overrunning the JOB ceiling reported no breach through the scoped accumulator")
+	}
+
+	if got := job.Total(); got != 1200 {
+		t.Errorf("job total = %d, want 1200: a cell's spend must reach the job accumulator exactly once", got)
 	}
 }

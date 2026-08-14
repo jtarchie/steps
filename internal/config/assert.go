@@ -7,6 +7,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -367,6 +369,33 @@ func validateExpectedToolCalls(context string, expected []ExpectedToolCall) erro
 	return nil
 }
 
+// AssertFilesMismatch reports the first assert.files entry that is not a
+// non-empty regular file under dir, or nil when every entry checks out.
+//
+// dir is the step's own working directory, read before its outputs are
+// captured — internal/pipeline calls it for a task step and internal/agent for
+// an agent step, which is why it lives here: this package is the one they
+// share, and it already owns the paired ValidateArtifactPath that made the
+// paths safe to join in the first place.
+func AssertFilesMismatch(files []string, dir string) error {
+	for _, rel := range files {
+		info, err := os.Stat(filepath.Join(dir, rel))
+		if err != nil {
+			return fmt.Errorf("assert.files: %s does not exist", rel)
+		}
+
+		if info.IsDir() {
+			return fmt.Errorf("assert.files: %s is a directory, not a file", rel)
+		}
+
+		if info.Size() == 0 {
+			return fmt.Errorf("assert.files: %s is empty", rel)
+		}
+	}
+
+	return nil
+}
+
 // validateAssertFiles rejects an assert.files entry whose path isn't
 // artifact-relative (ValidateArtifactPath — no ../, no absolute path, no
 // empty segment), or whose first component doesn't name one of the step's
@@ -419,10 +448,20 @@ func checkAssertFilePaths(label string, files, outputs []string) error {
 			return fmt.Errorf("%s: assert.files[%d]: %w", label, i, err)
 		}
 
-		name, _, _ := strings.Cut(path, "/")
+		name, rest, hasRest := strings.Cut(path, "/")
 		if !declared[name] {
 			return fmt.Errorf("%s: assert.files[%d] %q names artifact %q, which is not one of this step's outputs (%s)",
 				label, i, path, name, strings.Join(outputs, ", "))
+		}
+
+		// A bare artifact name is the output DIRECTORY, and a directory can
+		// never satisfy an assertion about a non-empty FILE — so this could
+		// only ever fail, on every run, whatever the step wrote. Rejected at
+		// load like every other unsatisfiable assert rather than at the end of
+		// the step that was going to fail anyway.
+		if !hasRest || strings.TrimSpace(rest) == "" {
+			return fmt.Errorf("%s: assert.files[%d] %q names the whole %q output, which is a directory — name a file inside it (%s/...)",
+				label, i, path, name, name)
 		}
 	}
 

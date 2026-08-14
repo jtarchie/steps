@@ -101,6 +101,12 @@ type RunUsage struct {
 	// apart from steps rather than faked in as one.
 	prior  int
 	budget int
+	// parent is the accumulator this one forwards its steps to, nil for the
+	// job-level accumulator itself. A SCOPED accumulator (see
+	// NewScopedRunUsage) exists so a nested piece of work — an across: block —
+	// can measure what ITS OWN steps spent, while every one of them still
+	// counts toward the job total exactly once.
+	parent *RunUsage
 }
 
 // NewRunUsage returns an accumulator with an optional job-level token ceiling
@@ -120,6 +126,22 @@ func NewResumedRunUsage(budgetTokens, prior int) *RunUsage {
 	return &RunUsage{budget: budgetTokens, prior: prior}
 }
 
+// NewScopedRunUsage returns an accumulator that measures only the steps
+// recorded through IT, while forwarding each of them to parent.
+//
+// It exists because a nested budget cannot be a delta on the job total. An
+// across: block used to measure its spend as "how much the job's number moved
+// while I ran", which silently charged it for every agent step running
+// CONCURRENTLY elsewhere in the plan — an in_parallel: sibling's tokens would
+// exhaust a matrix's allowance and stop it admitting cells that had spent
+// nothing. A scoped accumulator sees its own cells and nothing else.
+//
+// The job ceiling still governs: Add and wouldExceed both consult the parent
+// chain, so a scoped child can never be a way around it.
+func NewScopedRunUsage(parent *RunUsage) *RunUsage {
+	return &RunUsage{parent: parent}
+}
+
 // Prior is what earlier attempts of this run spent, 0 for a fresh run.
 func (u *RunUsage) Prior() int {
 	u.mu.Lock()
@@ -132,11 +154,18 @@ func (u *RunUsage) Prior() int {
 // exceeded.
 func (u *RunUsage) Add(step StepUsage) (exceeded bool) {
 	u.mu.Lock()
-	defer u.mu.Unlock()
-
 	u.steps = append(u.steps, step)
+	exceeded = u.budget > 0 && u.total() > u.budget
+	parent := u.parent
+	u.mu.Unlock()
 
-	return u.budget > 0 && u.total() > u.budget
+	// Forwarded OUTSIDE the lock: the parent takes its own, and holding both
+	// down a chain is how a lock order gets invented by accident.
+	if parent != nil && parent.Add(step) {
+		exceeded = true
+	}
+
+	return exceeded
 }
 
 // Steps is the per-step breakdown, in execution order.
@@ -161,9 +190,17 @@ func (u *RunUsage) Total() int {
 // rather than after paying for the overrun.
 func (u *RunUsage) wouldExceed(pending int) bool {
 	u.mu.Lock()
-	defer u.mu.Unlock()
+	own := u.budget > 0 && u.total()+pending > u.budget
+	parent := u.parent
+	u.mu.Unlock()
 
-	return u.budget > 0 && u.total()+pending > u.budget
+	if own {
+		return true
+	}
+
+	// A scoped accumulator usually has no ceiling of its own; the job's still
+	// has to stop work mid-step, so the question passes up the chain.
+	return parent != nil && parent.wouldExceed(pending)
 }
 
 // runningTotals renders the per-step breakdown a job breach must report,

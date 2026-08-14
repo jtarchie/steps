@@ -249,7 +249,7 @@ jobs:
       files: [answer/reply.md]
 ```
 
-  A missing file, an empty file, or a path naming a directory instead of a file all fail the assert — a load error catches a path that names no declared output before the pipeline ever runs.
+  A missing file or an empty one fails the assert. Two shapes are load errors instead, because neither could ever pass: a path naming no declared output, and a bare artifact name like `answer` — that is the output *directory*, and a directory is never a non-empty file. Name a file inside it.
 - **`steps test <pipeline.yml>`** runs every job in declaration order (forced, so the execution log is deterministic), prints per-job PASS/FAIL, and checks the pipeline-level `assert.execution`. It is how every example in these docs is verified.
 
 ## `do:` — several steps as one

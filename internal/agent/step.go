@@ -725,36 +725,10 @@ func assertAgentResponse(assert *config.Assert, res conversationResult, dir stri
 		}
 	}
 
-	err := assertFilesMismatch(assert.Files, dir)
+	err := config.AssertFilesMismatch(assert.Files, dir)
 	if err != nil {
 		//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
 		return outcome.Fail(err)
-	}
-
-	return nil
-}
-
-// assertFilesMismatch reports the first assert.files entry that isn't a
-// non-empty regular file under dir, or nil when every entry checks out. See
-// internal/pipeline's own copy (the task-step counterpart) for why this
-// isn't shared: the two packages have no common leaf below internal/config
-// worth adding one for.
-func assertFilesMismatch(files []string, dir string) error {
-	for _, rel := range files {
-		full := filepath.Join(dir, rel)
-
-		info, err := os.Stat(full)
-		if err != nil {
-			return fmt.Errorf("assert.files: %s does not exist", rel)
-		}
-
-		if info.IsDir() {
-			return fmt.Errorf("assert.files: %s is a directory, not a file", rel)
-		}
-
-		if info.Size() == 0 {
-			return fmt.Errorf("assert.files: %s is empty", rel)
-		}
 	}
 
 	return nil

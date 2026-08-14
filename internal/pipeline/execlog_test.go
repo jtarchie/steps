@@ -105,7 +105,7 @@ func TestAssertFilesMismatch(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := assertFilesMismatch(tt.files, dir)
+			err := config.AssertFilesMismatch(tt.files, dir)
 			if tt.match && err != nil {
 				t.Errorf("expected match, got %v", err)
 			}

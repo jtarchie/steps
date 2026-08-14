@@ -166,14 +166,14 @@ func runAcrossCells(
 
 	var failures []error
 
-	spend := newBlockBudget(ctx, cfg, step, cells)
+	cellCtx, spend := newBlockBudget(ctx, cfg, step, cells)
 
 	for index, cell := range cells {
 		if stopAdmitting(ctx, jobName, spend, index, len(cells)) {
 			break
 		}
 
-		skipped, err := runAcrossCell(ctx, cfg, jobName, i, cell, bw, st, cellParent)
+		skipped, err := runAcrossCell(cellCtx, cfg, jobName, i, cell, bw, st, cellParent)
 
 		// Settled here rather than deferred: the serial walk holds one cell at
 		// a time, and its spend is in the accumulator the moment this returns.
@@ -221,7 +221,7 @@ func runAcrossCellsConcurrently(
 		results[index] = branchResult{index: index, name: executedStepName(cells[index])}
 	}
 
-	spend := newBlockBudget(ctx, cfg, step, cells)
+	cellCtx, spend := newBlockBudget(ctx, cfg, step, cells)
 	spend.warnIfUnbindable(jobName, step.MaxInFlight, len(cells))
 
 	for index := range cells {
@@ -261,7 +261,7 @@ func runAcrossCellsConcurrently(
 			// Cells finish in whatever order they finish, so recording as they
 			// go would make assert.execution nondeterministic. Each records
 			// into its own log, merged below in declaration order.
-			runCtx, cellLog := forkExecLog(ctx)
+			runCtx, cellLog := forkExecLog(cellCtx)
 			logs[index] = cellLog
 
 			skipped, err := runAcrossCell(runCtx, cfg, jobName, i, cells[index], bw, st, cellParent)
@@ -308,8 +308,9 @@ func runAcrossCellsConcurrently(
 // admit and settling on completion makes overshoot a function of how wrong
 // the reservation is, instead of how many cells got a free pass.
 type blockBudget struct {
+	// usage is the block's OWN accumulator, scoped to its cells (see
+	// newBlockBudget). It starts at zero, so spent() is simply its total.
 	usage   *agent.RunUsage
-	start   int
 	ceiling int
 	// reserve is what one unfinished cell is assumed to cost; 0 means no
 	// reservation source was found, which reduces admission to exactly the
@@ -328,10 +329,20 @@ type blockBudget struct {
 	inFlight int
 }
 
-func newBlockBudget(ctx context.Context, cfg *config.Config, step config.Step, cells []config.Step) *blockBudget {
+// newBlockBudget builds the block's ceiling and the context its CELLS must
+// run under.
+//
+// The returned context carries a scoped accumulator (agent.NewScopedRunUsage)
+// so spent() counts this block's own cells and nothing else. Measuring it as
+// a delta on the job total instead charged the block for every agent step
+// running concurrently elsewhere in the plan — an in_parallel: sibling could
+// exhaust a matrix's allowance before one of its cells had spent a token.
+func newBlockBudget(
+	ctx context.Context, cfg *config.Config, step config.Step, cells []config.Step,
+) (context.Context, *blockBudget) {
 	ceiling := stepBudgetTokens(step)
 	if ceiling <= 0 {
-		return newIdleBlockBudget()
+		return ctx, newIdleBlockBudget()
 	}
 
 	usage := agent.RunUsageFrom(ctx)
@@ -339,16 +350,18 @@ func newBlockBudget(ctx context.Context, cfg *config.Config, step config.Step, c
 		// No accumulator means no agent step can report anything, so there is
 		// nothing to meter. Not an error: a matrix of tasks with a budget is
 		// pointless, not wrong.
-		return newIdleBlockBudget()
+		return ctx, newIdleBlockBudget()
 	}
 
+	scoped := agent.NewScopedRunUsage(usage)
+
 	budget := &blockBudget{
-		usage: usage, start: usage.Total(), ceiling: ceiling,
+		usage: scoped, ceiling: ceiling,
 		reserve: cellReserve(cfg, step, cells),
 	}
 	budget.settled = sync.NewCond(&budget.mu)
 
-	return budget
+	return agent.WithRunUsage(ctx, scoped), budget
 }
 
 // newIdleBlockBudget is the no-ceiling budget every unbudgeted block gets:
@@ -359,6 +372,47 @@ func newIdleBlockBudget() *blockBudget {
 	budget.settled = sync.NewCond(&budget.mu)
 
 	return budget
+}
+
+// soleAgentBody unwraps a cell down to the agent step inside it, when there
+// is exactly one.
+//
+// Exactly one is the point: a block of several agents has no single ceiling
+// to inherit, and guessing one of them would be worse than reserving nothing
+// (which at least warns). Nested wrappers recurse, since a try: around a do:
+// around an agent is a legal cell.
+func soleAgentBody(cell config.Step) (config.Step, bool) {
+	if cell.Agent != "" {
+		return cell, true
+	}
+
+	if cell.Try != nil {
+		return soleAgentBody(*cell.Try)
+	}
+
+	branches := cellBranches(cell)
+	if len(branches) != 1 {
+		return config.Step{}, false
+	}
+
+	return soleAgentBody(branches[0])
+}
+
+// cellBranches is the steps a container cell wraps, for soleAgentBody's walk.
+func cellBranches(cell config.Step) []config.Step {
+	//kindswitch:ignore only the container kinds wrap steps; the leaf kinds are the point of the default
+	switch {
+	case cell.Do != nil:
+		return cell.Do
+	case cell.InParallel != nil:
+		return cell.InParallel.Steps
+	case cell.Race != nil:
+		return cell.Race.Steps
+	case cell.Ensemble != nil:
+		return cell.Ensemble.Agents
+	default:
+		return nil
+	}
 }
 
 // cellReserve is what admission assumes one unfinished cell will spend, in
@@ -391,13 +445,12 @@ func cellReserve(cfg *config.Config, step config.Step, cells []config.Step) int 
 		return 0
 	}
 
-	// A try: cell keeps the agent on the step it wraps, not on the wrapper.
-	body := cells[0]
-	if body.Try != nil {
-		body = *body.Try
-	}
-
-	if body.Agent == "" {
+	// A wrapper keeps the agent on the step it wraps, not on itself, and a
+	// cell body can be a try:, a do:, or a concurrent block. Unwrapping only
+	// try: left every other shape with no reservation, so the documented
+	// fallback to the cell agent's own budget.tokens silently did not apply.
+	body, ok := soleAgentBody(cells[0])
+	if !ok {
 		return 0
 	}
 
@@ -519,7 +572,7 @@ func (b *blockBudget) spent() int {
 		return 0
 	}
 
-	return b.usage.Total() - b.start
+	return b.usage.Total()
 }
 
 // report announces that the matrix stopped early. Loudly, because a truncated

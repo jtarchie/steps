@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -1393,34 +1392,8 @@ func assertMismatch(assert *config.Assert, stdout string, exitCode int, workspac
 		return fmt.Errorf("assert.stdout: output does not contain %q", *assert.Stdout)
 	}
 
-	return assertFilesMismatch(assert.Files, workspaceDir)
-}
-
-// assertFilesMismatch reports the first assert.files entry that isn't a
-// non-empty regular file under dir, or nil when every entry checks out. dir
-// is the step's own working directory, read before capture — see
-// runAssertedTask and RunStep (internal/agent/step.go) for the agent-step
-// counterpart. Paths are already validated as artifact-relative at load time
-// (config.validateAssertFiles), so no further sanitizing is needed here.
-func assertFilesMismatch(files []string, dir string) error {
-	for _, rel := range files {
-		full := filepath.Join(dir, rel)
-
-		info, err := os.Stat(full)
-		if err != nil {
-			return fmt.Errorf("assert.files: %s does not exist", rel)
-		}
-
-		if info.IsDir() {
-			return fmt.Errorf("assert.files: %s is a directory, not a file", rel)
-		}
-
-		if info.Size() == 0 {
-			return fmt.Errorf("assert.files: %s is empty", rel)
-		}
-	}
-
-	return nil
+	//nolint:wrapcheck // the message is already an assert.* mismatch reason; wrapping would only repeat the field name
+	return config.AssertFilesMismatch(assert.Files, workspaceDir)
 }
 
 // printTaskOutput echoes a captured task run's streams to the terminal,

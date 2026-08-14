@@ -200,6 +200,21 @@ jobs:
 			want: "invalid artifact",
 		},
 		{
+			name: "assert.files names the whole output directory",
+			pipeline: `
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    outputs: [answer]
+    run: "true"
+    assert:
+      files: [answer]
+`,
+			want: `names the whole "answer" output, which is a directory`,
+		},
+		{
 			name: "assert.files names no declared output",
 			pipeline: `
 jobs:
