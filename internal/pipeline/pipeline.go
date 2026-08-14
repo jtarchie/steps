@@ -1833,14 +1833,26 @@ func Preflight(ctx context.Context, cfg *config.Config, job *config.Job) []confi
 	return append(problems, rsrc.Preflight(ctx, cfg, job, job.ResourceNames(), settings)...)
 }
 
-// PreflightResources probes the mcp-backed resource types behind the named
-// resources — the question `steps watch` must answer before its first poll,
-// where there is no single job to preflight.
+// PreflightPipeline probes everything remote a watcher will eventually
+// depend on — the models and MCP servers behind EVERY job's agents, and the
+// mcp-backed resource types behind the named trigger resources — the
+// question `steps watch` must answer before its first poll, where there is
+// no single job to preflight.
+//
+// Both halves, not just the resources, because a watcher's whole shape is
+// "wait, then run something nobody is watching". A pipeline whose agent
+// needs an MCP server that cannot be reached is already broken at startup,
+// but with only the trigger resources checked it starts clean, polls
+// clean, and fails at the first real trigger — after the get has run, which
+// is both the least useful moment to learn it and the one where the failure
+// is easiest to read as being about the trigger rather than the agent. The
+// two are one question and they are asked together.
 //
 // It lives here rather than in trigger for the same reason Preflight does:
-// the CLI and watch layers reach internal/resource through pipeline, and the
-// --no-preflight flag is carried on the context that arrives here.
-func PreflightResources(ctx context.Context, cfg *config.Config, names []string) []config.Problem {
+// the CLI and watch layers reach internal/agent and internal/resource
+// through pipeline, and the --no-preflight flag is carried on the context
+// that arrives here.
+func PreflightPipeline(ctx context.Context, cfg *config.Config, names []string) []config.Problem {
 	if preflightDisabled(ctx) {
 		return nil
 	}
@@ -1850,9 +1862,40 @@ func PreflightResources(ctx context.Context, cfg *config.Config, names []string)
 		return nil
 	}
 
+	var problems []config.Problem
+
+	if agents := watchedAgents(cfg); len(agents) > 0 {
+		problems = agent.Preflight(ctx, cfg, agents, settings)
+	}
+
 	// No job: watch is going to run every one of them, so every put in the
 	// pipeline is fair game to judge (see rsrc.Preflight).
-	return rsrc.Preflight(ctx, cfg, nil, names, settings)
+	return append(problems, rsrc.Preflight(ctx, cfg, nil, names, settings)...)
+}
+
+// watchedAgents is every agent any job's plan invokes, deduped in
+// first-seen order. A watcher may run any job, so scoping to one job's
+// agents — what the per-job Preflight above does — would be the wrong
+// question here.
+func watchedAgents(cfg *config.Config) []string {
+	var (
+		names []string
+		seen  = map[string]bool{}
+	)
+
+	for i := range cfg.Jobs {
+		for _, name := range cfg.Jobs[i].AgentNames() {
+			if seen[name] {
+				continue
+			}
+
+			seen[name] = true
+
+			names = append(names, name)
+		}
+	}
+
+	return names
 }
 
 // preflight proves the models and MCP servers this job's plan needs are

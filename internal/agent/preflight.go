@@ -34,6 +34,40 @@ import (
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
 )
 
+// transientErr marks a probe failure that WAITING could fix — a model that
+// did not answer, a server that did not accept a connection — as opposed to
+// one no amount of time changes: a tool the server does not expose, a
+// credential that is not set, an oauth token only a human can renew.
+//
+// The distinction is carried on the error rather than decided from its text
+// because only the site that produced it knows which kind it is, and it is
+// only marked where that is certain. Everything unmarked is terminal, so a
+// failure nobody classified refuses the run rather than being retried
+// forever in a watcher — the safer direction to be wrong in.
+//
+// See config.Problem.Transient for what the two callers do with it, and why
+// `steps run` and `steps watch` want opposite reactions to the same fact.
+type transientErr struct{ error }
+
+func (t transientErr) Unwrap() error { return t.error }
+
+// transient marks err as waitable, unless it is already an oauth failure
+// that needs a human — a token that cannot be refreshed does not heal on the
+// next poll, however much it looks like a connection problem from here.
+func transient(err error) error {
+	if errors.Is(err, stepsmcp.ErrNeedsLogin) {
+		return err
+	}
+
+	return transientErr{err}
+}
+
+func isTransient(err error) bool {
+	var marked transientErr
+
+	return errors.As(err, &marked)
+}
+
 // probeCache remembers what has already been verified in this process, so a
 // long-lived `steps watch` checks occasionally rather than on every poll. A
 // process-wide cache rather than a per-run one for exactly that reason.
@@ -306,8 +340,9 @@ func renderModelFailures(failures []modelFailure, healthyEndpoints map[string]bo
 		}
 
 		problems = append(problems, config.Problem{
-			Target: fmt.Sprintf("agent %q", failure.name),
-			Detail: detail,
+			Target:    fmt.Sprintf("agent %q", failure.name),
+			Detail:    detail,
+			Transient: isTransient(failure.err),
 		})
 	}
 
@@ -328,8 +363,9 @@ func probeAgentServers(ctx context.Context, cfg *config.Config, ri config.Resolv
 		err := probeServerCached(ctx, cfg, spec, settings)
 		if err != nil {
 			problems = append(problems, config.Problem{
-				Target: fmt.Sprintf("mcp %q", spec.MCP),
-				Detail: err.Error(),
+				Target:    fmt.Sprintf("mcp %q", spec.MCP),
+				Detail:    err.Error(),
+				Transient: isTransient(err),
 			})
 		}
 	}
@@ -414,7 +450,11 @@ func probeModel(ctx context.Context, ri config.ResolvedInvocation, timeout time.
 
 	for _, respErr := range llm.GenerateContent(probeCtx, req, false) {
 		if respErr != nil {
-			return describeProbeError(probeCtx, respErr, timeout)
+			// A model that answered badly, or not at all, is a fact about
+			// this minute — an outage, a rate limit, a cold start. The
+			// credential problems that are NOT are caught above, before any
+			// request is sent.
+			return transient(describeProbeError(probeCtx, respErr, timeout))
 		}
 
 		slog.Debug("preflight.model_ok", "model", ri.ModelName, "elapsed", time.Since(started))
@@ -422,7 +462,7 @@ func probeModel(ctx context.Context, ri config.ResolvedInvocation, timeout time.
 		return nil
 	}
 
-	return errors.New("the model returned no response at all")
+	return transient(errors.New("the model returned no response at all"))
 }
 
 // describeProbeError turns a raw client error into something a reader can act
@@ -438,7 +478,17 @@ func describeProbeError(ctx context.Context, err error, timeout time.Duration) e
 }
 
 func probeServerCached(ctx context.Context, cfg *config.Config, spec config.ToolSpec, settings *config.Preflight) error {
-	key := "mcp|" + spec.MCP + "|" + strings.Join(spec.MCPTools, ",")
+	// MCPTool belongs in the key as much as MCPTools does, and leaving it out
+	// was a hole in exactly the check this function performs. probeServer
+	// asks two questions — does the server answer, and does it expose the
+	// tools THIS grant names — and the second one has a different answer per
+	// grant. Keyed without MCPTool, `{mcp: x, tool: a}` and `{mcp: x, tool:
+	// b}` shared one entry, so whichever ran first answered for both: a grant
+	// naming a tool the server does not expose passed preflight on the
+	// strength of a different grant's tool existing. Silent, and only in a
+	// process that had already probed the same server — which is every
+	// `steps watch`.
+	key := "mcp|" + spec.MCP + "|" + spec.MCPTool + "|" + strings.Join(spec.MCPTools, ",")
 	now := time.Now()
 
 	found, cached := probeCache.lookup(key, settings.CacheWindow(), now)
@@ -471,10 +521,14 @@ func probeServer(ctx context.Context, cfg *config.Config, spec config.ToolSpec, 
 	tools, err := stepsmcp.ListServerTools(probeCtx, *srv)
 	if err != nil {
 		if probeCtx.Err() != nil {
-			return fmt.Errorf("did not start within %s", timeout)
+			return transient(fmt.Errorf("did not start within %s", timeout))
 		}
 
-		return fmt.Errorf("could not start: %w", err)
+		// Transient by default: a server that did not come up is usually a
+		// fact about this minute. transient() itself makes the exception for
+		// an oauth token no poll can renew, which is the case that has to
+		// stop a watcher rather than be retried by it.
+		return transient(fmt.Errorf("could not start: %w", err))
 	}
 
 	_, err = selectMCPTools(spec, tools)

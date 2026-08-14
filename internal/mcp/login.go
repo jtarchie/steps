@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -50,7 +51,11 @@ func Login(ctx context.Context, srv config.MCPServer, open func(url string) erro
 		return err
 	}
 
-	handler, err := buildAuthorizationHandler(cb, open, reg)
+	handler, err := buildAuthorizationHandler(cb, open, reg, authRequest{
+		scopes:        srv.Auth.Scopes,
+		issuer:        asm.Issuer,
+		issAdvertised: asm.AuthorizationResponseIssParameterSupported,
+	})
 	if err != nil {
 		return fmt.Errorf("mcp server %q: build authorization handler: %w", srv.Name, err)
 	}
@@ -60,7 +65,43 @@ func Login(ctx context.Context, srv config.MCPServer, open func(url string) erro
 		return err
 	}
 
-	return persistLoginResult(srv, asm, reg, tok)
+	// Persisted before the verdict below, deliberately. The token IS valid,
+	// and a login that throws away a working credential because it will not
+	// last is worse than one that keeps it and says so — `steps run` right
+	// now works either way.
+	err = persistLoginResult(srv, asm, reg, tok)
+	if err != nil {
+		return err
+	}
+
+	return checkUnattended(srv, tok)
+}
+
+// checkUnattended refuses to call a login successful when what it obtained
+// cannot outlive the session that obtained it.
+//
+// This is the check whose absence caused the incident it was written for: a
+// login reported ✓, saved an access token with no refresh token beside it,
+// and the pipeline ran fine for fifty minutes. The next morning's first
+// trigger failed with "token expired and refresh token is not set" — a
+// message about a state that had been true, and knowable, since the moment
+// login printed its checkmark. Nothing between those two points could have
+// reported it, because nothing between them looks at the token until it is
+// needed.
+//
+// A token with no expiry is not a problem: it does not run out, so there is
+// nothing to renew. Only expires-and-cannot-be-renewed earns an error.
+func checkUnattended(srv config.MCPServer, tok *oauth2.Token) error {
+	if tok.RefreshToken != "" || tok.Expiry.IsZero() {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"mcp server %q: authorized, and the token was saved — but the authorization server issued no refresh token, "+
+			"so this credential stops working at %s and `steps run`/`steps watch` will fail from then on with no way to renew it. "+
+			"If the server supports dynamic client registration it was asked for the refresh_token grant and declined; "+
+			"otherwise register an application that grants refresh tokens and set auth.client_id",
+		srv.Name, tok.Expiry.Format(time.RFC3339))
 }
 
 // discoverAndRegister fetches protected-resource and authorization-server
@@ -102,9 +143,21 @@ func discoverAndRegister(ctx context.Context, srv config.MCPServer, redirectURL 
 			srv.Name)
 	}
 
+	// GrantTypes is not decoration. RFC 7591 §2 defaults an omitted
+	// grant_types to ["authorization_code"] ALONE, so a client registered
+	// without it has not asked for the refresh grant — and an authorization
+	// server that honours the registration then issues an access token with
+	// no refresh token beside it, exactly as asked. The result looks like a
+	// successful login and dies at the first expiry, unattended, with
+	// "token expired and refresh token is not set" and nothing on disk to
+	// fix it. Registering the grant we intend to use is what makes silent
+	// refresh (oauth.go's persistingTokenSource) possible at all.
 	reg, err := oauthex.RegisterClient(ctx, asm.RegistrationEndpoint, &oauthex.ClientRegistrationMetadata{
-		RedirectURIs: []string{redirectURL},
-		ClientName:   "steps",
+		RedirectURIs:  []string{redirectURL},
+		ClientName:    "steps",
+		GrantTypes:    []string{"authorization_code", "refresh_token"},
+		ResponseTypes: []string{"code"},
+		Scope:         strings.Join(srv.Auth.Scopes, " "),
 	}, http.DefaultClient)
 	if err != nil {
 		return nil, nil, fmt.Errorf("mcp server %q: register client: %w", srv.Name, err)
@@ -139,17 +192,24 @@ func preregisteredClient(srv config.MCPServer) (*oauthex.ClientRegistrationRespo
 
 // buildAuthorizationHandler constructs the auth.AuthorizationCodeHandler
 // used for exactly one login attempt, pre-registered with reg so it never
-// performs its own (redundant) dynamic client registration.
-func buildAuthorizationHandler(cb *loopbackCallback, open func(string) error, reg *oauthex.ClientRegistrationResponse) (*auth.AuthorizationCodeHandler, error) {
+// performs its own (redundant) dynamic client registration. req carries what
+// this package decides rather than the SDK: the scopes to request, and how
+// to treat the iss that comes back (see fetch).
+func buildAuthorizationHandler(cb *loopbackCallback, open func(string) error, reg *oauthex.ClientRegistrationResponse, req authRequest) (*auth.AuthorizationCodeHandler, error) {
 	preregistered := &oauthex.ClientCredentials{ClientID: reg.ClientID}
 	if reg.ClientSecret != "" {
 		preregistered.ClientSecretAuth = &oauthex.ClientSecretAuth{ClientSecret: reg.ClientSecret}
 	}
 
 	handler, err := auth.NewAuthorizationCodeHandler(&auth.AuthorizationCodeHandlerConfig{
-		PreregisteredClient:      preregistered,
-		RedirectURL:              cb.redirectURL,
-		AuthorizationCodeFetcher: cb.fetch(open),
+		PreregisteredClient: preregistered,
+		RedirectURL:         cb.redirectURL,
+		// SEP-2207: adds offline_access to the requested scopes on an
+		// authorization server that advertises it. The paired half — the
+		// refresh_token grant type — is declared at registration above,
+		// which the SDK's own doc points out it will not do for you.
+		RequestRefreshToken:      true,
+		AuthorizationCodeFetcher: cb.fetch(open, req),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("new authorization code handler: %w", err)
@@ -369,6 +429,97 @@ func (cb *loopbackCallback) handle(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprintln(w, "Authorization complete. You can close this window and return to steps.")
 }
 
+// authRequest is what fetch decides that the SDK's own arguments do not
+// carry: which scopes this pipeline wants, and what the authorization
+// server's metadata said about RFC 9207's iss parameter.
+type authRequest struct {
+	scopes []string
+	// issuer is the authorization server's own identifier, as discovered.
+	issuer string
+	// issAdvertised is its authorization_response_iss_parameter_supported.
+	issAdvertised bool
+}
+
+// resolveIss decides which iss to hand the SDK, and is the reason login
+// works against a server that sends one without advertising that it does.
+//
+// The SDK validates iss against the metadata flag in both directions and
+// hard-fails on either mismatch: advertised-but-absent, and — the case that
+// bites here — present-but-not-advertised. Metabase's authorization server
+// is the second: it returns iss on every redirect and its metadata never
+// mentions the parameter, so forwarding it verbatim makes login impossible
+// against a server that is doing MORE than it promised, not less.
+//
+// Dropping iss wholesale would fix that and throw away RFC 9207's mix-up
+// defense for every server, which is the whole reason it is forwarded. So
+// the check happens here instead, against the issuer discovery already
+// resolved: an iss that matches is verified and then withheld from a SDK
+// that would only reject it; an iss that does NOT match is exactly the
+// attack the parameter exists to catch, and fails the login by name.
+func (a authRequest) resolveIss(got string) (string, error) {
+	if a.issAdvertised || got == "" {
+		// The SDK's own check is correct and sufficient here: it has the same
+		// flag and the same expected issuer.
+		return got, nil
+	}
+
+	if got != a.issuer {
+		return "", fmt.Errorf(
+			"authorization response came from issuer %q, but this flow was started against %q — refusing to exchange the code",
+			got, a.issuer)
+	}
+
+	return "", nil
+}
+
+// withScopes replaces the scope parameter of the authorization URL the SDK
+// built with the pipeline's auth.scopes:, and is what makes that setting
+// mean anything. Before this it was persisted into the token file and read
+// by nothing: the scopes actually REQUESTED were whichever ones the
+// protected-resource metadata advertised, so a pipeline asking for
+// `[agent:search]` against a server offering seventeen scopes was granted
+// all seventeen, including the ones that write. Least privilege that is
+// written down and not sent is worse than none, because it reads as done.
+//
+// The authorization URL is the seam because it is the only place a scope is
+// expressed: auth.AuthorizationCodeHandlerConfig exposes no scope knob (the
+// SDK picks them from the 401 challenge, else from the metadata), and the
+// code exchange that follows sends no scope at all — RFC 6749 §4.1.3 has no
+// such parameter, the grant is already fixed by what the user approved here.
+// So rewriting it here is complete rather than partial: there is no second
+// place for the old value to leak back in.
+//
+// An empty auth.scopes: changes nothing, leaving the SDK's choice — asking
+// for everything on offer is the right default for a server whose scopes the
+// pipeline has no opinion about. offline_access is preserved when the SDK
+// added it (RequestRefreshToken, SEP-2207), since dropping it would trade
+// this fix for the one above it.
+func withScopes(authURL string, scopes []string) string {
+	if len(scopes) == 0 {
+		return authURL
+	}
+
+	parsed, err := url.Parse(authURL)
+	if err != nil {
+		// Unparsable means the SDK built something this cannot reason about;
+		// handing it back unchanged fails no worse than not having tried.
+		return authURL
+	}
+
+	query := parsed.Query()
+
+	requested := append([]string(nil), scopes...)
+	if slices.Contains(strings.Fields(query.Get("scope")), "offline_access") &&
+		!slices.Contains(requested, "offline_access") {
+		requested = append(requested, "offline_access")
+	}
+
+	query.Set("scope", strings.Join(requested, " "))
+	parsed.RawQuery = query.Encode()
+
+	return parsed.String()
+}
+
 // stateFromAuthURL pulls the state parameter out of the authorization URL the
 // SDK built. auth.AuthorizationArgs carries only the URL, and state is the
 // only thing that distinguishes this attempt's redirect from any other
@@ -404,17 +555,19 @@ func (cb *loopbackCallback) Close() {
 // no-op looks identical to success from here, and the flow then just hangs
 // with nothing on screen to act on. Printing it unconditionally costs one
 // line and makes every one of those recoverable by hand.
-func (cb *loopbackCallback) fetch(open func(string) error) auth.AuthorizationCodeFetcher {
+func (cb *loopbackCallback) fetch(open func(string) error, req authRequest) auth.AuthorizationCodeFetcher {
 	return func(ctx context.Context, args *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
+		authURL := withScopes(args.URL, req.scopes)
+
 		// Announced before the URL is opened, so handle can already tell this
 		// attempt's redirect from a straggler. The SDK generates a fresh
 		// state per attempt and may retry Authorize, so a result left over
 		// from a previous attempt is drained rather than mistaken for this
 		// one's — it would only ever fail the SDK's own state comparison.
-		cb.expect(stateFromAuthURL(args.URL))
+		cb.expect(stateFromAuthURL(authURL))
 		cb.drain()
 
-		fmt.Printf("\nAuthorize in your browser:\n\n  %s\n\n", args.URL)
+		fmt.Printf("\nAuthorize in your browser:\n\n  %s\n\n", authURL)
 
 		// Opened on its own goroutine: cmd.Run waits for the opener to exit,
 		// and xdg-open with no registered handler (or a broken DISPLAY over
@@ -422,7 +575,7 @@ func (cb *loopbackCallback) fetch(open func(string) error) auth.AuthorizationCod
 		// unreachable and Ctrl-C useless. The URL is printed unconditionally
 		// above, so nothing is lost by not waiting.
 		go func() {
-			err := open(args.URL)
+			err := open(authURL)
 			if err != nil {
 				fmt.Printf("(could not open a browser automatically: %v — open the URL above)\n", err)
 			}
@@ -434,7 +587,12 @@ func (cb *loopbackCallback) fetch(open func(string) error) auth.AuthorizationCod
 				return nil, res.err
 			}
 
-			return &auth.AuthorizationResult{Code: res.code, State: res.state, Iss: res.iss}, nil
+			iss, err := req.resolveIss(res.iss)
+			if err != nil {
+				return nil, err
+			}
+
+			return &auth.AuthorizationResult{Code: res.code, State: res.state, Iss: iss}, nil
 		case <-ctx.Done():
 			return nil, fmt.Errorf("authorization: %w", ctx.Err())
 		}

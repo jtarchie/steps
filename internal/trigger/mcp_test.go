@@ -12,6 +12,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -197,5 +198,122 @@ func TestWatchStartsDespiteATransientOutage(t *testing.T) {
 	err = Watch(ctx, cfg, provider, st, nil, time.Minute, 1, false, "")
 	if err != nil && strings.Contains(err.Error(), "preflight") {
 		t.Fatalf("Watch: %v; a transient outage must not stop the watcher starting", err)
+	}
+}
+
+// agentMCPPipeline is a watchable pipeline whose MCP server is reached by an
+// AGENT rather than by a resource — the shape that used to slip past watch's
+// startup preflight entirely. The agent is granted a tool the server does
+// not expose, which no interval will grow.
+//
+// The model endpoint points at a closed port on purpose: a model that cannot
+// answer is a transient problem, so it must NOT be what stops the watcher.
+// That is what makes this test about the MCP grant and not about the model.
+func agentMCPPipeline(endpoint string) string {
+	return fmt.Sprintf(`
+defaults:
+  preflight:
+    timeout: 5s
+mcp_servers:
+- name: test
+  endpoint: %s
+resource_types:
+- name: shell-dummy
+  config:
+    check: 'echo ''[{"ref":"a"}]'''
+resources:
+- name: thing
+  type: shell-dummy
+  source: {}
+agents:
+- name: helper
+  source:
+    model: openai/gpt-4o-mini
+    endpoint: http://127.0.0.1:1/v1/
+    api_key_env: FAKE_KEY_FOR_TEST
+  tools:
+  - mcp: test
+    tool: no_such_tool
+jobs:
+- name: build
+  plan:
+  - get: thing
+    trigger: true
+  - agent: helper
+    prompt: hello
+`, endpoint)
+}
+
+// TestWatchPreflightsAgentMCPServers is the gap this closes: watch's startup
+// preflight only ever probed TRIGGER RESOURCES, so a pipeline whose agent
+// depended on an unusable MCP server started clean, polled clean, and failed
+// at the first real trigger — inside the job, after its gets had already
+// run. That is both the least useful moment to learn it and the one where
+// the failure reads as being about the trigger rather than the agent.
+func TestWatchPreflightsAgentMCPServers(t *testing.T) {
+	// Not t.Parallel(): the preflight caches are process-wide, and this test
+	// is about what preflight concludes.
+	pipeline.ResetPreflightCache()
+
+	dir := t.TempDir()
+	ts := mcpSearchServer(t)
+	cfg := loadConfig(t, dir, agentMCPPipeline(ts.URL))
+	st := mustOpenStore(t, dir)
+
+	provider, err := workspace.NewProvider(cfg.Workspace, false)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+
+	defer func() { _ = provider.Close() }()
+
+	// Bounded, because the failure mode of a regression here is Watch
+	// STARTING — and a started watcher polls until the package's 10-minute
+	// timeout, which reports a hang rather than the assertion that actually
+	// failed. With a deadline it comes back in seconds and says so.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	err = Watch(ctx, cfg, provider, st, nil, time.Minute, 1, false, "")
+	if err == nil {
+		t.Fatal("Watch: started despite an agent MCP grant naming a tool the server does not expose")
+	}
+
+	if !strings.Contains(err.Error(), "no_such_tool") {
+		t.Errorf("error = %v, want it to name the tool the agent was granted", err)
+	}
+}
+
+// TestPreflightMarksAModelOutageWaitable is the boundary the test above
+// leans on. A watcher is a daemon, and quitting because a model was not
+// answering at startup is how one that should have recovered on its own is
+// found dead on Monday — so the same probe failure that refuses a `steps
+// run` has to leave a watcher polling.
+//
+// Asserted on the problem rather than through Watch: "the watcher did NOT
+// exit" is only observable by letting the poll loop actually run a job,
+// which would make this a test of everything except the flag it is about.
+func TestPreflightMarksAModelOutageWaitable(t *testing.T) {
+	// Not t.Parallel(): uses t.Setenv, and the preflight caches are
+	// process-wide. The key has to be SET for this test to be about what it
+	// claims — an unset api_key_env is terminal, and correctly so, since no
+	// amount of polling exports a variable.
+	t.Setenv("FAKE_KEY_FOR_TEST", "not-a-real-key")
+	pipeline.ResetPreflightCache()
+
+	dir := t.TempDir()
+	ts := mcpSearchServer(t)
+	cfg := loadConfig(t, dir, strings.Replace(
+		agentMCPPipeline(ts.URL), "tool: no_such_tool", "tool: search_versions", 1))
+
+	problems := pipeline.PreflightPipeline(context.Background(), cfg, Resources(cfg))
+	if len(problems) == 0 {
+		t.Fatal("PreflightPipeline: expected the unreachable model to be reported")
+	}
+
+	for _, problem := range problems {
+		if !problem.Transient {
+			t.Errorf("problem %q is terminal and would stop the watcher: %s", problem.Target, problem.Detail)
+		}
 	}
 }

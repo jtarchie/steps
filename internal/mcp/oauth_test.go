@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -236,5 +237,203 @@ func TestOAuthTokenSourceEndpointMismatch(t *testing.T) {
 	_, err = oauthTokenSource(context.Background(), srv)
 	if err == nil {
 		t.Fatal("oauthTokenSource: expected an error for a persisted-endpoint mismatch")
+	}
+}
+
+// TestOAuthTokenSourceNeedsLoginWhenExpiredWithNoRefreshToken is the state
+// the incident ended in: a token file holding an access token that expired
+// an hour ago and no refresh token to trade for a new one.
+//
+// x/oauth2 answers this with "token expired and refresh token is not set",
+// which is true and names neither the server nor the fix, and only after a
+// transport has been built. It has to be ErrNeedsLogin, because that is what
+// tells `steps watch` this is not worth waiting out.
+func TestOAuthTokenSourceNeedsLoginWhenExpiredWithNoRefreshToken(t *testing.T) {
+	// Not t.Parallel(): uses t.Setenv.
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	path, err := TokenPath("metabase")
+	if err != nil {
+		t.Fatalf("TokenPath: %v", err)
+	}
+
+	srv := config.MCPServer{
+		Name:     "metabase",
+		Endpoint: "https://example.invalid/api/metabase-mcp",
+		Auth:     config.MCPServerAuth{Type: "oauth"},
+	}
+
+	tf := &TokenFile{ //nolint:gosec // test fixture literals, not real credentials
+		Endpoint:    srv.Endpoint,
+		ClientID:    "client-id",
+		TokenURL:    "https://example.invalid/oauth/token",
+		AccessToken: "expired-access-token",
+		Expiry:      time.Now().Add(-time.Hour),
+	}
+
+	err = tf.Save(path)
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	_, err = oauthTokenSource(context.Background(), srv)
+	if err == nil {
+		t.Fatal("oauthTokenSource: want an error for an expired, unrefreshable token")
+	}
+
+	if !errors.Is(err, ErrNeedsLogin) {
+		t.Fatalf("error = %v, want it to wrap ErrNeedsLogin so watch treats it as terminal", err)
+	}
+}
+
+// TestOAuthTokenSourceUnexpiredWithNoRefreshTokenStillWorks is the other
+// side of that check. A token that has not run out is usable right now,
+// which is all a `steps run` needs — refusing it would fail a run that would
+// have succeeded. Whether it can survive unattended is Login's question.
+func TestOAuthTokenSourceUnexpiredWithNoRefreshTokenStillWorks(t *testing.T) {
+	// Not t.Parallel(): uses t.Setenv.
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	path, err := TokenPath("metabase")
+	if err != nil {
+		t.Fatalf("TokenPath: %v", err)
+	}
+
+	srv := config.MCPServer{
+		Name:     "metabase",
+		Endpoint: "https://example.invalid/api/metabase-mcp",
+		Auth:     config.MCPServerAuth{Type: "oauth"},
+	}
+
+	tf := &TokenFile{ //nolint:gosec // test fixture literals, not real credentials
+		Endpoint:    srv.Endpoint,
+		ClientID:    "client-id",
+		TokenURL:    "https://example.invalid/oauth/token",
+		AccessToken: "live-access-token",
+		Expiry:      time.Now().Add(time.Hour),
+	}
+
+	err = tf.Save(path)
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	source, err := oauthTokenSource(context.Background(), srv)
+	if err != nil {
+		t.Fatalf("oauthTokenSource: %v", err)
+	}
+
+	tok, err := source.Token()
+	if err != nil {
+		t.Fatalf("Token: %v", err)
+	}
+
+	if tok.AccessToken != "live-access-token" {
+		t.Fatalf("AccessToken = %q, want the unexpired token to be handed back as-is", tok.AccessToken)
+	}
+}
+
+// TestOAuthTokenSourceNeedsLoginWhenRefreshRejected covers the second way a
+// credential dies for good: the refresh token is present but the
+// authorization server refuses it (revoked, expired, or already rotated away
+// by another process). The server ANSWERING and saying no is not something a
+// later poll improves.
+func TestOAuthTokenSourceNeedsLoginWhenRefreshRejected(t *testing.T) {
+	// Not t.Parallel(): uses t.Setenv.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "invalid_grant"})
+	}))
+	t.Cleanup(ts.Close)
+
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	path, err := TokenPath("linear")
+	if err != nil {
+		t.Fatalf("TokenPath: %v", err)
+	}
+
+	srv := config.MCPServer{Name: "linear", Endpoint: "https://mcp.linear.app/mcp", Auth: config.MCPServerAuth{Type: "oauth"}}
+
+	tf := &TokenFile{
+		Endpoint:     srv.Endpoint,
+		ClientID:     "client-id",
+		TokenURL:     ts.URL,
+		AccessToken:  "stale-access-token",
+		RefreshToken: "revoked-refresh-token",
+		Expiry:       time.Now().Add(-time.Hour),
+	}
+
+	err = tf.Save(path)
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	source, err := oauthTokenSource(context.Background(), srv)
+	if err != nil {
+		t.Fatalf("oauthTokenSource: %v", err)
+	}
+
+	_, err = source.Token()
+	if err == nil {
+		t.Fatal("Token: want an error when the authorization server rejects the refresh")
+	}
+
+	if !errors.Is(err, ErrNeedsLogin) {
+		t.Fatalf("error = %v, want it to wrap ErrNeedsLogin", err)
+	}
+}
+
+// TestOAuthTokenSourceKeepsNetworkFailureWaitable is the boundary the two
+// tests above share an edge with. A token endpoint that cannot be reached
+// says nothing about the credential, and marking it ErrNeedsLogin would make
+// a watcher exit over a blip that heals on its own — the failure mode
+// config.Problem.Transient exists to prevent.
+func TestOAuthTokenSourceKeepsNetworkFailureWaitable(t *testing.T) {
+	// Not t.Parallel(): uses t.Setenv.
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	path, err := TokenPath("linear")
+	if err != nil {
+		t.Fatalf("TokenPath: %v", err)
+	}
+
+	srv := config.MCPServer{Name: "linear", Endpoint: "https://mcp.linear.app/mcp", Auth: config.MCPServerAuth{Type: "oauth"}}
+
+	tf := &TokenFile{ //nolint:gosec // test fixture literals, not real credentials
+		Endpoint:     srv.Endpoint,
+		ClientID:     "client-id",
+		TokenURL:     "http://127.0.0.1:1/oauth/token", // nothing listens here
+		AccessToken:  "stale-access-token",
+		RefreshToken: "good-refresh-token",
+		Expiry:       time.Now().Add(-time.Hour),
+	}
+
+	err = tf.Save(path)
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	source, err := oauthTokenSource(context.Background(), srv)
+	if err != nil {
+		t.Fatalf("oauthTokenSource: %v", err)
+	}
+
+	_, err = source.Token()
+	if err == nil {
+		t.Fatal("Token: want an error when the token endpoint is unreachable")
+	}
+
+	if errors.Is(err, ErrNeedsLogin) {
+		t.Fatalf("error = %v, want an unreachable endpoint to stay waitable, not demand a re-login", err)
 	}
 }

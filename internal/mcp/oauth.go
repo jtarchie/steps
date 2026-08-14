@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -13,6 +14,20 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 )
+
+// ErrNeedsLogin marks an oauth failure that only a human re-running `steps
+// mcp login` can clear: no token on disk, one authorized for a different
+// endpoint, an expired token with nothing to refresh it with, or a refresh
+// the authorization server actively rejected.
+//
+// It exists to split one question preflight cannot answer from the error
+// text alone: would WAITING fix this? Every other way a server fails to
+// answer — DNS, a VPN not up yet, a 502 — is a fact about right now, and a
+// `steps watch` that quits over one is a watcher found dead on Monday for a
+// blip that healed in a minute. These four are facts about the credential,
+// and no interval grows a refresh token. See config.Problem.Transient, which
+// is what both preflight callers set from this.
+var ErrNeedsLogin = errors.New("run `steps mcp login`")
 
 // TokenFile is the on-disk shape persisted per oauth-configured server —
 // see tokenPath for where. It holds everything a later process needs to
@@ -36,6 +51,26 @@ type TokenFile struct {
 	RefreshToken string    `json:"refresh_token,omitempty"`
 	TokenType    string    `json:"token_type,omitempty"`
 	Expiry       time.Time `json:"expiry,omitempty"`
+}
+
+// checkRefreshable reports the one broken state a token file can be in that
+// is knowable without a single request: the access token has expired and
+// there is no refresh token to trade for a new one.
+//
+// An unexpired token with no refresh token is deliberately fine here. It
+// works right now, which is all a `steps run` needs; refusing it would fail
+// a run that would have succeeded. Whether a credential can survive
+// UNATTENDED is a different question, and it is answered once, at the only
+// moment anything can be done about it — see Login, which refuses to report
+// success for a token that expires with nothing to renew it.
+func (t *TokenFile) checkRefreshable() error {
+	if t.RefreshToken != "" || t.Expiry.IsZero() || time.Now().Before(t.Expiry) {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"the access token expired %s ago and the authorization server issued no refresh token — %w",
+		time.Since(t.Expiry).Round(time.Second), ErrNeedsLogin)
 }
 
 // token builds the *oauth2.Token x/oauth2 needs from the persisted fields.
@@ -165,11 +200,21 @@ func oauthTokenSource(ctx context.Context, srv config.MCPServer) (oauth2.TokenSo
 
 	tf, err := LoadTokenFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("mcp server %q is not authorized (run `steps mcp login <pipeline> %s`): %w", srv.Name, srv.Name, err)
+		return nil, fmt.Errorf("mcp server %q is not authorized (%w <pipeline> %s): %w", srv.Name, ErrNeedsLogin, srv.Name, err)
 	}
 
 	if tf.Endpoint != srv.Endpoint {
-		return nil, fmt.Errorf("mcp server %q: authorized for a different endpoint (run `steps mcp login <pipeline> %s` again)", srv.Name, srv.Name)
+		return nil, fmt.Errorf("mcp server %q: authorized for a different endpoint (%w <pipeline> %s again)", srv.Name, ErrNeedsLogin, srv.Name)
+	}
+
+	// Caught here rather than left to x/oauth2, which answers this exact
+	// state with a bare "token expired and refresh token is not set" — true,
+	// but it names neither the server nor the fix, and it arrives only after
+	// the transport has already been built. The state is knowable from the
+	// file alone, so it is answered from the file alone.
+	err = tf.checkRefreshable()
+	if err != nil {
+		return nil, fmt.Errorf("mcp server %q: %w", srv.Name, err)
 	}
 
 	cfg := &oauth2.Config{
@@ -205,7 +250,7 @@ type persistingTokenSource struct {
 func (p *persistingTokenSource) Token() (*oauth2.Token, error) {
 	tok, err := p.inner.Token()
 	if err != nil {
-		return nil, fmt.Errorf("refresh access token: %w", err)
+		return nil, fmt.Errorf("refresh access token: %w", classifyRefreshError(err))
 	}
 
 	if tok.AccessToken != p.lastAccess {
@@ -213,6 +258,22 @@ func (p *persistingTokenSource) Token() (*oauth2.Token, error) {
 	}
 
 	return tok, nil
+}
+
+// classifyRefreshError marks a refresh failure the caller cannot wait out.
+// An *oauth2.RetrieveError is the authorization server ANSWERING and
+// refusing — a revoked, expired, or already-rotated-away refresh token —
+// which no retry improves. Anything else (a dial failure, a 502, a timeout)
+// is left unmarked, and so stays transient: those are the ones a watcher
+// should survive rather than exit over.
+func classifyRefreshError(err error) error {
+	var retrieve *oauth2.RetrieveError
+
+	if !errors.As(err, &retrieve) {
+		return err
+	}
+
+	return fmt.Errorf("%w — %w", err, ErrNeedsLogin)
 }
 
 func (p *persistingTokenSource) persist(tok *oauth2.Token) {

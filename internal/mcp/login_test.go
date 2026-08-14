@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -31,12 +32,23 @@ import (
 // challenge is likewise read per request: it is the WWW-Authenticate value
 // the unauthorized MCP endpoint answers with, which real servers do not all
 // spell the same way.
+//
+// issuesRefreshToken models the axis this package cares most about: a real
+// authorization server hands back a refresh token only when the client
+// registered for the refresh_token grant, and a client that did not gets an
+// access token that quietly dies at its first expiry. Flipping it off is how
+// a test reproduces that server without a browser.
+//
+// registration captures what was sent to /register, so a test can assert on
+// the grant types steps declares rather than on their downstream effect.
 type fakeOAuthServer struct {
 	mux                  *http.ServeMux
 	server               *httptest.Server
 	issuedToken          string
 	supportsRegistration bool
+	issuesRefreshToken   bool
 	challenge            string
+	registration         map[string]any
 }
 
 func newFakeOAuthServer(t *testing.T) *fakeOAuthServer {
@@ -46,6 +58,7 @@ func newFakeOAuthServer(t *testing.T) *fakeOAuthServer {
 		mux:                  http.NewServeMux(),
 		issuedToken:          "issued-access-token",
 		supportsRegistration: true,
+		issuesRefreshToken:   true,
 		challenge:            "Bearer",
 	}
 	f.server = httptest.NewServer(f.mux)
@@ -94,9 +107,12 @@ func newFakeOAuthServer(t *testing.T) *fakeOAuthServer {
 
 		_ = json.NewDecoder(r.Body).Decode(&meta)
 
+		f.registration = meta
+
 		resp := map[string]any{
 			"client_id":     "test-client-id",
 			"redirect_uris": meta["redirect_uris"],
+			"grant_types":   meta["grant_types"],
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -104,12 +120,18 @@ func newFakeOAuthServer(t *testing.T) *fakeOAuthServer {
 	})
 
 	f.mux.HandleFunc("/token", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		body := map[string]any{
 			"access_token": f.issuedToken,
 			"token_type":   "Bearer",
 			"expires_in":   3600,
-		})
+		}
+
+		if f.issuesRefreshToken {
+			body["refresh_token"] = "issued-refresh-token"
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(body)
 	})
 
 	return f
@@ -175,6 +197,201 @@ func TestLoginEndToEnd(t *testing.T) {
 
 	assertLoginPersisted(t, tf, srv, fake.issuedToken)
 	assertPersistedTokenWorks(t, ctx, srv)
+}
+
+// capturingBrowserOpen is fakeBrowserOpen plus a record of the authorization
+// URL's query, for tests that assert on what steps ASKED the authorization
+// server for rather than on what it handed back.
+func capturingBrowserOpen(t *testing.T, into *url.Values) func(string) error {
+	t.Helper()
+
+	inner := fakeBrowserOpen(t)
+
+	return func(rawURL string) error {
+		parsed, err := url.Parse(rawURL)
+		if err == nil {
+			*into = parsed.Query()
+		}
+
+		return inner(rawURL)
+	}
+}
+
+// TestLoginRegistersRefreshGrant pins the field whose absence caused a
+// working login to expire unattended an hour later: RFC 7591 §2 defaults an
+// omitted grant_types to authorization_code alone, so a client that does not
+// declare refresh_token has asked not to be given a refresh token, and a
+// conforming server obliges.
+//
+// Asserted on the registration request rather than on the resulting token
+// because that is where the mistake lives — a fake that hands out refresh
+// tokens regardless would pass on the token alone while the real server this
+// was found against would not.
+func TestLoginRegistersRefreshGrant(t *testing.T) {
+	// Not t.Parallel(): uses t.Setenv (via TokenPath's os.UserConfigDir()).
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	fake := newFakeOAuthServer(t)
+
+	srv := config.MCPServer{
+		Name:     "fake",
+		Endpoint: fake.server.URL + "/mcp",
+		Auth:     config.MCPServerAuth{Type: "oauth"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	err := Login(ctx, srv, fakeBrowserOpen(t))
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	grants, _ := fake.registration["grant_types"].([]any)
+
+	var got []string
+
+	for _, grant := range grants {
+		if name, ok := grant.(string); ok {
+			got = append(got, name)
+		}
+	}
+
+	if !slices.Contains(got, "refresh_token") || !slices.Contains(got, "authorization_code") {
+		t.Fatalf("registered grant_types = %v, want both authorization_code and refresh_token", got)
+	}
+
+	path, err := TokenPath(srv.Name)
+	if err != nil {
+		t.Fatalf("TokenPath: %v", err)
+	}
+
+	tf, err := LoadTokenFile(path)
+	if err != nil {
+		t.Fatalf("LoadTokenFile: %v", err)
+	}
+
+	if tf.RefreshToken == "" {
+		t.Fatal("persisted RefreshToken is empty; nothing could renew this credential")
+	}
+}
+
+// TestLoginRequestsConfiguredScopes covers auth.scopes: actually reaching the
+// authorization server. It used to be persisted and read by nothing, so a
+// pipeline asking for one scope was granted every scope the server
+// advertised — least privilege that was written down and never sent.
+func TestLoginRequestsConfiguredScopes(t *testing.T) {
+	// Not t.Parallel(): uses t.Setenv (via TokenPath's os.UserConfigDir()).
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	fake := newFakeOAuthServer(t)
+
+	srv := config.MCPServer{
+		Name:     "scoped",
+		Endpoint: fake.server.URL + "/mcp",
+		Auth:     config.MCPServerAuth{Type: "oauth", Scopes: []string{"agent:search", "agent:query:execute"}},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var asked url.Values
+
+	err := Login(ctx, srv, capturingBrowserOpen(t, &asked))
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	if got := asked.Get("scope"); got != "agent:search agent:query:execute" {
+		t.Fatalf("authorization request scope = %q, want the two configured scopes", got)
+	}
+}
+
+// TestLoginWithoutConfiguredScopesAsksForWhatIsOffered is the other half:
+// an empty auth.scopes: must leave the SDK's choice alone rather than
+// narrowing to nothing, since asking for everything on offer is the right
+// default for a server the pipeline has no opinion about.
+func TestLoginWithoutConfiguredScopesAsksForWhatIsOffered(t *testing.T) {
+	// Not t.Parallel(): uses t.Setenv (via TokenPath's os.UserConfigDir()).
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	fake := newFakeOAuthServer(t)
+
+	srv := config.MCPServer{
+		Name:     "unscoped",
+		Endpoint: fake.server.URL + "/mcp",
+		Auth:     config.MCPServerAuth{Type: "oauth"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var asked url.Values
+
+	err := Login(ctx, srv, capturingBrowserOpen(t, &asked))
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	if _, present := asked["scope"]; present && asked.Get("scope") == "" {
+		t.Fatal("authorization request sent an empty scope; it should have been left untouched")
+	}
+}
+
+// TestLoginFailsWhenNoRefreshTokenIssued is the incident, reproduced: a
+// server that authorizes happily and returns an access token with no refresh
+// token beside it. Login must not report success — that credential works for
+// an hour and then fails in a watcher with nobody watching.
+//
+// The token is still expected on disk. It is valid, and a `steps run` right
+// now works with it; discarding a working credential to signal a future
+// problem would be the worse trade.
+func TestLoginFailsWhenNoRefreshTokenIssued(t *testing.T) {
+	// Not t.Parallel(): uses t.Setenv (via TokenPath's os.UserConfigDir()).
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	fake := newFakeOAuthServer(t)
+	fake.issuesRefreshToken = false
+
+	srv := config.MCPServer{
+		Name:     "norefresh",
+		Endpoint: fake.server.URL + "/mcp",
+		Auth:     config.MCPServerAuth{Type: "oauth"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	err := Login(ctx, srv, fakeBrowserOpen(t))
+	if err == nil {
+		t.Fatal("Login reported success for a credential that cannot be renewed")
+	}
+
+	if !strings.Contains(err.Error(), "no refresh token") {
+		t.Fatalf("Login error does not name the cause: %v", err)
+	}
+
+	path, err := TokenPath(srv.Name)
+	if err != nil {
+		t.Fatalf("TokenPath: %v", err)
+	}
+
+	tf, err := LoadTokenFile(path)
+	if err != nil {
+		t.Fatalf("LoadTokenFile: the working token should still have been saved: %v", err)
+	}
+
+	if tf.AccessToken != fake.issuedToken {
+		t.Fatalf("persisted AccessToken = %q, want %q", tf.AccessToken, fake.issuedToken)
+	}
 }
 
 // assertLoginPersisted checks the token file Login wrote.
@@ -475,4 +692,98 @@ func getStatus(t *testing.T, rawURL string) int {
 	defer func() { _ = resp.Body.Close() }()
 
 	return resp.StatusCode
+}
+
+// issBrowserOpen is fakeBrowserOpen for an authorization server that returns
+// RFC 9207's iss on the redirect — which some do whether or not their
+// metadata says so.
+func issBrowserOpen(t *testing.T, iss string) func(string) error {
+	t.Helper()
+
+	return func(rawURL string) error {
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			return fmt.Errorf("fake browser: parse authorization URL: %w", err)
+		}
+
+		query := parsed.Query()
+
+		callbackURL := fmt.Sprintf("%s?code=fake-code&state=%s&iss=%s",
+			query.Get("redirect_uri"), url.QueryEscape(query.Get("state")), url.QueryEscape(iss))
+
+		resp, err := http.Get(callbackURL) //nolint:gosec,noctx // test-only, loopback URL built from this flow's own redirect_uri
+		if err != nil {
+			return fmt.Errorf("fake browser: visit callback URL: %w", err)
+		}
+
+		return resp.Body.Close()
+	}
+}
+
+// TestLoginAcceptsAnUnadvertisedIss is the second Metabase case, after the
+// space-separated challenge: an authorization server that returns iss on
+// every redirect and never advertises
+// authorization_response_iss_parameter_supported.
+//
+// The SDK rejects that pairing outright, so forwarding iss verbatim made
+// login impossible against a server doing MORE than it promised rather than
+// less. steps validates the value itself and then withholds it from a check
+// that would only refuse it.
+func TestLoginAcceptsAnUnadvertisedIss(t *testing.T) {
+	// Not t.Parallel(): uses t.Setenv (via TokenPath's os.UserConfigDir()).
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	fake := newFakeOAuthServer(t)
+
+	srv := config.MCPServer{
+		Name:     "unadvertised-iss",
+		Endpoint: fake.server.URL + "/mcp",
+		Auth:     config.MCPServerAuth{Type: "oauth"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// The fake's metadata advertises no iss support, and its issuer is its
+	// own base URL — exactly Metabase's shape.
+	err := Login(ctx, srv, issBrowserOpen(t, fake.server.URL))
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	assertPersistedTokenWorks(t, ctx, srv)
+}
+
+// TestLoginRejectsAMismatchedIss is what the check above must not cost. An
+// iss naming a DIFFERENT issuer than the one this flow was started against
+// is the mix-up attack RFC 9207 exists to catch, and it has to fail whether
+// or not the server advertised the parameter — otherwise "tolerate an
+// unadvertised iss" would quietly mean "ignore iss".
+func TestLoginRejectsAMismatchedIss(t *testing.T) {
+	// Not t.Parallel(): uses t.Setenv (via TokenPath's os.UserConfigDir()).
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	fake := newFakeOAuthServer(t)
+
+	srv := config.MCPServer{
+		Name:     "mixed-up",
+		Endpoint: fake.server.URL + "/mcp",
+		Auth:     config.MCPServerAuth{Type: "oauth"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	err := Login(ctx, srv, issBrowserOpen(t, "https://attacker.example.com"))
+	if err == nil {
+		t.Fatal("Login: exchanged a code against an issuer it never started a flow with")
+	}
+
+	if !strings.Contains(err.Error(), "attacker.example.com") {
+		t.Fatalf("Login error does not name the unexpected issuer: %v", err)
+	}
 }

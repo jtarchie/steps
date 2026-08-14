@@ -195,7 +195,8 @@ func watchable(ctx context.Context, cfg *config.Config, interval time.Duration) 
 }
 
 // preflightTriggers proves every trigger resource can actually be checked,
-// before anything is polled or written.
+// and every model and MCP server the pipeline's agents need can actually be
+// reached, before anything is polled or written.
 //
 // A trigger resource whose check can never succeed — an mcp: tool the server
 // does not expose, or one whose required arguments this pipeline never sends
@@ -204,11 +205,17 @@ func watchable(ctx context.Context, cfg *config.Config, interval time.Duration) 
 // runs: nothing red, nothing running, nothing enqueued, forever. Say it once,
 // at the top, and exit non-zero.
 //
+// The agents are checked here for the same reason and against a quieter
+// failure: their servers were only ever probed by the per-job preflight, so
+// an unusable one surfaced at the first trigger — inside a job, after its
+// gets had already run — rather than at the startup that could have refused
+// to begin. See pipeline.PreflightPipeline.
+//
 // Only what is knowable without running anything, so a shell-backed check —
 // whose correctness is whatever the command does — reports nothing here and
 // still fails per-poll the way it always has.
 func preflightTriggers(ctx context.Context, cfg *config.Config, resources []string) error {
-	problems := pipeline.PreflightResources(ctx, cfg, resources)
+	problems := pipeline.PreflightPipeline(ctx, cfg, resources)
 	if len(problems) == 0 {
 		return nil
 	}

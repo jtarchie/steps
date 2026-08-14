@@ -369,8 +369,21 @@ This runs the OAuth 2.1 authorization-code + PKCE flow: discovers the server's m
 
   A browser that opens the wrong profile, opens nothing visible, or isn't there at all (SSH, a container) is indistinguishable from success on this side — the flow would just sit and wait with nothing on screen. Copy the URL into any browser that can reach the loopback address printed in `redirect_uri` and the login completes normally.
 - **A slightly malformed `WWW-Authenticate` challenge is tolerated.** Some servers separate the challenge's parameters with spaces where the HTTP spec wants commas (Metabase's MCP endpoint does). The header still says exactly one thing, so steps normalizes it and continues rather than failing the login over punctuation.
+- **An unadvertised `iss` is tolerated, a wrong one is not.** RFC 9207 has the authorization server return its own identifier on the redirect, and servers are supposed to declare that in their metadata. Some return it without declaring it (Metabase again). steps checks the value against the issuer it discovered: matching is fine and the login proceeds; an `iss` naming a *different* issuer is the mix-up attack the parameter exists to catch, and fails the login by name.
 - **Per-user, not per-pipeline**: the token lands in `${XDG_CONFIG_HOME:-~/.config}/steps/mcp/<server-name>.json` (`0600`) — deliberately outside any pipeline's `.steps/`. Logging in once authorizes that server for **every** pipeline referencing it by the same name.
 - **Silent refresh, no re-prompting**: `steps run`/`steps watch` never run an interactive flow — they load the persisted token and refresh it silently. If it can't be refreshed, the error names the exact `steps mcp login` command to run.
+- **The refresh grant is registered, not assumed.** Dynamic registration declares `grant_types: [authorization_code, refresh_token]`, because RFC 7591 defaults an omitted `grant_types` to `authorization_code` *alone* — and a conforming server then issues an access token with no refresh token beside it, exactly as asked. That looks like a successful login and dies at the first expiry, unattended.
+- **A login that can't be renewed is a failed login.** If the authorization server returns no refresh token for a token that *does* expire, `steps mcp login` saves it (it works right now) and exits non-zero saying when it stops working:
+
+  ```
+  steps: error: mcp login: mcp server "metabase": authorized, and the token was saved —
+    but the authorization server issued no refresh token, so this credential stops working
+    at 2026-08-13T22:44:05-06:00 and `steps run`/`steps watch` will fail from then on with
+    no way to renew it.
+  ```
+
+  A token with no expiry at all is fine and reports nothing: there is nothing to renew.
+- **`auth.scopes:` is what gets requested.** Left unset, steps asks for every scope the server's protected-resource metadata advertises, which is the right default for a server the pipeline has no opinion about. Setting it narrows the authorization request to exactly those scopes — worth doing against a server whose scope list includes writes you never intend to make.
 - **Trust boundary**: nothing token-shaped is ever cache-hashed or written to `.steps/state.db` — the same treatment as LLM provider credentials.
 
 ### Servers without dynamic client registration

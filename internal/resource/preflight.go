@@ -20,6 +20,7 @@ package resource
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -142,10 +143,15 @@ func preflightResource(
 		// problems below are facts about the pipeline — a tool that is not
 		// there, arguments that cannot satisfy it — and no amount of waiting
 		// changes either one.
+		//
+		// The exception is an oauth credential only a human can renew. It
+		// arrives here looking exactly like a server that would not talk to
+		// us, and treating it as waitable is how a watcher polls a server it
+		// can never again authenticate to, quietly, until someone notices.
 		return []config.Problem{{
 			Target:    fmt.Sprintf("mcp %q", mcp.Server),
 			Detail:    fmt.Sprintf("resource %q could not reach its server: %v", name, err),
-			Transient: true,
+			Transient: !errors.Is(err, stepsmcp.ErrNeedsLogin),
 		}}
 	}
 
