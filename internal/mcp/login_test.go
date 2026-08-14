@@ -394,6 +394,72 @@ func TestLoginFailsWhenNoRefreshTokenIssued(t *testing.T) {
 	}
 }
 
+// TestLoginKeepsARenewableTokenOverADisposableOne is the case the test above
+// does not cover: the same failure, but with something already on disk worth
+// more than what the login just obtained.
+//
+// Login persists before it judges, deliberately — writing a token that works
+// now beats discarding it because it will not last. That reasoning holds
+// against an empty directory and inverts against a renewable credential:
+// re-running login to widen scopes, against a server that this time issues no
+// refresh token, would replace a credential that survives unattended with one
+// that dies at expiry, and the old one is not recoverable.
+func TestLoginKeepsARenewableTokenOverADisposableOne(t *testing.T) {
+	// Not t.Parallel(): uses t.Setenv (via TokenPath's os.UserConfigDir()).
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	fake := newFakeOAuthServer(t)
+	fake.issuesRefreshToken = false
+
+	srv := config.MCPServer{
+		Name:     "downgrade",
+		Endpoint: fake.server.URL + "/mcp",
+		Auth:     config.MCPServerAuth{Type: "oauth"},
+	}
+
+	path, err := TokenPath(srv.Name)
+	if err != nil {
+		t.Fatalf("TokenPath: %v", err)
+	}
+
+	existing := &TokenFile{
+		Endpoint:     srv.Endpoint,
+		ClientID:     "client-id",
+		TokenURL:     fake.server.URL + "/token",
+		AccessToken:  "previous-access-token",
+		RefreshToken: "previous-refresh-token",
+		Expiry:       time.Now().Add(time.Hour),
+	}
+
+	err = existing.Save(path)
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	err = Login(ctx, srv, fakeBrowserOpen(t))
+	if err == nil {
+		t.Fatal("Login replaced a renewable credential with one that cannot be renewed, and reported success")
+	}
+
+	kept, err := LoadTokenFile(path)
+	if err != nil {
+		t.Fatalf("LoadTokenFile: %v", err)
+	}
+
+	if kept.RefreshToken != existing.RefreshToken {
+		t.Fatalf("persisted RefreshToken = %q, want the previous %q to have been kept", kept.RefreshToken, existing.RefreshToken)
+	}
+
+	if kept.AccessToken != existing.AccessToken {
+		t.Fatalf("persisted AccessToken = %q, want the previous %q to have been kept", kept.AccessToken, existing.AccessToken)
+	}
+}
+
 // assertLoginPersisted checks the token file Login wrote.
 func assertLoginPersisted(t *testing.T, tf *TokenFile, srv config.MCPServer, wantAccessToken string) {
 	t.Helper()

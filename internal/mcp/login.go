@@ -646,8 +646,21 @@ func (cb *loopbackCallback) fetch(open func(string) error, req authRequest) auth
 
 // persistLoginResult writes the completed login's token and the client
 // credentials/endpoint used to obtain it to srv's per-user token file.
+//
+// One thing it will not do is replace a renewable credential with a
+// disposable one. Login persists before it judges (see its comment), which is
+// right when the alternative is nothing on disk — but a re-login is not that
+// case. Widening scopes against a server that this time issues no refresh
+// token would otherwise overwrite a working, renewable token with one that
+// dies at expiry, report the failure, and leave no way back to what was there
+// a moment ago.
 func persistLoginResult(srv config.MCPServer, asm *oauthex.AuthServerMeta, reg *oauthex.ClientRegistrationResponse, tok *oauth2.Token) error {
 	path, err := TokenPath(srv.Name)
+	if err != nil {
+		return err
+	}
+
+	err = checkNotADowngrade(srv, path, tok)
 	if err != nil {
 		return err
 	}
@@ -670,4 +683,35 @@ func persistLoginResult(srv config.MCPServer, asm *oauthex.AuthServerMeta, reg *
 	}
 
 	return nil
+}
+
+// checkNotADowngrade refuses a write that would trade a renewable credential
+// for one that cannot outlive the session, keeping what is already on disk.
+//
+// Only that one direction is refused. Anything else — no file yet, an
+// unreadable one, a file for a different endpoint, or a new token that also
+// carries a refresh token — is a normal login and proceeds, because the
+// alternative to writing is having nothing.
+func checkNotADowngrade(srv config.MCPServer, path string, tok *oauth2.Token) error {
+	if tok.RefreshToken != "" {
+		return nil
+	}
+
+	existing, err := LoadTokenFile(path)
+	if err != nil {
+		// No file, or one this version cannot read. Either way there is
+		// nothing here worth preserving over a token that works right now.
+		return nil //nolint:nilerr // absence of a previous credential is not an error, it is the common case
+	}
+
+	if existing.RefreshToken == "" || existing.Endpoint != srv.Endpoint {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"mcp server %q: this login obtained a token the authorization server issued no refresh token for, "+
+			"but the existing one at %s can still be renewed — keeping it rather than replacing a credential that "+
+			"survives unattended with one that stops working at %s. "+
+			"Re-run with the same scopes as before, or delete that file to accept the downgrade",
+		srv.Name, path, tok.Expiry.Format(time.RFC3339))
 }
