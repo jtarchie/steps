@@ -6,48 +6,57 @@ Trust these instructions. Only search the codebase if something here is missing 
 
 **steps** is a Go CLI that executes Concourse-style YAML pipelines (`resource_types`/`resources`/`jobs`), with an LLM `agent` step type built in alongside conventional `get`/`task`/`put` steps. Resources are discovered/fetched via templated shell commands (or MCP); `agent` steps call an LLM with tool-calling support (`read_file`, `list_dir`, `run_shell`, custom tools, sub-agent delegation, MCP tools). All state is cached in SQLite (WAL mode) via content-addressed (merkle) hashing, so unchanged steps are skipped on rerun. `steps run` executes one job once; `steps watch` polls `trigger: true` resources and auto-runs affected jobs; `steps test` runs every job and checks `assert:` directives; `steps web` serves a local browser UI over that same state; `steps docs` renders the embedded documentation in the terminal.
 
-- **No CI configured**: there is no `.github/`, no Makefile, no CONTRIBUTING.md. The commands below are the entire validation pipeline — run them locally exactly as documented, in this order, before considering any change done.
+- **No CI configured**: there is no `.github/`, no CONTRIBUTING.md. `Taskfile.yml` (go-task) is the entire validation pipeline — run it locally exactly as documented before considering any change done.
 
-## Build, test, lint — validated commands, in order
+## Build, test, lint — `task` runs it all
 
-Prerequisites: Go 1.26.6 (`go version`) and golangci-lint v2.12+ (`golangci-lint version`; `brew install golangci-lint`). SQLite is vendored (`modernc.org/sqlite`, pure Go, no cgo/system SQLite needed). Two more tools join the sequence below, both `go install`-able and neither needing network/Docker/credentials to *run* (govulncheck fetches the vuln DB, which needs network once per invocation): `go install golang.org/x/vuln/cmd/govulncheck@latest` and `go install go.uber.org/nilaway/cmd/nilaway@latest`.
+Prerequisites: Go 1.26.6 (`go version`), golangci-lint v2.12+ (`golangci-lint version`; `brew install golangci-lint`), and go-task (`task --version`; `brew install go-task`). SQLite is vendored (`modernc.org/sqlite`, pure Go, no cgo/system SQLite needed). `task install:tools` installs the two remaining CLIs the sequence needs (`govulncheck`, `nilaway`) — neither needs network/Docker/credentials to *run* (govulncheck fetches the vuln DB, which needs network once per invocation).
 
-Run this exact sequence after any code change — each step is fast and none require Docker or credentials (govulncheck needs network to fetch the vuln DB, cached locally after the first run):
+Run `task` (bare — it's an alias for `task fmt`) after any code change; it runs the whole sequence below, in order, and does not require Docker or credentials:
 
 ```bash
-go fmt ./...        # ~0.3s. Auto-formats; most editors already do this.
-go mod tidy          # ~0.1s, currently a no-op — go.mod/go.sum are already tidy.
-                      # If it changes anything, that's a real signal: commit the diff.
-golangci-lint run    # ~2.2s. ~40 linters enabled (.golangci.yml). MUST report "0 issues"
-                      # before a change is done — a failing lint blocks the build, always
-                      # fix lint before touching logic further.
-go run ./tools/kindswitch ./...
-                      # ~3s. Reports TAGLESS kind dispatch (`switch { case step.Put != "": }`)
-                      # that omits a kind from config.Step's own Kind() table. golangci-lint's
-                      # `exhaustive` covers only the TAGGED spelling (`switch kind {`) — the
-                      # tagless form is `switch true`, with no enum type to reason about, so it
-                      # is outside that analyzer's model, not a config gap. Must exit 0.
-                      # Suppress a deliberate omission with `//kindswitch:ignore <reason>` on
-                      # the line above the switch; a reason is mandatory (a bare directive is
-                      # ignored and the switch keeps reporting).
-go test ./...        # ~11s wall (parallel, default), ~26s with -p 1 (serialized).
-                      # Both are fine; -p 1 only buys deterministic interleaved log output,
-                      # it is not required for correctness (verified with -race -count=50
-                      # soak testing under CPU load, 2026-07-15: no flakes either way).
-go build -v          # ~2.5s warm cache. Produces ./steps (~56MB).
-govulncheck ./...    # ~5s (first run also fetches the vuln DB over network). Reports known
-                      # CVEs actually reachable from the build — stdlib CVEs are pinned to
-                      # the Go *patch* version (`go version`), not this repo's code, so a
-                      # finding here is usually fixed by `brew upgrade go`, not an edit.
-                      # MUST report 0 vulnerabilities before a change is done.
-nilaway -exclude-test-files=true ./... || true
-                      # ~4s. Uber's nil-flow analyzer, advisory only — never gates a change,
-                      # deliberately not added to golangci-lint's run. It has a real false-
-                      # positive rate (e.g. flags slicing a possibly-nil slice, which Go
-                      # allows), so triage each finding rather than chasing zero.
+task
 ```
 
-All of them always pass clean on a fresh checkout (nilaway is advisory, so "clean" means golangci-lint/kindswitch/test/build/govulncheck are all clean — nilaway's own output is read, not gated on). If any of the gating ones fails, that is a real regression — do not work around it with `--no-verify`-style shortcuts or by skipping a step.
+`task fmt` runs, in order:
+
+```bash
+go fmt ./...     # ~0.3s. Auto-formats; most editors already do this.
+task tidy        # go mod tidy — ~0.1s, currently a no-op — go.mod/go.sum are already
+                  # tidy. If it changes anything, that's a real signal: commit the diff.
+task lint        # golangci-lint run — ~2.2s. ~40 linters enabled (.golangci.yml). MUST
+                  # report "0 issues" before a change is done — a failing lint blocks
+                  # the build, always fix lint before touching logic further.
+task kindswitch  # go run ./tools/kindswitch ./... — ~3s. Reports TAGLESS kind dispatch
+                  # (`switch { case step.Put != "": }`) that omits a kind from
+                  # config.Step's own Kind() table. golangci-lint's `exhaustive` covers
+                  # only the TAGGED spelling (`switch kind {`) — the tagless form is
+                  # `switch true`, with no enum type to reason about, so it is outside
+                  # that analyzer's model, not a config gap. Must exit 0. Suppress a
+                  # deliberate omission with `//kindswitch:ignore <reason>` on the line
+                  # above the switch; a reason is mandatory (a bare directive is ignored
+                  # and the switch keeps reporting).
+task test        # go test ./... — ~11s wall (parallel, default). -p 1 (serialized,
+                  # ~26s) only buys deterministic interleaved log output, not correctness
+                  # (verified with -race -count=50 soak testing under CPU load,
+                  # 2026-07-15: no flakes either way) — run it directly if you need that.
+task build       # go build -v — ~2.5s warm cache. Produces ./steps (~56MB).
+task vuln        # govulncheck ./... — ~5s (first run also fetches the vuln DB over
+                  # network). Reports known CVEs actually reachable from the build —
+                  # stdlib CVEs are pinned to the Go *patch* version (`go version`), not
+                  # this repo's code, so a finding here is usually fixed by
+                  # `brew upgrade go`, not an edit. MUST report 0 vulnerabilities.
+task nilaway     # nilaway -exclude-test-files=true ./... || true — ~4s. Uber's
+                  # nil-flow analyzer, advisory only — never gates a change, deliberately
+                  # not added to golangci-lint's run. It has a real false-positive rate
+                  # (e.g. flags slicing a possibly-nil slice, which Go allows).
+```
+
+All of them always pass clean on a fresh checkout (nilaway is advisory, so "clean" means golangci-lint/kindswitch/test/build/govulncheck are all clean — nilaway's own output is read, not gated on `task fmt`'s exit code). If any of the gating ones fails, that is a real regression — do not work around it with `--no-verify`-style shortcuts or by skipping a step.
+
+**Every nilaway finding still gets triaged, gate or not** — "advisory" means it doesn't block a commit, not that a finding is presumed spurious. Read each one, decide real bug vs. false positive (Go's nil-slice-slicing pattern is the known FP shape), and fix the real ones — including ones a change didn't introduce. Advisory-and-ignored is how a real nil-flow bug sits in the tree indefinitely; the check exists precisely because these don't reliably show up any other way. `task nilaway` on its own is the fast way to see just this output when triaging.
+
+Each of `task fmt`'s steps is also runnable on its own (`task lint`, `task test`, `task vuln`, ...) — see `task --list` for the full set, including single-purpose tasks like `task install:tools`.
 
 **Test suite specifics:**
 - Every package that spawns a goroutine (`internal/pipeline`, `internal/trigger`, `internal/web`, `internal/events`, `internal/agent`, `internal/mcp`, and the root package) has a `goleak_test.go` `TestMain` (`go.uber.org/goleak`) — `go test ./...` fails if a test leaves a goroutine running. One known, deliberate exception: `goleak.IgnoreTopFunction("github.com/modelcontextprotocol/go-sdk/mcp.(*streamableServerConn).Read")` in those TestMains — the go-sdk's server-side streamable-HTTP read loop does not exit when a client sends the session-termination DELETE, verified in isolation against go-sdk@v1.7.0 both with and without the client's standalone SSE stream. Not steps' leak to fix; re-check when the SDK bumps past v1.7.0. A new package that spawns a goroutine in production code needs the same `TestMain` (copy an existing `goleak_test.go`, adjust the doc comment).

@@ -1,0 +1,61 @@
+version: '3'
+
+tasks:
+  fmt:
+    desc: The full pre-check-in validation sequence from CLAUDE.md — the "before I commit" command. Run `task` alone for this.
+    cmds:
+      - go fmt ./...
+      - task: tidy
+      - task: lint
+      - task: kindswitch
+      - task: test
+      - task: build
+      - task: vuln
+      - task: nilaway
+
+  tidy:
+    desc: Keep go.mod/go.sum tidy — a diff here is a real signal, commit it.
+    cmds:
+      - go mod tidy
+
+  lint:
+    desc: golangci-lint — ~40 linters enabled (.golangci.yml), must report 0 issues.
+    cmds:
+      - golangci-lint run
+
+  kindswitch:
+    desc: Report tagless step-kind switches (tools/kindswitch) that golangci-lint's exhaustive check can't see. Must exit 0.
+    cmds:
+      - go run ./tools/kindswitch ./...
+
+  test:
+    desc: Run the test suite. Every goroutine-spawning package's goleak TestMain fails if a test leaves one running.
+    cmds:
+      - go test ./...
+
+  build:
+    desc: Build ./steps.
+    cmds:
+      - go build -v
+
+  vuln:
+    desc: Scan the module for known Go vulnerabilities actually reachable from the build (govulncheck).
+    cmds:
+      - govulncheck ./...
+
+  nilaway:
+    desc: Uber's nil-flow analyzer over production code. Advisory — never gates `task fmt`, but triage every finding rather than skipping it; it has a real false-positive rate, so not every finding needs a code change.
+    cmds:
+      - nilaway -exclude-test-files=true ./... || true
+
+  install:tools:
+    desc: Install the Go CLIs `task fmt` needs beyond the standard toolchain (golangci-lint is separate — see CLAUDE.md). Run once after cloning.
+    cmds:
+      - go install golang.org/x/vuln/cmd/govulncheck@latest
+      - go install go.uber.org/nilaway/cmd/nilaway@latest
+
+  default:
+    desc: Alias for `task fmt` — so bare `task` runs the whole validation sequence.
+    cmds:
+      - task: fmt
+      - task: test
