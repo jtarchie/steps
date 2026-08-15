@@ -70,6 +70,7 @@ jobs:
   - agent: writer
     outputs: [report]            # an empty report/ dir exists from turn one
     max_turns: 40
+    tools: [write_file]          # this STEP narrows the agent's grant to one tool
     prompt: "Write your findings into report/summary.md."
     assert:
       files: [report/summary.md]   # it WROTE the file, not just claimed to
@@ -82,6 +83,8 @@ jobs:
     execution: [writer, publish]
     outcome: succeeded
 ```
+
+A step's `tools:` **selects from** what the agent already grants — it can narrow, never widen. Naming a tool the agent does not provide is a load error, so one careless step cannot hand a model a capability the pipeline never gave it; an absent step `tools:` means the agent's whole grant, unchanged.
 
 ### `edit_file`
 
@@ -106,6 +109,35 @@ Unlike every other tool, `search_files` **never spills**: its bound is arithmeti
 ## Working directory, inputs, and dir:
 
 An agent step's `dir:` sets its working directory *and* names the artifact it operates in (its first path component — `dir: repo/cmd` names `repo`). That artifact must be one of the step's own declared `inputs:` (or `outputs:`), and it's flow-validated like any input — an agent pointed at a directory nothing fetched ("summarize the repository" with no `get`) fails at plan time, before the model is ever called. See [workspace.md](workspace.md).
+
+```yaml test=agents-dir
+agents:
+- name: reader
+  source: { model: openrouter/qwen/qwen3.7-flash }
+
+jobs:
+- name: inspect
+  plan:
+  - task: fetch
+    outputs: [repo]
+    run: |
+      mkdir -p repo/cmd
+      echo 'package main' > repo/cmd/main.go
+  - agent: reader
+    inputs: [repo]
+    dir: repo/cmd                 # start here; `repo` is the artifact it names
+    prompt: "What package does main.go declare?"
+    assert:
+      tool_calls:
+      - name: read_file
+        args: { path: main.go }   # relative to dir:, not to the step's root
+      stdout: package main
+  assert:
+    execution: [fetch, reader]
+    outcome: succeeded
+```
+
+Every tool path the model uses is relative to `dir:`, which is the point: a model handed the subdirectory it is meant to work in does not spend turns navigating to it, and cannot wander out — the file tools stay confined to the step's workspace regardless.
 
 ## Custom tools, `required:`, and call guards
 
@@ -292,12 +324,16 @@ jobs:
   - task: unit
     assert:
       stdout: unit tests pass       # ci/unit.sh's text, resolved at load
+  - task: smoke
+    run_file: ci/smoke.sh           # a plan step's OWN run:, from a file
+    assert:
+      stdout: smoke ok
   - agent: reviewer
     prompt_file: prompts/review.md  # loads the step's prompt from a file
     assert:
       stdout: Build looks fine
   assert:
-    execution: [unit, reviewer]
+    execution: [unit, smoke, reviewer]
     outcome: succeeded
 ```
 

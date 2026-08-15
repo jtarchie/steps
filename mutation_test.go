@@ -89,7 +89,7 @@ func checkMutantIsCaught(t *testing.T, block docs.Block, mut mutant) {
 		t.Setenv(key, "test-key-not-used-for-any-call")
 	}
 
-	scenario := docScenarios[block.TestID()]
+	scenario := docScenarios[block.TestID()].tolerateOverrun()
 
 	mutated := block
 	mutated.Body = mut.body
@@ -234,50 +234,73 @@ func stepSites(base []string, steps []any) []assertSite {
 	return sites
 }
 
-// nestedStepSites descends one step's children: a try: wrapper, the block
-// kinds that hold branches, and every hook.
+// nestedStepSites descends one step's children.
 func nestedStepSites(path []string, step map[string]any) []assertSite {
-	var sites []assertSite
+	groups := nestedStepGroups(step)
+	sites := make([]assertSite, 0, len(groups))
 
-	child := func(key string, value any) {
-		nested, ok := value.(map[string]any)
-		if !ok {
-			return
-		}
-
-		sites = append(sites, stepSites(append(append([]string{}, path...), key), []any{nested})...)
+	for _, group := range groups {
+		sites = append(sites, stepSites(append(append([]string{}, path...), group.keys...), group.steps)...)
 	}
 
-	children := func(key string, value any) {
-		nested, ok := value.([]any)
-		if !ok {
-			return
-		}
+	return sites
+}
 
-		sites = append(sites, stepSites(append(append([]string{}, path...), key), nested)...)
+// nestedGroup is one list of steps nested inside another step, with the path
+// segments that reach it.
+type nestedGroup struct {
+	keys  []string
+	steps []any
+}
+
+// stepContainerKeys are the block fields holding concurrent branches, paired
+// with the key their branch list sits under.
+var stepContainerKeys = map[string][]string{ //nolint:gochecknoglobals // a test's data table
+	"in_parallel": {"steps"},
+	"race":        {"steps"},
+	"ensemble":    {"agents"},
+}
+
+// hookKeys are the five hook fields, each holding a single step.
+var hookKeys = []string{"on_success", "on_failure", "on_error", "on_abort", "ensure"} //nolint:gochecknoglobals // a test's data table
+
+// nestedStepGroups returns every list of steps nested inside one step: what a
+// try: wraps, a do: block's children, a concurrent block's branches, and each
+// hook. Shared by both mutation harnesses so neither can silently stop
+// descending into a construct the other still walks.
+func nestedStepGroups(step map[string]any) []nestedGroup {
+	var groups []nestedGroup
+
+	single := func(key string) {
+		if nested, ok := step[key].(map[string]any); ok {
+			groups = append(groups, nestedGroup{keys: []string{key}, steps: []any{nested}})
+		}
 	}
 
-	child("try", step["try"])
-	children("do", step["do"])
+	single("try")
 
-	for _, key := range []string{"in_parallel", "race", "ensemble"} {
+	if nested, ok := step["do"].([]any); ok {
+		groups = append(groups, nestedGroup{keys: []string{"do"}, steps: nested})
+	}
+
+	for key, branchKeys := range stepContainerKeys {
 		block, ok := step[key].(map[string]any)
 		if !ok {
 			continue
 		}
 
-		for _, branchKey := range []string{"steps", "agents"} {
+		for _, branchKey := range branchKeys {
 			if branches, found := block[branchKey].([]any); found {
-				sites = append(sites, stepSites(append(append([]string{}, path...), key, branchKey), branches)...)
+				groups = append(groups, nestedGroup{keys: []string{key, branchKey}, steps: branches})
 			}
 		}
 	}
 
-	for _, hook := range []string{"on_success", "on_failure", "on_error", "on_abort", "ensure"} {
-		child(hook, step[hook])
+	for _, hook := range hookKeys {
+		single(hook)
 	}
 
-	return sites
+	return groups
 }
 
 // mutateField rewrites one assert field so it can no longer match, reporting

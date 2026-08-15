@@ -291,6 +291,35 @@ type fakeLLM struct {
 	// position. See newRoutedFakeLLM.
 	route    func(capturedRequest) turn
 	requests []capturedRequest
+	// overrun suppresses the "script exhausted" test failure, still
+	// answering 500. Set only by the mutation harness (dsl_mutation_test.go),
+	// where a mutant is EXPECTED to make a step fail and retry: an extra
+	// request there is the mutation working, not the fixture being wrong.
+	overrun bool
+}
+
+// tolerateOverrun returns a scenario whose provider does not fail the test
+// when a run asks for more turns than the script holds.
+func (s docScenario) tolerateOverrun() docScenario {
+	if s.fake == nil {
+		return s
+	}
+
+	inner := s.fake
+
+	s.fake = func(t *testing.T) *fakeLLM {
+		t.Helper()
+
+		fake := inner(t)
+
+		fake.mu.Lock()
+		fake.overrun = true
+		fake.mu.Unlock()
+
+		return fake
+	}
+
+	return s
 }
 
 // newFakeLLM starts a fake provider that answers the run's requests with
@@ -371,6 +400,7 @@ func (f *fakeLLM) handle(w http.ResponseWriter, r *http.Request) {
 	index := f.next
 	f.next++
 	route := f.route
+	overrun := f.overrun
 	f.mu.Unlock()
 
 	if route != nil {
@@ -389,7 +419,10 @@ func (f *fakeLLM) handle(w http.ResponseWriter, r *http.Request) {
 		// t.Errorf (not Fatalf) — this runs on the server's goroutine, where
 		// FailNow would abandon the handler mid-response and leave the run
 		// blocked on a reply that never comes.
-		f.t.Errorf("fake provider: request %d has no scripted turn (script has %d)", index+1, len(f.script))
+		if !overrun {
+			f.t.Errorf("fake provider: request %d has no scripted turn (script has %d)", index+1, len(f.script))
+		}
+
 		http.Error(w, "script exhausted", http.StatusInternalServerError)
 
 		return

@@ -19,8 +19,9 @@ agents:
 jobs:
 - name: review
   plan:
-  - agent: reviewer                # attempts: 3 is the agent default —
-    prompt: "Review the release."  # one 500 from the provider is absorbed
+  - agent: reviewer
+    attempts: 2                    # 3 is the agent default; spelled out so this
+    prompt: "Review the release."  # fixture pins it — one provider 500 is absorbed
     assert:
       stdout: Release looks good   # the answer AFTER the absorbed 500
   assert:

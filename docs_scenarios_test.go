@@ -115,6 +115,15 @@ var docScenarios = map[string]docScenario{
 		),
 	},
 
+	// dir: puts the model in repo/cmd, so its read_file path is main.go
+	// rather than repo/cmd/main.go.
+	"agents-dir": {
+		fake: scripted(
+			callsTool("read_file", map[string]any{"path": "main.go"}),
+			says("main.go declares package main."),
+		),
+	},
+
 	// The writer creates report/summary.md and the publish task proves the
 	// artifact flowed.
 	"agents-writer": {
@@ -157,6 +166,7 @@ var docScenarios = map[string]docScenario{
 	"agents-files": {
 		files: map[string]string{
 			"ci/unit.sh":          "echo unit tests pass\n",
+			"ci/smoke.sh":         "echo smoke ok\n",
 			"prompts/reviewer.md": "You review builds tersely.\n",
 			"prompts/review.md":   "Review the build output.\n",
 		},
