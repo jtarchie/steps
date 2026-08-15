@@ -26,14 +26,25 @@ func OpenStore(path string) (*Store, error) {
 		return nil, fmt.Errorf("could not create state directory for %q: %w", path, err)
 	}
 
-	// The DSN sets two pragmas on every connection at open time, plus the
+	// The DSN sets three pragmas on every connection at open time, plus the
 	// transaction mode:
 	//   - busy_timeout makes a writer wait for the write lock instead of
 	//     failing immediately with SQLITE_BUSY.
 	//   - journal_mode=WAL lets readers proceed concurrently with a writer,
 	//     which the default rollback journal serializes.
+	//   - foreign_keys turns on constraint ENFORCEMENT, which SQLite leaves
+	//     off per connection unless asked.
 	//   - _txlock=immediate takes the write lock when a transaction BEGINS
 	//     rather than when it first writes.
+	//
+	// foreign_keys is on so that a declared constraint means something. No
+	// table declares one today, which is exactly why it is set now and
+	// separately: switching enforcement on is a no-op that can be verified
+	// against the whole existing schema, rather than a variable in whichever
+	// change first depends on it. From here a REFERENCES clause is a rule the
+	// database keeps, not documentation — and ON DELETE CASCADE is how a row
+	// takes its dependents with it instead of leaving orphans for application
+	// code to remember.
 	//
 	// That last one is not a tuning knob. A deferred transaction that reads
 	// and then writes — which is what a read-modify-write like
@@ -54,7 +65,8 @@ func OpenStore(path string) (*Store, error) {
 	// at startup, so a single `steps` process is never racing another PROCESS
 	// to convert the same brand-new file — the only scenario in which
 	// busy_timeout fails to cover the conversion's exclusive lock.
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate")
+	db, err := sql.Open("sqlite",
+		path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("could not open state db %q: %w", path, err)
 	}
