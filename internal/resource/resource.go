@@ -77,9 +77,16 @@ func CheckVersions(
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
 
-	var versions []map[string]any
-
-	err = json.Unmarshal(out, &versions)
+	// UseNumber, for the reason the mcp path (decodeMapSlice) and
+	// ParseVersionJSON already have it: a version field goes straight back
+	// out — into in:'s template, into a put's payload, into an API's query
+	// string. encoding/json's default float64 turns an id of
+	// 1234567890123456789 into 1.2345678901234568e+18 and a fractional
+	// timestamp into exponent notation, so the value the resource is asked
+	// about is not the value it reported.
+	//
+	// A version is an identity, and this is the path that mints one.
+	versions, err := decodeVersionArray(out)
 	if err != nil {
 		slog.Debug("resource.check", "resource_type", rt.Name, "output", string(out))
 

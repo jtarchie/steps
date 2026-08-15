@@ -33,3 +33,20 @@ func ParseVersionJSON(versionJSON string) (map[string]any, error) {
 
 	return version, nil
 }
+
+// decodeVersionArray parses a check's stdout into versions, keeping numbers
+// as their exact digits — see ParseVersionJSON, and CheckVersions for why the
+// check is the place this matters most.
+func decodeVersionArray(out []byte) ([]map[string]any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(out))
+	decoder.UseNumber()
+
+	var versions []map[string]any
+
+	err := decoder.Decode(&versions)
+	if err != nil {
+		return nil, fmt.Errorf("parsing version array: %w", err)
+	}
+
+	return versions, nil
+}
