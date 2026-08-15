@@ -200,12 +200,15 @@ func (s *Store) HasPassedVersionSet(ctx context.Context, jobName string, want ma
 	return true, nil
 }
 
-// consumedVersionCap bounds job_version_cursor per (job, resource). The rows
-// exist to suppress versions a check can still return, so the bound has to be
-// a count rather than an age: a version that is old but still visible must
-// stay suppressed for as long as the check keeps offering it. A thousand is
-// far past any check window anyone polls (Slack's is 20 messages, GitHub's a
-// page) while keeping the table from growing forever.
+// consumedVersionCap is the FLOOR for job_version_cursor per (job, resource).
+// The rows exist to suppress versions a check can still return, so the bound
+// has to be a count rather than an age: a version that is old but still
+// visible must stay suppressed for as long as the check keeps offering it. A
+// thousand is far past any check window anyone polls (Slack's is 20 messages,
+// GitHub's a page).
+//
+// A caller remembering MORE history than this raises it to match — see
+// RecordConsumedVersion.
 const consumedVersionCap = 1000
 
 // ConsumedVersions returns the set of version JSONs jobName has already fanned
@@ -237,7 +240,16 @@ func (s *Store) ConsumedVersions(ctx context.Context, jobName, resourceName stri
 // Concourse's cursor, which advances regardless of build status (see
 // docs/conformance.md). Re-recording is a no-op rather than an error, so a
 // resumed or replayed run cannot fail on a version it already took.
-func (s *Store) RecordConsumedVersion(ctx context.Context, jobName, resourceName, versionJSON string) error {
+func (s *Store) RecordConsumedVersion(ctx context.Context, jobName, resourceName, versionJSON string, limit int) error {
+	// Never smaller than the history it is filtering. A consumed row pruned
+	// while the version it names is still in history reads as UNBUILT, and
+	// the job rebuilds it — the exact repetition this table exists to stop.
+	// The two bounds are therefore one bound: forget a version and forget
+	// that it was taken, in that order or not at all.
+	if limit < consumedVersionCap {
+		limit = consumedVersionCap
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("could not record a consumed version for job %q: %w", jobName, err)
@@ -277,7 +289,7 @@ func (s *Store) RecordConsumedVersion(ctx context.Context, jobName, resourceName
 			ORDER BY rowid DESC
 			LIMIT ?
 		)
-	`, jobName, resourceName, jobName, resourceName, consumedVersionCap)
+	`, jobName, resourceName, jobName, resourceName, limit)
 	if err != nil {
 		return fmt.Errorf("could not prune consumed versions for job %q: %w", jobName, err)
 	}

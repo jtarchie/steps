@@ -197,7 +197,9 @@ func (c *versionCursor) has(resourceName string, version map[string]any) bool {
 // Best-effort by design: failing to record must not turn a running build into
 // a failed one. The cost of a lost row is that the version is taken once more
 // later, which is the direction this errs on everywhere.
-func (c *versionCursor) take(ctx context.Context, st *store.Store, jobName, resourceName string, version map[string]any) {
+func (c *versionCursor) take(
+	ctx context.Context, st *store.Store, jobName, resourceName string, version map[string]any, limit int,
+) {
 	if c == nil {
 		return
 	}
@@ -207,7 +209,7 @@ func (c *versionCursor) take(ctx context.Context, st *store.Store, jobName, reso
 		return
 	}
 
-	err := st.RecordConsumedVersion(context.WithoutCancel(ctx), jobName, resourceName, key)
+	err := st.RecordConsumedVersion(context.WithoutCancel(ctx), jobName, resourceName, key, limit)
 	if err != nil {
 		slog.Warn("job.cursor_unrecorded", "job", jobName, "resource", resourceName, "error", err)
 

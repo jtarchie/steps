@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -139,7 +140,7 @@ func TestRecordVersionsPrunesOldestAndCascades(t *testing.T) {
 	recordN(t, store, "items", "1", "2", "3")
 
 	// The oldest version has been both taken and passed by a job.
-	err = store.RecordConsumedVersion(ctx, "build", "items", oldest)
+	err = store.RecordConsumedVersion(ctx, "build", "items", oldest, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +219,7 @@ func TestUsingAVersionIsNotTheSameAsCheckingForIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = store.RecordConsumedVersion(ctx, "build", "items", version)
+	err = store.RecordConsumedVersion(ctx, "build", "items", version, 0)
 	if err != nil {
 		t.Fatalf("recording a consumed version nothing had filed: %v", err)
 	}
@@ -250,4 +251,79 @@ func TestUsingAVersionIsNotTheSameAsCheckingForIt(t *testing.T) {
 	if got := versionNames(t, versions); fmt.Sprint(got) != "[7]" {
 		t.Errorf("history = %v, want [7] once a check reported it", got)
 	}
+}
+
+// TestConsumedRecordsOutliveTheHistoryTheyFilter is the interaction between
+// two caps that used to be set independently.
+//
+// The consumed set exists to stop a job rebuilding a version, and it is
+// bounded so it cannot grow forever. History is bounded too, and became
+// CONFIGURABLE — so a pipeline asking to remember more versions than the
+// consumed bound would lose the record of having built the oldest of them
+// while still being offered them. They read as unbuilt and get built again,
+// which is the exact repetition the consumed set exists to prevent.
+//
+// So the bounds are one bound: forget a version and forget that it was taken,
+// in that order or not at all.
+func TestConsumedRecordsOutliveTheHistoryTheyFilter(t *testing.T) {
+	t.Parallel()
+
+	store := newHistoryStore(t)
+	ctx := context.Background()
+
+	// More versions than the consumed floor, remembered on purpose.
+	const total = consumedVersionCap + 200
+
+	versions := make([]map[string]any, 0, total)
+	for i := range total {
+		versions = append(versions, map[string]any{"n": strconv.Itoa(i)})
+	}
+
+	err := store.RecordVersions(ctx, "items", versions, total)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, version := range versions {
+		encoded := mustEncode(t, version)
+
+		err = store.RecordConsumedVersion(ctx, "build", "items", encoded, total)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	history, err := store.ResourceVersions(ctx, "items")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	consumed, err := store.ConsumedVersions(ctx, "build", "items")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unbuilt := 0
+
+	for _, version := range history {
+		if !consumed[mustEncode(t, version)] {
+			unbuilt++
+		}
+	}
+
+	if unbuilt != 0 {
+		t.Errorf("%d of %d already-built versions read as unbuilt; they would all run again",
+			unbuilt, len(history))
+	}
+}
+
+func mustEncode(t *testing.T, version map[string]any) string {
+	t.Helper()
+
+	encoded, err := EncodeVersion(version)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return encoded
 }

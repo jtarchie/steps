@@ -839,7 +839,7 @@ func recordHistory(
 				return fmt.Errorf("trigger resource %q: %w", resourceName, err)
 			}
 
-			err = st.RecordConsumedVersion(ctx, job.Name, resourceName, encoded)
+			err = st.RecordConsumedVersion(ctx, job.Name, resourceName, encoded, cfg.VersionHistoryLimit())
 			if err != nil {
 				return fmt.Errorf("trigger resource %q: %w", resourceName, err)
 			}

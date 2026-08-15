@@ -740,14 +740,14 @@ func TestConsumedVersionsRoundTrip(t *testing.T) {
 		t.Fatalf("a fresh store reports %v consumed, want none", consumed)
 	}
 
-	err = st.RecordConsumedVersion(ctx, "answer", "mentions", `{"ts":"1"}`)
+	err = st.RecordConsumedVersion(ctx, "answer", "mentions", `{"ts":"1"}`, 0)
 	if err != nil {
 		t.Fatalf("RecordConsumedVersion: %v", err)
 	}
 
 	// Re-recording is a no-op, not an error: a resumed or replayed run must
 	// not fail on a version it already took.
-	err = st.RecordConsumedVersion(ctx, "answer", "mentions", `{"ts":"1"}`)
+	err = st.RecordConsumedVersion(ctx, "answer", "mentions", `{"ts":"1"}`, 0)
 	if err != nil {
 		t.Fatalf("RecordConsumedVersion (again): %v", err)
 	}
