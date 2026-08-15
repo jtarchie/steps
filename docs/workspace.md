@@ -12,8 +12,15 @@ jobs:
   - task: consume
     inputs: [meta]                   # sees meta/ because it says so — and nothing else
     run: cat meta/answer.txt
+    assert:
+      stdout: "42"                   # the artifact really crossed the step boundary
   - task: blind
     run: test ! -e meta              # declared nothing, sees nothing
+    assert:
+      code: 0                        # test(1) agrees meta/ is absent here
+  assert:
+    execution: [generate, consume, blind]
+    outcome: succeeded
 ```
 
 - **`inputs:`/`outputs:` are optional and default to empty.** An absent `inputs:` means the step mounts nothing; a pure-compute step legitimately declares nothing. An agent step's `dir:` also names the artifact it works in (its first path component) and is validated the same way.
@@ -43,6 +50,9 @@ jobs:
     run: echo 2 > b/two.txt
   - put: bundle
     inputs: all         # every artifact produced so far; valid only on put steps
+  assert:
+    execution: [one, two, bundle]    # `ls a b` in out: would fail if either were missing
+    outcome: succeeded
 ```
 
 ## Read-modify-write
@@ -62,7 +72,12 @@ jobs:
     run: echo second >> log/entries.txt
   - task: show
     inputs: [log]
-    run: wc -l < log/entries.txt      # 2
+    run: wc -l < log/entries.txt
+    assert:
+      stdout: "2"                     # both entries survived — the read-modify-write held
+  assert:
+    execution: [start, append, show]
+    outcome: succeeded
 ```
 
 A step that *fails* captures nothing, so put the state-advancing write in a step that succeeds.
@@ -90,6 +105,11 @@ jobs:
   - task: check
     inputs: [audit-notes]
     run: cat audit-notes/count.txt
+    assert:
+      stdout: "2"                           # the mapped-in handbook is what got counted
+  assert:
+    execution: [fetch, count-lines, check]
+    outcome: succeeded
 ```
 
 Mapping keys must be a subset of the resolved task's declared inputs/outputs, and mapping values must be plain artifact names.
@@ -98,7 +118,7 @@ Mapping keys must be a subset of the resolved task's declared inputs/outputs, an
 
 Optional tuning for *how* trees are materialized — not a switch that turns isolation on:
 
-```yaml noexec
+```yaml noexec=btrfs
 workspace:
   strategy: btrfs       # default: copy. btrfs (Linux only) snapshots instead of copying
   root: /mnt/btrfs      # optional for copy (default: system temp); required for btrfs
@@ -123,7 +143,7 @@ jobs:
 
 Agent and `put` steps make their chains unskippable, so a real run re-fetches every `get` from scratch — the network and disk paid again every time. The cache keeps fetched versions across builds:
 
-```yaml noexec
+```yaml noexec=btrfs
 workspace:
   strategy: btrfs
   root: /mnt/btrfs

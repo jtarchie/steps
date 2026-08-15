@@ -21,6 +21,11 @@ jobs:
   plan:
   - agent: reviewer                # attempts: 3 is the agent default —
     prompt: "Review the release."  # one 500 from the provider is absorbed
+    assert:
+      stdout: Release looks good   # the answer AFTER the absorbed 500
+  assert:
+    execution: [reviewer]
+    outcome: succeeded
 ```
 
 Use `attempts:` for transient faults — flaky network calls, rate limits, temporary unavailability. Do **not** use it for internal bugs, permanent failures (wrong credentials, missing resources), or anything that needs investigation: if a step fails reliably, fix the underlying issue instead of adding retries.
@@ -50,6 +55,11 @@ jobs:
     inputs: [release]
     timeout: 5m
     run: cat release/ref
+    assert:
+      stdout: v1
+  assert:
+    execution: [release, verify]
+    outcome: succeeded
 ```
 
 ## When to use timeout
@@ -81,6 +91,11 @@ jobs:
   plan:
   - task: work
     run: echo well inside the ceiling
+    assert:
+      stdout: well inside the ceiling
+  assert:
+    execution: [work]
+    outcome: succeeded
 ```
 
 - **Checked between steps, never during one.** The step that is running finishes and keeps its work; the deadline decides only whether the *next* one starts. The price is that a job may overrun by one step's duration — **and that bound is only as tight as your steps are**: a step with no `timeout:` of its own is unbounded, so give long steps their own if you want the job's to be a hard ceiling.
@@ -123,7 +138,11 @@ jobs:
   plan:
   - task: check
     run: test -f patched.txt      # fails until the fixer creates it
-    fix: fixer
+    fix: fixer                    # no step assert here: an assert takes over the
+                                  # success decision, so fix: would never be consulted
+  assert:
+    execution: [fixer, check]     # the fixer ran, then the task's re-run passed —
+    outcome: succeeded            # a green first try would record [check] alone
 ```
 
 With both `attempts:` and `fix:`, the fix agent runs **once per exhausted attempt**: attempt fails → fix agent → re-run, repeated until an attempt passes or all are spent, and the job fails with the error from the last attempt. Each fix invocation gets its own `attempts:` budget (default 1; overridable with `fix: {attempts: ...}`).
@@ -209,6 +228,11 @@ jobs:
   - agent: reviewer
     prompt: "Review the PR for safety issues."
     timeout: 10m
+    assert:
+      stdout: No safety issues found
+  assert:
+    execution: [reviewer]
+    outcome: succeeded
 ```
 
 > **An `agent:` step that sets no `timeout:` still gets one: 30 minutes.** This is the single exception to the explicit-only rule below, and it exists because the OpenAI client sets no request timeout of its own — without a fallback, one hung endpoint blocks the run forever.

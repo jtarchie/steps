@@ -44,10 +44,16 @@ jobs:
     verdicts:
       - approve: results               # the verdict picks the next step
       - reject: escalate
+    assert:
+      verdict: approve                 # what it decided
+      files: [report/summary.md]       # ...and that it actually wrote the thing
   - task: escalate
     run: echo paging a human
   - put: results                       # out: reads the agent's artifact
     inputs: [report]
+  assert:
+    execution: [repo, prepare, reviewer, results]   # escalate is absent — the
+    outcome: succeeded                              # approve verdict routed past it
 ```
 
 What each piece is doing, with the page that explains it:

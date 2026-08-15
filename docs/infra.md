@@ -6,7 +6,7 @@ Two independent opt-in features for running pipelines beyond the simple one-shot
 
 By default every pipeline-defined command (a resource type's `check`/`in`/`out`, a task's `run:`, an agent's `run_shell`/custom tools) runs on the host via `sh -c`. Setting `image:` on a `resource_types:` entry, a top-level `tasks:` entry, or an `agents:` entry runs that entity's commands in a container from that image instead — **one container per step**, started on the step's first command and removed when the step ends.
 
-```yaml noexec
+```yaml noexec=docker
 resource_types:
 - name: releases
   image: alpine/git             # check/in/out run in this image
@@ -83,7 +83,7 @@ For a [CLI-backed agent](agents.md#cli-backed-agents-claudesonnet) (`source.mode
 
 `image:` isolates a command's filesystem view but not its network — a containerized `run_shell` an agent wrote has the same egress the host does. For a step whose commands are model-generated, that is usually the isolation you actually wanted:
 
-```yaml noexec
+```yaml noexec=docker
 agents:
 - name: analyzer
   source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
@@ -114,7 +114,7 @@ This is not a full sandbox — a command can still reach the host filesystem by 
 
 Both sit wherever `image:` does, and both **require `image:`** — a host-executed command has no cgroup to cap and no privilege to raise, so accepting either there would promise something it does not do.
 
-```yaml noexec
+```yaml noexec=docker
 tasks:
 - name: integration
   image: docker:27-dind
@@ -142,7 +142,7 @@ On Linux, a bind mount carries host uids straight through. A container running a
 
 So **on Linux the default is the uid:gid that started `steps`**, not the image's user. Elsewhere the mismatch doesn't arise (Docker Desktop's VM maps ownership on bind mounts), so off Linux the default stays the image's own user.
 
-```yaml noexec
+```yaml noexec=docker
 tasks:
 - name: install-deps
   image: ubuntu
@@ -177,6 +177,11 @@ jobs:
 - name: release
   plan:
   - task: deploy
+    assert:
+      stdout: deploying to      # unset or not, the name reached the command
+  assert:
+    execution: [deploy]
+    outcome: succeeded
 ```
 
 - **Names, never values.** `env: [DEPLOY_TOKEN=hunter2]` is rejected at load time, following `api_key_env:`/`webhook_token_env:`. The reason is concrete: these fields are hashed into the merkle content map, which is written to `state.db` — a literal would be persisted in cleartext.
@@ -210,6 +215,9 @@ jobs:
 - name: publish
   plan:
   - put: counter
+  assert:
+    execution: [counter]
+    outcome: succeeded
 - name: notify
   plan:
   - get: counter
@@ -217,6 +225,14 @@ jobs:
   - task: announce
     inputs: [counter]
     run: echo "counter is now $(cat counter/n.txt)"
+    assert:
+      stdout: counter is now     # which number depends on when the poller ran;
+  assert:                        # under `steps test` the plan resolved before the put
+    execution: [counter, announce]
+    outcome: succeeded
+
+assert:
+  execution: [publish, notify]
 ```
 
 ```bash
@@ -254,6 +270,11 @@ jobs:
   - task: show
     inputs: [source]
     run: cat source/word.txt
+    assert:
+      stdout: hello
+  assert:
+    execution: [repo, show]   # recorded under the RESOURCE name, not the alias
+    outcome: succeeded
 ```
 
 The **artifact name is the `get:` value**; the **resource fetched is `resource:`**, defaulting to the `get:` value when omitted. This lets one resource appear under a task-friendly name, or twice in a plan under two names. Pair it with a task's `input_mapping:` (see [workspace.md](workspace.md)) to feed a reusable task's pinned input name from an aliased get.
@@ -273,6 +294,11 @@ jobs:
   plan:
   - task: summarize
     run: echo summarizing
+    assert:
+      stdout: summarizing
+  assert:
+    execution: [summarize]
+    outcome: succeeded        # a green run also clears the breaker's count
 ```
 
 ```
@@ -313,6 +339,11 @@ jobs:
   - task: test
     inputs: [repo]
     run: echo tests pass for "$(cat repo/ref)"
+    assert:
+      stdout: tests pass for abc123
+  assert:
+    execution: [repo, test]
+    outcome: succeeded
 
 - name: deploy
   plan:
@@ -322,6 +353,14 @@ jobs:
   - task: release
     inputs: [repo]
     run: echo deploying "$(cat repo/ref)"
+    assert:
+      stdout: deploying abc123
+  assert:
+    execution: [repo, release]   # unit ran green first, so the version was released
+    outcome: succeeded
+
+assert:
+  execution: [unit, deploy]      # declaration order, which is why unit's green counts
 ```
 
 ```
@@ -359,6 +398,11 @@ jobs:
   plan:
   - task: test
     run: echo testing
+    assert:
+      stdout: testing
+  assert:
+    execution: [test]
+    outcome: succeeded
 ```
 
 - **Unset is unlimited**, matching Concourse. The worker pool is the real backstop.
@@ -378,11 +422,24 @@ jobs:
   plan:
   - task: deploy
     run: echo deploying staging
+    assert:
+      stdout: deploying staging
+  assert:
+    execution: [deploy]
+    outcome: succeeded
 - name: deploy-prod
   serial_groups: [deploy-lock]
   plan:
   - task: deploy
     run: echo deploying prod
+    assert:
+      stdout: deploying prod
+  assert:
+    execution: [deploy]
+    outcome: succeeded
+
+assert:
+  execution: [deploy-staging, deploy-prod]
 ```
 
 ```
@@ -407,13 +464,26 @@ jobs:
   plan:
   - task: deploy
     run: echo deploying
+    assert:
+      stdout: deploying
   # default: shutdown WAITS for a running build to finish
+  assert:
+    execution: [deploy]
+    outcome: succeeded
 
 - name: nightly-report
   interruptible: true       # ...this one can just die
   plan:
   - task: report
     run: echo reporting
+    assert:
+      stdout: reporting
+  assert:
+    execution: [report]
+    outcome: succeeded
+
+assert:
+  execution: [deploy-prod, nightly-report]
 ```
 
 - **The default is to wait**, matching Concourse. Half-applying a deploy because someone restarted the watcher is the failure this exists to prevent.
@@ -447,6 +517,11 @@ jobs:
   - task: compile
     inputs: [repo]
     run: echo building "$(cat repo/ref)"
+    assert:
+      stdout: building abc123
+  assert:
+    execution: [repo, compile]
+    outcome: succeeded
 ```
 
 ```bash

@@ -183,6 +183,14 @@ func runFixTask(ctx context.Context, cfg *config.Config, runner shell.Runner, rt
 
 	fmt.Printf("task %q failed (exit %d); invoking fix agent %q\n", rt.Name, exitCode, rt.Fix.Agent)
 
+	// The fix agent is a dispatch point like any other, so it records — without
+	// this a job's assert.execution reads [check] whether the fix ran or the
+	// task passed first try, which is the one difference a fix: fixture exists
+	// to pin. It lands BEFORE the task's own entry because entries are recorded
+	// as each thing completes and the fix agent finishes inside the task step,
+	// the same ordering that puts a step ahead of its hooks.
+	recordExecution(ctx, rt.Fix.Agent)
+
 	err = agent.RunFix(ctx, cfg, rt, taskFailureOutput(stdout, stderr, exitCode), workspaceDir)
 	if err != nil {
 		return fmt.Errorf("fix agent %q: %w", rt.Fix.Agent, err)

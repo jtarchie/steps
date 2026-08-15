@@ -24,7 +24,12 @@ jobs:
   - get: shout
   - task: show
     inputs: [shout]
-    run: cat shout/word.txt        # HELLO — check rendered `upper` before running
+    run: cat shout/word.txt
+    assert:
+      stdout: HELLO                # `upper` ran in the check template, not here
+  assert:
+    execution: [shout, show]
+    outcome: succeeded
 ```
 
 ## Shell-quoting untrusted values
@@ -63,6 +68,11 @@ jobs:
   - task: show
     inputs: [repo]
     run: cat repo/uri.txt
+    assert:
+      stdout: github.com           # whatever --var supplied reached the template
+  assert:
+    execution: [repo, show]
+    outcome: succeeded
 ```
 
 ```bash
@@ -86,6 +96,11 @@ jobs:
     file: meta/version.txt
   - task: announce
     run: echo releasing ((tag))
+    assert:
+      stdout: releasing v1.2.3     # the captured value, trimmed, substituted
+  assert:
+    execution: [pick-tag, tag, announce]
+    outcome: succeeded
 ```
 
 The `inputs:` on the `load_var` step is not optional bookkeeping: a step's directory holds only the artifacts it declares, so a bare `file: version.txt` names nothing that exists. Both halves are checked at plan time — the file must sit inside a declared input, and that input must be something an earlier step produced.

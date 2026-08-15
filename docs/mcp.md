@@ -6,7 +6,7 @@ MCP (Model Context Protocol) servers are a third kind of external system, alongs
 
 ## Declaring a server
 
-```yaml noexec
+```yaml noexec=credentials
 mcp_servers:
 - name: github
   endpoint: https://api.githubcopilot.com/mcp/
@@ -36,7 +36,7 @@ jobs:
 
 ## Local (stdio) servers
 
-```yaml noexec
+```yaml noexec=stdio-mcp
 mcp_servers:
 - name: gopls
   command: gopls          # looked up on PATH; argv, never `sh -c`
@@ -91,7 +91,7 @@ This connects (per the server's configured auth) and prints each tool's name, de
 
 A `tools:` entry can reference an MCP server in three progressively broader forms, all sharing one connection to the server:
 
-```yaml noexec
+```yaml noexec=credentials
 mcp_servers:
 - name: github
   endpoint: https://api.githubcopilot.com/mcp/
@@ -124,7 +124,7 @@ jobs:
 
 ## Backing a resource type with MCP
 
-```yaml noexec
+```yaml noexec=credentials
 mcp_servers:
 - name: linear
   endpoint: https://mcp.linear.app/mcp
@@ -169,7 +169,7 @@ jobs:
 
 `source:` and `params:` only work as arguments when their keys already match the tool's parameters. When they don't — or when the value the tool needs lives on the **version** a check produced, which is the usual shape for `in:` — name the mapping instead. Every string in it is a template over exactly what that stage has, the same as a shell `check`/`in`/`out` command: `check` renders against `{source}`, `in` against `{source, version, params}`, `out` against `{source, params}`.
 
-```yaml noexec
+```yaml noexec=credentials
 mcp_servers:
 - name: slack
   endpoint: https://mcp.slack.com/mcp
@@ -240,7 +240,7 @@ A `check` needs a machine-readable list, and not every MCP tool has one to give.
 
 The split that does work: let the vendor's HTTP API do the **detecting**, where the response is JSON with stable ids, and let MCP do the **acting**, where prose in the response costs nothing. Two resource types, one of each style:
 
-```yaml noexec
+```yaml noexec=credentials
 mcp_servers:
 - name: slack
   endpoint: https://mcp.slack.com/mcp
@@ -310,7 +310,7 @@ A shell `out:` runs with the put's read view as its working directory and reads 
 
 A `params:` mapping whose **only** key is `file` is replaced by that file's contents:
 
-```yaml noexec
+```yaml noexec=credentials
 mcp_servers:
 - name: linear
   endpoint: https://mcp.linear.app/mcp
@@ -398,7 +398,7 @@ steps: error: mcp server "slack": authorization server does not support dynamic
 
 Register the application yourself, then name its credentials:
 
-```yaml noexec
+```yaml noexec=credentials
 mcp_servers:
 - name: slack
   endpoint: https://mcp.slack.com/mcp

@@ -4,7 +4,7 @@ A **resource** is something outside the pipeline that has versions: a git branch
 
 Every example on this page (and every other page) is a complete pipeline, verified by the test suite. Blocks that need the network or real credentials say so; everything else runs as shown.
 
-```yaml noexec
+```yaml noexec=network
 resources:
 - name: repo          # the artifact directory a get creates, and the name steps use
   type: git           # which resource type
@@ -58,6 +58,11 @@ jobs:
   - task: shout
     inputs: [greeting]
     run: tr a-z A-Z < greeting/word.txt
+    assert:
+      stdout: HOLA           # check printed oldest-first, so the LATEST is "hola"
+  assert:
+    execution: [greeting, shout]
+    outcome: succeeded
 ```
 
 ### `check` — what versions exist?
@@ -108,12 +113,25 @@ jobs:
   - task: show
     inputs: [log]
     run: wc -l < log/notes.txt
+    assert:
+      stdout: "1"            # the param reached in:
+  assert:
+    execution: [log, show]
+    outcome: succeeded
 - name: full
   plan:
   - get: log                 # same resource, whole thing
   - task: show
     inputs: [log]
     run: wc -l < log/notes.txt
+    assert:
+      stdout: "2"            # no param, so the default won — same resource, other view
+  assert:
+    execution: [log, show]
+    outcome: succeeded
+
+assert:
+  execution: [quick, full]
 ```
 
 **Optional params take the same shape as an optional `source:` field** (see [Shell safety](#shell-safety) below). Templates render with `missingkey=error`, so a bare `{{ .params.lines }}` makes `lines` *mandatory* on every get of that type; `{{ index .params "lines" | default "100" }}` works on an absent key and on a get with no `params:` block at all.
@@ -162,6 +180,11 @@ jobs:
   - task: verify
     inputs: [releases]
     run: cat releases/ref
+    assert:
+      stdout: v1.4.2
+  assert:
+    execution: [summarize, releases, releases, verify]   # put, then get — two entries
+    outcome: succeeded
 ```
 
 The explicit get fetches the resource's **latest** version at that moment, like any other get — for almost every plan that is the version the put just published, but a concurrent publisher can race it. A put whose output nothing reads simply has no get after it.
@@ -208,13 +231,21 @@ jobs:
   - task: show
     inputs: [build]
     run: cat build/number.txt
+    assert:
+      stdout: "88"
+  assert:
+    execution: [build, show]
+    outcome: succeeded
 - name: each-in-turn
   plan:
   - get: build
     version: every                 # the rest of the plan runs per version
   - task: show
     inputs: [build]
-    run: cat build/number.txt
+    run: cat build/number.txt      # no stdout assert: this runs once per version
+  assert:
+    execution: [build, show, build, show]   # the fan-out, one pass per version
+    outcome: succeeded
 - name: pinned
   plan:
   - get: build
@@ -222,6 +253,14 @@ jobs:
   - task: show
     inputs: [build]
     run: cat build/number.txt
+    assert:
+      stdout: "87"                 # the pin won over the newer version
+  assert:
+    execution: [build, show]
+    outcome: succeeded
+
+assert:
+  execution: [latest-only, each-in-turn, pinned]
 ```
 
 Under `every`, a failing version does not stop the remaining ones from being attempted.
@@ -264,6 +303,11 @@ jobs:
   - task: react
     inputs: [clock]
     run: cat clock/tick.txt
+    assert:
+      stdout: "1"
+  assert:
+    execution: [clock, react]
+    outcome: succeeded
 ```
 
 See [infra.md](infra.md) for the watch loop, webhooks, and cross-job triggering.

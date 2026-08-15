@@ -40,6 +40,14 @@ jobs:
   - agent: reader
     inputs: [notes]
     prompt: "What does notes/plan.txt say?"
+    assert:
+      tool_calls:                 # the granted built-in really was reachable
+      - name: read_file
+        args: { path: notes/plan.txt }
+      stdout: widgets ship on tuesday
+  assert:
+    execution: [fetch, reader]
+    outcome: succeeded
 ```
 
 The three built-ins that mutate state or reach the host are deliberately not in the default; each is a capability the pipeline must grant explicitly:
@@ -63,9 +71,16 @@ jobs:
     outputs: [report]            # an empty report/ dir exists from turn one
     max_turns: 40
     prompt: "Write your findings into report/summary.md."
+    assert:
+      files: [report/summary.md]   # it WROTE the file, not just claimed to
   - task: publish
     inputs: [report]
     run: cat report/summary.md
+    assert:
+      stdout: all clear            # ...and the artifact reached the next step
+  assert:
+    execution: [writer, publish]
+    outcome: succeeded
 ```
 
 ### `edit_file`
@@ -116,6 +131,14 @@ jobs:
   plan:
   - agent: reviewer
     prompt: "Review the change and post your conclusion."
+    assert:
+      tool_calls:
+      - name: post_review
+        args: { body: looks correct }   # only model-authored args are assertable —
+                                        # naming the pinned `repo` here is a load error
+  assert:
+    execution: [reviewer]
+    outcome: succeeded
 ```
 
 - **No tool failure, required or not, ever aborts or restarts the conversation.** A failed call comes back to the model as ordinary data (`{exit_code, stdout, stderr}` or `{"error": ...}`), exactly like `run_shell`, so the model sees what went wrong and can recover in the same session.
@@ -152,6 +175,13 @@ jobs:
   - agent: lead
     inputs: [notes]
     prompt: "Have your summarizer condense notes/log.txt, then report."
+    assert:
+      tool_calls:
+      - name: summarizer         # the child was reached as an ordinary tool call
+      stdout: there was an outage
+  assert:
+    execution: [fetch, lead]     # the child records nothing of its own
+    outcome: succeeded
 ```
 
 - Each call runs the child's own fresh conversation (its own model, persona, dials, `max_turns`, tool grant) and returns its final text as the tool result, capped at 32,000 bytes like any other tool output.
@@ -180,6 +210,9 @@ jobs:
   - task: check
     run: test -f config.json
     fix: fixer                 # scalar: just the agent name
+  assert:
+    execution: [fixer, check]  # the fixer ran and the re-run passed; a green first
+    outcome: succeeded         # try would record [check] alone
 ```
 
 The mapping form takes per-task overrides:
@@ -215,11 +248,26 @@ jobs:
 - name: quick
   plan:
   - task: unit               # run: absent -> resolves the tasks: entry
+    assert:
+      stdout: running unit tests
+  assert:
+    execution: [unit]
+    outcome: succeeded
 - name: full
   plan:
   - task: unit
+    assert:
+      stdout: running unit tests    # the same tasks: entry, resolved again
   - task: integration        # run: present -> inline; tasks: never consulted
     run: echo running integration tests
+    assert:
+      stdout: running integration tests
+  assert:
+    execution: [unit, integration]
+    outcome: succeeded
+
+assert:
+  execution: [quick, full]   # pipeline level: the jobs `steps test` must have run
 ```
 
 This resolution runs identically at plan time and run time, so a task's cache hash is always computed from its *resolved* `run:` string. An undefined reference is an ordinary error at plan time. An agent step's connection/dials/tool-grant resolve the same way.
@@ -242,8 +290,15 @@ jobs:
 - name: build
   plan:
   - task: unit
+    assert:
+      stdout: unit tests pass       # ci/unit.sh's text, resolved at load
   - agent: reviewer
     prompt_file: prompts/review.md  # loads the step's prompt from a file
+    assert:
+      stdout: Build looks fine
+  assert:
+    execution: [unit, reviewer]
+    outcome: succeeded
 ```
 
 Every `*_file:` path is resolved **once, at load time**, relative to the pipeline YAML's own directory — so everything downstream sees the resolved text and cannot tell it apart from the same value written inline. Editing an included file busts the cache exactly like editing an inline value would.
@@ -262,6 +317,11 @@ jobs:
 - name: build
   plan:
   - task: unit
+    assert:
+      stdout: from the shared task   # the run: came out of ci/unit.yml
+  assert:
+    execution: [unit]
+    outcome: succeeded
 ```
 
 The entry's own inline fields win over the loaded document's, and the loaded document may not itself use `file:`/`run_file:` — includes are resolved one level deep only, which is what makes cycle detection unnecessary.
@@ -297,6 +357,11 @@ jobs:
   - agent: reviewer
     inputs: [repo]
     prompt_file: { artifact: repo, path: .ci/REVIEW.md }
+    assert:
+      stdout: The change is correct
+  assert:
+    execution: [repo, reviewer]
+    outcome: succeeded
 ```
 
 This is the one place a step's config can come from a fetched artifact, and it is deliberately narrow — a task's `run:` and a whole agent definition cannot, for two reasons:
@@ -327,6 +392,11 @@ jobs:
     context_paths: [repo/CONVENTIONS.md]
     max_context_bytes: 400000  # ...except this step, which is handed more
     prompt: "State this project's convention in one line."
+    assert:
+      stdout: go vet           # answered from the injected file, no read_file turn spent
+  assert:
+    execution: [conventions, coder]
+    outcome: succeeded
 ```
 
 The point is not convenience but **guarantee**: conventions every invocation must follow are present from the first turn, instead of costing a `read_file` round trip the model might not bother with.
@@ -357,6 +427,12 @@ jobs:
     inputs: [repo]
     context_paths: ["repo/{{ .vars.dim }}.go"]
     prompt: "Review the {{ .vars.dim }} package."
+  assert:
+    execution:                 # one cell per value, each under its own coordinates
+    - fetch
+    - reviewer [dim=api]
+    - reviewer [dim=storage]
+    outcome: succeeded
 ```
 
 One path per entry, rendered per cell. A `{{ .vars.x }}` naming an axis the matrix does not declare is a **load** error naming the entry (`context_paths[0]`).
@@ -390,6 +466,11 @@ jobs:
       from:
         reviewer: verdict
     run: grep -q 'approve' upstream/reviewer
+    assert:
+      code: 0                        # the verdict file really landed at upstream/reviewer
+  assert:
+    execution: [reviewer, editor, gate]
+    outcome: succeeded
 ```
 
 - **Levels.** `verdict` is the name it chose; `note` adds the reason it gave; `full` adds its final response text.
@@ -418,6 +499,11 @@ jobs:
   plan:
   - agent: writer
     prompt: "Write the release announcement."
+    assert:
+      stdout: Announcement written
+  assert:
+    execution: [writer]
+    outcome: succeeded
 ```
 
 An agent's ceiling covers **the agent and everything it delegates to**. A sub-agent draws on its parent's remaining allowance rather than adding to it, so `budget.tokens` bounds the whole delegation subtree instead of one conversation in it — otherwise a capped agent could delegate its way past its own ceiling without ever exceeding it.
@@ -489,6 +575,11 @@ jobs:
   plan:
   - agent: writer
     prompt: "Write the announcement."
+    assert:
+      stdout: Announcement written   # the primary answered, so no source changed
+  assert:
+    execution: [writer]
+    outcome: succeeded
 ```
 
 - **Preflight is the trigger.** A primary that fails its pre-run probe is exactly when to pick an alternate: before the run has spent anything. Sources are tried in order; the first that answers serves the run.
@@ -503,7 +594,7 @@ jobs:
 
 An agent's `source.model` normally names a hosted model steps calls over HTTP. Prefix it with `@` instead and steps runs a coding-agent CLI as a subprocess:
 
-```yaml noexec
+```yaml noexec=cli
 agents:
 - name: reviewer
   source:
@@ -621,6 +712,15 @@ jobs:
     run: echo sending back
   - task: publish
     run: echo shipping
+    assert:
+      stdout: shipping
+  assert:
+    execution:                        # every member voted, then the majority's
+    - reviewer-a                      # target ran — revise is absent, which is
+    - reviewer-b                      # what "routed past it" looks like
+    - reviewer-c
+    - publish
+    outcome: succeeded
 ```
 
 ### ⚠️ N agents cost N times one

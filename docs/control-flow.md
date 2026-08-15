@@ -29,6 +29,9 @@ jobs:
   on_success:                  # job-level hook (inline alongside plan:)
     task: announce
     run: echo the whole job passed
+  assert:
+    execution: [work, record, cleanup, announce]   # step, its hooks, then the job's
+    outcome: succeeded
 ```
 
 - **Hooks observe, they don't consume.** A failing step's `on_failure` runs, and the failure still propagates — the job fails, `steps run` exits nonzero. This is the opposite of "swallow the error": a hook never clears a failure (only a matching `assert.execution` does that — see below). The one way a hook changes an outcome is upward: a failing `on_success` or `ensure` fails an otherwise-green step/job, since a broken notification or cleanup shouldn't read as success. A failing `on_failure`/`on_error`/`on_abort` is only logged.
@@ -57,6 +60,11 @@ jobs:
     inputs: [risk]
     when: { run: test -s risk/level.txt }   # mapping form
     run: cat risk/level.txt
+    assert:
+      stdout: low
+  assert:
+    execution: [scout, report]              # deep-review is absent — that IS the skip
+    outcome: succeeded
 ```
 
 - **The exit code is the whole contract.** A nonzero exit is a legitimate *false* (`grep -q` matching nothing, `test -f` on a missing file) and never a failure. Only a runner-level error — the command couldn't even be started (bad cwd, bad image, dead docker daemon) — fails the step. Note a shell "command not found" is exit 127, i.e. a false guard, not an error.
@@ -79,9 +87,14 @@ jobs:
     run: echo ok
   - try:
       task: notify           # fails — and the plan shrugs
-      run: "false"
+      run: "false"           # (assert: is rejected on both halves of a try:)
   - task: after
     run: echo still running
+    assert:
+      stdout: still running  # the plan really did carry on past the failure
+  assert:
+    execution: [build, notify, after]   # notify ran and failed; the wrapper hid it
+    outcome: succeeded
 ```
 
 The wrapper is **transparent**: the only thing it changes is whether the plan walker stops. Everything that *observes* the outcome sees the truth.
@@ -123,6 +136,11 @@ jobs:
     max_visits: 5
   - task: done
     run: echo converged
+    assert:
+      stdout: converged
+  assert:
+    execution: [seed, bump, check, bump, check, bump, check, done]   # three laps
+    outcome: succeeded
 ```
 
 And verdict routing — the agent's decision picks the next step:
@@ -146,10 +164,17 @@ jobs:
       - revise: draft          # backward — the loop max_visits: bounds
       - failure: escalate      # reserved: the step errored or decided nothing
     max_visits: 3
+    assert:
+      verdict: approve
   - task: escalate
     run: echo paging a human
   - task: publish
     run: echo publishing
+    assert:
+      stdout: publishing
+  assert:
+    execution: [draft, critic, publish]   # escalate is absent: the route jumped past it
+    outcome: succeeded
 ```
 
 - **Routing keys**: `success`/`failure` for a task/put/verdict-less agent, or a verdict name for a verdict agent. An errored or aborted step produces no key and never routes — it propagates, so a loop can't spin during shutdown or mask an outage. A `to.failure` route consumes the failure (the job doesn't also fail).
@@ -165,10 +190,15 @@ jobs:
 - name: fall-through
   plan:
   - task: flaky
-    run: "false"
-    to: { failure: next }    # the failure is consumed; the job stays green
+    run: "false"             # no assert: here — one would decide success itself,
+    to: { failure: next }    # and the failure is what the route consumes
   - task: report
     run: echo carrying on
+    assert:
+      stdout: carrying on
+  assert:
+    execution: [flaky, report]
+    outcome: succeeded       # the route consumed the failure, so the job is green
 ```
 
   The word is reserved on the value side: a step actually named `next` inside a `to:`-using segment is a load error naming the collision.
@@ -197,6 +227,8 @@ jobs:
 ```
 
 - **`assert.execution`**, on a job (ordered task/agent/hook names that must have run) or the pipeline top level (ordered job names). **A matching job `assert.execution` clears the plan's failure** — evaluated after hooks — so a fixture of deliberately-failing tasks stays green as long as the recorded order matches. A mismatch fails the job with a want/got diff and is never itself cleared. Execution asserts are never hashed (they're meta-checks, like job hooks).
+
+  **What records a name**: a task/agent/put by its own name, a get by its resource name, a `load_var:` by the var it captures, a matrix cell by its coordinates (`review [dim=api]`), a hook by its step name, and a task's `fix:` agent by the agent's name. Containers (`do:`, `in_parallel:`, `race:`, `ensemble:`, `across:`) record nothing of their own — their children do. Entries land as each thing *completes*, which is why a step precedes its hooks and a `fix:` agent precedes the task it rescued. Nothing at all is recorded for a skipped step, a cached step, a sub-agent conversation, or a cancelled `race:` loser — which is exactly what lets this assert prove something did **not** run.
 - **`assert.outcome`**, on a job only: `failed` or `succeeded` — what the plan *concluded*, as opposed to which steps ran. `outcome: failed` requires the plan to have produced an error and then clears it; `outcome: succeeded` requires none, and is **not** a no-op — it opts the job out of the clearing rule above, so a plan failure stays a failure.
 
   This exists because `assert.execution` structurally cannot express "this job should have failed": a defect that swallows a failure runs the same steps in the same order, so the assert matches either way — and then the match clears the very difference under test. `outcome:` is the observation `execution:` can't make; the two compose.
@@ -213,6 +245,9 @@ jobs:
     assert:
       stdout: checking
       code: 3
+  assert:
+    execution: [probe]
+    outcome: succeeded       # the matching assert is what makes exit 3 a success
 ```
 
 - **`assert.verdict`**, on an agent step that declares `verdicts:`: the name the model must have emitted, matched exactly. A classifier's product *is* the choice, so a fixture used to pass on whatever the model decided:
@@ -230,6 +265,9 @@ jobs:
     verdicts: [bug, feature, question]    # all bare: record the choice, route nowhere
     assert:
       verdict: bug
+  assert:
+    execution: [triage]
+    outcome: succeeded
 ```
 
   Naming a verdict outside the declared list, or setting it on a step with no `verdicts:`, is a load error: the assert could never match on any run.
@@ -247,6 +285,9 @@ jobs:
     outputs: [answer]
     assert:
       files: [answer/reply.md]
+  assert:
+    execution: [draft]
+    outcome: succeeded
 ```
 
   A missing file or an empty one fails the assert. Two shapes are load errors instead, because neither could ever pass: a path naming no declared output, and a bare artifact name like `answer` — that is the output *directory*, and a directory is never a non-empty file. Name a file inside it.
@@ -270,6 +311,9 @@ jobs:
     on_failure:
       task: rollback           # fires if ANY of the three failed
       run: echo rolling back
+  assert:
+    execution: [migrate, deploy, smoke-test]   # the children, in order; the block
+    outcome: succeeded                         # itself records nothing
 ```
 
 Without it that rollback has two spellings and both are worse: repeat the hook on all three steps and keep them in sync, or hoist it to the job, where it also fires for failures that have nothing to do with the group.
@@ -301,6 +345,9 @@ jobs:
         run: echo testing
       - task: vet
         run: echo vetting
+  assert:
+    execution: [lint, test, vet]   # declaration order, not completion order
+    outcome: succeeded             # outcome: is what catches a SWALLOWED branch
 ```
 
 - **The block fails when any branch fails.** `fail_fast:` decides only whether the siblings are cancelled or allowed to finish — never whether the failure counts. That distinction is not hypothetical: the first implementation swallowed a child failure under `fail_fast: false`, and a job containing a failing parallel step reported PASS.
@@ -333,6 +380,11 @@ jobs:
   - task: read
     inputs: [summary]              # the winner's summary/, whoever wrote it
     run: cat summary/text.txt
+    assert:
+      stdout: quick take           # `fast` won, so its artifact is the block's
+  assert:
+    execution: [fast, read]        # the cancelled loser records nothing
+    outcome: succeeded
 ```
 
 ### ⚠️ This costs more, not less
@@ -367,6 +419,13 @@ jobs:
       values: [agent, pipeline]
     task: matrix-test
     run: echo testing {{ .vars.package }} on go {{ .vars.go_version }}
+  assert:
+    execution:                     # the product, last axis varying fastest
+    - matrix-test [go_version=1.25 package=agent]
+    - matrix-test [go_version=1.25 package=pipeline]
+    - matrix-test [go_version=1.26 package=agent]
+    - matrix-test [go_version=1.26 package=pipeline]
+    outcome: succeeded
 ```
 
 `across:` is a **modifier**, not a container: the step it sits on is still a task (or a put, or an agent), it just runs once per cell. `{{ .vars.<name> }}` substitutes into the command, the image, the prompt, the working directory, the step's own name, and each entry of an agent step's `context_paths:` — so a fan-out cell can be *handed* the file it was assigned rather than told to go find it.
@@ -403,6 +462,12 @@ jobs:
     task: investigate
     inputs: [findings]
     run: echo investigating {{ .vars.item }}
+  assert:
+    execution:                     # width decided by what scan wrote, not by the file
+    - scan
+    - investigate [item=alpha]
+    - investigate [item=beta]
+    outcome: succeeded
 ```
 
 This is "the step plans, the pipeline executes": one step produces a work list, and each item becomes its own cell — independently hashed, cached and reported — instead of one agent grinding through the whole list in a conversation that outgrows its window.
@@ -433,6 +498,14 @@ jobs:
   - task: merge
     inputs: [findings]                   # findings/api/report.txt, findings/errors/report.txt
     run: cat findings/*/report.txt
+    assert:
+      stdout: api looks fine             # both cells' captures survived the collect
+  assert:
+    execution:
+    - review [dim=api]
+    - review [dim=errors]
+    - merge
+    outcome: succeeded
 ```
 
 The cell's own view is unchanged — it writes `findings/report.txt` and never sees the coordinates. The directory layout is one segment per axis value, declaration order, so it is derived entirely from declared things.
@@ -467,6 +540,13 @@ jobs:
     prompt: "Review the {{ .vars.dim }} dimension."
   - task: publish
     run: echo publishing what we got
+    assert:
+      stdout: publishing what we got
+  assert:
+    execution:                     # cell one overspent the allowance, so cells two
+    - reviewer [dim=api-boundaries]   # and three were never admitted — and the plan
+    - publish                         # carried on anyway, which is the whole point
+    outcome: succeeded
 ```
 
 ```
@@ -523,6 +603,13 @@ jobs:
     max_in_flight: 4        # four cells at a time
     task: review
     run: echo reviewing {{ .vars.dimension }}
+  assert:
+    execution:              # concurrent, but merged back in declaration order
+    - review [dimension=api-boundaries]
+    - review [dimension=error-paths]
+    - review [dimension=concurrency]
+    - review [dimension=performance]
+    outcome: succeeded
 ```
 
 - **Unset or `1` is the serial walk**, unchanged. This is opt-in, unlike `in_parallel:`'s `limit:` where an absent value means unbounded — each default matches the contract its own block already had. A value at or above the cell count is effectively unbounded.
@@ -536,7 +623,7 @@ jobs:
 
 Agent pipelines eventually gate something that cannot be undone — publishing, deploying, sending. `approval:` is the place in a plan to stop and ask. It parks the run until someone decides, so it can't be executed by the docs suite:
 
-```yaml noexec
+```yaml noexec=approval
 agents:
 - name: writer
   source: { model: openrouter/qwen/qwen3.7-flash }

@@ -263,6 +263,104 @@ func injectFakeProvider(t *testing.T, body, endpoint string) string {
 	return string(rewritten)
 }
 
+// TestDocsExamplesAssert is the ratchet that keeps the corpus from decaying
+// back into smoke tests: every job of every executed block must carry a
+// job-level assert: with BOTH execution: and outcome:, and a block declaring
+// more than one job must also carry the pipeline-level assert.execution that
+// names them.
+//
+// Without it a doc example proves only "this loads and exits 0" — 58 of the
+// 63 executed blocks were in exactly that state when this was written, so
+// `upper` could stop uppercasing and every one of them stayed green. Both
+// fields are required because each covers the other's blind spot:
+// execution: names which steps ran in what order (the load-bearing half, and
+// the only way to prove something did NOT run), while outcome: is what stops
+// a matching execution: from CLEARING a real plan failure — the clearing rule
+// makes execution: alone unable to tell a fixed build from a broken one.
+//
+// Job-level rather than step-level because it is the one position always
+// available: assert: is rejected on get/put steps and anywhere inside a try:,
+// and on a task with a fix: it would take over the success decision the fix:
+// exists to make. Step asserts are the richer check where they are legal, and
+// examples carry them too — they just cannot be the rule.
+func TestDocsExamplesAssert(t *testing.T) {
+	for _, block := range mustBlocks(t) {
+		if block.Mode() != "run" {
+			continue // fragments are prose; noexec blocks never execute
+		}
+
+		t.Run(block.Name(), func(t *testing.T) {
+			checkBlockAsserts(t, block)
+		})
+	}
+}
+
+// checkBlockAsserts enforces the rule above for one block.
+func checkBlockAsserts(t *testing.T, block docs.Block) {
+	t.Helper()
+
+	var doc struct {
+		Assert *config.Assert `yaml:"assert"`
+		Jobs   []struct {
+			Name   string         `yaml:"name"`
+			Assert *config.Assert `yaml:"assert"`
+		} `yaml:"jobs"`
+	}
+
+	err := yaml.Unmarshal([]byte(block.Body), &doc)
+	if err != nil {
+		t.Fatalf("block is not valid YAML: %v", err)
+	}
+
+	if len(doc.Jobs) == 0 {
+		t.Fatal("an executed block must declare at least one job")
+	}
+
+	for _, job := range doc.Jobs {
+		switch {
+		case job.Assert == nil:
+			t.Errorf("job %q has no assert: — an executed example must verify itself, not just run", job.Name)
+		case len(job.Assert.Execution) == 0:
+			t.Errorf("job %q asserts no execution: — name the steps that must run, in order", job.Name)
+		case job.Assert.Outcome == "":
+			t.Errorf("job %q asserts no outcome: — a matching execution: CLEARS a plan failure, so without it a broken build passes too", job.Name)
+		}
+	}
+
+	if len(doc.Jobs) > 1 && (doc.Assert == nil || len(doc.Assert.Execution) == 0) {
+		t.Errorf("a block with %d jobs needs a pipeline-level assert.execution naming them in order", len(doc.Jobs))
+	}
+}
+
+// TestDocsNoexecReasons makes opting out of execution cost a sentence. A
+// noexec block is validated but never run, so it is the one kind that can rot
+// silently — `noexec` alone was the cheapest way to make a stubborn example
+// stop failing. The reason must come from docs.NoexecReasons(), so "which
+// examples would run if this host had docker?" stays a grep.
+func TestDocsNoexecReasons(t *testing.T) {
+	allowed := map[string]bool{}
+	for _, reason := range docs.NoexecReasons() {
+		allowed[reason] = true
+	}
+
+	for _, block := range mustBlocks(t) {
+		if block.Mode() != "noexec" {
+			continue
+		}
+
+		reason := block.NoexecReason()
+
+		switch {
+		case reason == "":
+			t.Errorf("%s: bare `noexec` — say which capability this host lacks (noexec=<%s>)",
+				block.Name(), strings.Join(docs.NoexecReasons(), "|"))
+		case !allowed[reason]:
+			t.Errorf("%s: noexec=%s is not one of %v — add it to docs.NoexecReasons if it is a real new class",
+				block.Name(), reason, docs.NoexecReasons())
+		}
+	}
+}
+
 // TestDocsCoverage is the schema_test pattern applied to prose: every yaml
 // key on config.Step must appear in at least one *tested* doc block. Adding
 // a DSL field without documenting it is a red build, not a forgotten TODO.

@@ -8,9 +8,14 @@
 //	```yaml                a complete pipeline; schema-validated and executed
 //	```yaml test=<id>      executed against the fake LLM scenario named <id>
 //	                       (docs_scenarios_test.go) — required for agent steps
-//	```yaml noexec         schema-validated and loaded, not executed (needs
-//	                       docker, the network, or real credentials)
+//	```yaml noexec=<why>   schema-validated and loaded, not executed, because
+//	                       this host cannot run it — the reason is mandatory
+//	                       and drawn from a fixed vocabulary (see NoexecReason)
 //	```yaml fragment       rendered only; not a complete pipeline
+//
+// A bare `noexec` is deliberately NOT a mode: an unexecuted example is the
+// one that can silently rot, so opting out has to name which capability is
+// missing rather than being the cheapest thing to type.
 //
 // Everything here is reference material for what steps DOES. A proposal for
 // what it might do is a GitHub issue, not a page: sketches are not promises,
@@ -36,18 +41,50 @@ type Block struct {
 	Body string
 }
 
-// Mode reports how the block is tested: "run", "noexec", or "fragment".
+// Mode reports how the block is tested: "run", "noexec", or "fragment". A
+// bare `noexec` reports "noexec" too — it is a mode with no reason, which
+// TestDocsNoexecReasons rejects; treating it as "run" instead would fail the
+// authoring mistake as a broken pipeline rather than a missing reason.
 func (b Block) Mode() string {
 	for _, field := range strings.Fields(b.Info) {
 		switch {
-		case field == "noexec" || field == "fragment":
+		case field == "fragment":
 			return field
+		case field == "noexec" || strings.HasPrefix(field, "noexec="):
+			return "noexec"
 		case strings.HasPrefix(field, "test="):
 			return "run"
 		}
 	}
 
 	return "run"
+}
+
+// NoexecReasons is the closed vocabulary a noexec block may name: the
+// capability this host does not have. Closed rather than free text so the
+// set stays auditable — "which examples would run in CI if we gave it
+// docker?" has to be a question you can answer by grepping.
+func NoexecReasons() []string {
+	return []string{
+		"approval",    // parks the run until a human decides
+		"btrfs",       // needs a real btrfs filesystem (Linux only)
+		"cli",         // needs a coding-agent CLI on PATH
+		"credentials", // needs real credentials for a live third-party service
+		"docker",      // needs a docker daemon and a pullable image
+		"network",     // reaches a real host over the network
+		"stdio-mcp",   // needs an MCP server binary on PATH
+	}
+}
+
+// NoexecReason is the reason a noexec block names, "" when it names none.
+func (b Block) NoexecReason() string {
+	for _, field := range strings.Fields(b.Info) {
+		if reason, ok := strings.CutPrefix(field, "noexec="); ok {
+			return reason
+		}
+	}
+
+	return ""
 }
 
 // TestID is the fake-LLM scenario this block runs against, "" when none.

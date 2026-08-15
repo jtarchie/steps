@@ -178,9 +178,19 @@ func executedStepName(step config.Step) string {
 		return step.Agent
 	case config.StepKindPut:
 		return step.Put
+	case config.StepKindLoadVar:
+		// The var it captures IS its name. Without this the step recorded an
+		// empty string, which put a bare "" in the middle of every
+		// assert.execution covering a job that loads a var — unwritable as a
+		// fixture, and indistinguishable from a step that recorded nothing.
+		return step.LoadVar
 	case config.StepKindTry:
 		return executedStepName(*step.Try)
 	default:
+		// Every remaining kind is unnamed by construction: a get records its
+		// resource name separately, an approval has only a message, and the
+		// container kinds never reach here (recordStepExecution returns
+		// early — their children record themselves).
 		return ""
 	}
 }

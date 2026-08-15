@@ -194,6 +194,11 @@ jobs:
   plan:
   - agent: coder
     prompt: "Do the long-horizon work."
+    assert:
+      stdout: Done
+  assert:
+    execution: [coder]
+    outcome: succeeded
 ```
 
 Once a conversation's estimated size crosses the budget, the agent's own model is asked to summarize everything older than a recent window (roughly the most recent 30% of the budget), and the conversation continues from `[summary] + [recent turns]` instead of the full history. This can happen more than once in a very long conversation — each pass folds the previous summary into the new one. A summarization failure is logged and the turn proceeds uncompacted; it never aborts the attempt, the same failure-is-data treatment a tool failure gets.
@@ -229,6 +234,11 @@ jobs:
   plan:
   - agent: reviewer
     prompt: "Review the change."
+    assert:
+      stdout: Reviewed
+  assert:
+    execution: [reviewer]
+    outcome: succeeded
 ```
 
 `compact_after_tokens:` still outranks it, and overrides the budget outright rather than describing the model. Prefer `context_window:` unless you specifically want a budget that is not 80% of the window. Neither is available on a `@cli/` agent, which resolves its own window and compacts its own conversation.
