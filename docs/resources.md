@@ -95,10 +95,12 @@ check: |
 
 Guess too small and items scroll past during a busy period, permanently — steps keeps no version history, so whatever the window missed is gone. Guess anything at all and a cold start replays a backlog nobody is waiting on.
 
+This narrows **what the watcher detects**, which is what decides when a job is triggered. It does not narrow what that job then fetches: a triggered job re-runs `check` for itself, with no cursor, and sees its own full window.
+
 Three things to know:
 
 - **Spell it `{{ index .version "ts" | default "0" }}`, not `{{ .version.ts }}`.** On the first-ever check there is no cursor and `.version` is an empty map; templates render with `missingkey=error`, so the bare form fails that first poll. This is the same shape an optional `source:` field or get `params:` already uses.
-- **Only `steps watch` advances it**, and only after the jobs a version implies are enqueued — so a poll that finds versions and then dies does not skip past them. `steps run` and `steps plan` read the cursor and never move it; a run that moved it would push the watcher's baseline past a version no watch loop ever acted on.
+- **The cursor belongs to `steps watch` alone** — it both advances it and is the only thing that reads it. A `steps run` or `steps plan` renders `{{ .version }}` as an empty map even when a watcher has been polling for weeks. That is not an oversight: the cursor advances as soon as a poll ENQUEUES the jobs a version implies, so a job re-running its own check against it would ask "what is new since the versions I was just handed" and correctly get nothing. Repeats on the run side are stopped by [`every` takes each version once](#every-takes-each-version-once), which is keyed to what a job actually took rather than to what the poller last saw.
 - **A check that ignores `.version` keeps working exactly as before.** The cursor narrows what a check *asks for*; it is not a filter steps applies to the answer.
 
 ```yaml

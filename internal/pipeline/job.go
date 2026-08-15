@@ -228,19 +228,12 @@ func runJobPlan(ctx context.Context, r stepRunner, job *config.Job, pinned map[s
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
-	// The check cursor every get in this plan renders its check against. Read
-	// here, never written: advancing it is steps watch's job alone.
-	checked, err := loadLastChecked(ctx, r.st)
-	if err != nil {
-		return fmt.Errorf("job %q: %w", job.Name, err)
-	}
-
 	// cache is scoped to this one RunJob invocation (never shared across
 	// concurrent invocations — see resource.NewCache) and threaded into both
 	// the plan-time and run-time get-step resolution below, so a get step's
 	// check command runs at most once per job run instead of once during
 	// planning and again during execution.
-	cache := rsrc.NewCache(rsrc.WithConsumed(cursor.has), rsrc.WithLastChecked(checked.get))
+	cache := rsrc.NewCache(rsrc.WithConsumed(cursor.has))
 
 	skippable := map[string]bool{}
 

@@ -71,7 +71,7 @@ jobs:
 | `in` | `source`, `version`, `params` | an object of relative path → file contents |
 | `out` | `source`, `params`, and `file()` | the version it published, or `nil` |
 
-`check`'s `version` is the [check cursor](resources.md#the-check-cursor): the last version this pipeline recorded, so the check can ask for what it has not seen. It is an **empty map** on the first-ever check, which is what makes `version.ts ?? "0"` both the natural spelling and the correct one.
+`check`'s `version` is the [check cursor](resources.md#the-check-cursor): the last version `steps watch` recorded, so a poll can ask for what it has not seen. It is an **empty map** on the first-ever poll — and under `steps run`/`steps test`, which never receive a cursor — which is what makes `version.ts ?? "0"` both the natural spelling and the correct one rather than an incantation.
 
 `in` returns a file map rather than getting a `write()` builtin. That keeps an expression pure — no side effects, so its result is a function of its inputs, which is what the artifact cache is already built on. Paths must be relative and stay inside the artifact directory. Omit `in` entirely and steps writes `version.json` alone, which is all a type that merely detects change needs.
 
@@ -123,7 +123,7 @@ A check against a chat API is `1 + N` round trips, and in shell every one is ser
 
 **Request keys**: `url` (required), `method` (default `GET`), `query`, `headers`, `json` (marshaled, implies `POST` and sets the content type), `body` (raw string). An unknown key is an error rather than ignored — a misspelled `header:` that silently sends no authorization surfaces as a 401 somewhere else entirely.
 
-**Settings**: `headers` (merged into every request; a request's own header wins), `concurrency` (default 4), `timeout` (default `"30s"`, per request), `max_response_bytes` (default 8 MiB), `retry`, `tolerate_errors`.
+**Settings**: `headers` (merged into every request; a request's own header wins), `concurrency` (default 4), `timeout` (default `"30s"`, per request), `max_response_bytes` (default 8 MiB), `retry`, `tolerate_errors`. A setting spelled wrong is an error, and so is one **typed** wrong — `retry: {on: ["429"]}` would otherwise read as configured and retry nothing.
 
 Shared headers are a *setting* rather than something you merge into each request because **expr has no `merge()`** — so the API is shaped to make merging unnecessary.
 
