@@ -7,18 +7,20 @@ import (
 	"testing"
 )
 
-// TestConcurrentEnqueueAcrossProcesses pins the transaction mode.
-//
-// Enqueuing became a read-modify-write when queue rows started carrying
-// versions to merge, which is exactly the shape SQLite refuses to let wait:
-// a deferred transaction that reads and then writes must UPGRADE its lock,
-// and SQLite returns SQLITE_BUSY immediately rather than honoring
-// busy_timeout, since waiting there could deadlock. _txlock=immediate takes
-// the write lock up front instead (see OpenStore).
+// TestConcurrentEnqueueAcrossProcesses keeps two processes able to write at
+// once.
 //
 // Two handles on one file is `steps watch` alongside `steps web`, both of
-// which enqueue. Within a single process SetMaxOpenConns(1) makes this
+// which enqueue; within a single process SetMaxOpenConns(1) makes contention
 // unreachable, so a same-handle test would pass while the real shape failed.
+//
+// Enqueuing is a single statement again now that a row carries no versions
+// to merge, but the store still runs read-modify-write transactions
+// elsewhere (RecordVersions assigns check_order from a MAX it just read), and
+// those are the shape SQLite refuses to let wait: a deferred transaction that
+// reads and then writes must UPGRADE its lock, and SQLite answers SQLITE_BUSY
+// immediately rather than honoring busy_timeout, since waiting there could
+// deadlock. _txlock=immediate takes the write lock up front — see OpenStore.
 func TestConcurrentEnqueueAcrossProcesses(t *testing.T) {
 	t.Parallel()
 
@@ -41,7 +43,7 @@ func TestConcurrentEnqueueAcrossProcesses(t *testing.T) {
 			if i%2 == 1 {
 				st = b
 			}
-			err := st.EnqueueJobWithVersions(ctx, "build", "items", QueuedVersions{"items": {{"n": "1"}}})
+			err := st.EnqueueJob(ctx, "build", "items")
 			if err != nil {
 				errs <- err
 			}

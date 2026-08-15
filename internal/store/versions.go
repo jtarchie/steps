@@ -86,16 +86,37 @@ func (s *Store) CheckedResources(ctx context.Context) ([]CheckedResource, error)
 // RecordPassedVersion records that jobName completed successfully against this
 // exact version of a resource. It is what a downstream job's passed: reads.
 func (s *Store) RecordPassedVersion(ctx context.Context, jobName, resourceName, versionJSON, buildID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("could not record a passed version for job %q: %w", jobName, err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	// The version has to exist in history before anything may reference it.
+	// A `steps run` resolves its own versions and never goes near the poller,
+	// so this is the path by which a manually-run job's versions enter
+	// history at all.
+	err = ensureVersion(ctx, tx, resourceName, versionJSON)
+	if err != nil {
+		return err
+	}
+
 	// On conflict the build_id is UPDATED rather than left alone: re-running a
 	// job against versions it has already passed should refresh which build
 	// vouches for them, or the row would keep pointing at the oldest build
 	// that saw it and a newer coherent set would be invisible.
-	_, err := s.db.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO job_versions (job_name, resource_name, version_json, recorded_at, build_id)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (job_name, resource_name, version_json)
 		DO UPDATE SET build_id = excluded.build_id, recorded_at = excluded.recorded_at
 	`, jobName, resourceName, versionJSON, now(), buildID)
+	if err != nil {
+		return fmt.Errorf("could not record a passed version for job %q: %w", jobName, err)
+	}
+
+	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("could not record a passed version for job %q: %w", jobName, err)
 	}
@@ -217,7 +238,21 @@ func (s *Store) ConsumedVersions(ctx context.Context, jobName, resourceName stri
 // docs/conformance.md). Re-recording is a no-op rather than an error, so a
 // resumed or replayed run cannot fail on a version it already took.
 func (s *Store) RecordConsumedVersion(ctx context.Context, jobName, resourceName, versionJSON string) error {
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("could not record a consumed version for job %q: %w", jobName, err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	// As in RecordPassedVersion: the referenced version must be in history
+	// first, and a manually-run job's versions arrive by no other route.
+	err = ensureVersion(ctx, tx, resourceName, versionJSON)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO job_version_cursor (job_name, resource_name, version_json, consumed_at)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT (job_name, resource_name, version_json) DO NOTHING
@@ -234,7 +269,7 @@ func (s *Store) RecordConsumedVersion(ctx context.Context, jobName, resourceName
 	// ".1Z" (100ms) sorts AFTER ".15Z" (150ms) lexically, and the newest rows
 	// are not reliably the ones kept at the eviction boundary. rowid is
 	// monotonic in insertion order, which is the order this actually means.
-	_, err = s.db.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		DELETE FROM job_version_cursor
 		WHERE job_name = ? AND resource_name = ? AND rowid NOT IN (
 			SELECT rowid FROM job_version_cursor
@@ -245,6 +280,11 @@ func (s *Store) RecordConsumedVersion(ctx context.Context, jobName, resourceName
 	`, jobName, resourceName, jobName, resourceName, consumedVersionCap)
 	if err != nil {
 		return fmt.Errorf("could not prune consumed versions for job %q: %w", jobName, err)
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("could not record a consumed version for job %q: %w", jobName, err)
 	}
 
 	return nil

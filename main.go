@@ -73,17 +73,18 @@ var buildVersion = "dev"
 
 // RunCmd runs a single job's plan once, exactly as steps has always done.
 type RunCmd struct {
-	Pipeline      string            `arg:""                                                                   help:"path to the pipeline YAML file"`
-	Job           string            `help:"job name to run (defaults to the pipeline's only job)"`
-	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                  name:"pin"`
-	Force         bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
-	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                               help:"leave the build workspace on disk instead of deleting it"`
-	NoPreflight   bool              `help:"skip the pre-run health check of the job's models and MCP servers" name:"no-preflight"`
-	Var           map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."               name:"var"`
-	Resume        string            `help:"continue a failed run from the step that failed"                   name:"resume"`
-	Replay        string            `help:"fork a recorded run and re-run it from --from onward"              name:"replay"`
-	From          string            `help:"with --replay, the step name to re-run from"                       name:"from"`
-	VarsFile      string            `help:"YAML file of pipeline vars"                                        name:"vars-file"`
+	Pipeline       string            `arg:""                                                                                         help:"path to the pipeline YAML file"`
+	Job            string            `help:"job name to run (defaults to the pipeline's only job)"`
+	Pin            map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                                        name:"pin"`
+	Force          bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
+	KeepWorkspace  bool              `env:"STEPS_KEEP_WORKSPACE"                                                                     help:"leave the build workspace on disk instead of deleting it"`
+	NoPreflight    bool              `help:"skip the pre-run health check of the job's models and MCP servers"                       name:"no-preflight"`
+	Var            map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                                     name:"var"`
+	Resume         string            `help:"continue a failed run from the step that failed"                                         name:"resume"`
+	Replay         string            `help:"fork a recorded run and re-run it from --from onward"                                    name:"replay"`
+	From           string            `help:"with --replay, the step name to re-run from"                                             name:"from"`
+	VarsFile       string            `help:"YAML file of pipeline vars"                                                              name:"vars-file"`
+	VersionHistory int               `help:"how many versions of each resource to remember (pipeline defaults.version_history wins)" name:"version-history"`
 }
 
 // applyContinuation handles the flags that point this invocation at a previous
@@ -155,6 +156,8 @@ func (r *RunCmd) Run() error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
+	applyVersionHistoryFlag(cfg, r.VersionHistory)
+
 	ctx = applyPreflightFlag(ctx, r.NoPreflight)
 
 	jobName := r.Job
@@ -190,17 +193,18 @@ func (r *RunCmd) Run() error {
 // every job in the pipeline, and runs whichever jobs a version change
 // affects — see internal/trigger.
 type WatchCmd struct {
-	Pipeline      string            `arg:""                                                                       help:"path to the pipeline YAML file"`
-	Interval      time.Duration     `default:"30s"                                                                help:"how often to check trigger: true resources"`
-	Once          bool              `help:"poll once, run whatever that triggers, and exit (for cron or a timer)" name:"once"`
-	MaxConcurrent int               `default:"1"                                                                  help:"maximum number of triggered jobs running at once"`
-	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                      name:"pin"`
-	Force         bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
-	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                                   help:"leave the build workspace on disk instead of deleting it"`
-	NoPreflight   bool              `help:"skip the pre-run health check of each job's models and MCP servers"    name:"no-preflight"`
-	Listen        string            `help:"serve webhook checks on this address, e.g. :8080"                      name:"listen"`
-	Var           map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                   name:"var"`
-	VarsFile      string            `help:"YAML file of pipeline vars"                                            name:"vars-file"`
+	Pipeline       string            `arg:""                                                                                         help:"path to the pipeline YAML file"`
+	Interval       time.Duration     `default:"30s"                                                                                  help:"how often to check trigger: true resources"`
+	Once           bool              `help:"poll once, run whatever that triggers, and exit (for cron or a timer)"                   name:"once"`
+	VersionHistory int               `help:"how many versions of each resource to remember (pipeline defaults.version_history wins)" name:"version-history"`
+	MaxConcurrent  int               `default:"1"                                                                                    help:"maximum number of triggered jobs running at once"`
+	Pin            map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                                        name:"pin"`
+	Force          bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
+	KeepWorkspace  bool              `env:"STEPS_KEEP_WORKSPACE"                                                                     help:"leave the build workspace on disk instead of deleting it"`
+	NoPreflight    bool              `help:"skip the pre-run health check of each job's models and MCP servers"                      name:"no-preflight"`
+	Listen         string            `help:"serve webhook checks on this address, e.g. :8080"                                        name:"listen"`
+	Var            map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                                     name:"var"`
+	VarsFile       string            `help:"YAML file of pipeline vars"                                                              name:"vars-file"`
 }
 
 // Run loads the pipeline and blocks in trigger.Watch until canceled
@@ -219,6 +223,8 @@ func (w *WatchCmd) Run() error {
 
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
+
+	applyVersionHistoryFlag(cfg, w.VersionHistory)
 
 	ctx = applyPreflightFlag(ctx, w.NoPreflight)
 
@@ -989,6 +995,26 @@ func withSignalCancel(parent context.Context) (context.Context, context.CancelFu
 	}()
 
 	return ctx, cancel
+}
+
+// applyVersionHistoryFlag writes a command-line history limit into the config
+// unless the pipeline set its own.
+//
+// Precedence is resolved here rather than at the point of use so there is one
+// place it lives: the pipeline wins, because it is the thing that knows what
+// its resources do. See config.VersionHistoryLimit.
+func applyVersionHistoryFlag(cfg *config.Config, limit int) {
+	if limit <= 0 {
+		return
+	}
+
+	if cfg.Defaults == nil {
+		cfg.Defaults = &config.Defaults{}
+	}
+
+	if cfg.Defaults.VersionHistory == nil {
+		cfg.Defaults.VersionHistory = &limit
+	}
 }
 
 // applyPreflightFlag threads --no-preflight down to internal/pipeline.

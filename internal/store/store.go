@@ -79,7 +79,11 @@ func OpenStore(path string) (*Store, error) {
 
 	ctx := context.Background()
 
-	_, err = db.ExecContext(ctx, schema)
+	err = dropLegacyTables(ctx, db)
+	if err == nil {
+		_, err = db.ExecContext(ctx, schema)
+	}
+
 	if err == nil {
 		err = addColumns(ctx, db)
 	}

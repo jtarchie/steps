@@ -68,6 +68,11 @@
           "maximum": 100,
           "description": "How much of an agent's REMAINING token allowance one sub-agent call may take, pipeline-wide. Default 10. A sub-agent draws on its parent's budget rather than adding to it, so an agent's budget.tokens bounds its whole delegation subtree. Per-agent override: delegate_budget_percent on the agent."
         },
+        "version_history": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many versions of each resource steps remembers. Default 1000, or --version-history. History is what lets a job build a version that scrolled out of a check's window, and what a passed: gate proves against — a pruned version takes its green record with it, so a number below what a slow downstream job needs will hold that job back."
+        },
         "preflight": {
           "type": "object",
           "additionalProperties": false,

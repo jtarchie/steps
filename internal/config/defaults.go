@@ -43,6 +43,40 @@ type Defaults struct {
 	// Agent.DelegateBudgetPercent for the per-agent override, and
 	// DefaultDelegateBudgetPercent for the value when neither is set).
 	DelegateBudgetPercent *int `yaml:"delegate_budget_percent,omitempty"`
+	// VersionHistory is how many versions of each resource steps remembers.
+	//
+	// It belongs to the pipeline because the right number is a property of
+	// the resources it watches: a git branch produces a version per push, a
+	// chat feed one per message. `--version-history` supplies a default when
+	// this is unset, and DefaultVersionHistory when neither is.
+	//
+	// The floor is not zero: history is what lets a job build a version that
+	// scrolled out of a check's window, and what a `passed:` gate proves
+	// against — a version pruned from history takes its green record with it,
+	// so a number below what a slow downstream job needs holds that job back.
+	VersionHistory *int `yaml:"version_history,omitempty"`
+}
+
+// DefaultVersionHistory is how many versions of each resource steps
+// remembers when neither the pipeline nor the command line says.
+//
+// Deliberately the same order as the consumed-version bound next to it: far
+// past any check window anyone polls, while keeping a busy resource from
+// growing the table forever.
+const DefaultVersionHistory = 1000
+
+// VersionHistoryLimit is how many versions of each resource to keep,
+// resolving the pipeline's own setting against the built-in default.
+//
+// A caller that has a command-line default writes it into Defaults before
+// asking, so precedence stays in one place: whatever the pipeline says wins,
+// because it is the thing that knows what its resources do.
+func (c *Config) VersionHistoryLimit() int {
+	if c.Defaults != nil && c.Defaults.VersionHistory != nil && *c.Defaults.VersionHistory > 0 {
+		return *c.Defaults.VersionHistory
+	}
+
+	return DefaultVersionHistory
 }
 
 // DefaultDelegateBudgetPercent is how much of its remaining allowance an agent

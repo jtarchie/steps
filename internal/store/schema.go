@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -53,6 +54,42 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_job
     ON trigger_queue(job_name) WHERE status = 'pending';
 
+-- Every version steps has ever seen of a resource. The thing whose absence
+-- was, until now, the one STRUCTURAL divergence from Concourse: without it a
+-- version that scrolled out of a check's window while nothing was watching
+-- was simply gone, so a cursor could suppress a version but never resurrect
+-- one, and a job that was down could not build what it missed.
+--
+-- check_order is the point of the table. Versions have no inherent order —
+-- a check returns a list and an upstream may backfill — but order of
+-- DISCOVERY is well defined, and that is what this records: assigned once,
+-- when a version is first seen, and never revised. Concourse's
+-- NextEveryVersion walks the same column for the same reason.
+--
+-- It is also what makes re-derivation safe again. A job used to be handed
+-- the versions its poll resolved, because asking a cursor-driven check a
+-- second time returns a different answer; with history it can simply look
+-- them up, at plan time and run time alike.
+--
+-- from_check separates the two ways a row gets here, and the distinction is
+-- load-bearing. A check filing what it saw (from_check = 1) is history: it is
+-- complete for that resource, so a job can read it INSTEAD of checking. A row
+-- implied by something else referencing it (from_check = 0) is not: every
+-- steps run resolves its own versions and records what it took, which
+-- creates a parent for the foreign key but says nothing about what else
+-- exists. Treating those as history would let one remembered version hide
+-- every version a check would have reported.
+CREATE TABLE IF NOT EXISTS resource_versions (
+    resource_name TEXT NOT NULL,
+    version_json  TEXT NOT NULL,
+    check_order   INTEGER NOT NULL,
+    first_seen_at TEXT NOT NULL,
+    from_check    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (resource_name, version_json)
+);
+CREATE INDEX IF NOT EXISTS idx_resource_versions_order
+    ON resource_versions(resource_name, check_order);
+
 -- Which resource versions each job has SUCCESSFULLY run against. It is what
 -- passed: reads.
 --
@@ -64,13 +101,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_job
 --
 -- With it, the question becomes "is there one build of that job where all of
 -- these versions were green at once", which is what a fan-in actually needs.
+--
+-- The foreign key is what keeps this honest against retention: a version
+-- pruned from history takes its green record with it. That is the correct
+-- direction — a version no longer in history cannot be built, so a gate that
+-- would clear for it must stay shut — but it does couple the two, and a
+-- history cap set below what a slow downstream job needs will hold that job
+-- back. See resourceVersionCap.
 CREATE TABLE IF NOT EXISTS job_versions (
     job_name      TEXT NOT NULL,
     resource_name TEXT NOT NULL,
     version_json  TEXT NOT NULL,
     recorded_at   TEXT NOT NULL,
     build_id      TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (job_name, resource_name, version_json)
+    PRIMARY KEY (job_name, resource_name, version_json),
+    FOREIGN KEY (resource_name, version_json)
+        REFERENCES resource_versions(resource_name, version_json) ON DELETE CASCADE
 );
 
 -- Which versions a job has already FANNED OUT over under get: version: every.
@@ -90,7 +136,9 @@ CREATE TABLE IF NOT EXISTS job_version_cursor (
     resource_name TEXT NOT NULL,
     version_json  TEXT NOT NULL,
     consumed_at   TEXT NOT NULL,
-    PRIMARY KEY (job_name, resource_name, version_json)
+    PRIMARY KEY (job_name, resource_name, version_json),
+    FOREIGN KEY (resource_name, version_json)
+        REFERENCES resource_versions(resource_name, version_json) ON DELETE CASCADE
 );
 
 -- One row per run invocation, with the steps it got through. It is what
@@ -259,12 +307,86 @@ var addedColumns = []struct{ table, column, decl string }{
 	// The run a replay forked from. Empty for an ordinary run, which is every
 	// run recorded before replay existed.
 	{"runs", "parent_run_id", "TEXT NOT NULL DEFAULT ''"},
-	// The versions the poll that enqueued this row resolved, as
-	// {resource: [version, ...]}. Empty means none were supplied, which is
-	// every row queued by hand (the web UI, a manual re-run) and every row
-	// written before this column existed — those jobs resolve their own
-	// versions by running check, exactly as they always did.
-	{"trigger_queue", "versions_json", "TEXT NOT NULL DEFAULT ''"},
+}
+
+// rebuiltTables are tables whose DEFINITION changed, not just their columns.
+//
+// SQLite cannot add a constraint to an existing table, and the schema above
+// is all CREATE TABLE IF NOT EXISTS, so a database made before these grew
+// their foreign keys would keep the old definition forever and the cascade
+// would silently not happen. steps has no released version, so they are
+// dropped and recreated rather than rebuilt in place.
+//
+// What that costs on upgrade is bounded and already precedented (the same
+// trade-off job_versions.build_id took): a lost consumed-cursor means a
+// version: every job takes its current versions once more, and a lost
+// job_versions means a passed: gate waits for one more upstream run before
+// it can prove a version was green. Both resolve themselves on the next
+// poll; neither loses work that has not already happened.
+var rebuiltTables = []string{"job_versions", "job_version_cursor"}
+
+// dropLegacyTables removes any rebuiltTables entry that predates its foreign
+// keys, so the schema below can recreate it with them.
+//
+// Detection is the constraint itself rather than a version counter: a table
+// with no foreign_key_list is one from before, and a table that already has
+// them is left alone. Runs BEFORE the schema is executed, since CREATE TABLE
+// IF NOT EXISTS would otherwise see the old definition and do nothing.
+func dropLegacyTables(ctx context.Context, db *sql.DB) error {
+	for _, table := range rebuiltTables {
+		legacy, err := isLegacyTable(ctx, db, table)
+		if err != nil {
+			return err
+		}
+
+		if !legacy {
+			continue
+		}
+
+		_, err = db.ExecContext(ctx, "DROP TABLE "+table)
+		if err != nil {
+			return fmt.Errorf("could not rebuild %s: %w", table, err)
+		}
+
+		slog.Info("store.table_rebuilt", "table", table, "reason", "adding foreign keys")
+	}
+
+	return nil
+}
+
+// isLegacyTable reports whether a table exists and predates its foreign keys.
+//
+// The constraint itself is the version marker: a table with no
+// foreign_key_list was created before they were declared, and one that has
+// them is already current.
+func isLegacyTable(ctx context.Context, db *sql.DB, table string) (bool, error) {
+	var exists int
+
+	err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("could not inspect %s: %w", table, err)
+	}
+
+	if exists == 0 {
+		return false, nil
+	}
+
+	rows, err := db.QueryContext(ctx, "PRAGMA foreign_key_list("+table+")")
+	if err != nil {
+		return false, fmt.Errorf("could not inspect %s: %w", table, err)
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	hasFK := rows.Next()
+
+	err = rows.Err()
+	if err != nil {
+		return false, fmt.Errorf("could not inspect %s: %w", table, err)
+	}
+
+	return !hasFK, nil
 }
 
 // addColumns applies addedColumns, treating "duplicate column name" as

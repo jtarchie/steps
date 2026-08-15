@@ -299,6 +299,36 @@ func (j Job) ResourceNames() []string {
 	return names
 }
 
+// GetResourceNames lists every resource this job's plan or hooks fetch, in
+// first-appearance order and without repeats, resolving aliases the way
+// GetResourceName does.
+//
+// Deduped because two gets of one resource are two artifacts of the same
+// thing: a caller asking what to load for this job wants each answered once.
+func (j Job) GetResourceNames() []string {
+	var names []string
+
+	seen := map[string]bool{}
+
+	_ = j.visitSteps(func(_ string, step *Step) error {
+		if step.Get == "" {
+			return nil
+		}
+
+		name := step.GetResourceName()
+		if seen[name] {
+			return nil
+		}
+
+		seen[name] = true
+		names = append(names, name)
+
+		return nil
+	})
+
+	return names
+}
+
 // GetsResource reports whether this job's plan or hooks fetch the named
 // resource, resolving aliases the way GetResourceName does.
 //
