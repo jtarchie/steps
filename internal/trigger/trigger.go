@@ -383,10 +383,11 @@ type observedResource struct {
 	version map[string]any
 	latest  string
 	dirty   bool
-	// versions is everything this check returned, oldest first — the answer
-	// the poll already paid for, handed to the job it enqueues so that job
-	// does not re-derive a different one. See EnqueueJobWithVersions.
+	// versions is everything this check returned, oldest first.
 	versions []map[string]any
+	// coldStart marks a resource nothing had recorded before this check —
+	// the one moment a backlog is not news. See recordHistory.
+	coldStart bool
 }
 
 // pollOnce checks every trigger resource once and enqueues (deduplicated)
@@ -411,8 +412,15 @@ func pollOnce(ctx context.Context, cfg *config.Config, st *store.Store) ([]strin
 			return nil, err
 		}
 
-		if hasVersion {
-			observed[name] = obs
+		if !hasVersion {
+			continue
+		}
+
+		observed[name] = obs
+
+		err = recordHistory(ctx, cfg, st, name, obs)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -454,7 +462,7 @@ func pollOnce(ctx context.Context, cfg *config.Config, st *store.Store) ([]strin
 // in observed, returning the job names enqueued. It runs before any version
 // is recorded, so a failure here leaves every resource dirty for retry.
 func enqueueAffected(ctx context.Context, cfg *config.Config, st *store.Store, observed map[string]observedResource) ([]string, error) {
-	reasons, supplied, err := affectedJobs(ctx, cfg, st, observed)
+	reasons, err := affectedJobs(ctx, cfg, st, observed)
 	if err != nil {
 		return nil, err
 	}
@@ -462,7 +470,7 @@ func enqueueAffected(ctx context.Context, cfg *config.Config, st *store.Store, o
 	enqueued := make([]string, 0, len(reasons))
 
 	for jobName, reason := range reasons {
-		err := st.EnqueueJobWithVersions(ctx, jobName, reason, supplied[jobName])
+		err := st.EnqueueJob(ctx, jobName, reason)
 		if err != nil {
 			return nil, fmt.Errorf("enqueue job %q: %w", jobName, err)
 		}
@@ -473,17 +481,15 @@ func enqueueAffected(ctx context.Context, cfg *config.Config, st *store.Store, o
 	return enqueued, nil
 }
 
-// affectedJobs decides which jobs a poll's findings should run, why, and
-// against which versions.
+// affectedJobs decides which jobs a poll's findings should run, and why.
 //
-// The reason is a label and the first dirty resource will do. The versions
-// are the WORK, so every dirty resource the job reads contributes — a job
-// watching two resources that both moved must be handed both.
+// The reason is a label and the first dirty resource will do; which versions
+// a job then builds is not decided here at all, but read from history when
+// the job runs (see internal/pipeline's loadResourceHistory).
 func affectedJobs(
 	ctx context.Context, cfg *config.Config, st *store.Store, observed map[string]observedResource,
-) (reasons map[string]string, supplied map[string]store.QueuedVersions, err error) {
-	reasons = map[string]string{}
-	supplied = map[string]store.QueuedVersions{}
+) (map[string]string, error) {
+	reasons := map[string]string{}
 
 	for resourceName, obs := range observed {
 		if !obs.dirty {
@@ -491,64 +497,24 @@ func affectedJobs(
 		}
 
 		for _, job := range AffectedJobs(cfg, resourceName) {
-			ready, readyErr := jobReadyFor(ctx, st, job, observed)
-			if readyErr != nil {
-				return nil, nil, readyErr
+			if _, already := reasons[job.Name]; already {
+				continue
+			}
+
+			ready, err := jobReadyFor(ctx, st, job, observed)
+			if err != nil {
+				return nil, err
 			}
 
 			if !ready {
 				continue
 			}
 
-			if _, already := reasons[job.Name]; !already {
-				reasons[job.Name] = resourceName
-			}
-
-			// Initialized here rather than alongside the reason above: two
-			// maps that must be written in lockstep, whose failure mode is a
-			// write to a nil map, is a coupling worth not having.
-			if supplied[job.Name] == nil {
-				supplied[job.Name] = store.QueuedVersions{}
-			}
-
-			supplied[job.Name][resourceName] = obs.versions
+			reasons[job.Name] = resourceName
 		}
 	}
 
-	for jobName := range reasons {
-		job, findErr := cfg.FindJob(jobName)
-		if findErr != nil {
-			continue
-		}
-
-		applyPassedVersions(supplied[jobName], job, observed)
-	}
-
-	return reasons, supplied, nil
-}
-
-// applyPassedVersions overwrites, for every resource this job constrains with
-// passed:, the versions to build with the single version jobReadyFor just
-// proved went green upstream.
-//
-// Without it a constrained job would be handed the latest version its check
-// reported, which is precisely the version nothing has proved anything about
-// — and then build it, defeating the gate. The same hole exists today by a
-// longer route (the job re-checks at run time and takes the latest), so this
-// closes it rather than avoiding a new one.
-func applyPassedVersions(into store.QueuedVersions, job *config.Job, observed map[string]observedResource) {
-	if into == nil {
-		return
-	}
-
-	for resource := range job.PassedConstraints() {
-		obs, seen := observed[resource]
-		if !seen || obs.version == nil {
-			continue
-		}
-
-		into[resource] = []map[string]any{obs.version}
-	}
+	return reasons, nil
 }
 
 // reportSerialWaits says which pending jobs are held by a serial-group lock,
@@ -616,14 +582,7 @@ func releaseConstrainedJobs(
 			continue
 		}
 
-		// The set jobReadyFor just proved green upstream, handed over rather
-		// than discarded: without it the job re-checks at run time and can
-		// build a version NEWER than the one that passed, which is the gate
-		// failing open.
-		versions := store.QueuedVersions{}
-		applyPassedVersions(versions, job, observed)
-
-		err = st.EnqueueJobWithVersions(ctx, job.Name, "upstream jobs passed this version", versions)
+		err = st.EnqueueJob(ctx, job.Name, "upstream jobs passed this version")
 		if err != nil {
 			return nil, fmt.Errorf("enqueue job %q: %w", job.Name, err)
 		}
@@ -801,10 +760,11 @@ func checkResource(ctx context.Context, cfg *config.Config, st *store.Store, res
 	}
 
 	return observedResource{
-		version:  versions[len(versions)-1],
-		latest:   string(latest),
-		dirty:    found && previous != string(latest),
-		versions: versions,
+		version:   versions[len(versions)-1],
+		latest:    string(latest),
+		dirty:     found && previous != string(latest),
+		versions:  versions,
+		coldStart: !found,
 	}, true, nil
 }
 
@@ -829,6 +789,64 @@ func recordedVersion(
 	}
 
 	return encoded, version, true, nil
+}
+
+// recordHistory files everything this check reported, and on a resource's
+// FIRST check marks it all as already taken.
+//
+// The seeding is what stops a new watcher answering a backlog. History makes
+// every version a job could build visible to it, which is the point — but a
+// job whose plan says `version: every` would then fan out over the entire
+// backlog the first time anything triggered it, which is the flood this
+// whole effort exists to prevent. steps has always drawn the line in the
+// same place (pollOnce records a cold start's version without enqueuing
+// anything); this draws it for the per-job cursor too.
+//
+// It marks versions taken for every job that reads the resource, not just
+// triggered ones, because a job that has never run has no other way to say
+// "I was not here for these".
+//
+// The known edge: a job ADDED to the pipeline later has no such marking, so
+// its first trigger fans out over whatever history holds. That is a
+// deliberate limit rather than an oversight — steps cannot tell a job that
+// is new from one that has simply not run — and the cure is a narrower
+// history (defaults.version_history:) or a first run under --pin.
+func recordHistory(
+	ctx context.Context, cfg *config.Config, st *store.Store, resourceName string, obs observedResource,
+) error {
+	if len(obs.versions) == 0 {
+		return nil
+	}
+
+	err := st.RecordVersions(ctx, resourceName, obs.versions, cfg.VersionHistoryLimit())
+	if err != nil {
+		return fmt.Errorf("trigger resource %q: %w", resourceName, err)
+	}
+
+	if !obs.coldStart {
+		return nil
+	}
+
+	for i := range cfg.Jobs {
+		job := &cfg.Jobs[i]
+		if !job.GetsResource(resourceName) {
+			continue
+		}
+
+		for _, version := range obs.versions {
+			encoded, err := store.EncodeVersion(version)
+			if err != nil {
+				return fmt.Errorf("trigger resource %q: %w", resourceName, err)
+			}
+
+			err = st.RecordConsumedVersion(ctx, job.Name, resourceName, encoded)
+			if err != nil {
+				return fmt.Errorf("trigger resource %q: %w", resourceName, err)
+			}
+		}
+	}
+
+	return nil
 }
 
 // recoverDrainPanic turns a value recovered from a panic in drainOne into the
@@ -948,19 +966,10 @@ func drainOne(
 
 	fmt.Printf("trigger: running %s\n", jobName)
 
-	// The versions the poll that queued this row resolved. Empty for a
-	// hand-queued row (the web UI, a manual re-run) and for rows written
-	// before the column existed, in which case the job resolves its own.
-	supplied, err := st.ClaimedVersions(ctx, id)
-	if err != nil {
-		return true, finalizeRun(ctx, st, job, id, err)
-	}
-
 	runCtx, release := buildContext(ctx, job)
 	defer release()
 
-	return true, finalizeRun(ctx, st, job, id,
-		pipeline.RunJobWithVersions(runCtx, cfg, job, pinned, provider, st, force, supplied))
+	return true, finalizeRun(ctx, st, job, id, pipeline.RunJob(runCtx, cfg, job, pinned, provider, st, force))
 }
 
 // nonInterruptibleGrace bounds how long a shutdown waits for a build that did

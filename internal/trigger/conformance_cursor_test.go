@@ -24,8 +24,9 @@ import (
 // asks a different question than the poll did: a check written the way the
 // docs prescribe ("everything since the cursor") answers the poll with the
 // new versions, and then answers the job the poll just enqueued with
-// NOTHING. The job goes green having processed nothing, and the versions are
-// unrecoverable — steps keeps no version history.
+// NOTHING. The job would go green having processed nothing, and while
+// resource_versions now remembers what a check reported, a job that has
+// silently decided it has no work does not come back for it.
 //
 // This is deliberately an integration test over pollOnce AND RunJob. The
 // defect is invisible to either alone: the poll returns the right versions,

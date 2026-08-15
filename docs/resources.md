@@ -93,27 +93,84 @@ check: |
                --data-urlencode 'limit=200' https://api.example.com/messages
 ```
 
-Guess too small and items scroll past during a busy period, permanently — steps keeps no version history, so whatever the window missed is gone. Guess anything at all and a cold start replays a backlog nobody is waiting on.
+Guess too small and items scroll past during a busy period — and while [history](#version-history) means a version steps already recorded is not lost, one it never saw at all cannot be recovered by anything. Guess anything at all and a cold start reads a backlog nobody is waiting on.
 
 Three things to know:
 
 - **Spell it `{{ index .version "ts" | default "0" }}`, not `{{ .version.ts }}`.** On the first-ever check there is no cursor and `.version` is an empty map; templates render with `missingkey=error`, so the bare form fails that first poll. This is the same shape an optional `source:` field or get `params:` already uses.
 - **The cursor belongs to `steps watch` alone**, which both advances it and is the only thing that reads it. A `steps run` or `steps plan` renders `{{ .version }}` as an empty map even when a watcher has been polling for weeks — a manual run asks what exists, not what is new.
-- **A check that ignores `.version` keeps working exactly as before.** The cursor narrows what a check *asks for*; it is not a filter steps applies to the answer.
+- **A check that ignores `.version` keeps working exactly as before.** The cursor narrows what a check *asks for*; it is not a filter steps applies to the answer, and it is not what decides which versions a job builds — that is [history](#version-history).
 
-### What the triggered job runs on
+### Version history
 
-The versions a poll finds are handed to the job it triggers, and that job does **not** run `check` again for them. This matters more than it sounds:
+steps remembers every version it has seen of a resource, in the order it first
+saw them. That record is what a triggered job actually builds from — it does
+**not** re-run `check` for the versions it was triggered for.
 
-- A cursor-driven check is not re-derivable. Ask it twice and the second answer is different, because the first answer moved the cursor. A job re-deriving its own versions would ask "what is new since the versions I was just handed" and correctly get nothing.
-- Without the cursor, a re-derived check sees its whole window. Point a watcher at a queue with a twenty-item backlog, and the one new item that triggers the job arrives alongside the twenty stale ones — which, for a pipeline whose job is to answer things, means twenty answers nobody is waiting on.
+The reason is that a cursor-driven check cannot be asked twice. The second
+answer is different, because the first answer moved the cursor: a job
+re-deriving its own versions would ask "what is new since the versions I was
+just handed" and correctly get nothing. A lookup is repeatable, so plan time
+and run time agree without anything being passed between them.
 
-So the poll's answer travels with the job. A get whose resource the poll did not observe — a plain `get: repo` beside a triggered one — still resolves itself by running `check`, as does every get under a manual `steps run`.
+History is also what makes a version *recoverable*. Before it, whatever
+`check` returned right now was the whole universe — a version that scrolled
+out of the window while nothing was watching was gone, and no amount of
+cursor bookkeeping could bring it back.
 
-Two consequences worth knowing:
+Three things follow:
 
-- **A version that vanishes upstream fails the build.** The job fetches the version it was given; if that has since been deleted, `in` fails, loudly, rather than the job quietly doing nothing.
-- **`steps plan` shows what a *manual* run would do.** It has no queued versions to read, so it re-derives — which for a cursor-driven check can differ from what the queued run will actually build.
+- **A resource nothing has polled has no history**, so a get against it runs
+  its own `check` — every `steps run`, and every `get:` beside a triggered one.
+- **A cold start does not become a backlog.** The first check of a resource
+  records everything it reports and marks it all as already taken, so a
+  watcher pointed at twenty existing items answers none of them and waits for
+  the twenty-first. (A job *added* to the pipeline later has no such marking,
+  and its first trigger will see whatever history holds.)
+- **Pruning is not free.** A version dropped from history takes its green
+  record with it, so a `passed:` gate can no longer clear for it. That is
+  correct — a version out of history cannot be built — but it means a limit
+  set below what a slow downstream job needs will hold that job back.
+
+#### How much to remember
+
+`defaults.version_history:` caps it per resource, keeping the newest:
+
+```yaml
+defaults:
+  # A git branch produces a version per push; a chat feed one per message.
+  # The right number is a property of what you watch.
+  version_history: 50
+
+resource_types:
+- name: counter
+  config:
+    check: |
+      printf '[{"n": "1"}, {"n": "2"}]'
+    in: echo {{ .version.n | shellquote }} > n.txt
+
+resources:
+- name: ticks
+  type: counter
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: ticks
+  - task: show
+    inputs: [ticks]
+    run: cat ticks/n.txt
+    assert:
+      stdout: "2"
+  assert:
+    execution: [ticks, show]
+    outcome: succeeded
+```
+
+`--version-history` sets a default for a pipeline that does not; when neither
+says, steps keeps 1000. Whatever the limit, the newest versions are the ones
+kept.
 
 ```yaml
 resource_types:
@@ -339,7 +396,7 @@ A check reports what *exists*, not what is new — the same twenty Slack message
 - **Recorded per (job, resource)**, so another job reading the same resource keeps its own place.
 - **A version is taken when its build STARTS**, not when it succeeds — so a version whose build failed is not retried on the next run. This is Concourse's rule (`NextEveryVersion` reads the versions a build was *created* with and never looks at build status), and it is what stops one bad input failing forever, on every trigger, with an agent's bill attached. Re-running it is a deliberate act: `--force`, `--resume`, or a new version.
 - **`--force` ignores it**, along with every other piece of persisted state — which means it re-runs versions already taken, effects included. It still RECORDS what it takes, so an ordinary run afterwards does not repeat the same work again. It still *records* what it took, so the ordinary run after a forced one does not repeat that work a second time.
-- **It can only suppress, never resurrect.** steps keeps no version history: whatever `check` returns *now* is the whole universe. A version that scrolled out of the check's window while nothing was watching is gone. The [check cursor](#the-check-cursor) is how a type stops that being a guess — a check told where it left off can ask for everything since, rather than hoping a fixed window was wide enough.
+- **It suppresses; [history](#version-history) is what resurrects.** The versions a job may take are the ones steps has recorded, not only the ones `check` returns right now — so a version that scrolled out of the window while nothing was watching is still built. What history does not hold, nothing can recover: a version pruned by `version_history:`, or one from before steps first checked the resource.
 
 - **Only the first `get:` in a plan may say `every`.** That is the one fan-out point; a later get runs *inside* one of those fan-outs, where it can only fetch a single version. Writing it there is a load error rather than a field that is accepted and ignored. (Concourse allows several — each input has its own cursor — because it resolves a whole input *set* per build instead of fanning out at one step. See [conformance](conformance.md).)
 

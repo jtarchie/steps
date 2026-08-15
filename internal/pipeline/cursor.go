@@ -17,9 +17,10 @@ package pipeline
 // has not built: NextEveryVersion (atc/db/versions_db.go) reads the versions a
 // build was CREATED with (build_resource_config_version_inputs) and filters on
 // build status nowhere, so a version taken by a failed build stays taken. This
-// follows that exactly — see runGetStep, and docs/conformance.md for the one
-// divergence that remains (steps keeps no version history, so this can only
-// suppress a version, never resurrect one that scrolled out of view).
+// follows that exactly — see runGetStep. What this cannot do is resurrect:
+// it decides which of the versions steps HAS that a job still owes work on.
+// Which versions steps has is resource_versions' answer, and a version
+// pruned from there is beyond both.
 
 import (
 	"context"
@@ -100,30 +101,63 @@ func loadVersionCursor(ctx context.Context, st *store.Store, job *config.Job, su
 	return cursor, nil
 }
 
-// Why the run and plan paths do NOT read the check cursor, though they have
-// a store and could.
+// The run and plan paths do not read the poller's check cursor
+// (resource_checks), and must not: it means "the newest version the POLLER
+// has dispatched" and it advances as soon as a poll enqueues work, so a job
+// re-deriving its versions against it asks a different question than the
+// poll did and gets nothing. That is not a limitation any more, because they
+// no longer re-derive at all — they read history.
 //
-// The cursor (resource_checks, written by internal/trigger's pollOnce) means
-// "the newest version the POLLER has detected and dispatched". It advances
-// as soon as the affected jobs are enqueued — before any of them runs.
+// resourceHistory answers "which versions of this resource exist", from
+// resource_versions, in the order they were discovered.
 //
-// A get step re-derives its versions by running `check` again, at plan time
-// and at run time. Handing that re-derivation the cursor makes it ask a
-// different question than the poll did: a check written the way the docs
-// prescribe ("everything since {{ .version.ts }}") returns the three new
-// items to the poll, and then NOTHING to the job the poll just enqueued,
-// because the cursor already moved past them. The job exits green having
-// processed nothing, and the versions are gone -- steps keeps no version
-// history to recover them from.
+// It replaces handing versions to a job on its queue row. The poll's answer
+// used to have to be CARRIED because asking a cursor-driven check twice
+// returns two different answers; a lookup is repeatable, which is what makes
+// plan time and run time able to agree without anything being threaded
+// between them.
 //
-// So a cursor-driven check is not re-derivable, and only the one caller that
-// OWNS the cursor may use it. What stops the run path repeating work is the
-// per-(job, resource) consumed cursor above, which is keyed to what a job
-// actually took rather than to what the poller last saw.
-//
-// Pinned by TestConformanceRunDoesNotDependOnPollerCursor (internal/trigger),
-// which drives a real poll and a real RunJob rather than either alone --
-// the defect is invisible to each in isolation.
+// What stops a job repeating work is unchanged and separate: the consumed
+// set above, keyed to what a job actually took.
+type resourceHistory struct {
+	versions map[string][]map[string]any
+}
+
+// loadResourceHistory reads the history of every resource this job gets, once
+// up front — the same reason the consumed set is read once: the planner and
+// the executor have to judge the same list, and a lazy per-resource read
+// could see a poll land between them.
+func loadResourceHistory(ctx context.Context, st *store.Store, job *config.Job) (*resourceHistory, error) {
+	history := &resourceHistory{versions: map[string][]map[string]any{}}
+
+	for _, name := range job.GetResourceNames() {
+		versions, err := st.ResourceVersions(ctx, name)
+		if err != nil {
+			return nil, err //nolint:wrapcheck // ResourceVersions names the resource
+		}
+
+		history.versions[name] = versions
+	}
+
+	return history, nil
+}
+
+// get returns the versions recorded for a resource, or nil when there are
+// none — which resource.ResolveVersions treats as "nothing supplied, run the
+// check". That is the right fallback: a resource nothing has ever polled has
+// no history to read, and a manual `steps run` against one must still work.
+func (h *resourceHistory) get(resourceName string) []map[string]any {
+	if h == nil {
+		return nil
+	}
+
+	versions := h.versions[resourceName]
+	if len(versions) == 0 {
+		return nil
+	}
+
+	return versions
+}
 
 // fansOutOverEveryVersion reports whether a get step uses version: every —
 // the only mode that runs the rest of the plan once per version.

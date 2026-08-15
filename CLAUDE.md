@@ -8,6 +8,12 @@ Trust these instructions. Only search the codebase if something here is missing 
 
 - **No CI configured**: there is no `.github/`, no CONTRIBUTING.md. `Taskfile.yml` (go-task) is the entire validation pipeline — run it locally exactly as documented before considering any change done.
 
+## Working rules
+
+- **Unspecified behavior → ask "What would Concourse do?"** steps is a Concourse-shaped DSL; when a semantic isn't pinned down by this repo (what a field means at an edge, ordering, when a step is skipped, how a version is picked, what counts as a change), the default answer is whatever Concourse does. Research it thoroughly first — Concourse docs, its source, real pipeline behavior — then come back with the finding AND the open questions for the user. Do not invent a semantic and do not guess in silence; a divergence from Concourse is a deliberate decision the user makes, not a side effect of an implementation.
+- **Foreign key constraints are required.** Every SQLite column in `internal/store` that references another table's key declares a `REFERENCES` constraint with an explicit `ON DELETE` action. `PRAGMA foreign_keys=ON` is set on the connection, so a missing constraint is a silently-orphaned row, not a saved line. A relationship that genuinely cannot be a foreign key needs a comment naming why.
+- **Comments earn their place.** Write a comment only when it says something the code cannot: a why, a non-obvious invariant, an external constraint, a deliberate shortcut (`// ponytail:`). No restating the next line, no section banners, no narrating parameters. An extraneous comment is a defect — delete it rather than update it.
+
 ## Build, test, lint — `task` runs it all
 
 Prerequisites: Go 1.26.6 (`go version`), golangci-lint v2.12+ (`golangci-lint version`; `brew install golangci-lint`), and go-task (`task --version`; `brew install go-task`). SQLite is vendored (`modernc.org/sqlite`, pure Go, no cgo/system SQLite needed). `task install:tools` installs the two remaining CLIs the sequence needs (`govulncheck`, `nilaway`) — neither needs network/Docker/credentials to *run* (govulncheck fetches the vuln DB, which needs network once per invocation).

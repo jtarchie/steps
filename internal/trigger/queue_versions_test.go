@@ -258,12 +258,10 @@ jobs:
 		t.Fatalf("first run processed %v, want one version", got)
 	}
 
-	// Queue the same job against the same version again. The task is
-	// unchanged content over an unchanged version, so the planner must find
-	// it already recorded and the run must skip it.
-	err = st.EnqueueJobWithVersions(ctx, "build", "items", map[string][]map[string]any{
-		"items": {{"n": "2"}},
-	})
+	// Queue the same job again. The task is unchanged content over an
+	// unchanged version, so the planner must find it already recorded and the
+	// run must skip it.
+	err = st.EnqueueJob(ctx, "build", "items")
 	if err != nil {
 		t.Fatal(err)
 	}
