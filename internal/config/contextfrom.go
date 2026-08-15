@@ -3,12 +3,9 @@ package config
 // context: { from: { <step>: <level> } } — a step declaring which earlier
 // steps' decisions it wants to see.
 //
-// Every other channel between steps in this codebase is either automatic (the
-// run-context recap) or inferred (a handoff note's receiver was computed from
-// plan position). This one is declared on the RECEIVER, and nothing arrives
-// without it. That is the whole point: a step's inputs should be readable off
-// the step, and a sender should not be able to push context into a reader that
-// never asked.
+// Declared on the RECEIVER, and nothing arrives without it: a step's inputs
+// should be readable off the step, and a sender must never be able to push
+// context into a reader that never asked.
 //
 // The demand is also what creates the obligation. A verdict is always
 // recorded, so asking for one costs the sender nothing — but asking for a NOTE
@@ -27,9 +24,8 @@ import (
 
 // UpstreamDir is the directory a TASK reader's demanded outcomes are
 // materialized into, one file per sender named for the step. A shell command
-// cannot be handed a synthetic tool result, so the filesystem is the interface
-// it already has — the same reasoning that makes a context: write task record
-// by writing files.
+// cannot be handed a synthetic tool result the way an agent can, so the
+// filesystem is the interface it gets instead.
 //
 // Reserved as an artifact name (see ValidateArtifactName): an artifact so
 // called would materialize over the delivered outcomes.

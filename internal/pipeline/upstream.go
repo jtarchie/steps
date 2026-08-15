@@ -4,8 +4,7 @@ package pipeline
 //
 // An agent reader gets its senders as synthetic tool results, in the
 // conversation (see internal/agent's upstreamBlocks). A shell command has no
-// conversation, so it gets files — the same interface a context: write task
-// already records through, in the other direction.
+// conversation, so it gets files instead — one per demanded sender.
 
 import (
 	"context"
