@@ -598,11 +598,28 @@ func envelopeOf(request requestSpec, resp *http.Response, data []byte) map[strin
 		headers[key] = strings.Join(values, ", ")
 	}
 
+	// Decoded with UseNumber and then normalized, because the default
+	// float64 corrupts exactly the values versions are made of: an id wider
+	// than 2^53 comes out as 1.2345678901234568e+18, an identity the API
+	// never issued, which is then stored, hashed, and handed back as the
+	// next check's cursor. The same defect was fixed in the shell and mcp
+	// backends; this is the expr backend's copy.
+	//
+	// Normalized rather than left as json.Number, because expr's arithmetic
+	// does not operate on a string type: integers become int64 (exact for
+	// anything an API calls an id) and fractions become float64 (arithmetic
+	// keeps working; a fractional IDENTITY should be sent as a string, as
+	// e.g. Slack's ts already is — and arrives here untouched).
 	var parsed any
 
-	err := json.Unmarshal(data, &parsed)
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+
+	err := decoder.Decode(&parsed)
 	if err != nil {
 		parsed = nil
+	} else {
+		parsed = normalizeNumbers(parsed)
 	}
 
 	return map[string]any{
@@ -626,6 +643,40 @@ var httpClient = &http.Client{}
 // polls every few minutes.
 func CloseIdleConnections() {
 	httpClient.CloseIdleConnections()
+}
+
+// normalizeNumbers rewrites every json.Number in a decoded tree into a type
+// expr can compute with — int64 when the digits are an integer, float64
+// otherwise. See envelopeOf.
+func normalizeNumbers(value any) any {
+	switch typed := value.(type) {
+	case json.Number:
+		whole, err := typed.Int64()
+		if err == nil {
+			return whole
+		}
+
+		fraction, err := typed.Float64()
+		if err == nil {
+			return fraction
+		}
+
+		return typed.String()
+	case map[string]any:
+		for key, item := range typed {
+			typed[key] = normalizeNumbers(item)
+		}
+
+		return typed
+	case []any:
+		for i, item := range typed {
+			typed[i] = normalizeNumbers(item)
+		}
+
+		return typed
+	default:
+		return value
+	}
 }
 
 // stringMap converts a header-ish map, stringifying scalar values so a
