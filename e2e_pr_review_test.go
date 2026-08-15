@@ -1,14 +1,26 @@
 package main
 
-// The deterministic half of examples/pr-review.yml.
+// The deterministic half of examples/pr-review.yml — run against THE FILE,
+// not a copy of it.
 //
-// That example cannot be a fixture: it needs a live model, an authenticated
-// `gh`, and its pass/fail depends on what the reviewers find. What CAN be
-// pinned is the shape it is built out of — a planner step decides the width
-// of a matrix, one reviewer cell per dimension runs concurrently, everything
-// they produce comes back as one collected artifact, and a verdict routes the
-// run to the end. That is the part that would break silently, so that is the
-// part with a test.
+// That example needs a live model, an authenticated `gh`, and a real PR, and
+// its pass/fail depends on what the reviewers find. What is deterministic is
+// the shape: a planner decides the width of a matrix, one reviewer cell per
+// dimension runs concurrently, what they produce comes back as one collected
+// artifact, a human gate parks the run, and a put posts the result.
+//
+// This used to be pinned against a 300-line hand-written PARAPHRASE of the
+// example living in this file, which is two pipelines to keep in agreement
+// and one of them untested — by the time it was replaced the paraphrase had
+// grown a verdicts:/max_visits: loop the real example does not have. So the
+// example itself is what runs here: read from disk, pointed at a scripted
+// provider through the same source: seam the doc corpus uses, with `gh` and
+// `git` stubbed on PATH so the resource type's real check/in text executes.
+//
+// The division of labour with the file's own assert: blocks is deliberate.
+// The YAML asserts what must hold on a REAL run (each agent WROTE the
+// artifact it promised); this test asserts what is only true of the fixture
+// (which dimensions, how many cells, which nodes recorded).
 //
 // The model is scripted and routed on content rather than position:
 // concurrent cells reach the provider in whatever order their goroutines are
@@ -17,108 +29,159 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-// TestEndToEndPRReviewShape drives the pipeline's spine end to end: a planner
-// writes the work list, the matrix fans out over it concurrently, the cells'
-// findings come back as one artifact, and a verdict routes the run to the end.
-func TestEndToEndPRReviewShape(t *testing.T) {
+// TestEndToEndPRReviewExample runs examples/pr-review.yml end to end.
+func TestEndToEndPRReviewExample(t *testing.T) {
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	dir := t.TempDir()
-
 	fake := newRoutedFakeLLM(t, reviewScript())
+	path := writeExampleAgainstFake(t, dir, filepath.Join("examples", "pr-review.yml"), fake.URL)
 
-	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
+	stubGitHubCLI(t, dir)
 
-defaults:
-  preflight:
-    disabled: true
+	// Create and migrate the state db before anything races for it. Two
+	// store opens in one process is the shape this test needs — the run
+	// parks, a second command answers it — and SQLite's journal-to-WAL
+	// conversion is not covered by busy_timeout, so a concurrent FIRST open
+	// returns SQLITE_BUSY outright. Opening it once up front (this lists
+	// nothing) leaves both later opens attaching to a migrated file.
+	mustRun(t, "approvals", path)
 
-agents:
-- name: planner
-  source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
-  tools: [read_file, write_file]
-- name: reviewer
-  source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
-  tools: [read_file, write_file]
-- name: falsifier
-  source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
-  tools: [read_file, list_dir, write_file]
-- name: synthesizer
-  source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
-  tools: [read_file, list_dir, write_file]
+	// The approval: step parks the plan, so the run has to be answered from
+	// outside it — exactly as a person would, through the same command.
+	done := make(chan error, 1)
 
-jobs:
-- name: review
-  plan:
-  - agent: planner
-    inputs: []
-    outputs: [dims]
-    prompt: Decide the review dimensions; write dims/index.json and one brief per id.
+	go func() {
+		done <- run([]string{"test", path, "--var", "pr_repo=jtarchie/steps"})
+	}()
 
-  - across:
-    - var: dim
-      from_file: dims/index.json
-    max_in_flight: 2
-    try:
-      agent: reviewer
-      inputs: [dims]
-      outputs: [findings]
-      context_paths: ["dims/{{ .vars.dim }}.md"]
-      prompt: Review through the {{ .vars.dim }} dimension; write findings/report.json.
+	// Answer the gate, but never outlive the run: if the plan died before it
+	// parked, the useful message is the run's own error, not "nobody was
+	// waiting to be approved".
+	approved := make(chan error, 1)
 
-  - agent: falsifier
-    inputs: [findings]
-    outputs: [confirmed]
-    prompt: Invalidate every finding under findings/; write confirmed/confirmed.json.
+	go func() { approved <- approveWhenPending(path) }()
 
-  - agent: synthesizer
-    inputs: [confirmed]
-    outputs: [review]
-    verdicts:
-      - complete: check-draft
-      - blind-spots: falsifier     # backward: another pass at the gate
-    max_visits: 2                  # which is bounded, at one extra pass
-    prompt: Write the review from the confirmed findings.
+	select {
+	case err := <-done:
+		t.Fatalf("the run finished without ever parking on the approval: %v", err)
+	case err := <-approved:
+		if err != nil {
+			t.Fatalf("approving the gate: %v", err)
+		}
+	}
 
-  - task: check-draft
-    inputs: [review]
-    run: test -s review/summary.md && test -s review/findings.json
-`, fake.URL+"/v1/"))
+	err := <-done
+	if err != nil {
+		t.Fatalf("steps test %s: %v", path, err)
+	}
 
-	mustRun(t, path)
-
-	// ── the fan-out was as wide as the planner said, and named per dimension —
-	// a number the pipeline text never mentions.
 	nodes := storeNodes(t, path)
+
+	// The fan-out was as wide as the planner said, and named per dimension —
+	// a number the example's text never mentions.
 	for _, id := range []string{"state-mutation", "api-boundaries"} {
 		assertSucceeded(t, nodes, "agent", "reviewer [dim="+id+"]")
 	}
 
-	// ── the verdict routed the run to the end ───────────────────────────────
-	// check-draft ran, so the synthesizer really did write the files it
-	// claimed — and the backward blind-spots route did NOT fire, which is
-	// what a second falsifier run would show.
+	// Every phase after the matrix consumed what the one before it collected,
+	// through to the put — which only runs because the approval was answered.
+	for _, agent := range []string{"falsifier", "gatekeeper", "synthesizer"} {
+		assertSucceeded(t, nodes, "agent", agent)
+	}
+
 	assertSucceeded(t, nodes, "task", "check-draft")
+	assertSucceeded(t, nodes, "put", "pr-review")
+}
 
-	falsifierRuns := 0
+// approveWhenPending answers approval 1 once it exists, returning the last
+// error if it never does.
+func approveWhenPending(pipelinePath string) error {
+	deadline := time.Now().Add(30 * time.Second)
 
-	for _, node := range nodes {
-		if node.Resource == "falsifier" {
-			falsifierRuns++
+	var last error
+
+	for time.Now().Before(deadline) {
+		last = run([]string{"approve", pipelinePath, "1"})
+		if last == nil {
+			return nil
+		}
+
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	return last
+}
+
+// writeExampleAgainstFake copies a repo example into dir with every agent
+// pointed at the fake provider — the same structural rewrite docs_test.go
+// applies to a doc block, so the file on disk stays the one a reader runs.
+func writeExampleAgainstFake(t *testing.T, dir, examplePath, endpoint string) string {
+	t.Helper()
+
+	body, err := os.ReadFile(examplePath) //nolint:gosec // a repo path this test names itself
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return writePipeline(t, dir, injectFakeProvider(t, string(body), endpoint))
+}
+
+// stubGitHubCLI puts a fake `gh` and a no-op `git` at the front of PATH, so
+// the example's real check:/in:/out: shell text runs against canned data
+// instead of a network and an authenticated account.
+//
+// Stubbing the BINARIES rather than rewriting the resource type keeps the
+// thing under test the text a reader would run: the `in:` script still parses
+// the ref, still splits number from sha, still writes the three files the
+// planner's context_paths: name.
+func stubGitHubCLI(t *testing.T, dir string) {
+	t.Helper()
+
+	bin := filepath.Join(dir, "bin")
+
+	err := os.MkdirAll(bin, 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stubs := map[string]string{
+		// $2 is gh's subcommand under `pr`; every path the example takes is
+		// answered, and anything else is a loud failure rather than empty
+		// output that would surface much later as a missing file.
+		"gh": `#!/bin/sh
+case "$2" in
+  list)   printf '[{"ref": "7@abc123def456"}]' ;;
+  diff)   printf 'diff --git a/store.go b/store.go\n+func Set(k string) {}\n' ;;
+  view)   printf '{"title":"Add Set","body":"adds a setter","files":[{"path":"store.go"}],"baseRefName":"main"}' ;;
+  review) printf 'review posted\n' ;;
+  *)      echo "fake gh: unexpected argv: $*" >&2; exit 1 ;;
+esac
+`,
+		// The example clones the PR's code so reviewers can read the source.
+		// The fixture's model never reads it, and a real fetch would make
+		// this test need the network.
+		"git": `#!/bin/sh
+exit 0
+`,
+	}
+
+	for name, body := range stubs {
+		err = os.WriteFile(filepath.Join(bin, name), []byte(body), 0o700) //nolint:gosec // a stub this test invokes
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
 
-	if falsifierRuns != 1 {
-		t.Errorf("falsifier ran %d times, want 1; the verdict was complete, so the backward blind-spots route must not have fired", falsifierRuns)
-	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 // reviewScript is the model this fixture runs against: one function
@@ -147,17 +210,19 @@ func reviewScript() func(capturedRequest) turn {
 
 		// One reviewer cell. Every cell writes the SAME path, which is the
 		// point: the block collects each under its own dimension.
-		case requestMentions(req, "review through the"):
+		case requestMentions(req, "review this change through one dimension"):
 			return callsTool("write_file", map[string]any{"path": "findings/report.json", "content": `[{"id":"F-1"}]`})
 
-		case requestMentions(req, "invalidate every finding"):
+		case requestMentions(req, "try to invalidate each one"):
 			return callsTool("write_file", map[string]any{"path": "confirmed/confirmed.json", "content": `[{"id":"F-1"}]`})
 
-		case requestMentions(req, "write the review"):
+		case requestMentions(req, "decide whether it must be fixed"):
+			return callsTool("write_file", map[string]any{"path": "blocking/blocking.json", "content": `[]`})
+
+		case requestMentions(req, "write the review from the confirmed findings"):
 			return callsTools(
 				call("write_file", map[string]any{"path": "review/summary.md", "content": "# Review\n\none confirmed finding\n"}),
 				call("write_file", map[string]any{"path": "review/findings.json", "content": `[{"id":"F-1"}]`}),
-				call("verdict", map[string]any{"choice": "complete"}),
 			)
 		}
 

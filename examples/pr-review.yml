@@ -251,6 +251,8 @@ jobs:
       For each id, also write dims/<id>.md: what a reviewer taking this
       dimension looks for (one paragraph), and the repo-relative paths under
       pr/ to start from.
+    assert:
+      files: [dims/index.json]     # the work list exists, or the matrix has no width
 
   # ── phase 2: one reviewer per dimension, concurrently ────────────────────
   # `from_file:` takes the matrix's width from what the planner just wrote.
@@ -298,6 +300,8 @@ jobs:
       not facts. Try to invalidate each one against the code under pr/.
 
       Write the survivors to confirmed/confirmed.json.
+    assert:
+      files: [confirmed/confirmed.json]
 
   # ── phase 4: what actually blocks the merge ──────────────────────────────
   - agent: gatekeeper
@@ -310,6 +314,8 @@ jobs:
       before this PR merges.
 
       Write blocking/blocking.json.
+    assert:
+      files: [blocking/blocking.json]
 
   # ── phase 5: write the review ────────────────────────────────────────────
   - agent: synthesizer
@@ -324,6 +330,10 @@ jobs:
       Write review/summary.md (what a human reads) and review/findings.json
       (the structured list). Nothing else — the PR number is the pipeline's
       to know, not yours.
+    assert:
+      # The one assertion a prose answer cannot satisfy: an agent that reports
+      # success without producing anything is otherwise indistinguishable.
+      files: [review/summary.md, review/findings.json]
 
   # A deterministic check that the files exist, before a person is asked to look.
   - task: check-draft
@@ -334,6 +344,10 @@ jobs:
       test -s review/findings.json || { echo "no findings file was written" >&2; exit 1; }
 
       test -s pr/pr.number         || { echo "the PR number was never fetched" >&2; exit 1; }
+
+      echo "draft ready for review"
+    assert:
+      stdout: draft ready for review
 
   # ── a human approves before anything is public ───────────────────────────
   - approval:
@@ -348,3 +362,11 @@ jobs:
     try:
       task: notify
       run: echo "PR review pipeline failed" >&2
+
+  # No assert.execution here, deliberately: the matrix width is decided by the
+  # planner at run time, so the step names are not knowable when this file is
+  # written. Everything asserted above holds on a REAL run against a real
+  # model — the fixture-specific shape (which dimensions, how many cells) is
+  # asserted in Go instead, by e2e_pr_review_test.go.
+  assert:
+    outcome: succeeded
