@@ -40,7 +40,7 @@ func recordN(t *testing.T, store *Store, resource string, names ...string) {
 		versions = append(versions, map[string]any{"n": name})
 	}
 
-	err := store.RecordVersions(context.Background(), resource, versions, 0)
+	_, err := store.RecordVersions(context.Background(), resource, versions, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestRecordVersionsKeepsExactDigits(t *testing.T) {
 
 	store := newHistoryStore(t)
 
-	err := store.RecordVersions(context.Background(), "items", []map[string]any{
+	_, err := store.RecordVersions(context.Background(), "items", []map[string]any{
 		{"id": json.Number("1234567890123456789"), "ts": json.Number("1699887654.001200")},
 	}, 0)
 	if err != nil {
@@ -146,7 +146,7 @@ func TestRecordVersionsPrunesOldestAndCascades(t *testing.T) {
 	}
 
 	// A cap of two, applied as a fourth version arrives.
-	err = store.RecordVersions(ctx, "items", []map[string]any{{"n": "4"}}, 2)
+	_, err = store.RecordVersions(ctx, "items", []map[string]any{{"n": "4"}}, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestTheMarkCannotDevelopHoles(t *testing.T) {
 		versions = append(versions, map[string]any{"n": strconv.Itoa(i)})
 	}
 
-	err := store.RecordVersions(ctx, "items", versions, total)
+	_, err := store.RecordVersions(ctx, "items", versions, total)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,4 +305,134 @@ func highestOrder(orders map[string]int64) int64 {
 	}
 
 	return highest
+}
+
+// TestCheckReDiscoveryReMintsARunFiledOrder: a version only a RUN had filed
+// sits at whatever order the run minted, which is wrong the moment a check
+// reports it — "latest" resolves by highest order, so the run-filed newest
+// version would sort below everything the check reported after it, and the
+// prune would treat the NEWEST version as the oldest and delete it first.
+// The check is discovering it now, so it takes a fresh order now.
+func TestCheckReDiscoveryReMintsARunFiledOrder(t *testing.T) {
+	t.Parallel()
+
+	store := newHistoryStore(t)
+	ctx := context.Background()
+
+	// A manual run files v10 before any check has seen the resource.
+	v10 := mustEncode(t, map[string]any{"n": "10"})
+
+	_, err := store.RecordVersionOrder(ctx, "items", v10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The first check reports v1..v10, oldest first.
+	versions := make([]map[string]any, 0, 10)
+	for i := 1; i <= 10; i++ {
+		versions = append(versions, map[string]any{"n": strconv.Itoa(i)})
+	}
+
+	_, err = store.RecordVersions(ctx, "items", versions, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	history, err := store.ResourceVersions(ctx, "items")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := fmt.Sprint(history[len(history)-1]["n"]); got != "10" {
+		t.Errorf("latest = v%s, want v10 — the run-filed order must be re-minted on discovery", got)
+	}
+}
+
+// TestSteadyStateReportWritesNothing: the common case is a check re-reporting
+// its whole window every poll, and it must cost nothing — no order advance,
+// no row rewrite, and no "new versions" signal that would re-trigger jobs.
+func TestSteadyStateReportWritesNothing(t *testing.T) {
+	t.Parallel()
+
+	store := newHistoryStore(t)
+	ctx := context.Background()
+
+	report := []map[string]any{{"n": "1"}, {"n": "2"}, {"n": "3"}}
+
+	added, err := store.RecordVersions(ctx, "items", report, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if added != 3 {
+		t.Fatalf("first report added %d, want 3", added)
+	}
+
+	added, err = store.RecordVersions(ctx, "items", report, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if added != 0 {
+		t.Errorf("a re-reported window counted as %d new versions, want 0", added)
+	}
+
+	orders, err := store.VersionOrders(ctx, "items")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := highestOrder(orders); got != 3 {
+		t.Errorf("highest order = %d after a no-op poll, want 3 — orders must not inflate", got)
+	}
+}
+
+// TestPruneNeverEatsTheReportedWindow: a version the check still reports is
+// still real, whatever the cap says. Pruning it would make the next poll
+// "discover" it again at a fresh top order — with a cap smaller than the
+// window the table oscillates between halves forever, "latest" flips to an
+// old version on alternate polls, and every prune cascades away green
+// records so gates re-open and jobs re-fan-out each cycle. The cap bounds
+// what has scrolled AWAY; a window larger than the cap is kept whole.
+func TestPruneNeverEatsTheReportedWindow(t *testing.T) {
+	t.Parallel()
+
+	store := newHistoryStore(t)
+	ctx := context.Background()
+
+	window := make([]map[string]any, 0, 20)
+	for i := 1; i <= 20; i++ {
+		window = append(window, map[string]any{"n": fmt.Sprintf("%02d", i)})
+	}
+
+	for poll := 1; poll <= 3; poll++ {
+		_, err := store.RecordVersions(ctx, "items", window, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		history, err := store.ResourceVersions(ctx, "items")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(history) != 20 {
+			t.Fatalf("poll %d: %d rows, want the whole 20-item window", poll, len(history))
+		}
+
+		if got := fmt.Sprint(history[len(history)-1]["n"]); got != "20" {
+			t.Errorf("poll %d: latest = %s, want 20 — the prune must not oscillate", poll, got)
+		}
+	}
+}
+
+func mustEncode(t *testing.T, version map[string]any) string {
+	t.Helper()
+
+	encoded, err := EncodeVersion(version)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return encoded
 }

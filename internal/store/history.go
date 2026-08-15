@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 )
 
 // DefaultResourceVersionCap bounds resource_versions per resource when
@@ -27,19 +28,28 @@ import (
 // pipeline, or --version-history on the command line.
 const DefaultResourceVersionCap = 1000
 
-// RecordVersions adds versions this resource has not been seen with before,
-// assigning each the next check_order, and prunes the oldest beyond cap.
+// RecordVersions files what a check reported, assigning each genuinely new
+// version the next check_order, and prunes beyond the cap. It returns how
+// many versions were new to check-history, which is what decides whether
+// anything is worth triggering for.
 //
-// Versions already present are left ALONE — their check_order is the order
-// they were discovered in and revising it would reorder history under a job
-// that is midway through walking it. A check re-reporting its whole window
-// every poll is therefore idempotent, which is the common case.
+// A version a check already filed is left ALONE — its check_order is the
+// order it was discovered in, and revising it would reorder history under a
+// job midway through walking it. A check re-reporting its whole window every
+// poll therefore writes nothing, which is the common case.
+//
+// A version only a RUN had filed (from_check = 0) is the one exception: the
+// check is discovering it now, so it takes a fresh order at the top. Keeping
+// its stale order would be worse than it sounds — "latest" resolves by
+// highest order, so a run-filed newest version would sort below everything a
+// later check reported, and the prune would treat the newest version as the
+// OLDEST and delete it first.
 //
 // Ordering within one call follows the slice, which is the order the check
 // returned: oldest first, by the convention a check owes.
-func (s *Store) RecordVersions(ctx context.Context, resourceName string, versions []map[string]any, limit int) error {
+func (s *Store) RecordVersions(ctx context.Context, resourceName string, versions []map[string]any, limit int) (int, error) {
 	if len(versions) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	if limit <= 0 {
@@ -48,61 +58,122 @@ func (s *Store) RecordVersions(ctx context.Context, resourceName string, version
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("could not record versions for %q: %w", resourceName, err)
+		return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
 	}
 
 	defer func() { _ = tx.Rollback() }()
 
-	err = insertNewVersions(ctx, tx, resourceName, versions)
+	added, err := insertNewVersions(ctx, tx, resourceName, versions)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
-	err = pruneVersions(ctx, tx, resourceName, limit)
+	// Prune only what the check no longer reports. A version still in the
+	// report is still real, whatever the cap says — deleting it means the
+	// next poll "discovers" it again at a fresh top order, and with a cap
+	// smaller than the window the table oscillates forever between halves,
+	// "latest" flipping to an old version on alternate polls and every prune
+	// cascading away consumed marks so jobs re-fan-out each cycle. The cap
+	// therefore bounds what has scrolled AWAY, and a window larger than the
+	// cap is simply kept whole.
+	floor, err := minReportedOrder(ctx, tx, resourceName, versions)
 	if err != nil {
-		return err
+		return 0, err
+	}
+
+	err = pruneVersions(ctx, tx, resourceName, limit, floor)
+	if err != nil {
+		return 0, err
 	}
 
 	err = tx.Commit()
 	if err != nil {
-		return fmt.Errorf("could not record versions for %q: %w", resourceName, err)
+		return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
 	}
 
-	return nil
+	return added, nil
 }
 
-// insertNewVersions files the versions this resource has not been seen with,
-// each taking the next check_order.
-func insertNewVersions(ctx context.Context, tx *sql.Tx, resourceName string, versions []map[string]any) error {
+// insertNewVersions files the versions check-history does not hold, each
+// taking the next check_order, and reports how many that was.
+//
+// The WHERE on the upsert is what keeps a steady-state poll free: a row a
+// check already filed matches the conflict but not the WHERE, so nothing is
+// written and RowsAffected is 0 — the order neither advances nor gaps. A row
+// only a run had filed matches both, taking a fresh order (see
+// RecordVersions).
+func insertNewVersions(ctx context.Context, tx *sql.Tx, resourceName string, versions []map[string]any) (int, error) {
 	next, err := nextCheckOrder(ctx, tx, resourceName)
 	if err != nil {
-		return err
+		return 0, err
 	}
+
+	added := 0
 
 	for _, version := range versions {
 		encoded, err := EncodeVersion(version)
 		if err != nil {
-			return fmt.Errorf("could not record versions for %q: %w", resourceName, err)
+			return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
 		}
 
 		result, err := tx.ExecContext(ctx, `
 			INSERT INTO resource_versions (resource_name, version_json, check_order, first_seen_at, from_check)
 			VALUES (?, ?, ?, ?, 1)
-			ON CONFLICT (resource_name, version_json) DO UPDATE SET from_check = 1
+			ON CONFLICT (resource_name, version_json)
+			DO UPDATE SET from_check = 1, check_order = excluded.check_order, first_seen_at = excluded.first_seen_at
+			WHERE resource_versions.from_check = 0
 		`, resourceName, encoded, next, now())
 		if err != nil {
-			return fmt.Errorf("could not record versions for %q: %w", resourceName, err)
+			return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
 		}
 
-		// Only advance for a version that was actually new, so check_order
-		// stays dense and a re-reported window costs nothing.
-		added, err := result.RowsAffected()
-		if err == nil && added > 0 {
+		changed, err := result.RowsAffected()
+		if err == nil && changed > 0 {
 			next++
+			added++
 		}
 	}
 
-	return nil
+	return added, nil
+}
+
+// minReportedOrder is the lowest check_order among the versions a check just
+// reported — the floor below which pruning is safe.
+func minReportedOrder(ctx context.Context, tx *sql.Tx, resourceName string, versions []map[string]any) (int64, error) {
+	const chunk = 500
+
+	var floor int64 = 1<<62 - 1
+
+	for start := 0; start < len(versions); start += chunk {
+		end := min(start+chunk, len(versions))
+
+		args := make([]any, 0, end-start+1)
+		args = append(args, resourceName)
+
+		for _, version := range versions[start:end] {
+			encoded, err := EncodeVersion(version)
+			if err != nil {
+				return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
+			}
+
+			args = append(args, encoded)
+		}
+
+		var lowest sql.NullInt64
+
+		err := tx.QueryRowContext(ctx,
+			`SELECT MIN(check_order) FROM resource_versions WHERE resource_name = ? AND version_json IN (`+
+				placeholders(end-start)+`)`, args...).Scan(&lowest)
+		if err != nil {
+			return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
+		}
+
+		if lowest.Valid && lowest.Int64 < floor {
+			floor = lowest.Int64
+		}
+	}
+
+	return floor, nil
 }
 
 // nextCheckOrder is the order to give the next newly-seen version.
@@ -128,19 +199,21 @@ func nextCheckOrder(ctx context.Context, tx *sql.Tx, resourceName string) (int64
 	return highest.Int64 + 1, nil
 }
 
-// pruneVersions drops the oldest versions beyond the cap. The cascade takes
-// their consumed and passed rows with them, so nothing is left referring to a
-// version that no longer exists.
-func pruneVersions(ctx context.Context, tx *sql.Tx, resourceName string, limit int) error {
+// pruneVersions drops the oldest versions beyond the cap, but never one at
+// or above floor — the currently-reported set, which is still real however
+// small the cap (see RecordVersions). The cascade takes a pruned version's
+// green record with it, so nothing is left referring to a version that no
+// longer exists.
+func pruneVersions(ctx context.Context, tx *sql.Tx, resourceName string, limit int, floor int64) error {
 	_, err := tx.ExecContext(ctx, `
 		DELETE FROM resource_versions
-		WHERE resource_name = ? AND check_order NOT IN (
+		WHERE resource_name = ? AND check_order < ? AND check_order NOT IN (
 			SELECT check_order FROM resource_versions
 			WHERE resource_name = ?
 			ORDER BY check_order DESC
 			LIMIT ?
 		)
-	`, resourceName, resourceName, limit)
+	`, resourceName, floor, resourceName, limit)
 	if err != nil {
 		return fmt.Errorf("could not prune versions for %q: %w", resourceName, err)
 	}
@@ -331,4 +404,99 @@ func DecodeVersion(encoded string) (map[string]any, error) {
 	}
 
 	return version, nil
+}
+
+// GreenVersions returns the versions of a resource that EVERY named upstream
+// job has gone green against, oldest first by discovery order.
+//
+// This is what a passed:-constrained get chooses among. The constraint is
+// enforced at RESOLUTION rather than only at trigger time, because a gate
+// checked at enqueue and forgotten by the build is checked against a world
+// that can change in between: a poll validates v5, a newer v6 lands before a
+// worker claims the job, and a build resolving plain "latest" ships the
+// version nothing tested. It is also what makes `steps run` honor passed: at
+// all — a manual run resolves through the same path a triggered one does.
+//
+// Considered regardless of from_check: a version's green record proves a
+// build fetched it, which is better evidence of existence than a check
+// listing. Concourse's model, and the reason a job whose head keeps failing
+// upstream still deploys the newest version that DID pass.
+func (s *Store) GreenVersions(ctx context.Context, resourceName string, upstreamJobs []string) ([]map[string]any, error) {
+	orders, err := s.VersionOrders(ctx, resourceName)
+	if err != nil {
+		return nil, err
+	}
+
+	green := make(map[string]bool, len(orders))
+	for encoded := range orders {
+		green[encoded] = true
+	}
+
+	for _, upstream := range upstreamJobs {
+		passed, err := s.passedVersionSet(ctx, upstream, resourceName)
+		if err != nil {
+			return nil, err
+		}
+
+		for encoded := range green {
+			if !passed[encoded] {
+				delete(green, encoded)
+			}
+		}
+	}
+
+	encodedVersions := make([]string, 0, len(green))
+	for encoded := range green {
+		encodedVersions = append(encodedVersions, encoded)
+	}
+
+	sort.Slice(encodedVersions, func(i, j int) bool {
+		return orders[encodedVersions[i]] < orders[encodedVersions[j]]
+	})
+
+	versions := make([]map[string]any, 0, len(encodedVersions))
+
+	for _, encoded := range encodedVersions {
+		version, err := DecodeVersion(encoded)
+		if err != nil {
+			return nil, fmt.Errorf("could not read green versions for %q: %w", resourceName, err)
+		}
+
+		versions = append(versions, version)
+	}
+
+	return versions, nil
+}
+
+// passedVersionSet is every version_json jobName has recorded green for a
+// resource — the raw material GreenVersions intersects.
+func (s *Store) passedVersionSet(ctx context.Context, jobName, resourceName string) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT version_json FROM job_versions WHERE job_name = ? AND resource_name = ?`,
+		jobName, resourceName)
+	if err != nil {
+		return nil, fmt.Errorf("could not read passed versions for job %q: %w", jobName, err)
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	passed := map[string]bool{}
+
+	for rows.Next() {
+		var encoded string
+
+		err = rows.Scan(&encoded)
+		if err != nil {
+			return nil, fmt.Errorf("could not read passed versions for job %q: %w", jobName, err)
+		}
+
+		passed[encoded] = true
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("could not read passed versions for job %q: %w", jobName, err)
+	}
+
+	return passed, nil
 }
