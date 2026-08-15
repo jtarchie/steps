@@ -349,18 +349,37 @@ func (c *Config) validateResourceTypeConfig() error {
 // config: shape — split out of validateResourceTypeConfig to keep that
 // function's branch count down (cyclop).
 func (c *Config) validateOneResourceTypeConfig(rt ResourceType) error {
-	hasShell := rt.Config.Check != "" || rt.Config.In != "" || rt.Config.Out != ""
-	hasMCP := rt.Config.MCP != nil
+	declared := []string{}
 
-	if hasShell && hasMCP {
-		return fmt.Errorf("resource_type %q: check/in/out and mcp: are mutually exclusive", rt.Name)
+	if rt.Config.Check != "" || rt.Config.In != "" || rt.Config.Out != "" {
+		declared = append(declared, "check/in/out")
 	}
 
-	if !hasMCP {
-		return nil
+	if rt.Config.MCP != nil {
+		declared = append(declared, "mcp:")
 	}
 
-	return c.validateMCPResourceConfig(rt.Name, rt.Config.MCP)
+	if rt.Config.Expr != nil {
+		declared = append(declared, "expr:")
+	}
+
+	// A half-shell, half-expr type is harder to read than either pure form,
+	// and there is no case for one that a second resource type does not cover
+	// better.
+	if len(declared) > 1 {
+		return fmt.Errorf("resource_type %q: %s are mutually exclusive — a resource type picks exactly one backend",
+			rt.Name, strings.Join(declared, ", "))
+	}
+
+	switch rt.Config.Backend() {
+	case BackendMCP:
+		return c.validateMCPResourceConfig(rt.Name, rt.Config.MCP)
+	case BackendExpr:
+		return validateExprResourceConfig(rt)
+	case BackendShell:
+	}
+
+	return nil
 }
 
 // validateMCPStages checks the three lifecycle stages of one mcp: block: each

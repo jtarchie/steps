@@ -137,6 +137,27 @@ func preflightResource(
 
 	switch resourceType.Config.Backend() {
 	case config.BackendMCP:
+	case config.BackendExpr:
+		// Compiling proves the expressions parse and type-check before a
+		// watch loop starts polling. It does NOT prove the API they call
+		// will answer — preflight never makes a resource type's own
+		// requests, for the same reason it does not run a shell check.
+		// No context threaded on purpose: compiling parses and type-checks,
+		// it makes no call and touches no network, so there is nothing here a
+		// deadline could cancel.
+		//nolint:contextcheck // pure compilation; see above
+		err := CompileExprPrograms(&config.Config{ResourceTypes: []config.ResourceType{*resourceType}})
+		if err != nil {
+			// Not transient: no amount of waiting fixes a syntax error, and
+			// a watcher that treated it as one would poll a type that can
+			// never run, forever.
+			return []config.Problem{{
+				Target: fmt.Sprintf("resource %q", name),
+				Detail: err.Error(),
+			}}
+		}
+
+		return nil
 	case config.BackendShell:
 		// Nothing to prove ahead of time: a shell type's tools are whatever
 		// is on PATH when it runs, which preflight cannot know from here.

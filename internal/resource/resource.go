@@ -51,6 +51,8 @@ func CheckVersions(
 	switch rt.Config.Backend() {
 	case config.BackendMCP:
 		return mcpCheckVersions(ctx, cfg, rt, source, version)
+	case config.BackendExpr:
+		return exprCheckVersions(ctx, rt, source, version)
 	case config.BackendShell:
 	}
 
@@ -178,6 +180,8 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, sour
 	switch rt.Config.Backend() {
 	case config.BackendMCP:
 		return mcpRunIn(ctx, cfg, rt, source, version, params, destDir)
+	case config.BackendExpr:
+		return exprRunIn(ctx, rt, source, version, params, destDir)
 	case config.BackendShell:
 	}
 
@@ -223,6 +227,8 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, sou
 	switch rt.Config.Backend() {
 	case config.BackendMCP:
 		return mcpRunOut(ctx, cfg, rt, source, params, srcDir)
+	case config.BackendExpr:
+		return exprRunOut(ctx, rt, source, params, srcDir)
 	case config.BackendShell:
 	}
 

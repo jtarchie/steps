@@ -47,10 +47,11 @@ type ResourceType struct {
 // type's check/in/out are calls to a configured mcp_servers: entry instead
 // of shell commands (see MCPResourceConfig, validateResourceTypeConfig).
 type ResourceTypeConfig struct {
-	Check string             `yaml:"check,omitempty"`
-	In    string             `yaml:"in,omitempty"`
-	Out   string             `yaml:"out,omitempty"`
-	MCP   *MCPResourceConfig `yaml:"mcp,omitempty"`
+	Check string              `yaml:"check,omitempty"`
+	In    string              `yaml:"in,omitempty"`
+	Out   string              `yaml:"out,omitempty"`
+	MCP   *MCPResourceConfig  `yaml:"mcp,omitempty"`
+	Expr  *ExprResourceConfig `yaml:"expr,omitempty"`
 }
 
 // ResourceBackend is which way a resource type implements its three lifecycle
@@ -71,6 +72,7 @@ type ResourceBackend string
 const (
 	BackendShell ResourceBackend = "shell"
 	BackendMCP   ResourceBackend = "mcp"
+	BackendExpr  ResourceBackend = "expr"
 )
 
 // Backend reports how this resource type is implemented.
@@ -81,11 +83,14 @@ const (
 // rules (validateResourceGet, validateResourcePut) rather than a fourth
 // backend meaning "none".
 func (c ResourceTypeConfig) Backend() ResourceBackend {
-	if c.MCP != nil {
+	switch {
+	case c.MCP != nil:
 		return BackendMCP
+	case c.Expr != nil:
+		return BackendExpr
+	default:
+		return BackendShell
 	}
-
-	return BackendShell
 }
 
 // Resource is a named instance of a resource type, configured with a source.
@@ -121,6 +126,10 @@ func validateResourcePut(label, put string, resourceType *ResourceType) error {
 		if resourceType.Config.MCP.Out == nil {
 			return fmt.Errorf("%s: put %q targets mcp-backed resource type %q, which sets no mcp.out.tool; add one, or respond via an agent step granted the server's tools instead", label, put, resourceType.Name)
 		}
+	case BackendExpr:
+		if strings.TrimSpace(resourceType.Config.Expr.Out) == "" {
+			return fmt.Errorf("%s: put %q targets expr-backed resource type %q, which sets no expr.out; add one to describe what publishing means for this type", label, put, resourceType.Name)
+		}
 	case BackendShell:
 		if strings.TrimSpace(resourceType.Config.Out) == "" {
 			return fmt.Errorf("%s: put %q targets resource type %q, which declares no out: command; add one to describe what publishing means for this type", label, put, resourceType.Name)
@@ -144,6 +153,12 @@ func validateResourceGet(label, get string, resourceType *ResourceType) error {
 		if resourceType.Config.MCP.Check == nil {
 			return fmt.Errorf(
 				"%s: get %q targets mcp-backed resource type %q, which sets no mcp.check.tool; that type can only be published to (put:), so either add a check tool or fetch this from a type that has one",
+				label, get, resourceType.Name)
+		}
+	case BackendExpr:
+		if strings.TrimSpace(resourceType.Config.Expr.Check) == "" {
+			return fmt.Errorf(
+				"%s: get %q targets expr-backed resource type %q, which sets no expr.check; that type can only be published to (put:), so either add a check expression or fetch this from a type that has one",
 				label, get, resourceType.Name)
 		}
 	case BackendShell:

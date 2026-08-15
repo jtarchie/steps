@@ -1,0 +1,21 @@
+# A resource type picks exactly one backend. Half shell and half expr is
+# harder to read than either pure form, and there is no case for it a second
+# resource type does not cover better.
+# expect: are mutually exclusive — a resource type picks exactly one backend
+
+resource_types:
+- name: mixed
+  config:
+    check: printf '[]'
+    expr:
+      in: '{"version.json": toJSON(version)}'
+
+resources:
+- name: thing
+  type: mixed
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: thing

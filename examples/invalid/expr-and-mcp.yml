@@ -1,0 +1,26 @@
+# Same rule against the third pairing.
+# expect: are mutually exclusive — a resource type picks exactly one backend
+
+mcp_servers:
+- name: linear
+  endpoint: https://mcp.linear.app/mcp
+
+resource_types:
+- name: mixed
+  config:
+    mcp:
+      server: linear
+      check:
+        tool: list_issues
+    expr:
+      check: '[]'
+
+resources:
+- name: thing
+  type: mixed
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: thing

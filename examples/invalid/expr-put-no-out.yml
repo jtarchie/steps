@@ -1,0 +1,19 @@
+# A put has to mean something. An expr type with no out: cannot publish, and
+# saying so at load beats failing at the put.
+# expect: which sets no expr.out
+
+resource_types:
+- name: api
+  config:
+    expr:
+      check: '[{ref: "v1"}]'
+
+resources:
+- name: thing
+  type: api
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - put: thing

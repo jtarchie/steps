@@ -1,0 +1,18 @@
+# An expr: block that implements no stage can neither detect, fetch, nor
+# publish anything, so it is a declaration of nothing.
+# expect: expr: sets none of check/in/out
+
+resource_types:
+- name: api
+  config:
+    expr: {}
+
+resources:
+- name: thing
+  type: api
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: thing

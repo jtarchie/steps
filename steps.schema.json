@@ -144,8 +144,50 @@
             },
             "mcp": {
               "$ref": "#/$defs/mcpResourceConfig"
+            },
+            "expr": {
+              "$ref": "#/$defs/exprResourceConfig"
             }
           }
+        }
+      }
+    },
+    "exprResourceConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [
+        { "required": ["check"] },
+        { "required": ["check_file"] },
+        { "required": ["in"] },
+        { "required": ["in_file"] },
+        { "required": ["out"] },
+        { "required": ["out_file"] }
+      ],
+      "description": "Back check/in/out with expressions instead of shell commands, for a resource that is a JSON HTTP API and nothing else. Mutually exclusive with check/in/out and with mcp:. Evaluates in-process, so image:/network:/privileged:/container_limits: cannot apply.",
+      "properties": {
+        "check": {
+          "type": "string",
+          "description": "Returns an array of version objects, oldest first. Sees source and version (the last version recorded; an empty map on the first check)."
+        },
+        "check_file": {
+          "type": "string",
+          "description": "Path to a file holding the check expression, relative to the pipeline. Mutually exclusive with check. Suggested extension .expr."
+        },
+        "in": {
+          "type": "string",
+          "description": "Returns an object of artifact-relative path to file contents. Sees source, version and params. Omit to write version.json alone."
+        },
+        "in_file": {
+          "type": "string",
+          "description": "Path to a file holding the in expression, relative to the pipeline. Mutually exclusive with in."
+        },
+        "out": {
+          "type": "string",
+          "description": "Publishes, and returns the version it produced (or nil). Sees source and params, plus file() over the put's inputs."
+        },
+        "out_file": {
+          "type": "string",
+          "description": "Path to a file holding the out expression, relative to the pipeline. Mutually exclusive with out."
         }
       }
     },

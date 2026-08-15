@@ -42,6 +42,13 @@ func (c *Config) resolveFileIncludes(baseDir string) error {
 		}
 	}
 
+	for i := range c.ResourceTypes {
+		err := resolveResourceTypeIncludes(baseDir, &c.ResourceTypes[i])
+		if err != nil {
+			return err
+		}
+	}
+
 	for i := range c.Jobs {
 		err := c.Jobs[i].visitSteps(func(label string, step *Step) error {
 			return resolveStepIncludes(baseDir, label, step)
@@ -133,6 +140,35 @@ func readIncludeFile(baseDir, context, key, path string) ([]byte, error) {
 	}
 
 	return data, nil
+}
+
+// resolveResourceTypeIncludes applies a resource type's expr.check_file: /
+// expr.in_file: / expr.out_file:.
+//
+// Only the expr backend has them. A shell check: is usually one or two lines
+// and reads fine inline; an expression that walks three dependent API calls
+// is twenty, and belongs in a file that a diff and a review comment can
+// address.
+func resolveResourceTypeIncludes(baseDir string, rt *ResourceType) error {
+	if rt.Config.Expr == nil {
+		return nil
+	}
+
+	context := fmt.Sprintf("resource_type %q expr", rt.Name)
+	expression := rt.Config.Expr
+
+	for _, inc := range []include{
+		{context: context, key: "check", path: expression.CheckFile, target: &expression.Check},
+		{context: context, key: "in", path: expression.InFile, target: &expression.In},
+		{context: context, key: "out", path: expression.OutFile, target: &expression.Out},
+	} {
+		err := applyInclude(baseDir, inc)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // resolveTaskIncludes applies a tasks: entry's file: (a whole-document

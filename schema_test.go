@@ -145,6 +145,11 @@ func schemaDefsByType() map[string]reflect.Type {
 		"resource":     reflect.TypeOf(config.Resource{}),
 		"resourceType": reflect.TypeOf(config.ResourceType{}),
 		"mcpServer":    reflect.TypeOf(config.MCPServer{}),
+		// Listed where mcpResourceConfig is not, because this one decodes
+		// with plain yaml tags and so CAN be compared by reflection — the
+		// unlisted defs are the ones whose members go through hand-written
+		// UnmarshalYAML.
+		"exprResourceConfig": reflect.TypeOf(config.ExprResourceConfig{}),
 		"assert":       reflect.TypeOf(config.Assert{}),
 		"defaults":     reflect.TypeOf(config.Defaults{}),
 		"workspace":    reflect.TypeOf(config.WorkspaceConfig{}),

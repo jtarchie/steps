@@ -325,6 +325,14 @@ func (v *ValidateCmd) Run() error {
 
 	var errs []error
 
+	// An unparsable expr: expression is a fact about the FILE, so it is
+	// checked here rather than only at preflight — and before --syntax-only
+	// can skip anything, since nothing about it depends on this machine.
+	exprErr := pipeline.ValidateExpressions(cfg)
+	if exprErr != nil {
+		errs = append(errs, exprErr)
+	}
+
 	for i := range cfg.Jobs {
 		flowErr := workspace.ValidateArtifactFlow(cfg, &cfg.Jobs[i])
 		if flowErr != nil {

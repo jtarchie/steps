@@ -1,0 +1,20 @@
+# The mirror: a publish-only expr type has no versions to discover, so a get
+# against it is rejected where the get appears rather than by requiring a
+# check expression nothing would call.
+# expect: which sets no expr.check
+
+resource_types:
+- name: api
+  config:
+    expr:
+      out: 'nil'
+
+resources:
+- name: thing
+  type: api
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: thing

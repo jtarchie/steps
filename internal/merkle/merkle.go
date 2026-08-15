@@ -165,6 +165,8 @@ func GetNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 
 	withIsolation(resourceType.Privileged, resourceType.Limits, content)
 
+	withExprResourceStage(resourceType, "in", content)
+
 	err := withMCPResourceStage(cfg, resourceType, "in", content)
 	if err != nil {
 		return nil, err
@@ -227,6 +229,27 @@ func withMCPResourceStage(cfg *config.Config, resourceType config.ResourceType, 
 	}
 
 	return nil
+}
+
+// withExprResourceStage folds an expr-backed type's program text into the
+// content map, the same way in_template/out_template does for shell.
+//
+// Gated on the BACKEND rather than on the text being non-empty: switching a
+// type from shell to expr with neither declaring an in: must still bust the
+// hash, because the two fetch differently even when both are blank. Types
+// that are not expr-backed fold nothing, so every hash already in a state.db
+// stays byte-identical.
+func withExprResourceStage(resourceType config.ResourceType, stage string, content map[string]any) {
+	if resourceType.Config.Expr == nil {
+		return
+	}
+
+	switch stage {
+	case "in":
+		content["expr_in"] = resourceType.Config.Expr.In
+	case "out":
+		content["expr_out"] = resourceType.Config.Expr.Out
+	}
 }
 
 // normalizeMapKeys rewrites every map[any]any nested in value into a
@@ -682,6 +705,8 @@ func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 	}
 
 	withIsolation(resourceType.Privileged, resourceType.Limits, content)
+
+	withExprResourceStage(resourceType, "out", content)
 
 	err := withMCPResourceStage(cfg, resourceType, "out", content)
 	if err != nil {
@@ -1572,6 +1597,8 @@ func ResourceCacheKey(cfg *config.Config, resourceType config.ResourceType, sour
 	}
 
 	withIsolation(resourceType.Privileged, resourceType.Limits, content)
+
+	withExprResourceStage(resourceType, "in", content)
 
 	err := withMCPResourceStage(cfg, resourceType, "in", content)
 	if err != nil {

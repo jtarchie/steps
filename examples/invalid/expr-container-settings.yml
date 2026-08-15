@@ -1,0 +1,22 @@
+# An expr type evaluates in this process: there is no container to place on a
+# network or cap. Accepting image: and ignoring it would be worse than
+# refusing — a pipeline that reads as isolated and is not.
+# expect: expr: evaluates in-process, so image:/network: cannot apply
+
+resource_types:
+- name: api
+  image: alpine:3
+  network: none
+  config:
+    expr:
+      check: '[{ref: "v1"}]'
+
+resources:
+- name: thing
+  type: api
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: thing

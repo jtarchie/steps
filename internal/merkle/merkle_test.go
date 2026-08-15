@@ -1283,3 +1283,117 @@ func TestIsolationSettingsAffectHash(t *testing.T) {
 		t.Error("a task setting neither field changed hash; adding this feature must not invalidate existing caches")
 	}
 }
+
+// TestExprProgramsAffectHash: an expr-backed type's program text has to key
+// the get and put nodes for the same reason in_template/out_template does —
+// fixing an expression must re-run the step it fixes, not reuse what the
+// broken one produced.
+//
+// The backend-switch cases are the ones a value-gated fold would miss: a
+// shell type with no in: and an expr type with no in: fetch differently, so
+// they must not hash alike even though both templates are empty.
+func TestExprProgramsAffectHash(t *testing.T) {
+	t.Parallel()
+
+	source := map[string]any{"url": "https://example.com"}
+	version := map[string]any{"ref": "v1"}
+	step := config.Step{Get: "thing"}
+
+	getHash := func(t *testing.T, rt config.ResourceType) string {
+		t.Helper()
+
+		content, err := GetNodeContent(&config.Config{}, step, rt, source, version)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		hash, err := HashNode(NodeKindGet, content, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return hash
+	}
+
+	exprRT := func(in string) config.ResourceType {
+		return config.ResourceType{Config: config.ResourceTypeConfig{Expr: &config.ExprResourceConfig{In: in}}}
+	}
+
+	first := getHash(t, exprRT(`{"a.txt": "one"}`))
+	second := getHash(t, exprRT(`{"a.txt": "two"}`))
+
+	if first == second {
+		t.Error("two expr in: programs hashed alike; editing one would reuse the other's artifact")
+	}
+
+	shellNoIn := getHash(t, config.ResourceType{Config: config.ResourceTypeConfig{}})
+	exprNoIn := getHash(t, exprRT(""))
+
+	if shellNoIn == exprNoIn {
+		t.Error("a shell type and an expr type with no in: hashed alike; switching backend would reuse the other's artifact")
+	}
+
+	// The cross-build resource cache has to agree with the node hash, or an
+	// edited expression is re-planned and then handed the old fetch anyway.
+	firstKey, err := ResourceCacheKey(&config.Config{}, exprRT(`{"a.txt": "one"}`), source, version, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	secondKey, err := ResourceCacheKey(&config.Config{}, exprRT(`{"a.txt": "two"}`), source, version, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if firstKey == secondKey {
+		t.Error("two expr in: programs share a resource cache key; the fetch cache would serve the old artifact")
+	}
+}
+
+// TestExprOutProgramAffectsPutHash is the put half: editing what publishing
+// means must re-run the put, not reuse the node the old expression produced.
+func TestExprOutProgramAffectsPutHash(t *testing.T) {
+	t.Parallel()
+
+	putHash := func(t *testing.T, out string) string {
+		t.Helper()
+
+		rt := config.ResourceType{Config: config.ResourceTypeConfig{Expr: &config.ExprResourceConfig{Out: out}}}
+
+		content, err := PutNodeContent(&config.Config{}, config.Step{Put: "thing"}, rt,
+			map[string]any{"url": "https://example.com"}, nil, nil, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		hash, err := HashNode(NodeKindPut, content, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return hash
+	}
+
+	if putHash(t, `{a: "1"}`) == putHash(t, `{a: "2"}`) {
+		t.Error("two expr out: programs hashed alike")
+	}
+}
+
+// TestNonExprHashesUnchanged pins that adding the expr fold left every hash
+// already in a state.db alone. A backend nobody uses must not invalidate
+// every cached node in every existing pipeline.
+func TestNonExprHashesUnchanged(t *testing.T) {
+	t.Parallel()
+
+	rt := config.ResourceType{Config: config.ResourceTypeConfig{In: "true"}}
+
+	content, err := GetNodeContent(&config.Config{}, config.Step{Get: "repo"}, rt,
+		map[string]any{"uri": "u"}, map[string]any{"ref": "v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, present := content["expr_in"]; present {
+		t.Error("a shell-backed get folded expr_in into its content; every existing cached node would be invalidated")
+	}
+}

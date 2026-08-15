@@ -1,0 +1,21 @@
+# Setting both the inline field and its _file sibling is an error rather than
+# one silently winning — the rule run_file:/system_file:/prompt_file: already
+# follow.
+# expect: check: and check_file: are mutually exclusive
+
+resource_types:
+- name: api
+  config:
+    expr:
+      check: '[{ref: "v1"}]'
+      check_file: types/check.expr
+
+resources:
+- name: thing
+  type: api
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: thing
