@@ -26,12 +26,25 @@ jobs:
     ensure:
       task: cleanup            # runs whatever happened above
       run: echo tidying up
-  on_success:                  # job-level hook (inline alongside plan:)
+  on_success:                  # job-level hooks (inline alongside plan:)
     task: announce
     run: echo the whole job passed
+  on_failure:                  # exactly one on_* fires, chosen by classification
+    task: page
+    run: echo a step said no
+  on_error:
+    task: alert
+    run: echo the infrastructure said no
+  on_abort:
+    task: note-abort
+    run: echo someone pressed ctrl-c
+  ensure:                      # and this one runs whatever happened
+    task: sweep
+    run: echo tidying the job
   assert:
-    execution: [work, record, cleanup, announce]   # step, its hooks, then the job's
-    outcome: succeeded
+    execution: [work, record, cleanup, announce, sweep]   # step, its hooks, then
+    outcome: succeeded                                    # the job's — page, alert
+                                                          # and note-abort are absent
 ```
 
 - **Hooks observe, they don't consume.** A failing step's `on_failure` runs, and the failure still propagates — the job fails, `steps run` exits nonzero. This is the opposite of "swallow the error": a hook never clears a failure (only a matching `assert.execution` does that — see below). The one way a hook changes an outcome is upward: a failing `on_success` or `ensure` fails an otherwise-green step/job, since a broken notification or cleanup shouldn't read as success. A failing `on_failure`/`on_error`/`on_abort` is only logged.

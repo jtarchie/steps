@@ -190,6 +190,7 @@ A `tools:` entry can be a sub-agent tool — `{ agent: <name>, description: <tex
 agents:
 - name: summarizer
   source: { model: openrouter/qwen/qwen3.7-flash }
+  description: Condenses a file to a paragraph.   # what a PARENT sees by default
   tools: [read_file]
 - name: lead
   source: { model: openrouter/qwen/qwen3.7-flash }
@@ -271,10 +272,16 @@ The mapping form takes per-task overrides:
 
 A top-level `tasks:` list (mirroring `resources:`/`agents:`) lets a `run:`/`fix:` pair be defined once and reused across jobs. A job's `task:` step is disambiguated by whether it carries its own `run:`:
 
-```yaml
+```yaml test=agents-tasks-reuse
+agents:
+- name: fixer
+  source: { model: openrouter/qwen/qwen3.7-flash }
+  tools: [read_file, write_file, run_shell]
+
 tasks:
 - name: unit
   run: echo running unit tests
+  fix: fixer                 # the run:/fix: PAIR, defined once, reused by both jobs
 
 jobs:
 - name: quick
@@ -301,6 +308,8 @@ jobs:
 assert:
   execution: [quick, full]   # pipeline level: the jobs `steps test` must have run
 ```
+
+Neither execution assert names `fixer`, and that is the assertion: a green command never constructs its fix agent, so a fixer appearing in the log would mean the task had failed.
 
 This resolution runs identically at plan time and run time, so a task's cache hash is always computed from its *resolved* `run:` string. An undefined reference is an ordinary error at plan time. An agent step's connection/dials/tool-grant resolve the same way.
 
@@ -349,14 +358,23 @@ tasks:
   file: ci/unit.yml         # supplies run/fix/image/timeout/inputs/outputs
   timeout: 5m               # any field set here overrides the document's
 
+agents:
+- name: reviewer
+  file: ci/reviewer.yml     # the same for a whole agent definition
+  max_turns: 10             # ...and the same override rule
+
 jobs:
 - name: build
   plan:
   - task: unit
     assert:
       stdout: from the shared task   # the run: came out of ci/unit.yml
+  - agent: reviewer
+    prompt: "Review the build."
+    assert:
+      stdout: Nothing to flag
   assert:
-    execution: [unit]
+    execution: [unit, reviewer]
     outcome: succeeded
 ```
 
@@ -516,6 +534,45 @@ jobs:
 - **Validated at load**: the named step must exist in the job and must declare `verdicts:`, and a step may not read itself.
 - **Trust**: a delivered note or response is upstream model-authored text, so it is fenced as data with a tag that cannot occur inside it.
 - **Caching**: the `from:` declaration folds into the reading step's hash, and makes a *task* reader's chain unskippable — a cached command never runs, so a task whose `from:` changed must not replay an outcome produced without the decision it now asks for.
+
+## Model dials, and pipeline-wide `defaults:`
+
+An `agents:` entry carries the sampling dials for its model, and `defaults:` supplies what every agent that names nothing gets:
+
+```yaml test=agents-dials
+defaults:
+  model: openrouter/qwen/qwen3.7-flash   # any agent whose source: names no model
+  delegate_budget_percent: 10            # the share a sub-agent takes of what is left
+  preflight:
+    timeout: 30s                         # per pre-run probe
+    cache: 5m                            # a target verified this recently is trusted
+
+agents:
+- name: drafter
+  source: { model: openrouter/qwen/qwen3.7-flash }
+  temperature: 0.2            # dials, all optional — unset means the provider's own
+  top_p: 0.9
+  max_tokens: 2048
+  reasoning_effort: low       # low | medium | high, for models that take one
+  delegate_budget_percent: 25 # this agent's helpers get a bigger share
+  preflight: false            # ...and this one skips the probe (a slow local model)
+
+jobs:
+- name: draft
+  plan:
+  - agent: drafter
+    prompt: "Draft the release note."
+    assert:
+      stdout: Drafted
+  assert:
+    execution: [drafter]
+    outcome: succeeded
+```
+
+- **A dial left unset is not sent**, so the provider's own default applies — steps never invents a temperature. `reasoning_effort:` is passed through to models that accept one and ignored by those that don't; a value outside `low`/`medium`/`high` is a load error.
+- **Every dial folds into the step's hash**, unlike the operational limits (`attempts:`/`timeout:`/`budget:`): changing how the model samples changes what the step produces, so a cached result from one setting must not stand in for another.
+- **`defaults:` is a fallback, never an override.** Anything an agent states for itself wins; `defaults.model` fills in only for an agent whose `source:` names no model, which is what lets a whole pipeline be pointed at a different model by editing one line.
+- **`preflight:` composes both ways** — tune it pipeline-wide under `defaults:`, opt one agent out with `preflight: false`. See [the preflight section](README.md#commands).
 
 ## Budgets: `budget.tokens`
 

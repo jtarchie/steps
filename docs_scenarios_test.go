@@ -173,10 +173,19 @@ var docScenarios = map[string]docScenario{
 		fake: scripted(says("Build looks fine.")),
 	},
 
+	// An empty script IS the assertion: both jobs' tasks pass, so the fix
+	// agent is never constructed and the provider is never called. Any
+	// request at all fails this fixture.
+	"agents-tasks-reuse": {
+		fake: scripted(),
+	},
+
 	"agents-task-file": {
 		files: map[string]string{
-			"ci/unit.yml": "run: echo from the shared task\n",
+			"ci/unit.yml":     "run: echo from the shared task\n",
+			"ci/reviewer.yml": "source: { model: openrouter/qwen/qwen3.7-flash }\n",
 		},
+		fake: scripted(says("Nothing to flag in this build.")),
 	},
 
 	// The prompt arrives from the fetched artifact at run time.
@@ -208,6 +217,12 @@ var docScenarios = map[string]docScenario{
 			says("Approved."),
 			says("Nothing to apply; the review approved."),
 		),
+	},
+
+	// The sampling dials and defaults: block are load-time configuration;
+	// the conversation itself is one reply.
+	"agents-dials": {
+		fake: scripted(says("Drafted the release note.")),
 	},
 
 	"agents-budget": {

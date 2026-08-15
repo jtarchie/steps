@@ -130,20 +130,42 @@ func TestSchemaRejectsInvalidPipelines(t *testing.T) {
 	}
 }
 
-// The schema's step properties must match config.Step's yaml tags. Adding a
-// field to the struct without adding it here would leave editors flagging
-// valid pipelines as errors — a silent, annoying kind of wrong.
-func TestSchemaStepKeysMatchStruct(t *testing.T) {
+// schemaDefsByType maps a $defs entry in steps.schema.json to the config type
+// it describes. Every entry is held key-for-key against the struct below.
+//
+// The three unlisted object defs are the ones with no struct to compare
+// against: agentSource/fileRef/toolSpec and friends decode through
+// hand-written UnmarshalYAML, so reflection reports no yaml tags for them.
+func schemaDefsByType() map[string]reflect.Type {
+	return map[string]reflect.Type{
+		"step":         reflect.TypeOf(config.Step{}),
+		"job":          reflect.TypeOf(config.Job{}),
+		"task":         reflect.TypeOf(config.Task{}),
+		"agent":        reflect.TypeOf(config.Agent{}),
+		"resource":     reflect.TypeOf(config.Resource{}),
+		"resourceType": reflect.TypeOf(config.ResourceType{}),
+		"mcpServer":    reflect.TypeOf(config.MCPServer{}),
+		"assert":       reflect.TypeOf(config.Assert{}),
+		"defaults":     reflect.TypeOf(config.Defaults{}),
+		"workspace":    reflect.TypeOf(config.WorkspaceConfig{}),
+	}
+}
+
+// The schema's properties must match the config structs' yaml tags, in both
+// directions and for every type the pipeline format exposes. A field added to
+// a struct without a property here leaves editors flagging valid pipelines as
+// errors — a silent, annoying kind of wrong — and a property here with no
+// field offers completion for a key the loader will reject.
+func TestSchemaKeysMatchStructs(t *testing.T) {
 	data, err := os.ReadFile("steps.schema.json")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var doc struct {
-		Defs struct {
-			Step struct {
-				Properties map[string]any `json:"properties"`
-			} `json:"step"`
+		Properties map[string]any `json:"properties"`
+		Defs       map[string]struct {
+			Properties map[string]any `json:"properties"`
 		} `json:"$defs"`
 	}
 
@@ -152,18 +174,38 @@ func TestSchemaStepKeysMatchStruct(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	inSchema := doc.Defs.Step.Properties
-	inStruct := yamlTagNames(reflect.TypeOf(config.Step{}))
+	for def, typ := range schemaDefsByType() {
+		entry, ok := doc.Defs[def]
+		if !ok {
+			t.Errorf("steps.schema.json has no $defs/%s", def)
+
+			continue
+		}
+
+		compareKeys(t, "$defs/"+def, typ, entry.Properties)
+	}
+
+	// The document root is config.Config itself, spelled as top-level
+	// properties rather than a $defs entry.
+	compareKeys(t, "the schema root", reflect.TypeOf(config.Config{}), doc.Properties)
+}
+
+// compareKeys holds one struct's yaml tags and one schema object's properties
+// in agreement, reporting both directions of drift.
+func compareKeys(t *testing.T, where string, structType reflect.Type, inSchema map[string]any) {
+	t.Helper()
+
+	inStruct := yamlTagNames(structType)
 
 	for name := range inStruct {
 		if _, ok := inSchema[name]; !ok {
-			t.Errorf("config.Step has yaml key %q with no property in steps.schema.json", name)
+			t.Errorf("%s: config.%s has yaml key %q with no property in steps.schema.json", where, structType.Name(), name)
 		}
 	}
 
 	for name := range inSchema {
 		if _, ok := inStruct[name]; !ok {
-			t.Errorf("steps.schema.json declares step property %q that config.Step does not have", name)
+			t.Errorf("%s: steps.schema.json declares property %q that config.%s does not have", where, name, structType.Name())
 		}
 	}
 }

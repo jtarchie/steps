@@ -361,54 +361,150 @@ func TestDocsNoexecReasons(t *testing.T) {
 	}
 }
 
+// docsCoverageTypes is every config type the pipeline format exposes, with
+// the name used in failure messages. Adding a type here is how a new corner
+// of the DSL becomes subject to the documented-or-red rule below.
+//
+// Types absent on purpose: ToolSpec, Source, PromptFile and their siblings
+// decode through hand-written UnmarshalYAML rather than struct tags, so
+// reflection reports no yaml keys to require — their spellings are pinned by
+// internal/config's own decoder tests instead.
+func docsCoverageTypes() map[string]reflect.Type {
+	return map[string]reflect.Type{
+		"Config":          reflect.TypeOf(config.Config{}),
+		"Job":             reflect.TypeOf(config.Job{}),
+		"Step":            reflect.TypeOf(config.Step{}),
+		"Task":            reflect.TypeOf(config.Task{}),
+		"Agent":           reflect.TypeOf(config.Agent{}),
+		"Resource":        reflect.TypeOf(config.Resource{}),
+		"ResourceType":    reflect.TypeOf(config.ResourceType{}),
+		"MCPServer":       reflect.TypeOf(config.MCPServer{}),
+		"Assert":          reflect.TypeOf(config.Assert{}),
+		"Defaults":        reflect.TypeOf(config.Defaults{}),
+		"WorkspaceConfig": reflect.TypeOf(config.WorkspaceConfig{}),
+	}
+}
+
 // TestDocsCoverage is the schema_test pattern applied to prose: every yaml
-// key on config.Step must appear in at least one *tested* doc block. Adding
-// a DSL field without documenting it is a red build, not a forgotten TODO.
+// key of every config type must appear in at least one *tested* doc block.
+// Adding a DSL field without documenting it is a red build, not a forgotten
+// TODO.
+//
+// Keys are collected BY POSITION, not by name. A flat name-based sweep — what
+// this test used to do — cannot tell config.Step's tools: from config.Agent's,
+// so a step-level grant that no example had ever demonstrated read as covered
+// because agents: entries use the same word. Six field names collide that way
+// (name, run, image, env, tools, assert, ...), and each collision is a place
+// where "documented" quietly meant "some other type documented it".
 func TestDocsCoverage(t *testing.T) {
-	used := map[string]bool{}
+	used := map[string]map[string]bool{}
 
 	for _, block := range mustBlocks(t) {
 		if block.Mode() == "fragment" {
 			continue // fragments are unvalidated prose; they don't count
 		}
 
-		var doc any
+		var doc map[string]any
 
 		err := yaml.Unmarshal([]byte(block.Body), &doc)
 		if err != nil {
 			t.Fatalf("%s: %v", block.Name(), err)
 		}
 
-		collectKeys(doc, used)
+		collectPipelineKeys(doc, used)
 	}
 
-	var missing []string
+	for name, typ := range docsCoverageTypes() {
+		var missing []string
 
-	for tag := range yamlTagNames(reflect.TypeOf(config.Step{})) {
-		if !used[tag] {
-			missing = append(missing, tag)
+		for tag := range yamlTagNames(typ) {
+			if tag != "" && !used[name][tag] {
+				missing = append(missing, tag)
+			}
 		}
-	}
 
-	sort.Strings(missing)
+		sort.Strings(missing)
 
-	if len(missing) > 0 {
-		t.Errorf("config.Step fields with no tested doc example (add one to docs/*.md): %v", missing)
+		if len(missing) > 0 {
+			t.Errorf("config.%s fields with no tested doc example (add one to docs/*.md): %v", name, missing)
+		}
 	}
 }
 
-// collectKeys walks a decoded YAML value recording every mapping key.
-func collectKeys(value any, keys map[string]bool) {
-	switch typed := value.(type) {
-	case map[string]any:
-		for key, child := range typed {
-			keys[key] = true
+// record marks every key of a mapping as seen for one config type.
+func record(used map[string]map[string]bool, typeName string, node any) {
+	mapping, ok := node.(map[string]any)
+	if !ok {
+		return
+	}
 
-			collectKeys(child, keys)
+	if used[typeName] == nil {
+		used[typeName] = map[string]bool{}
+	}
+
+	for key := range mapping {
+		used[typeName][key] = true
+	}
+}
+
+// eachOf calls fn for every element of a list-valued key.
+func eachOf(doc map[string]any, key string, fn func(any)) {
+	list, ok := doc[key].([]any)
+	if !ok {
+		return
+	}
+
+	for _, entry := range list {
+		fn(entry)
+	}
+}
+
+// collectPipelineKeys walks one decoded block, recording each mapping's keys
+// against the config type that position decodes into.
+func collectPipelineKeys(doc map[string]any, used map[string]map[string]bool) {
+	record(used, "Config", doc)
+	record(used, "Defaults", doc["defaults"])
+	record(used, "WorkspaceConfig", doc["workspace"])
+	record(used, "Assert", doc["assert"])
+
+	for key, typeName := range map[string]string{
+		"resource_types": "ResourceType",
+		"resources":      "Resource",
+		"agents":         "Agent",
+		"mcp_servers":    "MCPServer",
+		"tasks":          "Task",
+	} {
+		eachOf(doc, key, func(entry any) { record(used, typeName, entry) })
+	}
+
+	eachOf(doc, "jobs", func(entry any) {
+		job, ok := entry.(map[string]any)
+		if !ok {
+			return
 		}
-	case []any:
-		for _, child := range typed {
-			collectKeys(child, keys)
+
+		record(used, "Job", job)
+		record(used, "Assert", job["assert"])
+
+		plan, _ := job["plan"].([]any)
+		collectStepKeys(plan, used)
+	})
+}
+
+// collectStepKeys records a plan's steps and everything nested inside them,
+// through the same walk both mutation harnesses use.
+func collectStepKeys(steps []any, used map[string]map[string]bool) {
+	for _, entry := range steps {
+		step, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		record(used, "Step", step)
+		record(used, "Assert", step["assert"])
+
+		for _, group := range nestedStepGroups(step) {
+			collectStepKeys(group.steps, used)
 		}
 	}
 }

@@ -37,6 +37,14 @@ jobs:
   plan:
   - get: tags
   - task: build
+    image: golang:1.25          # every one of these is a STEP-level override,
+    env: [BUILD_TAG]            # applying to this step and no other use of the
+    user: root                  # tasks: entry above
+    network: host
+    privileged: true
+    container_limits:
+      cpu: 512
+      memory: 2147483648
   - agent: reviewer
     inputs: [tags]
     prompt: "Sanity-check the fetched tag."
@@ -115,19 +123,55 @@ This is not a full sandbox — a command can still reach the host filesystem by 
 Both sit wherever `image:` does, and both **require `image:`** — a host-executed command has no cgroup to cap and no privilege to raise, so accepting either there would promise something it does not do.
 
 ```yaml noexec=docker
+resource_types:
+- name: images                  # publishing an image needs a daemon of its own
+  image: docker:27-dind
+  privileged: true
+  user: root                    # dind's daemon will not start unprivileged
+  network: bridge               # ...and it has to reach the registry
+  container_limits:
+    cpu: 1024
+    memory: 4294967296
+  config:
+    check: |
+      printf '[{"tag": "latest"}]'
+    out: |
+      docker build -t app . && printf '{"tag": "latest"}'
+
+resources:
+- name: app-image
+  type: images
+  source: {}
+
 tasks:
 - name: integration
   image: docker:27-dind
   privileged: true              # docker-in-docker needs it
+  network: bridge
   container_limits:
     cpu: 512                    # --cpu-shares
     memory: 2147483648          # --memory, in BYTES (2 GiB)
   run: ./run-integration.sh
 
+agents:
+- name: builder                 # an agent whose run_shell drives that daemon
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  image: docker:27-dind
+  privileged: true
+  user: root
+  env: [DOCKER_HOST]            # named, never valued — see env: below
+  container_limits:
+    cpu: 1024
+    memory: 4294967296
+  tools: [run_shell]
+
 jobs:
 - name: test
   plan:
   - task: integration
+  - agent: builder
+    prompt: "Build the image and report what failed."
+  - put: app-image
 ```
 
 - **`cpu:` is a share weight, not a core count.** It maps to `--cpu-shares`, a *relative* weight against other containers contending for CPU — 1024 is the default, so 512 means half a default container's share, and it caps nothing on an idle machine. The name matches Concourse so a pipeline moving between the two means the same thing in both.
