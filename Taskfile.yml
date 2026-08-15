@@ -33,6 +33,11 @@ tasks:
     cmds:
       - go test ./...
 
+  mutate:
+    desc: Just the mutation suites — break each doc-corpus assertion in turn and require the build to notice. Part of `task test`; this is the fast way to iterate on them alone.
+    cmds:
+      - go test . -run 'Mutation' -count=1
+
   build:
     desc: Build ./steps.
     cmds:

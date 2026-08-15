@@ -268,7 +268,11 @@ func (t *TestCmd) Run() error {
 		if jobErr != nil {
 			fmt.Printf("FAIL %s: %v\n", job.Name, jobErr)
 
-			failures = append(failures, job.Name)
+			// The REASON, not just the name. This error is what a caller
+			// sees — a script, a CI step, or the mutation suite asking
+			// which assertion caught a mutant — and "1 job(s) failed:
+			// [build]" sends every one of them back to scrape stdout.
+			failures = append(failures, fmt.Sprintf("  %s: %v", job.Name, jobErr))
 
 			continue
 		}
@@ -281,7 +285,7 @@ func (t *TestCmd) Run() error {
 	}
 
 	if len(failures) > 0 {
-		return fmt.Errorf("test: %d job(s) failed: %v", len(failures), failures)
+		return fmt.Errorf("test: %d job(s) failed:\n%s", len(failures), strings.Join(failures, "\n"))
 	}
 
 	fmt.Printf("%d/%d passed\n", len(executed), len(executed))
