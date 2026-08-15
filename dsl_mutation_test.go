@@ -31,6 +31,8 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/jtarchie/steps/docs"
 	"github.com/jtarchie/steps/internal/config"
 )
@@ -49,8 +51,6 @@ type stepOperator struct {
 // its own ignores: an unexplained omission is indistinguishable from an
 // oversight, and this is exactly the list where an oversight hides.
 var stepMutationSkips = map[string]string{ //nolint:gochecknoglobals // a test's data table
-	"": "the embedded Hooks struct has no spelling of its own; its on_success/on_failure/... keys are separate fields",
-
 	"trigger":  "steps test runs every job unconditionally, so trigger: changes nothing it can see; it decides polling under steps watch, covered by internal/trigger",
 	"approval": "an approval parks the run until a person answers, which is why its example is noexec=approval — there is no run to mutate",
 	"on_abort": "only SIGINT/SIGTERM mid-run reaches it, and a fixture that signals itself is testing the harness; pinned by TestConformanceAbortFiresOnAbortHook and TestRunHooksAbortGracePeriod instead",
@@ -226,7 +226,7 @@ func detectFieldSomewhere(t *testing.T, blocks []docs.Block, operator stepOperat
 	for _, block := range blocks {
 		for index := 0; ; index++ {
 			doc := decodeBlock(t, block)
-			if !applyToNthStep(doc, operator, index) {
+			if !applyToNthStep(t, doc, operator, index) {
 				break
 			}
 
@@ -248,11 +248,25 @@ func detectFieldSomewhere(t *testing.T, blocks []docs.Block, operator stepOperat
 	return ""
 }
 
-// applyToNthStep applies the operator to the nth step it fits, counting from
-// zero, and reports whether there was one.
-func applyToNthStep(doc map[string]any, operator stepOperator, n int) bool {
+// applyToNthStep applies the operator to the nth step it can actually mutate,
+// counting from zero, and reports whether there was one.
+//
+// "Can actually mutate" is decided by running the operator against a deep copy
+// first, because carrying the field is not the same as being falsifiable: an
+// empty list or a one-entry verdict vocabulary declines. Counting positions
+// where the field is merely PRESENT would let a declining site absorb an
+// index, so index 0 and index 1 would both land on the next site — the same
+// mutant run twice, and a site count in the failure message larger than the
+// number of sites really tried.
+func applyToNthStep(t *testing.T, doc map[string]any, operator stepOperator, n int) bool {
+	t.Helper()
+
 	remaining := n
 	walker := stepOperator{tag: operator.tag, apply: func(step map[string]any) bool {
+		if !operator.apply(deepCopyStep(t, step)) {
+			return false // nothing here to break; not a site
+		}
+
 		if remaining > 0 {
 			remaining--
 
@@ -348,6 +362,28 @@ func detectMutant(t *testing.T, block docs.Block, body string) string {
 	default:
 		return "crash"
 	}
+}
+
+// deepCopyStep round-trips a step through YAML, so probing whether an
+// operator applies cannot leave a half-mutation behind on the real tree. The
+// operators write through nested maps and slices, so a shallow copy would not
+// isolate anything.
+func deepCopyStep(t *testing.T, step map[string]any) map[string]any {
+	t.Helper()
+
+	encoded, err := yaml.Marshal(step)
+	if err != nil {
+		t.Fatalf("copy step: %v", err)
+	}
+
+	var copied map[string]any
+
+	err = yaml.Unmarshal(encoded, &copied)
+	if err != nil {
+		t.Fatalf("copy step: %v", err)
+	}
+
+	return copied
 }
 
 // runnableBlocks is the executed corpus, in page order.

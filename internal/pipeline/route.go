@@ -228,9 +228,18 @@ func routeTargetName(steps []config.Step, target int) string {
 
 // indexOfStep returns the position of the step named name (its task/put/agent
 // value) in steps, searching the single segment slice runSteps is handed.
+//
+// It asks config.Step.DisplayName rather than executedStepName because a jump
+// target is resolved against exactly the names LOAD TIME validated (see
+// config.stepName and segmentPositions). The two differ for load_var:, which
+// records the var it captures in the execution log but is not a routable step
+// — matching it here would let `to: {failure: report}` land on a `load_var:
+// report` sitting earlier in the segment instead of the task of that name the
+// loader resolved it to, and a backward jump to it fails the job on
+// max_visits.
 func indexOfStep(steps []config.Step, name string) (int, bool) {
 	for i := range steps {
-		if executedStepName(steps[i]) == name {
+		if steps[i].DisplayName() == name {
 			return i, true
 		}
 	}

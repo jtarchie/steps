@@ -65,10 +65,16 @@ func TestEndToEndPRReviewExample(t *testing.T) {
 
 	// Answer the gate, but never outlive the run: if the plan died before it
 	// parked, the useful message is the run's own error, not "nobody was
-	// waiting to be approved".
+	// waiting to be approved". stop is what keeps the poller from outliving
+	// the TEST on that path — a t.Fatal below runs this defer, and a goroutine
+	// still opening the store under a t.TempDir being deleted is both a
+	// goleak failure and a confusing second error.
 	approved := make(chan error, 1)
+	stop := make(chan struct{})
 
-	go func() { approved <- approveWhenPending(path) }()
+	defer close(stop)
+
+	go func() { approved <- approveWhenPending(path, stop) }()
 
 	select {
 	case err := <-done:
@@ -103,8 +109,8 @@ func TestEndToEndPRReviewExample(t *testing.T) {
 }
 
 // approveWhenPending answers approval 1 once it exists, returning the last
-// error if it never does.
-func approveWhenPending(pipelinePath string) error {
+// error if it never does. It gives up early when stop is closed.
+func approveWhenPending(pipelinePath string, stop <-chan struct{}) error {
 	deadline := time.Now().Add(30 * time.Second)
 
 	var last error
@@ -115,7 +121,11 @@ func approveWhenPending(pipelinePath string) error {
 			return nil
 		}
 
-		time.Sleep(20 * time.Millisecond)
+		select {
+		case <-stop:
+			return last
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
 
 	return last

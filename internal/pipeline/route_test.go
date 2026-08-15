@@ -33,6 +33,25 @@ func TestIndexOfStep(t *testing.T) {
 	}
 }
 
+// A load_var: records the var it captures in the execution log, but it is not
+// a routing target: load-time validation resolves `to:` against task/put/agent
+// names only, so matching one here would send a route to a step the loader
+// never offered — backward, which then fails the job on max_visits.
+func TestIndexOfStepIgnoresLoadVar(t *testing.T) {
+	t.Parallel()
+
+	steps := []config.Step{
+		{LoadVar: "report", VarFile: "meta/version.txt"},
+		{Task: "flaky", To: map[string]string{"failure": "report"}},
+		{Task: "report"},
+	}
+
+	idx, ok := indexOfStep(steps, "report")
+	if !ok || idx != 2 {
+		t.Errorf("indexOfStep(report) = %d,%v, want 2,true (the task, not the load_var)", idx, ok)
+	}
+}
+
 func TestResolveTransitionSuccessRoutesForward(t *testing.T) {
 	t.Parallel()
 

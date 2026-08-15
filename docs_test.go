@@ -418,7 +418,7 @@ func TestDocsCoverage(t *testing.T) {
 		var missing []string
 
 		for tag := range yamlTagNames(typ) {
-			if tag != "" && !used[name][tag] {
+			if !used[name][tag] {
 				missing = append(missing, tag)
 			}
 		}

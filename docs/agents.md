@@ -309,7 +309,7 @@ assert:
   execution: [quick, full]   # pipeline level: the jobs `steps test` must have run
 ```
 
-Neither execution assert names `fixer`, and that is the assertion: a green command never constructs its fix agent, so a fixer appearing in the log would mean the task had failed.
+Neither execution assert names `fixer`, and that is the assertion: a green command never constructs its fix agent. Note what this fixture does *not* pin — a step `assert:` takes over the success decision, so the `fix:` these steps inherit could not have run even had the command failed. The repair path itself is exercised in [attempts-timeout.md](attempts-timeout.md); what is reused here is the definition.
 
 This resolution runs identically at plan time and run time, so a task's cache hash is always computed from its *resolved* `run:` string. An undefined reference is an ordinary error at plan time. An agent step's connection/dials/tool-grant resolve the same way.
 
