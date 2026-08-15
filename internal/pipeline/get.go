@@ -70,7 +70,7 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 			// Taken, even though nothing ran: the cache skipped it because
 			// this exact chain already succeeded, which is the definition of
 			// a version this job is done with.
-			w.cursor.take(ctx, w.st, w.jobName, resource.Name, version, w.cfg.VersionHistoryLimit())
+			w.cursor.take(ctx, w.st, w.jobName, resource.Name, version)
 
 			continue
 		}
@@ -95,7 +95,7 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 		// retried — was tried and reverted. It makes a version that fails
 		// forever re-run forever, on every trigger, with an agent's bill
 		// attached, and it means "every version, once" quietly is not true.
-		w.cursor.take(ctx, w.st, w.jobName, resource.Name, version, w.cfg.VersionHistoryLimit())
+		w.cursor.take(ctx, w.st, w.jobName, resource.Name, version)
 
 		err = w.runTriggeredBuild(ctx, step, *resource, *resourceType, version, remainder, node)
 

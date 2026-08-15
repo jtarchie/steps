@@ -35,10 +35,14 @@ import (
 // versionCursor answers "has this job already taken this version", for the
 // resources one job's plan fans out over.
 type versionCursor struct {
-	// consumed is resource name -> set of version JSONs. Loaded once per run,
-	// before planning, so the plan-time and run-time views cannot drift apart
-	// mid-run as versions are consumed.
-	consumed map[string]map[string]bool
+	// marks is resource name -> the highest check_order this job has taken.
+	// Loaded once per run, before planning, so the plan-time and run-time
+	// views cannot drift apart mid-run as versions are consumed.
+	marks map[string]int64
+	// orders maps a version's canonical JSON to its check_order, for the
+	// resources this job reads. A version with no entry has never been
+	// recorded, so it sits above every mark and is still to do.
+	orders map[string]map[string]int64
 
 	// suppress is false under --force, which re-runs everything the cursor
 	// would otherwise filter out. It gates only `has`: the run still RECORDS
@@ -85,17 +89,24 @@ func loadVersionCursor(ctx context.Context, st *store.Store, job *config.Job, su
 	}
 
 	cursor := &versionCursor{
-		consumed: make(map[string]map[string]bool, len(resources)),
+		marks:    make(map[string]int64, len(resources)),
+		orders:   make(map[string]map[string]int64, len(resources)),
 		suppress: suppress,
 	}
 
 	for _, name := range resources {
-		consumed, err := st.ConsumedVersions(ctx, job.Name, name)
+		mark, err := st.ConsumedMark(ctx, job.Name, name)
 		if err != nil {
-			return nil, err //nolint:wrapcheck // ConsumedVersions already names the job
+			return nil, err //nolint:wrapcheck // ConsumedMark already names the job
 		}
 
-		cursor.consumed[name] = consumed
+		orders, err := st.VersionOrders(ctx, name)
+		if err != nil {
+			return nil, err //nolint:wrapcheck // VersionOrders already names the resource
+		}
+
+		cursor.marks[name] = mark
+		cursor.orders[name] = orders
 	}
 
 	return cursor, nil
@@ -177,13 +188,21 @@ func (c *versionCursor) has(resourceName string, version map[string]any) bool {
 
 	key, ok := encodeVersion(version)
 	if !ok {
-		// An unencodable version cannot be matched against the table, so it
-		// cannot be suppressed either. Running it again is the recoverable
-		// failure; skipping work that was never recorded is not.
+		// An unencodable version cannot be placed in the order, so it cannot
+		// be suppressed either. Running it again is the recoverable failure;
+		// skipping work that was never recorded is not.
 		return false
 	}
 
-	return c.consumed[resourceName][key]
+	// A version with no recorded order has never been seen, so it is above
+	// the mark by definition — the same conclusion, reached without inventing
+	// an order for it.
+	order, seen := c.orders[resourceName][key]
+	if !seen {
+		return false
+	}
+
+	return order <= c.marks[resourceName]
 }
 
 // take records that this job has taken a version — called as its build
@@ -198,7 +217,7 @@ func (c *versionCursor) has(resourceName string, version map[string]any) bool {
 // a failed one. The cost of a lost row is that the version is taken once more
 // later, which is the direction this errs on everywhere.
 func (c *versionCursor) take(
-	ctx context.Context, st *store.Store, jobName, resourceName string, version map[string]any, limit int,
+	ctx context.Context, st *store.Store, jobName, resourceName string, version map[string]any,
 ) {
 	if c == nil {
 		return
@@ -209,18 +228,35 @@ func (c *versionCursor) take(
 		return
 	}
 
-	err := st.RecordConsumedVersion(context.WithoutCancel(ctx), jobName, resourceName, key, limit)
+	detached := context.WithoutCancel(ctx)
+
+	// The version's order, filing it first if this job resolved it itself —
+	// which is every `steps run` against a resource no poll has recorded.
+	// Without that the cursor could not advance past it and the fan-out would
+	// repeat on the next run.
+	order, err := st.RecordVersionOrder(detached, resourceName, key)
 	if err != nil {
 		slog.Warn("job.cursor_unrecorded", "job", jobName, "resource", resourceName, "error", err)
 
 		return
 	}
 
-	if c.consumed[resourceName] == nil {
-		c.consumed[resourceName] = map[string]bool{}
+	err = st.RecordConsumedMark(detached, jobName, resourceName, order)
+	if err != nil {
+		slog.Warn("job.cursor_unrecorded", "job", jobName, "resource", resourceName, "error", err)
+
+		return
 	}
 
-	c.consumed[resourceName][key] = true
+	if c.orders[resourceName] == nil {
+		c.orders[resourceName] = map[string]int64{}
+	}
+
+	c.orders[resourceName][key] = order
+
+	if order > c.marks[resourceName] {
+		c.marks[resourceName] = order
+	}
 }
 
 // encodeVersion renders a version the same way passed: does (json.Marshal,

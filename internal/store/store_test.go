@@ -723,51 +723,59 @@ func TestMaxInFlightDefaultsToOneForAnUnknownJob(t *testing.T) {
 	assertQueueEmpty(t, store)
 }
 
-// TestConsumedVersionsRoundTrip covers the get: version: every cursor: what a
-// job has taken is what it reads back, per (job, resource).
-func TestConsumedVersionsRoundTrip(t *testing.T) {
+// TestConsumedMarkRoundTrip covers the get: version: every cursor: how far a
+// job has fanned out, per (job, resource).
+func TestConsumedMarkRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	st := openTestStore(t)
 	ctx := context.Background()
 
-	consumed, err := st.ConsumedVersions(ctx, "answer", "mentions")
+	mark, err := st.ConsumedMark(ctx, "answer", "mentions")
 	if err != nil {
-		t.Fatalf("ConsumedVersions: %v", err)
+		t.Fatalf("ConsumedMark: %v", err)
 	}
 
-	if len(consumed) != 0 {
-		t.Fatalf("a fresh store reports %v consumed, want none", consumed)
+	if mark != 0 {
+		t.Fatalf("a fresh store reports mark %d, want 0 — nothing taken", mark)
 	}
 
-	err = st.RecordConsumedVersion(ctx, "answer", "mentions", `{"ts":"1"}`, 0)
+	err = st.RecordConsumedMark(ctx, "answer", "mentions", 5)
 	if err != nil {
-		t.Fatalf("RecordConsumedVersion: %v", err)
+		t.Fatalf("RecordConsumedMark: %v", err)
 	}
 
 	// Re-recording is a no-op, not an error: a resumed or replayed run must
-	// not fail on a version it already took.
-	err = st.RecordConsumedVersion(ctx, "answer", "mentions", `{"ts":"1"}`, 0)
+	// not fail on work it already did.
+	err = st.RecordConsumedMark(ctx, "answer", "mentions", 5)
 	if err != nil {
-		t.Fatalf("RecordConsumedVersion (again): %v", err)
+		t.Fatalf("RecordConsumedMark (again): %v", err)
 	}
 
-	consumed, err = st.ConsumedVersions(ctx, "answer", "mentions")
+	// And it only moves forward. A backfilled version reaching a job that has
+	// already moved past it must not rewind the mark and hand back everything
+	// in between.
+	err = st.RecordConsumedMark(ctx, "answer", "mentions", 2)
 	if err != nil {
-		t.Fatalf("ConsumedVersions: %v", err)
+		t.Fatalf("RecordConsumedMark (older): %v", err)
 	}
 
-	if !consumed[`{"ts":"1"}`] || len(consumed) != 1 {
-		t.Errorf("consumed = %v, want exactly the recorded version", consumed)
+	mark, err = st.ConsumedMark(ctx, "answer", "mentions")
+	if err != nil {
+		t.Fatalf("ConsumedMark: %v", err)
+	}
+
+	if mark != 5 {
+		t.Errorf("mark = %d, want 5 — an older version must not rewind it", mark)
 	}
 
 	// Scoped per job and per resource — another job has taken nothing.
-	other, err := st.ConsumedVersions(ctx, "other-job", "mentions")
+	other, err := st.ConsumedMark(ctx, "other-job", "mentions")
 	if err != nil {
-		t.Fatalf("ConsumedVersions: %v", err)
+		t.Fatalf("ConsumedMark: %v", err)
 	}
 
-	if len(other) != 0 {
-		t.Errorf("another job reports %v consumed; the cursor is per job", other)
+	if other != 0 {
+		t.Errorf("another job reports mark %d; the cursor is per job", other)
 	}
 }

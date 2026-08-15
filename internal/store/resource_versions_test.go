@@ -139,12 +139,7 @@ func TestRecordVersionsPrunesOldestAndCascades(t *testing.T) {
 
 	recordN(t, store, "items", "1", "2", "3")
 
-	// The oldest version has been both taken and passed by a job.
-	err = store.RecordConsumedVersion(ctx, "build", "items", oldest, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	// The oldest version has been passed by a job.
 	err = store.RecordPassedVersion(ctx, "build", "items", oldest, "build-1")
 	if err != nil {
 		t.Fatal(err)
@@ -165,31 +160,13 @@ func TestRecordVersionsPrunesOldestAndCascades(t *testing.T) {
 		t.Errorf("versions = %v, want the newest two [3 4]", got)
 	}
 
-	assertNoTrace(t, store, oldest)
-}
-
-// assertNoTrace fails if anything still points at a pruned version.
-func assertNoTrace(t *testing.T, store *Store, version string) {
-	t.Helper()
-
-	ctx := context.Background()
-
-	consumed, err := store.ConsumedVersions(ctx, "build", "items")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if consumed[version] {
-		t.Error("the pruned version is still marked consumed; the cascade left an orphan")
-	}
-
 	passed, err := store.PassedVersions(ctx, "build", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for _, row := range passed {
-		if row.Version == version {
+		if row.Version == oldest {
 			t.Error("the pruned version is still recorded as passed; the cascade left an orphan")
 		}
 	}
@@ -219,9 +196,9 @@ func TestUsingAVersionIsNotTheSameAsCheckingForIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = store.RecordConsumedVersion(ctx, "build", "items", version, 0)
+	_, err = store.RecordVersionOrder(ctx, "items", version)
 	if err != nil {
-		t.Fatalf("recording a consumed version nothing had filed: %v", err)
+		t.Fatalf("filing a version nothing had checked: %v", err)
 	}
 
 	err = store.RecordPassedVersion(ctx, "build", "items", version, "build-1")
@@ -253,26 +230,26 @@ func TestUsingAVersionIsNotTheSameAsCheckingForIt(t *testing.T) {
 	}
 }
 
-// TestConsumedRecordsOutliveTheHistoryTheyFilter is the interaction between
-// two caps that used to be set independently.
+// TestTheMarkCannotDevelopHoles is why the cursor is a high-water mark and
+// not a set of consumed versions.
 //
-// The consumed set exists to stop a job rebuilding a version, and it is
-// bounded so it cannot grow forever. History is bounded too, and became
-// CONFIGURABLE — so a pipeline asking to remember more versions than the
-// consumed bound would lose the record of having built the oldest of them
-// while still being offered them. They read as unbuilt and get built again,
-// which is the exact repetition the consumed set exists to prevent.
+// A set has to be capped or it grows forever, and a capped set forgets its
+// oldest members while the versions they name are still offered — so they
+// read as unbuilt and run again, which is the repetition the cursor exists to
+// prevent. That was a live bug the moment history became configurable: ask to
+// remember more versions than the consumed cap, and the difference came back
+// round for a second build.
 //
-// So the bounds are one bound: forget a version and forget that it was taken,
-// in that order or not at all.
-func TestConsumedRecordsOutliveTheHistoryTheyFilter(t *testing.T) {
+// A mark has no members to forget. Whatever the history limit, everything at
+// or below it is done.
+func TestTheMarkCannotDevelopHoles(t *testing.T) {
 	t.Parallel()
 
 	store := newHistoryStore(t)
 	ctx := context.Background()
 
-	// More versions than the consumed floor, remembered on purpose.
-	const total = consumedVersionCap + 200
+	// Far more versions than any set-based cap would have kept.
+	const total = 5000
 
 	versions := make([]map[string]any, 0, total)
 	for i := range total {
@@ -284,46 +261,48 @@ func TestConsumedRecordsOutliveTheHistoryTheyFilter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, version := range versions {
-		encoded := mustEncode(t, version)
-
-		err = store.RecordConsumedVersion(ctx, "build", "items", encoded, total)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	history, err := store.ResourceVersions(ctx, "items")
+	orders, err := store.VersionOrders(ctx, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	consumed, err := store.ConsumedVersions(ctx, "build", "items")
+	if len(orders) != total {
+		t.Fatalf("history holds %d versions, want %d", len(orders), total)
+	}
+
+	// The job builds all of them, which is one row rather than 5000.
+	err = store.RecordConsumedMark(ctx, "build", "items", highestOrder(orders))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mark, err := store.ConsumedMark(ctx, "build", "items")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	unbuilt := 0
 
-	for _, version := range history {
-		if !consumed[mustEncode(t, version)] {
+	for _, order := range orders {
+		if order > mark {
 			unbuilt++
 		}
 	}
 
 	if unbuilt != 0 {
 		t.Errorf("%d of %d already-built versions read as unbuilt; they would all run again",
-			unbuilt, len(history))
+			unbuilt, total)
 	}
 }
 
-func mustEncode(t *testing.T, version map[string]any) string {
-	t.Helper()
+func highestOrder(orders map[string]int64) int64 {
+	var highest int64
 
-	encoded, err := EncodeVersion(version)
-	if err != nil {
-		t.Fatal(err)
+	for _, order := range orders {
+		if order > highest {
+			highest = order
+		}
 	}
 
-	return encoded
+	return highest
 }

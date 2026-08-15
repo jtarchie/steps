@@ -119,26 +119,40 @@ CREATE TABLE IF NOT EXISTS job_versions (
         REFERENCES resource_versions(resource_name, version_json) ON DELETE CASCADE
 );
 
--- Which versions a job has already FANNED OUT over under get: version: every.
+-- How far a job has FANNED OUT under get: version: every -- the highest
+-- check_order it has taken, per resource.
 --
 -- Deliberately not job_versions above, which looks like it would fit: that
 -- table answers "did this job go GREEN on this version" for passed:, while
--- this one answers "is this job DONE with this version" (see
--- internal/pipeline/cursor.go for why a failed build leaves it unconsumed).
--- Same shape, different question — and an available answer to the wrong
--- question is how the passed: bug came back once already.
+-- this one answers "is this job DONE with this version". Same subject,
+-- different question, and an available answer to the wrong one is how the
+-- passed: bug came back once already.
 --
--- A SET rather than a high-water mark, because versions have no stable total
--- order across checks: a check returns a list, and a resource may backfill.
--- "Everything before X" is a claim the data does not support; membership is.
+-- This was a SET of consumed versions until resource_versions gave versions
+-- a total order. The reason was sound while it held: a check returns a list
+-- and an upstream may backfill, so "everything before X" was a claim the data
+-- could not support and only membership could be recorded. check_order is
+-- that claim's missing foundation -- order of DISCOVERY, which is well
+-- defined even when order of existence is not.
+--
+-- A mark is not merely smaller than a set, it is safer. A set has to be
+-- capped or it grows forever, and a capped set forgets its oldest members
+-- while the versions they name are still offered -- so they read as unbuilt
+-- and run again, which is the repetition this table exists to prevent. A
+-- mark has no members to forget. It is also what Concourse records:
+-- NextEveryVersion takes the next version above the highest check_order the
+-- job has built.
+--
+-- No foreign key, because there is no version here to point at. Pruning
+-- history cannot corrupt a mark: it is a threshold, and a threshold naming
+-- an order that no longer exists still separates what is above it from what
+-- is below.
 CREATE TABLE IF NOT EXISTS job_version_cursor (
     job_name      TEXT NOT NULL,
     resource_name TEXT NOT NULL,
-    version_json  TEXT NOT NULL,
+    check_order   INTEGER NOT NULL,
     consumed_at   TEXT NOT NULL,
-    PRIMARY KEY (job_name, resource_name, version_json),
-    FOREIGN KEY (resource_name, version_json)
-        REFERENCES resource_versions(resource_name, version_json) ON DELETE CASCADE
+    PRIMARY KEY (job_name, resource_name)
 );
 
 -- One row per run invocation, with the steps it got through. It is what
@@ -323,18 +337,37 @@ var addedColumns = []struct{ table, column, decl string }{
 // job_versions means a passed: gate waits for one more upstream run before
 // it can prove a version was green. Both resolve themselves on the next
 // poll; neither loses work that has not already happened.
-var rebuiltTables = []string{"job_versions", "job_version_cursor"}
+var rebuiltTables = []struct {
+	table string
+	// legacy reports whether the existing table predates the current
+	// definition. Each entry names the evidence rather than a version
+	// counter, so the check stays true however many times the schema is
+	// reloaded: a table already rebuilt does not look legacy.
+	legacy func(context.Context, *sql.DB, string) (bool, error)
+}{
+	// Gained foreign keys, so an absence of them is the tell.
+	{"job_versions", tableLacksForeignKeys},
+	// Became a high-water mark, so a leftover version_json column is.
+	{"job_version_cursor", tableHasColumn("version_json")},
+}
 
-// dropLegacyTables removes any rebuiltTables entry that predates its foreign
-// keys, so the schema below can recreate it with them.
+// dropLegacyTables removes any rebuiltTables entry that predates its current
+// definition, so the schema below can recreate it.
 //
-// Detection is the constraint itself rather than a version counter: a table
-// with no foreign_key_list is one from before, and a table that already has
-// them is left alone. Runs BEFORE the schema is executed, since CREATE TABLE
-// IF NOT EXISTS would otherwise see the old definition and do nothing.
+// Runs BEFORE the schema is executed, since CREATE TABLE IF NOT EXISTS would
+// otherwise see the old definition and do nothing.
 func dropLegacyTables(ctx context.Context, db *sql.DB) error {
-	for _, table := range rebuiltTables {
-		legacy, err := isLegacyTable(ctx, db, table)
+	for _, rebuild := range rebuiltTables {
+		exists, err := tableExists(ctx, db, rebuild.table)
+		if err != nil {
+			return err
+		}
+
+		if !exists {
+			continue
+		}
+
+		legacy, err := rebuild.legacy(ctx, db, rebuild.table)
 		if err != nil {
 			return err
 		}
@@ -343,50 +376,94 @@ func dropLegacyTables(ctx context.Context, db *sql.DB) error {
 			continue
 		}
 
-		_, err = db.ExecContext(ctx, "DROP TABLE "+table)
+		_, err = db.ExecContext(ctx, "DROP TABLE "+rebuild.table)
 		if err != nil {
-			return fmt.Errorf("could not rebuild %s: %w", table, err)
+			return fmt.Errorf("could not rebuild %s: %w", rebuild.table, err)
 		}
 
-		slog.Info("store.table_rebuilt", "table", table, "reason", "adding foreign keys")
+		slog.Info("store.table_rebuilt", "table", rebuild.table)
 	}
 
 	return nil
 }
 
-// isLegacyTable reports whether a table exists and predates its foreign keys.
-//
-// The constraint itself is the version marker: a table with no
-// foreign_key_list was created before they were declared, and one that has
-// them is already current.
-func isLegacyTable(ctx context.Context, db *sql.DB, table string) (bool, error) {
-	var exists int
+func tableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
+	var count int
 
 	err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&exists)
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("could not inspect %s: %w", table, err)
 	}
 
-	if exists == 0 {
-		return false, nil
+	return count > 0, nil
+}
+
+// tableLacksForeignKeys reports whether a table declares none.
+func tableLacksForeignKeys(ctx context.Context, db *sql.DB, table string) (bool, error) {
+	found, err := pragmaHasRows(ctx, db, "foreign_key_list", table)
+	if err != nil {
+		return false, err
 	}
 
-	rows, err := db.QueryContext(ctx, "PRAGMA foreign_key_list("+table+")")
+	return !found, nil
+}
+
+// tableHasColumn reports whether a table still carries a named column.
+func tableHasColumn(column string) func(context.Context, *sql.DB, string) (bool, error) {
+	return func(ctx context.Context, db *sql.DB, table string) (bool, error) {
+		rows, err := db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+		if err != nil {
+			return false, fmt.Errorf("could not inspect %s: %w", table, err)
+		}
+
+		defer func() { _ = rows.Close() }()
+
+		for rows.Next() {
+			var (
+				index        int
+				name, kind   string
+				notNull      int
+				defaultValue sql.NullString
+				primaryKey   int
+			)
+
+			err = rows.Scan(&index, &name, &kind, &notNull, &defaultValue, &primaryKey)
+			if err != nil {
+				return false, fmt.Errorf("could not inspect %s: %w", table, err)
+			}
+
+			if name == column {
+				return true, nil
+			}
+		}
+
+		err = rows.Err()
+		if err != nil {
+			return false, fmt.Errorf("could not inspect %s: %w", table, err)
+		}
+
+		return false, nil
+	}
+}
+
+// pragmaHasRows reports whether a table-valued pragma returns anything.
+func pragmaHasRows(ctx context.Context, db *sql.DB, pragma, table string) (bool, error) {
+	rows, err := db.QueryContext(ctx, "PRAGMA "+pragma+"("+table+")")
 	if err != nil {
 		return false, fmt.Errorf("could not inspect %s: %w", table, err)
 	}
 
 	defer func() { _ = rows.Close() }()
 
-	hasFK := rows.Next()
+	found := rows.Next()
 
 	err = rows.Err()
 	if err != nil {
 		return false, fmt.Errorf("could not inspect %s: %w", table, err)
 	}
 
-	return !hasFK, nil
+	return found, nil
 }
 
 // addColumns applies addedColumns, treating "duplicate column name" as

@@ -827,22 +827,28 @@ func recordHistory(
 		return nil
 	}
 
+	orders, err := st.VersionOrders(ctx, resourceName)
+	if err != nil {
+		return fmt.Errorf("trigger resource %q: %w", resourceName, err)
+	}
+
+	var highest int64
+
+	for _, order := range orders {
+		if order > highest {
+			highest = order
+		}
+	}
+
 	for i := range cfg.Jobs {
 		job := &cfg.Jobs[i]
 		if !job.GetsResource(resourceName) {
 			continue
 		}
 
-		for _, version := range obs.versions {
-			encoded, err := store.EncodeVersion(version)
-			if err != nil {
-				return fmt.Errorf("trigger resource %q: %w", resourceName, err)
-			}
-
-			err = st.RecordConsumedVersion(ctx, job.Name, resourceName, encoded, cfg.VersionHistoryLimit())
-			if err != nil {
-				return fmt.Errorf("trigger resource %q: %w", resourceName, err)
-			}
+		err = st.RecordConsumedMark(ctx, job.Name, resourceName, highest)
+		if err != nil {
+			return fmt.Errorf("trigger resource %q: %w", resourceName, err)
 		}
 	}
 

@@ -200,103 +200,48 @@ func (s *Store) HasPassedVersionSet(ctx context.Context, jobName string, want ma
 	return true, nil
 }
 
-// consumedVersionCap is the FLOOR for job_version_cursor per (job, resource).
-// The rows exist to suppress versions a check can still return, so the bound
-// has to be a count rather than an age: a version that is old but still
-// visible must stay suppressed for as long as the check keeps offering it. A
-// thousand is far past any check window anyone polls (Slack's is 20 messages,
-// GitHub's a page).
-//
-// A caller remembering MORE history than this raises it to match — see
-// RecordConsumedVersion.
-const consumedVersionCap = 1000
+// ConsumedMark is how far a job has fanned out over a resource: the highest
+// check_order it has taken. Zero means it has taken nothing, and since
+// check_order starts at 1 that reads as "everything is still to do".
+func (s *Store) ConsumedMark(ctx context.Context, jobName, resourceName string) (int64, error) {
+	var mark sql.NullInt64
 
-// ConsumedVersions returns the set of version JSONs jobName has already fanned
-// out over for resourceName under `get: version: every` — the cursor that
-// stops the same version being taken twice.
-func (s *Store) ConsumedVersions(ctx context.Context, jobName, resourceName string) (map[string]bool, error) {
-	taken, err := collect(ctx, s.db, "consumed versions",
-		`SELECT version_json FROM job_version_cursor WHERE job_name = ? AND resource_name = ?`,
-		[]any{jobName, resourceName}, func(rows *sql.Rows) (string, error) {
-			var versionJSON string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT check_order FROM job_version_cursor WHERE job_name = ? AND resource_name = ?`,
+		jobName, resourceName).Scan(&mark)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
 
-			return versionJSON, rows.Scan(&versionJSON)
-		})
 	if err != nil {
-		return nil, err
+		return 0, fmt.Errorf("could not read the cursor for job %q: %w", jobName, err)
 	}
 
-	consumed := make(map[string]bool, len(taken))
-	for _, versionJSON := range taken {
-		consumed[versionJSON] = true
-	}
-
-	return consumed, nil
+	return mark.Int64, nil
 }
 
-// RecordConsumedVersion marks one version as taken by jobName. The caller
-// (internal/pipeline's versionCursor) records only versions whose build
-// succeeded, so a failure is retried — a documented divergence from
-// Concourse's cursor, which advances regardless of build status (see
-// docs/conformance.md). Re-recording is a no-op rather than an error, so a
-// resumed or replayed run cannot fail on a version it already took.
-func (s *Store) RecordConsumedVersion(ctx context.Context, jobName, resourceName, versionJSON string, limit int) error {
-	// Never smaller than the history it is filtering. A consumed row pruned
-	// while the version it names is still in history reads as UNBUILT, and
-	// the job rebuilds it — the exact repetition this table exists to stop.
-	// The two bounds are therefore one bound: forget a version and forget
-	// that it was taken, in that order or not at all.
-	if limit < consumedVersionCap {
-		limit = consumedVersionCap
+// RecordConsumedMark advances a job's cursor to include order.
+//
+// Only ever forward. A run that takes an older version than one already taken
+// -- a backfill reaching a job that has moved past it -- must not rewind the
+// mark and offer everything in between a second time.
+//
+// No pruning and no cap, which is the point of a mark: there are no members
+// to forget, so it cannot develop the holes a capped set does. See the table
+// comment in schema.go.
+func (s *Store) RecordConsumedMark(ctx context.Context, jobName, resourceName string, order int64) error {
+	if order <= 0 {
+		return nil
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("could not record a consumed version for job %q: %w", jobName, err)
-	}
-
-	defer func() { _ = tx.Rollback() }()
-
-	// As in RecordPassedVersion: the referenced version must be in history
-	// first, and a manually-run job's versions arrive by no other route.
-	err = ensureVersion(ctx, tx, resourceName, versionJSON)
-	if err != nil {
-		return err
-	}
-
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO job_version_cursor (job_name, resource_name, version_json, consumed_at)
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO job_version_cursor (job_name, resource_name, check_order, consumed_at)
 		VALUES (?, ?, ?, ?)
-		ON CONFLICT (job_name, resource_name, version_json) DO NOTHING
-	`, jobName, resourceName, versionJSON, nowNano())
+		ON CONFLICT (job_name, resource_name)
+		DO UPDATE SET check_order = MAX(check_order, excluded.check_order), consumed_at = excluded.consumed_at
+	`, jobName, resourceName, order, nowNano())
 	if err != nil {
-		return fmt.Errorf("could not record a consumed version for job %q: %w", jobName, err)
-	}
-
-	// Pruned here rather than on a timer: this is the only writer, so it is
-	// the only place the bound can be enforced without a background loop.
-	//
-	// Ordered by rowid alone, NOT by consumed_at. consumed_at is RFC3339Nano
-	// text, whose fractional part Go writes with trailing zeros trimmed — so
-	// ".1Z" (100ms) sorts AFTER ".15Z" (150ms) lexically, and the newest rows
-	// are not reliably the ones kept at the eviction boundary. rowid is
-	// monotonic in insertion order, which is the order this actually means.
-	_, err = tx.ExecContext(ctx, `
-		DELETE FROM job_version_cursor
-		WHERE job_name = ? AND resource_name = ? AND rowid NOT IN (
-			SELECT rowid FROM job_version_cursor
-			WHERE job_name = ? AND resource_name = ?
-			ORDER BY rowid DESC
-			LIMIT ?
-		)
-	`, jobName, resourceName, jobName, resourceName, limit)
-	if err != nil {
-		return fmt.Errorf("could not prune consumed versions for job %q: %w", jobName, err)
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		return fmt.Errorf("could not record a consumed version for job %q: %w", jobName, err)
+		return fmt.Errorf("could not record the cursor for job %q: %w", jobName, err)
 	}
 
 	return nil

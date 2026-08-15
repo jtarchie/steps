@@ -200,6 +200,80 @@ func (s *Store) ResourceVersions(ctx context.Context, resourceName string) ([]ma
 	return versions, nil
 }
 
+// VersionOrders maps every recorded version of a resource to its
+// check_order, INCLUDING the rows a check did not file.
+//
+// Deliberately wider than ResourceVersions, which answers "what exists" and
+// therefore reports only what a check saw. This answers "where does this
+// version sit", and a job that resolved its own versions needs an order for
+// them or its cursor could never advance past them — a `steps run` against an
+// unpolled resource would repeat its whole fan-out every time.
+func (s *Store) VersionOrders(ctx context.Context, resourceName string) (map[string]int64, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT version_json, check_order FROM resource_versions WHERE resource_name = ?`, resourceName)
+	if err != nil {
+		return nil, fmt.Errorf("could not read version order for %q: %w", resourceName, err)
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	orders := map[string]int64{}
+
+	for rows.Next() {
+		var (
+			encoded string
+			order   int64
+		)
+
+		err = rows.Scan(&encoded, &order)
+		if err != nil {
+			return nil, fmt.Errorf("could not read version order for %q: %w", resourceName, err)
+		}
+
+		orders[encoded] = order
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("could not read version order for %q: %w", resourceName, err)
+	}
+
+	return orders, nil
+}
+
+// RecordVersionOrder files a version if it is not already known and returns
+// the order it sits at, so a caller that resolved its own versions can
+// advance a cursor over them.
+func (s *Store) RecordVersionOrder(ctx context.Context, resourceName, versionJSON string) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("could not record version for %q: %w", resourceName, err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	err = ensureVersion(ctx, tx, resourceName, versionJSON)
+	if err != nil {
+		return 0, err
+	}
+
+	var order int64
+
+	err = tx.QueryRowContext(ctx,
+		`SELECT check_order FROM resource_versions WHERE resource_name = ? AND version_json = ?`,
+		resourceName, versionJSON).Scan(&order)
+	if err != nil {
+		return 0, fmt.Errorf("could not read version order for %q: %w", resourceName, err)
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return 0, fmt.Errorf("could not record version for %q: %w", resourceName, err)
+	}
+
+	return order, nil
+}
+
 // ensureVersion records a version as seen, so a row that references it has a
 // parent to point at.
 //
