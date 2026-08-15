@@ -167,7 +167,9 @@ jobs:
 
 ### Naming the arguments: `args:`
 
-`source:` and `params:` only work as arguments when their keys already match the tool's parameters. When they don't — or when the value the tool needs lives on the **version** a check produced, which is the usual shape for `in:` — name the mapping instead. Every string in it is a template over exactly what that stage has, the same as a shell `check`/`in`/`out` command: `check` renders against `{source}`, `in` against `{source, version, params}`, `out` against `{source, params}`.
+`source:` and `params:` only work as arguments when their keys already match the tool's parameters. When they don't — or when the value the tool needs lives on the **version** a check produced, which is the usual shape for `in:` — name the mapping instead. Every string in it is a template over exactly what that stage has, the same as a shell `check`/`in`/`out` command: `check` renders against `{source, version}`, `in` against `{source, version, params}`, `out` against `{source, params}`.
+
+`check`'s `version` is the [check cursor](resources.md#the-check-cursor) — the version the last successful check reported — and `args:` is the only way to reach it. A check with no `args:` still sends the `source:` alone: that payload is the tool's own published schema, and no third-party server declares a parameter steps invented.
 
 ```yaml noexec=credentials
 mcp_servers:
@@ -209,7 +211,7 @@ jobs:
 
 - **`args:` replaces the default payload entirely** — it is the argument object, not an addition to it.
 - **Non-string values pass through untouched**, so `limit: 20` reaches the tool as the number 20. Templates nest through mappings and lists.
-- **A template naming a field that isn't there fails the step**, exactly as a shell command's template does — a typo'd `{{ .version.chanel }}` is not quietly nothing. That includes naming a stage's missing half: `{{ .version.x }}` in `check.args:` fails, because a check has no version yet.
+- **A template naming a field that isn't there fails the step**, exactly as a shell command's template does — a typo'd `{{ .version.chanel }}` is not quietly nothing. In `check.args:` that bites on the very first poll, where the cursor is an empty map: write `{{ index .version "ts" | default "0" }}`, never a bare `{{ .version.ts }}`.
 - **A templated value is always a string.** `limit: 20` stays the number 20, but `limit: "{{ .source.limit }}"` sends `"20"`. Numbers lifted out of a version keep their exact digits — an issue id of `123456789` renders as `123456789`, not in exponent form.
 - **`{file: ...}` markers in a `put`'s `params:` are resolved first**, so `{{ .params.text }}` renders the file's contents.
 

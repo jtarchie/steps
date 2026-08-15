@@ -69,13 +69,66 @@ jobs:
 
 Runs when a plan is built, and on every `steps watch` poll.
 
-- **Sees**: `{{ .source }}`.
+- **Sees**: `{{ .source }}` and `{{ .version }}` — the last version this pipeline recorded for the resource. See [the cursor](#the-check-cursor) below.
 - **Must print**: a JSON **array** of version objects to stdout, **oldest first**. A version object is a flat map of strings — `{"ref": "abc123"}`, `{"number": "87"}`. The whole object identifies the version; steps never interprets the fields.
 - **Empty array** means "no versions yet". Under `version: every` the get fans out zero times and the job exits 0, so steps prints `get: <name> returned no versions; the N step(s) after it did not run` to say how much of the plan that dropped; any other version mode fails the step with `no versions available`. The message tells you a check came back empty — it cannot tell you *why*, so a type should still **fail loudly** (exit non-zero) when it can't answer, rather than printing nothing.
 - **Exit non-zero** to fail the step.
 
 ```json
 [{"ref": "9fceb02"}, {"ref": "d7b22a6"}]
+```
+
+#### The check cursor
+
+`{{ .version }}` is the newest version the last successful check reported — Concourse calls it the *current version*. It exists so a check can ask its API for what it has **not seen** instead of guessing a window:
+
+```yaml fragment
+# a guess, and the only thing between you and both failure modes below
+check: |
+  curl -sS ... --data-urlencode 'limit=20' https://api.example.com/messages
+
+# ask for exactly what we haven't seen
+check: |
+  curl -sS ... --data-urlencode 'since={{ index .version "ts" | default "0" }}' \
+               --data-urlencode 'limit=200' https://api.example.com/messages
+```
+
+Guess too small and items scroll past during a busy period, permanently — steps keeps no version history, so whatever the window missed is gone. Guess anything at all and a cold start replays a backlog nobody is waiting on.
+
+Three things to know:
+
+- **Spell it `{{ index .version "ts" | default "0" }}`, not `{{ .version.ts }}`.** On the first-ever check there is no cursor and `.version` is an empty map; templates render with `missingkey=error`, so the bare form fails that first poll. This is the same shape an optional `source:` field or get `params:` already uses.
+- **Only `steps watch` advances it**, and only after the jobs a version implies are enqueued — so a poll that finds versions and then dies does not skip past them. `steps run` and `steps plan` read the cursor and never move it; a run that moved it would push the watcher's baseline past a version no watch loop ever acted on.
+- **A check that ignores `.version` keeps working exactly as before.** The cursor narrows what a check *asks for*; it is not a filter steps applies to the answer.
+
+```yaml
+resource_types:
+- name: since-cursor
+  config:
+    # A real type would send this to an API. Here it just reports what it was
+    # handed, which is the part worth seeing: on a fresh run there is no
+    # cursor, so the default is what the check gets.
+    check: |
+      printf '[{"seen": "%s"}]' '{{ index .version "ts" | default "0" }}'
+    in: echo {{ .version.seen | shellquote }} > seen.txt
+
+resources:
+- name: feed
+  type: since-cursor
+  source: {}
+
+jobs:
+- name: poll
+  plan:
+  - get: feed
+  - task: show
+    inputs: [feed]
+    run: cat feed/seen.txt
+    assert:
+      stdout: "0"          # nothing recorded yet, so the check saw the default
+  assert:
+    execution: [feed, show]
+    outcome: succeeded
 ```
 
 ### `in` — fetch one version
@@ -272,7 +325,7 @@ A check reports what *exists*, not what is new — the same twenty Slack message
 - **Recorded per (job, resource)**, so another job reading the same resource keeps its own place.
 - **A version is taken when its build STARTS**, not when it succeeds — so a version whose build failed is not retried on the next run. This is Concourse's rule (`NextEveryVersion` reads the versions a build was *created* with and never looks at build status), and it is what stops one bad input failing forever, on every trigger, with an agent's bill attached. Re-running it is a deliberate act: `--force`, `--resume`, or a new version.
 - **`--force` ignores it**, along with every other piece of persisted state — which means it re-runs versions already taken, effects included. It still RECORDS what it takes, so an ordinary run afterwards does not repeat the same work again. It still *records* what it took, so the ordinary run after a forced one does not repeat that work a second time.
-- **It can only suppress, never resurrect.** steps keeps no version history: whatever `check` returns *now* is the whole universe. A version that scrolled out of the check's window while nothing was watching is gone, so a check should return a window wide enough to cover the gaps you care about.
+- **It can only suppress, never resurrect.** steps keeps no version history: whatever `check` returns *now* is the whole universe. A version that scrolled out of the check's window while nothing was watching is gone. The [check cursor](#the-check-cursor) is how a type stops that being a guess — a check told where it left off can ask for everything since, rather than hoping a fixed window was wide enough.
 
 - **Only the first `get:` in a plan may say `every`.** That is the one fan-out point; a later get runs *inside* one of those fan-outs, where it can only fetch a single version. Writing it there is a load error rather than a field that is accepted and ignored. (Concourse allows several — each input has its own cursor — because it resolves a whole input *set* per build instead of fanning out at one step. See [conformance](conformance.md).)
 
