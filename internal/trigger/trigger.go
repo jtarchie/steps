@@ -700,18 +700,9 @@ func checkResource(ctx context.Context, cfg *config.Config, st *store.Store, res
 		return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}
 
-	previous, found, err := st.LastCheckedVersion(ctx, resourceName)
+	previous, cursor, found, err := recordedVersion(ctx, st, resourceName)
 	if err != nil {
-		return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
-	}
-
-	var cursor map[string]any
-
-	if found {
-		cursor, err = rsrc.ParseVersionJSON(previous)
-		if err != nil {
-			return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
-		}
+		return observedResource{}, false, err
 	}
 
 	versions, err := rsrc.CheckVersions(ctx, cfg, *resourceType, resource.Source, cursor)
@@ -719,8 +710,25 @@ func checkResource(ctx context.Context, cfg *config.Config, st *store.Store, res
 		return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}
 
+	// A check that reports nothing is not a resource without a version — it
+	// is a resource whose version has not changed, and the recorded one is
+	// still current. Saying otherwise drops the resource out of `observed`,
+	// and a passed: constraint on it can then never be evaluated: it needs
+	// the CURRENT version, not a changed one (see releaseConstrainedJobs).
+	//
+	// This is the steady state for any cursor-driven check, which asks only
+	// for what it has not seen and therefore answers with nothing almost
+	// every poll. Before the cursor a check re-reported its whole window
+	// every time and this could not arise, which is why it took a
+	// cursor-driven pipeline to expose it. Concourse has the same notion for
+	// free: its version DB always knows a resource's current version,
+	// whatever the latest check happened to return.
 	if len(versions) == 0 {
-		return observedResource{}, false, nil
+		if !found {
+			return observedResource{}, false, nil
+		}
+
+		return observedResource{version: cursor, latest: previous, dirty: false}, true, nil
 	}
 
 	latest, err := json.Marshal(versions[len(versions)-1])
@@ -734,6 +742,29 @@ func checkResource(ctx context.Context, cfg *config.Config, st *store.Store, res
 		dirty:    found && previous != string(latest),
 		versions: versions,
 	}, true, nil
+}
+
+// recordedVersion reads the version last recorded for a resource, decoded.
+// It is the check cursor and, when a check reports nothing new, still the
+// resource's current version.
+func recordedVersion(
+	ctx context.Context, st *store.Store, resourceName string,
+) (encoded string, version map[string]any, found bool, err error) {
+	encoded, found, err = st.LastCheckedVersion(ctx, resourceName)
+	if err != nil {
+		return "", nil, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
+	}
+
+	if !found {
+		return "", nil, false, nil
+	}
+
+	version, err = rsrc.ParseVersionJSON(encoded)
+	if err != nil {
+		return "", nil, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
+	}
+
+	return encoded, version, true, nil
 }
 
 // recoverDrainPanic turns a value recovered from a panic in drainOne into the
