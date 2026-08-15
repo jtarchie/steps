@@ -161,6 +161,22 @@ linters:
             - "**/internal/retry/**"
           allow:
             - "$gostd"
+        # exprlang is the expr: resource backend's evaluator: the language, its
+        # three builtins, and nothing else. A leaf by design — it takes what it
+        # may read (env names, a directory) as arguments rather than reaching
+        # for config, so the only thing it decides is what an expression can
+        # do. expr-lang is chosen for what it CANNOT do (no statements, no
+        # loops, no I/O but the builtins handed to it here), which is why this
+        # allow-list must never grow a second engine.
+        Exprlang:
+          files:
+            - "**/internal/exprlang/**"
+          allow:
+            - "$gostd"
+            - "github.com/expr-lang/expr"
+            # goleak is test-only: http() fans out over goroutines, so this
+            # package's tests fail if one outlives its batch.
+            - "go.uber.org/goleak"
         # events is the run-event bus: a stdlib-only leaf every execution
         # package may publish to and the web layer subscribes to. It must stay
         # a leaf — the moment it imports config or store, the packages that
