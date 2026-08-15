@@ -274,16 +274,22 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, sou
 // version. Both the merkle planner and the executor call ResolveVersions so
 // plan-time hashing and run-time execution stay in lockstep.
 //
-// lastChecked supplies the check cursor — the last version recorded for a
-// resource by name. This is the only place that knows the RESOLVED resource
-// name (get: may alias it via resource:) before check runs, which is why the
-// lookup is a callback rather than a value: the caller holds the store, this
-// package stays free of it (the same seam WithConsumed uses). A nil callback,
-// or one returning nil, means no cursor — CheckVersions turns that into the
-// empty map.
+// supplied lets a caller hand over versions it has already resolved, in which
+// case the check is not run at all. `steps watch` does this: its poll asked
+// the resource what was new — precisely, using the cursor — and asking again
+// here would answer a different question (see WithResolvedVersions).
+//
+// It is a callback rather than a value because this is the only place that
+// knows the RESOLVED resource name: a get may alias it via `resource:`, and
+// the caller holds the versions under the real name. The same reason
+// WithConsumed is a callback, and the same reason both keep this package free
+// of any dependency on the store.
+//
+// A nil callback, or one returning nil, means nothing was supplied and the
+// check runs as it always has.
 func ResolveVersions(
 	ctx context.Context, cfg *config.Config, step config.Step, cliPinned map[string]string,
-	lastChecked func(resourceName string) map[string]any,
+	supplied func(resourceName string) []map[string]any,
 ) (*config.Resource, *config.ResourceType, []map[string]any, error) {
 	res, err := cfg.FindResource(step.GetResourceName())
 	if err != nil {
@@ -295,14 +301,21 @@ func ResolveVersions(
 		return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
 	}
 
-	var cursor map[string]any
-	if lastChecked != nil {
-		cursor = lastChecked(res.Name)
+	var versions []map[string]any
+
+	if supplied != nil {
+		versions = supplied(res.Name)
 	}
 
-	versions, err := CheckVersions(ctx, cfg, *resourceType, res.Source, cursor)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
+	// nil means nobody supplied any; a non-nil empty slice means the caller
+	// resolved none, and is left alone rather than re-derived.
+	if versions == nil {
+		versions, err = CheckVersions(ctx, cfg, *resourceType, res.Source, nil)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
+		}
+	} else {
+		slog.Debug("resource.versions_supplied", "resource", res.Name, "versions", len(versions))
 	}
 
 	// A CLI --version pin always wins; otherwise the step's own version:

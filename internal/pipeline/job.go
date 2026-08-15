@@ -35,7 +35,27 @@ import (
 // runSteps. skipCache (--force) bypasses only the chain-skip planning and
 // re-runs everything, though results are still recorded as usual.
 func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map[string]string, provider workspace.Provider, st *store.Store, skipCache bool) error {
-	slog.Info("job.run", "job", job.Name, "steps", len(job.Plan))
+	return RunJobWithVersions(ctx, cfg, job, pinned, provider, st, skipCache, nil)
+}
+
+// RunJobWithVersions runs a job against versions the caller has already
+// resolved, keyed by resource name — the form `steps watch` uses.
+//
+// Its poll asked each triggered resource what was new, precisely, using the
+// cursor. Handing the answer over is not an optimization: re-running the
+// check here answers a DIFFERENT question, because a cursor-driven check is
+// not re-derivable, and the job would work on its whole window rather than
+// the versions it was triggered for (see internal/pipeline/cursor.go).
+//
+// Resources nobody supplied — a plain `get: repo` beside a triggered one, and
+// every resource under a manual `steps run` — resolve themselves by running
+// check, exactly as they always have. That is why RunJob above is a wrapper
+// passing nil rather than a separate path.
+func RunJobWithVersions(
+	ctx context.Context, cfg *config.Config, job *config.Job, pinned map[string]string,
+	provider workspace.Provider, st *store.Store, skipCache bool, supplied map[string][]map[string]any,
+) error {
+	slog.Info("job.run", "job", job.Name, "steps", len(job.Plan), "supplied_resources", len(supplied))
 
 	err := workspace.ValidateArtifactFlow(cfg, job)
 	if err != nil {
@@ -129,7 +149,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	// invocation past this point, cached or not; they are never hashed or
 	// skipped. Concourse has no job-level hook construct to compare against
 	// (its hooks are step modifiers) — see docs/conformance.md.
-	runErr := runJobPlan(ctx, runner, job, pinned, provider, skipCache)
+	runErr := runJobPlan(ctx, runner, job, pinned, provider, skipCache, supplied)
 
 	finalErr := runHooks(ctx, runner.scope(fmt.Sprintf("job %q", job.Name)), job.Hooks, runErr)
 
@@ -214,7 +234,10 @@ func prepareImages(ctx context.Context, cfg *config.Config, jobName string) erro
 // aggregate outcome that job-level hooks dispatch on. A planning failure
 // classifies as errored (job on_error); a step failure carries whatever
 // classification its producing site marked it with.
-func runJobPlan(ctx context.Context, r stepRunner, job *config.Job, pinned map[string]string, provider workspace.Provider, skipCache bool) error {
+func runJobPlan(
+	ctx context.Context, r stepRunner, job *config.Job, pinned map[string]string,
+	provider workspace.Provider, skipCache bool, supplied map[string][]map[string]any,
+) error {
 	// Which versions this job has already fanned out over, read ONCE before
 	// planning so the planner and the executor judge the same set.
 	//
@@ -233,7 +256,10 @@ func runJobPlan(ctx context.Context, r stepRunner, job *config.Job, pinned map[s
 	// the plan-time and run-time get-step resolution below, so a get step's
 	// check command runs at most once per job run instead of once during
 	// planning and again during execution.
-	cache := rsrc.NewCache(rsrc.WithConsumed(cursor.has))
+	cache := rsrc.NewCache(
+		rsrc.WithConsumed(cursor.has),
+		rsrc.WithResolvedVersions(func(resourceName string) []map[string]any { return supplied[resourceName] }),
+	)
 
 	skippable := map[string]bool{}
 

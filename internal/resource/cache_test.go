@@ -104,30 +104,29 @@ func TestCacheNilAlwaysMisses(t *testing.T) {
 	}
 }
 
-// TestCacheWithLastCheckedFeedsTheCheck covers the seam that keeps this
-// package free of the store: the caller holds the cursor, the Cache carries
-// the lookup, and the check sees the answer. It is looked up by the RESOLVED
-// resource name — the get step here aliases it (get: alias, resource: thing),
-// which is exactly the case a name taken from step.Get would get wrong.
-func TestCacheWithLastCheckedFeedsTheCheck(t *testing.T) {
+// TestCacheWithResolvedVersionsSkipsTheCheck covers the seam that lets a
+// caller hand over versions it already resolved.
+//
+// The check must not run at all: this exists because `steps watch` has
+// already asked, and asking again does not merely cost a round trip — a
+// cursor-driven check answers a DIFFERENT question the second time, which is
+// how a triggered job came to process its whole window instead of the items
+// it was triggered for.
+//
+// The lookup is by RESOLVED resource name, which the aliased get here proves:
+// a name taken from step.Get would miss.
+func TestCacheWithResolvedVersionsSkipsTheCheck(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{
-		ResourceTypes: []config.ResourceType{{
-			Name: "dummy",
-			Config: config.ResourceTypeConfig{
-				Check: `printf '[{"ref": "%s"}]' '{{ index .version "ref" | default "cold" }}'`,
-			},
-		}},
-		Resources: []config.Resource{{Name: "thing", Type: "dummy"}},
-	}
+	counter := filepath.Join(t.TempDir(), "counter.txt")
+	cfg := countingConfig(t, counter)
 
 	var asked []string
 
-	cache := NewCache(WithLastChecked(func(resourceName string) map[string]any {
+	cache := NewCache(WithResolvedVersions(func(resourceName string) []map[string]any {
 		asked = append(asked, resourceName)
 
-		return map[string]any{"ref": "seeded"}
+		return []map[string]any{{"ref": "supplied"}}
 	}))
 
 	step := config.Step{Get: "alias", Resource: "thing"}
@@ -137,25 +136,69 @@ func TestCacheWithLastCheckedFeedsTheCheck(t *testing.T) {
 		t.Fatalf("ResolveVersionsCached: %v", err)
 	}
 
-	if len(versions) != 1 || versions[0]["ref"] != "seeded" {
-		t.Errorf("versions = %+v, want the check to have seen the cursor", versions)
+	if len(versions) != 1 || versions[0]["ref"] != "supplied" {
+		t.Errorf("versions = %+v, want the supplied version", versions)
+	}
+
+	if got := countLines(t, counter); got != 0 {
+		t.Errorf("check ran %d times, want 0 — the caller already resolved this", got)
 	}
 
 	if len(asked) != 1 || asked[0] != "thing" {
-		t.Errorf("cursor looked up for %v, want the resolved resource name [thing]", asked)
+		t.Errorf("looked up %v, want the resolved resource name [thing]", asked)
 	}
+}
 
-	// A cache with no cursor lookup is every caller that has no store to ask,
-	// and must still check — as an empty map, not a missing key.
-	plain := NewCache()
+// TestCacheWithResolvedVersionsFallsBackToChecking: a resource nobody
+// supplied still checks. That is every get beside a triggered one, and every
+// resource under a manual run — the same code path, not a second one.
+func TestCacheWithResolvedVersionsFallsBackToChecking(t *testing.T) {
+	t.Parallel()
 
-	_, _, versions, err = plain.ResolveVersionsCached(context.Background(), cfg, step, nil)
+	counter := filepath.Join(t.TempDir(), "counter.txt")
+	cfg := countingConfig(t, counter)
+
+	cache := NewCache(WithResolvedVersions(func(string) []map[string]any { return nil }))
+
+	_, _, versions, err := cache.ResolveVersionsCached(context.Background(), cfg, config.Step{Get: "thing"}, nil)
 	if err != nil {
-		t.Fatalf("ResolveVersionsCached (no cursor): %v", err)
+		t.Fatalf("ResolveVersionsCached: %v", err)
 	}
 
-	if len(versions) != 1 || versions[0]["ref"] != "cold" {
-		t.Errorf("versions = %+v, want the default with no cursor supplied", versions)
+	if len(versions) != 1 || versions[0]["ref"] != "v1" {
+		t.Errorf("versions = %+v, want the check's own answer", versions)
+	}
+
+	if got := countLines(t, counter); got != 1 {
+		t.Errorf("check ran %d times, want 1", got)
+	}
+}
+
+// TestCacheSuppliedEmptyIsNotAbsent: a caller that resolved NO versions is
+// not the same as a caller that supplied nothing. Re-deriving here would
+// hand the job the whole window precisely when the poll said there was
+// nothing new.
+func TestCacheSuppliedEmptyIsNotAbsent(t *testing.T) {
+	t.Parallel()
+
+	counter := filepath.Join(t.TempDir(), "counter.txt")
+	cfg := countingConfig(t, counter)
+
+	cache := NewCache(WithResolvedVersions(func(string) []map[string]any { return []map[string]any{} }))
+
+	step := config.Step{Get: "thing", Version: "every"}
+
+	_, _, versions, err := cache.ResolveVersionsCached(context.Background(), cfg, step, nil)
+	if err != nil {
+		t.Fatalf("ResolveVersionsCached: %v", err)
+	}
+
+	if len(versions) != 0 {
+		t.Errorf("versions = %+v, want none", versions)
+	}
+
+	if got := countLines(t, counter); got != 0 {
+		t.Errorf("check ran %d times, want 0 — an empty supply is an answer", got)
 	}
 }
 

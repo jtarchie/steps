@@ -95,13 +95,25 @@ check: |
 
 Guess too small and items scroll past during a busy period, permanently — steps keeps no version history, so whatever the window missed is gone. Guess anything at all and a cold start replays a backlog nobody is waiting on.
 
-This narrows **what the watcher detects**, which is what decides when a job is triggered. It does not narrow what that job then fetches: a triggered job re-runs `check` for itself, with no cursor, and sees its own full window.
-
 Three things to know:
 
 - **Spell it `{{ index .version "ts" | default "0" }}`, not `{{ .version.ts }}`.** On the first-ever check there is no cursor and `.version` is an empty map; templates render with `missingkey=error`, so the bare form fails that first poll. This is the same shape an optional `source:` field or get `params:` already uses.
-- **The cursor belongs to `steps watch` alone** — it both advances it and is the only thing that reads it. A `steps run` or `steps plan` renders `{{ .version }}` as an empty map even when a watcher has been polling for weeks. That is not an oversight: the cursor advances as soon as a poll ENQUEUES the jobs a version implies, so a job re-running its own check against it would ask "what is new since the versions I was just handed" and correctly get nothing. Repeats on the run side are stopped by [`every` takes each version once](#every-takes-each-version-once), which is keyed to what a job actually took rather than to what the poller last saw.
+- **The cursor belongs to `steps watch` alone**, which both advances it and is the only thing that reads it. A `steps run` or `steps plan` renders `{{ .version }}` as an empty map even when a watcher has been polling for weeks — a manual run asks what exists, not what is new.
 - **A check that ignores `.version` keeps working exactly as before.** The cursor narrows what a check *asks for*; it is not a filter steps applies to the answer.
+
+### What the triggered job runs on
+
+The versions a poll finds are handed to the job it triggers, and that job does **not** run `check` again for them. This matters more than it sounds:
+
+- A cursor-driven check is not re-derivable. Ask it twice and the second answer is different, because the first answer moved the cursor. A job re-deriving its own versions would ask "what is new since the versions I was just handed" and correctly get nothing.
+- Without the cursor, a re-derived check sees its whole window. Point a watcher at a queue with a twenty-item backlog, and the one new item that triggers the job arrives alongside the twenty stale ones — which, for a pipeline whose job is to answer things, means twenty answers nobody is waiting on.
+
+So the poll's answer travels with the job. A get whose resource the poll did not observe — a plain `get: repo` beside a triggered one — still resolves itself by running `check`, as does every get under a manual `steps run`.
+
+Two consequences worth knowing:
+
+- **A version that vanishes upstream fails the build.** The job fetches the version it was given; if that has since been deleted, `in` fails, loudly, rather than the job quietly doing nothing.
+- **`steps plan` shows what a *manual* run would do.** It has no queued versions to read, so it re-derives — which for a cursor-driven check can differ from what the queued run will actually build.
 
 ```yaml
 resource_types:

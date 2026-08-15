@@ -24,9 +24,10 @@ type Cache struct {
 	// — see WithConsumed. Nil means no filtering, which is every caller that
 	// has no store to ask.
 	consumed func(resourceName string, version map[string]any) bool
-	// lastChecked supplies a resource's check cursor — see WithLastChecked.
-	// Nil means no cursor, which is every caller that has no store to ask.
-	lastChecked func(resourceName string) map[string]any
+	// resolved supplies versions the caller already determined — see
+	// WithResolvedVersions. Nil means nobody supplied any, which is every
+	// caller that did not arrive through the trigger queue.
+	resolved func(resourceName string) []map[string]any
 }
 
 // CacheOption configures a Cache at construction.
@@ -49,22 +50,27 @@ func WithConsumed(consumed func(resourceName string, version map[string]any) boo
 	return func(c *Cache) { c.consumed = consumed }
 }
 
-// WithLastChecked supplies the check cursor: the last version this pipeline
-// recorded for a resource, which CheckVersions hands the check command so it
-// can ask its API for exactly what it has not seen.
+// WithResolvedVersions supplies versions the caller already resolved, so the
+// check for that resource is not run again.
 //
-// It rides on the Cache for the same reason WithConsumed does — the Cache is
+// This is how `steps watch` hands a job the versions its poll found. The poll
+// has already asked the resource what is new — precisely, using the cursor —
+// and re-asking is not merely wasteful but WRONG: a cursor-driven check
+// answers a different question the second time, and the job used to see its
+// whole window rather than the items it was triggered for (see
+// internal/pipeline/cursor.go, and the flood this closes).
+//
+// It rides on the Cache for the same reason WithConsumed does: the Cache is
 // the one seam both the plan-time caller (merkle.PlanChains) and the run-time
-// one go through, so neither can see a different cursor than the other, and
-// this package needs no dependency on the store to have one.
+// one go through, so neither can resolve a different list than the other —
+// the invariant that keeps a plan's hashes describing the run that follows.
 //
-// Both callers here only READ. Only steps watch advances a cursor (see
-// internal/trigger's pollOnce), and deliberately: it advances after enqueuing
-// the work a version implies, so nothing is skipped by a poll that found
-// versions but died before acting on them. A `steps run` that advanced the
-// cursor would suppress a trigger for a version no watch loop ever enqueued.
-func WithLastChecked(lastChecked func(resourceName string) map[string]any) CacheOption {
-	return func(c *Cache) { c.lastChecked = lastChecked }
+// A nil return means "not supplied, go and check" — which is every resource a
+// poll did not observe (a plain `get: repo` beside a triggered one) and every
+// manual `steps run`. A non-nil EMPTY slice means the caller resolved none,
+// and is honored as such rather than treated as absent.
+func WithResolvedVersions(resolved func(resourceName string) []map[string]any) CacheOption {
+	return func(c *Cache) { c.resolved = resolved }
 }
 
 type cacheEntry struct {
@@ -113,7 +119,7 @@ func (c *Cache) ResolveVersionsCached(
 		return entry.resource, entry.resourceType, entry.versions, entry.err
 	}
 
-	resource, resourceType, versions, err := ResolveVersions(ctx, cfg, step, pinned, c.lastChecked)
+	resource, resourceType, versions, err := ResolveVersions(ctx, cfg, step, pinned, c.resolved)
 
 	suppressed := 0
 

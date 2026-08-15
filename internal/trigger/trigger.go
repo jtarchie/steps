@@ -319,6 +319,10 @@ type observedResource struct {
 	version map[string]any
 	latest  string
 	dirty   bool
+	// versions is everything this check returned, oldest first — the answer
+	// the poll already paid for, handed to the job it enqueues so that job
+	// does not re-derive a different one. See EnqueueJobWithVersions.
+	versions []map[string]any
 }
 
 // pollOnce checks every trigger resource once and enqueues (deduplicated)
@@ -386,35 +390,15 @@ func pollOnce(ctx context.Context, cfg *config.Config, st *store.Store) ([]strin
 // in observed, returning the job names enqueued. It runs before any version
 // is recorded, so a failure here leaves every resource dirty for retry.
 func enqueueAffected(ctx context.Context, cfg *config.Config, st *store.Store, observed map[string]observedResource) ([]string, error) {
-	reasons := map[string]string{}
-
-	for resourceName, obs := range observed {
-		if !obs.dirty {
-			continue
-		}
-
-		for _, job := range AffectedJobs(cfg, resourceName) {
-			if _, already := reasons[job.Name]; already {
-				continue
-			}
-
-			ready, err := jobReadyFor(ctx, st, job, observed)
-			if err != nil {
-				return nil, err
-			}
-
-			if !ready {
-				continue
-			}
-
-			reasons[job.Name] = resourceName
-		}
+	reasons, supplied, err := affectedJobs(ctx, cfg, st, observed)
+	if err != nil {
+		return nil, err
 	}
 
 	enqueued := make([]string, 0, len(reasons))
 
 	for jobName, reason := range reasons {
-		err := st.EnqueueJob(ctx, jobName, reason)
+		err := st.EnqueueJobWithVersions(ctx, jobName, reason, supplied[jobName])
 		if err != nil {
 			return nil, fmt.Errorf("enqueue job %q: %w", jobName, err)
 		}
@@ -423,6 +407,84 @@ func enqueueAffected(ctx context.Context, cfg *config.Config, st *store.Store, o
 	}
 
 	return enqueued, nil
+}
+
+// affectedJobs decides which jobs a poll's findings should run, why, and
+// against which versions.
+//
+// The reason is a label and the first dirty resource will do. The versions
+// are the WORK, so every dirty resource the job reads contributes — a job
+// watching two resources that both moved must be handed both.
+func affectedJobs(
+	ctx context.Context, cfg *config.Config, st *store.Store, observed map[string]observedResource,
+) (reasons map[string]string, supplied map[string]store.QueuedVersions, err error) {
+	reasons = map[string]string{}
+	supplied = map[string]store.QueuedVersions{}
+
+	for resourceName, obs := range observed {
+		if !obs.dirty {
+			continue
+		}
+
+		for _, job := range AffectedJobs(cfg, resourceName) {
+			ready, readyErr := jobReadyFor(ctx, st, job, observed)
+			if readyErr != nil {
+				return nil, nil, readyErr
+			}
+
+			if !ready {
+				continue
+			}
+
+			if _, already := reasons[job.Name]; !already {
+				reasons[job.Name] = resourceName
+			}
+
+			// Initialized here rather than alongside the reason above: two
+			// maps that must be written in lockstep, whose failure mode is a
+			// write to a nil map, is a coupling worth not having.
+			if supplied[job.Name] == nil {
+				supplied[job.Name] = store.QueuedVersions{}
+			}
+
+			supplied[job.Name][resourceName] = obs.versions
+		}
+	}
+
+	for jobName := range reasons {
+		job, findErr := cfg.FindJob(jobName)
+		if findErr != nil {
+			continue
+		}
+
+		applyPassedVersions(supplied[jobName], job, observed)
+	}
+
+	return reasons, supplied, nil
+}
+
+// applyPassedVersions overwrites, for every resource this job constrains with
+// passed:, the versions to build with the single version jobReadyFor just
+// proved went green upstream.
+//
+// Without it a constrained job would be handed the latest version its check
+// reported, which is precisely the version nothing has proved anything about
+// — and then build it, defeating the gate. The same hole exists today by a
+// longer route (the job re-checks at run time and takes the latest), so this
+// closes it rather than avoiding a new one.
+func applyPassedVersions(into store.QueuedVersions, job *config.Job, observed map[string]observedResource) {
+	if into == nil {
+		return
+	}
+
+	for resource := range job.PassedConstraints() {
+		obs, seen := observed[resource]
+		if !seen || obs.version == nil {
+			continue
+		}
+
+		into[resource] = []map[string]any{obs.version}
+	}
 }
 
 // reportSerialWaits says which pending jobs are held by a serial-group lock,
@@ -490,7 +552,14 @@ func releaseConstrainedJobs(
 			continue
 		}
 
-		err = st.EnqueueJob(ctx, job.Name, "upstream jobs passed this version")
+		// The set jobReadyFor just proved green upstream, handed over rather
+		// than discarded: without it the job re-checks at run time and can
+		// build a version NEWER than the one that passed, which is the gate
+		// failing open.
+		versions := store.QueuedVersions{}
+		applyPassedVersions(versions, job, observed)
+
+		err = st.EnqueueJobWithVersions(ctx, job.Name, "upstream jobs passed this version", versions)
 		if err != nil {
 			return nil, fmt.Errorf("enqueue job %q: %w", job.Name, err)
 		}
@@ -660,9 +729,10 @@ func checkResource(ctx context.Context, cfg *config.Config, st *store.Store, res
 	}
 
 	return observedResource{
-		version: versions[len(versions)-1],
-		latest:  string(latest),
-		dirty:   found && previous != string(latest),
+		version:  versions[len(versions)-1],
+		latest:   string(latest),
+		dirty:    found && previous != string(latest),
+		versions: versions,
 	}, true, nil
 }
 
@@ -783,10 +853,19 @@ func drainOne(
 
 	fmt.Printf("trigger: running %s\n", jobName)
 
+	// The versions the poll that queued this row resolved. Empty for a
+	// hand-queued row (the web UI, a manual re-run) and for rows written
+	// before the column existed, in which case the job resolves its own.
+	supplied, err := st.ClaimedVersions(ctx, id)
+	if err != nil {
+		return true, finalizeRun(ctx, st, job, id, err)
+	}
+
 	runCtx, release := buildContext(ctx, job)
 	defer release()
 
-	return true, finalizeRun(ctx, st, job, id, pipeline.RunJob(runCtx, cfg, job, pinned, provider, st, force))
+	return true, finalizeRun(ctx, st, job, id,
+		pipeline.RunJobWithVersions(runCtx, cfg, job, pinned, provider, st, force, supplied))
 }
 
 // nonInterruptibleGrace bounds how long a shutdown waits for a build that did
