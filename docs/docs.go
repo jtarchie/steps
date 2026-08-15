@@ -155,7 +155,7 @@ type Group struct {
 func Groups() []Group {
 	return []Group{
 		{Title: "Writing pipelines", Pages: []string{
-			"resources.md", "control-flow.md", "agents.md",
+			"resources.md", "expr.md", "control-flow.md", "agents.md",
 			"attempts-timeout.md", "workspace.md", "infra.md",
 			"templating.md", "mcp.md", "complete.md",
 		}},

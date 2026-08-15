@@ -34,7 +34,7 @@ It fetches the exact commit the plan pinned, shallowly, so a branch that moves m
 
 ## Writing a resource type
 
-A resource type is three shell commands. Each is a [template](templating.md) and each runs `sh -c`. This one is self-contained, so it runs anywhere:
+A resource type is three shell commands. (For a resource that is a JSON HTTP API and nothing else, there is a second way to write them — see [expression resource types](expr.md), which trades containers and binary artifacts for concurrent HTTP and no dependency on `curl`/`jq`.) Each is a [template](templating.md) and each runs `sh -c`. This one is self-contained, so it runs anywhere:
 
 ```yaml
 resource_types:

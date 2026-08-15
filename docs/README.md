@@ -11,6 +11,7 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 | Page | What it covers | Length |
 |---|---|---|
 | [resources.md](resources.md) | Resources and resource types: the built-in `git`, the `check`/`in`/`out` contract, `version:`, `trigger:` | short |
+| [expr.md](expr.md) | Expression resource types: `expr:`, the batched `http()`, `env()`/`file()`, when to use it instead of shell | medium |
 | [control-flow.md](control-flow.md) | `when:` guards, hooks, `to:`/`verdicts:` routing, `do:`/`in_parallel:`/`race:`/`across:`, `assert:`, approvals | long |
 | [agents.md](agents.md) | Agent steps: tools, prompts, verdicts, sub-agents, `fix:`, budgets, failover, CLI agents, ensembles | long |
 | [attempts-timeout.md](attempts-timeout.md) | `attempts:` and `timeout:`, and how they interact | short |

@@ -150,9 +150,9 @@ func schemaDefsByType() map[string]reflect.Type {
 		// unlisted defs are the ones whose members go through hand-written
 		// UnmarshalYAML.
 		"exprResourceConfig": reflect.TypeOf(config.ExprResourceConfig{}),
-		"assert":       reflect.TypeOf(config.Assert{}),
-		"defaults":     reflect.TypeOf(config.Defaults{}),
-		"workspace":    reflect.TypeOf(config.WorkspaceConfig{}),
+		"assert":             reflect.TypeOf(config.Assert{}),
+		"defaults":           reflect.TypeOf(config.Defaults{}),
+		"workspace":          reflect.TypeOf(config.WorkspaceConfig{}),
 	}
 }
 

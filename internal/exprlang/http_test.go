@@ -108,7 +108,7 @@ func TestHTTPBatchIsActuallyConcurrent(t *testing.T) {
 	const concurrency = 4
 
 	var (
-		mu      sync.Mutex
+		mu       sync.Mutex
 		inFlight int
 		peak     int
 	)

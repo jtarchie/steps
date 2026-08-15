@@ -9,6 +9,7 @@ require (
 	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/alecthomas/kong v1.16.1
 	github.com/charmbracelet/glamour v1.0.0
+	github.com/expr-lang/expr v1.17.8
 	github.com/frioux/leatherman v0.0.0-20260807130354-76519e141082
 	github.com/go-task/slim-sprig/v3 v3.0.0
 	github.com/labstack/echo/v4 v4.15.4
@@ -44,7 +45,6 @@ require (
 	github.com/dlclark/regexp2 v1.12.0 // indirect
 	github.com/dlclark/regexp2/v2 v2.6.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
