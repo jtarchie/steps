@@ -259,6 +259,12 @@ var addedColumns = []struct{ table, column, decl string }{
 	// The run a replay forked from. Empty for an ordinary run, which is every
 	// run recorded before replay existed.
 	{"runs", "parent_run_id", "TEXT NOT NULL DEFAULT ''"},
+	// The versions the poll that enqueued this row resolved, as
+	// {resource: [version, ...]}. Empty means none were supplied, which is
+	// every row queued by hand (the web UI, a manual re-run) and every row
+	// written before this column existed — those jobs resolve their own
+	// versions by running check, exactly as they always did.
+	{"trigger_queue", "versions_json", "TEXT NOT NULL DEFAULT ''"},
 }
 
 // addColumns applies addedColumns, treating "duplicate column name" as

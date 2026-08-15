@@ -6,6 +6,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -23,21 +24,223 @@ type QueueRow struct {
 	Error      string
 }
 
-// EnqueueJob inserts a pending trigger_queue row for jobName, unless one
-// already exists — idx_trigger_queue_pending_job makes that a no-op dedup
-// rather than an error, so a resource going dirty twice before a worker
-// claims the row doesn't queue jobName twice.
+// QueuedVersions are the versions a poll resolved for the job it enqueued,
+// keyed by resource name. Empty means none were supplied and the job resolves
+// its own by running check — every hand-queued row, and every row written
+// before the column existed.
+type QueuedVersions map[string][]map[string]any
+
+// EnqueueJob queues jobName with no versions attached, leaving it to resolve
+// its own. This is the hand-queued path: the web UI, a manual re-run, and a
+// job released because its upstreams passed.
 func (s *Store) EnqueueJob(ctx context.Context, jobName, reason string) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO trigger_queue (job_name, reason, status, enqueued_at)
-		VALUES (?, ?, 'pending', ?)
-		ON CONFLICT (job_name) WHERE status = 'pending' DO NOTHING
-	`, jobName, reason, now())
+	return s.EnqueueJobWithVersions(ctx, jobName, reason, nil)
+}
+
+// EnqueueJobWithVersions queues jobName along with the versions the caller
+// already resolved for it.
+//
+// At most one pending row exists per job (idx_trigger_queue_pending_job), so
+// a second enqueue before a worker claims the first has to do something with
+// the versions it is carrying. It MERGES them, which is the whole reason this
+// is a read-modify-write in a transaction rather than the ON CONFLICT DO
+// NOTHING it used to be: dropping the second enqueue was free when the job
+// went on to re-derive everything for itself, and is data loss now that the
+// row IS the work. A version the poll found and nothing recorded is gone —
+// steps keeps no version history to recover it from.
+//
+// Order is preserved, oldest first, and a version already on the row is not
+// added twice.
+func (s *Store) EnqueueJobWithVersions(ctx context.Context, jobName, reason string, versions QueuedVersions) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	var existingJSON string
+
+	err = tx.QueryRowContext(ctx,
+		`SELECT versions_json FROM trigger_queue WHERE job_name = ? AND status = 'pending'`,
+		jobName).Scan(&existingJSON)
+
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		err = insertQueueRow(ctx, tx, jobName, reason, versions)
+	case err != nil:
+		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
+	default:
+		err = mergeQueueRow(ctx, tx, jobName, existingJSON, versions)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
 	}
 
 	return nil
+}
+
+func insertQueueRow(ctx context.Context, tx *sql.Tx, jobName, reason string, versions QueuedVersions) error {
+	encoded, err := encodeQueuedVersions(versions)
+	if err != nil {
+		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO trigger_queue (job_name, reason, status, enqueued_at, versions_json)
+		VALUES (?, ?, 'pending', ?, ?)
+	`, jobName, reason, now(), encoded)
+	if err != nil {
+		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
+	}
+
+	return nil
+}
+
+func mergeQueueRow(ctx context.Context, tx *sql.Tx, jobName, existingJSON string, versions QueuedVersions) error {
+	if len(versions) == 0 {
+		return nil // nothing to add; the pending row already covers this job
+	}
+
+	existing, err := decodeQueuedVersions(existingJSON)
+	if err != nil {
+		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
+	}
+
+	merged, err := mergeVersions(existing, versions)
+	if err != nil {
+		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
+	}
+
+	encoded, err := encodeQueuedVersions(merged)
+	if err != nil {
+		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`UPDATE trigger_queue SET versions_json = ? WHERE job_name = ? AND status = 'pending'`,
+		encoded, jobName)
+	if err != nil {
+		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
+	}
+
+	return nil
+}
+
+// ClaimedVersions returns the versions attached to a claimed queue row.
+//
+// A separate lookup rather than another value out of ClaimNextJob: that
+// function is a single atomic UPDATE whose shape is the admission rule, and
+// widening its RETURNING would touch every caller for the benefit of the one
+// that needs this.
+func (s *Store) ClaimedVersions(ctx context.Context, id int64) (QueuedVersions, error) {
+	var encoded string
+
+	err := s.db.QueryRowContext(ctx, `SELECT versions_json FROM trigger_queue WHERE id = ?`, id).Scan(&encoded)
+	if errors.Is(err, sql.ErrNoRows) {
+		// The row is gone (finalized, or cleared by a restart). Nothing
+		// supplied is a legitimate answer — the job resolves its own.
+		return nil, nil //nolint:nilnil // "no versions attached" is the meaning, not a missing value
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("could not read queued versions for row %d: %w", id, err)
+	}
+
+	versions, err := decodeQueuedVersions(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("could not read queued versions for row %d: %w", id, err)
+	}
+
+	return versions, nil
+}
+
+// mergeVersions unions per resource, keeping the existing order and
+// appending only what is not already there. Membership is by the version's
+// canonical JSON — the same encoding job_versions and job_version_cursor key
+// on, so "the same version" means the same thing everywhere.
+func mergeVersions(existing, incoming QueuedVersions) (QueuedVersions, error) {
+	merged := make(QueuedVersions, len(existing)+len(incoming))
+	for resource, versions := range existing {
+		merged[resource] = versions
+	}
+
+	for resource, versions := range incoming {
+		seen := make(map[string]bool, len(merged[resource]))
+
+		for _, version := range merged[resource] {
+			key, err := versionKey(version)
+			if err != nil {
+				return nil, err
+			}
+
+			seen[key] = true
+		}
+
+		for _, version := range versions {
+			key, err := versionKey(version)
+			if err != nil {
+				return nil, err
+			}
+
+			if seen[key] {
+				continue
+			}
+
+			seen[key] = true
+			merged[resource] = append(merged[resource], version)
+		}
+	}
+
+	return merged, nil
+}
+
+// versionKey is a version's canonical JSON — json.Marshal sorts map keys, so
+// this is the same encoding job_versions and job_version_cursor key on, and
+// "the same version" means the same thing everywhere.
+func versionKey(version map[string]any) (string, error) {
+	key, err := json.Marshal(version)
+	if err != nil {
+		return "", fmt.Errorf("could not encode version: %w", err)
+	}
+
+	return string(key), nil
+}
+
+func encodeQueuedVersions(versions QueuedVersions) (string, error) {
+	if len(versions) == 0 {
+		return "", nil
+	}
+
+	encoded, err := json.Marshal(versions)
+	if err != nil {
+		return "", fmt.Errorf("could not encode queued versions: %w", err)
+	}
+
+	return string(encoded), nil
+}
+
+func decodeQueuedVersions(encoded string) (QueuedVersions, error) {
+	if encoded == "" {
+		// Every hand-queued row, and every row written before the column
+		// existed.
+		return nil, nil //nolint:nilnil // "no versions attached" is the meaning
+	}
+
+	var versions QueuedVersions
+
+	err := json.Unmarshal([]byte(encoded), &versions)
+	if err != nil {
+		return nil, fmt.Errorf("could not decode queued versions: %w", err)
+	}
+
+	return versions, nil
 }
 
 // ClaimNextJob atomically transitions the oldest claimable pending row to
@@ -131,7 +334,18 @@ func (s *Store) CompleteJob(ctx context.Context, id int64, status string, runErr
 // startup before any worker/poller goroutine exists, so the two statements
 // run without concurrent writers.
 func (s *Store) ResetStaleRunning(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `
+	// The superseded running row is FOLDED INTO its successor rather than
+	// simply dropped. It carries the versions a poll resolved, and a crash
+	// between claiming a row and finishing it must not lose them: re-deriving
+	// them was the old safety net, and supplying versions is exactly the
+	// removal of that net. Everything else about the row (its reason, its
+	// place in the queue) is genuinely superseded.
+	err := s.foldSupersededRunning(ctx)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.ExecContext(ctx, `
 		DELETE FROM trigger_queue
 		WHERE status = 'running'
 		  AND EXISTS (
@@ -151,6 +365,63 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// foldSupersededRunning merges each about-to-be-deleted running row's
+// versions into the pending row that supersedes it.
+func (s *Store) foldSupersededRunning(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT job_name, versions_json FROM trigger_queue
+		WHERE status = 'running'
+		  AND versions_json != ''
+		  AND EXISTS (
+		      SELECT 1 FROM trigger_queue AS p
+		      WHERE p.job_name = trigger_queue.job_name AND p.status = 'pending'
+		  )
+	`)
+	if err != nil {
+		return fmt.Errorf("could not read superseded running jobs: %w", err)
+	}
+
+	stranded, err := scanStrandedVersions(rows)
+	if err != nil {
+		return fmt.Errorf("could not read superseded running jobs: %w", err)
+	}
+
+	for jobName, encoded := range stranded {
+		versions, decodeErr := decodeQueuedVersions(encoded)
+		if decodeErr != nil {
+			return decodeErr
+		}
+
+		err = s.EnqueueJobWithVersions(ctx, jobName, "resumed after restart", versions)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// scanStrandedVersions collects job_name -> versions_json for the running
+// rows about to be deleted.
+func scanStrandedVersions(rows *sql.Rows) (map[string]string, error) {
+	defer func() { _ = rows.Close() }()
+
+	stranded := map[string]string{}
+
+	for rows.Next() {
+		var jobName, encoded string
+
+		err := rows.Scan(&jobName, &encoded)
+		if err != nil {
+			return nil, err //nolint:wrapcheck // the caller names what it was reading
+		}
+
+		stranded[jobName] = encoded
+	}
+
+	return stranded, rows.Err() //nolint:wrapcheck // same
 }
 
 // ListTriggerQueue returns the most recent trigger-queue entries, newest
