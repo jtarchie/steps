@@ -104,6 +104,61 @@ func TestCacheNilAlwaysMisses(t *testing.T) {
 	}
 }
 
+// TestCacheWithLastCheckedFeedsTheCheck covers the seam that keeps this
+// package free of the store: the caller holds the cursor, the Cache carries
+// the lookup, and the check sees the answer. It is looked up by the RESOLVED
+// resource name — the get step here aliases it (get: alias, resource: thing),
+// which is exactly the case a name taken from step.Get would get wrong.
+func TestCacheWithLastCheckedFeedsTheCheck(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		ResourceTypes: []config.ResourceType{{
+			Name: "dummy",
+			Config: config.ResourceTypeConfig{
+				Check: `printf '[{"ref": "%s"}]' '{{ index .version "ref" | default "cold" }}'`,
+			},
+		}},
+		Resources: []config.Resource{{Name: "thing", Type: "dummy"}},
+	}
+
+	var asked []string
+
+	cache := NewCache(WithLastChecked(func(resourceName string) map[string]any {
+		asked = append(asked, resourceName)
+
+		return map[string]any{"ref": "seeded"}
+	}))
+
+	step := config.Step{Get: "alias", Resource: "thing"}
+
+	_, _, versions, err := cache.ResolveVersionsCached(context.Background(), cfg, step, nil)
+	if err != nil {
+		t.Fatalf("ResolveVersionsCached: %v", err)
+	}
+
+	if len(versions) != 1 || versions[0]["ref"] != "seeded" {
+		t.Errorf("versions = %+v, want the check to have seen the cursor", versions)
+	}
+
+	if len(asked) != 1 || asked[0] != "thing" {
+		t.Errorf("cursor looked up for %v, want the resolved resource name [thing]", asked)
+	}
+
+	// A cache with no cursor lookup is every caller that has no store to ask,
+	// and must still check — as an empty map, not a missing key.
+	plain := NewCache()
+
+	_, _, versions, err = plain.ResolveVersionsCached(context.Background(), cfg, step, nil)
+	if err != nil {
+		t.Fatalf("ResolveVersionsCached (no cursor): %v", err)
+	}
+
+	if len(versions) != 1 || versions[0]["ref"] != "cold" {
+		t.Errorf("versions = %+v, want the default with no cursor supplied", versions)
+	}
+}
+
 func TestCacheKeyedByResourceName(t *testing.T) {
 	t.Parallel()
 

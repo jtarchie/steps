@@ -2,6 +2,7 @@ package resource
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -129,5 +130,80 @@ func TestConformanceRunOutUnparsableStdoutIsNilNotError(t *testing.T) {
 
 	if result != nil {
 		t.Errorf("RunOut result = %v, want nil", result)
+	}
+}
+
+// TestConformanceCheckReceivesCurrentVersion pins the half of the check
+// contract steps used to omit. Concourse doc:
+// concourse-ci.org/docs/resource-types/implementing/ ("check" section) — a
+// check "is given the configured source and current version on stdin".
+// steps passed the source alone, so every resource type talking to a web API
+// had to guess a window (`limit: 20`) instead of asking for what it had not
+// seen.
+//
+// The empty-map case is the load-bearing one: on the first-ever check there
+// is no cursor, and templates render with missingkey=error, so a nil version
+// would make `{{ index .version "ref" }}` a hard failure on the first poll of
+// every pipeline. CheckVersions normalizes nil to an empty map so the
+// documented `index ... | default` idiom works from the very first run.
+func TestConformanceCheckReceivesCurrentVersion(t *testing.T) {
+	t.Parallel()
+
+	rt := config.ResourceType{
+		Name: "dummy",
+		Config: config.ResourceTypeConfig{
+			Check: `printf '[{"ref": "%s"}]' '{{ index .version "ref" | default "none" }}'`,
+		},
+	}
+
+	tests := map[string]struct {
+		version map[string]any
+		want    string
+	}{
+		"cursor recorded":     {version: map[string]any{"ref": "abc"}, want: "abc"},
+		"first check, nil":    {version: nil, want: "none"},
+		"first check, empty":  {version: map[string]any{}, want: "none"},
+		"cursor without hits": {version: map[string]any{"other": "x"}, want: "none"},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			versions, err := CheckVersions(context.Background(), nil, rt, map[string]any{}, test.version)
+			if err != nil {
+				t.Fatalf("CheckVersions: %v", err)
+			}
+
+			if len(versions) != 1 || versions[0]["ref"] != test.want {
+				t.Errorf("versions = %+v, want one version with ref %q", versions, test.want)
+			}
+		})
+	}
+}
+
+// TestParseVersionJSON covers the reason this decodes with UseNumber: a
+// recorded version goes straight back into a check template and out over the
+// wire. Slack's ts through encoding/json's default float64 renders as
+// 1.6998876540012e+09, which is not a timestamp any API has heard of.
+func TestParseVersionJSON(t *testing.T) {
+	t.Parallel()
+
+	version, err := ParseVersionJSON(`{"ts": 1699887654.001200, "id": 12345678901234567890}`)
+	if err != nil {
+		t.Fatalf("ParseVersionJSON: %v", err)
+	}
+
+	if got := fmt.Sprint(version["ts"]); got != "1699887654.001200" {
+		t.Errorf("ts = %s, want the digits as written", got)
+	}
+
+	if got := fmt.Sprint(version["id"]); got != "12345678901234567890" {
+		t.Errorf("id = %s, want an id wider than float64 to survive", got)
+	}
+
+	_, err = ParseVersionJSON("not json")
+	if err == nil {
+		t.Error("ParseVersionJSON(not json): want an error")
 	}
 }

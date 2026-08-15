@@ -172,7 +172,7 @@ func TestCheckVersionsMCPStructuredContent(t *testing.T) {
 	cfg := mcpFixtureConfig(t)
 	rt := mcpResourceType("list_issues")
 
-	versions, err := CheckVersions(context.Background(), cfg, rt, map[string]any{"team": "ENG"})
+	versions, err := CheckVersions(context.Background(), cfg, rt, map[string]any{"team": "ENG"}, nil)
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestCheckVersionsMCPTextContentFallback(t *testing.T) {
 	cfg := mcpFixtureConfig(t)
 	rt := mcpResourceType("list_issues_text")
 
-	versions, err := CheckVersions(context.Background(), cfg, rt, map[string]any{})
+	versions, err := CheckVersions(context.Background(), cfg, rt, map[string]any{}, nil)
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestCheckVersionsMCPObjectStructuredContentFallsBackToText(t *testing.T) {
 	cfg := mcpFixtureConfig(t)
 	rt := mcpResourceType("list_issues_object_structured")
 
-	versions, err := CheckVersions(context.Background(), cfg, rt, map[string]any{})
+	versions, err := CheckVersions(context.Background(), cfg, rt, map[string]any{}, nil)
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestCheckVersionsMCPScansEveryTextBlock(t *testing.T) {
 	cfg := mcpFixtureConfig(t)
 	rt := mcpResourceType("list_issues_prose_then_json")
 
-	versions, err := CheckVersions(context.Background(), cfg, rt, map[string]any{})
+	versions, err := CheckVersions(context.Background(), cfg, rt, map[string]any{}, nil)
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestCheckVersionsMCPToolError(t *testing.T) {
 	cfg := mcpFixtureConfig(t)
 	rt := mcpResourceType("list_issues_error")
 
-	_, err := CheckVersions(context.Background(), cfg, rt, map[string]any{})
+	_, err := CheckVersions(context.Background(), cfg, rt, map[string]any{}, nil)
 	if err == nil {
 		t.Fatal("CheckVersions: expected an error when the mcp tool returns IsError")
 	}
@@ -368,7 +368,7 @@ func TestCheckVersionsMCPSendsSourceVerbatim(t *testing.T) {
 	cfg := mcpFixtureConfig(t)
 	rt := mcpResourceType("list_issues_echo")
 
-	versions, err := CheckVersions(context.Background(), cfg, rt, map[string]any{"query": "to:me"})
+	versions, err := CheckVersions(context.Background(), cfg, rt, map[string]any{"query": "to:me"}, nil)
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}
@@ -376,6 +376,80 @@ func TestCheckVersionsMCPSendsSourceVerbatim(t *testing.T) {
 	sent, ok := versions[0]["sent"].(map[string]any)
 	if !ok || sent["query"] != "to:me" {
 		t.Fatalf("arguments = %+v, want the source itself", versions[0]["sent"])
+	}
+}
+
+// TestCheckVersionsMCPFallbackStaysSourceOnlyWithVersion extends that pin
+// across the check cursor. The cursor reaches the check's DATA, but an
+// args-less type's wire payload must not gain a version key: the arguments
+// are the remote tool's own published schema, and no off-the-shelf server
+// declares a parameter steps invented. A type that wants the cursor names it
+// in args:, as the next test does.
+func TestCheckVersionsMCPFallbackStaysSourceOnlyWithVersion(t *testing.T) {
+	t.Parallel()
+
+	cfg := mcpFixtureConfig(t)
+	rt := mcpResourceType("list_issues_echo")
+
+	versions, err := CheckVersions(context.Background(), cfg, rt,
+		map[string]any{"query": "to:me"}, map[string]any{"id": "42"})
+	if err != nil {
+		t.Fatalf("CheckVersions: %v", err)
+	}
+
+	sent, ok := versions[0]["sent"].(map[string]any)
+	if !ok {
+		t.Fatalf("arguments = %+v, want the source itself", versions[0]["sent"])
+	}
+
+	if sent["query"] != "to:me" {
+		t.Errorf("query = %#v, want the source verbatim", sent["query"])
+	}
+
+	if _, present := sent["version"]; present {
+		t.Errorf("arguments = %+v, want no version key on an args-less check", sent)
+	}
+}
+
+// TestCheckVersionsMCPArgsTemplateSeesVersion covers the supported way to use
+// the cursor from an mcp-backed check: name it in args:. The `default` is not
+// decoration — on the first-ever check the version is an empty map, and
+// missingkey=error would otherwise fail the poll.
+func TestCheckVersionsMCPArgsTemplateSeesVersion(t *testing.T) {
+	t.Parallel()
+
+	cfg := mcpFixtureConfig(t)
+	rt := mcpResourceType("list_issues_echo")
+	rt.Config.MCP.Check.Args = map[string]any{
+		"since": `{{ index .version "ts" | default "0" }}`,
+	}
+
+	cursor, err := ParseVersionJSON(`{"ts": 1699887654.001200}`)
+	if err != nil {
+		t.Fatalf("ParseVersionJSON: %v", err)
+	}
+
+	versions, err := CheckVersions(context.Background(), cfg, rt, map[string]any{}, cursor)
+	if err != nil {
+		t.Fatalf("CheckVersions: %v", err)
+	}
+
+	sent, _ := versions[0]["sent"].(map[string]any)
+	// The digits as recorded: a cursor rendered through float64 would arrive
+	// as 1.6998876540012e+09, which no API accepts as a timestamp.
+	if sent["since"] != "1699887654.001200" {
+		t.Errorf("since = %#v, want the recorded version's exact digits", sent["since"])
+	}
+
+	// And the first-ever check, where there is no cursor at all.
+	versions, err = CheckVersions(context.Background(), cfg, rt, map[string]any{}, nil)
+	if err != nil {
+		t.Fatalf("CheckVersions (no cursor): %v", err)
+	}
+
+	sent, _ = versions[0]["sent"].(map[string]any)
+	if sent["since"] != "0" {
+		t.Errorf("since = %#v, want the default on a first check", sent["since"])
 	}
 }
 
@@ -392,7 +466,7 @@ func TestCheckVersionsMCPArgsTemplate(t *testing.T) {
 		"limit": 20,
 	}
 
-	versions, err := CheckVersions(context.Background(), cfg, rt, map[string]any{"channel": "eng"})
+	versions, err := CheckVersions(context.Background(), cfg, rt, map[string]any{"channel": "eng"}, nil)
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}
@@ -529,7 +603,7 @@ func TestShellBackendUnaffectedByMCPBranch(t *testing.T) {
 		Config: config.ResourceTypeConfig{Check: `printf '[{"ref":"1"}]'`},
 	}
 
-	versions, err := CheckVersions(context.Background(), nil, rt, map[string]any{})
+	versions, err := CheckVersions(context.Background(), nil, rt, map[string]any{}, nil)
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}

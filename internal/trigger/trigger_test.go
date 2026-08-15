@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -380,6 +381,74 @@ jobs:
 // guarantee: a resource observed dirty must not have its recorded version
 // advanced if a *later* resource's check fails in the same poll — otherwise
 // the change would be silently consumed and the job never triggered.
+// TestPollOnceSecondPollPassesLastVersionToCheck is the watch-loop half of
+// the check cursor: the version recorded by one poll is what the NEXT poll's
+// check renders against, so a type can ask its API for what it has not seen
+// (Slack's oldest:, GitHub's since:) instead of guessing a window wide enough
+// to cover the gap.
+//
+// The check here records what it was handed and returns a version derived
+// from it, so the poll sequence is legible in one file: cold (no cursor),
+// then the version the first poll recorded.
+//
+// TestConformance note: covers the watch half of the contract
+// TestConformanceCheckReceivesCurrentVersion pins at the resource layer
+// (concourse-ci.org/docs/resource-types/implementing/, "check" section).
+func TestPollOnceSecondPollPassesLastVersionToCheck(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	seen := filepath.Join(dir, "seen.txt")
+
+	// Each poll appends the cursor it saw, and returns a version naming the
+	// poll number so the recorded cursor changes every time.
+	cfg := loadConfig(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+resource_types:
+- name: dummy
+  config:
+    check: |
+      cursor='{{ index .version "ref" | default "cold" }}'
+      echo "$cursor" >> %s
+      count=$(wc -l < %s | tr -d ' ')
+      printf '[{"ref": "v%%s"}]' "$count"
+resources:
+- name: thing
+  type: dummy
+  source: {}
+jobs:
+- name: build
+  plan:
+  - get: thing
+    trigger: true
+`, seen, seen))
+
+	st := mustOpenStore(t, dir)
+	ctx := context.Background()
+
+	for i := range 3 {
+		_, err := pollOnce(ctx, cfg, st)
+		if err != nil {
+			t.Fatalf("pollOnce %d: %v", i, err)
+		}
+	}
+
+	data, err := os.ReadFile(seen) //nolint:gosec // a t.TempDir()-scoped file this test wrote itself
+	if err != nil {
+		t.Fatalf("read seen: %v", err)
+	}
+
+	got := strings.Fields(string(data))
+	want := []string{"cold", "v1", "v2"}
+
+	if !slices.Equal(got, want) {
+		t.Errorf("cursors seen by successive checks = %v, want %v", got, want)
+	}
+}
+
 func TestPollOnceDoesNotConsumeChangeWhenLaterCheckFails(t *testing.T) {
 	t.Parallel()
 

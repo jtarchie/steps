@@ -24,6 +24,9 @@ type Cache struct {
 	// — see WithConsumed. Nil means no filtering, which is every caller that
 	// has no store to ask.
 	consumed func(resourceName string, version map[string]any) bool
+	// lastChecked supplies a resource's check cursor — see WithLastChecked.
+	// Nil means no cursor, which is every caller that has no store to ask.
+	lastChecked func(resourceName string) map[string]any
 }
 
 // CacheOption configures a Cache at construction.
@@ -44,6 +47,24 @@ type CacheOption func(*Cache)
 // version whose repetition is already governed by the merkle cache.
 func WithConsumed(consumed func(resourceName string, version map[string]any) bool) CacheOption {
 	return func(c *Cache) { c.consumed = consumed }
+}
+
+// WithLastChecked supplies the check cursor: the last version this pipeline
+// recorded for a resource, which CheckVersions hands the check command so it
+// can ask its API for exactly what it has not seen.
+//
+// It rides on the Cache for the same reason WithConsumed does — the Cache is
+// the one seam both the plan-time caller (merkle.PlanChains) and the run-time
+// one go through, so neither can see a different cursor than the other, and
+// this package needs no dependency on the store to have one.
+//
+// Both callers here only READ. Only steps watch advances a cursor (see
+// internal/trigger's pollOnce), and deliberately: it advances after enqueuing
+// the work a version implies, so nothing is skipped by a poll that found
+// versions but died before acting on them. A `steps run` that advanced the
+// cursor would suppress a trigger for a version no watch loop ever enqueued.
+func WithLastChecked(lastChecked func(resourceName string) map[string]any) CacheOption {
+	return func(c *Cache) { c.lastChecked = lastChecked }
 }
 
 type cacheEntry struct {
@@ -81,7 +102,7 @@ func (c *Cache) ResolveVersionsCached(
 	ctx context.Context, cfg *config.Config, step config.Step, pinned map[string]string,
 ) (*config.Resource, *config.ResourceType, []map[string]any, error) {
 	if c == nil {
-		return ResolveVersions(ctx, cfg, step, pinned)
+		return ResolveVersions(ctx, cfg, step, pinned, nil)
 	}
 
 	c.mu.Lock()
@@ -92,7 +113,7 @@ func (c *Cache) ResolveVersionsCached(
 		return entry.resource, entry.resourceType, entry.versions, entry.err
 	}
 
-	resource, resourceType, versions, err := ResolveVersions(ctx, cfg, step, pinned)
+	resource, resourceType, versions, err := ResolveVersions(ctx, cfg, step, pinned, c.lastChecked)
 
 	suppressed := 0
 

@@ -614,6 +614,12 @@ func observedSetFor(constraints map[string][]string, observed map[string]observe
 // between check and enqueue can't silently consume a change. hasVersion is
 // false when the check returned no versions at all (nothing to record or
 // trigger on).
+//
+// The previously recorded version does double duty. It is the cursor handed
+// to the check itself, so a type can ask its API for what it has not seen
+// rather than guessing a window; and, compared against what the check
+// returned, it is the dirty bit that decides whether to enqueue. Reading it
+// once serves both.
 func checkResource(ctx context.Context, cfg *config.Config, st *store.Store, resourceName string) (obs observedResource, hasVersion bool, err error) {
 	resource, err := cfg.FindResource(resourceName)
 	if err != nil {
@@ -625,7 +631,21 @@ func checkResource(ctx context.Context, cfg *config.Config, st *store.Store, res
 		return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}
 
-	versions, err := rsrc.CheckVersions(ctx, cfg, *resourceType, resource.Source)
+	previous, found, err := st.LastCheckedVersion(ctx, resourceName)
+	if err != nil {
+		return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
+	}
+
+	var cursor map[string]any
+
+	if found {
+		cursor, err = rsrc.ParseVersionJSON(previous)
+		if err != nil {
+			return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
+		}
+	}
+
+	versions, err := rsrc.CheckVersions(ctx, cfg, *resourceType, resource.Source, cursor)
 	if err != nil {
 		return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}
@@ -637,11 +657,6 @@ func checkResource(ctx context.Context, cfg *config.Config, st *store.Store, res
 	latest, err := json.Marshal(versions[len(versions)-1])
 	if err != nil {
 		return observedResource{}, false, fmt.Errorf("trigger resource %q: could not marshal version: %w", resourceName, err)
-	}
-
-	previous, found, err := st.LastCheckedVersion(ctx, resourceName)
-	if err != nil {
-		return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}
 
 	return observedResource{

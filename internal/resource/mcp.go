@@ -55,10 +55,15 @@ func callMCPResourceTool(ctx context.Context, cfg *config.Config, serverName, to
 
 // mcpCallArgs builds the argument object one lifecycle stage calls its tool
 // with: call.Args when set, with every string leaf rendered as a template
-// over data (whatever that stage has to template against — {source} for
-// check, {source, params} for out, {source, version, params} for in, exactly
-// mirroring the shell path's command templates); otherwise fallback,
+// over data (whatever that stage has to template against — {source, version}
+// for check, {source, params} for out, {source, version, params} for in,
+// exactly mirroring the shell path's command templates); otherwise fallback,
 // verbatim.
+//
+// Note the asymmetry on check: its DATA carries the cursor version, but its
+// FALLBACK is still source alone. The fallback is the wire payload for an
+// args-less type, and re-wrapping it as {source, version} would change what
+// every existing mcp-backed check sends — see mcpCheckVersions.
 //
 // The arguments ARE the remote tool's own published schema — see
 // config.MCPToolCall — so this returns exactly what the author named and
@@ -203,14 +208,24 @@ func exactNumbers(value any) any {
 // config.validateResourceGet), and a get against such a type is a load error,
 // so this is only ever reached with one set. The guard is there because
 // "unreachable" and "nil dereference" are one refactor apart.
-func mcpCheckVersions(ctx context.Context, cfg *config.Config, rt config.ResourceType, source map[string]any) ([]map[string]any, error) {
+//
+// version is the check cursor CheckVersions already nil-normalized to an
+// empty map. It reaches the tool only through an explicit check.args:
+// template ({{ index .version "ts" | default "0" }}): the args-less form
+// still sends source verbatim, because that payload IS the tool's published
+// schema and steps wraps it in nothing — adding a version key would break
+// every existing args-less type against a schema that never declared one.
+func mcpCheckVersions(
+	ctx context.Context, cfg *config.Config, rt config.ResourceType, source, version map[string]any,
+) ([]map[string]any, error) {
 	if rt.Config.MCP.Check == nil {
 		return nil, fmt.Errorf("check %q: this resource type sets no mcp.check.tool, so it can only be published to", rt.Name)
 	}
 
-	slog.Debug("resource.check", "resource_type", rt.Name, "source", source, "mcp_tool", rt.Config.MCP.Check.Tool)
+	slog.Debug("resource.check", "resource_type", rt.Name, "source", source, "version", version,
+		"mcp_tool", rt.Config.MCP.Check.Tool)
 
-	args, err := mcpCallArgs(*rt.Config.MCP.Check, map[string]any{"source": source}, source)
+	args, err := mcpCallArgs(*rt.Config.MCP.Check, map[string]any{"source": source, "version": version}, source)
 	if err != nil {
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}

@@ -14,26 +14,47 @@ import (
 	"github.com/jtarchie/steps/internal/template"
 )
 
-// CheckVersions renders rt.Config.Check against {"source": source}, runs it,
-// and parses stdout as a JSON array into []map[string]any. Ordering
-// (oldest-first) is entirely the check command's responsibility, per
-// Concourse convention — no sorting happens here (see docs/conformance.md
-// and internal/resource/resource_test.go's TestSelectVersion/"latest when
-// unpinned"; Concourse doc: concourse-ci.org/docs/resource-types/
-// implementing/, "check" section).
+// CheckVersions renders rt.Config.Check against {"source": source,
+// "version": version}, runs it, and parses stdout as a JSON array into
+// []map[string]any. Ordering (oldest-first) is entirely the check command's
+// responsibility, per Concourse convention — no sorting happens here (see
+// docs/conformance.md and internal/resource/resource_test.go's
+// TestSelectVersion/"latest when unpinned"; Concourse doc:
+// concourse-ci.org/docs/resource-types/implementing/, "check" section).
+//
+// version is the last version this pipeline recorded for the resource —
+// Concourse's "current version", which lets a check ask its API for exactly
+// what it has not seen (Slack's oldest:, GitHub's since:) instead of guessing
+// a window. It is nil-normalized to an empty map HERE, the single place both
+// backends and every call path agree on, so the first-ever check renders
+// against a present-but-empty map rather than a missing key. Templates render
+// with missingkey=error, so an optional cursor field is spelled
+// {{ index .version "ts" | default "0" }} — the same shape an optional
+// source: field or get param: already uses.
+//
+// Only steps watch advances the cursor (see internal/trigger's pollOnce,
+// which records after a successful check AND enqueue, so a failed poll never
+// advances past items nobody saw). The run and plan paths read it and never
+// write it.
 //
 // When rt.Config.MCP is set, this calls its check: tool instead (see
 // mcpCheckVersions) — cfg is needed only for that path, to resolve the
 // referenced mcp_servers: entry; the shell path below ignores it, so a nil
 // cfg is fine whenever the caller knows rt isn't mcp-backed.
-func CheckVersions(ctx context.Context, cfg *config.Config, rt config.ResourceType, source map[string]any) ([]map[string]any, error) {
-	if rt.Config.MCP != nil {
-		return mcpCheckVersions(ctx, cfg, rt, source)
+func CheckVersions(
+	ctx context.Context, cfg *config.Config, rt config.ResourceType, source, version map[string]any,
+) ([]map[string]any, error) {
+	if version == nil {
+		version = map[string]any{}
 	}
 
-	slog.Debug("resource.check", "resource_type", rt.Name, "source", source)
+	if rt.Config.MCP != nil {
+		return mcpCheckVersions(ctx, cfg, rt, source, version)
+	}
 
-	command, err := template.Render(rt.Config.Check, map[string]any{"source": source})
+	slog.Debug("resource.check", "resource_type", rt.Name, "source", source, "version", version)
+
+	command, err := template.Render(rt.Config.Check, map[string]any{"source": source, "version": version})
 	if err != nil {
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
@@ -240,7 +261,18 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, sou
 // version), every (all versions returned by check), or a YAML-pinned
 // version. Both the merkle planner and the executor call ResolveVersions so
 // plan-time hashing and run-time execution stay in lockstep.
-func ResolveVersions(ctx context.Context, cfg *config.Config, step config.Step, cliPinned map[string]string) (*config.Resource, *config.ResourceType, []map[string]any, error) {
+//
+// lastChecked supplies the check cursor — the last version recorded for a
+// resource by name. This is the only place that knows the RESOLVED resource
+// name (get: may alias it via resource:) before check runs, which is why the
+// lookup is a callback rather than a value: the caller holds the store, this
+// package stays free of it (the same seam WithConsumed uses). A nil callback,
+// or one returning nil, means no cursor — CheckVersions turns that into the
+// empty map.
+func ResolveVersions(
+	ctx context.Context, cfg *config.Config, step config.Step, cliPinned map[string]string,
+	lastChecked func(resourceName string) map[string]any,
+) (*config.Resource, *config.ResourceType, []map[string]any, error) {
 	res, err := cfg.FindResource(step.GetResourceName())
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
@@ -251,7 +283,12 @@ func ResolveVersions(ctx context.Context, cfg *config.Config, step config.Step, 
 		return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
 	}
 
-	versions, err := CheckVersions(ctx, cfg, *resourceType, res.Source)
+	var cursor map[string]any
+	if lastChecked != nil {
+		cursor = lastChecked(res.Name)
+	}
+
+	versions, err := CheckVersions(ctx, cfg, *resourceType, res.Source, cursor)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
 	}
