@@ -24,7 +24,6 @@ package pipeline
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -295,13 +294,14 @@ func (c *versionCursor) take(
 	}
 }
 
-// encodeVersion renders a version the same way passed: does (json.Marshal,
-// whose map keys are sorted), so both tables key on identical strings.
+// encodeVersion renders a version the canonical way every table keys on. A
+// thin adapter over store.EncodeVersion so the "same version, same string"
+// rule has one implementation.
 func encodeVersion(version map[string]any) (string, bool) {
-	encoded, err := json.Marshal(version)
+	encoded, err := store.EncodeVersion(version)
 	if err != nil {
 		return "", false
 	}
 
-	return string(encoded), true
+	return encoded, true
 }

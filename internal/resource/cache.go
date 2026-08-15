@@ -50,25 +50,26 @@ func WithConsumed(consumed func(resourceName string, version map[string]any) boo
 	return func(c *Cache) { c.consumed = consumed }
 }
 
-// WithResolvedVersions supplies versions the caller already resolved, so the
+// WithResolvedVersions supplies versions the caller already knows, so the
 // check for that resource is not run again.
 //
-// This is how `steps watch` hands a job the versions its poll found. The poll
-// has already asked the resource what is new — precisely, using the cursor —
-// and re-asking is not merely wasteful but WRONG: a cursor-driven check
-// answers a different question the second time, and the job used to see its
-// whole window rather than the items it was triggered for (see
-// internal/pipeline/cursor.go, and the flood this closes).
+// The caller is internal/pipeline reading recorded history (and, for a
+// passed:-constrained get, the green subset of it — see
+// pipeline.loadResourceHistory). Asking the check instead is not merely
+// wasteful but WRONG for any cursor-driven type: the check answers "what is
+// new since the cursor", which is the POLLER's question, and a job asking it
+// gets everything or nothing depending on where the cursor happens to sit.
 //
 // It rides on the Cache for the same reason WithConsumed does: the Cache is
-// the one seam both the plan-time caller (merkle.PlanChains) and the run-time
-// one go through, so neither can resolve a different list than the other —
-// the invariant that keeps a plan's hashes describing the run that follows.
+// the one seam every resolver goes through — RunJob's planner and executor,
+// and Explain — so none can resolve a different list than another. That is
+// the invariant that keeps a plan's hashes describing the run that follows,
+// and `steps plan` honest about what a run would do.
 //
-// A nil return means "not supplied, go and check" — which is every resource a
-// poll did not observe (a plain `get: repo` beside a triggered one) and every
-// manual `steps run`. A non-nil EMPTY slice means the caller resolved none,
-// and is honored as such rather than treated as absent.
+// A nil return means "nothing recorded, go and check" — a resource no poll
+// has ever filed. A non-nil EMPTY slice means the caller resolved none and
+// is honored as such: for a gated resource, "nothing has passed" must fail
+// the get, not fall back to a check the gate never sees.
 func WithResolvedVersions(resolved func(resourceName string) []map[string]any) CacheOption {
 	return func(c *Cache) { c.resolved = resolved }
 }

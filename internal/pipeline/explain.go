@@ -46,7 +46,19 @@ func Explain(ctx context.Context, cfg *config.Config, job *config.Job, pinned ma
 		return nil, fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
-	chains, err := merkle.PlanChains(ctx, cfg, job.Name, job.Plan, pinned, rsrc.NewCache(rsrc.WithConsumed(cursor.has)))
+	// And the same history, for the same reason. Without it, plan resolved
+	// by running the live check while the run read stored versions — two
+	// different lists, so the hashes and skip/run verdicts here described a
+	// run that would never happen. For a cursor-driven check it was worse
+	// than drift: the check saw no cursor, answered with everything or with
+	// nothing, and the plan output was fiction either way.
+	history, err := loadResourceHistory(ctx, st, job)
+	if err != nil {
+		return nil, fmt.Errorf("job %q: %w", job.Name, err)
+	}
+
+	chains, err := merkle.PlanChains(ctx, cfg, job.Name, job.Plan, pinned,
+		rsrc.NewCache(rsrc.WithConsumed(cursor.has), rsrc.WithResolvedVersions(history.get)))
 	if err != nil {
 		return nil, fmt.Errorf("job %q: planning: %w", job.Name, err)
 	}

@@ -111,3 +111,81 @@ jobs:
 	t.Logf("posted:\n%s", data)
 	assertConformanceLineCount(t, posted, 6)
 }
+
+// TestExplainResolvesFromHistoryLikeARun: `steps plan` must describe the run
+// that would happen, which means resolving versions the same way — from
+// recorded history, through the same Cache seam. Before this, Explain ran the
+// live check while the run read history; for a cursor-driven check the live
+// call has no cursor and answers with nothing, so `steps plan` errored with
+// "no versions available" against a pipeline whose run worked fine.
+func TestExplainResolvesFromHistoryLikeARun(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+
+	// A cursor-driven check: with no cursor it reports nothing, which is the
+	// answer Explain used to be handed.
+	pipelineYAML := `
+resource_types:
+- name: feed
+  config:
+    check: |
+      printf '[]'
+    in: echo {{ .version.n | shellquote }} > n.txt
+resources:
+- name: items
+  type: feed
+  source: {}
+jobs:
+- name: build
+  plan:
+  - get: items
+  - task: work
+    inputs: [items]
+    run: cat items/n.txt
+`
+
+	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := store.OpenStore(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	ctx := context.Background()
+
+	// What a watch poll would have recorded.
+	_, err = st.RecordVersions(ctx, "items", []map[string]any{{"n": "v1"}}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provider, err := workspace.NewProvider(nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
+	if err != nil {
+		t.Fatalf("RunJob: %v", err)
+	}
+
+	rows, err := Explain(ctx, cfg, &cfg.Jobs[0], nil, st)
+	if err != nil {
+		t.Fatalf("Explain: %v — plan resolved differently than the run it describes", err)
+	}
+
+	for _, row := range rows {
+		if !row.WouldSkip {
+			t.Errorf("step %q would run (%s), want everything cached after an identical run", row.Name, row.Reason)
+		}
+	}
+}
