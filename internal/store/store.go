@@ -26,11 +26,27 @@ func OpenStore(path string) (*Store, error) {
 		return nil, fmt.Errorf("could not create state directory for %q: %w", path, err)
 	}
 
-	// The DSN sets two pragmas on every connection at open time:
+	// The DSN sets two pragmas on every connection at open time, plus the
+	// transaction mode:
 	//   - busy_timeout makes a writer wait for the write lock instead of
 	//     failing immediately with SQLITE_BUSY.
 	//   - journal_mode=WAL lets readers proceed concurrently with a writer,
 	//     which the default rollback journal serializes.
+	//   - _txlock=immediate takes the write lock when a transaction BEGINS
+	//     rather than when it first writes.
+	//
+	// That last one is not a tuning knob. A deferred transaction that reads
+	// and then writes — which is what a read-modify-write like
+	// EnqueueJobWithVersions is — has to UPGRADE its lock, and SQLite refuses
+	// an upgrade that would have to wait, returning SQLITE_BUSY immediately
+	// rather than honoring busy_timeout, because waiting there could
+	// deadlock two transactions against each other. Taking the write lock up
+	// front turns that into an ordinary wait. Within one process this cannot
+	// arise (SetMaxOpenConns(1) below), but `steps watch` and `steps web`
+	// against one state.db are two processes, and both enqueue.
+	//
+	// Every transaction in this package is a writer, so there is no
+	// read-only transaction paying for the stricter lock.
 	//
 	// WAL is recorded in the database file header, so the conversion happens
 	// exactly once and every later connection's pragma is a cheap no-op. No
@@ -38,7 +54,7 @@ func OpenStore(path string) (*Store, error) {
 	// at startup, so a single `steps` process is never racing another PROCESS
 	// to convert the same brand-new file — the only scenario in which
 	// busy_timeout fails to cover the conversion's exclusive lock.
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("could not open state db %q: %w", path, err)
 	}
