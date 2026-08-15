@@ -10,7 +10,6 @@ package trigger
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -156,8 +155,28 @@ func WatchOnce(
 	pinned map[string]string,
 	force bool,
 ) error {
+	// The single-watcher lock, before prepareWatch touches the queue:
+	// ResetStaleRunning treats every running row as an abandoned leftover,
+	// which is only true when no other watch is alive. Under cron — the whole
+	// point of --once — a build outliving the interval makes overlap the
+	// NORMAL case, so a held lock is a clean no-op exit, not an error: the
+	// invocation that holds it is doing the work this one would have.
+	release, held, err := st.AcquireWatchLock()
+	if err != nil {
+		return fmt.Errorf("watch: %w", err)
+	}
+
+	if held {
+		fmt.Println("watch: another steps watch is running; nothing to do")
+		slog.Info("watch.lock_held")
+
+		return nil
+	}
+
+	defer release()
+
 	// Any positive interval satisfies watchable; nothing here waits.
-	err := prepareWatch(ctx, cfg, st, time.Second)
+	err = prepareWatch(ctx, cfg, st, time.Second)
 	if err != nil {
 		return err
 	}
@@ -203,7 +222,22 @@ func Watch(
 		maxConcurrent = 1
 	}
 
-	err := prepareWatch(ctx, cfg, st, interval)
+	// See WatchOnce for why the lock exists. A long-running watch finding it
+	// held is a different situation from a cron overlap, though: two daemons
+	// against one state.db is a deployment mistake, and silently exiting
+	// would look like a watcher that died. Refuse loudly instead.
+	release, held, err := st.AcquireWatchLock()
+	if err != nil {
+		return fmt.Errorf("watch: %w", err)
+	}
+
+	if held {
+		return errors.New("watch: another steps watch already holds this pipeline's state; two watchers against one state.db claim each other's work")
+	}
+
+	defer release()
+
+	err = prepareWatch(ctx, cfg, st, interval)
 	if err != nil {
 		return err
 	}
@@ -789,15 +823,15 @@ func checkResource(ctx context.Context, cfg *config.Config, st *store.Store, res
 		return observedResource{version: cursor, latest: previous, dirty: false}, true, nil
 	}
 
-	latest, err := json.Marshal(versions[len(versions)-1])
+	latest, err := store.EncodeVersion(versions[len(versions)-1])
 	if err != nil {
-		return observedResource{}, false, fmt.Errorf("trigger resource %q: could not marshal version: %w", resourceName, err)
+		return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}
 
 	return observedResource{
 		version:   versions[len(versions)-1],
-		latest:    string(latest),
-		dirty:     found && previous != string(latest),
+		latest:    latest,
+		dirty:     found && previous != latest,
 		versions:  versions,
 		coldStart: !found,
 	}, true, nil

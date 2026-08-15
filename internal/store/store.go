@@ -15,7 +15,8 @@ import (
 
 // Store is the sqlite-backed persistence layer for job-run/node state.
 type Store struct {
-	db *sql.DB
+	db   *sql.DB
+	path string
 }
 
 // OpenStore opens (creating if necessary) the sqlite database at path and
@@ -47,8 +48,9 @@ func OpenStore(path string) (*Store, error) {
 	// code to remember.
 	//
 	// That last one is not a tuning knob. A deferred transaction that reads
-	// and then writes — which is what a read-modify-write like
-	// EnqueueJobWithVersions is — has to UPGRADE its lock, and SQLite refuses
+	// and then writes — which is what RecordVersions is, assigning
+	// check_order from a MAX it just read — has to UPGRADE its lock, and
+	// SQLite refuses
 	// an upgrade that would have to wait, returning SQLITE_BUSY immediately
 	// rather than honoring busy_timeout, because waiting there could
 	// deadlock two transactions against each other. Taking the write lock up
@@ -94,7 +96,7 @@ func OpenStore(path string) (*Store, error) {
 		return nil, fmt.Errorf("could not migrate state db %q: %w", path, err)
 	}
 
-	return &Store{db: db}, nil
+	return &Store{db: db, path: path}, nil
 }
 
 // Close closes the underlying database connection.
