@@ -45,6 +45,15 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 
 	var buildErrs []error
 
+	// A pinned run consumes nothing. Naming a version is an instruction
+	// outside the every-flow — the consumed filter already exempts pinned
+	// runs (Cache.unconsumed), and the recording side has to match, because
+	// the cursor is a high-water mark over discovery order: a pin resolved
+	// outside history is minted at the TOP order, and taking it would leap
+	// the mark over every unbuilt version below it. The set-based cursor
+	// recorded pins harmlessly; a mark cannot.
+	pinnedRun := len(w.pinned) > 0
+
 	for _, version := range versions {
 		// Stop starting NEW triggered builds on cancellation; don't let one
 		// abandon itself mid-flight. Mirrors internal/trigger's worker loop.
@@ -70,7 +79,7 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 			// Taken, even though nothing ran: the cache skipped it because
 			// this exact chain already succeeded, which is the definition of
 			// a version this job is done with.
-			w.cursor.take(ctx, w.st, w.jobName, resource.Name, version)
+			w.takeUnlessPinned(ctx, pinnedRun, resource.Name, version)
 
 			continue
 		}
@@ -95,7 +104,7 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 		// retried — was tried and reverted. It makes a version that fails
 		// forever re-run forever, on every trigger, with an agent's bill
 		// attached, and it means "every version, once" quietly is not true.
-		w.cursor.take(ctx, w.st, w.jobName, resource.Name, version)
+		w.takeUnlessPinned(ctx, pinnedRun, resource.Name, version)
 
 		err = w.runTriggeredBuild(ctx, step, *resource, *resourceType, version, remainder, node)
 
@@ -127,6 +136,16 @@ func (w *planWalk) reportNoVersions(step config.Step, resourceName string, remai
 
 	fmt.Printf("get: %s returned no versions; the %d step(s) after it did not run\n", resourceName, remaining)
 	slog.Warn("job.get.no_versions", "job", w.jobName, "index", w.index, "resource", resourceName, "skipped_steps", remaining)
+}
+
+// takeUnlessPinned advances the cursor for a version, except on a pinned run
+// — see the pinnedRun comment in fanOutGet.
+func (w *planWalk) takeUnlessPinned(ctx context.Context, pinnedRun bool, resourceName string, version map[string]any) {
+	if pinnedRun {
+		return
+	}
+
+	w.cursor.take(ctx, w.st, w.jobName, resourceName, version)
 }
 
 // runTriggeredBuild runs the build that a single resource version triggers:
@@ -171,6 +190,14 @@ func (w *planWalk) runTriggeredBuild(
 	}
 
 	recordExecution(ctx, resource.Name)
+
+	// Registered here as well as in fetchGetStepInPlace, because a job whose
+	// FIRST get is trigger-eligible only ever fetches through this path — and
+	// a fetch nobody registers is a green version nobody records, which means
+	// a passed: gate downstream of such a job could never open. Latent while
+	// the gate was checked only at trigger time against hand-me-down state;
+	// loud the moment resolution started reading job_versions for real.
+	recordFetchedVersion(ctx, resource.Name, version)
 
 	err = fetchGetStepWithStep(ctx, w.cfg, step, step.Get, resource, resourceType, version, bw)
 

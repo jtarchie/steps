@@ -272,3 +272,94 @@ jobs:
 		t.Errorf("after a second identical trigger the task ran %d times, want 1 — plan and run disagreed on the version", len(got))
 	}
 }
+
+// TestColdStartSurvivesAPartialPoll: the baseline and the cold-start seeding
+// land together, per resource, not at the end of the poll.
+//
+// pollOnce's end-of-poll baselining exists so a crash between check and
+// enqueue cannot skip work — but a cold start enqueues nothing, so that
+// ordering protects nothing and waiting was actively harmful: with the
+// baseline deferred, ANY later resource's check failure aborted the poll
+// first, the resource read as cold again next poll, and the re-seed marked
+// versions that had arrived in between as already taken. Never enqueued,
+// silently dropped, forever.
+func TestColdStartSurvivesAPartialPoll(t *testing.T) {
+	dir := t.TempDir()
+	feed := filepath.Join(dir, "feed.txt")
+	other := filepath.Join(dir, "other.json")
+	processed := filepath.Join(dir, "processed.txt")
+
+	// Two resources; "broken" is checked after "items" (job order) and its
+	// versions file does not exist yet, so every poll aborts after items.
+	cfg := loadConfig(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+resource_types:
+- name: feed
+  config:
+    check: |
+      cursor='{{ index .version "n" | default "0" }}'
+      awk -v c="$cursor" 'BEGIN{printf "["} $1+0 > c+0 {printf "%%s{\"n\":\"%%s\"}", (k++?",":""), $1} END{printf "]"}' %s
+    in: echo {{ .version.n | shellquote }} > n.txt
+- name: fixed
+  config:
+    check: cat %s
+    in: echo x > x.txt
+resources:
+- name: items
+  type: feed
+  source: {}
+- name: broken
+  type: fixed
+  source: {}
+jobs:
+- name: build
+  plan:
+  - get: items
+    trigger: true
+    version: every
+  - task: work
+    inputs: [items]
+    run: cat items/n.txt >> %s
+- name: sidecar
+  plan:
+  - get: broken
+    trigger: true
+`, feed, other, processed))
+
+	st := mustOpenStore(t, dir)
+	ctx := context.Background()
+
+	// Cold start over a backlog; the poll ABORTS on broken's check.
+	writeLines(t, feed, 20)
+
+	_, err := pollOnce(ctx, cfg, st)
+	if err == nil {
+		t.Fatal("pollOnce: want the broken resource's check to fail the poll")
+	}
+
+	// Item 21 arrives while broken is still down. This is the window the
+	// deferred baseline used to swallow: items read as cold again, and the
+	// re-seed marked 21 as already taken.
+	writeLines(t, feed, 21)
+
+	_, err = pollOnce(ctx, cfg, st)
+	if err == nil {
+		t.Fatal("pollOnce: want the broken resource's check to still fail")
+	}
+
+	// broken recovers; the next poll must enqueue build for item 21.
+	writeVersions(t, other, `[{"ref":"r1"}]`)
+
+	_, err = pollOnce(ctx, cfg, st)
+	if err != nil {
+		t.Fatalf("pollOnce (recovered): %v", err)
+	}
+
+	drainQueue(ctx, t, cfg, st)
+
+	if got := processedItems(t, processed); len(got) != 1 || got[0] != "21" {
+		t.Errorf("the job processed %v, want [21] — arrivals during a partial poll must not be seeded away", got)
+	}
+}

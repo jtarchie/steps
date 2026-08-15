@@ -416,12 +416,16 @@ func pollOnce(ctx context.Context, cfg *config.Config, st *store.Store) ([]strin
 			continue
 		}
 
-		observed[name] = obs
-
-		err = recordHistory(ctx, cfg, st, name, obs)
+		grew, err := recordHistory(ctx, cfg, st, name, obs)
 		if err != nil {
 			return nil, err
 		}
+
+		// New versions BELOW the head are still new work: the head comparison
+		// alone would file them into history and trigger nothing.
+		obs.dirty = obs.dirty || grew
+
+		observed[name] = obs
 	}
 
 	enqueued, err := enqueueAffected(ctx, cfg, st, observed)
@@ -436,7 +440,7 @@ func pollOnce(ctx context.Context, cfg *config.Config, st *store.Store) ([]strin
 	// the recorded version then advances past it. Waiting for the resource to
 	// go dirty again would mean waiting for a version nobody has tested yet —
 	// which is to say, forever.
-	released, err := releaseConstrainedJobs(ctx, cfg, st, observed, enqueued)
+	released, err := releaseConstrainedJobs(ctx, cfg, st, enqueued)
 	if err != nil {
 		return nil, err
 	}
@@ -501,7 +505,7 @@ func affectedJobs(
 				continue
 			}
 
-			ready, err := jobReadyFor(ctx, st, job, observed)
+			ready, err := jobReadyFor(ctx, st, job)
 			if err != nil {
 				return nil, err
 			}
@@ -542,8 +546,15 @@ func reportSerialWaits(ctx context.Context, cfg *config.Config, st *store.Store)
 	}
 }
 
-// releaseConstrainedJobs enqueues every passed:-constrained job whose upstream
-// jobs have now gone green on the version currently observed.
+// releaseConstrainedJobs enqueues every passed:-constrained job for which
+// some version has now gone green upstream that the job has not itself run.
+//
+// The candidate is the newest GREEN version, not the newest version: those
+// differ exactly when the head keeps failing upstream, and judging only the
+// head starved the downstream job forever while a validated older version
+// sat in history. Concourse selects the latest version satisfying the
+// constraint, which is what asking the store — rather than this poll's
+// observation — amounts to.
 //
 // The guard against enqueueing the same work forever is the job's OWN passed
 // record: once it succeeds against a version it has recorded one, so it stops
@@ -551,8 +562,7 @@ func reportSerialWaits(ctx context.Context, cfg *config.Config, st *store.Store)
 // one at a time (the queue holds at most one pending row per job) until the
 // circuit breaker pauses it, which is what the breaker is for.
 func releaseConstrainedJobs(
-	ctx context.Context, cfg *config.Config, st *store.Store,
-	observed map[string]observedResource, alreadyEnqueued []string,
+	ctx context.Context, cfg *config.Config, st *store.Store, alreadyEnqueued []string,
 ) ([]string, error) {
 	var released []string
 
@@ -564,7 +574,7 @@ func releaseConstrainedJobs(
 			continue
 		}
 
-		ready, err := jobReadyFor(ctx, st, job, observed)
+		ready, err := jobReadyFor(ctx, st, job)
 		if err != nil {
 			return nil, err
 		}
@@ -573,7 +583,7 @@ func releaseConstrainedJobs(
 			continue
 		}
 
-		done, err := jobAlreadyRanThese(ctx, st, job.Name, constraints, observed)
+		done, err := jobAlreadyRanThese(ctx, st, job.Name, constraints)
 		if err != nil {
 			return nil, err
 		}
@@ -594,13 +604,17 @@ func releaseConstrainedJobs(
 }
 
 // jobAlreadyRanThese reports whether the job has itself already succeeded
-// against every constrained resource's current version — the fact that stops a
-// released job being released again on the next poll.
+// against every constrained resource's candidate version — the fact that
+// stops a released job being released again on the next poll.
 func jobAlreadyRanThese(
 	ctx context.Context, st *store.Store, jobName string,
-	constraints map[string][]string, observed map[string]observedResource,
+	constraints map[string][]string,
 ) (bool, error) {
-	want, complete := observedSetFor(constraints, observed)
+	want, complete, err := candidateSetFor(ctx, st, constraints)
+	if err != nil {
+		return false, err
+	}
+
 	if !complete {
 		return false, nil
 	}
@@ -614,16 +628,17 @@ func jobAlreadyRanThese(
 }
 
 // jobReadyFor reports whether every passed: constraint the job declares is
-// satisfied by the versions currently observed.
+// satisfied by some recorded version — the newest green one per resource.
 //
 // This is the correctness gap passed: exists to close: without it, watch can
 // trigger `deploy` on a commit the `test` job ALREADY FAILED on, and there is
 // no way to say "don't deploy unless the tests were green for this exact
 // commit".
 //
-// A job held back is not an error and not a lost trigger: the version stays
-// current, so the next poll after the upstream job goes green enqueues it.
-func jobReadyFor(ctx context.Context, st *store.Store, job *config.Job, observed map[string]observedResource) (bool, error) {
+// A job held back is not an error and not a lost trigger: the green record
+// is durable, so the poll after the upstream job goes green enqueues it —
+// even if newer, unproven versions have arrived on top in the meantime.
+func jobReadyFor(ctx context.Context, st *store.Store, job *config.Job) (bool, error) {
 	// Inverted from resource -> upstream jobs into upstream job -> the set of
 	// constrained resources naming it. That inversion IS the fix: each
 	// upstream job is asked once, about every version it vouches for at once,
@@ -640,12 +655,16 @@ func jobReadyFor(ctx context.Context, st *store.Store, job *config.Job, observed
 			}
 		}
 
-		want, complete := observedSetFor(constrained, observed)
+		want, complete, err := candidateSetFor(ctx, st, constrained)
+		if err != nil {
+			return false, err
+		}
+
 		if !complete {
-			// A constrained resource was not checked this poll (it carries no
-			// trigger: true), so there is no version to judge. Holding the job
-			// back is the conservative reading, and the one that matches "only
-			// run against a version that passed".
+			// A constrained resource has no green version at all, so there is
+			// nothing to judge. Holding the job back is the conservative
+			// reading, and the one that matches "only run against a version
+			// that passed".
 			return false, nil
 		}
 
@@ -681,22 +700,38 @@ func upstreamJobsOf(job *config.Job) []string {
 	return slices.Sorted(maps.Keys(seen))
 }
 
-// observedSetFor collects the currently observed version of every constrained
-// resource. complete is false when any of them was not checked this poll —
-// there is then no set to ask about, and the caller holds the job back.
-func observedSetFor(constraints map[string][]string, observed map[string]observedResource) (want map[string]map[string]any, complete bool) {
+// candidateSetFor picks, for every constrained resource, the version a
+// released job would actually build: the newest one green in all of that
+// resource's upstream jobs. complete is false when any resource has none —
+// there is then nothing to release for.
+//
+// Reading the store rather than this poll's observation is the point. The
+// observed head is one version, and judging only it meant a head that kept
+// failing upstream starved the job forever while a validated version sat in
+// history. It also kept the gate honest across the enqueue/claim window:
+// the build resolves green versions again at claim time (see
+// pipeline.loadResourceHistory), so what is judged here and what is built
+// there come from the same durable record rather than a moment that has
+// passed.
+func candidateSetFor(
+	ctx context.Context, st *store.Store, constraints map[string][]string,
+) (want map[string]map[string]any, complete bool, err error) {
 	want = make(map[string]map[string]any, len(constraints))
 
-	for resource := range constraints {
-		obs, seen := observed[resource]
-		if !seen {
-			return nil, false
+	for resource, upstreams := range constraints {
+		green, err := st.GreenVersions(ctx, resource, upstreams)
+		if err != nil {
+			return nil, false, fmt.Errorf("passed: constraint on %q: %w", resource, err)
 		}
 
-		want[resource] = obs.version
+		if len(green) == 0 {
+			return nil, false, nil
+		}
+
+		want[resource] = green[len(green)-1]
 	}
 
-	return want, true
+	return want, true, nil
 }
 
 // checkResource runs resourceName's check command and reports its latest
@@ -791,42 +826,68 @@ func recordedVersion(
 	return encoded, version, true, nil
 }
 
-// recordHistory files everything this check reported, and on a resource's
-// FIRST check marks it all as already taken.
+// recordHistory files everything this check reported, reports whether any of
+// it was NEW to history, and on a resource's first-ever check seeds the
+// baseline so a backlog is not answered.
 //
-// The seeding is what stops a new watcher answering a backlog. History makes
-// every version a job could build visible to it, which is the point — but a
-// job whose plan says `version: every` would then fan out over the entire
-// backlog the first time anything triggered it, which is the flood this
-// whole effort exists to prevent. steps has always drawn the line in the
-// same place (pollOnce records a cold start's version without enqueuing
-// anything); this draws it for the per-job cursor too.
+// The newness answer is what the trigger's dirty bit cannot see on its own:
+// that bit compares only the HEAD version against the baseline, so a check
+// whose window backfills older versions — a re-listed tag, an
+// eventually-consistent API — would file them into history and then trigger
+// nothing, leaving an every-mode backlog idle until some future head change.
+// New-to-history is the real "something arrived" signal, so it feeds dirty
+// alongside the head comparison (see pollOnce).
 //
-// It marks versions taken for every job that reads the resource, not just
-// triggered ones, because a job that has never run has no other way to say
-// "I was not here for these".
+// Cold-start seeding marks the whole first report as already taken, for every
+// job that reads the resource: history makes every version buildable, which
+// is the point, but a job whose plan says version: every would then fan out
+// over the entire backlog the first time anything triggered it. steps has
+// always drawn the line there — a cold start records without enqueuing — and
+// this draws it for the per-job cursor too.
 //
-// The known edge: a job ADDED to the pipeline later has no such marking, so
-// its first trigger fans out over whatever history holds. That is a
-// deliberate limit rather than an oversight — steps cannot tell a job that
-// is new from one that has simply not run — and the cure is a narrower
-// history (defaults.version_history:) or a first run under --pin.
+// The BASELINE is recorded here as well, immediately, not left to pollOnce's
+// end-of-poll loop. That loop deliberately baselines only after affected jobs
+// are enqueued, so a crash cannot skip work — but a cold start enqueues
+// nothing, so there is nothing that ordering protects, and waiting is
+// actively harmful: if a LATER resource's check fails, the poll aborts before
+// the baseline lands, the resource reads as cold again next poll, and the
+// re-seed marks versions that arrived in between as taken — never enqueued,
+// silently dropped, forever. Seeding and baselining together closes that to
+// a crash-width window.
+//
+// The known edge, stated rather than discovered: a job ADDED to the pipeline
+// later has no seeding, so its first trigger fans out over whatever history
+// holds. steps cannot tell a new job from one that has simply not run; the
+// cure is a narrower version_history: or a first run under --pin.
 func recordHistory(
 	ctx context.Context, cfg *config.Config, st *store.Store, resourceName string, obs observedResource,
-) error {
+) (bool, error) {
 	if len(obs.versions) == 0 {
-		return nil
+		return false, nil
 	}
 
-	err := st.RecordVersions(ctx, resourceName, obs.versions, cfg.VersionHistoryLimit())
+	added, err := st.RecordVersions(ctx, resourceName, obs.versions, cfg.VersionHistoryLimit())
 	if err != nil {
-		return fmt.Errorf("trigger resource %q: %w", resourceName, err)
+		return false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}
 
 	if !obs.coldStart {
-		return nil
+		return added > 0, nil
 	}
 
+	err = seedColdStart(ctx, cfg, st, resourceName, obs.latest)
+	if err != nil {
+		return false, err
+	}
+
+	// A cold start is never news, whatever arrived.
+	return false, nil
+}
+
+// seedColdStart marks a first-seen resource's whole history as taken for
+// every job that reads it, and records the baseline in the same breath — see
+// recordHistory for why neither may wait for the end of the poll.
+func seedColdStart(ctx context.Context, cfg *config.Config, st *store.Store, resourceName, latest string) error {
 	orders, err := st.VersionOrders(ctx, resourceName)
 	if err != nil {
 		return fmt.Errorf("trigger resource %q: %w", resourceName, err)
@@ -850,6 +911,11 @@ func recordHistory(
 		if err != nil {
 			return fmt.Errorf("trigger resource %q: %w", resourceName, err)
 		}
+	}
+
+	err = st.RecordCheckedVersion(ctx, resourceName, latest)
+	if err != nil {
+		return fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}
 
 	return nil

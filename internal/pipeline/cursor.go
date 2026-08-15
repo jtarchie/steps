@@ -132,6 +132,10 @@ func loadVersionCursor(ctx context.Context, st *store.Store, job *config.Job, su
 // set above, keyed to what a job actually took.
 type resourceHistory struct {
 	versions map[string][]map[string]any
+	// gated marks resources whose list is a passed: verdict rather than raw
+	// history. For those, EMPTY is an answer — "nothing has passed" — and
+	// must not fall back to a check that would resolve around the gate.
+	gated map[string]bool
 }
 
 // loadResourceHistory reads the history of every resource this job gets, once
@@ -139,12 +143,41 @@ type resourceHistory struct {
 // the executor have to judge the same list, and a lazy per-resource read
 // could see a poll land between them.
 func loadResourceHistory(ctx context.Context, st *store.Store, job *config.Job) (*resourceHistory, error) {
-	history := &resourceHistory{versions: map[string][]map[string]any{}}
+	history := &resourceHistory{versions: map[string][]map[string]any{}, gated: map[string]bool{}}
+
+	// A passed:-constrained resource resolves among GREEN versions, not raw
+	// history. Enforcing the gate here — at resolution — is what makes it a
+	// gate at all: checked only at trigger time, it judged a world that could
+	// change before a worker claimed the job (a newer, untested version
+	// arriving in between was then built as "latest"), and a manual
+	// `steps run` never consulted it in the first place. Resolution is the
+	// one door every run comes through.
+	//
+	// The list may legitimately be EMPTY — nothing has passed yet — and empty
+	// is an answer, not an absence: the get fails with "no versions
+	// available" rather than falling back to a check that would bypass the
+	// gate. Note a --pin still overrides; naming a version is an instruction.
+	constraints := job.PassedConstraints()
 
 	for _, name := range job.GetResourceNames() {
-		versions, err := st.ResourceVersions(ctx, name)
+		var (
+			versions []map[string]any
+			err      error
+		)
+
+		if upstreams, constrained := constraints[name]; constrained {
+			history.gated[name] = true
+
+			versions, err = st.GreenVersions(ctx, name, upstreams)
+			if versions == nil {
+				versions = []map[string]any{}
+			}
+		} else {
+			versions, err = st.ResourceVersions(ctx, name)
+		}
+
 		if err != nil {
-			return nil, err //nolint:wrapcheck // ResourceVersions names the resource
+			return nil, err //nolint:wrapcheck // the store names the resource
 		}
 
 		history.versions[name] = versions
@@ -163,7 +196,10 @@ func (h *resourceHistory) get(resourceName string) []map[string]any {
 	}
 
 	versions := h.versions[resourceName]
-	if len(versions) == 0 {
+
+	// A gated resource's list is authoritative even when empty: "nothing has
+	// passed" must fail the get, not run a check the gate never sees.
+	if len(versions) == 0 && !h.gated[resourceName] {
 		return nil
 	}
 
