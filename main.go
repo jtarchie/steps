@@ -156,8 +156,6 @@ func (r *RunCmd) Run() error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	applyVersionHistoryFlag(cfg, r.VersionHistory)
-
 	ctx = applyPreflightFlag(ctx, r.NoPreflight)
 
 	jobName := r.Job

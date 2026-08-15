@@ -357,12 +357,9 @@ func (s *Store) RecordVersionOrder(ctx context.Context, resourceName, versionJSO
 // version existed, so the implication is made explicit here rather than
 // left to fail as a constraint violation.
 func ensureVersion(ctx context.Context, tx *sql.Tx, resourceName, versionJSON string) error {
-	var highest sql.NullInt64
-
-	err := tx.QueryRowContext(ctx,
-		`SELECT MAX(check_order) FROM resource_versions WHERE resource_name = ?`, resourceName).Scan(&highest)
+	next, err := nextCheckOrder(ctx, tx, resourceName)
 	if err != nil {
-		return fmt.Errorf("could not read version order for %q: %w", resourceName, err)
+		return err
 	}
 
 	// from_check stays 0: this records that a version was USED, which is not
@@ -371,7 +368,7 @@ func ensureVersion(ctx context.Context, tx *sql.Tx, resourceName, versionJSON st
 		INSERT INTO resource_versions (resource_name, version_json, check_order, first_seen_at, from_check)
 		VALUES (?, ?, ?, ?, 0)
 		ON CONFLICT (resource_name, version_json) DO NOTHING
-	`, resourceName, versionJSON, highest.Int64+1, now())
+	`, resourceName, versionJSON, next, now())
 	if err != nil {
 		return fmt.Errorf("could not record version for %q: %w", resourceName, err)
 	}
