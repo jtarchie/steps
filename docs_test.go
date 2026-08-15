@@ -365,10 +365,25 @@ func TestDocsNoexecReasons(t *testing.T) {
 // the name used in failure messages. Adding a type here is how a new corner
 // of the DSL becomes subject to the documented-or-red rule below.
 //
-// Types absent on purpose: ToolSpec, Source, PromptFile and their siblings
-// decode through hand-written UnmarshalYAML rather than struct tags, so
-// reflection reports no yaml keys to require — their spellings are pinned by
-// internal/config's own decoder tests instead.
+// Types absent on purpose, in two groups.
+//
+// ToolSpec, Source, PromptFile and their siblings decode through hand-written
+// UnmarshalYAML rather than struct tags, so reflection reports no yaml keys
+// to require — their spellings are pinned by internal/config's own decoder
+// tests instead.
+//
+// The resource-type BACKEND configs — ExprResourceConfig, MCPResourceConfig,
+// MCPToolCall — are absent for a different reason, and it is a real limit
+// rather than an oversight. collectPipelineKeys records the keys of each
+// resource_types: entry and does not descend into config:, so listing them
+// here would demand keys this walk cannot see. Two of their fields could not
+// satisfy the rule even if it did: expr's check_file/in_file/out_file need a
+// sibling file on disk, and a doc block is a single self-contained pipeline
+// with nowhere to put one. They are held to the schema instead —
+// schema_test.go's schemaDefsByType compares ExprResourceConfig against
+// $defs/exprResourceConfig by reflection in both directions, so a new expr
+// field is still a red build until the schema names it. Widening this walk
+// to nested config types is worth doing; it is not a one-line map entry.
 func docsCoverageTypes() map[string]reflect.Type {
 	return map[string]reflect.Type{
 		"Config":          reflect.TypeOf(config.Config{}),
