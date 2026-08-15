@@ -639,3 +639,123 @@ func mustRunEvery(ctx context.Context, t *testing.T, cfg *config.Config, job *co
 		t.Fatalf("RunJob(force=%v): %v", force, err)
 	}
 }
+
+// TestConformanceRunReadsButNeverAdvancesCheckCursor covers the run half of
+// the check cursor: a check is given the last version this pipeline recorded
+// for the resource, so it can ask its API for exactly what it has not seen.
+//
+// Concourse doc: concourse-ci.org/docs/resource-types/implementing/ ("check"
+// section) — check "is given the configured source and current version on
+// stdin". Written spec page, not a source reading.
+//
+// steps claim under test: internal/resource/resource.go's CheckVersions doc,
+// internal/resource/cache.go's WithLastChecked doc, docs/resources.md's
+// `check` section.
+//
+// The second assertion is the one worth having. steps records that version
+// per RESOURCE, and steps watch compares it to decide whether anything is new
+// — so if a plain `steps run` advanced it, the watcher's baseline would move
+// past a version no watch loop ever enqueued and the trigger for it would
+// never fire. Reading and writing are split deliberately: this path reads.
+func TestConformanceRunReadsButNeverAdvancesCheckCursor(t *testing.T) {
+	dir := t.TempDir()
+	seen := filepath.Join(dir, "seen.txt")
+	path := filepath.Join(dir, "pipeline.yml")
+
+	// The check reports the cursor it was handed, both into the artifact (so
+	// the task can prove what the get resolved) and into a log (so a check
+	// that ran with no cursor is visible even when nothing downstream reads
+	// it). The default is what a first-ever check must fall back to:
+	// templates render with missingkey=error, so a bare {{ .version.ref }}
+	// would be a hard failure on the first poll of every pipeline.
+	pipelineYAML := fmt.Sprintf(`
+resource_types:
+- name: dummy
+  config:
+    check: |
+      cursor='{{ index .version "ref" | default "cold" }}'
+      echo "$cursor" >> %s
+      printf '[{"ref": "%%s"}]' "$cursor"
+    in: echo {{ .version.ref | shellquote }} > ./ref
+
+resources:
+- name: thing
+  type: dummy
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: thing
+  - task: work
+    inputs: [thing]
+    run: test "$(cat thing/ref)" = seeded
+`, seen)
+
+	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := store.OpenStore(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	ctx := context.Background()
+
+	// What a prior `steps watch` poll would have left behind.
+	const seeded = `{"ref":"seeded"}`
+
+	err = st.RecordCheckedVersion(ctx, "thing", seeded)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustRunEvery(ctx, t, cfg, &cfg.Jobs[0], st, false)
+
+	// The task above already failed the run if the artifact said otherwise;
+	// this pins the check's own view, which is what the contract is about.
+	assertEveryLineIs(t, seen, "seeded")
+
+	// And the record is exactly as the watcher left it.
+	after, found, err := st.LastCheckedVersion(ctx, "thing")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !found || after != seeded {
+		t.Errorf("recorded version after a run = %q (found=%v), want %q unchanged — only steps watch advances it",
+			after, found, seeded)
+	}
+}
+
+// assertEveryLineIs fails unless path holds at least one line and every line
+// equals want. The at-least-one clause matters: an empty file would otherwise
+// pass a loop over its lines, and "the check never ran" is the failure most
+// worth catching.
+func assertEveryLineIs(t *testing.T, path, want string) {
+	t.Helper()
+
+	data, err := os.ReadFile(path) //nolint:gosec // path is a t.TempDir()-scoped file the test wrote itself
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+
+	lines := strings.Fields(string(data))
+	if len(lines) == 0 {
+		t.Fatalf("%s is empty", path)
+	}
+
+	for _, line := range lines {
+		if line != want {
+			t.Errorf("%s: got %q, want every line to be %q", path, line, want)
+		}
+	}
+}

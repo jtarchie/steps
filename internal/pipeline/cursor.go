@@ -24,6 +24,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -98,6 +99,63 @@ func loadVersionCursor(ctx context.Context, st *store.Store, job *config.Job, su
 	}
 
 	return cursor, nil
+}
+
+// lastCheckedVersions answers "what version did this pipeline last record for
+// this resource", which is the cursor a check renders against so it can ask
+// its API for what it has not seen.
+//
+// A DIFFERENT record from the versionCursor above, deliberately: that one is
+// per-(job, resource) and exists to take a version once, this one is
+// per-resource and parameterizes an API call. Overloading either would mean a
+// resource-level request shaped by a job-level fact, so two jobs reading the
+// same resource would ask the upstream API for different windows.
+//
+// Read once before planning, for the same reason the consumed set is: the
+// planner and the executor must resolve versions against the same cursor or a
+// plan's hashes stop describing the run that follows.
+//
+// Read-only here. Only steps watch advances the record (internal/trigger's
+// pollOnce, after the jobs a version implies are enqueued). A `steps run`
+// that advanced it would move the watcher's baseline past a version no watch
+// loop ever acted on, suppressing the trigger for it entirely.
+type lastCheckedVersions struct {
+	versions map[string]map[string]any
+}
+
+// loadLastChecked reads every recorded check cursor in one query. A store
+// failure is returned rather than swallowed: silently checking with no cursor
+// would ask the upstream API for its default window, which is the guessing
+// this exists to end.
+func loadLastChecked(ctx context.Context, st *store.Store) (*lastCheckedVersions, error) {
+	rows, err := st.CheckedResources(ctx)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // CheckedResources already names what it was reading
+	}
+
+	checked := &lastCheckedVersions{versions: make(map[string]map[string]any, len(rows))}
+
+	for _, row := range rows {
+		version, err := rsrc.ParseVersionJSON(row.Version)
+		if err != nil {
+			return nil, fmt.Errorf("resource %q: %w", row.Name, err)
+		}
+
+		checked.versions[row.Name] = version
+	}
+
+	return checked, nil
+}
+
+// get returns the cursor for a resource, or nil when none was ever recorded
+// — which CheckVersions turns into the empty map a first-ever check renders
+// against.
+func (c *lastCheckedVersions) get(resourceName string) map[string]any {
+	if c == nil {
+		return nil
+	}
+
+	return c.versions[resourceName]
 }
 
 // fansOutOverEveryVersion reports whether a get step uses version: every —

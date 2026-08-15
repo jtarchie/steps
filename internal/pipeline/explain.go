@@ -46,7 +46,15 @@ func Explain(ctx context.Context, cfg *config.Config, job *config.Job, pinned ma
 		return nil, fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
-	chains, err := merkle.PlanChains(ctx, cfg, job.Name, job.Plan, pinned, rsrc.NewCache(rsrc.WithConsumed(cursor.has)))
+	// And the same check cursor, so the checks `steps plan` runs ask the same
+	// question a run's would.
+	checked, err := loadLastChecked(ctx, st)
+	if err != nil {
+		return nil, fmt.Errorf("job %q: %w", job.Name, err)
+	}
+
+	chains, err := merkle.PlanChains(ctx, cfg, job.Name, job.Plan, pinned,
+		rsrc.NewCache(rsrc.WithConsumed(cursor.has), rsrc.WithLastChecked(checked.get)))
 	if err != nil {
 		return nil, fmt.Errorf("job %q: planning: %w", job.Name, err)
 	}
