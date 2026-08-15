@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -140,13 +139,22 @@ func parseRequests(value any) (requests []requestSpec, single bool, err error) {
 	}
 }
 
+// requestKeys and settingKeys are the complete vocabularies of the two maps
+// http() accepts. Package-level so the check is one allocation for the whole
+// program rather than one per key of every request in a batch.
+var (
+	requestKeys = []string{"url", "method", "query", "headers", "json", "body"}
+	settingKeys = []string{"headers", "concurrency", "timeout", "max_response_bytes", "retry", "tolerate_errors"}
+)
+
 // parseRequest validates one request map. Unknown keys are rejected rather
 // than ignored: a misspelled `header:` that silently sends no authorization
 // fails as a 401 somewhere else entirely.
 func parseRequest(raw map[string]any, index int) (requestSpec, error) {
 	for key := range raw {
-		if !slices.Contains([]string{"url", "method", "query", "headers", "json", "body"}, key) {
-			return requestSpec{}, fmt.Errorf("http(): request %d has unknown key %q, want url/method/query/headers/json/body", index, key)
+		if !slices.Contains(requestKeys, key) {
+			return requestSpec{}, fmt.Errorf("http(): request %d has unknown key %q, want %s",
+				index, key, strings.Join(requestKeys, "/"))
 		}
 	}
 
@@ -204,17 +212,11 @@ func applyQuery(spec *requestSpec, query any, index int) error {
 
 	values := parsed.Query()
 
-	// Sorted so the URL a batch produces is deterministic, which matters for
-	// a test asserting on it and for a log line being diffable.
-	keys := make([]string, 0, len(pairs))
-	for key := range pairs {
-		keys = append(keys, key)
-	}
-
-	sort.Strings(keys)
-
-	for _, key := range keys {
-		values.Set(key, scalarString(pairs[key]))
+	// Iteration order does not leak into the result: Set replaces rather than
+	// appends, and url.Values.Encode sorts by key — so the URL a batch
+	// produces is deterministic without sorting here first.
+	for key, value := range pairs {
+		values.Set(key, scalarString(value))
 	}
 
 	parsed.RawQuery = values.Encode()
@@ -282,9 +284,8 @@ func parseOptions(params ...any) (httpOptions, error) {
 	}
 
 	for key := range settings {
-		known := []string{"headers", "concurrency", "timeout", "max_response_bytes", "retry", "tolerate_errors"}
-		if !slices.Contains(known, key) {
-			return httpOptions{}, fmt.Errorf("http(): unknown setting %q, want one of %s", key, strings.Join(known, "/"))
+		if !slices.Contains(settingKeys, key) {
+			return httpOptions{}, fmt.Errorf("http(): unknown setting %q, want one of %s", key, strings.Join(settingKeys, "/"))
 		}
 	}
 
@@ -295,11 +296,9 @@ func parseOptions(params ...any) (httpOptions, error) {
 		return httpOptions{}, err
 	}
 
-	options.concurrency = clampInt(settings["concurrency"], defaultConcurrency, 1, maxConcurrency)
-	options.maxBytes = int64(clampInt(settings["max_response_bytes"], defaultMaxBytes, 1, 1<<31))
-
-	if tolerate, present := settings["tolerate_errors"]; present {
-		options.tolerate, _ = tolerate.(bool)
+	err = applyBounds(&options, settings)
+	if err != nil {
+		return httpOptions{}, err
 	}
 
 	err = applyTimeout(&options, settings["timeout"])
@@ -313,6 +312,35 @@ func parseOptions(params ...any) (httpOptions, error) {
 	}
 
 	return options, nil
+}
+
+// applyBounds reads the settings that bound one batch's appetite:
+// concurrency, response size, and whether a dead member sinks the batch.
+func applyBounds(options *httpOptions, settings map[string]any) error {
+	var err error
+
+	options.concurrency, err = clampInt("concurrency", settings["concurrency"], defaultConcurrency, 1, maxConcurrency)
+	if err != nil {
+		return err
+	}
+
+	maxBytes, err := clampInt("max_response_bytes", settings["max_response_bytes"], defaultMaxBytes, 1, 1<<31)
+	if err != nil {
+		return err
+	}
+
+	options.maxBytes = int64(maxBytes)
+
+	if tolerate, present := settings["tolerate_errors"]; present && tolerate != nil {
+		flag, ok := tolerate.(bool)
+		if !ok {
+			return fmt.Errorf("http(): tolerate_errors is %T, want true or false", tolerate)
+		}
+
+		options.tolerate = flag
+	}
+
+	return nil
 }
 
 func applyTimeout(options *httpOptions, value any) error {
@@ -354,11 +382,21 @@ func applyRetry(options *httpOptions, value any) error {
 		return fmt.Errorf("http(): retry.on is %T, want a list of status codes", settings["on"])
 	}
 
-	for _, status := range statuses {
-		options.retryOn = append(options.retryOn, clampInt(status, 0, 0, 599))
+	for i, status := range statuses {
+		code, err := clampInt(fmt.Sprintf("retry.on[%d]", i), status, 0, 0, 599)
+		if err != nil {
+			return err
+		}
+
+		options.retryOn = append(options.retryOn, code)
 	}
 
-	options.retryMax = clampInt(settings["max"], 0, 0, 10)
+	var err error
+
+	options.retryMax, err = clampInt("retry.max", settings["max"], 0, 0, 10)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -373,9 +411,14 @@ func doBatch(ctx context.Context, requests []requestSpec, options httpOptions) (
 	slots := make(chan struct{}, options.concurrency)
 	done := make(chan int, len(requests))
 
+	// The slot is taken BEFORE the goroutine is spawned, so concurrency: 4
+	// over a thousand channels holds four goroutines rather than a thousand
+	// of which 996 are parked on the semaphore. done is buffered to the full
+	// batch, so no sender can block and the acquire below cannot deadlock.
 	for i, request := range requests {
+		slots <- struct{}{}
+
 		go func() {
-			slots <- struct{}{}
 			defer func() { <-slots }()
 
 			results[i], errs[i] = doWithRetry(ctx, request, options)
@@ -460,7 +503,15 @@ func retryDelay(envelope map[string]any, attempt int) time.Duration {
 	if after := headers["Retry-After"]; after != "" {
 		seconds, err := strconv.Atoi(after)
 		if err == nil && seconds >= 0 {
-			return min(time.Duration(seconds)*time.Second, maxRetryAfter)
+			// Capped BEFORE the multiply, not after: a server asking for
+			// 10^11 seconds overflows int64 nanoseconds into a negative
+			// duration, and a negative timer fires at once — turning the cap
+			// into a hot retry loop, which is the opposite of what it is for.
+			if seconds > int(maxRetryAfter/time.Second) {
+				return maxRetryAfter
+			}
+
+			return time.Duration(seconds) * time.Second
 		}
 
 		when, err := http.ParseTime(after)
@@ -600,7 +651,12 @@ func scalarString(value any) string {
 // clampInt reads an optional numeric setting, holding it inside a sane range
 // rather than trusting a pipeline file with a value that could exhaust the
 // machine.
-func clampInt(value any, fallback, low, high int) int {
+//
+// A value of the WRONG TYPE is an error rather than a silent fallback, for
+// the same reason an unknown setting key is: `concurrency: "8"` quietly
+// becoming 4, or `retry: {on: ["429"]}` quietly retrying nothing, is a
+// setting that reads as applied and is not.
+func clampInt(name string, value any, fallback, low, high int) (int, error) {
 	var number int
 
 	switch typed := value.(type) {
@@ -611,10 +667,10 @@ func clampInt(value any, fallback, low, high int) int {
 	case float64:
 		number = int(typed)
 	case nil:
-		return fallback
+		return fallback, nil
 	default:
-		return fallback
+		return 0, fmt.Errorf("http(): %s is %T, want a number", name, value)
 	}
 
-	return min(max(number, low), high)
+	return min(max(number, low), high), nil
 }

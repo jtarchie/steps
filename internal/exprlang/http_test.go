@@ -431,6 +431,30 @@ func TestHTTPRejectsUnknownKeys(t *testing.T) {
 	}
 }
 
+// TestHTTPRejectsWrongTypedSettings: a setting spelled right and typed wrong
+// is the worse half of the same defect the test above covers. `on: ["429"]`
+// used to clamp to the sentinel 0, which no response ever carries — so the
+// retry read as configured and retried nothing, and the only symptom was a
+// poll that gave up on the first rate limit.
+func TestHTTPRejectsWrongTypedSettings(t *testing.T) {
+	t.Parallel()
+
+	for _, settings := range []string{
+		`{concurrency: "2"}`,
+		`{max_response_bytes: "100"}`,
+		`{tolerate_errors: "yes"}`,
+		`{retry: {on: ["429"], max: 2}}`,
+		`{retry: {on: [429], max: "2"}}`,
+	} {
+		_, err := RunCheck(context.Background(), fmt.Sprintf(`http({url: "http://x"}, %s) | map((
+		  {a: "b"}
+		))`, settings), Input{})
+		if err == nil || !strings.Contains(err.Error(), "want") {
+			t.Errorf("%s: err = %v, want a message naming the setting and the type it wants", settings, err)
+		}
+	}
+}
+
 // TestHTTPPaginationByReduce pins the pattern that stands in for a
 // paginate() builtin. Expr has no loops, but reduce threads an accumulator,
 // so a cursor walk is a reduce over a BOUNDED range with an early-out — the
