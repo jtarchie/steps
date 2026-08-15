@@ -500,3 +500,27 @@ func TestHTTPPaginationByReduce(t *testing.T) {
 		t.Fatalf("versions = %+v, want every page accumulated in order", versions)
 	}
 }
+
+// TestHTTPRetryOnValidation: a retry that reads as configured and retries
+// nothing is worse than one that refuses to compile. An out-of-range status
+// was silently clamped to 599, which no response carries, and a retry with no
+// `on:` reported a type error about nil rather than the missing key.
+func TestHTTPRetryOnValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]string{
+		`{retry: {max: 3}}`:              "retry needs on:",
+		`{retry: {on: [4290], max: 3}}`:  "want an HTTP status code",
+		`{retry: {on: [42], max: 3}}`:    "want an HTTP status code",
+		`{retry: {on: ["429"], max: 3}}`: "want a number",
+	}
+
+	for settings, want := range tests {
+		_, err := RunCheck(context.Background(), fmt.Sprintf(`http({url: "http://x"}, %s) | map((
+		  {a: "b"}
+		))`, settings), Input{})
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want it to mention %q", settings, err, want)
+		}
+	}
+}

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"slices"
@@ -324,7 +326,9 @@ func applyBounds(options *httpOptions, settings map[string]any) error {
 		return err
 	}
 
-	maxBytes, err := clampInt("max_response_bytes", settings["max_response_bytes"], defaultMaxBytes, 1, 1<<31)
+	// math.MaxInt32 rather than 1<<31: the latter overflows an int on a
+	// 32-bit target and fails to compile there.
+	maxBytes, err := clampInt("max_response_bytes", settings["max_response_bytes"], defaultMaxBytes, 1, math.MaxInt32)
 	if err != nil {
 		return err
 	}
@@ -377,15 +381,28 @@ func applyRetry(options *httpOptions, value any) error {
 		return fmt.Errorf("http(): retry is %T, want an object like {on: [429], max: 3}", value)
 	}
 
+	if settings["on"] == nil {
+		return errors.New("http(): retry needs on: — which statuses to retry, e.g. {on: [429, 503], max: 3}")
+	}
+
 	statuses, ok := settings["on"].([]any)
 	if !ok {
 		return fmt.Errorf("http(): retry.on is %T, want a list of status codes", settings["on"])
 	}
 
 	for i, status := range statuses {
-		code, err := clampInt(fmt.Sprintf("retry.on[%d]", i), status, 0, 0, 599)
+		// The wide bound leaves clampInt doing type validation only. A
+		// status is not a quantity to be clamped into range: squeezing 4290
+		// down to 599 leaves a code no response ever carries, so the retry
+		// reads as configured and retries nothing — the exact failure the
+		// strict typing next door exists to prevent.
+		code, err := clampInt(fmt.Sprintf("retry.on[%d]", i), status, 0, 0, math.MaxInt32)
 		if err != nil {
 			return err
+		}
+
+		if code < 100 || code > 599 {
+			return fmt.Errorf("http(): retry.on[%d] is %v, want an HTTP status code", i, status)
 		}
 
 		options.retryOn = append(options.retryOn, code)
