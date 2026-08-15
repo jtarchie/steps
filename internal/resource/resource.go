@@ -48,8 +48,10 @@ func CheckVersions(
 		version = map[string]any{}
 	}
 
-	if rt.Config.MCP != nil {
+	switch rt.Config.Backend() {
+	case config.BackendMCP:
 		return mcpCheckVersions(ctx, cfg, rt, source, version)
+	case config.BackendShell:
 	}
 
 	slog.Debug("resource.check", "resource_type", rt.Name, "source", source, "version", version)
@@ -173,8 +175,10 @@ func matchesPin(version map[string]any, pinned map[string]string) bool {
 // comment for the in:-omitted default (writing version.json) and the
 // materialization convention when in: is set.
 func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, source, version, params map[string]any, destDir string) error {
-	if rt.Config.MCP != nil {
+	switch rt.Config.Backend() {
+	case config.BackendMCP:
 		return mcpRunIn(ctx, cfg, rt, source, version, params, destDir)
+	case config.BackendShell:
 	}
 
 	slog.Debug("resource.in", "resource_type", rt.Name, "source", source, "version", version, "params", params, "dest_dir", destDir)
@@ -216,8 +220,10 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, sour
 // targeting an mcp-backed type with no out: at load time), so this is only
 // ever reached with it set.
 func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, source, params map[string]any, srcDir string) (map[string]any, error) {
-	if rt.Config.MCP != nil {
+	switch rt.Config.Backend() {
+	case config.BackendMCP:
 		return mcpRunOut(ctx, cfg, rt, source, params, srcDir)
+	case config.BackendShell:
 	}
 
 	slog.Debug("resource.out", "resource_type", rt.Name, "source", source, "params", params, "src_dir", srcDir)

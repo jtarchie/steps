@@ -131,7 +131,15 @@ func preflightResource(
 	}
 
 	resourceType, err := cfg.FindResourceType(resource.Type)
-	if err != nil || resourceType.Config.MCP == nil {
+	if err != nil {
+		return nil
+	}
+
+	switch resourceType.Config.Backend() {
+	case config.BackendMCP:
+	case config.BackendShell:
+		// Nothing to prove ahead of time: a shell type's tools are whatever
+		// is on PATH when it runs, which preflight cannot know from here.
 		return nil
 	}
 

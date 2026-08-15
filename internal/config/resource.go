@@ -53,6 +53,41 @@ type ResourceTypeConfig struct {
 	MCP   *MCPResourceConfig `yaml:"mcp,omitempty"`
 }
 
+// ResourceBackend is which way a resource type implements its three lifecycle
+// stages. A type picks exactly one (see validateOneResourceTypeConfig).
+type ResourceBackend string
+
+// The backends. These exist so every dispatch over them can be a TAGGED
+// switch, which golangci-lint's `exhaustive` checks — adding a backend then
+// fails the build at each site that has not answered for it, rather than
+// leaving one to silently take a default arm.
+//
+// This is the same defect class tools/kindswitch was built for on
+// config.Step, reached by a cheaper road: kindswitch models the TAGLESS
+// spelling (`switch { case s.Put != "": }`), which Step needs because its
+// kind is spread across eleven fields on the step itself. A resource
+// backend has one natural name, so naming it turns the whole question over
+// to a linter that already runs.
+const (
+	BackendShell ResourceBackend = "shell"
+	BackendMCP   ResourceBackend = "mcp"
+)
+
+// Backend reports how this resource type is implemented.
+//
+// Shell is the default rather than a detected state: a type with an empty
+// config: is shell-backed with nothing to run, which is a type that can
+// neither detect nor fetch nor publish, and the errors for that are stage
+// rules (validateResourceGet, validateResourcePut) rather than a fourth
+// backend meaning "none".
+func (c ResourceTypeConfig) Backend() ResourceBackend {
+	if c.MCP != nil {
+		return BackendMCP
+	}
+
+	return BackendShell
+}
+
 // Resource is a named instance of a resource type, configured with a source.
 type Resource struct {
 	Name   string         `yaml:"name"`
@@ -81,16 +116,15 @@ type Resource struct {
 // nothing. That placeholder is exactly the ritual this repo's own examples
 // used to copy around.
 func validateResourcePut(label, put string, resourceType *ResourceType) error {
-	if resourceType.Config.MCP != nil {
+	switch resourceType.Config.Backend() {
+	case BackendMCP:
 		if resourceType.Config.MCP.Out == nil {
 			return fmt.Errorf("%s: put %q targets mcp-backed resource type %q, which sets no mcp.out.tool; add one, or respond via an agent step granted the server's tools instead", label, put, resourceType.Name)
 		}
-
-		return nil
-	}
-
-	if strings.TrimSpace(resourceType.Config.Out) == "" {
-		return fmt.Errorf("%s: put %q targets resource type %q, which declares no out: command; add one to describe what publishing means for this type", label, put, resourceType.Name)
+	case BackendShell:
+		if strings.TrimSpace(resourceType.Config.Out) == "" {
+			return fmt.Errorf("%s: put %q targets resource type %q, which declares no out: command; add one to describe what publishing means for this type", label, put, resourceType.Name)
+		}
 	}
 
 	return nil
@@ -105,13 +139,22 @@ func validateResourcePut(label, put string, resourceType *ResourceType) error {
 // declaration. So the rule moves to where a get actually appears: this type
 // cannot be fetched, and says so at load rather than at the first poll.
 func validateResourceGet(label, get string, resourceType *ResourceType) error {
-	if resourceType.Config.MCP == nil || resourceType.Config.MCP.Check != nil {
-		return nil
+	switch resourceType.Config.Backend() {
+	case BackendMCP:
+		if resourceType.Config.MCP.Check == nil {
+			return fmt.Errorf(
+				"%s: get %q targets mcp-backed resource type %q, which sets no mcp.check.tool; that type can only be published to (put:), so either add a check tool or fetch this from a type that has one",
+				label, get, resourceType.Name)
+		}
+	case BackendShell:
+		// A shell type with no check: is not rejected here: an empty command
+		// runs, prints nothing, and fails as "could not parse JSON output",
+		// which names the real problem. The mcp arm above cannot do that —
+		// there is no tool to call at all — which is why the rule exists for
+		// one backend and not the other.
 	}
 
-	return fmt.Errorf(
-		"%s: get %q targets mcp-backed resource type %q, which sets no mcp.check.tool; that type can only be published to (put:), so either add a check tool or fetch this from a type that has one",
-		label, get, resourceType.Name)
+	return nil
 }
 
 // validateVersionEvery rejects `version: every` anywhere it cannot actually
