@@ -120,6 +120,39 @@ func VersionMode(step config.Step) (mode string, pinned map[string]string) {
 	}
 }
 
+// versionsFor returns the versions a get step is choosing among: the ones the
+// caller supplied, or the ones a fresh check reports.
+//
+// A pin is answered by a check even when versions were supplied. It is an
+// instruction, not a question — `--pin ref=abc123` on a resource that has
+// since moved on must still find abc123, and would not if it were matched
+// against the slice a poll happened to observe. Cache.unconsumed exempts
+// pinned runs for the same reason.
+func versionsFor(
+	ctx context.Context, cfg *config.Config, step config.Step,
+	res *config.Resource, resourceType *config.ResourceType,
+	cliPinned map[string]string, supplied func(resourceName string) []map[string]any,
+) ([]map[string]any, error) {
+	mode, _ := VersionMode(step)
+
+	if supplied != nil && len(cliPinned) == 0 && mode != "pinned" {
+		// nil means nobody supplied any; a non-nil empty slice means the
+		// caller resolved none, and is honored rather than re-derived.
+		if versions := supplied(res.Name); versions != nil {
+			slog.Debug("resource.versions_supplied", "resource", res.Name, "versions", len(versions))
+
+			return versions, nil
+		}
+	}
+
+	versions, err := CheckVersions(ctx, cfg, *resourceType, res.Source, nil)
+	if err != nil {
+		return nil, fmt.Errorf("get %q: %w", step.Get, err)
+	}
+
+	return versions, nil
+}
+
 // SelectVersion returns the version matching all key/values in pinned, or
 // (if pinned is empty) the last element of versions (latest, by convention).
 func SelectVersion(versions []map[string]any, pinned map[string]string) (map[string]any, error) {
@@ -301,21 +334,9 @@ func ResolveVersions(
 		return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
 	}
 
-	var versions []map[string]any
-
-	if supplied != nil {
-		versions = supplied(res.Name)
-	}
-
-	// nil means nobody supplied any; a non-nil empty slice means the caller
-	// resolved none, and is left alone rather than re-derived.
-	if versions == nil {
-		versions, err = CheckVersions(ctx, cfg, *resourceType, res.Source, nil)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
-		}
-	} else {
-		slog.Debug("resource.versions_supplied", "resource", res.Name, "versions", len(versions))
+	versions, err := versionsFor(ctx, cfg, step, res, resourceType, cliPinned, supplied)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
 	// A CLI --version pin always wins; otherwise the step's own version:

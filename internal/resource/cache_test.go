@@ -225,3 +225,62 @@ func TestCacheKeyedByResourceName(t *testing.T) {
 		t.Errorf("check ran %d times for two distinct resources, want 2 (each resource name is its own cache entry)", got)
 	}
 }
+
+// TestPinnedGetIgnoresSuppliedVersions: a pin is an instruction, not a
+// question. `steps watch --pin ref=abc123` has to find abc123 even after the
+// resource has moved on, and matching it against the handful of versions the
+// last poll observed would fail with "no version matches pin" — for a version
+// that plainly exists. The consumed filter exempts pinned runs for the same
+// reason.
+func TestPinnedGetIgnoresSuppliedVersions(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		ResourceTypes: []config.ResourceType{{
+			Name:   "dummy",
+			Config: config.ResourceTypeConfig{Check: `printf '[{"ref":"old"},{"ref":"new"}]'`},
+		}},
+		Resources: []config.Resource{{Name: "thing", Type: "dummy"}},
+	}
+
+	// A poll that only ever saw the newest version.
+	newCache := func() *Cache {
+		return NewCache(WithResolvedVersions(func(string) []map[string]any {
+			return []map[string]any{{"ref": "new"}}
+		}))
+	}
+
+	// A CLI pin reaches back past what the poll observed.
+	_, _, versions, err := newCache().ResolveVersionsCached(context.Background(), cfg,
+		config.Step{Get: "thing"}, map[string]string{"ref": "old"})
+	if err != nil {
+		t.Fatalf("--pin against supplied versions: %v", err)
+	}
+
+	if len(versions) != 1 || versions[0]["ref"] != "old" {
+		t.Errorf("versions = %+v, want the pinned one", versions)
+	}
+
+	// And a step-level version: pin, which is the same instruction written in
+	// the pipeline instead of on the command line.
+	_, _, versions, err = newCache().ResolveVersionsCached(context.Background(), cfg,
+		config.Step{Get: "thing", Version: map[string]any{"ref": "old"}}, nil)
+	if err != nil {
+		t.Fatalf("step version: pin against supplied versions: %v", err)
+	}
+
+	if len(versions) != 1 || versions[0]["ref"] != "old" {
+		t.Errorf("versions = %+v, want the pinned one", versions)
+	}
+
+	// Unpinned still takes what the poll supplied, without checking.
+	_, _, versions, err = newCache().ResolveVersionsCached(context.Background(), cfg,
+		config.Step{Get: "thing"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(versions) != 1 || versions[0]["ref"] != "new" {
+		t.Errorf("versions = %+v, want the supplied version", versions)
+	}
+}
