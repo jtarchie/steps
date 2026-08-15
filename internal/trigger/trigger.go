@@ -100,21 +100,9 @@ func AffectedJobs(cfg *config.Config, resourceName string) []*config.Job {
 // version change into st's durable queue. A pool of maxConcurrent workers
 // (at least 1) drains that queue by calling pipeline.RunJob. Blocks until
 // ctx is canceled.
-func Watch(
-	ctx context.Context,
-	cfg *config.Config,
-	provider workspace.Provider,
-	st *store.Store,
-	pinned map[string]string,
-	interval time.Duration,
-	maxConcurrent int,
-	force bool,
-	listenAddr string,
-) error {
-	if maxConcurrent < 1 {
-		maxConcurrent = 1
-	}
-
+// prepareWatch runs the checks and state reconciliation both watch modes
+// need before anything polls.
+func prepareWatch(ctx context.Context, cfg *config.Config, st *store.Store, interval time.Duration) error {
 	err := watchable(ctx, cfg, interval)
 	if err != nil {
 		return err
@@ -142,6 +130,82 @@ func Watch(
 	err = st.SyncMaxInFlight(ctx, cfg.MaxInFlightByJob())
 	if err != nil {
 		return fmt.Errorf("watch: %w", err)
+	}
+
+	return nil
+}
+
+// WatchOnce polls every trigger resource exactly once, runs whatever that
+// enqueues until the queue is empty, and returns.
+//
+// The same work Watch does on its first tick, without the loop: one poll,
+// then drain. It exists so steps can be driven by something that already
+// owns the schedule — cron, a systemd timer, a CI step — instead of running
+// as a daemon, and so the behavior of a whole poll-to-build cycle can be
+// tested through the CLI rather than only from inside this package.
+//
+// Deliberately serial and listener-free. maxConcurrent exists to keep a long
+// watch responsive while a slow build runs, which a one-shot has no need of,
+// and a webhook listener with nothing to serve it would be a port opened for
+// the duration of one poll.
+func WatchOnce(
+	ctx context.Context,
+	cfg *config.Config,
+	provider workspace.Provider,
+	st *store.Store,
+	pinned map[string]string,
+	force bool,
+) error {
+	// Any positive interval satisfies watchable; nothing here waits.
+	err := prepareWatch(ctx, cfg, st, time.Second)
+	if err != nil {
+		return err
+	}
+
+	pollAndLog(ctx, cfg, st)
+
+	// Drains until the queue is empty rather than for a fixed count: one
+	// poll can enqueue several jobs, and a job's own hooks can enqueue more.
+	//
+	// A canceled context ends the drain without an error. Ctrl-C during a
+	// one-shot is a person stopping it, and the rows it did not reach are
+	// still pending for the next invocation — the same contract the long
+	// watch has on shutdown.
+	for ctx.Err() == nil {
+		ran, err := drainOne(ctx, cfg, provider, st, pinned, force)
+		if err != nil {
+			return fmt.Errorf("watch: %w", err)
+		}
+
+		if !ran {
+			break
+		}
+	}
+
+	return nil
+}
+
+// Watch polls every trigger: true resource on an interval and runs the jobs a
+// version change affects, until ctx is canceled. See WatchOnce for the
+// single-cycle form.
+func Watch(
+	ctx context.Context,
+	cfg *config.Config,
+	provider workspace.Provider,
+	st *store.Store,
+	pinned map[string]string,
+	interval time.Duration,
+	maxConcurrent int,
+	force bool,
+	listenAddr string,
+) error {
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
+	}
+
+	err := prepareWatch(ctx, cfg, st, interval)
+	if err != nil {
+		return err
 	}
 
 	var wg sync.WaitGroup

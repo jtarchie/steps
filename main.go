@@ -190,20 +190,21 @@ func (r *RunCmd) Run() error {
 // every job in the pipeline, and runs whichever jobs a version change
 // affects — see internal/trigger.
 type WatchCmd struct {
-	Pipeline      string            `arg:""                                                                    help:"path to the pipeline YAML file"`
-	Interval      time.Duration     `default:"30s"                                                             help:"how often to check trigger: true resources"`
-	MaxConcurrent int               `default:"1"                                                               help:"maximum number of triggered jobs running at once"`
-	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                   name:"pin"`
+	Pipeline      string            `arg:""                                                                       help:"path to the pipeline YAML file"`
+	Interval      time.Duration     `default:"30s"                                                                help:"how often to check trigger: true resources"`
+	Once          bool              `help:"poll once, run whatever that triggers, and exit (for cron or a timer)" name:"once"`
+	MaxConcurrent int               `default:"1"                                                                  help:"maximum number of triggered jobs running at once"`
+	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                      name:"pin"`
 	Force         bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
-	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                                help:"leave the build workspace on disk instead of deleting it"`
-	NoPreflight   bool              `help:"skip the pre-run health check of each job's models and MCP servers" name:"no-preflight"`
-	Listen        string            `help:"serve webhook checks on this address, e.g. :8080"                   name:"listen"`
-	Var           map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                name:"var"`
-	VarsFile      string            `help:"YAML file of pipeline vars"                                         name:"vars-file"`
+	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                                   help:"leave the build workspace on disk instead of deleting it"`
+	NoPreflight   bool              `help:"skip the pre-run health check of each job's models and MCP servers"    name:"no-preflight"`
+	Listen        string            `help:"serve webhook checks on this address, e.g. :8080"                      name:"listen"`
+	Var           map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                   name:"var"`
+	VarsFile      string            `help:"YAML file of pipeline vars"                                            name:"vars-file"`
 }
 
 // Run loads the pipeline and blocks in trigger.Watch until canceled
-// (SIGINT/SIGTERM).
+// (SIGINT/SIGTERM), or polls exactly once under --once.
 func (w *WatchCmd) Run() error {
 	cfg, err := loadWithVars(w.Pipeline, w.Var, w.VarsFile)
 	if err != nil {
@@ -220,6 +221,10 @@ func (w *WatchCmd) Run() error {
 	defer cancel()
 
 	ctx = applyPreflightFlag(ctx, w.NoPreflight)
+
+	if w.Once {
+		return wrapRunErr(trigger.WatchOnce(ctx, cfg, provider, st, w.Pin, w.Force))
+	}
 
 	return wrapRunErr(trigger.Watch(ctx, cfg, provider, st, w.Pin, w.Interval, w.MaxConcurrent, w.Force, w.Listen))
 }
