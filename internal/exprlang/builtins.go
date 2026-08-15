@@ -1,6 +1,7 @@
 package exprlang
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -77,6 +78,32 @@ func fileFunc(dir string) func(...any) (any, error) {
 		}
 
 		return string(data), nil
+	}
+}
+
+// failFunc builds fail(message), the only way an expression can refuse.
+//
+// It exists because "the request succeeded and the API said no" is the normal
+// shape of a JSON API: Slack answers 200 with {"ok": false, "error":
+// "not_in_channel"}, and so do plenty of others. http() deliberately treats a
+// status as data, so without this an out: that failed to post would return a
+// version-less nil — indistinguishable from a put that legitimately published
+// nothing, and the step would go green having done nothing at all.
+//
+// Paired with the ternary (which short-circuits), this reads as a guard:
+//
+//	posted.ok ? {channel: posted.channel} : fail("slack: " + posted.error)
+//
+// Deliberately not a general try/catch's other half — there is no catching
+// anything here. This is a way to say no, which a language with no statements
+// otherwise has no way to express.
+func failFunc() func(...any) (any, error) {
+	return func(params ...any) (any, error) {
+		if len(params) != 1 {
+			return nil, fmt.Errorf("fail() takes one message, got %d arguments", len(params))
+		}
+
+		return nil, errors.New(scalarString(params[0]))
 	}
 }
 

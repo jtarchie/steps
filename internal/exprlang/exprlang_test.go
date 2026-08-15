@@ -298,3 +298,34 @@ func TestFileFuncPathGuard(t *testing.T) {
 func quote(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
 }
+
+// TestFailFunc covers the only way an expression can refuse. It matters most
+// for out: a JSON API that answers 200 with {"ok": false} would otherwise
+// leave a failed publish looking like a put that produced no version — green,
+// and having done nothing.
+func TestFailFunc(t *testing.T) {
+	t.Parallel()
+
+	_, err := RunOut(context.Background(),
+		`false ? {a: "b"} : fail("slack: not_in_channel")`, Input{})
+	if err == nil || !strings.Contains(err.Error(), "not_in_channel") {
+		t.Fatalf("err = %v, want the message the expression named", err)
+	}
+
+	// The ternary short-circuits, so the happy path never evaluates it.
+	version, err := RunOut(context.Background(),
+		`true ? {a: "b"} : fail("unreachable")`, Input{})
+	if err != nil {
+		t.Fatalf("RunOut: %v", err)
+	}
+
+	if version["a"] != "b" {
+		t.Fatalf("version = %+v", version)
+	}
+
+	// Available to check too, where "the API said no" is equally real.
+	_, err = RunCheck(context.Background(), `fail("nope")`, Input{})
+	if err == nil || !strings.Contains(err.Error(), "nope") {
+		t.Fatalf("err = %v, want the failure", err)
+	}
+}

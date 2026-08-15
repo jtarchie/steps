@@ -141,6 +141,7 @@ func slotFuncs(ctx context.Context, slot Slot, in Input) []expr.Option {
 	funcs := []expr.Option{
 		expr.Function("env", envFunc(in.EnvAllow)),
 		expr.Function("http", httpFunc(ctx)),
+		expr.Function("fail", failFunc()),
 	}
 
 	if slot == SlotOut {

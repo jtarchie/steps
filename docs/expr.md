@@ -91,6 +91,23 @@ An allowed-but-unset variable is an **error**, not an empty string — an unset 
 
 `out` only. Reads from the put's inputs — the same directory a shell `out:` gets as its cwd. Relative paths only. Files usually end in a newline, so `trim(file("thread/ts"))` is the common spelling.
 
+### `fail(message)`
+
+The only way an expression can refuse. It exists because "the request
+succeeded and the API said no" is the normal shape of a JSON API — Slack
+answers `200` with `{"ok": false, "error": "not_in_channel"}` — and `http()`
+deliberately treats a status as data. Without it, an `out:` whose post was
+rejected returns `nil`, which is indistinguishable from a put that
+legitimately published nothing: green, having done nothing.
+
+Paired with the ternary (which short-circuits), it reads as a guard:
+
+```yaml fragment
+out: |
+  let posted = http({url: "…", json: {…}}).json;
+  posted.ok ? {channel: posted.channel, ts: posted.ts} : fail("slack: " + posted.error)
+```
+
 ### `http(request)` / `http(requests, settings)`
 
 **`http()` takes a list of requests**, and a single request is sugar for a one-element list. Nearly all of this backend's leverage lives in that one decision.
