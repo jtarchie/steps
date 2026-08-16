@@ -250,10 +250,20 @@ func runJobPlan(
 
 	cache := rsrc.NewCache(rsrc.WithConsumed(cursor.has), rsrc.WithResolvedVersions(history.get))
 
+	// The input sets this run will build — one per unconsumed step of the
+	// widest every-get, each binding EVERY get's version. Computed once,
+	// before planning and unconditionally (--force skips planning, but the
+	// walk still fans out over these), then walked identically by the planner
+	// and the executor, which is what keeps the two describing one shape.
+	resolution, err := resolveInputSets(ctx, r.cfg, job.Plan, pinned, cache, cursor, history)
+	if err != nil {
+		return fmt.Errorf("job %q: %w", job.Name, err)
+	}
+
 	skippable := map[string]bool{}
 
 	if !skipCache {
-		chains, planErr := merkle.PlanChains(ctx, r.cfg, job.Name, job.Plan, pinned, cache, nil)
+		chains, planErr := merkle.PlanChains(ctx, r.cfg, job.Name, job.Plan, pinned, cache, resolution.sets)
 		if planErr != nil {
 			return fmt.Errorf("job %q: planning: %w", job.Name, planErr)
 		}
@@ -271,6 +281,7 @@ func runJobPlan(
 		skippable:       skippable,
 		cache:           cache,
 		cursor:          cursor,
+		resolution:      resolution,
 		allowGetTrigger: true,
 	}, job.Plan)
 }

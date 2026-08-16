@@ -57,8 +57,17 @@ func Explain(ctx context.Context, cfg *config.Config, job *config.Job, pinned ma
 		return nil, fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
-	chains, err := merkle.PlanChains(ctx, cfg, job.Name, job.Plan, pinned,
-		rsrc.NewCache(rsrc.WithConsumed(cursor.has), rsrc.WithResolvedVersions(history.get)), nil)
+	cache := rsrc.NewCache(rsrc.WithConsumed(cursor.has), rsrc.WithResolvedVersions(history.get))
+
+	// The same sets a run would build, so plan output describes the run that
+	// follows — including the lockstep pairing across several every-gets,
+	// which per-get recursion cannot express.
+	resolution, err := resolveInputSets(ctx, cfg, job.Plan, pinned, cache, cursor, history)
+	if err != nil {
+		return nil, fmt.Errorf("job %q: %w", job.Name, err)
+	}
+
+	chains, err := merkle.PlanChains(ctx, cfg, job.Name, job.Plan, pinned, cache, resolution.sets)
 	if err != nil {
 		return nil, fmt.Errorf("job %q: planning: %w", job.Name, err)
 	}

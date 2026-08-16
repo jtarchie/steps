@@ -32,14 +32,16 @@ import (
 func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []config.Step) error {
 	i := w.index
 
-	resource, resourceType, versions, err := fetchGetVersions(ctx, w.cfg, step, w.pinned, w.cache)
+	resource, resourceType, _, err := fetchGetVersions(ctx, w.cfg, step, w.pinned, w.cache)
 	if err != nil {
 		return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 	}
 
-	slog.Debug("job.step", "job", w.jobName, "index", i, "kind", "get", "resource", step.Get, "versions", len(versions))
+	sets := w.resolution.sets
 
-	if len(versions) == 0 {
+	slog.Debug("job.step", "job", w.jobName, "index", i, "kind", "get", "resource", step.Get, "sets", len(sets))
+
+	if len(sets) == 0 {
 		w.reportNoVersions(step, resource.Name, len(remainder))
 	}
 
@@ -54,12 +56,14 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 	// recorded pins harmlessly; a mark cannot.
 	pinnedRun := len(w.pinned) > 0
 
-	for _, version := range versions {
+	for _, set := range sets {
 		// Stop starting NEW triggered builds on cancellation; don't let one
 		// abandon itself mid-flight. Mirrors internal/trigger's worker loop.
 		if ctx.Err() != nil {
 			break
 		}
+
+		version := set[resource.Name]
 
 		content, err := merkle.GetNodeContent(w.cfg, step, *resourceType, resource.Source, version)
 		if err != nil {
@@ -78,8 +82,10 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 
 			// Taken, even though nothing ran: the cache skipped it because
 			// this exact chain already succeeded, which is the definition of
-			// a version this job is done with.
-			w.takeUnlessPinned(ctx, pinnedRun, resource.Name, version)
+			// a set this job is done with. All of the set's bindings advance,
+			// not just this get's — consecutive sets can share a HELD first
+			// get's hash, and each skip must still move the other cursors.
+			w.takeSet(ctx, pinnedRun, set)
 
 			continue
 		}
@@ -104,9 +110,9 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 		// retried — was tried and reverted. It makes a version that fails
 		// forever re-run forever, on every trigger, with an agent's bill
 		// attached, and it means "every version, once" quietly is not true.
-		w.takeUnlessPinned(ctx, pinnedRun, resource.Name, version)
+		w.takeSet(ctx, pinnedRun, set)
 
-		err = w.runTriggeredBuild(ctx, step, *resource, *resourceType, version, remainder, node)
+		err = w.runTriggeredBuild(ctx, step, *resource, *resourceType, set, remainder, node)
 
 		publishStepFinished(ctx, w.jobName, i, step, hash, getStarted, err)
 
@@ -127,6 +133,17 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 // its source is gone" is not, so say which — and warn only on the second, or
 // the alarm becomes noise on every poll of a watched resource.
 func (w *planWalk) reportNoVersions(step config.Step, resourceName string, remaining int) {
+	// An input that could bind NOTHING — no unconsumed version, no held one —
+	// is named, because "no versions" from a sibling's perspective reads as
+	// idle when the real story is a resource that has never had a version at
+	// all.
+	if blocked := w.resolution.blockingReport(); blocked != "" {
+		fmt.Printf("get: %s cannot build; no versions exist for: %s\n", resourceName, blocked)
+		slog.Warn("job.get.blocked", "job", w.jobName, "index", w.index, "resource", resourceName, "blocking", blocked)
+
+		return
+	}
+
 	if taken := w.cache.Suppressed(step); taken > 0 {
 		fmt.Printf("get: %s has no new versions; all %d already taken\n", resourceName, taken)
 		slog.Info("job.get.no_new_versions", "job", w.jobName, "index", w.index, "resource", resourceName, "already_taken", taken)
@@ -138,14 +155,19 @@ func (w *planWalk) reportNoVersions(step config.Step, resourceName string, remai
 	slog.Warn("job.get.no_versions", "job", w.jobName, "index", w.index, "resource", resourceName, "skipped_steps", remaining)
 }
 
-// takeUnlessPinned advances the cursor for a version, except on a pinned run
-// — see the pinnedRun comment in fanOutGet.
-func (w *planWalk) takeUnlessPinned(ctx context.Context, pinnedRun bool, resourceName string, version map[string]any) {
+// takeSet advances the cursor of every fanning resource to its binding in
+// this set — a set is consumed as a unit, whatever its first get's fate.
+// Re-taking a held version is a MAX no-op.
+func (w *planWalk) takeSet(ctx context.Context, pinnedRun bool, set merkle.InputSet) {
 	if pinnedRun {
 		return
 	}
 
-	w.cursor.take(ctx, w.st, w.jobName, resourceName, version)
+	for _, resourceName := range w.resolution.everyResources {
+		if version := set[resourceName]; version != nil {
+			w.cursor.take(ctx, w.st, w.jobName, resourceName, version)
+		}
+	}
 }
 
 // runTriggeredBuild runs the build that a single resource version triggers:
@@ -157,8 +179,10 @@ func (w *planWalk) takeUnlessPinned(ctx context.Context, pinnedRun bool, resourc
 // fanned out by version:every.
 func (w *planWalk) runTriggeredBuild(
 	ctx context.Context, step config.Step, resource config.Resource, resourceType config.ResourceType,
-	version map[string]any, remainder []config.Step, node merkle.Node,
+	set merkle.InputSet, remainder []config.Step, node merkle.Node,
 ) error {
+	version := set[resource.Name]
+
 	bw, err := w.provider.NewBuild(ctx, resource.Name)
 	if err != nil {
 		return fmt.Errorf("could not create workspace for %q: %w", resource.Name, err)
@@ -223,6 +247,9 @@ func (w *planWalk) runTriggeredBuild(
 	remainderWalk.stepRunner = build
 	remainderWalk.parentHash = node.Hash
 	remainderWalk.allowGetTrigger = false
+	// Every get in the remainder binds this build's set — see
+	// fetchGetStepInPlace, which reads it before anything else.
+	remainderWalk.assigned = set
 
 	err = runSteps(ctx, remainderWalk, remainder)
 	buildOK = err == nil

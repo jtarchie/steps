@@ -76,8 +76,9 @@ func TestFoldStepUnskippableReportsOnce(t *testing.T) {
 // job exits 0 — the same thing a fully-successful job looks like. That is how
 // the self-build pipeline (experiments/self-build) spent runs doing literally
 // nothing after its story directory was deleted: "no new versions" and "the
-// source is gone" were indistinguishable from the outside. The empty case must
-// announce itself and say how much of the plan it dropped.
+// source is gone" were indistinguishable from the outside. A resource that has
+// never had a version at all is an input that can bind NOTHING — the report
+// must name it as blocking, not read as idle.
 func TestGetNoVersionsIsAnnounced(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pipeline.yml")
@@ -142,14 +143,8 @@ jobs:
 		t.Fatal("the task after an empty get ran; this test no longer covers the silent case")
 	}
 
-	if !strings.Contains(out, "get: thing returned no versions") {
-		t.Errorf("stdout must name the resource that came back empty; got:\n%s", out)
-	}
-
-	// The count is the part that makes it actionable — it says how much plan
-	// was silently dropped, not merely that a check was empty.
-	if !strings.Contains(out, "the 2 step(s) after it did not run") {
-		t.Errorf("stdout must say how many steps were dropped; got:\n%s", out)
+	if !strings.Contains(out, "get: thing cannot build; no versions exist for: thing") {
+		t.Errorf("stdout must name the resource that blocks the build; got:\n%s", out)
 	}
 }
 

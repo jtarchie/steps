@@ -10,6 +10,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
 	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/store"
@@ -28,6 +29,14 @@ type planWalk struct {
 	skippable map[string]bool
 	cache     *rsrc.Cache
 	cursor    *versionCursor
+
+	// resolution is the run's input sets — computed once, before planning,
+	// and the only thing fanOutGet fans out over.
+	resolution setResolution
+
+	// assigned is the current triggered build's input set: which version
+	// every get in the remainder binds. Nil outside a triggered build.
+	assigned merkle.InputSet
 
 	// allowGetTrigger is false inside a triggered build's remainder, where a
 	// get fetches into the existing workspace instead of fanning out again.
