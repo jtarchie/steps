@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"testing"
 
@@ -177,13 +178,68 @@ func TestNextHostedFallback(t *testing.T) {
 	}
 }
 
+// TestNextViableFallbackSkipsAMissingCredential is the regression for the
+// cascade giving up on the WHOLE ordered list over one bad entry: unlike a
+// CLI candidate (which the cascade stops at unconditionally — see
+// nextHostedFallback), a hosted candidate whose api_key_env isn't set in
+// this environment is a config problem on THAT one entry, not a reason to
+// abandon a healthy entry further down the same list — the same "try the
+// next one" treatment preflight's own failOver already gives an unhealthy
+// candidate.
+func TestNextViableFallbackSkipsAMissingCredential(t *testing.T) {
+	t.Setenv("STEPS_TEST_NEXTVIABLE_K2", "present")
+
+	agent := &config.Agent{
+		Name: "writer",
+		Fallback: []config.AgentFallback{
+			{Source: config.AgentSource{Model: "openai/gpt-4o-mini", APIKeyEnv: "STEPS_TEST_NEXTVIABLE_UNSET"}},
+			{Source: config.AgentSource{Model: "anthropic/claude-sonnet-4-5", APIKeyEnv: "STEPS_TEST_NEXTVIABLE_K2"}},
+		},
+	}
+
+	var ri config.ResolvedInvocation
+
+	next, apiKey, nextIndex, ok := nextViableFallback(agent, ri, -1)
+	if !ok {
+		t.Fatal("nextViableFallback(-1) = false, want true — index 1's credential is present, so it must not be walled off by index 0's missing one")
+	}
+
+	if nextIndex != 1 || next.ModelName != "claude-sonnet-4-5" {
+		t.Errorf("nextViableFallback(-1) = (model %q, index %d), want (claude-sonnet-4-5, 1) — index 0 must be skipped, not selected or fatal", next.ModelName, nextIndex)
+	}
+
+	if apiKey != "present" {
+		t.Errorf("apiKey = %q, want the resolved candidate's own key %q", apiKey, "present")
+	}
+
+	// Every candidate's credential missing: nothing left to select.
+	agentAllMissing := &config.Agent{
+		Name: "writer",
+		Fallback: []config.AgentFallback{
+			{Source: config.AgentSource{Model: "openai/gpt-4o-mini", APIKeyEnv: "STEPS_TEST_NEXTVIABLE_UNSET"}},
+		},
+	}
+
+	_, _, _, ok = nextViableFallback(agentAllMissing, ri, -1)
+	if ok {
+		t.Error("nextViableFallback with every candidate's credential missing = true, want false")
+	}
+}
+
 // TestFailoverEligible pins what the mid-run cascade reacts to: a plain
 // infrastructure error carrying a retryable status, and nothing else — not a
-// nil error, not a task-level failure (outcome.Fail), and not a canceled or
-// deadline-exceeded context, even one that happens to wrap a 5xx-shaped
-// error underneath.
+// nil error, not a task-level failure (outcome.Fail), not a canceled or
+// deadline-exceeded context (even one that happens to wrap a 5xx-shaped error
+// underneath), and not an internal error this package raises itself (a
+// budget breach classifies as outcome.Errored too, but is not the
+// provider's fault).
 func TestFailoverEligible(t *testing.T) {
 	ctx := context.Background()
+
+	// The shape a real connection failure takes reaching here (via
+	// net/http's client) — a bare errors.New with dial-shaped TEXT is not a
+	// net.Error and must not pass isTransientProviderError.
+	dialErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
 
 	tests := []struct {
 		name string
@@ -195,7 +251,8 @@ func TestFailoverEligible(t *testing.T) {
 		{"5xx api error", ctx, &openai.Error{StatusCode: http.StatusInternalServerError}, true},
 		{"400 api error", ctx, &openai.Error{StatusCode: http.StatusBadRequest}, false},
 		{"task-level failure wrapping a 5xx shape", ctx, outcome.Fail(&openai.Error{StatusCode: http.StatusInternalServerError}), false},
-		{"plain connection error", ctx, errors.New("dial tcp: connection refused"), true},
+		{"plain connection error", ctx, dialErr, true},
+		{"budget exceeded is errored but not the provider's fault", ctx, errors.New("agent budget exceeded (spent 500 tokens)"), false},
 	}
 
 	for _, tt := range tests {

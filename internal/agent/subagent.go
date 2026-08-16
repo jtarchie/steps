@@ -205,6 +205,13 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 			delegateFraction: c.fraction,
 		},
 	}
+	// A sub-agent conversation owns its own stepUsage's whole lifetime, the
+	// same as RunFix and runPreparedWithFailover — runConversationLoop no
+	// longer calls finish() on a caller's behalf (see its own doc comment).
+	// Without this, chargeDelegated never fires: the parent's budget is never
+	// debited for what this delegation spent, and the child's own spend never
+	// reaches the job total.
+	defer conv.usage.finish()
 
 	fmt.Printf("agent: %s (sub-agent)\n", c.ri.AgentName)
 

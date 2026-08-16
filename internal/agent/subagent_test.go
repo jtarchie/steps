@@ -248,3 +248,35 @@ func TestSubAgentUsesChildImageRunner(t *testing.T) {
 		t.Errorf("result = %#v, want ok", got["result"])
 	}
 }
+
+// TestSubAgentRunChargesBackTheParentsBudget is the regression for a delegation
+// silently escaping its parent's ceiling: preparedSubAgent.run builds its own
+// *stepUsage with `parent: env.usage` (see the field's own doc comment,
+// "charged back up the chain when it finishes"), but that charge-back only
+// happens inside stepUsage.finish() — and runConversationLoop stopped calling
+// finish() on a caller's behalf once the mid-run fallback: cascade needed to
+// call it itself across more than one attempt. Without run's own
+// `defer conv.usage.finish()`, a sub-agent's spend never reached its parent's
+// `.delegated`, so a capped agent could delegate its way past its own budget
+// without ever tripping it — exactly what usage.go's TestDelegatedBudgetDrawsOnTheParent
+// pins at the stepUsage level, but nothing exercised through run's actual call
+// path until now.
+func TestSubAgentRunChargesBackTheParentsBudget(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeLLM{responses: []*model.LLMResponse{
+		{
+			Content:       &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "the gist"}}},
+			UsageMetadata: &genai.GenerateContentResponseUsageMetadata{TotalTokenCount: 500},
+		},
+	}}
+
+	child := newTestSubAgent(t, fake)
+	parent := &stepUsage{budget: 1000, delegateFraction: 1.0}
+
+	child.run(context.Background(), map[string]any{"request": "summarize this"}, toolEnv{dir: t.TempDir(), usage: parent})
+
+	if got := parent.remaining(); got != 500 {
+		t.Errorf("parent.remaining() after the sub-agent spent 500/1000 = %d, want 500 — the spend must charge back to the parent when the child's conversation finishes", got)
+	}
+}

@@ -121,6 +121,17 @@ type conversationResult struct {
 	// the next source as agentConversation.resumeContents so a source swap
 	// resumes the conversation instead of restarting it.
 	endContents []*genai.Content
+	// endSatisfied/endCallCounts are the same attempt's required-tool and
+	// max_calls: bookkeeping at the moment it exited, for the same reason and
+	// the same consumer as endContents (see agentConversation.resumeSatisfied
+	// / resumeCallCounts): the message history alone tells a resumed attempt
+	// WHAT already happened, not which required tools that already satisfies
+	// or how much of each tool's budget it already spent — without these a
+	// resumed attempt's fresh bookkeeping would force an already-satisfied
+	// required tool to fire its side effect again, and hand a budgeted tool a
+	// new allowance on every source in the cascade.
+	endSatisfied  map[string]bool
+	endCallCounts map[string]int
 }
 
 // agentConversation is one runnable attempt's inputs.
@@ -167,6 +178,25 @@ type agentConversation struct {
 	// restarting it: it is exactly what the prior attempt's
 	// conversationResult.endContents captured.
 	resumeContents []*genai.Content
+	// resumeSatisfied/resumeCallCounts/resumeTrajectory/resumeVerdict/
+	// resumeNote carry the rest of a resumed attempt's bookkeeping forward
+	// from the prior attempt's conversationResult (see failover.go), the same
+	// way resumeContents carries the message history. Required alongside it:
+	// the history shows a required tool already succeeded, but without
+	// resumeSatisfied a fresh attempt's own (empty) satisfied map would not
+	// know that, and finishOrForce would force the resumed model to call it
+	// again — re-triggering whatever side effect it has. resumeCallCounts is
+	// the same guarantee for a max_calls:-budgeted tool: without it, a fresh
+	// (empty) callCounts map hands the tool a new allowance on every source
+	// the cascade tries. resumeTrajectory/resumeVerdict/resumeNote keep the
+	// final result's audit trail and last-decided verdict complete across a
+	// source swap instead of only reflecting whichever source happened to
+	// finish the step.
+	resumeSatisfied  map[string]bool
+	resumeCallCounts map[string]int
+	resumeTrajectory []recordedToolCall
+	resumeVerdict    string
+	resumeNote       string
 }
 
 // syntheticToolExchange builds the call/result message pair that makes
@@ -299,6 +329,39 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 	return res, err
 }
 
+// seedResumeState builds runConversationLoop's per-conversation bookkeeping,
+// seeded from a resumed attempt's own bookkeeping (see
+// agentConversation.resumeSatisfied's doc comment) rather than starting
+// empty, so a mid-run source swap cannot force an already-satisfied required
+// tool to fire again or hand a budgeted tool a fresh allowance. A first
+// attempt's resume* fields are all nil/zero, which is exactly the
+// fresh-start behavior this had before resuming existed.
+func seedResumeState(conv agentConversation) (satisfied map[string]bool, callCounts map[string]int, trajectory []recordedToolCall, verdict, note string) {
+	satisfied = conv.resumeSatisfied
+	if satisfied == nil {
+		satisfied = make(map[string]bool, len(conv.tools.required))
+	}
+
+	// callCounts is local to this call: one conversation, one budget per tool
+	// — carried forward across a resumed attempt rather than reset.
+	callCounts = conv.resumeCallCounts
+	if callCounts == nil {
+		callCounts = make(map[string]int, len(conv.tools.maxCalls))
+	}
+
+	// trajectory is likewise per-conversation, which is what an
+	// assert.tool_calls check should see: the calls that produced this step's
+	// outcome, including any a prior (failed-over) attempt already made.
+	trajectory = conv.resumeTrajectory
+
+	// verdict/note are the last successful verdict-tool choice and the note
+	// that accompanied it. A model that revises its own verdict ends on its
+	// final one, and note travels with whichever choice won — across a
+	// resumed attempt too, so an infrastructure hiccup mid-run cannot
+	// silently lose a decision the model had already made.
+	return satisfied, callCounts, trajectory, conv.resumeVerdict, conv.resumeNote
+}
+
 // runConversationLoop is runAgentConversation's body, split out so the
 // transcript attaches once at the boundary instead of at each of the loop's
 // several return sites.
@@ -310,7 +373,8 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	// double-charges a delegating parent). Whichever caller owns a
 	// conversation's whole lifetime — RunFix for its one-shot conversation,
 	// runPreparedWithFailover for a step's whole (possibly multi-source)
-	// sequence — calls finish() exactly once, after that lifetime ends.
+	// sequence, subagent.go's preparedSubAgent.run for a delegation — calls
+	// finish() exactly once, after that lifetime ends.
 	conv.usage = attachUsage(ctx, conv.usage)
 
 	// Publish this conversation's accumulator to its tools, so a sub-agent
@@ -320,17 +384,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	conv.env.usage = conv.usage
 
 	req := buildAgentRequest(conv)
-	satisfied := make(map[string]bool, len(conv.tools.required))
-	// callCounts is local to this call: one conversation, one budget per tool.
-	callCounts := make(map[string]int, len(conv.tools.maxCalls))
-	// trajectory is likewise per-conversation, which is what an
-	// assert.tool_calls check should see: the calls that produced this step's
-	// outcome.
-	var trajectory []recordedToolCall
-	// verdict/note are the last successful verdict-tool choice and the note
-	// that accompanied it. A model that revises its own verdict ends on its
-	// final one, and note travels with whichever choice won.
-	var verdict, note string
+	satisfied, callCounts, trajectory, verdict, note := seedResumeState(conv)
 	// compactionSummary/compactionStalled are maybeCompact's running state,
 	// scoped to this conversation like everything above.
 	var compactionSummary string
@@ -351,7 +405,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 		// has already blown its ceiling must not go on to have side effects.
 		resp, err := conv.generateWithinBudget(ctx, llm, req)
 		if err != nil {
-			return conversationResult{turns: turn, trajectory: trajectory, verdict: verdict, note: note, endContents: req.Contents}, err
+			return conversationResult{turns: turn, trajectory: trajectory, verdict: verdict, note: note, endContents: req.Contents, endSatisfied: satisfied, endCallCounts: callCounts}, err
 		}
 
 		req.Contents = append(req.Contents, resp.Content)
@@ -361,7 +415,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 
 		if len(calls) == 0 {
 			if conv.finishOrForce(req, satisfied) {
-				return conversationResult{text: text, turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note, endContents: req.Contents}, nil
+				return conversationResult{text: text, turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note, endContents: req.Contents, endSatisfied: satisfied, endCallCounts: callCounts}, nil
 			}
 
 			continue
@@ -391,7 +445,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 
 		detectErr := detector.respond(req, calls, parts)
 		if detectErr != nil {
-			return conversationResult{turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note, endContents: req.Contents}, detectErr
+			return conversationResult{turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note, endContents: req.Contents, endSatisfied: satisfied, endCallCounts: callCounts}, detectErr
 		}
 	}
 
@@ -399,7 +453,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	// ran but didn't finish its task), not infrastructure errors — mark them
 	// so hook dispatch classifies them as failed rather than errored. A
 	// transport error from generateOnce above stays unwrapped → errored.
-	exhausted := conversationResult{turns: conv.maxTurns, trajectory: trajectory, verdict: verdict, note: note, endContents: req.Contents}
+	exhausted := conversationResult{turns: conv.maxTurns, trajectory: trajectory, verdict: verdict, note: note, endContents: req.Contents, endSatisfied: satisfied, endCallCounts: callCounts}
 
 	return conv.outOfTurns(ctx, llm, req, exhausted, satisfied)
 }

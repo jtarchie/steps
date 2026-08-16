@@ -194,9 +194,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 
 	stepStarted := time.Now()
 
-	res, servedBy, err := runPreparedWithFailover(ctx, cfg, prepared)
-	prepared.ri = servedBy
-	res.model = fallbackModel(prepared)
+	res, err := runAndAnnounceFailover(ctx, cfg, name, &prepared)
 
 	printAgentResponse(res)
 
@@ -474,9 +472,7 @@ func RunHook(ctx context.Context, cfg *config.Config, step config.Step, bw works
 
 	fmt.Printf("agent: %s%s\n", step.Agent, fallbackBanner(prepared))
 
-	res, servedBy, err := runPreparedWithFailover(ctx, cfg, prepared)
-	prepared.ri = servedBy
-	res.model = fallbackModel(prepared)
+	res, err := runAndAnnounceFailover(ctx, cfg, step.Agent, &prepared)
 
 	printAgentResponse(res)
 
@@ -531,4 +527,32 @@ func fallbackModel(prepared preparedAgentStep) string {
 	}
 
 	return prepared.ri.ModelName
+}
+
+// runAndAnnounceFailover runs prepared's conversation via the mid-run
+// cascade, updates *prepared to whichever source actually served it (so the
+// caller's later fallbackModel/agentResultRecord calls see it), and prints
+// the step's own visible note if the source that served it is a mid-run swap
+// the pre-run fallbackBanner couldn't have already announced. Shared by
+// RunStep and RunHook so both report a served-by source the same way.
+//
+// Preflight's own failover is already covered by that pre-run banner, since
+// prepared.ri reflects preflight's pick before either caller ever prints it
+// — but the mid-run cascade (failover.go) can swap sources AFTER the banner
+// printed, and without the note here the step's own output line stays
+// silent about it, leaving only the agent.failover log line and the
+// recorded fallback_model to say so — one of the three channels
+// docs/agents.md's "Loudly visible" promises.
+func runAndAnnounceFailover(ctx context.Context, cfg *config.Config, name string, prepared *preparedAgentStep) (conversationResult, error) {
+	announcedModel := fallbackModel(*prepared)
+
+	res, servedBy, err := runPreparedWithFailover(ctx, cfg, *prepared)
+	prepared.ri = servedBy
+	res.model = fallbackModel(*prepared)
+
+	if res.model != "" && res.model != announcedModel {
+		fmt.Printf("agent: %s failed over mid-run to %s\n", name, res.model)
+	}
+
+	return res, err
 }

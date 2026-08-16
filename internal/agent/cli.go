@@ -97,10 +97,12 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 	}
 
 	// Bind this step's accounting to the job and report it however the step
-	// ends — the hosted path gets both from runAgentConversation, which this
-	// path never calls, so without them a CLI step's spend reached the step
-	// counters and stopped there: invisible to a job budget: and missing from
-	// the run's usage report.
+	// ends — the hosted path gets both from its own owning caller
+	// (runPreparedWithFailover, RunFix, or subagent.go), never from
+	// runConversationLoop itself, and this path calls none of those, so
+	// without them a CLI step's spend reached the step counters and stopped
+	// there: invisible to a job budget: and missing from the run's usage
+	// report.
 	prepared.conv.usage = attachUsage(ctx, prepared.conv.usage)
 	defer prepared.conv.usage.finish()
 

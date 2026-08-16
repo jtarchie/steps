@@ -779,6 +779,7 @@ jobs:
 func TestEndToEndAgentMidRunFailover(t *testing.T) {
 	t.Run("resumes on the fallback source", testMidRunFailoverResumes)
 	t.Run("a non-transient failure does not fail over", testMidRunFailoverSkipsNonTransient)
+	t.Run("does not re-invoke a required tool the primary already satisfied", testMidRunFailoverDoesNotReinvokeRequiredTool)
 }
 
 // testMidRunFailoverResumes: the primary completes a real read_file turn,
@@ -903,5 +904,75 @@ func testMidRunFailoverSkipsNonTransient(t *testing.T) {
 	result := storeNodeResult(t, path, "rejector")
 	if strings.Contains(result, "fallback_model") {
 		t.Errorf("recorded result names a fallback model despite no failover happening; got %q", result)
+	}
+}
+
+// testMidRunFailoverDoesNotReinvokeRequiredTool is the regression for a
+// mid-run resume that carries the message HISTORY forward but not the
+// bookkeeping that goes with it: the primary calls a required:, max_calls: 1
+// custom tool successfully on turn 1, then dies mid-conversation the same way
+// testMidRunFailoverResumes does. The fallback's own scripted turn is plain
+// text with no tool call at all — if satisfied/callCounts do not carry over
+// from the primary's attempt, finishOrForce sees the required tool as still
+// unsatisfied and forces the fallback to call it again via tool_choice, which
+// the fake can't honor (it has no second scripted turn), so the run would
+// fail outright instead of finishing cleanly on the fallback's one turn.
+func testMidRunFailoverDoesNotReinvokeRequiredTool(t *testing.T) {
+	dir := t.TempDir()
+
+	primary := newFakeLLM(t,
+		callsTool("mark", map[string]any{}),
+		failsWith(http.StatusInternalServerError),
+		failsWith(http.StatusInternalServerError),
+	)
+	fallback := newFakeLLM(t, says("Done via fallback."))
+
+	agentName := "marker"
+	yaml := fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: %[1]s
+  source:
+    endpoint: %[2]s/v1/
+    model: primary-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  fallback:
+  - source:
+      endpoint: %[3]s/v1/
+      model: fallback-model
+      api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools:
+  - name: mark
+    description: Mark that the required step ran.
+    run: echo marked
+    required: true
+    max_calls: 1
+
+jobs:
+- name: build
+  plan:
+  - agent: %[1]s
+    attempts: 2
+    prompt: Do the required step, then report.
+    assert:
+      stdout: Done via fallback.
+`, agentName, primary.URL, fallback.URL)
+
+	path := writePipeline(t, dir, yaml)
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	mustRun(t, path)
+
+	if got := fallback.requestCount(); got != 1 {
+		t.Fatalf("fallback provider requests = %d, want 1 — a carried-over satisfied required: tool must not force a second fallback turn", got)
+	}
+
+	result := storeNodeResult(t, path, agentName)
+	if got := strings.Count(result, `"name":"mark"`); got != 1 {
+		t.Errorf(`recorded trajectory calls "mark" %d times, want 1 — the required tool must not run twice across a mid-run failover; result: %s`, got, result)
 	}
 }

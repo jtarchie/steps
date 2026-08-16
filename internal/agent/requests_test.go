@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -297,8 +298,15 @@ func TestRetryableStatus(t *testing.T) {
 // TestIsTransientProviderError pins the classifier the mid-run fallback:
 // cascade decides on: a connection-level failure or a retryable status is
 // eligible to fail over, a model's own rejection (a 4xx) and the step's own
-// timeout/cancellation are not.
+// timeout/cancellation are not — and NEITHER is an internal error this
+// package raises itself (a budget breach, a malformed response), since
+// runOneConversation's returned error isn't necessarily the provider's fault
+// at all. dialErr/wrappedDialErr use a real *net.OpError, the shape an actual
+// connection failure takes reaching here (via net/http's client) — a bare
+// errors.New with dial-shaped TEXT is not a net.Error and must not pass.
 func TestIsTransientProviderError(t *testing.T) {
+	dialErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+
 	tests := []struct {
 		name string
 		err  error
@@ -308,10 +316,12 @@ func TestIsTransientProviderError(t *testing.T) {
 		{"429 api error", &openai.Error{StatusCode: http.StatusTooManyRequests}, true},
 		{"400 api error", &openai.Error{StatusCode: http.StatusBadRequest}, false},
 		{"401 api error", &openai.Error{StatusCode: http.StatusUnauthorized}, false},
-		{"connection error", errors.New("dial tcp: connection refused"), true},
-		{"wrapped connection error", fmt.Errorf("agent: generate content: %w", errors.New("dial tcp: connection refused")), true},
+		{"connection error", dialErr, true},
+		{"wrapped connection error", fmt.Errorf("agent: generate content: %w", dialErr), true},
 		{"context canceled", context.Canceled, false},
 		{"context deadline exceeded", context.DeadlineExceeded, false},
+		{"budget exceeded is an internal error, not the provider's fault", errors.New("agent budget exceeded (spent 500 tokens)"), false},
+		{"malformed/empty response is an internal error, not a connection failure", errors.New("agent: model returned an empty response"), false},
 	}
 
 	for _, tt := range tests {

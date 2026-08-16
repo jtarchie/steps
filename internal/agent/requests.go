@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
@@ -300,17 +301,31 @@ func rewind(req *http.Request) (*http.Request, error) {
 // status code on the way back out sees both shapes (a connection error that
 // never got a response, and a response the SDK turned into an error)
 // uniformly, without needing to plumb anything through the transport.
+//
+// The error reaching here is not necessarily a provider error at all: unlike
+// (*requestRetryTransport).retryable, which only ever sees what a
+// RoundTripper can return (a genuine network failure), this classifies
+// whatever runOneConversation returned — which also includes this package's
+// OWN internal errors (a budget breach, a malformed/empty response, a
+// detected loop). None of those are "an unreachable endpoint" and must not
+// trigger a source swap either, so a plain net.Error is required rather than
+// defaulting to true for anything unrecognized.
 func isTransientProviderError(err error) bool {
 	var apiErr *openai.Error
 	if errors.As(err, &apiErr) {
 		return retryableStatus(apiErr.StatusCode)
 	}
 
-	// No API error to unwrap: a connection-level failure (dial/read/write),
-	// unless it's the run's own context ending — the same exclusion
-	// (*requestRetryTransport).retryable makes above, for the same reason: a
-	// step's own timeout: firing says nothing about the provider's health.
-	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		// The run's own context ending says nothing about the provider's
+		// health — the same exclusion (*requestRetryTransport).retryable
+		// makes, for the same reason.
+		return false
+	}
+
+	var netErr net.Error
+
+	return errors.As(err, &netErr)
 }
 
 // discard drains and closes a response being thrown away, so its connection
