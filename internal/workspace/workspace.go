@@ -488,8 +488,9 @@ type isolatingBuild struct {
 	// and each of those forgets the entry — so the memo is exact rather than
 	// merely close, and hashing a large checkout costs the same whether one
 	// step reads it or ten do.
-	digestMu sync.Mutex
-	digests  map[string]string
+	digestMu    sync.Mutex
+	digests     map[string]string
+	generations map[string]uint64
 }
 
 // artifactDigest is the content hash of one artifact in the build store, for
@@ -500,22 +501,54 @@ type isolatingBuild struct {
 // (materializeSpace would fail later, and with a better message), and a cache
 // lookup is not the place to decide that.
 func (b *isolatingBuild) artifactDigest(name string) (string, error) {
-	b.digestMu.Lock()
-	defer b.digestMu.Unlock()
-
-	if digest, ok := b.digests[name]; ok {
+	digest, generation, ok := b.rememberedDigest(name)
+	if ok {
 		return digest, nil
 	}
 
-	dir := filepath.Join(b.artifacts, name)
-
-	digest, err := digestTree(dir)
+	// Outside the lock: walking a large checkout is the expensive part, and
+	// holding a build-wide mutex across it would serialize every concurrent
+	// branch behind one tree walk. Two branches racing the same artifact each
+	// compute it and agree, which costs one redundant walk and no correctness.
+	digest, err := digestTree(filepath.Join(b.artifacts, name))
 	if err != nil {
-		if os.IsNotExist(err) || errors.Is(err, fs.ErrNotExist) {
-			digest = ""
-		} else {
+		// A step may legitimately declare an input no earlier step produced;
+		// materializeSpace fails on that later, with a better message than a
+		// cache lookup could give.
+		if !errors.Is(err, fs.ErrNotExist) {
 			return "", err
 		}
+
+		digest = ""
+	}
+
+	b.rememberDigest(name, digest, generation)
+
+	return digest, nil
+}
+
+// rememberedDigest reports a memoized digest, and the generation the artifact
+// was at when it was read — what tells rememberDigest whether the bytes moved
+// while it was being walked.
+func (b *isolatingBuild) rememberedDigest(name string) (digest string, generation uint64, ok bool) {
+	b.digestMu.Lock()
+	defer b.digestMu.Unlock()
+
+	digest, ok = b.digests[name]
+
+	return digest, b.generations[name], ok
+}
+
+// rememberDigest memoizes a freshly computed digest, unless the artifact was
+// replaced while it was being computed — in which case the digest describes
+// bytes that are already gone, and memoizing it would hand the next step a key
+// for content nobody can read any more.
+func (b *isolatingBuild) rememberDigest(name, digest string, generation uint64) {
+	b.digestMu.Lock()
+	defer b.digestMu.Unlock()
+
+	if b.generations[name] != generation {
+		return
 	}
 
 	if b.digests == nil {
@@ -523,17 +556,22 @@ func (b *isolatingBuild) artifactDigest(name string) (string, error) {
 	}
 
 	b.digests[name] = digest
-
-	return digest, nil
 }
 
-// forgetDigests drops memoized digests for artifacts whose bytes just changed.
+// forgetDigests drops memoized digests for artifacts whose bytes just changed,
+// and bumps their generation so a walk already in flight over the old content
+// cannot install its answer afterwards.
 func (b *isolatingBuild) forgetDigests(names []string) {
 	b.digestMu.Lock()
 	defer b.digestMu.Unlock()
 
+	if b.generations == nil {
+		b.generations = map[string]uint64{}
+	}
+
 	for _, name := range names {
 		delete(b.digests, name)
+		b.generations[name]++
 	}
 }
 
@@ -546,15 +584,16 @@ func (b *isolatingBuild) FetchResource(ctx context.Context, name, cacheKey strin
 		return "", err
 	}
 
+	// After the fetch on BOTH paths, not only the cached one: ResourceDir's own
+	// forget happens before these bytes exist, so without this the digest
+	// memoized for an artifact could be the empty tree it was created as.
+	defer b.forgetDigests([]string{name})
+
 	if b.cache == nil || cacheKey == "" {
 		return dir, fetch(dir)
 	}
 
-	err = b.cache.Fetch(ctx, cacheKey, dir, func() error { return fetch(dir) })
-
-	b.forgetDigests([]string{name})
-
-	return dir, err
+	return dir, b.cache.Fetch(ctx, cacheKey, dir, func() error { return fetch(dir) })
 }
 
 func (b *isolatingBuild) ResourceDir(ctx context.Context, name string) (string, error) {

@@ -14,17 +14,22 @@ import (
 // stepCachePipeline is a plan whose middle step is the expensive one: a get
 // feeds an agent, and a task downstream reads what the agent wrote.
 //
-// The agent declares no verdicts:, no to:, no hooks and no context: from:, so
-// it is cacheable — the shape the whole pr-review fan-out has. The publish task
-// is volatile:, so it runs on EVERY pass regardless of the cache: without that
-// it would be reused too, and a restored report/ artifact nobody reads proves
-// nothing about restoration.
+// The agent declares no verdicts:, no to:, no hooks and no context: from:, and
+// declares outputs — the shape the whole pr-review fan-out has, and the only
+// step here the cache may reuse.
+//
+// The two tasks below it re-run on every pass for two different reasons, and
+// both matter. publish declares an output, so it is cacheable on paper and
+// runs only because it is volatile: — without that, a restored report/ nobody
+// reads would prove nothing about restoration. notify declares NO outputs, so
+// nothing about it is reusable: a hit would have nothing to restore and would
+// simply drop the side effect its run: exists for.
 //
 // One fake provider serves every run of a test, and its URL is baked in here:
 // the endpoint is part of an agent's hashed content, so a second provider on a
 // second port would be a different step and would miss the cache for a reason
 // that has nothing to do with what is under test.
-func stepCachePipeline(t *testing.T, dir, endpoint, root, publishLog, fetchLog, notes string) string {
+func stepCachePipeline(t *testing.T, dir, endpoint, root, publishLog, fetchLog, notifyLog, notes string) string {
 	t.Helper()
 
 	return writePipeline(t, dir, fmt.Sprintf(`
@@ -68,13 +73,17 @@ jobs:
   - task: publish
     volatile: true
     inputs: [report]
+    outputs: [published]
     run: |
       cat report/summary.md >> %[3]s
       echo >> %[3]s
+      cp report/summary.md published/
+  - task: notify
+    run: echo notified >> %[6]s
   assert:
-    execution: [repo, reviewer, publish]
+    execution: [repo, reviewer, publish, notify]
     outcome: succeeded
-`, endpoint, root, publishLog, fetchLog, notes))
+`, endpoint, root, publishLog, fetchLog, notes, notifyLog))
 }
 
 // stepCacheScript is the conversation the reviewer has when it actually runs.
@@ -109,11 +118,12 @@ func TestStepCacheReusesAnAgentStep(t *testing.T) {
 	dir, root := t.TempDir(), t.TempDir()
 	publishLog := filepath.Join(dir, "publish.log")
 	fetchLog := filepath.Join(dir, "fetch.log")
+	notifyLog := filepath.Join(dir, "notify.log")
 
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	fake := newFakeLLM(t, stepCacheScript()...)
-	path := stepCachePipeline(t, dir, fake.URL, root, publishLog, fetchLog, stepCacheNotes)
+	path := stepCachePipeline(t, dir, fake.URL, root, publishLog, fetchLog, notifyLog, stepCacheNotes)
 
 	mustRun(t, "test", path)
 
@@ -149,6 +159,11 @@ func TestStepCacheReusesAnAgentStep(t *testing.T) {
 	// the plan.
 	assertLineCount(t, fetchLog, 2)
 
+	// The output-less task ran both times. A step with nothing to restore must
+	// never be "reused": that is not reuse, it is dropping whatever its run:
+	// actually did — a webhook, a deploy, a notification.
+	assertLineCount(t, notifyLog, 2)
+
 	// The reused agent node says so. Without this a succeeded agent node with
 	// no transcript and no tokens is indistinguishable from one that ran and
 	// produced nothing.
@@ -166,18 +181,19 @@ func TestStepCacheRerunsWhenAnInputChanges(t *testing.T) {
 	dir, root := t.TempDir(), t.TempDir()
 	publishLog := filepath.Join(dir, "publish.log")
 	fetchLog := filepath.Join(dir, "fetch.log")
+	notifyLog := filepath.Join(dir, "notify.log")
 
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	fake := newFakeLLM(t, stepCacheScriptTimes(2)...)
 
-	mustRun(t, "test", stepCachePipeline(t, dir, fake.URL, root, publishLog, fetchLog, stepCacheNotes))
+	mustRun(t, "test", stepCachePipeline(t, dir, fake.URL, root, publishLog, fetchLog, notifyLog, stepCacheNotes))
 
 	// Same plan, same agent, same endpoint — only what the get: fetches is
 	// different, which is a change no plan-time hash of the agent step can
 	// see.
 	changed := "The widget catalog is seeded from catalog.toml on boot."
-	mustRun(t, "test", stepCachePipeline(t, dir, fake.URL, root, publishLog, fetchLog, changed))
+	mustRun(t, "test", stepCachePipeline(t, dir, fake.URL, root, publishLog, fetchLog, notifyLog, changed))
 
 	if got := fake.requestCount(); got != 2*len(stepCacheScript()) {
 		t.Errorf("provider requests across both runs = %d, want %d (different input bytes are different work)",
@@ -191,12 +207,13 @@ func TestStepCacheVolatileAgentAlwaysRuns(t *testing.T) {
 	dir, root := t.TempDir(), t.TempDir()
 	publishLog := filepath.Join(dir, "publish.log")
 	fetchLog := filepath.Join(dir, "fetch.log")
+	notifyLog := filepath.Join(dir, "notify.log")
 
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	fake := newFakeLLM(t, stepCacheScriptTimes(2)...)
 
-	path := stepCachePipeline(t, dir, fake.URL, root, publishLog, fetchLog, stepCacheNotes)
+	path := stepCachePipeline(t, dir, fake.URL, root, publishLog, fetchLog, notifyLog, stepCacheNotes)
 	volatileAgent := strings.Replace(
 		readFileString(t, path),
 		"  - agent: reviewer\n",

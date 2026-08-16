@@ -180,8 +180,8 @@ jobs:
 - name: publish
   plan:
   - task: stamp
-    volatile: true          # reads the clock; a recorded answer is a stale one
-    outputs: [stamp]
+    volatile: true          # produces an artifact, but reads the clock to do
+    outputs: [stamp]        # it — so a recorded answer would be a stale one
     run: date +%s > stamp/at
     assert:
       files: [stamp/at]
@@ -192,7 +192,8 @@ jobs:
 
 - **The key is the work, plus the bytes it reads.** A step's own hashed content (its command or prompt, image, tool grant, declared inputs/outputs and mappings) combined with a content digest of each input artifact as materialized. Deliberately **not** the step's merkle node hash, which carries the whole chain that led to it: two jobs doing the same work over the same bytes share one entry, and an upstream step that re-ran and answered *differently* changes the digest, so this step misses and runs. The digest covers paths, file bytes, the executable bit and symlink targets — never mtimes or ownership, which would miss on every run.
 - **Agent steps are cached like task steps, and for the same reason.** An agent step is a task running a model; the contract in both directions is that a step's declared inputs identify its work. An agent reaching past them through `run_shell` is the same bargain as a task's `run:` doing it — which is what `volatile:` is for.
-- **What is never cached**, because a hit restores declared outputs and nothing else: a step with `verdicts:` or `to:` (a decision the store records and routing keys on), one declaring `context: { from: ... }` (it reads an upstream decision the key cannot see), one with hooks (a hit fires none, like any skip), a task with `fix:`, and an `across:` cell. A `when:` guard is *not* a bar: it is evaluated first, and a step it lets through is work like any other.
+- **A step that declares no `outputs:` is never cached.** A hit restores declared artifacts and nothing else, so for such a step there is nothing to reuse — skipping it would just drop whatever its `run:` did, which is why `put:` is excluded too. The step below reads the network on every run *because* it declares no outputs; `volatile:` is what a step with outputs uses to say the same thing.
+- **What else is never cached**, for the same reason: a step with `verdicts:` or `to:` (a decision the store records and routing keys on), one declaring `context: { from: ... }` (it reads an upstream decision the key cannot see), one with hooks (a hit fires none, like any skip), a task with `fix:`, and an `across:` cell. A `when:` guard is *not* a bar: it is evaluated first, and a step it lets through is work like any other.
 - **`volatile:` is only valid on task and agent steps**, and never on a hook — anywhere else it would read as configured while binding nothing, so it is a load error.
 - **Requires `root:`.** Same reason the resource cache does: an entry has to outlive the run that wrote it. Without one, nothing is cached and nothing is stored.
 - **A hit costs a snapshot** (free on btrfs, a copy under `copy`), never a model call. **A failed step is never cached**, and **a cache failure never fails a build** — anything wrong falls back to running the step. Entries are evicted least-recently-used.

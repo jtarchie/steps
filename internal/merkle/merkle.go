@@ -1461,6 +1461,12 @@ func CellHash(cfg *config.Config, cell config.Step, parentHash string) (string, 
 //     precisely the case that never needed it.
 //   - An across: cell captures into per-coordinate subdirectories that mean
 //     something only inside the matrix that composed them.
+//   - A step declaring NO outputs: has nothing for a hit to restore, so
+//     reusing it would not be reuse — it would be omission. Whatever such a
+//     step is for is either its exit code as a gate or a side effect, and
+//     dropping a side effect silently is the failure put: is excluded to
+//     avoid. Caching a gate is a real thing to want and a different feature,
+//     with its own opt-in to design.
 //
 // when: is deliberately NOT excluded. It decides whether the step runs at all,
 // and is evaluated before the cache is consulted: a false guard skips the step
@@ -1474,13 +1480,13 @@ func StepCacheable(cfg *config.Config, step config.Step) bool {
 
 	switch kind { //nolint:exhaustive // every other kind is rejected below, which is what the default is for
 	case config.StepKindAgent:
-		return true
+		return len(step.Outputs) > 0
 	case config.StepKindTask:
 		// Conservative on a resolution error, matching taskCellProducesOutputs:
 		// a step that cannot be resolved must not be reported cacheable.
 		rt, err := cfg.ResolveTask(step)
 
-		return err == nil && rt.Fix == nil
+		return err == nil && rt.Fix == nil && len(rt.Outputs) > 0
 	default:
 		return false
 	}
@@ -1489,13 +1495,21 @@ func StepCacheable(cfg *config.Config, step config.Step) bool {
 // stepRecordsOnlyOutputs reports that a step's whole observable result is the
 // artifacts it declares — nothing routed on, read downstream, or reacted to by
 // a hook. See StepCacheable for what each exclusion protects.
+//
+// OutputSubdir alongside Label because only the first is reliable: an across:
+// cell whose name is itself templated keeps an empty Label (see
+// config.nameCell, which leaves the naming to the template), while every cell
+// is stamped with its coordinates whether or not the matrix collects. Two
+// cells that differ ONLY in coordinates would otherwise compute one action key
+// between them and reuse each other's outputs.
 func stepRecordsOnlyOutputs(step config.Step) bool {
 	return !step.Volatile &&
 		!step.Routes() &&
 		!step.ReadsFrom() &&
 		len(step.Verdicts) == 0 &&
 		step.Hooks.Empty() &&
-		step.Label == ""
+		step.Label == "" &&
+		step.OutputSubdir == ""
 }
 
 // taskCellProducesOutputs reports whether a task cell captures artifacts,

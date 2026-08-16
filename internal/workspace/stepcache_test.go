@@ -65,9 +65,11 @@ func produceOutput(t *testing.T, bw BuildWorkspace, req StepCacheRequest, conten
 
 	defer func() { _ = space.Close() }()
 
-	err = os.WriteFile(filepath.Join(space.Dir(), req.Outputs[0], "summary.md"), []byte(content), 0o600)
-	if err != nil {
-		t.Fatal(err)
+	for _, out := range req.Outputs {
+		err = os.WriteFile(filepath.Join(space.Dir(), out, "summary.md"), []byte(content), 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	err = space.Capture(ctx)
@@ -209,6 +211,69 @@ func TestStepCacheIgnoresAPartialEntry(t *testing.T) {
 
 	if mustRestore(t, seededBuild(t, provider, "notes"), req).Hit {
 		t.Error("an entry missing a declared output reported a hit")
+	}
+}
+
+// TestStepCacheRestoreLeavesArtifactsIntactWhenItFails is the promise that a
+// cache failure costs a re-run and nothing else.
+//
+// A restore that replaced artifacts in place would, on a mid-way failure,
+// report a plain miss having ALREADY deleted a destination it could not
+// refill — and the step that then runs would fail materializing its own
+// declared input. Staging every output before replacing any is what makes the
+// failure path a no-op.
+func TestStepCacheRestoreLeavesArtifactsIntactWhenItFails(t *testing.T) {
+	t.Parallel()
+
+	provider := stepCacheProvider(t, t.TempDir())
+
+	req := stepRequest()
+	req.Outputs = []string{"report", "coverage"}
+
+	bw := seededBuild(t, provider, "notes")
+	res := mustRestore(t, bw, req)
+
+	produceOutput(t, bw, req, "the summary")
+
+	caching, _ := bw.(StepCaching)
+
+	err := caching.StoreStep(context.Background(), res.Key, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Corrupt the second output in the entry so restoring it must fail after
+	// the first one has already been staged.
+	build := bw.(*isolatingBuild)
+	entry, _ := build.stepCache.entries.path(res.Key)
+
+	err = os.RemoveAll(filepath.Join(entry, "coverage"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.Symlink(t.TempDir(), filepath.Join(entry, "coverage"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A fresh build with its own artifacts of both names, which must survive.
+	second := seededBuild(t, provider, "notes")
+	produceOutput(t, second, req, "the second build's own summary")
+
+	if mustRestore(t, second, req).Hit {
+		t.Fatal("restoring through a symlinked cache entry reported a hit")
+	}
+
+	for _, name := range req.Outputs {
+		got, readErr := os.ReadFile(filepath.Join(second.(*isolatingBuild).artifacts, name, "summary.md")) //nolint:gosec // a t.TempDir()-scoped path the test arranged
+		if readErr != nil {
+			t.Fatalf("artifact %q did not survive the failed restore: %v", name, readErr)
+		}
+
+		if string(got) != "the second build's own summary" {
+			t.Errorf("artifact %q = %q, want the build's own content untouched", name, got)
+		}
 	}
 }
 

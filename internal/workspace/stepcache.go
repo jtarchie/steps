@@ -28,6 +28,12 @@ const stepCacheDirName = "steps-cache"
 // tuned by guesswork.
 const defaultStepCacheMaxEntries = 200
 
+// stagedSuffix names the directory an output is materialized into before it
+// replaces the artifact it is going to. It ends in a character
+// config.ValidateArtifactName refuses, so a staged directory can never collide
+// with a legitimate artifact of its own.
+const stagedSuffix = ".steps-staged"
+
 // stepCacheDomain separates this cache's keys from every other hash in the
 // codebase, so a merkle node hash can never be mistaken for an action key even
 // if one were passed to the wrong function.
@@ -194,9 +200,18 @@ func (c *stepCache) actionKey(digests func(string) (string, error), req StepCach
 // restore materializes every declared output from the entry into the artifact
 // store, reporting whether it did.
 //
-// All-or-nothing on presence: an entry missing any declared output is treated
-// as a miss and left alone, so a store that was interrupted halfway can only
-// ever cost a re-run, never hand a step a partially-populated set of inputs.
+// Two-phase, and that is the whole point of the shape. Every output is first
+// materialized to a staging path BESIDE its destination; only once all of them
+// have landed is any existing artifact replaced. Restoring in place instead
+// would mean an entry evicted mid-restore (or a full disk, or a refused
+// snapshot) had already deleted a destination it could not refill — and since
+// a failed restore is reported as a plain miss, the step would then run
+// against an artifact store missing one of its own declared inputs and fail
+// the build. A cache failure has to cost a re-run and nothing else.
+//
+// All-or-nothing on presence too: an entry missing any declared output is
+// treated as a miss and left alone, so a store interrupted halfway can only
+// ever cost a re-run.
 func (c *stepCache) restore(ctx context.Context, path, artifacts string, req StepCacheRequest) bool {
 	for _, out := range req.Outputs {
 		_, err := os.Stat(filepath.Join(path, out))
@@ -205,24 +220,24 @@ func (c *stepCache) restore(ctx context.Context, path, artifacts string, req Ste
 		}
 	}
 
-	// The entry directory itself must exist even for a step with no declared
-	// outputs, where the loop above checks nothing: for such a step the
-	// entry's mere presence IS the recorded fact that this work has been done.
-	_, err := os.Stat(path)
+	staged, err := c.stageOutputs(ctx, path, artifacts, req)
+	defer c.discardStaged(staged)
+
 	if err != nil {
+		slog.Warn("workspace.step_cache_restore_failed", "entry", path, "error", err)
+
 		return false
 	}
 
-	for _, out := range req.Outputs {
-		err := c.restoreOutput(ctx, path, artifacts, out, req.OutputMapping)
-		if err != nil {
-			slog.Warn("workspace.step_cache_restore_failed", "entry", path, "output", out, "error", err)
+	err = c.commitStaged(staged)
+	if err != nil {
+		// Past the point of no return: some artifacts are replaced and one is
+		// not. Reporting a miss is still right — the step runs and rewrites
+		// its own outputs — but the caller must forget every digest it
+		// remembered for them, which RestoreStep does unconditionally.
+		slog.Warn("workspace.step_cache_commit_failed", "entry", path, "error", err)
 
-			// Some outputs may already have landed. That is safe: they are
-			// exactly what the step would have produced, and the step is about
-			// to run and overwrite them.
-			return false
-		}
+		return false
 	}
 
 	c.entries.touch(path)
@@ -232,30 +247,78 @@ func (c *stepCache) restore(ctx context.Context, path, artifacts string, req Ste
 	return true
 }
 
-func (c *stepCache) restoreOutput(ctx context.Context, path, artifacts, out string, mapping map[string]string) error {
-	src := filepath.Join(path, out)
+// stagedOutput is one output materialized next to where it is going.
+type stagedOutput struct{ tmp, dst string }
 
-	// The same guard the resource cache applies to its entries: a cache
-	// directory a step reached by absolute path and replaced with a symlink
-	// would otherwise have its target copied into the artifact store.
-	err := rejectSymlinkSrc(src)
-	if err != nil {
-		return fmt.Errorf("cached output %q: %w", out, err)
+// stageOutputs materializes every declared output beside its destination,
+// touching no existing artifact.
+func (c *stepCache) stageOutputs(ctx context.Context, path, artifacts string, req StepCacheRequest) ([]stagedOutput, error) {
+	staged := make([]stagedOutput, 0, len(req.Outputs))
+
+	for _, out := range req.Outputs {
+		src := filepath.Join(path, out)
+
+		// The same guard the resource cache applies to its entries: a cache
+		// directory a step reached by absolute path and replaced with a
+		// symlink would otherwise have its target copied into the artifact
+		// store.
+		err := rejectSymlinkSrc(src)
+		if err != nil {
+			return staged, fmt.Errorf("cached output %q: %w", out, err)
+		}
+
+		dst := filepath.Join(artifacts, mappedName(out, req.OutputMapping))
+		tmp := dst + stagedSuffix
+
+		err = c.backend.remove(tmp)
+		if err != nil {
+			return staged, fmt.Errorf("clearing staged output %q: %w", out, err)
+		}
+
+		err = c.backend.materialize(ctx, src, tmp)
+		if err != nil {
+			return staged, fmt.Errorf("staging output %q: %w", out, err)
+		}
+
+		staged = append(staged, stagedOutput{tmp: tmp, dst: dst})
 	}
 
-	dst := filepath.Join(artifacts, mappedName(out, mapping))
+	return staged, nil
+}
 
-	err = c.backend.remove(dst)
-	if err != nil {
-		return fmt.Errorf("replacing artifact for %q: %w", out, err)
-	}
+// commitStaged swaps each staged output into place. Only local remove/rename
+// work remains here, so the window in which an artifact is absent is as short
+// as this design can make it.
+func (c *stepCache) commitStaged(staged []stagedOutput) error {
+	for i, out := range staged {
+		err := c.backend.remove(out.dst)
+		if err != nil {
+			return fmt.Errorf("replacing artifact %q: %w", filepath.Base(out.dst), err)
+		}
 
-	err = c.backend.materialize(ctx, src, dst)
-	if err != nil {
-		return fmt.Errorf("restoring output %q: %w", out, err)
+		err = os.Rename(out.tmp, out.dst)
+		if err != nil {
+			return fmt.Errorf("installing artifact %q: %w", filepath.Base(out.dst), err)
+		}
+
+		staged[i].tmp = "" // committed; discardStaged must not remove it
 	}
 
 	return nil
+}
+
+// discardStaged removes whatever is left staged, on every path out of restore.
+func (c *stepCache) discardStaged(staged []stagedOutput) {
+	for _, out := range staged {
+		if out.tmp == "" {
+			continue
+		}
+
+		err := c.backend.remove(out.tmp)
+		if err != nil {
+			slog.Warn("workspace.step_cache_staging_cleanup", "dir", out.tmp, "error", err)
+		}
+	}
 }
 
 // store files a succeeded step's captured outputs under key.
@@ -313,11 +376,12 @@ func (b *isolatingBuild) RestoreStep(ctx context.Context, req StepCacheRequest) 
 	}
 
 	hit := b.stepCache.restore(ctx, path, b.artifacts, req)
-	if hit {
-		// Restoring replaced artifacts wholesale, so anything remembered about
-		// their contents is now describing bytes that are gone.
-		b.forgetDigests(artifactNames(req.Outputs, req.OutputMapping))
-	}
+
+	// Unconditionally, not only on a hit: a restore that failed PART WAY has
+	// still replaced some artifacts, and a digest remembered for one of those
+	// would describe bytes that are gone — which is precisely how a later
+	// step's action key comes out right for content that is no longer there.
+	b.forgetDigests(artifactNames(req.Outputs, req.OutputMapping))
 
 	return StepCacheResult{Key: key, Hit: hit}, nil
 }
