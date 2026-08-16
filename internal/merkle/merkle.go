@@ -59,6 +59,13 @@ type Node struct {
 	Content    map[string]any
 }
 
+// InputSet is the versions one build binds, resource name to version — the
+// unit a plan fans out over. Each every-mode get advances one step per set;
+// everything else contributes its single resolved version to every set. It
+// lives here because the planner and the executor must derive chains and
+// builds from the SAME sets, and this package is where they already meet.
+type InputSet map[string]map[string]any
+
 // Chain is one root-to-leaf path through a job's plan: exactly what a
 // triggered build's recursion walks today (a plain chain, not a general
 // multi-parent DAG, since get: version: every is the only fan-out point).
