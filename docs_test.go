@@ -15,6 +15,7 @@ import (
 
 	"github.com/jtarchie/steps/docs"
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/pipeline"
 )
 
 // The docs ARE the tests: every fenced ```yaml block in docs/*.md is
@@ -83,6 +84,16 @@ func TestDocsExamples(t *testing.T) {
 // plus end-to-end execution and the scenario's own assertions.
 func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 	t.Helper()
+
+	// A block whose fallback: actually fires (or whose primary fails
+	// preflight) pins the agent name process-wide (see preflight.go's
+	// selectedSources) — otherwise-harmless state that would leak into
+	// whichever LATER test in this binary happens to declare an agent of the
+	// same name, pointed at a by-then-torn-down fake server. Resetting
+	// around every block, not just ones known to trigger it, is what makes
+	// that impossible regardless of which page a future example lands on.
+	pipeline.ResetPreflightCache()
+	t.Cleanup(pipeline.ResetPreflightCache)
 
 	if block.Mode() == "fragment" {
 		t.Skip("fragment: rendered only")
@@ -184,7 +195,13 @@ func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScena
 		}
 
 		if scenario.fake != nil {
-			body = injectFakeProvider(t, body, scenario.fake(t).URL)
+			var fallbackEndpoint string
+
+			if scenario.fallbackFake != nil {
+				fallbackEndpoint = scenario.fallbackFake(t).URL
+			}
+
+			body = injectFakeProvider(t, body, scenario.fake(t).URL, fallbackEndpoint)
 			t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 		}
 	}
@@ -220,7 +237,12 @@ func usesAgents(t *testing.T, body string) bool {
 // disables preflight, leaving everything else the doc showed intact. The
 // reader sees a real model name; the test sees a scripted one — the same
 // substitution a $STEPS_MODEL override performs, done structurally.
-func injectFakeProvider(t *testing.T, body, endpoint string) string {
+//
+// fallbackEndpoint, when non-"", additionally rewrites every agent's
+// fallback: [0].source the same way — for a doc example whose fallback must
+// actually be reachable rather than the common declared-but-never-dialed
+// case.
+func injectFakeProvider(t *testing.T, body, endpoint, fallbackEndpoint string) string {
 	t.Helper()
 
 	var doc map[string]any
@@ -242,6 +264,10 @@ func injectFakeProvider(t *testing.T, body, endpoint string) string {
 			"model":       "test-model",
 			"api_key_env": "STEPS_TEST_AGENT_API_KEY",
 		}
+
+		if fallbackEndpoint != "" {
+			injectFakeFallback(t, agent, fallbackEndpoint)
+		}
 	}
 
 	defaults, ok := doc["defaults"].(map[string]any)
@@ -261,6 +287,31 @@ func injectFakeProvider(t *testing.T, body, endpoint string) string {
 	}
 
 	return string(rewritten)
+}
+
+// injectFakeFallback rewrites agent's first fallback: entry's source: to
+// endpoint, leaving the rest of the entry (and any later ones) intact. Only
+// the first entry, matching the scope of the doc examples that need it —
+// a scenario wanting more would extend this rather than the doc growing a
+// convention nothing else follows.
+func injectFakeFallback(t *testing.T, agentEntry map[string]any, endpoint string) {
+	t.Helper()
+
+	fallback, ok := agentEntry["fallback"].([]any)
+	if !ok || len(fallback) == 0 {
+		t.Fatalf("agents: entry has no fallback: to inject a second fake into: %v", agentEntry)
+	}
+
+	first, ok := fallback[0].(map[string]any)
+	if !ok {
+		t.Fatalf("fallback: [0] is not a mapping: %v", fallback[0])
+	}
+
+	first["source"] = map[string]any{
+		"endpoint":    endpoint + "/v1/",
+		"model":       "test-fallback-model",
+		"api_key_env": "STEPS_TEST_AGENT_API_KEY",
+	}
 }
 
 // TestDocsExamplesAssert is the ratchet that keeps the corpus from decaying

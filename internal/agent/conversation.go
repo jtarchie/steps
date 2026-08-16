@@ -114,6 +114,13 @@ type conversationResult struct {
 	// never into nodes.result, which stays bounded to the trajectory. Empty
 	// for a CLI-delegated conversation (cli.go), which never enters the loop.
 	transcript []transcriptEvent
+	// endContents is the request's accumulated history at the moment this
+	// attempt exited — set on every return path in runConversationLoop,
+	// success or failure alike. It is internal plumbing, not part of what a
+	// step records: the mid-run fallback: cascade (failover.go) hands it to
+	// the next source as agentConversation.resumeContents so a source swap
+	// resumes the conversation instead of restarting it.
+	endContents []*genai.Content
 }
 
 // agentConversation is one runnable attempt's inputs.
@@ -153,6 +160,13 @@ type agentConversation struct {
 	// sub-agent is handed a child recorder so its work is visible while it
 	// happens (see transcriptRecorder.childRecorder).
 	recorder *transcriptRecorder
+	// resumeContents, when set, seeds the request's history verbatim instead
+	// of the system+prompt+context-block construction buildAgentRequest
+	// otherwise does — this is how the mid-run fallback: cascade (see
+	// failover.go) resumes a conversation on a new source rather than
+	// restarting it: it is exactly what the prior attempt's
+	// conversationResult.endContents captured.
+	resumeContents []*genai.Content
 }
 
 // syntheticToolExchange builds the call/result message pair that makes
@@ -191,6 +205,10 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 		Tools:             []*genai.Tool{conv.tools.decls},
 	}
 	conv.params.applyTo(cfg)
+
+	if conv.resumeContents != nil {
+		return &model.LLMRequest{Contents: conv.resumeContents, Config: cfg}
+	}
 
 	contents := make([]*genai.Content, 0, 3+(len(conv.contextBlocks)+len(conv.upstream))*2)
 
@@ -285,10 +303,15 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 // transcript attaches once at the boundary instead of at each of the loop's
 // several return sites.
 func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversation) (conversationResult, error) {
-	// Whatever happens below, report what this conversation spent and roll it
-	// into the job total.
+	// conv.usage.finish() is NOT called here — a resumed attempt (see
+	// failover.go) reuses the same *stepUsage across more than one call to
+	// this function, and finish() is not safe to call twice on one pointer
+	// (it adds this attempt's spend into the job total unconditionally, and
+	// double-charges a delegating parent). Whichever caller owns a
+	// conversation's whole lifetime — RunFix for its one-shot conversation,
+	// runPreparedWithFailover for a step's whole (possibly multi-source)
+	// sequence — calls finish() exactly once, after that lifetime ends.
 	conv.usage = attachUsage(ctx, conv.usage)
-	defer conv.usage.finish()
 
 	// Publish this conversation's accumulator to its tools, so a sub-agent
 	// call can size the child's allowance against what THIS invocation has
@@ -328,7 +351,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 		// has already blown its ceiling must not go on to have side effects.
 		resp, err := conv.generateWithinBudget(ctx, llm, req)
 		if err != nil {
-			return conversationResult{turns: turn, trajectory: trajectory, verdict: verdict, note: note}, err
+			return conversationResult{turns: turn, trajectory: trajectory, verdict: verdict, note: note, endContents: req.Contents}, err
 		}
 
 		req.Contents = append(req.Contents, resp.Content)
@@ -338,7 +361,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 
 		if len(calls) == 0 {
 			if conv.finishOrForce(req, satisfied) {
-				return conversationResult{text: text, turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note}, nil
+				return conversationResult{text: text, turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note, endContents: req.Contents}, nil
 			}
 
 			continue
@@ -368,7 +391,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 
 		detectErr := detector.respond(req, calls, parts)
 		if detectErr != nil {
-			return conversationResult{turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note}, detectErr
+			return conversationResult{turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note, endContents: req.Contents}, detectErr
 		}
 	}
 
@@ -376,7 +399,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	// ran but didn't finish its task), not infrastructure errors — mark them
 	// so hook dispatch classifies them as failed rather than errored. A
 	// transport error from generateOnce above stays unwrapped → errored.
-	exhausted := conversationResult{turns: conv.maxTurns, trajectory: trajectory, verdict: verdict, note: note}
+	exhausted := conversationResult{turns: conv.maxTurns, trajectory: trajectory, verdict: verdict, note: note, endContents: req.Contents}
 
 	return conv.outOfTurns(ctx, llm, req, exhausted, satisfied)
 }

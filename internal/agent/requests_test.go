@@ -3,12 +3,16 @@ package agent
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/openai/openai-go/v3"
 )
 
 // captureLogs redirects the default logger into a buffer for the duration of a
@@ -287,5 +291,34 @@ func TestRetryableStatus(t *testing.T) {
 		if retryableStatus(code) {
 			t.Errorf("retryableStatus(%d) = true, want false", code)
 		}
+	}
+}
+
+// TestIsTransientProviderError pins the classifier the mid-run fallback:
+// cascade decides on: a connection-level failure or a retryable status is
+// eligible to fail over, a model's own rejection (a 4xx) and the step's own
+// timeout/cancellation are not.
+func TestIsTransientProviderError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"5xx api error", &openai.Error{StatusCode: http.StatusInternalServerError}, true},
+		{"429 api error", &openai.Error{StatusCode: http.StatusTooManyRequests}, true},
+		{"400 api error", &openai.Error{StatusCode: http.StatusBadRequest}, false},
+		{"401 api error", &openai.Error{StatusCode: http.StatusUnauthorized}, false},
+		{"connection error", errors.New("dial tcp: connection refused"), true},
+		{"wrapped connection error", fmt.Errorf("agent: generate content: %w", errors.New("dial tcp: connection refused")), true},
+		{"context canceled", context.Canceled, false},
+		{"context deadline exceeded", context.DeadlineExceeded, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTransientProviderError(tt.err); got != tt.want {
+				t.Errorf("isTransientProviderError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }

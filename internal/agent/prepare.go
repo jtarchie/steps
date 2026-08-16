@@ -40,9 +40,16 @@ type preparedAgentStep struct {
 	// hashes against this one, so which source served a run is availability,
 	// not content: a fallback firing cannot invalidate a cache entry.
 	primary config.ResolvedInvocation
-	space   workspace.StepSpace
-	conv    agentConversation
-	llm     model.LLM
+	// fallbackIndex is ri's position in the agent's fallback: list, or -1
+	// when ri is still the primary (preflight picked nothing). It is where
+	// runPreparedWithFailover's mid-run cascade (failover.go) starts looking
+	// for the NEXT candidate — continuing the same ordered list preflight
+	// already walked, rather than re-trying a source preflight just proved
+	// dead.
+	fallbackIndex int
+	space         workspace.StepSpace
+	conv          agentConversation
+	llm           model.LLM
 	// closers holds everything opened for this step that must be released
 	// before its directory goes away: the MCP connections buildAgentTools
 	// opened, and the shell runner (whose container, under image:, bind-mounts
@@ -133,7 +140,7 @@ func (p preparedAgentStep) spillDirWouldBeCaptured() bool {
 // with. On error, any workspace.StepSpace already created is closed before
 // returning so the caller never has to.
 func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) (preparedAgentStep, error) {
-	primary, ri, err := resolveWithFailover(cfg, step)
+	primary, ri, fallbackIndex, err := resolveWithFailover(cfg, step)
 	if err != nil {
 		return preparedAgentStep{}, err
 	}
@@ -234,7 +241,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	}
 
 	return preparedAgentStep{
-		step: step, ri: ri, primary: primary, space: space, conv: conv, llm: invocationLLM(ri, apiKey),
+		step: step, ri: ri, primary: primary, fallbackIndex: fallbackIndex, space: space, conv: conv, llm: invocationLLM(ri, apiKey),
 		closers: closers, spillDir: spillDir,
 	}, nil
 }
@@ -259,28 +266,43 @@ func invocationLLM(ri config.ResolvedInvocation, apiKey string) model.LLM {
 // invalidating a single cache entry — which source served a run is
 // availability, not content. Everything but the source is identical between
 // the two: an outage changes where requests go, never what the agent is.
-func resolveWithFailover(cfg *config.Config, step config.Step) (primary, effective config.ResolvedInvocation, err error) {
+//
+// fallbackIndex is effective's position in agent.Fallback, or -1 when
+// effective is still the primary — runPreparedWithFailover's mid-run cascade
+// (failover.go) needs it to know where in the ordered list to continue from,
+// rather than re-trying a candidate preflight already proved dead.
+func resolveWithFailover(cfg *config.Config, step config.Step) (primary, effective config.ResolvedInvocation, fallbackIndex int, err error) {
+	fallbackIndex = -1
+
 	primary, err = cfg.ResolveAgentInvocation(step)
 	if err != nil {
-		return primary, effective, fmt.Errorf("agent %q: %w", step.Agent, err)
+		return primary, effective, fallbackIndex, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
 	source, ok := selectedSource(primary.AgentName)
 	if !ok {
-		return primary, primary, nil
+		return primary, primary, fallbackIndex, nil
 	}
 
 	agent, err := cfg.FindAgent(primary.AgentName)
 	if err != nil {
-		return primary, primary, nil //nolint:nilerr // it resolved a moment ago; not worth failing a step over
+		return primary, primary, fallbackIndex, nil //nolint:nilerr // it resolved a moment ago; not worth failing a step over
 	}
 
 	effective, err = primary.WithSource(source, agent)
 	if err != nil {
-		return primary, primary, fmt.Errorf("agent %q: %w", step.Agent, err)
+		return primary, primary, fallbackIndex, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
-	return primary, effective, nil
+	for i := range agent.Fallback {
+		if agent.Fallback[i].Source == source {
+			fallbackIndex = i
+
+			break
+		}
+	}
+
+	return primary, effective, fallbackIndex, nil
 }
 
 // prepareStepPrompt resolves a run-time prompt_file: {artifact, path} (see

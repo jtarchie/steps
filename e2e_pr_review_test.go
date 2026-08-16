@@ -142,7 +142,7 @@ func writeExampleAgainstFake(t *testing.T, dir, examplePath, endpoint string) st
 		t.Fatal(err)
 	}
 
-	return writePipeline(t, dir, injectFakeProvider(t, string(body), endpoint))
+	return writePipeline(t, dir, injectFakeProvider(t, string(body), endpoint, ""))
 }
 
 // stubGitHubCLI puts a fake `gh` and a no-op `git` at the front of PATH, so

@@ -275,6 +275,12 @@ linters:
             - "google.golang.org/adk/v2"
             - "google.golang.org/genai"
             - "github.com/achetronic/adk-utils-go"
+            # requests.go classifies a failed request by status code
+            # (isTransientProviderError, for the mid-run fallback: cascade),
+            # which means unwrapping the SDK's own *openai.Error rather than
+            # adk-utils-go's wrapper around it. Already an indirect
+            # dependency via adk-utils-go; this makes the direct use honest.
+            - "github.com/openai/openai-go/v3"
             - "github.com/modelcontextprotocol/go-sdk/mcp"
             # goleak is test-only: goleak_test.go's TestMain fails this
             # package's tests if any leaves a goroutine running.

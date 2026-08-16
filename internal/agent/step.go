@@ -194,7 +194,8 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 
 	stepStarted := time.Now()
 
-	res, err := runPrepared(ctx, prepared)
+	res, servedBy, err := runPreparedWithFailover(ctx, cfg, prepared)
+	prepared.ri = servedBy
 	res.model = fallbackModel(prepared)
 
 	printAgentResponse(res)
@@ -417,35 +418,15 @@ func truncateArgs(args map[string]any) map[string]any {
 	return out
 }
 
-// runPrepared runs the (already resolved and materialized) conversation under
-// its timeout (step.Timeout if set, otherwise the default agentStepTimeout).
-// Shared by RunStep and RunHook so a hook agent runs the exact same
-// conversation machinery, minus the merkle/store recording RunStep does.
-//
-// The timeout now bounds the conversation outright rather than each of several
-// restarts of it, which is what `timeout:` always read as. See
-// docs/attempts-timeout.md.
-func runPrepared(ctx context.Context, prepared preparedAgentStep) (conversationResult, error) {
-	timeout := agentTimeout(prepared.ri.Timeout)
-
-	// A CLI source delegates the conversation to a subprocess instead of
-	// driving it here (see cli.go). Branching at this one choke point is what
-	// gives RunStep, RunHook, and every routed re-entry the CLI path for free.
-	if prepared.ri.CLI != "" {
-		return runCLIConversation(ctx, prepared, timeout)
-	}
-
-	return runOneConversation(ctx, prepared.ri, prepared.llm, prepared.conv, timeout)
-}
-
 // runOneConversation runs a conversation under its timeout and, on failure,
 // reports the provider requests it really spent.
 //
 // It runs the conversation ONCE. attempts: retries the failing request, down
 // in requests.go, which is why nothing here loops: a restart discarded every
 // accumulated turn and re-billed the whole conversation to re-ask a question
-// the transport had already retried and given up on. Shared by runPrepared and
-// RunFix so both spend attempts: on the same thing.
+// the transport had already retried and given up on. Shared by
+// runPreparedWithFailover (failover.go, one call per source it tries) and
+// RunFix so all spend attempts: on the same thing.
 func runOneConversation(
 	ctx context.Context,
 	ri config.ResolvedInvocation,
@@ -493,7 +474,8 @@ func RunHook(ctx context.Context, cfg *config.Config, step config.Step, bw works
 
 	fmt.Printf("agent: %s%s\n", step.Agent, fallbackBanner(prepared))
 
-	res, err := runPrepared(ctx, prepared)
+	res, servedBy, err := runPreparedWithFailover(ctx, cfg, prepared)
+	prepared.ri = servedBy
 	res.model = fallbackModel(prepared)
 
 	printAgentResponse(res)

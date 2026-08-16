@@ -41,6 +41,13 @@ jobs:
 // one line. This automates that line.
 func TestFailoverUsesTheBackupWhenThePrimaryIsDown(t *testing.T) {
 	pipeline.ResetPreflightCache()
+	// Preflight pins "writer" (or "has-fallback") to whichever source
+	// answered, in a process-global cache that otherwise outlives this test —
+	// the next test in the binary to declare an agent of the same name would
+	// silently inherit a torn-down fake server's URL. Clearing on the way out
+	// too, not just the way in, is what makes that impossible regardless of
+	// test execution order.
+	t.Cleanup(pipeline.ResetPreflightCache)
 
 	dir := t.TempDir()
 
@@ -82,6 +89,13 @@ func TestFailoverUsesTheBackupWhenThePrimaryIsDown(t *testing.T) {
 // not a guarantee: with nothing healthy the run still stops before any step.
 func TestFailoverFailsWhenEverySourceIsDown(t *testing.T) {
 	pipeline.ResetPreflightCache()
+	// Preflight pins "writer" (or "has-fallback") to whichever source
+	// answered, in a process-global cache that otherwise outlives this test —
+	// the next test in the binary to declare an agent of the same name would
+	// silently inherit a torn-down fake server's URL. Clearing on the way out
+	// too, not just the way in, is what makes that impossible regardless of
+	// test execution order.
+	t.Cleanup(pipeline.ResetPreflightCache)
 
 	dir := t.TempDir()
 
@@ -117,6 +131,13 @@ func TestFailoverFailsWhenEverySourceIsDown(t *testing.T) {
 // while the log said preflight passed.
 func TestFailoverAppliesToEveryAgentSharingAModel(t *testing.T) {
 	pipeline.ResetPreflightCache()
+	// Preflight pins "writer" (or "has-fallback") to whichever source
+	// answered, in a process-global cache that otherwise outlives this test —
+	// the next test in the binary to declare an agent of the same name would
+	// silently inherit a torn-down fake server's URL. Clearing on the way out
+	// too, not just the way in, is what makes that impossible regardless of
+	// test execution order.
+	t.Cleanup(pipeline.ResetPreflightCache)
 
 	dir := t.TempDir()
 

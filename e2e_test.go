@@ -723,3 +723,185 @@ func assertSpentExactly(t *testing.T, stderr string, wantRequests int) {
 		t.Errorf("agent.request_retry lines = %d, want %d\n%s", got, wantRequests-1, stderr)
 	}
 }
+
+// midRunFailoverPipeline is the fixture shared by the mid-run failover
+// subtests: a single-tool agent (read_file only, no verdicts:) so the
+// scripted conversations stay small enough to hand-count requests against,
+// with attempts: 2 so exhausting the primary costs exactly two requests for
+// its failing turn instead of the default three.
+//
+// agentName is a parameter, not a constant, because the mid-run cascade pins
+// its choice of source process-wide (selectedSources, preflight.go) for the
+// life of the test binary — the same behavior a long-lived `steps watch`
+// relies on. Giving each subtest its own agent name is what keeps that real
+// pin from leaking one subtest's outage into the next.
+func midRunFailoverPipeline(t *testing.T, dir, agentName, primaryEndpoint, fallbackEndpoint string) string {
+	t.Helper()
+
+	yaml := fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: %[1]s
+  source:
+    endpoint: %[2]s/v1/
+    model: primary-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  fallback:
+  - source:
+      endpoint: %[3]s/v1/
+      model: fallback-model
+      api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools: [read_file]
+
+jobs:
+- name: build
+  plan:
+  - task: prepare
+    outputs: [prep]
+    run: echo hello > prep/NOTES.txt
+  - agent: %[1]s
+    inputs: [prep]
+    attempts: 2
+    prompt: Read the notes and summarize them.
+    assert:
+      stdout: Summarized via fallback.
+`, agentName, primaryEndpoint, fallbackEndpoint)
+
+	return writePipeline(t, dir, yaml)
+}
+
+// TestEndToEndAgentMidRunFailover exercises fallback:'s newer trigger: a
+// primary that answers preflight (disabled here, so it never even runs) and
+// then dies mid-conversation, after already completing one real tool turn.
+func TestEndToEndAgentMidRunFailover(t *testing.T) {
+	t.Run("resumes on the fallback source", testMidRunFailoverResumes)
+	t.Run("a non-transient failure does not fail over", testMidRunFailoverSkipsNonTransient)
+}
+
+// testMidRunFailoverResumes: the primary completes a real read_file turn,
+// then 500s until attempts: (2) is exhausted. The fallback source picks the
+// conversation up rather than starting it over — proven by inspecting the
+// fallback's own first captured request, which must already carry the
+// primary's tool call and result rather than just the original prompt.
+func testMidRunFailoverResumes(t *testing.T) {
+	dir := t.TempDir()
+
+	primary := newFakeLLM(t,
+		callsTool("read_file", map[string]any{"path": "prep/NOTES.txt"}),
+		failsWith(http.StatusInternalServerError),
+		failsWith(http.StatusInternalServerError),
+	)
+	fallback := newFakeLLM(t, says("Summarized via fallback."))
+
+	path := midRunFailoverPipeline(t, dir, "resumer", primary.URL, fallback.URL)
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	mustRun(t, path)
+
+	// ── retry layer ───────────────────────────────────────────────────
+	// One successful turn, then attempts: 2 spent entirely on the primary's
+	// dead second turn — the cascade only advances once that budget is gone,
+	// not on the first 500.
+	if got := primary.requestCount(); got != 3 {
+		t.Errorf("primary provider requests = %d, want 3 (1 successful turn + 2 exhausted attempts)", got)
+	}
+
+	if got := fallback.requestCount(); got != 1 {
+		t.Fatalf("fallback provider requests = %d, want 1", got)
+	}
+
+	// ── resume, not restart ──────────────────────────────────────────────
+	// The fallback's first request already carries the primary's completed
+	// tool turn: the assistant's read_file call and its result, not just the
+	// original system+prompt a restart would send.
+	assertResumedFromPrimary(t, fallback.request(1))
+
+	// ── outcome + visibility layer ─────────────────────────────────────
+	nodes := storeNodes(t, path)
+
+	agentNode := findNode(t, nodes, "agent", "resumer")
+	if agentNode.Status != "succeeded" {
+		t.Errorf("agent node status = %q, want succeeded", agentNode.Status)
+	}
+
+	result := storeNodeResult(t, path, "resumer")
+	if !strings.Contains(result, `"fallback_model":"fallback-model"`) {
+		t.Errorf("recorded result does not name the fallback model that actually served the run; got %q", result)
+	}
+}
+
+// assertResumedFromPrimary checks the fallback's first request already
+// carries the primary's completed read_file turn — the assistant's tool
+// call and its result — rather than just the original system+prompt a
+// restart would send.
+func assertResumedFromPrimary(t *testing.T, first capturedRequest) {
+	t.Helper()
+
+	results := first.toolResults()
+	if len(results) != 1 || !strings.Contains(results[0], "hello") {
+		t.Errorf("fallback request 1 tool results = %v, want the primary's read_file(prep/NOTES.txt) result carried over", results)
+	}
+
+	var sawToolCall bool
+
+	for _, msg := range first.Messages {
+		for _, call := range msg.ToolCalls {
+			if call.Function.Name == "read_file" {
+				sawToolCall = true
+			}
+		}
+	}
+
+	if !sawToolCall {
+		t.Errorf("fallback request 1 messages did not carry the primary's read_file call; got %+v", first.Messages)
+	}
+}
+
+// testMidRunFailoverSkipsNonTransient: the primary's second turn 400s — a
+// model/request rejection, not an outage. That is not attempts:'s or
+// fallback:'s business: no retry, no failover, the step just fails as
+// infrastructure the same way an unreachable provider does.
+func testMidRunFailoverSkipsNonTransient(t *testing.T) {
+	dir := t.TempDir()
+
+	primary := newFakeLLM(t,
+		callsTool("read_file", map[string]any{"path": "prep/NOTES.txt"}),
+		failsWith(http.StatusBadRequest),
+	)
+	fallback := newFakeLLM(t, says("Summarized via fallback."))
+
+	path := midRunFailoverPipeline(t, dir, "rejector", primary.URL, fallback.URL)
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	err := run([]string{path})
+	if err == nil {
+		t.Fatal("run succeeded despite the primary's second turn returning 400")
+	}
+
+	// A 400 is not in retryableStatus, so the transport never retries it —
+	// one request pays for the whole doomed turn.
+	if got := primary.requestCount(); got != 2 {
+		t.Errorf("primary provider requests = %d, want 2 (1 successful turn + 1 non-retryable 400)", got)
+	}
+
+	if got := fallback.requestCount(); got != 0 {
+		t.Errorf("fallback provider requests = %d, want 0 — a 400 must not trigger failover", got)
+	}
+
+	nodes := storeNodes(t, path)
+
+	agentNode := findNode(t, nodes, "agent", "rejector")
+	if agentNode.Status != "errored" {
+		t.Errorf("agent node status = %q, want errored", agentNode.Status)
+	}
+
+	result := storeNodeResult(t, path, "rejector")
+	if strings.Contains(result, "fallback_model") {
+		t.Errorf("recorded result names a fallback model despite no failover happening; got %q", result)
+	}
+}

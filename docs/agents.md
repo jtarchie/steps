@@ -675,13 +675,42 @@ jobs:
     outcome: succeeded
 ```
 
-- **Preflight is the trigger.** A primary that fails its pre-run probe is exactly when to pick an alternate: before the run has spent anything. Sources are tried in order; the first that answers serves the run.
-- **Connection-level failures only** — a timeout, an unreachable endpoint, a 5xx. A model *refusing* a request is a different class entirely; falling over on one would silently reroute a legitimate refusal to a possibly less suitable model.
-- **The total is bounded.** Each source gets one probe, and `attempts:` applies within whichever source won — not per source.
-- **Only the source changes.** Persona, dials, limits and tool grant are untouched: an outage changes where requests go, never what the agent is allowed to do. The compaction budget does follow the fallback model.
+`fallback:` fires two ways, automatically — declaring it is what opts an agent into both, there's no separate switch for the second:
+
+- **Before the run, from the pre-run probe.** A primary that fails preflight is exactly when to pick an alternate: before anything has been spent. Sources are tried in order; the first that answers serves the whole run.
+- **Mid-run, when `attempts:` gives up on the source actually running.** A primary that passes preflight and then starts erroring mid-conversation exhausts its `attempts:` budget the same as any agent step — but instead of just failing, the step moves to the next `fallback:` source and **resumes the same conversation** there rather than asking the task over: whatever the dead source already did (turns taken, tools called, results returned) carries over as the resumed request's history. Each source in the cascade gets its own `attempts:` budget in turn — a primary and two fallbacks can spend up to three sources' worth of `attempts:` before the step actually fails.
+
+```yaml test=agents-fallback-midrun
+agents:
+- name: writer
+  source:
+    model: openrouter/qwen/qwen3.7-flash
+  fallback:
+  - source:
+      endpoint: https://backup-provider.example.com/v1/
+      model: equivalent-model
+      api_key_env: BACKUP_KEY
+
+jobs:
+- name: publish
+  plan:
+  - agent: writer
+    attempts: 1   # no room to retry — the very first failure trips the cascade
+    prompt: "Write the announcement."
+    assert:
+      stdout: Announcement written via the fallback   # this time the fallback actually served the run
+  assert:
+    execution: [writer]
+    outcome: succeeded
+```
+
+- **Connection-level failures only** — a timeout, an unreachable endpoint, a 5xx. A model *refusing* a request is a different class entirely; falling over on one would silently reroute a legitimate refusal to a possibly less suitable model. A conversation that ran out of turns, or that a model refused, is never eligible either way — only the mid-run trigger has a request to inspect for this, but the rule is the same one preflight's trigger already implies.
+- **Resume only between two hosted sources.** A CLI-backed source (`@claude/sonnet`-style) already has its own resume mechanism — a session it rejoins — and its own dollar-metered budget, so it sits outside this cascade entirely: a CLI primary's own failure doesn't trigger it, and a hosted cascade that reaches a CLI `fallback:` entry stops there rather than skipping past it. `fallback:` still reaches a CLI source exactly as before, via the pre-run probe.
+- **Only the source changes.** Persona, dials, limits and tool grant are untouched: an outage changes where requests go, never what the agent is allowed to do. The compaction budget does follow whichever model actually serves the run.
 - **Never hashed.** Which source served a run is *availability*, not content — the alternative would invalidate every agent step at exactly the moment things are already going badly.
 - **Loudly visible.** A run that used a fallback says so in the log (`agent.failover`), on the step's own output line, and in the recorded result (`fallback_model`).
 - **Every fallback endpoint is validated** like the primary — no credentials in the URL, and the provider prefix must resolve at load.
+- **Pinned for the process, either way.** Once a source (preflight-picked or mid-run-picked) has served one run, a `steps watch` process keeps using it rather than re-probing or re-failing-over on every poll.
 
 ## CLI-backed agents: `@claude/sonnet`
 

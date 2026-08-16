@@ -110,9 +110,9 @@ func call(name string, args map[string]any) scriptedCall {
 
 // failsWith scripts a transport-level failure: the endpoint answers with an
 // HTTP status instead of a completion. Used to prove an LLM outage
-// classifies as errored (infrastructure) rather than failed (task-level).
-//
-//nolint:unparam // every caller happens to want 500 today; the parameter is the point of the helper
+// classifies as errored (infrastructure) rather than failed (task-level),
+// and — for a non-retryable status — that fallback:'s mid-run cascade
+// leaves a model's own rejection alone.
 func failsWith(status int) turn {
 	return turn{status: status}
 }

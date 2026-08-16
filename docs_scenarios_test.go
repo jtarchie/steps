@@ -16,6 +16,13 @@ type docScenario struct {
 	// tests do.
 	fake func(t *testing.T) *fakeLLM
 
+	// fallbackFake, when set, builds a SECOND scripted provider and points
+	// every agent's fallback: [0].source at it — for a doc example that needs
+	// its fallback to actually be reachable (and, for a mid-run scenario,
+	// actually fire) rather than the common case of a declared-but-never-
+	// dialed backup.
+	fallbackFake func(t *testing.T) *fakeLLM
+
 	// files are written into the pipeline's directory before the run — the
 	// run_file:/prompt_file:/load_var: targets a doc example references.
 	files map[string]string
@@ -234,6 +241,15 @@ var docScenarios = map[string]docScenario{
 	// The primary (the fake) answers, so the declared fallback never fires.
 	"agents-fallback": {
 		fake: scripted(says("Announcement written.")),
+	},
+
+	// attempts: 1 gives the primary no room to retry its one failing turn, so
+	// the mid-run cascade fires on the very first request — the fallback
+	// (fallbackFake, a SECOND scripted provider — see injectFakeFallback)
+	// actually answers, unlike the example above.
+	"agents-fallback-midrun": {
+		fake:         scripted(failsWith(500)),
+		fallbackFake: scripted(says("Announcement written via the fallback.")),
 	},
 
 	// Three concurrent members vote approve; routed on content because

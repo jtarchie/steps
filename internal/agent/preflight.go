@@ -16,7 +16,8 @@ package agent
 // catches "broken before we start", not "breaks halfway through". In the
 // incident that motivated it the model answered a test request at 08:10, the
 // run started at 08:12 — a preflight there would have PASSED — and the first
-// 500 arrived at 08:48. Failing over mid-run is a different feature.
+// 500 arrived at 08:48. Failing over mid-run is a different feature — see
+// failover.go's runPreparedWithFailover, which reacts to exactly that case.
 
 import (
 	"context"

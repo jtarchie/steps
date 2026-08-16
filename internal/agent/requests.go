@@ -37,6 +37,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/openai/openai-go/v3"
 )
 
 // retryBackoffUnit is the linear pause between request retries, matching
@@ -281,6 +283,34 @@ func rewind(req *http.Request) (*http.Request, error) {
 	next.Body = body
 
 	return next, nil
+}
+
+// isTransientProviderError classifies an error that already came back out of
+// a finished conversation attempt (attempts: exhausted, or a single
+// non-retryable failure) as the kind fallback:'s mid-run cascade should react
+// to — the same "connection-level failure" class the doc already promises:
+// "a timeout, an unreachable endpoint, a 5xx". A model *refusing* a request
+// (a 4xx) is a different class entirely and must not trigger a source swap.
+//
+// It classifies post-hoc rather than tagging the error where
+// requestRetryTransport gives up, because a persistent 5xx never becomes a Go
+// error at the transport layer at all — RoundTrip returns (resp, nil) for
+// any completed HTTP exchange, and it is the SDK, one layer up, that turns a
+// non-2xx status into *openai.Error after inspecting it. Classifying by
+// status code on the way back out sees both shapes (a connection error that
+// never got a response, and a response the SDK turned into an error)
+// uniformly, without needing to plumb anything through the transport.
+func isTransientProviderError(err error) bool {
+	var apiErr *openai.Error
+	if errors.As(err, &apiErr) {
+		return retryableStatus(apiErr.StatusCode)
+	}
+
+	// No API error to unwrap: a connection-level failure (dial/read/write),
+	// unless it's the run's own context ending — the same exclusion
+	// (*requestRetryTransport).retryable makes above, for the same reason: a
+	// step's own timeout: firing says nothing about the provider's health.
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
 
 // discard drains and closes a response being thrown away, so its connection

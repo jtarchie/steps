@@ -132,6 +132,12 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 		compactAfterTokens:   ri.CompactAfterTokens,
 		usage:                &stepUsage{name: ri.AgentName, budget: ri.BudgetTokens, delegateFraction: cfg.DelegateBudgetFraction(ri.AgentName)},
 	}
+	// RunFix runs the conversation once and never fails over (see
+	// failover.go's doc comment on the scope boundary), so it owns
+	// conv.usage's whole lifetime itself — runConversationLoop no longer
+	// calls finish() on a caller's behalf.
+	defer conv.usage.finish()
+
 	llm := newAgentLLM(ri, apiKey)
 
 	timeout := agentTimeout(ri.Timeout)
