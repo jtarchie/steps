@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -14,28 +15,29 @@ import (
 
 // TestConformancePinnedRunConsumesNothing: naming a version is an
 // instruction outside the every-flow, so a pinned run neither reads the
-// consumed cursor (Cache.unconsumed, long-standing) nor writes it (this
-// test's reason to exist).
+// consumed cursor (Cache.unconsumed, long-standing) nor writes it.
 //
 // The write half became load-bearing when the cursor became a high-water
-// mark. A pin outside history is minted at the TOP discovery order, and
-// taking it would leap the mark over every unbuilt version below — here, a
-// v0 hotfix pin silently cancelling the owed v4 and v5. The set-based cursor
-// recorded pins harmlessly; a mark cannot.
+// mark over discovery order: a pinned version sitting ABOVE the mark would,
+// if taken, leap the mark over every unbuilt version below it. Here the pin
+// names v4 while v4 and v5 are still owed — a regression that takes it
+// jumps the mark to 4 and silently cancels nothing less than the normal
+// run's own v4 rebuild.
 //
-// Concourse's parallel: a pinned resource is excluded from version-selection
-// entirely, and building a pinned version never advances NextEveryVersion's
-// cursor, because discovery order is never re-minted by a build.
+// Concourse's parallel: building a pinned version never advances
+// NextEveryVersion's cursor, because discovery order is never consumed by an
+// instruction.
 func TestConformancePinnedRunConsumesNothing(t *testing.T) {
 	dir := t.TempDir()
 	posted := filepath.Join(dir, "posted.txt")
+	feed := filepath.Join(dir, "feed.json")
 	path := filepath.Join(dir, "pipeline.yml")
 
 	pipelineYAML := fmt.Sprintf(`
 resource_types:
 - name: listing
   config:
-    check: printf '[{"n":"v0"},{"n":"v1"},{"n":"v2"},{"n":"v3"},{"n":"v4"},{"n":"v5"}]'
+    check: cat %s
     in: echo {{ .version.n | shellquote }} > n.txt
 resources:
 - name: items
@@ -49,7 +51,7 @@ jobs:
   - task: work
     inputs: [items]
     run: cat items/n.txt >> %s
-`, posted)
+`, feed, posted)
 
 	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
 	if err != nil {
@@ -69,17 +71,13 @@ jobs:
 
 	ctx := context.Background()
 
-	// A check filed v1..v3; the job built them (mark = 3).
-	versions := []map[string]any{{"n": "v1"}, {"n": "v2"}, {"n": "v3"}}
-	_, err = st.RecordVersions(ctx, "items", versions, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// The check reports v1..v3; the job builds them all (mark = 3).
+	writeFixture(t, feed, `[{"n":"v1"},{"n":"v2"},{"n":"v3"}]`)
 
 	err = RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
 	if err != nil {
@@ -87,28 +85,34 @@ jobs:
 	}
 	assertConformanceLineCount(t, posted, 3)
 
-	// v4, v5 arrive in history — owed work.
-	more := []map[string]any{{"n": "v1"}, {"n": "v2"}, {"n": "v3"}, {"n": "v4"}, {"n": "v5"}}
-	_, err = st.RecordVersions(ctx, "items", more, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// v4 and v5 arrive. An operator pins v4 — owed work, above the mark.
+	writeFixture(t, feed, `[{"n":"v1"},{"n":"v2"},{"n":"v3"},{"n":"v4"},{"n":"v5"}]`)
 
-	// An operator pins v0 — a hotfix version history never held.
-	err = RunJob(ctx, cfg, &cfg.Jobs[0], map[string]string{"n": "v0"}, provider, st, false)
+	err = RunJob(ctx, cfg, &cfg.Jobs[0], map[string]string{"n": "v4"}, provider, st, false)
 	if err != nil {
 		t.Fatalf("pinned run: %v", err)
 	}
 	assertConformanceLineCount(t, posted, 4)
 
-	// A normal run must still build the owed v4 and v5.
+	// The normal run still owes BOTH v4 and v5 — the pin was an instruction,
+	// not consumption. The task is changed first so the pinned run's chain
+	// cannot satisfy v4 through the merkle cache: with an identical task the
+	// cache would rightly skip v4 (work done is work done, and the skip path
+	// takes it), which is correct but indistinguishable from a regression
+	// that consumed v4 during the pinned run. A changed task forces a real
+	// rebuild, so only the correct cursor state produces both versions.
+	writeFixture(t, path, strings.Replace(pipelineYAML,
+		"run: cat items/n.txt >> ", "run: cat items/n.txt | tee -a ", 1))
+
+	cfg, err = config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	err = RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
 	if err != nil {
 		t.Fatalf("final run: %v", err)
 	}
-
-	data, _ := os.ReadFile(posted) //nolint:gosec // a t.TempDir()-scoped file this test wrote itself
-	t.Logf("posted:\n%s", data)
 	assertConformanceLineCount(t, posted, 6)
 }
 
@@ -118,6 +122,15 @@ jobs:
 // live check while the run read history; for a cursor-driven check the live
 // call has no cursor and answers with nothing, so `steps plan` errored with
 // "no versions available" against a pipeline whose run worked fine.
+func writeFixture(t *testing.T, path, contents string) {
+	t.Helper()
+
+	err := os.WriteFile(path, []byte(contents), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestExplainResolvesFromHistoryLikeARun(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pipeline.yml")

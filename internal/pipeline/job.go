@@ -226,6 +226,11 @@ func runJobPlan(
 	// cannot recover from a bad build — but the cursor is still built and
 	// still records. Skipping the recording too would mean a forced run
 	// performed every effect and remembered none of them.
+	// Whatever triggered this run, its resources are re-checked first — see
+	// refreshResourceHistory. Best-effort by design: the resolution below
+	// builds from recorded history either way.
+	refreshResourceHistory(ctx, r.cfg, r.st, job)
+
 	cursor, err := loadVersionCursor(ctx, r.st, job, !skipCache)
 	if err != nil {
 		return fmt.Errorf("job %q: %w", job.Name, err)
