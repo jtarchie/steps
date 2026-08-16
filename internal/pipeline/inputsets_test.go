@@ -24,10 +24,9 @@ type setsFixture struct {
 	cursor *versionCursor
 }
 
-// newSetsFixture builds the Config directly rather than via LoadConfig: the
-// load rule still restricts version: every to the first get (it relaxes only
-// once the whole pipeline honors sets), and these units test the resolver
-// underneath that rule.
+// newSetsFixture builds the Config directly rather than via LoadConfig:
+// these units test the resolver underneath the load rules, with fixtures a
+// step more minimal than a loadable pipeline.
 func newSetsFixture(t *testing.T, gets ...config.Step) *setsFixture {
 	t.Helper()
 

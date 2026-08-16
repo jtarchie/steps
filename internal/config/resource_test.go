@@ -2,16 +2,15 @@ package config
 
 import "testing"
 
-// TestVersionEveryOnlyOnTheFanOutGet pins where `version: every` is allowed.
+// TestVersionEveryOnlyOnTopLevelGets pins where `version: every` is allowed.
 //
-// A plan fans out at exactly one point — its first get — so `every` anywhere
-// else silently fetches a single version (the oldest, on every run). Concourse
-// has no such limit: there each input has its own cursor
-// (atc/scheduler/algorithm's individualResolver calls NextEveryVersion per
-// input), and several inputs may be `every` at once. steps models one fan-out
-// point, so the honest answer is a load error rather than a field that is
-// accepted and ignored.
-func TestVersionEveryOnlyOnTheFanOutGet(t *testing.T) {
+// Any top-level plan get may be `every` — each advances its own cursor per
+// input set, Concourse's model (atc/scheduler/algorithm's individualResolver
+// calls NextEveryVersion per input). A get inside a hook executes within a
+// build whose input set is already bound, so `every` there silently fetches
+// one version forever — a load error, not a field accepted and ignored. Two
+// `every` gets aliasing one resource would share one cursor: also rejected.
+func TestVersionEveryOnlyOnTopLevelGets(t *testing.T) {
 	t.Parallel()
 
 	const resources = `
@@ -47,7 +46,7 @@ jobs:
 		}
 	})
 
-	t.Run("rejected on a later get", func(t *testing.T) {
+	t.Run("allowed on a later top-level get", func(t *testing.T) {
 		t.Parallel()
 
 		path := writeConfig(t, resources+`
@@ -59,7 +58,29 @@ jobs:
     version: every
 `)
 
-		wantLoadError(t, path, "only valid on the FIRST get")
+		_, err := LoadConfig(path)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+	})
+
+	t.Run("allowed on several gets at once", func(t *testing.T) {
+		t.Parallel()
+
+		path := writeConfig(t, resources+`
+jobs:
+- name: j
+  plan:
+  - get: a
+    version: every
+  - get: b
+    version: every
+`)
+
+		_, err := LoadConfig(path)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
 	})
 
 	t.Run("rejected inside a hook", func(t *testing.T) {
@@ -75,6 +96,23 @@ jobs:
       version: every
 `)
 
-		wantLoadError(t, path, "only valid on the FIRST get")
+		wantLoadError(t, path, "only valid on a top-level get")
+	})
+
+	t.Run("rejected when two every gets alias one resource", func(t *testing.T) {
+		t.Parallel()
+
+		path := writeConfig(t, resources+`
+jobs:
+- name: j
+  plan:
+  - get: a
+    version: every
+  - get: also-a
+    resource: a
+    version: every
+`)
+
+		wantLoadError(t, path, "would share one")
 	})
 }

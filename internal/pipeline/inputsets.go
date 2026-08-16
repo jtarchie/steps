@@ -114,8 +114,8 @@ func gatherOneInput(
 	}
 
 	if _, twice := inputs.unconsumed[res.Name]; twice {
-		// Guarded at load once multi-every ships; kept here because a silent
-		// second cursor over one resource is the failure mode.
+		// Also guarded at load; kept here because a silent second cursor
+		// over one resource is the failure mode.
 		return fmt.Errorf(
 			"get %q: two version: every gets resolve to resource %q, which would share one cursor", step.Get, res.Name)
 	}

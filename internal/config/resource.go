@@ -175,44 +175,51 @@ func validateResourceGet(label, get string, resourceType *ResourceType) error {
 // validateVersionEvery rejects `version: every` anywhere it cannot actually
 // fan out.
 //
-// A plan has exactly ONE fan-out point: the first get in it, which runs the
-// rest of the plan once per version (internal/pipeline's runGetStep). Every
-// later get executes INSIDE one of those runs, where the remainder is already
-// a single linear chain, so it resolves to a single version
-// (runGetStepInPlace) — and quietly to the OLDEST one, forever, since nothing
-// there advances the version cursor.
+// Any TOP-LEVEL get in a plan may be `every`: each one advances its own
+// cursor one step per input set, in lockstep with its siblings, Concourse's
+// model (atc/scheduler/algorithm's individualResolver calls NextEveryVersion
+// per input). A get anywhere else — inside a hook or a branch step — executes
+// within a build whose input set is already bound, so `every` there would
+// fetch a single version (the oldest, forever, since nothing advances its
+// cursor). That is a step doing nothing while looking like it does something,
+// which is the failure this codebase rejects at load rather than at 3am: same
+// treatment as a put: against a type with no out:.
 //
-// That is a step doing nothing while looking like it does something, which is
-// the failure this codebase rejects at load rather than at 3am: same treatment
-// as a put: against a type with no out:, or a get: inside a do: block (also a
-// load error, and for the same reason — a fan-out with nowhere to go).
-//
-// Concourse has no such restriction: there, every input has its own cursor and
-// several can be `every` at once. steps models one fan-out point instead, so
-// the honest thing is to say so rather than accept the field and ignore it.
-// See docs/conformance.md.
+// Two `every` gets resolving to the SAME resource (via resource: aliasing)
+// are also rejected: the cursor is per (job, resource), so they would share
+// one high-water mark and silently consume each other's versions.
 func (c *Config) validateVersionEvery() error {
 	for i := range c.Jobs {
 		job := &c.Jobs[i]
 
-		fanOut := -1
+		everySeen := map[string]string{} // resource name -> the get that fans on it
 
+		topLevel := map[*Step]bool{}
 		for k := range job.Plan {
-			if job.Plan[k].Get != "" {
-				fanOut = k
-
-				break
-			}
+			topLevel[&job.Plan[k]] = true
 		}
 
 		err := job.visitSteps(func(label string, step *Step) error {
-			if !step.VersionEvery() || (fanOut >= 0 && step == &job.Plan[fanOut]) {
+			if !step.VersionEvery() {
 				return nil
 			}
 
-			return fmt.Errorf(
-				"%s: version: every is only valid on the FIRST get: in a job's plan, which is the one step that fans the rest of the plan out per version; here it would fetch a single version (the oldest, every time). Move it to that get, or drop version: every",
-				label)
+			if !topLevel[step] {
+				return fmt.Errorf(
+					"%s: version: every is only valid on a top-level get: in a job's plan, where each one fans the plan out per version; here the input set is already bound, so it would fetch a single version (the oldest, every time). Move it to a top-level get, or drop version: every",
+					label)
+			}
+
+			resource := step.GetResourceName()
+			if prior, dup := everySeen[resource]; dup {
+				return fmt.Errorf(
+					"%s: get %q and get %q both declare version: every on resource %q; the version cursor is per resource, so they would share one and silently consume each other's versions",
+					label, prior, step.Get, resource)
+			}
+
+			everySeen[resource] = step.Get
+
+			return nil
 		})
 		if err != nil {
 			return err
