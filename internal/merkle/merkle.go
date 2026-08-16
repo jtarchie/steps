@@ -1782,7 +1782,10 @@ func stepResourceName(step config.Step) string {
 // settings that decide what environment it runs in. An MCP-backed resource
 // type folds in its check/in tool identity through withMCPResourceStage, the
 // same as the node content does.
-func ResourceCacheKey(cfg *config.Config, resourceType config.ResourceType, source, version, params map[string]any) (string, error) {
+func ResourceCacheKey(
+	cfg *config.Config, resourceType config.ResourceType, extraEnv []string,
+	source, version, params map[string]any,
+) (string, error) {
 	content := map[string]any{
 		"in_template": resourceType.Config.In,
 		"source":      source,
@@ -1802,8 +1805,14 @@ func ResourceCacheKey(cfg *config.Config, resourceType config.ResourceType, sour
 		content["image"] = resourceType.Image
 	}
 
-	if len(resourceType.Env) > 0 {
-		content["env"] = sortedEnv(resourceType.Env)
+	// The union, not the type's own list — the same allow-list GetNodeContent
+	// folds in, and for a sharper reason here. A resource that adds env: so its
+	// type's in: can authenticate produces different bytes with the same
+	// source and version; keying on the type alone would serve it the
+	// unauthenticated tree an earlier fetch cached, and would give two
+	// resources of one type that differ only in env: a single shared entry.
+	if env := rsrc.UnionEnv(resourceType.Env, extraEnv); len(env) > 0 {
+		content["env"] = sortedEnv(env)
 	}
 
 	if resourceType.User != "" {

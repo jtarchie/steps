@@ -213,6 +213,16 @@ func (c *stepCache) actionKey(digests func(string) (string, error), req StepCach
 // treated as a miss and left alone, so a store interrupted halfway can only
 // ever cost a re-run.
 func (c *stepCache) restore(ctx context.Context, path, artifacts string, req StepCacheRequest) bool {
+	// A request with no outputs has nothing to restore, so every check below
+	// passes vacuously and this would report a hit against an empty cache —
+	// silently skipping a step whose entire result is its side effect.
+	// merkle.StepCacheable already refuses such a step; this is the same rule
+	// held at the layer that decides what an entry MEANS, so a future caller
+	// cannot reintroduce it.
+	if len(req.Outputs) == 0 {
+		return false
+	}
+
 	for _, out := range req.Outputs {
 		_, err := os.Stat(filepath.Join(path, out))
 		if err != nil {

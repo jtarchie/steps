@@ -1242,6 +1242,45 @@ func TestGetParamsAffectHash(t *testing.T) {
 	}
 }
 
+// TestResourceCacheKeyEnvUnion: a resource that adds env: so its type's in:
+// can authenticate produces different bytes from the same source and version,
+// so it must not be served an earlier, unauthenticated fetch — nor share one
+// entry with a sibling resource of the same type that allows different names.
+func TestResourceCacheKeyEnvUnion(t *testing.T) {
+	t.Parallel()
+
+	rt := config.ResourceType{Config: config.ResourceTypeConfig{In: "true"}, Env: []string{"HTTP_PROXY"}}
+	source := map[string]any{"uri": "https://example.com/repo.git"}
+	version := map[string]any{"ref": "v1"}
+
+	keyFor := func(t *testing.T, extraEnv []string) string {
+		t.Helper()
+
+		key, err := ResourceCacheKey(&config.Config{}, rt, extraEnv, source, version, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return key
+	}
+
+	bare := keyFor(t, nil)
+
+	if authenticated := keyFor(t, []string{"PRIVATE_TOKEN"}); authenticated == bare {
+		t.Error("adding a resource env: did not change the cache key; the unauthenticated fetch would be reused")
+	}
+
+	if other := keyFor(t, []string{"OTHER_TOKEN"}); other == keyFor(t, []string{"PRIVATE_TOKEN"}) {
+		t.Error("two resources allowing different env names share one cache entry")
+	}
+
+	// A resource restating a name its type already allows means nothing new,
+	// so it must not key differently either.
+	if restated := keyFor(t, []string{"HTTP_PROXY"}); restated != bare {
+		t.Error("restating an env name the type already allows changed the cache key")
+	}
+}
+
 // TestResourceCacheKeyParams is the same guarantee one level down, on the
 // CROSS-BUILD resource cache. That cache is keyed on content rather than on a
 // node's position in a plan, so it is shared between jobs and between builds —
@@ -1257,7 +1296,7 @@ func TestResourceCacheKeyParams(t *testing.T) {
 	keyFor := func(t *testing.T, params map[string]any) string {
 		t.Helper()
 
-		key, err := ResourceCacheKey(&config.Config{}, rt, source, version, params)
+		key, err := ResourceCacheKey(&config.Config{}, rt, nil, source, version, params)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1403,12 +1442,12 @@ func TestExprProgramsAffectHash(t *testing.T) {
 
 	// The cross-build resource cache has to agree with the node hash, or an
 	// edited expression is re-planned and then handed the old fetch anyway.
-	firstKey, err := ResourceCacheKey(&config.Config{}, exprRT(`{"a.txt": "one"}`), source, version, nil)
+	firstKey, err := ResourceCacheKey(&config.Config{}, exprRT(`{"a.txt": "one"}`), nil, source, version, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	secondKey, err := ResourceCacheKey(&config.Config{}, exprRT(`{"a.txt": "two"}`), source, version, nil)
+	secondKey, err := ResourceCacheKey(&config.Config{}, exprRT(`{"a.txt": "two"}`), nil, source, version, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

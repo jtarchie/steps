@@ -505,7 +505,7 @@ func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, step config.S
 func fetchGetStep(ctx context.Context, cfg *config.Config, artifact string, resource config.Resource, resourceType config.ResourceType, version, params map[string]any, bw workspace.BuildWorkspace) error {
 	fmt.Printf("get: %s (version: %v)\n", artifact, version)
 
-	err := resourceDir(ctx, cfg, artifact, resourceType, resource.Source, version, params, bw, func(dir string) error {
+	err := resourceDir(ctx, cfg, artifact, resourceType, resource.Env, resource.Source, version, params, bw, func(dir string) error {
 		return rsrc.RunIn(ctx, cfg, resourceType, resource.Env, resource.Source, version, params, dir)
 	})
 	if err != nil {
@@ -527,7 +527,7 @@ func fetchGetStep(ctx context.Context, cfg *config.Config, artifact string, reso
 // one with the cache off) takes the plain path.
 func resourceDir(
 	ctx context.Context, cfg *config.Config, artifact string,
-	resourceType config.ResourceType, source, version, params map[string]any,
+	resourceType config.ResourceType, extraEnv []string, source, version, params map[string]any,
 	bw workspace.BuildWorkspace, fetch func(dir string) error,
 ) error {
 	caching, ok := bw.(workspace.CachingBuild)
@@ -542,7 +542,7 @@ func resourceDir(
 
 	// A key this package cannot compute is not a reason to fail the fetch —
 	// an empty key simply means "do not cache this one".
-	key, err := merkle.ResourceCacheKey(cfg, resourceType, source, version, params)
+	key, err := merkle.ResourceCacheKey(cfg, resourceType, extraEnv, source, version, params)
 	if err != nil {
 		slog.Debug("job.get.cache_key_failed", "artifact", artifact, "error", err)
 

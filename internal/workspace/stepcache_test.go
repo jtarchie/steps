@@ -277,6 +277,37 @@ func TestStepCacheRestoreLeavesArtifactsIntactWhenItFails(t *testing.T) {
 	}
 }
 
+// TestStepCacheNeverHitsWithoutOutputs holds the rule at the storage layer
+// too, not only in merkle.StepCacheable: an entry for a step with nothing to
+// restore would pass every presence check vacuously, and "reusing" such a step
+// is just dropping whatever its command did.
+func TestStepCacheNeverHitsWithoutOutputs(t *testing.T) {
+	t.Parallel()
+
+	provider := stepCacheProvider(t, t.TempDir())
+
+	req := stepRequest()
+	req.Outputs = nil
+
+	bw := seededBuild(t, provider, "notes")
+
+	res := mustRestore(t, bw, req)
+	if res.Hit {
+		t.Fatal("a request with no outputs reported a hit against an empty cache")
+	}
+
+	caching, _ := bw.(StepCaching)
+
+	err := caching.StoreStep(context.Background(), res.Key, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if mustRestore(t, seededBuild(t, provider, "notes"), req).Hit {
+		t.Error("a stored no-output entry reported a hit")
+	}
+}
+
 // TestStepCacheNeedsADurableRoot: with a provider-owned temp root there is
 // nowhere for an entry to outlive the run, so there is no cache at all.
 func TestStepCacheNeedsADurableRoot(t *testing.T) {
