@@ -194,7 +194,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 
 	stepStarted := time.Now()
 
-	res, err := runAndAnnounceFailover(ctx, cfg, name, &prepared)
+	res, err := runAndAnnounceFailover(ctx, name, &prepared)
 
 	printAgentResponse(res)
 
@@ -481,7 +481,7 @@ func RunHook(ctx context.Context, cfg *config.Config, jobName string, step confi
 		bus: events.FromContext(ctx), runID: events.RunID(ctx), job: jobName, stepIndex: -1, stepName: step.DisplayName(),
 	}}
 
-	res, err := runAndAnnounceFailover(ctx, cfg, step.Agent, &prepared)
+	res, err := runAndAnnounceFailover(ctx, step.Agent, &prepared)
 
 	printAgentResponse(res)
 
@@ -552,15 +552,24 @@ func fallbackModel(prepared preparedAgentStep) string {
 // silent about it, leaving only the agent.failover log line and the
 // recorded fallback_model to say so — one of the three channels
 // docs/agents.md's "Loudly visible" promises.
-func runAndAnnounceFailover(ctx context.Context, cfg *config.Config, name string, prepared *preparedAgentStep) (conversationResult, error) {
-	announcedModel := fallbackModel(*prepared)
+func runAndAnnounceFailover(ctx context.Context, name string, prepared *preparedAgentStep) (conversationResult, error) {
+	res, served, err := runPreparedWithFailover(ctx, *prepared)
 
-	res, servedBy, err := runPreparedWithFailover(ctx, cfg, *prepared)
-	prepared.ri = servedBy
+	// Both halves of the served source, not just its invocation: leaving llm
+	// pointing at the source the cascade abandoned would make the struct
+	// describe two different sources at once, and anything later reusing it
+	// would send requests to the dead one while every log line and the
+	// recorded fallback_model named the live one.
+	prepared.ri = served.ri
+	prepared.llm = served.llm
 	res.model = fallbackModel(*prepared)
 
-	if res.model != "" && res.model != announcedModel {
-		fmt.Printf("agent: %s failed over mid-run to %s\n", name, res.model)
+	// Announced on the fact of the swap rather than on a change of model
+	// name: two fallback: entries may legitimately resolve to the same model
+	// and endpoint, and comparing names would go silent on exactly that
+	// configuration while agent.failover still logged the swap.
+	if served.swapped {
+		fmt.Printf("agent: %s failed over mid-run to %s\n", name, served.ri.ModelName)
 	}
 
 	return res, err

@@ -710,7 +710,9 @@ jobs:
 - **Never hashed.** Which source served a run is *availability*, not content — the alternative would invalidate every agent step at exactly the moment things are already going badly.
 - **Loudly visible.** A run that used a fallback says so in the log (`agent.failover`), on the step's own output line, and in the recorded result (`fallback_model`).
 - **Every fallback endpoint is validated** like the primary — no credentials in the URL, and the provider prefix must resolve at load.
-- **Pinned for the process, either way.** Once a source (preflight-picked or mid-run-picked) has served one run, a `steps watch` process keeps using it rather than re-probing or re-failing-over on every poll.
+- **Pinned for the process, either way.** Once a source (preflight-picked or mid-run-picked) has *served* one run, a `steps watch` process keeps using it rather than re-probing or re-failing-over on every poll. A source is pinned only after it actually finishes a conversation — a cascade that tries everything and finishes nothing leaves no pin behind, so the next run starts from the primary again instead of preferring whatever failed last.
+- **One deadline and one turn budget for the whole cascade.** `timeout:` and `max_turns:` bound the STEP, not each source: a resumed conversation continues both counts rather than restarting them, so three `fallback:` entries under `timeout: 10m`/`max_turns: 30` still cost at most ten minutes and thirty turns. See [attempts-timeout.md](attempts-timeout.md).
+- **Sub-agents follow the pre-run probe only.** A granted sub-agent runs on whichever source preflight selected for it, but has no mid-run cascade of its own — a delegation is one conversation, and its failure returns to the parent as tool-result data for the parent to react to.
 
 ## CLI-backed agents: `@claude/sonnet`
 

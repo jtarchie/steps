@@ -47,9 +47,14 @@ type preparedAgentStep struct {
 	// already walked, rather than re-trying a source preflight just proved
 	// dead.
 	fallbackIndex int
-	space         workspace.StepSpace
-	conv          agentConversation
-	llm           model.LLM
+	// agent is the resolved agent definition, carried so the cascade reads
+	// the fallback: list prepareAgentStep already resolved rather than
+	// looking it up again. nil when it could not be resolved, which leaves
+	// the cascade with nothing to walk.
+	agent *config.Agent
+	space workspace.StepSpace
+	conv  agentConversation
+	llm   model.LLM
 	// closers holds everything opened for this step that must be released
 	// before its directory goes away: the MCP connections buildAgentTools
 	// opened, and the shell runner (whose container, under image:, bind-mounts
@@ -140,7 +145,7 @@ func (p preparedAgentStep) spillDirWouldBeCaptured() bool {
 // with. On error, any workspace.StepSpace already created is closed before
 // returning so the caller never has to.
 func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) (preparedAgentStep, error) {
-	primary, ri, fallbackIndex, err := resolveWithFailover(cfg, step)
+	primary, ri, agent, fallbackIndex, err := resolveWithFailover(cfg, step)
 	if err != nil {
 		return preparedAgentStep{}, err
 	}
@@ -241,7 +246,8 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	}
 
 	return preparedAgentStep{
-		step: step, ri: ri, primary: primary, fallbackIndex: fallbackIndex, space: space, conv: conv, llm: invocationLLM(ri, apiKey),
+		step: step, ri: ri, primary: primary, fallbackIndex: fallbackIndex, agent: agent,
+		space: space, conv: conv, llm: invocationLLM(ri, apiKey),
 		closers: closers, spillDir: spillDir,
 	}, nil
 }
@@ -270,39 +276,48 @@ func invocationLLM(ri config.ResolvedInvocation, apiKey string) model.LLM {
 // fallbackIndex is effective's position in agent.Fallback, or -1 when
 // effective is still the primary — runPreparedWithFailover's mid-run cascade
 // (failover.go) needs it to know where in the ordered list to continue from,
-// rather than re-trying a candidate preflight already proved dead.
-func resolveWithFailover(cfg *config.Config, step config.Step) (primary, effective config.ResolvedInvocation, fallbackIndex int, err error) {
+// rather than re-trying a candidate preflight already proved dead. It comes
+// from the selection itself rather than from searching the list for a
+// matching source: duplicate sources make that search report the wrong entry
+// (see sourceSelection).
+//
+// agent is the resolved agent definition, returned so the cascade does not
+// have to look it up a second time. It is nil only when FindAgent failed for
+// an agent that resolved moments ago, which leaves the cascade with no
+// fallback list to walk — logged where that is decided, never silent.
+func resolveWithFailover(cfg *config.Config, step config.Step) (primary, effective config.ResolvedInvocation, agent *config.Agent, fallbackIndex int, err error) {
 	fallbackIndex = -1
 
 	primary, err = cfg.ResolveAgentInvocation(step)
 	if err != nil {
-		return primary, effective, fallbackIndex, fmt.Errorf("agent %q: %w", step.Agent, err)
+		return primary, effective, nil, fallbackIndex, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
-	source, ok := selectedSource(primary.AgentName)
+	// Resolved unconditionally, not just when a pin exists: the mid-run
+	// cascade needs the fallback list even on a run that starts on the
+	// primary, which is the common case.
+	agent, findErr := cfg.FindAgent(primary.AgentName)
+	if findErr != nil {
+		// It resolved a moment ago, so this is not worth failing a step over
+		// — but it does disable mid-run failover for the step, which must not
+		// happen quietly.
+		slog.Warn("agent.fallback_list_unavailable", "agent", primary.AgentName, "error", findErr,
+			"detail", "mid-run failover is disabled for this step")
+
+		return primary, primary, nil, fallbackIndex, nil
+	}
+
+	selection, ok := selectedSource(primary.AgentName)
 	if !ok {
-		return primary, primary, fallbackIndex, nil
+		return primary, primary, agent, fallbackIndex, nil
 	}
 
-	agent, err := cfg.FindAgent(primary.AgentName)
+	effective, err = primary.WithSource(selection.source, agent)
 	if err != nil {
-		return primary, primary, fallbackIndex, nil //nolint:nilerr // it resolved a moment ago; not worth failing a step over
+		return primary, primary, agent, fallbackIndex, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
-	effective, err = primary.WithSource(source, agent)
-	if err != nil {
-		return primary, primary, fallbackIndex, fmt.Errorf("agent %q: %w", step.Agent, err)
-	}
-
-	for i := range agent.Fallback {
-		if agent.Fallback[i].Source == source {
-			fallbackIndex = i
-
-			break
-		}
-	}
-
-	return primary, effective, fallbackIndex, nil
+	return primary, effective, agent, selection.index, nil
 }
 
 // prepareStepPrompt resolves a run-time prompt_file: {artifact, path} (see

@@ -1005,36 +1005,39 @@ jobs:
 
 	out := logs()
 
-	runLine := e2eFindLogLine(t, out, "job.run")
-	runID := e2eLogField(runLine, "run")
+	runLine := findLogLine(t, out, "job.run")
+	runID := logField(runLine, "run")
 
 	if runID == "" {
 		t.Fatalf("job.run carried no run id: %s", runLine)
 	}
 
 	for _, msg := range []string{"job.done", "job.step.finished"} {
-		line := e2eFindLogLine(t, out, msg)
-		if got := e2eLogField(line, "run"); got != runID {
+		line := findLogLine(t, out, msg)
+		if got := logField(line, "run"); got != runID {
 			t.Errorf("%s run=%q, want %q (job.run's id): %s", msg, got, runID, line)
 		}
 	}
 
 	for _, msg := range []string{"pipeline.run", "pipeline.done"} {
-		e2eFindLogLine(t, out, msg)
+		findLogLine(t, out, msg)
 	}
 }
 
-// e2eFindLogLine returns the first line in out whose message is msg, failing
-// the test if none does. tint (the CLI's own handler, see initLogging) has
-// no "msg=" prefix — the message is a bare token between the source
-// location and the first key=value field — so this matches on that token
-// exactly rather than assuming slog's default TextHandler layout.
-func e2eFindLogLine(t *testing.T, out, msg string) string {
+// findLogLine returns the first line in out whose message is msg, failing
+// the test if none does.
+//
+// It matches the message as a bare whitespace-delimited token, which holds for
+// both handlers this repo logs through: tint (the CLI's own, see initLogging)
+// writes the message unadorned between the source location and the first
+// key=value pair, and slog's TextHandler writes it as msg=<x>. Anchoring on
+// the token rather than on either layout keeps one helper honest for both.
+func findLogLine(t *testing.T, out, msg string) string {
 	t.Helper()
 
 	for _, line := range strings.Split(out, "\n") {
 		for _, field := range strings.Fields(line) {
-			if field == msg {
+			if field == msg || field == "msg="+msg {
 				return line
 			}
 		}
@@ -1045,9 +1048,8 @@ func e2eFindLogLine(t *testing.T, out, msg string) string {
 	return ""
 }
 
-// e2eLogField extracts a slog text-handler key=value field from line, or ""
-// when absent.
-func e2eLogField(line, key string) string {
+// logField extracts a key=value field from a log line, or "" when absent.
+func logField(line, key string) string {
 	for _, field := range strings.Fields(line) {
 		if v, ok := strings.CutPrefix(field, key+"="); ok {
 			return v

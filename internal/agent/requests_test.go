@@ -3,8 +3,10 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -12,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/openai/openai-go/v3"
 )
@@ -297,13 +300,17 @@ func TestRetryableStatus(t *testing.T) {
 
 // TestIsTransientProviderError pins the classifier the mid-run fallback:
 // cascade decides on: a connection-level failure or a retryable status is
-// eligible to fail over, a model's own rejection (a 4xx) and the step's own
-// timeout/cancellation are not — and NEITHER is an internal error this
-// package raises itself (a budget breach, a malformed response), since
-// runOneConversation's returned error isn't necessarily the provider's fault
-// at all. dialErr/wrappedDialErr use a real *net.OpError, the shape an actual
-// connection failure takes reaching here (via net/http's client) — a bare
-// errors.New with dial-shaped TEXT is not a net.Error and must not pass.
+// eligible to fail over, a model's own rejection (a 4xx) is not — and neither
+// is an internal error this package raises itself (a budget breach, a
+// malformed response), since runOneConversation's returned error isn't
+// necessarily the provider's fault at all. dialErr/wrappedDialErr use a real
+// *net.OpError, the shape an actual connection failure takes reaching here
+// (via net/http's client) — a bare errors.New with dial-shaped TEXT is not a
+// net.Error and must not pass.
+//
+// A deadline is deliberately NOT in this table: it means opposite things
+// depending on whose deadline expired, which is what TestIsTransientDeadline
+// below covers.
 func TestIsTransientProviderError(t *testing.T) {
 	dialErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
 
@@ -319,16 +326,43 @@ func TestIsTransientProviderError(t *testing.T) {
 		{"connection error", dialErr, true},
 		{"wrapped connection error", fmt.Errorf("agent: generate content: %w", dialErr), true},
 		{"context canceled", context.Canceled, false},
-		{"context deadline exceeded", context.DeadlineExceeded, false},
+		{"body truncated mid-response", fmt.Errorf("decode response: %w", io.ErrUnexpectedEOF), true},
+		{"json truncated mid-response", fmt.Errorf("decode response: %w", &json.SyntaxError{}), true},
 		{"budget exceeded is an internal error, not the provider's fault", errors.New("agent budget exceeded (spent 500 tokens)"), false},
 		{"malformed/empty response is an internal error, not a connection failure", errors.New("agent: model returned an empty response"), false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isTransientProviderError(tt.err); got != tt.want {
+			if got := isTransientProviderError(t.Context(), tt.err); got != tt.want {
 				t.Errorf("isTransientProviderError(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestIsTransientDeadline pins the one error whose meaning depends on whose
+// clock ran out.
+//
+// A provider that accepts the connection and then never answers burns the
+// step's whole timeout: and returns DeadlineExceeded — the most expensive
+// outage there is, and precisely what the cascade exists to escape. The same
+// error with a job context that has ALSO expired means the run itself is
+// over, and swapping sources then would be spending a dead run's remaining
+// fallbacks.
+func TestIsTransientDeadline(t *testing.T) {
+	t.Parallel()
+
+	err := fmt.Errorf("generate content: %w", context.DeadlineExceeded)
+
+	if !isTransientProviderError(t.Context(), err) {
+		t.Error("a conversation deadline under a healthy job must fail over: the provider hung")
+	}
+
+	expired, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Minute))
+	defer cancel()
+
+	if isTransientProviderError(expired, err) {
+		t.Error("a deadline reached because the JOB expired is not the provider's fault")
 	}
 }

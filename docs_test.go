@@ -297,9 +297,14 @@ func injectFakeProvider(t *testing.T, body, endpoint, fallbackEndpoint string) s
 func injectFakeFallback(t *testing.T, agentEntry map[string]any, endpoint string) {
 	t.Helper()
 
+	// An agent with no fallback: is not an error — a scenario registers ONE
+	// fallback fake, but the rewrite above visits every agent in the block, so
+	// an example pairing a failing-over writer with an ordinary reviewer would
+	// otherwise fail on the reviewer for a reason unrelated to what it tests.
+	// Nothing to inject, nothing to do.
 	fallback, ok := agentEntry["fallback"].([]any)
 	if !ok || len(fallback) == 0 {
-		t.Fatalf("agents: entry has no fallback: to inject a second fake into: %v", agentEntry)
+		return
 	}
 
 	first, ok := fallback[0].(map[string]any)

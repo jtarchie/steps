@@ -114,24 +114,62 @@ type conversationResult struct {
 	// never into nodes.result, which stays bounded to the trajectory. Empty
 	// for a CLI-delegated conversation (cli.go), which never enters the loop.
 	transcript []transcriptEvent
-	// endContents is the request's accumulated history at the moment this
-	// attempt exited — set on every return path in runConversationLoop,
-	// success or failure alike. It is internal plumbing, not part of what a
-	// step records: the mid-run fallback: cascade (failover.go) hands it to
-	// the next source as agentConversation.resumeContents so a source swap
-	// resumes the conversation instead of restarting it.
-	endContents []*genai.Content
-	// endSatisfied/endCallCounts are the same attempt's required-tool and
-	// max_calls: bookkeeping at the moment it exited, for the same reason and
-	// the same consumer as endContents (see agentConversation.resumeSatisfied
-	// / resumeCallCounts): the message history alone tells a resumed attempt
-	// WHAT already happened, not which required tools that already satisfies
-	// or how much of each tool's budget it already spent — without these a
-	// resumed attempt's fresh bookkeeping would force an already-satisfied
+	// checkpoint is everything this attempt would have to hand the next
+	// source for a swap to CONTINUE the conversation rather than restart it.
+	// Set on every return path, success or failure alike. It is internal
+	// plumbing, not part of what a step records — see resumeCheckpoint.
+	checkpoint resumeCheckpoint
+}
+
+// resumeCheckpoint is a conversation's position, carried from one source to
+// the next when the mid-run fallback: cascade (failover.go) swaps sources.
+//
+// It is ONE struct rather than a set of parallel resume*/end* field pairs
+// because every field here was added the same way: something turned out not
+// to survive a swap, and the fix was another pair threaded through
+// agentConversation, conversationResult, seedResumeState, every
+// conversationResult literal in runConversationLoop, and failover.go's copy
+// block. Each omission was a real bug — a required tool re-firing its side
+// effect, a budgeted tool getting a fresh allowance per source, a turn
+// ceiling multiplying by the length of the fallback list. Grouping them means
+// the next thing a conversation must remember is added in one place and
+// carried by construction, instead of relying on five call sites being
+// updated together.
+type resumeCheckpoint struct {
+	// contents is the request's accumulated message history. Seeding a
+	// request with it verbatim (see buildAgentRequest) is what makes a swap a
+	// resume rather than a restart.
+	contents []*genai.Content
+	// satisfied and callCounts are required-tool and max_calls: bookkeeping.
+	// The message history alone says WHAT already happened, not which
+	// required tools that satisfies or how much of each budget it spent:
+	// without these a resumed attempt would force an already-satisfied
 	// required tool to fire its side effect again, and hand a budgeted tool a
-	// new allowance on every source in the cascade.
-	endSatisfied  map[string]bool
-	endCallCounts map[string]int
+	// fresh allowance on every source the cascade tries.
+	satisfied  map[string]bool
+	callCounts map[string]int
+	// trajectory is the calls made so far, so assert.tool_calls and the
+	// recorded audit trail describe the whole step rather than whichever
+	// source happened to finish it.
+	trajectory []recordedToolCall
+	// verdict and note are the last successful verdict-tool choice and its
+	// note, so an infrastructure hiccup cannot lose a decision the model had
+	// already made.
+	verdict string
+	note    string
+	// turnsSpent is how many turns the conversation has already used, across
+	// every source so far. max_turns: is a ceiling on the STEP, so each
+	// source continues the count instead of restarting it — otherwise a
+	// declared cap of 30 permits 30 turns per fallback entry. This mirrors
+	// what cli.go's session rejoin already does for a CLI source.
+	turnsSpent int
+	// summary and stalled are maybeCompact's running state (compaction.go).
+	// Without them a swap re-initializes the running summary to empty, so the
+	// fallback summarizes a history that already CONTAINS a summary with no
+	// prior-summary anchor — compounding the loss — and re-pays for a
+	// summarization the primary already proved impossible.
+	summary string
+	stalled bool
 }
 
 // agentConversation is one runnable attempt's inputs.
@@ -171,32 +209,11 @@ type agentConversation struct {
 	// sub-agent is handed a child recorder so its work is visible while it
 	// happens (see transcriptRecorder.childRecorder).
 	recorder *transcriptRecorder
-	// resumeContents, when set, seeds the request's history verbatim instead
-	// of the system+prompt+context-block construction buildAgentRequest
-	// otherwise does — this is how the mid-run fallback: cascade (see
-	// failover.go) resumes a conversation on a new source rather than
-	// restarting it: it is exactly what the prior attempt's
-	// conversationResult.endContents captured.
-	resumeContents []*genai.Content
-	// resumeSatisfied/resumeCallCounts/resumeTrajectory/resumeVerdict/
-	// resumeNote carry the rest of a resumed attempt's bookkeeping forward
-	// from the prior attempt's conversationResult (see failover.go), the same
-	// way resumeContents carries the message history. Required alongside it:
-	// the history shows a required tool already succeeded, but without
-	// resumeSatisfied a fresh attempt's own (empty) satisfied map would not
-	// know that, and finishOrForce would force the resumed model to call it
-	// again — re-triggering whatever side effect it has. resumeCallCounts is
-	// the same guarantee for a max_calls:-budgeted tool: without it, a fresh
-	// (empty) callCounts map hands the tool a new allowance on every source
-	// the cascade tries. resumeTrajectory/resumeVerdict/resumeNote keep the
-	// final result's audit trail and last-decided verdict complete across a
-	// source swap instead of only reflecting whichever source happened to
-	// finish the step.
-	resumeSatisfied  map[string]bool
-	resumeCallCounts map[string]int
-	resumeTrajectory []recordedToolCall
-	resumeVerdict    string
-	resumeNote       string
+	// resume, when set, continues a conversation a previous source got part
+	// way through instead of starting a fresh one — see resumeCheckpoint for
+	// what has to travel and why. nil on a first attempt, which is the
+	// fresh-start behavior this had before resuming existed.
+	resume *resumeCheckpoint
 }
 
 // syntheticToolExchange builds the call/result message pair that makes
@@ -236,8 +253,8 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 	}
 	conv.params.applyTo(cfg)
 
-	if conv.resumeContents != nil {
-		return &model.LLMRequest{Contents: conv.resumeContents, Config: cfg}
+	if conv.resume != nil && conv.resume.contents != nil {
+		return &model.LLMRequest{Contents: conv.resume.contents, Config: cfg}
 	}
 
 	contents := make([]*genai.Content, 0, 3+(len(conv.contextBlocks)+len(conv.upstream))*2)
@@ -330,36 +347,35 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 }
 
 // seedResumeState builds runConversationLoop's per-conversation bookkeeping,
-// seeded from a resumed attempt's own bookkeeping (see
-// agentConversation.resumeSatisfied's doc comment) rather than starting
-// empty, so a mid-run source swap cannot force an already-satisfied required
-// tool to fire again or hand a budgeted tool a fresh allowance. A first
-// attempt's resume* fields are all nil/zero, which is exactly the
-// fresh-start behavior this had before resuming existed.
-func seedResumeState(conv agentConversation) (satisfied map[string]bool, callCounts map[string]int, trajectory []recordedToolCall, verdict, note string) {
-	satisfied = conv.resumeSatisfied
-	if satisfied == nil {
-		satisfied = make(map[string]bool, len(conv.tools.required))
+// seeded from a resumed attempt's checkpoint rather than starting empty, so a
+// mid-run source swap continues the conversation instead of restarting it —
+// see resumeCheckpoint for what each field prevents. A first attempt has no
+// checkpoint, which yields exactly the fresh-start behavior this had before
+// resuming existed.
+func seedResumeState(conv agentConversation) resumeCheckpoint {
+	state := resumeCheckpoint{}
+	if conv.resume != nil {
+		state = *conv.resume
 	}
 
-	// callCounts is local to this call: one conversation, one budget per tool
-	// — carried forward across a resumed attempt rather than reset.
-	callCounts = conv.resumeCallCounts
-	if callCounts == nil {
-		callCounts = make(map[string]int, len(conv.tools.maxCalls))
+	if state.satisfied == nil {
+		state.satisfied = make(map[string]bool, len(conv.tools.required))
 	}
 
-	// trajectory is likewise per-conversation, which is what an
-	// assert.tool_calls check should see: the calls that produced this step's
-	// outcome, including any a prior (failed-over) attempt already made.
-	trajectory = conv.resumeTrajectory
+	if state.callCounts == nil {
+		state.callCounts = make(map[string]int, len(conv.tools.maxCalls))
+	}
 
-	// verdict/note are the last successful verdict-tool choice and the note
-	// that accompanied it. A model that revises its own verdict ends on its
-	// final one, and note travels with whichever choice won — across a
-	// resumed attempt too, so an infrastructure hiccup mid-run cannot
-	// silently lose a decision the model had already made.
-	return satisfied, callCounts, trajectory, conv.resumeVerdict, conv.resumeNote
+	return state
+}
+
+// remainingTurns is how many turns this source may still spend: the step's
+// declared max_turns: less whatever earlier sources already used. Never
+// negative — a checkpoint at or past the ceiling yields 0, and the loop falls
+// straight through to outOfTurns, which is the right answer for a step that
+// has already spent its whole allowance.
+func remainingTurns(conv agentConversation, spent int) int {
+	return max(conv.maxTurns-spent, 0)
 }
 
 // runConversationLoop is runAgentConversation's body, split out so the
@@ -384,28 +400,36 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	conv.env.usage = conv.usage
 
 	req := buildAgentRequest(conv)
-	satisfied, callCounts, trajectory, verdict, note := seedResumeState(conv)
-	// compactionSummary/compactionStalled are maybeCompact's running state,
-	// scoped to this conversation like everything above.
-	var compactionSummary string
+	state := seedResumeState(conv)
+	turnsBefore := state.turnsSpent
 
-	var compactionStalled bool
+	// result snapshots the conversation's position for whichever exit path is
+	// taken next. turns counts the WHOLE step, across every source the
+	// cascade has tried, so a resumed attempt reports (and is bounded by) the
+	// total rather than its own share of it.
+	result := func(text string, spentThisSource int) conversationResult {
+		state.contents = req.Contents
+		state.turnsSpent = turnsBefore + spentThisSource
 
-	// detector is per-attempt like everything above: it watches for the model
-	// repeating one identical tool interaction (same call, same result) until
-	// it is clearly stuck, warns once, then fails the attempt — see loop.go.
+		return conversationResult{text: text, turns: state.turnsSpent, trajectory: state.trajectory,
+			verdict: state.verdict, note: state.note, checkpoint: state}
+	}
+
+	// detector is per-attempt: it watches for the model repeating one
+	// identical tool interaction (same call, same result) until it is clearly
+	// stuck, warns once, then fails the attempt — see loop.go.
 	detector := newLoopDetector()
 
-	for turn := range conv.maxTurns {
+	for turn := range remainingTurns(conv, turnsBefore) {
 		if conv.compactAfterTokens > 0 {
-			compactionSummary, compactionStalled = maybeCompact(ctx, llm, req, conv, compactionSummary, compactionStalled)
+			state.summary, state.stalled = maybeCompact(ctx, llm, req, conv, state.summary, state.stalled)
 		}
 
 		// The budget is checked before the turn's tool calls run: a step that
 		// has already blown its ceiling must not go on to have side effects.
 		resp, err := conv.generateWithinBudget(ctx, llm, req)
 		if err != nil {
-			return conversationResult{turns: turn, trajectory: trajectory, verdict: verdict, note: note, endContents: req.Contents, endSatisfied: satisfied, endCallCounts: callCounts}, err
+			return result("", turn), err
 		}
 
 		req.Contents = append(req.Contents, resp.Content)
@@ -414,8 +438,8 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 		conv.env.transcript.text(text)
 
 		if len(calls) == 0 {
-			if conv.finishOrForce(req, satisfied) {
-				return conversationResult{text: text, turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note, endContents: req.Contents, endSatisfied: satisfied, endCallCounts: callCounts}, nil
+			if conv.finishOrForce(req, state.satisfied) {
+				return result(text, turn+1), nil
 			}
 
 			continue
@@ -423,19 +447,19 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 
 		req.Config.ToolConfig = nil // clear any forcing from the prior turn — the model chooses freely again next time it tries to stop
 
-		turnStart := len(trajectory)
+		turnStart := len(state.trajectory)
 
 		for _, call := range calls {
-			trajectory = append(trajectory, recordedToolCall{name: call.Name, args: call.Args})
+			state.trajectory = append(state.trajectory, recordedToolCall{name: call.Name, args: call.Args})
 			conv.env.transcript.call(call.Name, call.Args)
 		}
 
-		parts := toolResponseParts(ctx, calls, conv.env, conv.tools.registry, conv.tools.maxCalls, callCounts)
-		markTrajectoryResults(trajectory[turnStart:], parts)
+		parts := toolResponseParts(ctx, calls, conv.env, conv.tools.registry, conv.tools.maxCalls, state.callCounts)
+		markTrajectoryResults(state.trajectory[turnStart:], parts)
 		conv.env.transcript.results(parts)
 
-		if choice, n := conv.trackToolResults(parts, satisfied); choice != "" {
-			verdict, note = choice, n // last successful verdict (and its note) wins across turns
+		if choice, n := conv.trackToolResults(parts, state.satisfied); choice != "" {
+			state.verdict, state.note = choice, n // last successful verdict (and its note) wins across turns
 		}
 
 		req.Contents = append(req.Contents, &genai.Content{
@@ -445,7 +469,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 
 		detectErr := detector.respond(req, calls, parts)
 		if detectErr != nil {
-			return conversationResult{turns: turn + 1, trajectory: trajectory, verdict: verdict, note: note, endContents: req.Contents, endSatisfied: satisfied, endCallCounts: callCounts}, detectErr
+			return result("", turn+1), detectErr
 		}
 	}
 
@@ -453,9 +477,9 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	// ran but didn't finish its task), not infrastructure errors — mark them
 	// so hook dispatch classifies them as failed rather than errored. A
 	// transport error from generateOnce above stays unwrapped → errored.
-	exhausted := conversationResult{turns: conv.maxTurns, trajectory: trajectory, verdict: verdict, note: note, endContents: req.Contents, endSatisfied: satisfied, endCallCounts: callCounts}
+	exhausted := result("", remainingTurns(conv, turnsBefore))
 
-	return conv.outOfTurns(ctx, llm, req, exhausted, satisfied)
+	return conv.outOfTurns(ctx, llm, req, exhausted, state.satisfied)
 }
 
 // outOfTurns decides what a conversation that used every turn is worth.
@@ -787,9 +811,26 @@ func executeBudgetedTool(ctx context.Context, call *genai.FunctionCall, env tool
 	slog.Debug("agent.tool_result", "tool", call.Name, "id", call.ID,
 		"run", live.runID, "job", live.job, "step", live.stepName, "index", live.stepIndex, "depth", live.depth,
 		"duration", time.Since(start), "error", response["error"], "exit_code", response["exit_code"],
-		"result", debugToolResultPreview(response))
+		"result", lazyToolResultPreview{response: response})
 
 	return response
+}
+
+// lazyToolResultPreview defers rendering a tool result until a handler
+// actually formats the record.
+//
+// Debug logging is off by default, and this line runs on every tool call of
+// every turn — building a filtered copy of the map and marshaling it (which
+// for a read_file result means touching up to maxReadFileBytes) purely to
+// produce a string nothing will print is work proportional to the result, on
+// the hot path, in the common case. slog calls LogValue only when the record
+// survives level filtering.
+type lazyToolResultPreview struct {
+	response map[string]any
+}
+
+func (p lazyToolResultPreview) LogValue() slog.Value {
+	return slog.StringValue(debugToolResultPreview(p.response))
 }
 
 // debugToolResultPreviewBytes caps how much of a tool's result content

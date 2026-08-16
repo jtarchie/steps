@@ -98,7 +98,7 @@ func TestRunPreparedRunsOneConversation(t *testing.T) {
 	// No fallback: entries on an unfindable agent — the cascade has nowhere
 	// to go, so this still pins the same "exactly one conversation" contract
 	// runPrepared used to.
-	_, _, err := runPreparedWithFailover(t.Context(), &config.Config{}, preparedAgentStep{
+	_, _, err := runPreparedWithFailover(t.Context(), preparedAgentStep{
 		ri:  config.ResolvedInvocation{Attempts: 3, MaxTurns: testMaxTurns},
 		llm: llm,
 		conv: agentConversation{

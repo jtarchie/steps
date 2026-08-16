@@ -3,7 +3,6 @@ package pipeline
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/outcome"
@@ -98,7 +97,7 @@ func resolveTransition(ctx context.Context, steps []config.Step, i int, step con
 // line. A backward route past max_visits yields exhaustedErr (a job-level
 // failure) instead of routing. routedKey, non-empty only when the step
 // actually routed, is what runSteps uses to build the next step's Handoff.
-func applyRouting(ctx context.Context, steps []config.Step, jobName string, i int, step config.Step, disposition stepDisposition, verdict string, stepErr error, visits map[int]int) (nextIndex int, routedKey string, consumedErr, exhaustedErr error) {
+func applyRouting(ctx context.Context, steps []config.Step, i int, step config.Step, disposition stepDisposition, verdict string, stepErr error, visits map[int]int) (nextIndex int, routedKey string, consumedErr, exhaustedErr error) {
 	if !step.Routes() || disposition != stepRan {
 		return i + 1, "", stepErr, nil
 	}
@@ -109,7 +108,7 @@ func applyRouting(ctx context.Context, steps []config.Step, jobName string, i in
 	}
 
 	if routed {
-		reportRoute(steps, jobName, i, step, target, key, visits)
+		reportRoute(ctx, steps, i, step, target, key, visits)
 
 		return target, key, nil, nil // consume the outcome — the job does not also fail
 	}
@@ -127,7 +126,7 @@ func applyRouting(ctx context.Context, steps []config.Step, jobName string, i in
 // many times this step may execute (see resolveTransition), so its own count
 // against its own bound is the number that says how close the loop is to
 // exhausting.
-func reportRoute(steps []config.Step, jobName string, i int, step config.Step, target int, key string, visits map[int]int) {
+func reportRoute(ctx context.Context, steps []config.Step, i int, step config.Step, target int, key string, visits map[int]int) {
 	from, to := executedStepName(step), routeTargetName(steps, target)
 
 	progress := fmt.Sprintf("visit %d", visits[i])
@@ -136,7 +135,7 @@ func reportRoute(steps []config.Step, jobName string, i int, step config.Step, t
 	}
 
 	fmt.Printf("route: %s --%s--> %s (%s)\n", from, key, to, progress)
-	slog.Info("job.route", "job", jobName, "index", i, "from", from, "key", key, "to", to, "visit", visits[i], "max_visits", step.MaxVisits)
+	logFrom(ctx).Info("job.route", "from", from, "key", key, "to", to, "visit", visits[i], "max_visits", step.MaxVisits)
 }
 
 // stepForcesUnskippable reports whether a step makes its chain unskippable: a
@@ -191,7 +190,7 @@ func unskippableReason(step config.Step) string {
 // one call, keeping runSteps's own branch count down. On the false->true
 // transition it prints why, once — the point at which the rest of this chain
 // stopped being cacheable.
-func foldStepUnskippable(cfg *config.Config, step config.Step, chainUnskippable bool) (bool, error) {
+func foldStepUnskippable(ctx context.Context, cfg *config.Config, step config.Step, chainUnskippable bool) (bool, error) {
 	unskippable, err := stepForcesUnskippable(cfg, step)
 	if err != nil {
 		return chainUnskippable, err
@@ -206,7 +205,7 @@ func foldStepUnskippable(cfg *config.Config, step config.Step, chainUnskippable 
 		name := executedStepName(step)
 
 		fmt.Printf("note: %s makes this chain uncacheable (%s)\n", name, reason)
-		slog.Debug("job.uncacheable", "step", name, "reason", reason)
+		logFrom(ctx).Debug("job.uncacheable", "step", name, "reason", reason)
 	}
 
 	return chainUnskippable || unskippable, nil

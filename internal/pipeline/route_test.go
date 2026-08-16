@@ -278,7 +278,7 @@ func TestApplyRoutingNextConsumesAFailure(t *testing.T) {
 	stepErr := outcome.Fail(errors.New("flaky failed"))
 
 	next, key, consumed, exhausted := applyRouting(
-		context.Background(), steps, "job", 0, steps[0], stepRan, "", stepErr, map[int]int{0: 1})
+		context.Background(), steps, 0, steps[0], stepRan, "", stepErr, map[int]int{0: 1})
 	if exhausted != nil {
 		t.Fatalf("unexpected exhaustion: %v", exhausted)
 	}
@@ -306,7 +306,7 @@ func TestApplyRoutingNextOffTheEndOfASegment(t *testing.T) {
 	stepErr := outcome.Fail(errors.New("last failed"))
 
 	next, _, consumed, exhausted := applyRouting(
-		context.Background(), steps, "job", 0, steps[0], stepRan, "", stepErr, map[int]int{0: 1})
+		context.Background(), steps, 0, steps[0], stepRan, "", stepErr, map[int]int{0: 1})
 	if exhausted != nil {
 		t.Fatalf("unexpected exhaustion: %v", exhausted)
 	}

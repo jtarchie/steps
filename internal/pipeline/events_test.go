@@ -40,16 +40,16 @@ func TestRunJobLogsCarryTheRunID(t *testing.T) {
 
 	out := buf.String()
 
-	runLine := findLine(t, out, "job.run")
-	runID := fieldValue(t, runLine, "run")
+	runLine := findLogLine(t, out, "job.run")
+	runID := logField(runLine, "run")
 
 	if runID == "" {
 		t.Fatalf("job.run carried no run id: %s", runLine)
 	}
 
 	for _, msg := range []string{"job.done", "job.step.finished"} {
-		line := findLine(t, out, msg)
-		if got := fieldValue(t, line, "run"); got != runID {
+		line := findLogLine(t, out, msg)
+		if got := logField(line, "run"); got != runID {
 			t.Errorf("%s run=%q, want %q (job.run's id): %s", msg, got, runID, line)
 		}
 	}
@@ -59,14 +59,17 @@ func TestRunJobLogsCarryTheRunID(t *testing.T) {
 	}
 }
 
-// findLine returns the first log line containing msg, failing the test if
-// none does.
-func findLine(t *testing.T, out, msg string) string {
+// findLogLine returns the first log line whose message is msg, failing the
+// test if none does. The message is matched as a whole field so a value that
+// happens to contain it cannot stand in for the line itself.
+func findLogLine(t *testing.T, out, msg string) string {
 	t.Helper()
 
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "msg="+msg+" ") {
-			return line
+		for _, field := range strings.Fields(line) {
+			if field == msg || field == "msg="+msg {
+				return line
+			}
 		}
 	}
 
@@ -75,11 +78,8 @@ func findLine(t *testing.T, out, msg string) string {
 	return ""
 }
 
-// fieldValue extracts a slog text-handler key=value field from line, or ""
-// when absent.
-func fieldValue(t *testing.T, line, key string) string {
-	t.Helper()
-
+// logField extracts a key=value field from a log line, or "" when absent.
+func logField(line, key string) string {
 	for _, field := range strings.Fields(line) {
 		if v, ok := strings.CutPrefix(field, key+"="); ok {
 			return v

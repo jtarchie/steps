@@ -9,6 +9,22 @@ import (
 	"github.com/jtarchie/steps/internal/pipeline"
 )
 
+// isolatePreflightPins clears the process-global source selection around a
+// test.
+//
+// Preflight pins an agent name to whichever source answered, in a cache that
+// deliberately outlives a single run (a `steps watch` that failed over should
+// stay failed over). Within one test binary that means the next test to
+// declare an agent of the same name silently inherits a torn-down fake
+// server's URL. Clearing on the way OUT as well as in is what makes that
+// impossible regardless of execution order.
+func isolatePreflightPins(t *testing.T) {
+	t.Helper()
+
+	pipeline.ResetPreflightCache()
+	t.Cleanup(pipeline.ResetPreflightCache)
+}
+
 // failoverPipeline points an agent at a dead primary with one live fallback.
 func failoverPipeline(t *testing.T, dir, deadURL, liveURL string) string {
 	t.Helper()
@@ -40,14 +56,7 @@ jobs:
 // minutes, and the manual fix was to point the agent at a different model —
 // one line. This automates that line.
 func TestFailoverUsesTheBackupWhenThePrimaryIsDown(t *testing.T) {
-	pipeline.ResetPreflightCache()
-	// Preflight pins "writer" (or "has-fallback") to whichever source
-	// answered, in a process-global cache that otherwise outlives this test —
-	// the next test in the binary to declare an agent of the same name would
-	// silently inherit a torn-down fake server's URL. Clearing on the way out
-	// too, not just the way in, is what makes that impossible regardless of
-	// test execution order.
-	t.Cleanup(pipeline.ResetPreflightCache)
+	isolatePreflightPins(t)
 
 	dir := t.TempDir()
 
@@ -88,14 +97,7 @@ func TestFailoverUsesTheBackupWhenThePrimaryIsDown(t *testing.T) {
 // TestFailoverFailsWhenEverySourceIsDown verifies a fallback is a fallback,
 // not a guarantee: with nothing healthy the run still stops before any step.
 func TestFailoverFailsWhenEverySourceIsDown(t *testing.T) {
-	pipeline.ResetPreflightCache()
-	// Preflight pins "writer" (or "has-fallback") to whichever source
-	// answered, in a process-global cache that otherwise outlives this test —
-	// the next test in the binary to declare an agent of the same name would
-	// silently inherit a torn-down fake server's URL. Clearing on the way out
-	// too, not just the way in, is what makes that impossible regardless of
-	// test execution order.
-	t.Cleanup(pipeline.ResetPreflightCache)
+	isolatePreflightPins(t)
 
 	dir := t.TempDir()
 
@@ -130,14 +132,7 @@ func TestFailoverFailsWhenEverySourceIsDown(t *testing.T) {
 // nothing was reported, and the run died mid-plan against the dead primary
 // while the log said preflight passed.
 func TestFailoverAppliesToEveryAgentSharingAModel(t *testing.T) {
-	pipeline.ResetPreflightCache()
-	// Preflight pins "writer" (or "has-fallback") to whichever source
-	// answered, in a process-global cache that otherwise outlives this test —
-	// the next test in the binary to declare an agent of the same name would
-	// silently inherit a torn-down fake server's URL. Clearing on the way out
-	// too, not just the way in, is what makes that impossible regardless of
-	// test execution order.
-	t.Cleanup(pipeline.ResetPreflightCache)
+	isolatePreflightPins(t)
 
 	dir := t.TempDir()
 

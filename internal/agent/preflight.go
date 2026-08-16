@@ -120,7 +120,7 @@ func ResetProbeCache() {
 	selectedSources.mu.Lock()
 	defer selectedSources.mu.Unlock()
 
-	selectedSources.by = map[string]config.AgentSource{}
+	selectedSources.by = map[string]sourceSelection{}
 }
 
 // Preflight checks every model and MCP server the named agents need, and
@@ -274,7 +274,7 @@ func failOver(ctx context.Context, agent *config.Agent, primary config.ResolvedI
 			continue
 		}
 
-		selectSource(agent.Name, agent.Fallback[i].Source)
+		selectSource(agent.Name, agent.Fallback[i].Source, i)
 
 		// Loud, not silent. A fallback model can produce meaningfully
 		// different output, and a quality dip caused by an outage must not
@@ -291,6 +291,20 @@ func failOver(ctx context.Context, agent *config.Agent, primary config.ResolvedI
 	return false
 }
 
+// sourceSelection is which fallback: entry an agent is running on: the source
+// itself, and its POSITION in the agent's fallback list.
+//
+// The position is stored rather than re-derived by searching the list for a
+// matching source, because two entries may legitimately hold the same source
+// (the same model reached through two entries that differ elsewhere, or an
+// honest copy-paste). A value scan then reports the FIRST match, and a
+// cascade continuing from that index re-tries the very source whose failure
+// triggered it.
+type sourceSelection struct {
+	source config.AgentSource
+	index  int
+}
+
 // selectedSources records which fallback an agent is running on, for the life
 // of the process. Process-scoped like probeCache and for the same reason: a
 // `steps watch` that failed over should stay failed over rather than
@@ -299,25 +313,44 @@ func failOver(ctx context.Context, agent *config.Agent, primary config.ResolvedI
 //nolint:gochecknoglobals // process-lifetime selection, deliberately shared across runs
 var selectedSources = struct {
 	mu sync.Mutex
-	by map[string]config.AgentSource
-}{by: map[string]config.AgentSource{}}
+	by map[string]sourceSelection
+}{by: map[string]sourceSelection{}}
 
-func selectSource(agentName string, source config.AgentSource) {
+// selectSource pins an agent to the fallback entry at index for the rest of
+// the process.
+//
+// Callers pin a source that has PROVED itself — answered a preflight probe,
+// or served a conversation through to its own conclusion — never one merely
+// chosen. Pinning on selection alone can strand the process on a source that
+// never answered: nothing un-pins it, and preflight only ever probes the
+// PRIMARY, so it would never notice.
+func selectSource(agentName string, source config.AgentSource, index int) {
 	selectedSources.mu.Lock()
 	defer selectedSources.mu.Unlock()
 
-	selectedSources.by[agentName] = source
+	selectedSources.by[agentName] = sourceSelection{source: source, index: index}
 }
 
-// SelectedSource returns the fallback source preflight chose for an agent, if
-// any. internal/pipeline has no need for it; the agent step itself applies it.
-func selectedSource(agentName string) (config.AgentSource, bool) {
+// clearSource drops an agent's pin, so the next run resolves from its primary
+// again. Called when a cascade tried every source and none served: continuing
+// to prefer the last one tried would be preferring a source that just failed.
+func clearSource(agentName string) {
 	selectedSources.mu.Lock()
 	defer selectedSources.mu.Unlock()
 
-	source, ok := selectedSources.by[agentName]
+	delete(selectedSources.by, agentName)
+}
 
-	return source, ok
+// selectedSource returns the fallback selection preflight (or a served
+// mid-run swap) chose for an agent, if any. internal/pipeline has no need for
+// it; the agent step itself applies it.
+func selectedSource(agentName string) (sourceSelection, bool) {
+	selectedSources.mu.Lock()
+	defer selectedSources.mu.Unlock()
+
+	selection, ok := selectedSources.by[agentName]
+
+	return selection, ok
 }
 
 // modelFailure is one model that did not answer, held until every model has

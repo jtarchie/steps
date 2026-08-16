@@ -5,7 +5,6 @@ package pipeline
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/jtarchie/steps/internal/agent"
@@ -135,7 +134,7 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 
 	recordCompletedStep(ctx, w.st, w.index, step, err)
 
-	nextIndex, _, err, exhaustedErr := applyRouting(ctx, steps, w.jobName, w.index, step, res.disposition, res.verdict, err, w.visits)
+	nextIndex, _, err, exhaustedErr := applyRouting(ctx, steps, w.index, step, res.disposition, res.verdict, err, w.visits)
 	if exhaustedErr != nil {
 		return true, exhaustedErr
 	}
@@ -153,7 +152,7 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 		return true, nil
 	}
 
-	unskippable, err := foldStepUnskippable(w.cfg, step, w.chainUnskippable)
+	unskippable, err := foldStepUnskippable(ctx, w.cfg, step, w.chainUnskippable)
 	if err != nil {
 		return true, err
 	}
@@ -178,7 +177,7 @@ func (w *planWalk) skipCompleted(ctx context.Context) bool {
 	}
 
 	fmt.Printf("skip: %s (already succeeded)\n", name)
-	slog.Info("job.skip", "job", w.jobName, "index", w.index, "reason", "resume", "step", name)
+	logFrom(ctx).Info("job.skip", "index", w.index, "reason", "resume", "step", name)
 	recordExecution(ctx, name)
 
 	w.index++
@@ -203,7 +202,7 @@ func reportChainSkipped(ctx context.Context, jobName string, firstIndex int, ste
 		}
 
 		fmt.Printf("skip: %s (chain)\n", name)
-		slog.Info("job.skip", "job", jobName, "index", firstIndex+offset, "step", name, "reason", "chain")
+		logFrom(ctx).Info("job.skip", "index", firstIndex+offset, "step", name, "reason", "chain")
 		publishStepSkipped(ctx, jobName, firstIndex+offset, step, "", skipReason(stepChainSkipped))
 	}
 }
@@ -249,7 +248,8 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 
 	// Carried so the frames that hold a command's captured output can publish
 	// it against the right step (see withStepIdentity).
-	ctx = withStepIdentity(ctx, i, step)
+	ctx = withStepIdentity(ctx, r.jobName, i, step)
+	ctx = withStepLogger(ctx, i, step)
 
 	res, err := dispatchNonGetStep(ctx, r, i, step, skippable, parentHash)
 
@@ -306,7 +306,7 @@ func dispatchNonGetStep(ctx context.Context, r stepRunner, i int, step config.St
 
 	if !shouldRun {
 		fmt.Printf("skip: %s (when)\n", executedStepName(step))
-		slog.Info("job.skip", "job", r.jobName, "index", i, "reason", "when", "step", executedStepName(step))
+		logFrom(ctx).Info("job.skip", "reason", "when", "step", executedStepName(step))
 
 		return stepResult{hash: parentHash, disposition: stepGuardSkipped}, nil
 	}

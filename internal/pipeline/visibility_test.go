@@ -52,7 +52,7 @@ func TestFoldStepUnskippableReportsOnce(t *testing.T) {
 	cfg := &config.Config{}
 	step := config.Step{Task: "t", To: map[string]string{"success": "next"}}
 
-	unskippable, err := foldStepUnskippable(cfg, step, false)
+	unskippable, err := foldStepUnskippable(t.Context(), cfg, step, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestFoldStepUnskippableReportsOnce(t *testing.T) {
 	}
 
 	// Already unskippable: still unskippable, and nothing new to announce.
-	unskippable, err = foldStepUnskippable(cfg, step, true)
+	unskippable, err = foldStepUnskippable(t.Context(), cfg, step, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func captureStdout(t *testing.T, fn func()) string {
 func TestFoldStepUnskippableLeavesPlainTasksCacheable(t *testing.T) {
 	t.Parallel()
 
-	unskippable, err := foldStepUnskippable(&config.Config{}, config.Step{Task: "t", Run: "true"}, false)
+	unskippable, err := foldStepUnskippable(t.Context(), &config.Config{}, config.Step{Task: "t", Run: "true"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -117,13 +117,13 @@ func TestPreflightCLIFailsOverToHostedProvider(t *testing.T) {
 		t.Fatalf("problems = %+v, want none — the fallback should have absorbed the missing cli", problems)
 	}
 
-	source, selected := selectedSource("reviewer")
+	selection, selected := selectedSource("reviewer")
 	if !selected {
 		t.Fatal("no fallback was selected for an agent whose cli is missing")
 	}
 
-	if source.Model != "openai/gpt-4o" {
-		t.Errorf("selected source = %q, want the hosted fallback", source.Model)
+	if selection.source.Model != "openai/gpt-4o" {
+		t.Errorf("selected source = %q, want the hosted fallback", selection.source.Model)
 	}
 
 	// The invocation the step will actually run must have left the CLI path
@@ -133,7 +133,7 @@ func TestPreflightCLIFailsOverToHostedProvider(t *testing.T) {
 		t.Fatalf("ResolveAgentInvocation: %v", err)
 	}
 
-	running, err := primary.WithSource(source, nil)
+	running, err := primary.WithSource(selection.source, nil)
 	if err != nil {
 		t.Fatalf("WithSource: %v", err)
 	}

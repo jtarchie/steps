@@ -29,6 +29,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -308,19 +309,50 @@ func rewind(req *http.Request) (*http.Request, error) {
 // whatever runOneConversation returned — which also includes this package's
 // OWN internal errors (a budget breach, a malformed/empty response, a
 // detected loop). None of those are "an unreachable endpoint" and must not
-// trigger a source swap either, so a plain net.Error is required rather than
-// defaulting to true for anything unrecognized.
-func isTransientProviderError(err error) bool {
+// trigger a source swap either, so each transient shape is recognized
+// explicitly rather than defaulting to true for anything unrecognized.
+//
+// jobCtx is the JOB's context, not the conversation's own deadline. The two
+// produce the same error and mean opposite things: a canceled or expired job
+// says nothing about the provider, while a conversation that burned its own
+// deadline against a live connection is the very outage this cascade exists
+// for — an endpoint that accepts the request and then never answers. Telling
+// them apart requires knowing whether the job itself is still healthy, which
+// only the caller can say.
+func isTransientProviderError(jobCtx context.Context, err error) bool {
 	var apiErr *openai.Error
 	if errors.As(err, &apiErr) {
 		return retryableStatus(apiErr.StatusCode)
 	}
 
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		// The run's own context ending says nothing about the provider's
-		// health — the same exclusion (*requestRetryTransport).retryable
-		// makes, for the same reason.
+	if errors.Is(err, context.Canceled) {
+		// A canceled run says nothing about the provider's health — the same
+		// exclusion (*requestRetryTransport).retryable makes.
 		return false
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		// Ours if the job is still fine: the conversation hit its own
+		// timeout: while the run carried on around it. A hung endpoint is
+		// the most expensive outage shape there is — it costs the step's
+		// whole deadline and produces nothing — so it must reach the
+		// cascade rather than fail the step outright.
+		return jobCtx.Err() == nil
+	}
+
+	// A connection that dies partway through a response body: the exchange
+	// began, so nothing produced an *openai.Error or a net.Error, and the
+	// SDK surfaces whatever the truncated bytes decoded to. Reading a
+	// half-delivered answer is a transport failure wearing a parser's
+	// clothes.
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		return true
+	}
+
+	var syntaxErr *json.SyntaxError
+
+	if errors.As(err, &syntaxErr) {
+		return true
 	}
 
 	var netErr net.Error

@@ -50,7 +50,14 @@ func buildSubAgentTool(ctx context.Context, cfg *config.Config, spec config.Tool
 		return nil, nil, nil, errors.New("sub-agent tool requires config to resolve the child agent")
 	}
 
-	ri, err := cfg.ResolveAgentInvocation(config.Step{Agent: spec.Agent})
+	// Resolved through the failover seam, not bare: preflight deliberately
+	// probes sub-agents too (see withSubAgents), and on a dead primary it
+	// picks a fallback, pins it, and reports the job healthy. Resolving the
+	// child without consulting that selection meant the run then went to the
+	// primary preflight had just proved dead — preflight making a promise the
+	// runtime did not keep. A sub-agent still gets no MID-RUN cascade of its
+	// own; the delegation is one conversation on the source preflight chose.
+	_, ri, _, _, err := resolveWithFailover(cfg, config.Step{Agent: spec.Agent})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("sub-agent %q: %w", spec.Agent, err)
 	}

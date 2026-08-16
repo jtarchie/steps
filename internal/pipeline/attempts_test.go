@@ -55,7 +55,7 @@ func TestTaskWithAttempts(t *testing.T) {
 	}
 
 	// Execute should succeed on the second attempt (retry).
-	err = executeTask(context.Background(), cfg, "job", 0, step, rt, bw)
+	err = executeTask(context.Background(), cfg, step, rt, bw)
 	if err != nil {
 		t.Fatalf("executeTask failed: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestTaskWithAttemptsAllFail(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = executeTask(context.Background(), cfg, "job", 0, step, rt, bw)
+	err = executeTask(context.Background(), cfg, step, rt, bw)
 	if err == nil {
 		t.Fatal("executeTask should have failed")
 	}
@@ -137,7 +137,7 @@ func TestTaskWithTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	err = executeTask(ctx, cfg, "job", 0, step, rt, bw)
+	err = executeTask(ctx, cfg, step, rt, bw)
 	if err == nil {
 		t.Fatal("executeTask should have timed out")
 	}
@@ -183,7 +183,7 @@ func TestTaskTimeoutIsDeadlineExceeded(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	err = executeTask(ctx, cfg, "job", 0, step, rt, bw)
+	err = executeTask(ctx, cfg, step, rt, bw)
 	if err == nil {
 		t.Fatal("executeTask should have failed due to timeout")
 	}
@@ -233,7 +233,7 @@ func TestTaskTimeoutSkipsRemainingAttempts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err = executeTask(ctx, cfg, "job", 0, step, rt, bw)
+	err = executeTask(ctx, cfg, step, rt, bw)
 	if err == nil {
 		t.Fatal("executeTask should have timed out")
 	}
@@ -310,7 +310,7 @@ func TestTaskWithAssertAndAttempts(t *testing.T) {
 	}
 
 	// Execute should succeed because the final attempt has the expected output.
-	err = executeTask(context.Background(), cfg, "job", 0, step, rt, bw)
+	err = executeTask(context.Background(), cfg, step, rt, bw)
 	if err != nil {
 		t.Fatalf("executeTask failed: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestTaskHooksFireOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_ = executeTask(context.Background(), cfg, "job", 0, step, rt, bw)
+	_ = executeTask(context.Background(), cfg, step, rt, bw)
 
 	// Note: hooks are not called from executeTask directly; they are called
 	// from dispatchNonGetStep in the main pipeline orchestration. This test

@@ -51,7 +51,9 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	// conversation turn with the run it belongs to.
 	ctx = events.WithRunID(ctx, resume.id)
 
-	slog.Info("job.run", "job", job.Name, "run", resume.id, "steps", len(job.Plan))
+	ctx = withRunLogger(ctx, resume.id, job.Name)
+
+	logFrom(ctx).Info("job.run", "steps", len(job.Plan))
 
 	err := workspace.ValidateArtifactFlow(cfg, job)
 	if err != nil {
@@ -123,7 +125,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	usage := agent.NewResumedRunUsage(jobBudgetTokens(job), priorSpend(ctx, st, resume))
 	ctx = agent.WithRunUsage(ctx, usage)
 
-	defer reportJobUsage(job.Name, resume.id, usage)
+	defer reportJobUsage(ctx, usage)
 
 	runner := stepRunner{cfg: cfg, jobName: job.Name, bw: bw, st: st}
 
@@ -161,7 +163,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 
 	recordPassedVersions(ctx, st, job.Name, resume.id, fetched)
 
-	slog.Info("job.done", "job", job.Name, "run", resume.id)
+	logFrom(ctx).Info("job.done")
 
 	return nil
 }
@@ -361,7 +363,7 @@ func priorSpend(ctx context.Context, st *store.Store, resume *resumeState) int {
 // job succeeded: seeing "341,204 tokens across 4 agent steps" is what tells an
 // operator which ceilings are even sensible to set. A job with no agent steps
 // prints nothing.
-func reportJobUsage(jobName, runID string, usage *agent.RunUsage) {
+func reportJobUsage(ctx context.Context, usage *agent.RunUsage) {
 	steps := usage.Steps()
 	prior := usage.Prior()
 
@@ -385,7 +387,7 @@ func reportJobUsage(jobName, runID string, usage *agent.RunUsage) {
 		fmt.Printf("  %-16s %s\n", step.Step, humanCount(step.Total))
 	}
 
-	fields := []any{"job", jobName, "run", runID, "total_tokens", total, "agent_steps", len(steps)}
+	fields := []any{"total_tokens", total, "agent_steps", len(steps)}
 	if prior > 0 {
 		fields = append(fields, "prior_tokens", prior, "attempt_tokens", total-prior)
 	}
@@ -394,7 +396,7 @@ func reportJobUsage(jobName, runID string, usage *agent.RunUsage) {
 		fields = append(fields, "budget_tokens", budget)
 	}
 
-	slog.Info("job.usage", fields...)
+	logFrom(ctx).Info("job.usage", fields...)
 }
 
 // humanCount renders a token count with thousands separators, since the

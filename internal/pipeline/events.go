@@ -104,9 +104,7 @@ func publishStepFinished(ctx context.Context, jobName string, i int, step config
 		text = err.Error()
 	}
 
-	slog.Info("job.step.finished",
-		"job", jobName, "run", runIDFrom(ctx), "index", i, "step", eventStepName(step), "kind", stepKindName(step),
-		"status", status, "duration", time.Since(started))
+	logFrom(ctx).Info("job.step.finished", "status", status, "duration", time.Since(started))
 
 	events.Publish(ctx, events.Event{
 		Type:       events.TypeStepFinished,
@@ -148,14 +146,32 @@ func publishStepSkipped(ctx context.Context, jobName string, i int, step config.
 type stepIdentityKey struct{}
 
 type stepIdentity struct {
+	job   string
 	index int
 	step  config.Step
 }
 
 // withStepIdentity tags ctx with the step about to run. Set per dispatch, so
 // concurrent branches of an in_parallel or across each carry their own.
-func withStepIdentity(ctx context.Context, i int, step config.Step) context.Context {
-	return context.WithValue(ctx, stepIdentityKey{}, stepIdentity{index: i, step: step})
+func withStepIdentity(ctx context.Context, jobName string, i int, step config.Step) context.Context {
+	return context.WithValue(ctx, stepIdentityKey{}, stepIdentity{job: jobName, index: i, step: step})
+}
+
+// currentStepRef is which plan step is executing, for the frames that must
+// hand that identity to another package rather than merely log it — a fix
+// agent's conversation publishes events under the step that invoked it (see
+// agent.RunFix).
+//
+// index -1 means there is no plan position: a hook or a fix running outside
+// the plan walk. Inventing one would file the conversation under an
+// unrelated step.
+func currentStepRef(ctx context.Context) (jobName string, index int) {
+	identity, ok := ctx.Value(stepIdentityKey{}).(stepIdentity)
+	if !ok {
+		return "", -1
+	}
+
+	return identity.job, identity.index
 }
 
 // publishOutputForCurrentStep publishes a command's output against whichever

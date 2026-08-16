@@ -22,6 +22,7 @@ package events
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -277,4 +278,35 @@ func RunID(ctx context.Context) string {
 	id, _ := ctx.Value(runIDKey{}).(string)
 
 	return id
+}
+
+// loggerKey is the context key for the run-scoped logger.
+type loggerKey struct{}
+
+// WithLogger returns a context carrying logger, so every package executing a
+// step logs under the run/job/step it belongs to without that identity being
+// threaded through its signatures.
+//
+// It lives beside WithRunID, and for the same reason: which run a line
+// belongs to is known by the package that owns the plan walk, and needed by
+// packages that must not import it. A stdlib-only leaf both already depend on
+// is the one place they can meet — and this stays stdlib-only, since log/slog
+// is stdlib.
+//
+// The alternative — a jobName/index parameter pair on every function that
+// might log — makes a diagnostic concern dictate the shape of everything it
+// touches, and spreads exactly as far as the logging does.
+func WithLogger(ctx context.Context, logger *slog.Logger) context.Context {
+	return context.WithValue(ctx, loggerKey{}, logger)
+}
+
+// Logger returns the logger ctx carries, or slog's default. Never nil, so a
+// call site reads Logger(ctx).Info(...) with no check of its own.
+func Logger(ctx context.Context) *slog.Logger {
+	logger, ok := ctx.Value(loggerKey{}).(*slog.Logger)
+	if !ok {
+		return slog.Default()
+	}
+
+	return logger
 }

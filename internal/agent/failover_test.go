@@ -35,7 +35,7 @@ func TestResolveWithFailoverKeepsThePrimaryForHashing(t *testing.T) {
 
 	// Before any failover, the two are the same invocation, and there is no
 	// fallback index to resume the mid-run cascade from.
-	primary, effective, fallbackIndex, err := resolveWithFailover(cfg, step)
+	primary, effective, _, fallbackIndex, err := resolveWithFailover(cfg, step)
 	if err != nil {
 		t.Fatalf("resolveWithFailover: %v", err)
 	}
@@ -47,9 +47,9 @@ func TestResolveWithFailoverKeepsThePrimaryForHashing(t *testing.T) {
 	assertFallbackIndex(t, fallbackIndex, -1, "still the primary")
 
 	// Preflight selects the fallback.
-	selectSource("writer", cfg.Agents[0].Fallback[0].Source)
+	selectSource("writer", cfg.Agents[0].Fallback[0].Source, 0)
 
-	primary, effective, fallbackIndex, err = resolveWithFailover(cfg, step)
+	primary, effective, _, fallbackIndex, err = resolveWithFailover(cfg, step)
 	if err != nil {
 		t.Fatalf("resolveWithFailover after failover: %v", err)
 	}
@@ -268,5 +268,178 @@ func TestFailoverEligible(t *testing.T) {
 
 	if got := failoverEligible(canceledCtx, &openai.Error{StatusCode: http.StatusInternalServerError}); got {
 		t.Error("failoverEligible on a canceled context = true, want false — a canceled run must not cascade")
+	}
+}
+
+// TestRemainingTurnsSpansTheCascade pins max_turns: as a ceiling on the STEP
+// rather than on each source it is tried on.
+//
+// Without this a declared cap of 30 permits 30 turns per fallback entry: the
+// resumed conversation carries its history forward but restarted its own turn
+// count, so the ceiling silently multiplied by the length of the list. cli.go's
+// session rejoin already subtracts turns already spent; this is the hosted
+// cascade's equivalent.
+func TestRemainingTurnsSpansTheCascade(t *testing.T) {
+	t.Parallel()
+
+	conv := agentConversation{maxTurns: 30} //nolint:exhaustruct // only the ceiling is under test
+
+	if got := remainingTurns(conv, 0); got != 30 {
+		t.Errorf("a fresh conversation gets %d turns, want the full 30", got)
+	}
+
+	if got := remainingTurns(conv, 25); got != 5 {
+		t.Errorf("after 25 turns the next source gets %d, want the remaining 5", got)
+	}
+
+	// A checkpoint at or past the ceiling yields no turns rather than a
+	// negative count, so the loop falls straight through to outOfTurns.
+	if got := remainingTurns(conv, 30); got != 0 {
+		t.Errorf("a spent budget gives %d turns, want 0", got)
+	}
+
+	if got := remainingTurns(conv, 42); got != 0 {
+		t.Errorf("an overspent budget gives %d turns, want 0 (never negative)", got)
+	}
+}
+
+// TestSeedResumeStateCarriesTheWholeCheckpoint proves every field a swap has
+// to remember actually survives into the next source's bookkeeping.
+//
+// Each of these was a real bug when it was missing: a required tool firing its
+// side effect twice, a budgeted tool getting a fresh allowance per source, a
+// verdict the primary had already decided going missing, and a compaction
+// summary re-derived from a history that already contained one.
+func TestSeedResumeStateCarriesTheWholeCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	conv := agentConversation{ //nolint:exhaustruct // the checkpoint is what is under test
+		resume: &resumeCheckpoint{
+			satisfied:  map[string]bool{"post_review": true},
+			callCounts: map[string]int{"post_review": 1},
+			trajectory: []recordedToolCall{{name: "post_review"}},
+			verdict:    "approve",
+			note:       "looks right",
+			turnsSpent: 7,
+			summary:    "the story so far",
+			stalled:    true,
+		},
+	}
+
+	state := seedResumeState(conv)
+
+	if !state.satisfied["post_review"] {
+		t.Error("a required tool already satisfied would be forced to fire again")
+	}
+
+	if state.callCounts["post_review"] != 1 {
+		t.Errorf("callCounts = %v, want the spend carried forward", state.callCounts)
+	}
+
+	if len(state.trajectory) != 1 {
+		t.Errorf("trajectory = %v, want the prior source's calls kept", state.trajectory)
+	}
+
+	if state.verdict != "approve" || state.note != "looks right" {
+		t.Errorf("verdict/note = %q/%q, want the decision already made", state.verdict, state.note)
+	}
+
+	if state.turnsSpent != 7 {
+		t.Errorf("turnsSpent = %d, want 7 — the ceiling spans the cascade", state.turnsSpent)
+	}
+
+	if state.summary != "the story so far" || !state.stalled {
+		t.Errorf("compaction state = %q/%v, want it carried so the fallback does not summarize a summary", state.summary, state.stalled)
+	}
+}
+
+// TestSeedResumeStateStartsFreshWithoutACheckpoint keeps the first attempt
+// behaving exactly as it did before resuming existed.
+func TestSeedResumeStateStartsFreshWithoutACheckpoint(t *testing.T) {
+	t.Parallel()
+
+	state := seedResumeState(agentConversation{}) //nolint:exhaustruct // a first attempt carries nothing
+
+	if state.satisfied == nil || state.callCounts == nil {
+		t.Error("a fresh conversation needs usable (non-nil) bookkeeping maps")
+	}
+
+	if state.turnsSpent != 0 || state.verdict != "" || len(state.trajectory) != 0 {
+		t.Errorf("a fresh conversation started from %+v, want zero", state)
+	}
+}
+
+// TestPinnedSourceOnlyAfterServing is the difference between preferring a
+// source that WORKED and one that was merely chosen.
+//
+// Pinning on selection stranded the process: a cascade that then exhausted
+// every source left the pin pointing at something that never answered, nothing
+// un-pinned it, and preflight only ever probes the PRIMARY — so no later run
+// re-examined the choice for the life of the process.
+func TestPinnedSourceOnlyAfterServing(t *testing.T) {
+	ResetProbeCache()
+	t.Cleanup(ResetProbeCache)
+
+	agent := &config.Agent{ //nolint:exhaustruct // only the fallback list is read
+		Name: "writer",
+		Fallback: []config.AgentFallback{
+			{Source: config.AgentSource{Model: "backup-a"}},
+			{Source: config.AgentSource{Model: "backup-b"}},
+		},
+	}
+
+	// The primary serving pins nothing: it is the default already.
+	pinServedSource(agent, -1)
+
+	if _, pinned := selectedSource("writer"); pinned {
+		t.Error("the primary serving must not pin anything")
+	}
+
+	pinServedSource(agent, 1)
+
+	selection, pinned := selectedSource("writer")
+	if !pinned {
+		t.Fatal("a fallback that served was not pinned")
+	}
+
+	if selection.index != 1 || selection.source.Model != "backup-b" {
+		t.Errorf("pinned %+v, want fallback index 1 (backup-b)", selection)
+	}
+
+	// Nothing served: the pin goes, so the next run resolves from the primary
+	// rather than preferring a source that just failed.
+	releaseSource(agent)
+
+	if _, pinned := selectedSource("writer"); pinned {
+		t.Error("an exhausted cascade left a pin behind — the next run would prefer a dead source")
+	}
+}
+
+// TestSelectedSourceIndexSurvivesDuplicateSources is why the selection stores
+// its own position rather than searching the list for a matching source.
+//
+// Two entries may legitimately hold the same source — a key rotation, or an
+// honest copy-paste. A value scan reports the FIRST match, so a cascade
+// continuing from it would re-try the very source whose failure triggered it.
+func TestSelectedSourceIndexSurvivesDuplicateSources(t *testing.T) {
+	ResetProbeCache()
+	t.Cleanup(ResetProbeCache)
+
+	shared := config.AgentSource{Model: "same-model"}
+
+	agent := &config.Agent{ //nolint:exhaustruct // only the fallback list is read
+		Name:     "writer",
+		Fallback: []config.AgentFallback{{Source: shared}, {Source: shared}},
+	}
+
+	pinServedSource(agent, 1)
+
+	selection, pinned := selectedSource("writer")
+	if !pinned {
+		t.Fatal("nothing was pinned")
+	}
+
+	if selection.index != 1 {
+		t.Errorf("selection index = %d, want 1 — a value scan would have reported 0 and re-tried the dead source", selection.index)
 	}
 }

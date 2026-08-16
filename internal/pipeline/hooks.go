@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/jtarchie/steps/internal/agent"
@@ -52,11 +51,11 @@ func runHooks(ctx context.Context, scope hookScope, hooks config.Hooks, baseErr 
 	case outcome.Succeeded:
 		promoted = runMatchedHook(ctx, scope, "on_success", hooks.OnSuccess)
 	case outcome.Failed:
-		logIfHookFailed(scope, "on_failure", runMatchedHook(ctx, scope, "on_failure", hooks.OnFailure))
+		logIfHookFailed(ctx, scope, "on_failure", runMatchedHook(ctx, scope, "on_failure", hooks.OnFailure))
 	case outcome.Errored:
-		logIfHookFailed(scope, "on_error", runMatchedHook(ctx, scope, "on_error", hooks.OnError))
+		logIfHookFailed(ctx, scope, "on_error", runMatchedHook(ctx, scope, "on_error", hooks.OnError))
 	case outcome.Aborted:
-		logIfHookFailed(scope, "on_abort", runMatchedHook(ctx, scope, "on_abort", hooks.OnAbort))
+		logIfHookFailed(ctx, scope, "on_abort", runMatchedHook(ctx, scope, "on_abort", hooks.OnAbort))
 	}
 
 	ensureErr := runMatchedHook(ctx, scope, "ensure", hooks.Ensure)
@@ -65,13 +64,13 @@ func runHooks(ctx context.Context, scope hookScope, hooks config.Hooks, baseErr 
 	// ensure's failure on that path is only logged. On a green outcome,
 	// on_success's failure takes precedence over ensure's.
 	if baseErr != nil {
-		logIfHookFailed(scope, "ensure", ensureErr)
+		logIfHookFailed(ctx, scope, "ensure", ensureErr)
 
 		return baseErr
 	}
 
 	if promoted != nil {
-		logIfHookFailed(scope, "ensure", ensureErr)
+		logIfHookFailed(ctx, scope, "ensure", ensureErr)
 
 		return promoted
 	}
@@ -98,7 +97,12 @@ func runMatchedHook(ctx context.Context, scope hookScope, name string, step *con
 	}
 
 	fmt.Printf("%s: %s hook\n", scope.label, name)
-	slog.Debug("job.hook", "scope", scope.label, "hook", name)
+
+	// Everything the hook body runs logs as the HOOK's, not as the step it
+	// hangs off — a hook has no plan position of its own, and filing its
+	// output under the step's index would read as the step doing it.
+	hookCtx = withHookLogger(hookCtx, scope.label, name)
+	logFrom(hookCtx).Debug("job.hook")
 
 	hookErr := runHookStep(hookCtx, scope, *step)
 
@@ -126,9 +130,9 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 			return fmt.Errorf("task %q: %w", step.Task, err)
 		}
 
-		return executeTask(ctx, scope.cfg, scope.jobName, -1, step, rt, scope.bw)
+		return executeTask(ctx, scope.cfg, step, rt, scope.bw)
 	case config.StepKindPut:
-		_, err := executePut(ctx, scope.cfg, scope.jobName, -1, step, scope.bw)
+		_, err := executePut(ctx, scope.cfg, step, scope.bw)
 
 		return err
 	case config.StepKindAgent:
@@ -149,9 +153,9 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 	}
 }
 
-func logIfHookFailed(scope hookScope, name string, err error) {
+func logIfHookFailed(ctx context.Context, scope hookScope, name string, err error) {
 	if err != nil {
-		slog.Warn("job.hook.failed", "scope", scope.label, "hook", name, "error", err.Error())
+		logFrom(ctx).Warn("job.hook.failed", "scope", scope.label, "hook", name, "error", err.Error())
 	}
 }
 

@@ -6,7 +6,6 @@ package pipeline
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
@@ -56,7 +55,7 @@ func taskCacheRequest(content map[string]any, step config.Step, rt config.Resolv
 // up at all, and gets the zero result — no key, no hit — which reads at the
 // call site as "run it, and file nothing".
 func lookupStepCache(
-	ctx context.Context, r stepRunner, i int, step config.Step, req workspace.StepCacheRequest, name string,
+	ctx context.Context, r stepRunner, step config.Step, req workspace.StepCacheRequest, name string,
 ) workspace.StepCacheResult {
 	if !merkle.StepCacheable(r.cfg, step) {
 		return workspace.StepCacheResult{}
@@ -68,7 +67,7 @@ func lookupStepCache(
 		// "(cached)", means something different by it, and the two land in the
 		// same transcript.
 		fmt.Printf("skip: %s (reused)\n", name)
-		slog.Info("job.skip", "job", r.jobName, "index", i, "step", name, "reason", "reused", "key", res.Key)
+		logFrom(ctx).Info("job.skip", "step", name, "reason", "reused", "key", res.Key)
 	}
 
 	return res
