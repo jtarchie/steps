@@ -77,11 +77,14 @@ config:
         {channel: channel, thread_ts: ts, text: text, unfurl_links: false} :
         {channel: channel, text: text, unfurl_links: false};
 
+      // Retried for the same reason the check side retries: a 429 here fails
+      // a put whose work is already done, and a rate limit is the one failure
+      // that says nothing about whether the message was worth sending.
       let posted = http({
         url: base + "/api/chat.postMessage",
         headers: {Authorization: "Bearer " + env(source.token_env ?? "SLACK_BOT_TOKEN")},
         json: payload,
-      }).json;
+      }, {retry: {on: [429, 503], max: 3}}).json;
 
       // Slack refuses with 200 and ok:false, so without this a rejected
       // post would look like a put that published nothing — green, having

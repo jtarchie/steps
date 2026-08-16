@@ -86,13 +86,17 @@ config:
     check: |
       let base = source.base_url ?? "https://slack.com";
       let auth = {Authorization: "Bearer " + env(source.token_env ?? "SLACK_BOT_TOKEN")};
+      // Every call carries it, not only the fan-outs. Under steps watch this
+      // check runs on every poll interval, which makes the two serial calls
+      // below the most-hit endpoints here and the likeliest to be rate
+      // limited — and a 429 on either loses the whole poll.
       let retry = {on: [429, 503], max: 3};
       let sourceChannels = source.channels ?? [];
       let limit = source.limit ?? 200;
 
       // Resolve the bot's own user id rather than hardcoding a U-id, which
       // would stop matching, silently, the moment the app is reinstalled.
-      let whoami = http({url: base + "/api/auth.test"}, {headers: auth}).json;
+      let whoami = http({url: base + "/api/auth.test"}, {headers: auth, retry: retry}).json;
       let me = whoami.ok ? whoami.user_id
         : fail("slack auth.test: " + (whoami.error ?? "failed"));
 
@@ -105,7 +109,7 @@ config:
         http({url: base + "/api/users.conversations",
               query: {types: "public_channel,private_channel,im",
                       exclude_archived: "true", limit: "1000"}},
-             {headers: auth}).json;
+             {headers: auth, retry: retry}).json;
 
       let channels = hasSourceChannels ? sourceChannels :
         (discovered.ok ? (discovered.channels | map((#.id)))

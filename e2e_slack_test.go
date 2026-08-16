@@ -30,11 +30,36 @@ import (
 func fakeSlack(t *testing.T) (*httptest.Server, *[]map[string]any) {
 	t.Helper()
 
+	return fakeSlackRateLimiting(t, nil)
+}
+
+// fakeSlackRateLimiting is fakeSlack with a budget of 429s to serve first, per
+// API path — how a real workspace answers when a watch host polls it faster
+// than its rate limit allows.
+func fakeSlackRateLimiting(t *testing.T, rateLimited map[string]int) (*httptest.Server, *[]map[string]any) {
+	t.Helper()
+
 	var mu sync.Mutex
 
 	var posted []map[string]any
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		remaining := rateLimited[r.URL.Path]
+
+		if remaining > 0 {
+			rateLimited[r.URL.Path] = remaining - 1
+		}
+		mu.Unlock()
+
+		if remaining > 0 {
+			// Retry-After: 0 so the test does not actually wait out a backoff.
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 
 		switch r.URL.Path {
@@ -182,6 +207,72 @@ jobs:
 
 	if !gotByChannel["D1"]["50.000"] || len(gotByChannel["D1"]) != 1 {
 		t.Errorf("D1 thread_ts set = %v, want exactly {50.000}", gotByChannel["D1"])
+	}
+}
+
+// TestEndToEndBuiltinSlackSurvivesRateLimits pins the retry on every call the
+// two built-in types make, not only the fan-outs.
+//
+// Under steps watch this check runs on every poll interval, which makes
+// auth.test and users.conversations — two serial calls before any fan-out —
+// the most-hit endpoints here and the likeliest to be rate limited. Without a
+// retry on them a single 429 fails the whole check ("slack auth.test:
+// ratelimited") and loses that poll, while the identically-limited history
+// fan-out immediately below would have backed off and succeeded. The same
+// holds for chat.postMessage on the put side, where a 429 fails a step whose
+// work is already done.
+func TestEndToEndBuiltinSlackSurvivesRateLimits(t *testing.T) {
+	server, posted := fakeSlackRateLimiting(t, map[string]int{
+		"/api/auth.test":             1,
+		"/api/users.conversations":   1,
+		"/api/conversations.history": 1,
+		"/api/chat.postMessage":      1,
+	})
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+
+	pipelineYAML := `
+resources:
+- name: mentions
+  type: slack-mentions
+  source:
+    base_url: ` + server.URL + `
+- name: reply
+  type: slack-reply
+  source:
+    base_url: ` + server.URL + `
+
+jobs:
+- name: answer
+  plan:
+  - get: mentions
+    trigger: true
+    version: every
+  - task: address
+    inputs: [mentions]
+    outputs: [thread, answer]
+    run: |
+      set -eu
+      grep -o '"channel": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > thread/channel
+      grep -o '"ts": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > thread/ts
+      printf '%s' "answered" > answer/reply.md
+  - put: reply
+    inputs: [thread, answer]
+`
+
+	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustRun(t, "run", path, "--job", "answer")
+
+	// The same three replies the un-rate-limited run produces: every 429 was
+	// absorbed, none of them cost a message.
+	if len(*posted) != 3 {
+		t.Errorf("posted %d messages, want 3 — a rate limit cost work that a retry should have absorbed: %v", len(*posted), *posted)
 	}
 }
 
