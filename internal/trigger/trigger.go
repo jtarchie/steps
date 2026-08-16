@@ -891,11 +891,14 @@ func recordedVersion(
 //
 // The known edge, stated rather than discovered: a job ADDED to the pipeline
 // later has no seeding, so its first trigger fans out over whatever history
-// holds. The same applies to a get newly switched to version: every — its
-// cursor has no mark, so the first run fans over the resource's retained
-// history. steps cannot tell a new job (or a newly-every'd get) from one that
-// has simply not run; the cure is a narrower version_history: or a first run
-// under --pin.
+// holds. steps cannot tell a new job from one that has simply not run; the
+// cure is a narrower version_history: or a first run under --pin.
+//
+// A get switched from latest to version: every is NOT that edge: seeding
+// marks every job that reads the resource, whatever version mode its get
+// used, so the cursor already holds the cold-start mark and the first every
+// run fans only over what arrived since. The backlog is bounded by the seed,
+// not by version_history:.
 func recordHistory(
 	ctx context.Context, cfg *config.Config, st *store.Store, resourceName string, obs observedResource,
 ) (bool, error) {

@@ -71,7 +71,13 @@ Runs when a plan is built, and on every `steps watch` poll.
 
 - **Sees**: `{{ .source }}` and `{{ .version }}` — the last version this pipeline recorded for the resource. See [the cursor](#the-check-cursor) below.
 - **Must print**: a JSON **array** of version objects to stdout, **oldest first**. A version object is a flat map of strings — `{"ref": "abc123"}`, `{"number": "87"}`. The whole object identifies the version; steps never interprets the fields.
-- **Empty array** means "no versions yet". Under `version: every`, a resource that has *never* had a version blocks the fan-out — zero builds, and the job exits 0 after printing `get: <name> cannot build; no versions exist for: <names>` to name what blocked it; any other version mode fails the step with `no versions available`. The message tells you a check came back empty — it cannot tell you *why*, so a type should still **fail loudly** (exit non-zero) when it can't answer, rather than printing nothing.
+- **Empty array** means "no versions yet". Any version mode other than `every` fails the step with `no versions available`. Under `version: every` the job exits 0 having built nothing, and says which kind of nothing it was:
+  - `get: <name> cannot build; no versions exist for: <names>` — an input has never had a version at all, so no set can be assembled. The named resources are what to go look at.
+  - `get: <name> has no new versions; all N already taken` — the steady state: everything this check reports has been built already.
+  - `get: <name> returned no versions; the N step(s) after it did not run` — the check came back empty and there is no history to fall back on, so that much plan was dropped.
+  - `get: <name> returned no versions; nothing was fetched` — the same, for a get *inside* a build: the rest of the plan still runs, without that artifact.
+
+  These say a check came back empty — they cannot say *why*, so a type should still **fail loudly** (exit non-zero) when it can't answer, rather than printing nothing.
 - **Exit non-zero** to fail the step.
 
 ```json
@@ -395,10 +401,11 @@ A check reports what *exists*, not what is new — the same twenty Slack message
 
 - **Recorded per (job, resource)**, so another job reading the same resource keeps its own place.
 - **A version is taken when its build STARTS**, not when it succeeds — so a version whose build failed is not retried on the next run. This is Concourse's rule (`NextEveryVersion` reads the versions a build was *created* with and never looks at build status), and it is what stops one bad input failing forever, on every trigger, with an agent's bill attached. Re-running it is a deliberate act: `--force`, `--resume`, or a new version.
-- **`--force` ignores it**, along with every other piece of persisted state — which means it re-runs versions already taken, effects included. It still RECORDS what it takes, so an ordinary run afterwards does not repeat the same work again. It still *records* what it took, so the ordinary run after a forced one does not repeat that work a second time.
+- **`--force` ignores it**, along with every other piece of persisted state — which means it re-runs versions already taken, effects included. It still *records* what it took, so the ordinary run after a forced one does not repeat that work a second time.
 - **It suppresses; [history](#version-history) is what resurrects.** The versions a job may take are the ones steps has recorded, not only the ones `check` returns right now — so a version that scrolled out of the window while nothing was watching is still built. What history does not hold, nothing can recover: a version pruned by `version_history:`, or one from before steps first checked the resource.
 
-- **Any top-level `get:` in a plan may say `every`** — each keeps its own cursor. A get inside a hook runs within a build whose versions are already decided, so `every` there is a load error rather than a field that is accepted and ignored; so are two `every` gets aliasing the same resource, which would share one cursor.
+- **Any top-level `get:` in a plan may say `every`** — each keeps its own cursor. Anywhere else (inside a hook, or a branch of `in_parallel:`/`do:`/`try:`) the get runs within a build whose versions are already decided, so `every` there is a load error rather than a field that is accepted and ignored. Two `every` gets on the same resource are a load error too — one cursor cannot serve both.
+- **A second get of the same resource keeps its own version.** `get: code, version: every` beside `get: baseline, resource: code, version: {ref: "v1"}` fans over `code` while `baseline` stays pinned, which is how a plan diffs what just arrived against a fixed point.
 
 `steps plan` reads the same record, so it lists only the versions a run would actually take.
 

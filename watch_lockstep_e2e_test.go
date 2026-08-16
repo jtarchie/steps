@@ -2,10 +2,11 @@ package main
 
 // Multi-`version: every` through the CLI: input sets, observed from outside.
 //
-// Same discipline as watch_e2e_test.go — every test drives `steps watch
-// --once` against a real pipeline and asserts only on what an operator could
-// see. These are separate because they cover behavior that did not exist when
-// that file froze: more than one get fanning out, in lockstep.
+// Same discipline as watch_e2e_test.go — every test drives the real CLI
+// (`watch --once`, or `run` where a manual trigger is the shape under test)
+// against a real pipeline and asserts only on what an operator could see.
+// These are separate because they cover behavior that did not exist when that
+// file froze: more than one get fanning out, in lockstep.
 
 import (
 	"fmt"
@@ -113,6 +114,32 @@ func (f *lockstepFixture) watch(t *testing.T) {
 	mustRun(t, "watch", f.pipeline, "--once")
 }
 
+// watchExpectingFailure runs a cycle whose job is meant to fail, and insists
+// that it did. Discarding the error would let a test that no longer injects a
+// failure keep passing as a no-failure scenario.
+func (f *lockstepFixture) watchExpectingFailure(t *testing.T) {
+	t.Helper()
+
+	err := run([]string{"watch", f.pipeline, "--once"})
+	if err == nil {
+		t.Fatal("the cycle was supposed to fail a build; it succeeded")
+	}
+}
+
+// mustReplace is strings.Replace that fails the test when it matches nothing.
+// Every fixture here is built by patching a shared pipeline, and a silent
+// no-op patch degrades a test into a weaker one that still passes.
+func mustReplace(t *testing.T, s, old, replacement string) string {
+	t.Helper()
+
+	out := strings.Replace(s, old, replacement, 1)
+	if out == s {
+		t.Fatalf("fixture patch matched nothing: %q", old)
+	}
+
+	return out
+}
+
 func (f *lockstepFixture) assertDid(t *testing.T, want ...string) {
 	t.Helper()
 
@@ -178,17 +205,17 @@ func TestWatchLockstepDiagonal(t *testing.T) {
 // retried. Same rule as the single-every case, per set instead of per
 // version.
 func TestWatchLockstepFailureAdvances(t *testing.T) {
-	fixture := newLockstepFixture(t, strings.Replace(lockstepPipeline,
+	fixture := newLockstepFixture(t, mustReplace(t, lockstepPipeline,
 		`run: echo "$(cat a/n.txt)+$(cat b/n.txt)" >> PROCESSED`,
 		`run: |
       echo "$(cat a/n.txt)+$(cat b/n.txt)" >> PROCESSED
-      test "$(cat a/n.txt)" != 3`, 1))
+      test "$(cat a/n.txt)" != 3`))
 
 	fixture.watch(t)
 
 	fixture.feed(t, fixture.feedA, 4)
 	fixture.feed(t, fixture.feedB, 4)
-	_ = run([]string{"watch", fixture.pipeline, "--once"}) // the middle set fails
+	fixture.watchExpectingFailure(t) // the middle set fails
 
 	fixture.assertDid(t, "2+2", "3+3", "4+4")
 
@@ -233,7 +260,7 @@ func TestWatchLockstepSkipStillConsumesTheSet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changed := strings.Replace(string(pipeline), `echo "$(cat`, `echo "changed:$(cat`, 1)
+	changed := mustReplace(t, string(pipeline), `echo "$(cat`, `echo "changed:$(cat`)
 
 	err = os.WriteFile(fixture.pipeline, []byte(changed), 0o600) //nolint:gosec // a t.TempDir()-scoped file this test wrote
 	if err != nil {
@@ -249,12 +276,12 @@ func TestWatchLockstepSkipStillConsumesTheSet(t *testing.T) {
 // — it binds its single resolved version into EVERY set, however many sets
 // its every siblings produce.
 func TestWatchLockstepNonEveryRidesAlong(t *testing.T) {
-	fixture := newLockstepFixture(t, strings.Replace(lockstepPipeline, `
+	fixture := newLockstepFixture(t, mustReplace(t, lockstepPipeline, `
   - get: a
     trigger: true
     version: every`, `
   - get: a
-    trigger: true`, 1))
+    trigger: true`))
 
 	fixture.watch(t)
 
