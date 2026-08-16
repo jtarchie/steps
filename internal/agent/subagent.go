@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"time"
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
@@ -215,6 +217,17 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 
 	fmt.Printf("agent: %s (sub-agent)\n", c.ri.AgentName)
 
+	// Which run/job/step this delegation belongs to and how deep it nests —
+	// read from the PARENT's live context (conv.recorder is the child's own,
+	// one level deeper), so a watcher reading slog output can attribute a
+	// child conversation to the step that spawned it, not just the events
+	// bus (see conv.recorder above / transcriptRecorder.childRecorder).
+	live := env.transcript.liveIdentity()
+	started := time.Now()
+
+	slog.Info("agent.subagent_start", "run", live.runID, "job", live.job, "step", live.stepName, "index", live.stepIndex,
+		"depth", live.depth+1, "agent", c.ri.AgentName)
+
 	// The child gets its own request counter so its provider requests are
 	// attributed to it rather than silently folded into the parent's total.
 	// Its session is stable per (run, agent) with no attempt component, so
@@ -222,6 +235,9 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	// composeSessionID).
 	res, runErr := runAgentConversation(withRequestCounter(ctx, &requestCounter{}), c.llm, conv)
 	printAgentResponse(res)
+
+	slog.Info("agent.subagent_finish", "run", live.runID, "job", live.job, "step", live.stepName, "index", live.stepIndex,
+		"depth", live.depth+1, "agent", c.ri.AgentName, "duration", time.Since(started), "error", runErr)
 
 	// Nest the child's transcript into the PARENT's recorder (env.transcript
 	// is the caller's), before the error branch: a failed child's trace is

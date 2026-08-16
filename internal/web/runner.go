@@ -108,6 +108,8 @@ func (r *LocalRunner) Drain(ctx context.Context, pipelines []*Pipeline) {
 }
 
 func (r *LocalRunner) drainPipeline(ctx context.Context, target *Pipeline) {
+	slog.Info("web.pipeline.drain_start", "pipeline", target.Slug)
+
 	// Anything a previous process left claimed-but-unfinished is stranded
 	// until something releases it — the same recovery `steps watch` does at
 	// startup, for the same reason.
@@ -162,6 +164,8 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 
 	force := r.takeForce(target.Slug, jobName)
 
+	slog.Info("web.job.run", "pipeline", target.Slug, "job", jobName)
+
 	runErr := r.runJob(ctx, target, job, force)
 
 	status := "succeeded"
@@ -170,6 +174,8 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 
 		slog.Error("web.run", "pipeline", target.Slug, "job", jobName, "error", runErr)
 	}
+
+	slog.Info("web.job.done", "pipeline", target.Slug, "job", jobName, "status", status)
 
 	err = target.Store.CompleteJob(context.WithoutCancel(ctx), id, status, runErr)
 	if err != nil {

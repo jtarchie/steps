@@ -217,6 +217,7 @@ linters:
             - "$gostd"
             - "github.com/modelcontextprotocol/go-sdk/mcp"
             - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/exprlang"
             # goleak is test-only: http() fans out over goroutines here too.
             - "go.uber.org/goleak"

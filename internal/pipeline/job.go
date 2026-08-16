@@ -35,7 +35,23 @@ import (
 // runSteps. skipCache (--force) bypasses only the chain-skip planning and
 // re-runs everything, though results are still recorded as usual.
 func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map[string]string, provider workspace.Provider, st *store.Store, skipCache bool) error {
-	slog.Info("job.run", "job", job.Name, "steps", len(job.Plan))
+	// A run identifies itself so a failure can be continued rather than
+	// restarted, and so every log line below — including this one — can be
+	// correlated to one invocation. Minted first, before validation or
+	// preflight even run: a run that fails before its first step is still a
+	// run somebody may want to trace.
+	resume := resumeFrom(ctx)
+	if resume == nil {
+		resume = &resumeState{id: NewRunID(), done: map[int]string{}}
+		ctx = withResume(ctx, resume)
+	}
+
+	// Publish the run's identity where packages that cannot import this one
+	// can still stamp it on their events — internal/agent, tagging every
+	// conversation turn with the run it belongs to.
+	ctx = events.WithRunID(ctx, resume.id)
+
+	slog.Info("job.run", "job", job.Name, "run", resume.id, "steps", len(job.Plan))
 
 	err := workspace.ValidateArtifactFlow(cfg, job)
 	if err != nil {
@@ -62,20 +78,6 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	if err != nil {
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
-
-	// A run identifies itself so a failure can be continued rather than
-	// restarted. Recorded before the first step, since a run that fails on
-	// step one is still a run somebody may want to resume.
-	resume := resumeFrom(ctx)
-	if resume == nil {
-		resume = &resumeState{id: NewRunID(), done: map[int]string{}}
-		ctx = withResume(ctx, resume)
-	}
-
-	// Publish the run's identity where packages that cannot import this one
-	// can still stamp it on their events — internal/agent, tagging every
-	// conversation turn with the run it belongs to.
-	ctx = events.WithRunID(ctx, resume.id)
 
 	// Every run records its own story, whether or not anything is watching.
 	ctx, closeBus := attachEventBus(ctx, st)
@@ -121,7 +123,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	usage := agent.NewResumedRunUsage(jobBudgetTokens(job), priorSpend(ctx, st, resume))
 	ctx = agent.WithRunUsage(ctx, usage)
 
-	defer reportJobUsage(job.Name, usage)
+	defer reportJobUsage(job.Name, resume.id, usage)
 
 	runner := stepRunner{cfg: cfg, jobName: job.Name, bw: bw, st: st}
 
@@ -159,7 +161,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 
 	recordPassedVersions(ctx, st, job.Name, resume.id, fetched)
 
-	slog.Info("job.done", "job", job.Name)
+	slog.Info("job.done", "job", job.Name, "run", resume.id)
 
 	return nil
 }
@@ -359,7 +361,7 @@ func priorSpend(ctx context.Context, st *store.Store, resume *resumeState) int {
 // job succeeded: seeing "341,204 tokens across 4 agent steps" is what tells an
 // operator which ceilings are even sensible to set. A job with no agent steps
 // prints nothing.
-func reportJobUsage(jobName string, usage *agent.RunUsage) {
+func reportJobUsage(jobName, runID string, usage *agent.RunUsage) {
 	steps := usage.Steps()
 	prior := usage.Prior()
 
@@ -383,7 +385,7 @@ func reportJobUsage(jobName string, usage *agent.RunUsage) {
 		fmt.Printf("  %-16s %s\n", step.Step, humanCount(step.Total))
 	}
 
-	fields := []any{"job", jobName, "total_tokens", total, "agent_steps", len(steps)}
+	fields := []any{"job", jobName, "run", runID, "total_tokens", total, "agent_steps", len(steps)}
 	if prior > 0 {
 		fields = append(fields, "prior_tokens", prior, "attempt_tokens", total-prior)
 	}

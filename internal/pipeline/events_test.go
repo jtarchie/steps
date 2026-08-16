@@ -1,7 +1,9 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,80 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
+
+// TestRunJobLogsCarryTheRunID proves the run-level bracket (job.run/job.done)
+// and every step's completion (job.step.finished) reach slog with the SAME
+// run id — an operator reading --log-level output, not just the event bus,
+// otherwise had no way to correlate a step's completion to the run/job it
+// belonged to, or even to know a step had finished at all (see job.step's
+// own pre-execution Debug line, which had no completion counterpart).
+func TestRunJobLogsCarryTheRunID(t *testing.T) {
+	// Not t.Parallel(): mutates slog's default logger.
+	cfg, job, st, provider := eventFixture(t)
+	defer func() { _ = st.Close() }()
+	defer func() { _ = provider.Close() }()
+
+	var buf bytes.Buffer
+
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	err := RunJob(context.Background(), cfg, job, nil, provider, st, false)
+	if err != nil {
+		t.Fatalf("RunJob: %v", err)
+	}
+
+	out := buf.String()
+
+	runLine := findLine(t, out, "job.run")
+	runID := fieldValue(t, runLine, "run")
+
+	if runID == "" {
+		t.Fatalf("job.run carried no run id: %s", runLine)
+	}
+
+	for _, msg := range []string{"job.done", "job.step.finished"} {
+		line := findLine(t, out, msg)
+		if got := fieldValue(t, line, "run"); got != runID {
+			t.Errorf("%s run=%q, want %q (job.run's id): %s", msg, got, runID, line)
+		}
+	}
+
+	if strings.Count(out, "job.step.finished") != len(job.Plan) {
+		t.Errorf("expected one job.step.finished per plan step (%d), got %d in: %s", len(job.Plan), strings.Count(out, "job.step.finished"), out)
+	}
+}
+
+// findLine returns the first log line containing msg, failing the test if
+// none does.
+func findLine(t *testing.T, out, msg string) string {
+	t.Helper()
+
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "msg="+msg+" ") {
+			return line
+		}
+	}
+
+	t.Fatalf("no log line found for %q in: %s", msg, out)
+
+	return ""
+}
+
+// fieldValue extracts a slog text-handler key=value field from line, or ""
+// when absent.
+func fieldValue(t *testing.T, line, key string) string {
+	t.Helper()
+
+	for _, field := range strings.Fields(line) {
+		if v, ok := strings.CutPrefix(field, key+"="); ok {
+			return v
+		}
+	}
+
+	return ""
+}
 
 // TestRunJobPublishesRunEvents is the whole live/post-hoc contract in one
 // pass: a real job run publishes a bracketed, ordered event stream, and the

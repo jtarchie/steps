@@ -32,7 +32,7 @@ import (
 func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []config.Step) error {
 	i := w.index
 
-	resource, resourceType, _, err := fetchGetVersions(ctx, w.cfg, step, w.pinned, w.cache)
+	resource, resourceType, _, err := fetchGetVersions(ctx, w.cfg, w.jobName, i, step, w.pinned, w.cache)
 	if err != nil {
 		return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 	}
@@ -234,7 +234,7 @@ func (w *planWalk) runTriggeredBuild(
 	// loud the moment resolution started reading job_versions for real.
 	recordFetchedVersion(ctx, resource.Name, version)
 
-	err = fetchGetStepWithStep(ctx, w.cfg, step, step.Get, resource, resourceType, version, bw)
+	err = fetchGetStepWithStep(ctx, w.cfg, w.jobName, w.index, step, step.Get, resource, resourceType, version, bw)
 
 	// Get-step hooks fire once per triggered build, in that build's own
 	// workspace, observing the fetch outcome. A fetch failure (or a hook that
@@ -332,7 +332,7 @@ func (w *planWalk) fetchInPlace(ctx context.Context, step config.Step, steps []c
 func (w *planWalk) resolveInPlaceVersion(
 	ctx context.Context, step config.Step,
 ) (*config.Resource, *config.ResourceType, map[string]any, error) {
-	resource, resourceType, versions, err := fetchGetVersions(ctx, w.cfg, step, w.pinned, w.cache)
+	resource, resourceType, versions, err := fetchGetVersions(ctx, w.cfg, w.jobName, w.index, step, w.pinned, w.cache)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -402,7 +402,7 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 	// step kind keeps, and hid a get whose fetch failed.
 	recordExecution(ctx, resource.Name)
 
-	err = fetchGetStepWithStep(ctx, w.cfg, step, step.Get, *resource, *resourceType, version, w.bw)
+	err = fetchGetStepWithStep(ctx, w.cfg, w.jobName, i, step, step.Get, *resource, *resourceType, version, w.bw)
 
 	// Get-step hooks fire in the same workspace the resource was fetched into.
 	if err == nil && !step.Hooks.Empty() {
@@ -449,7 +449,7 @@ func (w *planWalk) bindAssigned(step config.Step, versions []map[string]any) ([]
 
 // fetchGetVersions resolves a get step's versions with retries and timeout
 // support, returning the resource, its type, and the versions to fetch.
-func fetchGetVersions(ctx context.Context, cfg *config.Config, step config.Step, pinned map[string]string, cache *rsrc.Cache) (*config.Resource, *config.ResourceType, []map[string]any, error) {
+func fetchGetVersions(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, pinned map[string]string, cache *rsrc.Cache) (*config.Resource, *config.ResourceType, []map[string]any, error) {
 	var (
 		resource     *config.Resource
 		resourceType *config.ResourceType
@@ -458,7 +458,7 @@ func fetchGetVersions(ctx context.Context, cfg *config.Config, step config.Step,
 
 	err := retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
 		fmt.Printf("get: %s (attempt %d/%d)\n", step.Get, attempt, total)
-		slog.Info("job.get.attempt", "get", step.Get, "attempt", attempt, "total_attempts", total)
+		slog.Info("job.get.attempt", "job", jobName, "index", i, "get", step.Get, "attempt", attempt, "total_attempts", total)
 	}, func(attemptCtx context.Context) error {
 		res, resType, vers, fetchErr := cache.ResolveVersionsCached(attemptCtx, cfg, step, pinned)
 		if fetchErr != nil {
@@ -488,12 +488,12 @@ func fetchGetVersions(ctx context.Context, cfg *config.Config, step config.Step,
 // the artifact downstream steps name as an input — is always the get step's
 // artifact name (its get: value), which differs from the resource when the get
 // aliases it via resource:; only the fetched content comes from the resource.
-func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, step config.Step, artifact string, resource config.Resource, resourceType config.ResourceType, version map[string]any, bw workspace.BuildWorkspace) error {
+func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, artifact string, resource config.Resource, resourceType config.ResourceType, version map[string]any, bw workspace.BuildWorkspace) error {
 	err := retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
 		fmt.Printf("get: %s (version: %v, attempt %d/%d)\n", artifact, version, attempt, total)
-		slog.Info("job.get.in.attempt", "artifact", artifact, "attempt", attempt, "total_attempts", total)
+		slog.Info("job.get.in.attempt", "job", jobName, "index", i, "artifact", artifact, "attempt", attempt, "total_attempts", total)
 	}, func(attemptCtx context.Context) error {
-		return fetchGetStep(attemptCtx, cfg, artifact, resource, resourceType, version, step.Params, bw)
+		return fetchGetStep(attemptCtx, cfg, jobName, i, artifact, resource, resourceType, version, step.Params, bw)
 	})
 	if err != nil {
 		return fmt.Errorf("get %q: %w", artifact, err)
@@ -502,10 +502,10 @@ func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, step config.S
 	return nil
 }
 
-func fetchGetStep(ctx context.Context, cfg *config.Config, artifact string, resource config.Resource, resourceType config.ResourceType, version, params map[string]any, bw workspace.BuildWorkspace) error {
+func fetchGetStep(ctx context.Context, cfg *config.Config, jobName string, i int, artifact string, resource config.Resource, resourceType config.ResourceType, version, params map[string]any, bw workspace.BuildWorkspace) error {
 	fmt.Printf("get: %s (version: %v)\n", artifact, version)
 
-	err := resourceDir(ctx, cfg, artifact, resourceType, resource.Env, resource.Source, version, params, bw, func(dir string) error {
+	err := resourceDir(ctx, cfg, jobName, i, artifact, resourceType, resource.Env, resource.Source, version, params, bw, func(dir string) error {
 		return rsrc.RunIn(ctx, cfg, resourceType, resource.Env, resource.Source, version, params, dir)
 	})
 	if err != nil {
@@ -526,7 +526,7 @@ func fetchGetStep(ctx context.Context, cfg *config.Config, artifact string, reso
 // build workspace that cannot cache (the default shared one, or an isolating
 // one with the cache off) takes the plain path.
 func resourceDir(
-	ctx context.Context, cfg *config.Config, artifact string,
+	ctx context.Context, cfg *config.Config, jobName string, i int, artifact string,
 	resourceType config.ResourceType, extraEnv []string, source, version, params map[string]any,
 	bw workspace.BuildWorkspace, fetch func(dir string) error,
 ) error {
@@ -544,7 +544,7 @@ func resourceDir(
 	// an empty key simply means "do not cache this one".
 	key, err := merkle.ResourceCacheKey(cfg, resourceType, extraEnv, source, version, params)
 	if err != nil {
-		slog.Debug("job.get.cache_key_failed", "artifact", artifact, "error", err)
+		slog.Debug("job.get.cache_key_failed", "job", jobName, "index", i, "artifact", artifact, "error", err)
 
 		key = ""
 	}

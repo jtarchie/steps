@@ -79,6 +79,18 @@ type liveContext struct {
 	depth int
 }
 
+// liveIdentity returns r's live context, or the zero value when r is nil —
+// what a toolImpl invoked outside a conversation (a test, a direct call)
+// sees. Lets a log call site read job/step/run identity without its own nil
+// check on the recorder.
+func (r *transcriptRecorder) liveIdentity() liveContext {
+	if r == nil {
+		return liveContext{}
+	}
+
+	return r.live
+}
+
 // publish sends one recorded event to the bus, if there is one.
 func (r *transcriptRecorder) publish(eventType, text, name, detail string) {
 	if r == nil || r.live.bus == nil {

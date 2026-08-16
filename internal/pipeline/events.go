@@ -90,6 +90,11 @@ func publishStepStarted(ctx context.Context, jobName string, i int, step config.
 
 // publishStepFinished announces how a step ended, with the hash it produced
 // so a consumer can link straight to the node.
+//
+// It is also the one place a step's completion reaches slog — an operator
+// reading `--log-level` output, not the event bus/web UI, otherwise saw a
+// step START (the dispatchers' own "job.step" Debug line) and never learned
+// how long it ran or whether it succeeded.
 func publishStepFinished(ctx context.Context, jobName string, i int, step config.Step, hash string, started time.Time, err error) {
 	status := "succeeded"
 	text := ""
@@ -98,6 +103,10 @@ func publishStepFinished(ctx context.Context, jobName string, i int, step config
 		status = string(outcome.Classify(ctx, err))
 		text = err.Error()
 	}
+
+	slog.Info("job.step.finished",
+		"job", jobName, "run", runIDFrom(ctx), "index", i, "step", eventStepName(step), "kind", stepKindName(step),
+		"status", status, "duration", time.Since(started))
 
 	events.Publish(ctx, events.Event{
 		Type:       events.TypeStepFinished,

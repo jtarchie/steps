@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/shell"
 )
 
@@ -44,7 +45,7 @@ func buildFixPrompt(fix *config.FixSpec, rt config.ResolvedTask, failureOutput, 
 // resolving the exact failure the task hit; running under a different image
 // than the one that produced (and re-verifies) the failure would make the
 // loop incoherent.
-func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, failureOutput, workspaceDir string) error {
+func RunFix(ctx context.Context, cfg *config.Config, jobName string, stepIndex int, rt config.ResolvedTask, failureOutput, workspaceDir string) error {
 	fix := rt.Fix
 
 	// Project the fix spec onto an agent Step so ResolveAgentInvocation can
@@ -131,6 +132,13 @@ func RunFix(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, fai
 		toolChoiceStringOnly: ri.StringOnlyToolChoice,
 		compactAfterTokens:   ri.CompactAfterTokens,
 		usage:                &stepUsage{name: ri.AgentName, budget: ri.BudgetTokens, delegateFraction: cfg.DelegateBudgetFraction(ri.AgentName)},
+		// Give the conversation its live identity, matching RunStep/RunHook:
+		// a fix agent is nested inside the task step that failed, so its
+		// tool calls are attributable the same way instead of publishing (and
+		// logging) nowhere.
+		recorder: &transcriptRecorder{live: liveContext{
+			bus: events.FromContext(ctx), runID: events.RunID(ctx), job: jobName, stepIndex: stepIndex, stepName: fix.Agent,
+		}},
 	}
 	// RunFix runs the conversation once and never fails over (see
 	// failover.go's doc comment on the scope boundary), so it owns

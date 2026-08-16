@@ -135,7 +135,7 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 
 	recordCompletedStep(ctx, w.st, w.index, step, err)
 
-	nextIndex, _, err, exhaustedErr := applyRouting(ctx, steps, w.index, step, res.disposition, res.verdict, err, w.visits)
+	nextIndex, _, err, exhaustedErr := applyRouting(ctx, steps, w.jobName, w.index, step, res.disposition, res.verdict, err, w.visits)
 	if exhaustedErr != nil {
 		return true, exhaustedErr
 	}
@@ -203,7 +203,7 @@ func reportChainSkipped(ctx context.Context, jobName string, firstIndex int, ste
 		}
 
 		fmt.Printf("skip: %s (chain)\n", name)
-		slog.Info("job.skip", "job", jobName, "step", name, "reason", "chain")
+		slog.Info("job.skip", "job", jobName, "index", firstIndex+offset, "step", name, "reason", "chain")
 		publishStepSkipped(ctx, jobName, firstIndex+offset, step, "", skipReason(stepChainSkipped))
 	}
 }

@@ -763,7 +763,15 @@ func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, env too
 // custom tool's args, or write_file's content), no different from the full
 // command/output internal/shell already logs at this level.
 func executeBudgetedTool(ctx context.Context, call *genai.FunctionCall, env toolEnv, registry map[string]toolImpl, maxCalls, callCounts map[string]int) map[string]any {
-	slog.Debug("agent.tool_call", "tool", call.Name, "id", call.ID, "args", call.Args)
+	// Which run/job/step/depth this call belongs to — the identity every
+	// nested call (sub-agent, MCP, custom tool) shares with its enclosing
+	// conversation, read from the recorder rather than threaded as
+	// parameters. Zero-valued outside a conversation (tests, direct calls).
+	live := env.transcript.liveIdentity()
+
+	slog.Debug("agent.tool_call", "tool", call.Name, "id", call.ID,
+		"run", live.runID, "job", live.job, "step", live.stepName, "index", live.stepIndex, "depth", live.depth,
+		"args", call.Args)
 
 	start := time.Now()
 
@@ -777,6 +785,7 @@ func executeBudgetedTool(ctx context.Context, call *genai.FunctionCall, env tool
 	}
 
 	slog.Debug("agent.tool_result", "tool", call.Name, "id", call.ID,
+		"run", live.runID, "job", live.job, "step", live.stepName, "index", live.stepIndex, "depth", live.depth,
 		"duration", time.Since(start), "error", response["error"], "exit_code", response["exit_code"],
 		"result", debugToolResultPreview(response))
 

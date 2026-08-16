@@ -11,6 +11,7 @@ import (
 	"slices"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/template"
 )
@@ -63,7 +64,7 @@ func CheckVersions(
 	case config.BackendShell:
 	}
 
-	slog.Debug("resource.check", "resource_type", rt.Name, "source", source, "version", version)
+	slog.Debug("resource.check", "run", events.RunID(ctx), "resource_type", rt.Name, "source", source, "version", version)
 
 	command, err := template.Render(rt.Config.Check, map[string]any{"source": source, "version": version})
 	if err != nil {
@@ -100,7 +101,7 @@ func CheckVersions(
 		return nil, fmt.Errorf("check %q: could not parse JSON output: %w", rt.Name, err)
 	}
 
-	slog.Info("resource.checked", "resource_type", rt.Name, "versions", len(versions))
+	slog.Info("resource.checked", "run", events.RunID(ctx), "resource_type", rt.Name, "versions", len(versions))
 
 	return versions, nil
 }
@@ -271,7 +272,7 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, extr
 	case config.BackendShell:
 	}
 
-	slog.Debug("resource.in", "resource_type", rt.Name, "source", source, "version", version, "params", params, "dest_dir", destDir)
+	slog.Debug("resource.in", "run", events.RunID(ctx), "resource_type", rt.Name, "source", source, "version", version, "params", params, "dest_dir", destDir)
 
 	command, err := template.Render(rt.Config.In, map[string]any{"source": source, "version": version, "params": params})
 	if err != nil {
@@ -292,7 +293,7 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, extr
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
 
-	slog.Info("resource.fetched", "resource_type", rt.Name, "dest_dir", destDir)
+	slog.Info("resource.fetched", "run", events.RunID(ctx), "resource_type", rt.Name, "dest_dir", destDir)
 
 	return nil
 }
@@ -321,7 +322,7 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, ext
 	case config.BackendShell:
 	}
 
-	slog.Debug("resource.out", "resource_type", rt.Name, "source", source, "params", params, "src_dir", srcDir)
+	slog.Debug("resource.out", "run", events.RunID(ctx), "resource_type", rt.Name, "source", source, "params", params, "src_dir", srcDir)
 
 	command, err := template.Render(rt.Config.Out, map[string]any{"source": source, "params": params})
 	if err != nil {
@@ -351,7 +352,7 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, ext
 		return nil, nil //nolint:nilnil // unparsable/empty stdout is not an error; nil result means "no version produced"
 	}
 
-	slog.Info("resource.put", "resource_type", rt.Name, "src_dir", srcDir, "result", result)
+	slog.Info("resource.put", "run", events.RunID(ctx), "resource_type", rt.Name, "src_dir", srcDir, "result", result)
 
 	return result, nil
 }

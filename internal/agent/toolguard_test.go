@@ -294,6 +294,44 @@ func TestExecuteBudgetedToolLogsResultPreviewAtDebug(t *testing.T) {
 	}
 }
 
+// TestExecuteBudgetedToolLogsOwnerIdentity proves a nested tool call (the
+// case that was previously unattributable — see the mid-run cascade and
+// sub-agent/MCP call sites, none of which named a job/step/run) carries the
+// enclosing conversation's identity once env.transcript is set, so an
+// operator reading --log-level=debug output can tell which run/job/step
+// owns the call.
+func TestExecuteBudgetedToolLogsOwnerIdentity(t *testing.T) {
+	// Not t.Parallel(): mutates slog's default logger.
+	dir := t.TempDir()
+
+	registry := map[string]toolImpl{
+		"noop": func(_ context.Context, _ map[string]any, _ toolEnv) map[string]any {
+			return map[string]any{}
+		},
+	}
+	call := &genai.FunctionCall{Name: "noop"}
+
+	env := testEnv(dir)
+	env.transcript = &transcriptRecorder{live: liveContext{
+		runID: "run-123", job: "build", stepIndex: 2, stepName: "review", depth: 1,
+	}}
+
+	var buf bytes.Buffer
+
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	executeBudgetedTool(context.Background(), call, env, registry, nil, map[string]int{})
+
+	out := buf.String()
+	for _, want := range []string{"run=run-123", "job=build", "index=2", "step=review", "depth=1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected the tool-call/result logs to carry %q, got: %s", want, out)
+		}
+	}
+}
+
 // TestRunAgentConversationCallBudgetResetsAcrossAttempts drives
 // runAgentConversation twice (simulating two attempts.Do calls) against a
 // budgeted required tool, proving the second call — a fresh

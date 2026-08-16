@@ -84,7 +84,19 @@ func runPreparedWithFailover(ctx context.Context, cfg *config.Config, prepared p
 		// Loud, not silent, matching preflight's own failover — a fallback
 		// model can produce meaningfully different output, and a quality dip
 		// caused by an outage must not look identical to a normal run.
+		//
+		// live is read from the recorder RunStep/RunHook/RunFix already set
+		// up (see step.go's own doc comment on prepared.conv.recorder) rather
+		// than threaded as parameters here — the same reason
+		// executeBudgetedTool reads it: this line otherwise names the two
+		// models and nothing about which job, step, or run hit the cascade.
+		live := prepared.conv.recorder.liveIdentity()
+
 		slog.Warn("agent.failover",
+			"run", live.runID,
+			"job", live.job,
+			"step", live.stepName,
+			"index", live.stepIndex,
 			"agent", agent.Name,
 			"from", ri.ModelName,
 			"to", next.ModelName,

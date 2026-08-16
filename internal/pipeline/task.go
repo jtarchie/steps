@@ -58,7 +58,7 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 		return stepResult{}, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 	}
 
-	cached := lookupStepCache(ctx, r, step, req, name)
+	cached := lookupStepCache(ctx, r, i, step, req, name)
 	if cached.Hit {
 		err = r.st.RecordNode(ctx, nodeRecord(node), r.jobName, "succeeded", cached.NodeResult(), nil)
 		if err != nil {
@@ -70,7 +70,7 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 
 	fmt.Printf("task: %s\n", name)
 
-	err = executeTask(ctx, r.cfg, step, rt, r.bw)
+	err = executeTask(ctx, r.cfg, r.jobName, i, step, rt, r.bw)
 	if err != nil {
 		wrapped := fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 		recordStepFailure(ctx, r, node, wrapped)
@@ -95,7 +95,11 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 // outputs — with no merkle/store recording. Shared by runTaskStep (which
 // records the aggregate outcome) and hook execution (where the enclosing
 // step/job records it).
-func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt config.ResolvedTask, bw workspace.BuildWorkspace) error {
+//
+// jobName and i are carried only for logging/fix-agent identity — a hook
+// call site (i == -1: a hook is not a plan position) still has a job to
+// attribute the retry-attempt and fix-agent logs to.
+func executeTask(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, rt config.ResolvedTask, bw workspace.BuildWorkspace) error {
 	// A cell of a collecting matrix captures each output under its own
 	// coordinates (findings -> findings/alpha) instead of the plain name, so
 	// N cells share one declared artifact without clobbering each other. An
@@ -119,9 +123,9 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 
 	err = retryWithTimeout(ctx, step.Attempts, rt.Timeout, func(attempt, total int) {
 		fmt.Printf("task: %s (attempt %d/%d)\n", executedStepName(step), attempt, total)
-		slog.Info("job.task.attempt", "task", executedStepName(step), "attempt", attempt, "total_attempts", total)
+		slog.Info("job.task.attempt", "job", jobName, "index", i, "task", executedStepName(step), "attempt", attempt, "total_attempts", total)
 	}, func(attemptCtx context.Context) error {
-		return runTaskCommand(attemptCtx, cfg, rt, space.Dir())
+		return runTaskCommand(attemptCtx, cfg, jobName, i, rt, space.Dir())
 	})
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
@@ -137,7 +141,7 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 
 // runTaskCommand runs a task's run: command. Without an assert: or fix:, it
 // streams output live and any nonzero exit is a hard failure.
-func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, workspaceDir string) error {
+func runTaskCommand(ctx context.Context, cfg *config.Config, jobName string, i int, rt config.ResolvedTask, workspaceDir string) error {
 	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Env: rt.Env, User: rt.User, Network: rt.Network,
 		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()})
 	if err != nil {
@@ -151,7 +155,7 @@ func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedT
 	case rt.Assert != nil:
 		return runAssertedTask(ctx, runner, rt, workspaceDir)
 	case rt.Fix != nil:
-		return runFixTask(ctx, cfg, runner, rt, workspaceDir)
+		return runFixTask(ctx, cfg, jobName, i, runner, rt, workspaceDir)
 	}
 
 	stdout, stderr, err := runner.RunStreamedCapture(ctx, rt.Run, maxPublishedOutputBytes)
@@ -190,7 +194,7 @@ func classifyRunError(ctx context.Context, err error) error {
 // nonzero exit invoke the fix agent (seeded with that output and given the
 // task itself as a rerun tool), then re-run the command once — that re-run's
 // exit code is the verdict. A green first run never constructs the agent.
-func runFixTask(ctx context.Context, cfg *config.Config, runner shell.Runner, rt config.ResolvedTask, workspaceDir string) error {
+func runFixTask(ctx context.Context, cfg *config.Config, jobName string, i int, runner shell.Runner, rt config.ResolvedTask, workspaceDir string) error {
 	stdout, stderr, exitCode, err := runCaptured(ctx, runner, rt)
 	if err != nil {
 		return err
@@ -210,7 +214,7 @@ func runFixTask(ctx context.Context, cfg *config.Config, runner shell.Runner, rt
 	// the same ordering that puts a step ahead of its hooks.
 	recordExecution(ctx, rt.Fix.Agent)
 
-	err = agent.RunFix(ctx, cfg, rt, taskFailureOutput(stdout, stderr, exitCode), workspaceDir)
+	err = agent.RunFix(ctx, cfg, jobName, i, rt, taskFailureOutput(stdout, stderr, exitCode), workspaceDir)
 	if err != nil {
 		return fmt.Errorf("fix agent %q: %w", rt.Fix.Agent, err)
 	}

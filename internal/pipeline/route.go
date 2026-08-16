@@ -98,7 +98,7 @@ func resolveTransition(ctx context.Context, steps []config.Step, i int, step con
 // line. A backward route past max_visits yields exhaustedErr (a job-level
 // failure) instead of routing. routedKey, non-empty only when the step
 // actually routed, is what runSteps uses to build the next step's Handoff.
-func applyRouting(ctx context.Context, steps []config.Step, i int, step config.Step, disposition stepDisposition, verdict string, stepErr error, visits map[int]int) (nextIndex int, routedKey string, consumedErr, exhaustedErr error) {
+func applyRouting(ctx context.Context, steps []config.Step, jobName string, i int, step config.Step, disposition stepDisposition, verdict string, stepErr error, visits map[int]int) (nextIndex int, routedKey string, consumedErr, exhaustedErr error) {
 	if !step.Routes() || disposition != stepRan {
 		return i + 1, "", stepErr, nil
 	}
@@ -109,7 +109,7 @@ func applyRouting(ctx context.Context, steps []config.Step, i int, step config.S
 	}
 
 	if routed {
-		reportRoute(steps, i, step, target, key, visits)
+		reportRoute(steps, jobName, i, step, target, key, visits)
 
 		return target, key, nil, nil // consume the outcome — the job does not also fail
 	}
@@ -127,7 +127,7 @@ func applyRouting(ctx context.Context, steps []config.Step, i int, step config.S
 // many times this step may execute (see resolveTransition), so its own count
 // against its own bound is the number that says how close the loop is to
 // exhausting.
-func reportRoute(steps []config.Step, i int, step config.Step, target int, key string, visits map[int]int) {
+func reportRoute(steps []config.Step, jobName string, i int, step config.Step, target int, key string, visits map[int]int) {
 	from, to := executedStepName(step), routeTargetName(steps, target)
 
 	progress := fmt.Sprintf("visit %d", visits[i])
@@ -136,7 +136,7 @@ func reportRoute(steps []config.Step, i int, step config.Step, target int, key s
 	}
 
 	fmt.Printf("route: %s --%s--> %s (%s)\n", from, key, to, progress)
-	slog.Info("job.route", "from", from, "key", key, "to", to, "visit", visits[i], "max_visits", step.MaxVisits, "index", i)
+	slog.Info("job.route", "job", jobName, "index", i, "from", from, "key", key, "to", to, "visit", visits[i], "max_visits", step.MaxVisits)
 }
 
 // stepForcesUnskippable reports whether a step makes its chain unskippable: a

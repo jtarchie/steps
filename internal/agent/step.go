@@ -268,7 +268,7 @@ func reuseAgentStep(
 	ctx context.Context, cfg *config.Config, prepared preparedAgentStep, content map[string]any,
 	bw workspace.BuildWorkspace, st *store.Store, node merkle.Node, jobName, name string,
 ) (stepCacheLookup, StepOutcome, error) {
-	cached, err := lookupStepCache(ctx, cfg, prepared, content, bw, name)
+	cached, err := lookupStepCache(ctx, cfg, prepared, content, bw, jobName, name)
 	if err != nil || !cached.Hit {
 		return cached, StepOutcome{}, err
 	}
@@ -292,7 +292,7 @@ func reuseAgentStep(
 // the grant starts, which is real, but is not what an agent step costs.
 func lookupStepCache(
 	ctx context.Context, cfg *config.Config, prepared preparedAgentStep,
-	content map[string]any, bw workspace.BuildWorkspace, name string,
+	content map[string]any, bw workspace.BuildWorkspace, jobName, name string,
 ) (stepCacheLookup, error) {
 	if !merkle.StepCacheable(cfg, prepared.step) {
 		return stepCacheLookup{}, nil
@@ -317,7 +317,7 @@ func lookupStepCache(
 	res := workspace.LookupStepCache(ctx, bw, req)
 	if res.Hit {
 		fmt.Printf("skip: %s (reused)\n", name)
-		slog.Info("job.skip", "step", name, "reason", "reused", "key", res.Key)
+		slog.Info("job.skip", "job", jobName, "step", name, "reason", "reused", "key", res.Key)
 	}
 
 	return stepCacheLookup{StepCacheResult: res, request: req}, nil
@@ -463,7 +463,7 @@ func runOneConversation(
 // checked and rejected at load like any other. Evaluating it at load and then
 // never running it made that promise a lie — the hook reported success on a
 // mismatch its own assert existed to catch.
-func RunHook(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) error {
+func RunHook(ctx context.Context, cfg *config.Config, jobName string, step config.Step, bw workspace.BuildWorkspace) error {
 	prepared, err := prepareAgentStep(ctx, cfg, step, bw)
 	if err != nil {
 		return fmt.Errorf("agent %q: %w", step.Agent, err)
@@ -471,6 +471,15 @@ func RunHook(ctx context.Context, cfg *config.Config, step config.Step, bw works
 	defer prepared.close(step.Agent)
 
 	fmt.Printf("agent: %s%s\n", step.Agent, fallbackBanner(prepared))
+
+	// Give the conversation its live identity, matching RunStep (see its own
+	// comment above): a hook's conversation is nested inside a job that DOES
+	// have one, so its tool calls and any mid-run failover it triggers are
+	// attributable the same way a plan step's are, instead of publishing (and
+	// logging) nowhere. stepIndex is -1: a hook is not a plan position.
+	prepared.conv.recorder = &transcriptRecorder{live: liveContext{
+		bus: events.FromContext(ctx), runID: events.RunID(ctx), job: jobName, stepIndex: -1, stepName: step.DisplayName(),
+	}}
 
 	res, err := runAndAnnounceFailover(ctx, cfg, step.Agent, &prepared)
 

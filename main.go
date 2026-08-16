@@ -175,7 +175,11 @@ func (r *RunCmd) Run() error {
 		return err
 	}
 
+	slog.Info("pipeline.run", "pipeline", r.Pipeline, "job", job.Name)
+
 	runErr := pipeline.RunJob(ctx, cfg, job, r.Pin, provider, st, r.Force)
+
+	slog.Info("pipeline.done", "pipeline", r.Pipeline, "job", job.Name, "error", runErr)
 
 	// A successful manual run clears the watch circuit breaker: running the
 	// job by hand is the natural way to confirm a fix, and requiring a
@@ -226,6 +230,8 @@ func (w *WatchCmd) Run() error {
 
 	ctx = applyPreflightFlag(ctx, w.NoPreflight)
 
+	slog.Info("pipeline.watch", "pipeline", w.Pipeline, "once", w.Once, "interval", w.Interval, "max_concurrent", w.MaxConcurrent)
+
 	if w.Once {
 		return wrapRunErr(trigger.WatchOnce(ctx, cfg, provider, st, w.Pin, w.Force))
 	}
@@ -269,6 +275,8 @@ func (t *TestCmd) Run() error {
 		failures []string
 	)
 
+	slog.Info("pipeline.test", "pipeline", t.Pipeline, "jobs", len(cfg.Jobs))
+
 	for i := range cfg.Jobs {
 		job := &cfg.Jobs[i]
 		executed = append(executed, job.Name)
@@ -288,6 +296,8 @@ func (t *TestCmd) Run() error {
 
 		fmt.Printf("PASS %s\n", job.Name)
 	}
+
+	slog.Info("pipeline.test.done", "pipeline", t.Pipeline, "jobs", len(executed), "failed", len(failures))
 
 	if cfg.Assert != nil && len(cfg.Assert.Execution) > 0 && !slices.Equal(cfg.Assert.Execution, executed) {
 		return fmt.Errorf("pipeline assert.execution mismatch:\n  want: %v\n  got:  %v", cfg.Assert.Execution, executed)

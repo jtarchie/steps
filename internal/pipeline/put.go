@@ -53,7 +53,7 @@ func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindPut, StepIndex: i, Resource: resource.Name, Content: content}
 
-	result, err := executePut(ctx, r.cfg, step, r.bw)
+	result, err := executePut(ctx, r.cfg, r.jobName, i, step, r.bw)
 	if err != nil {
 		wrapped := fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 		recordStepFailure(ctx, r, node, wrapped)
@@ -76,7 +76,7 @@ func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 // nonzero out: exit is marked as a task-level failure so hook dispatch
 // classifies it as failed; a resource lookup or workspace error stays
 // unmarked → errored.
-func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) (map[string]any, error) {
+func executePut(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace) (map[string]any, error) {
 	// Named here, not left to the caller: runHookStep's put branch adds no
 	// context of its own, so an unwrapped lookup failure reaches a reader as a
 	// bare "no resource type named x" with nothing saying it came from a put.
@@ -95,7 +95,7 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 
 	retryErr := retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
 		fmt.Printf("put: %s (attempt %d/%d)\n", step.Put, attempt, total)
-		slog.Info("job.put.attempt", "put", step.Put, "attempt", attempt, "total_attempts", total)
+		slog.Info("job.put.attempt", "job", jobName, "index", i, "put", step.Put, "attempt", attempt, "total_attempts", total)
 	}, func(attemptCtx context.Context) error {
 		runResult, runErr := rsrc.RunOut(attemptCtx, cfg, *resourceType, resource.Env, resource.Source, step.Params, space.Dir())
 		if runErr != nil {

@@ -126,13 +126,13 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 			return fmt.Errorf("task %q: %w", step.Task, err)
 		}
 
-		return executeTask(ctx, scope.cfg, step, rt, scope.bw)
+		return executeTask(ctx, scope.cfg, scope.jobName, -1, step, rt, scope.bw)
 	case config.StepKindPut:
-		_, err := executePut(ctx, scope.cfg, step, scope.bw)
+		_, err := executePut(ctx, scope.cfg, scope.jobName, -1, step, scope.bw)
 
 		return err
 	case config.StepKindAgent:
-		err := agent.RunHook(ctx, scope.cfg, step, scope.bw)
+		err := agent.RunHook(ctx, scope.cfg, scope.jobName, step, scope.bw)
 		if err != nil {
 			return fmt.Errorf("agent hook: %w", err)
 		}
