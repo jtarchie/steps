@@ -166,7 +166,7 @@ func TestAcrossFileMatrixForcesItsProducerToRerun(t *testing.T) {
 		fileAxisStep("findings/items.json", "echo {{ .vars.item }}"),
 	}
 
-	chains, err := PlanChains(context.Background(), cfg, "build", steps, nil, nil)
+	chains, err := PlanChains(context.Background(), cfg, "build", steps, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PlanChains: %v", err)
 	}

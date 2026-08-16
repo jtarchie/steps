@@ -1060,8 +1060,38 @@ func HashNode(kind NodeKind, content map[string]any, parentHash string) (string,
 // the same *resource.Cache instance runSteps will use for this same job run.
 // A nil cache reproduces today's behavior exactly (CheckVersions runs again
 // during real execution for any branch that ends up running).
-func PlanChains(ctx context.Context, cfg *config.Config, jobName string, steps []config.Step, pinned map[string]string, cache *rsrc.Cache) ([]Chain, error) {
-	slog.Debug("job.plan", "job", jobName, "steps", len(steps))
+//
+// sets, when non-nil, is the fan-out: ONE chain per InputSet, each get bound
+// to its set's version. This is what keeps the planner and the executor
+// describing the same shape — the recursion below fans out per VERSION at
+// every get it meets, which for two every-gets is an N×M cross product while
+// the executor runs N lockstep builds. Sets are computed once (see
+// pipeline.resolveInputSets) and walked here and there alike, so the
+// disagreement cannot exist. A nil sets keeps the recursion, whose fan-out
+// is identical to one-chain-per-set whenever at most one get fans out —
+// pinned by TestPlanChainsSetsMatchRecursion.
+func PlanChains(
+	ctx context.Context, cfg *config.Config, jobName string, steps []config.Step,
+	pinned map[string]string, cache *rsrc.Cache, sets []InputSet,
+) ([]Chain, error) {
+	slog.Debug("job.plan", "job", jobName, "steps", len(steps), "sets", len(sets))
+
+	if sets != nil {
+		chains := make([]Chain, 0, len(sets))
+
+		for _, set := range sets {
+			chain, err := planChainForSet(ctx, cfg, steps, pinned, cache, set)
+			if err != nil {
+				return nil, err
+			}
+
+			chains = append(chains, chain)
+		}
+
+		slog.Debug("job.planned", "job", jobName, "chains", len(chains))
+
+		return chains, nil
+	}
 
 	chains, err := planSteps(ctx, cfg, steps, pinned, nil, "", false, cache)
 	if err != nil {
@@ -1071,6 +1101,91 @@ func PlanChains(ctx context.Context, cfg *config.Config, jobName string, steps [
 	slog.Debug("job.planned", "job", jobName, "chains", len(chains))
 
 	return chains, nil
+}
+
+// planChainForSet walks the plan once with every get bound to the set's
+// version — a straight line, since the fan-out already happened when the
+// sets were made.
+func planChainForSet(
+	ctx context.Context, cfg *config.Config, steps []config.Step,
+	pinned map[string]string, cache *rsrc.Cache, set InputSet,
+) (Chain, error) {
+	var (
+		prefix      []Node
+		parentHash  string
+		unskippable bool
+	)
+
+	// base makes StepIndex match the recursion byte for byte: planSteps
+	// re-slices the plan after every get, so downstream indices restart at
+	// zero. Purely metadata (never hashed), but the equivalence test compares
+	// whole chains, and an equivalence with an asterisk is not one.
+	base := 0
+
+	for i, step := range steps {
+		var (
+			node            Node
+			stepUnskippable bool
+			err             error
+		)
+
+		index := i - base
+
+		if step.Get != "" {
+			node, err = planBoundGetNode(ctx, cfg, step, index, pinned, cache, set, parentHash)
+			base = i + 1
+		} else {
+			node, stepUnskippable, err = planNonGetNode(cfg, step, index, parentHash)
+		}
+
+		if err != nil {
+			return Chain{}, err
+		}
+
+		prefix = append(prefix, node)
+		parentHash = node.Hash
+		unskippable = unskippable || stepUnskippable
+	}
+
+	return Chain{Nodes: prefix, RootHash: parentHash, Unskippable: unskippable}, nil
+}
+
+// planBoundGetNode builds a get node for the version the set assigned.
+//
+// The cache still resolves the resource and its type — and, memoized, is what
+// keeps the check to one run — but the VERSION is the set's word. The
+// fallback to the cache's own resolution covers a get the sets never bound,
+// which is defensive rather than expected: resolveInputSets binds every get
+// in the plan.
+func planBoundGetNode(
+	ctx context.Context, cfg *config.Config, step config.Step, i int,
+	pinned map[string]string, cache *rsrc.Cache, set InputSet, parentHash string,
+) (Node, error) {
+	res, resourceType, versions, err := cache.ResolveVersionsCached(ctx, cfg, step, pinned)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
+	}
+
+	version := set[res.Name]
+	if version == nil {
+		if len(versions) == 0 {
+			return Node{}, fmt.Errorf("step %d (get %q): no version bound and none resolved", i, step.Get)
+		}
+
+		version = versions[len(versions)-1]
+	}
+
+	content, err := GetNodeContent(cfg, step, *resourceType, res.Source, version)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
+	}
+
+	hash, err := HashNode(NodeKindGet, content, parentHash)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
+	}
+
+	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindGet, StepIndex: i, Resource: res.Name, Content: content}, nil
 }
 
 func planSteps(

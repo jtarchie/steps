@@ -129,7 +129,7 @@ func TestRoutingChainUnskippable(t *testing.T) {
 		{Task: "loop", Run: "true", To: map[string]string{"failure": "loop"}, MaxVisits: 2},
 	}
 
-	chains, err := PlanChains(context.Background(), cfg, "j", steps, nil, nil)
+	chains, err := PlanChains(context.Background(), cfg, "j", steps, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PlanChains: %v", err)
 	}

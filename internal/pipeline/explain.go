@@ -58,7 +58,7 @@ func Explain(ctx context.Context, cfg *config.Config, job *config.Job, pinned ma
 	}
 
 	chains, err := merkle.PlanChains(ctx, cfg, job.Name, job.Plan, pinned,
-		rsrc.NewCache(rsrc.WithConsumed(cursor.has), rsrc.WithResolvedVersions(history.get)))
+		rsrc.NewCache(rsrc.WithConsumed(cursor.has), rsrc.WithResolvedVersions(history.get)), nil)
 	if err != nil {
 		return nil, fmt.Errorf("job %q: planning: %w", job.Name, err)
 	}
