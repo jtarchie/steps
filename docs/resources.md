@@ -71,7 +71,7 @@ Runs when a plan is built, and on every `steps watch` poll.
 
 - **Sees**: `{{ .source }}` and `{{ .version }}` — the last version this pipeline recorded for the resource. See [the cursor](#the-check-cursor) below.
 - **Must print**: a JSON **array** of version objects to stdout, **oldest first**. A version object is a flat map of strings — `{"ref": "abc123"}`, `{"number": "87"}`. The whole object identifies the version; steps never interprets the fields.
-- **Empty array** means "no versions yet". Under `version: every` the get fans out zero times and the job exits 0, so steps prints `get: <name> returned no versions; the N step(s) after it did not run` to say how much of the plan that dropped; any other version mode fails the step with `no versions available`. The message tells you a check came back empty — it cannot tell you *why*, so a type should still **fail loudly** (exit non-zero) when it can't answer, rather than printing nothing.
+- **Empty array** means "no versions yet". Under `version: every`, a resource that has *never* had a version blocks the fan-out — zero builds, and the job exits 0 after printing `get: <name> cannot build; no versions exist for: <names>` to name what blocked it; any other version mode fails the step with `no versions available`. The message tells you a check came back empty — it cannot tell you *why*, so a type should still **fail loudly** (exit non-zero) when it can't answer, rather than printing nothing.
 - **Exit non-zero** to fail the step.
 
 ```json
@@ -333,7 +333,7 @@ Templates render with `missingkey=error`, so reading an optional field that wasn
 
 ## `version:` on a get step
 
-By default a get fetches the **latest** version `check` reported. `version: every` runs the rest of the plan once per version — the only fan-out point in a plan — and a mapping pins one exact version:
+By default a get fetches the **latest** version `check` reported. `version: every` runs the rest of the plan once per version, and a mapping pins one exact version:
 
 ```yaml
 resource_types:
@@ -398,9 +398,56 @@ A check reports what *exists*, not what is new — the same twenty Slack message
 - **`--force` ignores it**, along with every other piece of persisted state — which means it re-runs versions already taken, effects included. It still RECORDS what it takes, so an ordinary run afterwards does not repeat the same work again. It still *records* what it took, so the ordinary run after a forced one does not repeat that work a second time.
 - **It suppresses; [history](#version-history) is what resurrects.** The versions a job may take are the ones steps has recorded, not only the ones `check` returns right now — so a version that scrolled out of the window while nothing was watching is still built. What history does not hold, nothing can recover: a version pruned by `version_history:`, or one from before steps first checked the resource.
 
-- **Only the first `get:` in a plan may say `every`.** That is the one fan-out point; a later get runs *inside* one of those fan-outs, where it can only fetch a single version. Writing it there is a load error rather than a field that is accepted and ignored. (Concourse allows several — each input has its own cursor — because it resolves a whole input *set* per build instead of fanning out at one step. See [conformance](conformance.md).)
+- **Any top-level `get:` in a plan may say `every`** — each keeps its own cursor. A get inside a hook runs within a build whose versions are already decided, so `every` there is a load error rather than a field that is accepted and ignored; so are two `every` gets aliasing the same resource, which would share one cursor.
 
 `steps plan` reads the same record, so it lists only the versions a run would actually take.
+
+### Several `every` gets: input sets
+
+When more than one get says `every`, a run resolves **input sets**, Concourse's model: each `every` get advances one step per set through its own unbuilt versions, in lockstep with its siblings, and one build runs per set. A get whose versions run out **holds** at the newest version it has already covered while the others keep moving. There is no cross product — 3 new versions on one input and 2 on another mean three builds, not six.
+
+The hold rule is what makes the steady state right, not just the burst: updates rarely arrive in matched pairs. `config` moving alone builds `(code@held, config@new)`; `code` catching up later builds `(code@new, config@held)`.
+
+```yaml
+resource_types:
+- name: builds
+  config:
+    check: |
+      printf '[{"number": "87"}, {"number": "88"}]'
+    in: echo {{ .version.number | shellquote }} > number.txt
+- name: configs
+  config:
+    check: |
+      printf '[{"rev": "5"}]'
+    in: echo {{ .version.rev | shellquote }} > rev.txt
+
+resources:
+- name: build
+  type: builds
+  source: {}
+- name: conf
+  type: configs
+  source: {}
+
+jobs:
+- name: pairwise
+  plan:
+  - get: build
+    version: every
+  - get: conf
+    version: every
+  - task: show
+    inputs: [build, conf]
+    run: echo "$(cat build/number.txt) with conf $(cat conf/rev.txt)"
+  assert:
+    # Two sets: (87, 5) and (88, 5) — conf is exhausted after the first
+    # set and HOLDS at rev 5 while build keeps moving. Not a cross product.
+    execution: [build, conf, show, build, conf, show]
+    outcome: succeeded
+
+assert:
+  execution: [pairwise]
+```
 
 ## `trigger: true`
 

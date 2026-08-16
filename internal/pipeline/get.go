@@ -303,6 +303,8 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 		return stepResult{}, err
 	}
 
+	versions = w.bindAssigned(resource.Name, versions)
+
 	// Same silence, milder consequence than a fan-out's: the rest of the plan
 	// still runs, just without the artifact this get was supposed to
 	// materialize, so a later step fails on a missing input instead of on the
@@ -356,7 +358,25 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 		return stepResult{}, fmt.Errorf("could not record node %q: %w", node.Hash, err)
 	}
 
+	// Same spelling as the fan-out path: a get that fetched appears in
+	// assert.execution under its resource's name. With input sets, a later
+	// get is a full participant in the fan-out, not a footnote of the first.
+	recordExecution(ctx, resource.Name)
+
 	return ran(hash), nil
+}
+
+// bindAssigned substitutes the build's input-set binding for a resource, when
+// there is one — BEFORE fetchGetStepInPlace's empty check, which is
+// load-bearing: an every-get HELD at an already-consumed version has an empty
+// consumed-filtered cache entry, and without the binding the build would
+// silently lack its artifact.
+func (w *planWalk) bindAssigned(resourceName string, versions []map[string]any) []map[string]any {
+	if assigned := w.assigned[resourceName]; assigned != nil {
+		return []map[string]any{assigned}
+	}
+
+	return versions
 }
 
 // fetchGetVersions resolves a get step's versions with retries and timeout

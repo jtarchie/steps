@@ -67,6 +67,11 @@ func recordFetchedVersion(ctx context.Context, resource string, version map[stri
 // versions from different fanned-out builds look correlated. That is no more
 // permissive than the uncorrelated behaviour this replaced — it is the exact
 // old behaviour for that one shape — and strictly stricter everywhere else.
+// Input sets widen it: with several every-gets, fetched.by holds one version
+// per resource, last write wins, so of a multi-set run only the FINAL set's
+// combination is recorded as green-together. Earlier sets' versions are still
+// individually green via later runs that hold at them; correlating every set
+// under its own build id is the upgrade path if a fan-in ever needs it.
 func recordPassedVersions(ctx context.Context, st *store.Store, jobName, buildID string, fetched *fetchedVersions) {
 	fetched.mu.Lock()
 	defer fetched.mu.Unlock()
