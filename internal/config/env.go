@@ -51,6 +51,38 @@ func (c *Config) validateEnvValues() error {
 		if err != nil {
 			return err
 		}
+
+		err = c.validateResourceEnvBackend(res)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateResourceEnvBackend rejects env: on a resource whose type is
+// mcp-backed. An mcp-backed type authenticates via its mcp_servers: entry
+// and never calls env() at all (see resource.CheckVersions/RunIn/RunOut,
+// whose BackendMCP arm doesn't thread extraEnv through), so env: there is
+// not a smaller privilege grant — it is silently inert. Better to say so at
+// load time than let a copied reply-as-support-bot-style pattern (env: +
+// source.token_env) pass validation, run green, and never actually widen
+// anything.
+func (c *Config) validateResourceEnvBackend(res Resource) error {
+	if len(res.Env) == 0 {
+		return nil
+	}
+
+	resourceType, err := c.FindResourceType(res.Type)
+	if err != nil {
+		return nil //nolint:nilerr // unresolvable resource type is caught elsewhere at run time
+	}
+
+	if resourceType.Config.Backend() == BackendMCP {
+		return fmt.Errorf(
+			"resource %q: env: has no effect — resource type %q is mcp-backed, which authenticates via its mcp_servers: entry and never reads env: at all; drop env: here",
+			res.Name, res.Type)
 	}
 
 	return nil

@@ -182,6 +182,8 @@ Offset- and page-number APIs are simpler *and* better: the page numbers are know
 
 Answering mentions in a chat workspace: resolve who we are, list the channels we are in, then fetch each channel's history since the cursor — three dependent calls and a fan-out. `noexec` because it reaches a real host.
 
+Slack specifically ships as a built-in — `type: slack-mentions` / `type: slack-reply` need no `resource_types:` block at all, and cover more than this sketch does (1:1 DMs, thread replies, multiple bots in one pipeline). See [Resources](resources.md#the-built-in-slack-mentions-and-slack-reply-types). What follows is kept as a worked example of the *shape* — resolve identity, discover, fan out, filter — for a chat API that isn't Slack.
+
 ```yaml noexec=network
 resource_types:
 - name: mentions

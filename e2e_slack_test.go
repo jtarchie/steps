@@ -21,6 +21,12 @@ import (
 // message whose only relevance is that it has a reply, and a reply — buried
 // in that thread — that mentions the bot. A channel_join system message also
 // contains the mention text ("<@UBOT> has joined"), which must NOT count.
+//
+// D1 is a 1:1 DM (Slack's own "D" id prefix): its one message names no
+// mention at all, and must still be picked up — the DM-doesn't-need-a-
+// mention branch. C1 stays mention-gated throughout, so a DM-shaped message
+// without a mention landing there would prove the branch leaked past its
+// channel.
 func fakeSlack(t *testing.T) (*httptest.Server, *[]map[string]any) {
 	t.Helper()
 
@@ -37,19 +43,10 @@ func fakeSlack(t *testing.T) (*httptest.Server, *[]map[string]any) {
 		case "/api/users.conversations":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"ok":       true,
-				"channels": []map[string]string{{"id": "C1"}},
+				"channels": []map[string]string{{"id": "C1"}, {"id": "D1"}},
 			})
 		case "/api/conversations.history":
-			oldest := r.URL.Query().Get("oldest")
-
-			messages := []map[string]any{}
-			if oldest == "0" {
-				messages = []map[string]any{
-					{"type": "message", "user": "U2", "ts": "100.000", "text": "hey <@UBOT> help?"},
-					{"type": "message", "user": "U2", "ts": "101.000", "text": "no mention here", "reply_count": 1},
-					{"type": "message", "subtype": "channel_join", "user": "U2", "ts": "102.000", "text": "<@UBOT> has joined the channel"},
-				}
-			}
+			messages := fakeSlackHistory(r.URL.Query().Get("oldest"), r.URL.Query().Get("channel"))
 
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "messages": messages})
 		case "/api/conversations.replies":
@@ -84,6 +81,27 @@ func fakeSlack(t *testing.T) (*httptest.Server, *[]map[string]any) {
 	t.Cleanup(server.Close)
 
 	return server, &posted
+}
+
+// fakeSlackHistory returns conversations.history's fixed transcript: nothing
+// on any poll after the first (oldest != "0"), D1's unmentioned DM message,
+// or C1's channel transcript otherwise.
+func fakeSlackHistory(oldest, channel string) []map[string]any {
+	if oldest != "0" {
+		return []map[string]any{}
+	}
+
+	if channel == "D1" {
+		return []map[string]any{
+			{"type": "message", "user": "U2", "ts": "50.000", "text": "no bot mention needed, this is a DM"},
+		}
+	}
+
+	return []map[string]any{
+		{"type": "message", "user": "U2", "ts": "100.000", "text": "hey <@UBOT> help?"},
+		{"type": "message", "user": "U2", "ts": "101.000", "text": "no mention here", "reply_count": 1},
+		{"type": "message", "subtype": "channel_join", "user": "U2", "ts": "102.000", "text": "<@UBOT> has joined the channel"},
+	}
 }
 
 // TestEndToEndBuiltinSlackMentionsAndReply drives both built-in types through
@@ -136,26 +154,34 @@ jobs:
 	mustRun(t, "validate", path)
 	mustRun(t, "run", path, "--job", "answer")
 
-	if len(*posted) != 2 {
-		t.Fatalf("posted %d messages, want 2 (one per mention): %v", len(*posted), *posted)
+	if len(*posted) != 3 {
+		t.Fatalf("posted %d messages, want 3 (two channel mentions + one unmentioned DM): %v", len(*posted), *posted)
 	}
 
-	// Both replies land in channel C1, one threaded on the top-level mention
-	// (100.000) and one on the mention buried in the reply (101.500) — never
-	// the channel_join's ts, which would mean the mention filter let it
-	// through.
-	gotTS := map[string]bool{}
+	// Two replies land in channel C1, threaded on the top-level mention
+	// (100.000) and the mention buried in the reply (101.500) — never the
+	// channel_join's ts, which would mean the mention filter let it through.
+	// The third lands in D1, threaded on the DM message that named no
+	// mention at all — the DM-doesn't-need-a-mention branch, scoped to D1
+	// only (C1's unmentioned messages, 101.000 and the join, are absent).
+	gotByChannel := map[string]map[string]bool{}
 	for _, p := range *posted {
-		if p["channel"] != "C1" {
-			t.Errorf("posted to channel %v, want C1", p["channel"])
+		ch, _ := p["channel"].(string)
+		ts, _ := p["thread_ts"].(string)
+
+		if gotByChannel[ch] == nil {
+			gotByChannel[ch] = map[string]bool{}
 		}
 
-		ts, _ := p["thread_ts"].(string)
-		gotTS[ts] = true
+		gotByChannel[ch][ts] = true
 	}
 
-	if !gotTS["100.000"] || !gotTS["101.500"] {
-		t.Errorf("posted thread_ts set = %v, want {100.000, 101.500}", gotTS)
+	if !gotByChannel["C1"]["100.000"] || !gotByChannel["C1"]["101.500"] || len(gotByChannel["C1"]) != 2 {
+		t.Errorf("C1 thread_ts set = %v, want exactly {100.000, 101.500}", gotByChannel["C1"])
+	}
+
+	if !gotByChannel["D1"]["50.000"] || len(gotByChannel["D1"]) != 1 {
+		t.Errorf("D1 thread_ts set = %v, want exactly {50.000}", gotByChannel["D1"])
 	}
 }
 

@@ -62,6 +62,46 @@ func TestValidateEnvValuesAcceptsNames(t *testing.T) {
 	}
 }
 
+// TestValidateEnvValuesRejectsResourceEnvOnMCPBackedType closes the footgun
+// an mcp-backed resource type would otherwise leave open: env: has no effect
+// there (mcpCheckVersions/mcpRunIn/mcpRunOut never consult it), so silently
+// accepting it would let someone copy the reply-as-support-bot-style
+// env: + source.token_env pattern onto an mcp-backed resource, pass
+// validation, run green, and never actually widen anything.
+func TestValidateEnvValuesRejectsResourceEnvOnMCPBackedType(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		ResourceTypes: []ResourceType{{
+			Name:   "issues",
+			Config: ResourceTypeConfig{MCP: &MCPResourceConfig{Server: "s"}},
+		}},
+		Resources: []Resource{{Name: "tracker", Type: "issues", Env: []string{"SECOND_TOKEN"}}},
+	}
+
+	err := cfg.validateEnvValues()
+	if err == nil {
+		t.Fatal("expected env: on an mcp-backed resource to be rejected")
+	}
+
+	if !strings.Contains(err.Error(), "mcp-backed") {
+		t.Errorf("error = %v, want it to explain the mcp-backed type has no use for env:", err)
+	}
+}
+
+// An unknown resource type is a different validator's error — this one must
+// not itself panic or mask it by reporting something misleading.
+func TestValidateEnvValuesToleratesUnknownResourceType(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{Resources: []Resource{{Name: "tracker", Type: "does-not-exist", Env: []string{"TOKEN"}}}}
+
+	err := cfg.validateEnvValues()
+	if err != nil {
+		t.Errorf("validateEnvValues: %v, want nil (an unresolvable resource type is caught elsewhere)", err)
+	}
+}
+
 func TestValidateEnvPlacementRejectsGetAndPut(t *testing.T) {
 	t.Parallel()
 

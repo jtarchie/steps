@@ -10,16 +10,44 @@
 #     type: slack-mentions
 #     source:
 #       channels: []   # optional; [] (the default) is every channel the bot is in
-#       limit: 200     # optional; caps one very busy interval, default 200
+#       limit: 200     # optional; per-channel messages fetched per check, default 200
+#
+# Two known gaps, both inherent to a single scalar ts cursor plus
+# conversations.history's own oldest/limit shape, not something a bigger
+# limit: or a smarter filter fixes:
+#
+#   - A reply posted to a thread whose PARENT has already scrolled behind the
+#     cursor is invisible. threadRequests (below) only re-checks threads
+#     whose parent conversations.history still returns — once that parent's
+#     ts is older than the cursor, it will never come back, so a fresh reply
+#     to an old thread is never seen. Fixing this needs the cursor to
+#     remember which threads are still "open" across checks, not just a
+#     timestamp — a real change, not a tuning knob.
+#   - More than `limit` new messages in one channel between two checks lose
+#     the overflow permanently, not just delayed to next time: the cursor
+#     advances to the newest ts this check saw (from ANY channel), so
+#     whatever conversations.history didn't return because of `limit` now
+#     sits below the new cursor and is never asked for again. Fixing this
+#     needs real Slack pagination (response_metadata.next_cursor), which
+#     this check does not do.
 #
 # Needs SLACK_BOT_TOKEN (a bot token, xoxb-) in the environment, for an app
-# with chat:write, channels:history and channels:read (plus groups:history
-# and groups:read for private channels), installed to the workspace and
-# INVITED to every channel it should watch. Membership is what grants both
-# reading the history and appearing in users.conversations, so /invite IS the
-# subscribe action — there is no channel list to keep in sync unless
-# source.channels narrows it. app_mentions:read is not needed: that is the
-# Events API's scope, and this polls instead.
+# with chat:write, channels:history, channels:read, im:history and im:read
+# (plus groups:history and groups:read for private channels), installed to
+# the workspace and INVITED to every channel it should watch. Membership is
+# what grants both reading the history and appearing in users.conversations,
+# so /invite IS the subscribe action — there is no channel list to keep in
+# sync unless source.channels narrows it. app_mentions:read is not needed:
+# that is the Events API's scope, and this polls instead.
+#
+# 1:1 direct messages are watched too, always — every DM the bot is a party
+# to, with NO @mention required (nobody types "@bot" in a 1:1 chat; every
+# message there already IS the conversation). A channel/group still needs
+# the explicit mention, or every message in every watched channel would
+# answer. Group DMs (mpim) are NOT included — closer to a channel (several
+# humans talking to each other, bot is one more party) than a 1:1, so
+# skipping the mention requirement there would likely misfire the same way
+# a channel without one would.
 #
 # Different env var name, or a second bot in the same pipeline? source.
 # token_env names it instead of SLACK_BOT_TOKEN — but naming it isn't enough
@@ -75,7 +103,7 @@ config:
 
       let discovered = hasSourceChannels ? {ok: true, channels: []} :
         http({url: base + "/api/users.conversations",
-              query: {types: "public_channel,private_channel",
+              query: {types: "public_channel,private_channel,im",
                       exclude_archived: "true", limit: "1000"}},
              {headers: auth}).json;
 
@@ -97,21 +125,17 @@ config:
            query: {channel: #, oldest: oldest, limit: limit}}
         )), {headers: auth, concurrency: 4, retry: retry});
 
-      // A message is worth answering when a person wrote it, it is not us,
-      // and it mentions us. subtype is set on everything that is not a
-      // person talking — and a channel_join reads "<@UBOT> has joined the
-      // channel", which CONTAINS the mention, so /invite would otherwise
-      // answer itself once per channel, forever. bot_id catches relays and
-      // our own broadcasts.
-      let top = histories | map((
+      // Normalize both top-level messages and thread replies to the same
+      // {ch, msg} shape BEFORE filtering, so the "is this worth answering"
+      // rule — a person wrote it, it is not us, and it either mentions us
+      // or is a 1:1 DM — is written and tested in exactly one place, not
+      // once per source and at risk of drifting between them.
+      let topMessages = histories | map((
           let ch = #.request.query.channel;
           let body = #.json;
           let messages = body.ok ? body.messages
             : fail("slack conversations.history " + ch + ": " + (body.error ?? "failed"));
-          messages
-            | filter(!("subtype" in #) && !("bot_id" in #) && #.user != me)
-            | filter((#.text ?? "") contains ("<@" + me + ">"))
-            | map(({channel: ch, ts: #.ts}))
+          messages | map(({ch: ch, msg: #}))
         )) | flatten();
 
       // conversations.history returns TOP-LEVEL messages only, so a mention
@@ -132,23 +156,33 @@ config:
       let replies = len(threadRequests) == 0 ? [] :
         http(threadRequests, {headers: auth, concurrency: 4, retry: retry});
 
-      let inThread = replies | map((
+      let threadMessages = replies | map((
           let ch = #.request.query.channel;
           let parent = #.request.query.ts;
           let body = #.json;
           let messages = body.ok ? body.messages
             : fail("slack conversations.replies " + ch + ": " + (body.error ?? "failed"));
-          messages
-            | filter(#.ts != parent)
-            | filter(!("subtype" in #) && !("bot_id" in #) && #.user != me)
-            | filter((#.text ?? "") contains ("<@" + me + ">"))
-            | map(({channel: ch, ts: #.ts}))
+          messages | filter(#.ts != parent) | map(({ch: ch, msg: #}))
         )) | flatten();
+
+      // A message is worth answering when a person wrote it, it is not us,
+      // and it either mentions us OR is in a 1:1 DM (Slack's own "D"
+      // channel-id prefix — see the DM note above; no other reliable signal
+      // survives both the discovery path AND an explicit source.channels
+      // list, which carries no per-channel type info of its own). subtype is
+      // set on everything that is not a person talking — and a channel_join
+      // reads "<@UBOT> has joined the channel", which CONTAINS the mention,
+      // so /invite would otherwise answer itself once per channel, forever.
+      // bot_id catches relays and our own broadcasts.
+      let versions = concat(topMessages, threadMessages)
+        | filter(!("subtype" in #.msg) && !("bot_id" in #.msg) && #.msg.user != me)
+        | filter(hasPrefix(#.ch, "D") || ((#.msg.text ?? "") contains ("<@" + me + ">")))
+        | map(({channel: #.ch, ts: #.msg.ts}));
 
       // Oldest first, the ordering a check owes: Slack answers newest-first,
       // and across channels there is no single reversal that would do it. A
       // Slack ts is a STRING, so sorting it as one silently misorders.
-      concat(top, inThread) | sortBy(float(#.ts))
+      versions | sortBy(float(#.ts))
 
     # Both files are written here: a downstream put needs the ids, and an
     # agent step reads the thread as Slack's own JSON rather than a

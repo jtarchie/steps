@@ -34,7 +34,9 @@ It fetches the exact commit the plan pinned, shallowly, so a branch that moves m
 
 ## The built-in `slack-mentions` and `slack-reply` types
 
-Two more built-ins, both [expression-backed](expr.md) — Slack is a JSON HTTP API and nothing else, so there is no container and no `curl`/`jq` dependency to carry. `slack-mentions` is get-only: every unanswered `@mention` of the bot, oldest first, as a `{channel, ts}` version. `slack-reply` is put-only: posts a message, threaded or top-level.
+Two more built-ins, both [expression-backed](expr.md) — Slack is a JSON HTTP API and nothing else, so there is no container and no `curl`/`jq` dependency to carry. `slack-mentions` is get-only: every unanswered `@mention` of the bot in a channel, plus every message in a 1:1 DM (no `@mention` required there — nobody types one in a 1:1 chat), oldest first, as a `{channel, ts}` version. `slack-reply` is put-only: posts a message, threaded or top-level.
+
+Cold start does not mean a backlog: like every resource, the first-ever check of a freshly-deployed `slack-mentions` records everything it finds but answers none of it — see [Version history](#version-history) below. That rule is a `steps watch` behavior; `steps run` has no persisted cursor and always asks Slack for everything, every time.
 
 ```yaml noexec=network
 resources:
@@ -42,7 +44,7 @@ resources:
   type: slack-mentions
   source:
     channels: []   # optional; [] (the default) is every channel the bot is in
-    limit: 200      # optional; caps one very busy interval, default 200
+    limit: 200      # optional; per-channel messages fetched per check, default 200
 
 - name: reply
   type: slack-reply
@@ -75,16 +77,25 @@ jobs:
     inputs: [thread, answer]
 ```
 
-Both need `SLACK_BOT_TOKEN` (a bot token, `xoxb-`) in the environment, for an app with `chat:write`, `channels:history` and `channels:read` (plus `groups:history`/`groups:read` for private channels), installed to the workspace and **invited** to every channel it should watch or post to. Membership is what grants both reading history and appearing in `users.conversations`, so `/invite` *is* the subscribe action — `app_mentions:read` is not needed, since this polls rather than using the Events API.
+Both need `SLACK_BOT_TOKEN` (a bot token, `xoxb-`) in the environment, for an app with `chat:write`, `channels:history`, `channels:read`, `im:history` and `im:read` (plus `groups:history`/`groups:read` for private channels), installed to the workspace and **invited** to every channel it should watch or post to. Membership is what grants both reading history and appearing in `users.conversations`, so `/invite` *is* the subscribe action — `app_mentions:read` is not needed, since this polls rather than using the Events API.
+
+1:1 DMs are always watched too, with no `@mention` required — there is no `source:` field to turn this off. Group DMs (`mpim`) are not watched at all; a group is closer to a channel (several humans, bot is one more party) than a 1:1, so it keeps the explicit-mention rule instead.
 
 | `source:` field (either type) | required | meaning |
 |---|---|---|
-| `channels` (`slack-mentions`) | no | `[]` watches every channel the bot is in; a list of channel ids narrows it |
-| `limit` (`slack-mentions`) | no | per-check history page size, default `200` |
+| `channels` (`slack-mentions`) | no | `[]` watches every channel (and 1:1 DM) the bot is in; a list of ids narrows it |
+| `limit` (`slack-mentions`) | no | per-channel messages fetched per check, default `200` |
 | `base_url` (either) | no | overrides `https://slack.com` — for pointing a test at a fake server |
 | `token_env` (either) | no | overrides `SLACK_BOT_TOKEN` as the env var name to read the token from |
 
-`token_env` alone isn't enough to widen what a resource can read — `env()` only sees names its resource TYPE already declares (both types declare `SLACK_BOT_TOKEN`, shared by every resource of that type), which is what makes it safe for a shared, possibly-external type to hand-in-hand with any expr type at all. A resource naming a different token also needs `env:` *on the resource itself* to add that name to its own allow-list — `env:` and `source:` together, as in `reply-as-support-bot` above. Naming `token_env` without the matching `env:` entry is a run-time error (`env(...): not in this resource type's env:`), not a silent fall-back to `SLACK_BOT_TOKEN`.
+`token_env` alone isn't enough to widen what a resource can read — `env()` only sees names its resource TYPE already declares (both types declare `SLACK_BOT_TOKEN`, shared by every resource of that type), which is what makes it safe for a shared, possibly-external type to hand-in-hand with any expr type at all. A resource naming a different token also needs `env:` *on the resource itself* to add that name to its own allow-list — `env:` and `source:` together, as in `reply-as-support-bot` above. Naming `token_env` without the matching `env:` entry is a run-time error (`env(...): not in this resource type's env:`), not a silent fall-back to `SLACK_BOT_TOKEN`. (`env:` on a resource only means something for an expr- or shell-backed type — an mcp-backed type authenticates via its `mcp_servers:` entry and rejects `env:` at load time.)
+
+**Two known gaps**, both inherent to a single `ts` cursor plus `conversations.history`'s own `oldest`/`limit` shape — not bugs a bigger `limit:` or a smarter filter closes:
+
+- A reply to a thread whose *parent* message has already scrolled behind the cursor is never seen. The check only re-walks a thread when its parent still comes back from `conversations.history`; once the parent ages past the cursor, a fresh reply to that old thread is invisible forever.
+- More than `limit` new messages in one channel between two checks lose the overflow *permanently*, not just delayed — the cursor advances to the newest `ts` seen anywhere, so whatever `limit` cut off now sits below the new cursor and is never asked for again.
+
+Both would need the cursor to carry more than one timestamp (open thread tracking, real Slack pagination) to close — a larger change, not attempted here.
 
 `slack-reply`'s `put:` reads its message from files an upstream step writes, not `params:` — `file()` takes what `inputs:` put on disk directly, so a reply containing backticks or `$(…)` is data, never something a shell might run:
 
