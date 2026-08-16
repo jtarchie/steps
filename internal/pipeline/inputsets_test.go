@@ -255,8 +255,8 @@ func TestInputSetsPinCollapsesToOneSet(t *testing.T) {
 		t.Errorf("sets = %s, want the pinned versions once", got)
 	}
 
-	if len(resolution.everyResources) != 0 {
-		t.Errorf("everyResources = %v, want none — a pinned run consumes nothing", resolution.everyResources)
+	if len(resolution.everyInputs) != 0 {
+		t.Errorf("everyInputs = %v, want none — a pinned run consumes nothing", resolution.everyInputs)
 	}
 }
 

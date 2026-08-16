@@ -104,7 +104,10 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	ctx = withRunContext(ctx, job, skipCache)
 
 	// Remember which versions this run fetched, so a successful job can mark
-	// them green for any downstream job's passed: constraint.
+	// them green for any downstream job's passed: constraint. Every fetch
+	// happens inside a triggered build, which installs its own record over
+	// this one (runTriggeredBuild) — this is the outer fallback, and normally
+	// stays empty.
 	ctx, fetched := withFetchedVersions(ctx)
 
 	// Account for what this job's agent steps spend, and enforce the job's

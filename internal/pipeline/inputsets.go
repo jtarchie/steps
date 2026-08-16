@@ -20,13 +20,22 @@ type setResolution struct {
 	// exactly one for a plan with no every-get at all. Empty means nothing
 	// to build.
 	sets []merkle.InputSet
-	// everyResources names the resources that fan out, so the executor knows
-	// whose cursor each set advances.
-	everyResources []string
-	// blocking names every-resources that could bind nothing at all — no
+	// everyInputs names the gets that fan out, so the executor knows whose
+	// cursor each set advances.
+	everyInputs []everyInput
+	// blocking names resources that could bind nothing at all — no
 	// unconsumed version, no held version — which is what stops sets being
 	// built and what the "no versions" report should say.
 	blocking []string
+}
+
+// everyInput is one fanning get: the name it binds under in a set, and the
+// resource whose cursor its binding advances. The two differ when a get
+// aliases a resource (get: x, resource: y), and conflating them is how a
+// second get of the same resource lost its own version.
+type everyInput struct {
+	input    string
+	resource string
 }
 
 // resolveInputSets computes the input sets ONE run will build, Concourse's
@@ -108,20 +117,29 @@ func gatherOneInput(
 	// via the existing take exemption — consumes nothing.
 	mode, _ := rsrc.VersionMode(step)
 	if mode != "every" || len(pinned) > 0 {
-		inputs.fixed[res.Name] = versions[len(versions)-1]
+		// Narrowing to one version is SelectVersion's job and it errors on an
+		// empty list, so this list has an entry; say so rather than index
+		// into the promise.
+		if len(versions) == 0 {
+			return fmt.Errorf("get %q: resolved to no version", step.Get)
+		}
+
+		inputs.fixed[step.Get] = versions[len(versions)-1]
 
 		return nil
 	}
 
-	if _, twice := inputs.unconsumed[res.Name]; twice {
-		// Also guarded at load; kept here because a silent second cursor
-		// over one resource is the failure mode.
-		return fmt.Errorf(
-			"get %q: two version: every gets resolve to resource %q, which would share one cursor", step.Get, res.Name)
+	for _, prior := range resolution.everyInputs {
+		if prior.resource == res.Name {
+			// Also guarded at load; kept here because a silent second cursor
+			// over one resource is the failure mode.
+			return fmt.Errorf(
+				"get %q: two version: every gets resolve to resource %q, which would share one cursor", step.Get, res.Name)
+		}
 	}
 
-	resolution.everyResources = append(resolution.everyResources, res.Name)
-	inputs.unconsumed[res.Name] = versions
+	resolution.everyInputs = append(resolution.everyInputs, everyInput{input: step.Get, resource: res.Name})
+	inputs.unconsumed[step.Get] = versions
 
 	if len(versions) == 0 {
 		hold := cursor.heldVersion(res.Name, history.get(res.Name))
@@ -131,7 +149,7 @@ func gatherOneInput(
 			return nil
 		}
 
-		inputs.held[res.Name] = hold
+		inputs.held[step.Get] = hold
 	}
 
 	return nil
@@ -140,7 +158,7 @@ func gatherOneInput(
 // assembleSets pairs the gathered inputs into build order: set i binds each
 // every-get's i-th unconsumed version, holding when a shorter input runs out.
 func assembleSets(inputs setInputs, resolution setResolution) []merkle.InputSet {
-	if len(resolution.everyResources) == 0 {
+	if len(resolution.everyInputs) == 0 {
 		return []merkle.InputSet{inputs.fixed}
 	}
 
@@ -157,7 +175,7 @@ func assembleSets(inputs setInputs, resolution setResolution) []merkle.InputSet 
 
 	sets := make([]merkle.InputSet, 0, setCount)
 	for i := range setCount {
-		sets = append(sets, assembleOneSet(inputs, resolution.everyResources, i))
+		sets = append(sets, assembleOneSet(inputs, resolution.everyInputs, i))
 	}
 
 	return sets
@@ -166,23 +184,23 @@ func assembleSets(inputs setInputs, resolution setResolution) []merkle.InputSet 
 // assembleOneSet binds set i: fixed versions everywhere, and per every-get
 // its i-th unconsumed version — holding at the last one, or at the held
 // fallback, when it runs out.
-func assembleOneSet(inputs setInputs, everyResources []string, i int) merkle.InputSet {
+func assembleOneSet(inputs setInputs, everyInputs []everyInput, i int) merkle.InputSet {
 	set := merkle.InputSet{}
 
-	for resource, version := range inputs.fixed {
-		set[resource] = version
+	for input, version := range inputs.fixed {
+		set[input] = version
 	}
 
-	for _, resource := range everyResources {
-		versions := inputs.unconsumed[resource]
+	for _, every := range everyInputs {
+		versions := inputs.unconsumed[every.input]
 
 		switch {
 		case i < len(versions):
-			set[resource] = versions[i]
+			set[every.input] = versions[i]
 		case len(versions) > 0:
-			set[resource] = versions[len(versions)-1]
+			set[every.input] = versions[len(versions)-1]
 		default:
-			set[resource] = inputs.held[resource]
+			set[every.input] = inputs.held[every.input]
 		}
 	}
 

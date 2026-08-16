@@ -59,11 +59,18 @@ type Node struct {
 	Content    map[string]any
 }
 
-// InputSet is the versions one build binds, resource name to version — the
-// unit a plan fans out over. Each every-mode get advances one step per set;
+// InputSet is the versions one build binds, GET NAME to version — the unit a
+// plan fans out over. Each every-mode get advances one step per set;
 // everything else contributes its single resolved version to every set. It
 // lives here because the planner and the executor must derive chains and
 // builds from the SAME sets, and this package is where they already meet.
+//
+// Keyed by the get, not by the resource it fetches: Concourse resolves per
+// INPUT, and two gets may read one resource on purpose — `get: code,
+// version: every` beside `get: baseline, resource: code, version: {...}` is
+// how a plan diffs what just arrived against a fixed point. A resource-keyed
+// set gave them one shared binding, so the fan-out silently overrode the
+// baseline's pin and the comparison always found nothing.
 type InputSet map[string]map[string]any
 
 // Chain is one root-to-leaf path through a job's plan: exactly what a
@@ -1153,26 +1160,24 @@ func planChainForSet(
 // planBoundGetNode builds a get node for the version the set assigned.
 //
 // The cache still resolves the resource and its type — and, memoized, is what
-// keeps the check to one run — but the VERSION is the set's word. The
-// fallback to the cache's own resolution covers a get the sets never bound,
-// which is defensive rather than expected: resolveInputSets binds every get
-// in the plan.
+// keeps the check to one run — but the VERSION is the set's word, and a get
+// the set never bound is an error rather than a version chosen here.
+// resolveInputSets binds every get in the plan, so an unbound one means the
+// two sides have stopped agreeing about what a plan contains — and a planner
+// that quietly picks its own version hashes a chain the executor will not
+// run, which the skip cache then records as done.
 func planBoundGetNode(
 	ctx context.Context, cfg *config.Config, step config.Step, i int,
 	pinned map[string]string, cache *rsrc.Cache, set InputSet, parentHash string,
 ) (Node, error) {
-	res, resourceType, versions, err := cache.ResolveVersionsCached(ctx, cfg, step, pinned)
+	res, resourceType, _, err := cache.ResolveVersionsCached(ctx, cfg, step, pinned)
 	if err != nil {
 		return Node{}, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 	}
 
-	version := set[res.Name]
+	version := set[step.Get]
 	if version == nil {
-		if len(versions) == 0 {
-			return Node{}, fmt.Errorf("step %d (get %q): no version bound and none resolved", i, step.Get)
-		}
-
-		version = versions[len(versions)-1]
+		return Node{}, fmt.Errorf("step %d (get %q): the input set binds no version for it", i, step.Get)
 	}
 
 	content, err := GetNodeContent(cfg, step, *resourceType, res.Source, version)

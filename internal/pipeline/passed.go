@@ -52,26 +52,23 @@ func recordFetchedVersion(ctx context.Context, resource string, version map[stri
 	fetched.by[resource] = string(encoded)
 }
 
-// recordPassedVersions marks every version this job fetched as green for it,
-// once the job as a whole has succeeded.
+// recordPassedVersions marks every version a successful BUILD fetched as
+// green for its job.
 //
-// Per JOB, not per step: passed: means "that job ran green against this exact
-// version", and a job that failed after its get proves nothing about the
-// version it fetched.
-// buildID ties the whole set together: every version this run fetched is
-// recorded against one id, so a downstream fan-in can ask whether they were
-// green TOGETHER rather than merely each-at-some-point.
+// Per build, not per step: passed: means "that job ran green against this
+// exact version", and a build that failed after its get proves nothing about
+// the version it fetched. buildID ties one build's versions together, so a
+// downstream fan-in can ask whether they were green TOGETHER rather than
+// merely each-at-some-point.
 //
-// Known narrowing: a job using get: version: every fans out into several
-// builds within one invocation and records them all under this single id, so
-// versions from different fanned-out builds look correlated. That is no more
-// permissive than the uncorrelated behaviour this replaced — it is the exact
-// old behaviour for that one shape — and strictly stricter everywhere else.
-// Input sets widen it: with several every-gets, fetched.by holds one version
-// per resource, last write wins, so of a multi-set run only the FINAL set's
-// combination is recorded as green-together. Earlier sets' versions are still
-// individually green via later runs that hold at them; correlating every set
-// under its own build id is the upgrade path if a fan-in ever needs it.
+// A run fans out into one build per input set, and each records its own
+// versions under its own id (see runTriggeredBuild). Recording once per JOB
+// instead was wrong in both directions: it correlated versions from different
+// sets that never ran together, and — the map being keyed per resource — it
+// kept only the last set's, so every earlier set's versions stayed invisible
+// to a downstream gate forever. They could not be recovered later either: an
+// exhausted input holds at its NEWEST covered version, so a version
+// superseded within one run is never bound again.
 func recordPassedVersions(ctx context.Context, st *store.Store, jobName, buildID string, fetched *fetchedVersions) {
 	fetched.mu.Lock()
 	defer fetched.mu.Unlock()

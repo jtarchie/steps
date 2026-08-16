@@ -56,14 +56,17 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 	// recorded pins harmlessly; a mark cannot.
 	pinnedRun := len(w.pinned) > 0
 
-	for _, set := range sets {
+	for setIndex, set := range sets {
 		// Stop starting NEW triggered builds on cancellation; don't let one
 		// abandon itself mid-flight. Mirrors internal/trigger's worker loop.
 		if ctx.Err() != nil {
 			break
 		}
 
-		version := set[resource.Name]
+		version := set[step.Get]
+		if version == nil {
+			return fmt.Errorf("step %d (get %q): the input set binds no version for it", i, step.Get)
+		}
 
 		content, err := merkle.GetNodeContent(w.cfg, step, *resourceType, resource.Source, version)
 		if err != nil {
@@ -112,7 +115,7 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 		// attached, and it means "every version, once" quietly is not true.
 		w.takeSet(ctx, pinnedRun, set)
 
-		err = w.runTriggeredBuild(ctx, step, *resource, *resourceType, set, remainder, node)
+		err = w.runTriggeredBuild(ctx, step, *resource, *resourceType, set, setIndex, remainder, node)
 
 		publishStepFinished(ctx, w.jobName, i, step, hash, getStarted, err)
 
@@ -155,17 +158,18 @@ func (w *planWalk) reportNoVersions(step config.Step, resourceName string, remai
 	slog.Warn("job.get.no_versions", "job", w.jobName, "index", w.index, "resource", resourceName, "skipped_steps", remaining)
 }
 
-// takeSet advances the cursor of every fanning resource to its binding in
-// this set — a set is consumed as a unit, whatever its first get's fate.
-// Re-taking a held version is a MAX no-op.
+// takeSet advances the cursor of every fanning get to its binding in this set
+// — a set is consumed as a unit, whatever its first get's fate. The binding is
+// looked up by GET name and recorded against the RESOURCE, which is where the
+// cursor lives. Re-taking a held version is a MAX no-op.
 func (w *planWalk) takeSet(ctx context.Context, pinnedRun bool, set merkle.InputSet) {
 	if pinnedRun {
 		return
 	}
 
-	for _, resourceName := range w.resolution.everyResources {
-		if version := set[resourceName]; version != nil {
-			w.cursor.take(ctx, w.st, w.jobName, resourceName, version)
+	for _, every := range w.resolution.everyInputs {
+		if version := set[every.input]; version != nil {
+			w.cursor.take(ctx, w.st, w.jobName, every.resource, version)
 		}
 	}
 }
@@ -179,9 +183,16 @@ func (w *planWalk) takeSet(ctx context.Context, pinnedRun bool, set merkle.Input
 // fanned out by version:every.
 func (w *planWalk) runTriggeredBuild(
 	ctx context.Context, step config.Step, resource config.Resource, resourceType config.ResourceType,
-	set merkle.InputSet, remainder []config.Step, node merkle.Node,
+	set merkle.InputSet, setIndex int, remainder []config.Step, node merkle.Node,
 ) error {
-	version := set[resource.Name]
+	version := set[step.Get]
+
+	// The versions THIS build fetches, kept apart from its siblings'. A run
+	// fans out into one build per input set, and passed: asks whether some
+	// one build was green against a combination — so a job-wide record would
+	// both correlate versions that never ran together and, being keyed per
+	// resource, keep only the last set's. See recordPassedVersions.
+	ctx, fetched := withFetchedVersions(ctx)
 
 	bw, err := w.provider.NewBuild(ctx, resource.Name)
 	if err != nil {
@@ -254,7 +265,29 @@ func (w *planWalk) runTriggeredBuild(
 	err = runSteps(ctx, remainderWalk, remainder)
 	buildOK = err == nil
 
+	// Green is per BUILD, recorded when that build succeeds — Concourse
+	// records a build's inputs against the build, and a later set failing
+	// says nothing about an earlier one that passed. Waiting for the whole
+	// job instead lost every set but the last, and stranded all of them when
+	// any one set failed: taken at build start, never green, never retried.
+	if buildOK {
+		recordPassedVersions(ctx, w.st, w.jobName, buildIDForSet(ctx, setIndex), fetched)
+	}
+
 	return err
+}
+
+// buildIDForSet names one build of a run, for correlating the versions it
+// fetched. Scoped to the run id so two runs never look like one build, and
+// numbered within it because sets that HOLD a shared first get otherwise
+// produce identical node hashes.
+func buildIDForSet(ctx context.Context, setIndex int) string {
+	run := ""
+	if resume := resumeFrom(ctx); resume != nil {
+		run = resume.id
+	}
+
+	return fmt.Sprintf("%s#%d", run, setIndex)
 }
 
 // fetchInPlace fetches one version of a get step's resource into the existing
@@ -292,18 +325,22 @@ func (w *planWalk) fetchInPlace(ctx context.Context, step config.Step, steps []c
 	return false, nil
 }
 
-// fetchGetStepInPlace resolves one version and fetches it into the walk's
-// current workspace, returning the new parentHash — or stepChainSkipped when
-// the node's hash is already in the skippable index.
-func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (stepResult, error) {
-	i := w.index
-
+// resolveInPlaceVersion picks the single version an in-place get fetches: the
+// build's input-set binding, else what the step resolves to on its own. A nil
+// version (with no error) means the check came back empty and the get fetches
+// nothing.
+func (w *planWalk) resolveInPlaceVersion(
+	ctx context.Context, step config.Step,
+) (*config.Resource, *config.ResourceType, map[string]any, error) {
 	resource, resourceType, versions, err := fetchGetVersions(ctx, w.cfg, step, w.pinned, w.cache)
 	if err != nil {
-		return stepResult{}, err
+		return nil, nil, nil, err
 	}
 
-	versions = w.bindAssigned(resource.Name, versions)
+	versions, err = w.bindAssigned(step, versions)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("step %d: %w", w.index, err)
+	}
 
 	// Same silence, milder consequence than a fan-out's: the rest of the plan
 	// still runs, just without the artifact this get was supposed to
@@ -311,13 +348,29 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 	// empty check that caused it. Name the cause here, where it is known.
 	if len(versions) == 0 {
 		fmt.Printf("get: %s returned no versions; nothing was fetched\n", step.Get)
-		slog.Warn("job.get.no_versions", "job", w.jobName, "index", i, "resource", step.Get)
+		slog.Warn("job.get.no_versions", "job", w.jobName, "index", w.index, "resource", step.Get)
 
-		return ran(w.parentHash), nil
+		return resource, resourceType, nil, nil
 	}
 
 	// Inside a triggered build a get resolves to a single version.
-	version := versions[0]
+	return resource, resourceType, versions[0], nil
+}
+
+// fetchGetStepInPlace resolves one version and fetches it into the walk's
+// current workspace, returning the new parentHash — or stepChainSkipped when
+// the node's hash is already in the skippable index.
+func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (stepResult, error) {
+	i := w.index
+
+	resource, resourceType, version, err := w.resolveInPlaceVersion(ctx, step)
+	if err != nil {
+		return stepResult{}, err
+	}
+
+	if version == nil {
+		return ran(w.parentHash), nil
+	}
 
 	recordFetchedVersion(ctx, resource.Name, version)
 
@@ -340,6 +393,15 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 
 	node := merkle.Node{Hash: hash, ParentHash: w.parentHash, Kind: merkle.NodeKindGet, StepIndex: i, Resource: resource.Name, Content: content}
 
+	// Recorded on the same terms as the fan-out path (see runTriggeredBuild):
+	// once the step is known to run, BEFORE the fetch and its hooks. A get
+	// that fetched appears in assert.execution under its resource's name, and
+	// with input sets a later get is a full participant in the fan-out rather
+	// than a footnote of the first. Recording it afterwards put a get behind
+	// its own hooks, inverting the [step, its hooks...] order every other
+	// step kind keeps, and hid a get whose fetch failed.
+	recordExecution(ctx, resource.Name)
+
 	err = fetchGetStepWithStep(ctx, w.cfg, step, step.Get, *resource, *resourceType, version, w.bw)
 
 	// Get-step hooks fire in the same workspace the resource was fetched into.
@@ -358,25 +420,31 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 		return stepResult{}, fmt.Errorf("could not record node %q: %w", node.Hash, err)
 	}
 
-	// Same spelling as the fan-out path: a get that fetched appears in
-	// assert.execution under its resource's name. With input sets, a later
-	// get is a full participant in the fan-out, not a footnote of the first.
-	recordExecution(ctx, resource.Name)
-
 	return ran(hash), nil
 }
 
-// bindAssigned substitutes the build's input-set binding for a resource, when
-// there is one — BEFORE fetchGetStepInPlace's empty check, which is
-// load-bearing: an every-get HELD at an already-consumed version has an empty
-// consumed-filtered cache entry, and without the binding the build would
-// silently lack its artifact.
-func (w *planWalk) bindAssigned(resourceName string, versions []map[string]any) []map[string]any {
-	if assigned := w.assigned[resourceName]; assigned != nil {
-		return []map[string]any{assigned}
+// bindAssigned returns the build's input-set binding for a get, as the single
+// version to fetch. It is consulted BEFORE fetchGetStepInPlace's empty check,
+// which is load-bearing: an every-get HELD at an already-consumed version has
+// an empty consumed-filtered cache entry, and without the binding the build
+// would silently lack its artifact.
+//
+// Keyed by the get's own name, so a get aliasing a resource another get fans
+// over keeps the version IT resolved. An unbound get is an error rather than a
+// fallback: the planner hashed the set's binding, so choosing a different
+// version here would have the cache record that chain as done for work it
+// never did.
+func (w *planWalk) bindAssigned(step config.Step, versions []map[string]any) ([]map[string]any, error) {
+	if w.assigned == nil {
+		return versions, nil
 	}
 
-	return versions
+	assigned := w.assigned[step.Get]
+	if assigned == nil {
+		return nil, fmt.Errorf("get %q: the input set binds no version for it", step.Get)
+	}
+
+	return []map[string]any{assigned}, nil
 }
 
 // fetchGetVersions resolves a get step's versions with retries and timeout
