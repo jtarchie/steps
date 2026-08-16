@@ -130,7 +130,11 @@ func withIsolation(privileged bool, limits *config.ContainerLimits, content map[
 // with TaskNodeContent, PutNodeContent, and AgentContentMap below, is shared
 // between planning (this file) and real execution (internal/pipeline,
 // internal/agent) so both compute identical hashes for identical steps.
-func GetNodeContent(cfg *config.Config, step config.Step, resourceType config.ResourceType, source, version map[string]any) (map[string]any, error) {
+//
+// extraEnv is the resource INSTANCE's own env: (config.Resource.Env) — see
+// the env folding below for why it has to join resourceType.Env in the hash,
+// not just at run time.
+func GetNodeContent(cfg *config.Config, step config.Step, resourceType config.ResourceType, extraEnv []string, source, version map[string]any) (map[string]any, error) {
 	content := map[string]any{
 		"in_template": resourceType.Config.In,
 		"source":      source,
@@ -165,8 +169,16 @@ func GetNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 	// changes what it executes against, so the names are identity; changing a
 	// value is the operator's environment moving under a pipeline, which this
 	// package has never claimed to hash (same reasoning as a model's weights).
-	if len(resourceType.Env) > 0 {
-		content["env"] = sortedEnv(resourceType.Env)
+	//
+	// Unioned with extraEnv (the resource INSTANCE's own env:), not just
+	// resourceType.Env alone — widening or narrowing one resource's own
+	// allow-list changes what env() can see for that resource exactly the
+	// same way editing the type's own env: does, so leaving it out of the
+	// hash would be the wrong-cache-HIT failure withIsolation's doc comment
+	// describes: a get cached before a resource's env: named a new variable
+	// would be skipped as unchanged after, having never run with it visible.
+	if env := rsrc.UnionEnv(resourceType.Env, extraEnv); len(env) > 0 {
+		content["env"] = sortedEnv(env)
 	}
 
 	if resourceType.User != "" {
@@ -447,7 +459,7 @@ func hookContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 			return nil, fmt.Errorf("resolve put: %w", err)
 		}
 
-		return PutNodeContent(cfg, step, *resourceType, res.Source, step.Params, step.InputNames(), step.InputsAll())
+		return PutNodeContent(cfg, step, *resourceType, res.Env, res.Source, step.Params, step.InputNames(), step.InputsAll())
 	case config.StepKindAgent:
 		ri, err := cfg.ResolveAgentInvocation(step)
 		if err != nil {
@@ -508,7 +520,7 @@ func stepContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 			return nil, fmt.Errorf("resolve put: %w", err)
 		}
 
-		return PutNodeContent(cfg, step, *resourceType, res.Source, step.Params, step.InputNames(), step.InputsAll())
+		return PutNodeContent(cfg, step, *resourceType, res.Env, res.Source, step.Params, step.InputNames(), step.InputsAll())
 	case config.StepKindAgent:
 		ri, err := cfg.ResolveAgentInvocation(step)
 		if err != nil {
@@ -688,7 +700,10 @@ func assertContent(a *config.Assert) map[string]any {
 // PutNodeContent builds the content map hashed for a put node. inputs fold
 // in unconditionally (see TaskNodeContent); inputsAll folds the `inputs: all`
 // escape hatch as a distinct sentinel.
-func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.ResourceType, source, params map[string]any, inputs []string, inputsAll bool) (map[string]any, error) {
+//
+// extraEnv is the resource INSTANCE's own env: (config.Resource.Env) — see
+// GetNodeContent's env comment.
+func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.ResourceType, extraEnv []string, source, params map[string]any, inputs []string, inputsAll bool) (map[string]any, error) {
 	content := map[string]any{
 		"out_template": resourceType.Config.Out,
 		"source":       source,
@@ -705,9 +720,9 @@ func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 		content["image"] = resourceType.Image
 	}
 
-	// Names only — see the get node's env comment.
-	if len(resourceType.Env) > 0 {
-		content["env"] = sortedEnv(resourceType.Env)
+	// Names only, unioned with extraEnv — see GetNodeContent's env comment.
+	if env := rsrc.UnionEnv(resourceType.Env, extraEnv); len(env) > 0 {
+		content["env"] = sortedEnv(env)
 	}
 
 	if resourceType.User != "" {
@@ -1180,7 +1195,7 @@ func planBoundGetNode(
 		return Node{}, fmt.Errorf("step %d (get %q): the input set binds no version for it", i, step.Get)
 	}
 
-	content, err := GetNodeContent(cfg, step, *resourceType, res.Source, version)
+	content, err := GetNodeContent(cfg, step, *resourceType, res.Env, res.Source, version)
 	if err != nil {
 		return Node{}, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 	}
@@ -1560,7 +1575,7 @@ func planGetStep(
 	chains := make([]Chain, 0, len(versions))
 
 	for _, version := range versions {
-		content, err := GetNodeContent(cfg, step, *resourceType, res.Source, version)
+		content, err := GetNodeContent(cfg, step, *resourceType, res.Env, res.Source, version)
 		if err != nil {
 			return nil, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 		}
@@ -1608,7 +1623,7 @@ func putNode(cfg *config.Config, step config.Step, i int, parentHash string) (No
 		return Node{}, fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
 
-	content, err := PutNodeContent(cfg, step, *resourceType, res.Source, step.Params, step.InputNames(), step.InputsAll())
+	content, err := PutNodeContent(cfg, step, *resourceType, res.Env, res.Source, step.Params, step.InputNames(), step.InputsAll())
 	if err != nil {
 		return Node{}, fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}

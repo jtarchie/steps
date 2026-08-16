@@ -98,6 +98,25 @@ type Resource struct {
 	Name   string         `yaml:"name"`
 	Type   string         `yaml:"type"`
 	Source map[string]any `yaml:"source"`
+	// Env names host environment variables THIS resource's check/in/out may
+	// see, ON TOP OF whatever its resource type's own env: already allows —
+	// the two lists union at run time, rather than one replacing the other.
+	//
+	// It exists for the case a type's own env: cannot cover: a resource type
+	// is shared by every resource of that type in the pipeline, so its env:
+	// names ONE fixed credential variable — but two resources of the same
+	// type may need two DIFFERENT-named tokens (two Slack bots in one
+	// pipeline), or an operator's secret may already be named something
+	// other than the type's documented default. Widening the type's own
+	// env: would grant every resource of that type the new name; this grants
+	// only the one resource that asked for it, so the type's declared
+	// allow-list stays the complete picture of what a shared, possibly
+	// third-party type can read.
+	//
+	// Names only — see validateEnvValues. Meaningful only for an expr:- or
+	// shell-backed type; an mcp-backed type authenticates via its
+	// mcp_servers: entry and never consults env: at all.
+	Env []string `yaml:"env,omitempty"`
 	// WebhookTokenEnv names an OS environment variable holding the shared
 	// secret a webhook must present to trigger an immediate check of this
 	// resource (see `steps watch --listen`).

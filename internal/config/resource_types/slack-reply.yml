@@ -1,0 +1,92 @@
+# The built-in `slack-reply` resource type: post a message to Slack, either
+# into an existing thread or as a new top-level message.
+#
+# Registered automatically as `type: slack-reply` (see
+# registerBuiltinResourceTypes), so a pipeline that wants to post to Slack
+# writes a resource and nothing else:
+#
+#   resources:
+#   - name: reply
+#     type: slack-reply
+#     source: {}
+#
+#   - put: reply
+#     inputs: [thread, answer]
+#
+# Reads its inputs as files rather than params:, the way the built-in `git`
+# type reads its config from source: — file() takes what a put's inputs:
+# wrote to disk directly, so a reply containing backticks or $(…) is data,
+# never something a shell might run:
+#
+#   thread/channel   required — the channel id (the C… in a channel URL)
+#   thread/ts        optional — a parent message's ts; when present this
+#                     posts as a reply in that thread, when absent (or the
+#                     file does not exist) this posts a new top-level
+#                     message in the channel
+#   answer/reply.md  required — the message text
+#
+# Needs SLACK_BOT_TOKEN (a bot token, xoxb-) in the environment, for an app
+# with chat:write, installed to the workspace and INVITED to every channel
+# it posts to.
+#
+# Posting as a different bot than slack-mentions watches with? source.
+# token_env names the env var instead of SLACK_BOT_TOKEN — and, same as
+# slack-mentions, the resource also needs that name added to its OWN env:
+# (config.Resource.Env), since env() only reads names the type's env:
+# already allows and that list is shared by every slack-reply resource:
+#
+#   resources:
+#   - name: reply2
+#     type: slack-reply
+#     env: [SECOND_BOT_TOKEN]
+#     source: {token_env: SECOND_BOT_TOKEN}
+#
+# There is deliberately no check:/in:, so `get: reply` against this type is a
+# load error rather than a silent no-op: there is nothing here to detect or
+# fetch, only something to publish.
+#
+# expr:, not check:/in:/out: — this type is a JSON HTTP API and nothing else
+# (docs/expr.md), so it evaluates in-process and can never run in a
+# container: image:/network:/user:/privileged:/container_limits: are load
+# errors alongside expr:, enforced by validateExprNoContainer.
+#
+# source.base_url overrides the API root (default https://slack.com);
+# exists purely so a test can point this at an httptest.Server, since a
+# hardcoded slack.com is otherwise untestable without a live workspace.
+env:
+  - SLACK_BOT_TOKEN
+
+config:
+  expr:
+    # file() reads the put's inputs directly. trim() because an upstream
+    # task typically writes these ids with a trailing newline, which would
+    # otherwise become part of the channel or ts.
+    #
+    # thread_ts is included only when thread/ts is present and non-empty —
+    # that is what picks reply-in-thread vs. new-top-level-message. file()'s
+    # optional second argument is the "file may not exist" escape hatch: a
+    # missing thread/ts is not an error here, since a top-level post
+    # legitimately has none.
+    out: |
+      let base = source.base_url ?? "https://slack.com";
+      let channel = trim(file("thread/channel"));
+      let ts = trim(file("thread/ts", ""));
+      let text = file("answer/reply.md");
+
+      let payload = ts != "" ?
+        {channel: channel, thread_ts: ts, text: text, unfurl_links: false} :
+        {channel: channel, text: text, unfurl_links: false};
+
+      let posted = http({
+        url: base + "/api/chat.postMessage",
+        headers: {Authorization: "Bearer " + env(source.token_env ?? "SLACK_BOT_TOKEN")},
+        json: payload,
+      }).json;
+
+      // Slack refuses with 200 and ok:false, so without this a rejected
+      // post would look like a put that published nothing — green, having
+      // said nothing to anyone. The returned {channel, ts} is recorded as
+      // the version this put produced, so the run log names the exact
+      // message.
+      posted.ok ? {channel: posted.channel, ts: posted.ts}
+                : fail("slack chat.postMessage: " + (posted.error ?? "failed"))

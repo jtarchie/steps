@@ -32,6 +32,70 @@ jobs:
 
 It fetches the exact commit the plan pinned, shallowly, so a branch that moves mid-run still gives you the version that was planned. It has **no `out:`** — `put: repo` against it is a load error, because what "publish" means (which branch, which credentials, force or not) is a decision only you can make. Write your own type for that.
 
+## The built-in `slack-mentions` and `slack-reply` types
+
+Two more built-ins, both [expression-backed](expr.md) — Slack is a JSON HTTP API and nothing else, so there is no container and no `curl`/`jq` dependency to carry. `slack-mentions` is get-only: every unanswered `@mention` of the bot, oldest first, as a `{channel, ts}` version. `slack-reply` is put-only: posts a message, threaded or top-level.
+
+```yaml noexec=network
+resources:
+- name: mentions
+  type: slack-mentions
+  source:
+    channels: []   # optional; [] (the default) is every channel the bot is in
+    limit: 200      # optional; caps one very busy interval, default 200
+
+- name: reply
+  type: slack-reply
+  source: {}
+
+# A second bot, in the same pipeline, answering as someone else: env: adds
+# SECOND_BOT_TOKEN to just THIS resource's own allow-list (the type's own
+# env: still only names SLACK_BOT_TOKEN), and source.token_env picks it.
+- name: reply-as-support-bot
+  type: slack-reply
+  env: [SECOND_BOT_TOKEN]
+  source:
+    token_env: SECOND_BOT_TOKEN
+
+jobs:
+- name: answer-mention
+  plan:
+  - get: mentions
+    trigger: true
+    version: every    # answer every mention found, not just the newest
+  - task: address
+    inputs: [mentions]
+    outputs: [thread, answer]
+    run: |
+      set -eu
+      grep -o '"channel": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > thread/channel
+      grep -o '"ts": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > thread/ts
+      echo "got it, working on it" > answer/reply.md
+  - put: reply
+    inputs: [thread, answer]
+```
+
+Both need `SLACK_BOT_TOKEN` (a bot token, `xoxb-`) in the environment, for an app with `chat:write`, `channels:history` and `channels:read` (plus `groups:history`/`groups:read` for private channels), installed to the workspace and **invited** to every channel it should watch or post to. Membership is what grants both reading history and appearing in `users.conversations`, so `/invite` *is* the subscribe action — `app_mentions:read` is not needed, since this polls rather than using the Events API.
+
+| `source:` field (either type) | required | meaning |
+|---|---|---|
+| `channels` (`slack-mentions`) | no | `[]` watches every channel the bot is in; a list of channel ids narrows it |
+| `limit` (`slack-mentions`) | no | per-check history page size, default `200` |
+| `base_url` (either) | no | overrides `https://slack.com` — for pointing a test at a fake server |
+| `token_env` (either) | no | overrides `SLACK_BOT_TOKEN` as the env var name to read the token from |
+
+`token_env` alone isn't enough to widen what a resource can read — `env()` only sees names its resource TYPE already declares (both types declare `SLACK_BOT_TOKEN`, shared by every resource of that type), which is what makes it safe for a shared, possibly-external type to hand-in-hand with any expr type at all. A resource naming a different token also needs `env:` *on the resource itself* to add that name to its own allow-list — `env:` and `source:` together, as in `reply-as-support-bot` above. Naming `token_env` without the matching `env:` entry is a run-time error (`env(...): not in this resource type's env:`), not a silent fall-back to `SLACK_BOT_TOKEN`.
+
+`slack-reply`'s `put:` reads its message from files an upstream step writes, not `params:` — `file()` takes what `inputs:` put on disk directly, so a reply containing backticks or `$(…)` is data, never something a shell might run:
+
+| file | required | meaning |
+|---|---|---|
+| `thread/channel` | yes | the channel id to post to |
+| `thread/ts` | no | a parent message's `ts` — posts as a reply in that thread; omit to post a new top-level message |
+| `answer/reply.md` | yes | the message text |
+
+There is deliberately no `check:`/`in:` on `slack-reply` and no `out:` on `slack-mentions` — `get: reply` or `put: mentions` are both load errors, the same rule `git`'s missing `out:` follows.
+
 ## Writing a resource type
 
 A resource type is three shell commands. (For a resource that is a JSON HTTP API and nothing else, there is a second way to write them — see [expression resource types](expr.md), which trades containers and binary artifacts for concurrent HTTP and no dependency on `curl`/`jq`.) Each is a [template](templating.md) and each runs `sh -c`. This one is self-contained, so it runs anywhere:

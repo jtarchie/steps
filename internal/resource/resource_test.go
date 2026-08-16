@@ -123,7 +123,7 @@ func TestConformanceRunOutUnparsableStdoutIsNilNotError(t *testing.T) {
 		Config: config.ResourceTypeConfig{Out: "echo not-json"},
 	}
 
-	result, err := RunOut(context.Background(), nil, rt, map[string]any{}, map[string]any{}, t.TempDir())
+	result, err := RunOut(context.Background(), nil, rt, nil, map[string]any{}, map[string]any{}, t.TempDir())
 	if err != nil {
 		t.Fatalf("RunOut: %v, want nil error for unparsable stdout", err)
 	}
@@ -170,7 +170,7 @@ func TestConformanceCheckReceivesCurrentVersion(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			versions, err := CheckVersions(context.Background(), nil, rt, map[string]any{}, test.version)
+			versions, err := CheckVersions(context.Background(), nil, rt, nil, map[string]any{}, test.version)
 			if err != nil {
 				t.Fatalf("CheckVersions: %v", err)
 			}
@@ -179,6 +179,43 @@ func TestConformanceCheckReceivesCurrentVersion(t *testing.T) {
 				t.Errorf("versions = %+v, want one version with ref %q", versions, test.want)
 			}
 		})
+	}
+}
+
+// TestShellExtraEnvUnionsWithTypeEnv is the shell-backend counterpart of
+// expr_test.go's TestExtraEnvUnionsWithTypeEnv — UnionEnv (and its wiring
+// into shell.RunnerSpec.Env at every CheckVersions/RunIn/RunOut shell branch)
+// was previously exercised only through the expr backend and the built-in
+// Slack e2e tests, leaving the far more common shell-backed path unverified.
+// Not t.Parallel: t.Setenv forbids it.
+func TestShellExtraEnvUnionsWithTypeEnv(t *testing.T) {
+	t.Setenv("STEPS_TEST_SHELL_TYPE_TOKEN", "type-value")
+	t.Setenv("STEPS_TEST_SHELL_EXTRA_TOKEN", "extra-value")
+
+	rt := config.ResourceType{
+		Name: "dummy",
+		Env:  []string{"STEPS_TEST_SHELL_TYPE_TOKEN"},
+		Config: config.ResourceTypeConfig{
+			Check: `printf '[{"a": "%s", "b": "%s"}]' "$STEPS_TEST_SHELL_TYPE_TOKEN" "$STEPS_TEST_SHELL_EXTRA_TOKEN"`,
+		},
+	}
+
+	versions, err := CheckVersions(context.Background(), nil, rt, nil, map[string]any{}, nil)
+	if err != nil {
+		t.Fatalf("CheckVersions: %v", err)
+	}
+
+	if versions[0]["b"] != "" {
+		t.Fatalf("versions = %+v, want STEPS_TEST_SHELL_EXTRA_TOKEN invisible without extraEnv", versions)
+	}
+
+	versions, err = CheckVersions(context.Background(), nil, rt, []string{"STEPS_TEST_SHELL_EXTRA_TOKEN"}, map[string]any{}, nil)
+	if err != nil {
+		t.Fatalf("CheckVersions with extraEnv: %v", err)
+	}
+
+	if versions[0]["a"] != "type-value" || versions[0]["b"] != "extra-value" {
+		t.Fatalf("versions = %+v, want both the type's own env: and extraEnv readable", versions)
 	}
 }
 

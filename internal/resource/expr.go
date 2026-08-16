@@ -17,21 +17,23 @@ import (
 )
 
 // exprInput assembles what an expression evaluates against. The env allowlist
-// comes from the resource type's own env:, which is the whole set env() will
-// resolve — see exprlang's envFunc for why there is no baseline beneath it.
-func exprInput(rt config.ResourceType, source, version, params map[string]any, dir string) exprlang.Input {
+// is the resource type's own env: UNIONED with extraEnv (the calling
+// resource instance's own env: — config.Resource.Env), which is the whole
+// set env() will resolve — see exprlang's envFunc for why there is no
+// baseline beneath it.
+func exprInput(rt config.ResourceType, extraEnv []string, source, version, params map[string]any, dir string) exprlang.Input {
 	return exprlang.Input{
 		Source:   source,
 		Version:  version,
 		Params:   params,
-		EnvAllow: rt.Env,
+		EnvAllow: UnionEnv(rt.Env, extraEnv),
 		Dir:      dir,
 	}
 }
 
 // exprCheckVersions evaluates expr.check and returns its versions.
 func exprCheckVersions(
-	ctx context.Context, rt config.ResourceType, source, version map[string]any,
+	ctx context.Context, rt config.ResourceType, extraEnv []string, source, version map[string]any,
 ) ([]map[string]any, error) {
 	if rt.Config.Expr.Check == "" {
 		return nil, fmt.Errorf("check %q: this resource type sets no expr.check, so it can only be published to", rt.Name)
@@ -39,7 +41,7 @@ func exprCheckVersions(
 
 	slog.Debug("resource.check", "resource_type", rt.Name, "source", source, "version", version, "backend", "expr")
 
-	versions, err := exprlang.RunCheck(ctx, rt.Config.Expr.Check, exprInput(rt, source, version, nil, ""))
+	versions, err := exprlang.RunCheck(ctx, rt.Config.Expr.Check, exprInput(rt, extraEnv, source, version, nil, ""))
 	if err != nil {
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
@@ -55,7 +57,7 @@ func exprCheckVersions(
 // else happens — the same default the mcp backend takes, and the common case
 // for a type whose whole job is detecting that something changed.
 func exprRunIn(
-	ctx context.Context, rt config.ResourceType, source, version, params map[string]any, destDir string,
+	ctx context.Context, rt config.ResourceType, extraEnv []string, source, version, params map[string]any, destDir string,
 ) error {
 	if rt.Config.Expr.In == "" {
 		return writeJSONFile(filepath.Join(destDir, "version.json"), version)
@@ -64,7 +66,7 @@ func exprRunIn(
 	slog.Debug("resource.in", "resource_type", rt.Name, "source", source, "version", version,
 		"params", params, "dest_dir", destDir, "backend", "expr")
 
-	files, err := exprlang.RunIn(ctx, rt.Config.Expr.In, exprInput(rt, source, version, params, ""))
+	files, err := exprlang.RunIn(ctx, rt.Config.Expr.In, exprInput(rt, extraEnv, source, version, params, ""))
 	if err != nil {
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
@@ -110,7 +112,7 @@ func writeArtifactFiles(destDir string, files map[string]string) error {
 // exprRunOut evaluates expr.out, with file() scoped to srcDir — the put's
 // read view, the same directory a shell out: gets as its cwd.
 func exprRunOut(
-	ctx context.Context, rt config.ResourceType, source, params map[string]any, srcDir string,
+	ctx context.Context, rt config.ResourceType, extraEnv []string, source, params map[string]any, srcDir string,
 ) (map[string]any, error) {
 	if rt.Config.Expr.Out == "" {
 		return nil, fmt.Errorf("out %q: this resource type sets no expr.out", rt.Name)
@@ -119,7 +121,7 @@ func exprRunOut(
 	slog.Debug("resource.out", "resource_type", rt.Name, "source", source, "params", params,
 		"src_dir", srcDir, "backend", "expr")
 
-	version, err := exprlang.RunOut(ctx, rt.Config.Expr.Out, exprInput(rt, source, nil, params, srcDir))
+	version, err := exprlang.RunOut(ctx, rt.Config.Expr.Out, exprInput(rt, extraEnv, source, nil, params, srcDir))
 	if err != nil {
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}

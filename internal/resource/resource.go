@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/shell"
@@ -37,12 +38,18 @@ import (
 // advances past items nobody saw). The run and plan paths read it and never
 // write it.
 //
+// extraEnv is the resource INSTANCE's own env: (config.Resource.Env) —
+// additional names unioned with the resource TYPE's env: for this call only,
+// so one resource of a shared type can read a credential the type itself
+// doesn't name. See config.Resource.Env for why this is additive, never a
+// replacement.
+//
 // When rt.Config.MCP is set, this calls its check: tool instead (see
 // mcpCheckVersions) — cfg is needed only for that path, to resolve the
 // referenced mcp_servers: entry; the shell path below ignores it, so a nil
 // cfg is fine whenever the caller knows rt isn't mcp-backed.
 func CheckVersions(
-	ctx context.Context, cfg *config.Config, rt config.ResourceType, source, version map[string]any,
+	ctx context.Context, cfg *config.Config, rt config.ResourceType, extraEnv []string, source, version map[string]any,
 ) ([]map[string]any, error) {
 	if version == nil {
 		version = map[string]any{}
@@ -52,7 +59,7 @@ func CheckVersions(
 	case config.BackendMCP:
 		return mcpCheckVersions(ctx, cfg, rt, source, version)
 	case config.BackendExpr:
-		return exprCheckVersions(ctx, rt, source, version)
+		return exprCheckVersions(ctx, rt, extraEnv, source, version)
 	case config.BackendShell:
 	}
 
@@ -63,7 +70,7 @@ func CheckVersions(
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
 
-	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Env: rt.Env, User: rt.User, Network: rt.Network,
+	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Env: UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network,
 		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()})
 	if err != nil {
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
@@ -96,6 +103,23 @@ func CheckVersions(
 	slog.Info("resource.checked", "resource_type", rt.Name, "versions", len(versions))
 
 	return versions, nil
+}
+
+// UnionEnv combines a resource type's own env: with one resource instance's
+// additional env: (config.Resource.Env), without mutating either slice —
+// both are shared config data that later calls (or other resources of the
+// same type) still read.
+//
+// Exported so internal/merkle can fold the identical union into a get/put
+// node's hashed content — the env NAMES are cache identity for the same
+// reason resourceType.Env alone already was (see merkle.GetNodeContent),
+// and the two packages must agree on what that union is.
+func UnionEnv(typeEnv, extraEnv []string) []string {
+	if len(extraEnv) == 0 {
+		return typeEnv
+	}
+
+	return append(slices.Clone(typeEnv), extraEnv...)
 }
 
 // VersionMode returns a get step's version selection mode ("latest",
@@ -152,7 +176,7 @@ func versionsFor(
 		}
 	}
 
-	versions, err := CheckVersions(ctx, cfg, *resourceType, res.Source, nil)
+	versions, err := CheckVersions(ctx, cfg, *resourceType, res.Env, res.Source, nil)
 	if err != nil {
 		return nil, fmt.Errorf("get %q: %w", step.Get, err)
 	}
@@ -213,15 +237,18 @@ func matchesPin(version map[string]any, pinned map[string]string) bool {
 // {{ .params.x }} on an unset key is empty rather than an error — the same
 // treatment out: already gives a put with no params:.
 //
+// extraEnv is the resource instance's own env: — see CheckVersions' doc
+// comment.
+//
 // When rt.Config.MCP is set, this calls mcpRunIn instead — see its doc
 // comment for the in:-omitted default (writing version.json) and the
 // materialization convention when in: is set.
-func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, source, version, params map[string]any, destDir string) error {
+func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, extraEnv []string, source, version, params map[string]any, destDir string) error {
 	switch rt.Config.Backend() {
 	case config.BackendMCP:
 		return mcpRunIn(ctx, cfg, rt, source, version, params, destDir)
 	case config.BackendExpr:
-		return exprRunIn(ctx, rt, source, version, params, destDir)
+		return exprRunIn(ctx, rt, extraEnv, source, version, params, destDir)
 	case config.BackendShell:
 	}
 
@@ -232,7 +259,7 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, sour
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
 
-	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: destDir, Env: rt.Env, User: rt.User, Network: rt.Network,
+	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: destDir, Env: UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network,
 		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()})
 	if err != nil {
 		return fmt.Errorf("in %q: %w", rt.Name, err)
@@ -259,16 +286,19 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, sour
 // docs/conformance.md and TestConformanceRunOutUnparsableStdoutIsNilNotError
 // in resource_test.go).
 //
+// extraEnv is the resource instance's own env: — see CheckVersions' doc
+// comment.
+//
 // When rt.Config.MCP is set, this calls mcpRunOut instead. rt.Config.MCP.Out
 // is itself optional (see validateMCPResourcePuts, which rejects a put step
 // targeting an mcp-backed type with no out: at load time), so this is only
 // ever reached with it set.
-func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, source, params map[string]any, srcDir string) (map[string]any, error) {
+func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, extraEnv []string, source, params map[string]any, srcDir string) (map[string]any, error) {
 	switch rt.Config.Backend() {
 	case config.BackendMCP:
 		return mcpRunOut(ctx, cfg, rt, source, params, srcDir)
 	case config.BackendExpr:
-		return exprRunOut(ctx, rt, source, params, srcDir)
+		return exprRunOut(ctx, rt, extraEnv, source, params, srcDir)
 	case config.BackendShell:
 	}
 
@@ -279,7 +309,7 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, sou
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}
 
-	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: srcDir, Env: rt.Env, User: rt.User, Network: rt.Network,
+	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: srcDir, Env: UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network,
 		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()})
 	if err != nil {
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)

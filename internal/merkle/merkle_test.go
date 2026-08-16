@@ -228,7 +228,7 @@ func TestPutNodeContentInputsAffectHash(t *testing.T) {
 	mustHash := func(t *testing.T, inputs []string, ws *config.WorkspaceConfig) string {
 		t.Helper()
 
-		content, err := PutNodeContent(&config.Config{Workspace: ws}, config.Step{}, rt, source, nil, inputs, false)
+		content, err := PutNodeContent(&config.Config{Workspace: ws}, config.Step{}, rt, nil, source, nil, inputs, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -413,7 +413,7 @@ func TestGetPutImageAffectsHash(t *testing.T) {
 	source := map[string]any{"key": "v"}
 	version := map[string]any{"ref": "v1"}
 
-	baseGetContent, err := GetNodeContent(&config.Config{}, config.Step{}, base, source, version)
+	baseGetContent, err := GetNodeContent(&config.Config{}, config.Step{}, base, nil, source, version)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,7 +423,7 @@ func TestGetPutImageAffectsHash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	imageGetContent, err := GetNodeContent(&config.Config{}, config.Step{}, withImage, source, version)
+	imageGetContent, err := GetNodeContent(&config.Config{}, config.Step{}, withImage, nil, source, version)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +437,7 @@ func TestGetPutImageAffectsHash(t *testing.T) {
 		t.Error("setting a resource type's image did not change the get node hash")
 	}
 
-	basePutContent, err := PutNodeContent(&config.Config{}, config.Step{}, base, source, nil, nil, false)
+	basePutContent, err := PutNodeContent(&config.Config{}, config.Step{}, base, nil, source, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,7 +447,7 @@ func TestGetPutImageAffectsHash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	imagePutContent, err := PutNodeContent(&config.Config{}, config.Step{}, withImage, source, nil, nil, false)
+	imagePutContent, err := PutNodeContent(&config.Config{}, config.Step{}, withImage, nil, source, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,6 +459,74 @@ func TestGetPutImageAffectsHash(t *testing.T) {
 
 	if basePutHash == imagePutHash {
 		t.Error("setting a resource type's image did not change the put node hash")
+	}
+}
+
+// TestGetPutExtraEnvAffectsHash mirrors TestGetPutImageAffectsHash for
+// extraEnv (config.Resource.Env): widening one resource's own env:
+// allow-list changes what env() can see for it exactly the way editing the
+// resource TYPE's own env: already does (proven by TestGetPutImageAffectsHash's
+// sibling assertions on resourceType.Env, unexercised here on purpose to
+// isolate extraEnv as the only variable). Without this folded into the hash,
+// a get cached before a resource's env: named a new variable would be
+// skipped as unchanged afterward — the wrong-cache-HIT failure withIsolation
+// warns about for privileged/container_limits.
+//
+//nolint:cyclop // straight-line build/hash pairs for get and put in one test
+func TestGetPutExtraEnvAffectsHash(t *testing.T) {
+	t.Parallel()
+
+	rt := config.ResourceType{Config: config.ResourceTypeConfig{In: "true", Out: "true"}, Env: []string{"TYPE_TOKEN"}}
+
+	source := map[string]any{"key": "v"}
+	version := map[string]any{"ref": "v1"}
+
+	baseGetContent, err := GetNodeContent(&config.Config{}, config.Step{}, rt, nil, source, version)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	baseGetHash, err := HashNode(NodeKindGet, baseGetContent, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	extraGetContent, err := GetNodeContent(&config.Config{}, config.Step{}, rt, []string{"EXTRA_TOKEN"}, source, version)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	extraGetHash, err := HashNode(NodeKindGet, extraGetContent, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if baseGetHash == extraGetHash {
+		t.Error("widening a resource's own env: did not change the get node hash")
+	}
+
+	basePutContent, err := PutNodeContent(&config.Config{}, config.Step{}, rt, nil, source, nil, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	basePutHash, err := HashNode(NodeKindPut, basePutContent, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	extraPutContent, err := PutNodeContent(&config.Config{}, config.Step{}, rt, []string{"EXTRA_TOKEN"}, source, nil, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	extraPutHash, err := HashNode(NodeKindPut, extraPutContent, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if basePutHash == extraPutHash {
+		t.Error("widening a resource's own env: did not change the put node hash")
 	}
 }
 
@@ -672,7 +740,7 @@ func TestPutNodeContentOmitsTimeout(t *testing.T) {
 			Config: config.ResourceTypeConfig{Out: "echo out"},
 		}
 
-		content, err := PutNodeContent(&config.Config{}, config.Step{Put: "repo", Timeout: timeout}, rt, map[string]any{}, map[string]any{}, []string{}, false)
+		content, err := PutNodeContent(&config.Config{}, config.Step{Put: "repo", Timeout: timeout}, rt, nil, map[string]any{}, map[string]any{}, []string{}, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -693,7 +761,7 @@ func TestPutNodeContentOmitsTimeout(t *testing.T) {
 	}
 
 	rt := config.ResourceType{Name: "git", Config: config.ResourceTypeConfig{Out: "echo out"}}
-	content, _ := PutNodeContent(&config.Config{}, config.Step{Put: "repo", Timeout: "5m"}, rt, map[string]any{}, map[string]any{}, []string{}, false)
+	content, _ := PutNodeContent(&config.Config{}, config.Step{Put: "repo", Timeout: "5m"}, rt, nil, map[string]any{}, map[string]any{}, []string{}, false)
 	if _, ok := content["timeout"]; ok {
 		t.Error(`a put with timeout should not have a "timeout" content key`)
 	}
@@ -1143,7 +1211,7 @@ func TestGetParamsAffectHash(t *testing.T) {
 	hashFor := func(t *testing.T, step config.Step) string {
 		t.Helper()
 
-		content, err := GetNodeContent(&config.Config{}, step, rt, source, version)
+		content, err := GetNodeContent(&config.Config{}, step, rt, nil, source, version)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1302,7 +1370,7 @@ func TestExprProgramsAffectHash(t *testing.T) {
 	getHash := func(t *testing.T, rt config.ResourceType) string {
 		t.Helper()
 
-		content, err := GetNodeContent(&config.Config{}, step, rt, source, version)
+		content, err := GetNodeContent(&config.Config{}, step, rt, nil, source, version)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1360,7 +1428,7 @@ func TestExprOutProgramAffectsPutHash(t *testing.T) {
 
 		rt := config.ResourceType{Config: config.ResourceTypeConfig{Expr: &config.ExprResourceConfig{Out: out}}}
 
-		content, err := PutNodeContent(&config.Config{}, config.Step{Put: "thing"}, rt,
+		content, err := PutNodeContent(&config.Config{}, config.Step{Put: "thing"}, rt, nil,
 			map[string]any{"url": "https://example.com"}, nil, nil, false)
 		if err != nil {
 			t.Fatal(err)
@@ -1387,7 +1455,7 @@ func TestNonExprHashesUnchanged(t *testing.T) {
 
 	rt := config.ResourceType{Config: config.ResourceTypeConfig{In: "true"}}
 
-	content, err := GetNodeContent(&config.Config{}, config.Step{Get: "repo"}, rt,
+	content, err := GetNodeContent(&config.Config{}, config.Step{Get: "repo"}, rt, nil,
 		map[string]any{"uri": "u"}, map[string]any{"ref": "v1"})
 	if err != nil {
 		t.Fatal(err)

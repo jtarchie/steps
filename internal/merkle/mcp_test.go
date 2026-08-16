@@ -229,12 +229,12 @@ func TestMCPGetNodeContentFoldsInTool(t *testing.T) {
 		t.Fatalf("FindResourceType: %v", findErr)
 	}
 
-	contentA, err := GetNodeContent(cfgA, step, *rtA, map[string]any{"team": "ENG"}, map[string]any{"id": "1"})
+	contentA, err := GetNodeContent(cfgA, step, *rtA, nil, map[string]any{"team": "ENG"}, map[string]any{"id": "1"})
 	if err != nil {
 		t.Fatalf("GetNodeContent A: %v", err)
 	}
 
-	contentB, err := GetNodeContent(cfgB, step, *rtB, map[string]any{"team": "ENG"}, map[string]any{"id": "1"})
+	contentB, err := GetNodeContent(cfgB, step, *rtB, nil, map[string]any{"team": "ENG"}, map[string]any{"id": "1"})
 	if err != nil {
 		t.Fatalf("GetNodeContent B: %v", err)
 	}
@@ -274,12 +274,12 @@ func TestMCPGetNodeContentUnaffectedWhenInUnset(t *testing.T) {
 		t.Fatalf("FindResourceType: %v", err)
 	}
 
-	contentA, err := GetNodeContent(cfgA, step, *rtA, map[string]any{"team": "ENG"}, map[string]any{"id": "1"})
+	contentA, err := GetNodeContent(cfgA, step, *rtA, nil, map[string]any{"team": "ENG"}, map[string]any{"id": "1"})
 	if err != nil {
 		t.Fatalf("GetNodeContent A: %v", err)
 	}
 
-	contentB, err := GetNodeContent(cfgB, step, *rtB, map[string]any{"team": "ENG"}, map[string]any{"id": "1"})
+	contentB, err := GetNodeContent(cfgB, step, *rtB, nil, map[string]any{"team": "ENG"}, map[string]any{"id": "1"})
 	if err != nil {
 		t.Fatalf("GetNodeContent B: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestMCPPutNodeContentFoldsInTool(t *testing.T) {
 		t.Fatalf("FindResourceType: %v", err)
 	}
 
-	contentWithOut, err := PutNodeContent(cfg, step, *rt, map[string]any{"team": "ENG"}, map[string]any{"title": "x"}, nil, false)
+	contentWithOut, err := PutNodeContent(cfg, step, *rt, nil, map[string]any{"team": "ENG"}, map[string]any{"title": "x"}, nil, false)
 	if err != nil {
 		t.Fatalf("PutNodeContent: %v", err)
 	}
@@ -334,7 +334,7 @@ func getHashWithInArgs(t *testing.T, args map[string]any) string {
 
 	rt.Config.MCP.In.Args = args
 
-	content, err := GetNodeContent(cfg, step, *rt, map[string]any{"team": "ENG"}, map[string]any{"id": "1"})
+	content, err := GetNodeContent(cfg, step, *rt, nil, map[string]any{"team": "ENG"}, map[string]any{"id": "1"})
 	if err != nil {
 		t.Fatalf("GetNodeContent: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestMCPArgsOmittedFromHashWhenUnset(t *testing.T) {
 		t.Fatalf("FindResourceType: %v", err)
 	}
 
-	content, err := GetNodeContent(cfg, step, *rt, map[string]any{"team": "ENG"}, map[string]any{"id": "1"})
+	content, err := GetNodeContent(cfg, step, *rt, nil, map[string]any{"team": "ENG"}, map[string]any{"id": "1"})
 	if err != nil {
 		t.Fatalf("GetNodeContent: %v", err)
 	}

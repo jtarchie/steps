@@ -13,6 +13,7 @@ func TestValidateEnvValuesRejectsLiterals(t *testing.T) {
 		cfg  *Config
 	}{
 		{"resource_type", &Config{ResourceTypes: []ResourceType{{Name: "git", Env: []string{"TOKEN=abc"}}}}},
+		{"resource", &Config{Resources: []Resource{{Name: "repo", Type: "git", Env: []string{"TOKEN=abc"}}}}},
 		{"agent", &Config{Agents: []Agent{{Name: "reviewer", Env: []string{"TOKEN=abc"}}}}},
 		{"task", &Config{Tasks: []Task{{Name: "build", Env: []string{"TOKEN=abc"}}}}},
 		{"step", &Config{Jobs: []Job{{Name: "j", Plan: []Step{{Task: "build", Run: "true", Env: []string{"TOKEN=abc"}}}}}}},
@@ -50,6 +51,7 @@ func TestValidateEnvValuesAcceptsNames(t *testing.T) {
 
 	cfg := &Config{
 		ResourceTypes: []ResourceType{{Name: "git", Env: []string{"GIT_TOKEN"}}},
+		Resources:     []Resource{{Name: "repo", Type: "git", Env: []string{"SECOND_GIT_TOKEN"}}},
 		Agents:        []Agent{{Name: "reviewer", Env: []string{"GH_TOKEN"}}},
 		Tasks:         []Task{{Name: "build", Env: []string{"GOFLAGS", "GOPATH"}}},
 	}

@@ -68,7 +68,7 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 			return fmt.Errorf("step %d (get %q): the input set binds no version for it", i, step.Get)
 		}
 
-		content, err := merkle.GetNodeContent(w.cfg, step, *resourceType, resource.Source, version)
+		content, err := merkle.GetNodeContent(w.cfg, step, *resourceType, resource.Env, resource.Source, version)
 		if err != nil {
 			return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 		}
@@ -374,7 +374,7 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 
 	recordFetchedVersion(ctx, resource.Name, version)
 
-	content, err := merkle.GetNodeContent(w.cfg, step, *resourceType, resource.Source, version)
+	content, err := merkle.GetNodeContent(w.cfg, step, *resourceType, resource.Env, resource.Source, version)
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 	}
@@ -506,7 +506,7 @@ func fetchGetStep(ctx context.Context, cfg *config.Config, artifact string, reso
 	fmt.Printf("get: %s (version: %v)\n", artifact, version)
 
 	err := resourceDir(ctx, cfg, artifact, resourceType, resource.Source, version, params, bw, func(dir string) error {
-		return rsrc.RunIn(ctx, cfg, resourceType, resource.Source, version, params, dir)
+		return rsrc.RunIn(ctx, cfg, resourceType, resource.Env, resource.Source, version, params, dir)
 	})
 	if err != nil {
 		return fmt.Errorf("could not fetch resource %q: %w", resource.Name, classifyRunError(ctx, err))

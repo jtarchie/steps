@@ -1,0 +1,167 @@
+# The built-in `slack-mentions` resource type: every unanswered @mention of
+# the bot, oldest first.
+#
+# Registered automatically as `type: slack-mentions` (see
+# registerBuiltinResourceTypes), so a pipeline that wants to watch for
+# mentions writes a resource and nothing else:
+#
+#   resources:
+#   - name: mentions
+#     type: slack-mentions
+#     source:
+#       channels: []   # optional; [] (the default) is every channel the bot is in
+#       limit: 200     # optional; caps one very busy interval, default 200
+#
+# Needs SLACK_BOT_TOKEN (a bot token, xoxb-) in the environment, for an app
+# with chat:write, channels:history and channels:read (plus groups:history
+# and groups:read for private channels), installed to the workspace and
+# INVITED to every channel it should watch. Membership is what grants both
+# reading the history and appearing in users.conversations, so /invite IS the
+# subscribe action — there is no channel list to keep in sync unless
+# source.channels narrows it. app_mentions:read is not needed: that is the
+# Events API's scope, and this polls instead.
+#
+# Different env var name, or a second bot in the same pipeline? source.
+# token_env names it instead of SLACK_BOT_TOKEN — but naming it isn't enough
+# on its own: env() only reads names this TYPE already allows (env: below),
+# and that list is shared by every slack-mentions resource in the pipeline.
+# A resource asking for a name the type doesn't already allow adds it to its
+# OWN env: too (config.Resource.Env — unioned with the type's at run time,
+# widening only that one resource, not the type):
+#
+#   resources:
+#   - name: mentions2
+#     type: slack-mentions
+#     env: [SECOND_BOT_TOKEN]        # this resource's own allow-list addition
+#     source:
+#       token_env: SECOND_BOT_TOKEN  # which name env() should actually read
+#
+# expr:, not check:/in:/out: — this type is a JSON HTTP API and nothing else
+# (docs/expr.md). That also means it evaluates in-process and can never run
+# in a container: image:/network:/user:/privileged:/container_limits: are
+# load errors alongside expr:, enforced by validateExprNoContainer. Nothing
+# here executes a real tool, so there is nothing to isolate — the token is
+# the only thing worth protecting, and it travels as an env var the same way
+# any shell resource's credential would.
+#
+# source.base_url overrides the API root (default https://slack.com);
+# exists purely so a test can point this at an httptest.Server, since a
+# hardcoded slack.com is otherwise untestable without a live workspace.
+env:
+  - SLACK_BOT_TOKEN
+
+config:
+  expr:
+    # Three dependent calls and two fan-outs: resolve who we are, list the
+    # channels we are in, fetch each channel's history since the cursor,
+    # then walk the threads that have replies.
+    check: |
+      let base = source.base_url ?? "https://slack.com";
+      let auth = {Authorization: "Bearer " + env(source.token_env ?? "SLACK_BOT_TOKEN")};
+      let retry = {on: [429, 503], max: 3};
+      let sourceChannels = source.channels ?? [];
+      let limit = source.limit ?? 200;
+
+      // Resolve the bot's own user id rather than hardcoding a U-id, which
+      // would stop matching, silently, the moment the app is reinstalled.
+      let whoami = http({url: base + "/api/auth.test"}, {headers: auth}).json;
+      let me = whoami.ok ? whoami.user_id
+        : fail("slack auth.test: " + (whoami.error ?? "failed"));
+
+      // channels: [] means every channel the bot is IN, which is the only
+      // set it could read anyway — conversations.history needs membership,
+      // and users.conversations returns exactly the channels that grant it.
+      let hasSourceChannels = len(sourceChannels) > 0;
+
+      let discovered = hasSourceChannels ? {ok: true, channels: []} :
+        http({url: base + "/api/users.conversations",
+              query: {types: "public_channel,private_channel",
+                      exclude_archived: "true", limit: "1000"}},
+             {headers: auth}).json;
+
+      let channels = hasSourceChannels ? sourceChannels :
+        (discovered.ok ? (discovered.channels | map((#.id)))
+                       : fail("slack users.conversations: " + (discovered.error ?? "failed")));
+
+      // THE CURSOR: the last version this check reported, so it asks for
+      // what it has not seen instead of guessing a window. Empty on the
+      // first-ever check, which is what "0" covers — and what stops a cold
+      // start answering a backlog nobody is waiting on.
+      let oldest = version.ts ?? "0";
+
+      // One batched call instead of N serial ones: concurrent, backing off
+      // on a 429, and each result carries the request that produced it, so
+      // a failure names the channel.
+      let histories = http(channels | map((
+          {url: base + "/api/conversations.history",
+           query: {channel: #, oldest: oldest, limit: limit}}
+        )), {headers: auth, concurrency: 4, retry: retry});
+
+      // A message is worth answering when a person wrote it, it is not us,
+      // and it mentions us. subtype is set on everything that is not a
+      // person talking — and a channel_join reads "<@UBOT> has joined the
+      // channel", which CONTAINS the mention, so /invite would otherwise
+      // answer itself once per channel, forever. bot_id catches relays and
+      // our own broadcasts.
+      let top = histories | map((
+          let ch = #.request.query.channel;
+          let body = #.json;
+          let messages = body.ok ? body.messages
+            : fail("slack conversations.history " + ch + ": " + (body.error ?? "failed"));
+          messages
+            | filter(!("subtype" in #) && !("bot_id" in #) && #.user != me)
+            | filter((#.text ?? "") contains ("<@" + me + ">"))
+            | map(({channel: ch, ts: #.ts}))
+        )) | flatten();
+
+      // conversations.history returns TOP-LEVEL messages only, so a mention
+      // posted as a reply inside an existing thread is invisible above —
+      // which is most of how people actually talk to a bot. Parents carry
+      // reply_count, so this is a second batched pass over the threads that
+      // have replies. The cursor is what keeps that number small.
+      let threadRequests = histories | map((
+          let ch = #.request.query.channel;
+          (#.json.messages ?? [])
+            | filter((#.reply_count ?? 0) > 0)
+            | map((
+              {url: base + "/api/conversations.replies",
+               query: {channel: ch, ts: #.ts, oldest: oldest, limit: "200"}}
+            ))
+        )) | flatten();
+
+      let replies = len(threadRequests) == 0 ? [] :
+        http(threadRequests, {headers: auth, concurrency: 4, retry: retry});
+
+      let inThread = replies | map((
+          let ch = #.request.query.channel;
+          let parent = #.request.query.ts;
+          let body = #.json;
+          let messages = body.ok ? body.messages
+            : fail("slack conversations.replies " + ch + ": " + (body.error ?? "failed"));
+          messages
+            | filter(#.ts != parent)
+            | filter(!("subtype" in #) && !("bot_id" in #) && #.user != me)
+            | filter((#.text ?? "") contains ("<@" + me + ">"))
+            | map(({channel: ch, ts: #.ts}))
+        )) | flatten();
+
+      // Oldest first, the ordering a check owes: Slack answers newest-first,
+      // and across channels there is no single reversal that would do it. A
+      // Slack ts is a STRING, so sorting it as one silently misorders.
+      concat(top, inThread) | sortBy(float(#.ts))
+
+    # Both files are written here: a downstream put needs the ids, and an
+    # agent step reads the thread as Slack's own JSON rather than a
+    # rendering of it.
+    in: |
+      let base = source.base_url ?? "https://slack.com";
+      let thread = http({
+        url: base + "/api/conversations.replies",
+        headers: {Authorization: "Bearer " + env(source.token_env ?? "SLACK_BOT_TOKEN")},
+        query: {channel: version.channel, ts: version.ts},
+      }).json;
+
+      thread.ok ? {
+        "version.json": toJSON(version),
+        "thread.json": toJSON(thread),
+      } : fail("slack conversations.replies " + version.channel + ": " + (thread.error ?? "failed"))

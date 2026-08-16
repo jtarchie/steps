@@ -37,7 +37,7 @@ func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 		return stepResult{}, fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
 
-	content, err := merkle.PutNodeContent(r.cfg, step, *resourceType, resource.Source, step.Params, step.InputNames(), step.InputsAll())
+	content, err := merkle.PutNodeContent(r.cfg, step, *resourceType, resource.Env, resource.Source, step.Params, step.InputNames(), step.InputsAll())
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
@@ -97,7 +97,7 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 		fmt.Printf("put: %s (attempt %d/%d)\n", step.Put, attempt, total)
 		slog.Info("job.put.attempt", "put", step.Put, "attempt", attempt, "total_attempts", total)
 	}, func(attemptCtx context.Context) error {
-		runResult, runErr := rsrc.RunOut(attemptCtx, cfg, *resourceType, resource.Source, step.Params, space.Dir())
+		runResult, runErr := rsrc.RunOut(attemptCtx, cfg, *resourceType, resource.Env, resource.Source, step.Params, space.Dir())
 		if runErr != nil {
 			// Classified against the ATTEMPT's context, so a per-attempt
 			// timeout is told apart from a real nonzero out:.

@@ -34,16 +34,40 @@ func (c *Config) validateEnvRules() error {
 // cleartext. Accepting "KEY=value" silently would put the value in exactly
 // the place the whole convention exists to keep it out of.
 func (c *Config) validateEnvValues() error {
-	return c.visitContainerSettings(func(context string, settings containerSettings) error {
-		for _, name := range settings.Env {
-			err := checkEnvName(context, name)
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
+	err := c.visitContainerSettings(func(context string, settings containerSettings) error {
+		return checkEnvNames(context, settings.Env)
 	})
+	if err != nil {
+		return err
+	}
+
+	// Resource.Env is not a containerSettings field — a resource instance
+	// doesn't run in a container, only its type's check/in/out do — so it
+	// gets its own small walk rather than joining visitContainerSettings.
+	for i := range c.Resources {
+		res := c.Resources[i]
+
+		err := checkEnvNames(fmt.Sprintf("resource %q", res.Name), res.Env)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkEnvNames applies checkEnvName across one env: list, shared by
+// visitContainerSettings' callback and the Resource.Env walk above so the
+// two sites can't drift on how a bad entry is reported.
+func checkEnvNames(context string, names []string) error {
+	for _, name := range names {
+		err := checkEnvName(context, name)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // checkEnvName rejects an env: entry that isn't a bare variable name.

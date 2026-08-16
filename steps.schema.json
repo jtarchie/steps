@@ -259,6 +259,13 @@
           "type": "object",
           "description": "Type-specific configuration, available as {{ .source.* }}."
         },
+        "env": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Host environment variable NAMES this resource instance's check/in/out may see, UNIONED with its resource type's own env: (not replacing it). For when one resource of a shared type needs a credential under a different name than the type's own default."
+        },
         "webhook_token_env": {
           "type": "string",
           "description": "Environment variable holding the shared secret a webhook must present to trigger an immediate check of this resource. The variable NAME, never the token itself."

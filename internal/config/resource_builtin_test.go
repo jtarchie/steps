@@ -43,6 +43,97 @@ jobs:
 	}
 }
 
+// `type: slack-mentions` needs no resource_types: block either — it is
+// expr-backed (a JSON HTTP API and nothing else), get-only, and requires
+// SLACK_BOT_TOKEN so it can authenticate.
+func TestBuiltinSlackMentionsResourceTypeRegistered(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+resources:
+- name: mentions
+  type: slack-mentions
+  source: {}
+jobs:
+- name: j
+  plan: [{ get: mentions }]
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	resourceType, err := cfg.FindResourceType("slack-mentions")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if resourceType.Config.Backend() != BackendExpr {
+		t.Fatalf("Backend() = %v, want expr", resourceType.Config.Backend())
+	}
+
+	if resourceType.Config.Expr.Check == "" || resourceType.Config.Expr.In == "" {
+		t.Error("built-in slack-mentions is missing a check or in expression")
+	}
+
+	// Get-only by design: there is nothing to publish, so put: against it is
+	// a load error rather than a silent no-op.
+	if resourceType.Config.Expr.Out != "" {
+		t.Errorf("built-in slack-mentions declares expr.out: %q, want none", resourceType.Config.Expr.Out)
+	}
+
+	found := false
+
+	for _, name := range resourceType.Env {
+		if name == "SLACK_BOT_TOKEN" {
+			found = true
+		}
+	}
+
+	if !found {
+		t.Errorf("env = %v, want SLACK_BOT_TOKEN", resourceType.Env)
+	}
+}
+
+// `type: slack-reply` is the publish-only mirror: no expr.check/in, so
+// get: against it is a load error.
+func TestBuiltinSlackReplyResourceTypeRegistered(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+resources:
+- name: reply
+  type: slack-reply
+  source: {}
+jobs:
+- name: j
+  plan: [{ put: reply }]
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	resourceType, err := cfg.FindResourceType("slack-reply")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if resourceType.Config.Backend() != BackendExpr {
+		t.Fatalf("Backend() = %v, want expr", resourceType.Config.Backend())
+	}
+
+	if resourceType.Config.Expr.Out == "" {
+		t.Error("built-in slack-reply is missing an out expression")
+	}
+
+	if resourceType.Config.Expr.Check != "" || resourceType.Config.Expr.In != "" {
+		t.Errorf("built-in slack-reply declares expr.check/in, want neither (publish-only)")
+	}
+}
+
 // A user-defined type of the same name replaces the built-in outright. Command
 // templates don't merge — half of one check paired with half of another is not
 // a resource type anyone meant to write.

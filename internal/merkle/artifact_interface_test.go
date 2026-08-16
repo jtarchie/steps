@@ -31,7 +31,7 @@ func TestGetNodeContentAliasValueGated(t *testing.T) {
 	source := map[string]any{"repo": "x"}
 	version := map[string]any{"ref": "v1"}
 
-	plain, err := GetNodeContent(&config.Config{}, config.Step{Get: "repo"}, rtype, source, version)
+	plain, err := GetNodeContent(&config.Config{}, config.Step{Get: "repo"}, rtype, nil, source, version)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,8 +40,8 @@ func TestGetNodeContentAliasValueGated(t *testing.T) {
 		t.Errorf("unaliased get folded an artifact key: %#v", plain)
 	}
 
-	contentA, errA := GetNodeContent(&config.Config{}, config.Step{Get: "a", Resource: "repo"}, rtype, source, version)
-	contentB, errB := GetNodeContent(&config.Config{}, config.Step{Get: "b", Resource: "repo"}, rtype, source, version)
+	contentA, errA := GetNodeContent(&config.Config{}, config.Step{Get: "a", Resource: "repo"}, rtype, nil, source, version)
+	contentB, errB := GetNodeContent(&config.Config{}, config.Step{Get: "b", Resource: "repo"}, rtype, nil, source, version)
 	aliasA := hashOrFail(t, NodeKindGet, contentA, errA)
 	aliasB := hashOrFail(t, NodeKindGet, contentB, errB)
 
@@ -58,7 +58,7 @@ func TestPutInputsAllSentinel(t *testing.T) {
 
 	rtype := config.ResourceType{Config: config.ResourceTypeConfig{Out: "true"}}
 
-	withAll, err := PutNodeContent(&config.Config{}, config.Step{Put: "r"}, rtype, nil, nil, nil, true)
+	withAll, err := PutNodeContent(&config.Config{}, config.Step{Put: "r"}, rtype, nil, nil, nil, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
