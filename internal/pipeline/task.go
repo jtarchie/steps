@@ -51,9 +51,24 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 	// recorded node, and the skip line on the next run all say the same thing.
 	name := executedStepName(step)
 
-	fmt.Printf("task: %s\n", name)
-
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindTask, StepIndex: i, Resource: name, Content: content}
+
+	req, err := taskCacheRequest(content, step, rt)
+	if err != nil {
+		return stepResult{}, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
+	}
+
+	cached := lookupStepCache(ctx, r, step, req, name)
+	if cached.Hit {
+		err = r.st.RecordNode(ctx, nodeRecord(node), r.jobName, "succeeded", cached.NodeResult(), nil)
+		if err != nil {
+			return stepResult{}, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
+		}
+
+		return stepResult{hash: hash, disposition: stepCacheHit}, nil
+	}
+
+	fmt.Printf("task: %s\n", name)
 
 	err = executeTask(ctx, r.cfg, step, rt, r.bw)
 	if err != nil {
@@ -67,6 +82,10 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 	}
+
+	// After the node is recorded, so a run that could not record its own
+	// outcome does not leave behind an entry claiming the work is done.
+	workspace.SaveStepCache(ctx, r.bw, cached.Key, req)
 
 	return ran(hash), nil
 }

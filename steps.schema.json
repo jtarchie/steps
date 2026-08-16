@@ -1104,6 +1104,10 @@
         "container_limits": {
           "$ref": "#/$defs/containerLimits"
         },
+        "volatile": {
+          "type": "boolean",
+          "description": "Never reuse this step's result. Set it on a task or agent step that reads something the pipeline never declared — a clock, a network endpoint, a path outside its inputs — where a recorded answer would be a stale one."
+        },
         "when": {
           "$ref": "#/$defs/whenSpec"
         },

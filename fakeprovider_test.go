@@ -527,6 +527,29 @@ func storeTranscript(t *testing.T, pipelinePath, resource string) string {
 	return transcript
 }
 
+// storeNodeResult returns the most recent nodes.result JSON recorded for a
+// step, "" when the step recorded none.
+func storeNodeResult(t *testing.T, pipelinePath, resource string) string {
+	t.Helper()
+
+	db := openStateDB(t, pipelinePath)
+
+	var result string
+
+	err := db.QueryRowContext(t.Context(), `
+		SELECT COALESCE(result, '') FROM nodes
+		WHERE resource = ? ORDER BY created_at DESC LIMIT 1`, resource).Scan(&result)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ""
+	}
+
+	if err != nil {
+		t.Fatalf("query result for %q: %v", resource, err)
+	}
+
+	return result
+}
+
 // storeNodes returns every node the run recorded, in step order — the
 // persistence layer's view of what executed and how it ended.
 func storeNodes(t *testing.T, pipelinePath string) []nodeRow {

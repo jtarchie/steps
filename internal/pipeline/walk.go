@@ -125,7 +125,11 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 
 	res, err := runNonGetStep(ctx, w.stepRunner, w.index, step, w.skippable, w.parentHash)
 
-	if res.disposition == stepRan {
+	// A cache hit counts as a visit for the same reason it advances
+	// parentHash: the step produced its result. (No cacheable step routes, so
+	// nothing reads this count today — but a visit that means "the plan moved
+	// through here" must not depend on whether the work was paid for twice.)
+	if res.disposition == stepRan || res.disposition == stepCacheHit {
 		w.visits[w.index]++
 	}
 
@@ -249,13 +253,24 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 
 	res, err := dispatchNonGetStep(ctx, r, i, step, skippable, parentHash)
 
+	// A step whose outputs were reused counts as executed, even though no
+	// command or conversation ran: its artifacts are in place and the plan
+	// continued exactly as if it had run, so a fixture's assert.execution must
+	// read the same on a cold cache and a warm one. (A resume-skipped step
+	// records itself for the same reason — see skipCompleted. A when: guard
+	// and a chain skip do not, because there the step genuinely produced
+	// nothing.)
+	//
+	// Recorded before hooks so a job's assert.execution reads
+	// [step, its hooks...].
+	if res.disposition == stepRan || res.disposition == stepCacheHit {
+		recordStepExecution(ctx, step)
+	}
+
 	// A skip and a run are different events, not one event with a flag: the
 	// whole point of the transcript is that a replayed step is visibly
 	// distinct from a step that paid to execute.
 	if res.disposition == stepRan {
-		// Recorded before hooks so a job's assert.execution reads
-		// [step, its hooks...].
-		recordStepExecution(ctx, step)
 		publishStepFinished(ctx, r.jobName, i, step, res.hash, started, err)
 	} else {
 		publishStepSkipped(ctx, r.jobName, i, step, res.hash, skipReason(res.disposition))
@@ -355,6 +370,10 @@ func runAgentStep(ctx context.Context, r stepRunner, i int, step config.Step, pa
 		res.hash = ""
 
 		return res, fmt.Errorf("agent step: %w", err)
+	}
+
+	if out.Cached {
+		res.disposition = stepCacheHit
 	}
 
 	return res, nil

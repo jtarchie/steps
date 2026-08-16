@@ -107,6 +107,10 @@ type StepOutcome struct {
 	Verdict  string
 	Note     string
 	Response string
+	// Cached reports that this step's declared outputs were restored from an
+	// earlier run rather than produced by a conversation — so the caller
+	// publishes a skip, and no model was paid.
+	Cached bool
 }
 
 // printAgentResponse echoes an agent step's conversation result to the
@@ -165,9 +169,20 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	// cells of one matrix are finally tellable apart in a run.
 	name := step.DisplayName()
 
-	fmt.Printf("agent: %s%s\n", name, fallbackBanner(prepared))
-
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindAgent, StepIndex: i, Resource: name, Content: content}
+
+	// Before the "agent:" line, so a reused step announces itself as reused
+	// rather than appearing to start a conversation it never has.
+	cached, out, err := reuseAgentStep(ctx, cfg, prepared, content, bw, st, node, jobName, name)
+	if err != nil {
+		return StepOutcome{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+	}
+
+	if cached.Hit {
+		return out, nil
+	}
+
+	fmt.Printf("agent: %s%s\n", name, fallbackBanner(prepared))
 
 	// Give the conversation its live identity, so every turn it takes is
 	// publishable as belonging to this run, job, and step. Set here rather
@@ -230,7 +245,83 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 		return StepOutcome{Response: res.text}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
+	// After the node is recorded, so a run that could not record its own
+	// outcome does not leave an entry behind claiming the work is done.
+	workspace.SaveStepCache(ctx, bw, cached.Key, cached.request)
+
 	return StepOutcome{Hash: hash, Verdict: res.verdict, Note: res.note, Response: res.text}, nil
+}
+
+// stepCacheLookup is what the cache decided about this step, carrying the
+// request alongside so the store call after a successful run files exactly the
+// outputs the lookup asked about.
+type stepCacheLookup struct {
+	workspace.StepCacheResult
+
+	request workspace.StepCacheRequest
+}
+
+// reuseAgentStep performs the lookup and, on a hit, records the step's node as
+// succeeded — everything RunStep would otherwise do inline, lifted out to keep
+// it inside the complexity budget. The returned StepOutcome is meaningful only
+// when the lookup hit.
+func reuseAgentStep(
+	ctx context.Context, cfg *config.Config, prepared preparedAgentStep, content map[string]any,
+	bw workspace.BuildWorkspace, st *store.Store, node merkle.Node, jobName, name string,
+) (stepCacheLookup, StepOutcome, error) {
+	cached, err := lookupStepCache(ctx, cfg, prepared, content, bw, name)
+	if err != nil || !cached.Hit {
+		return cached, StepOutcome{}, err
+	}
+
+	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", cached.NodeResult(), nil)
+	if err != nil {
+		return cached, StepOutcome{}, fmt.Errorf("%w", err)
+	}
+
+	return cached, StepOutcome{Hash: node.Hash, Cached: true}, nil
+}
+
+// lookupStepCache reports whether this agent step's declared outputs were
+// already produced by an earlier run over the same input bytes, restoring them
+// when they were.
+//
+// It runs AFTER prepareAgentStep rather than before, because the step's own
+// content — and so its key — is not knowable until then: a prompt_file: naming
+// a run-time artifact is only loaded once the step's workspace exists. The cost
+// of a hit is therefore one materialized workspace and whatever tool servers
+// the grant starts, which is real, but is not what an agent step costs.
+func lookupStepCache(
+	ctx context.Context, cfg *config.Config, prepared preparedAgentStep,
+	content map[string]any, bw workspace.BuildWorkspace, name string,
+) (stepCacheLookup, error) {
+	if !merkle.StepCacheable(cfg, prepared.step) {
+		return stepCacheLookup{}, nil
+	}
+
+	// Hashed with NO parent: what identifies the work is this step's content
+	// and the bytes it reads, not the chain that led to it. See
+	// internal/pipeline's stepCacheRequest.
+	contentHash, err := merkle.HashNode(merkle.NodeKindAgent, content, "")
+	if err != nil {
+		return stepCacheLookup{}, fmt.Errorf("step cache key: %w", err)
+	}
+
+	step := prepared.step
+	req := workspace.StepCacheRequest{
+		ContentHash:   contentHash,
+		Inputs:        step.InputNames(),
+		Outputs:       step.Outputs,
+		OutputMapping: config.CollectedOutputMapping(step.Outputs, nil, step.OutputSubdir),
+	}
+
+	res := workspace.LookupStepCache(ctx, bw, req)
+	if res.Hit {
+		fmt.Printf("skip: %s (reused)\n", name)
+		slog.Info("job.skip", "step", name, "reason", "reused", "key", res.Key)
+	}
+
+	return stepCacheLookup{StepCacheResult: res, request: req}, nil
 }
 
 // agentResultRecord builds the result map RunStep records for a succeeded

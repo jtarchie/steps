@@ -49,6 +49,12 @@ const (
 	// everything downstream of it also already succeeded. The whole remaining
 	// plan is skipped.
 	stepChainSkipped
+	// stepCacheHit: this step's declared outputs were restored from an earlier
+	// run that did the same work over the same input bytes. Unlike a chain
+	// skip, only THIS step is skipped — the plan continues, and parentHash
+	// advances to the step's node exactly as if it had run, because as far as
+	// everything downstream can observe, it did.
+	stepCacheHit
 )
 
 // stepResult is what running one step produced: the node hash the next step

@@ -163,6 +163,40 @@ jobs:
 - **Keyed on content, not plan position** — a hash of the `in:` command, source, version, and execution settings (`image:`/`env:`/`user:`/`network:`), deliberately *not* the get node's merkle hash, so two jobs fetching the same version share one entry.
 - **A hit costs a snapshot** (free on btrfs; a copy under `copy` — but still no fetch). **A failed fetch is never cached.** **A cache failure never fails a build** — anything wrong falls back to fetching. The startup sweep spares it.
 
+## Step output cache (`volatile:`)
+
+The resource cache above keeps what a `get` fetched. This one keeps what a **task or agent step produced**, so the steps that cost money can skip too.
+
+It turns on by itself as soon as `workspace.root:` names a durable directory — there is no second switch. A step is looked up before it runs, and on a hit its declared `outputs:` are restored into the artifact store and the plan carries on with the next step:
+
+```
+skip: reviewer (reused)
+```
+
+Opt a single step out with `volatile:`:
+
+```yaml
+jobs:
+- name: publish
+  plan:
+  - task: stamp
+    volatile: true          # reads the clock; a recorded answer is a stale one
+    outputs: [stamp]
+    run: date +%s > stamp/at
+    assert:
+      files: [stamp/at]
+  assert:
+    execution: [stamp]
+    outcome: succeeded
+```
+
+- **The key is the work, plus the bytes it reads.** A step's own hashed content (its command or prompt, image, tool grant, declared inputs/outputs and mappings) combined with a content digest of each input artifact as materialized. Deliberately **not** the step's merkle node hash, which carries the whole chain that led to it: two jobs doing the same work over the same bytes share one entry, and an upstream step that re-ran and answered *differently* changes the digest, so this step misses and runs. The digest covers paths, file bytes, the executable bit and symlink targets — never mtimes or ownership, which would miss on every run.
+- **Agent steps are cached like task steps, and for the same reason.** An agent step is a task running a model; the contract in both directions is that a step's declared inputs identify its work. An agent reaching past them through `run_shell` is the same bargain as a task's `run:` doing it — which is what `volatile:` is for.
+- **What is never cached**, because a hit restores declared outputs and nothing else: a step with `verdicts:` or `to:` (a decision the store records and routing keys on), one declaring `context: { from: ... }` (it reads an upstream decision the key cannot see), one with hooks (a hit fires none, like any skip), a task with `fix:`, and an `across:` cell. A `when:` guard is *not* a bar: it is evaluated first, and a step it lets through is work like any other.
+- **`volatile:` is only valid on task and agent steps**, and never on a hook — anywhere else it would read as configured while binding nothing, so it is a load error.
+- **Requires `root:`.** Same reason the resource cache does: an entry has to outlive the run that wrote it. Without one, nothing is cached and nothing is stored.
+- **A hit costs a snapshot** (free on btrfs, a copy under `copy`), never a model call. **A failed step is never cached**, and **a cache failure never fails a build** — anything wrong falls back to running the step. Entries are evicted least-recently-used.
+
 ## Resuming a failed run
 
 If a step fails, re-running the job from the beginning pays for every expensive step again — and for agent steps it is **lossy**: an agent is not deterministic, so re-running does not reproduce the output that already passed review.

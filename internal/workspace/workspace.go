@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -251,24 +253,45 @@ type isolatingProvider struct {
 	token string
 	// cache is the cross-build resource cache, nil when the pipeline did not
 	// opt in (see config.CacheConfig).
-	cache  *resourceCache
-	builds atomic.Int64
+	cache *resourceCache
+	// stepCache reuses task/agent outputs across runs, nil when the root is
+	// this provider's own temp directory — see enableCache.
+	stepCache *stepCache
+	builds    atomic.Int64
 }
 
-// enableCache attaches the cross-build resource cache when the pipeline opted
-// in. Config guarantees an explicit root: alongside cache.resources, so the
-// cache directory always sits somewhere that outlives the run.
+// enableCache attaches the two cross-build caches.
+//
+// The resource cache is opt-in (cache.resources), because reusing a fetched
+// version changes an observable thing: what a get: puts on disk for a version
+// whose content moved underneath it.
+//
+// The step cache asks for no separate opt-in — a durable workspace.root: is
+// the whole requirement, and configuring one is already the deliberate act.
+// Both live under that root because a cache discarded at the end of the run
+// that filled it is only a slower way to run, and a provider-owned temp root
+// is removed at Close. Per-step control is volatile:, on the step whose result
+// must never be reused.
 func (p *isolatingProvider) enableCache(ws *config.WorkspaceConfig) error {
-	if !ws.CacheEnabled() {
+	if ws.CacheEnabled() {
+		cache, err := newResourceCache(p.backend, p.root, ws.CacheMaxEntries())
+		if err != nil {
+			return err
+		}
+
+		p.cache = cache
+	}
+
+	if p.ownsRoot {
 		return nil
 	}
 
-	cache, err := newResourceCache(p.backend, p.root, ws.CacheMaxEntries())
+	stepCache, err := newStepCache(p.backend, p.root, defaultStepCacheMaxEntries)
 	if err != nil {
 		return err
 	}
 
-	p.cache = cache
+	p.stepCache = stepCache
 
 	return nil
 }
@@ -373,6 +396,7 @@ func (p *isolatingProvider) NewBuild(ctx context.Context, label string) (BuildWo
 			stepsDir:  filepath.Join(p.reuse, "steps"),
 			keep:      true, // never tear down a tree we did not create
 			cache:     p.cache,
+			stepCache: p.stepCache,
 		}, nil
 	}
 
@@ -409,7 +433,10 @@ func (p *isolatingProvider) NewBuild(ctx context.Context, label string) (BuildWo
 
 	_ = ctx // no subprocess work happens at this layer; ctx kept for interface symmetry
 
-	return &isolatingBuild{backend: p.backend, root: root, artifacts: artifacts, stepsDir: steps, keep: p.keep, cache: p.cache}, nil
+	return &isolatingBuild{
+		backend: p.backend, root: root, artifacts: artifacts, stepsDir: steps,
+		keep: p.keep, cache: p.cache, stepCache: p.stepCache,
+	}, nil
 }
 
 func (p *isolatingProvider) Close() error {
@@ -452,7 +479,62 @@ type isolatingBuild struct {
 	stepsDir    string
 	keep        bool
 	cache       *resourceCache
+	stepCache   *stepCache
 	stepCounter atomic.Int64
+
+	// digests memoizes artifactDigest per artifact name. An artifact's bytes
+	// change only when something in this file replaces the directory (a get
+	// fetching, a step capturing, a matrix resetting, a cache hit restoring),
+	// and each of those forgets the entry — so the memo is exact rather than
+	// merely close, and hashing a large checkout costs the same whether one
+	// step reads it or ten do.
+	digestMu sync.Mutex
+	digests  map[string]string
+}
+
+// artifactDigest is the content hash of one artifact in the build store, for
+// the step cache's action key.
+//
+// An artifact that does not exist digests as the empty tree rather than
+// failing: a step may legitimately declare an input no earlier step produced
+// (materializeSpace would fail later, and with a better message), and a cache
+// lookup is not the place to decide that.
+func (b *isolatingBuild) artifactDigest(name string) (string, error) {
+	b.digestMu.Lock()
+	defer b.digestMu.Unlock()
+
+	if digest, ok := b.digests[name]; ok {
+		return digest, nil
+	}
+
+	dir := filepath.Join(b.artifacts, name)
+
+	digest, err := digestTree(dir)
+	if err != nil {
+		if os.IsNotExist(err) || errors.Is(err, fs.ErrNotExist) {
+			digest = ""
+		} else {
+			return "", err
+		}
+	}
+
+	if b.digests == nil {
+		b.digests = map[string]string{}
+	}
+
+	b.digests[name] = digest
+
+	return digest, nil
+}
+
+// forgetDigests drops memoized digests for artifacts whose bytes just changed.
+func (b *isolatingBuild) forgetDigests(names []string) {
+	b.digestMu.Lock()
+	defer b.digestMu.Unlock()
+
+	for _, name := range names {
+		delete(b.digests, name)
+	}
 }
 
 // FetchResource implements CachingBuild. With no cache configured it is
@@ -468,7 +550,11 @@ func (b *isolatingBuild) FetchResource(ctx context.Context, name, cacheKey strin
 		return dir, fetch(dir)
 	}
 
-	return dir, b.cache.Fetch(ctx, cacheKey, dir, func() error { return fetch(dir) })
+	err = b.cache.Fetch(ctx, cacheKey, dir, func() error { return fetch(dir) })
+
+	b.forgetDigests([]string{name})
+
+	return dir, err
 }
 
 func (b *isolatingBuild) ResourceDir(ctx context.Context, name string) (string, error) {
@@ -483,6 +569,8 @@ func (b *isolatingBuild) ResourceDir(ctx context.Context, name string) (string, 
 	if err != nil {
 		return "", fmt.Errorf("could not create resource dir %q: %w", dir, err)
 	}
+
+	b.forgetDigests([]string{name})
 
 	return dir, nil
 }
@@ -553,7 +641,11 @@ func (b *isolatingBuild) newSpace(ctx context.Context, label string, inputs, out
 		return nil, err
 	}
 
-	return &isolatingSpace{backend: b.backend, artifacts: b.artifacts, dir: dir, outputs: outputs, outputMapping: outputMapping, keep: b.keep}, nil
+	return &isolatingSpace{
+		backend: b.backend, artifacts: b.artifacts, dir: dir,
+		outputs: outputs, outputMapping: outputMapping, keep: b.keep,
+		captured: b.forgetDigests,
+	}, nil
 }
 
 // materializeSpace populates an already-created step directory with a copy or
@@ -670,6 +762,8 @@ func (b *isolatingBuild) ResetArtifact(ctx context.Context, name string) error {
 		return fmt.Errorf("resetting artifact %q: %w", name, err)
 	}
 
+	b.forgetDigests([]string{name})
+
 	return nil
 }
 
@@ -718,6 +812,10 @@ type isolatingSpace struct {
 	// on disk at Close, so the files a failed step had just written — the
 	// first thing anyone wants to look at — survive to be read.
 	keep bool
+	// captured tells the build which artifacts this step just replaced, so a
+	// digest remembered for one of them is not served to the next step's cache
+	// key after the bytes behind it changed.
+	captured func(names []string)
 }
 
 func (s *isolatingSpace) Dir() string { return s.dir }
@@ -745,6 +843,13 @@ func (s *isolatingSpace) Kept() bool { return s.keep }
 // silently dereference, exfiltrating the real target's contents into the
 // pipeline's artifact store as if it were the legitimate output.
 func (s *isolatingSpace) Capture(ctx context.Context) error {
+	if s.captured != nil {
+		// Before the loop, not after: a capture that fails partway has still
+		// replaced the artifacts it got to, and those digests are stale
+		// whether or not the step as a whole succeeded.
+		defer s.captured(artifactNames(s.outputs, s.outputMapping))
+	}
+
 	for _, out := range s.outputs {
 		src := filepath.Join(s.dir, out)
 

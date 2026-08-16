@@ -242,6 +242,8 @@ func skipReason(disposition stepDisposition) string {
 	switch disposition {
 	case stepChainSkipped:
 		return "unchanged — replayed from cache"
+	case stepCacheHit:
+		return "same inputs as an earlier run — outputs reused"
 	case stepGuardSkipped:
 		return "when: guard was false"
 	case stepRan:

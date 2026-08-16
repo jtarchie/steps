@@ -66,6 +66,7 @@ var stepMutationSkips = map[string]string{ //nolint:gochecknoglobals // a test's
 	"max_context_bytes": "same reason: it bounds how much context_paths content the model is handed, and a positional fake says the same thing however much it receives",
 
 	"max_in_flight": "documented to change only how many cells run at once, never which run or in what order (it is deliberately not even hashed) — there is nothing for an assertion to see",
+	"volatile":      "it decides whether the step cache may reuse a step, and that cache exists only under a durable workspace.root: across two runs — a corpus of single-run fixtures in a fresh temp dir has no cache for it to change; pinned by TestStepCacheReusesAnAgentStep and internal/merkle's TestStepCacheable instead",
 
 	"assert": "mutating an assertion is TestAssertMutation's whole job; doing it here too would test the same 215 mutants twice",
 }

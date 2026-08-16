@@ -225,6 +225,13 @@ type Step struct {
 	// Limits, on a task or agent step, overrides the referenced task's/agent's
 	// container_limits: for this step only (set-wins, like Image).
 	Limits *ContainerLimits `yaml:"container_limits,omitempty"`
+	// Volatile marks a step whose result must never be reused: it reads
+	// something the pipeline never declared — a clock, a network endpoint, a
+	// path outside its inputs — so a recorded answer is a stale one. Off by
+	// default, because a step's declared inputs are what identify its work,
+	// which is the contract a task's run: has always had. Valid only on task
+	// and agent steps: they are the two kinds the step cache reuses at all.
+	Volatile bool `yaml:"volatile,omitempty"`
 	// When, on a task/put/agent step, gates whether the step runs at all: an
 	// explicit command whose exit code decides (0 runs, nonzero skips). See
 	// WhenSpec. Invalid on get steps — a get fans the remainder of the plan

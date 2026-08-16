@@ -190,13 +190,13 @@ func TestResourceCacheRejectsATraversingKey(t *testing.T) {
 	}
 
 	for _, key := range []string{"", "..", "../escape", "a/b", `a\b`} {
-		if _, ok := cache.entryPath(key); ok {
-			t.Errorf("entryPath(%q) was accepted, want it refused", key)
+		if _, ok := cache.entries.path(key); ok {
+			t.Errorf("entry path(%q) was accepted, want it refused", key)
 		}
 	}
 
-	if _, ok := cache.entryPath("abc123"); !ok {
-		t.Error("entryPath rejected an ordinary hex key")
+	if _, ok := cache.entries.path("abc123"); !ok {
+		t.Error("entry path rejected an ordinary hex key")
 	}
 }
 

@@ -1436,6 +1436,68 @@ func CellHash(cfg *config.Config, cell config.Step, parentHash string) (string, 
 	return hash, cacheable, nil
 }
 
+// StepCacheable reports whether a step's outputs may be reused from an earlier
+// run that did the same work over the same input bytes — the per-step cache in
+// internal/workspace, which is a different mechanism from the chain skip the
+// rest of this file feeds.
+//
+// The two answer different questions. A chain skip asks "did this whole
+// remaining plan already succeed, unchanged", and ENDS the walk, so nothing
+// downstream ever observes an artifact it did not produce. A step cache hit
+// lets the plan continue, which is what makes the exclusions below necessary
+// rather than merely cautious: a hit restores declared outputs and nothing
+// else, so a step whose result is anything MORE than its outputs must run.
+//
+//   - volatile: is the author saying this step reads something undeclared.
+//   - A verdict or a to: is a decision the store records and routing keys on.
+//     Replaying it means writing "decided X, reused from run N" into the run
+//     record — a separate feature with its own audit questions.
+//   - context: from: reads an upstream decision delivered at run time, which
+//     the action key cannot see. A hit would reuse an answer computed from a
+//     decision that has since changed.
+//   - Hooks are side effects the author asked for by name, and no kind of skip
+//     fires them (see internal/pipeline's runNonGetStep).
+//   - A fix: agent runs only when the command failed, so a cache entry records
+//     precisely the case that never needed it.
+//   - An across: cell captures into per-coordinate subdirectories that mean
+//     something only inside the matrix that composed them.
+//
+// when: is deliberately NOT excluded. It decides whether the step runs at all,
+// and is evaluated before the cache is consulted: a false guard skips the step
+// without a lookup, and a true one leaves work whose result is identified by
+// its inputs like any other.
+func StepCacheable(cfg *config.Config, step config.Step) bool {
+	kind, ok := step.Kind()
+	if !ok || !stepRecordsOnlyOutputs(step) {
+		return false
+	}
+
+	switch kind { //nolint:exhaustive // every other kind is rejected below, which is what the default is for
+	case config.StepKindAgent:
+		return true
+	case config.StepKindTask:
+		// Conservative on a resolution error, matching taskCellProducesOutputs:
+		// a step that cannot be resolved must not be reported cacheable.
+		rt, err := cfg.ResolveTask(step)
+
+		return err == nil && rt.Fix == nil
+	default:
+		return false
+	}
+}
+
+// stepRecordsOnlyOutputs reports that a step's whole observable result is the
+// artifacts it declares — nothing routed on, read downstream, or reacted to by
+// a hook. See StepCacheable for what each exclusion protects.
+func stepRecordsOnlyOutputs(step config.Step) bool {
+	return !step.Volatile &&
+		!step.Routes() &&
+		!step.ReadsFrom() &&
+		len(step.Verdicts) == 0 &&
+		step.Hooks.Empty() &&
+		step.Label == ""
+}
+
 // taskCellProducesOutputs reports whether a task cell captures artifacts,
 // through its own declaration or the tasks: entry it references. Conservative
 // on a resolution error: an unresolvable cell must not be reported cacheable.

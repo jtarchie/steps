@@ -1,0 +1,28 @@
+# volatile: says "never reuse this step's result", and only a task or an agent
+# step has a result the step cache would reuse. A put's work is its side
+# effect, which is never replayed, and a get has its own resource cache with
+# its own opt-in — so volatile: on either reads as configured while binding
+# nothing. Refused rather than ignored.
+# expect: volatile is only valid on task and agent steps
+
+workspace:
+  strategy: copy
+
+resource_types:
+- name: dummy
+  config:
+    check: echo '[{"ref":"v1"}]'
+    in: "true"
+    out: "true"
+
+resources:
+- name: results
+  type: dummy
+  source: {}
+
+jobs:
+- name: publish
+  plan:
+  - put: results
+    volatile: true
+    params: {}
