@@ -292,12 +292,13 @@ func loadAgentDocument(baseDir, context, path string) (Agent, error) {
 // only when the entry declares no source: at all) rather than merged
 // field-by-field, since a mix of an inline model: with a document's endpoint:
 // is more likely a mistake than an intended override. a.Name is never
-// touched: the entry, not the document, names the agent. Split into two
-// halves purely to stay under the linter's cyclomatic-complexity budget —
+// touched: the entry, not the document, names the agent. Split into three
+// parts purely to stay under the linter's cyclomatic-complexity budget —
 // there is no grouping significance to the split.
 func mergeAgentDocument(a *Agent, doc Agent) {
 	mergeAgentIdentity(a, doc)
 	mergeAgentDials(a, doc)
+	mergeAgentLimits(a, doc)
 }
 
 func mergeAgentIdentity(a *Agent, doc Agent) {
@@ -339,10 +340,6 @@ func mergeAgentDials(a *Agent, doc Agent) {
 		a.ReasoningEffort = doc.ReasoningEffort
 	}
 
-	if a.MaxTurns == 0 {
-		a.MaxTurns = doc.MaxTurns
-	}
-
 	if a.CompactAfterTokens == nil {
 		a.CompactAfterTokens = doc.CompactAfterTokens
 	}
@@ -350,9 +347,23 @@ func mergeAgentDials(a *Agent, doc Agent) {
 	if a.ContextWindow == 0 {
 		a.ContextWindow = doc.ContextWindow
 	}
+}
 
-	if a.MaxContextBytes == 0 {
+func mergeAgentLimits(a *Agent, doc Agent) {
+	if a.MaxTurns == nil {
+		a.MaxTurns = doc.MaxTurns
+	}
+
+	if a.MaxContextBytes == nil {
 		a.MaxContextBytes = doc.MaxContextBytes
+	}
+
+	if a.Timeout == "" {
+		a.Timeout = doc.Timeout
+	}
+
+	if a.Attempts == nil {
+		a.Attempts = doc.Attempts
 	}
 }
 

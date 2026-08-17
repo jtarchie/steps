@@ -643,9 +643,9 @@ func TestResolveAgentInvocation(t *testing.T) {
 	t.Run("step sets its own attempts; agent max_turns applies", func(t *testing.T) {
 		t.Parallel()
 
-		cfg := baseCfg(Agent{Name: "a", Source: AgentSource{Model: "openai/gpt-4o"}, MaxTurns: 20})
+		cfg := baseCfg(Agent{Name: "a", Source: AgentSource{Model: "openai/gpt-4o"}, MaxTurns: intPtr(20)})
 
-		ri, err := cfg.ResolveAgentInvocation(Step{Agent: "a", Attempts: 2})
+		ri, err := cfg.ResolveAgentInvocation(Step{Agent: "a", Attempts: intPtr(2)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -938,11 +938,20 @@ fix:
 		t.Fatal("Fix is nil")
 	}
 
-	if got.Agent != "fixer" || got.Prompt != "only touch parser.go" || got.Dir != "repo" || got.Attempts != 2 {
+	if got.Agent != "fixer" || got.Prompt != "only touch parser.go" || got.Dir != "repo" {
 		t.Errorf("Fix = %+v, want the mapping's values", got)
 	}
 
-	if len(got.Tools) != 2 || got.Tools[0].Builtin != "read_file" || got.Tools[1].Builtin != "run_shell" {
+	if got.Attempts == nil || *got.Attempts != 2 {
+		t.Errorf("Fix.Attempts = %v, want 2", got.Attempts)
+	}
+
+	granted := make([]string, 0, len(got.Tools))
+	for _, tool := range got.Tools {
+		granted = append(granted, tool.Builtin)
+	}
+
+	if strings.Join(granted, ",") != "read_file,run_shell" {
 		t.Errorf("Fix.Tools = %+v, want [read_file run_shell]", got.Tools)
 	}
 }

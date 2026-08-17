@@ -136,6 +136,8 @@ func (c *Config) validate() error {
 		c.validateStepGuards,
 		c.validateStepContextPaths,
 		c.validateMaxContextBytes,
+		c.validateAgentDials,
+		c.validateAttempts,
 		c.validateContextSteps,
 		c.validateContextFrom,
 		c.validateVolatileSteps,

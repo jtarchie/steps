@@ -306,6 +306,24 @@ var docScenarios = map[string]docScenario{
 		),
 	},
 
+	// Two steps of one agent, each answering once: what the block is showing
+	// is that neither had to restate the entry's timeout:/attempts:/max_turns:.
+	"attempts-agent-dials": {
+		fake: scripted(
+			says("Looks correct."),
+			says("No injection paths."),
+		),
+	},
+
+	// The uncapped agent answers on its first turn. The dials being 0 is the
+	// point of the block; that a conversation with no ceiling still ENDS when
+	// the model is done is the point of running it.
+	"attempts-no-limits": {
+		fake: scripted(
+			says("migration complete"),
+		),
+	},
+
 	// The first cell reports spending double the block's budget, so cells two
 	// and three are never admitted — the script has exactly one turn, and a
 	// second request would fail the test by exhausting it.

@@ -1,0 +1,17 @@
+# timeout: "0" means "no deadline" on an AGENT step, and nowhere else.
+#
+# The asymmetry is the absence of a special case rather than one. An agent
+# step is the only kind that gets a deadline it never asked for (30 minutes,
+# because the model client sets no request timeout of its own), so it is the
+# only kind where declining one needs a spelling at all. On a task/get/put
+# step — and on a job — omitting timeout: already means no deadline, so a 0
+# there says nothing the empty field doesn't, while reading equally well as
+# "expire immediately" to anything enforcing it.
+# expect: timeout must be a positive duration
+
+jobs:
+- name: build
+  plan:
+  - task: compile
+    timeout: "0"
+    run: echo building

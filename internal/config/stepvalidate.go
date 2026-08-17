@@ -194,8 +194,8 @@ func checkAgentOnlyFields(label string, step *Step) error {
 	isAgent := step.Agent != ""
 
 	return firstMisplaced(label, []misplacedField{
-		{step.MaxTurns < 0, "max_turns must be a positive number of tool-calling turns"},
-		{step.MaxTurns > 0 && !isAgent, "max_turns is only valid on agent steps (it bounds the tool-calling loop; a task has no turns)"},
+		{step.MaxTurns != nil && *step.MaxTurns < 0, "max_turns must not be negative (omit it to take the agent's, or set 0 for no cap)"},
+		{step.MaxTurns != nil && !isAgent, "max_turns is only valid on agent steps (it bounds the tool-calling loop; a task has no turns)"},
 		{step.Prompt != "" && !isAgent, "prompt is only valid on agent steps (nothing else holds a conversation to prompt)"},
 		{step.Dir != "" && !isAgent, "dir is only valid on agent steps (a task embeds a cd in its run:)"},
 		{len(step.Tools) > 0 && !isAgent, "tools is only valid on agent steps (it selects from the agent's grant; a task's fix: carries its own tools)"},

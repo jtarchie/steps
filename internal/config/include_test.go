@@ -257,8 +257,8 @@ max_turns: 4
 		t.Errorf("System = %q, want %q", got, want)
 	}
 
-	if got, want := agent.MaxTurns, 20; got != want {
-		t.Errorf("MaxTurns = %d, want %d (the entry's own inline max_turns: must win over the document's)", got, want)
+	if got, want := agent.MaxTurns, 20; got == nil || *got != want {
+		t.Errorf("MaxTurns = %v, want %d (the entry's own inline max_turns: must win over the document's)", got, want)
 	}
 }
 
@@ -713,8 +713,8 @@ func TestReadBuiltinAgentProfiles(t *testing.T) {
 			t.Errorf("built-in agent %q has no system prompt or system_file", name)
 		}
 
-		if agent.MaxTurns == 0 {
-			t.Errorf("built-in agent %q has max_turns=0", name)
+		if agent.MaxTurns == nil {
+			t.Errorf("built-in agent %q sets no max_turns", name)
 		}
 	}
 }
@@ -727,8 +727,8 @@ func TestReadBuiltinBuilderProfile(t *testing.T) {
 		t.Fatalf("ReadBuiltinAgent(builder): %v", err)
 	}
 
-	if builder.MaxTurns != 50 {
-		t.Errorf("builder MaxTurns = %d, want 50", builder.MaxTurns)
+	if builder.MaxTurns == nil || *builder.MaxTurns != 50 {
+		t.Errorf("builder MaxTurns = %v, want 50", builder.MaxTurns)
 	}
 
 	if builder.Description == "" {
@@ -860,7 +860,7 @@ max_context_bytes: 5000
 		t.Errorf("ContextWindow = %d, want %d", got, want)
 	}
 
-	if got, want := agent.MaxContextBytes, 5000; got != want {
-		t.Errorf("MaxContextBytes = %d, want %d (the document's ceiling was dropped)", got, want)
+	if got, want := agent.MaxContextBytes, 5000; got == nil || *got != want {
+		t.Errorf("MaxContextBytes = %v, want %d (the document's ceiling was dropped)", got, want)
 	}
 }

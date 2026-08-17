@@ -6,6 +6,10 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 )
 
+// intPtr builds a pointer dial the way YAML would, so a test can tell
+// "attempts: 0" from an omitted attempts: (see config's dials.go).
+func intPtr(v int) *int { return &v }
+
 // TestStepCacheable pins which steps may have their outputs reused. Every
 // false case is a step whose observable result is MORE than its declared
 // artifacts, which a cache hit does not restore.
@@ -21,7 +25,7 @@ func TestStepCacheable(t *testing.T) {
 		"an agent with outputs": {Agent: "reviewer", Prompt: "review", Outputs: out},
 		"a task behind a when:": {Task: "work", Run: "make", Outputs: out, When: &config.WhenSpec{Run: "test -f go.mod"}},
 		"a task with an assert": {Task: "work", Run: "make", Outputs: out, Assert: &config.Assert{}},
-		"a task with attempts":  {Task: "work", Run: "make", Outputs: out, Attempts: 3},
+		"a task with attempts":  {Task: "work", Run: "make", Outputs: out, Attempts: intPtr(3)},
 		"an agent with tools":   {Agent: "reviewer", Prompt: "review", Outputs: out, Tools: []config.ToolSpec{{Name: "read_file"}}},
 	}
 

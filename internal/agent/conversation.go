@@ -369,12 +369,23 @@ func seedResumeState(conv agentConversation) resumeCheckpoint {
 	return state
 }
 
+// unlimitedTurns is remainingTurns' answer for a step that declared
+// max_turns: 0. It is deliberately not a very large number: a sentinel the
+// loop tests for cannot be reached by a long conversation, whereas a ceiling
+// of math.MaxInt silently becomes a real one for anything that subtracts
+// from it (the CLI path spends turns across attempts and does exactly that).
+const unlimitedTurns = -1
+
 // remainingTurns is how many turns this source may still spend: the step's
 // declared max_turns: less whatever earlier sources already used. Never
-// negative — a checkpoint at or past the ceiling yields 0, and the loop falls
-// straight through to outOfTurns, which is the right answer for a step that
-// has already spent its whole allowance.
+// negative for a capped step — a checkpoint at or past the ceiling yields 0,
+// and the loop falls straight through to outOfTurns, which is the right
+// answer for a step that has already spent its whole allowance.
 func remainingTurns(conv agentConversation, spent int) int {
+	if conv.maxTurns == 0 {
+		return unlimitedTurns
+	}
+
 	return max(conv.maxTurns-spent, 0)
 }
 
@@ -420,7 +431,14 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	// stuck, warns once, then fails the attempt — see loop.go.
 	detector := newLoopDetector()
 
-	for turn := range remainingTurns(conv, turnsBefore) {
+	// budget is fixed before the loop so the sentinel is compared, not
+	// counted down: an uncapped conversation ends by answering, by the step's
+	// deadline, by its token budget, or by loop detection — never here.
+	budget := remainingTurns(conv, turnsBefore)
+
+	turn := 0
+
+	for ; budget == unlimitedTurns || turn < budget; turn++ {
 		if conv.compactAfterTokens > 0 {
 			state.summary, state.stalled = maybeCompact(ctx, llm, req, conv, state.summary, state.stalled)
 		}
@@ -477,7 +495,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	// ran but didn't finish its task), not infrastructure errors — mark them
 	// so hook dispatch classifies them as failed rather than errored. A
 	// transport error from generateOnce above stays unwrapped → errored.
-	exhausted := result("", remainingTurns(conv, turnsBefore))
+	exhausted := result("", turn)
 
 	return conv.outOfTurns(ctx, llm, req, exhausted, state.satisfied)
 }

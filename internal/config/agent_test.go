@@ -89,14 +89,18 @@ func TestResolveMaxContextBytesPrecedence(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		step  int
-		agent int
+		step  *int
+		agent *int
 		want  int
 	}{
-		{"neither set takes the default", 0, 0, DefaultMaxContextBytes},
-		{"the agent's applies when the step is silent", 0, 5000, 5000},
-		{"the step's overrides the agent's", 250, 5000, 250},
-		{"the step's applies with no agent ceiling", 250, 0, 250},
+		{"neither set takes the default", nil, nil, DefaultMaxContextBytes},
+		{"the agent's applies when the step is silent", nil, intPtr(5000), 5000},
+		{"the step's overrides the agent's", intPtr(250), intPtr(5000), 250},
+		{"the step's applies with no agent ceiling", intPtr(250), nil, 250},
+		// An explicit 0 is a VALUE — "hand the file over whole" — at either
+		// level, and must not read as the absence the default fills in.
+		{"the agent's explicit 0 means no ceiling", nil, intPtr(0), 0},
+		{"the step's explicit 0 overrides the agent's ceiling", intPtr(0), intPtr(5000), 0},
 	}
 
 	for _, test := range tests {
@@ -104,7 +108,7 @@ func TestResolveMaxContextBytesPrecedence(t *testing.T) {
 			t.Parallel()
 
 			if got := resolveMaxContextBytes(test.step, test.agent); got != test.want {
-				t.Errorf("resolveMaxContextBytes(%d, %d) = %d, want %d", test.step, test.agent, got, test.want)
+				t.Errorf("resolveMaxContextBytes(%v, %v) = %d, want %d", test.step, test.agent, got, test.want)
 			}
 		})
 	}
@@ -120,10 +124,12 @@ func TestValidateMaxContextBytesOnSteps(t *testing.T) {
 		step    Step
 		wantErr string
 	}{
-		{"a negative ceiling is rejected", Step{Agent: "a", MaxContextBytes: -1}, "must be a positive number of bytes"},
-		{"a ceiling on a task step is rejected", Step{Task: "t", Run: "true", MaxContextBytes: 100}, "only valid on agent steps"},
+		{"a negative ceiling is rejected", Step{Agent: "a", MaxContextBytes: intPtr(-1)}, "must not be negative"},
+		{"a ceiling on a task step is rejected", Step{Task: "t", Run: "true", MaxContextBytes: intPtr(100)}, "only valid on agent steps"},
+		{"an explicit 0 on a task step is still misplaced", Step{Task: "t", Run: "true", MaxContextBytes: intPtr(0)}, "only valid on agent steps"},
 		{"unset is fine on any step", Step{Task: "t", Run: "true"}, ""},
-		{"set on an agent step is fine", Step{Agent: "a", MaxContextBytes: 100}, ""},
+		{"set on an agent step is fine", Step{Agent: "a", MaxContextBytes: intPtr(100)}, ""},
+		{"0 on an agent step is fine", Step{Agent: "a", MaxContextBytes: intPtr(0)}, ""},
 	}
 
 	for _, test := range tests {

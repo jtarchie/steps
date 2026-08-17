@@ -6,7 +6,7 @@ How an `agent` step in a pipeline actually runs, and the features around custom 
 
 An agent step runs a tool-calling conversation loop:
 
-1. Parse the agent's config: model/endpoint, system prompt, granted tools, `max_turns` (default 30; a step may override it with its own `max_turns:` so one long-horizon step can buy more turns without every step of the same agent paying for them).
+1. Parse the agent's config: model/endpoint, system prompt, granted tools, `max_turns` (default 30, `0` for no cap; a step may override it with its own `max_turns:` so one long-horizon step can buy more turns without every step of the same agent paying for them). Same for `timeout:` and `attempts:`, which an `agents:` entry may also carry — see [attempts-timeout.md](attempts-timeout.md).
 2. Build a system message combining the agent's persona with working-directory context (any `context_paths:` files are delivered as synthetic `read_file` tool results — see below).
 3. Loop, up to `max_turns`:
    - Send the conversation + tool definitions to the model.
@@ -455,7 +455,7 @@ jobs:
 
 The point is not convenience but **guarantee**: conventions every invocation must follow are present from the first turn, instead of costing a `read_file` round trip the model might not bother with.
 
-Paths are relative to the step's working directory and confined to its workspace, so in practice the file lives inside a declared input. They are read at **run time** (per attempt), which is what distinguishes them from `system_file:`: the persona is the pipeline author's own text, resolved once at load; `context_paths:` is content that arrives with a fetched artifact and can change between runs. A missing or escaping file fails the step at preparation, before a token is spent. A file that is merely too big (over `max_context_bytes:`, default 100KB) is **truncated** instead, with a note pointing at `read_file`'s paging — the author writes a path, not a size, and `pr/pr.diff` is a correct path that would otherwise start failing the day the pull request grew.
+Paths are relative to the step's working directory and confined to its workspace, so in practice the file lives inside a declared input. They are read at **run time** (per attempt), which is what distinguishes them from `system_file:`: the persona is the pipeline author's own text, resolved once at load; `context_paths:` is content that arrives with a fetched artifact and can change between runs. A missing or escaping file fails the step at preparation, before a token is spent. A file that is merely too big (over `max_context_bytes:`, default 100KB — `0` lifts the ceiling entirely) is **truncated** instead, with a note pointing at `read_file`'s paging — the author writes a path, not a size, and `pr/pr.diff` is a correct path that would otherwise start failing the day the pull request grew.
 
 `context_paths:` is a step-level field, not agent-level — the agent definition has no notion of which inputs are available. It requires `read_file` in the tool grant (which it is by default). Sub-agents and fix agents do not inherit the parent step's `context_paths:`. `max_context_bytes:` is spelled on **either**, and the step's wins (as above) — two steps sharing one agent routinely hand it different evidence. `context_window:` deliberately has no step spelling for the mirror-image reason: it describes the *model*, and the model belongs to the agent.
 

@@ -94,8 +94,11 @@ type FixSpec struct {
 	PromptFile string
 	Dir        string     // optional working dir, relative to the workspace
 	Tools      []ToolSpec // optional subset/addition to the agent's tool grant
-	Attempts   int        // optional whole-conversation retry count (default 1)
-	Timeout    string     // optional wall-clock deadline per fix-agent attempt
+	// Attempts is how many times the fix agent's failing REQUEST is
+	// re-issued. Unset takes the agent default; 0 is a load error, like
+	// attempts: anywhere else — see dials.go.
+	Attempts *int
+	Timeout  string // optional wall-clock deadline per fix-agent attempt
 }
 
 // UnmarshalYAML decodes a FixSpec from either a scalar (agent name) or a
@@ -118,7 +121,7 @@ func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 			PromptFile string     `yaml:"prompt_file"`
 			Dir        string     `yaml:"dir"`
 			Tools      []ToolSpec `yaml:"tools"`
-			Attempts   int        `yaml:"attempts"`
+			Attempts   *int       `yaml:"attempts"`
 			Timeout    string     `yaml:"timeout"`
 		}
 

@@ -59,7 +59,7 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (c
 	// failoverEligible call below): a step that overran its own timeout is
 	// infrastructure (errored), the same as it was when the deadline lived
 	// one frame down, whereas a canceled job is an abort.
-	cascadeCtx, cancel := context.WithTimeout(ctx, timeout)
+	cascadeCtx, cancel := withAgentDeadline(ctx, timeout)
 	defer cancel()
 
 	prepared.conv.usage = attachUsage(ctx, prepared.conv.usage)

@@ -306,7 +306,14 @@ func cliArgs(prepared preparedAgentStep, runtime cliRuntime, mcpConfig string, p
 		"--output-format", "stream-json",
 		"--verbose",
 		"--model", prepared.ri.ModelName,
-		"--max-turns", strconv.Itoa(plan.maxTurns),
+	}
+
+	// An uncapped step passes no --max-turns at all rather than a large one:
+	// the CLIs this drives impose no turn cap of their own, so omitting the
+	// flag IS the uncapped spelling, and a number would be a ceiling the
+	// pipeline never asked for.
+	if plan.maxTurns != unlimitedTurns {
+		args = append(args, "--max-turns", strconv.Itoa(plan.maxTurns))
 	}
 
 	// A retry rejoins the conversation instead of restarting the task. Session

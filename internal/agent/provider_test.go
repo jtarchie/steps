@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/config"
 )
 
 func TestLookupAPIKey(t *testing.T) {
@@ -164,7 +166,7 @@ func TestContextPathTruncatesInsteadOfFailing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blocks, err := loadContextBlocks(dir, []string{"big.diff"}, 0)
+	blocks, err := loadContextBlocks(dir, []string{"big.diff"}, config.DefaultMaxContextBytes)
 	if err != nil {
 		t.Fatalf("an oversized context path failed the step: %v", err)
 	}
@@ -179,6 +181,35 @@ func TestContextPathTruncatesInsteadOfFailing(t *testing.T) {
 
 	if !strings.Contains(blocks[0].content, "read_file") {
 		t.Error("the notice does not say how to reach the rest")
+	}
+}
+
+// TestContextPathZeroLimitHandsOverTheWholeFile pins max_context_bytes: 0 —
+// the explicit "no ceiling". It is the case a plain int could not express:
+// before the dial became a pointer, 0 was indistinguishable from an omitted
+// field and silently took the 100KB default.
+func TestContextPathZeroLimitHandsOverTheWholeFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	big := strings.Repeat("x", config.DefaultMaxContextBytes+5000)
+
+	err := os.WriteFile(filepath.Join(dir, "big.diff"), []byte(big), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blocks, err := loadContextBlocks(dir, []string{"big.diff"}, 0)
+	if err != nil {
+		t.Fatalf("loadContextBlocks: %v", err)
+	}
+
+	if got := len(blocks[0].content); got != len(big) {
+		t.Errorf("content = %d bytes, want the whole %d — max_context_bytes: 0 capped a file it should not have", got, len(big))
+	}
+
+	if strings.Contains(blocks[0].content, "[truncated:") {
+		t.Error("an uncapped file carries a truncation notice")
 	}
 }
 

@@ -244,6 +244,82 @@ jobs:
 >
 > `task:`/`put:`/`get:` steps have no such default: unset means no deadline.
 
+## Put the deadline on the agent, not on every step
+
+`timeout:` and `attempts:` are also fields of an `agents:` entry, and a step that sets neither inherits them:
+
+```yaml test=attempts-agent-dials
+agents:
+- name: deep-reviewer
+  timeout: 20m
+  attempts: 5
+  max_turns: 50
+  source: { model: openrouter/qwen/qwen3.7-flash }
+
+jobs:
+- name: review
+  plan:
+  - agent: deep-reviewer
+    prompt: "Review the diff for correctness."
+    assert:
+      stdout: Looks correct
+  - agent: deep-reviewer
+    prompt: "Now review it for security."
+    timeout: 45m
+    assert:
+      stdout: No injection paths
+  assert:
+    execution: [deep-reviewer, deep-reviewer]
+    outcome: succeeded
+```
+
+Both steps get 20 minutes, five attempts and 50 turns; the second one asks for 45 minutes and gets it. **Precedence is step, then agent entry, then the package default** — the same order `max_turns:` has always had, and nothing about it is new here except that two more dials now participate.
+
+The reason this belongs on the agent is that the right deadline is usually a property of the agent rather than of the step invoking it: a deep reviewer needs twenty minutes whoever calls it. Before an entry could carry one, a deadline shared by six steps was six copies of one number.
+
+It is **not** available on `defaults:`. A pipeline-wide deadline changes failure behavior at a distance — a step written with no `timeout:` means *this one has no deadline*, and a global default silently converts that into a deadline somebody else picked. An `agents:` entry is a thing the author named and pointed at deliberately, which is the difference.
+
+## Zero means no limit
+
+Every dial that bounds an agent step reads the same three ways:
+
+| written | means |
+|---|---|
+| omitted | take the default |
+| `0` | **no limit** |
+| negative | load error |
+
+```yaml test=attempts-no-limits
+agents:
+- name: marathon
+  max_turns: 0            # no turn cap — bounded by budget:, timeout: and loop detection
+  max_context_bytes: 0    # hand over context_paths: files whole, however large
+  timeout: "0"            # no deadline at all
+  budget: { tokens: 4000000 }
+  source: { model: openrouter/qwen/qwen3.7-flash }
+
+jobs:
+- name: migrate
+  plan:
+  - agent: marathon
+    prompt: "Migrate every call site, however long it takes."
+    assert:
+      stdout: migration complete
+  assert:
+    execution: [marathon]
+    outcome: succeeded
+```
+
+Two things about that block are worth being explicit about.
+
+**`timeout: "0"` is quoted, and it only means this on an agent step.** Quoted because YAML would otherwise hand the loader the integer 0 rather than a duration string. Agent-step-only because an agent step is the *only* kind that gets a deadline it never asked for — on a `task:`/`get:`/`put:` step, omitting `timeout:` already means no deadline, so a `0` there says nothing the empty field doesn't and is a load error. Same for a job's `timeout:`.
+
+**Removing a cap is not the same as removing a bound.** `max_turns: 0` does not mean "runs forever": the agent's `budget:` (tokens/USD), the step's deadline, the job's deadline, and loop detection all still bind, and each of them bounds a runaway conversation more precisely than a turn count does. What `max_turns:` is actually for is the case none of those catch — a model that keeps calling tools productively but never converges — so switching it off is a statement that one of the others is the real ceiling for this step, which is why the agent above names a token budget in the same breath. Take that away too, along with `timeout: "0"`, and nothing is left holding the step but loop detection. That is a choice, not an accident.
+
+**`attempts:` is deliberately outside the convention.** `attempts: 0` is a load error rather than "retry forever", because retrying a provider that is down would never stop, and the backstop that would otherwise catch it — the step's deadline — is itself something a step can now switch off. Omit `attempts:` for the default.
+
+Switching a cap off **busts the cache** for the affected steps. `max_turns:` is part of an agent step's identity (it is hashed, along with the model, persona and tool grant), so changing it re-runs the step — which is correct: a step that may now take 200 turns is not the step that was capped at 30. `timeout:`, `attempts:` and `max_context_bytes:` are never hashed, so changing those re-runs nothing.
+
 ## Why no global default?
 
 Timeouts are explicit-only (with the one agent-step exception above): a missing timeout doesn't fail silently, authors are forced to think about reasonable limits per step, and there are no surprise deadlines from a global setting somebody forgot about.

@@ -1,0 +1,24 @@
+# attempts: 0 is the one dial that does NOT follow the zero-means-no-limit
+# convention the limits beside it share (max_turns: 0, max_context_bytes: 0,
+# and an agent step's timeout: "0" all mean "no ceiling"). Retrying a provider
+# that is down would never stop, and the backstop that would otherwise catch
+# it — the step's own deadline — is itself something a step is allowed to
+# switch off.
+#
+# So it is rejected rather than reinterpreted, and the message says why: an
+# author writing 0 here is guessing at a rule that holds everywhere else on
+# the page, not making a typo. Omit attempts: for the default.
+# expect: does not mean unlimited
+
+agents:
+- name: writer
+  source:
+    model: openai/gpt-4o
+
+jobs:
+- name: publish
+  plan:
+  - agent: writer
+    inputs: []
+    attempts: 0
+    prompt: Write something.

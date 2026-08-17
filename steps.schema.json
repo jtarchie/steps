@@ -368,7 +368,17 @@
         },
         "max_turns": {
           "type": "integer",
-          "description": "Tool-calling turns per attempt. Default 30."
+          "minimum": 0,
+          "description": "Tool-calling turns per attempt. Omit for the default of 30; 0 removes the cap."
+        },
+        "timeout": {
+          "type": "string",
+          "description": "Wall-clock deadline every step of this agent gets when it sets none of its own (e.g. \"20m\"). Omit for the default of 30m; \"0\" means no deadline. A step's own timeout: still wins."
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many times a step of this agent re-issues a failed request when it sets no attempts: of its own. Omit for the default of 3; 0 is rejected."
         },
         "compact_after_tokens": {
           "type": "integer",
@@ -392,7 +402,7 @@
         "max_context_bytes": {
           "type": "integer",
           "minimum": 0,
-          "description": "How much of one context_paths: file reaches the model at conversation start. Default 100000; 0 takes that default. Over it the file is truncated with a pointer to read_file paging, never refused."
+          "description": "How much of one context_paths: file reaches the model at conversation start. Omit for the default of 100000; 0 hands the file over whole. Over the cap the file is truncated with a pointer to read_file paging, never refused."
         }
       }
     },
@@ -872,12 +882,14 @@
           }
         },
         "attempts": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many times this step's work is tried. Omit for the default (1, or 3 on an agent step). 0 is rejected: unlike the other limits it does not mean unlimited, because retrying a provider that is down would never stop."
         },
         "max_turns": {
           "type": "integer",
-          "minimum": 1,
-          "description": "Agent steps only: tool-calling turns per attempt for this one step, overriding the agent entry's max_turns."
+          "minimum": 0,
+          "description": "Agent steps only: tool-calling turns per attempt for this one step, overriding the agent entry's max_turns. 0 removes the cap."
         },
         "context_paths": {
           "type": "array",
@@ -888,7 +900,7 @@
         "max_context_bytes": {
           "type": "integer",
           "minimum": 0,
-          "description": "Per-file cap for this step's context_paths:, overriding the agent's max_context_bytes:. 0 defers to the agent."
+          "description": "Per-file cap for this step's context_paths:, overriding the agent's max_context_bytes:. Omit to defer to the agent; 0 hands the files over whole."
         },
         "verdicts": {
           "$ref": "#/$defs/verdicts"

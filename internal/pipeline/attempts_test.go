@@ -15,6 +15,10 @@ import (
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
+// intPtr builds a pointer dial the way YAML would, so a test can tell
+// "attempts: 0" from an omitted attempts: (see config's dials.go).
+func intPtr(v int) *int { return &v }
+
 // TestTaskWithAttempts verifies that a task with attempts: 3 retries on
 // failure and succeeds on a later attempt.
 func TestTaskWithAttempts(t *testing.T) {
@@ -48,7 +52,7 @@ func TestTaskWithAttempts(t *testing.T) {
 		},
 	}
 
-	step := config.Step{Task: "flaky", Attempts: 3}
+	step := config.Step{Task: "flaky", Attempts: intPtr(3)}
 	rt, err := cfg.ResolveTask(step)
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +91,7 @@ func TestTaskWithAttemptsAllFail(t *testing.T) {
 		},
 	}
 
-	step := config.Step{Task: "always-fails", Attempts: 2}
+	step := config.Step{Task: "always-fails", Attempts: intPtr(2)}
 	rt, err := cfg.ResolveTask(step)
 	if err != nil {
 		t.Fatal(err)
@@ -223,7 +227,7 @@ func TestTaskTimeoutSkipsRemainingAttempts(t *testing.T) {
 		},
 	}
 
-	step := config.Step{Task: "always-slow", Attempts: 3}
+	step := config.Step{Task: "always-slow", Attempts: intPtr(3)}
 
 	rt, err := cfg.ResolveTask(step)
 	if err != nil {
@@ -298,7 +302,7 @@ func TestTaskWithAssertAndAttempts(t *testing.T) {
 
 	step := config.Step{
 		Task:     "multi-attempt",
-		Attempts: 3,
+		Attempts: intPtr(3),
 		Assert: &config.Assert{
 			Stdout: ptrString("success output"),
 		},
@@ -348,7 +352,7 @@ func TestTaskHooksFireOnce(t *testing.T) {
 
 	step := config.Step{
 		Task:     "always-fails",
-		Attempts: 3,
+		Attempts: intPtr(3),
 	}
 
 	rt, err := cfg.ResolveTask(step)

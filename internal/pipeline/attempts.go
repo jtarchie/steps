@@ -7,8 +7,8 @@ import (
 	"github.com/jtarchie/steps/internal/retry"
 )
 
-// retryWithTimeout runs fn up to attempts times (attempts < 1 is treated as
-// 1), giving each attempt its own context bounded by timeoutStr when that
+// retryWithTimeout runs fn up to attempts times (unset, or below 1, is one
+// attempt), giving each attempt its own context bounded by timeoutStr when that
 // parses to a positive duration — per-attempt, not a single deadline shared
 // across the retries. On a retry (the second attempt onward) it calls marker
 // with the 1-based attempt number and the total so the caller can print its
@@ -18,13 +18,13 @@ import (
 // untouched, so a job abort stays distinguishable from a step overrunning its
 // own budget. An overrun ends the step immediately (retry.Stop) rather than
 // spending the remaining attempts re-failing against the same budget.
-func retryWithTimeout(ctx context.Context, attempts int, timeoutStr string, marker func(attempt, total int), fn func(ctx context.Context) error) error {
+func retryWithTimeout(ctx context.Context, attempts *int, timeoutStr string, marker func(attempt, total int), fn func(ctx context.Context) error) error {
 	timeout, err := config.ParseTimeout(timeoutStr)
 	if err != nil {
 		return err //nolint:wrapcheck // caller wraps with its own step context
 	}
 
-	total := max(attempts, 1)
+	total := max(config.AttemptCount(attempts), 1)
 
 	return retry.Do(ctx, total, func(attempt int) error { //nolint:wrapcheck // every caller wraps this func's own return with its step context
 		if attempt > 0 && marker != nil {

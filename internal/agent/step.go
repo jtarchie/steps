@@ -28,20 +28,48 @@ import (
 // that wants a tighter leash sets timeout: itself.
 const agentStepTimeout = 30 * time.Minute
 
-// agentTimeout resolves the per-attempt conversation deadline: the
-// invocation's timeout: when it parses to a positive duration, otherwise the
-// default agentStepTimeout. A parse error can't happen for a validated config
-// (config.validateTimeouts rejects it at LoadConfig), so an unexpected one
-// falls back to the default rather than failing the run.
+// agentTimeout resolves the per-attempt conversation deadline. It returns
+// noAgentDeadline when the step asked for none — an explicit timeout: 0,
+// which is the only way to opt out of the implicit ceiling above, since an
+// EMPTY timeout: on an agent step means "the default", not "no limit".
+//
+// A parse error can't happen for a validated config (config.validateTimeouts
+// rejects it at LoadConfig), so an unexpected one falls back to the default
+// rather than failing the run — and deliberately not to "no deadline", which
+// would turn a typo into an unbounded step.
 func agentTimeout(riTimeout string) time.Duration {
-	if riTimeout != "" {
-		parsed, err := config.ParseTimeout(riTimeout)
-		if err == nil && parsed > 0 {
-			return parsed
-		}
+	if riTimeout == "" {
+		return agentStepTimeout
 	}
 
-	return agentStepTimeout
+	parsed, err := config.ParseTimeout(riTimeout)
+	if err != nil {
+		return agentStepTimeout
+	}
+
+	if parsed == 0 {
+		return noAgentDeadline
+	}
+
+	return parsed
+}
+
+// noAgentDeadline is what agentTimeout returns for timeout: 0. Callers must
+// skip context.WithTimeout entirely rather than pass it along — a zero
+// duration there expires immediately, which is the opposite of what was
+// asked for.
+const noAgentDeadline time.Duration = 0
+
+// withAgentDeadline applies a resolved agent deadline to ctx, or leaves ctx
+// alone when the step opted out. It exists so the three attempt loops
+// (failover, cli, fix) cannot each get the noAgentDeadline check subtly
+// different.
+func withAgentDeadline(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout == noAgentDeadline {
+		return context.WithCancel(ctx)
+	}
+
+	return context.WithTimeout(ctx, timeout)
 }
 
 // nodeRecord converts a plan merkle.Node into the shape store.RecordNode
@@ -432,7 +460,7 @@ func runOneConversation(
 	conv agentConversation,
 	timeout time.Duration,
 ) (conversationResult, error) {
-	convCtx, cancel := context.WithTimeout(ctx, timeout)
+	convCtx, cancel := withAgentDeadline(ctx, timeout)
 	defer cancel()
 
 	logCompactionBudget(ri)

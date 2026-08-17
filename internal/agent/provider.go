@@ -62,11 +62,11 @@ func loadContextBlocks(dir string, paths []string, limit int) ([]contextBlock, e
 		return nil, nil
 	}
 
-	// Resolved once, not per path: config guarantees a nonzero MaxContextBytes
-	// on every production call (see resolveMaxContextBytes), so this only
-	// covers a direct caller that passed 0 — and reassigning it inside the loop
-	// made the ceiling depend on which iteration first saw an unset one.
-	if limit <= 0 {
+	// A negative limit reaches here only from a direct caller — a validated
+	// config rejects one — and would otherwise make io.LimitReader hand over
+	// nothing at all. 0 is NOT that case: it is max_context_bytes: 0, the
+	// explicit "no ceiling", and passes through.
+	if limit < 0 {
 		limit = config.DefaultMaxContextBytes
 	}
 
@@ -122,14 +122,22 @@ func loadContextBlock(dir, path string, limit int) (contextBlock, error) {
 	}
 	defer func() { _ = file.Close() }() // read-only; nothing to report on close
 
-	data, err := io.ReadAll(io.LimitReader(file, int64(limit)))
+	// limit 0 is max_context_bytes: 0 — hand the file over whole. The reader
+	// is unwrapped rather than given a huge bound, so the "is there more?"
+	// test below can stay a single comparison.
+	var reader io.Reader = file
+	if limit > 0 {
+		reader = io.LimitReader(file, int64(limit))
+	}
+
+	data, err := io.ReadAll(reader)
 	if err != nil {
 		return contextBlock{}, fmt.Errorf("context path %q: %w", path, err)
 	}
 
 	content := string(data)
 
-	if info.Size() > int64(limit) {
+	if limit > 0 && info.Size() > int64(limit) {
 		content += fmt.Sprintf(
 			"\n\n[truncated: %s is %d bytes, and the first %d are shown. "+
 				"Use read_file with start_line/end_line to page through the rest.]",

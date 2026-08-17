@@ -160,7 +160,7 @@ Each CLI step mints a v4 UUID and passes `--session-id` on its first invocation,
 
 The load-bearing fact, verified rather than assumed: **session-scoped flags re-apply on resume.** A resumed invocation re-reads `--mcp-config`, which is what makes this compatible with the per-attempt bridge — each attempt binds a fresh ephemeral port, and a resume that inherited the first attempt's config would be talking to a dead socket. `--tools` re-applies the same way. Resume also survives `SIGKILL` mid-run, which matters because that is the actual retry trigger; `TestLiveCLIRetryResumesRealSession` drives exactly that path against the real binary.
 
-`--max-turns` counts per invocation, not per session, so the cumulative budget is steps' to track: each attempt is passed `max_turns - turnsSpent`, and the step fails outright rather than retrying when nothing is left.
+`--max-turns` counts per invocation, not per session, so the cumulative budget is steps' to track: each attempt is passed `max_turns - turnsSpent`, and the step fails outright rather than retrying when nothing is left. Under `max_turns: 0` there is no remainder to track and the flag is omitted entirely — these CLIs impose no turn cap of their own, so passing nothing IS the uncapped spelling.
 
 Session files are deleted afterwards by globbing `~/.claude/projects/*/<session>.jsonl`. Matching on the minted id rather than a derived directory name keeps the deletion precise — the only file that can match is one this step created — and the whole thing is best effort, because a step that did its work must never fail over tidying.
 

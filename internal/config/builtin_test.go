@@ -44,8 +44,8 @@ jobs:
 	}
 
 	// The profile's dials come along too.
-	if agent.MaxTurns == 0 {
-		t.Error("MaxTurns = 0, want the built-in value inherited")
+	if agent.MaxTurns == nil {
+		t.Error("MaxTurns is unset, want the built-in value inherited")
 	}
 }
 
@@ -84,8 +84,8 @@ jobs:
 		t.Errorf("Tools = %v, want only the entry's grant", agent.Tools)
 	}
 
-	if agent.MaxTurns != 3 {
-		t.Errorf("MaxTurns = %d, want 3", agent.MaxTurns)
+	if agent.MaxTurns == nil || *agent.MaxTurns != 3 {
+		t.Errorf("MaxTurns = %v, want 3", agent.MaxTurns)
 	}
 }
 

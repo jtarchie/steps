@@ -146,7 +146,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 	var lastErr error
 
 	runErr := retry.Do(ctx, prepared.ri.Attempts, func(attempt int) error {
-		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+		attemptCtx, cancel := withAgentDeadline(ctx, timeout)
 		defer cancel()
 
 		plan := cliAttempt{
@@ -157,7 +157,10 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 			// counts turns in one conversation that request retries never
 			// reset, and a resumed session is the same conversation. The CLI
 			// counts turns per invocation, so the remainder is ours to track.
-			maxTurns: prepared.ri.MaxTurns - state.turns,
+			// max_turns: 0 has no remainder to track: it passes the sentinel
+			// through, and cliArgs omits the flag so the CLI applies its own
+			// (absent) default.
+			maxTurns: remainingCLITurns(prepared.ri.MaxTurns, state.turns),
 		}
 
 		// A resumed attempt is NOT re-sent the task: the session already holds
@@ -169,7 +172,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 			plan.prompt = renderCLIPrompt(prepared.conv)
 		}
 
-		if plan.maxTurns <= 0 {
+		if plan.outOfTurns() {
 			// Carrying lastErr matters: the budget ran out because of whatever
 			// failed a moment ago, and reporting only the ceiling would hide
 			// the thing actually worth investigating.
@@ -204,6 +207,18 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 	return state.result(prepared.ri.ModelName), runErr
 }
 
+// remainingCLITurns is the CLI path's share of the step's turn budget, with
+// max_turns: 0 carried through as the sentinel rather than turned into a
+// number — subtracting spent turns from "no cap" is how an uncapped step
+// would have acquired one.
+func remainingCLITurns(maxTurns, spent int) int {
+	if maxTurns == 0 {
+		return unlimitedTurns
+	}
+
+	return maxTurns - spent
+}
+
 // cliAttempt is one invocation's session state: which conversation it joins,
 // whether it is starting or continuing it, what it may still spend, and what
 // it is told.
@@ -216,6 +231,14 @@ type cliAttempt struct {
 	// (empty on the host path). Per-step, not per-attempt: a resumed attempt
 	// needs the transcript the previous one wrote there.
 	home string
+}
+
+// outOfTurns reports whether earlier attempts have spent the step's whole
+// turn budget. An uncapped step never has, which is why the sentinel is
+// tested before the number: unlimitedTurns is negative, and would otherwise
+// read as the most exhausted budget of all.
+func (p cliAttempt) outOfTurns() bool {
+	return p.maxTurns != unlimitedTurns && p.maxTurns <= 0
 }
 
 // cliStepState is everything a step has observed across its attempts.

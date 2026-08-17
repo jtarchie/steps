@@ -174,7 +174,8 @@ type ResolvedInvocation struct {
 	// only known at the step level.
 	ContextPaths []string
 	// MaxContextBytes is the resolved per-file cap for ContextPaths (see
-	// Agent.MaxContextBytes); never 0 — resolution substitutes the default.
+	// Agent.MaxContextBytes). 0 means no cap — an author asked for it, since
+	// resolution substitutes the default for an unset field.
 	MaxContextBytes int
 	// Generation dials, mirroring Agent's own fields once resolved. Kept flat
 	// here (rather than a nested type) so this package doesn't need to depend
@@ -184,9 +185,15 @@ type ResolvedInvocation struct {
 	TopP            *float64
 	MaxTokens       int
 	ReasoningEffort string // "", "low", "medium", or "high"
-	MaxTurns        int
-	Attempts        int
-	Timeout         string // wall-clock deadline per attempt; empty means no timeout
+	// MaxTurns is the resolved tool-calling cap; 0 means no cap, which only an
+	// explicit max_turns: 0 produces.
+	MaxTurns int
+	Attempts int
+	// Timeout is the resolved wall-clock deadline per attempt. Empty means
+	// "take internal/agent's default"; "0" means no deadline. Unlike every
+	// other step kind, an agent step's empty is NOT "no deadline" — see
+	// Step.Timeout.
+	Timeout string
 	// CompactAfterTokens is the already-resolved conversation-size budget (see
 	// Agent.CompactAfterTokens); 0 means compaction is disabled for this
 	// invocation.
@@ -301,20 +308,15 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		return ResolvedInvocation{}, fmt.Errorf("reasoning_effort %q must be one of low, medium, high", agent.ReasoningEffort)
 	}
 
-	// Step wins over agent entry, agent entry over the package default —
-	// the same shape timeout: resolution has.
-	maxTurns := step.MaxTurns
-	if maxTurns <= 0 {
-		maxTurns = agent.MaxTurns
-	}
+	// Step wins over agent entry, agent entry over the package default. Every
+	// one of these honors an explicit 0 rather than treating it as unset —
+	// that is what the pointers are for (see dials.go).
+	maxTurns := orDefault(step.MaxTurns, orDefault(agent.MaxTurns, defaultMaxAgentTurns))
+	attempts := orDefault(step.Attempts, orDefault(agent.Attempts, defaultAgentAttempts))
 
-	if maxTurns <= 0 {
-		maxTurns = defaultMaxAgentTurns
-	}
-
-	attempts := step.Attempts
-	if attempts <= 0 {
-		attempts = defaultAgentAttempts
+	timeout := step.Timeout
+	if timeout == "" {
+		timeout = agent.Timeout
 	}
 
 	compactAfterTokens, contextWindow := resolveCompactionBudget(target.ModelName, agent.ContextWindow, agent.CompactAfterTokens)
@@ -339,7 +341,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		ReasoningEffort:      reasoning,
 		MaxTurns:             maxTurns,
 		Attempts:             attempts,
-		Timeout:              step.Timeout,
+		Timeout:              timeout,
 		CompactAfterTokens:   compactAfterTokens,
 		ContextWindow:        contextWindow,
 		BudgetTokens:         budgetTokens(agent.Budget),

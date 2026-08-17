@@ -77,17 +77,28 @@ type Step struct {
 	PromptFile *FileRef   `yaml:"prompt_file,omitempty"`
 	Dir        string     `yaml:"dir,omitempty"`
 	Tools      []ToolSpec `yaml:"tools,omitempty"`
-	Attempts   int        `yaml:"attempts,omitempty"`
+	// Attempts is how many times this step's work is tried before it fails.
+	// Unset takes 1 for task/get/put steps and defaultAgentAttempts for agent
+	// steps (where a retry is a transport concern, not a re-run). An explicit
+	// 0 is a load error — see dials.go for why attempts: sits outside the
+	// zero-means-no-limit convention the other dials follow.
+	Attempts *int `yaml:"attempts,omitempty"`
 	// MaxTurns overrides the agent entry's max_turns for this one step:
-	// tool-calling turns per attempt. 0/unset inherits the agent's value
-	// (which itself defaults to defaultMaxAgentTurns). Agent steps only —
-	// one long-horizon step can buy more turns without every step of the
-	// same agent paying for them.
-	MaxTurns int `yaml:"max_turns,omitempty"`
+	// tool-calling turns per attempt. Unset inherits the agent's value (which
+	// itself defaults to defaultMaxAgentTurns); an explicit 0 removes the cap
+	// for this step alone. Agent steps only — one long-horizon step can buy
+	// more turns without every step of the same agent paying for them.
+	MaxTurns *int `yaml:"max_turns,omitempty"`
 	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
-	// (default) means no timeout. Valid on all step kinds (a get step's
-	// timeout bounds both its check and in commands); for task/put steps it
-	// overrides the referenced task/agent's Timeout.
+	// means no timeout on a task/get/put step, and the agent entry's timeout:
+	// — or the 30-minute package default — on an agent step, which is the one
+	// step kind that gets a deadline it never asked for. "0" there is how a
+	// long-horizon agent step says it wants none; on any other step kind it
+	// is a load error, since omitting the field already says that.
+	//
+	// Valid on all step kinds (a get step's timeout bounds both its check and
+	// in commands); for task/put steps it overrides the referenced
+	// task/agent's Timeout.
 	Timeout string `yaml:"timeout,omitempty"`
 	// Try wraps an inner step so a task-level failure of that step doesn't
 	// stop the plan. The wrapper is transparent: the inner step runs exactly
@@ -272,9 +283,9 @@ type Step struct {
 	// note saying so.
 	ContextPaths []string `yaml:"context_paths,omitempty"`
 	// MaxContextBytes overrides the agent's max_context_bytes: for this step
-	// only, capping how much of each ContextPaths file is handed over. 0 (the
-	// common case) defers to the agent's, which itself falls back to
-	// DefaultMaxContextBytes.
+	// only, capping how much of each ContextPaths file is handed over. Unset
+	// (the common case) defers to the agent's, which itself falls back to
+	// DefaultMaxContextBytes; an explicit 0 hands the files over whole.
 	//
 	// It belongs here as well as on the agent because context_paths: is itself
 	// a step-level field: two steps sharing one agents: entry routinely hand
@@ -284,7 +295,7 @@ type Step struct {
 	// name for the sake of one number. (context_window: has no step spelling
 	// for the mirror-image reason: it describes the MODEL, and the model is
 	// the agent's.) Operational, like the agent's, and likewise never hashed.
-	MaxContextBytes int `yaml:"max_context_bytes,omitempty"`
+	MaxContextBytes *int `yaml:"max_context_bytes,omitempty"`
 	// Hooks are the step's on_success/on_failure/on_error/on_abort/ensure
 	// reaction steps (see Hooks). Inlined so they sit alongside the step's
 	// own fields in YAML.

@@ -70,10 +70,30 @@ type Agent struct {
 	TopP            *float64 `yaml:"top_p,omitempty"`
 	MaxTokens       int      `yaml:"max_tokens,omitempty"`
 	ReasoningEffort string   `yaml:"reasoning_effort,omitempty"`
-	// MaxTurns caps the tool-calling loop (default defaultMaxAgentTurns).
-	// Retries (attempts:) are a per-task concern and live on the step, not
-	// here.
-	MaxTurns int `yaml:"max_turns,omitempty"`
+	// MaxTurns caps the tool-calling loop. Unset takes defaultMaxAgentTurns;
+	// an explicit 0 removes the cap entirely — see dials.go for the
+	// convention this shares with MaxContextBytes and Timeout.
+	MaxTurns *int `yaml:"max_turns,omitempty"`
+	// Timeout is the wall-clock deadline every step of this agent gets when
+	// it declares none of its own (e.g. "20m"). Unset takes the package
+	// default (30 minutes — agent.agentStepTimeout); "0" means no deadline at
+	// all, which no other step kind needs a spelling for because omitting the
+	// field already says it there.
+	//
+	// It lives here as well as on the step because the right deadline is
+	// usually a property of the AGENT — a deep reviewer needs twenty minutes
+	// whichever step invokes it — and without it a shared deadline had to be
+	// copied onto every step naming the agent. Not hashed, exactly as the
+	// step's own timeout: is not: a deadline is not part of what a step asks
+	// for.
+	Timeout string `yaml:"timeout,omitempty"`
+	// Attempts is how many times a step of this agent re-issues a failed
+	// REQUEST when it sets no attempts: of its own (see defaultAgentAttempts,
+	// and docs/attempts-timeout.md for why a retry here is a transport
+	// concern rather than a re-run of the conversation). Unset takes that
+	// default; 0 is a load error, not "unlimited" — see dials.go. Never
+	// hashed.
+	Attempts *int `yaml:"attempts,omitempty"`
 	// CompactAfterTokens caps how large a conversation's estimated token
 	// count grows before older turns are summarized away and replaced by a
 	// running summary (see internal/agent/compaction.go and docs/agents.md's
@@ -97,7 +117,8 @@ type Agent struct {
 	// compact_after_tokens:, when also set, still wins outright.
 	ContextWindow int `yaml:"context_window,omitempty"`
 	// MaxContextBytes caps how much of a context_paths: file is handed to the
-	// model at conversation start. 0 takes DefaultMaxContextBytes.
+	// model at conversation start. Unset takes DefaultMaxContextBytes; an
+	// explicit 0 hands over the whole file however large it is (see dials.go).
 	//
 	// It exists because the byte budget priming borrows was chosen for a
 	// different job: context_paths is delivered as a synthetic read_file
@@ -112,7 +133,7 @@ type Agent struct {
 	// Operational, like CompactAfterTokens, and excluded from the hash for the
 	// same reason: it governs how much of a conversation's own history and
 	// evidence is carried, not what the step is asking for.
-	MaxContextBytes int `yaml:"max_context_bytes,omitempty"`
+	MaxContextBytes *int `yaml:"max_context_bytes,omitempty"`
 	// Fallback lists alternate sources to use when the primary is
 	// UNREACHABLE, in order. See AgentFallback.
 	Fallback []AgentFallback `yaml:"fallback,omitempty"`
@@ -379,42 +400,34 @@ const DefaultMaxContextBytes = 100_000
 
 // resolveMaxContextBytes picks the ceiling in force: the STEP's if it set one,
 // else the agent's, else the default — so nothing downstream has to nil-check a
-// number or know the precedence.
+// number or know the precedence. A resolved 0 is "no ceiling", not "unset".
 //
 // Step wins because it is the narrower statement about the same conversation:
 // context_paths: is step-level, so the step is what knows how much evidence it
 // is handing over.
-func resolveMaxContextBytes(step, agent int) int {
-	if step > 0 {
-		return step
-	}
-
-	if agent > 0 {
-		return agent
-	}
-
-	return DefaultMaxContextBytes
+func resolveMaxContextBytes(step, agent *int) int {
+	return orDefault(step, orDefault(agent, DefaultMaxContextBytes))
 }
 
 // validateMaxContextBytes rejects a negative ceiling, on an agent or on a
-// step, and a step-level one on anything that is not an agent step. Zero is the
-// documented "take the default"/"defer to the agent", so only a negative is
-// meaningless here.
+// step, and a step-level one on anything that is not an agent step. Zero is
+// the documented "hand the file over whole" (see dials.go), so only a negative
+// is meaningless here.
 func (c *Config) validateMaxContextBytes() error {
 	for _, agent := range c.Agents {
-		if agent.MaxContextBytes < 0 {
-			return fmt.Errorf("agent %q: max_context_bytes must be a positive number of bytes (omit it for the default of %d)", agent.Name, DefaultMaxContextBytes)
+		if agent.MaxContextBytes != nil && *agent.MaxContextBytes < 0 {
+			return fmt.Errorf("agent %q: max_context_bytes must not be negative (omit it for the default of %d, or set 0 for no ceiling)", agent.Name, DefaultMaxContextBytes)
 		}
 	}
 
 	for _, job := range c.Jobs {
 		err := job.visitSteps(func(label string, step *Step) error {
-			if step.MaxContextBytes == 0 {
+			if step.MaxContextBytes == nil {
 				return nil
 			}
 
-			if step.MaxContextBytes < 0 {
-				return fmt.Errorf("%s: max_context_bytes must be a positive number of bytes (omit it to take the agent's)", label)
+			if *step.MaxContextBytes < 0 {
+				return fmt.Errorf("%s: max_context_bytes must not be negative (omit it to take the agent's, or set 0 for no ceiling)", label)
 			}
 
 			if step.Agent == "" {
