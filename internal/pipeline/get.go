@@ -31,17 +31,23 @@ import (
 func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []config.Step) error {
 	i := w.index
 
-	resource, resourceType, _, err := fetchGetVersions(ctx, w.cfg, step, w.pinned, w.cache)
+	// getCtx carries this get's own log identity, and deliberately does NOT
+	// reach runTriggeredBuild below: the remainder of the plan is other
+	// steps, each of which stamps its own, and handing them this one would
+	// have every later line claim to be the get's.
+	getCtx := withStepLogger(ctx, i, step)
+
+	resource, resourceType, _, err := fetchGetVersions(getCtx, w.cfg, step, w.pinned, w.cache)
 	if err != nil {
 		return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 	}
 
 	sets := w.resolution.sets
 
-	logFrom(ctx).Debug("job.step", "resource", step.Get, "sets", len(sets))
+	logFrom(getCtx).Debug("job.step", "resource", step.Get, "sets", len(sets))
 
 	if len(sets) == 0 {
-		w.reportNoVersions(ctx, step, resource.Name, len(remainder))
+		w.reportNoVersions(getCtx, step, resource.Name, len(remainder))
 	}
 
 	var buildErrs []error
@@ -79,8 +85,8 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 
 		if w.skippable[hash] {
 			fmt.Printf("skip: %s (version: %v)\n", resource.Name, version)
-			logFrom(ctx).Info("job.skip", "resource", resource.Name, "reason", "cached", "hash", hash)
-			publishStepSkipped(ctx, w.jobName, i, step, hash, skipReason(stepChainSkipped))
+			logFrom(getCtx).Info("job.skip", "resource", resource.Name, "reason", "cached", "hash", hash)
+			publishStepSkipped(getCtx, w.jobName, i, step, hash, skipReason(stepChainSkipped))
 
 			// Taken, even though nothing ran: the cache skipped it because
 			// this exact chain already succeeded, which is the definition of
@@ -99,7 +105,7 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 		// than one event for the step as a whole.
 		getStarted := time.Now()
 
-		publishStepStarted(ctx, w.jobName, i, step)
+		publishStepStarted(getCtx, w.jobName, i, step)
 
 		// Taken BEFORE the build, not after it succeeds — Concourse's own
 		// rule. NextEveryVersion reads build_resource_config_version_inputs, a
@@ -116,7 +122,7 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 
 		err = w.runTriggeredBuild(ctx, step, *resource, *resourceType, set, setIndex, remainder, node)
 
-		publishStepFinished(ctx, w.jobName, i, step, hash, getStarted, err)
+		publishStepFinished(getCtx, w.jobName, i, step, hash, getStarted, err)
 
 		if err != nil {
 			buildErrs = append(buildErrs, fmt.Errorf("step %d (get %q) version %v: %w", i, step.Get, version, err))
@@ -296,6 +302,11 @@ func buildIDForSet(ctx context.Context, setIndex int) string {
 // skipped (nil error) or the fetch failed.
 func (w *planWalk) fetchInPlace(ctx context.Context, step config.Step, steps []config.Step) (bool, error) {
 	started := time.Now()
+
+	// Safe to stamp for the whole function, unlike fanOutGet's: this path
+	// runs no remainder. It advances the walk and returns, and the loop
+	// carries on with its own context.
+	ctx = withStepLogger(ctx, w.index, step)
 
 	publishStepStarted(ctx, w.jobName, w.index, step)
 

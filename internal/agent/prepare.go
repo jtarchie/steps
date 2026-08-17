@@ -49,8 +49,8 @@ type preparedAgentStep struct {
 	fallbackIndex int
 	// agent is the resolved agent definition, carried so the cascade reads
 	// the fallback: list prepareAgentStep already resolved rather than
-	// looking it up again. nil when it could not be resolved, which leaves
-	// the cascade with nothing to walk.
+	// looking it up again. Never nil in a prepared step — preparation fails
+	// outright if the agent cannot be found (see resolveWithFailover).
 	agent *config.Agent
 	space workspace.StepSpace
 	conv  agentConversation
@@ -282,29 +282,31 @@ func invocationLLM(ri config.ResolvedInvocation, apiKey string) model.LLM {
 // (see sourceSelection).
 //
 // agent is the resolved agent definition, returned so the cascade does not
-// have to look it up a second time. It is nil only when FindAgent failed for
-// an agent that resolved moments ago, which leaves the cascade with no
-// fallback list to walk — logged where that is decided, never silent.
+// have to look it up a second time. It is non-nil whenever err is nil: the
+// lookup happens before anything that could fail for another reason, so
+// there is no partial state where a step has an invocation but no fallback
+// list.
 func resolveWithFailover(cfg *config.Config, step config.Step) (primary, effective config.ResolvedInvocation, agent *config.Agent, fallbackIndex int, err error) {
 	fallbackIndex = -1
 
-	primary, err = cfg.ResolveAgentInvocation(step)
+	// Looked up FIRST, and unconditionally: the mid-run cascade needs the
+	// fallback list even on a run that starts on the primary, which is the
+	// common case.
+	//
+	// Before the primary, because ResolveAgentInvocation performs this very
+	// lookup itself. Doing it afterwards meant a failure here was impossible
+	// — the same exact-name scan had just succeeded — so the branch handling
+	// it was unreachable, and the `agent == nil` state it seemed to produce
+	// was carried through preparedAgentStep and guarded against in three
+	// places downstream that could never fire.
+	agent, err = cfg.FindAgent(step.Agent)
 	if err != nil {
 		return primary, effective, nil, fallbackIndex, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
-	// Resolved unconditionally, not just when a pin exists: the mid-run
-	// cascade needs the fallback list even on a run that starts on the
-	// primary, which is the common case.
-	agent, findErr := cfg.FindAgent(primary.AgentName)
-	if findErr != nil {
-		// It resolved a moment ago, so this is not worth failing a step over
-		// — but it does disable mid-run failover for the step, which must not
-		// happen quietly.
-		slog.Warn("agent.fallback_list_unavailable", "agent", primary.AgentName, "error", findErr,
-			"detail", "mid-run failover is disabled for this step")
-
-		return primary, primary, nil, fallbackIndex, nil
+	primary, err = cfg.ResolveAgentInvocation(step)
+	if err != nil {
+		return primary, effective, nil, fallbackIndex, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
 	selection, ok := selectedSource(primary.AgentName)

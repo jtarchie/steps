@@ -100,8 +100,12 @@ func runMatchedHook(ctx context.Context, scope hookScope, name string, step *con
 
 	// Everything the hook body runs logs as the HOOK's, not as the step it
 	// hangs off — a hook has no plan position of its own, and filing its
-	// output under the step's index would read as the step doing it.
+	// output under the step's index would read as the step doing it. The
+	// identity is re-tagged for the same reason the logger is: without it a
+	// hook inherits the enclosing step's plan position (or, on a job-level
+	// hook, no job at all) and publishes a fix agent's conversation there.
 	hookCtx = withHookLogger(hookCtx, scope.label, name)
+	hookCtx = withHookIdentity(hookCtx, scope.jobName)
 	logFrom(hookCtx).Debug("job.hook")
 
 	hookErr := runHookStep(hookCtx, scope, *step)

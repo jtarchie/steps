@@ -252,6 +252,8 @@ func injectFakeProvider(t *testing.T, body, endpoint, fallbackEndpoint string) s
 		t.Fatalf("block is not valid YAML: %v", err)
 	}
 
+	injectedFallbacks := 0
+
 	agents, _ := doc["agents"].([]any)
 	for _, entry := range agents {
 		agent, ok := entry.(map[string]any)
@@ -265,9 +267,19 @@ func injectFakeProvider(t *testing.T, body, endpoint, fallbackEndpoint string) s
 			"api_key_env": "STEPS_TEST_AGENT_API_KEY",
 		}
 
-		if fallbackEndpoint != "" {
-			injectFakeFallback(t, agent, fallbackEndpoint)
+		if fallbackEndpoint != "" && injectFakeFallback(t, agent, fallbackEndpoint) {
+			injectedFallbacks++
 		}
+	}
+
+	// A scenario that stands up a second provider expects SOMETHING to be
+	// pointed at it. Per-agent the absence is legitimate (see
+	// injectFakeFallback), but across the whole block it means the fallback:
+	// this scenario exists to exercise is gone — and the example would still
+	// pass, running entirely on the primary while proving nothing about
+	// failover.
+	if fallbackEndpoint != "" && injectedFallbacks == 0 {
+		t.Fatal("this scenario registers a fallback provider, but no agent in the block declares a fallback: to point at it")
 	}
 
 	defaults, ok := doc["defaults"].(map[string]any)
@@ -294,7 +306,12 @@ func injectFakeProvider(t *testing.T, body, endpoint, fallbackEndpoint string) s
 // the first entry, matching the scope of the doc examples that need it —
 // a scenario wanting more would extend this rather than the doc growing a
 // convention nothing else follows.
-func injectFakeFallback(t *testing.T, agentEntry map[string]any, endpoint string) {
+//
+// It reports whether it found anything to rewrite, which is what lets the
+// caller tell "this agent has no fallback:" from "no agent in this block
+// does". The first is ordinary; the second means the scenario is testing
+// nothing.
+func injectFakeFallback(t *testing.T, agentEntry map[string]any, endpoint string) bool {
 	t.Helper()
 
 	// An agent with no fallback: is not an error — a scenario registers ONE
@@ -304,7 +321,7 @@ func injectFakeFallback(t *testing.T, agentEntry map[string]any, endpoint string
 	// Nothing to inject, nothing to do.
 	fallback, ok := agentEntry["fallback"].([]any)
 	if !ok || len(fallback) == 0 {
-		return
+		return false
 	}
 
 	first, ok := fallback[0].(map[string]any)
@@ -317,6 +334,8 @@ func injectFakeFallback(t *testing.T, agentEntry map[string]any, endpoint string
 		"model":       "test-fallback-model",
 		"api_key_env": "STEPS_TEST_AGENT_API_KEY",
 	}
+
+	return true
 }
 
 // TestDocsExamplesAssert is the ratchet that keeps the corpus from decaying

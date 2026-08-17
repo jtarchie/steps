@@ -95,12 +95,18 @@ func TestRunPreparedRunsOneConversation(t *testing.T) {
 
 	llm := &callCountingLLM{}
 
-	// No fallback: entries on an unfindable agent — the cascade has nowhere
-	// to go, so this still pins the same "exactly one conversation" contract
-	// runPrepared used to.
+	// An agent with no fallback: entries — the cascade has nowhere to go, so
+	// this still pins the same "exactly one conversation" contract runPrepared
+	// used to.
+	//
+	// The agent is a real (empty) one rather than nil: preparation fails
+	// outright when an agent cannot be found, so a prepared step never carries
+	// a nil one, and a test that fabricates that state is testing a shape
+	// production cannot reach.
 	_, _, err := runPreparedWithFailover(t.Context(), preparedAgentStep{
-		ri:  config.ResolvedInvocation{Attempts: 3, MaxTurns: testMaxTurns},
-		llm: llm,
+		ri:    config.ResolvedInvocation{Attempts: 3, MaxTurns: testMaxTurns},
+		agent: &config.Agent{Name: "writer"},
+		llm:   llm,
 		conv: agentConversation{
 			system:   "system",
 			prompt:   "prompt",

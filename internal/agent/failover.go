@@ -13,7 +13,6 @@ import (
 	"google.golang.org/adk/v2/model"
 
 	"github.com/jtarchie/steps/internal/config"
-	"github.com/jtarchie/steps/internal/outcome"
 )
 
 // runPreparedWithFailover runs prepared's conversation and, on a transient
@@ -51,14 +50,17 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (c
 	// timeout: bounds the STEP, not each source it is tried on. The deadline
 	// is established once, here, and every source below runs under it: a
 	// cascade of three sources under `timeout: 10m` has ten minutes between
-	// them, not thirty. runOneConversation still applies the same duration
-	// itself, which context.WithTimeout resolves to whichever deadline is
-	// sooner — so a later source gets only the time actually left.
+	// them, not thirty.
 	//
-	// Classification still reads the JOB's context, not this one (see the
-	// failoverEligible call below): a step that overran its own timeout is
-	// infrastructure (errored), the same as it was when the deadline lived
-	// one frame down, whereas a canceled job is an abort.
+	// runOneConversation is therefore passed noAgentDeadline rather than the
+	// duration again. It used to re-apply it, which allocated a second timer
+	// per source whose deadline — being set later — could never fire first,
+	// and left a reader deriving from context.WithTimeout's min-deadline
+	// semantics that the inner one was inert.
+	//
+	// Classification still reads the JOB's context, not this one (see
+	// classifySource): a canceled job is an abort, while this context
+	// expiring is the step spending its own budget.
 	cascadeCtx, cancel := withAgentDeadline(ctx, timeout)
 	defer cancel()
 
@@ -73,30 +75,26 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (c
 	swapped := false
 
 	for {
-		res, runErr := runOneConversation(cascadeCtx, ri, llm, conv, timeout)
-
-		// This source carried the conversation to a conclusion of its own —
-		// success, a refusal, a turn exhaustion, an assert failure. Only now
-		// is it worth pinning: a source is preferred because it SERVED, never
-		// because it was merely picked.
-		if !failoverEligible(ctx, runErr) {
-			pinServedSource(agent, index)
-
-			return res, servedSource{ri: ri, llm: llm, swapped: swapped}, runErr
-		}
+		res, runErr := runOneConversation(cascadeCtx, ri, llm, conv, noAgentDeadline)
 
 		// A cascade is a search for a source that can finish the step within
-		// the step's own deadline. Once that deadline has passed there is no
-		// time left for another source to do better, so stop rather than
-		// spend the rest of the list failing instantly.
-		next, apiKey, nextIndex, ok := nextViableFallback(agent, ri, index)
-		if !ok || cascadeCtx.Err() != nil {
-			// Nothing served. Leaving the previous pin in place would keep
-			// preferring a source that just failed, and since preflight only
-			// ever probes the PRIMARY, nothing would re-examine that choice
-			// for the life of the process.
-			releaseSource(agent)
+		// the step's own deadline, so both facts the decision needs beyond
+		// the error itself are gathered before it is made. Resolving the next
+		// candidate up front costs nothing: it is a config walk and an
+		// environment lookup, no request.
+		next, apiKey, nextIndex, hasNext := nextViableFallback(agent, ri, index)
 
+		verdict := decideCascade(classifySource(ctx, runErr), hasNext, cascadeCtx.Err() != nil, swapped)
+
+		switch verdict.pin {
+		case pinThisSource:
+			pinServedSource(agent, index)
+		case dropPin:
+			releaseSource(agent)
+		case leavePin:
+		}
+
+		if verdict.action == returnResult {
 			return res, servedSource{ri: ri, llm: llm, swapped: swapped}, runErr
 		}
 
@@ -164,7 +162,7 @@ type servedSource struct {
 // the process prefers it over a primary that is evidently unwell. index -1
 // means the step ran on the primary, which is the default and needs no pin.
 func pinServedSource(agent *config.Agent, index int) {
-	if agent == nil || index < 0 || index >= len(agent.Fallback) {
+	if index < 0 || index >= len(agent.Fallback) {
 		return
 	}
 
@@ -173,27 +171,7 @@ func pinServedSource(agent *config.Agent, index int) {
 
 // releaseSource drops any pin after a cascade in which nothing served.
 func releaseSource(agent *config.Agent) {
-	if agent == nil {
-		return
-	}
-
 	clearSource(agent.Name)
-}
-
-// failoverEligible reports whether runErr is the class of mid-run failure
-// the cascade should react to: a transient provider failure (a timeout, an
-// unreachable endpoint, a 5xx — see isTransientProviderError) that is also
-// classified as infrastructure (outcome.Errored), not a task-level outcome.
-// A turn-exhausted or loop-detected attempt, or a canceled/deadline-exceeded
-// context, is excluded by the outcome.Errored check alone — the same
-// exclusion the docs already promise: "a model refusing a request is a
-// different class entirely." An internal error this package raises itself
-// (a budget breach, a malformed response) also classifies as
-// outcome.Errored, which is why isTransientProviderError still has to tell
-// it apart from an actual connection-level failure — see its own doc
-// comment.
-func failoverEligible(ctx context.Context, runErr error) bool {
-	return runErr != nil && outcome.Classify(ctx, runErr) == outcome.Errored && isTransientProviderError(ctx, runErr)
 }
 
 // nextViableFallback walks agent.Fallback strictly forward from index,
@@ -233,13 +211,6 @@ func nextViableFallback(agent *config.Agent, ri config.ResolvedInvocation, index
 // operator's explicitly ordered CLI entry to reach a hosted one further down
 // would be its own kind of surprise.
 func nextHostedFallback(agent *config.Agent, ri config.ResolvedInvocation, index int) (config.ResolvedInvocation, int, bool) {
-	// A step whose agent could not be re-resolved (see resolveWithFailover,
-	// which says so at warn level) has no fallback list to walk, so the
-	// cascade is a single attempt.
-	if agent == nil {
-		return config.ResolvedInvocation{}, 0, false
-	}
-
 	for nextIndex := index + 1; nextIndex < len(agent.Fallback); nextIndex++ {
 		next, err := ri.WithSource(agent.Fallback[nextIndex].Source, agent)
 		if err != nil {

@@ -29,7 +29,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -312,14 +311,11 @@ func rewind(req *http.Request) (*http.Request, error) {
 // trigger a source swap either, so each transient shape is recognized
 // explicitly rather than defaulting to true for anything unrecognized.
 //
-// jobCtx is the JOB's context, not the conversation's own deadline. The two
-// produce the same error and mean opposite things: a canceled or expired job
-// says nothing about the provider, while a conversation that burned its own
-// deadline against a live connection is the very outage this cascade exists
-// for — an endpoint that accepts the request and then never answers. Telling
-// them apart requires knowing whether the job itself is still healthy, which
-// only the caller can say.
-func isTransientProviderError(jobCtx context.Context, err error) bool {
+// Neither context sentinel is transient here. A canceled run says nothing
+// about the provider, and a spent deadline cannot be distinguished from work
+// that was simply too big — classifySource handles both as sourceUnproven,
+// which is what keeps either from moving an agent's pinned source.
+func isTransientProviderError(err error) bool {
 	var apiErr *openai.Error
 	if errors.As(err, &apiErr) {
 		return retryableStatus(apiErr.StatusCode)
@@ -332,12 +328,13 @@ func isTransientProviderError(jobCtx context.Context, err error) bool {
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) {
-		// Ours if the job is still fine: the conversation hit its own
-		// timeout: while the run carried on around it. A hung endpoint is
-		// the most expensive outage shape there is — it costs the step's
-		// whole deadline and produces nothing — so it must reach the
-		// cascade rather than fail the step outright.
-		return jobCtx.Err() == nil
+		// A spent deadline is not evidence about the endpoint. It reads the
+		// same whether the endpoint hung or the work was simply larger than
+		// the budget allowed, and the cascade has no time left to find out:
+		// timeout: bounds the STEP, so every remaining source would begin
+		// already expired. classifySource calls this sourceUnproven and
+		// changes nothing about which source the process prefers.
+		return false
 	}
 
 	// A connection that dies partway through a response body: the exchange
@@ -345,19 +342,13 @@ func isTransientProviderError(jobCtx context.Context, err error) bool {
 	// SDK surfaces whatever the truncated bytes decoded to. Reading a
 	// half-delivered answer is a transport failure wearing a parser's
 	// clothes.
-	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
-		return true
-	}
-
-	var syntaxErr *json.SyntaxError
-
-	if errors.As(err, &syntaxErr) {
-		return true
-	}
-
-	var netErr net.Error
-
-	return errors.As(err, &netErr)
+	//
+	// ErrUnexpectedEOF only, not a bare io.EOF: EOF is the stdlib's most
+	// widely reused sentinel and the NORMAL terminator of any read, so
+	// treating it as an outage lets an ordinary end-of-stream anywhere in
+	// this package cascade to another model. A truncated JSON decode is
+	// exactly what returns ErrUnexpectedEOF instead.
+	return errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, new(net.Error))
 }
 
 // discard drains and closes a response being thrown away, so its connection

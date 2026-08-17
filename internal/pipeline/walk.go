@@ -247,7 +247,9 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 	publishStepStarted(ctx, r.jobName, i, step)
 
 	// Carried so the frames that hold a command's captured output can publish
-	// it against the right step (see withStepIdentity).
+	// it against the right step (see withStepIdentity). get steps never reach
+	// here — they stamp their own inside get.go, where the get's identity can
+	// be kept off the remainder of the plan it triggers.
 	ctx = withStepIdentity(ctx, r.jobName, i, step)
 	ctx = withStepLogger(ctx, i, step)
 

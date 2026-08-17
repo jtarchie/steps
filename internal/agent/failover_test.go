@@ -1,17 +1,10 @@
 package agent
 
 import (
-	"context"
-	"errors"
-	"net"
-	"net/http"
 	"testing"
-
-	"github.com/openai/openai-go/v3"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
-	"github.com/jtarchie/steps/internal/outcome"
 )
 
 // TestResolveWithFailoverKeepsThePrimaryForHashing is the mechanism behind the
@@ -223,51 +216,6 @@ func TestNextViableFallbackSkipsAMissingCredential(t *testing.T) {
 	_, _, _, ok = nextViableFallback(agentAllMissing, ri, -1)
 	if ok {
 		t.Error("nextViableFallback with every candidate's credential missing = true, want false")
-	}
-}
-
-// TestFailoverEligible pins what the mid-run cascade reacts to: a plain
-// infrastructure error carrying a retryable status, and nothing else — not a
-// nil error, not a task-level failure (outcome.Fail), not a canceled or
-// deadline-exceeded context (even one that happens to wrap a 5xx-shaped error
-// underneath), and not an internal error this package raises itself (a
-// budget breach classifies as outcome.Errored too, but is not the
-// provider's fault).
-func TestFailoverEligible(t *testing.T) {
-	ctx := context.Background()
-
-	// The shape a real connection failure takes reaching here (via
-	// net/http's client) — a bare errors.New with dial-shaped TEXT is not a
-	// net.Error and must not pass isTransientProviderError.
-	dialErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-
-	tests := []struct {
-		name string
-		ctx  context.Context //nolint:containedctx // table-driven: each case needs its own context (background vs. canceled)
-		err  error
-		want bool
-	}{
-		{"nil error", ctx, nil, false},
-		{"5xx api error", ctx, &openai.Error{StatusCode: http.StatusInternalServerError}, true},
-		{"400 api error", ctx, &openai.Error{StatusCode: http.StatusBadRequest}, false},
-		{"task-level failure wrapping a 5xx shape", ctx, outcome.Fail(&openai.Error{StatusCode: http.StatusInternalServerError}), false},
-		{"plain connection error", ctx, dialErr, true},
-		{"budget exceeded is errored but not the provider's fault", ctx, errors.New("agent budget exceeded (spent 500 tokens)"), false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := failoverEligible(tt.ctx, tt.err); got != tt.want {
-				t.Errorf("failoverEligible(%v) = %v, want %v", tt.err, got, tt.want)
-			}
-		})
-	}
-
-	canceledCtx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	if got := failoverEligible(canceledCtx, &openai.Error{StatusCode: http.StatusInternalServerError}); got {
-		t.Error("failoverEligible on a canceled context = true, want false — a canceled run must not cascade")
 	}
 }
 

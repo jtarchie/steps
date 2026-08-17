@@ -157,6 +157,20 @@ func withStepIdentity(ctx context.Context, jobName string, i int, step config.St
 	return context.WithValue(ctx, stepIdentityKey{}, stepIdentity{job: jobName, index: i, step: step})
 }
 
+// withHookIdentity tags ctx for a hook body: the job it belongs to, but no
+// plan position.
+//
+// Both halves matter, and each was previously wrong in a different
+// direction. A hook inherited whatever stepIdentity its enclosing step had
+// left behind, so a STEP-level hook's fix agent published under the step's
+// own index — the identity currentStepRef's contract says a hook must not
+// claim. And a JOB-level hook inherited nothing at all, so its fix agent
+// published under an empty job name, filing a real conversation under no job
+// in the browser.
+func withHookIdentity(ctx context.Context, jobName string) context.Context {
+	return context.WithValue(ctx, stepIdentityKey{}, stepIdentity{job: jobName, index: -1})
+}
+
 // currentStepRef is which plan step is executing, for the frames that must
 // hand that identity to another package rather than merely log it — a fix
 // agent's conversation publishes events under the step that invoked it (see
@@ -164,7 +178,8 @@ func withStepIdentity(ctx context.Context, jobName string, i int, step config.St
 //
 // index -1 means there is no plan position: a hook or a fix running outside
 // the plan walk. Inventing one would file the conversation under an
-// unrelated step.
+// unrelated step. The JOB is still reported in that case — it is known, and
+// losing it files the conversation under nothing at all.
 func currentStepRef(ctx context.Context) (jobName string, index int) {
 	identity, ok := ctx.Value(stepIdentityKey{}).(stepIdentity)
 	if !ok {

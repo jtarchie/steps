@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/openai/openai-go/v3"
 )
@@ -308,9 +307,10 @@ func TestRetryableStatus(t *testing.T) {
 // (via net/http's client) — a bare errors.New with dial-shaped TEXT is not a
 // net.Error and must not pass.
 //
-// A deadline is deliberately NOT in this table: it means opposite things
-// depending on whose deadline expired, which is what TestIsTransientDeadline
-// below covers.
+// Neither context sentinel is transient: a canceled run says nothing about
+// the provider, and a spent deadline cannot be told apart from work that was
+// simply too big for the budget. classifySource resolves both to
+// sourceUnproven — see cascade.go, and TestClassifySource for the rows.
 func TestIsTransientProviderError(t *testing.T) {
 	dialErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
 
@@ -326,43 +326,25 @@ func TestIsTransientProviderError(t *testing.T) {
 		{"connection error", dialErr, true},
 		{"wrapped connection error", fmt.Errorf("agent: generate content: %w", dialErr), true},
 		{"context canceled", context.Canceled, false},
+		{"context deadline exceeded", context.DeadlineExceeded, false},
 		{"body truncated mid-response", fmt.Errorf("decode response: %w", io.ErrUnexpectedEOF), true},
-		{"json truncated mid-response", fmt.Errorf("decode response: %w", &json.SyntaxError{}), true},
+		// io.EOF is the stdlib's ordinary end-of-stream, returned by every
+		// read that finishes. Reading it as an outage let any normal
+		// termination anywhere in this package cascade to another model.
+		{"a bare io.EOF is not an outage", fmt.Errorf("decode response: %w", io.EOF), false},
+		// A provider that sends malformed JSON has a problem, but not one
+		// another SOURCE fixes, and encoding/json returns this shape for
+		// every decode in the process — including model-authored tool args.
+		{"a json syntax error is not an outage", fmt.Errorf("decode response: %w", &json.SyntaxError{}), false},
 		{"budget exceeded is an internal error, not the provider's fault", errors.New("agent budget exceeded (spent 500 tokens)"), false},
 		{"malformed/empty response is an internal error, not a connection failure", errors.New("agent: model returned an empty response"), false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isTransientProviderError(t.Context(), tt.err); got != tt.want {
+			if got := isTransientProviderError(tt.err); got != tt.want {
 				t.Errorf("isTransientProviderError(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
-	}
-}
-
-// TestIsTransientDeadline pins the one error whose meaning depends on whose
-// clock ran out.
-//
-// A provider that accepts the connection and then never answers burns the
-// step's whole timeout: and returns DeadlineExceeded — the most expensive
-// outage there is, and precisely what the cascade exists to escape. The same
-// error with a job context that has ALSO expired means the run itself is
-// over, and swapping sources then would be spending a dead run's remaining
-// fallbacks.
-func TestIsTransientDeadline(t *testing.T) {
-	t.Parallel()
-
-	err := fmt.Errorf("generate content: %w", context.DeadlineExceeded)
-
-	if !isTransientProviderError(t.Context(), err) {
-		t.Error("a conversation deadline under a healthy job must fail over: the provider hung")
-	}
-
-	expired, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Minute))
-	defer cancel()
-
-	if isTransientProviderError(expired, err) {
-		t.Error("a deadline reached because the JOB expired is not the provider's fault")
 	}
 }
