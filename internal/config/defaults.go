@@ -55,6 +55,52 @@ type Defaults struct {
 	// against — a version pruned from history takes its green record with it,
 	// so a number below what a slow downstream job needs holds that job back.
 	VersionHistory *int `yaml:"version_history,omitempty"`
+	// RunHistory is how many runs of each job steps keeps in full.
+	//
+	// It belongs next to VersionHistory because it answers the same question
+	// about the other half of the database, and it was the half with no answer:
+	// resource_versions was the only table with a prune path, so every run
+	// recorded its nodes, its events, its usage and its agent transcripts
+	// forever. Measured on a pipeline answering Slack mentions overnight, a
+	// build cost about 23KB and nothing ever gave a byte back.
+	//
+	// Per JOB rather than pipeline-wide, for the reason the cap exists at all:
+	// a global number makes the least active job the least inspectable, since a
+	// busy neighbour evicts its history.
+	//
+	// Reaping a run takes its events, steps and usage rows with it by foreign
+	// key, and the nodes no surviving run refers to with them — so the floor is
+	// not free of meaning either. It is a cache horizon: a step whose content
+	// has not changed since before the window runs once more instead of being
+	// skipped. `--run-history` supplies a default when this is unset, and
+	// DefaultRunHistory when neither is.
+	RunHistory *int `yaml:"run_history,omitempty"`
+}
+
+// DefaultRunHistory is how many runs of each job steps keeps when neither the
+// pipeline nor the command line says.
+//
+// Smaller than DefaultVersionHistory by an order of magnitude, and deliberately:
+// a version is a few dozen bytes and a run is tens of kilobytes, so the same
+// number would make these two caps mean very different things. A hundred runs
+// is far more than anyone scrolls back through while keeping a busy watch's
+// database in the low tens of megabytes.
+const DefaultRunHistory = 100
+
+// RunHistoryLimit is how many runs of each job to keep, resolving the
+// pipeline's own setting against the built-in default.
+//
+// Zero from the pipeline means NO limit, matching every other cap in this repo,
+// and is why this cannot simply be a value with a default: the difference
+// between "unset, use the default" and "set to zero, keep everything" is the
+// difference between a bounded database and an unbounded one, and only a pointer
+// can carry it.
+func (c *Config) RunHistoryLimit() int {
+	if c.Defaults != nil && c.Defaults.RunHistory != nil {
+		return *c.Defaults.RunHistory
+	}
+
+	return DefaultRunHistory
 }
 
 // DefaultVersionHistory is how many versions of each resource steps
@@ -71,8 +117,13 @@ const DefaultVersionHistory = 1000
 // A caller that has a command-line default writes it into Defaults before
 // asking, so precedence stays in one place: whatever the pipeline says wins,
 // because it is the thing that knows what its resources do.
+// Zero means NO limit, matching the convention docs/attempts-timeout.md states
+// for every dial in this repo — omitted takes the default, 0 means no limit. It
+// read `> 0` before, which quietly turned `version_history: 0` into the 1000
+// default: a reader who wrote it to stop pruning got pruning anyway, and the
+// field disagreed with run_history: next to it.
 func (c *Config) VersionHistoryLimit() int {
-	if c.Defaults != nil && c.Defaults.VersionHistory != nil && *c.Defaults.VersionHistory > 0 {
+	if c.Defaults != nil && c.Defaults.VersionHistory != nil {
 		return *c.Defaults.VersionHistory
 	}
 

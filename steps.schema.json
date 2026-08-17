@@ -70,8 +70,13 @@
         },
         "version_history": {
           "type": "integer",
-          "minimum": 1,
-          "description": "How many versions of each resource steps remembers. Default 1000, or --version-history. History is what lets a job build a version that scrolled out of a check's window, and what a passed: gate proves against — a pruned version takes its green record with it, so a number below what a slow downstream job needs will hold that job back."
+          "minimum": 0,
+          "description": "How many versions of each resource steps remembers. Default 1000, or --version-history; 0 keeps everything. History is what lets a job build a version that scrolled out of a check's window, and what a passed: gate proves against — a pruned version takes its green record with it, so a number below what a slow downstream job needs will hold that job back."
+        },
+        "run_history": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many runs of each job steps keeps, with their events, agent transcripts and cached step nodes. Default 100, or --run-history; 0 keeps everything. Reaping a run also drops the cached nodes no surviving run refers to, so a step whose content has not changed since before the window runs once more instead of being skipped."
         },
         "preflight": {
           "type": "object",

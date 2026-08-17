@@ -83,7 +83,16 @@ func (s *Store) RecordAgentUsage(ctx context.Context, usage AgentUsage) error {
 			total_tokens = agent_usage.total_tokens + excluded.total_tokens,
 			cached_tokens = agent_usage.cached_tokens + excluded.cached_tokens,
 			reasoning_tokens = agent_usage.reasoning_tokens + excluded.reasoning_tokens,
-			cost_usd = agent_usage.cost_usd + excluded.cost_usd,
+			-- NULL means unpriced, and NULL + anything is NULL in SQL — so a plain
+			-- sum erased a reported cost the moment a second attempt against the
+			-- same node reported none, and reported nothing for the whole row.
+			-- Unpriced only when BOTH sides are, which keeps "no provider told us"
+			-- distinguishable from "$0.00" (see the schema, and RunCostTotals,
+			-- which counts unpriced steps so a partial total is shown as partial).
+			cost_usd = CASE
+				WHEN agent_usage.cost_usd IS NULL AND excluded.cost_usd IS NULL THEN NULL
+				ELSE COALESCE(agent_usage.cost_usd, 0) + COALESCE(excluded.cost_usd, 0)
+			END,
 			finish_reason = excluded.finish_reason,
 			duration_ms = agent_usage.duration_ms + excluded.duration_ms,
 			raw_meta = excluded.raw_meta,

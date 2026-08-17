@@ -358,6 +358,39 @@ Sun 02:00  nightly-summary PAUSED after 3 consecutive failures — resume with: 
 - **Resume is manual, deliberately** (`steps jobs <pipeline> --resume <job>`). Any successful run clears the breaker — including a manual `steps run`, the natural way to confirm a fix. Unattended auto-resume would defeat the safety purpose.
 - **Off by default.** A job that declares no ceiling never pauses; the count is still kept, so turning a breaker on later starts from a real number.
 
+## How much history to keep: `run_history:`
+
+`steps watch` runs for weeks, and every build it does writes a run row, an event per step, what each agent step spent, the full text of every agent conversation, and a cached node per step. None of that used to be cleaned up. Measured on a pipeline answering Slack mentions overnight, one build cost about **23KB** — so a hundred builds a day added a couple of megabytes a day, forever, and three quarters of it was cached nodes and agent transcripts.
+
+`defaults.run_history:` caps it per job, keeping the newest:
+
+```yaml
+defaults:
+  # Runs are much bigger than versions, so the two caps are not the same number:
+  # a version is a few dozen bytes and a run is tens of kilobytes.
+  run_history: 20
+  version_history: 50
+
+jobs:
+- name: summarize
+  plan:
+  - task: write
+    run: echo summarized
+    assert:
+      stdout: summarized
+  assert:
+    execution: [write]
+    outcome: succeeded
+```
+
+- **Per job, not pipeline-wide.** A global cap makes the least active job the least inspectable, because a busy neighbour evicts its history. Twenty runs of `summarize` and twenty of `deploy`, not twenty between them.
+- **Default 100**, or `--run-history` on `steps run`/`steps watch`. The pipeline wins when both are set, because it is the thing that knows how much its jobs write.
+- **`0` keeps everything**, the same convention [every other limit here uses](attempts-timeout.md#zero-means-no-limit) — including `version_history:`. That is a real choice with a real cost, not a safe default.
+- **A reaped run takes its whole story with it** — events, per-step records, agent spend and transcripts — so the run pages and `steps runs --cost` reach back exactly as far as the cap.
+- **It also bounds the step cache**, but by COUNT rather than by age — cached steps are capped at a generous multiple of this number and the oldest go first. The distinction matters: a pipeline that is fully cached does no new work, so it adds no new cache entries, so nothing is ever evicted from it. Eviction happens only while new entries are being made, which is when the old ones are going stale anyway. What losing one costs is a re-run of a step whose content had not changed; nothing is recomputed *wrongly*.
+- **What is NOT trimmed is what would change behavior.** Recorded resource versions have their own separate limit (`version_history:`), the per-job version cursor is never touched, and the chain-level "this content already succeeded" index is aged out on the same horizon rather than tied to node retention — so bounding history never re-answers a version a job has already handled, and never re-triggers.
+- **An agent transcript is capped on its own too**, at 256KB, regardless of this setting: a conversation has as many turns as it needs, and one very long step should not be able to outweigh every other row in the database.
+
 ## `passed:` — only run against versions that are green upstream
 
 Without it, `steps watch` will trigger `deploy` on a commit the `test` job **already failed on**, and there is no way to say otherwise. This is a correctness gap, not a convenience:

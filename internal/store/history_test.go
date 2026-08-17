@@ -27,6 +27,9 @@ func TestListJobRuns(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t)
 
+	mustRecordNode(t, st, "build", "hash-1")
+	mustRecordNode(t, st, "deploy", "hash-2")
+
 	err := st.RecordJobRun(ctx, "build", "hash-1", "succeeded", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -77,6 +80,8 @@ func TestListJobRunsRespectsLimit(t *testing.T) {
 	st := openTestStore(t)
 
 	for _, hash := range []string{"a", "b", "c"} {
+		mustRecordNode(t, st, "build", hash)
+
 		err := st.RecordJobRun(ctx, "build", hash, "succeeded", nil)
 		if err != nil {
 			t.Fatal(err)

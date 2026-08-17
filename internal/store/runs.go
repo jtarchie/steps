@@ -101,6 +101,14 @@ func (s *Store) StartRun(ctx context.Context, id, jobName, workspaceDir string) 
 // FinishRun records how a run ended, and when. The timestamp is what makes a
 // run's duration answerable at all: started_at alone leaves every finished
 // run looking like it is still going.
+//
+// workspace is deliberately NOT cleared here, though it looks like dead weight
+// once a run ends — an absolute path to a temporary directory, about ninety bytes
+// a run, kept forever. It was tried and reverted: the column is read AFTER a run
+// finishes by both of the features built on that, and neither can be told apart
+// from here. --resume continues a FAILED run from the tree deliberately left on
+// disk, and --replay forks a SUCCEEDED one that was kept with --keep-workspace.
+// Clearing it on failure breaks resume; clearing it on success breaks replay.
 func (s *Store) FinishRun(ctx context.Context, id, status string) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE runs SET status = ?, finished_at = ? WHERE id = ?`, status, nowNano(), id)
@@ -257,7 +265,7 @@ func (s *Store) FirstRunSince(ctx context.Context, jobName string, since time.Ti
 		WHERE job_name = ? AND started_at >= ?
 		ORDER BY started_at, rowid
 		LIMIT 1
-	`, fmt.Sprintf("could not look for a run of %q", jobName), jobName, since.UTC().Format(time.RFC3339Nano))
+	`, fmt.Sprintf("could not look for a run of %q", jobName), jobName, since.UTC().Format(sortableNano))
 }
 
 // oneRun reads a single RunRow, reporting ok=false rather than an error when

@@ -81,6 +81,16 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
+	// Retention, registered BEFORE the event bus so it runs AFTER closeBus has
+	// flushed: what links a node to a run is an event naming its hash, and
+	// pruning while events were still queued would let a resumed run's older
+	// nodes look unreferenced.
+	//
+	// At the end of every build rather than on a timer, because a watch process
+	// may never idle, and the moment one run finishes is the moment its
+	// predecessors became prunable.
+	defer pruneHistory(ctx, st, cfg, job.Name, resume.id)
+
 	// Every run records its own story, whether or not anything is watching.
 	ctx, closeBus := attachEventBus(ctx, st)
 	defer closeBus()
@@ -291,6 +301,34 @@ func runJobPlan(
 		resolution:      resolution,
 		allowGetTrigger: true,
 	}, job.Plan)
+}
+
+// pruneHistory trims what this job has accumulated: runs past the cap, with
+// their events, steps, usage and transcripts, and the trigger-queue rows for
+// work already finished.
+//
+// Best-effort and deliberately so. A database that could not be trimmed is not
+// a reason to fail a build that already succeeded — the failure is logged, the
+// next build tries again, and the only cost of a missed pass is the bytes it
+// would have freed.
+//
+// Runs on a detached context: a canceled or timed-out job is exactly the one
+// whose history is worth bounding, and the ambient context is already done by
+// the time this fires.
+// keepRunID is this build's own run, which retention must never delete — see
+// store.PruneRuns, where a resumed run reaped itself.
+func pruneHistory(ctx context.Context, st *store.Store, cfg *config.Config, jobName, keepRunID string) {
+	pruneCtx := context.WithoutCancel(ctx)
+
+	err := st.PruneRuns(pruneCtx, jobName, cfg.RunHistoryLimit(), keepRunID)
+	if err != nil {
+		logFrom(ctx).Warn("store.prune_runs", "job", jobName, "error", err)
+	}
+
+	err = st.PruneTriggerQueue(pruneCtx, jobName, store.DefaultTriggerQueueHistory)
+	if err != nil {
+		logFrom(ctx).Warn("store.prune_trigger_queue", "job", jobName, "error", err)
+	}
 }
 
 // recordChainSucceeded records the leaf of a fully-executed chain as

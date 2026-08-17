@@ -52,7 +52,12 @@ func (s *Store) RecordVersions(ctx context.Context, resourceName string, version
 		return 0, nil
 	}
 
-	if limit <= 0 {
+	// limit == 0 means no limit (docs/attempts-timeout.md's convention), so the
+	// prune below is skipped entirely rather than falling back to the default —
+	// which is what this did, making `version_history: 0` mean "cap at 1000".
+	// A negative value cannot arrive from config (the schema forbids it) and is
+	// treated as unset rather than as an error a storage call should invent.
+	if limit < 0 {
 		limit = DefaultResourceVersionCap
 	}
 
@@ -81,9 +86,11 @@ func (s *Store) RecordVersions(ctx context.Context, resourceName string, version
 		return 0, err
 	}
 
-	err = pruneVersions(ctx, tx, resourceName, limit, floor)
-	if err != nil {
-		return 0, err
+	if limit > 0 {
+		err = pruneVersions(ctx, tx, resourceName, limit, floor)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	err = tx.Commit()

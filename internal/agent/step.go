@@ -220,6 +220,35 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 		bus: events.FromContext(ctx), runID: events.RunID(ctx), job: jobName, stepIndex: i, stepName: name,
 	}}
 
+	// The node is recorded BEFORE the conversation, as running, because the
+	// usage and transcript rows written below reference it: agent_usage.node_hash
+	// and node_transcripts.hash are foreign keys into nodes, which is what lets
+	// retention delete a node and have its spend record and its transcript go
+	// with it rather than survive as rows nothing can reach.
+	//
+	// Every path below re-records the node with its real status, since
+	// RecordNode upserts. What a placeholder therefore leaves behind is a node
+	// still marked running only when the PROCESS died mid-conversation — which
+	// is true, and more than the nothing-at-all that was recorded before.
+	//
+	// It cannot be a cache hit in that state: HasNodeSucceeded asks for
+	// succeeded, and job_runs — the chain-level index — is not written here.
+	//
+	// Best-effort, like the usage and transcript writes it exists to enable: a
+	// bookkeeping row must never be what fails a step that would otherwise run.
+	// A failure here is not silent — those two writes log their own warning when
+	// the reference they need is missing — and the success path below records the
+	// node again with a returned error.
+	//
+	// On a DETACHED context, matching the two writes it enables (saveAgentUsage
+	// and saveAgentTranscript both use context.WithoutCancel). Written on the
+	// ambient ctx it was useless in the one case that matters: a step killed by
+	// timeout: or Ctrl-C has a cancelled ctx, so the placeholder never landed,
+	// and both later writes then failed the foreign keys they had just gained —
+	// losing the tokens an aborted agent step spent and its transcript, on
+	// precisely the runs worth investigating.
+	_ = st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), jobName, "running", nil, nil)
+
 	stepStarted := time.Now()
 
 	res, err := runAndAnnounceFailover(ctx, name, &prepared)

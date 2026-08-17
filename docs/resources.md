@@ -215,7 +215,7 @@ Three things follow:
 
 #### How much to remember
 
-`defaults.version_history:` caps it per resource, keeping the newest:
+`defaults.version_history:` caps it per resource, keeping the newest (`0` keeps everything, as [every limit here does](attempts-timeout.md#zero-means-no-limit)):
 
 ```yaml
 defaults:

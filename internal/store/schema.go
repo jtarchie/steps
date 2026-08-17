@@ -1,29 +1,84 @@
 package store
 
-import (
-	"context"
-	"database/sql"
-	"fmt"
-	"log/slog"
-	"strings"
-)
-
 const schema = `
+-- The interned merkle preimage: what each node's hash was computed FROM.
+--
+-- Its own table because the same content repeats across builds and used to be
+-- stored once per node. A step's content is mostly the parts of a pipeline
+-- that do not change between runs — an agent's prompt and tool definitions, a
+-- task's script, a put's expr body — while the part that does change is the
+-- version a get fetched, which is a few dozen bytes. Measured on the database
+-- that prompted this: 12 nodes, 7 distinct contents, and content was the
+-- largest column in the file.
+--
+-- Keyed by a hash OF THE CONTENT, not by the node hash. A node hash folds in
+-- its parent (see merkle.HashNode), so two byte-identical steps at different
+-- points in a chain hash differently as nodes and identically here — which is
+-- exactly the sharing this table exists for.
+--
+-- Nothing cascades INTO it: a row is shared by an unknown number of nodes, so
+-- one node's deletion says nothing about whether the content is still needed.
+-- Retention sweeps the unreferenced rows explicitly (see PruneRuns), and the
+-- RESTRICT on the referencing side is what makes a mistake there an error
+-- rather than a dangling node.
+CREATE TABLE IF NOT EXISTS node_content (
+    content_hash TEXT PRIMARY KEY,
+    content      TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS nodes (
     hash        TEXT PRIMARY KEY,
-    parent_hash TEXT NOT NULL,
+    -- NULL for a chain's first step, which has no parent. It was '', which is
+    -- the wrong shape for an absent reference — sqlite reads an empty string as
+    -- a value that must exist and a NULL as nothing to check — and the reads
+    -- already COALESCE it back to '' for their callers.
+    --
+    -- The one column here that deliberately declares NO foreign key, and the
+    -- reason is structural rather than an oversight: a CONTAINER node
+    -- (in_parallel, race, across, ensemble, do, try) is recorded once its
+    -- branches finish, because its status is what they decided — while every
+    -- node inside it already hashed under the container as its parent. The
+    -- child therefore exists before the parent, legitimately and by design, so
+    -- the reference could only ever be declared by recording placeholder rows
+    -- for six kinds of block step. Nothing would be gained by it: no delete
+    -- needs to cascade along this column (see pruneNodes, which nulls dangling
+    -- links instead) and no query joins on it. It is the link a node-detail
+    -- page renders, and nothing else.
+    parent_hash TEXT,
     kind        TEXT NOT NULL,
     job_name    TEXT NOT NULL,
     resource    TEXT NOT NULL,
     step_index  INTEGER NOT NULL,
-    content     TEXT NOT NULL,
+    content_hash TEXT NOT NULL REFERENCES node_content(content_hash) ON DELETE RESTRICT,
     result      TEXT,
     status      TEXT NOT NULL,
     error       TEXT,
     created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_nodes_parent_hash ON nodes(parent_hash);
+-- Retention scans nodes by job and age, and sweeps node_content by what nodes
+-- still point at; both are full scans without these.
+CREATE INDEX IF NOT EXISTS idx_nodes_job_created ON nodes(job_name, created_at);
+CREATE INDEX IF NOT EXISTS idx_nodes_content_hash ON nodes(content_hash);
 
+-- root_hash names a node and deliberately does not reference one, for two
+-- independent reasons.
+--
+-- It cannot: a chain's leaf may be a CONTAINER step, and a container records no
+-- node of its own — do: and in_parallel: are documented that way, their
+-- children recording themselves instead — so for a plan ending in a block there
+-- is no row to point at. It surfaced as every such pipeline failing to record.
+--
+-- And it should not, even where the node does exist. This table is the
+-- content-addressed SKIP index: a row means "this job has already run this
+-- exact content". Cascading it away when a node row is reaped would make
+-- retention silently re-run work that had succeeded, which is the opposite of
+-- what a cache should do under pressure. The chain's identity is its hash, not
+-- the survival of a row describing one of its steps.
+--
+-- Bounded by age instead (see pruneJobRuns), which is the bound that matches
+-- what it holds: a chain last green before the retention window is one whose
+-- content nobody is about to submit again.
 CREATE TABLE IF NOT EXISTS job_runs (
     job_name   TEXT NOT NULL,
     root_hash  TEXT NOT NULL,
@@ -161,13 +216,27 @@ CREATE TABLE IF NOT EXISTS job_version_cursor (
 CREATE TABLE IF NOT EXISTS runs (
     id         TEXT PRIMARY KEY,
     job_name   TEXT NOT NULL,
+    -- Kept for the life of the row, though it looks like dead weight once a run
+    -- ends. Clearing it was tried and reverted: --resume continues a FAILED run
+    -- from the tree deliberately left on disk, and --replay forks a SUCCEEDED one
+    -- kept with --keep-workspace, so both statuses are read after the run is
+    -- over. See FinishRun.
     workspace  TEXT NOT NULL,
     status     TEXT NOT NULL,
-    started_at TEXT NOT NULL
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    -- NULL for an ordinary run; the run a replay forked from otherwise. NULL
+    -- rather than '' for the reason nodes.parent_hash is (see above), and
+    -- SET NULL rather than CASCADE because a forked run is a run in its own
+    -- right — retention reaping its parent must not reach forward and delete
+    -- the child too.
+    parent_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL
 );
+-- Retention orders a job's runs by recency to find the ones past the cap.
+CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(job_name, started_at);
 
 CREATE TABLE IF NOT EXISTS run_steps (
-    run_id     TEXT NOT NULL,
+    run_id     TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     step_index INTEGER NOT NULL,
     step_name  TEXT NOT NULL,
     PRIMARY KEY (run_id, step_index)
@@ -223,9 +292,15 @@ CREATE TABLE IF NOT EXISTS job_breaker (
 -- Deliberately append-only and run-scoped, unlike content-addressed nodes:
 -- two runs sharing a cached node still have their own separate stories about
 -- reaching it.
+-- job_name stays denormalized here, and step_name/step_kind with it. They look
+-- like copies of what (run_id, step_index) already determines, and step_name is
+-- not: a fan-out cell reports its PARENT's plan index and distinguishes itself
+-- by name, so several rows share an index and only the name tells them apart.
+-- job_name alone is genuinely derivable — measured at 14 bytes an event, about
+-- 1% of what a build writes, which does not pay for a join on every event read.
 CREATE TABLE IF NOT EXISTS run_events (
     seq        INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id     TEXT NOT NULL,
+    run_id     TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     job_name   TEXT NOT NULL,
     type       TEXT NOT NULL,
     step_index INTEGER NOT NULL,
@@ -240,6 +315,11 @@ CREATE TABLE IF NOT EXISTS run_events (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, seq);
+-- Retention asks "which nodes does a surviving run still name" on every build,
+-- and RunsUsingNode asks the same question from the node detail page. Both are
+-- an anti-join on hash, which without this scans the whole table — the largest
+-- run-scoped one — inside a write transaction holding the exclusive lock.
+CREATE INDEX IF NOT EXISTS idx_run_events_hash ON run_events(hash);
 
 -- What each agent step spent, and the provider metadata that explains it.
 --
@@ -265,14 +345,14 @@ CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, seq);
 -- docs/agents.md. Reporting says "unpriced", never $0.00.
 --
 -- raw_meta keeps the provider's whole usage block. The schema has no
--- versioning beyond addedColumns, so a field not captured today cannot be
+-- versioning and no migration path, so a field not captured today cannot be
 -- backfilled tomorrow.
 CREATE TABLE IF NOT EXISTS agent_usage (
-    run_id            TEXT NOT NULL,
+    run_id            TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     step_index        INTEGER NOT NULL,
     step_name         TEXT NOT NULL,
     job_name          TEXT NOT NULL,
-    node_hash         TEXT NOT NULL,
+    node_hash         TEXT NOT NULL REFERENCES nodes(hash) ON DELETE CASCADE,
     model_requested   TEXT NOT NULL,
     model_served      TEXT NOT NULL,
     prompt_tokens     INTEGER NOT NULL,
@@ -294,189 +374,29 @@ CREATE INDEX IF NOT EXISTS idx_agent_usage_run ON agent_usage(run_id, step_index
 -- successors on every run and must stay bounded, while a transcript is read
 -- on demand ("what did this step actually say and do"). Same hash key as
 -- nodes; replaces on re-record like nodes does.
+--
+-- The largest single value the schema stores, and the one whose bound was
+-- missing: internal/agent caps a single tool RESULT, but a conversation has
+-- unboundedly many turns, so the row itself needs MaxTranscriptBytes.
 CREATE TABLE IF NOT EXISTS node_transcripts (
-    hash       TEXT PRIMARY KEY,
+    hash       TEXT PRIMARY KEY REFERENCES nodes(hash) ON DELETE CASCADE,
     job_name   TEXT NOT NULL,
     transcript TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
 `
 
-// addedColumns are columns added to tables that already shipped. The schema
-// above is all CREATE TABLE IF NOT EXISTS, which silently does nothing to a
-// database created by an earlier version — so a new column on an OLD table
-// needs its own ALTER, or the field exists only for people who deleted their
-// state.db.
-var addedColumns = []struct{ table, column, decl string }{
-	{"runs", "finished_at", "TEXT"},
-	// Rows written before this column existed carry '', which no correlated
-	// lookup can match (HasPassedVersionSet ignores them). That is the
-	// conservative direction and the right one: passed: is a GATE, so the
-	// upgrade holds a multi-resource fan-in back until its upstream job runs
-	// once more and writes a correlated set, rather than waving through a
-	// combination nobody can prove was ever green together. A single-resource
-	// constraint — the common case — is unaffected, since one row is trivially
-	// its own coherent set.
-	{"job_versions", "build_id", "TEXT NOT NULL DEFAULT ''"},
-	// The run a replay forked from. Empty for an ordinary run, which is every
-	// run recorded before replay existed.
-	{"runs", "parent_run_id", "TEXT NOT NULL DEFAULT ''"},
-}
-
-// rebuiltTables are tables whose DEFINITION changed, not just their columns.
+// steps has no released version and no migration path, deliberately: the schema
+// is created by CREATE TABLE IF NOT EXISTS and nothing rewrites an older one.
+// A database from before a schema change is not upgraded, it is deleted — the
+// only thing in it that cannot be rebuilt by running the pipeline again is run
+// history, and pre-production that is not worth a migration framework whose
+// every entry is a permanent cost.
 //
-// SQLite cannot add a constraint to an existing table, and the schema above
-// is all CREATE TABLE IF NOT EXISTS, so a database made before these grew
-// their foreign keys would keep the old definition forever and the cascade
-// would silently not happen. steps has no released version, so they are
-// dropped and recreated rather than rebuilt in place.
+// What this replaced: an addedColumns list of ALTER statements, a rebuiltTables
+// list pairing each table with a predicate for detecting its own legacy shape,
+// and the drop-and-recreate pass that ran them. Roughly 150 lines existing only
+// to carry state nobody is keeping.
 //
-// What that costs on upgrade is bounded and already precedented (the same
-// trade-off job_versions.build_id took): a lost consumed-cursor means a
-// version: every job takes its current versions once more, and a lost
-// job_versions means a passed: gate waits for one more upstream run before
-// it can prove a version was green. Both resolve themselves on the next
-// poll; neither loses work that has not already happened.
-var rebuiltTables = []struct {
-	table string
-	// legacy reports whether the existing table predates the current
-	// definition. Each entry names the evidence rather than a version
-	// counter, so the check stays true however many times the schema is
-	// reloaded: a table already rebuilt does not look legacy.
-	legacy func(context.Context, *sql.DB, string) (bool, error)
-}{
-	// Gained foreign keys, so an absence of them is the tell.
-	{"job_versions", tableLacksForeignKeys},
-	// Became a high-water mark, so a leftover version_json column is.
-	{"job_version_cursor", tableHasColumn("version_json")},
-}
-
-// dropLegacyTables removes any rebuiltTables entry that predates its current
-// definition, so the schema below can recreate it.
-//
-// Runs BEFORE the schema is executed, since CREATE TABLE IF NOT EXISTS would
-// otherwise see the old definition and do nothing.
-func dropLegacyTables(ctx context.Context, db *sql.DB) error {
-	for _, rebuild := range rebuiltTables {
-		exists, err := tableExists(ctx, db, rebuild.table)
-		if err != nil {
-			return err
-		}
-
-		if !exists {
-			continue
-		}
-
-		legacy, err := rebuild.legacy(ctx, db, rebuild.table)
-		if err != nil {
-			return err
-		}
-
-		if !legacy {
-			continue
-		}
-
-		_, err = db.ExecContext(ctx, "DROP TABLE "+rebuild.table)
-		if err != nil {
-			return fmt.Errorf("could not rebuild %s: %w", rebuild.table, err)
-		}
-
-		slog.Info("store.table_rebuilt", "table", rebuild.table)
-	}
-
-	return nil
-}
-
-func tableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
-	var count int
-
-	err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count)
-	if err != nil {
-		return false, fmt.Errorf("could not inspect %s: %w", table, err)
-	}
-
-	return count > 0, nil
-}
-
-// tableLacksForeignKeys reports whether a table declares none.
-func tableLacksForeignKeys(ctx context.Context, db *sql.DB, table string) (bool, error) {
-	found, err := pragmaHasRows(ctx, db, "foreign_key_list", table)
-	if err != nil {
-		return false, err
-	}
-
-	return !found, nil
-}
-
-// tableHasColumn reports whether a table still carries a named column.
-func tableHasColumn(column string) func(context.Context, *sql.DB, string) (bool, error) {
-	return func(ctx context.Context, db *sql.DB, table string) (bool, error) {
-		rows, err := db.QueryContext(ctx, "PRAGMA table_info("+table+")")
-		if err != nil {
-			return false, fmt.Errorf("could not inspect %s: %w", table, err)
-		}
-
-		defer func() { _ = rows.Close() }()
-
-		for rows.Next() {
-			var (
-				index        int
-				name, kind   string
-				notNull      int
-				defaultValue sql.NullString
-				primaryKey   int
-			)
-
-			err = rows.Scan(&index, &name, &kind, &notNull, &defaultValue, &primaryKey)
-			if err != nil {
-				return false, fmt.Errorf("could not inspect %s: %w", table, err)
-			}
-
-			if name == column {
-				return true, nil
-			}
-		}
-
-		err = rows.Err()
-		if err != nil {
-			return false, fmt.Errorf("could not inspect %s: %w", table, err)
-		}
-
-		return false, nil
-	}
-}
-
-// pragmaHasRows reports whether a table-valued pragma returns anything.
-func pragmaHasRows(ctx context.Context, db *sql.DB, pragma, table string) (bool, error) {
-	rows, err := db.QueryContext(ctx, "PRAGMA "+pragma+"("+table+")")
-	if err != nil {
-		return false, fmt.Errorf("could not inspect %s: %w", table, err)
-	}
-
-	defer func() { _ = rows.Close() }()
-
-	found := rows.Next()
-
-	err = rows.Err()
-	if err != nil {
-		return false, fmt.Errorf("could not inspect %s: %w", table, err)
-	}
-
-	return found, nil
-}
-
-// addColumns applies addedColumns, treating "duplicate column name" as
-// success. SQLite has no ADD COLUMN IF NOT EXISTS, and probing PRAGMA
-// table_info first would be the same check with an extra round trip and a
-// race between the check and the alter.
-func addColumns(ctx context.Context, db *sql.DB) error {
-	for _, add := range addedColumns {
-		_, err := db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", add.table, add.column, add.decl))
-		if err != nil && !strings.Contains(err.Error(), "duplicate column name") {
-			return fmt.Errorf("could not add %s.%s: %w", add.table, add.column, err)
-		}
-	}
-
-	return nil
-}
+// If that changes, the thing to add back is a real migration story — a version
+// counter and ordered steps — not another table-shaped special case.

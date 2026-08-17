@@ -65,6 +65,20 @@ linters:
     - depguard      # enforce the internal import-direction (no upward dep on the CLI layer)
 
   settings:
+    gosec:
+      excludes:
+        # G706 (log injection) flags any slog call whose attribute value came
+        # from outside — a request's RemoteAddr, a resource name, an argv, an
+        # error's text. It is a real class of bug for a logger that
+        # CONCATENATES, and structurally impossible for slog: attribute values
+        # are quoted and escaped by the handler, never interpolated into the
+        # message, so a value carrying a newline cannot forge a second log line.
+        #
+        # Excluded here, once and with the reason, rather than as a //nolint on
+        # every logging call in the repo. Every one of the eight sites it flagged
+        # was this same false positive, and its taint analysis surfaces them one
+        # at a time — so the scattered form is both noisier and never finished.
+        - G706
     depguard:
       rules:
         # Root (package main): a thin CLI entrypoint — parse flags, wire up

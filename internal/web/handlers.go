@@ -397,9 +397,19 @@ func (s *Server) handleLatestRun(c echo.Context) error {
 	// to zero would make FirstRunSince match the job's entire history and
 	// forward to its OLDEST run, presenting an ancient transcript as the one
 	// just triggered.
+	//
+	// The fallback is now+1ms, not now, because UnixMilli TRUNCATES: a run
+	// started earlier in the current millisecond has a started_at greater than a
+	// millisecond-floored "now", so it satisfies `>= since` and gets credited to
+	// a page that never triggered anything. Rounding up is the direction that
+	// matches the intent — a sentinel later than everything that already exists.
+	//
+	// It only surfaced when runs.started_at became zero-padded (see
+	// store.sortableNano): before that, comparing '…123456789Z' against '…123Z'
+	// as text rejected the run by accident of the trimming, not by design.
 	millis, err := strconv.ParseInt(c.QueryParam("since"), 10, 64)
 	if err != nil || millis <= 0 {
-		millis = time.Now().UTC().UnixMilli()
+		millis = time.Now().UTC().UnixMilli() + 1
 	}
 
 	since := time.UnixMilli(millis).UTC()

@@ -62,8 +62,34 @@ func assertHasSucceeded(t *testing.T, store *Store, jobName, rootHash string, wa
 	}
 }
 
+// mustRecordNode records a minimal node under a hash, so a row that references
+// it has something to point at.
+//
+// agent_usage.node_hash and node_transcripts.hash are foreign keys into nodes,
+// which is what lets retention delete a node and take its dependents with it.
+// job_runs.root_hash deliberately is NOT one (see the schema, and the negative
+// assertion in footprint_test.go) — but a job_runs row still names a chain leaf,
+// and seeding the node it names keeps these fixtures shaped like the runs that
+// produce them.
+//
+// The node is recorded as SUCCEEDED, which is a cache-hit state: a test about
+// HasNodeSucceeded or across-cell memoization should record its own nodes rather
+// than inherit this one.
+func mustRecordNode(t *testing.T, store *Store, jobName, hash string) {
+	t.Helper()
+
+	err := store.RecordNode(context.Background(), NodeRecord{
+		Hash: hash, Kind: "task", Resource: "step", Content: map[string]any{"hash": hash},
+	}, jobName, "succeeded", nil, nil)
+	if err != nil {
+		t.Fatalf("RecordNode(%q, %q): %v", jobName, hash, err)
+	}
+}
+
 func mustRecordJobRun(t *testing.T, store *Store, jobName, rootHash, status string, runErr error) {
 	t.Helper()
+
+	mustRecordNode(t, store, jobName, rootHash)
 
 	err := store.RecordJobRun(context.Background(), jobName, rootHash, status, runErr)
 	if err != nil {
@@ -529,6 +555,8 @@ func TestNodeTranscriptRoundTrip(t *testing.T) {
 		t.Fatal("expected no transcript before any save")
 	}
 
+	mustRecordNode(t, store, "build", "abc123")
+
 	err = store.SaveNodeTranscript(ctx, "abc123", "build", `[{"type":"text","text":"hi"}]`)
 	if err != nil {
 		t.Fatalf("SaveNodeTranscript: %v", err)
@@ -554,6 +582,8 @@ func TestNodeTranscriptReplace(t *testing.T) {
 	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
 	ctx := context.Background()
+
+	mustRecordNode(t, store, "build", "abc123")
 
 	for _, transcript := range []string{`[{"type":"text","text":"hi"}]`, `[{"type":"text","text":"replaced"}]`} {
 		err := store.SaveNodeTranscript(ctx, "abc123", "build", transcript)

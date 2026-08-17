@@ -86,6 +86,7 @@ type RunCmd struct {
 	From           string            `help:"with --replay, the step name to re-run from"                                             name:"from"`
 	VarsFile       string            `help:"YAML file of pipeline vars"                                                              name:"vars-file"`
 	VersionHistory int               `help:"how many versions of each resource to remember (pipeline defaults.version_history wins)" name:"version-history"`
+	RunHistory     int               `help:"how many runs of each job to keep (pipeline defaults.run_history wins)"                  name:"run-history"`
 }
 
 // applyContinuation handles the flags that point this invocation at a previous
@@ -157,6 +158,12 @@ func (r *RunCmd) Run() error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
+	// --version-history was declared on this command but never applied, so it
+	// silently did nothing here and only worked under `steps watch`. Both limits
+	// belong on both commands: a manual run records the same nodes, events and
+	// transcripts a triggered one does.
+	applyHistoryFlags(cfg, r.VersionHistory, r.RunHistory)
+
 	ctx = applyPreflightFlag(ctx, r.NoPreflight)
 
 	jobName := r.Job
@@ -200,6 +207,7 @@ type WatchCmd struct {
 	Interval       time.Duration     `default:"30s"                                                                                  help:"how often to check trigger: true resources"`
 	Once           bool              `help:"poll once, run whatever that triggers, and exit (for cron or a timer)"                   name:"once"`
 	VersionHistory int               `help:"how many versions of each resource to remember (pipeline defaults.version_history wins)" name:"version-history"`
+	RunHistory     int               `help:"how many runs of each job to keep (pipeline defaults.run_history wins)"                  name:"run-history"`
 	MaxConcurrent  int               `default:"1"                                                                                    help:"maximum number of triggered jobs running at once"`
 	Pin            map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                                        name:"pin"`
 	Force          bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
@@ -227,7 +235,7 @@ func (w *WatchCmd) Run() error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	applyVersionHistoryFlag(cfg, w.VersionHistory)
+	applyHistoryFlags(cfg, w.VersionHistory, w.RunHistory)
 
 	ctx = applyPreflightFlag(ctx, w.NoPreflight)
 
@@ -1249,14 +1257,15 @@ func withSignalCancel(parent context.Context) (context.Context, context.CancelFu
 	return ctx, cancel
 }
 
-// applyVersionHistoryFlag writes a command-line history limit into the config
+// applyHistoryFlags writes the command-line retention limits into the config
 // unless the pipeline set its own.
 //
 // Precedence is resolved here rather than at the point of use so there is one
-// place it lives: the pipeline wins, because it is the thing that knows what
-// its resources do. See config.VersionHistoryLimit.
-func applyVersionHistoryFlag(cfg *config.Config, limit int) {
-	if limit <= 0 {
+// place it lives: the pipeline wins, because it is the thing that knows what its
+// resources and its jobs do. See config.VersionHistoryLimit and
+// config.RunHistoryLimit.
+func applyHistoryFlags(cfg *config.Config, versions, runs int) {
+	if versions <= 0 && runs <= 0 {
 		return
 	}
 
@@ -1264,8 +1273,12 @@ func applyVersionHistoryFlag(cfg *config.Config, limit int) {
 		cfg.Defaults = &config.Defaults{}
 	}
 
-	if cfg.Defaults.VersionHistory == nil {
-		cfg.Defaults.VersionHistory = &limit
+	if versions > 0 && cfg.Defaults.VersionHistory == nil {
+		cfg.Defaults.VersionHistory = &versions
+	}
+
+	if runs > 0 && cfg.Defaults.RunHistory == nil {
+		cfg.Defaults.RunHistory = &runs
 	}
 }
 

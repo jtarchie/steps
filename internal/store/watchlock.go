@@ -37,6 +37,7 @@ func (s *Store) AcquireWatchLock() (release func(), held bool, err error) {
 		return nil, false, fmt.Errorf("could not open watch lock %q: %w", lockPath, err)
 	}
 
+	//nolint:gosec // a file descriptor is a small non-negative int; Fd() only returns uintptr
 	err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 	if err != nil {
 		_ = file.Close()
