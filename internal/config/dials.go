@@ -82,10 +82,33 @@ func (c *Config) validateAgentDials() error {
 // other dials on this page use for "no limit", so an author who writes it
 // here is making a reasonable guess at a convention rather than a typo. What
 // they get instead is the reason it is not one.
+// A fix: carries its own attempts:, and is walked explicitly here: visitSteps
+// descends into try:/do:/branches/hooks, but a FixSpec is not a Step, so
+// nothing else would ever reach it. That gap is how `fix: { attempts: 0 }`
+// loaded cleanly and was silently reinterpreted as 1 by the retry loop's own
+// floor — the exact guess this validator exists to refuse.
 func (c *Config) validateAttempts() error {
+	for _, task := range c.Tasks {
+		if task.Fix != nil {
+			err := validateAttemptCount(task.Fix.Attempts, fmt.Sprintf("task %q fix", task.Name))
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	for _, job := range c.Jobs {
 		err := job.visitSteps(func(label string, step *Step) error {
-			return validateAttemptCount(step.Attempts, label)
+			err := validateAttemptCount(step.Attempts, label)
+			if err != nil {
+				return err
+			}
+
+			if step.Fix != nil {
+				return validateAttemptCount(step.Fix.Attempts, label+" fix")
+			}
+
+			return nil
 		})
 		if err != nil {
 			return err

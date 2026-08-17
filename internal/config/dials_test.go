@@ -115,6 +115,15 @@ func TestAttemptsZeroIsRejected(t *testing.T) {
 	}{
 		{"on a step", &Config{Jobs: []Job{{Name: "j", Plan: []Step{{Task: "t", Run: "true", Attempts: intPtr(0)}}}}}},
 		{"on an agents: entry", &Config{Agents: []Agent{{Name: "a", Source: AgentSource{Model: "openai/gpt-4o"}, Attempts: intPtr(0)}}}},
+		// A fix: is not a Step, so visitSteps never reaches it — without an
+		// explicit walk this loaded cleanly and the retry loop's own floor
+		// silently reinterpreted the 0 as 1.
+		{"inside a step's fix:", &Config{Jobs: []Job{{Name: "j", Plan: []Step{
+			{Task: "t", Run: "true", Fix: &FixSpec{Agent: "fixer", Attempts: intPtr(0)}},
+		}}}}},
+		{"inside a tasks: entry's fix:", &Config{Tasks: []Task{
+			{Name: "t", Run: "true", Fix: &FixSpec{Agent: "fixer", Attempts: intPtr(0)}},
+		}}},
 	}
 
 	for _, test := range tests {

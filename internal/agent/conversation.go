@@ -376,6 +376,17 @@ func seedResumeState(conv agentConversation) resumeCheckpoint {
 // from it (the CLI path spends turns across attempts and does exactly that).
 const unlimitedTurns = -1
 
+// maxIgnoredForces is how many turns in a row the model may answer with text
+// while a forced tool call goes unmade before the attempt is failed.
+//
+// It costs a capped step nothing but wasted turns: the verdict at the end of
+// the old path was the same task-level failure naming the same unsatisfied
+// tools, just reached thirty turns later. Five matches loopDetectionMaxRepeats
+// on the same premise — a model that has declined an API-level constraint five
+// consecutive times is not about to comply on the sixth — and any tool call at
+// all resets it, so a model that stalls once and then complies is unaffected.
+const maxIgnoredForces = 5
+
 // remainingTurns is how many turns this source may still spend: the step's
 // declared max_turns: less whatever earlier sources already used. Never
 // negative for a capped step — a checkpoint at or past the ceiling yields 0,
@@ -431,6 +442,15 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	// stuck, warns once, then fails the attempt — see loop.go.
 	detector := newLoopDetector()
 
+	// ignoredForces counts CONSECUTIVE turns where a required tool was
+	// unsatisfied, tool_choice forced it, and the model answered with text
+	// anyway. The detector cannot see these: it hashes tool INTERACTIONS, and
+	// a turn with no tool call produces none — so this is the only thing
+	// standing between a provider that disregards tool_choice and a loop that
+	// never ends. max_turns used to be that backstop, which stopped being true
+	// the moment max_turns: 0 became expressible.
+	ignoredForces := 0
+
 	// budget is fixed before the loop so the sentinel is compared, not
 	// counted down: an uncapped conversation ends by answering, by the step's
 	// deadline, by its token budget, or by loop detection — never here.
@@ -439,9 +459,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	turn := 0
 
 	for ; budget == unlimitedTurns || turn < budget; turn++ {
-		if conv.compactAfterTokens > 0 {
-			state.summary, state.stalled = maybeCompact(ctx, llm, req, conv, state.summary, state.stalled)
-		}
+		state.summary, state.stalled = maybeCompact(ctx, llm, req, conv, state.summary, state.stalled)
 
 		// The budget is checked before the turn's tool calls run: a step that
 		// has already blown its ceiling must not go on to have side effects.
@@ -460,8 +478,17 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 				return result(text, turn+1), nil
 			}
 
+			ignoredForces++
+
+			forceErr := conv.forcingIsGoingNowhere(ignoredForces, state.satisfied)
+			if forceErr != nil {
+				return result("", turn+1), forceErr
+			}
+
 			continue
 		}
+
+		ignoredForces = 0
 
 		req.Config.ToolConfig = nil // clear any forcing from the prior turn — the model chooses freely again next time it tries to stop
 
@@ -498,6 +525,23 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	exhausted := result("", turn)
 
 	return conv.outOfTurns(ctx, llm, req, exhausted, state.satisfied)
+}
+
+// forcingIsGoingNowhere ends an attempt whose model has answered with text
+// through maxIgnoredForces consecutive forced tool calls. nil means carry on.
+//
+// The failure is task-level, matching what the turn cap used to produce on
+// this same path — the conversation ran and did not finish its task, which is
+// not an infrastructure fault.
+func (conv agentConversation) forcingIsGoingNowhere(ignored int, satisfied map[string]bool) error {
+	if ignored < maxIgnoredForces {
+		return nil
+	}
+
+	//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
+	return outcome.Fail(fmt.Errorf(
+		"agent ignored a forced tool call %d turns running; required tool(s) never succeeded: %s",
+		ignored, strings.Join(unsatisfiedRequiredTools(conv.tools.required, satisfied), ", ")))
 }
 
 // outOfTurns decides what a conversation that used every turn is worth.

@@ -347,8 +347,17 @@ func TestRunAgentConversationRequiredToolNeverCalled(t *testing.T) {
 		t.Fatal("expected an error: the required tool was never called even after being forced")
 	}
 
-	if res.turns != testMaxTurns {
-		t.Errorf("turns = %d, want %d", res.turns, testMaxTurns)
+	// maxIgnoredForces, not testMaxTurns: a model that has declined an
+	// API-level forced tool call five turns running is not going to comply on
+	// the sixth, so the attempt ends there instead of buying the same verdict
+	// three turns later. The verdict itself is unchanged — that is what makes
+	// the earlier stop free.
+	//
+	// It stopped being optional when max_turns: 0 became expressible: the turn
+	// cap used to be the only thing bounding this path, and an uncapped step
+	// has none.
+	if res.turns != maxIgnoredForces {
+		t.Errorf("turns = %d, want %d", res.turns, maxIgnoredForces)
 	}
 }
 

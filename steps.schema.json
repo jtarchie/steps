@@ -712,7 +712,9 @@
               }
             },
             "attempts": {
-              "type": "integer"
+              "type": "integer",
+              "minimum": 1,
+              "description": "How many times the fix agent's failed request is re-issued. Omit for the agent's default; 0 is rejected, as it is on a step."
             },
             "timeout": {
               "type": "string"

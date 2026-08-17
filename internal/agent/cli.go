@@ -211,12 +211,20 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 // max_turns: 0 carried through as the sentinel rather than turned into a
 // number — subtracting spent turns from "no cap" is how an uncapped step
 // would have acquired one.
+//
+// An overspent budget floors at 0 rather than going negative, because the
+// sentinel IS a negative number and the two must never collide: the CLI
+// reports num_turns in its own units (see clistream.go), so a capped step can
+// legitimately come back having spent MORE than its ceiling, and a bare
+// subtraction lands on exactly -1 often enough to matter. That value would
+// read as "uncapped" and hand the next attempt no --max-turns at all — the
+// precise opposite of the exhausted budget it represents.
 func remainingCLITurns(maxTurns, spent int) int {
 	if maxTurns == 0 {
 		return unlimitedTurns
 	}
 
-	return maxTurns - spent
+	return max(maxTurns-spent, 0)
 }
 
 // cliAttempt is one invocation's session state: which conversation it joins,

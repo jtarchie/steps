@@ -3,8 +3,12 @@ package agent
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/genai"
 )
 
 // TestAgentTimeoutResolution pins the one field whose EMPTY value is not
@@ -79,6 +83,69 @@ func TestRemainingCLITurnsCarriesTheSentinel(t *testing.T) {
 
 	if got := remainingCLITurns(30, 12); got != 18 {
 		t.Errorf("remainingCLITurns(30, 12) = %d, want 18", got)
+	}
+
+	// The CLI reports num_turns in its own units, so a capped step can come
+	// back having spent more than its ceiling. A bare subtraction lands on
+	// exactly the sentinel here, which would read as "uncapped" and hand the
+	// next attempt no --max-turns at all.
+	overspent := remainingCLITurns(30, 31)
+	if overspent == unlimitedTurns {
+		t.Fatal("an overspent budget collided with the unlimited sentinel")
+	}
+
+	if !(cliAttempt{maxTurns: overspent}).outOfTurns() {
+		t.Errorf("remainingCLITurns(30, 31) = %d, which does not read as an exhausted budget", overspent)
+	}
+}
+
+// TestIgnoredForcesEndTheConversation covers the path the loop detector
+// structurally cannot see: a provider that disregards tool_choice, so the
+// model answers with text while a required tool goes unmade. The detector
+// hashes tool INTERACTIONS, and these turns produce none.
+//
+// max_turns used to be the bound here — the conversation loop's own comment
+// said so — which stopped being true the moment max_turns: 0 became
+// expressible. Uncapped, this is a loop with nothing to end it.
+func TestIgnoredForcesEndTheConversation(t *testing.T) {
+	t.Parallel()
+
+	const toolName = "submit"
+
+	// Answers with text every time, never calling the required tool: the
+	// provider-ignores-tool_choice case. More responses than the bound so a
+	// regression loops rather than running out of script.
+	responses := make([]*model.LLMResponse, 0, 100)
+	for range 100 {
+		responses = append(responses, &model.LLMResponse{Content: &genai.Content{
+			Role:  genai.RoleModel,
+			Parts: []*genai.Part{{Text: "I would rather just tell you."}},
+		}})
+	}
+
+	fake := &fakeLLM{responses: responses}
+
+	conv := agentConversation{
+		prompt: "submit your answer",
+		env:    toolEnv{dir: t.TempDir()},
+		tools: agentTools{
+			registry: map[string]toolImpl{toolName: func(context.Context, map[string]any, toolEnv) map[string]any { return nil }},
+			required: map[string]bool{toolName: true},
+		},
+		maxTurns: 0, // the uncapped case: nothing else can stop this
+	}
+
+	_, err := runAgentConversation(t.Context(), fake, conv)
+	if err == nil {
+		t.Fatal("an uncapped conversation that never made its required call returned no error")
+	}
+
+	if !strings.Contains(err.Error(), toolName) {
+		t.Errorf("error = %v, want one naming the required tool that never succeeded", err)
+	}
+
+	if fake.calls > maxIgnoredForces+1 {
+		t.Errorf("provider requests = %d, want it bounded near %d", fake.calls, maxIgnoredForces)
 	}
 }
 

@@ -87,7 +87,11 @@ Tone: write as if briefing a colleague taking over mid-conversation.`
 // abort the attempt. maybeCompact only ever reads/mutates req.Contents; it
 // never touches turn counting, trajectory, or verdict tracking.
 func maybeCompact(ctx context.Context, llm model.LLM, req *model.LLMRequest, conv agentConversation, summary string, stalled bool) (newSummary string, newStalled bool) {
-	if stalled {
+	// compactAfterTokens == 0 is compaction switched off outright (an explicit
+	// compact_after_tokens: 0 — resolution never produces it from an unset
+	// field). The guard lives here rather than at the call site so the turn
+	// loop states its own business once.
+	if stalled || conv.compactAfterTokens <= 0 {
 		return summary, stalled
 	}
 
