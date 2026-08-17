@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -661,8 +662,251 @@ func firstLine(text string) string {
 // unauthorized oauth server just surfaces the actionable error naming this
 // login command.
 type MCPCmd struct {
+	List  MCPListCmd  `cmd:"" help:"list the pipeline's mcp servers and whether each one answers"`
 	Tools MCPToolsCmd `cmd:"" help:"list an mcp server's tools and their argument schemas"`
 	Login MCPLoginCmd `cmd:"" help:"interactively authorize an oauth-configured mcp server"`
+}
+
+// MCPListCmd is the inventory: every mcp_servers: entry, how it connects, who
+// consumes it, and — unless --offline — whether it answers right now.
+//
+// `mcp tools` answers "what can this one server do", which presumes you
+// already know which servers exist and which are working. This is the step
+// before that, and the reason it probes by default: a server is configured in
+// YAML but broken on this machine (binary not on PATH, token never obtained,
+// endpoint moved), and the file alone cannot tell you which.
+//
+// It reports rather than gates — a server that does not answer is a row with
+// an ✗, not a non-zero exit. `steps preflight` is the verb that fails.
+type MCPListCmd struct {
+	Pipeline string `arg:""                                                            help:"path to the pipeline YAML file"`
+	Offline  bool   `help:"list what the file declares without connecting to anything" name:"offline"`
+}
+
+// Run prints one row per configured server.
+func (m *MCPListCmd) Run() error {
+	cfg, err := config.LoadConfig(m.Pipeline)
+	if err != nil {
+		return fmt.Errorf("could not load pipeline: %w", err)
+	}
+
+	if len(cfg.MCPServers) == 0 {
+		fmt.Printf("no mcp_servers: entries in %s\n", m.Pipeline)
+
+		return nil
+	}
+
+	ctx, cancel := withSignalCancel(context.Background())
+	defer cancel()
+
+	// Sized up front so a row's status cell is indexable whether or not
+	// anything was probed — the offline path prints no STATUS column at all.
+	statuses := make([]string, len(cfg.MCPServers))
+
+	var probeErr error
+
+	if !m.Offline {
+		statuses, probeErr = probeMCPServers(ctx, cfg)
+	}
+
+	writer := newTabWriter()
+
+	header := "NAME\tTRANSPORT\tTARGET\tAUTH\tUSED BY"
+	if !m.Offline {
+		header += "\tSTATUS"
+	}
+
+	_, _ = fmt.Fprintln(writer, header)
+
+	for i, srv := range cfg.MCPServers {
+		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s",
+			srv.Name, mcpTransport(srv), mcpTarget(srv), mcpAuth(srv), mcpUsers(cfg, srv.Name))
+
+		if !m.Offline {
+			row += "\t" + statuses[i]
+		}
+
+		_, _ = fmt.Fprintln(writer, row)
+	}
+
+	err = flush(writer)
+	if err != nil {
+		return err
+	}
+
+	// An interrupted probe leaves rows reading "✗ context canceled", which is
+	// indistinguishable from a pipeline whose every server is down — so the
+	// exit status has to be the thing that separates them (130, not 0).
+	if probeErr != nil {
+		return fmt.Errorf("mcp list: %w", probeErr)
+	}
+
+	return nil
+}
+
+// probeMCPServers connects to every server and reports what it found, one
+// status per server in configuration order, plus the context's own error so an
+// interrupted listing is not mistaken for a listing of broken servers.
+//
+// Concurrently, because the failure this command exists to surface is a server
+// that does not answer — and doing that serially means the slowest possible
+// listing is the one with the most broken servers in it, each waiting out its
+// own timeout in turn.
+func probeMCPServers(ctx context.Context, cfg *config.Config) ([]string, error) {
+	var settings *config.Preflight
+	if cfg.Defaults != nil {
+		settings = cfg.Defaults.Preflight
+	}
+
+	timeout := settings.ProbeTimeout()
+	statuses := make([]string, len(cfg.MCPServers))
+
+	var wait sync.WaitGroup
+
+	for i, srv := range cfg.MCPServers {
+		if skip := mcpUnprobable(srv); skip != "" {
+			statuses[i] = skip
+
+			continue
+		}
+
+		wait.Add(1)
+
+		go func() {
+			defer wait.Done()
+
+			probeCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+
+			tools, err := stepsmcp.ListServerTools(probeCtx, srv)
+			if err != nil {
+				statuses[i] = "✗ " + mcpStatusReason(srv.Name, err)
+
+				return
+			}
+
+			statuses[i] = fmt.Sprintf("✓ %d %s", len(tools), pluralize(len(tools), "tool"))
+		}()
+	}
+
+	wait.Wait()
+
+	return statuses, ctx.Err() //nolint:wrapcheck // the caller names the command; a bare context.Canceled is what outcome.ExitCode reads
+}
+
+// mcpUnprobable reports the status for a server this command cannot honestly
+// probe, or "" for one it can.
+//
+// A relative cwd: is resolved against the working directory of the agent step
+// whose tools are being built (see config.WithResolvedMCPCwd) — a build
+// workspace that exists only during a run. Spawning it from wherever the
+// operator happens to have run `steps mcp list` would chdir somewhere else
+// entirely, and report a server that works perfectly in a run as broken.
+func mcpUnprobable(srv config.MCPServer) string {
+	if srv.IsStdio() && srv.Cwd != "" && !filepath.IsAbs(srv.Cwd) {
+		return fmt.Sprintf("· not probed (cwd: %s resolves per step)", srv.Cwd)
+	}
+
+	return ""
+}
+
+// mcpStatusReason renders a probe failure as a table cell. It drops the copies
+// of the server's name the error carries — the row's first column is already
+// that name — because the actionable part of these messages ("run `steps mcp
+// login` …", "$TOKEN is not set") is at the END, and is what the column's width
+// budget should be spent on.
+func mcpStatusReason(name string, err error) string {
+	reason, _, _ := strings.Cut(err.Error(), "\n")
+
+	for _, noise := range []string{
+		"mcp: ",
+		fmt.Sprintf("connect to %q: ", name),
+		fmt.Sprintf("mcp server %q: ", name),
+		fmt.Sprintf("mcp server %q ", name),
+	} {
+		reason = strings.TrimPrefix(reason, noise)
+	}
+
+	return elideMiddle(reason, maxStatusWidth)
+}
+
+// maxStatusWidth is how wide the STATUS cell may get before it is elided —
+// the same budget firstLine spends on the error columns of the other tables.
+const maxStatusWidth = 70
+
+// elideMiddle drops the middle of an over-long reason rather than its tail.
+//
+// Both ends carry meaning and neither survives the other's loss: a dial
+// failure names what was attempted first ("Post https://…") and how it went
+// last ("connection refused"), and truncating from the right — which is what
+// every other column here does, where the head is the whole content — keeps
+// only the URL nobody was asking about. Runes, not bytes: half a rune in a
+// tabwriter cell miscounts the column as well as printing as garbage.
+func elideMiddle(text string, width int) string {
+	runes := []rune(text)
+	if len(runes) <= width {
+		return text
+	}
+
+	head := width / 3
+
+	return string(runes[:head]) + "…" + string(runes[len(runes)-(width-head-1):])
+}
+
+func mcpTransport(srv config.MCPServer) string {
+	if srv.IsStdio() {
+		return "stdio"
+	}
+
+	return "http"
+}
+
+// mcpTarget renders what the server actually is: the endpoint for HTTP, the
+// argv (plus any pinned working directory) for stdio.
+func mcpTarget(srv config.MCPServer) string {
+	if !srv.IsStdio() {
+		return srv.Endpoint
+	}
+
+	target := strings.Join(append([]string{srv.Command}, srv.Args...), " ")
+	if srv.Cwd != "" {
+		target += fmt.Sprintf(" (cwd: %s)", srv.Cwd)
+	}
+
+	return target
+}
+
+// mcpAuth names the auth type and, for bearer, the environment variable the
+// credential is read from — the thing to go check when it is the credential
+// that is missing. Never the value.
+func mcpAuth(srv config.MCPServer) string {
+	if srv.Auth.Type == "" || srv.Auth.Type == "none" {
+		return "none"
+	}
+
+	if srv.Auth.APIKeyEnv != "" {
+		return srv.Auth.Type + " $" + srv.Auth.APIKeyEnv
+	}
+
+	return srv.Auth.Type
+}
+
+func mcpUsers(cfg *config.Config, name string) string {
+	users := cfg.MCPServerUsers(name)
+	if len(users) == 0 {
+		return "(unused)"
+	}
+
+	return strings.Join(users, ", ")
+}
+
+// pluralize adds the English plural s, so a count reads as a phrase.
+func pluralize(count int, noun string) string {
+	if count == 1 {
+		return noun
+	}
+
+	return noun + "s"
 }
 
 // MCPToolsCmd lists the tools a configured mcp_servers: entry exposes.

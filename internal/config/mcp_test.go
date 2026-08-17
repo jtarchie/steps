@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -251,6 +252,55 @@ func TestFindMCPServer(t *testing.T) {
 	_, err = cfg.FindMCPServer("ghost")
 	if err == nil {
 		t.Fatal("FindMCPServer(ghost): expected an error")
+	}
+}
+
+func TestMCPServerUsers(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		MCPServers: []MCPServer{{Name: "github", Endpoint: "https://example.com/mcp"}, {Name: "idle", Command: "gopls"}},
+		Agents: []Agent{
+			// Two grants of the same server name it once.
+			{Name: "triager", Tools: []ToolSpec{{MCP: "github", MCPTool: "a"}, {MCP: "github", MCPTool: "b"}, {Builtin: "read_file"}}},
+			{Name: "other", Tools: []ToolSpec{{Builtin: "read_file"}}},
+		},
+		ResourceTypes: []ResourceType{
+			{Name: "issues", Config: ResourceTypeConfig{MCP: &MCPResourceConfig{Server: "github"}}},
+			{Name: "shell", Config: ResourceTypeConfig{Check: "true"}},
+		},
+	}
+
+	users := cfg.MCPServerUsers("github")
+	if want := []string{"agent triager", "resource_type issues"}; !slices.Equal(users, want) {
+		t.Errorf("MCPServerUsers(github) = %v, want %v", users, want)
+	}
+
+	if users := cfg.MCPServerUsers("idle"); len(users) != 0 {
+		t.Errorf("MCPServerUsers(idle) = %v, want nothing", users)
+	}
+}
+
+// A fix:'s own tools: is the third place an MCP grant can appear (see
+// checkFixMCPToolShapes) — a server granted only there is reachable by a step,
+// and reporting it as unused would be a lie the listing tells.
+func TestMCPServerUsersSeesFixGrants(t *testing.T) {
+	t.Parallel()
+
+	fix := &FixSpec{Agent: "fixer", Tools: []ToolSpec{{MCP: "github"}}}
+	cfg := &Config{
+		MCPServers: []MCPServer{{Name: "github", Endpoint: "https://example.com/mcp"}},
+		Tasks:      []Task{{Name: "unit", Fix: fix}},
+		Jobs: []Job{{
+			Name: "build",
+			// Two fixing steps in one job name that job once.
+			Plan: []Step{{Task: "unit", Fix: fix}, {Task: "unit", Fix: fix}},
+		}},
+	}
+
+	users := cfg.MCPServerUsers("github")
+	if want := []string{"task unit fix", "job build fix"}; !slices.Equal(users, want) {
+		t.Errorf("MCPServerUsers(github) = %v, want %v", users, want)
 	}
 }
 

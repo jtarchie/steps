@@ -77,6 +77,28 @@ A `command:` server is a local subprocess `steps` spawns and speaks newline-deli
 - **Lifecycle**: for an agent tool grant, one subprocess is spawned per agent step per grant and reaped when the step ends. For a resource-type `mcp:` backend, a fresh subprocess is spawned **per** `check`/`in`/`out` call — including every `steps watch` poll — fine for a fast-starting binary, a poor fit for one that's slow to start.
 - **Diagnostics**: the subprocess's stderr is logged at debug level (`--log-level=debug`), under `mcp.stdio.stderr` with the server's name attached — the only way to see why a stdio server failed to start.
 
+## Taking inventory: `steps mcp list`
+
+What servers does this pipeline configure, who uses each one, and are they working *here*?
+
+```bash
+steps mcp list pipeline.yml
+```
+
+```
+NAME    TRANSPORT  TARGET                              AUTH                USED BY                     STATUS
+github  http       https://api.githubcopilot.com/mcp/  bearer $GITHUB_PAT  agent triager               ✗ environment variable "GITHUB_PAT" (api_key_env) is not set
+linear  http       https://mcp.linear.app/mcp          oauth               resource_type linear-issue  ✓ 24 tools
+gopls   stdio      gopls mcp (cwd: repo)               none                agent coder                 · not probed (cwd: repo resolves per step)
+```
+
+- **It connects, by default.** The file says a server exists; only a connection says it works — the binary is on this machine's PATH, the bearer token's env var is set, the oauth token is still good. Each server is probed concurrently, bounded by the same `defaults.preflight.timeout` a run's preflight uses.
+- **`--offline` skips every probe**, printing only what the file declares. Use it when you want the inventory instantly, or on a machine that holds none of the credentials.
+- **A relative `cwd:` is listed but not probed** (`·`). It resolves against the agent step's own working directory, which only exists while a run is happening — spawning it from your shell's directory instead would report a working server as broken.
+- **`USED BY` is the consumers**: the agents whose `tools:` grant the server, the `fix:` blocks whose own `tools:` grant it, and the resource types whose `mcp:` backend calls it. `(unused)` means nothing in this pipeline can reach it.
+- **`AUTH` names the env var, never the value** — `bearer $GITHUB_PAT` is the variable to go check.
+- **It reports; it does not gate.** A server that doesn't answer is a row with an ✗ and a zero exit status. `steps preflight` is the verb that fails on one, and `steps validate` is the one that checks the file.
+
 ## Discovering a server's tools: `steps mcp tools`
 
 Before writing a tool reference or a resource type's `mcp:` block, find out what a server actually exposes — its tool names and argument schemas are not something to guess:

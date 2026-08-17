@@ -70,7 +70,7 @@ See [`docs/resources.md`](docs/resources.md) for other resource types and the `c
 | `steps watch <pipeline>` | Poll `trigger: true` resources and run affected jobs. |
 | `steps test <pipeline>` | Run every job and check `assert:` directives. |
 | `steps web <pipeline>...` | Serve a local browser UI over the same state ([docs](docs/web.md)). |
-| `steps mcp tools\|login` | Inspect or authorize `mcp_servers:` entries. |
+| `steps mcp list\|tools\|login` | List, inspect, or authorize `mcp_servers:` entries. |
 
 Exit codes: `0` success, `1` a step failed, `2` the pipeline could not be run (config or infrastructure), `130` interrupted.
 

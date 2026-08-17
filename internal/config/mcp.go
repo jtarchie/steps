@@ -1,12 +1,13 @@
 package config
 
 // The mcp_servers: entry — transport, credentials, cwd resolution — plus the
-// two places a config can point at one: an agent's tool grant and a resource
-// type's check/in/out backend.
+// places a config can point at one: an agent's tool grant, a fix:'s own tool
+// grant, and a resource type's check/in/out backend.
 
 import (
 	"log/slog"
 	"path/filepath"
+	"slices"
 )
 
 // MCPResourceConfig backs a resource type's check/in/out with calls to a
@@ -183,4 +184,96 @@ func (c *Config) FindMCPServer(name string) (*MCPServer, error) {
 	}
 
 	return nil, notFound("mcp_servers entry", name, names(c.MCPServers, func(s MCPServer) string { return s.Name }))
+}
+
+// MCPServerUsers names everything that references the mcp_servers: entry
+// called name: the agents whose tools: grant it, the fix: blocks (on a tasks:
+// entry or on a step) whose own tools: grant it, and the resource types whose
+// mcp: backend calls it. Those are every place an MCP grant may appear — a
+// step's own tools: cannot introduce one, see rejectInlineMCPTools.
+//
+// Each user is named once however many of the server's tools it grants, and a
+// job is named once however many of its steps fix with it: the question this
+// answers is "who reaches this server", not "how often".
+//
+// A server with no users is configured and unreachable by any step, which is
+// the kind of thing a listing exists to make visible — so a grant this misses
+// is a server wrongly reported as dead weight.
+func (c *Config) MCPServerUsers(name string) []string {
+	var users []string
+
+	seen := map[string]bool{}
+
+	for _, user := range slices.Concat(
+		c.agentMCPUsers(name), c.fixMCPUsers(name), c.resourceTypeMCPUsers(name),
+	) {
+		if !seen[user] {
+			seen[user] = true
+
+			users = append(users, user)
+		}
+	}
+
+	return users
+}
+
+func (c *Config) agentMCPUsers(name string) []string {
+	var users []string
+
+	for _, agent := range c.Agents {
+		if grantsMCPServer(agent.Tools, name) {
+			users = append(users, "agent "+agent.Name)
+		}
+	}
+
+	return users
+}
+
+// fixMCPUsers covers both places a fix: can be written: on a tasks: entry and
+// on the step itself (which may override the task's).
+func (c *Config) fixMCPUsers(name string) []string {
+	var users []string
+
+	for i := range c.Tasks {
+		if fix := c.Tasks[i].Fix; fix != nil && grantsMCPServer(fix.Tools, name) {
+			users = append(users, "task "+c.Tasks[i].Name+" fix")
+		}
+	}
+
+	for _, job := range c.Jobs {
+		_ = job.visitSteps(func(_ string, step *Step) error {
+			if step.Fix != nil && grantsMCPServer(step.Fix.Tools, name) {
+				users = append(users, "job "+job.Name+" fix")
+			}
+
+			return nil
+		})
+	}
+
+	return users
+}
+
+func (c *Config) resourceTypeMCPUsers(name string) []string {
+	var users []string
+
+	for _, resourceType := range c.ResourceTypes {
+		if resourceType.Config.MCP != nil && resourceType.Config.MCP.Server == name {
+			users = append(users, "resource_type "+resourceType.Name)
+		}
+	}
+
+	return users
+}
+
+// grantsMCPServer reports whether a tool grant list draws from the named
+// mcp_servers: entry, in any of its three forms (one tool, a named subset,
+// or all of them — all spell the server the same way).
+func grantsMCPServer(tools []ToolSpec, name string) bool {
+	for _, tool := range tools {
+		if tool.MCP == name {
+			return true
+		}
+	}
+
+	return false
 }
