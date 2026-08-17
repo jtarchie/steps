@@ -137,7 +137,6 @@ func strPtr(s string) *string { return &s }
 func docsWrapWidth() int {
 	const maxWidth = 100
 
-	//nolint:gosec // a file descriptor is a small non-negative int; Fd() only returns uintptr
 	size, err := unix.IoctlGetWinsize(int(os.Stdout.Fd()), unix.TIOCGWINSZ)
 	if err != nil || size.Col == 0 {
 		return maxWidth

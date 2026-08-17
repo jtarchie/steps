@@ -39,7 +39,9 @@ tasks:
       - go test . -run 'Mutation' -count=1
 
   build:
-    desc: Build ./steps.
+    desc: Build ./steps. CGO_ENABLED=0 is a guard, not an optimization — the planned remote-worker shim cross-compiles this binary for any GOOS/GOARCH and pushes it over SFTP, so a transitive dep that pulls in cgo must fail the build here.
+    env:
+      CGO_ENABLED: "0"
     cmds:
       - go build -v
 
