@@ -12,24 +12,37 @@
 #       channels: []   # optional; [] (the default) is every channel the bot is in
 #       limit: 200     # optional; per-channel messages fetched per check, default 200
 #
-# Two known gaps, both inherent to a single scalar ts cursor plus
-# conversations.history's own oldest/limit shape, not something a bigger
-# limit: or a smarter filter fixes:
+# TWO WINDOWS, and keeping them apart is the whole design. `limit` messages
+# of channel history is the window this check can SEE; the cursor decides
+# what inside it is NEW. Collapsing the two — asking history for
+# `oldest=cursor` — is what made the bot unable to answer a thread: a reply
+# does not move its parent's ts, only latest_reply, so the moment anything
+# newer in ANY channel moved the cursor past the parent, history stopped
+# returning it, and conversations.replies is only ever asked about parents
+# history returned. A thread went dark as soon as it stopped being the most
+# recent thing in the workspace, which is most threads, most of the time.
 #
-#   - A reply posted to a thread whose PARENT has already scrolled behind the
-#     cursor is invisible. threadRequests (below) only re-checks threads
-#     whose parent conversations.history still returns — once that parent's
-#     ts is older than the cursor, it will never come back, so a fresh reply
-#     to an old thread is never seen. Fixing this needs the cursor to
-#     remember which threads are still "open" across checks, not just a
-#     timestamp — a real change, not a tuning knob.
-#   - More than `limit` new messages in one channel between two checks lose
-#     the overflow permanently, not just delayed to next time: the cursor
-#     advances to the newest ts this check saw (from ANY channel), so
-#     whatever conversations.history didn't return because of `limit` now
-#     sits below the new cursor and is never asked for again. Fixing this
-#     needs real Slack pagination (response_metadata.next_cursor), which
-#     this check does not do.
+# Two known gaps remain, both bounded by `limit` and both needing Slack
+# pagination (response_metadata.next_cursor) to close, which this check does
+# not do:
+#
+#   - A thread whose parent has scrolled past `limit` top-level messages in
+#     its channel is invisible, however active the thread still is. This is
+#     the residue of the bug above — no longer "as soon as the workspace
+#     moves on", but still "eventually", and how long that takes is how
+#     chatty the channel is. Raising `limit` buys more room only up to what
+#     Slack allows, and since 2025-05-29 that depends on the APP: a bot
+#     DISTRIBUTED outside the Marketplace gets 15 messages per request and
+#     one request a minute, whatever limit says, which leaves this design
+#     with almost no window at all. An internal app built for one workspace
+#     — what a self-hosted steps pipeline normally uses — is excluded from
+#     that, and honors limit as written (verified against a live workspace:
+#     limit=200 answered with a full window and has_more false).
+#   - More than `limit` new top-level messages in one channel between two
+#     checks lose the overflow permanently, not just delayed to next time:
+#     the cursor advances to the newest ts this check saw, so whatever
+#     history didn't return because of `limit` now sits below it and is
+#     never reported.
 #
 # Needs SLACK_BOT_TOKEN (a bot token, xoxb-) in the environment, for an app
 # with chat:write, channels:history, channels:read, im:history and im:read
@@ -115,45 +128,76 @@ config:
         (discovered.ok ? (discovered.channels | map((#.id)))
                        : fail("slack users.conversations: " + (discovered.error ?? "failed")));
 
-      // THE CURSOR: the last version this check reported, so it asks for
-      // what it has not seen instead of guessing a window. Empty on the
-      // first-ever check, which is what "0" covers — and what stops a cold
-      // start answering a backlog nobody is waiting on.
-      let oldest = version.ts ?? "0";
+      // THE CURSOR: the last version this check reported. It is what "new"
+      // means here — not what gets FETCHED (see the two windows above).
+      // Empty on the first-ever check, which is what "0" covers — and what
+      // stops a cold start answering a backlog nobody is waiting on.
+      let cursor = version.ts ?? "0";
+      let since = float(cursor);
 
       // One batched call instead of N serial ones: concurrent, backing off
       // on a 429, and each result carries the request that produced it, so
       // a failure names the channel.
+      //
+      // No oldest: this is the discovery window, and it has to reach behind
+      // the cursor to find the thread parents whose replies are new. limit
+      // bounds it, and Slack truncates the OLDEST end of the range, so what
+      // falls off is the far end of history rather than anything recent.
       let histories = http(channels | map((
           {url: base + "/api/conversations.history",
-           query: {channel: #, oldest: oldest, limit: limit}}
+           query: {channel: #, limit: limit}}
         )), {headers: auth, concurrency: 4, retry: retry});
 
       // Normalize both top-level messages and thread replies to the same
-      // {ch, msg} shape BEFORE filtering, so the "is this worth answering"
-      // rule — a person wrote it, it is not us, and it either mentions us
-      // or is a 1:1 DM — is written and tested in exactly one place, not
-      // once per source and at risk of drifting between them.
+      // {ch, root, msg} shape BEFORE filtering, so the "is this worth
+      // answering" rule — a person wrote it, it is not us, and it either
+      // mentions us or is a 1:1 DM — is written and tested in exactly one
+      // place, not once per source and at risk of drifting between them.
+      //
+      // root is the THREAD this message belongs to, which for a top-level
+      // message is itself. It is not decoration: the message's own ts
+      // identifies the mention and nothing else, and conversations.replies
+      // asked for a reply's ts answers with that one message — the reply,
+      // with no sign of the conversation it was written inside. Carrying the
+      // root is what lets in: fetch the actual thread, and the reply post
+      // back into it.
       let topMessages = histories | map((
           let ch = #.request.query.channel;
           let body = #.json;
           let messages = body.ok ? body.messages
             : fail("slack conversations.history " + ch + ": " + (body.error ?? "failed"));
-          messages | map(({ch: ch, msg: #}))
+          messages | map(({ch: ch, root: #.ts, msg: #}))
         )) | flatten();
 
       // conversations.history returns TOP-LEVEL messages only, so a mention
       // posted as a reply inside an existing thread is invisible above —
-      // which is most of how people actually talk to a bot. Parents carry
-      // reply_count, so this is a second batched pass over the threads that
-      // have replies. The cursor is what keeps that number small.
+      // which is most of how people actually talk to a bot. A parent carries
+      // latest_reply, so a thread with nothing new since the cursor is
+      // skipped without a call: that gate, not the discovery window, is what
+      // keeps this pass small. oldest = the cursor because here it IS the
+      // question — which replies are new — and Slack returns the parent
+      // regardless of it, so the parent filter below is not load-bearing.
+      //
+      // A parent with NO latest_reply is fetched rather than skipped. The
+      // alternative — falling back to the parent's own ts — reads an old
+      // parent as "nothing new" and puts the thread back in the dark, which
+      // is the exact bug this file exists to not have; one wasted call is
+      // the cheaper way to be wrong.
+      //
+      // Not free, and the cost is not "how much people are talking": the
+      // bot's OWN answer moves latest_reply past a cursor that only reported
+      // MENTIONS advance, so every thread it has already answered keeps
+      // qualifying — one call per answered thread per poll — until some
+      // newer mention pushes the cursor past that answer. Closing that needs
+      // the cursor to remember more than one timestamp, the same change the
+      // gaps above are waiting on.
       let threadRequests = histories | map((
           let ch = #.request.query.channel;
           (#.json.messages ?? [])
-            | filter((#.reply_count ?? 0) > 0)
+            | filter((#.reply_count ?? 0) > 0 && (!("latest_reply" in #) || float(#.latest_reply) > since))
             | map((
               {url: base + "/api/conversations.replies",
-               query: {channel: ch, ts: #.ts, oldest: oldest, limit: "200"}}
+               query: {channel: ch, ts: #.ts, oldest: cursor, limit: "200"}}
             ))
         )) | flatten();
 
@@ -166,7 +210,7 @@ config:
           let body = #.json;
           let messages = body.ok ? body.messages
             : fail("slack conversations.replies " + ch + ": " + (body.error ?? "failed"));
-          messages | filter(#.ts != parent) | map(({ch: ch, msg: #}))
+          messages | filter(#.ts != parent) | map(({ch: ch, root: parent, msg: #}))
         )) | flatten();
 
       // A message is worth answering when a person wrote it, it is not us,
@@ -178,10 +222,22 @@ config:
       // reads "<@UBOT> has joined the channel", which CONTAINS the mention,
       // so /invite would otherwise answer itself once per channel, forever.
       // bot_id catches relays and our own broadcasts.
+      //
+      // Newness is asserted here, not delegated to the request: the
+      // discovery window deliberately reaches behind the cursor, so
+      // everything it re-sees would otherwise be reported again on every
+      // poll. (Nothing would be answered twice — a version already recorded
+      // triggers nothing — but a check that re-reports its whole window
+      // every poll is a check whose report says nothing about what changed.)
+      // It comes FIRST because it is the cheapest and by far the most
+      // selective of the three: the window is `limit` messages per channel
+      // regardless of traffic, and in a steady state nearly all of them are
+      // old.
       let versions = concat(topMessages, threadMessages)
+        | filter(float(#.msg.ts) > since)
         | filter(!("subtype" in #.msg) && !("bot_id" in #.msg) && #.msg.user != me)
         | filter(hasPrefix(#.ch, "D") || ((#.msg.text ?? "") contains ("<@" + me + ">")))
-        | map(({channel: #.ch, ts: #.msg.ts}));
+        | map(({channel: #.ch, ts: #.msg.ts, thread_ts: #.root}));
 
       // Oldest first, the ordering a check owes: Slack answers newest-first,
       // and across channels there is no single reversal that would do it. A
@@ -191,12 +247,27 @@ config:
     # Both files are written here: a downstream put needs the ids, and an
     # agent step reads the thread as Slack's own JSON rather than a
     # rendering of it.
+    #
+    # thread_ts, NOT ts: conversations.replies is a thread endpoint, and the
+    # ts of a reply is not a thread id — asked for one it answers with that
+    # single message and nothing else, so an agent handed "the thread" got
+    # the sentence that named it and no idea what it was about. Falling back
+    # to ts covers a version recorded before this field existed, and is
+    # exactly right for a top-level mention, where the two are the same.
+    #
+    # A third gap, and the one that bites hardest when it bites: limit is
+    # explicit rather than left to Slack's default (1000 — but 15 for a bot
+    # distributed outside the Marketplace, per the note above), and
+    # conversations.replies returns the
+    # EARLIEST messages of the range first. So a thread longer than limit is
+    # truncated at the NEW end — the end the mention is at. Closing it needs
+    # the same pagination the check does not do.
     in: |
       let base = source.base_url ?? "https://slack.com";
       let thread = http({
         url: base + "/api/conversations.replies",
         headers: {Authorization: "Bearer " + env(source.token_env ?? "SLACK_BOT_TOKEN")},
-        query: {channel: version.channel, ts: version.ts},
+        query: {channel: version.channel, ts: version.thread_ts ?? version.ts, limit: "1000"},
       }).json;
 
       thread.ok ? {

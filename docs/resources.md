@@ -34,7 +34,7 @@ It fetches the exact commit the plan pinned, shallowly, so a branch that moves m
 
 ## The built-in `slack-mentions` and `slack-reply` types
 
-Two more built-ins, both [expression-backed](expr.md) — Slack is a JSON HTTP API and nothing else, so there is no container and no `curl`/`jq` dependency to carry. `slack-mentions` is get-only: every unanswered `@mention` of the bot in a channel, plus every message in a 1:1 DM (no `@mention` required there — nobody types one in a 1:1 chat), oldest first, as a `{channel, ts}` version. `slack-reply` is put-only: posts a message, threaded or top-level.
+Two more built-ins, both [expression-backed](expr.md) — Slack is a JSON HTTP API and nothing else, so there is no container and no `curl`/`jq` dependency to carry. `slack-mentions` is get-only: every unanswered `@mention` of the bot in a channel, plus every message in a 1:1 DM (no `@mention` required there — nobody types one in a 1:1 chat), oldest first, as a `{channel, ts, thread_ts}` version — `ts` is the message that named the bot, `thread_ts` the thread it lives in (the same value, for a top-level message). `slack-reply` is put-only: posts a message, threaded or top-level.
 
 Cold start does not mean a backlog: like every resource, the first-ever check of a freshly-deployed `slack-mentions` records everything it finds but answers none of it — see [Version history](#version-history) below. That rule is a `steps watch` behavior; `steps run` has no persisted cursor and always asks Slack for everything, every time.
 
@@ -71,7 +71,7 @@ jobs:
     run: |
       set -eu
       grep -o '"channel": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > thread/channel
-      grep -o '"ts": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > thread/ts
+      grep -o '"thread_ts": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > thread/ts
       echo "got it, working on it" > answer/reply.md
   - put: reply
     inputs: [thread, answer]
@@ -90,12 +90,15 @@ Both need `SLACK_BOT_TOKEN` (a bot token, `xoxb-`) in the environment, for an ap
 
 `token_env` alone isn't enough to widen what a resource can read — `env()` only sees names its resource TYPE already declares (both types declare `SLACK_BOT_TOKEN`, shared by every resource of that type), which is what makes it safe for a shared, possibly-external type to hand-in-hand with any expr type at all. A resource naming a different token also needs `env:` *on the resource itself* to add that name to its own allow-list — `env:` and `source:` together, as in `reply-as-support-bot` above. Naming `token_env` without the matching `env:` entry is a run-time error (`env(...): not in this resource type's env:`), not a silent fall-back to `SLACK_BOT_TOKEN`. (`env:` on a resource only means something for an expr- or shell-backed type — an mcp-backed type authenticates via its `mcp_servers:` entry and rejects `env:` at load time.)
 
-**Two known gaps**, both inherent to a single `ts` cursor plus `conversations.history`'s own `oldest`/`limit` shape — not bugs a bigger `limit:` or a smarter filter closes:
+**A mention inside a thread arrives with its thread.** `mentions/thread.json` is the whole conversation the mention was written in (Slack's `conversations.replies` payload: parent first, then replies), fetched by `thread_ts` — asking Slack for a *reply's* `ts` answers with that one message and nothing around it, which is an agent being handed a question with no context. Post the answer back with `thread_ts` too, as the example above does: a reply's `ts` is not a thread id.
 
-- A reply to a thread whose *parent* message has already scrolled behind the cursor is never seen. The check only re-walks a thread when its parent still comes back from `conversations.history`; once the parent ages past the cursor, a fresh reply to that old thread is invisible forever.
-- More than `limit` new messages in one channel between two checks lose the overflow *permanently*, not just delayed — the cursor advances to the newest `ts` seen anywhere, so whatever `limit` cut off now sits below the new cursor and is never asked for again.
+**A mention inside a thread counts**, and `limit:` is what decides whether it can be found. Slack's `conversations.history` returns top-level messages only, and a reply does not change its parent's `ts` — so the window the check reads channel history over is `limit` messages, deliberately *wider* than the cursor, and the cursor decides only what inside that window is new. A thread whose parent carries a `latest_reply` newer than the cursor is read; every other thread costs nothing.
 
-Both would need the cursor to carry more than one timestamp (open thread tracking, real Slack pagination) to close — a larger change, not attempted here.
+**Two known gaps** remain, both bounded by `limit:` and both needing Slack pagination to close:
+
+- A thread whose parent has scrolled past `limit` messages of its channel's history is invisible, however active the thread still is. How long that takes is how chatty the channel is; raising `limit:` buys more room, but only as much as Slack allows: since 2025-05-29 a bot **distributed** outside the Marketplace is capped at 15 messages per request and one request a minute, whatever `limit:` says. An internal app built for a single workspace — the usual case for a self-hosted pipeline — is excluded from that cap and honors `limit:` as written.
+- `mentions/thread.json` is truncated at its *newest* end for a thread longer than 1000 messages — Slack returns a thread oldest-first — so the mention itself can be missing from a very long thread.
+- More than `limit` new top-level messages in one channel between two checks lose the overflow *permanently*, not just delayed — the cursor advances to the newest `ts` seen anywhere, so whatever `limit` cut off now sits below the new cursor and is never asked for again.
 
 `slack-reply`'s `put:` reads its message from files an upstream step writes, not `params:` — `file()` takes what `inputs:` put on disk directly, so a reply containing backticks or `$(…)` is data, never something a shell might run:
 
