@@ -110,18 +110,7 @@ func (r *LocalRunner) Drain(ctx context.Context, pipelines []*Pipeline) {
 func (r *LocalRunner) drainPipeline(ctx context.Context, target *Pipeline) {
 	slog.Info("web.pipeline.drain_start", "pipeline", target.Slug)
 
-	// Anything a previous process left claimed-but-unfinished is stranded
-	// until something releases it — the same recovery `steps watch` does at
-	// startup, for the same reason.
-	err := target.Store.ResetStaleRunning(ctx)
-	if err != nil {
-		slog.Error("web.reset_stale", "pipeline", target.Slug, "error", err)
-	}
-
-	err = target.Store.SyncSerialGroups(ctx, target.Cfg.SerialGroupsByJob())
-	if err != nil {
-		slog.Error("web.sync_serial_groups", "pipeline", target.Slug, "error", err)
-	}
+	r.prepareQueue(ctx, target)
 
 	for {
 		if ctx.Err() != nil {
@@ -138,6 +127,31 @@ func (r *LocalRunner) drainPipeline(ctx context.Context, target *Pipeline) {
 			return
 		case <-time.After(drainIdleBackoff):
 		}
+	}
+}
+
+// prepareQueue is the startup recovery and config sync `steps watch` does,
+// mirrored here so admission decides the same way regardless of which front
+// end drains the queue. ClaimNextJob reads every input from SQL, so a table
+// this forgets to sync isn't a missing feature — it's a silently different
+// default (job_concurrency's COALESCE pins an unsynced job to one build).
+func (r *LocalRunner) prepareQueue(ctx context.Context, target *Pipeline) {
+	// Anything a previous process left claimed-but-unfinished is stranded
+	// until something releases it — the same recovery `steps watch` does at
+	// startup, for the same reason.
+	err := target.Store.ResetStaleRunning(ctx)
+	if err != nil {
+		slog.Error("web.reset_stale", "pipeline", target.Slug, "error", err)
+	}
+
+	err = target.Store.SyncSerialGroups(ctx, target.Cfg.SerialGroupsByJob())
+	if err != nil {
+		slog.Error("web.sync_serial_groups", "pipeline", target.Slug, "error", err)
+	}
+
+	err = target.Store.SyncMaxInFlight(ctx, target.Cfg.MaxInFlightByJob())
+	if err != nil {
+		slog.Error("web.sync_max_in_flight", "pipeline", target.Slug, "error", err)
 	}
 }
 
