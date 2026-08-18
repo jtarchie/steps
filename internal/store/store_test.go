@@ -557,7 +557,7 @@ func TestNodeTranscriptRoundTrip(t *testing.T) {
 
 	mustRecordNode(t, store, "build", "abc123")
 
-	err = store.SaveNodeTranscript(ctx, "abc123", "build", `[{"type":"text","text":"hi"}]`)
+	err = store.SaveNodeTranscript(ctx, "abc123", `[{"type":"text","text":"hi"}]`)
 	if err != nil {
 		t.Fatalf("SaveNodeTranscript: %v", err)
 	}
@@ -586,7 +586,7 @@ func TestNodeTranscriptReplace(t *testing.T) {
 	mustRecordNode(t, store, "build", "abc123")
 
 	for _, transcript := range []string{`[{"type":"text","text":"hi"}]`, `[{"type":"text","text":"replaced"}]`} {
-		err := store.SaveNodeTranscript(ctx, "abc123", "build", transcript)
+		err := store.SaveNodeTranscript(ctx, "abc123", transcript)
 		if err != nil {
 			t.Fatalf("SaveNodeTranscript: %v", err)
 		}

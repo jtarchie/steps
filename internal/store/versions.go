@@ -235,11 +235,11 @@ func (s *Store) RecordConsumedMark(ctx context.Context, jobName, resourceName st
 	}
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO job_version_cursor (job_name, resource_name, check_order, consumed_at)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO job_version_cursor (job_name, resource_name, check_order)
+		VALUES (?, ?, ?)
 		ON CONFLICT (job_name, resource_name)
-		DO UPDATE SET check_order = MAX(check_order, excluded.check_order), consumed_at = excluded.consumed_at
-	`, jobName, resourceName, order, nowNano())
+		DO UPDATE SET check_order = MAX(check_order, excluded.check_order)
+	`, jobName, resourceName, order)
 	if err != nil {
 		return fmt.Errorf("could not record the cursor for job %q: %w", jobName, err)
 	}

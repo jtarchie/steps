@@ -56,9 +56,10 @@ CREATE TABLE IF NOT EXISTS nodes (
     created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_nodes_parent_hash ON nodes(parent_hash);
--- Retention scans nodes by job and age, and sweeps node_content by what nodes
--- still point at; both are full scans without these.
-CREATE INDEX IF NOT EXISTS idx_nodes_job_created ON nodes(job_name, created_at);
+-- Retention scans nodes by job (ordering by rowid, not created_at — see
+-- pruneNodes) and sweeps node_content by what nodes still point at; both are
+-- full scans without these.
+CREATE INDEX IF NOT EXISTS idx_nodes_job ON nodes(job_name);
 CREATE INDEX IF NOT EXISTS idx_nodes_content_hash ON nodes(content_hash);
 
 -- root_hash names a node and deliberately does not reference one, for two
@@ -138,7 +139,6 @@ CREATE TABLE IF NOT EXISTS resource_versions (
     resource_name TEXT NOT NULL,
     version_json  TEXT NOT NULL,
     check_order   INTEGER NOT NULL,
-    first_seen_at TEXT NOT NULL,
     from_check    INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (resource_name, version_json)
 );
@@ -206,7 +206,6 @@ CREATE TABLE IF NOT EXISTS job_version_cursor (
     job_name      TEXT NOT NULL,
     resource_name TEXT NOT NULL,
     check_order   INTEGER NOT NULL,
-    consumed_at   TEXT NOT NULL,
     PRIMARY KEY (job_name, resource_name)
 );
 
@@ -292,16 +291,16 @@ CREATE TABLE IF NOT EXISTS job_breaker (
 -- Deliberately append-only and run-scoped, unlike content-addressed nodes:
 -- two runs sharing a cached node still have their own separate stories about
 -- reaching it.
--- job_name stays denormalized here, and step_name/step_kind with it. They look
--- like copies of what (run_id, step_index) already determines, and step_name is
--- not: a fan-out cell reports its PARENT's plan index and distinguishes itself
--- by name, so several rows share an index and only the name tells them apart.
--- job_name alone is genuinely derivable — measured at 14 bytes an event, about
--- 1% of what a build writes, which does not pay for a join on every event read.
+-- step_name/step_kind stay denormalized. They look like copies of what
+-- (run_id, step_index) already determines, and step_name is not: a fan-out
+-- cell reports its PARENT's plan index and distinguishes itself by name, so
+-- several rows share an index and only the name tells them apart. job_name
+-- used to ride along too, on the argument that it spared a join — but nothing
+-- ever read it back, so it was 14 bytes an event buying nothing (runs.job_name
+-- is there for anyone who needs it).
 CREATE TABLE IF NOT EXISTS run_events (
     seq        INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id     TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    job_name   TEXT NOT NULL,
     type       TEXT NOT NULL,
     step_index INTEGER NOT NULL,
     step_name  TEXT NOT NULL,
@@ -370,19 +369,17 @@ CREATE TABLE IF NOT EXISTS agent_usage (
 CREATE INDEX IF NOT EXISTS idx_agent_usage_run ON agent_usage(run_id, step_index);
 
 -- Full agent conversation transcripts, one row per agent node, kept OUT of
--- nodes.result deliberately: result is loaded by planners and routed-to
--- successors on every run and must stay bounded, while a transcript is read
--- on demand ("what did this step actually say and do"). Same hash key as
--- nodes; replaces on re-record like nodes does.
+-- nodes.result deliberately: result rides along on every node listing (the
+-- CLI's node table, the web UI's node and run pages) and must stay bounded,
+-- while a transcript is read on demand ("what did this step actually say and
+-- do"). Same hash key as nodes; replaces on re-record like nodes does.
 --
 -- The largest single value the schema stores, and the one whose bound was
 -- missing: internal/agent caps a single tool RESULT, but a conversation has
 -- unboundedly many turns, so the row itself needs MaxTranscriptBytes.
 CREATE TABLE IF NOT EXISTS node_transcripts (
     hash       TEXT PRIMARY KEY REFERENCES nodes(hash) ON DELETE CASCADE,
-    job_name   TEXT NOT NULL,
-    transcript TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    transcript TEXT NOT NULL
 );
 `
 

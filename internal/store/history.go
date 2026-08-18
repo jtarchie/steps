@@ -124,12 +124,12 @@ func insertNewVersions(ctx context.Context, tx *sql.Tx, resourceName string, ver
 		}
 
 		result, err := tx.ExecContext(ctx, `
-			INSERT INTO resource_versions (resource_name, version_json, check_order, first_seen_at, from_check)
-			VALUES (?, ?, ?, ?, 1)
+			INSERT INTO resource_versions (resource_name, version_json, check_order, from_check)
+			VALUES (?, ?, ?, 1)
 			ON CONFLICT (resource_name, version_json)
-			DO UPDATE SET from_check = 1, check_order = excluded.check_order, first_seen_at = excluded.first_seen_at
+			DO UPDATE SET from_check = 1, check_order = excluded.check_order
 			WHERE resource_versions.from_check = 0
-		`, resourceName, encoded, next, now())
+		`, resourceName, encoded, next)
 		if err != nil {
 			return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
 		}
@@ -372,10 +372,10 @@ func ensureVersion(ctx context.Context, tx *sql.Tx, resourceName, versionJSON st
 	// from_check stays 0: this records that a version was USED, which is not
 	// the same as a check reporting what exists. See ResourceVersions.
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO resource_versions (resource_name, version_json, check_order, first_seen_at, from_check)
-		VALUES (?, ?, ?, ?, 0)
+		INSERT INTO resource_versions (resource_name, version_json, check_order, from_check)
+		VALUES (?, ?, ?, 0)
 		ON CONFLICT (resource_name, version_json) DO NOTHING
-	`, resourceName, versionJSON, next, now())
+	`, resourceName, versionJSON, next)
 	if err != nil {
 		return fmt.Errorf("could not record version for %q: %w", resourceName, err)
 	}

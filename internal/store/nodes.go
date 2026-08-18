@@ -354,24 +354,22 @@ func truncateUTF8(s string, limit int) string {
 
 // SaveNodeTranscript stores (or replaces) an agent node's full conversation
 // transcript, a JSON array of events. Kept in its own table so nodes.result —
-// which planners and routed-to successors load on every run — stays bounded;
-// a transcript is read on demand instead.
+// which rides along on every node listing — stays bounded; a transcript is
+// read on demand instead.
 //
 // Truncated at MaxTranscriptBytes, keeping the HEAD: the task, the first tool
 // calls and the early decisions are what explain what a step was doing, and a
 // conversation that ran long enough to hit the cap is one whose middle is
 // mostly repetition.
-func (s *Store) SaveNodeTranscript(ctx context.Context, hash, jobName, transcript string) error {
+func (s *Store) SaveNodeTranscript(ctx context.Context, hash, transcript string) error {
 	transcript = truncateTranscript(transcript)
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO node_transcripts (hash, job_name, transcript, created_at)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO node_transcripts (hash, transcript)
+		VALUES (?, ?)
 		ON CONFLICT (hash) DO UPDATE SET
-			job_name = excluded.job_name,
-			transcript = excluded.transcript,
-			created_at = excluded.created_at
-	`, hash, jobName, transcript, now())
+			transcript = excluded.transcript
+	`, hash, transcript)
 	if err != nil {
 		return fmt.Errorf("could not save transcript for node %q: %w", hash, err)
 	}

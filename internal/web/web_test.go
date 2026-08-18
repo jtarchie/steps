@@ -132,14 +132,14 @@ func TestRunTranscriptRendersStepsAndAgentTurns(t *testing.T) {
 	}
 
 	appendEvents(t, pipeline.Store, "run-1", []store.RunEventRow{
-		{Type: events.TypeJobStarted, JobName: "build", StepIndex: -1},
-		{Type: events.TypeStepStarted, JobName: "build", StepIndex: 0, StepName: "repo", StepKind: "get"},
-		{Type: events.TypeStepSkipped, JobName: "build", StepIndex: 0, StepName: "repo", StepKind: "get", Status: "skipped", Hash: "cafe1234567", Text: "unchanged — replayed from cache"},
-		{Type: events.TypeStepStarted, JobName: "build", StepIndex: 1, StepName: "review", StepKind: "agent"},
-		{Type: events.TypeAgentText, JobName: "build", StepIndex: 1, StepName: "review", Text: "Reading the diff first."},
-		{Type: events.TypeAgentCall, JobName: "build", StepIndex: 1, StepName: "review", Name: "read_file", Detail: `{"path":"main.go"}`},
-		{Type: events.TypeAgentSubagent, JobName: "build", StepIndex: 1, StepName: "review", Name: "test-runner", Text: "run the suite", Status: "depth:1"},
-		{Type: events.TypeStepFinished, JobName: "build", StepIndex: 1, StepName: "review", StepKind: "agent", Status: "succeeded", Hash: "beef7654321", DurationMS: 4200},
+		{Type: events.TypeJobStarted, StepIndex: -1},
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "repo", StepKind: "get"},
+		{Type: events.TypeStepSkipped, StepIndex: 0, StepName: "repo", StepKind: "get", Status: "skipped", Hash: "cafe1234567", Text: "unchanged — replayed from cache"},
+		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "review", StepKind: "agent"},
+		{Type: events.TypeAgentText, StepIndex: 1, StepName: "review", Text: "Reading the diff first."},
+		{Type: events.TypeAgentCall, StepIndex: 1, StepName: "review", Name: "read_file", Detail: `{"path":"main.go"}`},
+		{Type: events.TypeAgentSubagent, StepIndex: 1, StepName: "review", Name: "test-runner", Text: "run the suite", Status: "depth:1"},
+		{Type: events.TypeStepFinished, StepIndex: 1, StepName: "review", StepKind: "agent", Status: "succeeded", Hash: "beef7654321", DurationMS: 4200},
 	})
 
 	err = pipeline.Store.FinishRun(ctx, "run-1", "succeeded")
@@ -248,7 +248,7 @@ func TestLiveStreamReplaysThenCloses(t *testing.T) {
 	}
 
 	appendEvents(t, pipeline.Store, "run-2", []store.RunEventRow{
-		{Type: events.TypeStepStarted, JobName: "build", StepIndex: 0, StepName: "repo", StepKind: "get"},
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "repo", StepKind: "get"},
 	})
 
 	err = pipeline.Store.FinishRun(ctx, "run-2", "succeeded")
@@ -378,8 +378,8 @@ func TestStepAnchors(t *testing.T) {
 	}
 
 	appendEvents(t, pipeline.Store, "anchored", []store.RunEventRow{
-		{Type: events.TypeStepStarted, JobName: "build", StepIndex: 0, StepName: "review[security]", StepKind: "agent"},
-		{Type: events.TypeStepFinished, JobName: "build", StepIndex: 0, StepName: "review[security]", StepKind: "agent", Status: "succeeded"},
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review[security]", StepKind: "agent"},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "review[security]", StepKind: "agent", Status: "succeeded"},
 	})
 
 	_, body := get(t, server, "/p/demo/runs/anchored")
@@ -520,11 +520,11 @@ func TestTranscriptShowsTaskOutput(t *testing.T) {
 	}
 
 	appendEvents(t, pipeline.Store, "noisy", []store.RunEventRow{
-		{Type: events.TypeStepStarted, JobName: "build", StepIndex: 0, StepName: "compile", StepKind: "task"},
-		{Type: events.TypeStepOutput, JobName: "build", StepIndex: 0, StepName: "compile", StepKind: "task", Text: "compiling 42 files"},
-		{Type: events.TypeStepFinished, JobName: "build", StepIndex: 0, StepName: "compile", StepKind: "task", Status: "succeeded", DurationMS: 30},
-		{Type: events.TypeStepStarted, JobName: "build", StepIndex: 1, StepName: "silent", StepKind: "task"},
-		{Type: events.TypeStepFinished, JobName: "build", StepIndex: 1, StepName: "silent", StepKind: "task", Status: "succeeded", DurationMS: 5},
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task"},
+		{Type: events.TypeStepOutput, StepIndex: 0, StepName: "compile", StepKind: "task", Text: "compiling 42 files"},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "compile", StepKind: "task", Status: "succeeded", DurationMS: 30},
+		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "silent", StepKind: "task"},
+		{Type: events.TypeStepFinished, StepIndex: 1, StepName: "silent", StepKind: "task", Status: "succeeded", DurationMS: 5},
 	})
 
 	err = pipeline.Store.FinishRun(ctx, "noisy", "succeeded")

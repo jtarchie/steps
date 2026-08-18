@@ -29,7 +29,6 @@ func StoreSink(st *store.Store) func(events.Event) {
 	return func(event events.Event) {
 		err := st.AppendRunEvent(context.Background(), store.RunEventRow{
 			RunID:      event.RunID,
-			JobName:    event.Job,
 			Type:       event.Type,
 			StepIndex:  event.StepIndex,
 			StepName:   event.StepName,

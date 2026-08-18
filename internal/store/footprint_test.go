@@ -73,7 +73,7 @@ var syntheticPlan = []syntheticStep{
 // resume record and the pair of events a step publishes.
 func syntheticStepRecords(
 	ctx context.Context, t *testing.T, store *Store,
-	runID, jobName string, index int, step syntheticStep, hash string,
+	runID string, index int, step syntheticStep, hash string,
 ) {
 	t.Helper()
 
@@ -84,7 +84,7 @@ func syntheticStepRecords(
 
 	for _, eventType := range []string{"step_started", "step_finished"} {
 		err = store.AppendRunEvent(ctx, RunEventRow{
-			RunID: runID, JobName: jobName, Type: eventType, StepIndex: index,
+			RunID: runID, Type: eventType, StepIndex: index,
 			StepName: step.name, StepKind: step.kind, Status: "succeeded",
 			Hash: hash, DurationMS: 1_234, At: time.Now(),
 		})
@@ -149,7 +149,7 @@ func syntheticBuild(ctx context.Context, t *testing.T, store *Store, jobName str
 		hashes = append(hashes, hash)
 		parent = hash
 
-		syntheticStepRecords(ctx, t, store, runID, jobName, index, step, hash)
+		syntheticStepRecords(ctx, t, store, runID, index, step, hash)
 	}
 
 	err = store.RecordAgentUsage(ctx, AgentUsage{
@@ -162,7 +162,7 @@ func syntheticBuild(ctx context.Context, t *testing.T, store *Store, jobName str
 		t.Fatalf("RecordAgentUsage: %v", err)
 	}
 
-	err = store.SaveNodeTranscript(ctx, hashes[3], jobName, transcriptJSON(transcriptBytes))
+	err = store.SaveNodeTranscript(ctx, hashes[3], transcriptJSON(transcriptBytes))
 	if err != nil {
 		t.Fatalf("SaveNodeTranscript: %v", err)
 	}
@@ -530,7 +530,7 @@ func TestFootprintTranscriptIsCapped(t *testing.T) {
 		t.Fatalf("RecordNode: %v", err)
 	}
 
-	err = store.SaveNodeTranscript(ctx, strings.Repeat("a", 64), "job",
+	err = store.SaveNodeTranscript(ctx, strings.Repeat("a", 64),
 		transcriptJSON(MaxTranscriptBytes*3))
 	if err != nil {
 		t.Fatalf("SaveNodeTranscript: %v", err)

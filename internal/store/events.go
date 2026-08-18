@@ -15,7 +15,6 @@ import (
 type RunEventRow struct {
 	Seq        int64
 	RunID      string
-	JobName    string
 	Type       string
 	StepIndex  int
 	StepName   string
@@ -50,9 +49,9 @@ const MaxEventTextBytes = 64 * 1024
 func (s *Store) AppendRunEvent(ctx context.Context, row RunEventRow) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO run_events
-			(run_id, job_name, type, step_index, step_name, step_kind, status, hash, text, name, detail, duration_ms, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, row.RunID, row.JobName, row.Type, row.StepIndex, row.StepName, row.StepKind,
+			(run_id, type, step_index, step_name, step_kind, status, hash, text, name, detail, duration_ms, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, row.RunID, row.Type, row.StepIndex, row.StepName, row.StepKind,
 		row.Status, row.Hash,
 		truncateUTF8(row.Text, MaxEventTextBytes),
 		truncateUTF8(row.Name, MaxEventTextBytes),
@@ -71,7 +70,7 @@ func (s *Store) AppendRunEvent(ctx context.Context, row RunEventRow) error {
 // on what it missed without re-reading what it already has.
 func (s *Store) RunEvents(ctx context.Context, runID string, afterSeq int64, limit int) ([]RunEventRow, error) {
 	return collect(ctx, s.db, "run events", `
-		SELECT seq, run_id, job_name, type, step_index, step_name, step_kind,
+		SELECT seq, run_id, type, step_index, step_name, step_kind,
 		       status, hash, text, name, detail, duration_ms, created_at
 		FROM run_events
 		WHERE run_id = ? AND seq > ?
@@ -83,7 +82,7 @@ func (s *Store) RunEvents(ctx context.Context, runID string, afterSeq int64, lim
 			createdAt string
 		)
 
-		err := rows.Scan(&row.Seq, &row.RunID, &row.JobName, &row.Type, &row.StepIndex,
+		err := rows.Scan(&row.Seq, &row.RunID, &row.Type, &row.StepIndex,
 			&row.StepName, &row.StepKind, &row.Status, &row.Hash, &row.Text,
 			&row.Name, &row.Detail, &row.DurationMS, &createdAt)
 
