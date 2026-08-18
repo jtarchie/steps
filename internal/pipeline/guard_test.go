@@ -83,6 +83,88 @@ func TestEvaluateStepGuard(t *testing.T) {
 	}
 }
 
+// TestEvaluateStepGuardReadsAnUnproducedInputAsAbsent covers the input an
+// earlier guarded step never wrote: the guard must get to run and answer
+// false, rather than failing on the missing directory before it runs. The
+// step's own staging is unchanged — only the guard's view tolerates this.
+func TestEvaluateStepGuardReadsAnUnproducedInputAsAbsent(t *testing.T) {
+	t.Parallel()
+
+	bw, _ := guardTestBuild(t)
+
+	// "answer" is never produced in this build; "facts" is.
+	step := config.Step{
+		Task: "t", Run: "true",
+		Inputs: config.Inputs("facts", "answer"),
+		When:   &config.WhenSpec{Run: "test -s answer/reply.md"},
+	}
+
+	got, err := evaluateStepGuard(context.Background(), &config.Config{}, step, bw)
+	if err != nil {
+		t.Fatalf("an input the build never produced is a false guard, not an error: %v", err)
+	}
+
+	if got {
+		t.Error("guard should be false when the input it tests was never produced")
+	}
+}
+
+// TestEvaluateStepGuardSeesTheViewTheStepGets covers the other half of the
+// leniency: an input that IS produced must reach the guard, whatever spelling
+// the step used to declare it. Reading the step's own inputs: list is not that
+// view — a task can inherit its inputs from the tasks: entry it references,
+// and input_mapping renames a declared input onto the plan artifact it draws
+// from. Both used to leave the guard staring at an empty directory and
+// answering a permanent, silent false.
+func TestEvaluateStepGuardSeesTheViewTheStepGets(t *testing.T) {
+	t.Parallel()
+
+	bw, dir := guardTestBuild(t)
+
+	err := os.WriteFile(filepath.Join(dir, "risk.txt"), []byte("high\n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{Tasks: []config.Task{
+		{Name: "audit", Run: "true", Inputs: config.Inputs("facts")},
+	}}
+
+	cases := []struct {
+		name string
+		step config.Step
+	}{
+		{
+			name: "inputs inherited from the tasks: entry",
+			step: config.Step{Task: "audit", When: &config.WhenSpec{Run: "grep -q high facts/risk.txt"}},
+		},
+		{
+			name: "input_mapping names the artifact the store holds",
+			step: config.Step{
+				Task: "t", Run: "true",
+				Inputs:       config.Inputs("evidence"),
+				InputMapping: map[string]string{"evidence": "facts"},
+				When:         &config.WhenSpec{Run: "grep -q high evidence/risk.txt"},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := evaluateStepGuard(context.Background(), cfg, tc.step, bw)
+			if err != nil {
+				t.Fatalf("evaluateStepGuard: %v", err)
+			}
+
+			if !got {
+				t.Error("guard read its input as absent, but the step's own space would have materialized it")
+			}
+		})
+	}
+}
+
 // TestEvaluateStepGuardCommandNotFound proves the exit-code contract holds
 // even for a command the shell cannot find: `sh -c` reports 127, which is a
 // nonzero exit (a false guard), NOT a runner-level failure. Only the runner
@@ -150,7 +232,7 @@ func TestResolveStepImage(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			spec, err := resolveStepRuntime(cfg, tc.step)
+			spec, _, err := resolveStepRuntime(cfg, tc.step)
 			if err != nil {
 				t.Fatalf("resolveStepRuntime: %v", err)
 			}

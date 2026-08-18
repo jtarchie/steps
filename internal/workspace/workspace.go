@@ -67,6 +67,24 @@ type BuildWorkspace interface {
 	// when all is true (inputs: all) — from every artifact in the build store.
 	// Unlike TaskSpace/agent steps, a put step never has outputs of its own.
 	PutSpace(ctx context.Context, label string, inputs []string, all bool) (StepSpace, error)
+	// GuardSpace composes a when: guard's read view: the same inputs the
+	// step's own TaskSpace/PutSpace would materialize — under the same
+	// inputMapping, and every artifact in the store when all is true — minus
+	// any the build store does not hold.
+	//
+	// A guard decides whether its step runs at all, and the question it is
+	// usually asked — is there anything in this artifact worth publishing —
+	// is about an artifact an earlier guarded step may legitimately never
+	// have written. Demanding every input first made such a guard FAIL
+	// instead of answer: the missing directory errored before the command
+	// that would have said "nothing to do" ever ran. Absent is an answer
+	// here, not an error.
+	//
+	// Only "not produced" is lenient. A name the step's own space would
+	// reject is kept, so it is reported from the one place that reports it;
+	// and the step's own space still requires every declared input, so a
+	// misspelled name is still an error the moment the step itself runs.
+	GuardSpace(ctx context.Context, label string, inputs []string, inputMapping map[string]string, all bool) (StepSpace, error)
 	Close() error
 }
 
@@ -78,8 +96,8 @@ type StepSpace interface {
 	// the shared implementation. Called only after the step itself
 	// succeeded.
 	Capture(ctx context.Context) error
-	// Close removes anything TaskSpace/PutSpace created for this step. A
-	// no-op for the shared implementation.
+	// Close removes anything TaskSpace/PutSpace/GuardSpace created for this
+	// step. A no-op for the shared implementation.
 	Close() error
 }
 
@@ -616,6 +634,47 @@ func (b *isolatingBuild) ResourceDir(ctx context.Context, name string) (string, 
 
 func (b *isolatingBuild) TaskSpace(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string) (StepSpace, error) {
 	return b.newSpace(ctx, label, inputs, outputs, inputMapping, outputMapping)
+}
+
+func (b *isolatingBuild) GuardSpace(ctx context.Context, label string, inputs []string, inputMapping map[string]string, all bool) (StepSpace, error) {
+	if all {
+		names, err := b.allArtifacts()
+		if err != nil {
+			return nil, err
+		}
+
+		inputs, inputMapping = names, nil
+	}
+
+	present := make([]string, 0, len(inputs))
+
+	for _, in := range inputs {
+		// The MAPPED name is what the store holds; the declared name is only
+		// what the directory is called inside the space. Checking the declared
+		// one would read every mapped input as unproduced, which is the guard
+		// answering false about an artifact that is right there.
+		artifact := mappedName(in, inputMapping)
+
+		// A name newSpace would reject is kept rather than skipped, so
+		// leniency covers exactly "not produced" and the error still comes
+		// from the one place that phrases it well.
+		if config.ValidateArtifactName(in) != nil || config.ValidateArtifactName(artifact) != nil {
+			present = append(present, in)
+
+			continue
+		}
+
+		_, err := os.Lstat(filepath.Join(b.artifacts, artifact))
+		if os.IsNotExist(err) {
+			continue
+		}
+
+		// Anything else — an unreadable directory, a symlinked artifact — is
+		// newSpace's to report too.
+		present = append(present, in)
+	}
+
+	return b.newSpace(ctx, label, present, nil, inputMapping, nil)
 }
 
 func (b *isolatingBuild) PutSpace(ctx context.Context, label string, inputs []string, all bool) (StepSpace, error) {

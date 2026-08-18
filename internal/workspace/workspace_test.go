@@ -340,6 +340,62 @@ func testProviderUnknownInputErrors(t *testing.T, newProvider func(t *testing.T)
 	}
 }
 
+// testProviderGuardSpaceDropsOnlyUnproducedInputs pins both halves of
+// GuardSpace's contract at the layer that owns it: an input no step produced
+// is dropped so the guard gets to run, and everything else — a mapped name,
+// `all` — is materialized exactly as the step's own space would.
+func testProviderGuardSpaceDropsOnlyUnproducedInputs(t *testing.T, newProvider func(t *testing.T) Provider) {
+	t.Helper()
+
+	p := newProvider(t)
+
+	bw, err := p.NewBuild(ctxT(), "b1")
+	if err != nil {
+		t.Fatalf("NewBuild: %v", err)
+	}
+
+	defer CloseBuild(bw, "b1")
+
+	repoDir, err := bw.ResourceDir(ctxT(), "repo")
+	if err != nil {
+		t.Fatalf("ResourceDir: %v", err)
+	}
+
+	writeFile(t, filepath.Join(repoDir, "file.txt"), "original")
+
+	// "built" is never produced in this build; declaring it must not error.
+	space, err := bw.GuardSpace(ctxT(), "01-when", []string{"source", "built"},
+		map[string]string{"source": "repo"}, false)
+	if err != nil {
+		t.Fatalf("GuardSpace with an unproduced input should not error: %v", err)
+	}
+
+	defer CloseSpace(space, "01-when")
+
+	_, err = os.Stat(filepath.Join(space.Dir(), "source", "file.txt"))
+	if err != nil {
+		t.Errorf("mapped input was not materialized under its declared name: %v", err)
+	}
+
+	_, err = os.Stat(filepath.Join(space.Dir(), "built"))
+	if !os.IsNotExist(err) {
+		t.Errorf("unproduced input should be absent, not materialized: %v", err)
+	}
+
+	// inputs: all draws the same set a put step's PutSpace would.
+	all, err := bw.GuardSpace(ctxT(), "02-when", nil, nil, true)
+	if err != nil {
+		t.Fatalf("GuardSpace(all): %v", err)
+	}
+
+	defer CloseSpace(all, "02-when")
+
+	_, err = os.Stat(filepath.Join(all.Dir(), "repo", "file.txt"))
+	if err != nil {
+		t.Errorf("inputs: all guard did not see the build's artifacts: %v", err)
+	}
+}
+
 func testProviderSymlinkCopiedNotFollowed(t *testing.T, newProvider func(t *testing.T) Provider) {
 	t.Helper()
 
@@ -408,6 +464,11 @@ func TestCopyProviderCaptureSwappedOutputSymlinkRejected(t *testing.T) {
 func TestCopyProviderUnknownInputErrors(t *testing.T) {
 	t.Parallel()
 	testProviderUnknownInputErrors(t, newTestCopyProvider)
+}
+
+func TestCopyProviderGuardSpaceDropsOnlyUnproducedInputs(t *testing.T) {
+	t.Parallel()
+	testProviderGuardSpaceDropsOnlyUnproducedInputs(t, newTestCopyProvider)
 }
 
 func TestCopyProviderSymlinkCopiedNotFollowed(t *testing.T) {

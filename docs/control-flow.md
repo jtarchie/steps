@@ -75,6 +75,15 @@ jobs:
     run: cat risk/level.txt
     assert:
       stdout: low
+  - task: escalate                          # skipped, so alert/ is never written
+    inputs: [risk]                          # the guard reads it, so it declares it
+    outputs: [alert]
+    when: grep -q high risk/level.txt
+    run: echo paging > alert/page.txt
+  - task: page                              # skipped too: an unwritten input reads
+    inputs: [alert]                         # as absent to the guard, not as an error
+    when: test -s alert/page.txt
+    run: echo paged the on-call
   assert:
     execution: [scout, report]              # deep-review is absent — that IS the skip
     outcome: succeeded
@@ -83,7 +92,8 @@ jobs:
 - **The exit code is the whole contract.** A nonzero exit is a legitimate *false* (`grep -q` matching nothing, `test -f` on a missing file) and never a failure. Only a runner-level error — the command couldn't even be started (bad cwd, bad image, dead docker daemon) — fails the step. Note a shell "command not found" is exit 127, i.e. a false guard, not an error.
 - **A guard-skipped step skips only itself; the plan continues.** This is different from a cache hit, which stops the whole remaining chain.
 - A skipped step fires no hooks and records no cache node, `job_run`, or execution-log entry — the same contract as a cached skip. That's what lets `assert.execution` prove a step was skipped.
-- The guard runs under the step's own resolved image, in a workspace materialized from the step's declared `inputs:`, but closed without capturing outputs — a guard can never publish artifacts.
+- The guard runs under the step's own resolved image, over the same inputs the step itself would get — including ones it inherits from a `tasks:` entry, an `input_mapping:` rename, and a put's `inputs: all` — but closed without capturing outputs, so a guard can never publish artifacts. A guard that reads a file has to declare the artifact holding it, exactly as the step does.
+- **An input an earlier guarded step never produced is simply absent to the guard**, not an error: `when: test -s answer/reply.md` on a step whose `answer` was written by a step that itself got skipped reads false and skips, which is the point of writing it. The step's own run still requires every declared input, so a misspelled name is still an error — just at the moment the step actually runs.
 - The guard command is folded into the step's content hash, but its *outcome* is a run-time fact the planner can't know, so any chain containing a `when:` step is unskippable — never recorded as a reusable "this whole chain succeeded" hash.
 - Invalid on `get` steps (a get fans the remainder of the plan out per version, so a conditional get has no coherent meaning).
 - This is how an agent decides routing without typed outputs: an `agent` step writes a verdict into a declared output artifact, and the next step's `when:` tests that file. The model proposes; a deterministic command disposes; both are visible in the YAML.

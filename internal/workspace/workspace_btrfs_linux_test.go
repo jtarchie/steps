@@ -131,6 +131,11 @@ func TestBtrfsProviderUnknownInputErrors(t *testing.T) {
 	testProviderUnknownInputErrors(t, newTestBtrfsProvider)
 }
 
+func TestBtrfsProviderGuardSpaceDropsOnlyUnproducedInputs(t *testing.T) {
+	t.Parallel()
+	testProviderGuardSpaceDropsOnlyUnproducedInputs(t, newTestBtrfsProvider)
+}
+
 func TestBtrfsProviderSymlinkCopiedNotFollowed(t *testing.T) {
 	t.Parallel()
 	testProviderSymlinkCopiedNotFollowed(t, newTestBtrfsProvider)

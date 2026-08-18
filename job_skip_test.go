@@ -192,3 +192,86 @@ jobs:
 	mustRun(t, "--force", path)
 	assertLineCount(t, checkCounter, 2)
 }
+
+// TestRunJobGuardDecidesWhenAnInputWasNeverProduced is the second half of what
+// `when:` is for. A step's guard exists to answer "is there anything here to
+// do", and the common shape of that question is about an artifact an earlier
+// guarded step may or may not have written — a model that had nothing to say,
+// a diff that came back empty. Staging the guard's own view used to demand
+// every declared input first, so the guard on a step downstream of a skipped
+// one failed before it could return false: the job errored on a missing
+// directory instead of skipping the step that had nothing to publish.
+//
+// The step's own execution still requires its inputs. Only the guard tolerates
+// an absent one, and only by reading it as absent.
+func TestRunJobGuardDecidesWhenAnInputWasNeverProduced(t *testing.T) {
+	dir := t.TempDir()
+	published := filepath.Join(dir, "published.txt")
+	path := filepath.Join(dir, "pipeline.yml")
+
+	pipeline := fmt.Sprintf(`
+jobs:
+- name: build
+  plan:
+  - task: answer
+    outputs: [answer]
+    when: "false"
+    run: printf 'something to say' > answer/reply.md
+  - task: publish
+    inputs: [answer]
+    when: test -s answer/reply.md
+    run: echo published >> %s
+`, published)
+
+	err := os.WriteFile(path, []byte(pipeline), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustRun(t, path)
+
+	assertLineCount(t, published, 0)
+}
+
+// TestRunJobGuardSeesTheSameInputsTheStepDoes is the other half of the same
+// contract, and the half a leniency rule can quietly break: an input that IS
+// there has to reach the guard. A step's inputs: list is not the whole story —
+// a task inherits its inputs from the tasks: entry it references, and
+// input_mapping renames a declared input onto the plan artifact it draws from.
+// A guard that reads the declared spelling against the artifact store finds
+// nothing, answers false, and skips the step forever, with nothing in the log
+// to say why.
+func TestRunJobGuardSeesTheSameInputsTheStepDoes(t *testing.T) {
+	dir := t.TempDir()
+	published := filepath.Join(dir, "published.txt")
+	path := filepath.Join(dir, "pipeline.yml")
+
+	pipeline := fmt.Sprintf(`
+tasks:
+- name: publish
+  inputs: [answer]
+  run: echo published >> %s
+
+jobs:
+- name: build
+  plan:
+  - task: scout
+    outputs: [findings]
+    run: printf 'something to say' > findings/reply.md
+  - task: publish
+    input_mapping: {answer: findings}
+    when: test -s answer/reply.md
+  assert:
+    execution: [scout, publish]
+    outcome: succeeded
+`, published)
+
+	err := os.WriteFile(path, []byte(pipeline), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustRun(t, path)
+
+	assertLineCount(t, published, 1)
+}
