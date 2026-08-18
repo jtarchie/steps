@@ -104,7 +104,7 @@ jobs:
 - **It fails the job**, as a job-level *failure* (the same class as exceeding `max_visits:`), so the job's own `on_failure` and `ensure` fire. That is where a "this took too long" notification belongs.
 - **It does not degrade**, unlike [`budget:` on an `across:` block](control-flow.md#a-ceiling-that-degrades-budget). A job-level limit is a backstop against a run that has gone wrong, and stopping loudly is the right answer.
 
-Those claims are pinned by a deliberately-expired deadline: the step that outlives it finishes and *succeeds*, the next step is never admitted, and the job's `on_failure` — not `on_error` — fires, because a job-level deadline is a failure where a step-level one is an error (see [Timeout classification](#timeout-classification)):
+Those claims are pinned by a deliberately-expired deadline: the step that outlives it finishes and *succeeds*, the next step is never admitted, and the job's `on_failure` — not `on_error` — fires, because an expired deadline is a failure at either level (see [Timeout classification](#timeout-classification)):
 
 ```yaml
 jobs:
@@ -216,7 +216,7 @@ Retryable failures are connection errors and HTTP 408, 409, 429, and 5xx. A 400 
 
 ## Timeout classification
 
-Timeouts classify as **errored**, not **failed** — `on_error` fires, `on_failure` does not. (Concourse makes the opposite call for a step timeout — a divergence tracked in [conformance.md](conformance.md).) Failed means the step itself said no (nonzero exit, red verdict); errored means the infrastructure did (timeout, docker, transport). This fixture pins it — the `assert:` block is what keeps a deliberately-erroring job green under `steps test` (see [control-flow.md](control-flow.md#assert-self-verification--steps-test)):
+A step's expired `timeout:` classifies as **failed** — `on_failure` fires, `on_error` does not, matching Concourse (which marks a timed-out step failed). The step was given a budget and did not finish inside it: that is the step saying no, not the infrastructure. Errored stays reserved for the machinery breaking (docker, transport, workspace). This fixture pins it — the `assert:` block is what keeps a deliberately-failing job green under `steps test` (see [control-flow.md](control-flow.md#assert-self-verification--steps-test)):
 
 ```yaml
 jobs:
@@ -225,14 +225,38 @@ jobs:
   - task: slow
     run: sleep 5
     timeout: 1s
-    on_error:
+    on_failure:
       task: page
       run: echo the deadline expired
+    on_error:
+      task: wrong
+      run: echo this must not fire
+  assert:
+    execution: [slow, page]    # on_failure fired, on_error did not
+    outcome: failed
+```
+
+What still lands on `on_error` is the machinery genuinely breaking. A provider that answers nothing but 500s — with `attempts: 1`, so the single request is the whole budget — is that class:
+
+```yaml test=attempts-provider-error
+agents:
+- name: reviewer
+  source: { model: openrouter/qwen/qwen3.7-flash }
+
+jobs:
+- name: outage
+  plan:
+  - agent: reviewer
+    prompt: "Review the PR."
+    attempts: 1
+    on_error:
+      task: page
+      run: echo the provider is down
     on_failure:
       task: wrong
       run: echo this must not fire
   assert:
-    execution: [slow, page]    # on_error fired, on_failure did not
+    execution: [reviewer, page]   # on_error fired, on_failure did not
     outcome: failed
 ```
 

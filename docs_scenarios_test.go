@@ -416,6 +416,16 @@ var docScenarios = map[string]docScenario{
 		),
 	},
 
+	// A provider that only ever 500s: with attempts: 1 the single request
+	// fails, the step classifies errored, and on_error is what fires — the
+	// doc corpus's one genuine errored trigger now that an expired timeout:
+	// classifies as failed.
+	"attempts-provider-error": {
+		fake: scripted(
+			failsWith(500),
+		),
+	},
+
 	// The task fails because patched.txt is missing; the fix agent writes it
 	// into the task's own working directory, and the re-run passes.
 	"attempts-fix": {

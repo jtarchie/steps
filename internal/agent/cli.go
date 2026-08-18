@@ -201,7 +201,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 			return retry.Stop(attemptErr)
 		}
 
-		return retry.StopOnDeadline(ctx, attemptCtx, attemptErr)
+		return retry.StopOnDeadline(ctx, attemptCtx, outcome.FailOnDeadline(ctx, attemptCtx, attemptErr))
 	})
 
 	return state.result(prepared.ri.ModelName), runErr

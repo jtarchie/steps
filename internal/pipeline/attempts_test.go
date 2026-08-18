@@ -146,10 +146,11 @@ func TestTaskWithTimeout(t *testing.T) {
 		t.Fatal("executeTask should have timed out")
 	}
 
-	// Verify it's classified as errored (timeout), not failed.
+	// An expired step timeout classifies as failed, per Concourse: the step
+	// was given a budget and did not finish inside it.
 	classification := outcome.Classify(ctx, err)
-	if classification != outcome.Errored {
-		t.Fatalf("expected Errored classification for timeout, got: %v", classification)
+	if classification != outcome.Failed {
+		t.Fatalf("expected Failed classification for timeout, got: %v", classification)
 	}
 }
 
@@ -251,14 +252,14 @@ func TestTaskTimeoutSkipsRemainingAttempts(t *testing.T) {
 		t.Errorf("task ran %d times, want 1 (a timeout must not be retried)", got)
 	}
 
-	// The error the caller sees is unchanged: still a DeadlineExceeded chain,
-	// still classified as errored, so hook dispatch behaves as before.
+	// The error keeps its DeadlineExceeded chain and classifies as failed
+	// (Concourse's call for a timed-out step), so on_failure is what fires.
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("expected DeadlineExceeded in error chain, got: %v", err)
 	}
 
-	if class := outcome.Classify(ctx, err); class != outcome.Errored {
-		t.Errorf("classification = %v, want %v", class, outcome.Errored)
+	if class := outcome.Classify(ctx, err); class != outcome.Failed {
+		t.Errorf("classification = %v, want %v", class, outcome.Failed)
 	}
 }
 

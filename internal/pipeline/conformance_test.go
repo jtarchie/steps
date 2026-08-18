@@ -247,8 +247,9 @@ jobs:
 // TestConformanceAbortFiresOnAbortHook covers the last of the five hook
 // modifiers to have no deterministic trigger.
 //
-// on_error got one as a YAML fixture (docs/attempts-timeout.md's doc-tested
-// deadline job, where a per-attempt timeout: classifies as Errored).
+// on_error got one in the root package (TestEndToEndAgentInfraErrorFiresOnError,
+// an unreachable provider endpoint — a step timeout no longer produces the
+// class, since an expired timeout: classifies as Failed per Concourse).
 // on_abort cannot be one: it requires a CANCELLED JOB CONTEXT — SIGINT/SIGTERM
 // mid-run — which a pipeline file has no way to ask for. So it lives here,
 // where the context is ours to cancel.

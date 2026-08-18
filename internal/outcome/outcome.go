@@ -18,7 +18,8 @@ const (
 	// Succeeded is a nil error.
 	Succeeded Class = "succeeded"
 	// Failed is a task-level failure: a nonzero command exit, a fix verdict
-	// still red, or a required tool that never succeeded. Marked with Fail.
+	// still red, a required tool that never succeeded, or the step's own
+	// timeout: expiring (see FailOnDeadline). Marked with Fail.
 	Failed Class = "failed"
 	// Errored is an infrastructure error: workspace setup, docker, an LLM
 	// transport failure, template rendering, or a store write.
@@ -42,6 +43,26 @@ func Fail(err error) error {
 	}
 
 	return &Failure{Err: err}
+}
+
+// FailOnDeadline marks err a task-level Failure when attemptCtx's own
+// deadline is what expired: attemptCtx is done while jobCtx is still live. A
+// step that outlives its timeout: is the step saying no — it was given a
+// budget and did not finish inside it — which is also Concourse's call (a
+// timed-out step is failed there, so on_failure fires). Errored stays
+// reserved for the machinery breaking.
+//
+// It is the classification twin of retry.StopOnDeadline and shares its
+// contract: each caller owns the attempt context it passes, and a deadline
+// from *inside* an attempt (an MCP or HTTP client's own timeout) does not
+// trip it. A nil err, a live attemptCtx, or a canceled jobCtx (an abort)
+// all pass err through untouched.
+func FailOnDeadline(jobCtx, attemptCtx context.Context, err error) error {
+	if err == nil || attemptCtx.Err() == nil || jobCtx.Err() != nil {
+		return err
+	}
+
+	return Fail(err)
 }
 
 // Process exit codes, one per outcome class a caller can act on.

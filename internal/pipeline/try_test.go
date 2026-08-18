@@ -15,9 +15,10 @@ func tryStep(inner config.Step) config.Step {
 	return config.Step{Try: &inner}
 }
 
-// TestTolerateTryFailureClassifies pins the line try: draws. Swallowing every
-// error class is what let a Ctrl-C mid-step report a green job and exit 0,
-// and let a docker/transport outage march the plan into the next step.
+// TestTolerateTryFailureClassifies pins the line try: draws, which is
+// Concourse's: failures and infrastructure errors are masked, an abort is not.
+// Swallowing the abort too is what let a Ctrl-C mid-step report a green job
+// and exit 0.
 func TestTolerateTryFailureClassifies(t *testing.T) {
 	t.Parallel()
 
@@ -35,7 +36,7 @@ func TestTolerateTryFailureClassifies(t *testing.T) {
 		tolerated bool
 	}{
 		{name: "task-level failure", ctx: context.Background(), step: tryStep(config.Step{Task: "notify"}), err: failed, tolerated: true},
-		{name: "infrastructure error", ctx: context.Background(), step: tryStep(config.Step{Task: "notify"}), err: errored},
+		{name: "infrastructure error", ctx: context.Background(), step: tryStep(config.Step{Task: "notify"}), err: errored, tolerated: true},
 		{name: "abort", ctx: canceled, step: tryStep(config.Step{Task: "notify"}), err: failed},
 		{name: "success", ctx: context.Background(), step: tryStep(config.Step{Task: "notify"}), err: nil, tolerated: true},
 		{name: "not a try step", ctx: context.Background(), step: config.Step{Task: "notify"}, err: failed},

@@ -600,12 +600,12 @@ jobs:
 	assertNoFile(t, fallthroughLog)
 }
 
-// TestEndToEndTryDoesNotTolerateInfraError pins the other line: try: swallows a
-// task-level failure and nothing else. An unreachable provider is an
-// infrastructure error, so a try-wrapped agent that can't be reached must still
-// fail the run — swallowing it would report a green job for an outage, and the
-// same classification is what keeps a Ctrl-C from being reported as success.
-func TestEndToEndTryDoesNotTolerateInfraError(t *testing.T) {
+// TestEndToEndTryToleratesInfraError pins the Concourse line: try: swallows
+// infrastructure errors as well as task-level failures (only an abort
+// propagates). An unreachable provider is an infrastructure error, so a
+// try-wrapped agent that can't be reached is shrugged off and the plan
+// carries on.
+func TestEndToEndTryToleratesInfraError(t *testing.T) {
 	dir := t.TempDir()
 	afterLog := filepath.Join(dir, "after.log")
 
@@ -637,12 +637,96 @@ jobs:
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	err := run([]string{path})
-	if err == nil {
-		t.Fatal("run should have failed: try: does not tolerate an infrastructure error")
+	if err != nil {
+		t.Fatalf("run failed: %v — try: tolerates an infrastructure error", err)
 	}
 
-	// The plan must not have continued past an untolerated error.
-	assertNoFile(t, afterLog)
+	// The plan carried on past the tolerated error.
+	assertLineCount(t, afterLog, 1)
+}
+
+// TestEndToEndAgentInfraErrorFiresOnError pins the errored class's hook
+// dispatch: an unreachable provider is the hermetic infrastructure error, so
+// on_error fires and on_failure does not. This is the errored-class pin now
+// that an expired timeout: no longer produces the class (a timeout is a
+// failure, per Concourse — see docs/conformance.md).
+func TestEndToEndAgentInfraErrorFiresOnError(t *testing.T) {
+	dir := t.TempDir()
+	errorLog := filepath.Join(dir, "error.log")
+	failureLog := filepath.Join(dir, "failure.log")
+
+	pipeline := fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: reviewer
+  source:
+    endpoint: http://127.0.0.1:1/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+
+jobs:
+- name: outage
+  plan:
+  - agent: reviewer
+    prompt: Review it.
+    attempts: 1
+    on_error:
+      task: page
+      run: echo errored >> %s
+    on_failure:
+      task: wrong
+      run: echo failed >> %s
+`, errorLog, failureLog)
+
+	path := writePipeline(t, dir, pipeline)
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	err := run([]string{path})
+	if err == nil {
+		t.Fatal("run should have failed: the provider is unreachable")
+	}
+
+	assertLineCount(t, errorLog, 1)
+	assertNoFile(t, failureLog)
+}
+
+// TestEndToEndTimeoutFiresOnFailure pins the Concourse line for an expired
+// step timeout: it classifies as failed — on_failure fires, on_error does
+// not. The doc-tested deadline fixture in docs/attempts-timeout.md pins the
+// same thing through steps test; this one holds it through a plain run.
+func TestEndToEndTimeoutFiresOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	failureLog := filepath.Join(dir, "failure.log")
+	errorLog := filepath.Join(dir, "error.log")
+
+	pipeline := fmt.Sprintf(`
+jobs:
+- name: deadline
+  plan:
+  - task: slow
+    run: sleep 5
+    timeout: 1s
+    on_failure:
+      task: page
+      run: echo failed >> %s
+    on_error:
+      task: wrong
+      run: echo errored >> %s
+`, failureLog, errorLog)
+
+	path := writePipeline(t, dir, pipeline)
+
+	err := run([]string{path})
+	if err == nil {
+		t.Fatal("run should have failed: the step outlived its timeout")
+	}
+
+	assertLineCount(t, failureLog, 1)
+	assertNoFile(t, errorLog)
 }
 
 // testSadPathAttemptsRetryTheRequest is the other half of the redefinition:

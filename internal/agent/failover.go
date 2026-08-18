@@ -13,6 +13,7 @@ import (
 	"google.golang.org/adk/v2/model"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/outcome"
 )
 
 // runPreparedWithFailover runs prepared's conversation and, on a transient
@@ -95,7 +96,10 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (c
 		}
 
 		if verdict.action == returnResult {
-			return res, servedSource{ri: ri, llm: llm, swapped: swapped}, runErr
+			// Marked here, after decideCascade: the cascade reasons about the
+			// spent deadline as an Errored source-outcome, but what leaves the
+			// step is a task-level failure — the step outlived its timeout:.
+			return res, servedSource{ri: ri, llm: llm, swapped: swapped}, outcome.FailOnDeadline(ctx, cascadeCtx, runErr) //nolint:wrapcheck // classification wrapper; the step caller adds its own context
 		}
 
 		// Loud, not silent, matching preflight's own failover — a fallback

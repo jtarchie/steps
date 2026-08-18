@@ -504,7 +504,10 @@ func runOneConversation(
 			"error", err)
 	}
 
-	return result, err
+	// The failover cascade passes noAgentDeadline (its cascadeCtx owns the
+	// step's budget and marks at its own return), so this fires only for the
+	// callers that hand a real timeout in: RunFix, and the fix path's hooks.
+	return result, outcome.FailOnDeadline(ctx, convCtx, err) //nolint:wrapcheck // classification wrapper; the step caller adds its own context
 }
 
 // RunHook runs an agent step as a hook: it resolves, materializes, runs the

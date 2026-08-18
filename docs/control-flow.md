@@ -3,7 +3,7 @@
 Four distinct, easy-to-conflate mechanisms for shaping how a job's plan executes, plus the self-verification (`assert:`) that makes fixtures out of them. All are opt-in; a pipeline that uses none of this hashes and behaves exactly as if the feature didn't exist.
 
 - **`do:`** (group) runs several steps as one, so a single hook covers the whole group.
-- **`try:`** (tolerate) wraps a step so its failure does not stop the plan — best-effort notifications, cleanup, or metrics pushes.
+- **`try:`** (tolerate) wraps a step so its failure or error does not stop the plan — best-effort notifications, cleanup, or metrics pushes.
 - **`when:`** (guard) runs *before* a step and decides whether it runs at all.
 - **`to:`** (route) runs *after* a step and decides which step runs next — including jumping backward to form a loop.
 - **Hooks** (`on_success`/`on_failure`/etc.) *react* to a step's outcome with a nested side-step, and never change control flow — you can't build a loop with a hook.
@@ -48,7 +48,7 @@ jobs:
 ```
 
 - **Hooks observe, they don't consume.** A failing step's `on_failure` runs, and the failure still propagates — the job fails, `steps run` exits nonzero. This is the opposite of "swallow the error": a hook never clears a failure (only a matching `assert.execution` does that — see below). The one way a hook changes an outcome is upward: a failing `on_success` or `ensure` fails an otherwise-green step/job, since a broken notification or cleanup shouldn't read as success. A failing `on_failure`/`on_error`/`on_abort` is only logged.
-- **Classification** buckets every step error against the job context: **failed** (a task-level failure — nonzero exit, a red fix verdict, a required tool that never succeeded), **errored** (everything else unmarked — workspace setup, docker, LLM transport, a resource check), or **aborted** (`ctx.Err() != nil`, i.e. SIGINT/SIGTERM mid-run). A docker-level exit (125/126/127) classifies as *failed*, since it's indistinguishable from the command's own exit code.
+- **Classification** buckets every step error against the job context: **failed** (a task-level failure — nonzero exit, a red fix verdict, a required tool that never succeeded, or the step's own `timeout:` expiring), **errored** (everything else unmarked — workspace setup, docker, LLM transport, a resource check), or **aborted** (`ctx.Err() != nil`, i.e. SIGINT/SIGTERM mid-run). A docker-level exit (125/126/127) classifies as *failed*, since it's indistinguishable from the command's own exit code.
 - **Ordering**: the single matching `on_*` hook runs, then `ensure` always runs last. Hooks reached after cancellation run under a 60-second grace period detached from the canceled context, so they complete but not forever.
 - **No identity of their own**: a hook step records no cache node and no `job_run` — the enclosing step/job records the aggregate outcome.
 - **Step hooks fold into the step's content hash**: editing a hook — or the top-level `tasks:`/`agents:` entry it references — busts the parent step's cache. A skipped (cached) step fires no hooks, since it didn't run.
@@ -100,7 +100,7 @@ jobs:
 
 ## Tolerated failure (`try:`)
 
-A `try:` wraps a single inner step (task, put, agent, or another try) so a **task-level failure** of that step doesn't stop the plan:
+A `try:` wraps a single inner step (task, put, agent, or another try) so a **failure or infrastructure error** of that step doesn't stop the plan:
 
 ```yaml
 jobs:
@@ -123,17 +123,36 @@ jobs:
 The wrapper is **transparent**: the only thing it changes is whether the plan walker stops. Everything that *observes* the outcome sees the truth.
 
 - **The wrapped step runs exactly as it would unwrapped.** Its `when:` guard decides whether it runs at all, its own hooks fire on its real outcome, and its node records that outcome. The wrapper records a second node, `succeeded` when the failure was tolerated.
-- **Only a task-level failure is tolerated.** An infrastructure error (docker, transport, workspace) or an abort (Ctrl-C) still stops the run and exits non-zero — the same line `to:` routing draws. Tolerating those would report a green job for a canceled build and march the plan into steps whose context is already dead.
+- **Everything but an abort is tolerated** — Concourse's line exactly (its TryStep masks failures, errors and timeouts, and propagates only cancellation). A task-level failure, an infrastructure error (docker, transport, workspace), and an expired `timeout:` are all shrugged off; an abort (Ctrl-C) still stops the run and exits non-zero — tolerating it would report a green job for a canceled build and march the plan into steps whose context is already dead. See [conformance.md](conformance.md).
 - **`to:` routing sees the real outcome**, because toleration happens *after* routing. `to: {failure: cleanup}` on the wrapper is reachable. The target name is the wrapped step's own name (task/put/agent).
 - **Hooks on the wrapper** also observe the real outcome, so `on_failure` on a `try:` fires when the wrapped step failed.
 - **The wrapper is the plan-positioned step**, so `to:` and `max_visits:` belong on it and are rejected on the step it wraps (where they used to load fine and silently never fire). `verdicts:` (targets and all) stays on the `agent:` step being wrapped, since that is what the agent runtime reads — a tolerated agent still routes on its verdict.
 - **`assert:` is rejected anywhere inside a `try:`**, on the wrapper and on the step it wraps alike. `assert:` is what makes a step a `steps test` fixture and `try:` swallows exactly the failure it reports, so such an assert could never fail a run.
 - **Composability:** `try:` nests and composes with `attempts:`/`timeout:` on the wrapped step — retry a few times, then shrug. Also works with `fix:` on a task — attempt repair, then tolerate if the fix doesn't stick.
 - **Artifacts flow through unchanged**: a wrapped task's `outputs:` are available to later steps exactly as if it were unwrapped (note that a *tolerated* step may not have produced them — a later `inputs:` on that artifact is a static contract, not a runtime guarantee).
-- **Output visibility**: when a failure is tolerated, the run prints `try: <name> failed (tried, continuing)` so the transcript doesn't read all-green while quietly eating a failure.
+- **Output visibility**: when an outcome is tolerated, the run prints `try: <name> failed (tried, continuing)` — or `errored`, naming the class — so the transcript doesn't read all-green while quietly eating one.
 - **Invalid on get steps**, rejected at load time.
 - **Valid as a hook body**: `ensure: { try: { put: slack-notify } }` is the usual home for best-effort notification — a failing `on_success`/`ensure` hook otherwise fails an otherwise-green step, and the wrapper is what stops that.
 - **Always unskippable**: the try wrapper and everything downstream of it always executes — removing `try:` from a step changes its identity, so re-running after an edit must not read a stale cache.
+
+The timeout case deserves its own fixture — an expired `timeout:` classifies as *failed* ([attempts-timeout.md](attempts-timeout.md#timeout-classification)), and the shrug covers it exactly as Concourse's does:
+
+```yaml
+jobs:
+- name: shrug
+  plan:
+  - try:
+      task: slow
+      run: sleep 5
+      timeout: 1s          # expires — a failure, per Concourse — and try: eats it
+  - task: after
+    run: echo carried on
+    assert:
+      stdout: carried on
+  assert:
+    execution: [slow, after]
+    outcome: succeeded     # a timed-out step inside try: is not a red job
+```
 
 ## Step transitions (`to:`/`max_visits:`/`verdicts:`)
 
