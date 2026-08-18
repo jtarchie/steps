@@ -127,6 +127,13 @@ func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 	}
 
 	executeDocBlock(t, block, scenario, dir, path, varFlags)
+
+	// The MCP twin of scenario.check: assertions against what the fixture
+	// server RECEIVED, which no YAML assert can see (an out: tool's
+	// arguments never land in the workspace).
+	if fixture, ok := docMCPFixtures[block.MCPID()]; ok && fixture.check != nil {
+		fixture.check(t, activeDocMCPServer)
+	}
 }
 
 // executeDocBlock is the run-mode half: full validate of the block's ORIGINAL
@@ -187,7 +194,7 @@ func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScena
 		}
 	}
 
-	body := block.Body
+	body := injectDocMCPFixture(t, block, block.Body)
 
 	if usesAgents(t, body) {
 		if block.Mode() == "run" && scenario.fake == nil {
@@ -292,6 +299,72 @@ func injectFakeProvider(t *testing.T, body, endpoint, fallbackEndpoint string) s
 	// would spend a scripted turn on a probe (see fakeprovider_test.go).
 	delete(defaults, "model")
 	defaults["preflight"] = map[string]any{"disabled": true}
+
+	rewritten, err := yaml.Marshal(doc)
+	if err != nil {
+		t.Fatalf("re-marshal block: %v", err)
+	}
+
+	return string(rewritten)
+}
+
+// injectDocMCPFixture starts the mcp= fixture a block's fence names (leaving
+// body untouched when it names none) and returns body rewritten to point at
+// it, tracking the started server in activeDocMCPServer for the post-run
+// check.
+func injectDocMCPFixture(t *testing.T, block docs.Block, body string) string {
+	t.Helper()
+
+	activeDocMCPServer = nil
+
+	id := block.MCPID()
+	if id == "" {
+		return body
+	}
+
+	fixture, ok := docMCPFixtures[id]
+	if !ok {
+		t.Fatalf("fence names mcp=%s but docs_mcp_test.go has no such fixture", id)
+	}
+
+	activeDocMCPServer = fixture.start(t)
+
+	return injectFakeMCP(t, body, activeDocMCPServer.URL)
+}
+
+// injectFakeMCP rewrites every mcp_servers: entry's endpoint: to the fixture
+// server and drops its auth:, leaving everything else the doc showed intact —
+// the MCP twin of injectFakeProvider. The reader sees a vendor's endpoint and
+// auth; the test sees an in-process server that needs neither. Preflight is
+// deliberately NOT disabled: probing the fake — the named tool exists, the
+// required arguments are sent — is part of the contract these examples pin.
+func injectFakeMCP(t *testing.T, body, endpoint string) string {
+	t.Helper()
+
+	var doc map[string]any
+
+	err := yaml.Unmarshal([]byte(body), &doc)
+	if err != nil {
+		t.Fatalf("block is not valid YAML: %v", err)
+	}
+
+	servers, _ := doc["mcp_servers"].([]any)
+	if len(servers) == 0 {
+		t.Fatal("the fence names an mcp fixture, but the block declares no mcp_servers: to point at it")
+	}
+
+	for _, entry := range servers {
+		server, ok := entry.(map[string]any)
+		if !ok {
+			t.Fatalf("mcp_servers: entry is not a mapping: %v", entry)
+		}
+
+		server["endpoint"] = endpoint
+
+		// The fixture checks no credential, and anything but "none" would
+		// demand an env var or a stored oauth token this host does not have.
+		delete(server, "auth")
+	}
 
 	rewritten, err := yaml.Marshal(doc)
 	if err != nil {

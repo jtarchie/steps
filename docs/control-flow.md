@@ -341,6 +341,27 @@ jobs:
 
 Without it that rollback has two spellings and both are worse: repeat the hook on all three steps and keep them in sync, or hoist it to the job, where it also fires for failures that have nothing to do with the group.
 
+In a green run that rollback never fires, so the claims it exists for get their own deliberately-failing fixture — the deploy breaks, and the assertions pin both halves of the contract:
+
+```yaml
+jobs:
+- name: ship-broken
+  plan:
+  - do:
+    - task: migrate
+      run: echo migrating
+    - task: deploy
+      run: "false"
+    - task: smoke-test
+      run: echo smoke passed
+    on_failure:
+      task: rollback
+      run: echo rolling back
+  assert:
+    execution: [migrate, deploy, rollback]   # smoke-test absent: the failure stopped the
+    outcome: failed                          # block; rollback present: the block's hook saw it
+```
+
 - **A failing step stops the block**, and the block reports that failure. Deliberately unlike `across:`, which runs every cell: a matrix asks which combinations work, while a `do:` block is one piece of work spelled in several steps — deploying after the migration failed is not a partial answer, it is a worse outcome.
 - **The block records nothing of its own.** It is a container, like `in_parallel:`; its children record themselves in declaration order, so `assert.execution` names the children and then the hook.
 - **Artifacts flow through in order.** A child may consume an earlier child's output exactly as two consecutive plan steps do. What the block produces stays visible to steps after it.
@@ -382,7 +403,25 @@ jobs:
 - **The block itself takes no operation fields**, same as `do:`.
 - **`limit:` and `fail_fast:` are hashed**, unlike `attempts:`/`timeout:`/`budget:`. They are not "how hard to try": they change which steps run at all, so a cached result from one setting must not satisfy the other.
 
-To regression-test a parallel block, use `assert.outcome` — `assert.execution` alone structurally cannot catch a swallowed branch failure (both builds run the same branches, so the assert matches either way and then *clears* the difference under test).
+To regression-test a parallel block, use `assert.outcome` — `assert.execution` alone structurally cannot catch a swallowed branch failure (both builds run the same branches, so the assert matches either way and then *clears* the difference under test). This is that fixture, the exact shape of the original bug:
+
+```yaml
+jobs:
+- name: verify-broken
+  plan:
+  - in_parallel:
+      fail_fast: false   # let the siblings finish — the failure must still count
+      steps:
+      - task: lint
+        run: echo linting
+      - task: test
+        run: "false"
+      - task: vet
+        run: echo vetting
+  assert:
+    execution: [lint, test, vet]   # every branch ran to completion
+    outcome: failed                # and the one red branch still failed the job
+```
 
 ## `race:` — first success wins
 
@@ -520,9 +559,9 @@ jobs:
     run: echo {{ .vars.dim }} looks fine > findings/report.txt
   - task: merge
     inputs: [findings]                   # findings/api/report.txt, findings/errors/report.txt
-    run: cat findings/*/report.txt
+    run: test "$(ls findings | wc -l)" -eq 2 && cat findings/*/report.txt | tr '\n' ' '
     assert:
-      stdout: api looks fine             # both cells' captures survived the collect
+      stdout: api looks fine errors looks fine   # exactly two cells, both contents intact
   assert:
     execution:
     - review [dim=api]
@@ -592,7 +631,7 @@ A reservation fixes that by charging the allowance up front for work not yet rep
 ```yaml fragment
 - across:
   - var: dim
-    from: dimensions
+    from_file: dimensions/items.json
   max_in_flight: 6            # full width; the budget binds anyway
   budget:
     tokens: 3600000

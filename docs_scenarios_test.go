@@ -1,6 +1,8 @@
 package main
 
 import (
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -113,22 +115,46 @@ var docScenarios = map[string]docScenario{
 		),
 	},
 
-	// The default read-only grant in action: the model reads the file it was
-	// pointed at and answers.
+	// The default read-only grant, pinned on delivery: the router answers
+	// only after read_file's RESULT carries the fixture file's text. A
+	// positional script would replay the answer even if the grant broke —
+	// assert.tool_calls records what the model REQUESTED, success or not —
+	// so a failed read has to starve the answer here to red out the fixture.
 	"agents-readonly": {
-		fake: scripted(
-			callsTool("read_file", map[string]any{"path": "notes/plan.txt"}),
-			says("It says widgets ship on tuesday."),
-		),
+		fake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
+				switch {
+				case req.toolResultContains("widgets ship on tuesday"):
+					return says("It says widgets ship on tuesday.")
+				case len(req.toolResults()) > 0:
+					return says("The file could not be read.")
+				default:
+					return callsTool("read_file", map[string]any{"path": "notes/plan.txt"})
+				}
+			})
+		},
 	},
 
 	// dir: puts the model in repo/cmd, so its read_file path is main.go
-	// rather than repo/cmd/main.go.
+	// rather than repo/cmd/main.go — and the router answers only after that
+	// dir:-relative path actually delivered the file's content.
 	"agents-dir": {
-		fake: scripted(
-			callsTool("read_file", map[string]any{"path": "main.go"}),
-			says("main.go declares package main."),
-		),
+		fake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
+				switch {
+				case req.toolResultContains("package main"):
+					return says("main.go declares package main.")
+				case len(req.toolResults()) > 0:
+					return says("The file could not be read.")
+				default:
+					return callsTool("read_file", map[string]any{"path": "main.go"})
+				}
+			})
+		},
 	},
 
 	// The writer creates report/summary.md and the publish task proves the
@@ -140,24 +166,52 @@ var docScenarios = map[string]docScenario{
 		),
 	},
 
-	// The model calls the required custom tool once; repo is pinned, so the
-	// call authors only body.
+	// required: enforced on the wire: the model first tries to stop, the
+	// loop forces post_review via tool_choice (the router calls it only when
+	// forced), and the answer comes after the tool result lands. repo is
+	// pinned, so the call authors only body.
 	"agents-custom-tool": {
-		fake: scripted(
-			callsTool("post_review", map[string]any{"body": "looks correct"}),
-			says("Posted the review."),
-		),
+		fake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
+				switch {
+				case req.forcedTool() == "post_review":
+					return callsTool("post_review", map[string]any{"body": "looks correct"})
+				case len(req.toolResults()) > 0:
+					return says("Posted the review.")
+				default:
+					return says("I reviewed the change; nothing more to do.")
+				}
+			})
+		},
 	},
 
-	// Parent delegates to the sub-agent tool; the child's own conversation is
-	// the second request (serial, so positional scripting holds); the parent
-	// then reports.
+	// Parent delegates to the sub-agent tool. The child is the request NOT
+	// offered a `summarizer` tool (only the parent's grant includes it), and
+	// the parent reports only after the child's answer arrives as its tool
+	// result — so a broken dispatch (the parent consuming the child's turn,
+	// or the child's answer never fed back) starves the router instead of
+	// passing on a lucky stdout match.
 	"agents-subagent": {
-		fake: scripted(
-			callsTool("summarizer", map[string]any{"request": "summarize notes/log.txt"}),
-			says("There was an outage; it is resolved."),
-			says("Summary: there was an outage; it is resolved."),
-		),
+		fake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
+				if !slices.Contains(req.toolNames(), "summarizer") {
+					return says("There was an outage; it is resolved.")
+				}
+
+				switch {
+				case req.toolResultContains("outage; it is resolved"):
+					return says("Summary: there was an outage; it is resolved.")
+				case len(req.toolResults()) > 0:
+					return says("The summarizer returned nothing useful.")
+				default:
+					return callsTool("summarizer", map[string]any{"request": "summarize notes/log.txt"})
+				}
+			})
+		},
 	},
 
 	// Same shape as attempts-fix: the fixer writes the file the task demands.
@@ -169,7 +223,10 @@ var docScenarios = map[string]docScenario{
 	},
 
 	// run_file:/system_file:/prompt_file: all resolve from these files at
-	// load; the conversation itself is a single reply.
+	// load — and the router answers only when the persona text is in the
+	// system message AND the prompt text is in the user message, so the
+	// files' CONTENT reaching the conversation is what is pinned, not just
+	// that the includes loaded.
 	"agents-files": {
 		files: map[string]string{
 			"ci/unit.sh":          "echo unit tests pass\n",
@@ -177,7 +234,17 @@ var docScenarios = map[string]docScenario{
 			"prompts/reviewer.md": "You review builds tersely.\n",
 			"prompts/review.md":   "Review the build output.\n",
 		},
-		fake: scripted(says("Build looks fine.")),
+		fake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
+				if strings.Contains(req.systemMessage(), "tersely") && req.userMessageContains("Review the build output.") {
+					return says("Build looks fine.")
+				}
+
+				return says("The persona or prompt never arrived.")
+			})
+		},
 	},
 
 	// An empty script IS the assertion: both jobs' tasks pass, so the fix
@@ -195,15 +262,39 @@ var docScenarios = map[string]docScenario{
 		fake: scripted(says("Nothing to flag in this build.")),
 	},
 
-	// The prompt arrives from the fetched artifact at run time.
+	// The prompt arrives from the fetched artifact at run time: the router
+	// answers only when REVIEW.md's text is the user message, so what is
+	// pinned is content delivery, not just that the file existed.
 	"agents-prompt-artifact": {
-		fake: scripted(says("The change is correct.")),
+		fake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
+				if req.userMessageContains("Review this change for correctness.") {
+					return says("The change is correct.")
+				}
+
+				return says("No review instructions arrived.")
+			})
+		},
 	},
 
-	// The conventions file arrives as a synthetic read_file result, so the
-	// model answers without calling any tool.
+	// The conventions file is injected as a synthetic read_file result at
+	// turn zero — so request 1 must ALREADY carry its text, before the model
+	// has called anything. The router answers from nothing else; a broken
+	// injection starves it and the stdout assert goes red.
 	"agents-context-paths": {
-		fake: scripted(says("Always run go vet before committing.")),
+		fake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
+				if req.toolResultContains("always run go vet") {
+					return says("Always run go vet before committing.")
+				}
+
+				return says("The conventions never arrived.")
+			})
+		},
 	},
 
 	// Two serial cells, one reply each — each cell's context_paths rendered
@@ -226,10 +317,22 @@ var docScenarios = map[string]docScenario{
 		),
 	},
 
-	// The sampling dials and defaults: block are load-time configuration;
-	// the conversation itself is one reply.
+	// The two agents are told apart by drafter's temperature dial reaching
+	// the wire — titler sets none, and an unset dial is never sent. A dial
+	// that stopped being sent (or a defaults.model that stopped filling
+	// titler in) flips or drops an answer and a stdout assert goes red.
 	"agents-dials": {
-		fake: scripted(says("Drafted the release note.")),
+		fake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
+				if strings.Contains(req.Raw, `"temperature"`) {
+					return says("Drafted the release note.")
+				}
+
+				return says("Titled the release note.")
+			})
+		},
 	},
 
 	"agents-budget": {
@@ -243,19 +346,37 @@ var docScenarios = map[string]docScenario{
 		fake: scripted(says("Announcement written.")),
 	},
 
-	// attempts: 1 gives the primary no room to retry its one failing turn, so
-	// the mid-run cascade fires on the very first request — the fallback
-	// (fallbackFake, a SECOND scripted provider — see injectFakeFallback)
-	// actually answers, unlike the example above.
+	// The primary completes a real tool turn and THEN dies; attempts: 1
+	// leaves no room to retry, so the cascade fires — and the fallback
+	// (fallbackFake, a SECOND provider — see injectFakeFallback) answers
+	// only when that completed turn's traffic arrives in its own first
+	// request. "Resumes the same conversation" is the thing tested here,
+	// not just claimed: a fresh-history resume starves the router.
 	"agents-fallback-midrun": {
-		fake:         scripted(failsWith(500)),
-		fallbackFake: scripted(says("Announcement written via the fallback.")),
+		fake: scripted(
+			callsTool("read_file", map[string]any{"path": "NOTES.txt"}),
+			failsWith(500),
+		),
+		fallbackFake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
+				if req.historyCalled("read_file") && len(req.toolResults()) > 0 {
+					return says("Announcement written via the fallback.")
+				}
+
+				return failsWith(500)
+			})
+		},
 	},
 
-	// Three concurrent members vote approve; routed on content because
-	// max_in_flight-style interleaving makes positional scripts racy. A
-	// request whose last message is a tool result is a member being told its
-	// vote landed; anything else is a member being asked to vote.
+	// A genuine 2–1 split: the style reviewer rejects, the other two approve
+	// — the one tally where majority, unanimous (would fail the block), and
+	// any (reject is listed first, would route to revise) all disagree, so
+	// decide: majority is the rule actually exercised. Members are told
+	// apart by their differentiated prompts; routed on content because they
+	// run concurrently. A request whose last message is a tool result is a
+	// member being told its vote landed.
 	"agents-ensemble": {
 		fake: func(t *testing.T) *fakeLLM {
 			t.Helper()
@@ -263,6 +384,10 @@ var docScenarios = map[string]docScenario{
 			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
 				if len(req.Messages) > 0 && req.Messages[len(req.Messages)-1].Role == "tool" {
 					return says("Voted.")
+				}
+
+				if req.userMessageContains("style") {
+					return callsTool("verdict", map[string]any{"choice": "reject", "note": "naming is inconsistent"})
 				}
 
 				return callsTool("verdict", map[string]any{"choice": "approve", "note": "correct"})

@@ -28,6 +28,8 @@ package main
 // instead of the behaviour. See newRoutedFakeLLM.
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -106,6 +108,117 @@ func TestEndToEndPRReviewExample(t *testing.T) {
 
 	assertSucceeded(t, nodes, "task", "check-draft")
 	assertSucceeded(t, nodes, "put", "pr-review")
+
+	assertCollectedFindings(t, fake)
+}
+
+// assertCollectedFindings pins the SHAPE of the collected matrix output:
+// findings/<dim>/report.json per dimension, each holding the cell that wrote
+// it. The example's own assert: blocks check that files exist, not where
+// collection put them — so a regression that flattened or misnamed the tree
+// would pass everything else. The falsifier's scripted read_file of each path
+// is the observation: its tool result carries the file's content, paired to
+// the call by tool_call_id in the captured request.
+func assertCollectedFindings(t *testing.T, fake *fakeLLM) {
+	t.Helper()
+
+	want := map[string]string{
+		"findings/state-mutation/report.json": reviewerFindings("state-mutation"),
+		"findings/api-boundaries/report.json": reviewerFindings("api-boundaries"),
+	}
+
+	got := map[string]string{}
+
+	for n := 1; n <= fake.requestCount(); n++ {
+		collectReadFileResults(t, fake.request(n), want, got)
+	}
+
+	for path, content := range want {
+		if got[path] != content {
+			t.Errorf("collected findings at %s: got %q, want %q", path, got[path], content)
+		}
+	}
+}
+
+// collectReadFileResults records, into got, the content each wanted read_file
+// call in req's history came back with. The fake numbers call ids per
+// RESPONSE ("call_1", ...), so an id alone is ambiguous across turns of one
+// conversation — walking the history in order and rebinding at each assistant
+// turn scopes every tool result to the assistant message it answers.
+func collectReadFileResults(t *testing.T, req capturedRequest, want, got map[string]string) {
+	t.Helper()
+
+	pending := map[string]string{}
+
+	for _, msg := range req.Messages {
+		if len(msg.ToolCalls) > 0 {
+			pending = pendingReadFilePaths(msg, want)
+
+			continue
+		}
+
+		path, ok := pending[msg.ToolCallID]
+		if msg.Role != "tool" || !ok {
+			continue
+		}
+
+		delete(pending, msg.ToolCallID)
+
+		content, err := parseReadFileResult(msg.Content)
+		if err != nil {
+			t.Errorf("read_file %s: %v", path, err)
+
+			continue
+		}
+
+		got[path] = content
+	}
+}
+
+// pendingReadFilePaths maps each of msg's read_file call ids to the path it
+// asked for, keeping only paths that appear in want.
+func pendingReadFilePaths(msg capturedMessage, want map[string]string) map[string]string {
+	pending := map[string]string{}
+
+	for _, tc := range msg.ToolCalls {
+		if tc.Function.Name != "read_file" {
+			continue
+		}
+
+		var args struct {
+			Path string `json:"path"`
+		}
+
+		if json.Unmarshal([]byte(tc.Function.Arguments), &args) != nil {
+			continue
+		}
+
+		if _, wanted := want[args.Path]; wanted {
+			pending[tc.ID] = args.Path
+		}
+	}
+
+	return pending
+}
+
+// parseReadFileResult unpacks a read_file tool result into the file content
+// it carried, surfacing the tool's own error field as an error.
+func parseReadFileResult(raw string) (string, error) {
+	var result struct {
+		Content string `json:"content"`
+		Error   string `json:"error"`
+	}
+
+	err := json.Unmarshal([]byte(raw), &result)
+	if err != nil {
+		return "", fmt.Errorf("not a read_file result: %w", err)
+	}
+
+	if result.Error != "" {
+		return "", errors.New(result.Error)
+	}
+
+	return result.Content, nil
 }
 
 // approveWhenPending answers approval 1 once it exists, returning the last
@@ -219,11 +332,28 @@ func reviewScript() func(capturedRequest) turn {
 			)
 
 		// One reviewer cell. Every cell writes the SAME path, which is the
-		// point: the block collects each under its own dimension.
+		// point: the block collects each under its own dimension. The content
+		// names the cell's dimension (read off the brief in its context), so
+		// the falsifier's read below can tell a swap from a correct collection.
 		case requestMentions(req, "review this change through one dimension"):
-			return callsTool("write_file", map[string]any{"path": "findings/report.json", "content": `[{"id":"F-1"}]`})
+			dim := "api-boundaries"
+			if strings.Contains(req.Raw, "state-mutation") {
+				dim = "state-mutation"
+			}
 
+			return callsTool("write_file", map[string]any{"path": "findings/report.json", "content": reviewerFindings(dim)})
+
+		// The falsifier reads the collected tree before writing its verdict —
+		// assertCollectedFindings pairs these reads with their results to pin
+		// that collection produced findings/<dim>/report.json per dimension.
 		case requestMentions(req, "try to invalidate each one"):
+			if !modelHasCalled(req, "read_file") {
+				return callsTools(
+					call("read_file", map[string]any{"path": "findings/state-mutation/report.json"}),
+					call("read_file", map[string]any{"path": "findings/api-boundaries/report.json"}),
+				)
+			}
+
 			return callsTool("write_file", map[string]any{"path": "confirmed/confirmed.json", "content": `[{"id":"F-1"}]`})
 
 		case requestMentions(req, "decide whether it must be fixed"):
@@ -238,6 +368,13 @@ func reviewScript() func(capturedRequest) turn {
 
 		return says("done")
 	}
+}
+
+// reviewerFindings is the content the scripted reviewer cell for dim writes —
+// one definition, so the script's writes and the collection assertion cannot
+// drift apart.
+func reviewerFindings(dim string) string {
+	return fmt.Sprintf(`[{"id":"F-1","dim":%q}]`, dim)
 }
 
 // TestEndToEndPRReviewFanOutIsConcurrent proves the reviewer cells really do

@@ -38,12 +38,11 @@ type Job struct {
 	//
 	// Never hashed — an operational limit, like every other.
 	Timeout string `yaml:"timeout,omitempty"`
-	// Serial states that two builds of this job must never run at once.
-	//
-	// It is a statement of intent rather than a switch: this runner always
-	// serializes builds of one job, so serial: true records that a pipeline
-	// depends on that. There is deliberately no serial: false — it would
-	// promise a parallelism this runner does not offer.
+	// Serial states that two builds of this job must never run at once —
+	// max_in_flight: 1 in Concourse's older spelling. It matters because an
+	// unset job is UNLIMITED (see EffectiveMaxInFlight): serial:/serial_groups:
+	// force the effective value to 1, and setting max_in_flight: beside either
+	// is a load error (checkJobMaxInFlight).
 	Serial bool `yaml:"serial,omitempty"`
 	// SerialGroups names locks this job holds while it runs. Two jobs sharing
 	// a group never run at the same time, which is what stops two different

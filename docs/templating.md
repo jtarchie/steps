@@ -69,7 +69,8 @@ jobs:
     inputs: [repo]
     run: cat repo/uri.txt
     assert:
-      stdout: github.com           # whatever --var supplied reached the template
+      # the exact value --var supplied (the command below) reached the template
+      stdout: github.com/acme/app-staging
   assert:
     execution: [repo, show]
     outcome: succeeded
@@ -95,15 +96,19 @@ jobs:
     inputs: [meta]           # the load_var step reads from its own declared input
     file: meta/version.txt
   - task: announce
-    run: echo releasing ((tag))
+    run: echo "releasing ((tag)) ok"
     assert:
-      stdout: releasing v1.2.3     # the captured value, trimmed, substituted
+      # the captured value, trimmed, substituted — untrimmed, version.txt's
+      # trailing newline would land before "ok" and break this line
+      stdout: releasing v1.2.3 ok
   assert:
     execution: [pick-tag, tag, announce]
     outcome: succeeded
 ```
 
 The `inputs:` on the `load_var` step is not optional bookkeeping: a step's directory holds only the artifacts it declares, so a bare `file: version.txt` names nothing that exists. Both halves are checked at plan time — the file must sit inside a declared input, and that input must be something an earlier step produced.
+
+`load_var:` names share the one `((var))` namespace, so a name both passed with `--var` and captured by a `load_var:` goes to `--var`: supplied vars substitute textually before the file is parsed, leaving no `((name))` for the captured value to fill — the `load_var:` step still runs, but substitutes nothing. (Concourse keeps run-captured vars in a separate `((.:name))` namespace instead; see [conformance.md](conformance.md).)
 
 ### ⚠️ Vars are config, not secrets
 

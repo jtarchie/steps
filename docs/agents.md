@@ -41,10 +41,10 @@ jobs:
     inputs: [notes]
     prompt: "What does notes/plan.txt say?"
     assert:
-      tool_calls:                 # the granted built-in really was reachable
+      tool_calls:                 # read_file really ran, with this path...
       - name: read_file
         args: { path: notes/plan.txt }
-      stdout: widgets ship on tuesday
+      stdout: widgets ship on tuesday   # ...and the answer could only come from what it returned
   assert:
     execution: [fetch, reader]
     outcome: succeeded
@@ -510,6 +510,8 @@ jobs:
   - agent: reviewer
     prompt: "Review the change."
     verdicts: [approve, revise]      # no routing — this one just decides
+    assert:
+      verdict: approve               # what it decided, pinned at the source
   - agent: editor
     prompt: "Apply the review."
     context:
@@ -556,6 +558,7 @@ agents:
   reasoning_effort: low       # low | medium | high, for models that take one
   delegate_budget_percent: 25 # this agent's helpers get a bigger share
   preflight: false            # ...and this one skips the probe (a slow local model)
+- name: titler                # no source: at all — defaults.model is its model
 
 jobs:
 - name: draft
@@ -564,8 +567,12 @@ jobs:
     prompt: "Draft the release note."
     assert:
       stdout: Drafted
+  - agent: titler
+    prompt: "Title the release note."
+    assert:
+      stdout: Titled
   assert:
-    execution: [drafter]
+    execution: [drafter, titler]
     outcome: succeeded
 ```
 
@@ -834,8 +841,8 @@ jobs:
       member_errors: fail             # or: exclude
       agents:
       - {agent: reviewer-a, prompt: "Review the diff for correctness."}
-      - {agent: reviewer-b, prompt: "Review the diff for correctness."}
-      - {agent: reviewer-c, prompt: "Review the diff for correctness."}
+      - {agent: reviewer-b, prompt: "Review the diff for style."}
+      - {agent: reviewer-c, prompt: "Review the diff for security."}
   - task: revise
     run: echo sending back
   - task: publish

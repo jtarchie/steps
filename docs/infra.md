@@ -214,15 +214,20 @@ Commands run with a deliberately narrow environment: a host command sees a fixed
 ```yaml
 tasks:
 - name: deploy
-  env: [DEPLOY_REGION, SSH_AUTH_SOCK]
-  run: echo "deploying to ${DEPLOY_REGION:-nowhere (DEPLOY_REGION is unset)}"
+  env: [OPENROUTER_API_KEY]     # the name; the value stays in the operator's env
+  run: |
+    if [ "${OPENROUTER_API_KEY+set}" = set ]; then
+      echo "credential reached the command"
+    else
+      echo "credential was filtered out"
+    fi
 
 jobs:
 - name: release
   plan:
   - task: deploy
     assert:
-      stdout: deploying to      # unset or not, the name reached the command
+      stdout: credential reached the command   # delete the env: line and this fails
   assert:
     execution: [deploy]
     outcome: succeeded
@@ -230,7 +235,7 @@ jobs:
 
 - **Names, never values.** `env: [DEPLOY_TOKEN=hunter2]` is rejected at load time, following `api_key_env:`/`webhook_token_env:`. The reason is concrete: these fields are hashed into the merkle content map, which is written to `state.db` — a literal would be persisted in cleartext.
 - **Works on both execution paths.** On the host the named variables are added to the allowlist; in a container they're passed as `docker run -e NAME` (no value), so the secret never appears in an argv the host's process list would expose.
-- **An unset variable contributes nothing** rather than an empty value, so a command can still tell "not configured" from "configured empty".
+- **An unset variable contributes nothing** rather than an empty value, so a command can still tell "not configured" from "configured empty" — with the colon-less shell forms (`${VAR+set}`, as above, or `${VAR-fallback}`); `${VAR:-fallback}` collapses the two.
 - **Step-level override**: a `task`/`agent` step's `env:` replaces the referenced entry's for that step only. Unlike `image:` this is *declared*-wins, not non-empty-wins — an explicit `env: []` means "nothing beyond the baseline", which is a real thing to want. Invalid on `get`/`put` steps (set it on the resource type).
 - **Caching**: the variable **names** fold into the node's hash. The values do not — a value changing is the operator's environment moving under the pipeline, which steps has never claimed to hash.
 
@@ -286,7 +291,7 @@ steps watch pipeline.yml --interval 30s --max-concurrent 1
 - **Two independent loops, connected only through a durable store-backed queue**: a **poller** checks every trigger resource on `--interval`, diffs the latest version against what's recorded, and enqueues every affected job; a **worker pool** (`--max-concurrent`, default 1) drains that queue by calling the same job runner `steps run` uses. The durable queue means a crash mid-run doesn't lose pending work.
 - **At-least-once, never at-most-once**: a resource's recorded version only advances *after* every affected job is durably enqueued. If a check errors or the process crashes mid-poll, the resource stays "dirty" and is retried next poll rather than silently dropped.
 - **Cold start seeds a baseline, never triggers.** A resource checked for the first time just records its current version — a fresh (or freshly lost) state database can't mass-re-run every job the moment `watch` starts.
-- **Dedup, ordering, and per-job serialization**: a resource going dirty twice before a worker claims the row enqueues its affected job once — but a job already running can still get a fresh pending row queued behind it, so a version change mid-run isn't dropped. Claiming a job never overlaps two runs of the same job.
+- **Dedup, ordering, and per-job concurrency**: a resource going dirty twice before a worker claims the row enqueues its affected job once — but a job already running can still get a fresh pending row queued behind it, so a version change mid-run isn't dropped. Claiming respects the job's [`max_in_flight:`](#max_in_flight--how-many-builds-of-one-job-at-once) — unlimited when unset, forced to 1 by `serial:`/`serial_groups:`.
 - **Graceful-shutdown carve-out**: a job interrupted by SIGINT/SIGTERM mid-run is *not* marked failed — its row is left "running" and reset to "pending" on the next startup, recovering a hard crash and an interrupted shutdown the same way.
 
 ## Get renaming (`resource:`)
@@ -526,7 +531,7 @@ assert:
 10:03:20  deploy-staging started
 ```
 
-- **`serial: true` is a statement of intent, not a switch.** This runner *always* serializes builds of one job. Writing it records that your pipeline depends on that guarantee. There is deliberately no `serial: false` — it would promise a parallelism this runner does not offer.
+- **`serial: true` forces one build at a time.** It is [`max_in_flight: 1`](#max_in_flight--how-many-builds-of-one-job-at-once) in Concourse's older spelling, and it does something: an unset job is unlimited. `serial: false` is just that default spelled out — writing `serial: true` beside `max_in_flight:` is a load error, since the number would do nothing.
 - **The lock is taken inside the claim**, in one atomic statement — a read-then-claim would have a race exactly where the lock is supposed to be.
 - **"Queued" and "blocked on a lock" look different.** A blocked job says who is holding it; otherwise a held job is indistinguishable from an idle watcher.
 - **Membership is synced from the pipeline on every `steps watch` startup.** A group removed from the YAML stops holding a lock immediately.

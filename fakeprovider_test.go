@@ -256,6 +256,47 @@ func (r capturedRequest) toolResults() []string {
 	return results
 }
 
+// userMessageContains reports whether any user message in the request's
+// history carries text — how a routed fake pins that a prompt (inline, from a
+// file, or from a fetched artifact) actually reached the wire.
+func (r capturedRequest) userMessageContains(text string) bool {
+	for _, msg := range r.Messages {
+		if msg.Role == "user" && strings.Contains(msg.Content, text) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// toolResultContains reports whether any tool result in the request's history
+// carries text — how a routed fake gates its answer on a tool having actually
+// delivered content, rather than merely having been requested.
+func (r capturedRequest) toolResultContains(text string) bool {
+	for _, result := range r.toolResults() {
+		if strings.Contains(result, text) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// historyCalled reports whether the request's history carries an assistant
+// tool call of this name — the other half of "a completed tool turn is
+// present", alongside toolResults.
+func (r capturedRequest) historyCalled(name string) bool {
+	for _, msg := range r.Messages {
+		for _, call := range msg.ToolCalls {
+			if call.Function.Name == name {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // forcedTool returns the name of the tool this request's tool_choice forces,
 // or "" when the model was left free to choose. A non-empty value is the
 // observable signal that the conversation loop caught the model trying to

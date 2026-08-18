@@ -8,6 +8,10 @@
 //	```yaml                a complete pipeline; schema-validated and executed
 //	```yaml test=<id>      executed against the fake LLM scenario named <id>
 //	                       (docs_scenarios_test.go) — required for agent steps
+//	```yaml mcp=<id>       executed with every mcp_servers: entry pointed at
+//	                       the in-process fake MCP fixture named <id>
+//	                       (docs_mcp_test.go) — required for mcp examples
+//	                       that run
 //	```yaml noexec=<why>   schema-validated and loaded, not executed, because
 //	                       this host cannot run it — the reason is mandatory
 //	                       and drawn from a fixed vocabulary (see NoexecReason)
@@ -52,7 +56,7 @@ func (b Block) Mode() string {
 			return field
 		case field == "noexec" || strings.HasPrefix(field, "noexec="):
 			return "noexec"
-		case strings.HasPrefix(field, "test="):
+		case strings.HasPrefix(field, "test="), strings.HasPrefix(field, "mcp="):
 			return "run"
 		}
 	}
@@ -98,9 +102,26 @@ func (b Block) TestID() string {
 	return ""
 }
 
-// Name identifies the block in test output: page, line, and scenario if any.
+// MCPID is the fake MCP fixture this block's mcp_servers: are pointed at
+// during execution (docs_mcp_test.go), "" when none.
+func (b Block) MCPID() string {
+	for _, field := range strings.Fields(b.Info) {
+		if id, ok := strings.CutPrefix(field, "mcp="); ok {
+			return id
+		}
+	}
+
+	return ""
+}
+
+// Name identifies the block in test output: page, line, and scenario or MCP
+// fixture if any.
 func (b Block) Name() string {
 	if id := b.TestID(); id != "" {
+		return fmt.Sprintf("%s:%d(%s)", b.Page, b.Line, id)
+	}
+
+	if id := b.MCPID(); id != "" {
 		return fmt.Sprintf("%s:%d(%s)", b.Page, b.Line, id)
 	}
 

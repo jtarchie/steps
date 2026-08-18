@@ -18,7 +18,8 @@ import (
 // where it's attached:
 //   - On a Config (top level), only Execution is valid: an ordered list of the
 //     job names that must have run.
-//   - On a Job, Execution (task/agent/hook names) and Outcome. By omission
+//   - On a Job, Execution (task/agent/get/put/hook names, in execution
+//     order) and Outcome. By omission
 //     Execution also asserts what must NOT run. A matching Job Execution
 //     clears the plan's failure, so one green fixture can contain
 //     deliberately-failing tasks; Outcome is how a fixture says what the plan

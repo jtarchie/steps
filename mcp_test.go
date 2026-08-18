@@ -57,15 +57,27 @@ jobs:
 	return path
 }
 
+// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestMCPToolsListsRealServer(t *testing.T) {
-	t.Parallel()
-
 	ts := mcpCLIFixtureServer(t)
 	path := mcpCLIPipeline(t, ts.URL)
 
-	err := run([]string{"mcp", "tools", path, "test"})
+	var err error
+
+	out := captureStdout(t, func() {
+		err = run([]string{"mcp", "tools", path, "test"})
+	})
+
 	if err != nil {
 		t.Fatalf("run(mcp tools): %v", err)
+	}
+
+	// The listing has to NAME what the server exposes — a zero exit with an
+	// empty printout would otherwise pass for a working command.
+	for _, want := range []string{"ping", "Replies pong.", "arguments:"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("mcp tools output is missing %q:\n%s", want, out)
+		}
 	}
 }
 

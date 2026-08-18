@@ -221,6 +221,9 @@ Three things follow:
 `defaults.version_history:` caps it per resource, keeping the newest (`0` keeps everything, as [every limit here does](attempts-timeout.md#zero-means-no-limit)):
 
 ```yaml
+# The cap itself is not observable in one run — internal/store's tests measure
+# the pruning. This example pins only that the field loads and a capped
+# resource still fetches normally.
 defaults:
   # A git branch produces a version per push; a chat feed one per message.
   # The right number is a property of what you watch.
@@ -358,14 +361,14 @@ Runs when a `put` step executes. Optional: a type with no `out:` is read-only, a
 
 ### A put publishes; it does not fetch
 
-A put step runs `out:` and nothing else — there is no implicit get afterward, so a put produces no artifact. (Concourse fetches the produced version automatically; steps deliberately does not: an artifact appearing in the build that no step declared is exactly the kind of ambient data flow this DSL rejects.) A plan that wants the just-published version writes the fetch it means:
+A put step runs `out:` and nothing else — there is no implicit get afterward, so a put produces no artifact. (Concourse fetches the produced version automatically; steps deliberately does not: an artifact appearing in the build that no step declared is exactly the kind of ambient data flow this DSL rejects.) A plan that wants the resource's contents after a put writes the fetch it means:
 
 ```yaml
 resource_types:
 - name: release
   config:
     check: |
-      printf '[{"ref": "v1.4.2"}]'
+      printf '[{"ref": "v1.4.1"}]'
     in: echo {{ .version.ref | shellquote }} > ref
     out: |
       cat notes/summary.txt        # "publish" the summary an earlier step wrote
@@ -382,20 +385,22 @@ jobs:
   - task: summarize
     outputs: [notes]
     run: echo 'what changed' > notes/summary.txt
-  - put: releases              # out: publishes and prints the version
+  - put: releases              # out: publishes and prints v1.4.2
     inputs: [notes]
-  - get: releases              # fetch it back, explicitly
+  - get: releases              # fetch the resource, explicitly
   - task: verify
     inputs: [releases]
     run: cat releases/ref
     assert:
-      stdout: v1.4.2
+      # check's answer, NOT the v1.4.2 the put just printed — the get was
+      # pinned when the plan was built, before out: ran. See below.
+      stdout: v1.4.1
   assert:
     execution: [summarize, releases, releases, verify]   # put, then get — two entries
     outcome: succeeded
 ```
 
-The explicit get fetches the resource's **latest** version at that moment, like any other get — for almost every plan that is the version the put just published, but a concurrent publisher can race it. A put whose output nothing reads simply has no get after it.
+The explicit get fetches the version `check` reported **when the plan was built** — check runs once, before any step, so the version the put publishes mid-run is not what the same run's get fetches (the example above pins exactly that: `out:` prints `v1.4.2`, the get still fetches `v1.4.1`). The version a put prints is recorded with the run; it reaches gets in *later* runs, once a check has reported it — a downstream job triggered on the resource is the plan shape that consumes what a put published. A put whose output nothing reads simply has no get after it.
 
 ## Shell safety
 
@@ -498,12 +503,12 @@ resource_types:
 - name: builds
   config:
     check: |
-      printf '[{"number": "87"}, {"number": "88"}]'
+      printf '[{"number": "87"}, {"number": "88"}, {"number": "89"}]'
     in: echo {{ .version.number | shellquote }} > number.txt
 - name: configs
   config:
     check: |
-      printf '[{"rev": "5"}]'
+      printf '[{"rev": "5"}, {"rev": "6"}]'
     in: echo {{ .version.rev | shellquote }} > rev.txt
 
 resources:
@@ -523,11 +528,20 @@ jobs:
     version: every
   - task: show
     inputs: [build, conf]
-    run: echo "$(cat build/number.txt) with conf $(cat conf/rev.txt)"
+    # The case pins the pairing, not just the count: a cross product would
+    # build (87,6), (88,5) or (89,5) and fail here.
+    run: |
+      pair="$(cat build/number.txt)-$(cat conf/rev.txt)"
+      case "$pair" in
+        87-5|88-6|89-6) echo "took $pair" ;;
+        *) echo "unexpected pair $pair"; exit 1 ;;
+      esac
+    assert:
+      stdout: took
   assert:
-    # Two sets: (87, 5) and (88, 5) — conf is exhausted after the first
-    # set and HOLDS at rev 5 while build keeps moving. Not a cross product.
-    execution: [build, conf, show, build, conf, show]
+    # Three sets, not six: (87,5), (88,6), then conf is exhausted and
+    # HOLDS at rev 6 while build keeps moving — (89,6).
+    execution: [build, conf, show, build, conf, show, build, conf, show]
     outcome: succeeded
 
 assert:
@@ -566,7 +580,7 @@ jobs:
     outcome: succeeded
 ```
 
-See [infra.md](infra.md) for the watch loop, webhooks, and cross-job triggering.
+See [infra.md](infra.md) for the watch loop, webhooks, and cross-job triggering. Gating a get on upstream jobs — Concourse's `passed:` — is there too: [infra.md#passed](infra.md#passed--only-run-against-versions-that-are-green-upstream).
 
 ## MCP-backed types
 

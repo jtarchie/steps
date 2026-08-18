@@ -2,7 +2,7 @@
 # the host's network, so accepting `network: none` here would promise an
 # isolation that does not exist -- the kind of thing discovered in an incident
 # review rather than at load time.
-# expect: requires image:
+# expect: network "none" requires image:
 
 tasks:
 - name: build

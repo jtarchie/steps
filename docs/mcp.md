@@ -2,7 +2,7 @@
 
 MCP (Model Context Protocol) servers are a third kind of external system, alongside LLM providers (`agents:`) and shell-backed resource types (`resource_types:`): a reusable, named connection (`mcp_servers:`) that an agent's `tools:` grant can draw tools from, and/or a resource type's `check`/`in`/`out` can call instead of shelling out.
 
-**Two transports**: Streamable HTTP (`endpoint:`) or a local subprocess over stdio (`command:`). The examples on this page validate but are not executed by the docs suite — they need real servers and credentials.
+**Two transports**: Streamable HTTP (`endpoint:`) or a local subprocess over stdio (`command:`). The agent-facing and stdio examples on this page validate but are not executed by the docs suite — they need real servers and credentials. The resource-type examples execute under the suite against an in-process MCP server standing in for the vendor's, so the endpoints they show are illustrative but the check/in/out behavior they demonstrate is tested.
 
 ## Declaring a server
 
@@ -86,10 +86,10 @@ steps mcp list pipeline.yml
 ```
 
 ```
-NAME    TRANSPORT  TARGET                              AUTH                USED BY                     STATUS
-github  http       https://api.githubcopilot.com/mcp/  bearer $GITHUB_PAT  agent triager               ✗ environment variable "GITHUB_PAT" (api_key_env) is not set
-linear  http       https://mcp.linear.app/mcp          oauth               resource_type linear-issue  ✓ 24 tools
-gopls   stdio      gopls mcp (cwd: repo)               none                agent coder                 · not probed (cwd: repo resolves per step)
+NAME    TRANSPORT  TARGET                              AUTH                USED BY        STATUS
+github  http       https://api.githubcopilot.com/mcp/  bearer $GITHUB_PAT  agent triager  ✗ environment variable "GITHUB_PAT" (api_key_env) is not set
+linear  http       https://mcp.linear.app/mcp          oauth               (unused)       ✓ 24 tools
+gopls   stdio      gopls mcp (cwd: repo)               none                agent coder    · not probed (cwd: repo resolves per step)
 ```
 
 - **It connects, by default.** The file says a server exists; only a connection says it works — the binary is on this machine's PATH, the bearer token's env var is set, the oauth token is still good. Each server is probed concurrently, bounded by the same `defaults.preflight.timeout` a run's preflight uses.
@@ -146,7 +146,7 @@ jobs:
 
 ## Backing a resource type with MCP
 
-```yaml noexec=credentials
+```yaml mcp=mcp-linear-issues
 mcp_servers:
 - name: linear
   endpoint: https://mcp.linear.app/mcp
@@ -179,6 +179,12 @@ jobs:
   - task: record
     inputs: [eng-bugs]
     run: cat eng-bugs/version.json
+    assert:
+      stdout: ENG-204        # the suite's server reports ENG-101 then ENG-204,
+                             # oldest first — so the get took the LATEST
+  assert:
+    execution: [eng-bugs, record]
+    outcome: succeeded
 ```
 
 - **Every stage is optional, but a block must do something.** A type declaring none of `check:`/`in:`/`out:` is a load error. A `get` against a type with no `check:` is one too, and so is a `put` against a type with no `out:` — which is what makes a **publish-only type** (all `out:`, no `check:`) a first-class shape: the half of a workflow that posts a reply has no versions to discover, and naming a check tool nothing ever calls would be a ritual. `mcp:` is mutually exclusive with the shell `check:`/`in:`/`out:` strings — a resource type sets one style or the other, which is how a pipeline **detects over HTTP and acts over MCP**: two resource types, one shell-backed and one MCP-backed.
@@ -193,7 +199,7 @@ jobs:
 
 `check`'s `version` is the [check cursor](resources.md#the-check-cursor) — the version the last successful check reported — and `args:` is the only way to reach it. A check with no `args:` still sends the `source:` alone: that payload is the tool's own published schema, and no third-party server declares a parameter steps invented.
 
-```yaml noexec=credentials
+```yaml mcp=mcp-slack-thread
 mcp_servers:
 - name: slack
   endpoint: https://mcp.slack.com/mcp
@@ -229,6 +235,20 @@ jobs:
   plan:
   - get: mentions
     trigger: true
+  - task: read
+    inputs: [mentions]
+    run: cat mentions/content-0.txt   # slack_read_thread's text result
+    assert:
+      stdout: C0123456789 at 1717171717.000100   # the version's own fields,
+                                                 # delivered through in.args:
+  - put: mentions                     # answer in the thread the check found
+    params:
+      channel: C0123456789
+      thread_ts: "1717171717.000100"
+      text: on it
+  assert:
+    execution: [mentions, read, mentions]
+    outcome: succeeded
 ```
 
 - **`args:` replaces the default payload entirely** — it is the argument object, not an addition to it.
@@ -334,7 +354,7 @@ A shell `out:` runs with the put's read view as its working directory and reads 
 
 A `params:` mapping whose **only** key is `file` is replaced by that file's contents:
 
-```yaml noexec=credentials
+```yaml mcp=mcp-file-params
 mcp_servers:
 - name: linear
   endpoint: https://mcp.linear.app/mcp
@@ -359,11 +379,16 @@ jobs:
   - task: investigate
     outputs: [report]
     run: echo 'the retry loop never backs off' > report/body.md
+    assert:
+      files: [report/body.md]
   - put: eng-bugs
     inputs: [report]
     params:
       title: Retry loop spins
       description: { file: report/body.md }   # <- contents, not the literal map
+  assert:
+    execution: [investigate, eng-bugs]
+    outcome: succeeded
 ```
 
 - **The path is relative to the put's read view**, so its first component names an artifact in the step's `inputs:` — the same path shape as `across:`'s `from_file:`. Absolute paths, `../` escapes, and a bare filename naming no artifact are all errors, as is a file that isn't there (which says so, and asks whether its artifact is in `inputs:`).

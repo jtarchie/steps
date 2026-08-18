@@ -99,8 +99,8 @@ jobs:
 	}
 }
 
-// An agent step can never be cached, and the plan says so in the same words
-// the run itself uses rather than leaving the reader to wonder.
+// A step with a when: guard cannot be cached, and the plan says so in the
+// same words the run itself uses rather than leaving the reader to wonder.
 func TestPlanNamesWhyAStepCannotBeCached(t *testing.T) {
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `

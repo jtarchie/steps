@@ -1,6 +1,6 @@
 # Two axes with one name: the second would silently shadow the first, and half
 # the matrix would quietly not exist.
-# expect: twice
+# expect: declares var "suite" twice
 
 jobs:
 - name: build

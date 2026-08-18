@@ -20,8 +20,8 @@ jobs:
 - name: review
   plan:
   - agent: reviewer
-    attempts: 2                    # 3 is the agent default; spelled out so this
-    prompt: "Review the release."  # fixture pins it — one provider 500 is absorbed
+    attempts: 2                    # pins that a retry absorbs the one provider 500 —
+    prompt: "Review the release."  # any attempts >= 2 would pass; the default is 3
     assert:
       stdout: Release looks good   # the answer AFTER the absorbed 500
   assert:
@@ -104,9 +104,31 @@ jobs:
 - **It fails the job**, as a job-level *failure* (the same class as exceeding `max_visits:`), so the job's own `on_failure` and `ensure` fire. That is where a "this took too long" notification belongs.
 - **It does not degrade**, unlike [`budget:` on an `across:` block](control-flow.md#a-ceiling-that-degrades-budget). A job-level limit is a backstop against a run that has gone wrong, and stopping loudly is the right answer.
 
+Those claims are pinned by a deliberately-expired deadline: the step that outlives it finishes and *succeeds*, the next step is never admitted, and the job's `on_failure` — not `on_error` — fires, because a job-level deadline is a failure where a step-level one is an error (see [Timeout classification](#timeout-classification)):
+
+```yaml
+jobs:
+- name: bounded-expired
+  timeout: 1s
+  on_failure:
+    task: overdue
+    run: echo the job deadline expired
+  on_error:
+    task: wrong-class
+    run: echo this must not fire
+  plan:
+  - task: slow
+    run: sleep 2                 # outlives the job's deadline, and still succeeds
+  - task: never
+    run: echo must not run
+  assert:
+    execution: [slow, overdue]   # slow kept its work; never was not admitted
+    outcome: failed
+```
+
 ### An expired timeout is not retried
 
-When an attempt exhausts its own `timeout:`, the step ends there — the remaining attempts are **skipped**. The same work against the same budget expires again, so retrying only doubles the wall clock and the bill. This matters most for `agent` steps, where a retried conversation would be rebuilt from scratch and paid for a second time.
+When an attempt exhausts its own `timeout:`, the step ends there — the remaining attempts are **skipped**. (A deliberate divergence from Concourse, which retries a timed-out attempt like any other failure — see [conformance.md](conformance.md).) The same work against the same budget expires again, so retrying only doubles the wall clock and the bill. This matters most for `agent` steps, where a retried conversation would be rebuilt from scratch and paid for a second time.
 
 `attempts:` buys retries of a transient fault; it cannot buy more time. If a step legitimately needs longer, raise `timeout:`:
 
@@ -194,7 +216,7 @@ Retryable failures are connection errors and HTTP 408, 409, 429, and 5xx. A 400 
 
 ## Timeout classification
 
-Timeouts classify as **errored**, not **failed** — `on_error` fires, `on_failure` does not. Failed means the step itself said no (nonzero exit, red verdict); errored means the infrastructure did (timeout, docker, transport). This fixture pins it — the `assert:` block is what keeps a deliberately-erroring job green under `steps test` (see [control-flow.md](control-flow.md#assert-self-verification--steps-test)):
+Timeouts classify as **errored**, not **failed** — `on_error` fires, `on_failure` does not. (Concourse makes the opposite call for a step timeout — a divergence tracked in [conformance.md](conformance.md).) Failed means the step itself said no (nonzero exit, red verdict); errored means the infrastructure did (timeout, docker, transport). This fixture pins it — the `assert:` block is what keeps a deliberately-erroring job green under `steps test` (see [control-flow.md](control-flow.md#assert-self-verification--steps-test)):
 
 ```yaml
 jobs:

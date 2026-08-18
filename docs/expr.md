@@ -206,7 +206,7 @@ resource_types:
         // politely on a 429, and each result carries the request that made it.
         http(channels | map((
               {url: "https://slack.com/api/conversations.history",
-               query: {channel: #, oldest: version.ts ?? "0", limit: "200"}}
+               query: {channel: #, oldest: version.ts ?? "0", limit: string(source.limit)}}
             )),
             {headers: auth, concurrency: 4, retry: {on: [429, 503], max: 3}})
         | map((
@@ -234,9 +234,6 @@ jobs:
   - get: asks
     trigger: true
     version: every
-  assert:
-    execution: [asks]
-    outcome: succeeded
 ```
 
 Note `version.ts ?? "0"`: that is the [cursor](resources.md#the-check-cursor), and it is why there is no `limit: 20` guess here. And `sortBy(float(#.ts))` — a Slack `ts` is a *string*, so sorting it as one silently misorders.
