@@ -10,10 +10,14 @@ package web
 // So JSON is PARSED here rather than printed, which buys four things a
 // re-indent could not:
 //
-//   - key order survives. encoding/json's MarshalIndent sorts, because a
-//     round trip through map[string]any has no order left to keep — but the
-//     order a provider or a tool chose is information, and reading a
-//     trajectory whose fields shuffle costs real attention.
+//   - a document nested inside a string keeps ITS author's key order. The
+//     outer envelope's order is already gone by the time it reaches here —
+//     internal/agent records args and results as map[string]any, and a merkle
+//     content map MUST marshal sorted for the hash to be deterministic — but
+//     the bytes inside a "content" string are a file, or a model-authored
+//     body, and those never passed through a Go map. Re-marshaling to
+//     re-indent would sort them too, which is a receipt rewriting its own
+//     evidence.
 //   - a string value that is ITSELF a JSON document renders as that
 //     document, unescaped, still inside its own quotes so the nesting stays
 //     honest rather than being flattened away.
@@ -215,63 +219,68 @@ func (n jsonNode) block() bool {
 
 // inlineable reports a value that reads better on a transcript row than in a
 // block beneath it.
-func (n jsonNode) inlineable() bool {
-	if n.hasBlock() {
-		return false
+func (n jsonNode) inlineable() bool { return n.inlineFits(jsonInlineWidth) >= 0 }
+
+// inlineFits reports the budget left after rendering this value on one line,
+// or -1 for a value that cannot be — either because it is wider than the
+// budget, or because a string somewhere under it has to become its own block
+// and a block cannot live on a single line.
+//
+// Bounded on purpose: it stops the moment the budget is gone, so deciding
+// whether a 32KB tool result fits in 96 columns costs 96 columns of walking
+// rather than 32KB of it — and this runs for every container of every turn on
+// the page.
+func (n jsonNode) inlineFits(budget int) int {
+	if budget < 0 || n.block() {
+		return -1
 	}
 
-	return n.inlineWidth() <= jsonInlineWidth
-}
-
-// hasBlock reports a block-rendered string anywhere in the tree — one is
-// enough to force the whole value into a block, since a document cannot be
-// nested inside a single line.
-func (n jsonNode) hasBlock() bool {
-	if n.block() {
-		return true
-	}
-
-	for _, kid := range n.kids {
-		if kid.hasBlock() {
-			return true
-		}
-	}
-
-	return false
-}
-
-// inlineWidth is how wide this value would render on one line. Approximate by
-// construction — an escaped quote costs more characters than it counts — and
-// that is fine: it decides a layout, not a correctness property.
-func (n jsonNode) inlineWidth() int {
 	switch n.kind {
-	case kindObject, kindArray:
-		width := len("{}")
-
-		for i, kid := range n.kids {
-			if i > 0 {
-				width += len(",")
-			}
-
-			width += len(" ") + kid.inlineWidth()
-
-			if n.kind == kindObject {
-				width += len(`"": `) + len(kid.key)
-			}
-		}
-
-		if len(n.kids) > 0 {
-			width += len(" ")
-		}
-
-		return width
 	case kindString:
-		return len(n.text) + len(`""`)
+		return spend(budget, len(n.text)+len(`""`))
 	case kindNumber, kindLiteral:
-		return len(n.lit)
+		return spend(budget, len(n.lit))
+	case kindObject, kindArray:
+		return n.membersFit(budget)
 	}
 
-	return 0
+	return -1
+}
+
+// membersFit measures a container's brackets and everything between them.
+func (n jsonNode) membersFit(budget int) int {
+	budget = spend(budget, len("{}"))
+
+	for i, kid := range n.kids {
+		if i > 0 {
+			budget = spend(budget, len(","))
+		}
+
+		budget = spend(budget, len(" "))
+
+		if n.kind == kindObject {
+			budget = spend(budget, len(`"": `)+len(kid.key))
+		}
+
+		budget = kid.inlineFits(budget)
+	}
+
+	if len(n.kids) > 0 {
+		budget = spend(budget, len(" "))
+	}
+
+	return budget
+}
+
+// spend draws cost from a budget, reporting exhaustion as -1 and staying
+// there: every later call sees a negative budget and returns -1 in turn, which
+// is what lets the walk unwind without a bail at each step.
+func spend(budget, cost int) int {
+	if budget < 0 || cost > budget {
+		return -1
+	}
+
+	return budget - cost
 }
 
 // writeInline renders the value on one line, with spaces inside the brackets:
@@ -486,16 +495,28 @@ func plainView(raw string) jsonView {
 }
 
 // jsonPre renders a payload as a block, always — for the pages that give it a
-// <pre> of its own and have nothing to fold it behind.
+// <pre> of its own and have nothing to fold it behind. A payload that is not a
+// document is shown as it came, escaped, rather than dropped.
 func jsonPre(raw string) template.HTML {
-	if strings.TrimSpace(raw) == "" {
-		return ""
+	if block, ok := jsonBlock(raw); ok {
+		return block
 	}
 
+	//nolint:gosec // G203: escaped, no markup added
+	return template.HTML(template.HTMLEscapeString(strings.TrimRight(raw, "\n")))
+}
+
+// jsonBlock renders a payload as a highlighted block, reporting false when it
+// is not a complete JSON document.
+//
+// The distinction matters to the one caller that has somewhere better to fall
+// back to: prose.go hands a ```json fence here, and a fence cut off mid-object
+// — a truncated response — is better served by a lexer that tolerates a
+// fragment than by this parser, which correctly refuses it.
+func jsonBlock(raw string) (template.HTML, bool) {
 	node, ok := parseJSONDocument(raw, 0)
 	if !ok {
-		//nolint:gosec // G203: escaped, no markup added
-		return template.HTML(template.HTMLEscapeString(strings.TrimRight(raw, "\n")))
+		return "", false
 	}
 
 	var out strings.Builder
@@ -503,7 +524,7 @@ func jsonPre(raw string) template.HTML {
 	node.writeBlock(&out, 0)
 
 	//nolint:gosec // G203: spans built above, values escaped
-	return template.HTML(out.String())
+	return template.HTML(out.String()), true
 }
 
 // jsonLine renders a payload on one line, for a table cell that cannot host a

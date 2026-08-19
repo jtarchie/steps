@@ -136,7 +136,6 @@ func templateFuncs() template.FuncMap {
 		"prose":     renderProse,
 		"thousands": thousands,
 		"lower":     strings.ToLower,
-		"trim":      strings.TrimSpace,
 		"trimMD":    func(name string) string { return strings.TrimSuffix(name, ".md") },
 		"sparkline": sparkline,
 		// The sparkline's geometry: bars are 6 wide on an 8-unit pitch, drawn
@@ -228,13 +227,18 @@ func statusWord(status string) string {
 // ("34,500 tokens"), so the two front ends do not report the same number in
 // two spellings.
 func thousands(n int) string {
-	if n < 0 {
-		return "-" + thousands(-n)
-	}
-
 	digits := strconv.Itoa(n)
 
+	// Grouped after the sign rather than by recursing on -n: negating
+	// math.MinInt64 yields itself, so that guard never terminated.
+	sign := ""
+	if strings.HasPrefix(digits, "-") {
+		sign, digits = "-", digits[1:]
+	}
+
 	var out strings.Builder
+
+	out.WriteString(sign)
 
 	for i, digit := range digits {
 		if i > 0 && (len(digits)-i)%3 == 0 {
@@ -307,10 +311,14 @@ type transcriptEvent struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
 	Name string `json:"name,omitempty"`
-	// Args stays raw rather than decoding to a map: a map has no key order,
-	// and re-marshaling one sorts the arguments a model actually authored in
-	// some order. Kept verbatim, this page shows the same call the run
-	// transcript does.
+	// Args stays raw rather than decoding to a map and marshaling it again.
+	// Not because that would restore an order — internal/agent already stored
+	// these as a map[string]any (transcript.go), so the model's own ordering
+	// was canonicalized away upstream and no consumer can get it back. It
+	// stays raw because a second reshape can only lose: a non-object args
+	// value would decode to nothing, and the run transcript reads the very
+	// same recorded bytes, so both pages show one string rather than two
+	// re-encodings of it.
 	Args    json.RawMessage   `json:"args,omitempty"`
 	Content string            `json:"content,omitempty"`
 	Agent   string            `json:"agent,omitempty"`

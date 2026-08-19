@@ -52,6 +52,21 @@
   });
   document.addEventListener('click', function () { pipemenu.classList.remove('open'); });
 
+  // A shared link names a step; open it so the reader lands on the content
+  // rather than on a collapsed row they still have to click. Here rather than
+  // in the live-run script, which is where it used to live: the link a person
+  // actually pastes is read days later, against a run that finished. Adding
+  // the class (rather than opening the body from :target in CSS) is what keeps
+  // the chevron honest and the row still collapsible.
+  function openHashTarget() {
+    if (!window.location.hash) return;
+    var target = document.querySelector(window.location.hash);
+    if (target && target.classList.contains('step')) target.classList.add('open');
+  }
+
+  openHashTarget();
+  window.addEventListener('hashchange', openHashTarget);
+
   document.querySelectorAll('.step[data-toggle] > .stephead').forEach(function (head) {
     var toggle = function () { head.parentElement.classList.toggle('open'); };
     head.addEventListener('click', function (e) { if (!e.target.closest('a')) toggle(); });
@@ -155,4 +170,4 @@
 
 {{/* An agent's recorded response: prose as written, fenced blocks
      highlighted. See prose.go for why the fence is the only markdown honored. */}}
-{{define "prosebody"}}{{range prose .}}{{if .IsCode}}<pre class="json code">{{if .Lang}}<span class="codelang">{{.Lang}}</span>{{end}}{{.Code}}</pre>{{else}}<p class="say">{{.Text}}</p>{{end}}{{end}}{{end}}
+{{define "prosebody"}}{{range prose .}}{{if .IsCode}}<div class="codeblock">{{if .Lang}}<span class="codelang">{{.Lang}}</span>{{end}}<pre class="json code">{{.Code}}</pre></div>{{else}}<p class="say">{{.Text}}</p>{{end}}{{end}}{{end}}

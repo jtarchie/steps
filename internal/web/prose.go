@@ -139,9 +139,12 @@ func highlightCode(body, lang string) template.HTML {
 		return " "
 	}
 
+	// A complete document goes through this package's renderer; a fence cut
+	// off mid-object falls through to chroma, which lexes a fragment where the
+	// parser can only refuse it.
 	if lang == "json" {
-		if rendered := jsonPre(body); rendered != "" {
-			return rendered
+		if block, ok := jsonBlock(body); ok {
+			return block
 		}
 	}
 

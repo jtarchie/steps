@@ -16,9 +16,9 @@
   <span class="rail">→</span> <b>{{short .Node.Hash}}</b>
 </p>
 
-{{if .Result}}
+{{with jsonPre .Result}}
 <h2 class="eyebrow">Result</h2>
-<pre class="contentmap json">{{jsonPre .Result}}</pre>
+<pre class="contentmap json">{{.}}</pre>
 {{end}}
 
 {{if .Transcript}}

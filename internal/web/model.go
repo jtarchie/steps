@@ -37,9 +37,13 @@ type stepView struct {
 	// Result is the node's recorded result, decoded — the verdict, the
 	// response, the trajectory. Nil when the step recorded none.
 	Result map[string]any
-	// Output is what the step printed. Empty for a failed step, whose output
-	// the error already carries.
-	Output string
+	// Outputs is what the step printed, one entry per output event.
+	//
+	// A slice rather than a string because a step with attempts: publishes one
+	// output per attempt, and the live stream appends a block for each. Held as
+	// a single overwritten string, the page a reader watched three attempts on
+	// would silently drop two of them at the closing reload.
+	Outputs []string
 }
 
 // Running reports a step that started and has not reported an end.
@@ -59,7 +63,7 @@ func (s stepView) Failed() bool {
 // isn't is worse than no chevron.
 func (s stepView) HasDetail(jobError string) bool {
 	return len(s.Turns) > 0 ||
-		s.Output != "" ||
+		len(s.Outputs) > 0 ||
 		s.DistinctError(jobError) != "" ||
 		s.Response() != "" ||
 		s.Note() != "" ||
@@ -98,26 +102,36 @@ func (s stepView) resultString(key string) string {
 }
 
 // Conversation is the step's turns with the one redundant turn dropped: the
-// model's LAST text is normally the answer the Response block already shows in
+// model's last text is normally the answer the Response block already shows in
 // full, and printing a whole response twice on one page — once mid-transcript,
 // once labeled — is noise exactly where a reader is trying to find the answer.
 //
-// Only the trailing turn, and only when it matches: a model's running
-// commentary mid-conversation is not the answer, and a response the model
-// never said in a text turn (a wrapped-up conversation, a verdict-only step)
-// still has to appear.
+// Only that turn, and only when it matches: a model's running commentary
+// mid-conversation is not the answer, and a response the model never said in a
+// text turn (a wrapped-up conversation, a verdict-only step) still has to
+// appear.
 func (s stepView) Conversation() []turnView {
 	response := strings.TrimSpace(s.Response())
 	if response == "" || len(s.Turns) == 0 {
 		return s.Turns
 	}
 
-	last := s.Turns[len(s.Turns)-1]
-	if last.Type != "agent_text" || strings.TrimSpace(last.Text) != response {
-		return s.Turns
+	// The last text, not the last turn: a model that emits text AND a tool call
+	// in one message records the result after the text, so keying on the
+	// trailing turn let the answer through twice.
+	for i := len(s.Turns) - 1; i >= 0; i-- {
+		if s.Turns[i].Type != "agent_text" {
+			continue
+		}
+
+		if strings.TrimSpace(s.Turns[i].Text) != response {
+			return s.Turns
+		}
+
+		return append(s.Turns[:i:i], s.Turns[i+1:]...)
 	}
 
-	return s.Turns[:len(s.Turns)-1]
+	return s.Turns
 }
 
 // turnView is one piece of agent conversation traffic.
@@ -293,9 +307,9 @@ func buildRunView(run store.RunRow, rows []store.RunEventRow, results map[string
 	return view
 }
 
-// attachOutput hangs a step's printed output on it. The event can arrive
-// before the step finishes, so the step is opened if it is not on the list
-// yet — the same tolerance closeStep has for a chain-skipped step.
+// attachOutput hangs one of a step's printed outputs on it. The event can
+// arrive before the step finishes, so the step is opened if it is not on the
+// list yet — the same tolerance closeStep has for a chain-skipped step.
 func attachOutput(view *runView, index map[string]int, row store.RunEventRow) {
 	position, seen := index[stepKey(row)]
 	if !seen {
@@ -303,7 +317,7 @@ func attachOutput(view *runView, index map[string]int, row store.RunEventRow) {
 		position = index[stepKey(row)]
 	}
 
-	view.Steps[position].Output = row.Text
+	view.Steps[position].Outputs = append(view.Steps[position].Outputs, row.Text)
 }
 
 // isAgentTraffic reports conversation events, which hang under a step rather

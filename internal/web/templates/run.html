@@ -83,14 +83,14 @@
     <div class="stepbody">
       {{with .DistinctError $run.JobError}}<div class="log"><span class="err">{{.}}</span></div>{{end}}
       {{if .Reason}}<div class="log">{{.Reason}}{{if .Hash}} · content hash {{short .Hash}}{{end}}</div>{{end}}
-      {{if .Output}}<pre class="log output">{{jsonPre .Output}}</pre>{{end}}
+      {{range .Outputs}}<pre class="log output">{{jsonPre .}}</pre>{{end}}
 
       {{range .Conversation}}
       <div class="turn {{if eq .Type "agent_text"}}model{{else}}tool{{end}}{{if .Nested}} nested{{end}}">
         <span class="who">{{if eq .Type "agent_text"}}model{{else if eq .Type "agent_call"}}tool{{else if eq .Type "agent_result"}}result{{else}}delegate{{end}}</span>
         <div class="what">
           {{if .Name}}<code>{{.Name}}</code>{{end}}
-          {{if .Text}}{{if eq .Type "agent_text"}}<div class="prose">{{template "prosebody" .Text}}</div>{{else}}<span class="say">{{.Text}}</span>{{end}}{{end}}
+          {{if .Text}}<span class="say">{{.Text}}</span>{{end}}
           {{if .Detail}}{{template "jsonvalue" (jsonValue .Detail)}}{{end}}
         </div>
       </div>
@@ -153,13 +153,18 @@
   // after the closing reload reads as two different pages. jsonview.go is the
   // definition; keep the two in step.
   //
-  // ONE divergence is accepted: numbers here come back through JSON.parse, so
-  // an integer past 2^53 or a decimal written 0.50 renders as JavaScript would
-  // print it, where the server preserves the source text (json.Decoder with
-  // UseNumber). Closing that would mean shipping a second JSON tokenizer to
-  // the browser; instead the run's closing reload replaces this DOM with the
-  // server's, so the exact spelling is never more than one turn away.
+  // Structure, folding, and token colors match exactly, and every decision the
+  // mirror itself makes — the depth bound, the trailing-newline rule, the
+  // inline threshold, byte sizes — is kept in step with jsonview.go. What
+  // cannot match is whatever JSON.parse has already decided before this code
+  // runs: a number past 2^53 or written 0.50 renders as JavaScript prints it
+  // (the server keeps the source text via json.Decoder with UseNumber), a
+  // repeated key keeps only its last member, and integer-like keys come back in
+  // numeric rather than source order. Closing any of those means shipping a
+  // second JSON tokenizer to the browser — a poor trade for a view the run's
+  // own closing reload replaces with the server's rendering seconds later.
   var JSON_INLINE_WIDTH = 96;
+  var JSON_DEPTH_LIMIT = 6;
 
   // parseDoc parses an object or array, and nothing else — a bare string or
   // number is already its own best rendering.
@@ -171,23 +176,26 @@
   }
 
   // embedded is the document a string value turned out to hold: the read_file
-  // shape, and the whole reason this is a renderer and not a formatter.
-  function embedded(value) {
-    return typeof value === 'string' ? parseDoc(value) : undefined;
+  // shape, and the whole reason this is a renderer and not a formatter. Bounded
+  // at the depth jsonStringNode bounds it, so a deeply nested sub-agent
+  // trajectory does not unwrap further here than it will after the reload.
+  function embedded(value, nesting) {
+    if (typeof value !== 'string' || nesting >= JSON_DEPTH_LIMIT) return undefined;
+    return parseDoc(value);
   }
 
   // A TRAILING newline is not structure — jsonview.go's block() makes the same
   // exemption, and without it here a live "3\n" folded behind a summary while
   // the same value rendered inline after the closing reload.
-  function isBlockString(value) {
+  function isBlockString(value, nesting) {
     return typeof value === 'string' &&
-      (value.replace(/\n+$/, '').indexOf('\n') >= 0 || embedded(value) !== undefined);
+      (value.replace(/\n+$/, '').indexOf('\n') >= 0 || embedded(value, nesting) !== undefined);
   }
 
-  function hasBlock(value) {
-    if (isBlockString(value)) return true;
+  function hasBlock(value, nesting) {
+    if (isBlockString(value, nesting)) return true;
     if (value && typeof value === 'object') {
-      return Object.keys(value).some(function (key) { return hasBlock(value[key]); });
+      return Object.keys(value).some(function (key) { return hasBlock(value[key], nesting); });
     }
     return false;
   }
@@ -207,8 +215,8 @@
     return width + (keys.length ? 1 : 0);
   }
 
-  function inlineable(value) {
-    return !hasBlock(value) && inlineWidth(value) <= JSON_INLINE_WIDTH;
+  function inlineable(value, nesting) {
+    return !hasBlock(value, nesting) && inlineWidth(value) <= JSON_INLINE_WIDTH;
   }
 
   function tok(parent, cls, text) { parent.appendChild(el('span', cls, text)); }
@@ -243,18 +251,18 @@
     tok(parent, 'j-punc', array ? ']' : '}');
   }
 
-  function appendStringBlock(parent, value, depth) {
-    if (!isBlockString(value)) { scalar(parent, value); return; }
+  function appendStringBlock(parent, value, depth, nesting) {
+    if (!isBlockString(value, nesting)) { scalar(parent, value); return; }
 
     // The quotes stay, on their own lines: this value IS a string, and a
     // reader has to be able to tell a document from a document-shaped string.
     tok(parent, 'j-str', '"');
     raw(parent, '\n');
 
-    var doc = embedded(value);
+    var doc = embedded(value, nesting);
     if (doc !== undefined) {
       pad(parent, depth + 1);
-      appendBlock(parent, doc, depth + 1);
+      appendBlock(parent, doc, depth + 1, nesting + 1);
       raw(parent, '\n');
     } else {
       value.replace(/\n+$/, '').split('\n').forEach(function (line) {
@@ -268,15 +276,16 @@
     tok(parent, 'j-str', '"');
   }
 
-  function appendBlock(parent, value, depth) {
-    if (typeof value === 'string') { appendStringBlock(parent, value, depth); return; }
+  function appendBlock(parent, value, depth, nesting) {
+    nesting = nesting || 0;
+    if (typeof value === 'string') { appendStringBlock(parent, value, depth, nesting); return; }
     if (value === null || typeof value !== 'object') { scalar(parent, value); return; }
 
     var array = Array.isArray(value);
     var keys = Object.keys(value);
 
     if (!keys.length) { tok(parent, 'j-punc', array ? '[]' : '{}'); return; }
-    if (inlineable(value)) { appendInline(parent, value); return; }
+    if (inlineable(value, nesting)) { appendInline(parent, value); return; }
 
     tok(parent, 'j-punc', array ? '[' : '{');
     raw(parent, '\n');
@@ -288,7 +297,7 @@
         tok(parent, 'j-punc', ':');
         raw(parent, ' ');
       }
-      appendBlock(parent, value[key], depth + 1);
+      appendBlock(parent, value[key], depth + 1, nesting);
       if (i < keys.length - 1) tok(parent, 'j-punc', ',');
       raw(parent, '\n');
     });
@@ -296,6 +305,11 @@
     pad(parent, depth);
     tok(parent, 'j-punc', array ? ']' : '}');
   }
+
+  // Counted in BYTES, the way formatBytes counts them: source.length counts
+  // UTF-16 units and would report a different size than the server for the
+  // same payload the moment one non-ASCII character is in it.
+  function byteLength(text) { return new TextEncoder().encode(text).length; }
 
   function bytes(size) {
     if (size < 1000) return size + ' B';
@@ -306,7 +320,7 @@
   function plural(n, noun) { return n === 1 ? '1 ' + noun : n + ' ' + noun + 's'; }
 
   function summarize(value, source) {
-    var size = bytes(source.length);
+    var size = bytes(byteLength(source));
     if (Array.isArray(value)) return 'array · ' + plural(value.length, 'item') + ' · ' + size;
     var keys = Object.keys(value);
     if (keys.length > 0 && keys.length <= 3) return keys.join(', ') + ' · ' + size;
@@ -324,17 +338,17 @@
         return el('span', 'jsonline', text);
       }
       return foldNode(
-        'text · ' + plural(text.split('\n').length, 'line') + ' · ' + bytes(source.length),
+        'text · ' + plural(text.split('\n').length, 'line') + ' · ' + bytes(byteLength(source)),
         function (pre) { raw(pre, text); });
     }
 
-    if (inlineable(value)) {
+    if (inlineable(value, 0)) {
       var span = el('span', 'jsonline');
       appendInline(span, value);
       return span;
     }
 
-    return foldNode(summarize(value, source), function (pre) { appendBlock(pre, value, 0); });
+    return foldNode(summarize(value, source), function (pre) { appendBlock(pre, value, 0, 0); });
   }
 
   function foldNode(summary, fill) {
@@ -352,7 +366,7 @@
     var pre = el('pre', 'log output');
     var value = parseDoc(text);
     if (value === undefined) raw(pre, text);
-    else appendBlock(pre, value, 0);
+    else appendBlock(pre, value, 0, 0);
     return pre;
   }
 
@@ -466,17 +480,6 @@
   // retry would hammer a dead port for as long as the tab lives.
   var retries = 0;
   var maxRetries = 6;
-
-  // A shared link names a step; open it so the reader lands on the content
-  // rather than on a collapsed row they have to click.
-  function openHashTarget() {
-    if (!window.location.hash) return;
-    var target = document.querySelector(window.location.hash);
-    if (target && target.classList.contains('step')) target.classList.add('open');
-  }
-
-  openHashTarget();
-  window.addEventListener('hashchange', openHashTarget);
 
   // The tab is the status display for a run nobody is looking at. Update it
   // the moment the run ends, before the reload, so a background tab reports

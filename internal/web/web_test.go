@@ -691,3 +691,121 @@ func TestLiveViewResumesAfterWhatItRendered(t *testing.T) {
 		t.Error("live stream does not resume from the rendered sequence")
 	}
 }
+
+// TestEveryOutputEventSurvives covers a step with attempts:, which publishes
+// one output per attempt. The live stream appends a block per event, so holding
+// them as a single overwritten string meant the run's closing reload silently
+// deleted the attempts a reader had just been watching.
+func TestEveryOutputEventSurvives(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	err := pipeline.Store.StartRun(ctx, "run-retry", "build", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-retry", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task"},
+		{Type: events.TypeStepOutput, StepIndex: 0, StepName: "compile", Text: "attempt one failed"},
+		{Type: events.TypeStepOutput, StepIndex: 0, StepName: "compile", Text: "attempt two failed"},
+		{Type: events.TypeStepOutput, StepIndex: 0, StepName: "compile", Text: "attempt three passed"},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "compile", StepKind: "task", Status: "succeeded"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-retry", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-retry")
+
+	for _, want := range []string{"attempt one failed", "attempt two failed", "attempt three passed"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("transcript dropped an output event: %q missing", want)
+		}
+	}
+}
+
+// TestAnswerIsNotPrintedTwice covers the dedup between the last model text and
+// the labeled answer — including the shape that used to slip through, where the
+// model emitted text AND a tool call in one message, so the text is not the
+// trailing turn.
+func TestAnswerIsNotPrintedTwice(t *testing.T) {
+	t.Parallel()
+
+	const answer = "Two SKUs need restocking."
+
+	step := stepView{
+		Result: map[string]any{"response": answer},
+		Turns: []turnView{
+			{Type: events.TypeAgentText, Text: "Reading the inventory first."},
+			{Type: events.TypeAgentText, Text: answer},
+			// Recorded after the answer: the same assistant message carried a
+			// tool call, so the result lands last.
+			{Type: events.TypeAgentCall, Name: "read_file"},
+			{Type: events.TypeAgentResult, Name: "read_file"},
+		},
+	}
+
+	kept := step.Conversation()
+	if len(kept) != 3 {
+		t.Fatalf("Conversation kept %d turns, want 3: %+v", len(kept), kept)
+	}
+
+	for _, turn := range kept {
+		if turn.Text == answer {
+			t.Error("the answer is still in the conversation as well as under `answer`")
+		}
+	}
+
+	// The mid-conversation commentary is not the answer and must survive.
+	if kept[0].Text != "Reading the inventory first." {
+		t.Errorf("dropped the wrong turn: %+v", kept)
+	}
+
+	// A response the model never said as text leaves every turn alone.
+	other := stepView{Result: map[string]any{"response": "different"}, Turns: step.Turns}
+	if len(other.Conversation()) != len(step.Turns) {
+		t.Error("a non-matching response dropped a turn anyway")
+	}
+}
+
+// TestNodePageOmitsAnAbsentResult pins the section guard that moved when the
+// emptiness check moved into jsonPre: a node with nothing recorded must not
+// render a "Result" heading over an empty box.
+func TestNodePageOmitsAnAbsentResult(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	record := store.NodeRecord{
+		Hash:      "aaaa111122223333",
+		Kind:      "task",
+		StepIndex: 0,
+		Resource:  "compile",
+		Content:   map[string]any{"run": "true"},
+	}
+
+	err := pipeline.Store.RecordNode(ctx, record, "build", "succeeded", nil, nil)
+	if err != nil {
+		t.Fatalf("RecordNode: %v", err)
+	}
+
+	code, body := get(t, server, "/p/demo/nodes/"+record.Hash)
+	if code != http.StatusOK {
+		t.Fatalf("GET node = %d: %s", code, body)
+	}
+
+	// The content map is the page's point and must render highlighted.
+	if !strings.Contains(body, `class="j-key"`) {
+		t.Error("node content map is not highlighted")
+	}
+
+	if strings.Contains(body, ">Result<") {
+		t.Error("node page shows a Result section for a node that recorded none")
+	}
+}

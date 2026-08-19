@@ -1,6 +1,8 @@
 package web
 
 import (
+	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 )
@@ -72,16 +74,21 @@ func TestJSONValueUnescapesEmbeddedDocument(t *testing.T) {
 	}
 }
 
-// TestJSONValueKeepsSourceOrderAndNumbers pins the two things a round trip
-// through map[string]any silently destroys.
-func TestJSONValueKeepsSourceOrderAndNumbers(t *testing.T) {
+// TestJSONValueKeepsEmbeddedOrderAndNumbers pins what a round trip through
+// map[string]any would destroy and this renderer must not.
+//
+// The OUTER envelope's order is already lost upstream (internal/agent records
+// args and results as maps), so it is not what this asserts. The document
+// inside a "content" string never passed through a Go map — it is a file, or a
+// model-authored body — and re-marshaling to re-indent would sort it.
+func TestJSONValueKeepsEmbeddedOrderAndNumbers(t *testing.T) {
 	t.Parallel()
 
-	html := string(jsonValue(`{"zebra":1,"alpha":2,"id":12345678901234567890,"ratio":0.50}`).HTML)
+	html := string(jsonValue(`{"content":"{\"zebra\":1,\"alpha\":2,\"id\":12345678901234567890,\"ratio\":0.50}"}`).HTML)
 
 	zebra, alpha := strings.Index(html, "zebra"), strings.Index(html, "alpha")
 	if zebra < 0 || alpha < 0 || zebra > alpha {
-		t.Errorf("keys were sorted rather than kept in source order:\n%s", html)
+		t.Errorf("the embedded document's keys were sorted:\n%s", html)
 	}
 
 	// A 20-digit id must not come back as 1.2345678901234567e+19, and 0.50
@@ -90,6 +97,55 @@ func TestJSONValueKeepsSourceOrderAndNumbers(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Errorf("number %s was rewritten:\n%s", want, html)
 		}
+	}
+}
+
+// TestJSONDepthLimitStopsUnwrapping keeps a chain of documents-inside-strings
+// from recursing without bound over input a model authored.
+func TestJSONDepthLimitStopsUnwrapping(t *testing.T) {
+	t.Parallel()
+
+	// Nest deeper than jsonDepthLimit, each level a document escaped inside the
+	// previous one's string.
+	payload := `{"n":0}`
+	for range jsonDepthLimit + 3 {
+		wrapped, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+
+		payload = `{"content":` + string(wrapped) + `}`
+	}
+
+	html := string(jsonValue(payload).HTML)
+
+	// It rendered, and stopped: the innermost levels stay escaped strings
+	// rather than becoming more blocks.
+	if !strings.Contains(html, `class="j-key"`) {
+		t.Fatalf("deeply nested payload did not render:\n%s", html)
+	}
+
+	if got := strings.Count(html, `<span class="j-key">&#34;content&#34;</span>`); got > jsonDepthLimit+1 {
+		t.Errorf("unwrapped %d levels, want at most %d", got, jsonDepthLimit+1)
+	}
+}
+
+// TestJSONBlockRejectsFragments is the distinction prose.go depends on: a
+// ```json fence cut off mid-object must fall through to a lexer that tolerates
+// a fragment, not be silently accepted as plain text.
+func TestJSONBlockRejectsFragments(t *testing.T) {
+	t.Parallel()
+
+	if _, ok := jsonBlock(`{"qty": 60`); ok {
+		t.Error("a truncated document was accepted as a complete one")
+	}
+
+	if _, ok := jsonBlock(`"qty": 60`); ok {
+		t.Error("a bare member was accepted as a document")
+	}
+
+	if _, ok := jsonBlock(`{"qty": 60}`); !ok {
+		t.Error("a complete document was rejected")
 	}
 }
 
@@ -200,6 +256,22 @@ func TestRenderProseHonorsFencesOnly(t *testing.T) {
 	}
 }
 
+// TestRenderProseHighlightsATruncatedJSONFence covers the case the fragment
+// distinction exists for: a response cut off mid-object still gets colored, by
+// the lexer, because this package's parser correctly refuses it.
+func TestRenderProseHighlightsATruncatedJSONFence(t *testing.T) {
+	t.Parallel()
+
+	segments := renderProse("```json\n{\"restock\": [\n  {\"sku\": \"WID-001\"")
+	if len(segments) != 1 || !segments[0].IsCode() {
+		t.Fatalf("truncated json fence not recognized: %+v", segments)
+	}
+
+	if !strings.Contains(string(segments[0].Code), "<span") {
+		t.Errorf("truncated json fence lost its highlighting: %s", segments[0].Code)
+	}
+}
+
 // TestRenderProseKeepsAnUnterminatedFence covers a truncated response — which
 // is exactly when a reader most needs the page not to swallow anything.
 func TestRenderProseKeepsAnUnterminatedFence(t *testing.T) {
@@ -239,7 +311,12 @@ func TestRenderProseHighlightsOtherLanguages(t *testing.T) {
 func TestThousandsMatchesTheCLI(t *testing.T) {
 	t.Parallel()
 
-	for input, want := range map[int]string{0: "0", 999: "999", 1000: "1,000", 34500: "34,500", 1234567: "1,234,567", -4200: "-4,200"} {
+	// math.MinInt is the one that mattered: -n is itself, so a recursive
+	// negative branch never terminated and took the process with it.
+	for input, want := range map[int]string{
+		0: "0", 999: "999", 1000: "1,000", 34500: "34,500", 1234567: "1,234,567",
+		-4200: "-4,200", math.MinInt64: "-9,223,372,036,854,775,808",
+	} {
 		if got := thousands(input); got != want {
 			t.Errorf("thousands(%d) = %q, want %q", input, got, want)
 		}
