@@ -146,3 +146,13 @@
 </body>
 </html>
 {{end}}
+
+{{/* One JSON payload, wherever it appears: inline on the row when it is
+     small, and otherwise folded behind a summary naming what is inside it.
+     A <details> rather than a scripted toggle, so the fold survives with
+     JavaScript off and behaves identically on the live-stream path. */}}
+{{define "jsonvalue"}}{{if not .Empty}}{{if .Inline}}<span class="jsonline">{{.HTML}}</span>{{else}}<details class="jsonbox"><summary>{{.Summary}}</summary><pre class="json">{{.HTML}}</pre></details>{{end}}{{end}}{{end}}
+
+{{/* An agent's recorded response: prose as written, fenced blocks
+     highlighted. See prose.go for why the fence is the only markdown honored. */}}
+{{define "prosebody"}}{{range prose .}}{{if .IsCode}}<pre class="json code">{{if .Lang}}<span class="codelang">{{.Lang}}</span>{{end}}{{.Code}}</pre>{{else}}<p class="say">{{.Text}}</p>{{end}}{{end}}{{end}}

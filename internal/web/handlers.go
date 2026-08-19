@@ -264,8 +264,8 @@ func (s *Server) handleNode(c echo.Context) error {
 	return c.Render(http.StatusOK, "node", map[string]any{
 		"Nav":        s.nav(c),
 		"Node":       node,
-		"Content":    prettyJSON(node.Content),
-		"Result":     prettyJSON(node.Result),
+		"Content":    node.Content,
+		"Result":     node.Result,
 		"Runs":       runs,
 		"Transcript": transcriptEvents(transcript, hasTranscript),
 	})

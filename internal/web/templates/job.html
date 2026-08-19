@@ -69,7 +69,7 @@
     <thead><tr><th>Resource</th><th>Version</th><th>Recorded</th></tr></thead>
     <tbody>
       {{range .Versions}}
-      <tr><td>{{.Resource}}</td><td class="dim">{{.Version}}</td><td class="dim">{{ago .RecordedAt}}</td></tr>
+      <tr><td>{{.Resource}}</td><td>{{jsonLine .Version}}</td><td class="dim">{{ago .RecordedAt}}</td></tr>
       {{end}}
     </tbody>
   </table>

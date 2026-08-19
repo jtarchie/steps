@@ -11,7 +11,7 @@
       <tr>
         <td>{{.Name}}</td>
         <td class="dim">{{.Type}}</td>
-        <td class="dim">{{if $seen}}{{$seen.Version}}{{else}}<span class="faint">never checked</span>{{end}}</td>
+        <td class="dim">{{if $seen}}{{jsonLine $seen.Version}}{{else}}<span class="faint">never checked</span>{{end}}</td>
         <td class="dim">{{if $seen}}{{ago $seen.CheckedAt}}{{else}}—{{end}}</td>
       </tr>
       {{end}}

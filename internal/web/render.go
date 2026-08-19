@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -125,11 +126,19 @@ func templateFuncs() template.FuncMap {
 		"stamp":      formatStamp,
 		"short":      shortID,
 		"statusWord": statusWord,
-		"prettyJSON": prettyJSON,
-		"trim":       strings.TrimSpace,
-		"trimMD":     func(name string) string { return strings.TrimSuffix(name, ".md") },
-		"firstLine":  firstLine,
-		"sparkline":  sparkline,
+		// JSON is parsed and highlighted rather than re-indented — see
+		// jsonview.go. jsonValue folds a bulky payload behind a summary for a
+		// transcript row; jsonPre is the same rendering for a page that gives
+		// it a <pre> of its own.
+		"jsonValue": jsonValue,
+		"jsonPre":   jsonPre,
+		"jsonLine":  jsonLine,
+		"prose":     renderProse,
+		"thousands": thousands,
+		"lower":     strings.ToLower,
+		"trim":      strings.TrimSpace,
+		"trimMD":    func(name string) string { return strings.TrimSuffix(name, ".md") },
+		"sparkline": sparkline,
 		// The sparkline's geometry: bars are 6 wide on an 8-unit pitch, drawn
 		// from a 16-high baseline. Arithmetic in the template rather than
 		// pre-baked coordinates in the model, so the chart stays a
@@ -215,34 +224,27 @@ func statusWord(status string) string {
 	}
 }
 
-// prettyJSON re-indents stored JSON for display, returning the input
-// unchanged when it is not JSON — a content map that will not parse is still
-// worth showing.
-func prettyJSON(raw string) string {
-	if strings.TrimSpace(raw) == "" {
-		return ""
+// thousands groups a count the way the CLI's own usage summary does
+// ("34,500 tokens"), so the two front ends do not report the same number in
+// two spellings.
+func thousands(n int) string {
+	if n < 0 {
+		return "-" + thousands(-n)
 	}
 
-	var value any
+	digits := strconv.Itoa(n)
 
-	err := json.Unmarshal([]byte(raw), &value)
-	if err != nil {
-		return raw
+	var out strings.Builder
+
+	for i, digit := range digits {
+		if i > 0 && (len(digits)-i)%3 == 0 {
+			out.WriteByte(',')
+		}
+
+		out.WriteRune(digit)
 	}
 
-	out, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return raw
-	}
-
-	return string(out)
-}
-
-// firstLine is the first line of a multi-line string, for a summary cell.
-func firstLine(text string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
-
-	return line
+	return out.String()
 }
 
 // sparkBar is one bar of a duration sparkline.
@@ -302,29 +304,22 @@ func sparkline(runs []store.RunRow) []sparkBar {
 // package the web layer must not depend on — and the shape is a stored JSON
 // contract, which is exactly the kind of thing two packages may each know.
 type transcriptEvent struct {
-	Type    string            `json:"type"`
-	Text    string            `json:"text,omitempty"`
-	Name    string            `json:"name,omitempty"`
-	Args    map[string]any    `json:"args,omitempty"`
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+	Name string `json:"name,omitempty"`
+	// Args stays raw rather than decoding to a map: a map has no key order,
+	// and re-marshaling one sorts the arguments a model actually authored in
+	// some order. Kept verbatim, this page shows the same call the run
+	// transcript does.
+	Args    json.RawMessage   `json:"args,omitempty"`
 	Content string            `json:"content,omitempty"`
 	Agent   string            `json:"agent,omitempty"`
 	Request string            `json:"request,omitempty"`
 	Events  []transcriptEvent `json:"events,omitempty"`
 }
 
-// ArgsJSON renders a call's arguments for display.
-func (e transcriptEvent) ArgsJSON() string {
-	if len(e.Args) == 0 {
-		return ""
-	}
-
-	data, err := json.Marshal(e.Args)
-	if err != nil {
-		return ""
-	}
-
-	return string(data)
-}
+// ArgsJSON is a call's arguments as they were recorded.
+func (e transcriptEvent) ArgsJSON() string { return string(e.Args) }
 
 // transcriptEvents decodes a stored transcript, yielding nil when there is
 // none or it will not parse.

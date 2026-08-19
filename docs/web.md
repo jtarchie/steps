@@ -50,9 +50,24 @@ the things a scrollback cannot give you:
   printed nothing is not expandable at all, so a chevron never promises detail
   that is not there.
 - **An agent step expands into its conversation**: the model's text each turn,
-  every tool call, and any sub-agent delegation nested underneath.
+  every tool call, and any sub-agent delegation nested underneath, closing with
+  the step's `answer`.
+- **Every payload is rendered as JSON, not printed.** A call's arguments, a
+  tool result, a node's content map, a resource version: parsed and
+  highlighted, in the order they were recorded. A document that arrived escaped
+  inside a string — `read_file` returns `{"content": "…"}`, and that content is
+  often JSON itself — is shown as the document it is, unescaped, still inside
+  its quotes so the nesting stays legible. Small payloads sit on the row; a
+  bulky one folds behind a summary that names what is inside it (`content ·
+  555 B`), so one 30KB tool result cannot bury the conversation around it.
+- **An agent's answer keeps its fenced code blocks.** A ```` ```json ```` block
+  in a response is highlighted exactly like the tool results above it; every
+  other language goes through the same highlighter `/docs` uses. Nothing else
+  in the model's text becomes markup — a fence is a boundary the page can
+  honor without interpreting what a model wrote as page structure.
 - **Every hash is a link** to the node page, and **every step has one too** —
-  the `#` beside its name is a URL you can paste at someone.
+  the `#` beside its name is a URL you can paste at someone, and it opens the
+  step it names.
 
 ## Live runs
 

@@ -567,3 +567,127 @@ func openingTag(t *testing.T, body, id string) string {
 
 	return body[start : start+end]
 }
+
+// TestRunTranscriptHighlightsToolJSON is the readability contract for the
+// surface an agent step spends most of its rows on. A tool result arrives as
+// JSON whose interesting value is itself a JSON document escaped inside a
+// string — the read_file shape — and the page must show that document as a
+// document: keys colored, source order kept, and the escaping gone.
+func TestRunTranscriptHighlightsToolJSON(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	err := pipeline.Store.StartRun(ctx, "run-json", "build", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-json", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent"},
+		{Type: events.TypeAgentCall, StepIndex: 0, StepName: "review", Name: "read_file", Detail: `{"path":"notes/inventory.json"}`},
+		{Type: events.TypeAgentResult, StepIndex: 0, StepName: "review", Name: "read_file", Detail: `{"content":"{\"warehouse\":\"sea-1\",\"on_hand\":12,\"ok\":true}"}`},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "review", StepKind: "agent", Status: "succeeded", DurationMS: 120},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-json", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	code, body := get(t, server, "/p/demo/runs/run-json")
+	if code != http.StatusOK {
+		t.Fatalf("GET run = %d", code)
+	}
+
+	checks := []struct {
+		what string
+		// present is markup the page must carry; absent is markup that proves
+		// the payload was printed rather than parsed.
+		present []string
+		absent  []string
+	}{
+		{
+			// Each token carries its own class, so the stylesheet — not the
+			// markup — owns what a JSON key looks like.
+			what:    "highlighted tokens",
+			present: []string{`class="j-key"`, `class="j-str"`, `class="j-num"`, `class="j-lit"`},
+		},
+		{
+			// The document escaped inside "content" is shown unescaped, and its
+			// keys are highlighted like any other — only possible if it was
+			// parsed rather than printed as a string.
+			what:    "embedded document parsed out of its string",
+			present: []string{`<span class="j-key">&#34;warehouse&#34;</span>`},
+			absent:  []string{`\&#34;warehouse\&#34;`, `\"warehouse\"`},
+		},
+		{
+			// A short args map stays on its row; a bulky result folds behind a
+			// disclosure naming what is inside it.
+			what:    "bulk folded, small inline",
+			present: []string{`<details class="jsonbox"`, "notes/inventory.json"},
+		},
+	}
+
+	for _, check := range checks {
+		for _, want := range check.present {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s: missing %s", check.what, want)
+			}
+		}
+
+		for _, unwanted := range check.absent {
+			if strings.Contains(body, unwanted) {
+				t.Errorf("%s: still carries %s", check.what, unwanted)
+			}
+		}
+	}
+
+	// Source order, not Go-map order: on_hand precedes ok in the document.
+	if strings.Index(body, "on_hand") > strings.Index(body, `j-key">&#34;ok&#34;`) {
+		t.Error("JSON keys were re-sorted rather than kept in source order")
+	}
+}
+
+// TestLiveViewResumesAfterWhatItRendered pins the contract that keeps a
+// mid-run page from showing everything twice: the transcript carries the
+// highest event sequence the server already drew, and the stream resumes after
+// it. Opened at 0 instead, the stream replays events already on the page and
+// appends a second copy of every turn.
+func TestLiveViewResumesAfterWhatItRendered(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	err := pipeline.Store.StartRun(ctx, "run-live", "build", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-live", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent"},
+		{Type: events.TypeAgentCall, StepIndex: 0, StepName: "review", Name: "read_file", Detail: `{"path":"main.go"}`},
+		{Type: events.TypeStepOutput, StepIndex: 0, StepName: "review", Text: "compiled 3 packages"},
+	})
+
+	// Left running deliberately: the live script only ships for a run in
+	// flight, which is the only case this bug could occur in.
+	rows, err := pipeline.Store.RunEvents(ctx, "run-live", 0, 5000)
+	if err != nil {
+		t.Fatalf("RunEvents: %v", err)
+	}
+
+	want := fmt.Sprintf(`data-last-seq="%d"`, rows[len(rows)-1].Seq)
+
+	_, body := get(t, server, "/p/demo/runs/run-live")
+	if !strings.Contains(body, want) {
+		t.Errorf("transcript does not carry the sequence it rendered (want %s)", want)
+	}
+
+	// And the script must read it rather than starting from zero.
+	if !strings.Contains(body, "Number(transcript.dataset.lastSeq)") {
+		t.Error("live stream does not resume from the rendered sequence")
+	}
+}

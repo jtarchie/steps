@@ -9,7 +9,7 @@
 {{if .Node.Error}}<div class="errblock"><span class="lbl">error:</span> {{.Node.Error}}</div>{{end}}
 
 <h2 class="eyebrow">Content <span class="unbold">— what this hash is made of</span></h2>
-<pre class="contentmap">{{.Content}}</pre>
+<pre class="contentmap json">{{jsonPre .Content}}</pre>
 <p class="chain">
   <span class="rail">parent</span>
   {{if .Node.ParentHash}}<a class="hash" href="/p/{{.Nav.Current}}/nodes/{{.Node.ParentHash}}">{{short .Node.ParentHash}}</a>{{else}}<span class="rail">∅ root</span>{{end}}
@@ -18,7 +18,7 @@
 
 {{if .Result}}
 <h2 class="eyebrow">Result</h2>
-<pre class="contentmap">{{.Result}}</pre>
+<pre class="contentmap json">{{jsonPre .Result}}</pre>
 {{end}}
 
 {{if .Transcript}}
@@ -53,13 +53,13 @@
 {{define "turns"}}
 {{range .}}
   {{if eq .Type "text"}}
-  <div class="turn model"><span class="who">model</span><span class="what">{{.Text}}</span></div>
+  <div class="turn model"><span class="who">model</span><div class="what"><div class="prose">{{template "prosebody" .Text}}</div></div></div>
   {{else if eq .Type "call"}}
-  <div class="turn tool"><span class="who">tool</span><span class="what"><code>{{.Name}}</code> <span class="args">{{.ArgsJSON}}</span></span></div>
+  <div class="turn tool"><span class="who">tool</span><div class="what"><code>{{.Name}}</code>{{template "jsonvalue" (jsonValue .ArgsJSON)}}</div></div>
   {{else if eq .Type "result"}}
-  <div class="turn tool"><span class="who">result</span><span class="what"><code>{{.Name}}</code> <span class="args">{{.Content}}</span></span></div>
+  <div class="turn tool"><span class="who">result</span><div class="what"><code>{{.Name}}</code>{{template "jsonvalue" (jsonValue .Content)}}</div></div>
   {{else if eq .Type "subagent"}}
-  <div class="turn tool"><span class="who">delegate</span><span class="what"><code>{{.Agent}}</code> {{.Request}}</span></div>
+  <div class="turn tool"><span class="who">delegate</span><div class="what"><code>{{.Agent}}</code><span class="say">{{.Request}}</span></div></div>
   <div class="subtrace">{{template "turns" .Events}}</div>
   {{end}}
 {{end}}

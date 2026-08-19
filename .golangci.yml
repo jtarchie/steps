@@ -375,9 +375,16 @@ linters:
             - "github.com/yuin/goldmark/extension"
             - "github.com/yuin/goldmark/parser"
             - "github.com/yuin/goldmark-highlighting/v2"
-            # chroma is goldmark-highlighting's engine; imported directly only
-            # to define the "steps" code style from the UI's own palette.
+            # chroma is goldmark-highlighting's engine; imported directly to
+            # define the "steps" code style from the UI's own palette, and —
+            # lexers/formatters — to reuse that same style for the fenced
+            # blocks inside an agent's recorded response (prose.go). JSON is
+            # NOT chroma's there: internal/web renders that itself, because
+            # unescaping a document nested in a string needs a parser, not a
+            # lexer.
             - "github.com/alecthomas/chroma/v2"
+            - "github.com/alecthomas/chroma/v2/lexers"
+            - "github.com/alecthomas/chroma/v2/formatters/html"
             - "github.com/jtarchie/steps/docs"
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/events"

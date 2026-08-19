@@ -97,6 +97,29 @@ func (s stepView) resultString(key string) string {
 	return value
 }
 
+// Conversation is the step's turns with the one redundant turn dropped: the
+// model's LAST text is normally the answer the Response block already shows in
+// full, and printing a whole response twice on one page — once mid-transcript,
+// once labeled — is noise exactly where a reader is trying to find the answer.
+//
+// Only the trailing turn, and only when it matches: a model's running
+// commentary mid-conversation is not the answer, and a response the model
+// never said in a text turn (a wrapped-up conversation, a verdict-only step)
+// still has to appear.
+func (s stepView) Conversation() []turnView {
+	response := strings.TrimSpace(s.Response())
+	if response == "" || len(s.Turns) == 0 {
+		return s.Turns
+	}
+
+	last := s.Turns[len(s.Turns)-1]
+	if last.Type != "agent_text" || strings.TrimSpace(last.Text) != response {
+		return s.Turns
+	}
+
+	return s.Turns[:len(s.Turns)-1]
+}
+
 // turnView is one piece of agent conversation traffic.
 type turnView struct {
 	Type   string
@@ -127,6 +150,14 @@ type runView struct {
 	// run with no agent steps, which is what keeps the panel off a page that
 	// has nothing to say about spend.
 	Usage []store.AgentUsage
+	// LastSeq is the highest event sequence this view already renders, and it
+	// is what the live stream must resume AFTER.
+	//
+	// Without it the stream opened at ?after=0 and replayed events the page
+	// had already drawn, appending a second copy of every turn and every line
+	// of output a run had produced before the tab was opened — visible on
+	// exactly the page a person opens while a run is in flight.
+	LastSeq int64
 }
 
 // Spend rolls this run's agent usage up for the page header.
@@ -234,6 +265,10 @@ func buildRunView(run store.RunRow, rows []store.RunEventRow, results map[string
 	index := map[string]int{}
 
 	for _, row := range rows {
+		if row.Seq > view.LastSeq {
+			view.LastSeq = row.Seq
+		}
+
 		switch row.Type {
 		case events.TypeJobFinished:
 			if row.Text != "" {
