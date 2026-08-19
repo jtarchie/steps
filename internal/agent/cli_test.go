@@ -47,6 +47,13 @@ func cliPrepared(t *testing.T, toolNames []string) preparedAgentStep {
 	conv.system = "You are a reviewer."
 	conv.prompt = "Review the diff."
 
+	// Every name is treated as a builtin grant, which is what these tests
+	// mean by a granted tool; a test about custom tools clears this.
+	conv.tools.builtins = map[string]bool{}
+	for _, name := range toolNames {
+		conv.tools.builtins[name] = true
+	}
+
 	return preparedAgentStep{
 		step: config.Step{Agent: "reviewer"},
 		ri: config.ResolvedInvocation{
@@ -157,6 +164,87 @@ func TestCLIToolPermissionsGrantedGatedTools(t *testing.T) {
 		if !slices.Contains(tools, want) {
 			t.Errorf("--tools = %v, want the granted tool %q on the surface", tools, want)
 		}
+	}
+}
+
+// TestCLIToolPermissionsWebFetch: web_fetch rides the CLI's native WebFetch,
+// and an allow: list arrives as per-domain permission entries rather than a
+// blanket grant — the CLI's own permission engine enforces the same fence the
+// HTTP path's impl does.
+func TestCLIToolPermissionsWebFetch(t *testing.T) {
+	t.Parallel()
+
+	prepared := cliPrepared(t, []string{"web_fetch"})
+	prepared.conv.tools.webFetchAllow = []string{"specification.website", "backerkit.com"}
+
+	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
+	tools := strings.Split(argValue(args, "--tools"), ",")
+	allowed := strings.Split(argValue(args, "--allowedTools"), ",")
+
+	if want := []string{"WebFetch"}; !slices.Equal(tools, want) {
+		t.Errorf("--tools = %v, want exactly %v", tools, want)
+	}
+
+	// TWO rules per entry, because the CLI's matcher is exact where steps' is
+	// suffix-aware: domain:h alone denies api.h, which checkWebFetchHost
+	// allows, and domain:*.h alone denies the apex. Emitting both is what
+	// makes one written fence mean the same thing on both backends
+	// (semantics verified against Claude Code's permission reference).
+	for _, want := range []string{
+		"WebFetch(domain:specification.website)", "WebFetch(domain:*.specification.website)",
+		"WebFetch(domain:backerkit.com)", "WebFetch(domain:*.backerkit.com)",
+	} {
+		if !slices.Contains(allowed, want) {
+			t.Errorf("allowed = %v, want it to contain %q", allowed, want)
+		}
+	}
+
+	// A bare WebFetch entry alongside the scoped ones would BE the blanket
+	// grant the list exists to prevent.
+	if slices.Contains(allowed, "WebFetch") {
+		t.Errorf("allowed = %v, want no unscoped WebFetch entry", allowed)
+	}
+}
+
+// TestCLIToolPermissionsWebFetchBareGrant: no allow: list means the whole
+// web, so the permission entry is the unscoped native name.
+func TestCLIToolPermissionsWebFetchBareGrant(t *testing.T) {
+	t.Parallel()
+
+	args := cliArgs(cliPrepared(t, []string{"web_fetch"}), cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
+
+	if allowed := strings.Split(argValue(args, "--allowedTools"), ","); !slices.Contains(allowed, "WebFetch") {
+		t.Errorf("allowed = %v, want the unscoped WebFetch entry", allowed)
+	}
+}
+
+// TestCLIToolPermissionsCustomToolKeepsItsName: the natives table is keyed by
+// steps' BUILTIN names, and a custom tool is free to reuse one. Matching the
+// mapping by name alone would swap that pipeline's own command for the CLI's
+// tool of the same shape — a curl-through-an-authed-proxy tool silently
+// becoming the CLI's own unrestricted fetcher, with the run: never executing.
+// Provenance, not spelling, decides what is native.
+func TestCLIToolPermissionsCustomToolKeepsItsName(t *testing.T) {
+	t.Parallel()
+
+	prepared := cliPrepared(t, []string{"web_fetch"})
+	prepared.conv.tools.builtins = nil // the grant was a custom {name: web_fetch, run: ...}
+
+	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
+	tools := strings.Split(argValue(args, "--tools"), ",")
+	allowed := strings.Split(argValue(args, "--allowedTools"), ",")
+
+	if slices.Contains(tools, "WebFetch") {
+		t.Errorf("--tools = %v, want no native WebFetch — the grant was a custom tool", tools)
+	}
+
+	if !slices.Contains(allowed, "mcp__steps__web_fetch") {
+		t.Errorf("allowed = %v, want the custom tool bridged under its own name", allowed)
+	}
+
+	// The bridge must serve it, or the model is offered a tool nothing runs.
+	if skip := nativeToolNames(prepared.conv, cliRuntimes["claude"]); skip["web_fetch"] {
+		t.Error("the bridge skipped a custom tool as if it were native")
 	}
 }
 

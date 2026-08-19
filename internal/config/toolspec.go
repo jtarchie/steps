@@ -64,6 +64,13 @@ type ToolSpec struct {
 	// the machine chooses where." Values are plain strings; not templated.
 	// Invalid on builtins and sub-agent tools.
 	Args map[string]string
+	// Allow narrows the web_fetch builtin to the named hosts: an entry
+	// matches its exact hostname and any subdomain of it, and every hop of a
+	// redirect chain is re-checked. Empty means any http(s) URL — the same
+	// trust level as run_shell, which can already curl anywhere; the list is
+	// for the agent that is granted a browser but not a shell. Invalid on
+	// every other tool form (validateWebFetchAllowShape).
+	Allow []string
 	// MaxOutputBytes sets the inline output budget for this one tool
 	// (0/unset = the global default, maxToolOutputBytes in internal/agent).
 	// An explicit value wins in either direction, bounded above by the spill
@@ -103,7 +110,7 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 	case yaml.MappingNode:
 		err := rejectUnknownKeys(value, "agent tool",
 			"builtin", "name", "description", "run", "agent", "mcp", "tool", "tools",
-			"required", "max_calls", "max_output_bytes", "args")
+			"required", "max_calls", "max_output_bytes", "args", "allow")
 		if err != nil {
 			return err
 		}
@@ -121,6 +128,7 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 			MaxCalls       int               `yaml:"max_calls"`
 			MaxOutputBytes int               `yaml:"max_output_bytes"`
 			Args           map[string]string `yaml:"args"`
+			Allow          []string          `yaml:"allow"`
 		}
 
 		err = value.Decode(&m)
@@ -129,7 +137,7 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 		}
 
 		t.Builtin, t.Name, t.Description, t.Run, t.Agent, t.Required = m.Builtin, m.Name, m.Description, m.Run, m.Agent, m.Required
-		t.MaxCalls, t.Args, t.MaxOutputBytes = m.MaxCalls, m.Args, m.MaxOutputBytes
+		t.MaxCalls, t.Args, t.MaxOutputBytes, t.Allow = m.MaxCalls, m.Args, m.MaxOutputBytes, m.Allow
 		t.MCP, t.MCPTool, t.MCPTools = m.MCP, m.Tool, m.Tools
 
 		return nil

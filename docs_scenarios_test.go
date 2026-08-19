@@ -166,6 +166,31 @@ var docScenarios = map[string]docScenario{
 		),
 	},
 
+	// The allow: fence, proven by its refusal: the fetch targets a host
+	// outside the list, the refusal comes back as tool-result data (before
+	// any connection — the example needs no network), and the model records
+	// it. Routed rather than positional so a broken fence — the fetch
+	// somehow succeeding, or erroring differently — starves the write.
+	"agents-web-fetch": {
+		fake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
+				switch {
+				case req.historyCalled("write_file"):
+					return says("Recorded the refusal.")
+				case req.toolResultContains("allow: list"):
+					return callsTool("write_file", map[string]any{
+						"path":    "notes/status.md",
+						"content": "fetch refused: issues.example is outside this pipeline's allow list\n",
+					})
+				default:
+					return callsTool("web_fetch", map[string]any{"url": "https://issues.example/open"})
+				}
+			})
+		},
+	},
+
 	// required: enforced on the wire: the model first tries to stop, the
 	// loop forces post_review via tool_choice (the router calls it only when
 	// forced), and the answer comes after the tool result lands. repo is

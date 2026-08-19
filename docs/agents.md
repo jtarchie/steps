@@ -10,8 +10,8 @@ An agent step runs a tool-calling conversation loop:
 2. Build a system message combining the agent's persona with working-directory context (any `context_paths:` files are delivered as synthetic `read_file` tool results — see below).
 3. Loop, up to `max_turns`:
    - Send the conversation + tool definitions to the model.
-   - If the model requests tools, execute them (`read_file`, `list_dir`, `search_files`, `run_shell`, `write_file`, `edit_file`, or a custom/sub-agent tool).
-   - Cap any tool output at 32,000 bytes before it goes back to the model — output over that is saved to a file under the step's working directory instead of being dropped, with a short pointer message taking its place (see [compaction](agents-internals.md#compacting-long-conversations)); `read_file` is the exception, reading up to 100,000 bytes (a spilled file exists precisely so the model can pull it back) and degrading to plain truncation with `start_line`/`end_line` paging.
+   - If the model requests tools, execute them (`read_file`, `list_dir`, `search_files`, `run_shell`, `write_file`, `edit_file`, `web_fetch`, or a custom/sub-agent tool).
+   - Cap any tool output at 32,000 bytes before it goes back to the model — output over that is saved to a file under the step's working directory instead of being dropped, with a short pointer message taking its place (see [compaction](agents-internals.md#compacting-long-conversations)). Two tools carry their own bound instead, both at 100,000 bytes and neither spilling: `read_file` (a spilled file exists precisely so the model can pull it back), degrading to plain truncation with `start_line`/`end_line` paging, and `web_fetch`, which cuts the body off and says so — the page is still on the web, so a narrower URL is the way to the rest.
    - Append the tool results and continue.
 4. Exit when the model stops requesting tools, `max_turns` is exceeded, or [loop detection](agents-internals.md#loop-detection) kills a stuck conversation.
    - A spent turn budget **ends** the conversation rather than destroying it: the runner makes one final request with the tools withheld, asking the model to answer from what it already gathered, and records the answer with `wrapped_up: true` so a degraded answer is tellable from a confident one.
@@ -50,13 +50,14 @@ jobs:
     outcome: succeeded
 ```
 
-The three built-ins that mutate state or reach the host are deliberately not in the default; each is a capability the pipeline must grant explicitly:
+The built-ins that mutate state or reach beyond the workspace are deliberately not in the default; each is a capability the pipeline must grant explicitly:
 
 | tool | what it does |
 |---|---|
 | `run_shell` | Run a shell command in the working directory — unconfined within the step's host or container. |
 | `write_file` | Write (or with `append: true`, append) a UTF-8 text file. Replaces a whole file. |
 | `edit_file` | Replace an exact string in an existing file — change part of a file without re-emitting it. |
+| `web_fetch` | HTTP GET a URL and return its body — optionally fenced to named hosts with `allow:`. |
 
 ```yaml test=agents-writer
 agents:
@@ -105,6 +106,49 @@ Supply `pattern` (a regexp matched against each line), `glob` (a shell pattern m
 Unlike every other tool, `search_files` **never spills**: its bound is arithmetic — content matches accumulate against a 28KB budget, so a saturated result lands under the 32,000-byte inline cap by construction. `head_limit` caps results (default 50, ceiling 200); `total` and `truncated` report the true scale, so the answer to a flooded result is a narrower pattern, not a second page. `.git`, `node_modules`, `vendor`, binary files, and files over 2MB are skipped. `**` is supported only as a leading glob segment (`**/*.go`).
 
 `write_file` requires the file's immediate parent directory to already exist — use `run_shell` (`mkdir -p`) first if it doesn't. Like every file tool, its path is confined to the working directory and re-validated against symlink escapes.
+
+### `web_fetch`
+
+Takes one argument, `url` (`http://` or `https://` only), and returns `{status, content_type, body, truncated}`. The body is capped at 100KB inline and cut off past it (`truncated: true`) — the overflow is not spilled, because the page is still on the web and a narrower URL fetches the rest.
+
+A bare grant reaches any http(s) URL — the same trust level as `run_shell`, which can already `curl` anywhere. The mapping form's `allow:` is for the agent granted a browser but **not** a shell: each entry matches its exact hostname and any subdomain, case-insensitively, and every hop of a redirect chain is re-checked, so a permitted host that 302s elsewhere is refused mid-flight. The fence is enforced in steps, not in prompt language — a refused fetch comes back as `{"error": ...}` data naming the host and the list, which matters precisely because this tool exists to read pages the pipeline does not control:
+
+```yaml test=agents-web-fetch
+agents:
+- name: auditor
+  source: { model: openrouter/qwen/qwen3.7-flash }
+  tools:
+  - write_file
+  - builtin: web_fetch
+    allow: [specification.website]   # this host and its subdomains; empty/absent = any http(s) URL
+
+jobs:
+- name: audit
+  plan:
+  - agent: auditor
+    outputs: [notes]
+    prompt: "Check the tracker at issues.example and record what you find in notes/status.md."
+    assert:
+      tool_calls:
+      - name: web_fetch
+        args: { url: "https://issues.example/open" }   # outside allow: — refused as tool-result data
+      files: [notes/status.md]
+  - task: show
+    inputs: [notes]
+    run: cat notes/status.md
+    assert:
+      stdout: refused
+  assert:
+    execution: [auditor, show]
+    outcome: succeeded
+```
+
+The refusal happens before any connection is attempted, so the example above runs without network — and the model, told about the fence in the tool's own description, records the refusal instead of retrying it.
+
+Two rules keep a written fence honest, both enforced at load:
+
+- **`allow:` belongs on the `agents:` entry that grants the tool.** A step's `tools:` *selects* from the grant, and a selection is resolved by substituting the agent's own spec — so an `allow:` written on a step would read as a fence and bind nothing. Select by bare name (`tools: [web_fetch]`) and the agent's fence comes with it.
+- **Entries are bare hostnames** — no scheme, path, port, or wildcard. A host already covers its subdomains, and a pattern-shaped entry is refused rather than interpreted, because the two backends read the list differently enough that one written fence could otherwise mean two different things (see below).
 
 ## Working directory, inputs, and dir:
 
@@ -771,6 +815,11 @@ Granted built-ins map to the CLI's *native* tools, because a CLI is best at the 
 | `write_file` | `Write` |
 | `edit_file` | `Edit` |
 | `search_files` | `Grep` |
+| `web_fetch` | `WebFetch` |
+
+One row diverges in contract, deliberately: the CLI's `WebFetch` takes a URL *and a prompt* and answers with a model-written summary of the page, where the hosted path's `web_fetch` returns the raw body.
+
+An `allow:` list binds on both paths, but it is *compiled* for this one: each entry becomes a **pair** of permission rules, `WebFetch(domain:host)` and `WebFetch(domain:*.host)`, because the CLI matches domains exactly where steps matches a host and its subdomains — one rule alone would deny the subdomains, the other would deny the apex. This is also why a wildcard entry is a load error rather than a pattern: `*` denies everything here and matches everything there. One divergence is left standing, since it belongs to the CLI's engine: it checks the domain of the request, not each hop of a redirect chain.
 
 Everything else in the grant — custom `run:` tools, `mcp:` grants, and the synthesized `verdict` tool — reaches the CLI over a loopback MCP server steps starts for the step and tears down after. Those are the *same* implementations a hosted agent runs. Credentials stay in the parent process; nothing reaches the CLI's config but a URL and a single-use token.
 

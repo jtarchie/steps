@@ -65,6 +65,12 @@ var cliRuntimes = map[string]cliRuntime{
 			"write_file":   "Write",
 			"edit_file":    "Edit",
 			"search_files": "Grep",
+			// A known contract divergence, accepted deliberately: the CLI's
+			// WebFetch takes url+prompt and answers with a model-written
+			// summary, where the HTTP path's web_fetch returns the raw body.
+			// The native tool is what the CLI's model was trained against,
+			// which is the same reasoning as every other row here.
+			"web_fetch": "WebFetch",
 		},
 	},
 }

@@ -112,7 +112,12 @@ func objectSchema(properties map[string]*genai.Schema, required ...string) *gena
 }
 
 func builtinAgentTools(image string) map[string]builtinTool {
+	webFetchDecl, webFetchImpl := webFetchTool(nil)
+
 	return map[string]builtinTool{
+		// The catalogue entry is the unrestricted form; a grant carrying
+		// allow: is rebuilt with the list bound in (see resolveToolSpec).
+		config.WebFetchBuiltinName: {decl: webFetchDecl, impl: webFetchImpl},
 		"read_file": {
 			decl: &genai.FunctionDeclaration{
 				Name:        "read_file",

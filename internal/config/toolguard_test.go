@@ -92,6 +92,38 @@ jobs:
 			want: "max_calls/args are only valid on custom tools",
 		},
 		{
+			name: "allow on a custom tool",
+			pipeline: `
+agents:
+- name: reviewer
+  source: { model: lmstudio/qwen }
+  tools:
+  - name: post_review
+    description: d
+    run: echo hi
+    allow: [example.com]
+jobs:
+- name: j
+  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
+`,
+			want: "allow is only valid on the web_fetch builtin",
+		},
+		{
+			name: "allow on another builtin",
+			pipeline: `
+agents:
+- name: reviewer
+  source: { model: lmstudio/qwen }
+  tools:
+  - builtin: run_shell
+    allow: [example.com]
+jobs:
+- name: j
+  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
+`,
+			want: "allow is only valid on the web_fetch builtin",
+		},
+		{
 			name: "negative max_calls",
 			pipeline: `
 agents:

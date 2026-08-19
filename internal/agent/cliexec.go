@@ -383,8 +383,34 @@ func cliToolPermissions(conv agentConversation, runtime cliRuntime) (natives, al
 			continue
 		}
 
-		if native, isNative := runtime.natives[decl.Name]; isNative {
+		// Provenance, not spelling: the natives table is keyed by builtin
+		// name, and a custom tool may reuse one (see agentTools.builtins).
+		if native, isNative := runtime.natives[decl.Name]; isNative && conv.tools.builtins[decl.Name] {
 			natives = append(natives, native)
+
+			// A web_fetch allow: list becomes per-domain permission entries
+			// instead of one blanket grant, so the CLI enforces the same
+			// fence the HTTP path's impl does.
+			//
+			// TWO rules per entry, and both are needed: the CLI's domain
+			// matcher is exact where checkWebFetchHost is suffix-aware, so
+			// `domain:h` alone denies api.h (which the hosted path allows)
+			// and `domain:*.h` alone denies the apex. Emitting the pair is
+			// what keeps one written fence from being two different fences.
+			//
+			// One divergence remains and is not closable from here: the CLI
+			// matches the requested domain, not each redirect hop, so a hop
+			// off an allowed host is its enforcement to make, not steps'.
+			if decl.Name == config.WebFetchBuiltinName && len(conv.tools.webFetchAllow) > 0 {
+				for _, host := range conv.tools.webFetchAllow {
+					allowed = append(allowed,
+						fmt.Sprintf("%s(domain:%s)", native, host),
+						fmt.Sprintf("%s(domain:*.%s)", native, host))
+				}
+
+				continue
+			}
+
 			allowed = append(allowed, native)
 
 			continue
@@ -413,7 +439,10 @@ func nativeToolNames(conv agentConversation, runtime cliRuntime) map[string]bool
 			continue
 		}
 
-		if _, isNative := runtime.natives[decl.Name]; isNative {
+		// Same provenance rule as cliToolPermissions: a custom tool sharing a
+		// builtin's name is NOT served by the CLI, so the bridge must serve
+		// it or the model is offered a tool nothing runs.
+		if _, isNative := runtime.natives[decl.Name]; isNative && conv.tools.builtins[decl.Name] {
 			skip[decl.Name] = true
 		}
 	}

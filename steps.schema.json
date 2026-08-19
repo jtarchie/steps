@@ -444,7 +444,8 @@
             "run_shell",
             "write_file",
             "edit_file",
-            "search_files"
+            "search_files",
+            "web_fetch"
           ]
         },
         {
@@ -459,6 +460,13 @@
             },
             "description": {
               "type": "string"
+            },
+            "allow": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "web_fetch only, and only where the tool is granted (an agents: entry): bare hostnames the tool may reach — no scheme, path, port or wildcard. Each entry matches itself and its subdomains, on every redirect hop. Empty/absent means any http(s) URL."
             }
           }
         },

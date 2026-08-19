@@ -76,6 +76,19 @@ type agentTools struct {
 	// from the map is unlimited. Enforced by the conversation loop's
 	// per-attempt counter, before a call reaches its toolImpl.
 	maxCalls map[string]int
+	// webFetchAllow is the web_fetch grant's allow: list, carried out of the
+	// spec because the CLI path needs it AFTER resolution: a native WebFetch
+	// grant expresses the list as per-domain permission entries
+	// (cliToolPermissions), and by then only the declarations remain.
+	webFetchAllow []string
+	// builtins names the tools that came from a BUILTIN grant, as opposed to
+	// a custom tool that happens to spell its name the same way. It exists
+	// because the CLI runtime's natives table is keyed by builtin name, and
+	// a pipeline is free to write {name: web_fetch, run: ./authfetch.sh}:
+	// mapping that to the CLI's own WebFetch would substitute a different
+	// capability for the one the pipeline wrote, silently. Provenance is
+	// known only here, where the spec is still in hand.
+	builtins map[string]bool
 }
 
 // resolvedSpec is what one tools: entry produced. A spec yields several
@@ -116,6 +129,7 @@ func buildAgentTools(ctx context.Context, cfg *config.Config, specs []config.Too
 		registry: make(map[string]toolImpl, len(specs)),
 		required: requiredToolNames(specs),
 		maxCalls: maxCallsByName(specs),
+		builtins: make(map[string]bool, len(specs)),
 	}
 
 	decls := make([]*genai.FunctionDeclaration, 0, len(specs))
@@ -123,6 +137,14 @@ func buildAgentTools(ctx context.Context, cfg *config.Config, specs []config.Too
 	var closers []io.Closer
 
 	for _, spec := range specs {
+		if spec.Builtin != "" {
+			tools.builtins[spec.Builtin] = true
+		}
+
+		if spec.Builtin == config.WebFetchBuiltinName {
+			tools.webFetchAllow = spec.Allow
+		}
+
 		resolved, err := resolveToolSpec(ctx, cfg, spec, builtins)
 		if err == nil {
 			if resolved.closer != nil {
@@ -203,12 +225,7 @@ func resolveToolSpec(ctx context.Context, cfg *config.Config, spec config.ToolSp
 		return one(decl, impl, closer), nil
 
 	case spec.Builtin != "":
-		bt, ok := builtins[spec.Builtin]
-		if !ok {
-			return resolvedSpec{}, fmt.Errorf("unknown builtin tool %q", spec.Builtin)
-		}
-
-		return one(bt.decl, bt.impl, nil), nil
+		return resolveBuiltinSpec(spec, builtins)
 
 	case spec.Name != "" && spec.Run != "":
 		decl, impl := customToolDecl(spec)
@@ -218,6 +235,24 @@ func resolveToolSpec(ctx context.Context, cfg *config.Config, spec config.ToolSp
 	default:
 		return resolvedSpec{}, errors.New("agent tool: custom tool requires both name and run")
 	}
+}
+
+// resolveBuiltinSpec resolves a builtin grant from the catalogue. web_fetch
+// is the one builtin whose declaration and impl depend on the grant itself:
+// allow: narrows what it may reach, and the declaration tells the model so.
+func resolveBuiltinSpec(spec config.ToolSpec, builtins map[string]builtinTool) (resolvedSpec, error) {
+	bt, ok := builtins[spec.Builtin]
+	if !ok {
+		return resolvedSpec{}, fmt.Errorf("unknown builtin tool %q", spec.Builtin)
+	}
+
+	if spec.Builtin == config.WebFetchBuiltinName && len(spec.Allow) > 0 {
+		decl, impl := webFetchTool(spec.Allow)
+
+		return one(decl, impl, nil), nil
+	}
+
+	return one(bt.decl, bt.impl, nil), nil
 }
 
 // one is the single-declaration resolvedSpec every kind but a bare MCP grant

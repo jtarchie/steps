@@ -920,6 +920,13 @@ func recordHistory(
 		return false, err
 	}
 
+	// Said out loud because the check's own "versions=N" line reads as N
+	// pending triggers to anyone who doesn't know the cold-start rule — and
+	// a first watch after deleting the state db is exactly when someone is
+	// staring at the log deciding whether to ^C.
+	slog.Info("trigger.cold_start", "resource", resourceName, "versions_recorded", len(obs.versions),
+		"note", "first-ever check: backlog recorded as already taken, triggering nothing")
+
 	// A cold start is never news, whatever arrived.
 	return false, nil
 }
