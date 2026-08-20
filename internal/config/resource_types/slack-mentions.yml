@@ -191,15 +191,52 @@ config:
       // newer mention pushes the cursor past that answer. Closing that needs
       // the cursor to remember more than one timestamp, the same change the
       // gaps above are waiting on.
-      let threadRequests = histories | map((
+      // A COLD START asks about the most recently active threads and stops.
+      //
+      // The cursor is what keeps this fan-out small — a thread is asked about
+      // only when its latest_reply is newer. On a first check there is no
+      // cursor, since is 0, and `latest_reply > 0` is true of every thread
+      // that has ever been replied to: one call each, across the whole
+      // discovery window of every channel the bot is in.
+      //
+      // That is not just slow, it is a trap that cannot open itself. One
+      // rate-limited call fails the check (deliberately — see below), a
+      // failed check reports no version, no version means no cursor, and the
+      // next poll does exactly the same thing. A workspace with more threads
+      // than the rate limit allows calls for is a watcher that never runs
+      // once, and the only ways out are a quieter workspace or a hand-written
+      // --pin.
+      //
+      // A first check only has to establish WHERE TO START. Everything below
+      // the newest version it reports is marked already-taken by the
+      // cold-start rule in internal/trigger, so calls spent discovering older
+      // threads buy nothing that is ever built. Bounded rather than skipped
+      // because the mention people actually write is a reply inside a thread
+      // (see the note above threadRequests' filter), and the newest of those
+      // still has to be findable on the first check.
+      let coldStart = version.ts == nil;
+      let coldStartThreads = 5;
+
+      let threadCandidates = histories | map((
           let ch = #.request.query.channel;
           (#.json.messages ?? [])
             | filter((#.reply_count ?? 0) > 0 && (!("latest_reply" in #) || float(#.latest_reply) > since))
-            | map((
-              {url: base + "/api/conversations.replies",
-               query: {channel: ch, ts: #.ts, oldest: cursor, limit: "200"}}
-            ))
+            // active is what "most recent" is measured on. A parent with no
+            // latest_reply falls back to its own ts rather than dropping out
+            // of the ordering entirely.
+            | map(({ch: ch, ts: #.ts, active: float(#.latest_reply ?? #.ts)}))
         )) | flatten();
+
+      // sortBy(-active) rather than a "desc" argument: the negation sorts the
+      // same way and does not depend on which sortBy overload this expr
+      // version carries.
+      let threadRequests = (coldStart
+          ? (threadCandidates | sortBy(-#.active) | take(coldStartThreads))
+          : threadCandidates)
+        | map((
+          {url: base + "/api/conversations.replies",
+           query: {channel: #.ch, ts: #.ts, oldest: cursor, limit: "200"}}
+        ));
 
       let replies = len(threadRequests) == 0 ? [] :
         http(threadRequests, {headers: auth, concurrency: 4, retry: retry});

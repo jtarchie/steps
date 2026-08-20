@@ -38,6 +38,8 @@ Two more built-ins, both [expression-backed](expr.md) — Slack is a JSON HTTP A
 
 Cold start does not mean a backlog: like every resource, the first-ever check of a freshly-deployed `slack-mentions` records everything it finds and answers only the newest of it — see [Version history](#version-history) below. That rule is a `steps watch` behavior; `steps run` has no persisted cursor and always asks Slack for everything, every time.
 
+A first check is also **bounded in what it asks Slack**. Finding a mention written as a reply means one `conversations.replies` call per thread, and the cursor is what normally keeps that set small — no cursor means every thread that has ever been replied to qualifies. On a workspace with more threads than the rate limit allows calls for, that first check gets throttled, and a throttled check reports no version, which leaves no cursor for the next one: a watcher that can never run once. So a cold start looks at the five most recently active threads and stops. Everything below the newest version is marked already-taken anyway, so calls spent discovering older threads buy nothing that is ever built.
+
 ```yaml noexec=network
 resources:
 - name: mentions
