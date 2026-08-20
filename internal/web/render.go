@@ -157,6 +157,18 @@ func templateFuncs() template.FuncMap {
 	}
 }
 
+// formatUSD renders a dollar figure at the precision an agent run actually
+// costs. Four decimals rather than two: a single cheap step lands in the
+// fractions of a cent, and rounding those to $0.00 loses exactly the number
+// the column exists to show.
+func formatUSD(amount float64) string {
+	if amount >= 1 {
+		return fmt.Sprintf("$%.2f", amount)
+	}
+
+	return fmt.Sprintf("$%.4f", amount)
+}
+
 // formatDuration renders a duration the way a terminal would: whole seconds
 // below a minute, m/s above, and a dash for nothing.
 func formatDuration(d time.Duration) string {

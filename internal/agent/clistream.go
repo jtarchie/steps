@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 )
 
 // cliStreamMaxLine bounds one event. A single assistant message carrying a
@@ -37,6 +38,13 @@ type cliRunResult struct {
 	// into the step's usage so a job-level budget: still counts a CLI agent.
 	inputTokens  int
 	outputTokens int
+	// cachedTokens is how much of the prompt the provider served from cache.
+	// Folded into inputTokens as well (a cached token is still an input token
+	// a budget must count), and kept separately because the two answer
+	// different questions: what a step spent, and how much of that was cheap.
+	cachedTokens int
+	// costUSD is the CLI's own figure for what the run cost.
+	costUSD float64
 	// isError is the CLI's own verdict on its run — it exited having failed
 	// at the task, as distinct from having crashed (which shows up as an exit
 	// status instead).
@@ -66,7 +74,11 @@ type cliEvent struct {
 	NumTurns int      `json:"num_turns"`
 	IsError  bool     `json:"is_error"`
 	Errors   []string `json:"errors"`
-	Usage    struct {
+	// TotalCostUSD is what the CLI says the run cost. The only provider path
+	// steps has that reports a dollar figure at all — the HTTP ones report
+	// tokens and leave pricing to whoever knows the rate card.
+	TotalCostUSD float64 `json:"total_cost_usd"`
+	Usage        struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
 		// Cached prompt tokens are counted as input, and counting them is not
@@ -84,10 +96,23 @@ func (e cliEvent) promptTokens() int {
 	return e.Usage.InputTokens + e.Usage.CacheCreationInputTokens + e.Usage.CacheReadInputTokens
 }
 
+// cachedTokens is the share of that input the provider did not have to read
+// again. Both fields count: a creation write is what makes the next run's read
+// free, and reporting only the reads calls the first run of a cached
+// conversation 0% cached.
+func (e cliEvent) cachedTokens() int {
+	return e.Usage.CacheCreationInputTokens + e.Usage.CacheReadInputTokens
+}
+
 // cliContentBlock is one block of an assistant or user message: the tool_use
 // blocks are the calls, the tool_result blocks are their outcomes.
 type cliContentBlock struct {
-	Type      string          `json:"type"`
+	Type string `json:"type"`
+	// Text is the model's own commentary on an assistant turn — what it said
+	// while working, as distinct from what it called. Read only since the
+	// transcript recorder existed to receive it; before that the field was
+	// absent and every word a CLI agent wrote mid-conversation was dropped.
+	Text      string          `json:"text"`
 	ID        string          `json:"id"`
 	Name      string          `json:"name"`
 	Input     map[string]any  `json:"input"`
@@ -102,7 +127,9 @@ type cliContentBlock struct {
 // parsed but never ended is reported through sawResult, so the caller can
 // combine it with the process's exit status — which is the pair that actually
 // distinguishes "crashed" from "finished badly".
-func parseCLIStream(reader io.Reader) (cliRunResult, error) {
+// The recorder may be nil — a caller that only wants the reduced result, and
+// every test that predates the transcript, passes one.
+func parseCLIStream(reader io.Reader, rec *transcriptRecorder) (cliRunResult, error) {
 	var result cliRunResult
 
 	// Tool calls are indexed by the id the CLI assigns them, so a result
@@ -130,8 +157,10 @@ func parseCLIStream(reader io.Reader) (cliRunResult, error) {
 		switch event.Type {
 		case "assistant":
 			recordCLIToolCalls(&result, index, event)
+			recordCLITurn(rec, event)
 		case "user":
 			markCLIToolResults(&result, index, event)
+			recordCLIResults(rec, result.trajectory, index, event)
 		case "result":
 			result.sawResult = true
 			result.text = event.Result
@@ -140,6 +169,8 @@ func parseCLIStream(reader io.Reader) (cliRunResult, error) {
 			result.errSubtype = event.Subtype
 			result.inputTokens = event.promptTokens()
 			result.outputTokens = event.Usage.OutputTokens
+			result.cachedTokens = event.cachedTokens()
+			result.costUSD = event.TotalCostUSD
 
 			if len(event.Errors) > 0 {
 				result.errMessage = event.Errors[0]
@@ -186,6 +217,79 @@ func recordCLIToolCalls(result *cliRunResult, index map[string]int, event cliEve
 			index[block.ID] = len(result.trajectory) - 1
 		}
 	}
+}
+
+// recordCLITurn hands one assistant turn to the transcript: what the model
+// said, then what it called, in the order the blocks arrived.
+//
+// Recorded from the STREAM rather than from the bridge, including for bridged
+// mcp__steps__* tools that the parent itself executes. The stream sees both
+// kinds and is authoritative for order (the same rule mergeCLITrajectory
+// follows), so recording the bridge's view as well would show every bridged
+// call twice and race the stdout reader for the position it appears at.
+func recordCLITurn(rec *transcriptRecorder, event cliEvent) {
+	for _, block := range event.Message.Content {
+		switch block.Type {
+		case "text":
+			rec.text(block.Text)
+		case "tool_use":
+			if block.Name != "" {
+				rec.call(block.Name, block.Input)
+			}
+		}
+	}
+}
+
+// recordCLIResults hands a user turn's tool results to the transcript,
+// resolving each one's tool NAME through the same id index markCLIToolResults
+// uses — a tool_result block carries the call's id and never its name.
+func recordCLIResults(rec *transcriptRecorder, trajectory []recordedToolCall, index map[string]int, event cliEvent) {
+	if rec == nil {
+		return
+	}
+
+	for _, block := range event.Message.Content {
+		if block.Type != "tool_result" {
+			continue
+		}
+
+		at, ok := index[block.ToolUseID]
+		if !ok || at >= len(trajectory) {
+			continue
+		}
+
+		rec.result(trajectory[at].name, cliResultText(block.Content))
+	}
+}
+
+// cliResultText flattens a tool_result's content, which the CLI sends either
+// as a bare string or as the block array the Messages API uses.
+func cliResultText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+
+	var text string
+
+	err := json.Unmarshal(raw, &text)
+	if err == nil {
+		return text
+	}
+
+	var blocks []cliContentBlock
+
+	err = json.Unmarshal(raw, &blocks)
+	if err != nil {
+		return string(raw)
+	}
+
+	var out strings.Builder
+
+	for _, block := range blocks {
+		out.WriteString(block.Text)
+	}
+
+	return out.String()
 }
 
 // markCLIToolResults backfills ok from the tool_result blocks in a user turn.

@@ -799,7 +799,7 @@ The quotes are not stylistic: a leading `@` is a reserved indicator in YAML, so 
 
 ### What changes, and what doesn't
 
-This is **delegation, not a different transport**. The CLI owns the conversation: its own turn loop, its own tools, its own context window. steps owns everything around it, unchanged — the workspace, the merkle hash that decides whether the step runs at all, `timeout:`, the recorded trajectory and response, `assert:`, and `verdicts:`/`to:` routing. You get the CLI's own tooling inside a pipeline that still caches, routes, and fans out.
+This is **delegation, not a different transport**. The CLI owns the conversation: its own turn loop, its own tools, its own context window. steps owns everything around it, unchanged — the workspace, the merkle hash that decides whether the step runs at all, `timeout:`, the recorded trajectory and response, `assert:`, and `verdicts:`/`to:` routing. steps also reads the CLI's transcript as it streams, so the turns it takes are published and stored exactly as a hosted agent's are — a delegated step is not a quieter one. You get the CLI's own tooling inside a pipeline that still caches, routes, and fans out.
 
 **Authentication** comes from the CLI's own credential store — the subprocess inherits `HOME`, so a subscription login works with no `api_key_env:` at all. Set `api_key_env:` only to forward a specific key as `ANTHROPIC_API_KEY`.
 

@@ -67,6 +67,12 @@ type StepUsage struct {
 	// the one requested: openrouter/auto and router models resolve at request
 	// time, and providers substitute. Empty when nothing reported one.
 	ModelServed string
+	// CostUSD is what the run cost, when a provider path reports one at all.
+	// Only a CLI subprocess does: it meters itself and prints the figure in
+	// its terminal event, while every HTTP path reports tokens and leaves
+	// pricing to whoever knows the rate card. Zero means unreported, never
+	// free — which is why the page shows nothing rather than $0.00.
+	CostUSD float64
 	// FinishReason is why the last response ended. "length" (or whatever the
 	// provider spells it) means the answer was TRUNCATED by max_tokens, which
 	// is otherwise indistinguishable from a model that simply said little —
@@ -285,6 +291,7 @@ type stepUsage struct {
 	total        int
 	cached       int
 	reasoning    int
+	costUSD      float64
 	served       string
 	finishReason string
 	raw          string
@@ -359,6 +366,46 @@ func (s *stepUsage) addTokens(prompt, completion int) {
 	s.prompt += prompt
 	s.completion += completion
 	s.total += prompt + completion
+}
+
+// reportedCost is a dollar figure a provider actually reported, or nil.
+//
+// A pointer because the column has to tell "nobody priced this" apart from
+// "this was free", and every HTTP path reports no price at all.
+func reportedCost(cost float64) *float64 {
+	if cost <= 0 {
+		return nil
+	}
+
+	return &cost
+}
+
+// addCLIReport folds in the figures only a CLI subprocess reports about
+// itself: how much of its prompt was served from cache, what it cost, and how
+// it stopped.
+//
+// Separate from record() because that one reads a *model.LLMResponse, which
+// this path never has — a CLI reports its own accounting in the terminal event
+// of its stream (see clistream.go) and never hands over a provider response.
+// Without it a CLI step's spend row said 0% cached on a conversation that was
+// almost entirely cache reads, and priced a billable run at nothing.
+func (s *stepUsage) addCLIReport(cached int, costUSD float64, finishReason string) {
+	if cached == 0 && costUSD == 0 && finishReason == "" {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.cached += cached
+
+	if costUSD > 0 {
+		s.costUSD += costUSD
+	}
+
+	if finishReason != "" {
+		s.finishReason = finishReason
+	}
 }
 
 // hasCeiling reports whether this invocation declares a token budget at all.
@@ -542,7 +589,7 @@ func (s *stepUsage) snapshot() StepUsage {
 
 	return StepUsage{
 		Step: s.name, Prompt: s.prompt, Completion: s.completion, Total: s.total,
-		Cached: s.cached, Reasoning: s.reasoning,
+		Cached: s.cached, Reasoning: s.reasoning, CostUSD: s.costUSD,
 		ModelServed: s.served, FinishReason: s.finishReason, Raw: s.raw,
 	}
 }
@@ -634,6 +681,7 @@ func saveAgentUsage(ctx context.Context, st *store.Store, args saveUsageArgs) {
 		Total:        args.usage.Total,
 		Cached:       args.usage.Cached,
 		Reasoning:    args.usage.Reasoning,
+		CostUSD:      reportedCost(args.usage.CostUSD),
 		FinishReason: args.usage.FinishReason,
 		DurationMS:   args.duration.Milliseconds(),
 		RawMeta:      args.usage.Raw,

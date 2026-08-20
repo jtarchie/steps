@@ -260,7 +260,10 @@ func execCLI(
 
 	// Parsed as it arrives, not buffered whole: a step that times out
 	// mid-conversation still has the trajectory of what it managed to do.
-	run, parseErr := parseCLIStream(stdout)
+	// The step's own recorder, so every turn the child takes is published as
+	// it happens under the step that spawned it. It is set for every agent
+	// step in RunStep, whichever path runs — this one just never used it.
+	run, parseErr := parseCLIStream(stdout, prepared.conv.recorder)
 
 	// Drain whatever is left before waiting. A parse that stopped early (an
 	// over-long line) leaves the child writing into a pipe nobody reads, and

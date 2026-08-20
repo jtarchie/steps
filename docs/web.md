@@ -93,10 +93,16 @@ the things a scrollback cannot give you:
   `![](http://…)` in a review is a request the browser makes on its own, so the
   page shows the alt text and the host it wanted instead. Headings mint no
   anchor ids, which are the page's own (`#step-…`) to hand out.
-- **A CLI-backed agent shows its tool calls too.** An agent whose
+- **A CLI-backed agent reads the same as a hosted one.** An agent whose
   `source.model:` is a CLI (`@claude/sonnet`) runs its own tool loop in a
-  subprocess and publishes no turns, but the calls it made are recorded with
-  the step and are listed under it.
+  subprocess, so steps reads that subprocess's transcript as it streams and
+  publishes the same turns: the model's text, every tool call, and every
+  result. They appear live while the step runs and are stored with it
+  afterwards, so the node page's conversation works for a CLI step too.
+- **What a step cost**, when anything reported it. A CLI meters itself and
+  prints a figure when it exits; the HTTP paths report tokens and leave pricing
+  to whoever knows the rate card. A run where nothing reported one says
+  `unpriced` rather than `$0.00`, which would read as free.
 - **Every hash is a link** to the node page, and **every step has one too** —
   the `#` beside its name is a URL you can paste at someone, and it opens the
   step it names.

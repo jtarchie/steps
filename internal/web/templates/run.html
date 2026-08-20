@@ -43,18 +43,19 @@
     <span class="spendtotal">{{thousands $spend.Tokens}} tokens</span>
     <span class="spendmeta">{{$spend.CachePercent}}% cached</span>
     <span class="spendmeta">{{$spend.Steps}} agent step(s)</span>
-    <span class="spendmeta unpriced" title="No provider path reports a dollar figure yet, so this is deliberately not shown as $0.00">unpriced</span>
+    {{if $spend.Priced}}<span class="spendtotal">{{$spend.Cost}}</span>{{else}}<span class="spendmeta unpriced" title="No provider on this run reported a dollar figure, so this is deliberately not shown as $0.00">unpriced</span>{{end}}
     {{if $spend.Truncated}}<span class="spendwarn">{{$spend.Truncated}} response(s) truncated</span>{{end}}
   </div>
   <div class="spendscroll">
   <table class="spendtable">
-    <tr><th>step</th><th class="num">tokens</th><th class="num">cached</th><th>model served</th><th>finish</th></tr>
+    <tr><th>step</th><th class="num">tokens</th><th class="num">cached</th><th>model served</th><th class="num">cost</th><th>finish</th></tr>
     {{range $run.UsageRows}}
     <tr>
       <td>{{.StepName}}</td>
       <td class="num">{{thousands .Total}}</td>
       <td class="num">{{.CachePercent}}%</td>
       <td class="model">{{if .ModelServed}}{{.ModelServed}}{{else}}{{.ModelReq}}{{end}}</td>
+      <td class="num">{{.Cost}}</td>
       <td>{{if .Truncated}}<span class="spendwarn">{{lower .FinishReason}} — truncated</span>{{else}}<span class="dim">{{lower .FinishReason}}</span>{{end}}</td>
     </tr>
     {{end}}

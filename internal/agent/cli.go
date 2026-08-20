@@ -149,6 +149,12 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 	// after it. See cliStepState.
 	state := newCLIStepState()
 
+	// What the CLI reported about its own spend, folded in once the attempts
+	// are done. Deferred rather than written per attempt because the figures
+	// accumulate in state, and the last word on how a step finished belongs
+	// to the step rather than to whichever attempt spoke last.
+	defer func() { prepared.conv.usage.addCLIReport(state.cachedTokens, state.costUSD, state.finishReason) }()
+
 	var lastErr error
 
 	runErr := retry.Do(ctx, prepared.ri.Attempts, func(attempt int) error {
@@ -210,7 +216,11 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		return retry.StopOnDeadline(ctx, attemptCtx, outcome.FailOnDeadline(ctx, attemptCtx, attemptErr))
 	})
 
-	return state.result(prepared.ri.ModelName), runErr
+	// The conversation the child had, as the recorder captured it off the
+	// stream. Attached however the step ended, like the hosted path attaches
+	// its own — a step that died mid-task is the one whose trace is needed
+	// most.
+	return state.result(prepared.ri.ModelName, prepared.conv.recorder), runErr
 }
 
 // remainingCLITurns is the CLI path's share of the step's turn budget, with
@@ -269,12 +279,15 @@ func (p cliAttempt) outOfTurns() bool {
 // events, so the calls a step actually made are the concatenation, not the
 // last slice.
 type cliStepState struct {
-	text       string
-	turns      int
-	trajectory []recordedToolCall
-	verdict    string
-	note       string
-	satisfied  map[string]bool
+	text         string
+	turns        int
+	trajectory   []recordedToolCall
+	verdict      string
+	note         string
+	satisfied    map[string]bool
+	cachedTokens int
+	costUSD      float64
+	finishReason string
 }
 
 func newCLIStepState() *cliStepState {
@@ -287,6 +300,19 @@ func (s *cliStepState) absorb(run cliRunResult, bridge *cliBridge) {
 
 	s.turns += run.turns
 	s.trajectory = append(s.trajectory, mergeCLITrajectory(run.trajectory, bridgeCalls)...)
+
+	// Accumulated like everything else here: the attempts share one
+	// conversation, so what a resumed run spent adds to what the first one
+	// did rather than replacing it.
+	s.cachedTokens += run.cachedTokens
+	s.costUSD += run.costUSD
+
+	// Last non-empty wins, matching the answer and the verdict below: a
+	// crashed attempt reports no subtype and must not erase how an earlier
+	// one finished.
+	if run.errSubtype != "" {
+		s.finishReason = run.errSubtype
+	}
 
 	// Last non-empty wins for the answer and the decision: a later attempt
 	// speaks for the conversation, but a crashed one that said nothing must
@@ -305,7 +331,7 @@ func (s *cliStepState) absorb(run cliRunResult, bridge *cliBridge) {
 }
 
 // result is what the step reports, however many attempts it took.
-func (s *cliStepState) result(modelName string) conversationResult {
+func (s *cliStepState) result(modelName string, rec *transcriptRecorder) conversationResult {
 	return conversationResult{
 		text:       s.text,
 		turns:      s.turns,
@@ -313,6 +339,7 @@ func (s *cliStepState) result(modelName string) conversationResult {
 		model:      modelName,
 		verdict:    s.verdict,
 		note:       s.note,
+		transcript: rec.recorded(),
 	}
 }
 

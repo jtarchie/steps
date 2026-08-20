@@ -17,7 +17,7 @@ func TestParseCLIStream(t *testing.T) {
 		`{"type":"result","subtype":"success","result":"all done","num_turns":3,"is_error":false,"usage":{"input_tokens":120,"output_tokens":45}}`,
 	}, "\n")
 
-	result, err := parseCLIStream(strings.NewReader(stream))
+	result, err := parseCLIStream(strings.NewReader(stream), nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestParseCLIStreamTolerance(t *testing.T) {
 		`{"type":"result","subtype":"success","result":"fine","num_turns":1}`,
 	}, "\n")
 
-	result, err := parseCLIStream(strings.NewReader(stream))
+	result, err := parseCLIStream(strings.NewReader(stream), nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestParseCLIStreamTruncated(t *testing.T) {
 	// retry this and not that.
 	stream := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"sleep 1"}}]}}`
 
-	result, err := parseCLIStream(strings.NewReader(stream))
+	result, err := parseCLIStream(strings.NewReader(stream), nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -130,12 +130,149 @@ func TestParseCLIStreamReportsFailure(t *testing.T) {
 
 	stream := `{"type":"result","subtype":"error_max_turns","result":"","num_turns":8,"is_error":true}`
 
-	result, err := parseCLIStream(strings.NewReader(stream))
+	result, err := parseCLIStream(strings.NewReader(stream), nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
 
 	if !result.isError || result.errSubtype != "error_max_turns" {
 		t.Errorf("result = {isError: %v, subtype: %q}, want {true, error_max_turns}", result.isError, result.errSubtype)
+	}
+}
+
+// TestParseCLIStreamRecordsTheConversation is the transcript half of the same
+// parse: the same stream that yields the reduced result also has to yield the
+// conversation, in the order it happened, so a CLI agent's step reads like a
+// hosted one's.
+func TestParseCLIStreamRecordsTheConversation(t *testing.T) {
+	t.Parallel()
+
+	stream := strings.Join([]string{
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"looking"},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"main.go"}}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"package main"}]}}`,
+		`{"type":"result","subtype":"success","result":"done","num_turns":1,"is_error":false}`,
+	}, "\n")
+
+	rec := &transcriptRecorder{}
+
+	_, err := parseCLIStream(strings.NewReader(stream), rec)
+	if err != nil {
+		t.Fatalf("parseCLIStream: %v", err)
+	}
+
+	want := []transcriptEvent{
+		{Type: "text", Text: "looking"},
+		{Type: "call", Name: "Read"},
+		{Type: "result", Name: "Read", Content: "package main"},
+	}
+
+	if len(rec.events) != len(want) {
+		t.Fatalf("recorded %d events, want %d: %+v", len(rec.events), len(want), rec.events)
+	}
+
+	for i, expected := range want {
+		got := rec.events[i]
+		if got.Type != expected.Type || got.Name != expected.Name {
+			t.Errorf("event %d = %s/%s, want %s/%s", i, got.Type, got.Name, expected.Type, expected.Name)
+		}
+
+		if expected.Text != "" && got.Text != expected.Text {
+			t.Errorf("event %d text = %q, want %q", i, got.Text, expected.Text)
+		}
+
+		// A tool_result names only the call's id, so the content arriving
+		// under the right TOOL is what proves the id lookup works.
+		if expected.Content != "" && got.Content != expected.Content {
+			t.Errorf("event %d content = %q, want %q", i, got.Content, expected.Content)
+		}
+	}
+}
+
+// TestParseCLIStreamRecordsABridgedCallOnce pins the choice not to record the
+// bridge's own view as well. A bridged tool is executed by the parent AND
+// reported by the child's stream; recording both would double every verdict.
+func TestParseCLIStreamRecordsABridgedCallOnce(t *testing.T) {
+	t.Parallel()
+
+	stream := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"v1","name":"mcp__steps__verdict","input":{"choice":"approve"}}]}}`
+
+	rec := &transcriptRecorder{}
+
+	_, err := parseCLIStream(strings.NewReader(stream), rec)
+	if err != nil {
+		t.Fatalf("parseCLIStream: %v", err)
+	}
+
+	calls := 0
+
+	for _, event := range rec.events {
+		if event.Type == "call" {
+			calls++
+		}
+	}
+
+	if calls != 1 {
+		t.Errorf("recorded %d calls for one bridged tool_use, want 1: %+v", calls, rec.events)
+	}
+}
+
+// TestParseCLIStreamRecordsBlockShapedResults covers the other content shape:
+// the Messages API sends a tool_result's content as a block array, not always
+// as a bare string, and a transcript that showed raw JSON for half of them
+// would be a rendering nobody could read.
+func TestParseCLIStreamRecordsBlockShapedResults(t *testing.T) {
+	t.Parallel()
+
+	stream := strings.Join([]string{
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{}}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"first"},{"type":"text","text":" second"}]}]}}`,
+	}, "\n")
+
+	rec := &transcriptRecorder{}
+
+	_, err := parseCLIStream(strings.NewReader(stream), rec)
+	if err != nil {
+		t.Fatalf("parseCLIStream: %v", err)
+	}
+
+	found := ""
+
+	for _, event := range rec.events {
+		if event.Type == "result" {
+			found = event.Content
+		}
+	}
+
+	if found != "first second" {
+		t.Errorf("block-shaped result flattened to %q, want %q", found, "first second")
+	}
+}
+
+// TestParseCLIStreamReportsWhatItSpent covers the accounting the terminal
+// event carries and the parser used to discard.
+func TestParseCLIStreamReportsWhatItSpent(t *testing.T) {
+	t.Parallel()
+
+	stream := `{"type":"result","subtype":"success","result":"done","num_turns":1,"is_error":false,` +
+		`"total_cost_usd":0.25,"usage":{"input_tokens":10,"output_tokens":5,` +
+		`"cache_creation_input_tokens":100,"cache_read_input_tokens":900}}`
+
+	result, err := parseCLIStream(strings.NewReader(stream), nil)
+	if err != nil {
+		t.Fatalf("parseCLIStream: %v", err)
+	}
+
+	// Cached tokens are input tokens too: a budget counts them, and the cache
+	// figure says how much of that input was cheap.
+	if result.inputTokens != 1010 {
+		t.Errorf("input tokens = %d, want 1010", result.inputTokens)
+	}
+
+	if result.cachedTokens != 1000 {
+		t.Errorf("cached tokens = %d, want 1000", result.cachedTokens)
+	}
+
+	if result.costUSD != 0.25 {
+		t.Errorf("cost = %v, want 0.25", result.costUSD)
 	}
 }

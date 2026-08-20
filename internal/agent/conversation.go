@@ -109,10 +109,13 @@ type conversationResult struct {
 	// from: { <this step>: note|full } } is handed it (see upstream.go).
 	note string
 	// transcript is the full ordered exchange — model text, tool calls,
-	// results, nested sub-agent traces — attached by runAgentConversation on
-	// every exit path. Persisted to node_transcripts (see saveAgentTranscript),
-	// never into nodes.result, which stays bounded to the trajectory. Empty
-	// for a CLI-delegated conversation (cli.go), which never enters the loop.
+	// results, nested sub-agent traces — attached on every exit path.
+	// Persisted to node_transcripts (see saveAgentTranscript), never into
+	// nodes.result, which stays bounded to the trajectory.
+	//
+	// Attached by runAgentConversation on the hosted path, and by
+	// runCLIConversation on the delegated one, which never enters this loop
+	// and reads the child's own stream instead (clistream.go).
 	transcript []transcriptEvent
 	// checkpoint is everything this attempt would have to hand the next
 	// source for a swap to CONTINUE the conversation rather than restart it.

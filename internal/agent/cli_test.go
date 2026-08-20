@@ -608,7 +608,7 @@ func TestCLIStepStateAccumulatesAcrossAttempts(t *testing.T) {
 	second := newFakeBridgeObservation(t, "", "", nil)
 	state.absorb(cliRunResult{text: "done", turns: 3, trajectory: []recordedToolCall{{name: "Write", ok: true}}}, second)
 
-	result := state.result("sonnet")
+	result := state.result("sonnet", nil)
 
 	if result.verdict != "approve" || result.note != "looks fine" {
 		t.Errorf("verdict/note = %q/%q, want the one emitted before the crash", result.verdict, result.note)
@@ -637,7 +637,7 @@ func TestCLIStepStateKeepsEarlierAnswer(t *testing.T) {
 	state.absorb(cliRunResult{text: "the real answer", turns: 2}, newFakeBridgeObservation(t, "reject", "", nil))
 	state.absorb(cliRunResult{}, newFakeBridgeObservation(t, "", "", nil))
 
-	result := state.result("sonnet")
+	result := state.result("sonnet", nil)
 	if result.text != "the real answer" || result.verdict != "reject" {
 		t.Errorf("result = {text: %q, verdict: %q}, want the earlier attempt's output preserved", result.text, result.verdict)
 	}

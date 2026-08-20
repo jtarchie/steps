@@ -179,14 +179,37 @@ func (r *transcriptRecorder) results(parts []*genai.Part) {
 			continue
 		}
 
-		content := renderResultContent(part.FunctionResponse.Response)
-		r.events = append(r.events, transcriptEvent{
-			Type:    "result",
-			Name:    part.FunctionResponse.Name,
-			Content: content,
-		})
-		r.publish(events.TypeAgentResult, "", part.FunctionResponse.Name, content)
+		r.result(part.FunctionResponse.Name, renderResultContent(part.FunctionResponse.Response))
 	}
+}
+
+// result records ONE tool result already rendered to text.
+//
+// The seam between the two paths: the hosted loop arrives with genai parts and
+// flattens them above, while a CLI transcript arrives as a name and a content
+// string it read off the child's stream (see clistream.go). Both land here, so
+// there is one place a result becomes an event and no way for the two to
+// drift.
+func (r *transcriptRecorder) result(name, content string) {
+	if r == nil || name == "" {
+		return
+	}
+
+	bounded := truncateToolOutputLimit(content, maxRecordedResultBytes)
+
+	r.events = append(r.events, transcriptEvent{Type: "result", Name: name, Content: bounded})
+	r.publish(events.TypeAgentResult, "", name, bounded)
+}
+
+// recorded is the conversation captured so far, nil-safe so a caller that
+// never had a recorder (a direct invocation, a test) reads an empty
+// transcript rather than branching on it.
+func (r *transcriptRecorder) recorded() []transcriptEvent {
+	if r == nil {
+		return nil
+	}
+
+	return r.events
 }
 
 // subagent records one delegation: the parent's request and the child

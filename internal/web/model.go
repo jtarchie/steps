@@ -385,7 +385,21 @@ type spendSummary struct {
 	Cached    int
 	Steps     int
 	Truncated int
+	// USD is what the run cost, summed over the steps that reported a price.
+	// Zero when nothing did, which is not the same as free — see Priced.
+	USD float64
 }
+
+// Priced reports whether any step of this run reported a dollar figure.
+//
+// Only a CLI-backed agent does: it meters itself and prints the number when it
+// exits, while every HTTP path reports tokens and leaves pricing to whoever
+// knows the rate card. A run with none must say "unpriced" rather than
+// "$0.00", which would read as free.
+func (s spendSummary) Priced() bool { return s.USD > 0 }
+
+// Cost renders the run's price.
+func (s spendSummary) Cost() string { return formatUSD(s.USD) }
 
 // CachePercent is the share of tokens the provider served from cache.
 //
@@ -407,6 +421,10 @@ func (r runView) Spend() spendSummary {
 		summary.Tokens += step.Total
 		summary.Cached += step.Cached
 		summary.Steps++
+
+		if step.CostUSD != nil {
+			summary.USD += *step.CostUSD
+		}
 
 		if truncatedFinish(step.FinishReason) {
 			summary.Truncated++
@@ -435,6 +453,16 @@ func (u usageView) Truncated() bool { return truncatedFinish(u.FinishReason) }
 // usageView is one agent step's spend as the template reads it.
 type usageView struct {
 	store.AgentUsage
+}
+
+// Cost renders this step's price, empty when nothing reported one — a blank
+// cell rather than a zero, for the same reason the header says "unpriced".
+func (u usageView) Cost() string {
+	if u.CostUSD == nil {
+		return ""
+	}
+
+	return formatUSD(*u.CostUSD)
 }
 
 // CachePercent is this step's own cache hit rate.
