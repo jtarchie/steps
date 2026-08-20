@@ -429,9 +429,9 @@ jobs:
 // discovers threads therefore cannot be the cursor: it is `limit` messages of
 // channel history, and the cursor decides what is NEW inside it.
 //
-// Two polls, because one cannot express it: the first is the cold start that
-// takes the backlog without answering it, and only then is the cursor ahead of
-// the parent.
+// Two polls, because one cannot express it: the first is the cold start,
+// which takes the backlog and answers only its newest mention, and only then
+// is the cursor ahead of the parent.
 func TestEndToEndBuiltinSlackAnswersAReplyBehindTheCursor(t *testing.T) {
 	server, workspace := fakeSlackServing(t, nil)
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
@@ -475,8 +475,12 @@ jobs:
 
 	mustRun(t, "watch", path, "--once")
 
-	if got := workspace.postedMessages(); len(got) != 0 {
-		t.Fatalf("cold start posted %d messages, want 0 — a fresh watcher records the backlog, it does not answer it: %v", len(got), got)
+	// One, not the backlog: a fresh watcher records what it finds and answers
+	// only the newest of it (docs/conformance.md's cold-start row).
+	postedAfterColdStart := len(workspace.postedMessages())
+	if postedAfterColdStart != 1 {
+		t.Fatalf("cold start posted %d messages, want exactly 1 — the newest mention, never the backlog behind it: %v",
+			postedAfterColdStart, workspace.postedMessages())
 	}
 
 	// The cursor now sits at 101.500, the newest mention the cold start
@@ -499,15 +503,17 @@ jobs:
 	}
 
 	posted := workspace.postedMessages()
-	if len(posted) != 1 {
-		t.Fatalf("posted %d messages, want exactly 1 (the new reply, and nothing the cold start already took): %v", len(posted), posted)
+	if len(posted) != postedAfterColdStart+1 {
+		t.Fatalf("posted %d messages, want %d (one new reply, and nothing the cold start already took): %v",
+			len(posted), postedAfterColdStart+1, posted)
 	}
 
 	// Threaded on the PARENT, 100.000 — the answer belongs in the
 	// conversation the question was asked in, and 300.000 is a reply, not a
 	// thread.
-	if posted[0]["channel"] != "C1" || posted[0]["thread_ts"] != "100.000" {
-		t.Errorf("posted %v, want a reply threaded on C1/100.000", posted[0])
+	answer := posted[len(posted)-1]
+	if answer["channel"] != "C1" || answer["thread_ts"] != "100.000" {
+		t.Errorf("posted %v, want a reply threaded on C1/100.000", answer)
 	}
 }
 

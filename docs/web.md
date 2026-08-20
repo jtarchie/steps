@@ -5,15 +5,17 @@ steps web pipeline.yml
 ```
 
 Serves a browser view of what the runner has done and is doing, at
-`http://127.0.0.1:8088`. Several pipelines at once:
+`http://127.0.0.1:8088` — and, unless told not to, polls `trigger: true`
+resources while it serves, so one command both notices new versions and builds
+them. Several pipelines at once:
 
 ```bash
 steps web app.yml infra.yml nightly.yml
 ```
 
 Each is routed under `/p/<basename>/`, because state is per-pipeline by
-construction — `.steps/state.db` lives beside each YAML, so two pipelines
-never share a database here either.
+construction — each YAML gets its own `.steps/<filename>.db`, so two
+pipelines never share a database, not even two sitting in one directory.
 
 ## What it shows
 
@@ -137,18 +139,67 @@ and pauses while the tab is hidden.
 Three controls, each writing the same rows the CLI writes:
 
 - **Trigger** / **Re-run (forced)** enqueue the job into the durable trigger
-  queue `steps watch` uses. `steps web` drains that queue in-process by
-  calling `pipeline.RunJob` — there is no second execution path, so a job run
-  from a browser gets the same caching, hooks, serial groups, and recording as
-  any other. Forced re-run skips the merkle cache; an unforced one does not,
+  queue `steps watch` uses — the same queue this process's own polling fills.
+  `steps web` drains it in-process by calling `pipeline.RunJob` — there is no
+  second execution path, so a job run from a browser gets the same caching,
+  hooks, serial groups, and recording as any other. Forced re-run skips the merkle cache; an unforced one does not,
   which on an unchanged pipeline correctly does almost nothing.
 - **Approve / Reject** on an `approval:` step, with the reason recorded — the
   same row `steps approve` writes.
 - **Resume** a job the watch circuit breaker paused.
 
 `--read-only` withholds all three: the controls disappear from the pages and
-the routes refuse. The queue is still drained, since a row queued by a
-separate `steps watch` is work this process can still do.
+the routes refuse. The queue is still drained, and polling still runs — that
+flag is a statement about the HTTP surface, not about what the process does on
+its own. `--listen 0.0.0.0:8088 --read-only` is a build box that still has to
+notice new versions; pair it with `--no-watch` if you meant a viewer.
+
+## Watching, or not
+
+Polling is on by default, on the same terms `steps watch` polls:
+
+```bash
+steps web pipeline.yml                      # serve, and poll every 30s
+steps web pipeline.yml --interval 5m        # slower
+steps web pipeline.yml --no-watch           # serve only; something else polls
+```
+
+- **One poller per pipeline, each with its own state.** Every pipeline has
+  its own database (`.steps/<filename>.db`), so two served pipelines never
+  contend — and within one pipeline, the poller is handed the store handle its
+  drain already uses rather than opening a second one. `trigger.Poll`'s doc
+  comment has the why; the short version is that a store is a single pooled
+  connection, so sharing it queues the poll's writes behind the drain's
+  instead of adding a second connection to fight for the same write lock.
+- **The single-watcher lock is shared with `steps watch`.** Two pollers
+  against one database claim each other's work, so whichever starts second
+  gives way — but not in the same way. `steps watch` exists to poll, so it
+  refuses to start and says so. `steps web` exists to serve, so it keeps
+  serving that pipeline and skips only its polling, saying which one:
+
+  ```
+  steps web: nightly is watched by another process; serving it without polling
+  ```
+
+  Started the other way round, a later `steps watch` is the one that refuses —
+  stop the web process, or start it with `--no-watch`.
+- **The lock guards recovery, not just polling**, which is why `--no-watch`
+  still takes it for a moment at startup. Re-queueing rows a crashed process
+  left claimed reads every running row as abandoned — true only when no other
+  watcher is alive. A `steps web` that skipped the lock and recovered anyway
+  would flip a live `steps watch`'s in-flight job back to pending and run it a
+  second time.
+- **A pipeline with no `trigger: true` get is not an error here.** `steps
+  watch` refuses it (there is nothing to poll and that is all it does); `steps
+  web` notes it in the log and serves, because plenty of pipelines are run by
+  hand and the UI is where you would run them from.
+- **Preflight runs before the first poll**, the same check `steps watch` does
+  and with the same asymmetry: a problem *waiting cannot fix* — an `mcp:` tool
+  the server does not expose — stops that pipeline's polling and says so,
+  while a problem waiting might fix — a server that did not answer, a token a
+  refresh would renew — is printed once as `(transient — polling anyway)` and
+  left to the loop, which retries by its nature. `--no-preflight` skips the
+  check entirely. It runs inside the poller, so it never delays serving.
 
 ## Security
 
@@ -168,6 +219,9 @@ mean to hand out the controls too.
 
 ```
 --listen         address to serve on (default 127.0.0.1:8088)
+--interval       how often to poll trigger: true resources (default 30s)
+--no-watch       serve without polling; leave that to `steps watch`
+--no-preflight   skip the pre-poll health check of models and MCP servers
 --read-only      serve without trigger, approval, or resume controls
 --keep-workspace leave build workspaces on disk
 --var / --vars-file   pipeline vars, as everywhere else

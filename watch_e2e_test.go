@@ -84,6 +84,18 @@ func (f *watchFixture) watch(t *testing.T, args ...string) {
 	mustRun(t, append([]string{"watch", f.pipeline, "--once"}, args...)...)
 }
 
+// coldStart runs the first-ever poll, whose rule changed deliberately: it
+// seeds everything BELOW the newest version as taken and builds the newest
+// once (docs/conformance.md — Concourse builds what its first check reports).
+// A test whose subject is what happens AFTER a baseline exists discards that
+// one build, so its assertions stay about arrivals rather than about the seed.
+func (f *watchFixture) coldStart(t *testing.T) {
+	t.Helper()
+
+	f.watch(t)
+	f.write(t, f.processed, "")
+}
+
 // watchExpectingFailure runs a cycle whose job is meant to fail.
 func (f *watchFixture) watchExpectingFailure(t *testing.T) {
 	t.Helper()
@@ -146,16 +158,37 @@ jobs:
     run: cat items/n.txt >> PROCESSED
 `
 
-// TestWatchColdStartDoesNotAnswerTheBacklog is the behavior the whole cursor
-// effort exists for. A watcher pointed at a resource that already has history
-// must not treat all of it as new: it records where things stand and waits.
-func TestWatchColdStartDoesNotAnswerTheBacklog(t *testing.T) {
+// TestWatchColdStartAnswersTheNewestNotTheBacklog is the behavior the whole
+// cursor effort exists for, as amended: a watcher pointed at a resource that
+// already has history must not treat all of it as new. It builds the newest
+// version and records the rest as taken — one build, not twenty, and not
+// zero. Zero was the rule until it proved indistinguishable from a watcher
+// that does not work: a resource that changes slowly (an open PR, a release)
+// would sit unbuilt for as long as it stayed quiet, and deleting the state
+// database to "start fresh" re-armed the same silence. Concourse builds the
+// version its first check reports; so does this now.
+func TestWatchColdStartAnswersTheNewestNotTheBacklog(t *testing.T) {
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 20)
 
 	fixture.watch(t)
 
-	fixture.assertDid(t)
+	fixture.assertDid(t, "20")
+}
+
+// TestWatchColdStartWithVersionEveryBuildsOnce is the guard on the amended
+// rule: `version: every` fans out over unconsumed versions, so a cold start
+// that left the whole window unconsumed would build twenty times. One build,
+// then the backlog stays taken.
+func TestWatchColdStartWithVersionEveryBuildsOnce(t *testing.T) {
+	fixture := newWatchFixture(t, cursorFeed)
+	fixture.items(t, 20)
+
+	fixture.watch(t)
+	fixture.assertDid(t, "20")
+
+	fixture.watch(t)
+	fixture.assertDid(t, "20")
 }
 
 // TestWatchProcessesOnlyWhatIsNew: one new item after a cold start means one
@@ -164,7 +197,7 @@ func TestWatchColdStartDoesNotAnswerTheBacklog(t *testing.T) {
 func TestWatchProcessesOnlyWhatIsNew(t *testing.T) {
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 20)
-	fixture.watch(t)
+	fixture.coldStart(t)
 
 	fixture.items(t, 21)
 	fixture.watch(t)
@@ -177,7 +210,7 @@ func TestWatchProcessesOnlyWhatIsNew(t *testing.T) {
 func TestWatchLosesNothingAcrossPolls(t *testing.T) {
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 20)
-	fixture.watch(t)
+	fixture.coldStart(t)
 
 	fixture.items(t, 21)
 	fixture.watch(t)
@@ -193,7 +226,7 @@ func TestWatchLosesNothingAcrossPolls(t *testing.T) {
 func TestWatchIsIdleWhenNothingChanges(t *testing.T) {
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 20)
-	fixture.watch(t)
+	fixture.coldStart(t)
 
 	fixture.items(t, 21)
 	fixture.watch(t)
@@ -214,7 +247,7 @@ func TestWatchVersionEveryTakesEachVersionOnce(t *testing.T) {
 		"run: |\n      cat items/n.txt >> PROCESSED\n      test \"$(cat items/n.txt)\" != 22", 1))
 
 	fixture.items(t, 20)
-	fixture.watch(t)
+	fixture.coldStart(t)
 
 	// Three new versions at once, the middle one failing its task.
 	fixture.items(t, 23)
@@ -240,7 +273,7 @@ func TestWatchSkipsUnchangedWork(t *testing.T) {
     trigger: true`, 1))
 
 	fixture.items(t, 1)
-	fixture.watch(t)
+	fixture.coldStart(t)
 
 	fixture.items(t, 2)
 	fixture.watch(t)
@@ -262,7 +295,7 @@ func TestWatchPinReachesPastWhatThePollSaw(t *testing.T) {
     check: cat FEED`, 1))
 
 	fixture.write(t, fixture.feed, `[{"n":"1"},{"n":"2"}]`)
-	fixture.watch(t)
+	fixture.coldStart(t)
 
 	fixture.write(t, fixture.feed, `[{"n":"1"},{"n":"2"},{"n":"3"}]`)
 	fixture.watch(t, "--pin", "n=1")
@@ -302,7 +335,7 @@ jobs:
 `)
 
 	fixture.write(t, fixture.feed, `[{"ts":1699887654.001200}]`)
-	fixture.watch(t)
+	fixture.coldStart(t)
 
 	fixture.write(t, fixture.feed, `[{"ts":1699887654.001200},{"ts":1699887999.000100}]`)
 	fixture.watch(t)
@@ -345,7 +378,7 @@ jobs:
 `)
 
 	fixture.write(t, fixture.feed, `[{"n":"1"}]`)
-	fixture.watch(t)
+	fixture.coldStart(t)
 
 	fixture.write(t, fixture.feed, `[{"n":"2"}]`)
 	fixture.watch(t)

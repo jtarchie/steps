@@ -1211,10 +1211,23 @@ func wrapRunErr(err error) error {
 }
 
 // statePath returns the sqlite database path for pipeline's persisted job
-// state: .steps/state.db colocated with the pipeline YAML's own directory,
-// so distinct pipelines never share a database file.
+// state: under .steps/ beside the pipeline YAML, named for the FILE.
+//
+// Per file, not per directory. Everything in the database is keyed by a name
+// the pipeline chose for itself — job, resource, queue row — so two pipelines
+// in one folder are two namespaces, not one, and a shared `.steps/state.db`
+// silently merged them: one pipeline's version change could enqueue a job the
+// other then claimed and ran, resource version history accumulated under one
+// name for both, and `steps web app.yml infra.yml` handed the same store to
+// two drainers (defeating the SetMaxOpenConns(1) serialization store.go
+// relies on). That layout is also the one README and docs/web.md advertise.
+//
+// There is no migration, per this repo's no-migration rule: an older
+// `.steps/state.db` is simply not read any more. The first run after this
+// re-seeds its cold start, which triggers nothing — the safe direction to be
+// wrong in.
 func statePath(pipeline string) string {
-	return filepath.Join(filepath.Dir(pipeline), ".steps", "state.db")
+	return filepath.Join(filepath.Dir(pipeline), ".steps", filepath.Base(pipeline)+".db")
 }
 
 // selectJob resolves which job to run: the explicit name if given, or the
@@ -1254,7 +1267,15 @@ func withSignalCancel(parent context.Context) (context.Context, context.CancelFu
 		}
 	}()
 
-	return ctx, cancel
+	// Untrapping on the way out is what keeps a SECOND ^C working. A command
+	// whose shutdown waits for something slow — `steps web` now waits for its
+	// drain and poll loops — would otherwise swallow every further signal
+	// into a channel nobody reads, and could only be killed with SIGKILL.
+	// Once, since callers defer this and may also call it early themselves.
+	return ctx, sync.OnceFunc(func() {
+		signal.Stop(sigs)
+		cancel()
+	})
 }
 
 // applyHistoryFlags writes the command-line retention limits into the config
@@ -1452,6 +1473,11 @@ func loadWithVars(path string, flags map[string]string, varsFile string) (*confi
 // (.steps/state.db lives beside each YAML), so serving several means opening
 // several stores, and the UI routes them under /p/<name>/.
 //
+// It polls trigger: true resources as well as serving, because a front end
+// that drains a queue nothing fills is a runner that looks alive and notices
+// nothing — the surprise this default exists to remove. --no-watch turns it
+// off for someone who runs `steps watch` separately.
+//
 // It binds loopback by default and has no authentication, because there is
 // nothing to authenticate against — this is the local runner's own front end,
 // in the same trust domain as the shell that started it. Binding it to a
@@ -1459,24 +1485,53 @@ func loadWithVars(path string, flags map[string]string, varsFile string) (*confi
 // reach the port; --listen exists for the person who has decided that is what
 // they want, not as a default.
 type WebCmd struct {
-	Pipeline      []string          `arg:""                                                     help:"path(s) to pipeline YAML files"`
-	Listen        string            `default:"127.0.0.1:8088"                                   help:"address to serve on"`
-	ReadOnly      bool              `help:"serve without trigger, approval, or resume controls" name:"read-only"`
-	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                 help:"leave build workspaces on disk instead of deleting them"`
-	Var           map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..." name:"var"`
-	VarsFile      string            `help:"YAML file of pipeline vars"                          name:"vars-file"`
+	Pipeline      []string          `arg:""                                                          help:"path(s) to pipeline YAML files"`
+	Listen        string            `default:"127.0.0.1:8088"                                        help:"address to serve on"`
+	Interval      time.Duration     `default:"30s"                                                   help:"how often to check trigger: true resources"`
+	NoWatch       bool              `help:"serve without polling trigger: true resources"            name:"no-watch"`
+	NoPreflight   bool              `help:"skip the pre-poll health check of models and MCP servers" name:"no-preflight"`
+	ReadOnly      bool              `help:"serve without trigger, approval, or resume controls"      name:"read-only"`
+	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                      help:"leave build workspaces on disk instead of deleting them"`
+	Var           map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."      name:"var"`
+	VarsFile      string            `help:"YAML file of pipeline vars"                               name:"vars-file"`
 }
 
 // Run loads every named pipeline, opens its store, and serves until canceled.
 func (w *WebCmd) Run() error {
+	// Rejected rather than shrugged at: `steps watch` refuses a non-positive
+	// interval, and a web that quietly served forever without ever polling
+	// would be the exact confusion this command's default exists to remove.
+	if !w.NoWatch && w.Interval <= 0 {
+		return fmt.Errorf("web: --interval must be positive, got %s; --no-watch is how polling is turned off", w.Interval)
+	}
+
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
+
+	ctx = applyPreflightFlag(ctx, w.NoPreflight)
 
 	pipelines, providers, cleanup, err := w.load()
 	if err != nil {
 		return err
 	}
 	defer cleanup()
+
+	// Tried for every pipeline, even under --no-watch: the lock guards more
+	// than polling. See claimWatchLocks.
+	claims := claimWatchLocks(pipelines)
+	defer releaseWatchLocks(claims)
+
+	// Before either loop below exists, because ResetStaleRunning is only safe
+	// with no concurrent writer — see web.PrepareQueue.
+	for i, target := range pipelines {
+		web.PrepareQueue(ctx, target, claims[i].owned)
+	}
+
+	// Held only long enough to decide whether that recovery was ours to do:
+	// keeping it would block the `steps watch` this flag exists to defer to.
+	if w.NoWatch {
+		releaseWatchLocks(claims)
+	}
 
 	var runner web.Runner
 
@@ -1490,10 +1545,29 @@ func (w *WebCmd) Run() error {
 		return fmt.Errorf("web: %w", err)
 	}
 
+	var background sync.WaitGroup
+
+	// Registered after `defer cleanup()`, so it runs BEFORE it: both loops
+	// below write through stores cleanup closes. cancel() here rather than
+	// relying on the deferred one at the top, since Start also returns on its
+	// own error, with the context still live and the loops still running.
+	defer func() {
+		cancel()
+		background.Wait()
+	}()
+
 	// The drainer runs regardless of --read-only: a row queued by a separate
 	// `steps watch` against the same database is still work this process can
 	// do. What --read-only withholds is the UI's ability to ADD work.
-	go local.Drain(ctx, pipelines)
+	background.Add(1)
+
+	go func() {
+		defer background.Done()
+
+		local.Drain(ctx, pipelines)
+	}()
+
+	w.startPolling(ctx, &background, pipelines, claims)
 
 	fmt.Printf("steps web: http://%s\n", w.Listen)
 
@@ -1503,6 +1577,108 @@ func (w *WebCmd) Run() error {
 	}
 
 	return nil
+}
+
+// startPolling launches one trigger poller per served pipeline, so this
+// process both fills and drains the queue — unless --no-watch, which leaves
+// the filling to a separate `steps watch`.
+//
+// Each poller is handed its pipeline's OWN store handle rather than opening a
+// second one; trigger.Poll's doc comment says why, and is the one copy of
+// that reasoning.
+//
+// --read-only does not disable polling, deliberately: it withholds the
+// BROWSER's ability to add work, which is a statement about the HTTP surface,
+// not about what this process does on its own. `--listen 0.0.0.0 --read-only`
+// is a build box that still has to notice new versions.
+func (w *WebCmd) startPolling(
+	ctx context.Context, background *sync.WaitGroup, pipelines []*web.Pipeline, claims []pipelineWatch,
+) {
+	if w.NoWatch {
+		fmt.Println("steps web: not polling (--no-watch)")
+
+		return
+	}
+
+	for i, target := range pipelines {
+		// Said per pipeline, not counted up: a banner that reports "polling 3
+		// pipelines" while two of them gave up is worse than no banner, and
+		// which ones gave up is the part an operator needs.
+		switch {
+		case !claims[i].owned:
+			fmt.Printf("steps web: %s is watched by another process; serving it without polling\n", target.Slug)
+			slog.Info("web.poll_lock_held", "pipeline", target.Slug)
+
+			continue
+		case len(trigger.Resources(target.Cfg)) == 0:
+			// Not a failure: plenty of pipelines are run by hand, and the UI
+			// is exactly where you would run them from.
+			fmt.Printf("steps web: %s has no trigger: true get; serving it without polling\n", target.Slug)
+
+			continue
+		}
+
+		fmt.Printf("steps web: polling %s every %s\n", target.Slug, w.Interval)
+
+		background.Add(1)
+
+		go func() {
+			defer background.Done()
+
+			err := trigger.Poll(ctx, target.Cfg, target.Store, w.Interval)
+			if err != nil && !errors.Is(err, trigger.ErrNoTriggers) {
+				slog.Error("web.poll_stopped", "pipeline", target.Slug, "error", err)
+			}
+		}()
+	}
+}
+
+// pipelineWatch is what this process learned when it tried to take a
+// pipeline's single-watcher lock: whether it owns it, and how to give it back.
+type pipelineWatch struct {
+	owned   bool
+	release func()
+}
+
+// claimWatchLocks tries the single-watcher lock for every served pipeline.
+//
+// It runs even under --no-watch, because the lock guards two things, not one.
+// Polling is the obvious one — two pollers against a state.db claim each
+// other's work. The other is RECOVERY: re-queueing stranded rows reads every
+// running row as an abandoned leftover, which is only true when no other
+// watcher is alive, and `steps web` next to `steps watch` is a pairing this
+// command's docs actively recommend.
+//
+// A held lock is not fatal here, unlike in watch: serving is this command's
+// job and polling is the extra, so it gives up that pipeline's polling and
+// keeps serving it — and keeps the other pipelines' polling.
+func claimWatchLocks(pipelines []*web.Pipeline) []pipelineWatch {
+	claims := make([]pipelineWatch, len(pipelines))
+
+	for i, target := range pipelines {
+		release, held, err := target.Store.AcquireWatchLock()
+
+		switch {
+		case err != nil:
+			slog.Error("web.watch_lock", "pipeline", target.Slug, "error", err)
+		case held:
+			slog.Info("web.watch_lock_held", "pipeline", target.Slug)
+		default:
+			// Once, so the --no-watch early release and the deferred one at
+			// shutdown are not two closes of the same lock file.
+			claims[i] = pipelineWatch{owned: true, release: sync.OnceFunc(release)}
+		}
+	}
+
+	return claims
+}
+
+func releaseWatchLocks(claims []pipelineWatch) {
+	for _, claim := range claims {
+		if claim.release != nil {
+			claim.release()
+		}
+	}
 }
 
 // load opens every pipeline named on the command line, along with its store,

@@ -260,7 +260,7 @@ jobs:
 `, versionsPath, taskCounterPath)
 }
 
-func TestPollOnceColdStartSeedsBaselineWithoutEnqueuing(t *testing.T) {
+func TestPollOnceColdStartSeedsBaselineAndEnqueuesTheNewest(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -275,8 +275,10 @@ func TestPollOnceColdStartSeedsBaselineWithoutEnqueuing(t *testing.T) {
 		t.Fatalf("pollOnce: %v", err)
 	}
 
-	if len(enqueued) != 0 {
-		t.Errorf("cold start enqueued %v, want none", enqueued)
+	// One version exists, so there is no backlog below it: the cold start
+	// builds it, the way Concourse builds what its first check reports.
+	if len(enqueued) != 1 || enqueued[0] != "build" {
+		t.Errorf("cold start enqueued %v, want [build] — the newest version", enqueued)
 	}
 }
 

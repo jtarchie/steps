@@ -110,8 +110,6 @@ func (r *LocalRunner) Drain(ctx context.Context, pipelines []*Pipeline) {
 func (r *LocalRunner) drainPipeline(ctx context.Context, target *Pipeline) {
 	slog.Info("web.pipeline.drain_start", "pipeline", target.Slug)
 
-	r.prepareQueue(ctx, target)
-
 	for {
 		if ctx.Err() != nil {
 			return
@@ -130,21 +128,31 @@ func (r *LocalRunner) drainPipeline(ctx context.Context, target *Pipeline) {
 	}
 }
 
-// prepareQueue is the startup recovery and config sync `steps watch` does,
+// PrepareQueue is the startup recovery and config sync `steps watch` does,
 // mirrored here so admission decides the same way regardless of which front
 // end drains the queue. ClaimNextJob reads every input from SQL, so a table
 // this forgets to sync isn't a missing feature — it's a silently different
 // default (job_concurrency's COALESCE pins an unsynced job to one build).
-func (r *LocalRunner) prepareQueue(ctx context.Context, target *Pipeline) {
-	// Anything a previous process left claimed-but-unfinished is stranded
-	// until something releases it — the same recovery `steps watch` does at
-	// startup, for the same reason.
-	err := target.Store.ResetStaleRunning(ctx)
-	if err != nil {
-		slog.Error("web.reset_stale", "pipeline", target.Slug, "error", err)
+//
+// The caller runs this BEFORE starting any drain or poll goroutine, which is
+// a requirement rather than a convention: ResetStaleRunning is three
+// statements with no transaction around them, and an enqueue landing between
+// two of them leaves a row no later poll re-queues.
+//
+// recoverStale is the caller's answer to "does this process hold the
+// pipeline's watch lock?" — recovery reads every running row as an abandoned
+// leftover, which is only true when no other watcher is alive. Serving next
+// to a live `steps watch` and recovering anyway would flip that watcher's
+// in-flight job back to pending and run it a second time.
+func PrepareQueue(ctx context.Context, target *Pipeline, recoverStale bool) {
+	if recoverStale {
+		err := target.Store.ResetStaleRunning(ctx)
+		if err != nil {
+			slog.Error("web.reset_stale", "pipeline", target.Slug, "error", err)
+		}
 	}
 
-	err = target.Store.SyncSerialGroups(ctx, target.Cfg.SerialGroupsByJob())
+	err := target.Store.SyncSerialGroups(ctx, target.Cfg.SerialGroupsByJob())
 	if err != nil {
 		slog.Error("web.sync_serial_groups", "pipeline", target.Slug, "error", err)
 	}

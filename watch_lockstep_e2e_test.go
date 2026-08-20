@@ -117,6 +117,21 @@ func (f *lockstepFixture) watch(t *testing.T) {
 // watchExpectingFailure runs a cycle whose job is meant to fail, and insists
 // that it did. Discarding the error would let a test that no longer injects a
 // failure keep passing as a no-failure scenario.
+// coldStart runs the first-ever poll, which builds the newest set it finds
+// and seeds everything below it as taken (see watchFixture.coldStart). Every
+// test here is about what arrives AFTER a baseline exists, so that one build
+// is discarded rather than written into each expectation.
+func (f *lockstepFixture) coldStart(t *testing.T) {
+	t.Helper()
+
+	f.watch(t)
+
+	err := os.WriteFile(f.processed, nil, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (f *lockstepFixture) watchExpectingFailure(t *testing.T) {
 	t.Helper()
 
@@ -161,7 +176,7 @@ func (f *lockstepFixture) assertDid(t *testing.T, want ...string) {
 // nothing.
 func TestWatchLockstepStreamingInterleave(t *testing.T) {
 	fixture := newLockstepFixture(t, lockstepPipeline)
-	fixture.watch(t) // cold start at (a1, b1): seeded, not built
+	fixture.coldStart(t) // baseline at (a1, b1): built once, then discarded
 
 	fixture.feed(t, fixture.feedA, 2)
 	fixture.feed(t, fixture.feedB, 2)
@@ -189,7 +204,7 @@ func TestWatchLockstepStreamingInterleave(t *testing.T) {
 // product: 3x2 backlogs mean three builds, not six.
 func TestWatchLockstepDiagonal(t *testing.T) {
 	fixture := newLockstepFixture(t, lockstepPipeline)
-	fixture.watch(t)
+	fixture.coldStart(t) // baseline: built once, then discarded
 
 	fixture.feed(t, fixture.feedA, 4)
 	fixture.feed(t, fixture.feedB, 3)
@@ -211,7 +226,7 @@ func TestWatchLockstepFailureAdvances(t *testing.T) {
       echo "$(cat a/n.txt)+$(cat b/n.txt)" >> PROCESSED
       test "$(cat a/n.txt)" != 3`))
 
-	fixture.watch(t)
+	fixture.coldStart(t) // baseline: built once, then discarded
 
 	fixture.feed(t, fixture.feedA, 4)
 	fixture.feed(t, fixture.feedB, 4)
@@ -231,7 +246,7 @@ func TestWatchLockstepFailureAdvances(t *testing.T) {
 // idle, an unconsumed one would rebuild under the new task.
 func TestWatchLockstepSkipStillConsumesTheSet(t *testing.T) {
 	fixture := newLockstepFixture(t, lockstepPipeline)
-	fixture.watch(t)
+	fixture.coldStart(t) // baseline: built once, then discarded
 
 	fixture.feed(t, fixture.feedA, 2)
 	fixture.feed(t, fixture.feedB, 2)
@@ -283,11 +298,32 @@ func TestWatchLockstepNonEveryRidesAlong(t *testing.T) {
   - get: a
     trigger: true`))
 
-	fixture.watch(t)
+	fixture.coldStart(t) // baseline: built once, then discarded
 
 	fixture.feed(t, fixture.feedA, 2)
 	fixture.feed(t, fixture.feedB, 3)
 	fixture.watch(t)
 
 	fixture.assertDid(t, "2+2", "2+3")
+}
+
+// TestWatchLockstepColdStartBuildsOneSet: with the cold-start rule now
+// building the newest version, a first poll facing backlogs in BOTH feeds
+// must still build exactly ONE set — the newest of each — and not walk the
+// diagonal over everything it just discovered. This is the shape the amended
+// rule could most easily break, and the reason `version: every` needs its own
+// cold-start test rather than sharing the single-resource one.
+func TestWatchLockstepColdStartBuildsOneSet(t *testing.T) {
+	fixture := newLockstepFixture(t, lockstepPipeline)
+
+	fixture.feed(t, fixture.feedA, 4)
+	fixture.feed(t, fixture.feedB, 3)
+
+	fixture.watch(t)
+
+	fixture.assertDid(t, "4+3")
+
+	// And the backlog below stays taken: a quiet poll adds nothing.
+	fixture.watch(t)
+	fixture.assertDid(t, "4+3")
 }

@@ -51,13 +51,13 @@ jobs:
 // passing versions through the queue.
 //
 // A watcher started against an existing backlog must not answer the backlog.
-// The poll gets this right on its own — a cold start seeds the baseline and
-// enqueues nothing, and the next poll reports only what is genuinely new.
-// The job used to throw that away and re-run check for itself, with no
-// cursor, so it saw the whole window: 20 stale items plus the new one, each
-// fanned out over as its own build. For the pipeline this feature was built
-// for, that is 21 replies to threads nobody is waiting on and 21 paid model
-// calls.
+// The poll gets this right on its own — a cold start seeds everything below
+// the newest as taken and enqueues that newest one, and the next poll reports
+// only what is genuinely new. The job used to throw that away and re-run
+// check for itself, with no cursor, so it saw the whole window: 20 stale
+// items plus the new one, each fanned out over as its own build. For the
+// pipeline this feature was built for, that is 21 replies to threads nobody
+// is waiting on and 21 paid model calls, where the rule here costs 2.
 func TestPollHandsItsVersionsToTheJobItEnqueues(t *testing.T) {
 	dir := t.TempDir()
 	feed := filepath.Join(dir, "feed.txt")
@@ -75,8 +75,8 @@ func TestPollHandsItsVersionsToTheJobItEnqueues(t *testing.T) {
 		t.Fatalf("pollOnce (cold start): %v", err)
 	}
 
-	if len(enqueued) != 0 {
-		t.Fatalf("cold start enqueued %v, want nothing", enqueued)
+	if len(enqueued) != 1 || enqueued[0] != "build" {
+		t.Fatalf("cold start enqueued %v, want [build] — the newest item only", enqueued)
 	}
 
 	// Exactly one new item arrives.
@@ -94,8 +94,8 @@ func TestPollHandsItsVersionsToTheJobItEnqueues(t *testing.T) {
 	drainQueue(ctx, t, cfg, st)
 
 	got := processedItems(t, processed)
-	if len(got) != 1 || got[0] != "21" {
-		t.Errorf("the job processed %v, want exactly [21] — the poll found one new item", got)
+	if len(got) != 2 || got[0] != "20" || got[1] != "21" {
+		t.Errorf("the job processed %v, want [20 21] — the newest at cold start, then the one new item; never the 19 below it", got)
 	}
 }
 
@@ -118,6 +118,11 @@ func TestPollVersionsSurviveAReEnqueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pollOnce (cold start): %v", err)
 	}
+
+	// The cold start builds the newest (20); drained and forgotten here so
+	// the assertion below stays about the collision this test is named for.
+	drainQueue(ctx, t, cfg, st)
+	writeVersions(t, processed, "")
 
 	// Two polls land before anything drains the queue.
 	writeLines(t, feed, 21)
@@ -359,7 +364,12 @@ jobs:
 
 	drainQueue(ctx, t, cfg, st)
 
-	if got := processedItems(t, processed); len(got) != 1 || got[0] != "21" {
-		t.Errorf("the job processed %v, want [21] — arrivals during a partial poll must not be seeded away", got)
+	// Both, and in order: 21 because a partial poll must not seed away an
+	// arrival, and 20 because the cold start's own build was never lost
+	// either. The aborted poll never reached its enqueue, so what carried 20
+	// through is the consumed MARK — the queue row is a nudge, the mark is
+	// the source of truth about what a job still owes.
+	if got := processedItems(t, processed); len(got) != 2 || got[0] != "20" || got[1] != "21" {
+		t.Errorf("the job processed %v, want [20 21] — neither the cold-start build nor the arrival during a partial poll may be seeded away", got)
 	}
 }

@@ -513,14 +513,14 @@ type jobRunRow struct {
 	Error   string
 }
 
-// openStateDB opens the .steps/state.db colocated with a pipeline YAML, for
+// openStateDB opens the state database colocated with a pipeline YAML, for
 // reading. It fails the test when the database doesn't exist — sql.Open
 // would happily create an empty one, turning "the run recorded nothing" into
 // a silently passing assertion.
 func openStateDB(t *testing.T, pipelinePath string) *sql.DB {
 	t.Helper()
 
-	dbPath := filepath.Join(filepath.Dir(pipelinePath), ".steps", "state.db")
+	dbPath := statePath(pipelinePath)
 
 	_, err := os.Stat(dbPath)
 	if err != nil {

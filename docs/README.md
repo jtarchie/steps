@@ -36,7 +36,7 @@ steps run <pipeline>        run one job (--resume <id> continues a failed one,
                             --replay <id> --from <step> re-runs one step of one)
 steps watch <pipeline>      poll trigger: true resources, run affected jobs
 steps test <pipeline>       run every job and check assert: directives
-steps web <pipeline>...     serve the browser UI over the same state
+steps web <pipeline>...     serve the browser UI, polling as it serves
 steps validate <pipeline>   check the file, and that this machine can run it
 steps plan <pipeline>       show what a run would execute vs skip
 steps runs <pipeline>       show what past runs recorded (--cost for spend)

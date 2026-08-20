@@ -36,7 +36,7 @@ It fetches the exact commit the plan pinned, shallowly, so a branch that moves m
 
 Two more built-ins, both [expression-backed](expr.md) — Slack is a JSON HTTP API and nothing else, so there is no container and no `curl`/`jq` dependency to carry. `slack-mentions` is get-only: every unanswered `@mention` of the bot in a channel, plus every message in a 1:1 DM (no `@mention` required there — nobody types one in a 1:1 chat), oldest first, as a `{channel, ts, thread_ts}` version — `ts` is the message that named the bot, `thread_ts` the thread it lives in (the same value, for a top-level message). `slack-reply` is put-only: posts a message, threaded or top-level.
 
-Cold start does not mean a backlog: like every resource, the first-ever check of a freshly-deployed `slack-mentions` records everything it finds but answers none of it — see [Version history](#version-history) below. That rule is a `steps watch` behavior; `steps run` has no persisted cursor and always asks Slack for everything, every time.
+Cold start does not mean a backlog: like every resource, the first-ever check of a freshly-deployed `slack-mentions` records everything it finds and answers only the newest of it — see [Version history](#version-history) below. That rule is a `steps watch` behavior; `steps run` has no persisted cursor and always asks Slack for everything, every time.
 
 ```yaml noexec=network
 resources:
@@ -177,7 +177,7 @@ check: |
                --data-urlencode 'limit=200' https://api.example.com/messages
 ```
 
-Guess too small and items scroll past during a busy period — and while [history](#version-history) means a version steps already recorded is not lost, one it never saw at all cannot be recovered by anything. Guess anything at all and a cold start reads a backlog nobody is waiting on.
+Guess too small and items scroll past during a busy period — and while [history](#version-history) means a version steps already recorded is not lost, one it never saw at all cannot be recovered by anything. Guess anything at all and a cold start sees a backlog it must not answer — it builds only the newest of what it finds.
 
 Three things to know:
 
@@ -207,10 +207,15 @@ Three things follow:
 - **A resource nothing has polled has no history**, so a get against it runs
   its own `check` — every `steps run`, and every `get:` beside a triggered one.
 - **A cold start does not become a backlog.** The first check of a resource
-  records everything it reports and marks it all as already taken, so a
-  watcher pointed at twenty existing items answers none of them and waits for
-  the twenty-first. (A job *added* to the pipeline later has no such marking,
-  and its first trigger will see whatever history holds.)
+  records everything it reports, marks everything BELOW the newest as already
+  taken, and triggers once on the newest — so a watcher pointed at twenty
+  existing items builds the twentieth and answers none of the nineteen. One
+  build, not twenty (which is what the marking is for) and not zero (which
+  left a slowly-changing resource unbuilt indefinitely, and made deleting the
+  state database re-arm that silence). `version: every` does not change this:
+  the fan-out is over UNCONSUMED versions, and a cold start leaves exactly one
+  unconsumed. (A job *added* to the pipeline later has no such marking, and
+  its first trigger will see whatever history holds.)
 - **Pruning is not free.** A version dropped from history takes its green
   record with it, so a `passed:` gate can no longer clear for it. That is
   correct — a version out of history cannot be built — but it means a limit

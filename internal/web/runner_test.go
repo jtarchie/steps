@@ -43,7 +43,7 @@ jobs:
 	ctx := t.Context()
 	target := &Pipeline{Slug: "demo", Path: path, Cfg: cfg, Store: st, Bus: events.New(nil)}
 
-	NewLocalRunner(nil).prepareQueue(ctx, target)
+	PrepareQueue(ctx, target, true)
 
 	// Claim two builds of the job without completing either: the second claim
 	// is the one a missing job_concurrency row denies.

@@ -32,6 +32,12 @@ import (
 // queue again, so an empty queue doesn't busy-spin between poll ticks.
 const workerIdleBackoff = 500 * time.Millisecond
 
+// ErrNoTriggers reports a pipeline with no trigger: true get step: there is
+// nothing for a poll loop to check. Exported because whether that is fatal
+// depends on what the process is FOR — `steps watch` exists to poll and
+// refuses to start, while `steps web` exists to serve and carries on.
+var ErrNoTriggers = errors.New("no get step in any job sets trigger: true; nothing for watch to poll")
+
 // Resources returns the distinct resource names referenced by any get
 // step with trigger: true, anywhere in any job's plan, in first-seen order.
 // A get step's resource: alias is resolved to the underlying resource name
@@ -232,7 +238,7 @@ func Watch(
 	}
 
 	if held {
-		return errors.New("watch: another steps watch already holds this pipeline's state; two watchers against one state.db claim each other's work")
+		return errors.New("watch: another watcher already holds this pipeline's state — a `steps watch`, or a `steps web` that polls unless started with --no-watch; two watchers against one state.db claim each other's work")
 	}
 
 	defer release()
@@ -276,13 +282,45 @@ func Watch(
 	return nil
 }
 
+// Poll is Watch's producer half: it validates and preflights the pipeline,
+// then checks every trigger: true resource on an interval and enqueues the
+// jobs a version change affects, until ctx is canceled. It never drains the
+// queue.
+//
+// That split exists for `steps web`, which drains the same queue through its
+// own in-process runner — a second set of workers here would claim rows out
+// from under it, and the two would report each other's runs.
+//
+// Three things stay the caller's, because the answer differs by front end:
+//
+//   - the single-watcher lock (store.AcquireWatchLock). Watch refuses when it
+//     is held; a UI that also polls gives way and keeps serving.
+//   - startup reconciliation (ResetStaleRunning and the serial-group /
+//     max-in-flight syncs prepareWatch does). Whoever owns the drain owns
+//     that, since it is the drain's admission it repairs.
+//   - the store handle. Pass the one the drain already uses: a Store is a
+//     single pooled connection (SetMaxOpenConns(1)), so sharing it serializes
+//     this loop's writes behind that pool instead of putting a second
+//     connection on the same file to contend for its write lock. One handle
+//     per pipeline, never one per loop.
+func Poll(ctx context.Context, cfg *config.Config, st *store.Store, interval time.Duration) error {
+	err := watchable(ctx, cfg, interval)
+	if err != nil {
+		return err
+	}
+
+	runPoller(ctx, cfg, st, interval)
+
+	return nil
+}
+
 // watchable reports whether there is anything to watch and whether what
 // there is can be checked at all — every reason to refuse to start, gathered
 // in one place so Watch's own body is the loop it exists to run.
 func watchable(ctx context.Context, cfg *config.Config, interval time.Duration) error {
 	resources := Resources(cfg)
 	if len(resources) == 0 {
-		return errors.New("no get step in any job sets trigger: true; nothing for watch to poll")
+		return ErrNoTriggers
 	}
 
 	if interval <= 0 {
@@ -329,11 +367,11 @@ func preflightTriggers(ctx context.Context, cfg *config.Config, resources []stri
 		terminal bool
 	)
 
-	out.WriteString("watch: preflight failed, nothing was polled:")
+	out.WriteString("trigger preflight failed, nothing was polled:")
 
 	for _, problem := range problems {
 		if problem.Transient {
-			fmt.Printf("watch: %s: %s (transient — polling anyway)\n", problem.Target, problem.Detail)
+			fmt.Printf("trigger preflight: %s: %s (transient — polling anyway)\n", problem.Target, problem.Detail)
 			slog.Warn("watch.preflight_transient", "target", problem.Target, "detail", problem.Detail)
 
 			continue
@@ -925,10 +963,14 @@ func recordHistory(
 	// a first watch after deleting the state db is exactly when someone is
 	// staring at the log deciding whether to ^C.
 	slog.Info("trigger.cold_start", "resource", resourceName, "versions_recorded", len(obs.versions),
-		"note", "first-ever check: backlog recorded as already taken, triggering nothing")
+		"note", "first-ever check: everything below the newest recorded as already taken; the newest triggers once")
 
-	// A cold start is never news, whatever arrived.
-	return false, nil
+	// The newest version IS news, which is what Concourse does with the
+	// single version a first check reports (its check contract returns only
+	// the current version when given none, so a Concourse first check has no
+	// backlog to consider). Only the backlog BELOW it is swallowed — see
+	// seedColdStart.
+	return true, nil
 }
 
 // seedColdStart marks a first-seen resource's whole history as taken for
@@ -940,13 +982,7 @@ func seedColdStart(ctx context.Context, cfg *config.Config, st *store.Store, res
 		return fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}
 
-	var highest int64
-
-	for _, order := range orders {
-		if order > highest {
-			highest = order
-		}
-	}
+	mark := coldStartMark(orders, latest)
 
 	for i := range cfg.Jobs {
 		job := &cfg.Jobs[i]
@@ -954,7 +990,7 @@ func seedColdStart(ctx context.Context, cfg *config.Config, st *store.Store, res
 			continue
 		}
 
-		err = st.RecordConsumedMark(ctx, job.Name, resourceName, highest)
+		err = st.RecordConsumedMark(ctx, job.Name, resourceName, mark)
 		if err != nil {
 			return fmt.Errorf("trigger resource %q: %w", resourceName, err)
 		}
@@ -966,6 +1002,43 @@ func seedColdStart(ctx context.Context, cfg *config.Config, st *store.Store, res
 	}
 
 	return nil
+}
+
+// coldStartMark is how much of a first-ever check counts as already taken:
+// everything BELOW the newest version, so the newest is left for the poll to
+// trigger exactly once.
+//
+// Marking the whole window (which this did until the rule changed) meant a
+// fresh — or freshly deleted — state database could never build anything
+// until something new arrived, which for a resource that changes slowly is
+// indistinguishable from a watcher that does not work. Concourse builds the
+// version its first check reports; this is the same outcome for a check that
+// reports a window rather than only its current version.
+//
+// The mark is a high-water mark over DISCOVERY order, so this is the largest
+// order strictly below the newest's. Orders are not assumed contiguous
+// (RecordVersionOrder assigns MAX+1, and a pin can mint one), hence a scan
+// rather than "highest - 1". A latest that is somehow not the highest order
+// falls back to seeding everything: refusing to build is the safe direction
+// when the ordering says something this function does not understand.
+func coldStartMark(orders map[string]int64, latest string) int64 {
+	var highest, second int64
+
+	for _, order := range orders {
+		switch {
+		case order > highest:
+			highest, second = order, highest
+		case order > second && order < highest:
+			second = order
+		}
+	}
+
+	latestOrder, ok := orders[latest]
+	if !ok || latestOrder != highest {
+		return highest
+	}
+
+	return second
 }
 
 // recoverDrainPanic turns a value recovered from a panic in drainOne into the

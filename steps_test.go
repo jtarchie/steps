@@ -24,7 +24,7 @@ jobs:
 `
 
 	// writePipeline gives each subtest its own temp dir (and therefore its
-	// own .steps/state.db, colocated with the YAML) so the parallel subtests
+	// own state database, colocated with the YAML) so the parallel subtests
 	// never share a state database across independent Store connections.
 	writePipeline := func(t *testing.T) string {
 		t.Helper()
