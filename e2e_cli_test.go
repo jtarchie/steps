@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -124,10 +123,7 @@ func TestE2ECLIAgentInvocation(t *testing.T) {
 }
 
 func TestE2ECLIAgentVerdictRoutesTheJob(t *testing.T) {
-	_, err := exec.LookPath("curl")
-	if err != nil {
-		t.Skip("curl is needed to call the bridge from a shell-script cli")
-	}
+	requireCurl(t)
 
 	dir := t.TempDir()
 
@@ -140,7 +136,7 @@ func TestE2ECLIAgentVerdictRoutesTheJob(t *testing.T) {
 
 	path := cliPipeline(t, dir)
 
-	err = run([]string{path})
+	err := run([]string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -193,10 +189,7 @@ func TestE2ECLIAgentWithoutVerdictFails(t *testing.T) {
 // when it failed to RUN. A CLI that ran and reported a bad outcome is not
 // re-rolled (see TestE2ECLIAgentDoesNotRetryTaskFailure).
 func TestE2ECLIAgentRetriesInfrastructureFailure(t *testing.T) {
-	_, err := exec.LookPath("curl")
-	if err != nil {
-		t.Skip("curl is needed to call the bridge from a shell-script cli")
-	}
+	requireCurl(t)
 
 	dir := t.TempDir()
 
@@ -217,7 +210,7 @@ fi
 		1)
 	path := writePipeline(t, dir, yaml)
 
-	err = run([]string{path})
+	err := run([]string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -320,10 +313,7 @@ func TestE2ECLIAgentDoesNotRetryTaskFailure(t *testing.T) {
 // reading another cell.s captured verdict would route the wrong branch.
 // Nothing about that is exercised by a sequential test.
 func TestE2ECLIAgentsRunConcurrently(t *testing.T) {
-	_, err := exec.LookPath("curl")
-	if err != nil {
-		t.Skip("curl is needed to call the bridge from a shell-script cli")
-	}
+	requireCurl(t)
 
 	dir := t.TempDir()
 
@@ -368,7 +358,7 @@ jobs:
 
 	path := writePipeline(t, dir, yaml)
 
-	err = run([]string{path})
+	err := run([]string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}

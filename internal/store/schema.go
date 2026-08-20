@@ -349,11 +349,13 @@ CREATE INDEX IF NOT EXISTS idx_run_events_hash ON run_events(hash);
 -- step_index stays as a column for ordering, alongside rowid so steps sharing
 -- an index still read back in the order they were recorded.
 --
--- cost_usd is nullable and stays NULL today: nothing in the request path
--- reports a dollar figure yet. It is here rather than computed from a price
--- table because a bundled table goes stale every time any provider changes
--- rates, and a confidently wrong number is worse than an absent one — see
--- docs/agents.md. Reporting says "unpriced", never $0.00.
+-- cost_usd is nullable because "nobody priced this" and "this was free" are
+-- different answers. A CLI-backed agent meters itself and reports a figure on
+-- exit; every HTTP path reports tokens and nothing else, and its rows stay
+-- NULL. It is never computed from a price table, because a bundled table goes
+-- stale every time any provider changes rates and a confidently wrong number
+-- is worse than an absent one — see docs/agents.md. A NULL reports as
+-- "unpriced", never $0.00.
 --
 -- raw_meta keeps the provider's whole usage block. The schema has no
 -- versioning and no migration path, so a field not captured today cannot be

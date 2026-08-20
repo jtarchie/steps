@@ -102,7 +102,9 @@ the things a scrollback cannot give you:
 - **What a step cost**, when anything reported it. A CLI meters itself and
   prints a figure when it exits; the HTTP paths report tokens and leave pricing
   to whoever knows the rate card. A run where nothing reported one says
-  `unpriced` rather than `$0.00`, which would read as free.
+  `unpriced` rather than `$0.00`, which would read as free, and a run where
+  only some steps did says `$0.42+3?` — a bill for three of six steps
+  presented as the whole one is the same lie in the other direction.
 - **Every hash is a link** to the node page, and **every step has one too** —
   the `#` beside its name is a URL you can paste at someone, and it opens the
   step it names.

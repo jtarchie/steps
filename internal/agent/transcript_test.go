@@ -145,3 +145,32 @@ func TestRenderResultContentBoundsTheLargestRealResult(t *testing.T) {
 		t.Fatalf("rendered content length = %d, want ≤ %d", len(content), limit)
 	}
 }
+
+// TestRecorderResultDoesNotReTruncate pins the seam between the two paths that
+// feed the recorder. Both bound their own content before handing it over, and
+// a second cap here does not shorten anything usefully — it cuts the marker
+// the FIRST cap appended and replaces it with one reporting that marker's own
+// length, so a 100KB result claimed 25 bytes had been dropped.
+func TestRecorderResultDoesNotReTruncate(t *testing.T) {
+	t.Parallel()
+
+	rec := &transcriptRecorder{}
+	bounded := renderResultContent(map[string]any{"content": strings.Repeat("x", maxReadFileBytes)})
+
+	rec.result("read_file", bounded)
+
+	if len(rec.events) != 1 {
+		t.Fatalf("recorded %d events, want 1", len(rec.events))
+	}
+
+	got := rec.events[0].Content
+	if got != bounded {
+		t.Errorf("result re-bounded content it was handed: %d bytes in, %d out", len(bounded), len(got))
+	}
+
+	// One marker, naming the real overflow. Two means the second cap ate the
+	// first one's and counted itself.
+	if n := strings.Count(got, "[truncated"); n != 1 {
+		t.Errorf("content carries %d truncation markers, want 1: tail %q", n, got[max(0, len(got)-60):])
+	}
+}

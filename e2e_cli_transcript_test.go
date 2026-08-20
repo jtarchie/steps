@@ -17,7 +17,6 @@ package main
 
 import (
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -40,9 +39,11 @@ func TestE2ECLIAgentPublishesItsConversation(t *testing.T) {
 	}, "\n"))
 
 	requireCurl(t)
-	mustRun(t, "run", cliPipeline(t, dir), "--job", "review")
 
-	rows := agentEventsFor(t, dir, "reviewer")
+	path := cliPipeline(t, dir)
+	mustRun(t, "run", path, "--job", "review")
+
+	rows := agentEventsFor(t, path, "reviewer")
 
 	// The model's commentary, which recordCLIToolCalls dropped on the floor —
 	// it walks the content blocks and keeps only tool_use.
@@ -85,9 +86,11 @@ func TestE2ECLIAgentRecordsABridgedCallExactlyOnce(t *testing.T) {
 	}, "\n"))
 
 	requireCurl(t)
-	mustRun(t, "run", cliPipeline(t, dir), "--job", "review")
 
-	rows := agentEventsFor(t, dir, "reviewer")
+	path := cliPipeline(t, dir)
+	mustRun(t, "run", path, "--job", "review")
+
+	rows := agentEventsFor(t, path, "reviewer")
 
 	calls := 0
 
@@ -115,9 +118,11 @@ func TestE2ECLIAgentStoresItsTranscript(t *testing.T) {
 	}, "\n"))
 
 	requireCurl(t)
-	mustRun(t, "run", cliPipeline(t, dir), "--job", "review")
 
-	st := openStoreFor(t, dir)
+	path := cliPipeline(t, dir)
+	mustRun(t, "run", path, "--job", "review")
+
+	st := openStoreFor(t, path)
 
 	nodes, err := st.ListNodes(t.Context(), "", 50)
 	if err != nil {
@@ -166,9 +171,11 @@ func TestE2ECLIAgentRecordsWhatItSpent(t *testing.T) {
 	}, "\n"))
 
 	requireCurl(t)
-	mustRun(t, "run", cliPipeline(t, dir), "--job", "review")
 
-	usage := agentUsageFor(t, dir)
+	path := cliPipeline(t, dir)
+	mustRun(t, "run", path, "--job", "review")
+
+	usage := agentUsageFor(t, path)
 
 	// 10 + 300 + 4000 input, of which 4300 were served from cache.
 	if usage.Cached != 4300 {
@@ -189,10 +196,10 @@ func TestE2ECLIAgentRecordsWhatItSpent(t *testing.T) {
 }
 
 // agentEventsFor reads the agent conversation events recorded for one step.
-func agentEventsFor(t *testing.T, dir, step string) []store.RunEventRow {
+func agentEventsFor(t *testing.T, path, step string) []store.RunEventRow {
 	t.Helper()
 
-	st := openStoreFor(t, dir)
+	st := openStoreFor(t, path)
 
 	runs, err := st.ListRuns(t.Context(), "review", 10)
 	if err != nil || len(runs) == 0 {
@@ -220,10 +227,10 @@ func agentEventsFor(t *testing.T, dir, step string) []store.RunEventRow {
 }
 
 // agentUsageFor reads the one agent_usage row a single-agent run records.
-func agentUsageFor(t *testing.T, dir string) store.AgentUsage {
+func agentUsageFor(t *testing.T, path string) store.AgentUsage {
 	t.Helper()
 
-	st := openStoreFor(t, dir)
+	st := openStoreFor(t, path)
 
 	runs, err := st.ListRuns(t.Context(), "review", 10)
 	if err != nil || len(runs) == 0 {
@@ -242,16 +249,12 @@ func agentUsageFor(t *testing.T, dir string) store.AgentUsage {
 	return usage[0]
 }
 
-// openStoreFor opens the state database a run in dir wrote.
-func openStoreFor(t *testing.T, dir string) *store.Store {
+// openStoreFor opens the state database the pipeline at path wrote, through
+// the same statePath() every other end-to-end test derives it with.
+func openStoreFor(t *testing.T, path string) *store.Store {
 	t.Helper()
 
-	path, err := filepath.Glob(filepath.Join(dir, ".steps", "*.db"))
-	if err != nil || len(path) == 0 {
-		t.Fatalf("no state database under %s: %v", dir, err)
-	}
-
-	st, err := store.OpenStore(path[0])
+	st, err := store.OpenStore(statePath(path))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

@@ -183,22 +183,27 @@ func (r *transcriptRecorder) results(parts []*genai.Part) {
 	}
 }
 
-// result records ONE tool result already rendered to text.
+// result records ONE tool result already rendered to text AND already bounded
+// by whoever rendered it — renderResultContent below on the hosted path,
+// recordCLIResults on the CLI one.
 //
 // The seam between the two paths: the hosted loop arrives with genai parts and
 // flattens them above, while a CLI transcript arrives as a name and a content
 // string it read off the child's stream (see clistream.go). Both land here, so
 // there is one place a result becomes an event and no way for the two to
 // drift.
+//
+// It deliberately does not cap again. truncateToolOutputLimit appends a marker
+// naming how much it dropped, so re-capping an already-marked string cuts that
+// marker off and replaces it with one reporting the MARKER's own size — a
+// 100KB result then claims 25 bytes were truncated.
 func (r *transcriptRecorder) result(name, content string) {
 	if r == nil || name == "" {
 		return
 	}
 
-	bounded := truncateToolOutputLimit(content, maxRecordedResultBytes)
-
-	r.events = append(r.events, transcriptEvent{Type: "result", Name: name, Content: bounded})
-	r.publish(events.TypeAgentResult, "", name, bounded)
+	r.events = append(r.events, transcriptEvent{Type: "result", Name: name, Content: content})
+	r.publish(events.TypeAgentResult, "", name, content)
 }
 
 // recorded is the conversation captured so far, nil-safe so a caller that

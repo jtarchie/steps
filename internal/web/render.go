@@ -157,11 +157,16 @@ func templateFuncs() template.FuncMap {
 	}
 }
 
-// formatUSD renders a dollar figure at the precision an agent run actually
+// FormatUSD renders a dollar figure at the precision an agent run actually
 // costs. Four decimals rather than two: a single cheap step lands in the
 // fractions of a cent, and rounding those to $0.00 loses exactly the number
-// the column exists to show.
-func formatUSD(amount float64) string {
+// the column exists to show — the same reading an unpriced run must never
+// produce.
+//
+// Exported because the terminal report (`steps runs --cost`) prints the same
+// figures from the same rows, and two spellings of "how much" would disagree
+// on exactly the cheap runs where the difference is the whole answer.
+func FormatUSD(amount float64) string {
 	if amount >= 1 {
 		return fmt.Sprintf("$%.2f", amount)
 	}

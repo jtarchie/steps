@@ -12,8 +12,8 @@ import (
 // AgentUsage is one agent step's recorded spend, as it goes in and comes back
 // out of agent_usage.
 //
-// CostUSD is a pointer because absent and zero are different answers: no
-// provider path reports a dollar figure today, and rendering an unreported
+// CostUSD is a pointer because absent and zero are different answers: only a
+// CLI-backed agent reports a dollar figure at all, and rendering an unreported
 // cost as $0.00 would make an unpriced run look free.
 type AgentUsage struct {
 	RunID        string

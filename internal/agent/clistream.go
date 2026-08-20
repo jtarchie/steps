@@ -258,7 +258,10 @@ func recordCLIResults(rec *transcriptRecorder, trajectory []recordedToolCall, in
 			continue
 		}
 
-		rec.result(trajectory[at].name, cliResultText(block.Content))
+		// Bounded here rather than in the recorder: a stream result is the
+		// one arrival that carries no cap of its own, where the hosted path's
+		// renderResultContent has already applied one (see recorder.result).
+		rec.result(trajectory[at].name, truncateToolOutputLimit(cliResultText(block.Content), maxRecordedResultBytes))
 	}
 }
 

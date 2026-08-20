@@ -1980,15 +1980,20 @@ func cachePercent(total, cached int) string {
 // renderCost shows a dollar figure only when something actually reported one,
 // and marks it partial when some steps did not.
 //
-// Never $0.00 for an unreported cost: no provider path reports dollars today,
-// so a zero here would say every run was free rather than that nobody priced
-// it. See the agent_usage schema comment.
+// Never $0.00 for an unreported cost: only a CLI-backed agent reports dollars
+// at all, so a zero here would say every hosted run was free rather than that
+// nobody priced it. See the agent_usage schema comment.
+//
+// web.FormatUSD rather than a local %.2f, and for the same reason the absent
+// case is not a zero: a CLI step routinely costs fractions of a cent, and two
+// decimals round exactly those runs to the "$0.00" this function exists to
+// never print.
 func renderCost(cost *float64, unpriced int) string {
 	if cost == nil {
 		return "unpriced"
 	}
 
-	rendered := fmt.Sprintf("$%.2f", *cost)
+	rendered := web.FormatUSD(*cost)
 	if unpriced > 0 {
 		rendered += fmt.Sprintf("+%d?", unpriced)
 	}
