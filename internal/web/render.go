@@ -148,6 +148,12 @@ func templateFuncs() template.FuncMap {
 		"mark":    statusMark,
 		"favicon": faviconFor,
 		"rfc3339": func(t time.Time) string { return t.UTC().Format(time.RFC3339) },
+		// The recursive step template needs both the page (for
+		// pipeline-scoped links) and the step it is drawing; a Go template
+		// passes exactly one argument, so they are paired here.
+		"stepctx": func(page map[string]any, step *stepView) stepCtx {
+			return stepCtx{Page: page, Step: step}
+		},
 	}
 }
 

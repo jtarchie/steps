@@ -137,7 +137,7 @@ func RunFix(ctx context.Context, cfg *config.Config, jobName string, stepIndex i
 		// tool calls are attributable the same way instead of publishing (and
 		// logging) nowhere.
 		recorder: &transcriptRecorder{live: liveContext{
-			bus: events.FromContext(ctx), runID: events.RunID(ctx), job: jobName, stepIndex: stepIndex, stepName: fix.Agent,
+			bus: events.FromContext(ctx), runID: events.RunID(ctx), stepID: events.StepID(ctx), job: jobName, stepIndex: stepIndex, stepName: fix.Agent,
 		}},
 	}
 	// RunFix runs the conversation once and never fails over (see

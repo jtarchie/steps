@@ -13,19 +13,23 @@ import (
 // RunEventRow is one persisted run event — the stored form of events.Event,
 // which is what a finished run is replayed from.
 type RunEventRow struct {
-	Seq        int64
-	RunID      string
-	Type       string
-	StepIndex  int
-	StepName   string
-	StepKind   string
-	Status     string
-	Hash       string
-	Text       string
-	Name       string
-	Detail     string
-	DurationMS int64
-	At         time.Time
+	Seq       int64
+	RunID     string
+	Type      string
+	StepIndex int
+	StepName  string
+	StepKind  string
+	// StepID/ParentStepID carry the display tree — see events.Event, which
+	// documents why it is minted rather than read off the merkle chain.
+	StepID       int64
+	ParentStepID int64
+	Status       string
+	Hash         string
+	Text         string
+	Name         string
+	Detail       string
+	DurationMS   int64
+	At           time.Time
 }
 
 // MaxEventTextBytes bounds the free-text columns of one run event.
@@ -49,9 +53,11 @@ const MaxEventTextBytes = 64 * 1024
 func (s *Store) AppendRunEvent(ctx context.Context, row RunEventRow) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO run_events
-			(run_id, type, step_index, step_name, step_kind, status, hash, text, name, detail, duration_ms, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(run_id, type, step_index, step_name, step_kind, step_id, parent_step_id,
+			 status, hash, text, name, detail, duration_ms, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, row.RunID, row.Type, row.StepIndex, row.StepName, row.StepKind,
+		row.StepID, row.ParentStepID,
 		row.Status, row.Hash,
 		truncateUTF8(row.Text, MaxEventTextBytes),
 		truncateUTF8(row.Name, MaxEventTextBytes),
@@ -71,6 +77,7 @@ func (s *Store) AppendRunEvent(ctx context.Context, row RunEventRow) error {
 func (s *Store) RunEvents(ctx context.Context, runID string, afterSeq int64, limit int) ([]RunEventRow, error) {
 	return collect(ctx, s.db, "run events", `
 		SELECT seq, run_id, type, step_index, step_name, step_kind,
+		       step_id, parent_step_id,
 		       status, hash, text, name, detail, duration_ms, created_at
 		FROM run_events
 		WHERE run_id = ? AND seq > ?
@@ -83,7 +90,8 @@ func (s *Store) RunEvents(ctx context.Context, runID string, afterSeq int64, lim
 		)
 
 		err := rows.Scan(&row.Seq, &row.RunID, &row.Type, &row.StepIndex,
-			&row.StepName, &row.StepKind, &row.Status, &row.Hash, &row.Text,
+			&row.StepName, &row.StepKind, &row.StepID, &row.ParentStepID,
+			&row.Status, &row.Hash, &row.Text,
 			&row.Name, &row.Detail, &row.DurationMS, &createdAt)
 
 		row.At = parseTimestamp(createdAt)

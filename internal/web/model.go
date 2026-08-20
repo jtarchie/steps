@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,8 +21,16 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// stepView is one step of a run, with whatever the step produced beneath it.
+// stepView is one step of a run, with whatever the step produced beneath it —
+// including, for a block step, the steps that ran inside it.
 type stepView struct {
+	// ID and ParentID are the run's display tree (see events.Event). Zero on
+	// a run recorded before the tree existed, which folds back to the flat
+	// list this page used to be.
+	ID       int64
+	ParentID int64
+	// Children are the steps that ran inside this one, in start order.
+	Children []*stepView
 	Index    int
 	Name     string
 	Kind     string
@@ -49,6 +58,17 @@ type stepView struct {
 // Running reports a step that started and has not reported an end.
 func (s stepView) Running() bool { return s.Status == "" || s.Status == "running" }
 
+// Elapsed is how long a running step has been running, for the row's own
+// clock. The page's timer script keeps it counting; this is what it reads
+// before the first tick, and what a reader with scripting off sees.
+func (s stepView) Elapsed() time.Duration {
+	if s.Started.IsZero() {
+		return 0
+	}
+
+	return time.Since(s.Started)
+}
+
 // Skipped reports a step that did not execute.
 func (s stepView) Skipped() bool { return s.Status == "skipped" }
 
@@ -57,17 +77,102 @@ func (s stepView) Failed() bool {
 	return s.Status == "failed" || s.Status == "errored" || s.Status == "aborted"
 }
 
-// HasDetail reports whether the step has anything to show when expanded.
-// A step with no body must not be foldable: an expandable row that opens onto
-// nothing reads as a broken page, and a chevron that promises detail there
-// isn't is worse than no chevron.
-func (s stepView) HasDetail(jobError string) bool {
+// Container reports a step that ran other steps inside it.
+func (s stepView) Container() bool { return len(s.Children) > 0 }
+
+// Active reports a step still running, or holding something that is.
+//
+// It is what lights the rail down the branch the work is actually on, so a
+// reader who has folded half the page still knows where to look. Recursive
+// rather than a flag set at fold time, because a container's own status stays
+// running until every child has finished — the two answers agree, and this
+// one needs no second pass to maintain.
+func (s stepView) Active() bool {
+	if !s.Running() {
+		return false
+	}
+
+	if !s.Container() {
+		return true
+	}
+
+	for _, child := range s.Children {
+		if child.Active() {
+			return true
+		}
+	}
+
+	// A container whose children have all finished while it has not is
+	// between its last child and its own finish event. Nothing is running
+	// inside it, so nothing about it should read as running.
+	return false
+}
+
+// rollup counts how a container's subtree came out, for the row itself. A
+// folded block still has to answer "where does this stand", and the rows that
+// would otherwise answer are folded away with it.
+type rollup struct {
+	Cells   int
+	Passed  int
+	Failed  int
+	Running int
+	Skipped int
+}
+
+// Empty reports a rollup with nothing to say, which is not rendered.
+//
+// A container holding ONE step says nothing a reader cannot read off that
+// step's own row — a try: wrapping a task would otherwise carry a permanent
+// "1 step · 1 passed" that is pure furniture. Unless something inside went
+// wrong: a failure has to survive the fold, however few steps it took.
+func (r rollup) Empty() bool { return r.Cells == 0 || (r.Cells == 1 && r.Failed == 0) }
+
+// Rollup summarises the step's DIRECT children — the unit a reader counts.
+// A matrix reports its cells, not the tasks and agents inside them, which is
+// the number the pipeline itself printed when it fanned out.
+func (s stepView) Rollup() rollup {
+	var out rollup
+
+	for _, child := range s.Children {
+		out.Cells++
+
+		switch {
+		case child.Skipped():
+			out.Skipped++
+		case child.Failed():
+			out.Failed++
+		case child.Running():
+			out.Running++
+		default:
+			out.Passed++
+		}
+	}
+
+	return out
+}
+
+// HasBody reports whether the step produced anything to show under its own
+// row — as distinct from the steps that ran INSIDE it, which are a subtree.
+//
+// The two are separate because the body is rendered at all only when there is
+// one: an empty .stepbody still carries its padding, which on a container
+// opened a visible gap between the block and the first step inside it.
+func (s stepView) HasBody(jobError string) bool {
 	return len(s.Turns) > 0 ||
+		len(s.Trajectory()) > 0 ||
 		len(s.Outputs) > 0 ||
 		s.DistinctError(jobError) != "" ||
 		s.Response() != "" ||
 		s.Note() != "" ||
 		s.Reason != ""
+}
+
+// HasDetail reports whether the step has anything to show when expanded.
+// A step with no body must not be foldable: an expandable row that opens onto
+// nothing reads as a broken page, and a chevron that promises detail there
+// isn't is worse than no chevron.
+func (s stepView) HasDetail(jobError string) bool {
+	return s.Container() || s.HasBody(jobError)
 }
 
 // DistinctError is the step's error, or "" when it is the same text the run
@@ -80,6 +185,100 @@ func (s stepView) DistinctError(jobError string) string {
 	}
 
 	return s.Error
+}
+
+// Anchor is the step's own id in the page, and the target of the # link
+// beside its name.
+//
+// Built on the step occurrence rather than on (index, name), because those
+// two are shared: a try: and the step inside it produced the SAME anchor, so
+// the page carried duplicate ids and a link pasted at someone opened the
+// wrapper instead of the step they meant. The slug stays for a human reading
+// the URL; the id is what makes it point at one row.
+func (s stepView) Anchor() string {
+	if s.ID == 0 {
+		return fmt.Sprintf("step-%d-%s", s.Index, slugify(s.Name))
+	}
+
+	return fmt.Sprintf("step-%d-%s", s.ID, slugify(s.Name))
+}
+
+// Key identifies this row to the live stream, which must find the row the
+// server already drew rather than appending a second one. Mirrors stepKey.
+func (s stepView) Key() string {
+	if s.ID != 0 {
+		return "#" + strconv.FormatInt(s.ID, 10)
+	}
+
+	return fmt.Sprintf("%d/%s", s.Index, s.Name)
+}
+
+// callView is one recorded tool call read back from a node's result.
+type callView struct {
+	Name     string
+	OK       bool
+	ArgsJSON string
+}
+
+// Trajectory is the tool calls a step's node recorded, for the steps whose
+// conversation never reached the event bus.
+//
+// A CLI-backed agent (source.model: "@claude/sonnet") owns its own tool loop
+// in a subprocess, so it publishes no turns — but the calls it made are
+// parsed out of the CLI's stream and stored in the node's result either way.
+// The page showed the final answer and nothing about how it got there, while
+// the record of exactly that sat one field away in a map it had already
+// decoded.
+//
+// Empty when the step DID publish turns: those are the same calls, live and
+// in order, and rendering both would show every tool call twice.
+func (s stepView) Trajectory() []callView {
+	if len(s.Turns) > 0 || s.Result == nil {
+		return nil
+	}
+
+	recorded, _ := s.Result["trajectory"].([]any)
+
+	calls := make([]callView, 0, len(recorded))
+
+	for _, entry := range recorded {
+		call, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		name, _ := call["name"].(string)
+		if name == "" {
+			continue
+		}
+
+		// A call whose "ok" is absent reads as having run, matching how the
+		// CLI stream records one it never saw a result block for.
+		succeeded, present := call["ok"].(bool)
+
+		calls = append(calls, callView{
+			Name:     name,
+			OK:       succeeded || !present,
+			ArgsJSON: encodeArgs(call["args"]),
+		})
+	}
+
+	return calls
+}
+
+// encodeArgs renders a recorded call's arguments back to JSON, so they render
+// through the same jsonValue path a live tool call's do.
+func encodeArgs(args any) string {
+	if args == nil {
+		return ""
+	}
+
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		return ""
+	}
+
+	return string(encoded)
 }
 
 // Verdict pulls the routing verdict out of an agent step's result.
@@ -150,8 +349,14 @@ func (t turnView) Nested() bool { return t.Depth > 0 }
 
 // runView is a whole run, assembled.
 type runView struct {
-	Run      store.RunRow
-	Steps    []stepView
+	Run store.RunRow
+	// Steps is every step of the run in start order, flat. The page renders
+	// Roots instead; this is what the run-level questions (what changed, what
+	// was cached) are still asked of, because they are about the run and not
+	// about its shape.
+	Steps []*stepView
+	// Roots are the steps at the top of the plan, each holding its subtree.
+	Roots    []*stepView
 	JobError string
 	// Changed names the steps whose content hash differs from the last
 	// successful run of the same job — the "what is different this time"
@@ -304,6 +509,8 @@ func buildRunView(run store.RunRow, rows []store.RunEventRow, results map[string
 		}
 	}
 
+	linkTree(&view)
+
 	return view
 }
 
@@ -340,11 +547,13 @@ func openStep(view *runView, index map[string]int, row store.RunEventRow) {
 	}
 
 	index[key] = len(view.Steps)
-	view.Steps = append(view.Steps, stepView{
-		Index:   row.StepIndex,
-		Name:    row.StepName,
-		Kind:    row.StepKind,
-		Started: row.At,
+	view.Steps = append(view.Steps, &stepView{
+		ID:       row.StepID,
+		ParentID: row.ParentStepID,
+		Index:    row.StepIndex,
+		Name:     row.StepName,
+		Kind:     row.StepKind,
+		Started:  row.At,
 	})
 }
 
@@ -365,7 +574,7 @@ func closeStep(view *runView, index map[string]int, row store.RunEventRow, resul
 		position = index[stepKey(row)]
 	}
 
-	step := &view.Steps[position]
+	step := view.Steps[position]
 	step.Status = row.Status
 	step.Hash = row.Hash
 	step.Duration = time.Duration(row.DurationMS) * time.Millisecond
@@ -433,9 +642,52 @@ func parseDepth(status string) int {
 	return depth
 }
 
-// stepKey identifies a step within one run.
+// stepKey identifies one step occurrence within a run.
+//
+// The minted id when there is one, because it is the only thing that tells a
+// try: apart from the step it wraps — those publish the same index and the
+// same name, and keying on that pair folded them into a single row that
+// reported the wrapper's kind and the wrapped step's nothing.
+//
+// A run recorded before ids existed has none, and falls back to the pair.
+// That run renders exactly as it did then: flat, with the collision it always
+// had. Better than one row swallowing the whole plan, which is what keying
+// every such step on id 0 would do.
 func stepKey(row store.RunEventRow) string {
+	if row.StepID != 0 {
+		return "#" + strconv.FormatInt(row.StepID, 10)
+	}
+
 	return fmt.Sprintf("%d/%s", row.StepIndex, row.StepName)
+}
+
+// linkTree hangs each step under the container it named, leaving the steps
+// with no container (or one this run never recorded) as roots.
+//
+// Order is start order throughout: the flat list is appended to as steps
+// open, and a child is appended to its parent as it is linked, so a matrix's
+// cells appear in the order they began rather than the order they finished.
+func linkTree(view *runView) {
+	byID := make(map[int64]*stepView, len(view.Steps))
+
+	for _, step := range view.Steps {
+		if step.ID != 0 {
+			byID[step.ID] = step
+		}
+	}
+
+	for _, step := range view.Steps {
+		parent, nested := byID[step.ParentID]
+		// A step cannot contain itself, and a malformed pair must not build a
+		// cycle the template would recurse through forever.
+		if !nested || parent == step {
+			view.Roots = append(view.Roots, step)
+
+			continue
+		}
+
+		parent.Children = append(parent.Children, step)
+	}
 }
 
 // decodeResult decodes a node's stored result JSON, yielding nil rather than
@@ -578,4 +830,11 @@ func sortEdges(edges []edgeView) {
 
 		return edges[i].Job < edges[j].Job
 	})
+}
+
+// stepCtx is what the recursive step template is invoked with: the page it is
+// being drawn on, and the step to draw.
+type stepCtx struct {
+	Page map[string]any
+	Step *stepView
 }

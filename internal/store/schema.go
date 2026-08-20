@@ -305,6 +305,18 @@ CREATE TABLE IF NOT EXISTS run_events (
     step_index INTEGER NOT NULL,
     step_name  TEXT NOT NULL,
     step_kind  TEXT NOT NULL,
+    -- The display tree: which step this is, and which container it ran inside
+    -- (0 at the top of a plan). See events.Event for why it is minted per run
+    -- rather than read off the merkle chain.
+    --
+    -- parent_step_id declares NO foreign key, and the reason is the one
+    -- nodes.parent_hash already has: a container publishes step_finished
+    -- AFTER the children that ran inside it, so the child's row legitimately
+    -- precedes the parent's. It is also self-referential within one table,
+    -- where a cascade would delete a whole subtree on a retention pass that
+    -- only meant to trim one row. Both rows die together with their run.
+    step_id        INTEGER NOT NULL DEFAULT 0,
+    parent_step_id INTEGER NOT NULL DEFAULT 0,
     status     TEXT NOT NULL,
     hash       TEXT NOT NULL,
     text       TEXT NOT NULL,

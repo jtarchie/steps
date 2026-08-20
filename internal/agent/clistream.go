@@ -168,7 +168,11 @@ func recordCLIToolCalls(result *cliRunResult, index map[string]int, event cliEve
 			continue
 		}
 
-		args := block.Input
+		// Bounded the same way the hosted path bounds its own trajectory
+		// (truncateArgs). Stored raw, one Write call carried a whole file
+		// into the node's result — the CLI path was the only one paying that
+		// on disk, which footprint_test.go exists to keep honest.
+		args := truncateArgs(block.Input)
 		if args == nil {
 			args = map[string]any{}
 		}

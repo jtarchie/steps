@@ -35,6 +35,25 @@ The run page is the point of the whole thing. It renders a run the way the
 terminal does — steps in order, prefixed by kind, colored by outcome — with
 the things a scrollback cannot give you:
 
+- **A plan is a tree, and it renders as one.** A block step (`across:`,
+  `in_parallel:`, `race:`, `ensemble:`, `do:`, `try:`) holds the steps that ran
+  inside it, indented under a guide rail, and folding the block folds its whole
+  subtree. A triggering `get:` holds the entire build its version set off,
+  which is what it already is — the get does not finish until that build does.
+- **A folded block still says where it stands.** Its row carries the count of
+  what is inside it — `3 steps · 2 passed · 1 failed` — because the rows that
+  would otherwise answer are folded away with it. A block wrapping a single
+  step carries no count unless that step failed: one child says nothing its own
+  row does not.
+- **The rail lights along the branch that is working.** While a run is in
+  flight, every block holding something still running is marked, so a reader
+  who has folded half the page still knows where to look. A failed branch is
+  not marked the same way — the counts above already carry the failure up every
+  ancestor.
+- **Keyboard**: <kbd>j</kbd>/<kbd>k</kbd> walk the tree, <kbd>e</kbd>/<kbd>c</kbd>
+  expand and collapse everything, <kbd>enter</kbd> toggles, and <kbd>f</kbd>
+  jumps to the innermost failure — the step that actually broke, rather than
+  the outermost block that reports it.
 - **A cached step is folded and dimmed**, labeled `unchanged — replayed from
   cache`. The steps a chain-skip swallowed are shown too, for the same reason:
   a transcript that stops at the cache hit reads as a truncated run rather
@@ -60,11 +79,22 @@ the things a scrollback cannot give you:
   its quotes so the nesting stays legible. Small payloads sit on the row; a
   bulky one folds behind a summary that names what is inside it (`content ·
   555 B`), so one 30KB tool result cannot bury the conversation around it.
-- **An agent's answer keeps its fenced code blocks.** A ```` ```json ```` block
-  in a response is highlighted exactly like the tool results above it; every
-  other language goes through the same highlighter `/docs` uses. Nothing else
-  in the model's text becomes markup — a fence is a boundary the page can
-  honor without interpreting what a model wrote as page structure.
+- **An agent's answer is rendered as markdown**, because that is what models
+  write: headings, lists, tables, emphasis. A ```` ```json ```` block is
+  highlighted exactly like the tool results above it; every other language goes
+  through the same highlighter `/docs` uses.
+
+  The text came from a model, so the renderer is a deliberately narrowed one.
+  Raw HTML is dropped rather than parsed. A `javascript:` or `data:` link
+  renders with no destination, and every surviving link carries
+  `rel="noopener noreferrer nofollow"`. **Images are never fetched** — an
+  `![](http://…)` in a review is a request the browser makes on its own, so the
+  page shows the alt text and the host it wanted instead. Headings mint no
+  anchor ids, which are the page's own (`#step-…`) to hand out.
+- **A CLI-backed agent shows its tool calls too.** An agent whose
+  `source.model:` is a CLI (`@claude/sonnet`) runs its own tool loop in a
+  subprocess and publishes no turns, but the calls it made are recorded with
+  the step and are listed under it.
 - **Every hash is a link** to the node page, and **every step has one too** —
   the `#` beside its name is a URL you can paste at someone, and it opens the
   step it names.

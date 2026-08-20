@@ -105,7 +105,7 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 		// than one event for the step as a whole.
 		getStarted := time.Now()
 
-		publishStepStarted(getCtx, w.jobName, i, step)
+		mark := publishStepStarted(getCtx, w.jobName, i, step)
 
 		// Taken BEFORE the build, not after it succeeds — Concourse's own
 		// rule. NextEveryVersion reads build_resource_config_version_inputs, a
@@ -120,9 +120,13 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 		// attached, and it means "every version, once" quietly is not true.
 		w.takeSet(ctx, pinnedRun, set)
 
-		err = w.runTriggeredBuild(ctx, step, *resource, *resourceType, set, setIndex, remainder, node)
+		// The get is the container of everything the version it selected goes
+		// on to build — which is what it already IS, since runTriggeredBuild
+		// runs the whole remainder of the plan and this step does not finish
+		// until that does. Only the tree was missing.
+		err = w.runTriggeredBuild(withChildrenOf(ctx, mark), step, *resource, *resourceType, set, setIndex, remainder, node)
 
-		publishStepFinished(getCtx, w.jobName, i, step, hash, getStarted, err)
+		publishStepFinished(getCtx, w.jobName, i, step, mark, hash, getStarted, err)
 
 		if err != nil {
 			buildErrs = append(buildErrs, fmt.Errorf("step %d (get %q) version %v: %w", i, step.Get, version, err))
@@ -308,11 +312,11 @@ func (w *planWalk) fetchInPlace(ctx context.Context, step config.Step, steps []c
 	// carries on with its own context.
 	ctx = withStepLogger(ctx, w.index, step)
 
-	publishStepStarted(ctx, w.jobName, w.index, step)
+	mark := publishStepStarted(ctx, w.jobName, w.index, step)
 
 	res, err := w.fetchGetStepInPlace(ctx, step)
 	if err != nil {
-		publishStepFinished(ctx, w.jobName, w.index, step, res.hash, started, err)
+		publishStepFinished(ctx, w.jobName, w.index, step, mark, res.hash, started, err)
 
 		return true, err
 	}
@@ -324,7 +328,7 @@ func (w *planWalk) fetchInPlace(ctx context.Context, step config.Step, steps []c
 		return true, nil
 	}
 
-	publishStepFinished(ctx, w.jobName, w.index, step, res.hash, started, nil)
+	publishStepFinished(ctx, w.jobName, w.index, step, mark, res.hash, started, nil)
 
 	if res.hash != "" {
 		w.parentHash = res.hash

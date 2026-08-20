@@ -375,6 +375,14 @@ linters:
             - "github.com/yuin/goldmark/extension"
             - "github.com/yuin/goldmark/parser"
             - "github.com/yuin/goldmark-highlighting/v2"
+            # renderer/text/util are goldmark's own extension points, needed
+            # by the SECOND converter (prose.go) that renders model-authored
+            # prose: an AST transformer that makes images inert, and node
+            # renderers for links and fenced code. The docs converter needs
+            # none of them because it renders text this repo wrote.
+            - "github.com/yuin/goldmark/renderer"
+            - "github.com/yuin/goldmark/text"
+            - "github.com/yuin/goldmark/util"
             # chroma is goldmark-highlighting's engine; imported directly to
             # define the "steps" code style from the UI's own palette, and —
             # lexers/formatters — to reuse that same style for the fenced

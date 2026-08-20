@@ -68,8 +68,26 @@ type Event struct {
 	StepIndex int    `json:"step_index"`
 	StepName  string `json:"step_name,omitempty"`
 	StepKind  string `json:"step_kind,omitempty"`
-	Status    string `json:"status,omitempty"`
-	Hash      string `json:"hash,omitempty"`
+	// StepID identifies this OCCURRENCE of a step within its run, and
+	// ParentStepID the container it ran inside — 0 at the top of a plan.
+	// Together they are the display tree: what a reader sees folded under
+	// what.
+	//
+	// Deliberately not the merkle chain, which cannot answer this. An
+	// across: cell hashes under the MATRIX'S predecessor rather than under
+	// the matrix, so nodes.parent_hash records the three cells and the block
+	// that owns them as siblings; a when:-skipped step's own hash IS its
+	// parent's, which would graft it onto itself; and a step's hash is not
+	// known when it STARTS, because load_var substitution rewrites the step
+	// inside the dispatch. Minted per run, none of which applies.
+	//
+	// Also what tells a try: apart from the step it wraps: those publish the
+	// same index and the same name, and keying a step by that pair folded the
+	// two into one row.
+	StepID       int64  `json:"step_id,omitempty"`
+	ParentStepID int64  `json:"parent_step_id,omitempty"`
+	Status       string `json:"status,omitempty"`
+	Hash         string `json:"hash,omitempty"`
 	// Text carries model output, a log line, or an error message depending on
 	// Type; Name and Detail carry a tool call's name and its arguments or
 	// result. Kept as three generic fields rather than a per-type struct for
@@ -276,6 +294,25 @@ func WithRunID(ctx context.Context, id string) context.Context {
 // RunID returns the run id carried by ctx, or "".
 func RunID(ctx context.Context) string {
 	id, _ := ctx.Value(runIDKey{}).(string)
+
+	return id
+}
+
+// stepIDKey is the context key for the step a conversation belongs to.
+type stepIDKey struct{}
+
+// WithStepID tags ctx with the display-tree id of the step now executing, so
+// a package that cannot import the pipeline — internal/agent, publishing a
+// conversation's turns — can still say which step's subtree its events hang
+// under. Without it every turn a nested agent produced had to be matched back
+// to a step by (index, name), which a try: and the agent it wraps share.
+func WithStepID(ctx context.Context, id int64) context.Context {
+	return context.WithValue(ctx, stepIDKey{}, id)
+}
+
+// StepID returns the step id carried by ctx, or 0 outside a step.
+func StepID(ctx context.Context) int64 {
+	id, _ := ctx.Value(stepIDKey{}).(int64)
 
 	return id
 }

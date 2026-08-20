@@ -28,18 +28,20 @@ import (
 func StoreSink(st *store.Store) func(events.Event) {
 	return func(event events.Event) {
 		err := st.AppendRunEvent(context.Background(), store.RunEventRow{
-			RunID:      event.RunID,
-			Type:       event.Type,
-			StepIndex:  event.StepIndex,
-			StepName:   event.StepName,
-			StepKind:   event.StepKind,
-			Status:     event.Status,
-			Hash:       event.Hash,
-			Text:       event.Text,
-			Name:       event.Name,
-			Detail:     event.Detail,
-			DurationMS: event.DurationMS,
-			At:         event.At,
+			RunID:        event.RunID,
+			Type:         event.Type,
+			StepIndex:    event.StepIndex,
+			StepName:     event.StepName,
+			StepKind:     event.StepKind,
+			StepID:       event.StepID,
+			ParentStepID: event.ParentStepID,
+			Status:       event.Status,
+			Hash:         event.Hash,
+			Text:         event.Text,
+			Name:         event.Name,
+			Detail:       event.Detail,
+			DurationMS:   event.DurationMS,
+			At:           event.At,
 		})
 		if err != nil {
 			slog.Warn("run.event_persist", "type", event.Type, "error", err)
@@ -75,16 +77,24 @@ func runIDFrom(ctx context.Context) string {
 	return resume.id
 }
 
-// publishStepStarted announces a step that is about to execute.
-func publishStepStarted(ctx context.Context, jobName string, i int, step config.Step) {
+// publishStepStarted announces a step that is about to execute, and returns
+// the mark identifying it — which its finish event reports again, and which a
+// container hands to what it runs (see steptree.go).
+func publishStepStarted(ctx context.Context, jobName string, i int, step config.Step) stepMark {
+	mark := markStep(ctx)
+
 	events.Publish(ctx, events.Event{
-		Type:      events.TypeStepStarted,
-		RunID:     runIDFrom(ctx),
-		Job:       jobName,
-		StepIndex: i,
-		StepName:  eventStepName(step),
-		StepKind:  stepKindName(step),
+		Type:         events.TypeStepStarted,
+		RunID:        runIDFrom(ctx),
+		Job:          jobName,
+		StepIndex:    i,
+		StepName:     eventStepName(step),
+		StepKind:     stepKindName(step),
+		StepID:       mark.id,
+		ParentStepID: mark.parent,
 	})
+
+	return mark
 }
 
 // publishStepFinished announces how a step ended, with the hash it produced
@@ -94,7 +104,10 @@ func publishStepStarted(ctx context.Context, jobName string, i int, step config.
 // reading `--log-level` output, not the event bus/web UI, otherwise saw a
 // step START (the dispatchers' own "job.step" Debug line) and never learned
 // how long it ran or whether it succeeded.
-func publishStepFinished(ctx context.Context, jobName string, i int, step config.Step, hash string, started time.Time, err error) {
+func publishStepFinished(
+	ctx context.Context, jobName string, i int, step config.Step, mark stepMark,
+	hash string, started time.Time, err error,
+) {
 	status := "succeeded"
 	text := ""
 
@@ -106,16 +119,18 @@ func publishStepFinished(ctx context.Context, jobName string, i int, step config
 	logFrom(ctx).Info("job.step.finished", "status", status, "duration", time.Since(started))
 
 	events.Publish(ctx, events.Event{
-		Type:       events.TypeStepFinished,
-		RunID:      runIDFrom(ctx),
-		Job:        jobName,
-		StepIndex:  i,
-		StepName:   eventStepName(step),
-		StepKind:   stepKindName(step),
-		Status:     status,
-		Hash:       hash,
-		Text:       text,
-		DurationMS: time.Since(started).Milliseconds(),
+		Type:         events.TypeStepFinished,
+		RunID:        runIDFrom(ctx),
+		Job:          jobName,
+		StepIndex:    i,
+		StepName:     eventStepName(step),
+		StepKind:     stepKindName(step),
+		StepID:       mark.id,
+		ParentStepID: mark.parent,
+		Status:       status,
+		Hash:         hash,
+		Text:         text,
+		DurationMS:   time.Since(started).Milliseconds(),
 	})
 }
 
@@ -124,16 +139,20 @@ func publishStepFinished(ctx context.Context, jobName string, i int, step config
 // value of the event: "nothing happened" is not actionable, "replayed from
 // cache" is.
 func publishStepSkipped(ctx context.Context, jobName string, i int, step config.Step, hash, reason string) {
+	mark := markStep(ctx)
+
 	events.Publish(ctx, events.Event{
-		Type:      events.TypeStepSkipped,
-		RunID:     runIDFrom(ctx),
-		Job:       jobName,
-		StepIndex: i,
-		StepName:  eventStepName(step),
-		StepKind:  stepKindName(step),
-		Status:    "skipped",
-		Hash:      hash,
-		Text:      reason,
+		Type:         events.TypeStepSkipped,
+		RunID:        runIDFrom(ctx),
+		Job:          jobName,
+		StepIndex:    i,
+		StepName:     eventStepName(step),
+		StepKind:     stepKindName(step),
+		StepID:       mark.id,
+		ParentStepID: mark.parent,
+		Status:       "skipped",
+		Hash:         hash,
+		Text:         reason,
 	})
 }
 
@@ -240,6 +259,7 @@ func publishStepOutput(ctx context.Context, jobName string, i int, step config.S
 		StepIndex: i,
 		StepName:  eventStepName(step),
 		StepKind:  stepKindName(step),
+		StepID:    events.StepID(ctx),
 		Text:      combined,
 	})
 }
@@ -315,6 +335,15 @@ func eventStepName(step config.Step) string {
 // empty string for a step whose kind does not resolve (already an error on
 // the execution path; here it just means the event says less).
 func stepKindName(step config.Step) string {
+	// across: is a modifier rather than a kind, so Kind() reports what each
+	// CELL will be — but the step publishing here is the block, which is what
+	// dispatchNonGetStep resolves it to before it ever asks for a kind. Left
+	// as the cell kind, a matrix and its cells were three rows all labelled
+	// "try", with nothing on the page saying which one was the matrix.
+	if len(step.Across) > 0 {
+		return "across"
+	}
+
 	kind, ok := step.Kind()
 	if !ok {
 		return ""

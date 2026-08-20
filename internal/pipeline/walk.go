@@ -9,6 +9,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
 	rsrc "github.com/jtarchie/steps/internal/resource"
@@ -244,7 +245,7 @@ func recordCompletedStep(ctx context.Context, st *store.Store, i int, step confi
 func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, skippable map[string]bool, parentHash string) (stepResult, error) {
 	started := time.Now()
 
-	publishStepStarted(ctx, r.jobName, i, step)
+	mark := publishStepStarted(ctx, r.jobName, i, step)
 
 	// Carried so the frames that hold a command's captured output can publish
 	// it against the right step (see withStepIdentity). get steps never reach
@@ -252,6 +253,17 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 	// be kept off the remainder of the plan it triggers.
 	ctx = withStepIdentity(ctx, r.jobName, i, step)
 	ctx = withStepLogger(ctx, i, step)
+
+	// Every block kind reaches its children through this dispatch, so one
+	// scope here is the whole display tree: an across:'s cells, a try:'s
+	// wrapped step, an in_parallel:'s branches all report this step as their
+	// container without any of those runners knowing the tree exists.
+	ctx = withChildrenOf(ctx, mark)
+
+	// And the same id where a package that cannot import this one can read
+	// it: internal/agent stamps it on every turn of the conversation this
+	// step is about to have.
+	ctx = events.WithStepID(ctx, mark.id)
 
 	res, err := dispatchNonGetStep(ctx, r, i, step, skippable, parentHash)
 
@@ -273,7 +285,7 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 	// whole point of the transcript is that a replayed step is visibly
 	// distinct from a step that paid to execute.
 	if res.disposition == stepRan {
-		publishStepFinished(ctx, r.jobName, i, step, res.hash, started, err)
+		publishStepFinished(ctx, r.jobName, i, step, mark, res.hash, started, err)
 	} else {
 		publishStepSkipped(ctx, r.jobName, i, step, res.hash, skipReason(res.disposition))
 	}

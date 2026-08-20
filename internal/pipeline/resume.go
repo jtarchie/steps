@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
@@ -23,6 +24,9 @@ type resumeState struct {
 	done map[int]string
 	// resuming is true when this run continues a previous one.
 	resuming bool
+	// nextStepID mints display-tree ids for this run (see steptree.go).
+	// Atomic because a fan-out block starts its cells concurrently.
+	nextStepID atomic.Int64
 }
 
 type resumeKey struct{}

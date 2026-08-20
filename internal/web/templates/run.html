@@ -63,49 +63,15 @@
 </section>
 {{end}}
 
+<div class="keyhint" aria-hidden="true">
+  <span><kbd>j</kbd>/<kbd>k</kbd> move</span>
+  <span><kbd>e</kbd>/<kbd>c</kbd> expand / collapse all</span>
+  <span><kbd>f</kbd> first failure</span>
+  <span><kbd>enter</kbd> toggle</span>
+</div>
+
 <div class="transcript" id="transcript" data-last-seq="{{$run.LastSeq}}">
-  {{range $run.Steps}}
-  {{$detail := .HasDetail $run.JobError}}
-  <div id="step-{{.Index}}-{{slug .Name}}" class="step {{if .Skipped}}skipped{{else if .Failed}}failed{{else if .Running}}running{{else}}passed{{end}}{{if and $detail (or .Failed .Turns)}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{.Index}}/{{.Name}}">
-    <div class="stephead"{{if $detail}} role="button" tabindex="0"{{end}}>
-      <span class="chev{{if $detail}} chev-icon{{end}}"></span>
-      <span class="kind">{{.Kind}}</span>
-      <span class="name">{{.Name}}</span>
-      <a class="anchor" href="#step-{{.Index}}-{{slug .Name}}" title="Link to this step" aria-label="Link to this step">#</a>
-      {{if .Reason}}<span class="note">{{.Reason}}</span>{{end}}
-      {{if .Verdict}}<span class="note">verdict: {{.Verdict}}</span>{{end}}
-      <span class="dur">
-        {{if and (not .Skipped) (not .Running)}}{{duration .Duration}}{{end}}
-        {{if .Hash}} · <a class="hash" href="/p/{{$.Nav.Current}}/nodes/{{.Hash}}">{{short .Hash}}</a>{{end}}
-        {{if .Running}}<span class="cursor">▍</span>{{end}}
-      </span>
-    </div>
-    <div class="stepbody">
-      {{with .DistinctError $run.JobError}}<div class="log"><span class="err">{{.}}</span></div>{{end}}
-      {{if .Reason}}<div class="log">{{.Reason}}{{if .Hash}} · content hash {{short .Hash}}{{end}}</div>{{end}}
-      {{range .Outputs}}<pre class="log output">{{jsonPre .}}</pre>{{end}}
-
-      {{range .Conversation}}
-      <div class="turn {{if eq .Type "agent_text"}}model{{else}}tool{{end}}{{if .Nested}} nested{{end}}">
-        <span class="who">{{if eq .Type "agent_text"}}model{{else if eq .Type "agent_call"}}tool{{else if eq .Type "agent_result"}}result{{else}}delegate{{end}}</span>
-        <div class="what">
-          {{if .Name}}<code>{{.Name}}</code>{{end}}
-          {{if .Text}}<span class="say">{{.Text}}</span>{{end}}
-          {{if .Detail}}{{template "jsonvalue" (jsonValue .Detail)}}{{end}}
-        </div>
-      </div>
-      {{end}}
-
-      {{if .Response}}
-      <div class="turn answer">
-        <span class="who">answer</span>
-        <div class="response">{{template "prosebody" .Response}}</div>
-      </div>
-      {{end}}
-      {{if .Note}}<div class="agentmeta">note: {{.Note}}</div>{{end}}
-    </div>
-  </div>
-  {{else}}
+  {{range $run.Roots}}{{template "step" (stepctx $ .)}}{{else}}
   <div class="step"><div class="stephead"><span class="faint">This run recorded no steps.</span></div></div>
   {{end}}
 </div>
@@ -143,6 +109,65 @@
   }
 
   function stepEl(key) { return transcript.querySelector('[data-step="' + CSS.escape(key) + '"]'); }
+
+  // A step's body, created the first time it has something in it. An empty
+  // .stepbody still carries its padding, which on a container opened a gap
+  // between the block and the first step inside it.
+  //
+  // Also the one place a row becomes foldable, because it is the one place a
+  // row gains something to fold. The server decides data-toggle from what a
+  // step had WHEN THE PAGE WAS DRAWN, so a step that was running and empty
+  // then — the common case for a page opened mid-run — rendered without one,
+  // and every turn that streamed in afterwards landed in a body nothing could
+  // open.
+  function bodyOf(step) {
+    if (!step.hasAttribute('data-toggle')) {
+      step.setAttribute('data-toggle', '');
+
+      var head = step.querySelector(':scope > .stephead');
+      if (head) {
+        head.setAttribute('role', 'button');
+        head.setAttribute('tabindex', '0');
+        var chev = head.querySelector(':scope > .chev');
+        if (chev) chev.classList.add('chev-icon');
+      }
+    }
+
+    var body = step.querySelector(':scope > .stepbody');
+    if (!body) {
+      body = el('div', 'stepbody');
+      step.insertBefore(body, step.querySelector(':scope > .substeps'));
+    }
+    return body;
+  }
+
+  // The key a row is found by, mirroring the server's stepKey: the minted id
+  // when the event carries one, and the old (index, name) pair when it does
+  // not — which is the only thing a run recorded before ids existed has.
+  function keyOf(e) {
+    return e.step_id ? '#' + e.step_id : e.step_index + '/' + e.step_name;
+  }
+
+  // Where a new step belongs: inside its container's subtree, or at the top
+  // of the transcript. A container that has not drawn a subtree yet grows one
+  // — a matrix's first cell is what turns the matrix into a container.
+  function containerFor(e) {
+    if (!e.parent_step_id) return transcript;
+
+    var parent = stepEl('#' + e.parent_step_id);
+    if (!parent) return transcript;
+
+    parent.classList.add('container');
+    if (!parent.hasAttribute('data-toggle')) parent.setAttribute('data-toggle', '');
+    parent.classList.add('open');
+
+    var sub = parent.querySelector(':scope > .substeps');
+    if (!sub) {
+      sub = el('div', 'substeps');
+      parent.appendChild(sub);
+    }
+    return sub;
+  }
 
   // JSON is rendered here the way jsonview.go renders it server-side: token
   // spans, a document escaped inside a string unescaped into a block, and a
@@ -373,6 +398,10 @@
   function startStep(e, key) {
     if (stepEl(key)) return;
     var div = el('div', 'step running open');
+    // data-toggle is what makes the row respond to a click. The server puts
+    // it on every row with a body; a row built here always gets one, because
+    // the turns and the answer that arrive next are exactly that body.
+    div.setAttribute('data-toggle', '');
     div.dataset.step = key;
 
     var head = el('div', 'stephead');
@@ -382,20 +411,103 @@
     head.appendChild(el('span', 'kind', e.step_kind));
     head.appendChild(el('span', 'name', e.step_name));
 
+    var meta = el('span', 'headmeta');
     var dur = el('span', 'dur');
+    // Counted by the same ticker the server-rendered rows use, so a step that
+    // started while the page was open reads identically to one that was
+    // already running when it loaded.
+    var clock = document.createElement('time');
+    clock.className = 'live';
+    clock.dataset.elapsedSince = new Date().toISOString();
+    clock.textContent = '0s';
+    dur.appendChild(clock);
+    dur.appendChild(document.createTextNode(' '));
     dur.appendChild(el('span', 'cursor', '▍'));
-    head.appendChild(dur);
+    meta.appendChild(dur);
+    head.appendChild(meta);
 
     div.appendChild(head);
-    div.appendChild(el('div', 'stepbody'));
-    transcript.appendChild(div);
+    containerFor(e).appendChild(div);
+    refreshTree();
+  }
+
+  // The container-level state, recomputed from what is on the page rather
+  // than tracked — the active rail and the rollup counts.
+  //
+  // Both are derived from the children's own status, so re-deriving them is
+  // simpler than maintaining them, and it is the only way they stay right
+  // when a nested cell finishes: nothing publishes an event on the CONTAINER
+  // when its third child goes green, so a rollup the server drew as
+  // "3 running" said 3 running for the rest of the run.
+  //
+  // This mirrors stepView.Rollup and stepView.Active in model.go. Keep the
+  // two in step: a count that reads one way live and another after the
+  // closing reload is the drift this whole view refuses.
+  var ROLLUP = [
+    {cls: 'passed', label: 'passed', mark: 'r-pass'},
+    {cls: 'failed', label: 'failed', mark: 'r-fail'},
+    {cls: 'running', label: 'running', mark: 'r-run'},
+    {cls: 'skipped', label: 'skipped', mark: 'r-skip'},
+  ];
+
+  function refreshTree() {
+    transcript.querySelectorAll('.step').forEach(function (step) {
+      var running = step.classList.contains('running');
+      var holds = step.querySelector('.step.running') !== null;
+      step.classList.toggle('active', running && (holds || !step.querySelector('.substeps')));
+
+      drawRollup(step);
+    });
+  }
+
+  function drawRollup(step) {
+    var sub = step.querySelector(':scope > .substeps');
+    if (!sub) return;
+
+    var children = Array.from(sub.children).filter(function (node) {
+      return node.classList.contains('step');
+    });
+
+    var counts = {};
+    children.forEach(function (child) {
+      ROLLUP.forEach(function (state) {
+        if (child.classList.contains(state.cls)) counts[state.cls] = (counts[state.cls] || 0) + 1;
+      });
+    });
+
+    var meta = step.querySelector(':scope > .stephead .headmeta');
+    var existing = meta && meta.querySelector(':scope > .rollup');
+
+    // One child says nothing its own row does not — unless it failed, which
+    // has to survive the fold. Mirrors rollup.Empty.
+    if (!meta || !children.length || (children.length === 1 && !counts.failed)) {
+      if (existing) existing.remove();
+      return;
+    }
+
+    var box = existing || el('span', 'rollup');
+    box.textContent = '';
+    box.appendChild(el('span', null, children.length + ' step' + (children.length === 1 ? '' : 's')));
+
+    ROLLUP.forEach(function (state) {
+      if (!counts[state.cls]) return;
+      box.appendChild(el('span', 'r-sep', '·'));
+      box.appendChild(el('b', state.mark, counts[state.cls] + ' ' + state.label));
+    });
+
+    if (!existing) meta.insertBefore(box, meta.firstChild);
   }
 
   function finishStep(e, node) {
     var skipped = e.type === 'step_skipped';
-    node.className = 'step ' + (skipped ? 'skipped' : (e.status === 'succeeded' ? 'passed' : 'failed'));
+    // Only the STATUS class changes. Rewriting className wholesale dropped
+    // "open" and "container" with it, so a step collapsed at the instant it
+    // finished — hiding the turns a reader was in the middle of, and the
+    // subtree of every block.
+    node.classList.remove('running', 'active');
+    node.classList.add(skipped ? 'skipped' : (e.status === 'succeeded' ? 'passed' : 'failed'));
 
-    var dur = node.querySelector('.dur');
+    var dur = node.querySelector(':scope > .stephead .dur');
     if (dur) {
       dur.textContent = skipped ? '' : e.duration;
       if (e.hash) {
@@ -409,13 +521,32 @@
     if (e.text && !skipped && e.status !== 'succeeded') {
       var log = el('div', 'log');
       log.appendChild(el('span', 'err', e.text));
-      node.querySelector('.stepbody').appendChild(log);
+      bodyOf(node).appendChild(log);
     }
 
     if (e.text && skipped) {
-      var name = node.querySelector('.stephead .name');
+      var name = node.querySelector(':scope > .stephead .name');
       name.insertAdjacentElement('afterend', el('span', 'note', e.text));
     }
+
+    // The answer the step ended on. The server draws it for a finished run,
+    // and without it here a live reader watched an agent work and then saw
+    // the one thing it produced only after a reload.
+    if (e.response) {
+      var turn = el('div', 'turn answer');
+      turn.appendChild(el('span', 'who', 'answer'));
+      var body = el('div', 'response');
+      // The one place this file uses innerHTML, and the only one that can:
+      // the markup is prose.go's output, which is the same renderer — and the
+      // same bytes — the server-rendered page ships. See answerFor in live.go.
+      var md = el('div', 'md');
+      md.innerHTML = e.response;
+      body.appendChild(md);
+      turn.appendChild(body);
+      bodyOf(node).appendChild(turn);
+    }
+
+    refreshTree();
   }
 
   function addTurn(e, node) {
@@ -437,8 +568,17 @@
     if (e.detail) what.appendChild(jsonNode(e.detail));
 
     turn.appendChild(what);
-    target.querySelector('.stepbody').appendChild(turn);
-    window.scrollTo(0, document.body.scrollHeight);
+    bodyOf(target).appendChild(turn);
+    target.classList.add('open');
+    follow();
+  }
+
+  // Follow the stream only for a reader who is already at the bottom.
+  // Unconditional, it yanked the page back down every time a tool call landed
+  // — so reading anything above the fold during a live run was impossible.
+  function follow() {
+    var slack = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
+    if (slack < 120) window.scrollTo(0, document.documentElement.scrollHeight);
   }
 
   function onEvent(msg) {
@@ -448,7 +588,7 @@
     if (e.seq <= last) return;
     last = e.seq;
 
-    var key = e.step_index + '/' + e.step_name;
+    var key = keyOf(e);
 
     if (e.type === 'step_started') { startStep(e, key); return; }
 
@@ -466,7 +606,7 @@
       // the live-versus-replay drift this design refuses.
       var target = node || Array.from(transcript.querySelectorAll('.step.running')).pop();
       if (target && e.text) {
-        target.querySelector('.stepbody').appendChild(outputEl(e.text));
+        bodyOf(target).appendChild(outputEl(e.text));
         target.classList.add('open');
       }
       return;
@@ -533,4 +673,74 @@
 })();
 </script>
 {{end}}
+{{end}}
+\n
+{{/* One step, and everything that ran inside it.
+     Recursive: a container renders its children through this same template,
+     so a matrix's cells are INSIDE the matrix's markup rather than beside it.
+     Takes a stepctx because a Go template's {{$.}} is the top-level argument
+     and this needs both the page (for pipeline-scoped links) and the step. */}}
+{{define "step"}}
+{{$page := .Page}}{{$step := .Step}}{{$run := .Page.Run}}
+{{$detail := $step.HasDetail $run.JobError}}
+{{$anchor := $step.Anchor}}
+<div id="{{$anchor}}" class="step{{if $step.Skipped}} skipped{{else if $step.Failed}} failed{{else if $step.Running}} running{{else}} passed{{end}}{{if $step.Container}} container{{end}}{{if $step.Active}} active{{end}}{{if and $detail (or $step.Failed $step.Turns $step.Container)}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{$step.Key}}">
+  <div class="stephead"{{if $detail}} role="button" tabindex="0"{{end}}>
+    <span class="chev{{if $detail}} chev-icon{{end}}"></span>
+    <span class="kind">{{$step.Kind}}</span>
+    <span class="name">{{$step.Name}}</span>
+    <a class="anchor" href="#{{$anchor}}" title="Link to this step" aria-label="Link to this step">#</a>
+    {{if $step.Reason}}<span class="note">{{$step.Reason}}</span>{{end}}
+    {{if $step.Verdict}}<span class="note">verdict: {{$step.Verdict}}</span>{{end}}
+    <span class="headmeta">
+      {{with $step.Rollup}}{{if not .Empty}}<span class="rollup">
+        <span>{{.Cells}} step{{if ne .Cells 1}}s{{end}}</span>
+        {{if .Passed}}<span class="r-sep">·</span><b class="r-pass">{{.Passed}} passed</b>{{end}}
+        {{if .Failed}}<span class="r-sep">·</span><b class="r-fail">{{.Failed}} failed</b>{{end}}
+        {{if .Running}}<span class="r-sep">·</span><b class="r-run">{{.Running}} running</b>{{end}}
+        {{if .Skipped}}<span class="r-sep">·</span><b class="r-skip">{{.Skipped}} skipped</b>{{end}}
+      </span>{{end}}{{end}}
+      <span class="dur">
+        {{if and (not $step.Skipped) (not $step.Running)}}{{duration $step.Duration}}{{end}}
+        {{if $step.Running}}<time class="live" data-elapsed-since="{{rfc3339 $step.Started}}">{{duration $step.Elapsed}}</time>{{end}}
+        {{if $step.Hash}} · <a class="hash" href="/p/{{$page.Nav.Current}}/nodes/{{$step.Hash}}">{{short $step.Hash}}</a>{{end}}
+        {{if $step.Running}}<span class="cursor">▍</span>{{end}}
+      </span>
+    </span>
+  </div>
+  {{if $step.HasBody $run.JobError}}<div class="stepbody">
+    {{with $step.DistinctError $run.JobError}}<div class="log"><span class="err">{{.}}</span></div>{{end}}
+    {{if $step.Reason}}<div class="log">{{$step.Reason}}{{if $step.Hash}} · content hash {{short $step.Hash}}{{end}}</div>{{end}}
+    {{range $step.Outputs}}<pre class="log output">{{jsonPre .}}</pre>{{end}}
+
+    {{range $step.Conversation}}
+    <div class="turn {{if eq .Type "agent_text"}}model{{else}}tool{{end}}{{if .Nested}} nested{{end}}">
+      <span class="who">{{if eq .Type "agent_text"}}model{{else if eq .Type "agent_call"}}tool{{else if eq .Type "agent_result"}}result{{else}}delegate{{end}}</span>
+      <div class="what">
+        {{if .Name}}<code>{{.Name}}</code>{{end}}
+        {{if .Text}}<span class="say">{{.Text}}</span>{{end}}
+        {{if .Detail}}{{template "jsonvalue" (jsonValue .Detail)}}{{end}}
+      </div>
+    </div>
+    {{end}}
+
+    {{range $step.Trajectory}}
+    <div class="turn tool">
+      <span class="who">tool</span>
+      <div class="what"><code>{{.Name}}</code>{{if not .OK}}<span class="note">failed</span>{{end}}{{template "jsonvalue" (jsonValue .ArgsJSON)}}</div>
+    </div>
+    {{end}}
+
+    {{if $step.Response}}
+    <div class="turn answer">
+      <span class="who">answer</span>
+      <div class="response">{{template "prosebody" $step.Response}}</div>
+    </div>
+    {{end}}
+    {{if $step.Note}}<div class="agentmeta">note: {{$step.Note}}</div>{{end}}
+  </div>{{end}}
+  {{if $step.Container}}<div class="substeps">
+    {{range $step.Children}}{{template "step" (stepctx $page .)}}{{end}}
+  </div>{{end}}
+</div>
 {{end}}

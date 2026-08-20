@@ -67,12 +67,100 @@
   openHashTarget();
   window.addEventListener('hashchange', openHashTarget);
 
-  document.querySelectorAll('.step[data-toggle] > .stephead').forEach(function (head) {
-    var toggle = function () { head.parentElement.classList.toggle('open'); };
-    head.addEventListener('click', function (e) { if (!e.target.closest('a')) toggle(); });
-    head.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+  // DELEGATED, deliberately. Bound per-element at load, a step the live
+  // stream appended later had no listener at all: it rendered with a chevron,
+  // looked expandable, and did nothing when clicked — so an agent whose row
+  // collapsed as it finished could only be reopened by reloading the page.
+  // One listener on the document covers every step, including the ones that
+  // do not exist yet.
+  function toggleFrom(target) {
+    var head = target.closest('.stephead');
+    if (!head) return null;
+    var step = head.parentElement;
+    return step && step.hasAttribute('data-toggle') ? step : null;
+  }
+
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('a')) return;
+    var step = toggleFrom(e.target);
+    if (step) step.classList.toggle('open');
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    var step = toggleFrom(e.target);
+    if (!step) return;
+    e.preventDefault();
+    step.classList.toggle('open');
+  });
+
+  // Keyboard navigation over the step tree.
+  //
+  // A run of any size is read by scanning, and on a tree the scan is the
+  // expensive part: the interesting row is three containers deep and the page
+  // is tall. j/k walk it, e/c change what is open wholesale, and f goes
+  // straight to the thing a person opened a failed run to find.
+  var transcript = document.querySelector('.transcript');
+
+  function steps() { return transcript ? Array.from(transcript.querySelectorAll('.step')) : []; }
+
+  function select(step) {
+    if (!step) return;
+    steps().forEach(function (other) { other.classList.remove('sel'); });
+    step.classList.add('sel');
+    // Focused as well as marked, so Enter and Space reach the toggle handler
+    // above rather than needing a second copy of it here.
+    var head = step.querySelector(':scope > .stephead');
+    if (head && head.hasAttribute('tabindex')) head.focus({preventScroll: true});
+    step.scrollIntoView({block: 'center', behavior: 'smooth'});
+  }
+
+  function selected() { return transcript ? transcript.querySelector('.step.sel') : null; }
+
+  function step(by) {
+    var all = steps();
+    if (!all.length) return;
+    var at = all.indexOf(selected());
+    select(all[Math.min(Math.max(at + by, 0), all.length - 1)]);
+  }
+
+  function foldAll(open) {
+    steps().forEach(function (node) {
+      if (node.hasAttribute('data-toggle')) node.classList.toggle('open', open);
     });
+  }
+
+  // The INNERMOST failure: a failed step inside a failed container is the one
+  // that actually broke, and every ancestor is failed only because of it.
+  function firstFailure() {
+    return steps().filter(function (node) {
+      return node.classList.contains('failed') && !node.querySelector('.step.failed');
+    })[0];
+  }
+
+  function reveal(node) {
+    for (var at = node; at; at = at.parentElement) {
+      if (at.classList && at.classList.contains('step')) at.classList.add('open');
+    }
+  }
+
+  document.addEventListener('keydown', function (e) {
+    if (!transcript || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+    switch (e.key) {
+      case 'j': step(1); break;
+      case 'k': step(-1); break;
+      case 'e': foldAll(true); break;
+      case 'c': foldAll(false); break;
+      case 'f':
+        var failure = firstFailure();
+        if (failure) { reveal(failure); select(failure); }
+        break;
+      default: return;
+    }
+
+    e.preventDefault();
   });
 
   var backdrop = document.getElementById('palette-backdrop');
@@ -168,6 +256,6 @@
      JavaScript off and behaves identically on the live-stream path. */}}
 {{define "jsonvalue"}}{{if not .Empty}}{{if .Inline}}<span class="jsonline">{{.HTML}}</span>{{else}}<details class="jsonbox"><summary>{{.Summary}}</summary><pre class="json">{{.HTML}}</pre></details>{{end}}{{end}}{{end}}
 
-{{/* An agent's recorded response: prose as written, fenced blocks
-     highlighted. See prose.go for why the fence is the only markdown honored. */}}
-{{define "prosebody"}}{{range prose .}}{{if .IsCode}}<div class="codeblock">{{if .Lang}}<span class="codelang">{{.Lang}}</span>{{end}}<pre class="json code">{{.Code}}</pre></div>{{else}}<p class="say">{{.Text}}</p>{{end}}{{end}}{{end}}
+{{/* An agent's recorded response, rendered as the markdown models actually
+     write. See prose.go for what the renderer refuses to do with it. */}}
+{{define "prosebody"}}<div class="md">{{prose .}}</div>{{end}}

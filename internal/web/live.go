@@ -12,6 +12,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"net/http"
 	"strconv"
 	"time"
@@ -114,7 +115,7 @@ func (s *Server) flushEvents(c echo.Context, runID string, after int64) (int64, 
 	}
 
 	for _, row := range rows {
-		writeSSE(c.Response(), "event", liveEvent{RunEventRow: row})
+		writeSSE(c.Response(), "event", liveEvent{RunEventRow: row, Response: s.answerFor(c, row)})
 		after = row.Seq
 	}
 
@@ -125,9 +126,41 @@ func (s *Server) flushEvents(c echo.Context, runID string, after int64) (int64, 
 	return after, nil
 }
 
+// answerFor is the rendered answer a finishing agent step produced, empty for
+// every other event.
+//
+// The response lives in the step's NODE, not in its event, so a live reader
+// saw an agent work for six minutes and then saw the one thing it produced
+// only after the run's closing reload. One lookup, on the one event type that
+// can have one.
+//
+// Rendered here rather than in the browser: the answer is markdown, and the
+// renderer that makes model-authored markdown safe to put on a page is a Go
+// one (prose.go). Its whole contract is that its output is safe HTML — the
+// same bytes the server-rendered page ships — so handing those bytes to the
+// client is not a second trust decision. Re-implementing a markdown parser in
+// the browser to avoid it would be, and would drift.
+func (s *Server) answerFor(c echo.Context, row store.RunEventRow) template.HTML {
+	if row.Type != events.TypeStepFinished || row.StepKind != "agent" || row.Hash == "" {
+		return ""
+	}
+
+	node, ok, err := pipelineOf(c).Store.FindNode(c.Request().Context(), row.Hash)
+	if err != nil || !ok || node.Result == "" {
+		return ""
+	}
+
+	answer, _ := decodeResult(node.Result)["response"].(string)
+
+	return renderProse(answer)
+}
+
 // liveEvent is the wire shape of one event. Deliberately close to the stored
 // row: the client renders a live event and a replayed one with the same code.
-type liveEvent struct{ store.RunEventRow }
+type liveEvent struct {
+	store.RunEventRow
+	Response template.HTML
+}
 
 // MarshalJSON renders the event with the derived fields a client needs
 // (a human-readable duration, the nesting depth already parsed) so the
@@ -135,19 +168,22 @@ type liveEvent struct{ store.RunEventRow }
 func (e liveEvent) MarshalJSON() ([]byte, error) {
 	//nolint:wrapcheck // marshaling a fixed struct cannot fail in a way the caller can act on
 	return json.Marshal(map[string]any{
-		"seq":        e.Seq,
-		"type":       e.Type,
-		"step_index": e.StepIndex,
-		"step_name":  e.StepName,
-		"step_kind":  e.StepKind,
-		"status":     e.Status,
-		"hash":       e.Hash,
-		"text":       e.Text,
-		"name":       e.Name,
-		"detail":     e.Detail,
-		"duration":   formatDuration(time.Duration(e.DurationMS) * time.Millisecond),
-		"depth":      parseDepth(e.Status),
-		"agent":      isAgentEvent(e.Type),
+		"seq":            e.Seq,
+		"type":           e.Type,
+		"step_index":     e.StepIndex,
+		"step_name":      e.StepName,
+		"step_kind":      e.StepKind,
+		"step_id":        e.StepID,
+		"parent_step_id": e.ParentStepID,
+		"response":       string(e.Response),
+		"status":         e.Status,
+		"hash":           e.Hash,
+		"text":           e.Text,
+		"name":           e.Name,
+		"detail":         e.Detail,
+		"duration":       formatDuration(time.Duration(e.DurationMS) * time.Millisecond),
+		"depth":          parseDepth(e.Status),
+		"agent":          isAgentEvent(e.Type),
 	})
 }
 

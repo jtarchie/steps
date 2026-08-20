@@ -217,7 +217,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	// than in prepareAgentStep because only RunStep knows the plan index —
 	// a hook or fix conversation has none, and publishes nothing.
 	prepared.conv.recorder = &transcriptRecorder{live: liveContext{
-		bus: events.FromContext(ctx), runID: events.RunID(ctx), job: jobName, stepIndex: i, stepName: name,
+		bus: events.FromContext(ctx), runID: events.RunID(ctx), stepID: events.StepID(ctx), job: jobName, stepIndex: i, stepName: name,
 	}}
 
 	// The node is recorded BEFORE the conversation, as running, because the
@@ -538,7 +538,7 @@ func RunHook(ctx context.Context, cfg *config.Config, jobName string, step confi
 	// attributable the same way a plan step's are, instead of publishing (and
 	// logging) nowhere. stepIndex is -1: a hook is not a plan position.
 	prepared.conv.recorder = &transcriptRecorder{live: liveContext{
-		bus: events.FromContext(ctx), runID: events.RunID(ctx), job: jobName, stepIndex: -1, stepName: step.DisplayName(),
+		bus: events.FromContext(ctx), runID: events.RunID(ctx), stepID: events.StepID(ctx), job: jobName, stepIndex: -1, stepName: step.DisplayName(),
 	}}
 
 	res, err := runAndAnnounceFailover(ctx, step.Agent, &prepared)

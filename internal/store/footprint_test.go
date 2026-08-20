@@ -752,6 +752,18 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 			"container block has no node to point at, and cascading the skip index " +
 			"off node retention silently re-runs succeeded work")
 	}
+
+	// And the third, for the same shape of reason as nodes.parent_hash: a
+	// container publishes its step_finished AFTER the steps that ran inside
+	// it, so the child's row precedes the parent's. Self-referential within
+	// one table besides, where a cascade would take a whole subtree out on a
+	// pass that meant to trim one row. Both rows die with their run either
+	// way, via run_id.
+	if declaresForeignKey(ctx, t, store, "run_events", "parent_step_id") {
+		t.Error("run_events.parent_step_id declares a foreign key; a container's own " +
+			"event is written after its children's, so the parent row does not exist " +
+			"yet when the child is recorded")
+	}
 }
 
 func hasForeignKey(ctx context.Context, t *testing.T, store *Store, table, column, target, onDelete string) bool {

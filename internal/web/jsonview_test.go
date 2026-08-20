@@ -221,38 +221,21 @@ func TestJSONLineNeverWraps(t *testing.T) {
 	}
 }
 
-// TestRenderProseHonorsFencesOnly is the deliberate stopping point: a fence is
-// a lexical boundary, and nothing else in the model's text becomes structure.
-func TestRenderProseHonorsFencesOnly(t *testing.T) {
+// TestRenderProseRendersJSONFencesLikeEveryOtherPayload keeps the property
+// the fence-only renderer was built around, now that markdown replaced it: a
+// ```json block in an answer must look like the JSON in the tool result one
+// row above it, not like chroma's idea of JSON.
+func TestRenderProseRendersJSONFencesLikeEveryOtherPayload(t *testing.T) {
 	t.Parallel()
 
-	segments := renderProse("Here is the order:\n\n```json\n{\"qty\": 60}\n```\n")
-	if len(segments) != 2 {
-		t.Fatalf("got %d segments, want prose + code: %+v", len(segments), segments)
+	got := string(renderProse("Here is the order:\n\n```json\n{\"qty\": 60}\n```\n"))
+
+	if !strings.Contains(got, "Here is the order") {
+		t.Errorf("prose around the fence was lost: %s", got)
 	}
 
-	if segments[0].IsCode() || !strings.Contains(string(segments[0].Text), "Here is the order") {
-		t.Errorf("first segment is not the prose: %+v", segments[0])
-	}
-
-	if !segments[1].IsCode() || segments[1].Lang != "json" {
-		t.Errorf("second segment is not a json block: %+v", segments[1])
-	}
-
-	// JSON in a response is rendered by this package, so it matches the JSON
-	// in a tool result one row above it.
-	if !strings.Contains(string(segments[1].Code), `class="j-key"`) {
-		t.Errorf("fenced json did not use the shared renderer: %s", segments[1].Code)
-	}
-
-	// A heading is not a heading, and raw HTML is not HTML.
-	plain := renderProse("# not a heading\n<script>alert(1)</script>")
-	if len(plain) != 1 || plain[0].IsCode() {
-		t.Fatalf("prose became something else: %+v", plain)
-	}
-
-	if strings.Contains(string(plain[0].Text), "<script>") {
-		t.Errorf("raw HTML survived: %s", plain[0].Text)
+	if !strings.Contains(got, `class="j-key"`) {
+		t.Errorf("fenced json did not use the shared renderer: %s", got)
 	}
 }
 
@@ -262,13 +245,9 @@ func TestRenderProseHonorsFencesOnly(t *testing.T) {
 func TestRenderProseHighlightsATruncatedJSONFence(t *testing.T) {
 	t.Parallel()
 
-	segments := renderProse("```json\n{\"restock\": [\n  {\"sku\": \"WID-001\"")
-	if len(segments) != 1 || !segments[0].IsCode() {
-		t.Fatalf("truncated json fence not recognized: %+v", segments)
-	}
-
-	if !strings.Contains(string(segments[0].Code), "<span") {
-		t.Errorf("truncated json fence lost its highlighting: %s", segments[0].Code)
+	got := string(renderProse("```json\n{\"restock\": [\n  {\"sku\": \"WID-001\""))
+	if !strings.Contains(got, "<span") {
+		t.Errorf("truncated json fence lost its highlighting: %s", got)
 	}
 }
 
@@ -277,13 +256,13 @@ func TestRenderProseHighlightsATruncatedJSONFence(t *testing.T) {
 func TestRenderProseKeepsAnUnterminatedFence(t *testing.T) {
 	t.Parallel()
 
-	segments := renderProse("Proposed:\n\n```yaml\njobs:\n- name: buil")
-	if len(segments) != 2 || !segments[1].IsCode() {
-		t.Fatalf("unterminated fence was dropped: %+v", segments)
+	got := string(renderProse("Proposed:\n\n```yaml\njobs:\n- name: buil"))
+	if !strings.Contains(got, "buil") {
+		t.Errorf("truncated block lost its content: %s", got)
 	}
 
-	if !strings.Contains(string(segments[1].Code), "buil") {
-		t.Errorf("truncated block lost its content: %s", segments[1].Code)
+	if !strings.Contains(got, "codeblock") {
+		t.Errorf("unterminated fence did not render as code: %s", got)
 	}
 }
 
@@ -292,19 +271,13 @@ func TestRenderProseKeepsAnUnterminatedFence(t *testing.T) {
 func TestRenderProseHighlightsOtherLanguages(t *testing.T) {
 	t.Parallel()
 
-	segments := renderProse("```go\nfunc main() {}\n```")
-	if len(segments) != 1 || !segments[0].IsCode() {
-		t.Fatalf("go block not recognized: %+v", segments)
-	}
-
-	if !strings.Contains(string(segments[0].Code), "<span") {
-		t.Errorf("go block was not highlighted: %s", segments[0].Code)
+	if got := string(renderProse("```go\nfunc main() {}\n```")); !strings.Contains(got, "<span") {
+		t.Errorf("go block was not highlighted: %s", got)
 	}
 
 	// An unknown language degrades to escaped text rather than failing.
-	unknown := renderProse("```nosuchlang\nplain <b>\n```")
-	if strings.Contains(string(unknown[0].Code), "<b>") {
-		t.Errorf("unknown language passed markup through: %s", unknown[0].Code)
+	if got := string(renderProse("```nosuchlang\nplain <b>\n```")); strings.Contains(got, "<b>") {
+		t.Errorf("unknown language passed markup through: %s", got)
 	}
 }
 

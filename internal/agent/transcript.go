@@ -72,6 +72,10 @@ type liveContext struct {
 	job       string
 	stepIndex int
 	stepName  string
+	// stepID is the step's place in the run's display tree, so a turn hangs
+	// under the step that produced it rather than being matched back by
+	// (index, name) — a pair a try: shares with the step inside it.
+	stepID int64
 	// depth is how deep in the sub-agent tree this conversation sits. A
 	// child's events are published too — a delegation that takes a minute is
 	// the thing a watcher most wants to see progressing — and depth is how a
@@ -103,6 +107,7 @@ func (r *transcriptRecorder) publish(eventType, text, name, detail string) {
 		Job:       r.live.job,
 		StepIndex: r.live.stepIndex,
 		StepName:  r.live.stepName,
+		StepID:    r.live.stepID,
 		StepKind:  "agent",
 		Text:      text,
 		Name:      name,
