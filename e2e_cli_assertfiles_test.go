@@ -149,3 +149,40 @@ func cliSessionID(t *testing.T, argv string) string {
 
 	return ""
 }
+
+// TestE2ECLIAgentNudgeSharesTheAttemptsBudget pins the ceiling when both
+// budgets are in play. attempts: retries a child that DIED; the nudge wakes
+// one that finished owing files. Nothing stops a round from doing both, and
+// multiplying them is how "five chances" turns into eighteen real model
+// invocations — each one paid for.
+//
+// They pool instead: a step spends at most attempts + maxFilesNudges child
+// invocations, so a retry taken in one round is not handed back in the next.
+// The fake fails every odd invocation and finishes every even one without
+// writing, which is the compound the multiplication needs.
+func TestE2ECLIAgentNudgeSharesTheAttemptsBudget(t *testing.T) {
+	dir := t.TempDir()
+	counter := filepath.Join(t.TempDir(), "invocations")
+
+	cli := writeFakeClaude(t, fmt.Sprintf(`
+printf x >> %[1]q
+if [ $(( $(wc -c < %[1]q) %% 2 )) -eq 1 ]; then
+  exit 3
+fi
+echo '%[2]s'
+`, counter, cliResultEvent("The answer is in this message.", 1)))
+
+	path := writePipeline(t, dir, strings.Replace(
+		readFileString(t, cliAssertFilesPipeline(t, dir)),
+		"    assert:", "    attempts: 2\n    assert:", 1))
+
+	err := run([]string{path})
+	if err == nil {
+		t.Fatal("run() succeeded, but the agent never wrote its declared artifact")
+	}
+
+	// 2 attempts + 5 nudge rounds, not 2 x 6.
+	if got, want := cli.invocations(t), 2+5; got > want {
+		t.Errorf("the fake cli ran %d times, want no more than %d — the two budgets pool rather than multiply", got, want)
+	}
+}

@@ -5,6 +5,7 @@ package agent
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -153,20 +154,27 @@ func describeTrajectory(got []recordedToolCall) string {
 // dir is the step's SPACE, not the agent's working directory: dir: may point
 // the conversation somewhere inside the space, while assert.files: paths stay
 // artifact-relative to the space itself.
+//
+// agentDir is where the model's OWN file tools resolve a relative path
+// (step.Dir). It is the same directory unless dir: moved it, and when it did,
+// a nudge naming a space-relative path names one the model's tools resolve
+// somewhere else — so the nudge has to say what the paths are rooted in
+// rather than send it to write the same file twice in the wrong place.
 type assertFilesExpectation struct {
-	files []string
-	dir   string
+	files    []string
+	dir      string
+	agentDir string
 }
 
 // newAssertFilesExpectation reads the contract off a step. The zero value is
 // the right answer for a step that declares none — unmet() is empty, so every
 // caller's check is a no-op without any of them testing for it.
-func newAssertFilesExpectation(assert *config.Assert, dir string) assertFilesExpectation {
+func newAssertFilesExpectation(assert *config.Assert, dir, agentDir string) assertFilesExpectation {
 	if assert == nil || len(assert.Files) == 0 {
 		return assertFilesExpectation{}
 	}
 
-	return assertFilesExpectation{files: assert.Files, dir: dir}
+	return assertFilesExpectation{files: assert.Files, dir: dir, agentDir: agentDir}
 }
 
 // unmet reports the entries not satisfied right now — nothing when the step
@@ -180,6 +188,58 @@ func newAssertFilesExpectation(assert *config.Assert, dir string) assertFilesExp
 // forward. Everything downstream reads files.
 func (e assertFilesExpectation) unmet() []string {
 	return config.AssertFilesMismatches(e.files, e.dir)
+}
+
+// mismatch is the unmet contract as the error the post-hoc check reports, or
+// nil when the step owes nothing. Shared with assertAgentResponse rather than
+// reworded, so an operator reads the same sentence whichever path reached the
+// failure.
+func (e assertFilesExpectation) mismatch() error {
+	//nolint:wrapcheck // the config package owns this message; rewording it here is the bug
+	return config.AssertFilesMismatch(e.files, e.dir)
+}
+
+// nudge is what THIS step's model is told about its unmet entries: the shared
+// wording, plus — when dir: moved the model's working directory out from under
+// the paths — where to actually write them.
+//
+// Naming a space-relative path to a model whose tools resolve against dir: is
+// worse than saying nothing: told "answer/reply.md does not exist" under
+// `dir: answer`, a model writes <space>/answer/answer/reply.md, the assert
+// stays unmet, and every remaining chance is spent on the same mistake. So
+// the paths are re-expressed against the directory the model's own write_file
+// resolves from, which is the one it can act on.
+func (e assertFilesExpectation) nudge(unmet []string) string {
+	text := assertFilesNudge(unmet)
+	if e.agentDir == "" || e.agentDir == e.dir {
+		return text
+	}
+
+	return text + " " + e.whereToWrite()
+}
+
+// whereToWrite translates the declared paths into the model's own frame.
+//
+// A path that lands outside the working directory has no such translation:
+// write_file confines itself to dir (resolveWritePath), so the model
+// genuinely cannot reach it and being told to try would waste its remaining
+// chances. It is told where the paths are rooted instead — a shell command
+// can still get there, and if nothing can, the step is misconfigured and the
+// failure should read like one.
+func (e assertFilesExpectation) whereToWrite() string {
+	relative := make([]string, 0, len(e.files))
+
+	for _, file := range e.files {
+		rel, err := filepath.Rel(e.agentDir, filepath.Join(e.dir, file))
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Sprintf("Those paths are relative to %s, which is not your working directory.", e.dir)
+		}
+
+		relative = append(relative, rel)
+	}
+
+	return fmt.Sprintf("Your working directory is not what those paths are relative to — from where you are, write them as: %s.",
+		strings.Join(relative, ", "))
 }
 
 // assertFilesNudge is what a model trying to finish without its declared

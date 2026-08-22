@@ -40,7 +40,7 @@ func expectingConversation(t *testing.T, dir string, files ...string) agentConve
 		env:      toolEnv{dir: dir, runner: runner},
 		tools:    built,
 		maxTurns: testMaxTurns,
-		expect:   newAssertFilesExpectation(&config.Assert{Files: files}, dir),
+		expect:   newAssertFilesExpectation(&config.Assert{Files: files}, dir, dir),
 	}
 }
 
@@ -199,7 +199,7 @@ func TestVerdictAcceptedOnceFilesExist(t *testing.T) {
 func expectingVerdictConversation(t *testing.T, dir string, verdicts []string, files ...string) agentConversation {
 	t.Helper()
 
-	expect := newAssertFilesExpectation(&config.Assert{Files: files}, dir)
+	expect := newAssertFilesExpectation(&config.Assert{Files: files}, dir, dir)
 
 	built, _, err := buildAgentTools(context.Background(), nil, nil, "")
 	if err != nil {
@@ -276,4 +276,83 @@ func lastUserText(t *testing.T, req *model.LLMRequest) string {
 	t.Fatal("no user text in the request")
 
 	return ""
+}
+
+// TestUnmetFilesOutrankTheVerdictInTheFAILURE pins what the OPERATOR is told
+// when a step declaring both verdicts: and assert.files: gives up.
+//
+// The gate makes the model's own report unavailable, which is the point — but
+// it also means the conversation ends on "required tool never succeeded"
+// rather than reaching assertAgentResponse, so the run named the verdict tool
+// as the cause when the cause was the missing file. The model was told five
+// times; the person reading the job failure was told about the wrong thing.
+func TestUnmetFilesOutrankTheVerdictInTheFailure(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	responses := make([]*model.LLMResponse, testMaxTurns*2)
+	for i := range responses {
+		responses[i] = verdictCall("approve")
+	}
+
+	_, err := runAgentConversation(context.Background(), &fakeLLM{responses: responses},
+		expectingVerdictConversation(t, dir, []string{"approve", "revise"}, "answer/reply.md"))
+	if err == nil {
+		t.Fatal("the step should have failed: its declared file was never written")
+	}
+
+	if !strings.Contains(err.Error(), "answer/reply.md") {
+		t.Errorf("failure does not name the missing file — the whole reason the verdict was refused: %v", err)
+	}
+}
+
+// TestNudgeSpeaksTheModelsOwnPaths covers dir:, where the declared path and
+// the path the model's tools resolve are not the same string. Handed the
+// declared one, a model under `dir: answer` writes answer/answer/reply.md and
+// spends every chance repeating it.
+func TestNudgeSpeaksTheModelsOwnPaths(t *testing.T) {
+	t.Parallel()
+
+	space := t.TempDir()
+	agentDir := filepath.Join(space, "answer")
+
+	err := os.MkdirAll(agentDir, 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expect := newAssertFilesExpectation(&config.Assert{Files: []string{"answer/reply.md"}}, space, agentDir)
+
+	nudge := expect.nudge(expect.unmet())
+	if !strings.Contains(nudge, "write them as: reply.md") {
+		t.Errorf("nudge does not translate the path into the model's own frame: %q", nudge)
+	}
+}
+
+// TestNudgeAdmitsAPathTheModelCannotReach is the other half: write_file is
+// confined to the working directory, so a declared path outside it is one no
+// amount of nudging can produce. Saying "write it" there burns the allowance
+// on an instruction the tools refuse.
+func TestNudgeAdmitsAPathTheModelCannotReach(t *testing.T) {
+	t.Parallel()
+
+	space := t.TempDir()
+	agentDir := filepath.Join(space, "elsewhere")
+
+	err := os.MkdirAll(agentDir, 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expect := newAssertFilesExpectation(&config.Assert{Files: []string{"answer/reply.md"}}, space, agentDir)
+
+	nudge := expect.nudge(expect.unmet())
+	if strings.Contains(nudge, "write them as:") {
+		t.Errorf("nudge tells the model to write a path write_file will refuse: %q", nudge)
+	}
+
+	if !strings.Contains(nudge, space) {
+		t.Errorf("nudge does not say what the paths are rooted in: %q", nudge)
+	}
 }

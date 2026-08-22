@@ -160,9 +160,14 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		// nudges counts the rounds spent telling the child its declared
 		// assert.files: are missing — see nudgeCLIForMissingFiles.
 		nudges int
+		// spent counts CHILD INVOCATIONS across every round, which is what
+		// the pooled budget is denominated in — see cliRoundAttempts.
+		spent int
 	)
 
 	attempts := func(attempt int) error {
+		spent++
+
 		attemptCtx, cancel := withAgentDeadline(ctx, timeout)
 		defer cancel()
 
@@ -183,7 +188,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 			maxTurns: remainingCLITurns(prepared.ri.MaxTurns, state.turns),
 		}
 
-		plan.prompt = cliAttemptPrompt(plan.resume, state, prepared)
+		plan.prompt = cliAttemptPrompt(plan.resume, attempt > 0, state, prepared)
 
 		if plan.outOfTurns() {
 			// Carrying lastErr matters: the budget ran out because of whatever
@@ -217,7 +222,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		return retry.StopOnDeadline(ctx, attemptCtx, outcome.FailOnDeadline(ctx, attemptCtx, attemptErr))
 	}
 
-	runErr := runCLIRounds(ctx, prepared, state, &nudges, attempts)
+	runErr := runCLIRounds(ctx, prepared, state, &nudges, &spent, attempts)
 
 	// The conversation the child had, as the recorder captured it off the
 	// stream. Attached however the step ended, like the hosted path attaches
@@ -240,15 +245,33 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 // whether it is opening the session or rejoining it.
 func runCLIRounds(
 	ctx context.Context, prepared preparedAgentStep, state *cliStepState,
-	nudges *int, attempts func(int) error,
+	nudges, spent *int, attempts func(int) error,
 ) error {
 	for ; ; *nudges++ {
-		err := retry.Do(ctx, prepared.ri.Attempts, attempts)
+		err := retry.Do(ctx, cliRoundAttempts(prepared.ri.Attempts, *spent), attempts)
 		if err != nil || !nudgeCLIForMissingFiles(prepared, state, *nudges) {
 			//nolint:wrapcheck // the attempt already wrapped and classified its own failure
 			return err
 		}
 	}
+}
+
+// cliRoundAttempts is what one round may spend out of a budget the whole step
+// shares.
+//
+// The two limits answer different questions — attempts: retries a child that
+// DIED, a nudge round wakes one that finished owing files — and nothing stops
+// a round from doing both, so handing each round a fresh attempts: budget
+// MULTIPLIES them: attempts: 3 against five nudges is eighteen real
+// invocations of a model, each paid for, under a promise of five chances.
+// They pool instead, at attempts + maxFilesNudges for the step, which leaves
+// the common attempts: 1 case exactly where it was and stops a retry taken in
+// one round from being handed back in the next.
+//
+// Never below 1: a round that has arrived here is a round that is going to
+// run, and zero would make retry.Do's meaning the caller's problem.
+func cliRoundAttempts(attempts, spent int) int {
+	return max(min(attempts, attempts+maxFilesNudges-spent), 1)
 }
 
 // cliAttemptPrompt is what one invocation is told.
@@ -259,16 +282,34 @@ func runCLIRounds(
 // which is the missing file when there is one, and otherwise that its
 // predecessor died.
 //
+// retrying separates the two reasons a session is rejoined, because they are
+// not interchangeable: a nudge round wakes a child that FINISHED, so the
+// missing file is the whole message; a retry wakes one that DIED, and telling
+// it only about the file drops both "continue, do not start over" and the
+// verdict-tool reminder cliContinuationPrompt carries. A retry that also owes
+// files gets both.
+//
 // The unmet set is recomputed here rather than captured when the round
 // opened: an attempt that wrote one of two declared files and then died
 // should be told about the one still missing, not both.
-func cliAttemptPrompt(resume bool, state *cliStepState, prepared preparedAgentStep) string {
+func cliAttemptPrompt(resume, retrying bool, state *cliStepState, prepared preparedAgentStep) string {
 	if !resume {
 		return renderCLIPrompt(prepared.conv)
 	}
 
-	if unmet := prepared.conv.expect.unmet(); len(unmet) > 0 {
-		return assertFilesNudge(unmet)
+	unmet := prepared.conv.expect.unmet()
+
+	if retrying {
+		prompt := cliContinuationPrompt(state, prepared)
+		if len(unmet) > 0 {
+			prompt += " " + prepared.conv.expect.nudge(unmet)
+		}
+
+		return prompt
+	}
+
+	if len(unmet) > 0 {
+		return prepared.conv.expect.nudge(unmet)
 	}
 
 	return cliContinuationPrompt(state, prepared)

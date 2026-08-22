@@ -59,7 +59,7 @@ func buildVerdictTool(verdicts []string, noteRequired bool, expect assertFilesEx
 		}
 
 		if unmet := expect.unmet(); len(unmet) > 0 {
-			return map[string]any{"error": "verdict: " + assertFilesNudge(unmet)}
+			return map[string]any{"error": "verdict: " + expect.nudge(unmet)}
 		}
 
 		result := map[string]any{"exit_code": 0, "verdict": choice}

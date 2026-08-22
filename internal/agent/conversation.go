@@ -355,7 +355,39 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 	res, err := runConversationLoop(ctx, llm, conv)
 	res.transcript = rec.events
 
-	return res, err
+	return res, conv.blameUnmetFiles(err)
+}
+
+// blameUnmetFiles replaces a task-level failure with the step's unmet
+// assert.files: when it still owes any, so an operator is told the cause
+// rather than the symptom.
+//
+// Every backstop the loop can end on reports the mechanism it caught: the
+// verdict tool never succeeded, a required tool was forced five times, the
+// model repeated itself, the turns ran out. When the step also owes files,
+// all four of those are downstream of the same thing — the model was told
+// what was missing, repeatedly, and did not write it. Naming the verdict tool
+// there is actively misleading, because the gate refused that call BECAUSE of
+// the file (see buildVerdictTool). It is also what docs/agents.md promises:
+// the step fails naming the file.
+//
+// Only a task-level failure is rewritten. A transport error is infrastructure
+// — the missing file is incidental to it, and restating it as an assert
+// failure would reclassify an errored step as a failed one, firing the wrong
+// hook.
+func (conv agentConversation) blameUnmetFiles(err error) error {
+	var failure *outcome.Failure
+	if err == nil || !errors.As(err, &failure) {
+		return err
+	}
+
+	mismatch := conv.expect.mismatch()
+	if mismatch == nil {
+		return err
+	}
+
+	//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
+	return outcome.Fail(mismatch)
 }
 
 // seedResumeState builds runConversationLoop's per-conversation bookkeeping,
@@ -836,7 +868,7 @@ func (conv agentConversation) nudgeMissingFiles(req *model.LLMRequest, nudges *i
 
 	req.Contents = append(req.Contents, &genai.Content{
 		Role:  genai.RoleUser,
-		Parts: []*genai.Part{{Text: assertFilesNudge(unmet)}},
+		Parts: []*genai.Part{{Text: conv.expect.nudge(unmet)}},
 	})
 
 	return true

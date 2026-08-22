@@ -184,9 +184,10 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, err
 	}
 
-	// Bound to the SPACE, not to dir: assert.files: paths are relative to
-	// what the step captures, which dir: does not move.
-	expect := newAssertFilesExpectation(step.Assert, space.Dir())
+	// Checked against the SPACE, not against dir: assert.files: paths are
+	// relative to what the step captures, which dir: does not move. dir goes
+	// along only so a nudge can say so when the two differ.
+	expect := newAssertFilesExpectation(step.Assert, space.Dir(), dir)
 
 	verdictTool, err := injectVerdictTool(step.VerdictNames(), step.NoteRequired, tools, expect)
 	if err != nil {
