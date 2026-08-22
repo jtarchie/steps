@@ -65,6 +65,9 @@ type CLI struct {
 	Reject    RejectCmd        `cmd:""                                  help:"reject a waiting approval: step"`
 	Web       WebCmd           `cmd:""                                  help:"serve the pipeline UI over the same state the CLI writes"`
 	Docs      DocsCmd          `cmd:""                                  help:"read the docs in the terminal (no page name lists them)"`
+	// Last, and hidden: see ShimCmd. Placing it here keeps the help ordering
+	// of the real commands untouched.
+	Shim ShimCmd `cmd:"" hidden:"" name:"_shim"`
 }
 
 // buildVersion is the version string steps --version prints. Overridden at

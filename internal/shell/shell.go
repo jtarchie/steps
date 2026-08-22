@@ -541,6 +541,25 @@ func HostEnv() []string {
 	return hostEnvWith(nil)
 }
 
+// HostEnvWithValues is HostEnv plus variables whose values are supplied
+// rather than resolved from this process's environment — the shape a venue
+// needs, where the pipeline's env: was resolved on the orchestrator and the
+// command runs on a machine that never had those variables set.
+//
+// The baseline still comes from THIS process, deliberately: PATH, HOME and
+// TMPDIR belong to the machine the command runs on, and carrying the
+// orchestrator's across would be wrong in the cases where it differed at all.
+// Only the explicitly named values travel.
+func HostEnvWithValues(values map[string]string) []string {
+	env := hostEnvWith(nil)
+
+	for name, value := range values {
+		env = append(env, name+"="+value)
+	}
+
+	return env
+}
+
 // hostEnvWith is HostEnv plus the variables a pipeline's env: named
 // explicitly (see NewRunner). A named variable that isn't set in the steps
 // process's environment contributes nothing rather than an empty value: the
@@ -874,3 +893,8 @@ func RunShellCaptureFull(ctx context.Context, command, cwd string) (stdout, stde
 // wants build-tagged files; this bounds the damage portably in one line until
 // something needs the difference between "2 seconds late" and "immediate".
 const cancelWaitDelay = 2 * time.Second
+
+// CancelWaitDelay is cancelWaitDelay, exported for the shim: a command run on
+// a worker has to be cut off on the same terms as one run here, or cancelling
+// a step means two different things depending on where it landed.
+const CancelWaitDelay = cancelWaitDelay

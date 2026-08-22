@@ -142,6 +142,12 @@ linters:
             # into resource/agent territory, which pipeline.RunJob still
             # exclusively orchestrates.
             - "github.com/jtarchie/steps/internal/mcp"
+            # shim is the same shape of dependency as mcp: `steps _shim` is a
+            # standalone process mode with no relationship to pipeline.RunJob.
+            # It is what a worker runs after the orchestrator pushes this
+            # binary to it, so main constructs it directly rather than through
+            # a pipeline that, on that machine, does not exist.
+            - "github.com/jtarchie/steps/internal/shim"
             # outcome is a stdlib-only leaf supplying the vocabulary main
             # needs at the process boundary: which exit code an error earns
             # (outcome.ExitCode). Classifying a failure as "the pipeline said
@@ -238,6 +244,23 @@ linters:
             - "github.com/jtarchie/steps/internal/mcp"
             - "github.com/jtarchie/steps/internal/shell"
             - "github.com/jtarchie/steps/internal/template"
+        # shim is the remote half of a placed step: it runs as `steps _shim` on
+        # a worker, reads frames from stdin and writes them to stdout, and
+        # knows nothing about pipelines — no config, no store, no workspace,
+        # no merkle. That ignorance IS the contract: a worker runs a binary and
+        # a command in a directory, and every decision about what the command
+        # means stays where the pipeline is. It reaches shell for one reason
+        # only: a command placed on a worker has to run the way HostRunner runs
+        # one, same env allowlist and same cancellation bound, or placement
+        # would quietly change what a step inherits.
+        Shim:
+          files:
+            - "**/internal/shim/**"
+          allow:
+            - "$gostd"
+            - "go.uber.org/goleak"
+            - "github.com/jtarchie/steps/internal/shell"
+            - "github.com/jtarchie/steps/internal/wire"
         # wire is the framed protocol and tree codec the orchestrator and a
         # pushed shim speak across a venue. A stdlib-only leaf on purpose: it
         # is the one thing both ends of a version skew must agree on byte for

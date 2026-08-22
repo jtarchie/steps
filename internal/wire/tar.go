@@ -53,11 +53,59 @@ const (
 // failure, and in practice names a leftover .sock the step did not mean to
 // declare as output.
 func PackTree(w io.Writer, root string) error {
+	return PackPaths(w, root, nil)
+}
+
+// PackPaths is PackTree restricted to the named top-level entries, each packed
+// under its own name so it extracts back to the same place.
+//
+// A nil or empty names packs everything. Naming them is what keeps a step's
+// declared outputs from dragging its inputs home: a two-gigabyte checkout does
+// not need to travel back to prove it did not change.
+//
+// A named entry that does not exist is not an error here. A step that declared
+// an output and produced nothing is a pipeline-level fact, reported where the
+// outputs are checked, and failing the transfer instead would replace that
+// message with a worse one.
+func PackPaths(w io.Writer, root string, names []string) error {
 	writer := tar.NewWriter(w)
 
-	// filepath.WalkDir, so parents precede their children (an extractor needs
-	// that) and the order is deterministic — the same walk digestTree does.
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+	roots := []string{root}
+	if len(names) > 0 {
+		roots = make([]string, 0, len(names))
+
+		for _, name := range names {
+			roots = append(roots, filepath.Join(root, name))
+		}
+	}
+
+	for _, from := range roots {
+		err := packWalk(writer, root, from)
+		if err != nil {
+			return fmt.Errorf("packing %q: %w", root, err)
+		}
+	}
+
+	// Close, not Flush: tar.Writer verifies here that every header's declared
+	// size matched the bytes actually written, which is the same invariant
+	// digestFile enforces when it refuses a file that changed under it.
+	err := writer.Close()
+	if err != nil {
+		return fmt.Errorf("packing %q: %w", root, err)
+	}
+
+	return nil
+}
+
+// packWalk writes the tree at from into writer, naming every entry relative to
+// root so a subtree extracts back where it came from.
+func packWalk(writer *tar.Writer, root, from string) error {
+	_, err := os.Lstat(from)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+
+	err = filepath.WalkDir(from, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -74,15 +122,7 @@ func PackTree(w io.Writer, root string) error {
 		return packEntry(writer, path, filepath.ToSlash(rel), entry)
 	})
 	if err != nil {
-		return fmt.Errorf("packing %q: %w", root, err)
-	}
-
-	// Close, not Flush: tar.Writer verifies here that every header's declared
-	// size matched the bytes actually written, which is the same invariant
-	// digestFile enforces when it refuses a file that changed under it.
-	err = writer.Close()
-	if err != nil {
-		return fmt.Errorf("packing %q: %w", root, err)
+		return fmt.Errorf("%w", err)
 	}
 
 	return nil
