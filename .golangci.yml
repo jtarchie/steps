@@ -244,6 +244,24 @@ linters:
             - "github.com/jtarchie/steps/internal/mcp"
             - "github.com/jtarchie/steps/internal/shell"
             - "github.com/jtarchie/steps/internal/template"
+        # venue is the orchestrator half of remote execution, and the single
+        # decision point one tier ABOVE shell: shell decides host vs container,
+        # venue decides this machine vs a worker, and hands straight back to
+        # shell when the answer is "here". A separate package precisely so
+        # internal/shell stays stdlib-only — an ssh client in the leaf every
+        # execution path imports would make "Leaves: no internal deps, stdlib
+        # only" false for all of them. It reaches shim because pushing and
+        # starting one is its job, and it is what knows how a shim names
+        # itself.
+        Venue:
+          files:
+            - "**/internal/venue/**"
+          allow:
+            - "$gostd"
+            - "go.uber.org/goleak"
+            - "github.com/jtarchie/steps/internal/shell"
+            - "github.com/jtarchie/steps/internal/shim"
+            - "github.com/jtarchie/steps/internal/wire"
         # shim is the remote half of a placed step: it runs as `steps _shim` on
         # a worker, reads frames from stdin and writes them to stdout, and
         # knows nothing about pipelines — no config, no store, no workspace,

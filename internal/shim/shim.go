@@ -74,9 +74,17 @@ type session struct {
 	// command is running.
 	cancel   context.CancelFunc
 	cancelOp uint32
+	// running tracks commands still in flight, so a session cannot tear its
+	// scratch out from under one on the way out.
+	running sync.WaitGroup
 }
 
 func (s *session) run(ctx context.Context) error {
+	// A command outlives the frame that asked for it (see handle), so the
+	// session must not return — and cleanup must not run — while one is still
+	// writing to the tree it is about to remove.
+	defer s.running.Wait()
+
 	for {
 		frame, err := s.decoder.Read()
 		if errors.Is(err, io.EOF) {
@@ -119,7 +127,7 @@ func (s *session) handle(ctx context.Context, frame wire.Frame) (bool, error) {
 	case wire.FrameUpload:
 		return false, s.upload(frame.Op)
 	case wire.FrameExec:
-		return false, s.exec(ctx, frame)
+		return false, s.startExec(ctx, frame)
 	case wire.FrameFetch:
 		return false, s.fetch(frame)
 	case wire.FrameCancel:

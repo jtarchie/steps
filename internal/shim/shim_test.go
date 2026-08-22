@@ -331,6 +331,96 @@ func TestShimCleansUpItsScratch(t *testing.T) {
 	}
 }
 
+// TestShimCancelsARunningCommand pins that the read loop keeps reading while a
+// command runs.
+//
+// It is a regression test with a specific bug behind it: the shim first ran
+// commands inline, which meant a cancel frame could not be read until the
+// command it was meant to stop had already finished. Nothing failed loudly —
+// the command simply ran to completion, so a cancelled step took as long as
+// whatever it started, and every feature built on cancellation (timeouts,
+// fail_fast, race:, Ctrl-C) silently did nothing to a placed step.
+//
+// The cancel is sent only once the command has PROVED it is running, because
+// that is the case that regressed. A cancel racing the launch is a different
+// path, handled upstream by the context rather than by the exit frame.
+func TestShimCancelsARunningCommand(t *testing.T) {
+	t.Parallel()
+
+	peer := newPeer(t, Options{Build: "test", Root: t.TempDir()})
+	peer.hello()
+
+	op := peer.next()
+	peer.send(wire.FrameExec, op, wire.Exec{Command: "echo running; sleep 60"})
+
+	// Wait for the command to say it is alive. Until this arrives, a cancel
+	// would be racing the launch instead of interrupting the work.
+	frame := peer.read()
+	if frame.Type != wire.FrameStdout || !strings.Contains(string(frame.Payload), "running") {
+		t.Fatalf("expected the command to announce itself, got a type %d frame", frame.Type)
+	}
+
+	peer.sendEmpty(wire.FrameCancel, op)
+
+	done := make(chan wire.Exit, 1)
+
+	go func() {
+		for {
+			next, err := peer.decoder.Read()
+			if err != nil {
+				close(done)
+
+				return
+			}
+
+			if next.Type == wire.FrameExit {
+				var exit wire.Exit
+				_ = wire.DecodeJSON(next, &exit)
+				done <- exit
+
+				return
+			}
+		}
+	}()
+
+	select {
+	case exit, ok := <-done:
+		if !ok {
+			t.Fatal("the session ended without reporting the cancelled command")
+		}
+
+		if !exit.Started {
+			t.Error("Started = false, want true — the command was running, it was just cut short")
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the cancelled command kept running: the shim could not hear a cancel while a command was in flight")
+	}
+}
+
+// TestShimIgnoresACancelForAnotherOperation pins the op check. A cancel races
+// the exit it was trying to prevent, so one aimed at a command that already
+// finished must not kill the command that started after it.
+func TestShimIgnoresACancelForAnotherOperation(t *testing.T) {
+	t.Parallel()
+
+	peer := newPeer(t, Options{Build: "test", Root: t.TempDir()})
+	peer.hello()
+
+	// A cancel for an operation that never existed, standing in for one that
+	// arrived late.
+	peer.sendEmpty(wire.FrameCancel, 9999)
+
+	stdout, _, exit := peer.exec("echo survived", nil)
+
+	if !exit.Started || exit.Code != 0 {
+		t.Fatalf("exit = %+v, want the command to have run untouched", exit)
+	}
+
+	if stdout != "survived\n" {
+		t.Errorf("stdout = %q, want the command to have completed", stdout)
+	}
+}
+
 // TestShimRefusesAMismatchedProtocol: the shim is the binary the orchestrator
 // pushed, so a version difference means somebody is pointing at a stale or
 // foreign one. Saying so beats degrading.

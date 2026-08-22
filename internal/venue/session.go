@@ -1,0 +1,281 @@
+package venue
+
+// One conversation with one worker, for one step.
+//
+// The shape is dockerSession's, deliberately and almost line for line: a lazy
+// connection made on first use, a failure that sticks so a broken worker is
+// not re-dialled once per command, and a teardown that builds its own context
+// rather than taking the caller's. Those three decisions were each paid for
+// once already by the container path, and a venue gets them wrong in exactly
+// the same ways.
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/jtarchie/steps/internal/shim"
+	"github.com/jtarchie/steps/internal/wire"
+)
+
+// closeTimeout bounds a teardown. Mirrors dockerCleanupTimeout, for the same
+// reason: Close runs from deferred paths whose context is routinely already
+// cancelled — a timed-out step, a Ctrl-C — and those are precisely the cases
+// where leaving scratch on somebody else's machine would be worst.
+const closeTimeout = 30 * time.Second
+
+// transport is a byte pipe to a shim, plus whatever has to be torn down to
+// release it. The venue does not care whether that is a child process or an
+// SSH channel, which is what lets a second scheme land without touching
+// anything below.
+type transport struct {
+	in    io.ReadCloser
+	out   io.WriteCloser
+	close func(context.Context) error
+}
+
+// session owns the conversation. Runners hold it BY POINTER so a WithLabel
+// copy shares one worker rather than dialling a second — the same reason
+// DockerRunner holds its session by pointer.
+type session struct {
+	worker Worker
+	// cwd is the local tree that goes out and results come back into.
+	cwd string
+	// outputs names what to bring back after each command.
+	outputs []string
+	// env carries the values the pipeline's env: opted into, resolved here.
+	env map[string]string
+	// keep leaves the worker's scratch behind, following --keep-workspace.
+	keep bool
+
+	mu        sync.Mutex
+	attempted bool
+	startErr  error
+	closed    bool
+	transport *transport
+	encoder   *wire.Encoder
+	decoder   *wire.Decoder
+	workdir   string
+	op        uint32
+}
+
+var (
+	// errSessionClosed is a command on a session whose step already finished.
+	errSessionClosed = errors.New("the step's worker session has been closed")
+	// errNoWorkdir is a shim that answered a hello without naming where it put
+	// the tree, which no shim this repo built can do.
+	errNoWorkdir = errors.New("the worker did not report a work directory")
+)
+
+// ensure connects, greets, and sends the step's tree, once.
+//
+// A failure sticks. An unreachable host, a rejected key or a failed binary
+// push must not be retried once per run_shell in a conversation: the first
+// answer is the true one and every retry costs another timeout.
+func (s *session) ensure(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errSessionClosed
+	}
+
+	if s.attempted {
+		return s.startErr
+	}
+
+	s.attempted = true
+	s.startErr = s.connect(ctx)
+
+	return s.startErr
+}
+
+func (s *session) connect(ctx context.Context) error {
+	transport, err := dial(s.worker)
+	if err != nil {
+		return fmt.Errorf("worker %q: %w", s.worker, err)
+	}
+
+	s.transport = transport
+	s.encoder = wire.NewEncoder(transport.out)
+	s.decoder = wire.NewDecoder(transport.in)
+
+	err = s.greet()
+	if err != nil {
+		// The transport is already up, so tearing it down here is what keeps a
+		// failed handshake from stranding a child process or an SSH channel.
+		_ = transport.close(ctx)
+		s.transport = nil
+
+		return fmt.Errorf("worker %q: %w", s.worker, err)
+	}
+
+	err = s.upload()
+	if err != nil {
+		_ = transport.close(ctx)
+		s.transport = nil
+
+		return fmt.Errorf("worker %q: %w", s.worker, err)
+	}
+
+	return nil
+}
+
+func (s *session) greet() error {
+	build, err := shim.SelfBuild()
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	// The session name has to be unique across every session that could ever
+	// share a worker, because it names a scratch directory the shim removes on
+	// its way out: two sessions agreeing on a name means one deletes the
+	// other's tree mid-step. Step directory and pid are the traceable part —
+	// they say which run to blame for a leftover — and the random suffix is
+	// what makes the guarantee, since two builds can produce the same step
+	// directory name and two orchestrators can share a pid.
+	name, err := sessionName(s.cwd)
+	if err != nil {
+		return err
+	}
+
+	err = s.write(wire.Frame{Type: wire.FrameHello, Op: s.nextOp()}, wire.Hello{
+		Protocol: wire.Protocol,
+		Build:    build,
+		Session:  name,
+		Keep:     s.keep,
+	})
+	if err != nil {
+		return err
+	}
+
+	frame, err := s.read()
+	if err != nil {
+		return err
+	}
+
+	var ok wire.HelloOK
+
+	err = decode(frame, &ok)
+	if err != nil {
+		return err
+	}
+
+	if ok.Protocol != wire.Protocol {
+		return fmt.Errorf("%w: this steps speaks protocol %d and the worker's shim speaks %d — the binary on the worker is not this one",
+			wire.ErrProtocol, wire.Protocol, ok.Protocol)
+	}
+
+	if ok.Workdir == "" {
+		return errNoWorkdir
+	}
+
+	s.workdir = ok.Workdir
+
+	return nil
+}
+
+// close tears the session down, letting the shim remove its own scratch.
+//
+// It builds its own context rather than taking a caller's, because the caller's
+// is routinely already cancelled by the time cleanup runs, and a cancelled
+// context here would skip the goodbye that frees the worker.
+func (s *session) close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return nil
+	}
+
+	s.closed = true
+
+	if s.transport == nil {
+		// Never dialled: nothing to release, which is the ordinary case for a
+		// step that was skipped or failed before its first command.
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
+	defer cancel()
+
+	// Best effort: a worker that already vanished cannot be told goodbye, and
+	// saying so would replace the real error with a cleanup one.
+	_ = s.encoder.Write(wire.Frame{Type: wire.FrameBye, Op: s.nextOp()})
+
+	err := s.transport.close(ctx)
+	s.transport = nil
+
+	if err != nil {
+		return fmt.Errorf("worker %q: %w", s.worker, err)
+	}
+
+	return nil
+}
+
+func (s *session) nextOp() uint32 {
+	s.op++
+
+	return s.op
+}
+
+func (s *session) write(frame wire.Frame, payload any) error {
+	err := s.encoder.WriteJSON(frame.Type, frame.Op, payload)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	return nil
+}
+
+// read returns the next frame, turning an error frame from the shim into a Go
+// error so callers never have to check for it.
+func (s *session) read() (wire.Frame, error) {
+	frame, err := s.decoder.Read()
+	if err != nil {
+		// A transport that died mid-step is infrastructure, and saying so
+		// explicitly is what keeps it from being read as a command's verdict.
+		return wire.Frame{}, fmt.Errorf("the connection to the worker was lost: %w", err)
+	}
+
+	if frame.Type == wire.FrameError {
+		var wireErr wire.Error
+
+		decodeErr := decode(frame, &wireErr)
+		if decodeErr != nil {
+			return wire.Frame{}, decodeErr
+		}
+
+		return wire.Frame{}, errors.New(wireErr.Message)
+	}
+
+	return frame, nil
+}
+
+// sessionName is a worker-unique name for one step's scratch.
+func sessionName(cwd string) (string, error) {
+	suffix := make([]byte, 8)
+
+	_, err := rand.Read(suffix)
+	if err != nil {
+		return "", fmt.Errorf("naming the session: %w", err)
+	}
+
+	return fmt.Sprintf("%s-%d-%s", filepath.Base(cwd), os.Getpid(), hex.EncodeToString(suffix)), nil
+}
+
+func decode(frame wire.Frame, v any) error {
+	err := wire.DecodeJSON(frame, v)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	return nil
+}

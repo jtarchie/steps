@@ -133,6 +133,23 @@ type RunnerSpec struct {
 	// MemoryBytes is `docker run --memory`, in bytes. Zero omits the flag.
 	// A container over it is OOM-killed, which surfaces as exit 137.
 	MemoryBytes int64
+	// Worker is the venue a step's tags: resolved to — a worker URL, already
+	// mapped from tag to machine by whoever parsed the CLI. Empty, the
+	// overwhelming default, runs on this machine and leaves the host/container
+	// decision below exactly as it was.
+	//
+	// Cwd stays a LOCAL path when this is set: it is the tree that gets sent
+	// and the tree the results come back into. Nothing above here has to know
+	// which machine ran the command.
+	Worker string
+	// Fetch names the directories to bring back after each command, which for
+	// a task step are its declared outputs.
+	//
+	// Named rather than everything, because a step that consumed a large
+	// checkout should not ship it home again to prove it did not change. Empty
+	// with a Worker set means a command whose effects on the tree are not
+	// wanted — a guard, which reads the tree and answers a question about it.
+	Fetch []string
 }
 
 // NewRunner returns a DockerRunner scoped to spec, or a HostRunner when

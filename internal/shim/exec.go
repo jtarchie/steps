@@ -18,7 +18,21 @@ import (
 	"github.com/jtarchie/steps/internal/wire"
 )
 
-func (s *session) exec(ctx context.Context, frame wire.Frame) error {
+// startExec begins a command and returns without waiting for it.
+//
+// Two things here are load-bearing and easy to get backwards.
+//
+// The command runs on its own goroutine, so the session keeps reading frames
+// while it works. A shim that ran commands inline could not read a cancel
+// until the command it was meant to stop had already finished — which fails
+// silently, as a cancelled step that takes as long as whatever it started.
+//
+// The cancel is registered BEFORE that goroutine starts, not inside it.
+// Registering from the goroutine loses a race the orchestrator can easily win:
+// a cancel sent immediately after the exec — a step already past its deadline,
+// a race: whose sibling already answered — arrives to find nothing registered
+// and is dropped.
+func (s *session) startExec(ctx context.Context, frame wire.Frame) error {
 	if s.workdir == "" {
 		return errUnopened
 	}
@@ -33,12 +47,26 @@ func (s *session) exec(ctx context.Context, frame wire.Frame) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	s.beginCommand(frame.Op, cancel)
 
-	exit := s.runCommand(runCtx, frame.Op, request)
+	s.running.Add(1)
 
-	s.endCommand()
-	cancel()
+	go func() {
+		defer s.running.Done()
+		defer cancel()
 
-	return s.send(wire.FrameExit, frame.Op, exit)
+		exit := s.runCommand(runCtx, frame.Op, request)
+
+		s.endCommand()
+
+		sendErr := s.send(wire.FrameExit, frame.Op, exit)
+		if sendErr != nil {
+			// Nowhere left to report it: the session that would have carried
+			// the message is the thing that failed. The orchestrator sees the
+			// transport die, which is the truth.
+			return
+		}
+	}()
+
+	return nil
 }
 
 func (s *session) runCommand(ctx context.Context, op uint32, request wire.Exec) wire.Exit {
