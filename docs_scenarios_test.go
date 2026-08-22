@@ -252,6 +252,31 @@ var docScenarios = map[string]docScenario{
 	// system message AND the prompt text is in the user message, so the
 	// files' CONTENT reaching the conversation is what is pinned, not just
 	// that the includes loaded.
+	// The nudge, end to end in a doc example: the model answers in prose,
+	// steps tells it the file it owes is missing, and it writes it. Routed on
+	// the nudge's own text rather than positionally, so an implementation
+	// that stopped telling the model starves the write instead of quietly
+	// scripting one.
+	"agents-delivers-files": {
+		fake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
+				switch {
+				case req.historyCalled("write_file"):
+					return says("Written.")
+				case req.userMessageContains("must leave behind"):
+					return callsTool("write_file", map[string]any{
+						"path":    "answer/reply.md",
+						"content": "The catalog is seeded from widgets.json.\n",
+					})
+				default:
+					return says("The catalog is seeded from widgets.json.")
+				}
+			})
+		},
+	},
+
 	"agents-files": {
 		files: map[string]string{
 			"ci/unit.sh":          "echo unit tests pass\n",

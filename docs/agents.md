@@ -226,6 +226,47 @@ jobs:
 - **Only custom tools can be `required:`**, and `max_calls:`/`args:` are rejected at load on builtin and sub-agent tools. A builtin can be written as a mapping (`{builtin: read_file}`) purely so those fields have somewhere to attach.
 - **Quote everything that reaches the shell.** `{{ .args.body | shellquote }}` — an LLM-authored value with backticks in it is otherwise command-substituted. See [templating.md](templating.md).
 
+## Delivering files the pipeline will read
+
+An agent's answer is not its final message. Everything downstream — a `put:`, a task, another agent — reads **files**, and a model that summarizes its work in prose instead of writing it has produced nothing while sounding finished. `assert.files:` already states which files a step owes ([control-flow.md](control-flow.md#assert-self-verification--steps-test)); on an agent step it is also enforced *while the model can still act on it*:
+
+```yaml test=agents-delivers-files
+agents:
+- name: responder
+  source: { model: openrouter/qwen/qwen3.7-flash }
+  tools: [write_file]
+
+jobs:
+- name: answer
+  plan:
+  - agent: responder
+    outputs: [answer]
+    prompt: "Answer the question. Write your answer to answer/reply.md."
+    assert:
+      files: [answer/reply.md]
+  - task: deliver
+    inputs: [answer]
+    run: cat answer/reply.md
+    assert:
+      stdout: widgets.json
+  assert:
+    execution: [responder, deliver]
+    outcome: succeeded
+```
+
+The model in that example answers in prose first and writes nothing. Rather than ending the step there, the conversation puts it back:
+
+> You are trying to finish, but this step declared files it must leave behind and they are not there: `answer/reply.md` does not exist. Your final message is not the deliverable — a later step of this pipeline reads these files, and text you write in this conversation reaches nobody. Write them now using the tools you have, then finish.
+
+- **It fires when the model tries to stop**, not after the step is over — the same moment `required:` tools are forced, for the same reason: afterwards there is no one left to tell.
+- **Five chances, and they do not reset.** A model that keeps answering in prose runs out and the step fails naming the file, which is what an unmet `assert.files` always did. The nudge can only give the model chances to change the outcome; it never changes the outcome itself.
+- **Every missing file is named at once.** Told one at a time, a model pays a turn per artifact to learn what one sentence could have said.
+- **An empty file is a missing file** — the same rule the assert already used, which matters here because `touch`ing the path is what a model reaching for the letter of the instruction does.
+- **It gates `verdicts:`.** A step declaring both cannot record a decision while its files are absent: the `verdict` tool refuses with an error naming them. A verdict is the model's report on the work and the files *are* the work, so a decision accepted over missing artifacts is precisely the false success worth preventing — the report routes the job, and the job goes green having produced nothing.
+- **CLI-backed agents get the same thing through a resumed session.** A subprocess owns its own tool loop, so the check runs after it exits and the child is woken with `--resume` and told what is missing — its conversation, its working directory and its task all still intact. A restart would re-send work it has already done; see [attempts-timeout.md](attempts-timeout.md#what-attempts-costs-on-an-agent).
+
+Nothing to enable and no field to set. `assert.files:` was already the contract; the only question was whether the one party who could still honor it got to hear about it.
+
 ## Sub-agent delegation (`agent:` tools)
 
 A `tools:` entry can be a sub-agent tool — `{ agent: <name>, description: <text> }` — exposing another `agents:` entry to the parent model as a callable tool taking a single `request` string. "Delegate and get an answer back":

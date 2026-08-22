@@ -333,6 +333,8 @@ jobs:
 ```
 
   A missing file or an empty one fails the assert. Two shapes are load errors instead, because neither could ever pass: a path naming no declared output, and a bare artifact name like `answer` — that is the output *directory*, and a directory is never a non-empty file. Name a file inside it.
+
+  **On an agent step, an unmet `assert.files` is put back to the model before it fails.** A model that tries to finish while a declared file is missing is told which one, at the moment it tries to stop, and gets to write it — up to five times, after which the step fails exactly as it always did. Nothing to enable and no field to set: the check already stated the contract, and the only question was whether the one party who could still fix it got to hear about it. See [agents.md](agents.md#delivering-files-the-pipeline-will-read) for what the model is told and why.
 - **`steps test <pipeline.yml>`** runs every job in declaration order (forced, so the execution log is deterministic), prints per-job PASS/FAIL, and checks the pipeline-level `assert.execution`. It is how every example in these docs is verified.
 
 ## `do:` — several steps as one

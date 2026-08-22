@@ -184,7 +184,11 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, err
 	}
 
-	verdictTool, err := injectVerdictTool(step.VerdictNames(), step.NoteRequired, tools)
+	// Bound to the SPACE, not to dir: assert.files: paths are relative to
+	// what the step captures, which dir: does not move.
+	expect := newAssertFilesExpectation(step.Assert, space.Dir())
+
+	verdictTool, err := injectVerdictTool(step.VerdictNames(), step.NoteRequired, tools, expect)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 		closeAll(closers)
@@ -241,6 +245,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		maxTurns:             ri.MaxTurns,
 		toolChoiceStringOnly: ri.StringOnlyToolChoice,
 		verdictTool:          verdictTool,
+		expect:               expect,
 		compactAfterTokens:   ri.CompactAfterTokens,
 		usage:                &stepUsage{name: ri.AgentName, budget: ri.BudgetTokens, delegateFraction: cfg.DelegateBudgetFraction(ri.AgentName)},
 	}

@@ -25,7 +25,12 @@ func TestAgentHookHonorsAssert(t *testing.T) {
 		dir := t.TempDir()
 		// The agent answers in prose and writes nothing, which is precisely
 		// the failure assert.files exists to catch.
-		fake := newFakeLLM(t, says("All good, I have filed the incident note."))
+		//
+		// Repeating rather than scripted: an unmet assert.files: is now put
+		// back to the model when it tries to stop, so a model that refuses is
+		// asked more than once by design (see maxFilesNudges). The refusal is
+		// the fixture; how many times it takes to establish is not.
+		fake := newRepeatingFakeLLM(t, says("All good, I have filed the incident note."))
 		path := agentHookAssertPipeline(t, dir, fake.URL, "files: [note/incident.md]")
 
 		t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")

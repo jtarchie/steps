@@ -25,7 +25,15 @@ const verdictToolName = "verdict"
 // capture it. An out-of-vocabulary choice (shouldn't happen given the enum,
 // but defensively) comes back as {"error": ...} data so the model can re-call
 // — the same failure-as-data contract as every other tool.
-func buildVerdictTool(verdicts []string, noteRequired bool) (*genai.FunctionDeclaration, toolImpl) {
+//
+// expect is the step's assert.files: contract, and it GATES the verdict: a
+// decision recorded while the step's declared artifacts are missing is the
+// precise false success the contract exists to prevent — the model reports on
+// work whose product does not exist, routing fires on that report, and the
+// run is green. Refusing as {"error": ...} rather than by any new mechanism
+// is what keeps the enforcement free: an unsuccessful call leaves the required
+// tool unsatisfied, so the loop's existing forcing asks again.
+func buildVerdictTool(verdicts []string, noteRequired bool, expect assertFilesExpectation) (*genai.FunctionDeclaration, toolImpl) {
 	decl := &genai.FunctionDeclaration{
 		Name:        verdictToolName,
 		Description: "Emit your decision. Call this exactly once with your final verdict — it is how the pipeline decides which step runs next.",
@@ -50,6 +58,10 @@ func buildVerdictTool(verdicts []string, noteRequired bool) (*genai.FunctionDecl
 			return map[string]any{"error": fmt.Sprintf("verdict: choice %q is not one of: %s", choice, strings.Join(verdicts, ", "))}
 		}
 
+		if unmet := expect.unmet(); len(unmet) > 0 {
+			return map[string]any{"error": "verdict: " + assertFilesNudge(unmet)}
+		}
+
 		result := map[string]any{"exit_code": 0, "verdict": choice}
 
 		note := stringArg(args, "note")
@@ -67,7 +79,7 @@ func buildVerdictTool(verdicts []string, noteRequired bool) (*genai.FunctionDecl
 // step's already-built tool set when the step declares verdicts:, and returns
 // the tool's name (or "" when verdict mode is off). A pre-existing tool of the
 // same name is a conflict — rejected here rather than silently shadowed.
-func injectVerdictTool(verdicts []string, noteRequired bool, tools agentTools) (string, error) {
+func injectVerdictTool(verdicts []string, noteRequired bool, tools agentTools, expect assertFilesExpectation) (string, error) {
 	if len(verdicts) == 0 {
 		return "", nil
 	}
@@ -76,7 +88,7 @@ func injectVerdictTool(verdicts []string, noteRequired bool, tools agentTools) (
 		return "", fmt.Errorf("declares verdicts: but already defines a tool named %q", verdictToolName)
 	}
 
-	decl, impl := buildVerdictTool(verdicts, noteRequired)
+	decl, impl := buildVerdictTool(verdicts, noteRequired, expect)
 	tools.decls.FunctionDeclarations = append(tools.decls.FunctionDeclarations, decl)
 	tools.registry[verdictToolName] = impl
 	tools.required[verdictToolName] = true

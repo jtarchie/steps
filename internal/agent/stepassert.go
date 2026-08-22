@@ -145,3 +145,59 @@ func describeTrajectory(got []recordedToolCall) string {
 
 	return "[" + strings.Join(names, ", ") + "]"
 }
+
+// assertFilesExpectation is a step's assert.files: contract bound to the
+// directory it is checked in, so anything holding one can ask whether the
+// step has delivered yet without also knowing where a step's outputs live.
+//
+// dir is the step's SPACE, not the agent's working directory: dir: may point
+// the conversation somewhere inside the space, while assert.files: paths stay
+// artifact-relative to the space itself.
+type assertFilesExpectation struct {
+	files []string
+	dir   string
+}
+
+// newAssertFilesExpectation reads the contract off a step. The zero value is
+// the right answer for a step that declares none — unmet() is empty, so every
+// caller's check is a no-op without any of them testing for it.
+func newAssertFilesExpectation(assert *config.Assert, dir string) assertFilesExpectation {
+	if assert == nil || len(assert.Files) == 0 {
+		return assertFilesExpectation{}
+	}
+
+	return assertFilesExpectation{files: assert.Files, dir: dir}
+}
+
+// unmet reports the entries not satisfied right now — nothing when the step
+// declares none, or when every one of them is on disk.
+//
+// It is the same check assertAgentResponse makes when the conversation is
+// over, asked EARLY: while the model can still act on the answer. A step's
+// declared files are the one part of its contract a model can be wrong about
+// silently — it can believe it delivered, say so in its final message, and be
+// telling the truth about its intent while the pipeline has nothing to carry
+// forward. Everything downstream reads files.
+func (e assertFilesExpectation) unmet() []string {
+	return config.AssertFilesMismatches(e.files, e.dir)
+}
+
+// assertFilesNudge is what a model trying to finish without its declared
+// files is told.
+//
+// It names the paths and then names the REASON, because the reason is what
+// the failure this exists for got wrong: a model that answers in its final
+// message has not been lazy, it has misunderstood who is reading. Telling it
+// "a later step reads these files, your message reaches nobody" corrects the
+// belief; telling it "write the file" only corrects one instance of it.
+//
+// Deliberately not a tool result: there is no call to answer, and dressing
+// one up would put words in the model's mouth about a tool it never invoked.
+func assertFilesNudge(unmet []string) string {
+	return fmt.Sprintf(
+		"You are trying to finish, but this step declared files it must leave behind and they are not there: %s. "+
+			"Your final message is not the deliverable — a later step of this pipeline reads these files, "+
+			"and text you write in this conversation reaches nobody. "+
+			"Write them now using the tools you have, then finish.",
+		strings.Join(unmet, "; "))
+}

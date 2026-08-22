@@ -379,22 +379,39 @@ func validateExpectedToolCalls(context string, expected []ExpectedToolCall) erro
 // share, and it already owns the paired ValidateArtifactPath that made the
 // paths safe to join in the first place.
 func AssertFilesMismatch(files []string, dir string) error {
+	unmet := AssertFilesMismatches(files, dir)
+	if len(unmet) == 0 {
+		return nil
+	}
+
+	return fmt.Errorf("assert.files: %s", unmet[0])
+}
+
+// AssertFilesMismatches reports EVERY unmet entry rather than stopping at the
+// first, each phrased as the reason alone ("x does not exist") so a caller can
+// join them into one message.
+//
+// The plural form exists for the agent path, which does not merely report the
+// mismatch but hands it back to the model: told one missing file at a time, a
+// model writes one file, tries to stop, and is told about the next — paying a
+// turn per artifact to learn something one sentence could have said.
+func AssertFilesMismatches(files []string, dir string) []string {
+	var unmet []string
+
 	for _, rel := range files {
 		info, err := os.Stat(filepath.Join(dir, rel))
-		if err != nil {
-			return fmt.Errorf("assert.files: %s does not exist", rel)
-		}
 
-		if info.IsDir() {
-			return fmt.Errorf("assert.files: %s is a directory, not a file", rel)
-		}
-
-		if info.Size() == 0 {
-			return fmt.Errorf("assert.files: %s is empty", rel)
+		switch {
+		case err != nil:
+			unmet = append(unmet, rel+" does not exist")
+		case info.IsDir():
+			unmet = append(unmet, rel+" is a directory, not a file")
+		case info.Size() == 0:
+			unmet = append(unmet, rel+" is empty")
 		}
 	}
 
-	return nil
+	return unmet
 }
 
 // validateAssertFiles rejects an assert.files entry whose path isn't

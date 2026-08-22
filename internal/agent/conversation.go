@@ -166,6 +166,12 @@ type resumeCheckpoint struct {
 	// declared cap of 30 permits 30 turns per fallback entry. This mirrors
 	// what cli.go's session rejoin already does for a CLI source.
 	turnsSpent int
+	// filesNudges is how many times the model has been told its declared
+	// assert.files: are missing. It travels with the checkpoint for the
+	// reason turnsSpent does: the allowance is the STEP's, and a failover
+	// that handed the model a fresh set of chances to be stubborn would
+	// multiply the ceiling by the length of the fallback chain.
+	filesNudges int
 	// summary and stalled are maybeCompact's running state (compaction.go).
 	// Without them a swap re-initializes the running summary to empty, so the
 	// fallback summarizes a history that already CONTAINS a summary with no
@@ -196,6 +202,9 @@ type agentConversation struct {
 	// step declares verdicts:, else "". A successful call to it records the
 	// chosen verdict into conversationResult.verdict.
 	verdictTool string
+	// expect is the step's assert.files: contract, checked at the moment the
+	// model tries to stop rather than only after it has (see nudgeMissingFiles).
+	expect assertFilesExpectation
 	// compactAfterTokens caps req.Contents' estimated size before older turns
 	// are summarized away and replaced by a running summary — see maybeCompact
 	// in compaction.go. 0 disables compaction entirely: the turn loop then
@@ -477,15 +486,13 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 		conv.env.transcript.text(text)
 
 		if len(calls) == 0 {
-			if conv.finishOrForce(req, state.satisfied) {
-				return result(text, turn+1), nil
+			finished, stopErr := conv.handleStopAttempt(req, &state, &ignoredForces)
+			if stopErr != nil {
+				return result("", turn+1), stopErr
 			}
 
-			ignoredForces++
-
-			forceErr := conv.forcingIsGoingNowhere(ignoredForces, state.satisfied)
-			if forceErr != nil {
-				return result("", turn+1), forceErr
+			if finished {
+				return result(text, turn+1), nil
 			}
 
 			continue
@@ -528,6 +535,29 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	exhausted := result("", turn)
 
 	return conv.outOfTurns(ctx, llm, req, exhausted, state.satisfied)
+}
+
+// handleStopAttempt decides what a turn requesting no tools means: the
+// conversation is over, or the model is not done and must be told why.
+//
+// Two obligations are checked, and their order is the claim: the files a step
+// declared come BEFORE the required tools it declared, because a verdict is
+// the model's report on the work and the files ARE the work. A step carrying
+// both must never be asked to file its report first.
+func (conv agentConversation) handleStopAttempt(
+	req *model.LLMRequest, state *resumeCheckpoint, ignoredForces *int,
+) (bool, error) {
+	if conv.nudgeMissingFiles(req, &state.filesNudges) {
+		return false, nil
+	}
+
+	if conv.finishOrForce(req, state.satisfied) {
+		return true, nil
+	}
+
+	*ignoredForces++
+
+	return false, conv.forcingIsGoingNowhere(*ignoredForces, state.satisfied)
 }
 
 // forcingIsGoingNowhere ends an attempt whose model has answered with text
@@ -773,6 +803,43 @@ func (conv agentConversation) finishOrForce(req *model.LLMRequest, satisfied map
 	forceRequiredTool(req, missing[0], conv.toolChoiceStringOnly)
 
 	return false
+}
+
+// maxFilesNudges is how many times a model may try to finish without the
+// files its step declared before it is left to fail.
+//
+// Same number as maxIgnoredForces and loopDetectionMaxRepeats, on the same
+// premise: a model that has been told five times what is missing and still
+// has not written it is not about to on the sixth. It does NOT reset — a
+// model that writes one file, stops, is told about the next, and stops again
+// is making progress and never spends a second nudge, whereas one that reads
+// a file between refusals would reset a counter that forgave it for acting
+// busy.
+const maxFilesNudges = 5
+
+// nudgeMissingFiles handles a turn in which the model requested no tools and
+// the step declared assert.files:. It reports true when the conversation must
+// carry on — the files are missing and the model has been told which — and
+// false when there is nothing to say or nothing left to say it with.
+//
+// Spending the allowance leaves the conversation to end normally rather than
+// failing here. assertAgentResponse then reports the same mismatch it always
+// did, from the one place that owns that message: the nudge can only give the
+// model chances to change the outcome, never change the outcome itself.
+func (conv agentConversation) nudgeMissingFiles(req *model.LLMRequest, nudges *int) bool {
+	unmet := conv.expect.unmet()
+	if len(unmet) == 0 || *nudges >= maxFilesNudges {
+		return false
+	}
+
+	*nudges++
+
+	req.Contents = append(req.Contents, &genai.Content{
+		Role:  genai.RoleUser,
+		Parts: []*genai.Part{{Text: assertFilesNudge(unmet)}},
+	})
+
+	return true
 }
 
 // collectParts splits a model turn into the tool calls it requested and the

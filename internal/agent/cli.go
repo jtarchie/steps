@@ -155,16 +155,24 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 	// to the step rather than to whichever attempt spoke last.
 	defer func() { prepared.conv.usage.addCLIReport(state.cachedTokens, state.costUSD, state.finishReason) }()
 
-	var lastErr error
+	var (
+		lastErr error
+		// nudges counts the rounds spent telling the child its declared
+		// assert.files: are missing — see nudgeCLIForMissingFiles.
+		nudges int
+	)
 
-	runErr := retry.Do(ctx, prepared.ri.Attempts, func(attempt int) error {
+	attempts := func(attempt int) error {
 		attemptCtx, cancel := withAgentDeadline(ctx, timeout)
 		defer cancel()
 
 		plan := cliAttempt{
 			session: session,
-			resume:  attempt > 0,
-			home:    stepHome,
+			// A nudge round rejoins the same conversation the same way a
+			// retried attempt does. Nothing about the child's memory is
+			// different; only the reason for speaking to it again is.
+			resume: attempt > 0 || nudges > 0,
+			home:   stepHome,
 			// The turn budget is per STEP, not per attempt — the hosted path
 			// counts turns in one conversation that request retries never
 			// reset, and a resumed session is the same conversation. The CLI
@@ -175,14 +183,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 			maxTurns: remainingCLITurns(prepared.ri.MaxTurns, state.turns),
 		}
 
-		// A resumed attempt is NOT re-sent the task: the session already holds
-		// the prompt, the recap and the context blocks, and repeating them
-		// invites redoing finished work.
-		if plan.resume {
-			plan.prompt = cliContinuationPrompt(state, prepared)
-		} else {
-			plan.prompt = renderCLIPrompt(prepared.conv)
-		}
+		plan.prompt = cliAttemptPrompt(plan.resume, state, prepared)
 
 		if plan.outOfTurns() {
 			// Carrying lastErr matters: the budget ran out because of whatever
@@ -214,13 +215,90 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		}
 
 		return retry.StopOnDeadline(ctx, attemptCtx, outcome.FailOnDeadline(ctx, attemptCtx, attemptErr))
-	})
+	}
+
+	runErr := runCLIRounds(ctx, prepared, state, &nudges, attempts)
 
 	// The conversation the child had, as the recorder captured it off the
 	// stream. Attached however the step ended, like the hosted path attaches
 	// its own — a step that died mid-task is the one whose trace is needed
 	// most.
 	return state.result(prepared.ri.ModelName, prepared.conv.recorder), runErr
+}
+
+// runCLIRounds spends the step's attempts:, and then keeps waking the child
+// for as long as the files its step declared are missing.
+//
+// The hosted path can interrupt a model mid-conversation because it owns the
+// turn loop; here the child owns it, so the equivalent moment is the one
+// after it exits. Resuming its session is what makes that the same thing
+// rather than a restart — the transcript, the working directory and the task
+// are all still there, and the child is told the one fact it could not see
+// (cliContinuationPrompt already says exactly that of a failed attempt).
+//
+// nudges is the caller's, because the attempt closure reads it to decide
+// whether it is opening the session or rejoining it.
+func runCLIRounds(
+	ctx context.Context, prepared preparedAgentStep, state *cliStepState,
+	nudges *int, attempts func(int) error,
+) error {
+	for ; ; *nudges++ {
+		err := retry.Do(ctx, prepared.ri.Attempts, attempts)
+		if err != nil || !nudgeCLIForMissingFiles(prepared, state, *nudges) {
+			//nolint:wrapcheck // the attempt already wrapped and classified its own failure
+			return err
+		}
+	}
+}
+
+// cliAttemptPrompt is what one invocation is told.
+//
+// A resumed attempt is NOT re-sent the task: the session already holds the
+// prompt, the recap and the context blocks, and repeating them invites
+// redoing finished work. It is told the one fact it cannot see instead —
+// which is the missing file when there is one, and otherwise that its
+// predecessor died.
+//
+// The unmet set is recomputed here rather than captured when the round
+// opened: an attempt that wrote one of two declared files and then died
+// should be told about the one still missing, not both.
+func cliAttemptPrompt(resume bool, state *cliStepState, prepared preparedAgentStep) string {
+	if !resume {
+		return renderCLIPrompt(prepared.conv)
+	}
+
+	if unmet := prepared.conv.expect.unmet(); len(unmet) > 0 {
+		return assertFilesNudge(unmet)
+	}
+
+	return cliContinuationPrompt(state, prepared)
+}
+
+// nudgeCLIForMissingFiles reports whether the child should be woken again
+// because its step's assert.files: are still missing.
+//
+// False when there is nothing missing, when the allowance is spent, or when
+// the step has no turns left to spend on another round — after which
+// assertAgentResponse reports the mismatch exactly as it would have anyway.
+// The nudge buys the model chances; it never changes the verdict on them.
+func nudgeCLIForMissingFiles(prepared preparedAgentStep, state *cliStepState, nudges int) bool {
+	unmet := prepared.conv.expect.unmet()
+	if len(unmet) == 0 || nudges >= maxFilesNudges {
+		return false
+	}
+
+	if remainingCLITurns(prepared.ri.MaxTurns, state.turns) == 0 {
+		return false
+	}
+
+	slog.Info("agent.cli.files_nudge",
+		"agent", prepared.ri.AgentName,
+		"cli", prepared.ri.CLI,
+		"round", nudges+1,
+		"of", maxFilesNudges,
+		"unmet", strings.Join(unmet, "; "))
+
+	return true
 }
 
 // remainingCLITurns is the CLI path's share of the step's turn budget, with
