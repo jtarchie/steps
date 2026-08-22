@@ -33,6 +33,13 @@ type docScenario struct {
 	// ((name)) the doc example deliberately leaves unresolved.
 	vars map[string]string
 
+	// workers are passed as --worker flags: the tag-to-machine mapping an
+	// operator supplies for a step's tags:. Built per test, like fake, so a
+	// scenario can point at something it started; a scenario that only needs
+	// placement to HAPPEN names local:, which runs the step through a shim on
+	// this machine and needs no network.
+	workers map[string]string
+
 	// check runs after a green `steps test`, for assertions the YAML itself
 	// can't carry (which branch a verdict took, what a put received).
 	check func(t *testing.T, dir string)
@@ -50,6 +57,13 @@ func scripted(turns ...turn) func(t *testing.T) *fakeLLM {
 // docScenarios maps fence test= ids to their scaffolding. Keep ids
 // page-scoped ("agents-review", not "review") so a rename never collides.
 var docScenarios = map[string]docScenario{
+	// A placed step, run through a shim in a child process on this machine:
+	// no network, no worker, no credentials, and the whole transport — frames,
+	// tree round trip, exit codes — exercised for real rather than stubbed.
+	"infra-worker": {
+		workers: map[string]string{"gpu": "local:"},
+	},
+
 	// The full worked pipeline (complete.md): read, write the report, approve
 	// — which routes past escalate to the put.
 	"complete-review": {

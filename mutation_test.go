@@ -109,17 +109,16 @@ func checkMutantIsCaught(t *testing.T, block docs.Block, mut mutant) {
 	dir := t.TempDir()
 	path := writeDocBlock(t, dir, mutated, scenario)
 
-	varFlags := make([]string, 0, 2*len(scenario.vars))
-	for name, value := range scenario.vars {
-		varFlags = append(varFlags, "--var", name+"="+value)
-	}
-
-	err := run(append([]string{"validate", "--syntax-only", path}, varFlags...))
+	err := run(append([]string{"validate", "--syntax-only", path}, scenarioVarFlags(scenario)...))
 	if err != nil {
 		t.Fatalf("the mutant does not load, so a failing run would prove nothing about the assertion: %v", err)
 	}
 
-	err = run(append([]string{"test", path}, varFlags...))
+	// scenarioFlags, not just the vars: a mutant has to be invoked exactly as
+	// the doc harness invokes the original. Missing a flag here makes the run
+	// fail for the wrong reason — an unmapped worker rather than the broken
+	// assertion — and the mutant reads as uncaught.
+	err = run(append([]string{"test", path}, scenarioFlags(scenario)...))
 	if err == nil {
 		t.Fatalf("the mutated assertion still passed — as written it cannot fail, so it verifies nothing")
 	}

@@ -373,6 +373,13 @@ linters:
           files:
             - "**/internal/pipeline/**"
           allow:
+            # venue is the tier ABOVE shell: shell decides host vs container,
+            # venue decides this machine vs a worker and hands back to shell
+            # when the answer is here. pipeline is what turns a step's tags:
+            # into a machine, so it constructs runners through venue rather
+            # than shell — the one import that moves, and the only place that
+            # mapping is known.
+            - "github.com/jtarchie/steps/internal/venue"
             - "$gostd"
             # goleak is test-only: goleak_test.go's TestMain fails this
             # package's tests if any leaves a goroutine running.

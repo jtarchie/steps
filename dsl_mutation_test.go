@@ -115,6 +115,13 @@ var stepOperators = []stepOperator{
 	{tag: "attempts", apply: setInt("attempts", 1)},
 	{tag: "max_turns", apply: setInt("max_turns", 1)},
 	{tag: "timeout", apply: setString("timeout", "1ms")},
+	// Delete the placement and the step runs here instead, so STEPS_WORKER is
+	// unset and the example's own stdout assertion goes red. The falsifiable
+	// claim is "it ran somewhere else", which is the whole of what tags: means.
+	// Rewriting the tag instead would be caught too, but as a crash — an
+	// unmapped tag is refused before the run starts — and a caught assertion
+	// is the stronger evidence.
+	{tag: "tags", apply: deleteKey("tags")},
 
 	// Raising a matrix's allowance admits the cells it was stopping.
 	{tag: "budget", apply: scaleBudgetTokens},
@@ -344,16 +351,14 @@ func detectMutant(t *testing.T, block docs.Block, body string) string {
 	dir := t.TempDir()
 	path := writeDocBlock(t, dir, mutated, scenario)
 
-	varFlags := make([]string, 0, 2*len(scenario.vars))
-	for name, value := range scenario.vars {
-		varFlags = append(varFlags, "--var", name+"="+value)
-	}
+	varFlags := scenarioVarFlags(scenario)
+	runFlags := scenarioFlags(scenario)
 
 	if run(append([]string{"validate", "--syntax-only", path}, varFlags...)) != nil {
 		return "load"
 	}
 
-	err := run(append([]string{"test", path}, varFlags...))
+	err := run(append([]string{"test", path}, runFlags...))
 
 	switch {
 	case err == nil:

@@ -82,6 +82,38 @@ func TestDocsExamples(t *testing.T) {
 // runDocBlock is one block's whole treatment: schema validation, syntax-only
 // validate, and — for run-mode blocks — full validate of the original text
 // plus end-to-end execution and the scenario's own assertions.
+// scenarioVarFlags is what every command accepts: the --var values an operator
+// supplies for a ((name)) the example leaves unresolved.
+func scenarioVarFlags(scenario docScenario) []string {
+	flags := make([]string, 0, 2*len(scenario.vars))
+
+	for name, value := range scenario.vars {
+		flags = append(flags, "--var", name+"="+value)
+	}
+
+	return flags
+}
+
+// scenarioFlags is everything an operator would have typed to RUN a doc
+// example: its vars plus its --worker mappings. Only the commands that execute
+// a plan take the latter — validate answers whether a pipeline is loadable,
+// which is true or false regardless of what machines exist.
+//
+// One helper rather than a loop per caller, because the mutation harness has
+// to invoke a block exactly the way the docs harness does. Building the flags
+// separately would make every mutant of a field only one side passed register
+// as a crash instead of a caught assertion — which reads as coverage while
+// proving nothing.
+func scenarioFlags(scenario docScenario) []string {
+	flags := scenarioVarFlags(scenario)
+
+	for tag, worker := range scenario.workers {
+		flags = append(flags, "--worker", tag+"="+worker)
+	}
+
+	return flags
+}
+
 func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 	t.Helper()
 
@@ -112,10 +144,8 @@ func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 	dir := t.TempDir()
 	path := writeDocBlock(t, dir, block, scenario)
 
-	varFlags := make([]string, 0, 2*len(scenario.vars))
-	for name, value := range scenario.vars {
-		varFlags = append(varFlags, "--var", name+"="+value)
-	}
+	varFlags := scenarioVarFlags(scenario)
+	runFlags := scenarioFlags(scenario)
 
 	err = run(append([]string{"validate", "--syntax-only", path}, varFlags...))
 	if err != nil {
@@ -126,7 +156,7 @@ func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 		return
 	}
 
-	executeDocBlock(t, block, scenario, dir, path, varFlags)
+	executeDocBlock(t, block, scenario, dir, path, varFlags, runFlags)
 
 	// The MCP twin of scenario.check: assertions against what the fixture
 	// server RECEIVED, which no YAML assert can see (an out: tool's
@@ -143,7 +173,7 @@ func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 // provider the docs reach for, so a block naming a provider with no key here
 // fails loudly instead of silently skipping the check. noexec blocks never
 // get here: their stdio MCP binaries aren't on this host.
-func executeDocBlock(t *testing.T, block docs.Block, scenario docScenario, dir, path string, varFlags []string) {
+func executeDocBlock(t *testing.T, block docs.Block, scenario docScenario, dir, path string, varFlags, runFlags []string) {
 	t.Helper()
 
 	for _, key := range []string{"OPENROUTER_API_KEY", "OPENCODE_API_KEY", "ANTHROPIC_API_KEY"} {
@@ -164,7 +194,7 @@ func executeDocBlock(t *testing.T, block docs.Block, scenario docScenario, dir, 
 		t.Fatalf("steps validate (full, original text): %v", err)
 	}
 
-	err = run(append([]string{"test", path}, varFlags...))
+	err = run(append([]string{"test", path}, runFlags...))
 	if err != nil {
 		t.Fatalf("steps test: %v", err)
 	}

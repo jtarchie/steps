@@ -13,6 +13,7 @@ import (
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/venue"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -120,7 +121,7 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 		fmt.Printf("task: %s (attempt %d/%d)\n", executedStepName(step), attempt, total)
 		logFrom(ctx).Info("job.task.attempt", "task", executedStepName(step), "attempt", attempt, "total_attempts", total)
 	}, func(attemptCtx context.Context) error {
-		return runTaskCommand(attemptCtx, cfg, rt, space.Dir())
+		return runTaskCommand(attemptCtx, cfg, step, rt, space.Dir())
 	})
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
@@ -136,9 +137,12 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 
 // runTaskCommand runs a task's run: command. Without an assert: or fix:, it
 // streams output live and any nonzero exit is a hard failure.
-func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedTask, workspaceDir string) error {
-	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Env: rt.Env, User: rt.User, Network: rt.Network,
-		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()})
+func runTaskCommand(ctx context.Context, cfg *config.Config, step config.Step, rt config.ResolvedTask, workspaceDir string) error {
+	// Fetch is the step's declared outputs: what a worker sends back after
+	// every command, so the local tree matches before an assert: reads it.
+	runner, err := venue.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Env: rt.Env, User: rt.User, Network: rt.Network,
+		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes(),
+		Worker: workerFor(ctx, step), WorkerTag: placementTag(step), Fetch: rt.Outputs})
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}

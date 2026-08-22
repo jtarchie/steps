@@ -1,0 +1,16 @@
+# An agent step is a conversation this process holds: the model, the tool
+# calls and the file tools all read the step's directory HERE. Placing one on
+# a worker would move only its run_shell, leaving the model reading one
+# machine's filesystem and writing to another with no way to tell which.
+# Refused until an agent can be placed whole.
+# expect: tags: is not valid on an agent step
+agents:
+- name: reviewer
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    tags: [gpu]
+    prompt: "Review it."

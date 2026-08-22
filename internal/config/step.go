@@ -229,6 +229,24 @@ type Step struct {
 	// agent's Network for this step only (non-empty-wins, like Image).
 	// Invalid on get/put steps, for the same reason Image is.
 	Network string `yaml:"network,omitempty"`
+	// Tags names the worker a step's commands run on: a capability the step
+	// needs, mapped to a machine by the invocation (--worker), never by the
+	// pipeline. Empty runs on this machine, which is what nearly every step
+	// does.
+	//
+	// One entry. Concourse intersects a step's tags against a pool of workers
+	// advertising theirs; there is no pool here, so a second tag would name a
+	// second machine and the step would have no home.
+	//
+	// NOT hashed. Placement decides where a step runs, not what it produces —
+	// the same reasoning as timeout: and attempts: — and a tree that crossed a
+	// wire digests identically to one that never left (see internal/wire).
+	// Retagging a step, or repointing a tag at another machine, therefore does
+	// not invalidate work that already succeeded.
+	//
+	// Invalid on get/put/try steps, on agent steps and on a task with fix:
+	// (both would leave half a step on each machine), and alongside image:.
+	Tags []string `yaml:"tags,omitempty"`
 	// Privileged, on a task or agent step, overrides the referenced task's/
 	// agent's Privileged for this step only. True-wins, like Image's
 	// non-empty-wins: there is no way to force UNprivileged from a step when

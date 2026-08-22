@@ -1,0 +1,16 @@
+# The same split as tags-on-agent.yml, reached from the other side: a task's
+# fix: builds a repair agent from THIS step, whose file tools read the local
+# copy while its commands would run on the worker. The agent-step rule cannot
+# see it, because the step is a task.
+# expect: tags: is not valid on a task with fix:
+agents:
+- name: repair
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+
+jobs:
+- name: build
+  plan:
+  - task: compile
+    tags: [gpu]
+    run: exit 1
+    fix: { agent: repair }

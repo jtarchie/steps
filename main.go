@@ -84,6 +84,7 @@ type RunCmd struct {
 	KeepWorkspace  bool              `env:"STEPS_KEEP_WORKSPACE"                                                                     help:"leave the build workspace on disk instead of deleting it"`
 	NoPreflight    bool              `help:"skip the pre-run health check of the job's models and MCP servers"                       name:"no-preflight"`
 	Var            map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                                     name:"var"`
+	Worker         map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)"                 name:"worker"`
 	Resume         string            `help:"continue a failed run from the step that failed"                                         name:"resume"`
 	Replay         string            `help:"fork a recorded run and re-run it from --from onward"                                    name:"replay"`
 	From           string            `help:"with --replay, the step name to re-run from"                                             name:"from"`
@@ -169,6 +170,11 @@ func (r *RunCmd) Run() error {
 
 	ctx = applyPreflightFlag(ctx, r.NoPreflight)
 
+	ctx, err = applyWorkerFlags(ctx, r.Worker)
+	if err != nil {
+		return err
+	}
+
 	jobName := r.Job
 
 	ctx, jobName, err = r.applyContinuation(ctx, st, provider, jobName)
@@ -218,6 +224,7 @@ type WatchCmd struct {
 	NoPreflight    bool              `help:"skip the pre-run health check of each job's models and MCP servers"                      name:"no-preflight"`
 	Listen         string            `help:"serve webhook checks on this address, e.g. :8080"                                        name:"listen"`
 	Var            map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                                     name:"var"`
+	Worker         map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)"                 name:"worker"`
 	VarsFile       string            `help:"YAML file of pipeline vars"                                                              name:"vars-file"`
 }
 
@@ -242,6 +249,11 @@ func (w *WatchCmd) Run() error {
 
 	ctx = applyPreflightFlag(ctx, w.NoPreflight)
 
+	ctx, err = applyWorkerFlags(ctx, w.Worker)
+	if err != nil {
+		return err
+	}
+
 	slog.Info("pipeline.watch", "pipeline", w.Pipeline, "once", w.Once, "interval", w.Interval, "max_concurrent", w.MaxConcurrent)
 
 	if w.Once {
@@ -258,9 +270,10 @@ func (w *WatchCmd) Run() error {
 // point for a self-verifying fixture — every runnable example in docs/*.md
 // is one (see docs_test.go).
 type TestCmd struct {
-	Pipeline string            `arg:""                                                     help:"path to the pipeline YAML file"`
-	Var      map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..." name:"var"`
-	VarsFile string            `help:"YAML file of pipeline vars"                          name:"vars-file"`
+	Pipeline string            `arg:""                                                                         help:"path to the pipeline YAML file"`
+	Var      map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                     name:"var"`
+	Worker   map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)" name:"worker"`
+	VarsFile string            `help:"YAML file of pipeline vars"                                              name:"vars-file"`
 }
 
 // Run loads the pipeline, runs every job (force), and reports pass/fail per
@@ -281,6 +294,11 @@ func (t *TestCmd) Run() error {
 
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
+
+	ctx, err = applyWorkerFlags(ctx, t.Worker)
+	if err != nil {
+		return err
+	}
 
 	var (
 		executed []string
@@ -1306,6 +1324,21 @@ func applyHistoryFlags(cfg *config.Config, versions, runs int) {
 	}
 }
 
+// applyWorkerFlags threads the --worker mappings down to internal/pipeline,
+// which is where a step's tags: gets turned into a machine.
+//
+// Parsed here rather than at first use, so a typo in a worker URL is reported
+// with everything else that is wrong with the invocation instead of mid-plan,
+// when a step happens to reach for it.
+func applyWorkerFlags(ctx context.Context, workers map[string]string) (context.Context, error) {
+	ctx, err := pipeline.WithWorkers(ctx, workers)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+
+	return ctx, nil
+}
+
 // applyPreflightFlag threads --no-preflight down to internal/pipeline.
 func applyPreflightFlag(ctx context.Context, skip bool) context.Context {
 	if !skip {
@@ -1488,15 +1521,16 @@ func loadWithVars(path string, flags map[string]string, varsFile string) (*confi
 // reach the port; --listen exists for the person who has decided that is what
 // they want, not as a default.
 type WebCmd struct {
-	Pipeline      []string          `arg:""                                                          help:"path(s) to pipeline YAML files"`
-	Listen        string            `default:"127.0.0.1:8088"                                        help:"address to serve on"`
-	Interval      time.Duration     `default:"30s"                                                   help:"how often to check trigger: true resources"`
-	NoWatch       bool              `help:"serve without polling trigger: true resources"            name:"no-watch"`
-	NoPreflight   bool              `help:"skip the pre-poll health check of models and MCP servers" name:"no-preflight"`
-	ReadOnly      bool              `help:"serve without trigger, approval, or resume controls"      name:"read-only"`
-	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                      help:"leave build workspaces on disk instead of deleting them"`
-	Var           map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."      name:"var"`
-	VarsFile      string            `help:"YAML file of pipeline vars"                               name:"vars-file"`
+	Pipeline      []string          `arg:""                                                                         help:"path(s) to pipeline YAML files"`
+	Listen        string            `default:"127.0.0.1:8088"                                                       help:"address to serve on"`
+	Interval      time.Duration     `default:"30s"                                                                  help:"how often to check trigger: true resources"`
+	NoWatch       bool              `help:"serve without polling trigger: true resources"                           name:"no-watch"`
+	NoPreflight   bool              `help:"skip the pre-poll health check of models and MCP servers"                name:"no-preflight"`
+	ReadOnly      bool              `help:"serve without trigger, approval, or resume controls"                     name:"read-only"`
+	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                                     help:"leave build workspaces on disk instead of deleting them"`
+	Var           map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                     name:"var"`
+	Worker        map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)" name:"worker"`
+	VarsFile      string            `help:"YAML file of pipeline vars"                                              name:"vars-file"`
 }
 
 // Run loads every named pipeline, opens its store, and serves until canceled.
@@ -1512,6 +1546,11 @@ func (w *WebCmd) Run() error {
 	defer cancel()
 
 	ctx = applyPreflightFlag(ctx, w.NoPreflight)
+
+	ctx, workerErr := applyWorkerFlags(ctx, w.Worker)
+	if workerErr != nil {
+		return workerErr
+	}
 
 	pipelines, providers, cleanup, err := w.load()
 	if err != nil {

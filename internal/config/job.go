@@ -110,6 +110,15 @@ func (j Job) visitHookSteps(fn func(label string, step *Step) error) error {
 	})
 }
 
+// VisitSteps exposes the step walk to callers outside this package, so a rule
+// enforced elsewhere covers hooks, try: bodies and concurrent branches exactly
+// as a rule written here does. Exported for the placement check, which needs
+// the step tree but reads its answer from the invocation rather than from the
+// pipeline.
+func (j Job) VisitSteps(fn func(label string, step *Step) error) error {
+	return j.visitSteps(fn)
+}
+
 // visitSteps calls fn for every step reachable from a job: each plan step,
 // each job-level hook, and recursively every hook carried by any of those
 // steps. label is a human-readable path such as

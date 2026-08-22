@@ -17,6 +17,10 @@ type containerSettings struct {
 	Network    string
 	Privileged bool
 	Limits     *ContainerLimits
+	// Tags rides along so the rule that refuses tags: with image: reads the
+	// RESOLVED image, which is the only place a step inheriting one from the
+	// tasks: entry it references can be caught.
+	Tags []string
 }
 
 func (rt ResourceType) containerSettings() containerSettings {
@@ -32,7 +36,7 @@ func (t Task) containerSettings() containerSettings {
 }
 
 func (s Step) containerSettings() containerSettings {
-	return containerSettings{Image: s.Image, Env: s.Env, User: s.User, Network: s.Network, Privileged: s.Privileged, Limits: s.Limits}
+	return containerSettings{Image: s.Image, Env: s.Env, User: s.User, Network: s.Network, Privileged: s.Privileged, Limits: s.Limits, Tags: s.Tags}
 }
 
 // visitContainerSettings calls fn for every entity that can carry execution

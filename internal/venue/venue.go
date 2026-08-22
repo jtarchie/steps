@@ -38,7 +38,7 @@ func NewRunner(spec shell.RunnerSpec) (shell.Runner, error) {
 		worker:  worker,
 		cwd:     spec.Cwd,
 		outputs: spec.Fetch,
-		env:     resolveEnv(spec.Env),
+		env:     withWorkerTag(resolveEnv(spec.Env), spec.WorkerTag),
 		keep:    keepWorkspace(),
 	}}, nil
 }
@@ -65,6 +65,29 @@ func resolveEnv(names []string) map[string]string {
 	}
 
 	return values
+}
+
+// WorkerEnv is the variable a placed command can read to learn where it is.
+//
+// It exists because placement was otherwise entirely invisible from inside a
+// step: a script that needs to behave differently on a worker — or a person
+// reading a log wondering whether the tag took effect — had nothing to ask.
+// Absent, rather than empty, for a step running on this machine, so the two
+// are distinguishable to a command that tests for presence.
+const WorkerEnv = "STEPS_WORKER"
+
+func withWorkerTag(env map[string]string, tag string) map[string]string {
+	if tag == "" {
+		return env
+	}
+
+	if env == nil {
+		env = map[string]string{}
+	}
+
+	env[WorkerEnv] = tag
+
+	return env
 }
 
 // keepWorkspace reports whether --keep-workspace is in effect, so a worker

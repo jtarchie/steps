@@ -906,6 +906,16 @@
           "minimum": 0,
           "description": "Agent steps only: tool-calling turns per attempt for this one step, overriding the agent entry's max_turns. 0 removes the cap."
         },
+        "tags": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "task steps only. Names the worker the step's commands run on; the invocation maps the name to a machine with --worker. One entry: there is no worker pool to intersect against. Invalid with image:, on agent steps, and on a task with fix:."
+        },
         "context_paths": {
           "type": "array",
           "items": {

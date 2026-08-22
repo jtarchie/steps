@@ -87,6 +87,49 @@ For a [CLI-backed agent](agents.md#cli-backed-agents-claudesonnet) (`source.mode
 - **Preflight also checks the image has the CLI** (`docker run --rm --pull=never <image> claude --version`), after the up-front pull. Pointing `image:` at something without the CLI is easy and otherwise invisible until the step runs.
 - **A containerized CLI agent does not need the CLI on the host** — `steps validate`'s PATH check is skipped for any agent whose every step resolves an image.
 
+## Remote workers (`tags:`)
+
+Every step of a job runs on the machine `steps` runs on. `tags:` places one somewhere else — a GPU box, a different OS or arch, a machine that holds hardware or credentials the orchestrator does not:
+
+```yaml test=infra-worker
+jobs:
+- name: train
+  assert:
+    execution: [prepare, train]
+    outcome: succeeded
+  plan:
+  - task: prepare
+    outputs: [data]
+    run: echo seed > data/seed.txt
+  - task: train
+    tags: [gpu]
+    inputs: [data]
+    outputs: [model]
+    run: |
+      echo "trained from $(cat data/seed.txt)" > model/report.txt
+      echo "worker: ${STEPS_WORKER:-none}"
+    assert:
+      stdout: "worker: gpu"
+      files: [model/report.txt]
+```
+
+The pipeline names a **capability**; the invocation names the **machine**:
+
+```console
+steps run --worker gpu=ssh://jt@gpu-box pipeline.yml
+```
+
+Keeping machines out of the pipeline file is what lets the same pipeline run on somebody else's fleet — the split Concourse draws between a step's `tags:` and a worker's advertised ones.
+
+- **The step's tree goes with it.** Its declared `inputs:` are sent to the worker, the command runs there, and its declared `outputs:` come back — before the step's own `assert:` reads them. Nothing else travels: a large input does not get shipped home again to prove it did not change.
+- **`STEPS_WORKER` names the tag** inside a placed command, and is unset for a step running locally. It is how a script tells the difference, and how the example above proves the tag took effect.
+- **One tag.** Concourse intersects a step's tags against a pool of workers advertising theirs; there is no pool here, so a second tag would name a second machine and the step would have no home.
+- **An unmapped tag is an error before the run starts**, not a fall back to local execution. A step that says it needs a GPU box, quietly running on a laptop, is the same broken promise `network:` without `image:` is refused for.
+- **`local:`** runs the step through a shim in a child process on this machine — for trying a tagged pipeline out without a worker, and for debugging the shim itself: `--worker gpu=local:`.
+- Valid on **task steps only**. Invalid on `get`/`put` steps (their commands come from the resource type), on `agent` steps and on a task with `fix:` — an agent's tools and conversation run in the orchestrator, so only its shell commands would move, leaving half a step on each machine. Invalid with `image:`: a worker runs the step's commands directly, so name a worker that already has what the step needs.
+- The remote contract is **sshd and a pushed `steps` binary**, nothing else. No agent to install, no daemon to run.
+- **Caching**: `tags:` does **not** fold into the node's hash. Placement decides where a step runs, not what it produces, and a tree that crossed the wire digests identically to one that never left — so retagging a step, or repointing a tag at a new machine, does not re-run work that already succeeded.
+
 ## Container network (`network:`)
 
 `image:` isolates a command's filesystem view but not its network — a containerized `run_shell` an agent wrote has the same egress the host does. For a step whose commands are model-generated, that is usually the isolation you actually wanted:

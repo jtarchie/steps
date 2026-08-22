@@ -7,6 +7,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/venue"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -49,8 +50,15 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 	defer workspace.CloseSpace(space, label)
 
 	spec.Cwd = space.Dir()
+	// The guard goes wherever the step goes. resolveStepRuntime's own contract
+	// is that a guard runs "in the same view the step itself gets", and a
+	// guard evaluated here about a step that runs elsewhere would be reading a
+	// different machine's answer. Nothing comes back: a guard is closed
+	// without Capture, so it has no outputs to fetch.
+	spec.Worker = workerFor(ctx, step)
+	spec.WorkerTag = placementTag(step)
 
-	runner, err := shell.NewRunner(spec)
+	runner, err := venue.NewRunner(spec)
 	if err != nil {
 		return false, err //nolint:wrapcheck // NewRunner's error already names the cause
 	}

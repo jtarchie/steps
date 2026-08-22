@@ -1,0 +1,20 @@
+# Every execution setting is refused on a put for the same reason: a put's
+# command comes from its resource type, not from the step, so a setting here
+# would describe a command this step does not own.
+# expect: tags is not valid on put steps
+resource_types:
+- name: mock
+  config:
+    check: echo '[{"ref":"1"}]'
+    in: 'mkdir -p "$1"'
+    out: 'echo "{}"'
+
+resources:
+- name: thing
+  type: mock
+
+jobs:
+- name: ship
+  plan:
+  - put: thing
+    tags: [gpu]

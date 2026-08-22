@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"testing"
 
 	"go.uber.org/goleak"
@@ -18,5 +19,22 @@ import (
 // the client's standalone SSE stream — go-sdk@v1.7.0, no fix in a later
 // release as of this writing). Not steps' leak to fix.
 func TestMain(m *testing.M) {
+	// A local: worker execs `<this binary> _shim`, and under `go test` this
+	// binary is the test binary — which answers to nothing but the suite, so
+	// without this a placed step would re-run the whole suite as a subprocess
+	// instead of serving one session. Dispatching before goleak and before
+	// m.Run is what makes the documented example an example that runs.
+	//
+	// The os/exec TestHelperProcess pattern: same binary, told which half to
+	// be.
+	if len(os.Args) > 1 && os.Args[1] == "_shim" {
+		err := run(os.Args[1:])
+		if err != nil {
+			os.Exit(1)
+		}
+
+		os.Exit(0)
+	}
+
 	goleak.VerifyTestMain(m, goleak.IgnoreTopFunction("github.com/modelcontextprotocol/go-sdk/mcp.(*streamableServerConn).Read"))
 }

@@ -142,6 +142,11 @@ type RunnerSpec struct {
 	// and the tree the results come back into. Nothing above here has to know
 	// which machine ran the command.
 	Worker string
+	// WorkerTag is the tag that resolved to Worker, published to the command
+	// as STEPS_WORKER so a script can tell it is on a worker and which one.
+	// Empty for a step running on this machine, which is what makes the
+	// variable's absence meaningful.
+	WorkerTag string
 	// Fetch names the directories to bring back after each command, which for
 	// a task step are its declared outputs.
 	//

@@ -55,7 +55,15 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 
 	logFrom(ctx).Info("job.run", "steps", len(job.Plan))
 
-	err := workspace.ValidateArtifactFlow(cfg, job)
+	// Before anything runs, beside the artifact-flow check and for the same
+	// reason: a plan that cannot be carried out should say so instead of
+	// failing partway through.
+	err := ValidateWorkerPlacement(ctx, job)
+	if err != nil {
+		return err
+	}
+
+	err = workspace.ValidateArtifactFlow(cfg, job)
 	if err != nil {
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
