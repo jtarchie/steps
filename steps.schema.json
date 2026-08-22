@@ -693,7 +693,7 @@
       }
     },
     "fixSpec": {
-      "description": "An agent to invoke when the task's run: exits non-zero.",
+      "description": "An agent to invoke when a run misses the task's success criteria: its assert: when it declares one, a non-zero exit otherwise. The re-run after the repair is judged by that same rule.",
       "oneOf": [
         {
           "type": "string",

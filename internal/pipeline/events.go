@@ -216,16 +216,23 @@ func currentStepRef(ctx context.Context) (jobName string, index int) {
 }
 
 // publishOutputForCurrentStep publishes a command's output against whichever
-// step the context says is running. A no-op off the plan walk — a hook or a
-// fix command has no plan index, and inventing one would attach its output to
-// an unrelated step.
-func publishOutputForCurrentStep(ctx context.Context, jobName, stdout, stderr string) {
+// step the context says is running, and does nothing at all when no run put
+// an identity on the context.
+//
+// It does NOT currently skip a hook, though currentStepRef's contract says a
+// hook holds no plan position: withHookIdentity installs an identity with
+// index -1 and a zero Step, so a hook task's output publishes with an empty
+// name and kind and the run view files it under the enclosing step (or under
+// a nameless one). Pre-dates the fix:/assert: work and affects the plain task
+// path identically; fixing it means deciding whether a hook gets a step
+// identity of its own or publishes nothing, which is a DSL call.
+func publishOutputForCurrentStep(ctx context.Context, stdout, stderr string) {
 	identity, ok := ctx.Value(stepIdentityKey{}).(stepIdentity)
 	if !ok {
 		return
 	}
 
-	publishStepOutput(ctx, jobName, identity.index, identity.step, stdout, stderr)
+	publishStepOutput(ctx, identity.job, identity.index, identity.step, stdout, stderr)
 }
 
 // maxPublishedOutputBytes bounds what one step contributes to a run's event
@@ -245,6 +252,15 @@ const maxPublishedOutputBytes = 32_000
 // runFixTask hands the fix agent — it never reaches the transcript.) A step
 // that printed nothing publishes nothing: an empty log block is worse than
 // no log block.
+//
+// Callers arrive with different budgets and that is NOT reconciled here. The
+// plain task path bounds its own capture (RunStreamedCapture takes
+// maxPublishedOutputBytes per stream, and appends its own "... [truncated N
+// bytes]" marker); assert:/fix: tasks capture with the unbounded
+// RunCaptureFull because assert.stdout has to see the whole stream, so their
+// rows are bounded only by store.MaxEventTextBytes. A cap applied here cannot
+// fix that without also clipping the marker off an already-compliant stream —
+// the budget belongs in runCaptured, which is where the capture happens.
 func publishStepOutput(ctx context.Context, jobName string, i int, step config.Step, stdout, stderr string) {
 	combined := strings.TrimRight(stdout, "\n")
 

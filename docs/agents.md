@@ -314,7 +314,7 @@ jobs:
 
 ## Self-healing tasks (`fix:`)
 
-`fix:` attaches an agent to a **task** step: if the command exits non-zero, the agent is invoked to repair whatever broke, and then the command runs again. A green run never constructs the agent at all. This example is real: the task fails, the fixer creates the missing file, the re-run passes:
+`fix:` attaches an agent to a **task** step: if the run misses the step's own success criteria, the agent is invoked to repair whatever broke, and then the command runs again. Those criteria are the step's `assert:` when it declares one and a non-zero exit otherwise — so a task asserting `code: 3` is *not* repaired on exit 3, and one exiting 0 with the wrong output *is*. A passing run never constructs the agent at all. This example is real: the task fails, the fixer creates the missing file, the re-run passes:
 
 ```yaml test=agents-fix
 agents:
@@ -346,7 +346,7 @@ The mapping form takes per-task overrides:
       timeout: 10m
 ```
 
-**How the loop terminates.** The agent is seeded with the failing command's captured output and given the parent task itself as a zero-arg **rerun tool** (its `run:`, never its `fix:`, so a rerun cannot recurse). It can edit, rerun, and see the new output. When the conversation ends, `steps` runs the command one final time, and *that* exit code decides the step. There is no repeat-until-green loop: one agent conversation, then one verdict. A still-red command fails the step normally, firing `on_failure`.
+**How the loop terminates.** The agent is seeded with the verdict that failed plus the command's captured output, and given the parent task itself as a zero-arg **rerun tool** (its `run:`, never its `fix:`, so a rerun cannot recurse). It can edit, rerun, and see the new output. When the conversation ends, `steps` runs the command one final time and judges *that* run — by the same rule that triggered the repair. There is no repeat-until-green loop: one agent conversation, then one verdict. A still-red command fails the step normally, firing `on_failure`, and its error names the fixer that could not rescue it.
 
 **What a fix agent needs.** It must be able to edit, and the default tool grant deliberately excludes the write tools — grant them explicitly.
 
@@ -395,7 +395,7 @@ assert:
   execution: [quick, full]   # pipeline level: the jobs `steps test` must have run
 ```
 
-Neither execution assert names `fixer`, and that is the assertion: a green command never constructs its fix agent. Had either command failed, the `fix:` these steps inherit would have run first and the step `assert:` would then have judged the re-run — a reused definition brings its repair behavior with it. The repair path itself is exercised in [attempts-timeout.md](attempts-timeout.md); what is reused here is the definition.
+Neither execution assert names `fixer`, and that is the assertion: a command that satisfies its assert never constructs its fix agent. Had either step `assert:` gone unmet, the `fix:` these steps inherit would have run and then that same assert would have judged the re-run — a reused definition brings its repair behavior with it. The repair path itself is exercised in [attempts-timeout.md](attempts-timeout.md); what is reused here is the definition.
 
 This resolution runs identically at plan time and run time, so a task's cache hash is always computed from its *resolved* `run:` string. An undefined reference is an ordinary error at plan time. An agent step's connection/dials/tool-grant resolve the same way.
 

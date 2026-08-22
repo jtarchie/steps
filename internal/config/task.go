@@ -74,16 +74,19 @@ type Task struct {
 	Outputs []string   `yaml:"outputs,omitempty"`
 }
 
-// FixSpec is a task step's fix: — the agent to invoke when the task's run:
-// command exits nonzero. A bare scalar names the agent (all other fields
-// derived); a mapping allows per-task overrides. It implements
+// FixSpec is a task step's fix: — the agent to invoke when a run misses the
+// step's own success criteria. A bare scalar names the agent (all other
+// fields derived); a mapping allows per-task overrides. It implements
 // yaml.Unmarshaler for the same scalar-or-mapping reason ToolSpec does.
 //
-// On a task failure, the named agent is invoked seeded with the captured
-// output, with the parent task auto-injected as a zero-arg rerun tool (its
-// run:, never its fix:, so a rerun can't recurse); after it stops, the task's
-// command is re-run and that exit code is the step's verdict. Fields left
-// unset fall back to the agent's own defaults (Attempts to 1).
+// Those criteria are the step's Assert when it declares one and a nonzero
+// exit otherwise — the SAME rule that grades the result, so a repair is never
+// triggered by a different question than the one it is graded on. On a
+// failure the named agent is invoked seeded with that verdict and the
+// captured output, with the parent task auto-injected as a zero-arg rerun
+// tool (its run:, never its fix:, so a rerun can't recurse); after it stops,
+// the task's command is re-run and judged the same way. Fields left unset
+// fall back to the agent's own defaults (Attempts to 1).
 type FixSpec struct {
 	Agent  string // agents: entry to invoke on failure
 	Prompt string // optional override; empty uses a default fix prompt

@@ -159,7 +159,7 @@ func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedT
 	// one whose output is actually wanted, and nothing else carries it: the
 	// error this returns is "command %q failed: exit status N", with no trace
 	// of what the command said on its way out.
-	publishOutputForCurrentStep(ctx, rt.Name, stdout, stderr)
+	publishOutputForCurrentStep(ctx, stdout, stderr)
 
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, classifyRunError(ctx, err))
@@ -185,27 +185,30 @@ func classifyRunError(ctx context.Context, err error) error {
 	return err
 }
 
-// runFixTask runs a task with a fix: agent: capture the output, and on a
-// nonzero exit invoke the fix agent (seeded with that output and given the
-// task itself as a rerun tool), then re-run the command once. A green first
-// run never constructs the agent.
+// runFixTask runs a task with a fix: agent: capture the output, and when the
+// run misses the step's own success criteria invoke the fix agent (seeded
+// with that verdict and output, and given the task itself as a rerun tool),
+// then re-run the command once and judge that. A run that already passes
+// never constructs the agent.
 //
-// The re-run's output is what decides the step — via the task's assert: when
-// it has one, and by its exit code otherwise. Repair is part of producing an
-// outcome and assert: is the oracle over the outcome produced, which is the
-// layering attempts: already has (only the final attempt is judged). Running
-// them the other way round made a declared fix: bind nothing, silently.
+// The trigger and the verdict are the same question — taskVerdict — asked
+// before and after the repair. Asking the first one with a different rule is
+// what let a declared fix: bind nothing: gated on the exit code alone, a task
+// whose assert: was the real criterion got repaired when it had already
+// passed (and went red when the repair worked), and got no repair at all when
+// it failed while exiting 0.
 func runFixTask(ctx context.Context, cfg *config.Config, runner shell.Runner, rt config.ResolvedTask, workspaceDir string) error {
 	stdout, stderr, exitCode, err := runCaptured(ctx, runner, rt)
 	if err != nil {
 		return err
 	}
 
-	if exitCode == 0 {
-		return finishTask(ctx, rt, stdout, stderr, exitCode, workspaceDir)
+	failure := taskVerdict(rt, stdout, exitCode, workspaceDir)
+	if failure == nil {
+		return finishTask(ctx, rt, stdout, stderr, exitCode, workspaceDir, "")
 	}
 
-	fmt.Printf("task %q failed (exit %d); invoking fix agent %q\n", rt.Name, exitCode, rt.Fix.Agent)
+	fmt.Printf("task %q failed (%s); invoking fix agent %q\n", rt.Name, failure, rt.Fix.Agent)
 
 	// The fix agent is a dispatch point like any other, so it records — without
 	// this a job's assert.execution reads [check] whether the fix ran or the
@@ -219,67 +222,75 @@ func runFixTask(ctx context.Context, cfg *config.Config, runner shell.Runner, rt
 	// calls publish under it rather than nowhere (see agent.RunFix).
 	jobName, stepIndex := currentStepRef(ctx)
 
-	err = agent.RunFix(ctx, cfg, jobName, stepIndex, rt, taskFailureOutput(stdout, stderr, exitCode), workspaceDir)
+	err = agent.RunFix(ctx, cfg, jobName, stepIndex, rt, taskFailureOutput(failure, stdout, stderr, exitCode), workspaceDir)
 	if err != nil {
 		return fmt.Errorf("fix agent %q: %w", rt.Fix.Agent, err)
 	}
 
-	// Verdict: re-run the command (its run:, not its fix:) and gate on it.
+	// Verdict: re-run the command (its run:, not its fix:) and judge that.
 	stdout, stderr, exitCode, err = runCaptured(ctx, runner, rt)
 	if err != nil {
 		return err
 	}
 
+	return finishTask(ctx, rt, stdout, stderr, exitCode, workspaceDir,
+		fmt.Sprintf("still failing after fix agent %q", rt.Fix.Agent))
+}
+
+// taskVerdict judges a completed run by the step's own success criteria: its
+// assert: when the task declared one, its exit code otherwise. nil means the
+// run passed.
+//
+// Separate from finishTask because runFixTask has to ask the question before
+// it publishes anything — a repair decided by a different rule than the one
+// that grades the result is a repair aimed at the wrong target.
+func taskVerdict(rt config.ResolvedTask, stdout string, exitCode int, workspaceDir string) error {
 	if rt.Assert != nil {
-		return finishTask(ctx, rt, stdout, stderr, exitCode, workspaceDir)
+		return assertMismatch(rt.Assert, stdout, exitCode, workspaceDir)
 	}
 
-	publishOutputForCurrentStep(ctx, rt.Name, stdout, stderr)
-
 	if exitCode != 0 {
-		return fmt.Errorf("task %q: %w", rt.Name, outcome.Fail(fmt.Errorf("still failing after fix agent %q (exit %d)", rt.Fix.Agent, exitCode)))
+		return fmt.Errorf("exit status %d", exitCode)
 	}
 
 	return nil
 }
 
-// finishTask publishes a completed run's output and turns it into the step's
-// outcome: the assert's own mismatch when the task declared one, the exit code
-// otherwise. The publish comes first either way — a mismatch names the
+// finishTask publishes a completed run's output and turns the step's verdict
+// on it into the step's error. The publish comes first — a mismatch names the
 // expectation that failed and never the output that missed it, so suppressing
 // the output on failure would hide exactly what the reader needs.
-func finishTask(ctx context.Context, rt config.ResolvedTask, stdout, stderr string, exitCode int, workspaceDir string) error {
-	publishOutputForCurrentStep(ctx, rt.Name, stdout, stderr)
+//
+// attribution, when set, names what already tried and failed to make this run
+// pass, so a step its fixer could not rescue does not read like a step that
+// never had one. That distinction is the first thing an operator wants from a
+// red build of a feature that costs money per invocation.
+func finishTask(ctx context.Context, rt config.ResolvedTask, stdout, stderr string, exitCode int, workspaceDir, attribution string) error {
+	publishOutputForCurrentStep(ctx, stdout, stderr)
 
-	if rt.Assert == nil {
-		if exitCode != 0 {
-			return fmt.Errorf("task %q: %w", rt.Name, outcome.Fail(fmt.Errorf("exit status %d", exitCode)))
-		}
-
+	failure := taskVerdict(rt, stdout, exitCode, workspaceDir)
+	if failure == nil {
 		return nil
 	}
 
-	mismatch := assertMismatch(rt.Assert, stdout, exitCode, workspaceDir)
-	if mismatch != nil {
-		return fmt.Errorf("task %q: %w", rt.Name, outcome.Fail(mismatch))
+	if attribution != "" {
+		failure = fmt.Errorf("%s: %w", attribution, failure)
 	}
 
-	return nil
+	return fmt.Errorf("task %q: %w", rt.Name, outcome.Fail(failure))
 }
 
-// runAssertedTask runs rt.Run capturing its output, then evaluates rt.Assert:
-// a matching stdout substring and exit code make the task a success even on a
-// non-zero exit; a mismatch is a task-level failure with a got-vs-want reason.
-// workspaceDir is where assert.files: entries are checked — the task's own
-// working directory, read before the caller (executeTask) captures it into
-// the artifact store.
+// runAssertedTask runs rt.Run capturing its output, then judges it against
+// rt.Assert. workspaceDir is where assert.files: entries are checked — the
+// task's own working directory, read before the caller (executeTask) captures
+// it into the artifact store.
 func runAssertedTask(ctx context.Context, runner shell.Runner, rt config.ResolvedTask, workspaceDir string) error {
 	stdout, stderr, exitCode, err := runCaptured(ctx, runner, rt)
 	if err != nil {
 		return err
 	}
 
-	return finishTask(ctx, rt, stdout, stderr, exitCode, workspaceDir)
+	return finishTask(ctx, rt, stdout, stderr, exitCode, workspaceDir, "")
 }
 
 // runCaptured runs rt.Run buffering both streams, echoes them (RunCaptureFull
@@ -326,11 +337,17 @@ func assertMismatch(assert *config.Assert, stdout string, exitCode int, workspac
 	return config.AssertFilesMismatch(assert.Files, workspaceDir)
 }
 
-// taskFailureOutput formats a failed run's exit code and streams into the
-// text seeded into the fix agent's prompt.
-func taskFailureOutput(stdout, stderr string, exitCode int) string {
+// taskFailureOutput formats a failed run's verdict, exit code and streams
+// into the text seeded into the fix agent's prompt.
+//
+// The verdict is named separately from the exit code because with an assert:
+// they are different facts: a command can exit 0 and still have failed the
+// step, and a fixer told only the exit code would be repairing something the
+// step never asked about.
+func taskFailureOutput(reason error, stdout, stderr string, exitCode int) string {
 	var b strings.Builder
 
+	fmt.Fprintf(&b, "failure: %s\n", reason)
 	fmt.Fprintf(&b, "exit code: %d\n", exitCode)
 
 	if stdout != "" {

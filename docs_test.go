@@ -427,10 +427,9 @@ func injectFakeFallback(t *testing.T, agentEntry map[string]any, endpoint string
 // makes execution: alone unable to tell a fixed build from a broken one.
 //
 // Job-level rather than step-level because it is the one position always
-// available: assert: is rejected on get/put steps and anywhere inside a try:,
-// and on a task with a fix: it would take over the success decision the fix:
-// exists to make. Step asserts are the richer check where they are legal, and
-// examples carry them too — they just cannot be the rule.
+// available: assert: is rejected on get/put steps and anywhere inside a try:.
+// Step asserts are the richer check where they are legal, and examples carry
+// them too — they just cannot be the rule.
 func TestDocsExamplesAssert(t *testing.T) {
 	for _, block := range mustBlocks(t) {
 		if block.Mode() != "run" {

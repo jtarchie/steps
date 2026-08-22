@@ -79,7 +79,7 @@ jobs:
 	// ...and the tuned step did, against the artifact the first run produced.
 	assertLineCount(t, tuned, 2)
 
-	if !strings.Contains(readFile(t, tuned), "second") {
+	if !strings.Contains(readFileString(t, tuned), "second") {
 		t.Error("the replayed step ran the old text, so the edit under test was not what executed")
 	}
 }

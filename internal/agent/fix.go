@@ -13,7 +13,11 @@ import (
 // defaultFixPrompt is used when a task's fix: supplies no prompt of its own.
 // %q is the task name (also the name of the injected rerun tool). The
 // captured failure output is appended after this.
-const defaultFixPrompt = `A command that must pass has just failed; its output is below. Investigate the working directory, make the smallest change that resolves the failure, then call the %q tool to re-run the command and confirm it passes. Repeat until it passes, then reply with a brief summary and stop.`
+// The stop condition is the stated failure, not exit 0: a task's success
+// criteria are its assert: when it declares one, so a command can exit 0 and
+// still have failed the step. An agent told to "repeat until it passes" reads
+// the rerun tool's exit_code, sees 0, and stops having repaired nothing.
+const defaultFixPrompt = `A command that must pass has just failed; the failure and its output are below. Investigate the working directory, make the smallest change that resolves the stated failure, then call the %q tool to re-run the command. Note that a zero exit code is not by itself success — the failure named below is what has to be resolved. Repeat until it is, then reply with a brief summary and stop.`
 
 // buildFixPrompt assembles the fix conversation's user prompt: the fix:'s
 // own prompt: (or the default), then the captured failure output the model

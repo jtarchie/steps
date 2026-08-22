@@ -33,10 +33,12 @@ type Step struct {
 	// file's directory, instead of writing it inline (see LoadConfig's
 	// resolveFileIncludes). Mutually exclusive with Run. Task steps only.
 	RunFile string `yaml:"run_file,omitempty"`
-	// Fix, on a task step, names an agent to invoke when run: exits nonzero:
-	// the agent is seeded with the captured output and given the task itself
-	// as a rerun tool, then the command is re-run to decide the step. A green
-	// run never constructs the agent. See FixSpec.
+	// Fix, on a task step, names an agent to invoke when a run misses the
+	// step's own success criteria — its Assert when it declares one, a
+	// nonzero exit otherwise. The agent is seeded with that verdict and the
+	// captured output and given the task itself as a rerun tool; the command
+	// is then re-run and judged by the same rule. A run that already passes
+	// never constructs the agent. See FixSpec.
 	Fix *FixSpec `yaml:"fix,omitempty"`
 	// Put names a resource to run its out command against.
 	Put string `yaml:"put,omitempty"`

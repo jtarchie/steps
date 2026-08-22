@@ -264,7 +264,7 @@ func TestRunJobTaskReferenceUsesTaskFix(t *testing.T) {
 
 	dir := t.TempDir()
 	counter := filepath.Join(dir, "counter.txt")
-	run := fmt.Sprintf(`c=%s; n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$c"; test $n -ge 2`, counter)
+	run := failThenPass(counter)
 	path := writeTaskFixPipeline(t, dir, fakeA.URL, fakeB.URL, run, "fixerA", "")
 
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
@@ -288,7 +288,7 @@ func TestRunJobTaskReferenceStepFixOverridesTaskFix(t *testing.T) {
 
 	dir := t.TempDir()
 	counter := filepath.Join(dir, "counter.txt")
-	run := fmt.Sprintf(`c=%s; n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$c"; test $n -ge 2`, counter)
+	run := failThenPass(counter)
 	path := writeTaskFixPipeline(t, dir, fakeA.URL, fakeB.URL, run, "fixerA", "    fix: fixerB\n")
 
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
