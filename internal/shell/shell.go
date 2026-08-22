@@ -615,9 +615,12 @@ func exitCodeOf(err error) int {
 		return 0
 	}
 
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		return exitErr.ExitCode()
+	// The capability, not the type: *exec.ExitError satisfies this through its
+	// embedded *os.ProcessState and *ExitError satisfies it directly, so a
+	// command that ran on a worker answers the same as one that ran here.
+	var coder interface{ ExitCode() int }
+	if errors.As(err, &coder) {
+		return coder.ExitCode()
 	}
 
 	return -1
@@ -634,8 +637,17 @@ func processStarted(err error) bool {
 	}
 
 	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return true
+	}
 
-	return errors.As(err, &exitErr)
+	// A venue says the same thing about a command on another machine. It sends
+	// this only when the remote process actually started; a worker that could
+	// not be reached, or a command that never launched, comes back as a plain
+	// error so that it stays "the machinery broke".
+	var remoteErr *ExitError
+
+	return errors.As(err, &remoteErr)
 }
 
 // Run runs command via `sh -c command` with h.cwd as its working directory,
@@ -818,10 +830,13 @@ func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes
 // failure (a command's own nonzero exit) apart from an errored one so hooks
 // dispatch correctly; a resource check's failure, by contrast, is left
 // unwrapped so it classifies as errored.
+//
+// "Started and then exited nonzero" is exactly what processStarted answers,
+// including for a command a venue ran on another machine — the two questions
+// were always the same one, and only os/exec's monopoly on the answer made
+// them look different.
 func IsExitError(err error) bool {
-	var exitErr *exec.ExitError
-
-	return errors.As(err, &exitErr)
+	return err != nil && processStarted(err)
 }
 
 // RunShell runs command on the host via `sh -c command` with cwd as its
