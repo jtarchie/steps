@@ -147,10 +147,10 @@ func runTaskCommand(ctx context.Context, cfg *config.Config, rt config.ResolvedT
 	defer shell.CloseRunner(runner, rt.Name)
 
 	switch {
-	case rt.Assert != nil:
-		return runAssertedTask(ctx, runner, rt, workspaceDir)
 	case rt.Fix != nil:
 		return runFixTask(ctx, cfg, runner, rt, workspaceDir)
+	case rt.Assert != nil:
+		return runAssertedTask(ctx, runner, rt, workspaceDir)
 	}
 
 	stdout, stderr, err := runner.RunStreamedCapture(ctx, rt.Run, maxPublishedOutputBytes)
@@ -187,8 +187,14 @@ func classifyRunError(ctx context.Context, err error) error {
 
 // runFixTask runs a task with a fix: agent: capture the output, and on a
 // nonzero exit invoke the fix agent (seeded with that output and given the
-// task itself as a rerun tool), then re-run the command once — that re-run's
-// exit code is the verdict. A green first run never constructs the agent.
+// task itself as a rerun tool), then re-run the command once. A green first
+// run never constructs the agent.
+//
+// The re-run's output is what decides the step — via the task's assert: when
+// it has one, and by its exit code otherwise. Repair is part of producing an
+// outcome and assert: is the oracle over the outcome produced, which is the
+// layering attempts: already has (only the final attempt is judged). Running
+// them the other way round made a declared fix: bind nothing, silently.
 func runFixTask(ctx context.Context, cfg *config.Config, runner shell.Runner, rt config.ResolvedTask, workspaceDir string) error {
 	stdout, stderr, exitCode, err := runCaptured(ctx, runner, rt)
 	if err != nil {
@@ -196,7 +202,7 @@ func runFixTask(ctx context.Context, cfg *config.Config, runner shell.Runner, rt
 	}
 
 	if exitCode == 0 {
-		return nil
+		return finishTask(ctx, rt, stdout, stderr, exitCode, workspaceDir)
 	}
 
 	fmt.Printf("task %q failed (exit %d); invoking fix agent %q\n", rt.Name, exitCode, rt.Fix.Agent)
@@ -219,10 +225,16 @@ func runFixTask(ctx context.Context, cfg *config.Config, runner shell.Runner, rt
 	}
 
 	// Verdict: re-run the command (its run:, not its fix:) and gate on it.
-	_, _, exitCode, err = runCaptured(ctx, runner, rt)
+	stdout, stderr, exitCode, err = runCaptured(ctx, runner, rt)
 	if err != nil {
 		return err
 	}
+
+	if rt.Assert != nil {
+		return finishTask(ctx, rt, stdout, stderr, exitCode, workspaceDir)
+	}
+
+	publishOutputForCurrentStep(ctx, rt.Name, stdout, stderr)
 
 	if exitCode != 0 {
 		return fmt.Errorf("task %q: %w", rt.Name, outcome.Fail(fmt.Errorf("still failing after fix agent %q (exit %d)", rt.Fix.Agent, exitCode)))
@@ -231,24 +243,21 @@ func runFixTask(ctx context.Context, cfg *config.Config, runner shell.Runner, rt
 	return nil
 }
 
-// runAssertedTask runs rt.Run capturing its output, then evaluates rt.Assert:
-// a matching stdout substring and exit code make the task a success even on a
-// non-zero exit; a mismatch is a task-level failure with a got-vs-want reason.
-// assert takes over the success determination, so a task's fix: is not
-// consulted when an assert is present. workspaceDir is where assert.files:
-// entries are checked — the task's own working directory, read before the
-// caller (executeTask) captures it into the artifact store.
-func runAssertedTask(ctx context.Context, runner shell.Runner, rt config.ResolvedTask, workspaceDir string) error {
-	stdout, stderr, exitCode, err := runCaptured(ctx, runner, rt)
-	if err != nil {
-		return err
-	}
-
-	// Before the assert is evaluated: a mismatch reports which expectation
-	// failed ("output does not contain %q") and never the output that missed
-	// it, so suppressing this on failure would hide exactly what the reader
-	// needs to see the mismatch for themselves.
+// finishTask publishes a completed run's output and turns it into the step's
+// outcome: the assert's own mismatch when the task declared one, the exit code
+// otherwise. The publish comes first either way — a mismatch names the
+// expectation that failed and never the output that missed it, so suppressing
+// the output on failure would hide exactly what the reader needs.
+func finishTask(ctx context.Context, rt config.ResolvedTask, stdout, stderr string, exitCode int, workspaceDir string) error {
 	publishOutputForCurrentStep(ctx, rt.Name, stdout, stderr)
+
+	if rt.Assert == nil {
+		if exitCode != 0 {
+			return fmt.Errorf("task %q: %w", rt.Name, outcome.Fail(fmt.Errorf("exit status %d", exitCode)))
+		}
+
+		return nil
+	}
 
 	mismatch := assertMismatch(rt.Assert, stdout, exitCode, workspaceDir)
 	if mismatch != nil {
@@ -256,6 +265,21 @@ func runAssertedTask(ctx context.Context, runner shell.Runner, rt config.Resolve
 	}
 
 	return nil
+}
+
+// runAssertedTask runs rt.Run capturing its output, then evaluates rt.Assert:
+// a matching stdout substring and exit code make the task a success even on a
+// non-zero exit; a mismatch is a task-level failure with a got-vs-want reason.
+// workspaceDir is where assert.files: entries are checked — the task's own
+// working directory, read before the caller (executeTask) captures it into
+// the artifact store.
+func runAssertedTask(ctx context.Context, runner shell.Runner, rt config.ResolvedTask, workspaceDir string) error {
+	stdout, stderr, exitCode, err := runCaptured(ctx, runner, rt)
+	if err != nil {
+		return err
+	}
+
+	return finishTask(ctx, rt, stdout, stderr, exitCode, workspaceDir)
 }
 
 // runCaptured runs rt.Run buffering both streams, echoes them (RunCaptureFull

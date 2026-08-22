@@ -189,3 +189,126 @@ func readFile(t *testing.T, path string) string {
 
 	return string(data)
 }
+
+// writeFixAssertPipeline is writeFixPipeline plus a step assert: and a
+// job-level execution assert — the combination that used to bind nothing.
+func writeFixAssertPipeline(t *testing.T, dir, endpoint, run, stepAssert, jobAssert string) string {
+	t.Helper()
+
+	path := filepath.Join(dir, "pipeline.yml")
+	pipeline := fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: fixer
+  source:
+    endpoint: %s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools: [read_file, run_shell]
+
+jobs:
+- name: build
+  plan:
+  - task: check
+    inputs: []
+    run: %s
+    fix: fixer
+    assert:
+%s%s
+`, endpoint, run, stepAssert, jobAssert)
+
+	err := os.WriteFile(path, []byte(pipeline), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return path
+}
+
+// failThenPass returns a command that exits 1 the first time it runs and 0
+// the second, printing which run it is on so an assert can tell them apart.
+func failThenPass(counter string) string {
+	return fmt.Sprintf(
+		`c=%s; n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$c"; echo "run $n"; test $n -ge 2`,
+		counter)
+}
+
+// TestRunJobTaskFixRunsBeforeAssertJudges: a task carrying both is repaired
+// first and judged second. assert: is an oracle over the step's outcome and
+// fix: is part of producing one, so an assert that suppressed the repair was
+// a declared fixer that bound nothing — with no error to say so.
+//
+// It also pins WHICH run the oracle sees: the final one, the same rule
+// attempts: already follows.
+func TestRunJobTaskFixRunsBeforeAssertJudges(t *testing.T) {
+	fake := fixAgentServer(t)
+
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "counter.txt")
+	path := writeFixAssertPipeline(t, dir, fake.URL, failThenPass(counter),
+		"      code: 0\n      stdout: run 2",
+		"\n  assert:\n    execution: [fixer, check]\n    outcome: succeeded")
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	mustRun(t, path)
+
+	if got := fake.requestCount(); got != 1 {
+		t.Errorf("fix agent calls = %d, want 1 — the assert suppressed the repair", got)
+	}
+
+	if got := strings.TrimSpace(readFile(t, counter)); got != "2" {
+		t.Errorf("counter = %q, want 2 (initial run + the post-repair re-run)", got)
+	}
+}
+
+// TestRunJobTaskFixAssertStillJudges: the repair is not a free pass. A
+// command the fixer could not make satisfy the assert still fails the step,
+// and the reason is the assert's own mismatch — which is what the author
+// declared the step's success to mean.
+func TestRunJobTaskFixAssertStillJudges(t *testing.T) {
+	fake := fixAgentServer(t)
+
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "counter.txt")
+	path := writeFixAssertPipeline(t, dir, fake.URL, failThenPass(counter),
+		"      stdout: run 3", "")
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	err := run([]string{path})
+	if err == nil {
+		t.Fatal("expected the job to fail: the repaired command still does not satisfy the assert")
+	}
+
+	if !strings.Contains(err.Error(), "assert.stdout") {
+		t.Errorf("failure reason = %v, want the assert's own mismatch", err)
+	}
+
+	if got := fake.requestCount(); got != 1 {
+		t.Errorf("fix agent calls = %d, want 1", got)
+	}
+}
+
+// TestRunJobTaskFixGreenPathSkipsAgentWithAssert: the $0 happy path survives
+// the composition — a command that passes first try never constructs the
+// agent, assert or no assert.
+func TestRunJobTaskFixGreenPathSkipsAgentWithAssert(t *testing.T) {
+	fake := fixAgentServer(t)
+
+	dir := t.TempDir()
+	path := writeFixAssertPipeline(t, dir, fake.URL, "echo all good",
+		"      code: 0\n      stdout: all good",
+		"\n  assert:\n    execution: [check]\n    outcome: succeeded")
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	mustRun(t, path)
+
+	if got := fake.requestCount(); got != 0 {
+		t.Errorf("fix agent calls = %d, want 0 (a passing task must not invoke the agent)", got)
+	}
+}

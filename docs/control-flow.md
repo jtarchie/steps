@@ -274,7 +274,7 @@ jobs:
 - **`assert.outcome`**, on a job only: `failed` or `succeeded` — what the plan *concluded*, as opposed to which steps ran. `outcome: failed` requires the plan to have produced an error and then clears it; `outcome: succeeded` requires none, and is **not** a no-op — it opts the job out of the clearing rule above, so a plan failure stays a failure.
 
   This exists because `assert.execution` structurally cannot express "this job should have failed": a defect that swallows a failure runs the same steps in the same order, so the assert matches either way — and then the match clears the very difference under test. `outcome:` is the observation `execution:` can't make; the two compose.
-- **`assert: {stdout, code}`**, on a task/agent step (`code` is task-only — agents have no exit code). A matching `stdout` substring plus exact `code` makes a non-zero-exit task a *success*; a mismatch is a task-level failure, so `on_failure` fires. When present, assert takes over success determination — a task's `fix:` isn't consulted. This folds into the step's content hash, since it changes the success criteria:
+- **`assert: {stdout, code}`**, on a task/agent step (`code` is task-only — agents have no exit code). A matching `stdout` substring plus exact `code` makes a non-zero-exit task a *success*; a mismatch is a task-level failure, so `on_failure` fires. It judges the run the step actually ended on: with `attempts:` that is the final attempt, and with `fix:` it is the re-run that followed the repair — an assert is the oracle over an outcome, not a replacement for producing one. This folds into the step's content hash, since it changes the success criteria:
 
 ```yaml
 jobs:

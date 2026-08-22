@@ -161,8 +161,9 @@ jobs:
   plan:
   - task: check
     run: test -f patched.txt      # fails until the fixer creates it
-    fix: fixer                    # no step assert here: an assert takes over the
-                                  # success decision, so fix: would never be consulted
+    fix: fixer
+    assert:
+      code: 0                     # judged after the repair, on the re-run
   assert:
     execution: [fixer, check]     # the fixer ran, then the task's re-run passed —
     outcome: succeeded            # a green first try would record [check] alone
@@ -172,7 +173,7 @@ With both `attempts:` and `fix:`, the fix agent runs **once per exhausted attemp
 
 ## Interaction with `assert:`
 
-Only the **final attempt's output** is evaluated by `assert:`. If attempt 1 prints the expected text but exits nonzero, the task retries — only the last attempt's stdout and code are checked. (See [control-flow.md](control-flow.md) for `assert:` itself.)
+Only the **final attempt's output** is evaluated by `assert:`. If attempt 1 prints the expected text but exits nonzero, the task retries — only the last attempt's stdout and code are checked. A `fix:` sits inside an attempt the same way, so what an assert judges is the re-run that followed the repair, as in the fixture above. An assert is the oracle over the outcome a step reached, never a substitute for reaching one. (See [control-flow.md](control-flow.md) for `assert:` itself.)
 
 ## Hook firing
 
