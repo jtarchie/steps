@@ -18,12 +18,12 @@ import (
 )
 
 // dial opens a transport to a worker.
-func dial(worker Worker) (*transport, error) {
+func dial(ctx context.Context, worker Worker) (*transport, error) {
 	switch worker.Scheme {
 	case SchemeLocal:
 		return dialLocal(worker)
 	case SchemeSSH:
-		return nil, fmt.Errorf("%w: ssh workers are not supported by this build yet", ErrWorker)
+		return dialSSH(ctx, worker)
 	default:
 		return nil, fmt.Errorf("%w: unknown scheme %q", ErrWorker, worker.Scheme)
 	}

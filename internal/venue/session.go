@@ -31,6 +31,15 @@ import (
 // where leaving scratch on somebody else's machine would be worst.
 const closeTimeout = 30 * time.Second
 
+// helloTimeout bounds the handshake.
+//
+// Without it a worker that accepted the connection but could not run the
+// binary — the shape every architecture mismatch takes — leaves this end
+// blocked forever on a frame that is never coming, and a step hangs instead of
+// failing. Generous, because it also covers a cold machine paging in a 50MB
+// binary.
+const helloTimeout = 60 * time.Second
+
 // transport is a byte pipe to a shim, plus whatever has to be torn down to
 // release it. The venue does not care whether that is a child process or an
 // SSH channel, which is what lets a second scheme land without touching
@@ -39,6 +48,19 @@ type transport struct {
 	in    io.ReadCloser
 	out   io.WriteCloser
 	close func(context.Context) error
+	// diagnostics is whatever the far end wrote outside the protocol. It is
+	// the only account of a shim that never started — a binary built for
+	// another architecture, a loader that refused it — because such a shim
+	// never says anything the protocol can carry.
+	diagnostics func() string
+	// exited is closed when the far end's process ends, and is the reliable
+	// way to learn that: an SSH channel's reader does not dependably return
+	// EOF when the remote command dies, so a handshake waiting only on bytes
+	// would wait out its whole timeout for a shim that was never going to
+	// speak. Closed rather than sent to, so both the handshake and the
+	// teardown can read it. nil when a transport has no separate notion of the
+	// process ending.
+	exited <-chan struct{}
 }
 
 // session owns the conversation. Runners hold it BY POINTER so a WithLabel
@@ -98,7 +120,7 @@ func (s *session) ensure(ctx context.Context) error {
 }
 
 func (s *session) connect(ctx context.Context) error {
-	transport, err := dial(s.worker)
+	transport, err := dial(ctx, s.worker)
 	if err != nil {
 		return fmt.Errorf("worker %q: %w", s.worker, err)
 	}
@@ -111,21 +133,34 @@ func (s *session) connect(ctx context.Context) error {
 	if err != nil {
 		// The transport is already up, so tearing it down here is what keeps a
 		// failed handshake from stranding a child process or an SSH channel.
-		_ = transport.close(ctx)
-		s.transport = nil
+		//nolint:contextcheck // deliberately not the caller's context; see abandon
+		s.abandon()
 
 		return fmt.Errorf("worker %q: %w", s.worker, err)
 	}
 
 	err = s.upload()
 	if err != nil {
-		_ = transport.close(ctx)
-		s.transport = nil
+		//nolint:contextcheck // deliberately not the caller's context; see abandon
+		s.abandon()
 
 		return fmt.Errorf("worker %q: %w", s.worker, err)
 	}
 
 	return nil
+}
+
+// abandon tears down a transport whose session never opened.
+//
+// Under its own bounded context, never the caller's: the caller's may have no
+// deadline at all, and a worker that has already stopped answering would then
+// hold the step open forever on the cleanup rather than the work.
+func (s *session) abandon() {
+	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
+	defer cancel()
+
+	_ = s.transport.close(ctx)
+	s.transport = nil
 }
 
 func (s *session) greet() error {
@@ -156,7 +191,7 @@ func (s *session) greet() error {
 		return err
 	}
 
-	frame, err := s.read()
+	frame, err := s.readHello()
 	if err != nil {
 		return err
 	}
@@ -180,6 +215,73 @@ func (s *session) greet() error {
 	s.workdir = ok.Workdir
 
 	return nil
+}
+
+// readHello reads the handshake under a deadline, so a shim that never got as
+// far as speaking is reported rather than waited on.
+func (s *session) readHello() (wire.Frame, error) {
+	type result struct {
+		frame wire.Frame
+		err   error
+	}
+
+	// Buffered, so the read goroutine can always finish and exit even after
+	// this function has given up on it. Closing the transport is what
+	// unblocks it.
+	answered := make(chan result, 1)
+
+	go func() {
+		frame, err := s.read()
+		answered <- result{frame: frame, err: err}
+	}()
+
+	timer := time.NewTimer(helloTimeout)
+	defer timer.Stop()
+
+	var ended <-chan struct{}
+	if s.transport != nil {
+		ended = s.transport.exited
+	}
+
+	select {
+	case answer := <-answered:
+		if answer.err != nil {
+			return wire.Frame{}, s.startupError(answer.err)
+		}
+
+		return answer.frame, nil
+	case <-ended:
+		// The shim is gone and said nothing. Whatever it wrote on the way out
+		// is the whole explanation, and waiting for the timeout would only
+		// delay reporting it.
+		return wire.Frame{}, s.startupError(errShimExited)
+	case <-timer.C:
+		return wire.Frame{}, s.startupError(errNoHello)
+	}
+}
+
+// errShimExited is a worker whose shim died before the handshake.
+var errShimExited = errors.New("the shim exited before answering")
+
+// errNoHello is a worker that accepted a connection and then said nothing.
+var errNoHello = errors.New("the worker did not answer within the handshake timeout")
+
+// startupError explains a handshake that did not happen, using whatever the
+// far end said outside the protocol.
+func (s *session) startupError(cause error) error {
+	note := ""
+	if s.transport != nil && s.transport.diagnostics != nil {
+		note = s.transport.diagnostics()
+	}
+
+	if note == "" {
+		return fmt.Errorf("%w: %w", errShimDidNotStart, cause)
+	}
+
+	// The worker's own words first: "cannot execute binary file" says more
+	// than any wrapper this end could write.
+	return fmt.Errorf("%w: %w (worker said: %s) — build a binary for that machine and name it with ?binary=",
+		errShimDidNotStart, cause, note)
 }
 
 // close tears the session down, letting the shim remove its own scratch.

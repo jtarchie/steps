@@ -127,7 +127,9 @@ Keeping machines out of the pipeline file is what lets the same pipeline run on 
 - **An unmapped tag is an error before the run starts**, not a fall back to local execution. A step that says it needs a GPU box, quietly running on a laptop, is the same broken promise `network:` without `image:` is refused for.
 - **`local:`** runs the step through a shim in a child process on this machine — for trying a tagged pipeline out without a worker, and for debugging the shim itself: `--worker gpu=local:`.
 - Valid on **task steps only**. Invalid on `get`/`put` steps (their commands come from the resource type), on `agent` steps and on a task with `fix:` — an agent's tools and conversation run in the orchestrator, so only its shell commands would move, leaving half a step on each machine. Invalid with `image:`: a worker runs the step's commands directly, so name a worker that already has what the step needs.
-- The remote contract is **sshd and a pushed `steps` binary**, nothing else. No agent to install, no daemon to run.
+- The remote contract is **sshd and a pushed `steps` binary**, nothing else — no agent to install, no daemon to run. `steps` uploads itself over SFTP on first use, keyed by the binary's own content hash, and reuses it after that.
+- **Authentication** is your SSH agent, or `?identity=/path/to/key` for a specific key (an encrypted key has to go through the agent). Host keys are checked against `~/.ssh/known_hosts`, or `?known_hosts=` — never skipped.
+- **A worker on a different OS or architecture** needs a binary built for it: `?binary=/path/to/steps-linux-arm64`. `steps` has no Go toolchain in the field, so it cannot cross-compile one for you; `CGO_ENABLED=0` is what makes the one you build pushable.
 - **Caching**: `tags:` does **not** fold into the node's hash. Placement decides where a step runs, not what it produces, and a tree that crossed the wire digests identically to one that never left — so retagging a step, or repointing a tag at a new machine, does not re-run work that already succeeded.
 
 ## Container network (`network:`)

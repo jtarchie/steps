@@ -49,7 +49,15 @@ type Worker struct {
 	Root string
 	// Binary is a locally-built shim to push instead of this process's own,
 	// for a worker whose platform this machine cannot produce a binary for.
+	// steps has no Go toolchain in the field, so a mismatched worker is an
+	// operator supplying a binary they built rather than a cross-compile.
 	Binary string
+	// Identity is a private key file to authenticate with, on top of whatever
+	// an SSH agent offers. An encrypted key has to go through the agent.
+	Identity string
+	// KnownHosts overrides ~/.ssh/known_hosts. Host keys are always checked;
+	// this only says against which file.
+	KnownHosts string
 }
 
 // ErrWorker is a worker mapping that cannot be reached as written.
@@ -82,7 +90,10 @@ func ParseWorker(raw string) (Worker, error) {
 		return Worker{}, err
 	}
 
-	worker.Binary = parsed.Query().Get("binary")
+	query := parsed.Query()
+	worker.Binary = query.Get("binary")
+	worker.Identity = query.Get("identity")
+	worker.KnownHosts = query.Get("known_hosts")
 
 	return worker, nil
 }

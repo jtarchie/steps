@@ -34,6 +34,7 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 ```
 steps run <pipeline>        run one job (--resume <id> continues a failed one,
                             --replay <id> --from <step> re-runs one step of one)
+                            --worker <tag>=<url> places tags: steps on a machine
 steps watch <pipeline>      poll trigger: true resources, run affected jobs
 steps test <pipeline>       run every job and check assert: directives
 steps web <pipeline>...     serve the browser UI, polling as it serves

@@ -258,6 +258,14 @@ linters:
             - "**/internal/venue/**"
           allow:
             - "$gostd"
+            # The SSH client and its sftp subsystem: the whole remote contract
+            # is sshd plus a pushed binary, so these are what implement it.
+            # Both are pure Go, which is what keeps CGO_ENABLED=0 true and so
+            # keeps a cross-built binary pushable to a foreign worker.
+            - "golang.org/x/crypto/ssh"
+            - "golang.org/x/crypto/ssh/agent"
+            - "golang.org/x/crypto/ssh/knownhosts"
+            - "github.com/pkg/sftp"
             - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/shell"
             - "github.com/jtarchie/steps/internal/shim"
