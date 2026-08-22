@@ -238,6 +238,16 @@ linters:
             - "github.com/jtarchie/steps/internal/mcp"
             - "github.com/jtarchie/steps/internal/shell"
             - "github.com/jtarchie/steps/internal/template"
+        # wire is the framed protocol and tree codec the orchestrator and a
+        # pushed shim speak across a venue. A stdlib-only leaf on purpose: it
+        # is the one thing both ends of a version skew must agree on byte for
+        # byte, so it must not be able to drift by acquiring a dependency only
+        # one side has.
+        Wire:
+          files:
+            - "**/internal/wire/**"
+          allow:
+            - "$gostd"
         Workspace:
           files:
             - "**/internal/workspace/**"
@@ -245,6 +255,12 @@ linters:
             - "$gostd"
             - "golang.org/x/sys/unix"
             - "github.com/jtarchie/steps/internal/config"
+            # wire is reached from tests only, and deliberately: digestTree is
+            # unexported, and it is the digest that decides whether a tree that
+            # crossed a wire is still the same content. The test proving the
+            # codec preserves it therefore has to sit next to the digest, not
+            # next to the codec.
+            - "github.com/jtarchie/steps/internal/wire"
         # mcp is the shared MCP client layer (internal/agent's tool source and
         # internal/resource's mcp: backend both build on it), sitting at the
         # same tier as resource/workspace: depends on config, nothing
