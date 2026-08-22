@@ -86,7 +86,7 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 		if w.skippable[hash] {
 			fmt.Printf("skip: %s (version: %v)\n", resource.Name, version)
 			logFrom(getCtx).Info("job.skip", "resource", resource.Name, "reason", "cached", "hash", hash)
-			publishStepSkipped(getCtx, w.jobName, i, step, hash, skipReason(stepChainSkipped))
+			publishStepSkipped(getCtx, w.jobName, i, step, markStep(getCtx), hash, skipReason(stepChainSkipped))
 
 			// Taken, even though nothing ran: the cache skipped it because
 			// this exact chain already succeeded, which is the definition of
@@ -322,7 +322,7 @@ func (w *planWalk) fetchInPlace(ctx context.Context, step config.Step, steps []c
 	}
 
 	if res.disposition == stepChainSkipped {
-		publishStepSkipped(ctx, w.jobName, w.index, step, res.hash, skipReason(res.disposition))
+		publishStepSkipped(ctx, w.jobName, w.index, step, mark, res.hash, skipReason(res.disposition))
 		reportChainSkipped(ctx, w.jobName, w.index+1, steps[w.index+1:])
 
 		return true, nil

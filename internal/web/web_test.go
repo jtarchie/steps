@@ -318,6 +318,51 @@ func appendEvents(t *testing.T, st *store.Store, runID string, rows []store.RunE
 	}
 }
 
+// TestGuardSkippedStepDoesNotStayRunning is the reader's half of the identity
+// a skip event carries. A when:-guarded step announces itself and is only
+// then skipped, so both events name the same step id — and the transcript has
+// to fold them into ONE closed row. Under a fresh id per event the page held
+// the start open forever: a job reported succeeded while one of its steps
+// still ticked.
+func TestGuardSkippedStepDoesNotStayRunning(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	err := pipeline.Store.StartRun(ctx, "run-guard", "build", "/tmp/ws")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-guard", []store.RunEventRow{
+		{Type: events.TypeJobStarted, StepIndex: -1},
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1, Status: "succeeded", DurationMS: 12},
+		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "publish", StepKind: "put", StepID: 2},
+		{Type: events.TypeStepSkipped, StepIndex: 1, StepName: "publish", StepKind: "put", StepID: 2, Status: "skipped", Text: "when: guard was false"},
+		{Type: events.TypeJobFinished, StepIndex: -1, Status: "succeeded"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-guard", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	code, body := get(t, server, "/p/demo/runs/run-guard")
+	if code != http.StatusOK {
+		t.Fatalf("GET run = %d: %s", code, body)
+	}
+
+	if strings.Contains(body, `class="step running`) {
+		t.Error("a finished run renders a step as still running")
+	}
+
+	if got := strings.Count(body, `class="step skipped`); got != 1 {
+		t.Errorf("guarded step rendered %d times as skipped, want exactly 1", got)
+	}
+}
+
 // writeFileRaw is os.WriteFile with the test's permissions, kept apart so the
 // helper above reads as one line.
 func writeFileRaw(path, body string) error {

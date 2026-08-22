@@ -204,7 +204,7 @@ func reportChainSkipped(ctx context.Context, jobName string, firstIndex int, ste
 
 		fmt.Printf("skip: %s (chain)\n", name)
 		logFrom(ctx).Info("job.skip", "index", firstIndex+offset, "step", name, "reason", "chain")
-		publishStepSkipped(ctx, jobName, firstIndex+offset, step, "", skipReason(stepChainSkipped))
+		publishStepSkipped(ctx, jobName, firstIndex+offset, step, markStep(ctx), "", skipReason(stepChainSkipped))
 	}
 }
 
@@ -287,7 +287,7 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 	if res.disposition == stepRan {
 		publishStepFinished(ctx, r.jobName, i, step, mark, res.hash, started, err)
 	} else {
-		publishStepSkipped(ctx, r.jobName, i, step, res.hash, skipReason(res.disposition))
+		publishStepSkipped(ctx, r.jobName, i, step, mark, res.hash, skipReason(res.disposition))
 	}
 
 	// Neither kind of skip fires hooks: the step did not run, so it has no

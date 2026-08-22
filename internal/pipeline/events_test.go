@@ -382,3 +382,53 @@ func runFixturePipeline(t *testing.T, yaml string, wantFailure bool) []events.Ev
 
 	return collected
 }
+
+// TestGuardSkippedStepClosesItsOwnStart pins the identity a skip event must
+// carry: a when:-guarded step already published step_started under a minted
+// id, so its skip has to report THAT id rather than mint a second one.
+//
+// A fresh mark made the skip a CHILD of the start (the context inside the
+// step already names the start as the container), so the web UI's tree held
+// an entry that never closed — a finished job rendered a step whose elapsed
+// timer kept counting.
+func TestGuardSkippedStepClosesItsOwnStart(t *testing.T) {
+	t.Parallel()
+
+	collected := runFixturePipeline(t, `
+jobs:
+  - name: build
+    plan:
+      - task: ran
+        run: "true"
+      - task: guarded
+        when: "false"
+        run: "true"
+`, false)
+
+	var started, skipped *events.Event
+
+	for i, event := range collected {
+		if event.StepName != "guarded" {
+			continue
+		}
+
+		switch event.Type {
+		case events.TypeStepStarted:
+			started = &collected[i]
+		case events.TypeStepSkipped:
+			skipped = &collected[i]
+		}
+	}
+
+	if started == nil || skipped == nil {
+		t.Fatalf("guarded step published started=%v skipped=%v, want both", started, skipped)
+	}
+
+	if skipped.StepID != started.StepID {
+		t.Errorf("skip step id = %d, want %d (the id its start published)", skipped.StepID, started.StepID)
+	}
+
+	if skipped.ParentStepID != started.ParentStepID {
+		t.Errorf("skip parent = %d, want %d — a skip is not nested inside its own start", skipped.ParentStepID, started.ParentStepID)
+	}
+}

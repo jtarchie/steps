@@ -138,9 +138,17 @@ func publishStepFinished(
 // a merkle cache hit, a when: guard, or a resume. The reason is the whole
 // value of the event: "nothing happened" is not actionable, "replayed from
 // cache" is.
-func publishStepSkipped(ctx context.Context, jobName string, i int, step config.Step, hash, reason string) {
-	mark := markStep(ctx)
-
+//
+// mark is the caller's, not one minted here, because a skip is not always the
+// first anyone hears of the step: a when: guard and an in-place get both
+// publish step_started before they know the step will be skipped, and the
+// context inside such a step already names that start as the container. A
+// fresh mark there closes nothing and nests the skip under its own start, so
+// the consumer holds an entry that never ends. A step nobody announced — a
+// chain skip — passes markStep(ctx) itself.
+func publishStepSkipped(
+	ctx context.Context, jobName string, i int, step config.Step, mark stepMark, hash, reason string,
+) {
 	events.Publish(ctx, events.Event{
 		Type:         events.TypeStepSkipped,
 		RunID:        runIDFrom(ctx),
