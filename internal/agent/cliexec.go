@@ -457,8 +457,10 @@ func nativeToolNames(conv agentConversation, runtime cliRuntime) map[string]bool
 //
 // On the HTTP path the upstream steps' decisions and the context_paths files
 // arrive as synthetic tool exchanges — messages fabricated into a transcript
-// this package owns. There is no transcript to fabricate into here, so the
-// same content is prepended to the prompt instead, in the same order.
+// this package owns, which is why the task has to precede them there. There
+// is no transcript to fabricate into here and no roles to order, so the same
+// content is prepended to the prompt as fenced blocks and the task text ends
+// it, where the most recent instruction belongs.
 func renderCLIPrompt(conv agentConversation) string {
 	var out strings.Builder
 

@@ -48,7 +48,7 @@ func (p agentGenParams) applyTo(cfg *genai.GenerateContentConfig) {
 
 	if p.maxTokens > 0 {
 		tokens := min(p.maxTokens, math.MaxInt32)
-		cfg.MaxOutputTokens = int32(tokens) //nolint:gosec // clamped to MaxInt32 on the line above
+		cfg.MaxOutputTokens = int32(tokens)
 	}
 
 	if level, ok := reasoningLevels[p.reasoning]; ok {
@@ -254,10 +254,10 @@ func syntheticToolExchange(callID, name string, args map[string]any, content str
 
 // buildAgentRequest builds a fresh LLM request (system + user prompt + tools
 // + dials). When conv.contextBlocks is non-empty, synthetic read_file tool
-// call/response messages are prepended before the user prompt so the model
-// sees the context as if it had called read_file itself. A fresh request is
-// built per attempt so a retry starts from a clean conversation rather than
-// the grown Contents of a failed attempt.
+// call/response messages follow the user prompt so the model sees the context
+// as if it had called read_file itself. A fresh request is built per attempt
+// so a retry starts from a clean conversation rather than the grown Contents
+// of a failed attempt.
 func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 	cfg := &genai.GenerateContentConfig{
 		SystemInstruction: &genai.Content{Parts: []*genai.Part{{Text: conv.system}}},
@@ -271,9 +271,20 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 
 	contents := make([]*genai.Content, 0, 3+(len(conv.contextBlocks)+len(conv.upstream))*2)
 
-	// The decisions this step asked upstream steps for come first: they are
-	// what happened BEFORE this step, and the context_paths files below are
-	// what this step was handed to work on.
+	// The task comes first, because everything below it is a tool exchange
+	// and a tool exchange only follows a request. An assistant that reaches
+	// for read_file before anyone has asked it anything is a transcript no
+	// model was trained on, and a chat template is entitled to refuse it —
+	// LM Studio's qwen3.8 answers such a conversation with "No user query
+	// found in messages" rather than a completion.
+	contents = append(contents, &genai.Content{
+		Role:  genai.RoleUser,
+		Parts: []*genai.Part{{Text: conv.prompt}},
+	})
+
+	// The decisions this step asked upstream steps for come first of the
+	// injected pair: they are what happened BEFORE this step, and the
+	// context_paths files below are what this step was handed to work on.
 	for i, block := range conv.upstream {
 		contents = append(contents, syntheticToolExchange(
 			fmt.Sprintf("upstream_%d", i), readStepToolName, map[string]any{"step": block.path}, block.content)...)
@@ -283,12 +294,6 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 		contents = append(contents, syntheticToolExchange(
 			fmt.Sprintf("ctx_%d", i), "read_file", map[string]any{"path": block.path}, block.content)...)
 	}
-
-	// User prompt comes after any injected context.
-	contents = append(contents, &genai.Content{
-		Role:  genai.RoleUser,
-		Parts: []*genai.Part{{Text: conv.prompt}},
-	})
 
 	return &model.LLMRequest{
 		Contents: contents,

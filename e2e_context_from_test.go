@@ -160,3 +160,85 @@ jobs:
 // endpoint is a tiny readability shim: every fixture in this file points an
 // agent at the same fake provider.
 func endpoint(fake *fakeLLM) string { return fake.URL }
+
+// TestEndToEndInjectedContextFollowsTheUserPrompt pins the ORDER of the
+// messages a step's injected context produces. Both context_paths: files and
+// an upstream decision arrive as synthetic tool exchanges, and a tool exchange
+// only makes sense after a task has been given: an assistant that reaches for
+// read_file before anyone asked it anything is a transcript no model ever saw
+// in training, and some chat templates reject it outright (LM Studio's qwen3.8
+// answers a conversation opening on an assistant tool call with
+// "No user query found in messages").
+func TestEndToEndInjectedContextFollowsTheUserPrompt(t *testing.T) {
+	dir := t.TempDir()
+	fake := newFakeLLM(t,
+		callsTool("verdict", map[string]any{"choice": "bug", "note": "stack trace attached"}),
+		says("Classified."),
+		says("Filed under bugs."),
+	)
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: triager
+  source: {endpoint: %[1]s/v1/, model: test-model, api_key_env: STEPS_TEST_AGENT_API_KEY}
+- name: filer
+  source: {endpoint: %[1]s/v1/, model: test-model, api_key_env: STEPS_TEST_AGENT_API_KEY}
+
+jobs:
+- name: triage
+  plan:
+  - task: seed
+    outputs: [notes]
+    run: echo 'always cite a line number' > notes/CONVENTIONS.md
+  - agent: triager
+    inputs: []
+    prompt: Classify the report.
+    verdicts: [bug, feature]
+  - agent: filer
+    inputs: [notes]
+    context_paths: [notes/CONVENTIONS.md]
+    context:
+      from:
+        triager: note
+    prompt: File it.
+`, endpoint(fake)))
+
+	mustRun(t, path)
+
+	reader := fake.request(3)
+
+	// Everything it was handed is still there...
+	for _, want := range []string{"read_step", "stack trace attached", "always cite a line number"} {
+		if !strings.Contains(reader.Raw, want) {
+			t.Errorf("reader's request does not carry %q", want)
+		}
+	}
+
+	// ...and the task it was handed them for comes first.
+	if len(reader.Messages) < 2 {
+		t.Fatalf("reader's request has %d messages, want at least 2", len(reader.Messages))
+	}
+
+	if got := reader.Messages[0].Role; got != "system" {
+		t.Errorf("first message role = %q, want system", got)
+	}
+
+	if got := reader.Messages[1].Role; got != "user" {
+		roles := make([]string, 0, len(reader.Messages))
+		for _, msg := range reader.Messages {
+			roles = append(roles, msg.Role)
+		}
+
+		t.Errorf("first non-system message role = %q, want user; got roles %v", got, roles)
+	}
+
+	if got := reader.Messages[1].Content; !strings.Contains(got, "File it.") {
+		t.Errorf("first user message = %q, want the step's own prompt", got)
+	}
+}
