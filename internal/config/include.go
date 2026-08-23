@@ -408,17 +408,19 @@ func resolveStepMessages(baseDir, label string, step *Step) error {
 		return nil
 	}
 
+	err := checkMessageFileForms(label, step.MessageFiles)
+	if err != nil {
+		return err
+	}
+
 	if len(step.Messages) > 0 {
 		return fmt.Errorf("%s: messages: and message_files: are mutually exclusive — two ordered lists cannot say which message comes first", label)
 	}
 
-	// A deferred file is read at run time out of an artifact this step
-	// declares, so there is nothing to inline here. Any deferred entry leaves
-	// the whole list to internal/agent, which resolves them in order.
-	for _, ref := range step.MessageFiles {
-		if ref.Deferred() {
-			return nil
-		}
+	if step.MessageFiles[0].Deferred() {
+		// Read at run time out of an artifact this step declares, so there is
+		// nothing to inline here; internal/agent resolves them in order.
+		return nil
 	}
 
 	messages := make([]string, 0, len(step.MessageFiles))
@@ -434,6 +436,51 @@ func resolveStepMessages(baseDir, label string, step *Step) error {
 
 	step.Messages = messages
 	step.MessageFiles = nil
+
+	return nil
+}
+
+// checkMessageFileForms refuses the two shapes a list can take that a single
+// *FileRef could not.
+//
+// A null entry decodes to a nil FileRef, and every site that reads one would
+// dereference it — here, and again in internal/agent for the deferred form.
+// The scalar field this replaced was nil-checked at each of them; a list
+// rejects the hole once instead.
+//
+// A mix of forms is refused because the two resolve against different roots: a
+// bare path against the pipeline file's directory at load time, an {artifact,
+// path} against the step's materialized workspace at run time. One ordered
+// list cannot be resolved at two times without carrying per-entry state
+// through hashing and into internal/agent.
+//
+// Left unrefused, a mixed list was worse than broken: one deferred entry made
+// the whole list skip inlining, so the bare path was later resolved under the
+// workspace. It either vanished mid-build, or — where an input artifact
+// happened to share the leading directory name — resolved to a file the
+// FETCHED artifact supplied, sending a PR author's text to the model in place
+// of the pipeline author's.
+//
+// Both are refused at LOAD, so a pipeline that cannot work is caught before
+// any get has run.
+func checkMessageFileForms(label string, refs []*FileRef) error {
+	deferred, inline := 0, 0
+
+	for i, ref := range refs {
+		if ref == nil || (ref.Path == "" && ref.Artifact == "") {
+			return fmt.Errorf("%s: message_files: entry %d is empty — remove it, or name a file", label, i+1)
+		}
+
+		if ref.Deferred() {
+			deferred++
+		} else {
+			inline++
+		}
+	}
+
+	if deferred > 0 && inline > 0 {
+		return fmt.Errorf("%s: message_files: mixes file paths with {artifact, path} entries — a path resolves against this pipeline's directory and an artifact entry against the step's workspace, so one list cannot hold both", label)
+	}
 
 	return nil
 }

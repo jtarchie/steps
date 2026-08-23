@@ -1,0 +1,16 @@
+# A null list entry decodes to a nil FileRef. The scalar prompt_file: this
+# replaced was nil-checked at every site; the list form has to reject the hole
+# rather than dereference it — and rejecting it at LOAD is what keeps a
+# pipeline that cannot work from being discovered mid-build, after the gets
+# have already run.
+# expect: message_files: entry 1 is empty
+agents:
+- name: reviewer
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    message_files:
+      -

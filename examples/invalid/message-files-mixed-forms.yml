@@ -1,0 +1,32 @@
+# The two forms resolve against different roots: a bare path against this
+# pipeline file's directory at load time, an {artifact, path} against the
+# step's materialized workspace at run time. A single ordered list cannot be
+# resolved at two different times, and the failure of accepting it was not a
+# missing file — it was a fetched artifact supplying the text in place of the
+# pipeline author's, whenever an input happened to share the leading directory
+# name.
+# expect: message_files: mixes file paths with {artifact, path} entries
+resource_types:
+- name: mock
+  config:
+    check: echo '[{"ref":"1"}]'
+    in: 'mkdir -p "$1"/prompts && echo hi > "$1"/prompts/intro.md'
+    out: 'echo "{}"'
+
+resources:
+- name: prompts
+  type: mock
+
+agents:
+- name: reviewer
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+
+jobs:
+- name: review
+  plan:
+  - get: prompts
+  - agent: reviewer
+    inputs: [prompts]
+    message_files:
+      - prompts/intro.md
+      - { artifact: prompts, path: intro.md }
