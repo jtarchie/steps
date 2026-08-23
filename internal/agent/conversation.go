@@ -592,7 +592,11 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 func (conv agentConversation) handleStopAttempt(
 	req *model.LLMRequest, state *resumeCheckpoint, ignoredForces *int,
 ) (bool, error) {
-	if conv.nudgeMissingFiles(req, &state.filesNudges) {
+	// Only once there is nothing left to ask. assert.files: is an obligation
+	// on the STEP, not on each message, so nudging at an earlier boundary
+	// would tell a model it owes files before it has been asked the question
+	// meant to produce them.
+	if state.sent+1 >= len(conv.messages) && conv.nudgeMissingFiles(req, &state.filesNudges) {
 		return false, nil
 	}
 

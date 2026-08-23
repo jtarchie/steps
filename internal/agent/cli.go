@@ -163,6 +163,9 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		// spent counts CHILD INVOCATIONS across every round, which is what
 		// the pooled budget is denominated in — see cliRoundAttempts.
 		spent int
+		// sent is the index of the message being asked. Every invocation
+		// after the first rejoins the session, whatever the reason.
+		sent int
 	)
 
 	attempts := func(attempt int) error {
@@ -176,7 +179,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 			// A nudge round rejoins the same conversation the same way a
 			// retried attempt does. Nothing about the child's memory is
 			// different; only the reason for speaking to it again is.
-			resume: attempt > 0 || nudges > 0,
+			resume: rejoiningCLISession(attempt, nudges, sent),
 			home:   stepHome,
 			// The turn budget is per STEP, not per attempt — the hosted path
 			// counts turns in one conversation that request retries never
@@ -188,7 +191,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 			maxTurns: remainingCLITurns(prepared.ri.MaxTurns, state.turns),
 		}
 
-		plan.prompt = cliAttemptPrompt(plan.resume, attempt > 0, state, prepared)
+		plan.prompt = cliAttemptPrompt(plan.resume, attempt > 0, sent, state, prepared)
 
 		if plan.outOfTurns() {
 			// Carrying lastErr matters: the budget ran out because of whatever
@@ -222,13 +225,64 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		return retry.StopOnDeadline(ctx, attemptCtx, outcome.FailOnDeadline(ctx, attemptCtx, attemptErr))
 	}
 
-	runErr := runCLIRounds(ctx, prepared, state, &nudges, &spent, attempts)
+	runErr := runCLIMessages(ctx, prepared, state, &nudges, &spent, &sent, attempts)
 
 	// The conversation the child had, as the recorder captured it off the
 	// stream. Attached however the step ended, like the hosted path attaches
 	// its own — a step that died mid-task is the one whose trace is needed
 	// most.
 	return state.result(prepared.ri.ModelName, prepared.conv.recorder), runErr
+}
+
+// runCLIMessages asks the step's messages in turn, each one resuming the same
+// session the last was answered in.
+//
+// A child that finished is woken for a new question exactly as it is woken for
+// a missing file: the transcript, the working directory and the task are all
+// intact, and it is told the one thing it has not heard. That is what makes
+// this the same conversation rather than a second one — a CLI agent has no
+// other way to be asked twice, since the child owns its own turn loop and
+// exits when it is done.
+//
+// Two things reset at a message boundary and one deliberately does not.
+//
+// Required-tool satisfaction resets, for the reason the hosted path resets it:
+// carrying it forward would let the child answer the last question without
+// calling the verdict tool again, and the step would route on a decision made
+// about something else.
+//
+// The invocation budget resets, because attempts: means "retries for this
+// ask". Pooling it across messages would leave a child that died answering the
+// third question with nothing left to retry on, having spent the allowance on
+// the first.
+//
+// max_turns: does NOT reset: it bounds the whole conversation, exactly as it
+// does on the hosted path, and remainingCLITurns already tracks it per step.
+func runCLIMessages(
+	ctx context.Context, prepared preparedAgentStep, state *cliStepState,
+	nudges, spent, sent *int, attempts func(int) error,
+) error {
+	messages := prepared.conv.messages
+	if len(messages) == 0 {
+		messages = []string{""}
+	}
+
+	for i := range messages {
+		*sent = i
+
+		if i > 0 {
+			*spent = 0
+			*nudges = 0
+			state.satisfied = map[string]bool{}
+		}
+
+		err := runCLIRounds(ctx, prepared, state, nudges, spent, i == len(messages)-1, attempts)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // runCLIRounds spends the step's attempts:, and then keeps waking the child
@@ -245,15 +299,31 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 // whether it is opening the session or rejoining it.
 func runCLIRounds(
 	ctx context.Context, prepared preparedAgentStep, state *cliStepState,
-	nudges, spent *int, attempts func(int) error,
+	nudges, spent *int, last bool, attempts func(int) error,
 ) error {
 	for ; ; *nudges++ {
 		err := retry.Do(ctx, cliRoundAttempts(prepared.ri.Attempts, *spent), attempts)
-		if err != nil || !nudgeCLIForMissingFiles(prepared, state, *nudges) {
+
+		// Files are owed by the STEP, so a message with another after it is
+		// not the moment to ask for them: the question that produces the file
+		// may be the one still unasked.
+		if err != nil || !last || !nudgeCLIForMissingFiles(prepared, state, *nudges) {
 			//nolint:wrapcheck // the attempt already wrapped and classified its own failure
 			return err
 		}
 	}
+}
+
+// rejoiningCLISession reports whether this invocation continues a session
+// rather than opening one.
+//
+// Three reasons to wake a child that is already there, and the child cannot
+// tell them apart from the flag alone: the last attempt died, the step still
+// owes files, or there is another message to put to it. What differs is only
+// what it is told (see cliAttemptPrompt); that it is the same conversation is
+// true in every case.
+func rejoiningCLISession(attempt, nudges, sent int) bool {
+	return attempt > 0 || nudges > 0 || sent > 0
 }
 
 // cliRoundAttempts is what one round may spend out of a budget the whole step
@@ -292,9 +362,18 @@ func cliRoundAttempts(attempts, spent int) int {
 // The unmet set is recomputed here rather than captured when the round
 // opened: an attempt that wrote one of two declared files and then died
 // should be told about the one still missing, not both.
-func cliAttemptPrompt(resume, retrying bool, state *cliStepState, prepared preparedAgentStep) string {
+func cliAttemptPrompt(resume, retrying bool, sent int, state *cliStepState, prepared preparedAgentStep) string {
 	if !resume {
 		return renderCLIPrompt(prepared.conv)
+	}
+
+	// A message the child has not been asked yet outranks both other reasons
+	// to rejoin: it did not die, and whatever it still owes belongs to the
+	// step rather than to this question. Only the message text is sent — the
+	// session already holds the task, the context blocks and the upstream
+	// decisions, and re-sending them is what invites redoing finished work.
+	if next, ok := pendingCLIMessage(prepared, sent, state); ok {
+		return next
 	}
 
 	unmet := prepared.conv.expect.unmet()
@@ -313,6 +392,28 @@ func cliAttemptPrompt(resume, retrying bool, state *cliStepState, prepared prepa
 	}
 
 	return cliContinuationPrompt(state, prepared)
+}
+
+// pendingCLIMessage is the message this invocation is opening, when it is one
+// the child has not seen.
+//
+// Every invocation for message N after the first is a retry of that same
+// message, and a retry must not re-ask it — the child either died mid-answer,
+// in which case it is told to continue, or it owes a file. The distinction is
+// whether anything has been absorbed since the boundary, which turns is the
+// only per-invocation counter that survives it.
+func pendingCLIMessage(prepared preparedAgentStep, sent int, state *cliStepState) (string, bool) {
+	if sent <= 0 || sent >= len(prepared.conv.messages) {
+		return "", false
+	}
+
+	if state.asked >= sent {
+		return "", false
+	}
+
+	state.asked = sent
+
+	return prepared.conv.messages[sent], true
 }
 
 // nudgeCLIForMissingFiles reports whether the child should be woken again
@@ -398,6 +499,9 @@ func (p cliAttempt) outOfTurns() bool {
 // events, so the calls a step actually made are the concatenation, not the
 // last slice.
 type cliStepState struct {
+	// asked is the highest message index already put to the child, so a retry
+	// of that message resumes it rather than asking it twice.
+	asked        int
 	text         string
 	turns        int
 	trajectory   []recordedToolCall
