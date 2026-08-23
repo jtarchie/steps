@@ -37,6 +37,13 @@ func TestMain(m *testing.M) {
 			os.Exit(0)
 		}
 
+		// A shim that stops answering once a command starts, so a test can
+		// drive the path where a worker wedges mid-step.
+		if os.Getenv(deafExecEnv) != "" {
+			serveDeafShim()
+			os.Exit(0)
+		}
+
 		build, err := shim.SelfBuild()
 		if err != nil {
 			os.Exit(1)

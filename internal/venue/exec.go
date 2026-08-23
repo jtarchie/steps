@@ -5,7 +5,9 @@ package venue
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/wire"
 )
 
@@ -88,10 +90,27 @@ func deliver(frame wire.Frame, sinks outputSinks) (wire.Exit, bool, error) {
 	}
 }
 
-// watchCancel sends a cancel frame if ctx ends before the command does.
+// watchCancel sends a cancel frame if ctx ends before the command does, and
+// closes the connection if that frame goes unanswered.
+//
+// The cancel alone is only as good as the worker: it asks a shim that is still
+// listening to stop, which is the ordinary case. A worker that has wedged — a
+// stalled disk, a hung child, a network still holding the TCP connection open
+// with nothing moving over it — answers nothing, and run's read is a
+// synchronous ReadFull with no deadline. So timeout:, fail_fast, race: and
+// Ctrl-C would each end nothing at all: the step would sit on that read for as
+// long as the machine stayed up.
+//
+// Closing the reader is what makes the read return. Same bound and the same
+// reasoning as a local command's WaitDelay: ask first, and if the far end has
+// stopped listening, stop waiting on it.
 func (s *session) watchCancel(ctx context.Context, op uint32) func() {
 	done := make(chan struct{})
 	stopped := make(chan struct{})
+
+	// Captured now rather than read in the goroutine: close() nils the field
+	// under the mutex, and this runs without it.
+	tr := s.transport
 
 	go func() {
 		defer close(stopped)
@@ -102,6 +121,18 @@ func (s *session) watchCancel(ctx context.Context, op uint32) func() {
 			// the read side will report that first.
 			_ = s.encoder.Write(wire.Frame{Type: wire.FrameCancel, Op: op})
 		case <-done:
+			return
+		}
+
+		grace := time.NewTimer(shell.CancelWaitDelay)
+		defer grace.Stop()
+
+		select {
+		case <-done:
+		case <-grace.C:
+			if tr != nil {
+				_ = tr.in.Close()
+			}
 		}
 	}()
 
