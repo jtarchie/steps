@@ -3,6 +3,7 @@ package venue
 // Moving the step's tree, in both directions.
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -83,22 +84,66 @@ func (s *session) fetch() error {
 		return err
 	}
 
-	// Clear each destination first, the same way workspace.Capture removes
-	// before it materializes: an output is replaced by what the command
-	// produced, not merged with what was there. It also keeps the unpack's
-	// refusal to overwrite meaningful — nothing it writes can already exist.
+	// Staged, then swapped. Removing the destinations first and unpacking over
+	// them would destroy the step's outputs the moment a transfer died — a
+	// dropped connection, a truncated stream — and the retry that follows
+	// would then re-upload the emptied tree and fail for an unrelated reason.
+	// Local execution has no such window, and placement must not add one.
+	//
+	// Inside cwd deliberately: the swap below is a rename, which needs to stay
+	// on one filesystem.
+	staging, err := os.MkdirTemp(s.cwd, ".steps-fetch-")
+	if err != nil {
+		return fmt.Errorf("staging the fetched outputs: %w", err)
+	}
+
+	defer func() { _ = os.RemoveAll(staging) }()
+
+	err = s.receive(op, staging)
+	if err != nil {
+		return err
+	}
+
+	return s.swapFetched(staging)
+}
+
+// swapFetched moves each fetched output into place, replacing what was there.
+//
+// Per output rather than all at once: an output the worker sent nothing for is
+// left alone rather than emptied, which is what a step that declared an output
+// and produced nothing already means everywhere else — a fact reported where
+// outputs are checked, not a reason to delete the previous one here.
+func (s *session) swapFetched(staging string) error {
 	for _, name := range s.outputs {
-		err = os.RemoveAll(filepath.Join(s.cwd, name))
+		src := filepath.Join(staging, name)
+
+		_, err := os.Lstat(src)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+
 		if err != nil {
-			return fmt.Errorf("clearing %q before fetching it back: %w", name, err)
+			return fmt.Errorf("fetching %q back: %w", name, err)
+		}
+
+		dst := filepath.Join(s.cwd, name)
+
+		err = os.RemoveAll(dst)
+		if err != nil {
+			return fmt.Errorf("clearing %q before replacing it: %w", name, err)
+		}
+
+		err = os.Rename(src, dst)
+		if err != nil {
+			return fmt.Errorf("replacing %q with what the worker sent: %w", name, err)
 		}
 	}
 
-	return s.receive(op)
+	return nil
 }
 
 // receive unpacks one operation's data frames into the local tree.
-func (s *session) receive(op uint32) error {
+func (s *session) receive(op uint32, into string) error {
 	reader, writer := io.Pipe()
 
 	var (
@@ -111,7 +156,7 @@ func (s *session) receive(op uint32) error {
 	go func() {
 		defer wg.Done()
 
-		unpackErr = wire.UnpackTree(reader, s.cwd)
+		unpackErr = wire.UnpackTree(reader, into)
 		// Closing with the error stops the frame loop below from blocking on a
 		// pipe nobody is reading any more.
 		_ = reader.CloseWithError(unpackErr)

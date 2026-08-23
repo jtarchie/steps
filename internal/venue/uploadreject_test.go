@@ -19,6 +19,11 @@ import (
 // refuse whatever tree it is sent.
 const rejectUploadEnv = "STEPS_TEST_REJECT_UPLOAD"
 
+// breakFetchEnv makes it accept everything and then answer the fetch with
+// bytes that are not an archive, so the transfer fails after the orchestrator
+// has committed to it.
+const breakFetchEnv = "STEPS_TEST_BREAK_FETCH"
+
 // serveRejectingShim is the far end of that: it greets normally, drains the
 // upload, and reports it failed — the shape a worker takes when its disk is
 // full or its scratch is read-only.
@@ -38,7 +43,20 @@ func serveRejectingShim() {
 				Protocol: wire.Protocol,
 				Workdir:  os.TempDir(),
 			})
+		case wire.FrameFetch:
+			// Not an archive. UnpackTree fails, which is every way a transfer
+			// can die after the orchestrator asked for it: a dropped
+			// connection, a truncated stream, a worker that went away.
+			_ = encoder.Write(wire.Frame{Type: wire.FrameData, Op: frame.Op, Payload: []byte("not a tar stream")})
+			_ = encoder.Write(wire.Frame{Type: wire.FrameEnd, Op: frame.Op})
 		case wire.FrameEnd:
+			if os.Getenv(breakFetchEnv) != "" {
+				// This mode takes the tree; only the fetch is broken.
+				_ = encoder.Write(wire.Frame{Type: wire.FrameEnd, Op: frame.Op})
+
+				continue
+			}
+
 			// The end of the tree it was refusing.
 			_ = encoder.WriteJSON(wire.FrameError, frame.Op, wire.Error{
 				Message: "unpacking the step tree: no space left on device",
@@ -55,7 +73,7 @@ func serveRejectingShim() {
 
 			_ = encoder.WriteJSON(wire.FrameExit, frame.Op, wire.Exit{Started: true, Code: 0})
 		case wire.FrameHelloOK, wire.FrameUpload, wire.FrameStdout, wire.FrameStderr,
-			wire.FrameExit, wire.FrameFetch, wire.FrameData, wire.FrameCancel,
+			wire.FrameExit, wire.FrameData, wire.FrameCancel,
 			wire.FrameError, wire.FrameBye:
 			// Everything else this stub has no opinion about, including the
 			// data frames of the tree it is refusing.
@@ -98,5 +116,34 @@ func TestVenueRefusedUploadNeverRunsTheCommand(t *testing.T) {
 
 	if !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatal("the command ran anyway — a rejected tree still had side effects on the worker")
+	}
+}
+
+// TestVenueFailedFetchKeepsTheLocalOutputs pins that a transfer which dies
+// leaves the step's outputs where they were.
+//
+// fetch() used to os.RemoveAll every declared output BEFORE reading a byte of
+// the reply, so a dropped connection destroyed them irrecoverably — and the
+// retry that follows re-uploads the now-emptied tree, so the second attempt
+// fails for a reason unrelated to the first. Local execution has no such
+// window.
+func TestVenueFailedFetchKeepsTheLocalOutputs(t *testing.T) {
+	t.Setenv(breakFetchEnv, "1")
+
+	cwd := t.TempDir()
+	mustWrite(t, filepath.Join(cwd, "out", "previous.txt"), "from an earlier attempt\n")
+
+	runner := newLocalRunner(t, localWorker(t, cwd, "out"))
+
+	err := runner.Run(context.Background(), "true")
+	if err == nil {
+		t.Fatal("the step succeeded despite a fetch that could not be unpacked")
+	}
+
+	kept := filepath.Join(cwd, "out", "previous.txt")
+
+	_, statErr := os.Stat(kept)
+	if statErr != nil {
+		t.Fatalf("a failed fetch destroyed the local outputs: %v", statErr)
 	}
 }

@@ -32,7 +32,7 @@ func TestMain(m *testing.M) {
 		// A shim that refuses the tree, so a test can drive the path where a
 		// worker rejects an upload. Selected by environment rather than argv
 		// because the venue execs a fixed "<binary> _shim".
-		if os.Getenv(rejectUploadEnv) != "" {
+		if os.Getenv(rejectUploadEnv) != "" || os.Getenv(breakFetchEnv) != "" {
 			serveRejectingShim()
 			os.Exit(0)
 		}
