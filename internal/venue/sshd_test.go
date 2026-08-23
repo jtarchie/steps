@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +37,11 @@ type testSSHD struct {
 	URL string
 	// Root is the worker's home: where a pushed binary and its scratch land.
 	Root string
+	// HostKey is this server's own public key, so a test can pin it the way an
+	// operator pins a machine that has no known_hosts entry.
+	HostKey ssh.PublicKey
+	// Identity is the private key a client authenticates with.
+	Identity string
 
 	// Uploads counts files written over sftp — how a test asks whether the
 	// binary was pushed, and whether a second session reused it.
@@ -91,6 +97,8 @@ func newTestSSHD(t *testing.T) *testSSHD {
 	knownHosts := filepath.Join(dir, "known_hosts")
 	writeKnownHosts(t, knownHosts, server.listener.Addr().String(), hostPub)
 
+	server.HostKey = hostPub
+	server.Identity = identity
 	server.URL = fmt.Sprintf("ssh://%s/%s?identity=%s&known_hosts=%s",
 		server.listener.Addr().String(), server.Root, identity, knownHosts)
 
@@ -334,4 +342,20 @@ func commandOf(payload []byte) string {
 	}
 
 	return request.Value
+}
+
+// URLWithPin is a mapping at this server verified by a fingerprint instead of
+// a known_hosts file — the shape a venue with no history takes.
+func (s *testSSHD) URLWithPin(t *testing.T, fingerprint string) string {
+	t.Helper()
+
+	return fmt.Sprintf("ssh://%s/%s?identity=%s&hostkey=%s",
+		s.listener.Addr().String(), s.Root, s.Identity, url.QueryEscape(fingerprint))
+}
+
+// URLWithHostKeyPin pins this server's actual key, which must be accepted.
+func (s *testSSHD) URLWithHostKeyPin(t *testing.T) string {
+	t.Helper()
+
+	return s.URLWithPin(t, ssh.FingerprintSHA256(s.HostKey))
 }

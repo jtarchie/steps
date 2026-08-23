@@ -317,6 +317,10 @@ func keyFile(path string) (ssh.AuthMethod, error) {
 // is; an operator who has not got a known_hosts entry yet is one ssh away from
 // having one.
 func hostKeyCallback(worker Worker) (ssh.HostKeyCallback, error) {
+	if worker.HostKey != "" {
+		return pinnedHostKey(worker.HostKey), nil
+	}
+
 	file := worker.KnownHosts
 	if file == "" {
 		home, err := os.UserHomeDir()
@@ -334,6 +338,26 @@ func hostKeyCallback(worker Worker) (ssh.HostKeyCallback, error) {
 
 	return callback, nil
 }
+
+// pinnedHostKey verifies a worker against a fingerprint the operator supplied.
+//
+// The mismatch names BOTH fingerprints. A pin that failed saying only "host
+// key mismatch" leaves an operator unable to tell a replaced machine from a
+// mistyped mapping, and those two want opposite responses.
+func pinnedHostKey(want string) ssh.HostKeyCallback {
+	return func(_ string, remote net.Addr, key ssh.PublicKey) error {
+		got := ssh.FingerprintSHA256(key)
+		if got != want {
+			return fmt.Errorf("%w: %s offered %s and the mapping pins %s",
+				errHostKeyMismatch, remote, got, want)
+		}
+
+		return nil
+	}
+}
+
+// errHostKeyMismatch is a worker that is not the machine it was pinned to.
+var errHostKeyMismatch = errors.New("the worker's host key does not match its hostkey= pin")
 
 // remoteShimPath is where a build of the binary lives on a worker.
 func remoteShimPath(worker Worker, build string) string {

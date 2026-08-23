@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 )
 
 // Scheme names how to reach a worker.
@@ -61,6 +62,12 @@ type Worker struct {
 	// KnownHosts overrides ~/.ssh/known_hosts. Host keys are always checked;
 	// this only says against which file.
 	KnownHosts string
+	// HostKey pins the worker's host key by SHA256 fingerprint, for a machine
+	// that has no known_hosts entry and never will: one acquired on demand,
+	// used, and destroyed. Whatever created it attested its key out of band,
+	// and this is where that attestation arrives. Host keys are still always
+	// checked -- this says against WHAT rather than against which file.
+	HostKey string
 }
 
 // ErrWorker is a worker mapping that cannot be reached as written.
@@ -97,8 +104,44 @@ func ParseWorker(raw string) (Worker, error) {
 	worker.Binary = query.Get("binary")
 	worker.Identity = query.Get("identity")
 	worker.KnownHosts = query.Get("known_hosts")
+	worker.HostKey = query.Get("hostkey")
+
+	err = checkHostKey(worker)
+	if err != nil {
+		return Worker{}, err
+	}
 
 	return worker, nil
+}
+
+// fingerprintPattern is OpenSSH's own SHA256 spelling: the prefix, then the
+// digest in unpadded base64. Exactly what ssh-keyscan, ssh-keygen -l and the
+// EC2 console all print, so an operator pastes rather than converts.
+var fingerprintPattern = regexp.MustCompile(`^SHA256:[A-Za-z0-9+/]{43}$`)
+
+// checkHostKey refuses a pin that can never match, and refuses a mapping that
+// names two different answers to the same question.
+//
+// At PARSE time, not at dial time. A typo in a fingerprint that only failed on
+// connection looks exactly like the machine having been replaced -- which is
+// the alarm this whole feature exists to raise, and a false one teaches
+// operators to ignore it.
+func checkHostKey(worker Worker) error {
+	if worker.HostKey == "" {
+		return nil
+	}
+
+	if !fingerprintPattern.MatchString(worker.HostKey) {
+		return fmt.Errorf("%w %q: hostkey= must be an OpenSSH SHA256 fingerprint, as in SHA256:abc... (ssh-keyscan -t ed25519 host | ssh-keygen -lf - prints one)",
+			ErrWorker, worker.URL)
+	}
+
+	if worker.KnownHosts != "" {
+		return fmt.Errorf("%w %q: hostkey= and known_hosts= are two answers to the same question — pin the key, or name the file that holds it",
+			ErrWorker, worker.URL)
+	}
+
+	return nil
 }
 
 // applyScheme fills in whatever a scheme needs from the parsed URL.
