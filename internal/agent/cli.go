@@ -192,6 +192,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		}
 
 		plan.prompt = cliAttemptPrompt(plan.resume, attempt > 0, sent, state, prepared)
+		_, pending := pendingCLIMessage(prepared, sent, state)
 
 		if plan.outOfTurns() {
 			// Carrying lastErr matters: the budget ran out because of whatever
@@ -203,6 +204,8 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 
 		attemptErr := runCLIAttempt(attemptCtx, prepared, runtime, plan, state)
 		lastErr = attemptErr
+
+		markDelivered(state, sent, pending, attemptErr)
 
 		if attemptErr != nil {
 			slog.Warn("agent.cli.attempt_failed",
@@ -314,6 +317,23 @@ func runCLIRounds(
 	}
 }
 
+// markDelivered records that the child has had the message, once it actually
+// has.
+//
+// Composing the prompt used to record it, which meant a failure BEFORE
+// delivery — the bridge config, a pipe, the spawn itself — left the retry
+// telling the child to continue a question it never received, and the step
+// reported success having silently skipped that message.
+//
+// Erring the other way is the safe direction: a delivery this fails to record
+// is re-asked, which the child can see and handle. A question dropped is a
+// step that answered less than it was told to and said nothing about it.
+func markDelivered(state *cliStepState, sent int, pending bool, attemptErr error) {
+	if pending && attemptErr == nil {
+		state.asked = sent
+	}
+}
+
 // rejoiningCLISession reports whether this invocation continues a session
 // rather than opening one.
 //
@@ -410,8 +430,6 @@ func pendingCLIMessage(prepared preparedAgentStep, sent int, state *cliStepState
 	if state.asked >= sent {
 		return "", false
 	}
-
-	state.asked = sent
 
 	return prepared.conv.messages[sent], true
 }

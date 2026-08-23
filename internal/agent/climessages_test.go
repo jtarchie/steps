@@ -142,3 +142,30 @@ func TestCLIAgentOneMessageIsOneInvocation(t *testing.T) {
 		t.Fatalf("the child was invoked %d time(s), want exactly 1", got)
 	}
 }
+
+// TestCLIAttemptPromptDoesNotConsumeTheMessage pins that composing a prompt
+// has no side effect.
+//
+// It used to mark the message as asked while merely building the string, so
+// any failure before the child received it — the bridge config, a pipe, the
+// spawn — made the retry send "continue" for a question that was never put.
+// The step then reported success having skipped it, silently.
+func TestCLIAttemptPromptDoesNotConsumeTheMessage(t *testing.T) {
+	t.Parallel()
+
+	prepared := cliPrepared(t, nil)
+	prepared.conv.messages = []string{"Review the diff.", "Name the line."}
+
+	state := newCLIStepState()
+
+	first := cliAttemptPrompt(true, false, 1, state, prepared)
+	if !strings.Contains(first, "Name the line.") {
+		t.Fatalf("prompt = %q, want the pending message", first)
+	}
+
+	// The same invocation, retried because it never reached the child.
+	second := cliAttemptPrompt(true, true, 1, state, prepared)
+	if !strings.Contains(second, "Name the line.") {
+		t.Errorf("the retry asked %q — the message was consumed by composing the first prompt, so the child is told to continue something it never got", second)
+	}
+}
