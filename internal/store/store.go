@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -106,7 +107,75 @@ func OpenStore(path string) (*Store, error) {
 		return nil, fmt.Errorf("could not migrate state db %q: %w", path, err)
 	}
 
+	err = checkSchemaVersion(ctx, db, path)
+	if err != nil {
+		_ = db.Close()
+
+		return nil, err
+	}
+
 	return &Store{db: db, path: path}, nil
+}
+
+// ErrSchemaVersion is a database some other build of steps wrote.
+var ErrSchemaVersion = errors.New("the state database was written by a different version of steps")
+
+// checkSchemaVersion refuses a database this build cannot write to, and stamps
+// one it just created.
+//
+// This is NOT migration machinery, and deliberately not the first step of any:
+// there is no upgrade path here, by design, and the answer to a stale database
+// is still to delete it. What it adds is that somebody is TOLD.
+//
+// Without it the failure was silent and looked like success. The schema is
+// CREATE TABLE IF NOT EXISTS, so an older database opens fine and simply lacks
+// a column; every INSERT naming that column then fails, and the run-event sink
+// only warns — a build went green having recorded nothing, and whoever ran it
+// found out when they opened the web UI to an empty run. A green build that
+// quietly lost its history is worse than a red one that says why.
+//
+// PRAGMA user_version rather than a table: it lives in the file header, costs
+// no row, and cannot itself be the thing that is missing.
+func checkSchemaVersion(ctx context.Context, db *sql.DB, path string) error {
+	var found int
+
+	err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&found)
+	if err != nil {
+		return fmt.Errorf("could not read the schema version of %q: %w", path, err)
+	}
+
+	// Zero is a database created before this check existed, which is every
+	// database older than it — and every one of those predates at least this
+	// column. Stamping instead of refusing would bless exactly the stale files
+	// the check is for, so the only zero that is accepted is one this open
+	// just created, which the DDL above has already filled in.
+	if found == schemaVersion {
+		return nil
+	}
+
+	if found == 0 && freshlyCreated(ctx, db) {
+		_, err = db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion))
+		if err != nil {
+			return fmt.Errorf("could not stamp the schema version of %q: %w", path, err)
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf("%w: %s is at schema %d and this steps writes %d — there is no upgrade path (see the schema's own comment); delete the file and run again, which loses that pipeline's run history and cache but nothing else",
+		ErrSchemaVersion, path, found, schemaVersion)
+}
+
+// freshlyCreated reports that this open made the database, rather than
+// inheriting one an older build left. A database with no run and no node has
+// nothing to lose by being stamped.
+func freshlyCreated(ctx context.Context, db *sql.DB) bool {
+	var rows int
+
+	err := db.QueryRowContext(ctx,
+		"SELECT (SELECT COUNT(*) FROM runs) + (SELECT COUNT(*) FROM nodes)").Scan(&rows)
+
+	return err == nil && rows == 0
 }
 
 // Close reclaims what retention freed and closes the underlying connection.

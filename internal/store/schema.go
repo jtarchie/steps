@@ -1,5 +1,16 @@
 package store
 
+// schemaVersion is stamped into PRAGMA user_version and checked on open.
+//
+// BUMP IT whenever the DDL below changes in a way an existing file cannot
+// satisfy — a new column, a new NOT NULL, a changed key. That is what turns
+// "this database is from an older steps" into a message instead of a build
+// that silently records nothing (see checkSchemaVersion).
+//
+// It is a detector, not a migration counter. There is still no upgrade path
+// and deliberately so; the answer to a mismatch remains deleting the file.
+const schemaVersion = 1
+
 const schema = `
 -- The interned merkle preimage: what each node's hash was computed FROM.
 --
