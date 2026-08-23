@@ -879,7 +879,7 @@ func (conv agentConversation) advanceIfMore(req *model.LLMRequest, state *resume
 // model actually made.
 func (conv agentConversation) advance(req *model.LLMRequest, state *resumeCheckpoint) {
 	state.sent++
-	state.satisfied = map[string]bool{}
+	state.satisfied = conv.carriedSatisfaction(state)
 
 	// Forcing from the previous message's last turn would otherwise still be
 	// set, constraining the model's first answer to a tool it has already
@@ -890,6 +890,31 @@ func (conv agentConversation) advance(req *model.LLMRequest, state *resumeCheckp
 		Role:  genai.RoleUser,
 		Parts: []*genai.Part{{Text: conv.messages[state.sent]}},
 	})
+}
+
+// carriedSatisfaction is what stays satisfied across a message boundary.
+//
+// Almost nothing: the point of a new message is that the verdict is asked
+// again. The exception is a required tool that has also spent its max_calls:
+// budget, which resets on an attempts: restart and not before — so requiring
+// it again would be requiring the impossible. finishOrForce would force it
+// every turn, executeBudgetedTool would answer "call budget exhausted", and
+// the step would burn max_turns and fail having asked for something it had
+// already forbidden.
+//
+// Treating it as satisfied is the honest reading: the tool was required, and
+// it was called, in this conversation.
+func (conv agentConversation) carriedSatisfaction(state *resumeCheckpoint) map[string]bool {
+	carried := map[string]bool{}
+
+	for name := range state.satisfied {
+		budget, capped := conv.tools.maxCalls[name]
+		if capped && state.callCounts[name] >= budget {
+			carried[name] = true
+		}
+	}
+
+	return carried
 }
 
 // finishOrForce handles a turn in which the model requested no tools. It
