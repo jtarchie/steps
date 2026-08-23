@@ -17,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"strings"
 )
 
 // Scheme names how to reach a worker.
@@ -44,8 +43,12 @@ type Worker struct {
 	Scheme Scheme
 	User   string
 	Host   string
-	// Root overrides where the shim makes its scratch on the worker. Empty
-	// takes the worker's own temp directory.
+	// Root overrides where the worker keeps both the pushed binary and the
+	// step's scratch. Empty takes the worker's own temp directory. It is the
+	// URL's path, kept ABSOLUTE: ssh://box/mnt/fast names /mnt/fast, and
+	// trimming the leading slash silently moved it under the login user's
+	// home instead -- a machine with a fast disk mounted at /mnt would take
+	// the mapping, put nothing there, and fill the root filesystem.
 	Root string
 	// Binary is a locally-built shim to push instead of this process's own,
 	// for a worker whose platform this machine cannot produce a binary for.
@@ -111,7 +114,7 @@ func applyScheme(worker Worker, parsed *url.URL) (Worker, error) {
 			worker.User = parsed.User.Username()
 		}
 
-		worker.Root = strings.TrimPrefix(parsed.Path, "/")
+		worker.Root = parsed.Path
 
 		return worker, nil
 	case SchemeLocal:

@@ -186,6 +186,7 @@ func (s *session) greet() error {
 		Build:    build,
 		Session:  name,
 		Keep:     s.keep,
+		Root:     s.worker.Root,
 	})
 	if err != nil {
 		return err

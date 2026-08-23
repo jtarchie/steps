@@ -30,6 +30,11 @@ type Hello struct {
 	// --keep-workspace. Without it, the postmortem the flag exists for stops
 	// at the machine boundary.
 	Keep bool `json:"keep"`
+	// Root is where the shim makes its scratch, from the worker URL's path.
+	// Empty takes the shim's own default. Sent rather than assumed, because
+	// only this end knows the mapping: a shim started by an operator over a
+	// bare ssh command has no URL to read it from.
+	Root string `json:"root,omitempty"`
 }
 
 // HelloOK is the shim's answer.

@@ -109,7 +109,7 @@ func startShim(client *ssh.Client, remote string) (*transport, error) {
 	// name steps. Everything else the shim needs arrives in the hello frame
 	// rather than as an argument, which is one fewer thing to quote in a
 	// dialect this end cannot see.
-	err = session.Start(remote + " _shim")
+	err = session.Start(shellQuote(remote) + " _shim")
 	if err != nil {
 		_ = session.Close()
 		_ = client.Close()
@@ -342,6 +342,17 @@ func remoteShimPath(worker Worker, build string) string {
 	}
 
 	return path.Join(root, "steps-shim", build, "steps")
+}
+
+// shellQuote wraps a path for the remote login shell.
+//
+// An SSH exec request is a string the far end hands to a shell, so an
+// unquoted path with a space in it becomes two arguments and one with a
+// semicolon becomes two commands. The path is built from the worker URL, which
+// only an operator writes -- but a mapping naming a disk with a space in its
+// name should mount that disk, not fail obscurely.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // diagnosticBytes bounds how much of a worker's stderr is kept for an error

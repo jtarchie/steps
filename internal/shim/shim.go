@@ -160,7 +160,13 @@ func (s *session) hello(frame wire.Frame) error {
 
 	s.keep = hello.Keep
 
-	root := s.opts.Root
+	// The orchestrator's mapping wins: it is the operator naming a disk on
+	// THIS machine, and it is the same path the binary was pushed under.
+	root := hello.Root
+	if root == "" {
+		root = s.opts.Root
+	}
+
 	if root == "" {
 		root = os.TempDir()
 	}
