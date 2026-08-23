@@ -92,7 +92,13 @@ func (c *Config) validateTagsRejectAgent() error {
 			// agent from THIS step, with its file tools on the local directory
 			// and its run_shell on the runner the task uses. The agent rule
 			// above does not see it, because the step is a task.
-			if len(step.Tags) > 0 && step.Fix != nil {
+			//
+			// The RESOLVED fix:, for the reason validateTagsRejectImage reads
+			// the resolved image: a step that names a tasks: entry inherits
+			// that entry's fix: (see ResolveTask), so checking only the step's
+			// own let exactly this split through — the command ran on the
+			// worker while the repair agent read the local workspace.
+			if len(step.Tags) > 0 && c.resolvedStepFix(*step) != nil {
 				return fmt.Errorf("%s: tags: is not valid on a task with fix: — the repair agent reads this machine's copy of the step while its commands would run on the worker",
 					label)
 			}
@@ -105,6 +111,27 @@ func (c *Config) validateTagsRejectAgent() error {
 	}
 
 	return nil
+}
+
+// resolvedStepFix reports the fix: a task step would actually run with,
+// merging the step's own over the tasks: entry it references. It answers nil
+// for anything it cannot resolve, leaving that error to whichever validator
+// owns it.
+func (c *Config) resolvedStepFix(step Step) *FixSpec {
+	if step.Fix != nil {
+		return step.Fix
+	}
+
+	if step.Task == "" {
+		return nil
+	}
+
+	task, err := c.FindTask(step.Task)
+	if err != nil {
+		return nil
+	}
+
+	return task.Fix
 }
 
 // validateTagsRejectImage refuses tags: together with image:.

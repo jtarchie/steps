@@ -1,0 +1,19 @@
+# The same split tags-with-fix.yml refuses, inherited rather than declared: a
+# step naming a tasks: entry takes that entry's fix: too, so the repair agent
+# is built either way. It reads this machine's copy of the workspace while the
+# command it is repairing ran on the worker.
+# expect: tags: is not valid on a task with fix:
+agents:
+- name: repair
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+
+tasks:
+- name: compile
+  run: exit 1
+  fix: { agent: repair }
+
+jobs:
+- name: build
+  plan:
+  - task: compile
+    tags: [gpu]
