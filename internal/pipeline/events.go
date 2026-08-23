@@ -41,6 +41,7 @@ func StoreSink(st *store.Store) func(events.Event) {
 			Name:         event.Name,
 			Detail:       event.Detail,
 			DurationMS:   event.DurationMS,
+			Worker:       event.Worker,
 			At:           event.At,
 		})
 		if err != nil {
@@ -131,6 +132,7 @@ func publishStepFinished(
 		Hash:         hash,
 		Text:         text,
 		DurationMS:   time.Since(started).Milliseconds(),
+		Worker:       placementOf(ctx, step),
 	})
 }
 

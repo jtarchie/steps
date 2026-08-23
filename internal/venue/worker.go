@@ -176,3 +176,22 @@ func applyScheme(worker Worker, parsed *url.URL) (Worker, error) {
 
 // String is the mapping as the operator wrote it.
 func (w Worker) String() string { return w.URL }
+
+// Address is the machine, without the credentials for reaching it.
+//
+// The query string is dropped deliberately: ?identity= and ?hostkey= say how
+// to authenticate, and this is what gets written to the run record and drawn
+// in a browser. What survives is what identifies the machine — the scheme, the
+// user, the host, and the disk a step was told to use.
+func (w Worker) Address() string {
+	if w.Scheme == SchemeLocal {
+		return "local:"
+	}
+
+	address := string(w.Scheme) + "://"
+	if w.User != "" {
+		address += w.User + "@"
+	}
+
+	return address + w.Host + w.Root
+}

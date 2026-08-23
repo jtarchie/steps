@@ -96,6 +96,21 @@ type Event struct {
 	Name       string `json:"name,omitempty"`
 	Detail     string `json:"detail,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
+	// Worker names where a step's commands ran, as "tag (address)", and is
+	// EMPTY for a step that ran on this machine. Absence is the signal:
+	// spelling out "local" would put a worker on every row of every pipeline
+	// that has none, and the interesting rows are the ones that left.
+	//
+	// Recorded because nothing else can answer it after the fact. tags: is
+	// deliberately outside the merkle hash — placement decides where a step
+	// runs, not what it produces — so the cache cannot say, and a hash that
+	// matched a local run is exactly the case where the question gets asked.
+	//
+	// The ADDRESS, not the mapping as written: a worker URL carries
+	// ?identity= and ?hostkey= query parameters that describe how to
+	// authenticate, and a record rendered in a browser is the wrong place for
+	// them.
+	Worker string `json:"worker,omitempty"`
 }
 
 // subscriberBuffer bounds how far behind a subscriber may fall before its

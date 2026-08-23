@@ -29,7 +29,10 @@ type RunEventRow struct {
 	Name         string
 	Detail       string
 	DurationMS   int64
-	At           time.Time
+	// Worker is where a placed step ran; empty for this machine. See
+	// events.Event.Worker.
+	Worker string
+	At     time.Time
 }
 
 // MaxEventTextBytes bounds the free-text columns of one run event.
@@ -54,8 +57,8 @@ func (s *Store) AppendRunEvent(ctx context.Context, row RunEventRow) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO run_events
 			(run_id, type, step_index, step_name, step_kind, step_id, parent_step_id,
-			 status, hash, text, name, detail, duration_ms, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 status, hash, text, name, detail, duration_ms, worker, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, row.RunID, row.Type, row.StepIndex, row.StepName, row.StepKind,
 		row.StepID, row.ParentStepID,
 		row.Status, row.Hash,
@@ -63,6 +66,7 @@ func (s *Store) AppendRunEvent(ctx context.Context, row RunEventRow) error {
 		truncateUTF8(row.Name, MaxEventTextBytes),
 		truncateUTF8(row.Detail, MaxEventTextBytes),
 		row.DurationMS,
+		truncateUTF8(row.Worker, MaxEventTextBytes),
 		row.At.UTC().Format(sortableNano))
 	if err != nil {
 		return fmt.Errorf("could not append run event for %q: %w", row.RunID, err)
@@ -78,7 +82,7 @@ func (s *Store) RunEvents(ctx context.Context, runID string, afterSeq int64, lim
 	return collect(ctx, s.db, "run events", `
 		SELECT seq, run_id, type, step_index, step_name, step_kind,
 		       step_id, parent_step_id,
-		       status, hash, text, name, detail, duration_ms, created_at
+		       status, hash, text, name, detail, duration_ms, worker, created_at
 		FROM run_events
 		WHERE run_id = ? AND seq > ?
 		ORDER BY seq
@@ -92,7 +96,7 @@ func (s *Store) RunEvents(ctx context.Context, runID string, afterSeq int64, lim
 		err := rows.Scan(&row.Seq, &row.RunID, &row.Type, &row.StepIndex,
 			&row.StepName, &row.StepKind, &row.StepID, &row.ParentStepID,
 			&row.Status, &row.Hash, &row.Text,
-			&row.Name, &row.Detail, &row.DurationMS, &createdAt)
+			&row.Name, &row.Detail, &row.DurationMS, &row.Worker, &createdAt)
 
 		row.At = parseTimestamp(createdAt)
 

@@ -508,6 +508,16 @@
     node.classList.remove('running', 'active');
     node.classList.add(skipped ? 'skipped' : (e.status === 'succeeded' ? 'passed' : 'failed'));
 
+    // The server draws this for a finished step, so the stream has to too:
+    // a reader watching live and one who reloaded must see the same row.
+    if (e.worker) {
+      var head = node.querySelector(':scope > .stephead .headmeta');
+      var slot = head && head.querySelector(':scope > .dur');
+      if (slot && !head.querySelector('.worker')) {
+        head.insertBefore(el('span', 'note worker', 'on ' + e.worker), slot);
+      }
+    }
+
     var dur = node.querySelector(':scope > .stephead .dur');
     if (dur) {
       dur.textContent = skipped ? '' : e.duration;
@@ -701,6 +711,7 @@
         {{if .Running}}<span class="r-sep">·</span><b class="r-run">{{.Running}} running</b>{{end}}
         {{if .Skipped}}<span class="r-sep">·</span><b class="r-skip">{{.Skipped}} skipped</b>{{end}}
       </span>{{end}}{{end}}
+      {{if $step.Worker}}<span class="note worker">on {{$step.Worker}}</span>{{end}}
       <span class="dur">
         {{if and (not $step.Skipped) (not $step.Running)}}{{duration $step.Duration}}{{end}}
         {{if $step.Running}}<time class="live" data-elapsed-since="{{rfc3339 $step.Started}}">{{duration $step.Elapsed}}</time>{{end}}

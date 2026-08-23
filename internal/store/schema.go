@@ -323,6 +323,11 @@ CREATE TABLE IF NOT EXISTS run_events (
     name       TEXT NOT NULL,
     detail     TEXT NOT NULL,
     duration_ms INTEGER NOT NULL,
+    -- Where a placed step's commands ran, "tag (address)". Empty for a step
+    -- that ran on this machine, which is the overwhelming majority — see
+    -- events.Event.Worker for why absence rather than "local" is the signal,
+    -- and why the address is stored without the mapping's query string.
+    worker     TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, seq);

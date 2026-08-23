@@ -38,6 +38,10 @@ type stepView struct {
 	Hash     string
 	Reason   string // why it was skipped, when it was
 	Error    string
+	// Worker is where the step's commands ran, "tag (address)", empty for
+	// this machine. Drawn because a red step on a fleet otherwise names no
+	// machine — see events.Event.Worker.
+	Worker   string
 	Duration time.Duration
 	Started  time.Time
 	// Turns is agent conversation traffic that arrived while this step was
@@ -622,6 +626,12 @@ func closeStep(view *runView, index map[string]int, row store.RunEventRow, resul
 	step.Status = row.Status
 	step.Hash = row.Hash
 	step.Duration = time.Duration(row.DurationMS) * time.Millisecond
+
+	// Only when set: a finished step's row carries it, and the events that
+	// precede it do not, so an unconditional assignment would blank it.
+	if row.Worker != "" {
+		step.Worker = row.Worker
+	}
 
 	if row.Type == events.TypeStepSkipped {
 		step.Reason = row.Text

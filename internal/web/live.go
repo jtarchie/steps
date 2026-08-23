@@ -182,6 +182,7 @@ func (e liveEvent) MarshalJSON() ([]byte, error) {
 		"name":           e.Name,
 		"detail":         e.Detail,
 		"duration":       formatDuration(time.Duration(e.DurationMS) * time.Millisecond),
+		"worker":         e.Worker,
 		"depth":          parseDepth(e.Status),
 		"agent":          isAgentEvent(e.Type),
 	})

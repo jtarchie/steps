@@ -68,6 +68,29 @@ func workerFor(ctx context.Context, step config.Step) string {
 	return worker.URL
 }
 
+// placementOf describes where a step ran, for the run record: "tag (address)",
+// or empty for a step that ran on this machine.
+//
+// Absence is the signal, so this answers empty for an untagged step rather
+// than naming the local machine — see events.Event.Worker. The address rather
+// than the mapping as written, so ?identity= and ?hostkey= stay out of a
+// record that gets drawn in a browser.
+func placementOf(ctx context.Context, step config.Step) string {
+	tag := placementTag(step)
+	if tag == "" {
+		return ""
+	}
+
+	worker, ok := workersFrom(ctx)[tag]
+	if !ok {
+		// Unreachable for the reason workerFor says; the tag alone is still
+		// the honest answer if it ever happens.
+		return tag
+	}
+
+	return tag + " (" + worker.Address() + ")"
+}
+
 // placementTag is the one tag a step carries, if any. A try: wrapper is
 // transparent here for the same reason it is everywhere else: the wrapped step
 // is the one that runs.
