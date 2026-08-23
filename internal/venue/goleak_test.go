@@ -29,21 +29,29 @@ const shortWait = 250 * time.Millisecond
 // still running would strand it.
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "_shim" {
-		// A shim that refuses the tree, so a test can drive the path where a
-		// worker rejects an upload. Selected by environment rather than argv
-		// because the venue execs a fixed "<binary> _shim".
-		if os.Getenv(rejectUploadEnv) != "" || os.Getenv(breakFetchEnv) != "" {
-			serveRejectingShim()
-			os.Exit(0)
-		}
+		serveShim()
+	}
 
-		// A shim that stops answering once a command starts, so a test can
-		// drive the path where a worker wedges mid-step.
-		if os.Getenv(deafExecEnv) != "" {
-			serveDeafShim()
-			os.Exit(0)
-		}
+	goleak.VerifyTestMain(m)
+}
 
+// serveShim is the far half of a local: venue, told by environment which
+// worker to impersonate: environment rather than argv because the venue execs
+// a fixed "<binary> _shim". It never returns.
+func serveShim() {
+	switch {
+	// A shim that refuses the tree, so a test can drive the path where a
+	// worker rejects an upload.
+	case os.Getenv(rejectUploadEnv) != "", os.Getenv(breakFetchEnv) != "":
+		serveRejectingShim()
+	// A shim that stops answering once a command starts, so a test can drive
+	// the path where a worker wedges mid-step.
+	case os.Getenv(deafExecEnv) != "":
+		serveDeafShim()
+	// A shim that is not the binary that was pushed.
+	case os.Getenv(wrongBuildEnv) != "":
+		serveWrongBuildShim()
+	default:
 		build, err := shim.SelfBuild()
 		if err != nil {
 			os.Exit(1)
@@ -53,9 +61,7 @@ func TestMain(m *testing.M) {
 		if err != nil {
 			os.Exit(1)
 		}
-
-		os.Exit(0)
 	}
 
-	goleak.VerifyTestMain(m)
+	os.Exit(0)
 }

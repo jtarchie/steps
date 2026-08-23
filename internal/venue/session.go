@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jtarchie/steps/internal/shim"
 	"github.com/jtarchie/steps/internal/wire"
 )
 
@@ -61,6 +60,11 @@ type transport struct {
 	// teardown can read it. nil when a transport has no separate notion of the
 	// process ending.
 	exited <-chan struct{}
+	// build is the content hash of the binary this transport actually
+	// started. Not SelfBuild(): a worker reached with ?binary= runs a binary
+	// the operator built, whose hash is not this process's, and greet compares
+	// what came back against what went out.
+	build string
 }
 
 // session owns the conversation. Runners hold it BY POINTER so a WithLabel
@@ -94,7 +98,18 @@ var (
 	// errNoWorkdir is a shim that answered a hello without naming where it put
 	// the tree, which no shim this repo built can do.
 	errNoWorkdir = errors.New("the worker did not report a work directory")
+	// errWrongBuild is a worker running a steps binary this run did not push.
+	errWrongBuild = errors.New("the worker is not running the binary that was pushed to it")
 )
+
+// short is a build hash cut to something a human can compare in an error.
+func short(build string) string {
+	if len(build) > 12 {
+		return build[:12]
+	}
+
+	return build
+}
 
 // ensure connects, greets, and sends the step's tree, once.
 //
@@ -164,10 +179,7 @@ func (s *session) abandon() {
 }
 
 func (s *session) greet() error {
-	build, err := shim.SelfBuild()
-	if err != nil {
-		return fmt.Errorf("%w", err)
-	}
+	build := s.transport.build
 
 	// The session name has to be unique across every session that could ever
 	// share a worker, because it names a scratch directory the shim removes on
@@ -207,6 +219,17 @@ func (s *session) greet() error {
 	if ok.Protocol != wire.Protocol {
 		return fmt.Errorf("%w: this steps speaks protocol %d and the worker's shim speaks %d — the binary on the worker is not this one",
 			wire.ErrProtocol, wire.Protocol, ok.Protocol)
+	}
+
+	// The check wire.Hello.Build has always described and nobody performed.
+	// A pushed binary is reused when a file of the right SIZE is already at
+	// its content-keyed path, which is a guess about bytes; this is the
+	// answer. It is also the only thing that catches a protocol-compatible
+	// shim that is nonetheless not the build this run pushed — an older steps
+	// left at that path by hand, or a truncation a matching size hid.
+	if build != "" && ok.Build != "" && ok.Build != build {
+		return fmt.Errorf("%w: the worker is running build %s and this steps pushed %s — remove %s on the worker and run again",
+			errWrongBuild, short(ok.Build), short(build), remoteShimPath(s.worker, build))
 	}
 
 	if ok.Workdir == "" {

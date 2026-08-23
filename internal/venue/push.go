@@ -31,41 +31,41 @@ import (
 const shimMode = 0o700
 
 // pushShim puts the binary on the worker if it is not already there, and
-// returns the path to run.
-func pushShim(client *ssh.Client, worker Worker) (string, error) {
+// returns the path to run and the build it is.
+func pushShim(client *ssh.Client, worker Worker) (remote, build string, err error) {
 	local, err := localBinary(worker)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	build, err := shim.BuildOf(local)
+	build, err = shim.BuildOf(local)
 	if err != nil {
-		return "", fmt.Errorf("%w", err)
+		return "", "", fmt.Errorf("%w", err)
 	}
 
-	remote := remoteShimPath(worker, build)
+	remote = remoteShimPath(worker, build)
 
 	fs, err := sftp.NewClient(client)
 	if err != nil {
-		return "", fmt.Errorf("opening sftp (the worker's sshd must offer the sftp subsystem): %w", err)
+		return "", "", fmt.Errorf("opening sftp (the worker's sshd must offer the sftp subsystem): %w", err)
 	}
 	defer func() { _ = fs.Close() }()
 
 	present, err := alreadyPushed(fs, remote, local)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	if present {
-		return remote, nil
+		return remote, build, nil
 	}
 
 	err = uploadShim(fs, local, remote)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	return remote, nil
+	return remote, build, nil
 }
 
 // localBinary is the binary to push: this process, or one the operator built
@@ -92,6 +92,11 @@ func localBinary(worker Worker) (string, error) {
 // Size as well as presence: an upload interrupted partway leaves a file at the
 // right path with the wrong contents, and the whole point of a content-keyed
 // path is that the name is a promise about the bytes.
+//
+// Size is a guess, not proof -- hashing the far side means running something
+// on it, which is the thing this function exists to decide whether to do. The
+// proof comes one step later: the shim reports its own build in the handshake
+// and greet refuses a session whose answer is not what was pushed.
 func alreadyPushed(fs *sftp.Client, remote, local string) (bool, error) {
 	remoteInfo, err := fs.Stat(remote)
 	if err != nil {

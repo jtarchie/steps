@@ -62,18 +62,18 @@ func dialSSH(ctx context.Context, worker Worker) (*transport, error) {
 
 	client := ssh.NewClient(sshConn, channels, requests)
 
-	remote, err := pushShim(client, worker)
+	remote, build, err := pushShim(client, worker)
 	if err != nil {
 		_ = client.Close()
 
 		return nil, err
 	}
 
-	return startShim(client, remote)
+	return startShim(client, remote, build)
 }
 
 // startShim execs the pushed binary and hands back its stdio as the transport.
-func startShim(client *ssh.Client, remote string) (*transport, error) {
+func startShim(client *ssh.Client, remote, build string) (*transport, error) {
 	session, err := client.NewSession()
 	if err != nil {
 		_ = client.Close()
@@ -104,11 +104,11 @@ func startShim(client *ssh.Client, remote string) (*transport, error) {
 	diagnostics := &diagnosticBuffer{left: diagnosticBytes}
 	session.Stderr = diagnostics
 
-	// The remote login shell runs this string, so the path is deliberately one
-	// no shell treats specially: a temp directory, a hex build key, and the
-	// name steps. Everything else the shim needs arrives in the hello frame
-	// rather than as an argument, which is one fewer thing to quote in a
-	// dialect this end cannot see.
+	// The remote login shell runs this string, so the path is quoted: it can
+	// contain anything the worker URL's path did, and a disk mounted with a
+	// space in its name would otherwise become two arguments. Everything else
+	// the shim needs arrives in the hello frame rather than as an argument,
+	// which is one fewer thing to quote in a dialect this end cannot see.
 	err = session.Start(shellQuote(remote) + " _shim")
 	if err != nil {
 		_ = session.Close()
@@ -140,6 +140,7 @@ func startShim(client *ssh.Client, remote string) (*transport, error) {
 		out:         stdin,
 		diagnostics: diagnostics.String,
 		exited:      exit.done,
+		build:       build,
 		close: func(ctx context.Context) error {
 			return closeSession(ctx, client, stdin, exit, diagnostics)
 		},

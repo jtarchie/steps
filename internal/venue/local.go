@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+
+	"github.com/jtarchie/steps/internal/shim"
 )
 
 // dial opens a transport to a worker.
@@ -49,6 +51,11 @@ func dialLocal(worker Worker) (*transport, error) {
 	// shim itself, or a merely-interrupted step loses the outputs the session
 	// was about to hand back. The shim exits on its own when its stdin closes,
 	// which is what close below does.
+	build, err := shim.BuildOf(binary)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+
 	//nolint:noctx,gosec // see above: the lifetime is the session's, not a command's, and the binary is this process or one the operator named
 	command := exec.Command(binary, "_shim")
 
@@ -73,8 +80,9 @@ func dialLocal(worker Worker) (*transport, error) {
 	}
 
 	return &transport{
-		in:  stdout,
-		out: stdin,
+		in:    stdout,
+		out:   stdin,
+		build: build,
 		close: func(ctx context.Context) error {
 			// Closing stdin is the goodbye: the shim sees EOF, removes its
 			// scratch, and exits. Waiting for that is what makes a finished
