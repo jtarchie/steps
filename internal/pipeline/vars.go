@@ -73,8 +73,22 @@ func renderStepVars(ctx context.Context, step config.Step) config.Step {
 	}
 
 	step.Run = config.RenderVars(step.Run, values)
-	for i := range step.Messages {
-		step.Messages[i] = config.RenderVars(step.Messages[i], values)
+
+	// Cloned, not rendered in place. step is a copy of the config's step, but
+	// a slice field still points at the config's own array — so rendering
+	// through it would substitute into the LOADED pipeline, and a long-lived
+	// process (steps web, steps watch) hands that same config to every run.
+	// The second run would then find no placeholder left, send the first
+	// run's values, and — because the substituted text is what gets hashed —
+	// hash identically to it. A false cache hit, which is the failure the doc
+	// above says this function exists to prevent.
+	if len(step.Messages) > 0 {
+		rendered := make([]string, len(step.Messages))
+		for i, message := range step.Messages {
+			rendered[i] = config.RenderVars(message, values)
+		}
+
+		step.Messages = rendered
 	}
 
 	step.Image = config.RenderVars(step.Image, values)
