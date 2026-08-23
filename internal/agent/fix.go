@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
+	"slices"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
@@ -20,17 +20,24 @@ import (
 // the rerun tool's exit_code, sees 0, and stops having repaired nothing.
 const defaultFixPrompt = `A command that must pass has just failed; the failure and its output are below. Investigate the working directory, make the smallest change that resolves the stated failure, then call the %q tool to re-run the command. Note that a zero exit code is not by itself success — the failure named below is what has to be resolved. Repeat until it is, then reply with a brief summary and stop.`
 
-// buildFixPrompt assembles the fix conversation's user prompt: the fix:'s
-// own messages: [(or the default)], then the captured failure output the model
-// is being asked to resolve. Split out of RunFix to keep its control flow
-// inside the complexity budget; behavior is unchanged.
-func buildFixPrompt(fix *config.FixSpec, rt config.ResolvedTask, failureOutput, spillDir string) string {
-	prompt := strings.Join(fix.Messages, "\n\n")
-	if prompt == "" {
-		prompt = fmt.Sprintf(defaultFixPrompt, rt.Name)
+// buildFixMessages assembles the fix conversation's user turns: the fix:'s own
+// messages: (or the default), with the captured failure output appended to the
+// first — it is the thing the model is being asked to resolve, so it belongs
+// in the turn that opens the work rather than the one that closes it.
+//
+// One turn per entry, exactly as a step's messages: means. They were joined
+// with a blank line into a single turn, which is the difference between asking
+// a model to do a thing and then check it, and asking it to do both at once —
+// the ordering a list of messages exists to buy.
+func buildFixMessages(fix *config.FixSpec, rt config.ResolvedTask, failureOutput, spillDir string) []string {
+	messages := slices.Clone(fix.Messages)
+	if len(messages) == 0 {
+		messages = []string{fmt.Sprintf(defaultFixPrompt, rt.Name)}
 	}
 
-	return prompt + "\n\n--- failure output ---\n" + spillOrTruncate(failureOutput, spillDir)
+	messages[0] += "\n\n--- failure output ---\n" + spillOrTruncate(failureOutput, spillDir)
+
+	return messages
 }
 
 // RunFix invokes a failed task's fix: agent. It reuses the normal
@@ -114,7 +121,7 @@ func RunFix(ctx context.Context, cfg *config.Config, jobName string, stepIndex i
 		defer func() { _ = os.RemoveAll(spillDir) }()
 	}
 
-	prompt := buildFixPrompt(fix, rt, failureOutput, spillDir)
+	messages := buildFixMessages(fix, rt, failureOutput, spillDir)
 
 	contextBlocks, err := loadContextBlocks(dir, ri.ContextPaths, ri.MaxContextBytes)
 	if err != nil {
@@ -123,7 +130,7 @@ func RunFix(ctx context.Context, cfg *config.Config, jobName string, stepIndex i
 
 	conv := agentConversation{
 		system:        buildSystemMessage(ri.Persona, dir),
-		messages:      []string{prompt},
+		messages:      messages,
 		contextBlocks: contextBlocks,
 		env:           toolEnv{dir: dir, runner: runner, spillDir: spillDir},
 		tools:         tools,

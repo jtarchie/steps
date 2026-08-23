@@ -389,6 +389,8 @@ The mapping form takes per-task overrides:
       timeout: 10m
 ```
 
+Its `messages:` is a list of user turns, exactly as an agent step's is: the fixer runs the first to completion before the second is sent. The captured failure output is appended to the first, since it is what the repair starts from.
+
 **How the loop terminates.** The agent is seeded with the verdict that failed plus the command's captured output, and given the parent task itself as a zero-arg **rerun tool** (its `run:`, never its `fix:`, so a rerun cannot recurse). It can edit, rerun, and see the new output. When the conversation ends, `steps` runs the command one final time and judges *that* run — by the same rule that triggered the repair. There is no repeat-until-green loop: one agent conversation, then one verdict. A still-red command fails the step normally, firing `on_failure`, and its error names the fixer that could not rescue it.
 
 **What a fix agent needs.** It must be able to edit, and the default tool grant deliberately excludes the write tools — grant them explicitly.
