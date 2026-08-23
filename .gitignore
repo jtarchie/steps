@@ -16,3 +16,8 @@
 # Local credentials for running the examples/self-build experiment (direnv)
 .envrc
 .DS_Store
+
+# golangci-lint's lock lives at $TMPDIR/golangci-lint.lock, so `task lint`
+# points TMPDIR here: two checkouts linting at once cannot then block each
+# other. See the lint task.
+.golangci-tmp/

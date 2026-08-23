@@ -20,8 +20,43 @@ tasks:
 
   lint:
     desc: golangci-lint — ~40 linters enabled (.golangci.yml), must report 0 issues.
+    env:
+      # golangci-lint serializes ALL invocations on this machine through one
+      # lock at $TMPDIR/golangci-lint.lock (verified with lsof: a fixed path,
+      # not the cache directory — GOLANGCI_LINT_CACHE does not move it). So
+      # linting two checkouts at once, or this one while an editor lints it in
+      # the background, makes the loser exit 3 with "parallel golangci-lint is
+      # running" — a failed lint with nothing wrong in the code.
+      #
+      # Giving this repo its own TMPDIR moves the lock into it, so the only
+      # thing we can ever contend with is ourselves. The cache stays shared,
+      # which is what keeps it warm.
+      TMPDIR: '{{.ROOT_DIR}}/.golangci-tmp'
     cmds:
-      - golangci-lint run
+      # Retry only the lock, and only by its message: exit 3 also means a real
+      # internal error, and swallowing that would turn a broken linter into a
+      # silent pass. Anything else is reported immediately.
+      - |
+        for attempt in 1 2 3 4 5 6; do
+          if out=$(golangci-lint run 2>&1); then
+            printf '%s\n' "$out"
+            exit 0
+          fi
+
+          status=$?
+          case "$out" in
+            *"parallel golangci-lint is running"*)
+              echo "another golangci-lint holds the lock; waiting 15s (attempt $attempt/6)" >&2
+              sleep 15
+              ;;
+            *)
+              printf '%s\n' "$out"
+              exit $status
+              ;;
+          esac
+        done
+        echo "golangci-lint stayed locked by another process for 90s" >&2
+        exit 3
 
   kindswitch:
     desc: Report tagless step-kind switches (tools/kindswitch) that golangci-lint's exhaustive check can't see. Must exit 0.
