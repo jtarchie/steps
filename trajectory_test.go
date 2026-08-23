@@ -104,7 +104,8 @@ jobs:
 - name: work
   plan:
   - agent: worker
-    prompt: write some notes
+    messages:
+      - write some notes
 `)
 
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
@@ -150,7 +151,8 @@ jobs:
 - name: work
   plan:
   - agent: worker
-    prompt: do the thing
+    messages:
+      - do the thing
     assert:
       stdout: "a phrase the model never says"
 `)
@@ -201,7 +203,8 @@ jobs:
 - name: work
   plan:
   - agent: worker
-    prompt: write a big file
+    messages:
+      - write a big file
 `)
 
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
@@ -378,7 +381,8 @@ jobs:
 - name: work
   plan:
   - agent: worker
-    prompt: spill something
+    messages:
+      - spill something
     on_success:
       task: fail-after-the-agent
       run: exit 1
@@ -459,7 +463,8 @@ jobs:
     inputs: [built]
     outputs: [built]
     dir: built
-    prompt: spill something
+    messages:
+      - spill something
   - task: inspect
     inputs: [built]
     run: |

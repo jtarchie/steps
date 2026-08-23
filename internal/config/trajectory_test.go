@@ -19,7 +19,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: do it
+    messages:
+      - do it
     assert:
       stdout: posted
       tool_calls:
@@ -107,7 +108,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: x
+    messages:
+      - x
     assert:
       tool_calls:
       - args: { a: "1" }
@@ -131,7 +133,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: x
+    messages:
+      - x
     assert:
       tool_calls:
       - name: post_review
@@ -173,7 +176,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: x
+    messages:
+      - x
     assert:
       tool_calls:
       - name: post_review

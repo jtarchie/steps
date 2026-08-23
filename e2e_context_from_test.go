@@ -39,11 +39,13 @@ jobs:
   plan:
   - agent: triager
     inputs: []
-    prompt: Classify the report.
+    messages:
+      - Classify the report.
     verdicts: [bug, feature]
   - agent: filer
     inputs: []
-    prompt: File it.
+    messages:
+      - File it.
     context:
       from:
         triager: note
@@ -135,13 +137,15 @@ jobs:
   plan:
   - agent: writer
     inputs: []
-    prompt: Write it.
+    messages:
+      - Write it.
     context:
       from:
         critic: full
   - agent: critic
     inputs: []
-    prompt: Judge it.
+    messages:
+      - Judge it.
     verdicts:
       - approve
       - revise: writer
@@ -198,7 +202,8 @@ jobs:
     run: echo 'always cite a line number' > notes/CONVENTIONS.md
   - agent: triager
     inputs: []
-    prompt: Classify the report.
+    messages:
+      - Classify the report.
     verdicts: [bug, feature]
   - agent: filer
     inputs: [notes]
@@ -206,7 +211,8 @@ jobs:
     context:
       from:
         triager: note
-    prompt: File it.
+    messages:
+      - File it.
 `, endpoint(fake)))
 
 	mustRun(t, path)

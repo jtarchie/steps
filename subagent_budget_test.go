@@ -64,7 +64,8 @@ jobs:
   plan:
   - agent: lead
     inputs: []
-    prompt: Delegate the summary.
+    messages:
+      - Delegate the summary.
     assert:
       tool_calls:
       - name: summarizer

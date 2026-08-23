@@ -88,15 +88,18 @@ type Task struct {
 // the task's command is re-run and judged the same way. Fields left unset
 // fall back to the agent's own defaults (Attempts to 1).
 type FixSpec struct {
-	Agent  string // agents: entry to invoke on failure
-	Prompt string // optional override; empty uses a default fix prompt
-	// PromptFile loads Prompt's text from a file at a path relative to the
-	// pipeline file's directory, instead of writing it inline. Mutually
-	// exclusive with Prompt. Mapping form only (a bare scalar fix: has no
-	// room for it).
-	PromptFile string
-	Dir        string     // optional working dir, relative to the workspace
-	Tools      []ToolSpec // optional subset/addition to the agent's tool grant
+	Agent string // agents: entry to invoke on failure
+	// Messages is what the repair agent is asked, one user turn per entry.
+	// Empty uses a default fix prompt. Named for the step field it mirrors:
+	// this is the same concept, and calling it something else here would make
+	// the DSL say two words for one idea.
+	Messages []string
+	// MessageFiles loads Messages from files, one message per file, at paths
+	// relative to the pipeline file's directory. Mutually exclusive with
+	// Messages. Mapping form only (a bare scalar fix: has no room for it).
+	MessageFiles []string
+	Dir          string     // optional working dir, relative to the workspace
+	Tools        []ToolSpec // optional subset/addition to the agent's tool grant
 	// Attempts is how many times the fix agent's failing REQUEST is
 	// re-issued. Unset takes the agent default; 0 is a load error, like
 	// attempts: anywhere else — see dials.go.
@@ -105,7 +108,7 @@ type FixSpec struct {
 }
 
 // UnmarshalYAML decodes a FixSpec from either a scalar (agent name) or a
-// mapping ({agent, prompt, prompt_file, dir, tools, attempts, timeout}) YAML
+// mapping ({agent, prompt, message_files, dir, tools, attempts, timeout}) YAML
 // node.
 func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias kinds that can't appear here
@@ -113,19 +116,19 @@ func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 		return value.Decode(&f.Agent) //nolint:wrapcheck // yaml.v3 error is already descriptive
 	case yaml.MappingNode:
 		err := rejectUnknownKeys(value, "task fix",
-			"agent", "prompt", "prompt_file", "dir", "tools", "attempts", "timeout")
+			"agent", "messages", "message_files", "dir", "tools", "attempts", "timeout")
 		if err != nil {
 			return err
 		}
 
 		var m struct {
-			Agent      string     `yaml:"agent"`
-			Prompt     string     `yaml:"prompt"`
-			PromptFile string     `yaml:"prompt_file"`
-			Dir        string     `yaml:"dir"`
-			Tools      []ToolSpec `yaml:"tools"`
-			Attempts   *int       `yaml:"attempts"`
-			Timeout    string     `yaml:"timeout"`
+			Agent        string     `yaml:"agent"`
+			Messages     []string   `yaml:"messages"`
+			MessageFiles []string   `yaml:"message_files"`
+			Dir          string     `yaml:"dir"`
+			Tools        []ToolSpec `yaml:"tools"`
+			Attempts     *int       `yaml:"attempts"`
+			Timeout      string     `yaml:"timeout"`
 		}
 
 		err = value.Decode(&m)
@@ -133,7 +136,7 @@ func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 			return fmt.Errorf("task fix: %w", err)
 		}
 
-		f.Agent, f.Prompt, f.PromptFile, f.Dir = m.Agent, m.Prompt, m.PromptFile, m.Dir
+		f.Agent, f.Messages, f.MessageFiles, f.Dir = m.Agent, m.Messages, m.MessageFiles, m.Dir
 		f.Tools, f.Attempts, f.Timeout = m.Tools, m.Attempts, m.Timeout
 
 		return nil

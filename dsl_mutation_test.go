@@ -62,7 +62,7 @@ var stepMutationSkips = map[string]string{ //nolint:gochecknoglobals // a test's
 	"privileged":       "same: noexec=docker",
 	"container_limits": "same: noexec=docker",
 
-	"prompt":            "the scripted provider answers by POSITION, not by prompt content, so rewriting a prompt changes nothing a fixture can observe — asserting on it would be asserting on the fake",
+	"messages":          "the scripted provider answers by POSITION, not by prompt content, so rewriting a message changes nothing a fixture can observe — asserting on it would be asserting on the fake",
 	"max_context_bytes": "same reason: it bounds how much context_paths content the model is handed, and a positional fake says the same thing however much it receives",
 
 	"max_in_flight": "documented to change only how many cells run at once, never which run or in what order (it is deliberately not even hashed) — there is nothing for an assertion to see",
@@ -94,7 +94,7 @@ var stepOperators = []stepOperator{
 	{tag: "input_mapping", apply: mutateFirstMapValue("input_mapping")},
 	{tag: "output_mapping", apply: mutateFirstMapValue("output_mapping")},
 
-	{tag: "prompt_file", apply: mutatePromptFile},
+	{tag: "message_files", apply: mutateMessageFiles},
 	{tag: "context_paths", apply: replaceFirstOfList("context_paths", mutantMarker)},
 	{tag: "inputs", apply: dropFirstOfList("inputs")},
 	{tag: "outputs", apply: dropFirstOfList("outputs")},
@@ -543,16 +543,27 @@ func mutateVersion(step map[string]any) bool {
 	}
 }
 
-// mutatePromptFile breaks both spellings: the load-time path and the
-// run-time {artifact, path} mapping.
-func mutatePromptFile(step map[string]any) bool {
-	switch step["prompt_file"].(type) {
+// mutateMessageFiles breaks the first entry, in either spelling it can take:
+// the load-time path, and the run-time {artifact, path} mapping.
+func mutateMessageFiles(step map[string]any) bool {
+	files, ok := step["message_files"].([]any)
+	if !ok || len(files) == 0 {
+		return false
+	}
+
+	switch first := files[0].(type) {
 	case string:
-		step["prompt_file"] = mutantMarker
+		files[0] = mutantMarker
 
 		return true
 	case map[string]any:
-		return mutateFirstMapValue("prompt_file")(step)
+		for key := range first {
+			first[key] = mutantMarker
+
+			return true
+		}
+
+		return false
 	default:
 		return false
 	}

@@ -34,9 +34,11 @@ jobs:
           agents:
           - agent: a
             outputs: [shared]
-            prompt: p
+            messages:
+              - p
           - agent: b
-            prompt: p
+            messages:
+              - p
           verdicts:
           - ok: done
           - bad: done

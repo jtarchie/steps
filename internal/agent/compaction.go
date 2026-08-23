@@ -121,7 +121,12 @@ func maybeCompact(ctx context.Context, llm model.LLM, req *model.LLMRequest, con
 	}
 
 	replaceSummary(req, summarized, recentContents)
-	injectContinuation(req, conv.prompt)
+	// The FIRST message, not whichever one is being answered: compaction
+	// summarizes the OLD turns and keeps the recent ones, so a later message is
+	// still verbatim in the history. The opening task is the one at risk of
+	// being summarized into a paraphrase, and it is the one the model must not
+	// lose.
+	injectContinuation(req, conv.opening())
 
 	slog.Info("agent.compaction", "summarized_turns", len(oldContents), "recent_turns", len(recentContents))
 

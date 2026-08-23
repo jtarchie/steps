@@ -21,4 +21,5 @@ jobs:
   - agent: writer
     inputs: []
     attempts: 0
-    prompt: Write something.
+    messages:
+      - Write something.

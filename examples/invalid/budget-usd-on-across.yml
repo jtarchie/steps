@@ -21,6 +21,7 @@ jobs:
       values: [a, b]
     agent: reviewer
     inputs: []
-    prompt: "review {{ .vars.item }}"
+    messages:
+      - "\"review {{ .vars.item }}\""
     budget:
       usd: 1.50

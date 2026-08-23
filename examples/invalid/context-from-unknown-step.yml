@@ -20,11 +20,13 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: Review it.
+    messages:
+      - Review it.
     verdicts: [approve, revise]
   - agent: editor
     inputs: []
-    prompt: Edit it.
+    messages:
+      - Edit it.
     context:
       from:
         reviwer: note

@@ -64,7 +64,8 @@ jobs:
   plan:
   - agent: tireless
     inputs: []
-    prompt: Investigate the repository.
+    messages:
+      - Investigate the repository.
 `)
 
 	mustRun(t, path)
@@ -108,7 +109,8 @@ jobs:
   plan:
   - agent: hasty
     inputs: []
-    prompt: Say something.
+    messages:
+      - Say something.
 `)
 
 	err := run([]string{"run", path, "--job", "expires"})
@@ -145,7 +147,8 @@ jobs:
   - agent: hasty
     inputs: []
     timeout: 5m
-    prompt: Say something.
+    messages:
+      - Say something.
 `)
 
 	mustRun(t, path)
@@ -181,7 +184,8 @@ jobs:
   plan:
   - agent: onceonly
     inputs: []
-    prompt: Say something.
+    messages:
+      - Say something.
 `)
 
 	err := run([]string{"run", path, "--job", "flaky"})

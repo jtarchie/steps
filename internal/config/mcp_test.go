@@ -369,7 +369,7 @@ agents:
 ` + grantYAML + `
 jobs:
 - name: j
-  plan: [{ agent: triager, prompt: x, inputs: [] }]
+  plan: [{ agent: triager, messages: [x], inputs: [] }]
 `
 }
 
@@ -475,7 +475,8 @@ jobs:
   plan:
   - agent: triager
     inputs: []
-    prompt: x
+    messages:
+      - x
     tools: [github]
 `
 	path := writeConfig(t, pipeline)
@@ -562,7 +563,8 @@ jobs:
   plan:
   - agent: triager
     inputs: []
-    prompt: x
+    messages:
+      - x
     tools:
     - mcp: github
       tool: search_issues

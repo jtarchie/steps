@@ -13,4 +13,5 @@ jobs:
   plan:
   - agent: writer
     inputs: []
-    prompt: Write something.
+    messages:
+      - Write something.

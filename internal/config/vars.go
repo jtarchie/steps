@@ -157,13 +157,19 @@ type varField struct{ name, value string }
 // run-time rendering cannot drift apart. Adding a field here is what makes it
 // both checked and rendered.
 func varFields(step *Step) []varField {
-	return []varField{
-		{"run", step.Run},
-		{"prompt", step.Prompt},
-		{"image", step.Image},
-		{"dir", step.Dir},
-		{"file", step.VarFile},
+	fields := make([]varField, 0, 4+len(step.Messages))
+	fields = append(fields,
+		varField{"run", step.Run},
+		varField{"image", step.Image},
+		varField{"dir", step.Dir},
+		varField{"file", step.VarFile},
+	)
+
+	for i, message := range step.Messages {
+		fields = append(fields, varField{fmt.Sprintf("messages[%d]", i), message})
 	}
+
+	return fields
 }
 
 // unresolvedInValue walks a decoded YAML value — a params: mapping, a nested

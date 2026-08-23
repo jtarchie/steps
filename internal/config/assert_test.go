@@ -67,7 +67,8 @@ jobs:
   plan:
   - agent: c
     inputs: []
-    prompt: x
+    messages:
+      - x
     assert:
       verdict: approve
 `,
@@ -84,7 +85,8 @@ jobs:
   plan:
   - agent: c
     inputs: []
-    prompt: x
+    messages:
+      - x
     verdicts: [approve, revise]
     assert:
       verdict: aprove

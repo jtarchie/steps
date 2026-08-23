@@ -7,7 +7,7 @@ import (
 )
 
 func agentStepWithAssert(assert *config.Assert) config.Step {
-	return config.Step{Agent: "reviewer", Prompt: "do it", Assert: assert}
+	return config.Step{Agent: "reviewer", Messages: []string{"do it"}, Assert: assert}
 }
 
 // TestAssertToolCallsHashStabilityWhenUnset proves value-gating: an assert

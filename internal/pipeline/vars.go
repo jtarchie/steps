@@ -73,7 +73,10 @@ func renderStepVars(ctx context.Context, step config.Step) config.Step {
 	}
 
 	step.Run = config.RenderVars(step.Run, values)
-	step.Prompt = config.RenderVars(step.Prompt, values)
+	for i := range step.Messages {
+		step.Messages[i] = config.RenderVars(step.Messages[i], values)
+	}
+
 	step.Image = config.RenderVars(step.Image, values)
 	step.Dir = config.RenderVars(step.Dir, values)
 	step.VarFile = config.RenderVars(step.VarFile, values)

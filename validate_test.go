@@ -21,7 +21,8 @@ jobs:
     run: touch `+filepath.Join(dir, "ran.txt")+`
     trigger: true
   - agent: ghost
-    prompt: x
+    messages:
+      - x
 `)
 
 	err := run([]string{"validate", path})
@@ -153,7 +154,8 @@ jobs:
 - name: review
   plan:
   - agent: "@builtin/reviewer"
-    prompt: review the notes
+    messages:
+      - review the notes
 `)
 
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
@@ -279,7 +281,8 @@ jobs:
   plan:
   - agent: writer
     inputs: []
-    prompt: Write something.
+    messages:
+      - Write something.
 `)
 
 	err := run([]string{"validate", path})
@@ -322,7 +325,8 @@ jobs:
   plan:
   - agent: writer
     inputs: []
-    prompt: Write something.
+    messages:
+      - Write something.
 `)
 
 	t.Setenv("STEPS_TEST_PRESENT_KEY", "set-to-something")
@@ -353,7 +357,8 @@ jobs:
   plan:
   - agent: writer
     inputs: []
-    prompt: Write something.
+    messages:
+      - Write something.
 `)
 
 	err := run([]string{"validate", path})
@@ -387,7 +392,8 @@ jobs:
   plan:
   - agent: writer
     inputs: []
-    prompt: Write something.
+    messages:
+      - Write something.
 `)
 
 	err := run([]string{"validate", path, "--syntax-only"})

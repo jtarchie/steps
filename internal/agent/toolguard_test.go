@@ -355,7 +355,7 @@ func TestRunAgentConversationCallBudgetResetsAcrossAttempts(t *testing.T) {
 	}
 
 	conv := agentConversation{
-		prompt:   "review it",
+		messages: []string{"review it"},
 		env:      toolEnv{dir: dir, runner: runner},
 		tools:    built,
 		maxTurns: testMaxTurns,

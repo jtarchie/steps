@@ -54,7 +54,7 @@ func TestSubAgentHashStabilityWithoutSubAgents(t *testing.T) {
 	t.Parallel()
 
 	cfg := agentCfg([]config.ToolSpec{{Builtin: "read_file"}}, "")
-	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 
 	ri, err := cfg.ResolveAgentInvocation(step)
 	if err != nil {
@@ -91,7 +91,7 @@ func TestSubAgentEditBustsParentHash(t *testing.T) {
 	t.Parallel()
 
 	tools := []config.ToolSpec{{Agent: "extra", Description: "delegate"}}
-	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 
 	before := mustAgentHash(t, agentCfg(tools, "you are v1"), step)
 	after := mustAgentHash(t, agentCfg(tools, "you are v2"), step)
@@ -107,7 +107,7 @@ func TestSubAgentEditBustsParentHash(t *testing.T) {
 func TestSubAgentGrantChangesHash(t *testing.T) {
 	t.Parallel()
 
-	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 
 	withBuiltin := mustAgentHash(t, agentCfg([]config.ToolSpec{{Builtin: "read_file"}}, ""), step)
 	withSubAgent := mustAgentHash(t, agentCfg([]config.ToolSpec{{Agent: "extra", Description: "delegate"}}, ""), step)

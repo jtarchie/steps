@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -103,7 +104,7 @@ func testStepSpace(t *testing.T) workspace.StepSpace {
 	return space
 }
 
-func TestResolveDeferredPrompt(t *testing.T) {
+func TestResolveDeferredMessages(t *testing.T) {
 	t.Parallel()
 
 	spaceDir := t.TempDir()
@@ -118,30 +119,19 @@ func TestResolveDeferredPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	step := config.Step{Agent: "reviewer", PromptFile: &config.FileRef{Artifact: "repo", Path: "PROMPT.md"}}
+	step := config.Step{Agent: "reviewer", MessageFiles: []*config.FileRef{&config.FileRef{Artifact: "repo", Path: "PROMPT.md"}}}
 
-	got, err := resolveDeferredPrompt(spaceDir, step)
+	got, err := resolveDeferredMessages(spaceDir, step)
 	if err != nil {
-		t.Fatalf("resolveDeferredPrompt: %v", err)
+		t.Fatalf("resolveDeferredMessages: %v", err)
 	}
 
-	if want := "Review this.\n"; got != want {
-		t.Errorf("resolveDeferredPrompt = %q, want %q", got, want)
-	}
-}
-
-func TestResolveDeferredPromptRejectsInlinePromptAlsoSet(t *testing.T) {
-	t.Parallel()
-
-	step := config.Step{Agent: "reviewer", Prompt: "inline", PromptFile: &config.FileRef{Artifact: "repo", Path: "PROMPT.md"}}
-
-	_, err := resolveDeferredPrompt(t.TempDir(), step)
-	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Fatalf("err = %v, want a mutually-exclusive error", err)
+	if want := []string{"Review this.\n"}; !slices.Equal(got, want) {
+		t.Errorf("resolveDeferredMessages = %q, want %q", got, want)
 	}
 }
 
-func TestResolveDeferredPromptRejectsEmptyFile(t *testing.T) {
+func TestResolveDeferredMessagesRejectsEmptyFile(t *testing.T) {
 	t.Parallel()
 
 	spaceDir := t.TempDir()
@@ -156,20 +146,20 @@ func TestResolveDeferredPromptRejectsEmptyFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	step := config.Step{Agent: "reviewer", PromptFile: &config.FileRef{Artifact: "repo", Path: "PROMPT.md"}}
+	step := config.Step{Agent: "reviewer", MessageFiles: []*config.FileRef{&config.FileRef{Artifact: "repo", Path: "PROMPT.md"}}}
 
-	_, err = resolveDeferredPrompt(spaceDir, step)
+	_, err = resolveDeferredMessages(spaceDir, step)
 	if err == nil || !strings.Contains(err.Error(), "is empty") {
 		t.Fatalf("err = %v, want an empty-file error", err)
 	}
 }
 
-// TestResolveDeferredPromptRejectsSymlinkEscape proves resolveDeferredPrompt
+// TestResolveDeferredMessagesRejectsSymlinkEscape proves resolveDeferredPrompt
 // inherits resolveAgentPath's symlink confinement (already exhaustively
 // tested at that level in tools_test.go) rather than re-implementing it — an
 // artifact's contents are untrusted, and a symlink planted inside it (e.g. by
 // a malicious repo) must not be followed outside the step's space.
-func TestResolveDeferredPromptRejectsSymlinkEscape(t *testing.T) {
+func TestResolveDeferredMessagesRejectsSymlinkEscape(t *testing.T) {
 	t.Parallel()
 
 	spaceDir := t.TempDir()
@@ -190,9 +180,9 @@ func TestResolveDeferredPromptRejectsSymlinkEscape(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	step := config.Step{Agent: "reviewer", PromptFile: &config.FileRef{Artifact: "repo", Path: "leak/secret.txt"}}
+	step := config.Step{Agent: "reviewer", MessageFiles: []*config.FileRef{&config.FileRef{Artifact: "repo", Path: "leak/secret.txt"}}}
 
-	_, err = resolveDeferredPrompt(spaceDir, step)
+	_, err = resolveDeferredMessages(spaceDir, step)
 	if err == nil || !strings.Contains(err.Error(), "escapes the working directory") {
 		t.Fatalf("err = %v, want an escape-rejected error", err)
 	}

@@ -1326,7 +1326,7 @@ func validateAgentArtifactFlow(cfg *config.Config, jobName string, i int, step c
 		return err
 	}
 
-	err = checkPromptFileArtifactAvailable(jobName, i, step.Agent, step.PromptFile, step.InputNames(), available)
+	err = checkMessageFileArtifactsAvailable(jobName, i, step.Agent, step.MessageFiles, step.InputNames(), available)
 	if err != nil {
 		return err
 	}
@@ -1338,30 +1338,30 @@ func validateAgentArtifactFlow(cfg *config.Config, jobName string, i int, step c
 	return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
 }
 
-// checkPromptFileArtifactAvailable validates a run-time prompt_file:
+// checkMessageFileArtifactsAvailable validates a run-time message_files:
 // {artifact, path}'s artifact (see config.FileRef.Deferred) against both the
 // plan's available set (so it names something actually fetched/produced
 // somewhere in the job) and the step's own declared inputs: (so the artifact
 // is guaranteed to be materialized into the step's working directory by the
 // time it reads it — see internal/agent's resolveDeferredPrompt, which reads
 // relative to the step's own build space, not the whole plan). A load-time
-// prompt_file: (a plain path, not a mapping) names no artifact and is a
+// message_files: (a plain path, not a mapping) names no artifact and is a
 // no-op here.
-func checkPromptFileArtifactAvailable(jobName string, i int, agentName string, promptFile *config.FileRef, inputs []string, available map[string]bool) error {
-	if !promptFile.Deferred() {
-		return nil
-	}
+func checkMessageFileArtifactsAvailable(jobName string, i int, agentName string, messageFiles []*config.FileRef, inputs []string, available map[string]bool) error {
+	for _, ref := range messageFiles {
+		if !ref.Deferred() {
+			continue
+		}
 
-	artifact := promptFile.Artifact
+		if !available[ref.Artifact] {
+			return fmt.Errorf("job %q step %d (agent %q): message_files artifact %q is not a resource fetched or an output produced earlier in the plan",
+				jobName, i, agentName, ref.Artifact)
+		}
 
-	if !available[artifact] {
-		return fmt.Errorf("job %q step %d (agent %q): prompt_file artifact %q is not a resource fetched or an output produced earlier in the plan",
-			jobName, i, agentName, artifact)
-	}
-
-	if !slices.Contains(inputs, artifact) {
-		return fmt.Errorf("job %q step %d (agent %q): prompt_file artifact %q must also be declared in this step's inputs",
-			jobName, i, agentName, artifact)
+		if !slices.Contains(inputs, ref.Artifact) {
+			return fmt.Errorf("job %q step %d (agent %q): message_files artifact %q must also be declared in this step's inputs",
+				jobName, i, agentName, ref.Artifact)
+		}
 	}
 
 	return nil
@@ -1459,27 +1459,31 @@ func validateHookArtifactFlow(cfg *config.Config, jobName string, i int, hookNam
 }
 
 // checkHookPromptFileArtifactAvailable is validateHookArtifactFlow's sibling
-// of checkPromptFileArtifactAvailable: an agent hook's run-time prompt_file:
+// of checkMessageFileArtifactsAvailable: an agent hook's run-time message_files:
 // {artifact, path} needs the same guard the top-level plan walk applies — the
 // artifact must be available to the hook and declared in its own inputs:,
 // since internal/agent reads it out of the hook step's own materialized
 // working directory. Split out of validateHookArtifactFlow purely to stay
 // under the linter's cyclomatic-complexity budget.
 func checkHookPromptFileArtifactAvailable(jobName string, i int, hookName string, hook config.Step, inputs []string, view map[string]bool) error {
-	if hook.Agent == "" || !hook.PromptFile.Deferred() {
+	if hook.Agent == "" {
 		return nil
 	}
 
-	artifact := hook.PromptFile.Artifact
+	for _, ref := range hook.MessageFiles {
+		if !ref.Deferred() {
+			continue
+		}
 
-	if !view[artifact] {
-		return fmt.Errorf("job %q step %d %s hook (agent %q): prompt_file artifact %q is not available to this hook",
-			jobName, i, hookName, hook.Agent, artifact)
-	}
+		if !view[ref.Artifact] {
+			return fmt.Errorf("job %q step %d %s hook (agent %q): message_files artifact %q is not available to this hook",
+				jobName, i, hookName, hook.Agent, ref.Artifact)
+		}
 
-	if !slices.Contains(inputs, artifact) {
-		return fmt.Errorf("job %q step %d %s hook (agent %q): prompt_file artifact %q must also be declared in this hook's inputs",
-			jobName, i, hookName, hook.Agent, artifact)
+		if !slices.Contains(inputs, ref.Artifact) {
+			return fmt.Errorf("job %q step %d %s hook (agent %q): message_files artifact %q must also be declared in this hook's inputs",
+				jobName, i, hookName, hook.Agent, ref.Artifact)
+		}
 	}
 
 	return nil

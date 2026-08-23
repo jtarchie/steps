@@ -18,7 +18,7 @@ agents:
   source: { model: lmstudio/qwen }
 jobs:
 - name: j
-  plan: [{ agent: "@builtin/reviewer", prompt: review }]
+  plan: [{ agent: "@builtin/reviewer", messages: [review] }]
 `)
 
 	cfg, err := LoadConfig(path)
@@ -63,7 +63,7 @@ agents:
   max_turns: 3
 jobs:
 - name: j
-  plan: [{ agent: "@builtin/reviewer", prompt: review }]
+  plan: [{ agent: "@builtin/reviewer", messages: [review] }]
 `)
 
 	cfg, err := LoadConfig(path)

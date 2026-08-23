@@ -155,6 +155,10 @@ type resumeCheckpoint struct {
 	// recorded audit trail describe the whole step rather than whichever
 	// source happened to finish it.
 	trajectory []recordedToolCall
+	// sent is the index of the message currently being answered. It is part of
+	// the checkpoint because a failover mid-conversation has to resume at the
+	// message it was on, not restart the list.
+	sent int
 	// verdict and note are the last successful verdict-tool choice and its
 	// note, so an infrastructure hiccup cannot lose a decision the model had
 	// already made.
@@ -183,8 +187,12 @@ type resumeCheckpoint struct {
 
 // agentConversation is one runnable attempt's inputs.
 type agentConversation struct {
-	system        string
-	prompt        string
+	system string
+	// messages is what the step says to the model, one user turn per entry.
+	// The first opens the conversation; each later one is sent only after the
+	// model has finished answering the one before it, so it is written against
+	// an answer that already exists.
+	messages      []string
 	contextBlocks []contextBlock
 	// upstream is what named earlier steps decided, delivered as synthetic
 	// read_step results because this step declared context: { from: ... }.
@@ -279,7 +287,7 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 	// found in messages" rather than a completion.
 	contents = append(contents, &genai.Content{
 		Role:  genai.RoleUser,
-		Parts: []*genai.Part{{Text: conv.prompt}},
+		Parts: []*genai.Part{{Text: conv.opening()}},
 	})
 
 	// The decisions this step asked upstream steps for come first of the
@@ -589,7 +597,11 @@ func (conv agentConversation) handleStopAttempt(
 	}
 
 	if conv.finishOrForce(req, state.satisfied) {
-		return true, nil
+		// Every required tool has succeeded, so the model is done answering
+		// the message it was given. Whether the CONVERSATION is done is a
+		// different question: another message means it carries on, with its
+		// verdict reopened.
+		return !conv.advanceIfMore(req, state), nil
 	}
 
 	*ignoredForces++
@@ -825,6 +837,55 @@ func attachUsage(ctx context.Context, usage *stepUsage) *stepUsage {
 	usage.run = RunUsageFrom(ctx)
 
 	return usage
+}
+
+// opening is the message that starts the conversation, or "" when a caller
+// built one with none. Empty is what the single-string field allowed before
+// this was a list, and a conversation with nothing to say is the caller's
+// error to report, not a panic here.
+func (conv agentConversation) opening() string {
+	if len(conv.messages) == 0 {
+		return ""
+	}
+
+	return conv.messages[0]
+}
+
+// advanceIfMore sends the next message when there is one, reporting whether the
+// conversation carries on.
+func (conv agentConversation) advanceIfMore(req *model.LLMRequest, state *resumeCheckpoint) bool {
+	if state.sent+1 >= len(conv.messages) {
+		return false
+	}
+
+	conv.advance(req, state)
+
+	return true
+}
+
+// advance sends the next message and reopens the question of what this step
+// decided.
+//
+// Required-tool satisfaction resets, and that is the whole of why a later
+// message means anything. Carrying it forward would let the model answer the
+// second message without calling the verdict tool again — the step would then
+// route on a verdict formed before the last thing it was asked, silently. The
+// earlier verdict stays on the checkpoint until a new one replaces it, so a
+// conversation cut short by a failover still reports the last decision the
+// model actually made.
+func (conv agentConversation) advance(req *model.LLMRequest, state *resumeCheckpoint) {
+	state.sent++
+	state.satisfied = map[string]bool{}
+
+	// Forcing from the previous message's last turn would otherwise still be
+	// set, constraining the model's first answer to a tool it has already
+	// satisfied for a question it has not yet been asked.
+	req.Config.ToolConfig = nil
+
+	req.Contents = append(req.Contents, &genai.Content{
+		Role:  genai.RoleUser,
+		Parts: []*genai.Part{{Text: conv.messages[state.sent]}},
+	})
 }
 
 // finishOrForce handles a turn in which the model requested no tools. It

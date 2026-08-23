@@ -240,7 +240,7 @@ Note `version.ts ?? "0"`: that is the [cursor](resources.md#the-check-cursor), a
 
 ## Expressions belong in files
 
-A twenty-line program has no business inside a YAML scalar, so each slot takes a `_file` sibling — the pattern `run_file:`, `system_file:` and `prompt_file:` already establish:
+A twenty-line program has no business inside a YAML scalar, so each slot takes a `_file` sibling — the pattern `run_file:`, `system_file:` and `message_files:` already establish:
 
 ```yaml fragment
 resource_types:

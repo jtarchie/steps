@@ -45,7 +45,8 @@ jobs:
       tokens: 700
     agent: reviewer
     inputs: []
-    prompt: "Review {{ .vars.item }}"
+    messages:
+      - "\"Review {{ .vars.item }}\""
   - task: after
     inputs: []
     run: echo "the plan continued"
@@ -103,7 +104,8 @@ jobs:
       tokens: %[2]d
     agent: reviewer
     inputs: []
-    prompt: "Review {{ .vars.item }}"
+    messages:
+      - "\"Review {{ .vars.item }}\""
 `, fake.URL+"/v1/", tokens)
 	}
 
@@ -136,7 +138,8 @@ func TestAcrossBudgetRejectsWhatItCannotEnforce(t *testing.T) {
 			name: "on a step with no across:",
 			step: `  - agent: reviewer
     inputs: []
-    prompt: hi
+    messages:
+      - hi
     budget:
       tokens: 500`,
 			wantErr: "only valid on an across: step",
@@ -148,7 +151,8 @@ func TestAcrossBudgetRejectsWhatItCannotEnforce(t *testing.T) {
       values: [a, b]
     agent: reviewer
     inputs: []
-    prompt: "{{ .vars.item }}"
+    messages:
+      - "\"{{ .vars.item }}\""
     budget:
       usd: 1.5`,
 			wantErr: "budget.usd is not valid on an across: step",
@@ -161,7 +165,7 @@ func TestAcrossBudgetRejectsWhatItCannotEnforce(t *testing.T) {
 			name: "a reservation on an agent, which admits nothing",
 			step: `  - agent: reserver
     inputs: []
-    prompt: hi`,
+    messages: [hi]`,
 			extraAgent: `- name: reserver
   source: { model: openai/test-model, api_key_env: STEPS_TEST_AGENT_API_KEY }
   budget:
@@ -179,7 +183,8 @@ func TestAcrossBudgetRejectsWhatItCannotEnforce(t *testing.T) {
       values: [a, b]
     agent: reviewer
     inputs: []
-    prompt: "{{ .vars.item }}"
+    messages:
+      - "\"{{ .vars.item }}\""
     budget:
       tokens: 500
       reserve_per_cell: 100`,
@@ -192,7 +197,8 @@ func TestAcrossBudgetRejectsWhatItCannotEnforce(t *testing.T) {
       values: [a, b]
     agent: reviewer
     inputs: []
-    prompt: "{{ .vars.item }}"
+    messages:
+      - "\"{{ .vars.item }}\""
     max_in_flight: 2
     budget:
       tokens: 500
@@ -266,7 +272,8 @@ jobs:
       tokens: 700
     agent: reviewer
     inputs: []
-    prompt: "Review {{ .vars.item }}"
+    messages:
+      - "\"Review {{ .vars.item }}\""
 `, fake.URL+"/v1/"))
 
 	mustRun(t, path)
@@ -314,7 +321,8 @@ jobs:
       reserve_per_cell: 400
     agent: reviewer
     inputs: []
-    prompt: "Review {{ .vars.item }}"
+    messages:
+      - "\"Review {{ .vars.item }}\""
 `, fake.URL+"/v1/"))
 
 	mustRun(t, path)
@@ -363,7 +371,8 @@ jobs:
       tokens: 700
     agent: reviewer
     inputs: []
-    prompt: "Review {{ .vars.item }}"
+    messages:
+      - "\"Review {{ .vars.item }}\""
 `, fake.URL+"/v1/"))
 
 	mustRun(t, path)

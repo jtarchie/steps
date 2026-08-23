@@ -33,7 +33,8 @@ jobs:
     run: echo ran >> %[3]s
   - agent: writer
     inputs: []
-    prompt: Write something.
+    messages:
+      - Write something.
 `, endpoint, extra, filepath.Join(dir, "task.log")))
 }
 
@@ -195,10 +196,12 @@ jobs:
   plan:
   - agent: healthy
     inputs: []
-    prompt: Plan it.
+    messages:
+      - Plan it.
   - agent: broken
     inputs: []
-    prompt: Build it.
+    messages:
+      - Build it.
 `, fake.URL))
 
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")

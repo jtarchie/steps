@@ -12,7 +12,8 @@ tasks:
   run: exit 1
   fix:
     agent: fixer
-    prompt: Fix the build.
+    messages:
+      - Fix the build.
 
 jobs:
 - name: ci

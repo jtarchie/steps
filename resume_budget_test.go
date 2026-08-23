@@ -47,13 +47,15 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: first pass
+    messages:
+      - first pass
   - task: gate
     inputs: []
     run: %[2]s
   - agent: reviewer
     inputs: []
-    prompt: second pass
+    messages:
+      - second pass
 `, fake.URL+"/v1/", gate)
 	}
 

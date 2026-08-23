@@ -183,7 +183,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 
 	conv := agentConversation{
 		system:        buildSystemMessage(c.ri.Persona, env.dir),
-		prompt:        request,
+		messages:      []string{request},
 		contextBlocks: contextBlocks,
 		env:           toolEnv{dir: env.dir, runner: runner, spillDir: env.spillDir},
 		tools:         c.tools,

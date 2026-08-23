@@ -224,7 +224,7 @@ func TestResolveStepImage(t *testing.T) {
 		{name: "inline task, no image", step: config.Step{Task: "t", Run: "true"}, want: ""},
 		{name: "task inherits the tasks: entry image", step: config.Step{Task: "built"}, want: "golang:1.26"},
 		{name: "step image overrides the task's", step: config.Step{Task: "built", Image: "alpine"}, want: "alpine"},
-		{name: "agent image", step: config.Step{Agent: "a", Prompt: "x"}, want: "python:3.12"},
+		{name: "agent image", step: config.Step{Agent: "a", Messages: []string{"x"}}, want: "python:3.12"},
 		{name: "put takes its resource type's image", step: config.Step{Put: "r"}, want: "alpine/git"},
 	}
 

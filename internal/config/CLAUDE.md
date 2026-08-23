@@ -1,6 +1,6 @@
 # internal/config
 
-YAML parsing (`LoadConfig`) and every config type (`Config`, `Resource`, `Agent`, `Task`, `Job`, `Step`, ...); also the config-merge logic (`ResolveTask`, `ResolveAgentInvocation`) both plan-time hashing and run-time execution share, plus `run_file:`/`system_file:`/`prompt_file:`/`file:` include resolution. Depends on nothing internal.
+YAML parsing (`LoadConfig`) and every config type (`Config`, `Resource`, `Agent`, `Task`, `Job`, `Step`, ...); also the config-merge logic (`ResolveTask`, `ResolveAgentInvocation`) both plan-time hashing and run-time execution share, plus `run_file:`/`system_file:`/`message_files:`/`file:` include resolution. Depends on nothing internal.
 
 **One file per domain:** `config.go` is only `LoadConfig` plus the `validate()` dispatcher; every check that dispatcher names lives in the file for its feature, next to the types it validates. Add a new rule to the file that owns its feature, not to `config.go`.
 

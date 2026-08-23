@@ -86,19 +86,19 @@ func TestVerdictsBustAgentHash(t *testing.T) {
 
 	cfg := agentCfg([]config.ToolSpec{{Builtin: "read_file"}}, "")
 
-	base := mustAgentHash(t, cfg, config.Step{Agent: "reviewer", Prompt: "x"})
+	base := mustAgentHash(t, cfg, config.Step{Agent: "reviewer", Messages: []string{"x"}})
 	withVerdicts := mustAgentHash(t, cfg, config.Step{
-		Agent: "reviewer", Prompt: "x",
+		Agent: "reviewer", Messages: []string{"x"},
 		Verdicts:  []config.VerdictRoute{{Name: "approve", Target: "reviewer"}, {Name: "revise", Target: "reviewer"}},
 		MaxVisits: 2,
 	})
 	reordered := mustAgentHash(t, cfg, config.Step{
-		Agent: "reviewer", Prompt: "x",
+		Agent: "reviewer", Messages: []string{"x"},
 		Verdicts:  []config.VerdictRoute{{Name: "revise", Target: "reviewer"}, {Name: "approve", Target: "reviewer"}},
 		MaxVisits: 2,
 	})
 	retargeted := mustAgentHash(t, cfg, config.Step{
-		Agent: "reviewer", Prompt: "x",
+		Agent: "reviewer", Messages: []string{"x"},
 		Verdicts:  []config.VerdictRoute{{Name: "approve", Target: "next"}, {Name: "revise", Target: "reviewer"}},
 		MaxVisits: 2,
 	})

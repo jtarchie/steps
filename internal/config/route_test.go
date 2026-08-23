@@ -20,7 +20,8 @@ jobs:
     run: "true"
   - agent: critic
     inputs: []
-    prompt: judge it
+    messages:
+      - judge it
     verdicts:
       - approve: publish
       - revise: draft
@@ -233,7 +234,8 @@ jobs:
   plan:
   - agent: c
     inputs: []
-    prompt: x
+    messages:
+      - x
     verdicts:
       - success: c
 `,
@@ -252,7 +254,8 @@ jobs:
   plan:
   - agent: c
     inputs: []
-    prompt: x
+    messages:
+      - x
     verdicts: [approve, revise]
     to: { approve: done, revise: done }
   - task: done
@@ -272,7 +275,8 @@ jobs:
   plan:
   - agent: c
     inputs: []
-    prompt: x
+    messages:
+      - x
     verdicts:
       - approve: done
       - approve: next
@@ -293,7 +297,8 @@ jobs:
   plan:
   - agent: c
     inputs: []
-    prompt: x
+    messages:
+      - x
     verdicts:
       - approve
       - failure
@@ -311,7 +316,8 @@ jobs:
   plan:
   - agent: c
     inputs: []
-    prompt: x
+    messages:
+      - x
     verdicts:
       - approve: nowhere
 `,
@@ -331,7 +337,8 @@ jobs:
     run: "true"
   - agent: c
     inputs: []
-    prompt: x
+    messages:
+      - x
     verdicts:
       - revise: draft
 `,
@@ -348,7 +355,8 @@ jobs:
   plan:
   - agent: c
     inputs: []
-    prompt: x
+    messages:
+      - x
     verdicts:
       - approve: done
         revise: done
@@ -502,7 +510,8 @@ func TestRouteTargetNext(t *testing.T) {
 			plan: `
   - agent: critic
     inputs: []
-    prompt: judge it
+    messages:
+      - judge it
     verdicts:
       - approve: next
       - revise: draft

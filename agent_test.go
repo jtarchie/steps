@@ -35,7 +35,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: hello
+    messages:
+      - hello
 `, fake.URL)
 
 	err := os.WriteFile(path, []byte(pipeline), 0o600)
@@ -59,7 +60,7 @@ jobs:
 }
 
 // TestRunJobAgentPromptFileArtifactReadsRepoFile is the end-to-end proof for
-// the run-time prompt_file: {artifact, path} form: an agent step's prompt
+// the run-time message_files: {artifact, path} form: an agent step's prompt
 // text is read out of a get step's fetched artifact and actually reaches the
 // model. The dummy resource's in: writes PROMPT.md directly into the fetched
 // directory (its cwd, per resource.RunIn), and the agent step declares repo
@@ -101,7 +102,7 @@ jobs:
   - get: repo
   - agent: reviewer
     inputs: [repo]
-    prompt_file: { artifact: repo, path: PROMPT.md }
+    message_files: [{ artifact: repo, path: PROMPT.md }]
 `, fake.URL)
 
 	err := os.WriteFile(path, []byte(pipeline), 0o600)
@@ -114,7 +115,7 @@ jobs:
 	mustRun(t, path)
 
 	if got := fake.request(1).Messages; len(got) != 2 || !strings.Contains(got[1].Content, "Review this repo carefully.") {
-		t.Errorf("the prompt_file's loaded text did not reach the model as the user message; got %+v", got)
+		t.Errorf("the message_files's loaded text did not reach the model as the user message; got %+v", got)
 	}
 }
 
@@ -156,7 +157,8 @@ jobs:
   plan:
   - agent: browser
     inputs: []
-    prompt: Investigate the repository.
+    messages:
+      - Investigate the repository.
 `)
 
 	mustRun(t, path)

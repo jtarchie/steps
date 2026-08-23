@@ -69,7 +69,7 @@ jobs:
 			want: `step when at line 7: unknown key "runs" (did you mean "run"?)`,
 		},
 		{
-			name: "prompt_file mapping",
+			name: "message_files mapping",
 			pipeline: `
 agents:
 - name: a
@@ -78,9 +78,9 @@ jobs:
 - name: j
   plan:
   - agent: a
-    prompt_file: { artifact: repo, paths: x.md }
+    message_files: [{ artifact: repo, paths: x.md }]
 `,
-			want: `prompt_file at line 9: unknown key "paths" (did you mean "path"?)`,
+			want: `message_files at line 9: unknown key "paths" (did you mean "path"?)`,
 		},
 		{
 			name: "fix mapping",
@@ -93,9 +93,9 @@ jobs:
   plan:
   - task: t
     run: "false"
-    fix: { agent: fixer, prompts: retry }
+    fix: { agent: fixer, messsages: retry }
 `,
-			want: `task fix at line 10: unknown key "prompts" (did you mean "prompt"?)`,
+			want: `task fix at line 10: unknown key "messsages" (did you mean "messages"?)`,
 		},
 		{
 			name: "tools entry mapping",
@@ -109,7 +109,7 @@ agents:
     maxcalls: 2
 jobs:
 - name: j
-  plan: [{ agent: a, prompt: x }]
+  plan: [{ agent: a, messages: [x] }]
 `,
 			want: `agent tool at line 8: unknown key "maxcalls" (did you mean "max_calls"?)`,
 		},

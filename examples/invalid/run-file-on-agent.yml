@@ -1,5 +1,5 @@
 # run_file: loads a task's run: script from a file beside the pipeline. An agent
-# has no run:; the equivalent field is prompt_file:.
+# has no run:; the equivalent field is message_files:.
 # expect: run_file: is only valid on task steps
 
 agents:
@@ -11,5 +11,6 @@ jobs:
 - name: build
   plan:
   - agent: reviewer
-    prompt: review it
+    messages:
+      - review it
     run_file: tasks/build.sh

@@ -26,11 +26,13 @@ jobs:
   plan:
   - agent: critic
     inputs: []
-    prompt: judge it
+    messages:
+      - judge it
     verdicts: [approve, revise]
   - agent: writer
     inputs: []
-    prompt: rewrite it
+    messages:
+      - rewrite it
     context:
       from:
         critic: note
@@ -63,11 +65,13 @@ jobs:
   plan:
   - agent: critic
     inputs: []
-    prompt: judge it
+    messages:
+      - judge it
     verdicts: [approve, revise]
   - agent: writer
     inputs: []
-    prompt: rewrite it
+    messages:
+      - rewrite it
     context:
       from:
         critic: verdict
@@ -95,13 +99,15 @@ jobs:
   plan:
   - agent: writer
     inputs: []
-    prompt: write it
+    messages:
+      - write it
     context:
       from:
         critic: full
   - agent: critic
     inputs: []
-    prompt: judge it
+    messages:
+      - judge it
     verdicts:
       - approve
       - revise: writer
@@ -130,11 +136,13 @@ jobs:
   plan:
   - agent: critic
     inputs: []
-    prompt: judge it
+    messages:
+      - judge it
     verdicts: [approve, revise]
   - agent: writer
     inputs: []
-    prompt: rewrite it
+    messages:
+      - rewrite it
     context:
       from:
         critik: note
@@ -149,10 +157,12 @@ jobs:
   plan:
   - agent: critic
     inputs: []
-    prompt: judge it
+    messages:
+      - judge it
   - agent: writer
     inputs: []
-    prompt: rewrite it
+    messages:
+      - rewrite it
     context:
       from:
         critic: note
@@ -167,7 +177,8 @@ jobs:
   plan:
   - agent: critic
     inputs: []
-    prompt: judge it
+    messages:
+      - judge it
     verdicts: [approve, revise]
     context:
       from:
@@ -183,11 +194,13 @@ jobs:
   plan:
   - agent: critic
     inputs: []
-    prompt: judge it
+    messages:
+      - judge it
     verdicts: [approve, revise]
   - agent: writer
     inputs: []
-    prompt: rewrite it
+    messages:
+      - rewrite it
     context:
       from:
         critic: everything
@@ -202,7 +215,8 @@ jobs:
   plan:
   - agent: writer
     inputs: []
-    prompt: rewrite it
+    messages:
+      - rewrite it
     context:
       from: {}
 `,

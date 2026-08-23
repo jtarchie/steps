@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
@@ -20,11 +21,11 @@ import (
 const defaultFixPrompt = `A command that must pass has just failed; the failure and its output are below. Investigate the working directory, make the smallest change that resolves the stated failure, then call the %q tool to re-run the command. Note that a zero exit code is not by itself success — the failure named below is what has to be resolved. Repeat until it is, then reply with a brief summary and stop.`
 
 // buildFixPrompt assembles the fix conversation's user prompt: the fix:'s
-// own prompt: (or the default), then the captured failure output the model
+// own messages: [(or the default)], then the captured failure output the model
 // is being asked to resolve. Split out of RunFix to keep its control flow
 // inside the complexity budget; behavior is unchanged.
 func buildFixPrompt(fix *config.FixSpec, rt config.ResolvedTask, failureOutput, spillDir string) string {
-	prompt := fix.Prompt
+	prompt := strings.Join(fix.Messages, "\n\n")
 	if prompt == "" {
 		prompt = fmt.Sprintf(defaultFixPrompt, rt.Name)
 	}
@@ -56,7 +57,7 @@ func RunFix(ctx context.Context, cfg *config.Config, jobName string, stepIndex i
 	// resolve grants/dials/limits exactly as it does for a real agent step.
 	ri, err := cfg.ResolveAgentInvocation(config.Step{
 		Agent:    fix.Agent,
-		Prompt:   fix.Prompt,
+		Messages: fix.Messages,
 		Dir:      fix.Dir,
 		Tools:    fix.Tools,
 		Attempts: fix.Attempts,
@@ -122,7 +123,7 @@ func RunFix(ctx context.Context, cfg *config.Config, jobName string, stepIndex i
 
 	conv := agentConversation{
 		system:        buildSystemMessage(ri.Persona, dir),
-		prompt:        prompt,
+		messages:      []string{prompt},
 		contextBlocks: contextBlocks,
 		env:           toolEnv{dir: dir, runner: runner, spillDir: spillDir},
 		tools:         tools,

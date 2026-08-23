@@ -62,7 +62,8 @@ jobs:
   plan:
   - try:
       agent: reviewer
-      prompt: hello
+      messages:
+        - hello
 `)
 		_, err := LoadConfig(path)
 		if err != nil {
@@ -297,7 +298,8 @@ jobs:
   plan:
   - try:
       agent: reviewer
-      prompt: judge it
+      messages:
+        - judge it
       verdicts:
         - pass: ship
         - fail: reviewer
@@ -324,7 +326,8 @@ jobs:
   plan:
   - try:
       agent: reviewer
-      prompt: judge it
+      messages:
+        - judge it
       verdicts:
         - pass: nowhere
 `)
@@ -342,7 +345,8 @@ jobs:
   plan:
   - try:
       agent: reviewer
-      prompt: judge it
+      messages:
+        - judge it
       verdicts: [pass, fail]
 `)
 

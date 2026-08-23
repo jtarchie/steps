@@ -27,7 +27,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: do it
+    messages:
+      - do it
 `
 }
 
@@ -82,7 +83,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: do it
+    messages:
+      - do it
     tools: [extra]
 `
 	path := writeConfig(t, pipeline)
@@ -121,7 +123,7 @@ agents:
     description: nope
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
+  plan: [{ agent: reviewer, messages: [x], inputs: [] }]
 `,
 			want: `no agent named "ghost"`,
 		},
@@ -139,7 +141,7 @@ agents:
   source: { model: lmstudio/qwen }
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
+  plan: [{ agent: reviewer, messages: [x], inputs: [] }]
 `,
 			want: "may not set required",
 		},
@@ -157,7 +159,7 @@ agents:
   source: { model: lmstudio/qwen }
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
+  plan: [{ agent: reviewer, messages: [x], inputs: [] }]
 `,
 			want: "must not also set builtin/name/run",
 		},
@@ -174,7 +176,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: x
+    messages:
+      - x
     tools:
     - agent: extra
       description: d
@@ -192,7 +195,7 @@ agents:
     description: d
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
+  plan: [{ agent: reviewer, messages: [x], inputs: [] }]
 `,
 			want: "agent cycle detected",
 		},
@@ -208,7 +211,7 @@ agents:
   tools: [{ agent: a, description: d }]
 jobs:
 - name: j
-  plan: [{ agent: a, prompt: x, inputs: [] }]
+  plan: [{ agent: a, messages: [x], inputs: [] }]
 `,
 			want: "agent cycle detected",
 		},
@@ -262,7 +265,7 @@ func TestSubAgentDepthLimit(t *testing.T) {
 		}
 	}
 
-	b.WriteString("jobs:\n- name: j\n  plan: [{ agent: a0, prompt: x, inputs: [] }]\n")
+	b.WriteString("jobs:\n- name: j\n  plan: [{ agent: a0, messages: [x], inputs: [] }]\n")
 
 	path := writeConfig(t, b.String())
 	wantLoadError(t, path, "nesting depth exceeded")

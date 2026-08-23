@@ -16,7 +16,7 @@ import (
 func TestBudgetIsNotHashed(t *testing.T) {
 	t.Parallel()
 
-	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 
 	contentFor := func(t *testing.T, budget *config.Budget) map[string]any {
 		t.Helper()
@@ -71,7 +71,7 @@ func TestBudgetIsNotHashed(t *testing.T) {
 func TestFallbackIsNotHashed(t *testing.T) {
 	t.Parallel()
 
-	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 
 	hashFor := func(t *testing.T, fallback []config.AgentFallback) string {
 		t.Helper()

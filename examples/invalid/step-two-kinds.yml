@@ -7,4 +7,5 @@ jobs:
   - task: work
     agent: reviewer
     run: "true"
-    prompt: review it
+    messages:
+      - review it

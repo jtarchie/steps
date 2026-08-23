@@ -93,7 +93,8 @@ jobs:
       agent: notifier
       inputs: []
       outputs: [note]
-      prompt: File an incident note at note/incident.md.
+      messages:
+        - File an incident note at note/incident.md.
       assert:
         %[2]s
 `, endpoint, assertLine)

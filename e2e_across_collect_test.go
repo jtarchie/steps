@@ -136,7 +136,8 @@ jobs:
     agent: reviewer
     inputs: []
     outputs: [findings]
-    prompt: "Review the {{ .vars.dim }} dimension; write findings/report.txt"
+    messages:
+      - "\"Review the {{ .vars.dim }} dimension; write findings/report.txt\""
   - task: collect
     inputs: [findings]
     run: |

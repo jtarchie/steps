@@ -27,7 +27,8 @@ jobs:
 - name: triage
   plan:
   - agent: triager
-    prompt: "Find open issues labeled 'crash' and summarize them."
+    messages:
+      - "\"Find open issues labeled 'crash' and summarize them.\""
 ```
 
 - `name` is how `agents:` tool grants and `resource_types:` `mcp:` blocks reference this server — declared once, shared by any number of consumers, the same "reusable top-level block" idiom as `agents:`/`resources:`.
@@ -62,7 +63,8 @@ jobs:
   - agent: coder
     inputs: [repo]
     dir: repo
-    prompt: "Find unused exported functions."
+    messages:
+      - "\"Find unused exported functions.\""
 ```
 
 A `command:` server is a local subprocess `steps` spawns and speaks newline-delimited JSON to over stdin/stdout, instead of connecting over HTTP.
@@ -133,7 +135,8 @@ jobs:
 - name: triage
   plan:
   - agent: triager
-    prompt: "Triage today's crash reports."
+    messages:
+      - "\"Triage today's crash reports.\""
 ```
 
 - **Single tool** (`tool:`): the only form that may also set `description:` (overriding the server's own), `required:`, or `max_calls:` — the same semantics as a custom tool (see [agents.md](agents.md)). Its model-facing function name is `<server>__<tool>` (double underscore — a dot is rejected by OpenAI's function-name charset).
@@ -467,7 +470,8 @@ jobs:
 - name: respond
   plan:
   - agent: responder
-    prompt: "Summarize today's mentions."
+    messages:
+      - "\"Summarize today's mentions.\""
 ```
 
 - **`client_id:` skips registration; everything else is identical.** PKCE, the loopback callback, the code exchange, the token file, and silent refresh at run/watch time all behave exactly as they do for a dynamically-registered client.

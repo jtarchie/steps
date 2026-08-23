@@ -20,8 +20,10 @@ jobs:
       agents:
       - agent: reviewer-a
         inputs: []
-        prompt: Review it.
+        messages:
+          - Review it.
         verdicts: [yes, no]
       - agent: reviewer-b
         inputs: []
-        prompt: Review it.
+        messages:
+          - Review it.

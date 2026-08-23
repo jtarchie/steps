@@ -85,7 +85,8 @@ jobs:
       run: "true"
   - try:
       agent: unreachable
-      prompt: Review it.
+      messages:
+        - Review it.
       attempts: 1
       on_error:
         task: outage-error
@@ -178,7 +179,8 @@ jobs:
 - name: job-error-hooks
   plan:
   - agent: unreachable
-    prompt: Review it.
+    messages:
+      - Review it.
     attempts: 1
   on_error:
     task: errored-hook

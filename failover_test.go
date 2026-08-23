@@ -47,7 +47,8 @@ jobs:
   plan:
   - agent: writer
     inputs: []
-    prompt: Write something.
+    messages:
+      - Write something.
 `, deadURL, liveURL))
 }
 
@@ -169,10 +170,12 @@ jobs:
   plan:
   - agent: has-fallback
     inputs: []
-    prompt: Plan it.
+    messages:
+      - Plan it.
   - agent: no-fallback
     inputs: []
-    prompt: Build it.
+    messages:
+      - Build it.
 `, dead.URL, live.URL))
 
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")

@@ -19,7 +19,9 @@ jobs:
       agents:
       - agent: reviewer-a
         inputs: []
-        prompt: Review it.
+        messages:
+          - Review it.
       - agent: reviewer-b
         inputs: []
-        prompt: Review it.
+        messages:
+          - Review it.

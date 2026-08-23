@@ -22,7 +22,7 @@ import (
 // Renaming ci/a.sh to ci/b.sh with identical bytes correctly does not bust a
 // cache.
 //
-// The one exception is an agent step's prompt_file: {artifact, path} mapping
+// The one exception is an agent step's message_files: {artifact, path} mapping
 // form (see FileRef.Deferred): that names a file inside an artifact a get
 // step fetches, which does not exist yet at load time, so it is left
 // untouched here and resolved later by internal/agent, once the artifact is
@@ -173,7 +173,7 @@ func resolveResourceTypeIncludes(baseDir string, rt *ResourceType) error {
 
 // resolveTaskIncludes applies a tasks: entry's file: (a whole-document
 // include, merged so the entry's own inline fields win) and its run_file:/
-// fix.prompt_file:.
+// fix.message_files:.
 func resolveTaskIncludes(baseDir string, t *Task) error {
 	context := fmt.Sprintf("task %q", t.Name)
 
@@ -368,9 +368,9 @@ func mergeAgentLimits(a *Agent, doc Agent) {
 }
 
 // resolveStepIncludes applies one step's own includes: run_file: (task steps
-// only), prompt_file: when it's the load-time scalar form (agent steps only —
+// only), message_files: when it's the load-time scalar form (agent steps only —
 // the {artifact, path} mapping form is deferred to run time; see FileRef and
-// internal/agent), and its fix:'s prompt_file:.
+// internal/agent), and its fix:'s message_files:.
 func resolveStepIncludes(baseDir, label string, step *Step) error {
 	if step.RunFile != "" && step.Task == "" {
 		return fmt.Errorf("%s: run_file: is only valid on task steps", label)
@@ -381,33 +381,89 @@ func resolveStepIncludes(baseDir, label string, step *Step) error {
 		return err
 	}
 
-	if step.PromptFile != nil && step.Agent == "" {
-		return fmt.Errorf("%s: prompt_file: is only valid on agent steps", label)
-	}
-
-	if step.PromptFile != nil && !step.PromptFile.Deferred() {
-		if step.Prompt != "" {
-			return fmt.Errorf("%s: prompt: and prompt_file: are mutually exclusive", label)
-		}
-
-		data, err := readIncludeFile(baseDir, label, "prompt_file", step.PromptFile.Path)
-		if err != nil {
-			return err
-		}
-
-		step.Prompt = string(data)
-		step.PromptFile = nil
+	err = resolveStepMessages(baseDir, label, step)
+	if err != nil {
+		return err
 	}
 
 	return applyFixInclude(baseDir, label, step.Fix)
 }
 
-// applyFixInclude resolves a fix:'s prompt_file:, shared by a task step's own
-// fix: and a tasks: entry's.
-func applyFixInclude(baseDir, context string, fix *FixSpec) error {
-	if fix == nil {
+// resolveStepMessages turns a step's message_files: into messages:, for the
+// load-time form.
+//
+// The exclusivity check runs FIRST, and before the deferred/non-deferred split,
+// which is the one behavioural change in this rename. It used to sit inside the
+// non-deferred branch, so a step pairing messages: with a run-time {artifact,
+// path} file was refused by internal/agent halfway through a build rather than
+// by the loader — a pipeline that could never work, discovered after twenty
+// minutes of fetching. Both forms now fail at load, where `steps validate` can
+// see them.
+func resolveStepMessages(baseDir, label string, step *Step) error {
+	if len(step.MessageFiles) > 0 && step.Agent == "" {
+		return fmt.Errorf("%s: message_files: is only valid on agent steps", label)
+	}
+
+	if len(step.MessageFiles) == 0 {
 		return nil
 	}
 
-	return applyInclude(baseDir, include{context: context + " fix", key: "prompt", path: fix.PromptFile, target: &fix.Prompt})
+	if len(step.Messages) > 0 {
+		return fmt.Errorf("%s: messages: and message_files: are mutually exclusive — two ordered lists cannot say which message comes first", label)
+	}
+
+	// A deferred file is read at run time out of an artifact this step
+	// declares, so there is nothing to inline here. Any deferred entry leaves
+	// the whole list to internal/agent, which resolves them in order.
+	for _, ref := range step.MessageFiles {
+		if ref.Deferred() {
+			return nil
+		}
+	}
+
+	messages := make([]string, 0, len(step.MessageFiles))
+
+	for _, ref := range step.MessageFiles {
+		data, err := readIncludeFile(baseDir, label, "message_files", ref.Path)
+		if err != nil {
+			return err
+		}
+
+		messages = append(messages, string(data))
+	}
+
+	step.Messages = messages
+	step.MessageFiles = nil
+
+	return nil
+}
+
+// applyFixInclude resolves a fix:'s message_files:, shared by a task step's own
+// fix: and a tasks: entry's.
+func applyFixInclude(baseDir, context string, fix *FixSpec) error {
+	if fix == nil || len(fix.MessageFiles) == 0 {
+		return nil
+	}
+
+	if len(fix.Messages) > 0 {
+		return fmt.Errorf("%s fix: messages: and message_files: are mutually exclusive — two ordered lists cannot say which message comes first", context)
+	}
+
+	messages := make([]string, 0, len(fix.MessageFiles))
+
+	for _, path := range fix.MessageFiles {
+		var message string
+
+		err := applyInclude(baseDir, include{context: context + " fix", key: "messages", path: path, target: &message})
+		if err != nil {
+			return err
+		}
+
+		messages = append(messages, message)
+	}
+
+	fix.Messages = messages
+	fix.MessageFiles = nil
+
+	return nil
 }

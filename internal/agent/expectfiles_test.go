@@ -36,7 +36,7 @@ func expectingConversation(t *testing.T, dir string, files ...string) agentConve
 	}
 
 	return agentConversation{
-		prompt:   "answer it",
+		messages: []string{"answer it"},
 		env:      toolEnv{dir: dir, runner: runner},
 		tools:    built,
 		maxTurns: testMaxTurns,
@@ -217,7 +217,7 @@ func expectingVerdictConversation(t *testing.T, dir string, verdicts []string, f
 	}
 
 	return agentConversation{
-		prompt:      "judge it",
+		messages:    []string{"judge it"},
 		env:         toolEnv{dir: dir, runner: runner},
 		tools:       built,
 		maxTurns:    testMaxTurns,

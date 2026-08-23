@@ -99,7 +99,7 @@ func TestWhenHashedOnEveryStepKind(t *testing.T) {
 		t.Parallel()
 
 		cfg := agentCfg([]config.ToolSpec{{Builtin: "read_file"}}, "")
-		step := config.Step{Agent: "reviewer", Prompt: "x", When: when}
+		step := config.Step{Agent: "reviewer", Messages: []string{"x"}, When: when}
 
 		ri, err := cfg.ResolveAgentInvocation(step)
 		if err != nil {

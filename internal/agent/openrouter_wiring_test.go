@@ -109,7 +109,7 @@ func TestRunPreparedRunsOneConversation(t *testing.T) {
 		llm:   llm,
 		conv: agentConversation{
 			system:   "system",
-			prompt:   "prompt",
+			messages: []string{"prompt"},
 			maxTurns: testMaxTurns,
 		},
 	})

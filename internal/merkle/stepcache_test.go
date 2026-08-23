@@ -22,11 +22,11 @@ func TestStepCacheable(t *testing.T) {
 
 	cacheable := map[string]config.Step{
 		"a task with outputs":   {Task: "work", Run: "make", Outputs: out},
-		"an agent with outputs": {Agent: "reviewer", Prompt: "review", Outputs: out},
+		"an agent with outputs": {Agent: "reviewer", Messages: []string{"review"}, Outputs: out},
 		"a task behind a when:": {Task: "work", Run: "make", Outputs: out, When: &config.WhenSpec{Run: "test -f go.mod"}},
 		"a task with an assert": {Task: "work", Run: "make", Outputs: out, Assert: &config.Assert{}},
 		"a task with attempts":  {Task: "work", Run: "make", Outputs: out, Attempts: intPtr(3)},
-		"an agent with tools":   {Agent: "reviewer", Prompt: "review", Outputs: out, Tools: []config.ToolSpec{{Name: "read_file"}}},
+		"an agent with tools":   {Agent: "reviewer", Messages: []string{"review"}, Outputs: out, Tools: []config.ToolSpec{{Name: "read_file"}}},
 	}
 
 	for name, step := range cacheable {
@@ -37,12 +37,12 @@ func TestStepCacheable(t *testing.T) {
 
 	uncacheable := map[string]config.Step{
 		"volatile":         {Task: "work", Run: "make", Outputs: out, Volatile: true},
-		"a volatile agent": {Agent: "reviewer", Prompt: "review", Outputs: out, Volatile: true},
+		"a volatile agent": {Agent: "reviewer", Messages: []string{"review"}, Outputs: out, Volatile: true},
 		"a put":            {Put: "results"},
 		"a get":            {Get: "repo"},
 		"a routing task":   {Task: "work", Run: "make", Outputs: out, To: map[string]string{"failure": "cleanup"}},
-		"a verdict agent":  {Agent: "reviewer", Prompt: "review", Outputs: out, Verdicts: []config.VerdictRoute{{Name: "approve"}}},
-		"a context: from reader": {Agent: "reviewer", Prompt: "review", Outputs: out, Context: &config.ContextSpec{
+		"a verdict agent":  {Agent: "reviewer", Messages: []string{"review"}, Outputs: out, Verdicts: []config.VerdictRoute{{Name: "approve"}}},
+		"a context: from reader": {Agent: "reviewer", Messages: []string{"review"}, Outputs: out, Context: &config.ContextSpec{
 			From: map[string]config.FromLevel{"classifier": config.FromVerdict},
 		}},
 		"a hooked task": {Task: "work", Run: "make", Outputs: out, Hooks: config.Hooks{OnSuccess: &config.Step{Task: "notify", Run: "echo"}}},
@@ -52,7 +52,7 @@ func TestStepCacheable(t *testing.T) {
 		// declares none has nothing to reuse — skipping it would just drop
 		// whatever its run: actually did.
 		"a task with no outputs":   {Task: "notify", Run: "curl -X POST https://hooks.example/deploy"},
-		"an agent with no outputs": {Agent: "reviewer", Prompt: "review"},
+		"an agent with no outputs": {Agent: "reviewer", Messages: []string{"review"}},
 
 		// Both spellings of an across: cell. The templated one is why
 		// OutputSubdir is checked and not only Label: config.nameCell leaves
@@ -78,7 +78,7 @@ func TestStepCacheableRejectsAFixTask(t *testing.T) {
 	cfg := &config.Config{
 		Tasks: []config.Task{{
 			Name: "lint", Run: "golangci-lint run", Outputs: out,
-			Fix: &config.FixSpec{Agent: "fixer", Prompt: "fix it"},
+			Fix: &config.FixSpec{Agent: "fixer", Messages: []string{"fix it"}},
 		}},
 	}
 

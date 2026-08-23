@@ -20,7 +20,7 @@ func mcpAgentCfg(reviewerTools []config.ToolSpec, endpoint string) *config.Confi
 func TestMCPToolGrantHashChangesVsBuiltin(t *testing.T) {
 	t.Parallel()
 
-	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 
 	withBuiltin := mustAgentHash(t, mcpAgentCfg([]config.ToolSpec{{Builtin: "read_file"}}, "https://api.github.com/mcp/"), step)
 	withMCP := mustAgentHash(t, mcpAgentCfg([]config.ToolSpec{{MCP: "github", MCPTool: "search_issues"}}, "https://api.github.com/mcp/"), step)
@@ -38,7 +38,7 @@ func TestMCPServerEndpointChangeBustsHash(t *testing.T) {
 	t.Parallel()
 
 	tools := []config.ToolSpec{{MCP: "github", MCPTool: "search_issues"}}
-	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 
 	before := mustAgentHash(t, mcpAgentCfg(tools, "https://api.github.com/mcp/v1/"), step)
 	after := mustAgentHash(t, mcpAgentCfg(tools, "https://api.github.com/mcp/v2/"), step)
@@ -51,7 +51,7 @@ func TestMCPServerEndpointChangeBustsHash(t *testing.T) {
 func TestMCPToolNameChangeBustsHash(t *testing.T) {
 	t.Parallel()
 
-	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 	endpoint := "https://api.github.com/mcp/"
 
 	before := mustAgentHash(t, mcpAgentCfg([]config.ToolSpec{{MCP: "github", MCPTool: "search_issues"}}, endpoint), step)
@@ -68,7 +68,7 @@ func TestMCPToolNameChangeBustsHash(t *testing.T) {
 func TestMCPSubsetGrantHashOrderIndependent(t *testing.T) {
 	t.Parallel()
 
-	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 	endpoint := "https://api.github.com/mcp/"
 
 	a := mustAgentHash(t, mcpAgentCfg([]config.ToolSpec{{MCP: "github", MCPTools: []string{"get_issue", "search_issues"}}}, endpoint), step)
@@ -85,7 +85,7 @@ func TestMCPSubsetGrantHashOrderIndependent(t *testing.T) {
 func TestMCPGrantFormsHashDifferently(t *testing.T) {
 	t.Parallel()
 
-	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 	endpoint := "https://api.github.com/mcp/"
 
 	single := mustAgentHash(t, mcpAgentCfg([]config.ToolSpec{{MCP: "github", MCPTool: "search_issues"}}, endpoint), step)
@@ -113,7 +113,7 @@ func TestMCPStdioCommandChangeBustsHash(t *testing.T) {
 	t.Parallel()
 
 	tools := []config.ToolSpec{{MCP: "gopls", MCPTool: "go_search"}}
-	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 
 	before := mustAgentHash(t, mcpStdioAgentCfg(tools, "gopls", []string{"mcp"}, ""), step)
 	after := mustAgentHash(t, mcpStdioAgentCfg(tools, "gopls-fork", []string{"mcp"}, ""), step)
@@ -132,7 +132,7 @@ func TestMCPStdioArgsOrderBustsHash(t *testing.T) {
 	t.Parallel()
 
 	tools := []config.ToolSpec{{MCP: "gopls", MCPTool: "go_search"}}
-	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 
 	before := mustAgentHash(t, mcpStdioAgentCfg(tools, "gopls", []string{"mcp", "-rpc.trace"}, ""), step)
 	after := mustAgentHash(t, mcpStdioAgentCfg(tools, "gopls", []string{"-rpc.trace", "mcp"}, ""), step)
@@ -146,7 +146,7 @@ func TestMCPStdioCwdChangeBustsHash(t *testing.T) {
 	t.Parallel()
 
 	tools := []config.ToolSpec{{MCP: "gopls", MCPTool: "go_search"}}
-	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 
 	before := mustAgentHash(t, mcpStdioAgentCfg(tools, "gopls", []string{"mcp"}, "/repo/a"), step)
 	after := mustAgentHash(t, mcpStdioAgentCfg(tools, "gopls", []string{"mcp"}, "/repo/b"), step)
@@ -164,7 +164,7 @@ func TestMCPHTTPServerHashUnaffectedByStdioFields(t *testing.T) {
 	t.Parallel()
 
 	tools := []config.ToolSpec{{MCP: "github", MCPTool: "search_issues"}}
-	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 
 	withoutStdioFields := mustAgentHash(t, mcpAgentCfg(tools, "https://api.github.com/mcp/"), step)
 

@@ -106,7 +106,8 @@ jobs:
     run: date
   - agent: reviewer
     volatile: true
-    prompt: review
+    messages:
+      - review
 `)
 
 	_, err := LoadConfig(path)

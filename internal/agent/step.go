@@ -343,7 +343,7 @@ func reuseAgentStep(
 // when they were.
 //
 // It runs AFTER prepareAgentStep rather than before, because the step's own
-// content — and so its key — is not knowable until then: a prompt_file: naming
+// content — and so its key — is not knowable until then: a message_files: naming
 // a run-time artifact is only loaded once the step's workspace exists. The cost
 // of a hit is therefore one materialized workspace and whatever tool servers
 // the grant starts, which is real, but is not what an agent step costs.

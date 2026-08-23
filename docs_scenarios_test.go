@@ -26,7 +26,7 @@ type docScenario struct {
 	fallbackFake func(t *testing.T) *fakeLLM
 
 	// files are written into the pipeline's directory before the run — the
-	// run_file:/prompt_file:/load_var: targets a doc example references.
+	// run_file:/message_files:/load_var: targets a doc example references.
 	files map[string]string
 
 	// vars are passed as --var flags: what an operator supplies for a
@@ -60,6 +60,14 @@ var docScenarios = map[string]docScenario{
 	// A placed step, run through a shim in a child process on this machine:
 	// no network, no worker, no credentials, and the whole transport — frames,
 	// tree round trip, exit codes — exercised for real rather than stubbed.
+	// Two user turns, so the provider answers twice: the second script entry is
+	// what the model says once it has been asked the follow-up.
+	"agents-two-messages": {
+		fake: scripted(
+			says("Safe to ship."),
+			says("It turns on parser.go line 42."),
+		),
+	},
 	"infra-worker": {
 		workers: map[string]string{"gpu": "local:"},
 	},
@@ -261,7 +269,7 @@ var docScenarios = map[string]docScenario{
 		),
 	},
 
-	// run_file:/system_file:/prompt_file: all resolve from these files at
+	// run_file:/system_file:/message_files: all resolve from these files at
 	// load — and the router answers only when the persona text is in the
 	// system message AND the prompt text is in the user message, so the
 	// files' CONTENT reaching the conversation is what is pinned, not just

@@ -100,7 +100,8 @@ jobs:
   # lexically confined to its working directory, but it's this step's own
   # inputs: that keeps repo/ out of view in the first place.
   - agent: reviewer
-    prompt: does NOTES.md read like a real release note, or a placeholder?
+    messages:
+      - does NOTES.md read like a real release note, or a placeholder?
     inputs: [built]
 
   # inputs: selects exactly what the out: command can see. Omitted/empty

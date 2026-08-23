@@ -1,5 +1,5 @@
 # Setting both the inline field and its _file sibling is an error rather than
-# one silently winning — the rule run_file:/system_file:/prompt_file: already
+# one silently winning — the rule run_file:/system_file:/message_files: already
 # follow.
 # expect: check: and check_file: are mutually exclusive
 

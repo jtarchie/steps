@@ -31,7 +31,7 @@ func verdictConversation(t *testing.T, dir string, verdicts []string) agentConve
 	}
 
 	return agentConversation{
-		prompt:      "judge it",
+		messages:    []string{"judge it"},
 		env:         toolEnv{dir: dir, runner: runner},
 		tools:       built,
 		maxTurns:    testMaxTurns,

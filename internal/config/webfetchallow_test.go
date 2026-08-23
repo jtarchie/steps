@@ -21,7 +21,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: x
+    messages:
+      - x
     tools:
     - builtin: web_fetch
       allow: [docs.example]
@@ -41,7 +42,8 @@ jobs:
     inputs: []
     fix:
       agent: fixer
-      prompt: fix it
+      messages:
+        - fix it
       tools:
       - builtin: web_fetch
         allow: [docs.example]
@@ -56,7 +58,8 @@ tasks:
   run: "true"
   fix:
     agent: fixer
-    prompt: fix it
+    messages:
+      - fix it
     tools:
     - builtin: web_fetch
       allow: [docs.example]
@@ -108,7 +111,7 @@ agents:
     allow: ["` + entry + `"]
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
+  plan: [{ agent: reviewer, messages: [x], inputs: [] }]
 `
 
 			wantLoadError(t, writeConfig(t, pipeline), "must be a bare hostname")
@@ -132,7 +135,7 @@ agents:
     allow: [specification.website, docs.backerkit.com, 127.0.0.1]
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
+  plan: [{ agent: reviewer, messages: [x], inputs: [] }]
 `
 
 	cfg, err := LoadConfig(writeConfig(t, pipeline))
@@ -164,7 +167,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: x
+    messages:
+      - x
     tools: [web_fetch]
 `
 

@@ -200,7 +200,8 @@ jobs:
     run: echo 'first draft' > notes/draft.txt
   - agent: critic
     inputs: [notes]
-    prompt: "Read notes/draft.txt. Approve it, or send it back."
+    messages:
+      - "\"Read notes/draft.txt. Approve it, or send it back.\""
     verdicts:
       - approve: publish       # route: record the verdict and jump forward
       - revise: draft          # backward — the loop max_visits: bounds
@@ -303,7 +304,8 @@ jobs:
 - name: label
   plan:
   - agent: triage
-    prompt: "Classify this report: the app crashes on launch."
+    messages:
+      - "\"Classify this report: the app crashes on launch.\""
     verdicts: [bug, feature, question]    # all bare: record the choice, route nowhere
     assert:
       verdict: bug
@@ -386,7 +388,7 @@ jobs:
 - **A failing step stops the block**, and the block reports that failure. Deliberately unlike `across:`, which runs every cell: a matrix asks which combinations work, while a `do:` block is one piece of work spelled in several steps — deploying after the migration failed is not a partial answer, it is a worse outcome.
 - **The block records nothing of its own.** It is a container, like `in_parallel:`; its children record themselves in declaration order, so `assert.execution` names the children and then the hook.
 - **Artifacts flow through in order.** A child may consume an earlier child's output exactly as two consecutive plan steps do. What the block produces stays visible to steps after it.
-- **The block takes no operation fields.** `inputs:`, `run:`, `image:`, `prompt:` and friends belong on the steps inside; a block fetches nothing and runs nothing of its own.
+- **The block takes no operation fields.** `inputs:`, `run:`, `image:`, `messages:` and friends belong on the steps inside; a block fetches nothing and runs nothing of its own.
 - **`try:` works inside**, tolerating only its own step, exactly as it does in a plain plan.
 - **A `get:` is not valid inside**, for the reason it is not valid inside `try:` or a concurrent block: a get fans the remainder of the plan out per version, and inside a block that fan-out has nowhere to go.
 - **`to:` and `max_visits:` belong on the block, not on its children.** A child has no plan position to be routed to, so those would load cleanly and never fire. They are load errors on a child, naming the fix.
@@ -620,7 +622,8 @@ jobs:
     budget:
       tokens: 1000            # cells stop being admitted once this is spent
     agent: reviewer
-    prompt: "Review the {{ .vars.dim }} dimension."
+    messages:
+      - "\"Review the {{ .vars.dim }} dimension.\""
   - task: publish
     run: echo publishing what we got
     assert:
@@ -715,7 +718,8 @@ jobs:
 - name: publish
   plan:
   - agent: writer
-    prompt: "Draft the release announcement into draft/summary.md."
+    messages:
+      - "\"Draft the release announcement into draft/summary.md.\""
     outputs: [draft]
   - approval:
       message: "Draft is in draft/summary.md — publish?"

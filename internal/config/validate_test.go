@@ -29,7 +29,8 @@ jobs:
     run: "true"
     trigger: true
   - agent: ghost
-    prompt: x
+    messages:
+      - x
 `)
 
 	_, err := LoadConfig(path)
@@ -144,7 +145,7 @@ agents:
   source: { model: lmstudio/qwen }
 jobs:
 - name: j
-  plan: [{ agent: reviwer, prompt: x }]
+  plan: [{ agent: reviwer, messages: [x] }]
 `,
 			want: `no agent named "reviwer" (did you mean "reviewer"?)`,
 		},
@@ -178,7 +179,7 @@ jobs:
   plan:
   - task: t
     run: "true"
-    on_failure: { agent: ghost, prompt: x }
+    on_failure: { agent: ghost, messages: [x] }
 `,
 			want: `no agent named "ghost"`,
 		},
@@ -256,7 +257,8 @@ jobs:
 - name: j
   plan:
   - agent: a
-    prompt: x
+    messages:
+      - x
     params: { branch: main }
 `,
 			want: "params is only valid on get and put steps",

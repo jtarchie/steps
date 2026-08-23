@@ -92,7 +92,8 @@ jobs:
   - agent: reviewer
     inputs: [repo, prep]
     outputs: [report]
-    prompt: Review the notes and summarize them.
+    messages:
+      - Review the notes and summarize them.
     verdicts:
       - approve: results
       - reject: escalate
@@ -626,7 +627,8 @@ jobs:
   plan:
   - try:
       agent: reviewer
-      prompt: Review it.
+      messages:
+        - Review it.
       attempts: 1
   - task: after
     run: echo after >> %s
@@ -671,7 +673,8 @@ jobs:
 - name: outage
   plan:
   - agent: reviewer
-    prompt: Review it.
+    messages:
+      - Review it.
     attempts: 1
     on_error:
       task: page
@@ -761,7 +764,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: Say something.
+    messages:
+      - Say something.
     attempts: 3
 `, fake.URL))
 
@@ -849,7 +853,8 @@ jobs:
   - agent: %[1]s
     inputs: [prep]
     attempts: 2
-    prompt: Read the notes and summarize them.
+    messages:
+      - Read the notes and summarize them.
     assert:
       stdout: Summarized via fallback.
 `, agentName, primaryEndpoint, fallbackEndpoint)
@@ -1040,7 +1045,8 @@ jobs:
   plan:
   - agent: %[1]s
     attempts: 2
-    prompt: Do the required step, then report.
+    messages:
+      - Do the required step, then report.
     assert:
       stdout: Done via fallback.
 `, agentName, primary.URL, fallback.URL)

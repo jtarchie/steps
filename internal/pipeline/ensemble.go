@@ -237,7 +237,7 @@ func runEnsembleJudge(
 ) (string, error) {
 	judgeStep := config.Step{
 		Agent:    step.Ensemble.JudgeAgent(),
-		Prompt:   judgePrompt(step.Ensemble, votes),
+		Messages: []string{judgePrompt(step.Ensemble, votes)},
 		Verdicts: step.Ensemble.EnsembleVerdictsFor(),
 	}
 

@@ -67,9 +67,9 @@ func TestAcrossAgentCellsGetDistinctNames(t *testing.T) {
 	t.Parallel()
 
 	cells, err := ExpandAcross("job \"j\" step 0", Step{
-		Across: []AcrossVar{{Var: "shard", Values: []string{"a", "b"}}},
-		Agent:  "reviewer",
-		Prompt: "review it",
+		Across:   []AcrossVar{{Var: "shard", Values: []string{"a", "b"}}},
+		Agent:    "reviewer",
+		Messages: []string{"review it"},
 	})
 	if err != nil {
 		t.Fatalf("ExpandAcross: %v", err)
@@ -151,7 +151,7 @@ func TestAcrossRendersContextPaths(t *testing.T) {
 		cells, err := ExpandAcross(`job "j" step 0`, Step{
 			Across:       []AcrossVar{{Var: "pkg", Values: []string{"agent", "pipeline"}}},
 			Agent:        "reviewer",
-			Prompt:       "review {{ .vars.pkg }}",
+			Messages:     []string{"review {{ .vars.pkg }}"},
 			ContextPaths: []string{"repo/internal/{{ .vars.pkg }}/step.go", "repo/CLAUDE.md"},
 		})
 		if err != nil {

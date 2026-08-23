@@ -342,7 +342,7 @@ func TestTrajectoryRecordsBudgetRejectedCall(t *testing.T) {
 	}}
 
 	conv := agentConversation{
-		prompt:   "review",
+		messages: []string{"review"},
 		env:      toolEnv{dir: dir, runner: runner},
 		tools:    built,
 		maxTurns: testMaxTurns,

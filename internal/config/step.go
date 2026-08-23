@@ -1,7 +1,7 @@
 package config
 
 // A plan step: the flat get/task/put/agent union, its inputs: declaration,
-// its prompt_file: reference, and the walk over a step and its hook tree.
+// its message_files: reference, and the walk over a step and its hook tree.
 
 import (
 	"fmt"
@@ -63,22 +63,39 @@ type Step struct {
 	// default retry count (attempts: 3 = up to 3 total tries, including the
 	// first); 0/unset inherits the agent's default (which itself defaults
 	// to 1).
-	Agent  string `yaml:"agent,omitempty"`
-	Prompt string `yaml:"prompt,omitempty"`
-	// PromptFile supplies Prompt from a file instead of inline text, in one of
-	// two forms (see FileRef): a scalar path, relative to the pipeline file's
-	// directory, resolved at load time exactly like RunFile/SystemFile; or a
-	// {artifact, path} mapping naming a file inside an artifact this step
-	// declares in its inputs:, read at run time once that artifact is
-	// fetched. The run-time form exists only here (not for a task's run:, not
-	// for an agent's own definition/persona) — see docs/agents.md. It costs
-	// no merkle caching: an agent step's chain is already unconditionally
-	// unskippable (see internal/merkle's planNonGetNode), so there is nothing
-	// to lose by resolving this after plan time. Mutually exclusive with
-	// Prompt in the scalar form.
-	PromptFile *FileRef   `yaml:"prompt_file,omitempty"`
-	Dir        string     `yaml:"dir,omitempty"`
-	Tools      []ToolSpec `yaml:"tools,omitempty"`
+	Agent string `yaml:"agent,omitempty"`
+	// Messages is what this step says to the agent: one user turn per entry.
+	//
+	// A list rather than a single string because a conversation is a list, and
+	// exposing only its first element was an arbitrary restriction rather than
+	// a design. The agent runs each message to completion — tool calls and all
+	// — before the next one is sent, so a later message is written against an
+	// answer that already exists. That is the whole difference from putting
+	// both asks in one message, where the model composes its answer to the
+	// second while it is still deciding the first.
+	//
+	// The agent's standing instructions are not here: they are its own
+	// system:. These are the per-invocation asks.
+	Messages []string `yaml:"messages,omitempty"`
+	// MessageFiles supplies Messages from files instead of inline text, one
+	// message per file, in either of FileRef's two forms: a scalar path
+	// relative to the pipeline file's directory, resolved at load time exactly
+	// like RunFile/SystemFile; or a {artifact, path} mapping naming a file
+	// inside an artifact this step declares in its inputs:, read at run time
+	// once that artifact is fetched. The run-time form exists only here (not
+	// for a task's run:, not for an agent's own definition/persona) — see
+	// docs/agents.md. It costs no merkle caching: an agent step's chain is
+	// already unconditionally unskippable (see internal/merkle's
+	// planNonGetNode), so there is nothing to lose by resolving it after plan
+	// time.
+	//
+	// Mutually exclusive with Messages, in BOTH forms. Two ordered lists
+	// cannot be interleaved, so a step that declared both would be asking for
+	// an order neither field states; refusing is the only answer that does not
+	// invent one.
+	MessageFiles []*FileRef `yaml:"message_files,omitempty"`
+	Dir          string     `yaml:"dir,omitempty"`
+	Tools        []ToolSpec `yaml:"tools,omitempty"`
 	// Attempts is how many times this step's work is tried before it fails.
 	// Unset takes 1 for task/get/put steps and defaultAgentAttempts for agent
 	// steps (where a retry is a transport concern, not a re-run). An explicit
@@ -507,7 +524,7 @@ func (s Step) GetResourceName() string {
 	return s.Get
 }
 
-// FileRef is an agent step's prompt_file: — the text of the model's prompt
+// FileRef is an agent step's message_files: — the text of the model's prompt
 // for this step, loaded from a file rather than written inline. A scalar path
 // is relative to the pipeline YAML's own directory and is resolved at load
 // time, exactly like every other *_file field (see LoadConfig's
@@ -529,7 +546,7 @@ func (f *FileRef) UnmarshalYAML(value *yaml.Node) error {
 	case yaml.ScalarNode:
 		return value.Decode(&f.Path) //nolint:wrapcheck // yaml.v3 error is already descriptive
 	case yaml.MappingNode:
-		err := rejectUnknownKeys(value, "prompt_file", "artifact", "path")
+		err := rejectUnknownKeys(value, "message_files", "artifact", "path")
 		if err != nil {
 			return err
 		}
@@ -541,18 +558,18 @@ func (f *FileRef) UnmarshalYAML(value *yaml.Node) error {
 
 		err = value.Decode(&m)
 		if err != nil {
-			return fmt.Errorf("prompt_file: %w", err)
+			return fmt.Errorf("message_files: %w", err)
 		}
 
 		if m.Artifact == "" || m.Path == "" {
-			return fmt.Errorf("prompt_file at line %d: an {artifact, path} mapping requires both fields", value.Line)
+			return fmt.Errorf("message_files at line %d: an {artifact, path} mapping requires both fields", value.Line)
 		}
 
 		f.Artifact, f.Path = m.Artifact, m.Path
 
 		return nil
 	default:
-		return fmt.Errorf("prompt_file at line %d must be a path or an {artifact, path} mapping", value.Line)
+		return fmt.Errorf("message_files at line %d must be a path or an {artifact, path} mapping", value.Line)
 	}
 }
 

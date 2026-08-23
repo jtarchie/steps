@@ -70,7 +70,8 @@ jobs:
   plan:
   - agent: writer
     inputs: []
-    prompt: Create a file named out.txt containing exactly the word WROTE. Then stop.
+    messages:
+      - Create a file named out.txt containing exactly the word WROTE. Then stop.
   - task: capture
     inputs: []
     run: cp out.txt `+proof+`
@@ -122,9 +123,10 @@ jobs:
   plan:
   - agent: limited
     inputs: []
-    prompt: |
-      Try to run the shell command: touch `+filepath.Join(dir, "breach.txt")+`
-      If you have no tool that can run shell commands, simply stop.
+    messages:
+      - |
+        Try to run the shell command: touch `+filepath.Join(dir, "breach.txt")+`
+        If you have no tool that can run shell commands, simply stop.
   - task: capture
     inputs: []
     run: echo done > `+report+`
@@ -198,11 +200,12 @@ jobs:
   - agent: worker
     inputs: []
     attempts: 2
-    prompt: |
-      Do these in order, pausing to think carefully about each one:
-      1. Write a file named one.txt containing the word ALPHA.
-      2. Write a file named two.txt containing the word BETA.
-      3. Write a file named three.txt containing the word GAMMA.
+    messages:
+      - |
+        Do these in order, pausing to think carefully about each one:
+        1. Write a file named one.txt containing the word ALPHA.
+        2. Write a file named two.txt containing the word BETA.
+        3. Write a file named three.txt containing the word GAMMA.
   - task: capture
     inputs: []
     run: cp -f one.txt two.txt three.txt `+dir+`/ 2>/dev/null || true

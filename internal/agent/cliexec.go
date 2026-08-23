@@ -483,7 +483,7 @@ func renderCLIPrompt(conv agentConversation) string {
 		fmt.Fprintf(&out, "%s:\n<%s>\n%s\n</%s>\n\n", block.path, tag, block.content, tag)
 	}
 
-	out.WriteString(conv.prompt)
+	out.WriteString(conv.opening())
 
 	return out.String()
 }

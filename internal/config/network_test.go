@@ -103,7 +103,7 @@ func TestValidateNetworkNeedsImageResolvesThroughTheAgent(t *testing.T) {
 
 	cfg := &Config{
 		Agents: []Agent{{Name: "reviewer", Source: AgentSource{Model: "openai/gpt-4o"}, Image: "python:3.12"}},
-		Jobs:   []Job{{Name: "j", Plan: []Step{{Agent: "reviewer", Prompt: "x", Network: "none"}}}},
+		Jobs:   []Job{{Name: "j", Plan: []Step{{Agent: "reviewer", Messages: []string{"x"}, Network: "none"}}}},
 	}
 
 	err := cfg.validateNetworkNeedsImage()

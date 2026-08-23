@@ -71,7 +71,7 @@
         "version_history": {
           "type": "integer",
           "minimum": 0,
-          "description": "How many versions of each resource steps remembers. Default 1000, or --version-history; 0 keeps everything. History is what lets a job build a version that scrolled out of a check's window, and what a passed: gate proves against — a pruned version takes its green record with it, so a number below what a slow downstream job needs will hold that job back."
+          "description": "How many versions of each resource steps remembers. Default 1000, or --version-history; 0 keeps everything. History is what lets a job build a version that scrolled out of a check's window, and what a passed: gate proves against \u2014 a pruned version takes its green record with it, so a number below what a slow downstream job needs will hold that job back."
         },
         "run_history": {
           "type": "integer",
@@ -166,12 +166,36 @@
       "type": "object",
       "additionalProperties": false,
       "anyOf": [
-        { "required": ["check"] },
-        { "required": ["check_file"] },
-        { "required": ["in"] },
-        { "required": ["in_file"] },
-        { "required": ["out"] },
-        { "required": ["out_file"] }
+        {
+          "required": [
+            "check"
+          ]
+        },
+        {
+          "required": [
+            "check_file"
+          ]
+        },
+        {
+          "required": [
+            "in"
+          ]
+        },
+        {
+          "required": [
+            "in_file"
+          ]
+        },
+        {
+          "required": [
+            "out"
+          ]
+        },
+        {
+          "required": [
+            "out_file"
+          ]
+        }
       ],
       "description": "Back check/in/out with expressions instead of shell commands, for a resource that is a JSON HTTP API and nothing else. Mutually exclusive with check/in/out and with mcp:. Evaluates in-process, so image:/network:/privileged:/container_limits: cannot apply.",
       "properties": {
@@ -208,9 +232,21 @@
         "server"
       ],
       "anyOf": [
-        { "required": ["check"] },
-        { "required": ["in"] },
-        { "required": ["out"] }
+        {
+          "required": [
+            "check"
+          ]
+        },
+        {
+          "required": [
+            "in"
+          ]
+        },
+        {
+          "required": [
+            "out"
+          ]
+        }
       ],
       "description": "Back check/in/out with MCP tool calls instead of shell commands. Mutually exclusive with check/in/out.",
       "properties": {
@@ -401,7 +437,9 @@
         },
         "settings": {
           "type": "string",
-          "enum": ["project"],
+          "enum": [
+            "project"
+          ],
           "description": "CLI sources only: opt the subprocess into the repo's checked-in .claude/ project scope (settings, CLAUDE.md, hooks). Absent, it loads no configuration scopes at all."
         },
         "max_context_bytes": {
@@ -466,7 +504,7 @@
               "items": {
                 "type": "string"
               },
-              "description": "web_fetch only, and only where the tool is granted (an agents: entry): bare hostnames the tool may reach — no scheme, path, port or wildcard. Each entry matches itself and its subdomains, on every redirect hop. Empty/absent means any http(s) URL."
+              "description": "web_fetch only, and only where the tool is granted (an agents: entry): bare hostnames the tool may reach \u2014 no scheme, path, port or wildcard. Each entry matches itself and its subdomains, on every redirect hop. Empty/absent means any http(s) URL."
             }
           }
         },
@@ -709,11 +747,21 @@
             "agent": {
               "type": "string"
             },
-            "prompt": {
-              "type": "string"
+            "messages": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              },
+              "description": "What this step says to the agent: one user turn per entry. Each is run to completion before the next is sent. Mutually exclusive with message_files."
             },
-            "prompt_file": {
-              "type": "string"
+            "message_files": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              },
+              "description": "Loads messages from files, one message per file, relative to the pipeline file. Mutually exclusive with messages."
             },
             "dir": {
               "type": "string"
@@ -881,11 +929,21 @@
         "agent": {
           "type": "string"
         },
-        "prompt": {
-          "type": "string"
+        "messages": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          },
+          "description": "What this step says to the agent: one user turn per entry. Each is run to completion before the next is sent. Mutually exclusive with message_files."
         },
-        "prompt_file": {
-          "$ref": "#/$defs/fileRef"
+        "message_files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/fileRef"
+          },
+          "description": "Loads messages from files, one message per file. A scalar path resolves at load time; an {artifact, path} mapping is read at run time from an artifact this step declares in inputs. Mutually exclusive with messages."
         },
         "dir": {
           "type": "string"
@@ -1143,7 +1201,7 @@
         },
         "volatile": {
           "type": "boolean",
-          "description": "Never reuse this step's result. Set it on a task or agent step that reads something the pipeline never declared — a clock, a network endpoint, a path outside its inputs — where a recorded answer would be a stale one."
+          "description": "Never reuse this step's result. Set it on a task or agent step that reads something the pipeline never declared \u2014 a clock, a network endpoint, a path outside its inputs \u2014 where a recorded answer would be a stale one."
         },
         "when": {
           "$ref": "#/$defs/whenSpec"

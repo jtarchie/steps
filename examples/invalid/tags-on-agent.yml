@@ -13,4 +13,5 @@ jobs:
   plan:
   - agent: reviewer
     tags: [gpu]
-    prompt: "Review it."
+    messages:
+      - "\"Review it.\""

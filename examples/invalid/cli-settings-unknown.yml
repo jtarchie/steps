@@ -12,4 +12,5 @@ jobs:
 - name: build
   plan:
   - agent: builder
-    prompt: Build the thing.
+    messages:
+      - Build the thing.

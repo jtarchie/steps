@@ -126,8 +126,8 @@ func TestIgnoredForcesEndTheConversation(t *testing.T) {
 	fake := &fakeLLM{responses: responses}
 
 	conv := agentConversation{
-		prompt: "submit your answer",
-		env:    toolEnv{dir: t.TempDir()},
+		messages: []string{"submit your answer"},
+		env:      toolEnv{dir: t.TempDir()},
 		tools: agentTools{
 			registry: map[string]toolImpl{toolName: func(context.Context, map[string]any, toolEnv) map[string]any { return nil }},
 			required: map[string]bool{toolName: true},

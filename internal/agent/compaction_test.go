@@ -306,7 +306,7 @@ func TestMaybeCompactNoOpUnderBudget(t *testing.T) {
 	t.Parallel()
 
 	req := &model.LLMRequest{Contents: []*genai.Content{textContent(genai.RoleUser, "short prompt")}}
-	conv := agentConversation{prompt: "short prompt", compactAfterTokens: 1000}
+	conv := agentConversation{messages: []string{"short prompt"}, compactAfterTokens: 1000}
 	fake := &fakeLLM{} // no responses configured -- a call here fails the test via "no more responses"
 
 	gotSummary, gotStalled := maybeCompact(context.Background(), fake, req, conv, "", false)
@@ -376,7 +376,7 @@ func TestMaybeCompactFiresAndReplacesContents(t *testing.T) {
 		textContent(genai.RoleUser, strings.Repeat("b", 400)),
 		textContent(genai.RoleModel, "a short recent reply"),
 	}}
-	conv := agentConversation{prompt: "the original request", compactAfterTokens: 150}
+	conv := agentConversation{messages: []string{"the original request"}, compactAfterTokens: 150}
 	fake := &fakeLLM{responses: []*model.LLMResponse{textResponse("Summary: discussed a and b.")}}
 
 	gotSummary, gotStalled := maybeCompact(context.Background(), fake, req, conv, "", false)
@@ -418,7 +418,7 @@ func TestMaybeCompactStallsWhenRecentAloneExceedsBudget(t *testing.T) {
 		textContent(genai.RoleUser, strings.Repeat("b", 400)),
 		textContent(genai.RoleModel, strings.Repeat("c", 4000)), // huge trailing turn
 	}}
-	conv := agentConversation{prompt: "the original request", compactAfterTokens: 150}
+	conv := agentConversation{messages: []string{"the original request"}, compactAfterTokens: 150}
 	fake := &fakeLLM{responses: []*model.LLMResponse{textResponse("Summary: discussed a and b.")}}
 
 	gotSummary, gotStalled := maybeCompact(context.Background(), fake, req, conv, "", false)

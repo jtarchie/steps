@@ -105,7 +105,8 @@ jobs:
   - get: repo
   - agent: inspector
     inputs: [repo]
-    prompt: Inspect the checked-out repo.
+    messages:
+      - Inspect the checked-out repo.
 `, endpoint, dockerE2EImage)
 
 	path := filepath.Join(dir, "pipeline.yml")

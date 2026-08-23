@@ -56,7 +56,8 @@ jobs:
   plan:
   - agent: auditor
     outputs: [report]
-    prompt: Audit the site against the spec.
+    messages:
+      - Audit the site against the spec.
     assert:
       tool_calls:
       - name: web_fetch

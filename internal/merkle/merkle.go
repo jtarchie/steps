@@ -987,7 +987,7 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 
 	content := map[string]any{
 		"agent":            step.Agent,
-		"prompt":           step.Prompt,
+		"messages":         config.StableStrings(step.Messages),
 		"dir":              step.Dir,
 		"model":            ri.ModelName,
 		"endpoint":         ri.BaseURL,

@@ -36,13 +36,16 @@ jobs:
 %[5]s      agents:
       - agent: reviewer-a
         inputs: []
-        prompt: Review it.
+        messages:
+          - Review it.
       - agent: reviewer-b
         inputs: []
-        prompt: Review it.
+        messages:
+          - Review it.
       - agent: reviewer-c
         inputs: []
-        prompt: Review it.
+        messages:
+          - Review it.
   - task: revise
     inputs: []
     run: echo revised >> %[3]s
@@ -167,10 +170,12 @@ jobs:
       agents:
       - agent: reviewer-a
         inputs: []
-        prompt: Review it.
+        messages:
+          - Review it.
       - agent: reviewer-b
         inputs: []
-        prompt: Review it.
+        messages:
+          - Review it.
 `, newFakeLLM(t, votes("approve")...).URL, newFakeLLM(t, votes("reject")...).URL))
 
 	err := run([]string{"run", path, "--job", "review"})

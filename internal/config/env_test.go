@@ -141,7 +141,7 @@ func TestValidateEnvPlacementAllowsEmptyOnTaskAndAgent(t *testing.T) {
 
 	cfg := &Config{Jobs: []Job{{Name: "j", Plan: []Step{
 		{Task: "build", Run: "true", Env: []string{}},
-		{Agent: "reviewer", Prompt: "x", Env: []string{}},
+		{Agent: "reviewer", Messages: []string{"x"}, Env: []string{}},
 	}}}}
 
 	err := cfg.rejectOnGetAndPut("env", func(s *Step) bool { return s.Env != nil })
@@ -194,7 +194,7 @@ func TestResolveAgentInvocationEnvOverride(t *testing.T) {
 		Env:    []string{"FROM_AGENT"},
 	}}}
 
-	ri, err := cfg.ResolveAgentInvocation(Step{Agent: "reviewer", Prompt: "x"})
+	ri, err := cfg.ResolveAgentInvocation(Step{Agent: "reviewer", Messages: []string{"x"}})
 	if err != nil {
 		t.Fatalf("ResolveAgentInvocation: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestResolveAgentInvocationEnvOverride(t *testing.T) {
 		t.Errorf("Env = %v, want [FROM_AGENT]", ri.Env)
 	}
 
-	ri, err = cfg.ResolveAgentInvocation(Step{Agent: "reviewer", Prompt: "x", Env: []string{"FROM_STEP"}})
+	ri, err = cfg.ResolveAgentInvocation(Step{Agent: "reviewer", Messages: []string{"x"}, Env: []string{"FROM_STEP"}})
 	if err != nil {
 		t.Fatalf("ResolveAgentInvocation: %v", err)
 	}

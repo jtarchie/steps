@@ -22,7 +22,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: do it
+    messages:
+      - do it
 `
 	path := writeConfig(t, pipeline)
 
@@ -69,7 +70,7 @@ agents:
     max_calls: 2
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
+  plan: [{ agent: reviewer, messages: [x], inputs: [] }]
 `,
 			want: "max_calls/args are only valid on custom tools",
 		},
@@ -87,7 +88,7 @@ agents:
   source: { model: lmstudio/qwen }
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
+  plan: [{ agent: reviewer, messages: [x], inputs: [] }]
 `,
 			want: "max_calls/args are only valid on custom tools",
 		},
@@ -104,7 +105,7 @@ agents:
     allow: [example.com]
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
+  plan: [{ agent: reviewer, messages: [x], inputs: [] }]
 `,
 			want: "allow is only valid on the web_fetch builtin",
 		},
@@ -119,7 +120,7 @@ agents:
     allow: [example.com]
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
+  plan: [{ agent: reviewer, messages: [x], inputs: [] }]
 `,
 			want: "allow is only valid on the web_fetch builtin",
 		},
@@ -136,7 +137,7 @@ agents:
     max_calls: -1
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: x, inputs: [] }]
+  plan: [{ agent: reviewer, messages: [x], inputs: [] }]
 `,
 			want: "max_calls must be >= 0",
 		},
@@ -174,7 +175,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: x
+    messages:
+      - x
     tools:
     - builtin: read_file
       max_calls: 3

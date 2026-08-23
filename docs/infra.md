@@ -47,7 +47,8 @@ jobs:
       memory: 2147483648
   - agent: reviewer
     inputs: [tags]
-    prompt: "Sanity-check the fetched tag."
+    messages:
+      - "\"Sanity-check the fetched tag.\""
 ```
 
 - **Step-level override**: a `task`/`agent` step's own `image:` overrides the referenced `tasks:`/`agents:` entry's image for that step only. It's inherit-only — a non-empty step `image:` always wins, and there's no way to force host execution from a step when the task/agent sets one. `image:` is invalid on `get`/`put` steps (a put's image comes from its resource type).
@@ -152,7 +153,8 @@ jobs:
     run: echo 42 > data/metrics.txt
   - agent: analyzer
     inputs: [data]
-    prompt: "Analyze data/metrics.txt offline."
+    messages:
+      - "\"Analyze data/metrics.txt offline.\""
 ```
 
 - Passed straight to `docker run --network`, so `none`, `host`, `bridge`, or a named network all work; docker reports a typo itself at container start.
@@ -215,7 +217,8 @@ jobs:
   plan:
   - task: integration
   - agent: builder
-    prompt: "Build the image and report what failed."
+    messages:
+      - "\"Build the image and report what failed.\""
   - put: app-image
 ```
 

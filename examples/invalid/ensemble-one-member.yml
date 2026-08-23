@@ -16,4 +16,5 @@ jobs:
       agents:
       - agent: reviewer
         inputs: []
-        prompt: Review it.
+        messages:
+          - Review it.

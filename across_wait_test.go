@@ -35,7 +35,8 @@ jobs:
       reserve_per_cell: %[3]d
     agent: reviewer
     inputs: []
-    prompt: "Review {{ .vars.item }}"
+    messages:
+      - "\"Review {{ .vars.item }}\""
 `, endpoint, ceiling, reserve))
 }
 

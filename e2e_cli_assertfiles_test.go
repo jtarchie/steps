@@ -40,7 +40,8 @@ jobs:
   - agent: responder
     inputs: []
     outputs: [answer]
-    prompt: Answer the question. Write your answer to answer/reply.md.
+    messages:
+      - Answer the question. Write your answer to answer/reply.md.
     assert:
       files: [answer/reply.md]
   - task: deliver

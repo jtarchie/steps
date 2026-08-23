@@ -48,7 +48,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: Review the diff.
+    messages:
+      - Review the diff.
     verdicts:
       - approve: celebrate
       - reject: escalate
@@ -205,8 +206,8 @@ fi
 
 	yaml := strings.Replace(
 		readFileString(t, cliPipeline(t, dir)),
-		"prompt: Review the diff.",
-		"prompt: Review the diff.\n    attempts: 2",
+		"messages: [Review the diff.]",
+		"messages: [Review the diff.]\n    attempts: 2",
 		1)
 	path := writePipeline(t, dir, yaml)
 
@@ -280,8 +281,8 @@ func TestE2ECLIAgentDoesNotRetryTaskFailure(t *testing.T) {
 
 	yaml := strings.Replace(
 		readFileString(t, cliPipeline(t, dir)),
-		"prompt: Review the diff.",
-		"prompt: Review the diff.\n    attempts: 3",
+		"messages: [Review the diff.]",
+		"messages: [Review the diff.]\n    attempts: 3",
 		1)
 	path := writePipeline(t, dir, yaml)
 
@@ -348,7 +349,8 @@ jobs:
     agent: reviewer
     inputs: []
     outputs: []
-    prompt: Review cell {{ .vars.cell }}.
+    messages:
+      - Review cell {{ .vars.cell }}.
     verdicts:
       - approve: next
   - task: record

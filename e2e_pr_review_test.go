@@ -428,7 +428,8 @@ jobs:
   - agent: planner
     inputs: []
     outputs: [dims]
-    prompt: Decide the review dimensions; write dims/index.json.
+    messages:
+      - Decide the review dimensions; write dims/index.json.
   - across:
     - var: dim
       from_file: dims/index.json
@@ -436,7 +437,8 @@ jobs:
     agent: reviewer
     inputs: [dims]
     outputs: [findings]
-    prompt: "Review through the {{ .vars.dim }} dimension."
+    messages:
+      - "\"Review through the {{ .vars.dim }} dimension.\""
 `, fake.URL+"/v1/"))
 
 	mustRun(t, path)

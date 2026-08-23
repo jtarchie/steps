@@ -150,7 +150,7 @@ func newTestConversation(t *testing.T, prompt, dir string) agentConversation {
 	}
 
 	return agentConversation{
-		prompt:   prompt,
+		messages: []string{prompt},
 		env:      toolEnv{dir: dir, runner: runner},
 		tools:    built,
 		maxTurns: testMaxTurns,
@@ -227,7 +227,7 @@ func requiredToolConversation(t *testing.T, dir string) agentConversation {
 	}
 
 	return agentConversation{
-		prompt:   "review it",
+		messages: []string{"review it"},
 		env:      toolEnv{dir: dir, runner: runner},
 		tools:    built,
 		maxTurns: testMaxTurns,
@@ -416,7 +416,7 @@ func TestRunAgentConversationRecoversFailedRequiredTool(t *testing.T) {
 	}
 
 	conv := agentConversation{
-		prompt:   "review it",
+		messages: []string{"review it"},
 		env:      toolEnv{dir: dir, runner: runner},
 		tools:    built,
 		maxTurns: testMaxTurns,
@@ -608,7 +608,7 @@ func TestRunAgentConversationRequiredMCPToolCalled(t *testing.T) {
 	}
 
 	conv := agentConversation{
-		prompt:   "search for bugs",
+		messages: []string{"search for bugs"},
 		env:      toolEnv{dir: t.TempDir()},
 		tools:    agentTools{registry: registry, required: map[string]bool{toolName: true}},
 		maxTurns: testMaxTurns,
@@ -653,7 +653,7 @@ func TestRunAgentConversationRequiredMCPToolErrorNotSatisfied(t *testing.T) {
 	}
 
 	conv := agentConversation{
-		prompt:   "search for bugs",
+		messages: []string{"search for bugs"},
 		env:      toolEnv{dir: t.TempDir()},
 		tools:    agentTools{registry: registry, required: map[string]bool{toolName: true}},
 		maxTurns: testMaxTurns,

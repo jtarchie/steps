@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -96,7 +97,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: look at it
+    messages:
+      - look at it
 `)
 	writeSibling(t, path, "prompts/reviewer.md", "You are a terse reviewer.\n")
 
@@ -116,7 +118,7 @@ jobs:
 }
 
 // TestLoadConfigPromptFileInHook proves resolveFileIncludes' walk reaches a
-// hook step's prompt_file: — the walk goes through Job.visitSteps, which
+// hook step's message_files: — the walk goes through Job.visitSteps, which
 // recurses into Hooks.Each and hands out *Step pointers, so a mutation there
 // must land on the same backing Step the hook actually runs.
 func TestLoadConfigPromptFileInHook(t *testing.T) {
@@ -135,7 +137,7 @@ jobs:
     on_failure:
       agent: fixer
       inputs: []
-      prompt_file: prompts/fix.md
+      message_files: [prompts/fix.md]
 `)
 	writeSibling(t, path, "prompts/fix.md", "Fix the failing task.\n")
 
@@ -149,8 +151,8 @@ jobs:
 		t.Fatal("on_failure hook is nil")
 	}
 
-	if got, want := hook.Prompt, "Fix the failing task.\n"; got != want {
-		t.Errorf("hook.Prompt = %q, want %q", got, want)
+	if got, want := hook.Messages, []string{"Fix the failing task.\n"}; !slices.Equal(got, want) {
+		t.Errorf("hook.Messages = %q, want %q", got, want)
 	}
 }
 
@@ -166,7 +168,7 @@ tasks:
   run: exit 1
   fix:
     agent: fixer
-    prompt_file: prompts/fix.md
+    message_files: [prompts/fix.md]
 jobs:
 - name: build
   plan:
@@ -179,8 +181,8 @@ jobs:
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	if got, want := cfg.Tasks[0].Fix.Prompt, "Fix it.\n"; got != want {
-		t.Errorf("Tasks[0].Fix.Prompt = %q, want %q", got, want)
+	if got, want := cfg.Tasks[0].Fix.Messages, []string{"Fix it.\n"}; !slices.Equal(got, want) {
+		t.Errorf("Tasks[0].Fix.Messages = %q, want %q", got, want)
 	}
 }
 
@@ -235,7 +237,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: look at it
+    messages:
+      - look at it
 `)
 	writeSibling(t, path, "agents/reviewer.yml", `
 source: { model: lmstudio/qwen }
@@ -274,7 +277,7 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt_file: prompts/review.md
+    message_files: [prompts/review.md]
 `)
 	writeSibling(t, path, "prompts/review.md", "Review the checked-out code.\n")
 
@@ -284,17 +287,17 @@ jobs:
 	}
 
 	step := cfg.Jobs[0].Plan[0]
-	if got, want := step.Prompt, "Review the checked-out code.\n"; got != want {
-		t.Errorf("Prompt = %q, want %q", got, want)
+	if got, want := step.Messages, []string{"Review the checked-out code.\n"}; !slices.Equal(got, want) {
+		t.Errorf("Messages = %q, want %q", got, want)
 	}
 
-	if step.PromptFile != nil {
-		t.Errorf("PromptFile = %+v, want nil after inlining", step.PromptFile)
+	if step.MessageFiles != nil {
+		t.Errorf("PromptFile = %+v, want nil after inlining", step.MessageFiles)
 	}
 }
 
 // TestLoadConfigStepPromptFileDeferredFormLeftUnresolved proves the
-// {artifact, path} mapping form of prompt_file: is deliberately NOT resolved
+// {artifact, path} mapping form of message_files: is deliberately NOT resolved
 // at load time (there is no artifact on disk yet — see FileRef's doc
 // comment) and survives LoadConfig untouched, for internal/agent to resolve
 // at run time.
@@ -320,7 +323,7 @@ jobs:
   - get: repo
   - agent: reviewer
     inputs: [repo]
-    prompt_file: { artifact: repo, path: PROMPT.md }
+    message_files: [{ artifact: repo, path: PROMPT.md }]
 `)
 
 	cfg, err := LoadConfig(path)
@@ -329,16 +332,21 @@ jobs:
 	}
 
 	step := cfg.Jobs[0].Plan[1]
-	if step.Prompt != "" {
-		t.Errorf("Prompt = %q, want empty (unresolved at load time)", step.Prompt)
+	if len(step.Messages) != 0 {
+		t.Errorf("Messages = %q, want empty (unresolved at load time)", step.Messages)
 	}
 
-	if !step.PromptFile.Deferred() {
-		t.Fatalf("PromptFile.Deferred() = false, want true")
+	if len(step.MessageFiles) != 1 {
+		t.Fatalf("MessageFiles = %+v, want one deferred entry", step.MessageFiles)
 	}
 
-	if step.PromptFile.Artifact != "repo" || step.PromptFile.Path != "PROMPT.md" {
-		t.Errorf("PromptFile = %+v, want {Artifact: repo, Path: PROMPT.md}", step.PromptFile)
+	ref := step.MessageFiles[0]
+	if !ref.Deferred() {
+		t.Fatalf("MessageFiles[0].Deferred() = false, want true")
+	}
+
+	if ref.Artifact != "repo" || ref.Path != "PROMPT.md" {
+		t.Errorf("MessageFiles[0] = %+v, want {Artifact: repo, Path: PROMPT.md}", ref)
 	}
 }
 
@@ -474,14 +482,15 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: look
+    messages:
+      - look
     run_file: ci/unit.sh
 `,
 			sibling: map[string]string{"ci/unit.sh": "echo hi\n"},
 			want:    `run_file: is only valid on task steps`,
 		},
 		{
-			name: "prompt_file on a non-agent step rejected",
+			name: "message_files on a non-agent step rejected",
 			pipeline: `
 tasks:
 - name: unit
@@ -490,13 +499,13 @@ jobs:
 - name: build
   plan:
   - task: unit
-    prompt_file: prompts/x.md
+    message_files: [prompts/x.md]
 `,
 			sibling: map[string]string{"prompts/x.md": "hello\n"},
-			want:    `prompt_file: is only valid on agent steps`,
+			want:    `message_files: is only valid on agent steps`,
 		},
 		{
-			name: "prompt and prompt_file both set",
+			name: "prompt and message_files both set",
 			pipeline: `
 agents:
 - name: reviewer
@@ -506,11 +515,12 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: inline prompt
-    prompt_file: prompts/review.md
+    messages:
+      - inline prompt
+    message_files: [prompts/review.md]
 `,
 			sibling: map[string]string{"prompts/review.md": "file prompt\n"},
-			want:    `prompt: and prompt_file: are mutually exclusive`,
+			want:    `messages: and message_files: are mutually exclusive`,
 		},
 		{
 			name: "nested file: in an included task document rejected",
@@ -537,7 +547,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: hi
+    messages:
+      - hi
 `,
 			sibling: map[string]string{"agents/reviewer.yml": "source: { model: lmstudio/qwen }\nsystem_file: p.md\n"},
 			want:    `an included agent document may not itself set file or system_file`,
@@ -571,7 +582,8 @@ jobs:
   plan:
   - agent: coder
     inputs: []
-    prompt: build it
+    messages:
+      - build it
 `)
 
 	cfg, err := LoadConfig(path)
@@ -602,7 +614,8 @@ jobs:
   plan:
   - agent: "@builtin/reviewer"
     inputs: []
-    prompt: review the code
+    messages:
+      - review the code
 `)
 
 	cfg, err := LoadConfig(path)
@@ -637,7 +650,8 @@ jobs:
   plan:
   - agent: "@builtin/reviewer"
     inputs: []
-    prompt: review it
+    messages:
+      - review it
 `)
 
 	cfg, err := LoadConfig(path)
@@ -675,7 +689,7 @@ jobs:
   plan:
   - agent: coder
     inputs: []
-    prompt_file: "@builtin/explorer"
+    message_files: ["@builtin/explorer"]
 `)
 
 	cfg, err := LoadConfig(path)
@@ -685,8 +699,8 @@ jobs:
 
 	step := cfg.Jobs[0].Plan[0]
 
-	if step.Prompt == "" {
-		t.Fatal("prompt_file @builtin/explorer resolved to empty string")
+	if len(step.Messages) == 0 {
+		t.Fatal("message_files @builtin/explorer resolved to empty string")
 	}
 }
 
@@ -768,7 +782,8 @@ jobs:
   plan:
   - agent: lead
     inputs: []
-    prompt: review
+    messages:
+      - review
 `)
 
 	cfg, err := LoadConfig(path)
@@ -812,7 +827,8 @@ jobs:
   plan:
   - agent: lead
     inputs: []
-    prompt: review
+    messages:
+      - review
 `)
 
 	_, err := LoadConfig(path)
@@ -842,7 +858,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: look at it
+    messages:
+      - look at it
 `)
 	writeSibling(t, path, "agents/reviewer.yml", `
 source: { model: lmstudio/qwen }

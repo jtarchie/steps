@@ -240,7 +240,8 @@ jobs:
   - get: thing
     trigger: true
   - agent: helper
-    prompt: hello
+    messages:
+      - hello
 `, endpoint)
 }
 

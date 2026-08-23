@@ -169,7 +169,7 @@ func TestAcrossFromFileArtifactMustBeAvailable(t *testing.T) {
 	})
 }
 
-// TestValidateArtifactFlowPromptFileArtifact checks a run-time prompt_file:
+// TestValidateArtifactFlowPromptFileArtifact checks a run-time message_files:
 // {artifact, path}'s artifact against both the plan (fetched/produced
 // somewhere) and the step's own declared inputs: (materialized into its
 // working directory) — see checkPromptFileArtifactAvailable.
@@ -185,7 +185,7 @@ func TestValidateArtifactFlowPromptFileArtifact(t *testing.T) {
 
 		job := &config.Job{Name: "j", Plan: []config.Step{
 			{Get: "repo"},
-			{Agent: "reviewer", Inputs: config.Inputs("repo"), PromptFile: &config.FileRef{Artifact: "repo", Path: "PROMPT.md"}},
+			{Agent: "reviewer", Inputs: config.Inputs("repo"), MessageFiles: []*config.FileRef{{Artifact: "repo", Path: "PROMPT.md"}}},
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
@@ -199,14 +199,14 @@ func TestValidateArtifactFlowPromptFileArtifact(t *testing.T) {
 
 		// Inputs deliberately doesn't declare "repo": if it did,
 		// checkInputsAvailable would reject it first (a plain undeclared-input
-		// error), masking the prompt_file-specific check this case targets.
+		// error), masking the message_files-specific check this case targets.
 		job := &config.Job{Name: "j", Plan: []config.Step{
-			{Agent: "reviewer", Inputs: config.Inputs(), PromptFile: &config.FileRef{Artifact: "repo", Path: "PROMPT.md"}},
+			{Agent: "reviewer", Inputs: config.Inputs(), MessageFiles: []*config.FileRef{{Artifact: "repo", Path: "PROMPT.md"}}},
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
-		if err == nil || !strings.Contains(err.Error(), "prompt_file artifact") {
-			t.Fatalf("err = %v, want a prompt_file-artifact-not-available error", err)
+		if err == nil || !strings.Contains(err.Error(), "message_files artifact") {
+			t.Fatalf("err = %v, want a message_files-artifact-not-available error", err)
 		}
 	})
 
@@ -215,7 +215,7 @@ func TestValidateArtifactFlowPromptFileArtifact(t *testing.T) {
 
 		job := &config.Job{Name: "j", Plan: []config.Step{
 			{Get: "repo"},
-			{Agent: "reviewer", Inputs: config.Inputs(), PromptFile: &config.FileRef{Artifact: "repo", Path: "PROMPT.md"}},
+			{Agent: "reviewer", Inputs: config.Inputs(), MessageFiles: []*config.FileRef{{Artifact: "repo", Path: "PROMPT.md"}}},
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
@@ -228,12 +228,12 @@ func TestValidateArtifactFlowPromptFileArtifact(t *testing.T) {
 		t.Parallel()
 
 		job := &config.Job{Name: "j", Plan: []config.Step{
-			{Agent: "reviewer", Inputs: config.Inputs(), PromptFile: &config.FileRef{Path: "prompts/review.md"}},
+			{Agent: "reviewer", Inputs: config.Inputs(), MessageFiles: []*config.FileRef{&config.FileRef{Path: "prompts/review.md"}}},
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
 		if err != nil {
-			t.Fatalf("err = %v, want nil (a load-time prompt_file: names no artifact)", err)
+			t.Fatalf("err = %v, want nil (a load-time message_files: names no artifact)", err)
 		}
 	})
 }

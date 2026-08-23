@@ -45,7 +45,7 @@ func cliPrepared(t *testing.T, toolNames []string) preparedAgentStep {
 
 	conv := bridgeConversation(decls, registry, nil)
 	conv.system = "You are a reviewer."
-	conv.prompt = "Review the diff."
+	conv.messages = []string{"Review the diff."}
 
 	// Every name is treated as a builtin grant, which is what these tests
 	// mean by a granted tool; a test about custom tools clears this.
@@ -338,7 +338,7 @@ func TestRenderCLIPrompt(t *testing.T) {
 	conv := agentConversation{
 		upstream:      []contextBlock{{path: "critic", content: "<fence>\nverdict: revise\n</fence>"}},
 		contextBlocks: []contextBlock{{path: "repo/NOTES.md", content: "some notes"}},
-		prompt:        "Review the diff.",
+		messages:      []string{"Review the diff."},
 	}
 
 	rendered := renderCLIPrompt(conv)
@@ -443,7 +443,7 @@ func TestCLIPromptFencesContextBlocks(t *testing.T) {
 
 	rendered := renderCLIPrompt(agentConversation{
 		contextBlocks: []contextBlock{{path: "repo/README.md", content: injection}},
-		prompt:        "Summarize the readme.",
+		messages:      []string{"Summarize the readme."},
 	})
 
 	before, _, found := strings.Cut(rendered, injection)

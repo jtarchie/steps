@@ -21,7 +21,8 @@ jobs:
   plan:
   - agent: reviewer
     attempts: 2                    # pins that a retry absorbs the one provider 500 —
-    prompt: "Review the release."  # any attempts >= 2 would pass; the default is 3
+    messages:
+      - "Review the release."  # any attempts >= 2 would pass; the default is 3
     assert:
       stdout: Release looks good   # the answer AFTER the absorbed 500
   assert:
@@ -248,7 +249,8 @@ jobs:
 - name: outage
   plan:
   - agent: reviewer
-    prompt: "Review the PR."
+    messages:
+      - "\"Review the PR.\""
     attempts: 1
     on_error:
       task: page
@@ -274,7 +276,8 @@ jobs:
 - name: review
   plan:
   - agent: reviewer
-    prompt: "Review the PR for safety issues."
+    messages:
+      - "\"Review the PR for safety issues.\""
     timeout: 10m
     assert:
       stdout: No safety issues found
@@ -307,11 +310,13 @@ jobs:
 - name: review
   plan:
   - agent: deep-reviewer
-    prompt: "Review the diff for correctness."
+    messages:
+      - "\"Review the diff for correctness.\""
     assert:
       stdout: Looks correct
   - agent: deep-reviewer
-    prompt: "Now review it for security."
+    messages:
+      - "\"Now review it for security.\""
     timeout: 45m
     assert:
       stdout: No injection paths
@@ -349,7 +354,8 @@ jobs:
 - name: migrate
   plan:
   - agent: marathon
-    prompt: "Migrate every call site, however long it takes."
+    messages:
+      - "\"Migrate every call site, however long it takes.\""
     assert:
       stdout: migration complete
   assert:

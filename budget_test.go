@@ -36,7 +36,8 @@ jobs:
   plan:
   - agent: writer
     inputs: []
-    prompt: Write something.
+    messages:
+      - Write something.
     on_failure:
       task: on-failure
       inputs: []
@@ -132,10 +133,12 @@ jobs:
   plan:
   - agent: planner
     inputs: []
-    prompt: Plan it.
+    messages:
+      - Plan it.
   - agent: coder
     inputs: []
-    prompt: Build it.
+    messages:
+      - Build it.
 `, fake.URL))
 
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
@@ -278,7 +281,8 @@ jobs:
     - var: shard
       values: [a, b, c]
     agent: reviewer
-    prompt: "review {{ .vars.shard }}"
+    messages:
+      - "\"review {{ .vars.shard }}\""
 `, fake.URL))
 
 	err := run([]string{"run", path, "--job", "fan"})

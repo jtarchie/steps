@@ -18,6 +18,7 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: review it
+    messages:
+      - review it
     budget:
       tokens: 500

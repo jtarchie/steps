@@ -13,7 +13,7 @@ func TestToolCallGuardHashStabilityWhenUnset(t *testing.T) {
 	t.Parallel()
 
 	cfg := agentCfg([]config.ToolSpec{{Name: "post_review", Run: "gh pr review"}}, "")
-	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 
 	ri, err := cfg.ResolveAgentInvocation(step)
 	if err != nil {
@@ -45,7 +45,7 @@ func TestToolCallGuardHashStabilityWhenUnset(t *testing.T) {
 func TestToolCallGuardHashBustsWhenSet(t *testing.T) {
 	t.Parallel()
 
-	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 
 	unset := mustAgentHash(t, agentCfg([]config.ToolSpec{{Name: "post_review", Run: "gh pr review"}}, ""), step)
 	withMaxCalls := mustAgentHash(t, agentCfg([]config.ToolSpec{{Name: "post_review", Run: "gh pr review", MaxCalls: 1}}, ""), step)
@@ -77,7 +77,7 @@ func TestMaxOutputBytesHashStabilityWhenUnset(t *testing.T) {
 	t.Parallel()
 
 	cfg := agentCfg([]config.ToolSpec{{Name: "post_review", Run: "gh pr review"}}, "")
-	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 
 	ri, err := cfg.ResolveAgentInvocation(step)
 	if err != nil {
@@ -117,10 +117,13 @@ func TestMaxOutputBytesHashIsPinned(t *testing.T) {
 	t.Parallel()
 
 	// Originally captured against the tree as it stood before
-	// max_output_bytes: was added; re-based as described above.
-	const wantHash = "ca3aacb1a8a3c2a04942a41dd0e6d05b130553d8dc4d876eabfb3a08cdd49210"
+	// max_output_bytes: was added; re-based as described above, and again when
+	// prompt: became messages: — renaming a hashed key invalidates every agent
+	// step's chain, which is the intended effect of the rename rather than a
+	// side effect of it.
+	const wantHash = "bad9999ef4e8d5033445d56329daf1ca4106ebd07aba75cc53c6cb2ab6a07ed9"
 
-	got := mustAgentHash(t, agentCfg([]config.ToolSpec{{Name: "post_review", Run: "gh pr review"}}, ""), config.Step{Agent: "reviewer", Prompt: "do it"})
+	got := mustAgentHash(t, agentCfg([]config.ToolSpec{{Name: "post_review", Run: "gh pr review"}}, ""), config.Step{Agent: "reviewer", Messages: []string{"do it"}})
 	if got != wantHash {
 		t.Errorf("agent step hash = %q, want the pinned %q", got, wantHash)
 	}
@@ -132,7 +135,7 @@ func TestMaxOutputBytesHashIsPinned(t *testing.T) {
 func TestMaxOutputBytesHashBustsWhenSet(t *testing.T) {
 	t.Parallel()
 
-	step := config.Step{Agent: "reviewer", Prompt: "do it"}
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 
 	unset := mustAgentHash(t, agentCfg([]config.ToolSpec{{Name: "post_review", Run: "gh pr review"}}, ""), step)
 	set := mustAgentHash(t, agentCfg([]config.ToolSpec{{Name: "post_review", Run: "gh pr review", MaxOutputBytes: 4000}}, ""), step)

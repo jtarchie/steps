@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -918,7 +919,8 @@ func TestFixSpecUnmarshalMapping(t *testing.T) {
 	const doc = `
 fix:
   agent: fixer
-  prompt: only touch parser.go
+  messages:
+    - only touch parser.go
   dir: repo
   attempts: 2
   tools: [read_file, run_shell]
@@ -938,8 +940,12 @@ fix:
 		t.Fatal("Fix is nil")
 	}
 
-	if got.Agent != "fixer" || got.Prompt != "only touch parser.go" || got.Dir != "repo" {
+	if got.Agent != "fixer" || got.Dir != "repo" {
 		t.Errorf("Fix = %+v, want the mapping's values", got)
+	}
+
+	if want := []string{"only touch parser.go"}; !slices.Equal(got.Messages, want) {
+		t.Errorf("Fix.Messages = %q, want %q", got.Messages, want)
 	}
 
 	if got.Attempts == nil || *got.Attempts != 2 {
@@ -1093,7 +1099,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: go
+    messages:
+      - go
 `
 
 	path := filepath.Join(t.TempDir(), "pipeline.yml")

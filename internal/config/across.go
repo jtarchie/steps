@@ -263,11 +263,14 @@ type renderableField struct {
 // clones it first.
 func renderableFields(cell *Step) []renderableField {
 	fields := make([]renderableField, 0, 7+len(cell.ContextPaths))
+	for i := range cell.Messages {
+		fields = append(fields, renderableField{fmt.Sprintf("messages[%d]", i), &cell.Messages[i]})
+	}
+
 	fields = append(fields,
 		renderableField{"task", &cell.Task},
 		renderableField{"run", &cell.Run},
 		renderableField{"image", &cell.Image},
-		renderableField{"prompt", &cell.Prompt},
 		renderableField{"dir", &cell.Dir},
 		renderableField{"put", &cell.Put},
 		renderableField{"get", &cell.Get},
@@ -315,11 +318,13 @@ func renderCell(label string, cell *Step, combo acrossCombo) error {
 
 	// The same aliasing the Try pointer above has, for the same reason:
 	// ExpandAcross builds a cell by assigning the step, which copies the struct
-	// but SHARES the array behind context_paths with every other cell.
-	// renderableFields hands out pointers INTO that array, so rendering in
-	// place would have cell 1 consume the template and leave cell 2 with cell
-	// 1's paths.
+	// but SHARES the array behind context_paths and messages with every other
+	// cell. renderableFields hands out pointers INTO those arrays, so rendering
+	// in place would have cell 1 consume the template and leave cell 2 with
+	// cell 1's paths — and, once messages: became a list, cell 1's whole
+	// conversation. Every slice this renders through has to be cloned here.
 	cell.ContextPaths = slices.Clone(cell.ContextPaths)
+	cell.Messages = slices.Clone(cell.Messages)
 
 	for _, field := range renderableFields(cell) {
 		rendered, err := renderVars(*field.value, combo)

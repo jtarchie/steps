@@ -32,7 +32,8 @@ jobs:
   plan:
   - agent: triager
     inputs: []
-    prompt: Classify the report.
+    messages:
+      - Classify the report.
     verdicts: [bug, feature, question]
 %[3]s  - task: after
     inputs: []

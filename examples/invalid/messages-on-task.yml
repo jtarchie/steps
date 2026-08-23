@@ -1,0 +1,12 @@
+# messages: is the task given to an agent's model. A task step holds no
+# conversation, so a messages here did nothing — rejected rather than read as
+# if it were in force.
+# expect: messages is only valid on agent steps
+
+jobs:
+- name: build
+  plan:
+  - task: compile
+    run: "true"
+    messages:
+      - Please build carefully.

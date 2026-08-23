@@ -24,7 +24,7 @@ import (
 // network:, privileged: and container_limits: are shell-only, because an
 // expression evaluates in-process and has no container to configure.
 //
-// Each slot has a _file sibling, following run_file:/system_file:/prompt_file:
+// Each slot has a _file sibling, following run_file:/system_file:/message_files:
 // A twenty-line program has no business inside a YAML scalar, and a real file
 // is reviewable: a diff reads as a diff and a comment lands on a line.
 // Suggested extension .expr.

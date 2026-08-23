@@ -17,7 +17,8 @@ jobs:
 - name: j
   plan:
   - agent: writer
-    prompt: go
+    messages:
+      - go
     context: write
 `)
 
@@ -35,7 +36,8 @@ jobs:
 - name: j
   plan:
   - agent: writer
-    prompt: go
+    messages:
+      - go
     context: { write: true }
 `)
 
@@ -53,7 +55,8 @@ jobs:
 - name: j
   plan:
   - agent: writer
-    prompt: go
+    messages:
+      - go
     context: {}
 `)
 
@@ -77,14 +80,16 @@ jobs:
   plan:
   - agent: critic
     inputs: []
-    prompt: judge it
+    messages:
+      - judge it
     verdicts: [approve, revise]
   - task: work
     inputs: []
     run: "true"
     on_failure:
       agent: writer
-      prompt: notify
+      messages:
+        - notify
       context:
         from:
           critic: verdict
@@ -115,7 +120,8 @@ jobs:
   plan:
   - agent: critic
     inputs: []
-    prompt: judge it
+    messages:
+      - judge it
     verdicts: [approve, revise]
   - put: results
     inputs: []

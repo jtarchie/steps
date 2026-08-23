@@ -28,7 +28,7 @@ import (
 // complexity budget.
 type preparedAgentStep struct {
 	// step is the resolved step: identical to RunStep's own step parameter,
-	// except a run-time prompt_file: {artifact, path} (see FileRef.Deferred)
+	// except a run-time message_files: {artifact, path} (see FileRef.Deferred)
 	// has been read and folded into Prompt (with PromptFile cleared) by the
 	// time this is returned. RunStep must hash THIS copy, not its own step
 	// param, so merkle.AgentContentMap sees the loaded prompt text rather than
@@ -232,7 +232,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	conv := agentConversation{
 		system:        buildSystemMessage(ri.Persona, dir),
-		prompt:        step.Prompt,
+		messages:      step.Messages,
 		contextBlocks: contextBlocks,
 		upstream:      upstreamBlocks(ctx, step),
 		env:           toolEnv{dir: dir, runner: runner, spillDir: spillDir},
@@ -328,28 +328,28 @@ func resolveWithFailover(cfg *config.Config, step config.Step) (primary, effecti
 	return primary, effective, agent, selection.index, nil
 }
 
-// prepareStepPrompt resolves a run-time prompt_file: {artifact, path} (see
+// prepareStepPrompt resolves a run-time message_files: {artifact, path} (see
 // resolveDeferredPrompt) out of the materialized workspace, when the step
 // declares one. Extracted from prepareAgentStep (its branches would
 // otherwise push the preparation flow over the complexity budget); behavior
 // is unchanged.
 func prepareStepPrompt(spaceDir string, step config.Step) (config.Step, error) {
-	if !step.PromptFile.Deferred() {
+	if len(step.MessageFiles) == 0 {
 		return step, nil
 	}
 
-	resolved, err := resolveDeferredPrompt(spaceDir, step)
+	resolved, err := resolveDeferredMessages(spaceDir, step)
 	if err != nil {
 		return config.Step{}, err
 	}
 
-	step.Prompt = resolved
-	step.PromptFile = nil
+	step.Messages = resolved
+	step.MessageFiles = nil
 
 	return step, nil
 }
 
-// resolveDeferredPrompt reads step's run-time prompt_file: {artifact, path}
+// resolveDeferredPrompt reads step's run-time message_files: {artifact, path}
 // (see config.FileRef.Deferred) out of the step's own materialized working
 // directory. Unlike a load-time include (resolved once, at LoadConfig, before
 // merkle.PlanChains ever runs), this file lives inside an artifact a get step
@@ -363,31 +363,33 @@ func prepareStepPrompt(spaceDir string, step config.Step) (config.Step, error) {
 // author put there — so the path is confined and symlink-checked by
 // resolveAgentPath, the same guard read_file/list_dir use against a
 // model-supplied path.
-func resolveDeferredPrompt(spaceDir string, step config.Step) (string, error) {
-	if step.Prompt != "" {
-		return "", fmt.Errorf("agent %q: prompt: and prompt_file: are mutually exclusive", step.Agent)
+func resolveDeferredMessages(spaceDir string, step config.Step) ([]string, error) {
+	messages := make([]string, 0, len(step.MessageFiles))
+
+	for _, ref := range step.MessageFiles {
+		rel := filepath.Join(ref.Artifact, ref.Path)
+
+		resolved, err := resolveAgentPath(spaceDir, rel)
+		if err != nil {
+			return nil, fmt.Errorf("agent %q: message_files {artifact: %q, path: %q}: %w",
+				step.Agent, ref.Artifact, ref.Path, err)
+		}
+
+		data, err := os.ReadFile(resolved) //nolint:gosec // resolved and confined by resolveAgentPath against spaceDir, the step's own materialized working directory
+		if err != nil {
+			return nil, fmt.Errorf("agent %q: message_files {artifact: %q, path: %q}: %w",
+				step.Agent, ref.Artifact, ref.Path, err)
+		}
+
+		if strings.TrimSpace(string(data)) == "" {
+			return nil, fmt.Errorf("agent %q: message_files {artifact: %q, path: %q} is empty",
+				step.Agent, ref.Artifact, ref.Path)
+		}
+
+		messages = append(messages, string(data))
 	}
 
-	rel := filepath.Join(step.PromptFile.Artifact, step.PromptFile.Path)
-
-	resolved, err := resolveAgentPath(spaceDir, rel)
-	if err != nil {
-		return "", fmt.Errorf("agent %q: prompt_file {artifact: %q, path: %q}: %w",
-			step.Agent, step.PromptFile.Artifact, step.PromptFile.Path, err)
-	}
-
-	data, err := os.ReadFile(resolved) //nolint:gosec // resolved and confined by resolveAgentPath against spaceDir, the step's own materialized working directory
-	if err != nil {
-		return "", fmt.Errorf("agent %q: prompt_file {artifact: %q, path: %q}: %w",
-			step.Agent, step.PromptFile.Artifact, step.PromptFile.Path, err)
-	}
-
-	if strings.TrimSpace(string(data)) == "" {
-		return "", fmt.Errorf("agent %q: prompt_file {artifact: %q, path: %q} is empty",
-			step.Agent, step.PromptFile.Artifact, step.PromptFile.Path)
-	}
-
-	return string(data), nil
+	return messages, nil
 }
 
 // toolOutputSpillDirName is the fixed name of the subdirectory a

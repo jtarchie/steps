@@ -69,7 +69,8 @@ jobs:
   - agent: reviewer
     inputs: [repo]
     outputs: [report]
-    prompt: Review the notes and summarize them.
+    messages:
+      - Review the notes and summarize them.
   - task: publish
     volatile: true
     inputs: [report]

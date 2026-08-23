@@ -249,17 +249,18 @@ jobs:
     inputs: [pr]
     outputs: [dims]
     context_paths: [pr/pr.diff, pr/pr.json]
-    prompt: |
-      Decide the review dimensions for this change.
+    messages:
+      - |
+        Decide the review dimensions for this change.
 
-      Write dims/index.json: a JSON array of dimension ids. Each id must be
-      short kebab-case (letters, digits, - _ .), unique, and there must be at
-      most SIX — fewer is better than overlapping. A trivial change justifies
-      one or two.
+        Write dims/index.json: a JSON array of dimension ids. Each id must be
+        short kebab-case (letters, digits, - _ .), unique, and there must be at
+        most SIX — fewer is better than overlapping. A trivial change justifies
+        one or two.
 
-      For each id, also write dims/<id>.md: what a reviewer taking this
-      dimension looks for (one paragraph), and the repo-relative paths under
-      pr/ to start from.
+        For each id, also write dims/<id>.md: what a reviewer taking this
+        dimension looks for (one paragraph), and the repo-relative paths under
+        pr/ to start from.
     assert:
       files: [dims/index.json]     # the work list exists, or the matrix has no width
 
@@ -289,24 +290,26 @@ jobs:
       inputs: [pr, dims]
       outputs: [findings]
       context_paths: ["dims/{{ .vars.dim }}.md"]
-      prompt: |
-        Review this change through one dimension only. Your brief is already
-        in your context — it says what to look for and where to start under
-        pr/. Read the code before you claim anything about it.
+      messages:
+        - |
+          Review this change through one dimension only. Your brief is already
+          in your context — it says what to look for and where to start under
+          pr/. Read the code before you claim anything about it.
 
-        Write your findings to findings/report.json.
+          Write your findings to findings/report.json.
 
   # ── phase 3: the falsifiability gate ─────────────────────────────────────
-  # A separate step rather than an instruction in the reviewer's prompt: an
+  # A separate step rather than an instruction in the reviewer's messages: an
   # agent grading its own work is not a gate.
   - agent: falsifier
     inputs: [pr, findings]
     outputs: [confirmed]
-    prompt: |
-      List findings/ — each <dimension>/report.json in it is a set of CLAIMS,
-      not facts. Try to invalidate each one against the code under pr/.
+    messages:
+      - |
+        List findings/ — each <dimension>/report.json in it is a set of CLAIMS,
+        not facts. Try to invalidate each one against the code under pr/.
 
-      Write the survivors to confirmed/confirmed.json.
+        Write the survivors to confirmed/confirmed.json.
     assert:
       files: [confirmed/confirmed.json]
 
@@ -315,11 +318,12 @@ jobs:
     inputs: [pr, confirmed]
     outputs: [blocking]
     context_paths: [confirmed/confirmed.json]
-    prompt: |
-      For each confirmed finding above, decide whether it must be fixed
-      before this PR merges.
+    messages:
+      - |
+        For each confirmed finding above, decide whether it must be fixed
+        before this PR merges.
 
-      Write blocking/blocking.json.
+        Write blocking/blocking.json.
     assert:
       files: [blocking/blocking.json]
 
@@ -328,13 +332,14 @@ jobs:
     inputs: [pr, confirmed, blocking]
     outputs: [review]
     context_paths: [confirmed/confirmed.json, blocking/blocking.json]
-    prompt: |
-      Write the review from the confirmed findings above. Cluster any that
-      are worse together than apart into a single compound risk.
+    messages:
+      - |
+        Write the review from the confirmed findings above. Cluster any that
+        are worse together than apart into a single compound risk.
 
-      Write review/summary.md (what a human reads) and review/findings.json
-      (the structured list). Nothing else — the PR number is the pipeline's
-      to know, not yours.
+        Write review/summary.md (what a human reads) and review/findings.json
+        (the structured list). Nothing else — the PR number is the pipeline's
+        to know, not yours.
     assert:
       # The one assertion a prose answer cannot satisfy: an agent that reports
       # success without producing anything is otherwise indistinguishable.

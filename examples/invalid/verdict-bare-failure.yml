@@ -17,7 +17,8 @@ jobs:
   plan:
   - agent: reviewer
     inputs: []
-    prompt: Review it.
+    messages:
+      - Review it.
     verdicts:
       - approve
       - failure

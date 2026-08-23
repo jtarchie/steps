@@ -18,9 +18,11 @@ jobs:
 - name: j
   plan:
   - agent: reviewer
-    prompt: review
+    messages:
+      - review
   - agent: big-thinker
-    prompt: think
+    messages:
+      - think
 `)
 
 	cfg, err := LoadConfig(path)
@@ -59,7 +61,7 @@ agents:
 - name: reviewer
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: review }]
+  plan: [{ agent: reviewer, messages: [review] }]
 `)
 
 	cfg, err := LoadConfig(path)
@@ -94,9 +96,11 @@ jobs:
 - name: j
   plan:
   - agent: reviewer
-    prompt: review
+    messages:
+      - review
   - agent: pinned
-    prompt: think
+    messages:
+      - think
 `)
 
 	cfg, err := LoadConfig(path)
@@ -135,7 +139,7 @@ defaults:
   model: lmstudio/qwen
 jobs:
 - name: j
-  plan: [{ agent: "@builtin/reviewer", prompt: review }]
+  plan: [{ agent: "@builtin/reviewer", messages: [review] }]
 `)
 
 	cfg, err := LoadConfig(path)
@@ -164,7 +168,7 @@ agents:
 - name: reviewer
 jobs:
 - name: j
-  plan: [{ agent: reviewer, prompt: review }]
+  plan: [{ agent: reviewer, messages: [review] }]
 `)
 
 	wantLoadError(t, path, "has no model; set source.model on it, a pipeline-level defaults.model, or $STEPS_MODEL")

@@ -44,7 +44,8 @@ jobs:
 - name: j
   plan:
   - agent: r
-    prompt: x
+    messages:
+      - x
 `)
 	})
 
@@ -215,7 +216,8 @@ jobs:
 - name: j
   plan:
   - agent: r
-    prompt: x
+    messages:
+      - x
     inputs: [repo]
     input_mapping: { repo: source }
 `), "only valid on task steps")

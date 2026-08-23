@@ -252,7 +252,7 @@ func TestBudgetSpellingFollowsTheRunner(t *testing.T) {
 			cfg := &Config{
 				Agents: []Agent{{Name: "reviewer", Source: AgentSource{Model: tt.model}, Budget: &budget}},
 				Jobs: []Job{{Name: "review", Plan: []Step{
-					{Agent: "reviewer", Prompt: "go", Inputs: &InputSpec{}},
+					{Agent: "reviewer", Messages: []string{"go"}, Inputs: &InputSpec{}},
 				}}},
 			}
 
@@ -345,11 +345,11 @@ func TestCLIAgentContainerRules(t *testing.T) {
 					Network: tt.agentNetwork,
 				}},
 				Jobs: []Job{{Name: "review", Plan: []Step{{
-					Agent:   "reviewer",
-					Prompt:  "go",
-					Inputs:  &InputSpec{},
-					Image:   tt.stepImage,
-					Network: tt.stepNetwork,
+					Agent:    "reviewer",
+					Messages: []string{"go"},
+					Inputs:   &InputSpec{},
+					Image:    tt.stepImage,
+					Network:  tt.stepNetwork,
 				}}}},
 			}
 
