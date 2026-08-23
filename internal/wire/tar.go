@@ -26,18 +26,18 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
-// Permissions written into the archive. digestTree records one bit of a
-// regular file's mode — whether it can be run — so these two values carry that
-// bit and nothing else. Reproducing the umask of whichever machine created the
-// file would be noise that no cache key can observe.
-const (
-	execFileMode = 0o755
-	fileMode     = 0o644
-	dirMode      = 0o755
-)
+// stagedDirMode is what a directory is created with while a tree is being
+// unpacked, before its recorded mode is applied.
+//
+// Private, and narrower than anything an archive is likely to carry: a
+// directory is briefly visible between its creation and the second pass, and
+// the safe end to err on is the closed one. A recorded mode wider than this is
+// applied once the tree is whole.
+const stagedDirMode = 0o700
 
 // PackTree writes root's contents to w as a tar stream carrying exactly what
 // digestTree hashes.
@@ -131,10 +131,15 @@ func packWalk(writer *tar.Writer, root, from string) error {
 func packEntry(writer *tar.Writer, path, name string, entry fs.DirEntry) error {
 	switch {
 	case entry.IsDir():
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("%w", err)
+		}
+
 		return writeHeader(writer, &tar.Header{
 			Typeflag: tar.TypeDir,
 			Name:     name + "/",
-			Mode:     dirMode,
+			Mode:     int64(info.Mode().Perm()),
 		})
 	case entry.Type()&fs.ModeSymlink != 0:
 		target, err := os.Readlink(path)
@@ -166,10 +171,15 @@ func packFile(writer *tar.Writer, path, name string, entry fs.DirEntry) error {
 		return fmt.Errorf("%w", err)
 	}
 
-	mode := int64(fileMode)
-	if info.Mode()&0o111 != 0 {
-		mode = execFileMode
-	}
+	// The mode as it stands, not a canonical one. digestTree reads only the
+	// executable bit, so this is invisible to every cache key — which is
+	// precisely why collapsing it went unnoticed: a 0600 deploy key arrived on
+	// the worker world-readable, and ssh refuses to use such a key at all.
+	//
+	// Reproducibility is unaffected. The bits come from the file, not from the
+	// umask of whichever machine created it, so packing one tree twice still
+	// produces one stream.
+	mode := int64(info.Mode().Perm())
 
 	size := info.Size()
 
@@ -236,10 +246,17 @@ func UnpackTree(r io.Reader, root string) error {
 
 	reader := tar.NewReader(r)
 
+	// Directory modes are applied only once every entry has been written. A
+	// recorded 0500 restored on the way past would refuse its own children,
+	// and a directory is briefly world-visible if created wide and narrowed
+	// later — so they are created private (stagedDirMode) and opened up, never
+	// the other way round.
+	dirModes := map[string]fs.FileMode{}
+
 	for {
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
-			return nil
+			return applyDirModes(dir, dirModes)
 		}
 
 		if err != nil {
@@ -255,7 +272,31 @@ func UnpackTree(r io.Reader, root string) error {
 		if err != nil {
 			return fmt.Errorf("unpacking %q into %q: %w", name, root, err)
 		}
+
+		if header.Typeflag == tar.TypeDir {
+			dirModes[name] = fs.FileMode(header.Mode).Perm() //nolint:gosec // a mode this codec wrote
+		}
 	}
+}
+
+// applyDirModes restores recorded directory modes, deepest first so a
+// directory narrowed by its own mode is not one this still has to write into.
+func applyDirModes(dir *os.Root, modes map[string]fs.FileMode) error {
+	names := make([]string, 0, len(modes))
+	for name := range modes {
+		names = append(names, name)
+	}
+
+	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+
+	for _, name := range names {
+		err := dir.Chmod(name, modes[name])
+		if err != nil {
+			return fmt.Errorf("restoring the mode of %q: %w", name, err)
+		}
+	}
+
+	return nil
 }
 
 // ErrUnsafePath is an archive entry naming a path outside the tree. os.Root
@@ -337,7 +378,7 @@ func mkdirAll(dir *os.Root, name string) error {
 	for _, part := range strings.Split(name, string(filepath.Separator)) {
 		built = filepath.Join(built, part)
 
-		err := dir.Mkdir(built, dirMode)
+		err := dir.Mkdir(built, stagedDirMode)
 		if err != nil && !errors.Is(err, fs.ErrExist) {
 			return fmt.Errorf("%w", err)
 		}

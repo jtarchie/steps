@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -144,4 +145,62 @@ func writeRegular(w *tar.Writer, name string) {
 		Format:   tar.FormatPAX,
 	})
 	_, _ = w.Write([]byte(content))
+}
+
+// TestTreeRoundTripPreservesPermissions pins that a mode survives the wire.
+//
+// digestTree records only whether a file is executable, so nothing in the
+// cache-key machinery can observe this — which is exactly why it needs its own
+// test. Collapsing every file to 0644 was reproducible and wrong: a step that
+// fetched a 0600 deploy key handed the worker a world-readable one, and ssh
+// refuses to use it. The widening is the bug; the reproducibility it was
+// protecting is unaffected, because the mode is read from the file rather than
+// from whichever umask created it.
+func TestTreeRoundTripPreservesPermissions(t *testing.T) {
+	t.Parallel()
+
+	modes := []os.FileMode{0o600, 0o400, 0o640, 0o700, 0o755, 0o644}
+
+	src := t.TempDir()
+
+	for _, mode := range modes {
+		name := fmt.Sprintf("mode-%04o", mode)
+
+		err := os.WriteFile(filepath.Join(src, name), []byte("content\n"), mode)
+		if err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+
+		err = os.Chmod(filepath.Join(src, name), mode)
+		if err != nil {
+			t.Fatalf("chmod %s: %v", name, err)
+		}
+	}
+
+	var buf bytes.Buffer
+
+	err := PackTree(&buf, src)
+	if err != nil {
+		t.Fatalf("PackTree: %v", err)
+	}
+
+	dst := t.TempDir()
+
+	err = UnpackTree(&buf, dst)
+	if err != nil {
+		t.Fatalf("UnpackTree: %v", err)
+	}
+
+	for _, mode := range modes {
+		name := fmt.Sprintf("mode-%04o", mode)
+
+		info, err := os.Stat(filepath.Join(dst, name))
+		if err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+
+		if got := info.Mode().Perm(); got != mode {
+			t.Errorf("%s came back %04o, want %04o", name, got, mode)
+		}
+	}
 }
