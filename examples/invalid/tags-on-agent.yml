@@ -14,4 +14,4 @@ jobs:
   - agent: reviewer
     tags: [gpu]
     messages:
-      - "\"Review it.\""
+      - "Review it."

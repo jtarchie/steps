@@ -42,7 +42,7 @@ jobs:
     context_paths: [guidelines/RULES.txt]   # handed to the model at turn zero
     max_turns: 8                            # read, write, decide, with room to spare
     messages:
-      - "\"Read repo/NOTES.txt and write a one-line summary to report/summary.md.\""
+      - "Read repo/NOTES.txt and write a one-line summary to report/summary.md."
     verdicts:
       - approve: results               # the verdict picks the next step
       - reject: escalate

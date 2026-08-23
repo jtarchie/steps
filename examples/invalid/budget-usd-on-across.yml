@@ -22,6 +22,6 @@ jobs:
     agent: reviewer
     inputs: []
     messages:
-      - "\"review {{ .vars.item }}\""
+      - "review {{ .vars.item }}"
     budget:
       usd: 1.50

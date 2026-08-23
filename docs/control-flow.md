@@ -201,7 +201,7 @@ jobs:
   - agent: critic
     inputs: [notes]
     messages:
-      - "\"Read notes/draft.txt. Approve it, or send it back.\""
+      - "Read notes/draft.txt. Approve it, or send it back."
     verdicts:
       - approve: publish       # route: record the verdict and jump forward
       - revise: draft          # backward — the loop max_visits: bounds
@@ -305,7 +305,7 @@ jobs:
   plan:
   - agent: triage
     messages:
-      - "\"Classify this report: the app crashes on launch.\""
+      - "Classify this report: the app crashes on launch."
     verdicts: [bug, feature, question]    # all bare: record the choice, route nowhere
     assert:
       verdict: bug
@@ -623,7 +623,7 @@ jobs:
       tokens: 1000            # cells stop being admitted once this is spent
     agent: reviewer
     messages:
-      - "\"Review the {{ .vars.dim }} dimension.\""
+      - "Review the {{ .vars.dim }} dimension."
   - task: publish
     run: echo publishing what we got
     assert:
@@ -719,7 +719,7 @@ jobs:
   plan:
   - agent: writer
     messages:
-      - "\"Draft the release announcement into draft/summary.md.\""
+      - "Draft the release announcement into draft/summary.md."
     outputs: [draft]
   - approval:
       message: "Draft is in draft/summary.md — publish?"

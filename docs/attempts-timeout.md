@@ -250,7 +250,7 @@ jobs:
   plan:
   - agent: reviewer
     messages:
-      - "\"Review the PR.\""
+      - "Review the PR."
     attempts: 1
     on_error:
       task: page
@@ -277,7 +277,7 @@ jobs:
   plan:
   - agent: reviewer
     messages:
-      - "\"Review the PR for safety issues.\""
+      - "Review the PR for safety issues."
     timeout: 10m
     assert:
       stdout: No safety issues found
@@ -311,12 +311,12 @@ jobs:
   plan:
   - agent: deep-reviewer
     messages:
-      - "\"Review the diff for correctness.\""
+      - "Review the diff for correctness."
     assert:
       stdout: Looks correct
   - agent: deep-reviewer
     messages:
-      - "\"Now review it for security.\""
+      - "Now review it for security."
     timeout: 45m
     assert:
       stdout: No injection paths
@@ -355,7 +355,7 @@ jobs:
   plan:
   - agent: marathon
     messages:
-      - "\"Migrate every call site, however long it takes.\""
+      - "Migrate every call site, however long it takes."
     assert:
       stdout: migration complete
   assert:

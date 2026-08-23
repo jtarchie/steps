@@ -74,7 +74,7 @@ jobs:
   - agent: reader
     inputs: [notes]
     messages:
-      - "\"What does notes/plan.txt say?\""
+      - "What does notes/plan.txt say?"
     assert:
       tool_calls:                 # read_file really ran, with this path...
       - name: read_file
@@ -108,7 +108,7 @@ jobs:
     max_turns: 40
     tools: [write_file]          # this STEP narrows the agent's grant to one tool
     messages:
-      - "\"Write your findings into report/summary.md.\""
+      - "Write your findings into report/summary.md."
     assert:
       files: [report/summary.md]   # it WROTE the file, not just claimed to
   - task: publish
@@ -164,7 +164,7 @@ jobs:
   - agent: auditor
     outputs: [notes]
     messages:
-      - "\"Check the tracker at issues.example and record what you find in notes/status.md.\""
+      - "Check the tracker at issues.example and record what you find in notes/status.md."
     assert:
       tool_calls:
       - name: web_fetch
@@ -208,7 +208,7 @@ jobs:
     inputs: [repo]
     dir: repo/cmd                 # start here; `repo` is the artifact it names
     messages:
-      - "\"What package does main.go declare?\""
+      - "What package does main.go declare?"
     assert:
       tool_calls:
       - name: read_file
@@ -245,7 +245,7 @@ jobs:
   plan:
   - agent: reviewer
     messages:
-      - "\"Review the change and post your conclusion.\""
+      - "Review the change and post your conclusion."
     assert:
       tool_calls:
       - name: post_review
@@ -281,7 +281,7 @@ jobs:
   - agent: responder
     outputs: [answer]
     messages:
-      - "\"Answer the question. Write your answer to answer/reply.md.\""
+      - "Answer the question. Write your answer to answer/reply.md."
     assert:
       files: [answer/reply.md]
   - task: deliver
@@ -335,7 +335,7 @@ jobs:
   - agent: lead
     inputs: [notes]
     messages:
-      - "\"Have your summarizer condense notes/log.txt, then report.\""
+      - "Have your summarizer condense notes/log.txt, then report."
     assert:
       tool_calls:
       - name: summarizer         # the child was reached as an ordinary tool call
@@ -500,7 +500,7 @@ jobs:
       stdout: from the shared task   # the run: came out of ci/unit.yml
   - agent: reviewer
     messages:
-      - "\"Review the build.\""
+      - "Review the build."
     assert:
       stdout: Nothing to flag
   assert:
@@ -576,7 +576,7 @@ jobs:
     context_paths: [repo/CONVENTIONS.md]
     max_context_bytes: 400000  # ...except this step, which is handed more
     messages:
-      - "\"State this project's convention in one line.\""
+      - "State this project's convention in one line."
     assert:
       stdout: go vet           # answered from the injected file, no read_file turn spent
   assert:
@@ -612,7 +612,7 @@ jobs:
     inputs: [repo]
     context_paths: ["repo/{{ .vars.dim }}.go"]
     messages:
-      - "\"Review the {{ .vars.dim }} package.\""
+      - "Review the {{ .vars.dim }} package."
   assert:
     execution:                 # one cell per value, each under its own coordinates
     - fetch
@@ -641,13 +641,13 @@ jobs:
   plan:
   - agent: reviewer
     messages:
-      - "\"Review the change.\""
+      - "Review the change."
     verdicts: [approve, revise]      # no routing — this one just decides
     assert:
       verdict: approve               # what it decided, pinned at the source
   - agent: editor
     messages:
-      - "\"Apply the review.\""
+      - "Apply the review."
     context:
       from:
         reviewer: note               # verdict | note | full
@@ -699,12 +699,12 @@ jobs:
   plan:
   - agent: drafter
     messages:
-      - "\"Draft the release note.\""
+      - "Draft the release note."
     assert:
       stdout: Drafted
   - agent: titler
     messages:
-      - "\"Title the release note.\""
+      - "Title the release note."
     assert:
       stdout: Titled
   assert:
@@ -735,7 +735,7 @@ jobs:
   plan:
   - agent: writer
     messages:
-      - "\"Write the release announcement.\""
+      - "Write the release announcement."
     assert:
       stdout: Announcement written
   assert:
@@ -812,7 +812,7 @@ jobs:
   plan:
   - agent: writer
     messages:
-      - "\"Write the announcement.\""
+      - "Write the announcement."
     assert:
       stdout: Announcement written   # the primary answered, so no source changed
   assert:
@@ -842,7 +842,7 @@ jobs:
   - agent: writer
     attempts: 1   # no room to retry — the very first failure trips the cascade
     messages:
-      - "\"Write the announcement.\""
+      - "Write the announcement."
     assert:
       stdout: Announcement written via the fallback   # this time the fallback actually served the run
   assert:
@@ -888,7 +888,7 @@ jobs:
     inputs: [repo]
     dir: repo
     messages:
-      - "\"Review this code.\""
+      - "Review this code."
 ```
 
 The quotes are not stylistic: a leading `@` is a reserved indicator in YAML, so an unquoted value is a parse error before steps ever sees it. `@claude/sonnet` reads as "the claude CLI, asked for sonnet" — the part after the slash is passed through untouched.

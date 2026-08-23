@@ -67,7 +67,7 @@ Agent steps can set `timeout:` and `attempts:` to bound their execution:
 ```yaml fragment
 - agent: reviewer
   messages:
-    - "\"Review the PR\""
+    - "Review the PR"
   timeout: 10m
   attempts: 2
 ```
@@ -195,7 +195,7 @@ jobs:
   plan:
   - agent: coder
     messages:
-      - "\"Do the long-horizon work.\""
+      - "Do the long-horizon work."
     assert:
       stdout: Done
   assert:
@@ -236,7 +236,7 @@ jobs:
   plan:
   - agent: reviewer
     messages:
-      - "\"Review the change.\""
+      - "Review the change."
     assert:
       stdout: Reviewed
   assert:
