@@ -29,6 +29,14 @@ const shortWait = 250 * time.Millisecond
 // still running would strand it.
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "_shim" {
+		// A shim that refuses the tree, so a test can drive the path where a
+		// worker rejects an upload. Selected by environment rather than argv
+		// because the venue execs a fixed "<binary> _shim".
+		if os.Getenv(rejectUploadEnv) != "" {
+			serveRejectingShim()
+			os.Exit(0)
+		}
+
 		build, err := shim.SelfBuild()
 		if err != nil {
 			os.Exit(1)

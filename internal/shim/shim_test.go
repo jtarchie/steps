@@ -462,6 +462,12 @@ func (p *peer) upload(src string) {
 	}
 
 	p.sendEmpty(wire.FrameEnd, op)
+
+	// The shim acknowledges a tree it accepted, so the far end can tell a
+	// refusal from a reply that has not arrived yet.
+	if frame := p.read(); frame.Type != wire.FrameEnd || frame.Op != op {
+		p.t.Fatalf("expected the upload to be acknowledged, got a type %d frame for operation %d", frame.Type, frame.Op)
+	}
 }
 
 // fetch asks for named subtrees and unpacks them into dst.

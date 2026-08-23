@@ -43,6 +43,22 @@ func (s *session) upload() error {
 		return fmt.Errorf("%w", err)
 	}
 
+	// Wait for the worker to say it took the tree. A refusal — a full disk, a
+	// read-only scratch, an entry it will not write — arrives as an error
+	// frame that read turns into a Go error, and the session fails here
+	// rather than at the first command. It matters that this is BEFORE the
+	// exec: a step's command has real side effects, and running it against a
+	// tree the far end rejected is worse than any transfer failure.
+	frame, err := s.read()
+	if err != nil {
+		return err
+	}
+
+	if frame.Type != wire.FrameEnd || frame.Op != op {
+		return fmt.Errorf("%w: the worker answered a type %d frame for operation %d instead of acknowledging the tree",
+			wire.ErrProtocol, frame.Type, frame.Op)
+	}
+
 	return nil
 }
 

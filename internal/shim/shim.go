@@ -192,14 +192,25 @@ func (s *session) upload(op uint32) error {
 	}
 
 	reader, done := s.dataReader(op)
-	defer done()
 
 	err := wire.UnpackTree(reader, s.workdir)
+
+	// Drained BEFORE the acknowledgement, not after. The far end sends its
+	// next operation as soon as it hears this one landed, so a drain that ran
+	// later would read that operation's opening frame and throw it away as
+	// leftovers — the step would then wait forever for a reply to a command
+	// nobody kept.
+	done()
+
 	if err != nil {
 		return fmt.Errorf("unpacking the step tree: %w", err)
 	}
 
-	return nil
+	// Acknowledged, because silence is indistinguishable from a refusal that
+	// has not arrived yet. Without this the orchestrator could only check its
+	// own writes, and would go on to run the step's command against a tree
+	// this end never accepted.
+	return s.sendEmpty(wire.FrameEnd, op)
 }
 
 func (s *session) fetch(frame wire.Frame) error {
