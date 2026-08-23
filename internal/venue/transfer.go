@@ -3,6 +3,7 @@ package venue
 // Moving the step's tree, in both directions.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -19,7 +20,10 @@ import (
 // step is supposed to see — internal/workspace built it from the declared
 // inputs and nothing else — so filtering again here would be a second, drifting
 // opinion about the same question.
-func (s *session) upload() error {
+func (s *session) upload(ctx context.Context) error {
+	stop := s.watchTransfer(ctx)
+	defer stop()
+
 	op := s.nextOp()
 
 	err := s.encoder.Write(wire.Frame{Type: wire.FrameUpload, Op: op})
@@ -72,7 +76,10 @@ func (s *session) upload() error {
 // every assertion on a placed step fail with "does not exist". After a Run*
 // method returns, the local tree reflects the worker, exactly as it would have
 // if the command had run here.
-func (s *session) fetch() error {
+func (s *session) fetch(ctx context.Context) error {
+	stop := s.watchTransfer(ctx)
+	defer stop()
+
 	if len(s.outputs) == 0 {
 		return nil
 	}

@@ -132,7 +132,7 @@ func (r runner) exchange(ctx context.Context, command string, p plan) (string, s
 
 	// Before returning, not at capture time: an assert: on this step is
 	// checked against the local tree the moment this call returns.
-	err = r.session.fetch()
+	err = r.session.fetch(ctx)
 	if err != nil {
 		return stdout.result(), stderr.result(), err
 	}

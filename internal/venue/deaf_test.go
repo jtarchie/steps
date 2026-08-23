@@ -17,6 +17,10 @@ import (
 // command nor the cancel.
 const deafExecEnv = "STEPS_TEST_DEAF_EXEC"
 
+// deafUploadEnv makes it go silent one step earlier: it takes the tree and
+// never says whether it landed.
+const deafUploadEnv = "STEPS_TEST_DEAF_UPLOAD"
+
 // serveDeafShim is a worker that wedged. It is not malicious and not crashed:
 // the connection stays open and the process stays alive, exactly as a stalled
 // disk, a hung child or a silently dead network path leaves it. Nothing this
@@ -38,6 +42,12 @@ func serveDeafShim() {
 				Workdir:  os.TempDir(),
 			})
 		case wire.FrameEnd:
+			if os.Getenv(deafUploadEnv) != "" {
+				// Never acknowledge the tree: the shape a worker takes when
+				// its disk stalls partway through writing one.
+				continue
+			}
+
 			_ = encoder.Write(wire.Frame{Type: wire.FrameEnd, Op: frame.Op})
 		case wire.FrameExec:
 			// The whole point: no stdout, no exit, and no answer to the cancel
@@ -85,5 +95,39 @@ func TestVenueCancellationEndsACommandAWedgedWorkerIgnores(t *testing.T) {
 		}
 	case <-limit.C:
 		t.Fatal("the command never returned: the cancel frame went unanswered and the read has no deadline, so the step waits on the worker forever")
+	}
+}
+
+// TestVenueCancellationEndsAnUnacknowledgedUpload is the same absent deadline,
+// one step earlier in the session.
+//
+// Nothing runs until the worker says it took the tree — deliberately, since a
+// command against a rejected tree has real side effects. But a worker that
+// never answers is not a worker that refused, and that read had no deadline
+// either: the build parked before its first command, where even the exec
+// watchdog could not reach it.
+func TestVenueCancellationEndsAnUnacknowledgedUpload(t *testing.T) {
+	t.Setenv(deafExecEnv, "1")
+	t.Setenv(deafUploadEnv, "1")
+
+	runner := newLocalRunner(t, localWorker(t, t.TempDir()))
+
+	ctx, cancel := context.WithTimeout(context.Background(), shortWait)
+	defer cancel()
+
+	returned := make(chan error, 1)
+
+	go func() { returned <- runner.Run(ctx, "anything") }()
+
+	limit := time.NewTimer(30 * time.Second)
+	defer limit.Stop()
+
+	select {
+	case err := <-returned:
+		if err == nil {
+			t.Fatal("a step whose tree was never acknowledged reported success")
+		}
+	case <-limit.C:
+		t.Fatal("the step never returned: the worker never acknowledged the tree and the read has no deadline, so the build waits on it forever")
 	}
 }

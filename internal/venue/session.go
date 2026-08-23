@@ -154,7 +154,7 @@ func (s *session) connect(ctx context.Context) error {
 		return fmt.Errorf("worker %q: %w", s.worker, err)
 	}
 
-	err = s.upload()
+	err = s.upload(ctx)
 	if err != nil {
 		//nolint:contextcheck // deliberately not the caller's context; see abandon
 		s.abandon()

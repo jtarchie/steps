@@ -96,15 +96,29 @@ func deliver(frame wire.Frame, sinks outputSinks) (wire.Exit, bool, error) {
 // The cancel alone is only as good as the worker: it asks a shim that is still
 // listening to stop, which is the ordinary case. A worker that has wedged — a
 // stalled disk, a hung child, a network still holding the TCP connection open
-// with nothing moving over it — answers nothing, and run's read is a
-// synchronous ReadFull with no deadline. So timeout:, fail_fast, race: and
-// Ctrl-C would each end nothing at all: the step would sit on that read for as
-// long as the machine stayed up.
+// with nothing moving over it — answers nothing, and the reads it is being
+// waited on are synchronous ReadFulls with no deadline. So timeout:, fail_fast,
+// race: and Ctrl-C would each end nothing at all: the step would sit on that
+// read for as long as the machine stayed up.
+func (s *session) watchCancel(ctx context.Context, op uint32) func() {
+	return s.watch(ctx, &op)
+}
+
+// watchTransfer is the same watchdog for a tree crossing the wire, which has
+// no cancel frame to send: the shim is mid-transfer, not mid-command. A
+// transfer that stalls parks the build just as thoroughly as a command that
+// does — the upload's acknowledgement and every fetch are reads with the same
+// absent deadline.
+func (s *session) watchTransfer(ctx context.Context) func() {
+	return s.watch(ctx, nil)
+}
+
+// watch ends a blocked read once ctx does.
 //
 // Closing the reader is what makes the read return. Same bound and the same
 // reasoning as a local command's WaitDelay: ask first, and if the far end has
 // stopped listening, stop waiting on it.
-func (s *session) watchCancel(ctx context.Context, op uint32) func() {
+func (s *session) watch(ctx context.Context, cancelOp *uint32) func() {
 	done := make(chan struct{})
 	stopped := make(chan struct{})
 
@@ -117,9 +131,11 @@ func (s *session) watchCancel(ctx context.Context, op uint32) func() {
 
 		select {
 		case <-ctx.Done():
-			// Best effort: a worker already gone cannot be told to stop, and
-			// the read side will report that first.
-			_ = s.encoder.Write(wire.Frame{Type: wire.FrameCancel, Op: op})
+			if cancelOp != nil {
+				// Best effort: a worker already gone cannot be told to stop,
+				// and the read side will report that first.
+				_ = s.encoder.Write(wire.Frame{Type: wire.FrameCancel, Op: *cancelOp})
+			}
 		case <-done:
 			return
 		}
