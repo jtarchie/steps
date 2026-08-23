@@ -573,13 +573,27 @@ func HostEnv() []string {
 // orchestrator's across would be wrong in the cases where it differed at all.
 // Only the explicitly named values travel.
 func HostEnvWithValues(values map[string]string) []string {
-	env := hostEnvWith(nil)
+	baseline := hostEnvWith(nil)
+	env := make([]string, 0, len(baseline)+len(values))
 
+	// Supplied values FIRST, baseline after, because os/exec keeps the last
+	// duplicate. Appending them the other way round meant naming any
+	// allowlisted variable in env: — PATH, HOME, TMPDIR, USER, SHELL, LANG —
+	// replaced the worker's with the orchestrator's, and a macOS HOME or
+	// TMPDIR names directories a Linux worker does not have, so mktemp, git
+	// and ssh break on them.
+	//
+	// Silent, too: naming a baseline variable is a genuine no-op on the local
+	// path, where both values come from one machine. It only misbehaves once a
+	// step is placed.
+	//
+	// A variable outside the baseline — which is what env: is for — is
+	// unaffected: nothing later shadows it.
 	for name, value := range values {
 		env = append(env, name+"="+value)
 	}
 
-	return env
+	return append(env, baseline...)
 }
 
 // hostEnvWith is HostEnv plus the variables a pipeline's env: named
