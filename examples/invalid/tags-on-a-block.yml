@@ -1,0 +1,17 @@
+# A block runs nothing of its own, so a placement on it describes no command.
+# Accepting it was worse than useless: the tag hard-failed the job when
+# unmapped, and when mapped was silently dropped for every child — the block's
+# steps ran locally while the pipeline said they needed a particular machine.
+# It also routed around the refusal of tags: on agent steps, since an ensemble
+# is a block of them.
+# expect: tags is not valid on an in_parallel step
+jobs:
+- name: build
+  plan:
+  - in_parallel:
+      steps:
+      - task: one
+        run: echo one
+      - task: two
+        run: echo two
+    tags: [gpu]

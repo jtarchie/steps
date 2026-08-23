@@ -106,7 +106,18 @@ func (c *Config) validateEnsembleBlock(label string, step *Step) error {
 		return fmt.Errorf("%s: ensemble.verdicts must list the vocabulary the members vote in", label)
 	}
 
-	err := c.validateEnsembleMembers(label, ensemble)
+	// The same refusal do:/in_parallel:/race: get, which this block was
+	// missing entirely: a block runs no command of its own, so a field
+	// describing one belongs to the members. tags: made the omission matter —
+	// a placement here hard-failed the job when unmapped and was silently
+	// dropped for every member when mapped, and it routed around the refusal
+	// of tags: on agent steps, an ensemble being a block of exactly those.
+	err := c.rejectOperationFields(label, step, "an ensemble")
+	if err != nil {
+		return err
+	}
+
+	err = c.validateEnsembleMembers(label, ensemble)
 	if err != nil {
 		return err
 	}

@@ -79,6 +79,7 @@ func (c *Config) rejectOperationFields(label string, step *Step, kind string) er
 		{"inputs", step.InputsDeclared()},
 		{"outputs", step.Outputs != nil},
 		{"image", step.Image != ""},
+		{"tags", len(step.Tags) > 0},
 		{"run", step.Run != ""},
 		{"messages", len(step.Messages) > 0},
 		{"message_files", len(step.MessageFiles) > 0},
