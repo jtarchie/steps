@@ -57,6 +57,7 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 	// without Capture, so it has no outputs to fetch.
 	spec.Worker = workerFor(ctx, step)
 	spec.WorkerTag = placementTag(step)
+	spec.Keep = workspace.Kept(space)
 
 	runner, err := venue.NewRunner(spec)
 	if err != nil {

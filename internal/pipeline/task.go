@@ -124,7 +124,7 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 	// ORIGINAL tree and lose whatever the last attempt wrote outside its
 	// declared outputs. A task that marks progress on disk to skip work it has
 	// already done would then pass here and loop forever on a worker.
-	runner, err := taskRunner(ctx, step, rt, space.Dir())
+	runner, err := taskRunner(ctx, step, rt, space)
 	if err != nil {
 		return err
 	}
@@ -150,12 +150,21 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 }
 
 // taskRunner builds the runner a task's attempts share.
-func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, workspaceDir string) (shell.Runner, error) {
+func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, space workspace.StepSpace) (shell.Runner, error) {
+	workspaceDir := space.Dir()
+
 	// Fetch is the step's declared outputs: what a worker sends back after
 	// every command, so the local tree matches before an assert: reads it.
 	runner, err := venue.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Env: rt.Env, User: rt.User, Network: rt.Network,
 		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes(),
-		Worker: workerFor(ctx, step), WorkerTag: placementTag(step), Fetch: rt.Outputs})
+		Worker: workerFor(ctx, step), WorkerTag: placementTag(step), Fetch: rt.Outputs,
+		// The same postmortem, on the machine that actually ran the step: a
+		// worker's scratch is the remote half of the step directory, and a
+		// flag whose whole purpose is having the files afterwards would stop
+		// at the machine boundary without this. Asked of the workspace rather
+		// than read from the flag, because the workspace is what actually
+		// decided whether this step's directory survives.
+		Keep: workspace.Kept(space)})
 	if err != nil {
 		return nil, fmt.Errorf("task %q: %w", rt.Name, err)
 	}

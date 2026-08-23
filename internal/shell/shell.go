@@ -155,6 +155,10 @@ type RunnerSpec struct {
 	// with a Worker set means a command whose effects on the tree are not
 	// wanted — a guard, which reads the tree and answers a question about it.
 	Fetch []string
+	// Keep leaves a worker's scratch behind, following --keep-workspace. Read
+	// only by the venue: on this machine the workspace decides its own fate,
+	// and it is the one that answered this.
+	Keep bool
 }
 
 // NewRunner returns a DockerRunner scoped to spec, or a HostRunner when

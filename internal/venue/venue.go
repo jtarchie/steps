@@ -5,7 +5,6 @@ package venue
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/jtarchie/steps/internal/shell"
 )
@@ -39,7 +38,7 @@ func NewRunner(spec shell.RunnerSpec) (shell.Runner, error) {
 		cwd:     spec.Cwd,
 		outputs: spec.Fetch,
 		env:     withWorkerTag(resolveEnv(spec.Env), spec.WorkerTag),
-		keep:    keepWorkspace(),
+		keep:    spec.Keep,
 	}}, nil
 }
 
@@ -88,18 +87,4 @@ func withWorkerTag(env map[string]string, tag string) map[string]string {
 	env[WorkerEnv] = tag
 
 	return env
-}
-
-// keepWorkspace reports whether --keep-workspace is in effect, so a worker
-// leaves its scratch behind too.
-//
-// Read from the environment rather than threaded through RunnerSpec because
-// that is where the flag already lives (STEPS_KEEP_WORKSPACE), and because the
-// postmortem the flag exists for is worth exactly as much on the machine that
-// ran the step as on the one that scheduled it — stopping at the machine
-// boundary would be the same bug the flag was added to fix.
-func keepWorkspace() bool {
-	value := strings.ToLower(strings.TrimSpace(os.Getenv("STEPS_KEEP_WORKSPACE")))
-
-	return value == "1" || value == "true" || value == "yes"
 }
