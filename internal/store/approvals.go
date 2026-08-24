@@ -26,9 +26,9 @@ type Approval struct {
 // RequestApproval records a pending approval and returns its id.
 func (s *Store) RequestApproval(ctx context.Context, jobName, message string) (int64, error) {
 	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO approvals (job_name, message, status, requested_at)
-		VALUES (?, ?, 'pending', ?)
-	`, jobName, message, now())
+		INSERT INTO approvals (pipeline_id, job_name, message, status, requested_at)
+		VALUES (?, ?, ?, 'pending', ?)
+	`, s.pipelineID, jobName, message, now())
 	if err != nil {
 		return 0, fmt.Errorf("could not request approval for job %q: %w", jobName, err)
 	}
@@ -45,8 +45,8 @@ func (s *Store) RequestApproval(ctx context.Context, jobName, message string) (i
 func (s *Store) DecideApproval(ctx context.Context, id int64, status, by, reason string) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE approvals SET status = ?, decided_at = ?, decided_by = ?, reason = ?
-		WHERE id = ? AND status = 'pending'
-	`, status, now(), by, reason, id)
+		WHERE id = ? AND pipeline_id = ? AND status = 'pending'
+	`, status, now(), by, reason, id, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not decide approval %d: %w", id, err)
 	}
@@ -70,8 +70,8 @@ func (s *Store) ApprovalStatus(ctx context.Context, id int64) (Approval, error) 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, job_name, message, status, requested_at,
 		       COALESCE(decided_at, ''), COALESCE(decided_by, ''), COALESCE(reason, '')
-		FROM approvals WHERE id = ?
-	`, id).Scan(&approval.ID, &approval.JobName, &approval.Message, &approval.Status,
+		FROM approvals WHERE id = ? AND pipeline_id = ?
+	`, id, s.pipelineID).Scan(&approval.ID, &approval.JobName, &approval.Message, &approval.Status,
 		&approval.RequestedAt, &approval.DecidedAt, &approval.DecidedBy, &approval.Reason)
 	if err != nil {
 		return Approval{}, fmt.Errorf("could not read approval %d: %w", id, err)
@@ -84,8 +84,8 @@ func (s *Store) ApprovalStatus(ctx context.Context, id int64) (Approval, error) 
 func (s *Store) PendingApprovals(ctx context.Context) ([]Approval, error) {
 	return collect(ctx, s.db, "pending approvals", `
 		SELECT id, job_name, message, requested_at FROM approvals
-		WHERE status = 'pending' ORDER BY id
-	`, nil, func(rows *sql.Rows) (Approval, error) {
+		WHERE pipeline_id = ? AND status = 'pending' ORDER BY id
+	`, []any{s.pipelineID}, func(rows *sql.Rows) (Approval, error) {
 		approval := Approval{Status: "pending"}
 
 		return approval, rows.Scan(&approval.ID, &approval.JobName, &approval.Message, &approval.RequestedAt)
@@ -98,8 +98,8 @@ func (s *Store) AllApprovals(ctx context.Context, limit int) ([]Approval, error)
 	return collect(ctx, s.db, "approvals", `
 		SELECT id, job_name, message, status, requested_at,
 		       COALESCE(decided_at, ''), COALESCE(decided_by, ''), COALESCE(reason, '')
-		FROM approvals ORDER BY id DESC LIMIT ?
-	`, []any{limit}, func(rows *sql.Rows) (Approval, error) {
+		FROM approvals WHERE pipeline_id = ? ORDER BY id DESC LIMIT ?
+	`, []any{s.pipelineID, limit}, func(rows *sql.Rows) (Approval, error) {
 		var approval Approval
 
 		return approval, rows.Scan(&approval.ID, &approval.JobName, &approval.Message, &approval.Status,

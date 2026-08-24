@@ -33,7 +33,7 @@ jobs:
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"))
+	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

@@ -99,10 +99,23 @@ func syntheticStepRecords(
 // written through the public Store methods rather than raw SQL — the footprint
 // being measured is the one production code actually produces, including every
 // column those methods fill in.
+// runIDFor is a synthetic run's id, unique across the pipelines that may share
+// one state file. runs.id is a global primary key — two pipelines minting the
+// same id would upsert onto one row rather than record two runs — which is why
+// production ids are random (pipeline.NewRunID) and why this one carries the
+// pipeline.
+func runIDFor(store *Store, build int) string {
+	if store.pipelineID == 1 {
+		return fmt.Sprintf("RUN%05d", build)
+	}
+
+	return fmt.Sprintf("RUN%d-%05d", store.pipelineID, build)
+}
+
 func syntheticBuild(ctx context.Context, t *testing.T, store *Store, jobName string, build int) {
 	t.Helper()
 
-	runID := fmt.Sprintf("RUN%05d", build)
+	runID := runIDFor(store, build)
 	version := fmt.Sprintf(`{"channel":"C0BQ88M07NV","ts":"17869%05d.021829"}`, build)
 
 	// Every build is backdated to its own minute, because a test that writes
@@ -124,7 +137,7 @@ func syntheticBuild(ctx context.Context, t *testing.T, store *Store, jobName str
 	hashes := make([]string, 0, 6)
 
 	for index, step := range syntheticPlan {
-		hash := fmt.Sprintf("%064x", build*100+index)
+		hash := fmt.Sprintf("%064x", int(store.pipelineID)*1_000_000+build*100+index)
 
 		// The invariant part: a prompt, an expr script, a tool list. Identical in
 		// every build, which is what interning collapses.
@@ -200,8 +213,8 @@ func backdateBuild(ctx context.Context, t *testing.T, store *Store, runID string
 		{`UPDATE run_events SET created_at = ? WHERE run_id = ?`,
 			[]any{at.Format(time.RFC3339Nano), runID}},
 		{`UPDATE nodes SET created_at = ?
-		    WHERE hash IN (SELECT hash FROM run_events WHERE run_id = ?)`,
-			[]any{at.Format(time.RFC3339), runID}},
+		    WHERE pipeline_id = ? AND hash IN (SELECT hash FROM run_events WHERE run_id = ?)`,
+			[]any{at.Format(time.RFC3339), store.pipelineID, runID}},
 	} {
 		_, err := store.db.ExecContext(ctx, update.query, update.args...)
 		if err != nil {
@@ -724,6 +737,21 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 		{"nodes", "content_hash", "node_content", "RESTRICT"},
 		{"runs", "parent_run_id", "runs", "SET NULL"},
 		{"job_versions", "resource_name", "resource_versions", "CASCADE"},
+		// Every pipeline-scoped table cascades off the pipelines row, which is
+		// what makes forgetting a pipeline one DELETE rather than fourteen.
+		// The run-scoped tables are absent on purpose: they reach the pipeline
+		// through runs and cascade with it.
+		{"nodes", "pipeline_id", "pipelines", "CASCADE"},
+		{"job_runs", "pipeline_id", "pipelines", "CASCADE"},
+		{"runs", "pipeline_id", "pipelines", "CASCADE"},
+		{"resource_checks", "pipeline_id", "pipelines", "CASCADE"},
+		{"resource_versions", "pipeline_id", "pipelines", "CASCADE"},
+		{"job_version_cursor", "pipeline_id", "pipelines", "CASCADE"},
+		{"trigger_queue", "pipeline_id", "pipelines", "CASCADE"},
+		{"approvals", "pipeline_id", "pipelines", "CASCADE"},
+		{"job_concurrency", "pipeline_id", "pipelines", "CASCADE"},
+		{"job_serial_groups", "pipeline_id", "pipelines", "CASCADE"},
+		{"job_breaker", "pipeline_id", "pipelines", "CASCADE"},
 	} {
 		if !hasForeignKey(ctx, t, store, want.table, want.column, want.target, want.onDelete) {
 			t.Errorf("%s.%s does not declare REFERENCES %s ... ON DELETE %s",
@@ -972,5 +1000,118 @@ func TestRunOrderIsTimeOrder(t *testing.T) {
 	// And it is still a timestamp the readers can parse back.
 	if got := parseTimestamp(ordered[2].Format(sortableNano)); !got.Equal(ordered[2]) {
 		t.Errorf("parseTimestamp round trip = %v, want %v", got, ordered[2])
+	}
+}
+
+// TestFootprintSharedDatabaseCostsWhatItHolds is the measurement for --state:
+// several pipelines in one file must cost about what they cost apart, and each
+// one's retention must bound its own rows and only its own.
+//
+// The failure it is aimed at is an unscoped index or an unscoped prune. A
+// pipeline column added to a key without the query that reads it being narrowed
+// turns every scan into a full-table one and every cap into a shared cap — and
+// neither shows up as a wrong answer until a second pipeline exists to be wrong
+// about. Growth well past the pipeline count is what that looks like on disk.
+func TestFootprintSharedDatabaseCostsWhatItHolds(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "shared.db")
+
+	const (
+		keep      = 10
+		builds    = 40
+		pipelines = 3
+		jobName   = "answer-mention"
+	)
+
+	// The same job name and the same plan in every pipeline, deliberately: it
+	// is the case where nothing but pipeline_id tells the rows apart.
+	alone := mustOpenStore(t, filepath.Join(t.TempDir(), "alone.db"))
+
+	buildAndPrune(ctx, t, alone, jobName, builds, keep)
+
+	oneAlone := totalBytes(tableBytes(ctx, t, alone))
+	logFootprint(t, "one pipeline in its own file", tableBytes(ctx, t, alone))
+
+	err := alone.Close()
+	if err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	shared := make([]*Store, 0, pipelines)
+
+	for i := range pipelines {
+		store, err := OpenStore(path, fmt.Sprintf("pipeline-%d", i))
+		if err != nil {
+			t.Fatalf("OpenStore: %v", err)
+		}
+
+		defer func() { _ = store.Close() }()
+
+		shared = append(shared, store)
+	}
+
+	for _, store := range shared {
+		buildAndPrune(ctx, t, store, jobName, builds, keep)
+	}
+
+	sizes := tableBytes(ctx, t, shared[0])
+	logFootprint(t, fmt.Sprintf("%d pipelines in one file", pipelines), sizes)
+
+	// Interning is shared across pipelines (node_content is keyed by a hash OF
+	// the content), and these three plans are byte-identical, so the shared
+	// file should come in UNDER the naive multiple rather than over it. The
+	// ceiling is what catches an unscoped prune or index; the generous floor
+	// only catches a pipeline whose rows went missing entirely.
+	ratio := float64(totalBytes(sizes)) / float64(oneAlone)
+	if ratio > pipelines*1.15 {
+		t.Errorf("%d pipelines in one file cost %.2fx one pipeline alone; something is not scoped",
+			pipelines, ratio)
+	}
+
+	if ratio < 1.0 {
+		t.Errorf("%d pipelines cost %.2fx one; rows are being lost across pipelines", pipelines, ratio)
+	}
+
+	assertEachPipelineAtItsOwnCap(ctx, t, shared, jobName, keep)
+}
+
+// buildAndPrune runs `builds` synthetic builds through one store, pruning to
+// `keep` after each, which is what a real build does at the end of RunJob.
+func buildAndPrune(ctx context.Context, t *testing.T, store *Store, jobName string, builds, keep int) {
+	t.Helper()
+
+	for build := 1; build <= builds; build++ {
+		syntheticBuild(ctx, t, store, jobName, build)
+
+		err := store.PruneRuns(ctx, jobName, keep, "")
+		if err != nil {
+			t.Fatalf("PruneRuns: %v", err)
+		}
+	}
+}
+
+// assertEachPipelineAtItsOwnCap checks that retention bounded every pipeline
+// separately. A cap applied globally would leave the file at `keep` runs in
+// total rather than `keep` per pipeline, and each pipeline would see a
+// fraction of its own history.
+func assertEachPipelineAtItsOwnCap(ctx context.Context, t *testing.T, shared []*Store, jobName string, keep int) {
+	t.Helper()
+
+	for i, store := range shared {
+		runs, err := store.ListRuns(ctx, jobName, keep*len(shared))
+		if err != nil {
+			t.Fatalf("ListRuns: %v", err)
+		}
+
+		if len(runs) != keep {
+			t.Errorf("pipeline-%d kept %d runs, want %d — retention is not per pipeline", i, len(runs), keep)
+		}
+	}
+
+	want := keep * len(shared)
+	if got := countRows(ctx, t, shared[0], "runs"); got != want {
+		t.Errorf("the file holds %d runs, want %d — one pipeline's prune reached another's", got, want)
 	}
 }

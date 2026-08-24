@@ -14,15 +14,28 @@ import (
 	_ "modernc.org/sqlite" // registers the "sqlite" driver name used by sql.Open below
 )
 
-// Store is the sqlite-backed persistence layer for job-run/node state.
+// Store is the sqlite-backed persistence layer for job-run/node state, scoped
+// to one pipeline.
+//
+// pipelineID is why every method below reads like it always did: a state file
+// may hold several pipelines, and rather than thread a pipeline through sixty
+// signatures, the handle IS the scope. A caller cannot forget to pass it and
+// cannot pass the wrong one; `steps web` serving three pipelines from one file
+// holds three of these.
 type Store struct {
-	db   *sql.DB
-	path string
+	db         *sql.DB
+	path       string
+	pipeline   string
+	pipelineID int64
 }
 
-// OpenStore opens (creating if necessary) the sqlite database at path and
-// applies the schema. The parent directory is created if it doesn't exist.
-func OpenStore(path string) (*Store, error) {
+// OpenStore opens (creating if necessary) the sqlite database at path, applies
+// the schema, and scopes the returned handle to the named pipeline — creating
+// its row on first sight. The parent directory is created if it doesn't exist.
+//
+// pipelineName is an identity, not a path: it defaults to the YAML's base name
+// and is overridden with --name. See the pipelines table.
+func OpenStore(path, pipelineName string) (*Store, error) {
 	err := os.MkdirAll(filepath.Dir(path), 0o750)
 	if err != nil {
 		return nil, fmt.Errorf("could not create state directory for %q: %w", path, err)
@@ -114,8 +127,45 @@ func OpenStore(path string) (*Store, error) {
 		return nil, err
 	}
 
-	return &Store{db: db, path: path}, nil
+	id, err := registerPipeline(ctx, db, pipelineName, path)
+	if err != nil {
+		_ = db.Close()
+
+		return nil, err
+	}
+
+	return &Store{db: db, path: path, pipeline: pipelineName, pipelineID: id}, nil
 }
+
+// registerPipeline resolves the name to its row id, inserting it the first
+// time. The path is refreshed on every open so a moved checkout stops
+// reporting where it used to live — the name is the identity, the path is
+// only what a human reads back.
+func registerPipeline(ctx context.Context, db *sql.DB, name, path string) (int64, error) {
+	if name == "" {
+		return 0, errors.New("a state store needs a pipeline name; pass --name or let it default to the pipeline file's base name")
+	}
+
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO pipelines (name, path) VALUES (?, ?)
+		ON CONFLICT(name) DO UPDATE SET path = excluded.path
+	`, name, path)
+	if err != nil {
+		return 0, fmt.Errorf("could not register pipeline %q in %q: %w", name, path, err)
+	}
+
+	var id int64
+
+	err = db.QueryRowContext(ctx, `SELECT id FROM pipelines WHERE name = ?`, name).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("could not read pipeline %q from %q: %w", name, path, err)
+	}
+
+	return id, nil
+}
+
+// Pipeline is the name this handle is scoped to.
+func (s *Store) Pipeline() string { return s.pipeline }
 
 // ErrSchemaVersion is a database some other build of steps wrote.
 var ErrSchemaVersion = errors.New("the state database was written by a different version of steps")

@@ -139,11 +139,15 @@ func (r *LocalRunner) drainPipeline(ctx context.Context, target *Pipeline) {
 // statements with no transaction around them, and an enqueue landing between
 // two of them leaves a row no later poll re-queues.
 //
-// recoverStale is the caller's answer to "does this process hold the
-// pipeline's watch lock?" — recovery reads every running row as an abandoned
-// leftover, which is only true when no other watcher is alive. Serving next
-// to a live `steps watch` and recovering anyway would flip that watcher's
-// in-flight job back to pending and run it a second time.
+// recoverStale is the caller's answer to "does this process own the queue?" —
+// recovery reads every running row as an abandoned leftover, which is only
+// true when no other watcher is alive. Serving next to a live `steps watch`
+// and recovering anyway would flip that watcher's in-flight job back to
+// pending and run it a second time.
+//
+// It used to be answered by a file lock this process raced for; it is now
+// answered by --no-watch, which is the operator saying the polling belongs to
+// something else. See store.ResetStaleRunning for why the lock went.
 func PrepareQueue(ctx context.Context, target *Pipeline, recoverStale bool) {
 	if recoverStale {
 		err := target.Store.ResetStaleRunning(ctx)

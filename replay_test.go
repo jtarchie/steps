@@ -196,7 +196,7 @@ jobs:
 func runIDFromStore(t *testing.T, pipelinePath string) string {
 	t.Helper()
 
-	st, err := store.OpenStore(statePath(pipelinePath))
+	st, err := store.OpenStore(statePath(pipelinePath, ""), pipelineName(pipelinePath))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func runIDFromStore(t *testing.T, pipelinePath string) string {
 func runExists(t *testing.T, pipelinePath, runID string) bool {
 	t.Helper()
 
-	st, err := store.OpenStore(statePath(pipelinePath))
+	st, err := store.OpenStore(statePath(pipelinePath, ""), pipelineName(pipelinePath))
 	if err != nil {
 		t.Fatal(err)
 	}

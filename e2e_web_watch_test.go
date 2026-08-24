@@ -169,9 +169,8 @@ func TestWebPollsTriggerResourcesByDefault(t *testing.T) {
 	waitForDid(t, fixture, "1", "2")
 }
 
-// TestWebNoWatchLeavesPollingToWatch: --no-watch must not merely stay quiet,
-// it must leave the watcher's LOCK alone, since that is what decides whether
-// a `steps watch` can start alongside it.
+// TestWebNoWatchLeavesPollingToWatch: --no-watch means this process does not
+// poll, so a `steps watch` beside it is the only thing noticing new versions.
 func TestWebNoWatchLeavesPollingToWatch(t *testing.T) {
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 1)
@@ -179,66 +178,8 @@ func TestWebNoWatchLeavesPollingToWatch(t *testing.T) {
 	served := startWeb(t, []string{fixture.pipeline}, "--no-watch", "--interval", "200ms")
 	defer served.stop(t)
 
-	assertWatchLockFree(t, fixture.pipeline)
-
 	fixture.items(t, 2)
 	assertNothingProcessed(t, fixture)
-}
-
-// TestWebSkipsPollingWhenAnotherWatcherHoldsTheLock: two pollers against one
-// state.db claim each other's work, so the one whose job is the UI gives way
-// — and keeps serving, which is the part that must not become collateral.
-func TestWebSkipsPollingWhenAnotherWatcherHoldsTheLock(t *testing.T) {
-	fixture := newWatchFixture(t, cursorFeed)
-	fixture.items(t, 1)
-
-	st, err := store.OpenStore(statePath(fixture.pipeline))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = st.Close() }()
-
-	release, held, err := st.AcquireWatchLock()
-	if err != nil || held {
-		t.Fatalf("could not take the watch lock first: held=%v err=%v", held, err)
-	}
-	defer release()
-
-	served := startWeb(t, []string{fixture.pipeline}, "--interval", "200ms")
-	defer served.stop(t)
-
-	fixture.items(t, 2)
-	assertNothingProcessed(t, fixture)
-
-	// Still serving: giving up the poll is not giving up the job.
-	resp, err := probe(t, served.addr)
-	if err != nil {
-		t.Fatalf("web stopped serving after declining to poll: %v", err)
-	}
-
-	_ = resp.Body.Close()
-}
-
-func assertWatchLockFree(t *testing.T, pipelinePath string) {
-	t.Helper()
-
-	st, err := store.OpenStore(statePath(pipelinePath))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	defer func() { _ = st.Close() }()
-
-	release, held, err := st.AcquireWatchLock()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if held {
-		t.Fatal("the watch lock is held, so a steps watch could not start alongside this one")
-	}
-
-	release()
 }
 
 // assertNothingProcessed is the one time-bounded assertion here: proving a
@@ -278,13 +219,13 @@ func newWatchFixtureIn(t *testing.T, dir, name, pipelineYAML string) *watchFixtu
 	return fixture
 }
 
-// TestStatePathIsPerPipelineFile pins the invariant every claim about serving
+// TestStatePathIsPerPipelineFile pins the DEFAULT every claim about serving
 // several pipelines rests on. Keyed by directory, two pipelines in one folder
-// shared a database whose every row is keyed by a name they each chose
-// independently — job, resource, queue row.
+// would share a database by accident of layout rather than because anyone
+// asked — which is what --state is for, and why it is not the default.
 func TestStatePathIsPerPipelineFile(t *testing.T) {
-	first := statePath("/srv/pipelines/app.yml")
-	second := statePath("/srv/pipelines/infra.yml")
+	first := statePath("/srv/pipelines/app.yml", "")
+	second := statePath("/srv/pipelines/infra.yml", "")
 
 	if first == second {
 		t.Fatalf("app.yml and infra.yml share %q", first)
@@ -292,6 +233,11 @@ func TestStatePathIsPerPipelineFile(t *testing.T) {
 
 	if filepath.Dir(first) != "/srv/pipelines/.steps" {
 		t.Errorf("state moved out from under .steps/: %q", first)
+	}
+
+	// --state overrides both, which is the whole feature.
+	if got := statePath("/srv/pipelines/app.yml", "/var/lib/steps.db"); got != "/var/lib/steps.db" {
+		t.Errorf("--state was ignored: %q", got)
 	}
 }
 
@@ -330,22 +276,17 @@ func TestWebLeavesAForeignWatchersClaimedJobAlone(t *testing.T) {
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 1)
 
-	st, err := store.OpenStore(statePath(fixture.pipeline))
+	st, err := store.OpenStore(statePath(fixture.pipeline, ""), pipelineName(fixture.pipeline))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	defer func() { _ = st.Close() }()
 
-	// Pose as the `steps watch` that is already running: hold the lock, and
-	// hold a job in flight.
-	release, held, err := st.AcquireWatchLock()
-	if err != nil || held {
-		t.Fatalf("could not take the watch lock first: held=%v err=%v", held, err)
-	}
-
-	defer release()
-
+	// Pose as the `steps watch` that is already running, by holding a job in
+	// flight. Nothing but --no-watch now keeps the served process off it: the
+	// single-watcher lock this test used to take is gone, so the flag IS the
+	// statement that some other process owns the queue.
 	err = st.EnqueueJob(t.Context(), "build", "test")
 	if err != nil {
 		t.Fatal(err)

@@ -54,7 +54,7 @@ jobs:
 
 	mustRun(t, path)
 
-	st, err := store.OpenStore(statePath(path))
+	st, err := store.OpenStore(statePath(path, ""), pipelineName(path))
 	if err != nil {
 		t.Fatalf("open state store: %v", err)
 	}

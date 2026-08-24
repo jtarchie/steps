@@ -28,7 +28,7 @@ func TestOpenStoreRefusesAnOlderSchema(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "state.db")
 
-	fresh, err := OpenStore(path)
+	fresh, err := OpenStore(path, "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestOpenStoreRefusesAnOlderSchema(t *testing.T) {
 
 	stampVersion(t, path, schemaVersion-1)
 
-	_, err = OpenStore(path)
+	_, err = OpenStore(path, "test")
 	if err == nil {
 		t.Fatal("a database written by an older build was opened — its records are silently discarded from here on")
 	}
@@ -72,7 +72,7 @@ func TestOpenStoreAdoptsAnEmptyOlderDatabase(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "state.db")
 
-	st, err := OpenStore(path)
+	st, err := OpenStore(path, "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestOpenStoreAdoptsAnEmptyOlderDatabase(t *testing.T) {
 
 	stampVersion(t, path, 0)
 
-	st, err = OpenStore(path)
+	st, err = OpenStore(path, "test")
 	if err != nil {
 		t.Fatalf("an empty database was refused: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestOpenStoreAcceptsItsOwnDatabase(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 
 	for range 3 {
-		st, err := OpenStore(path)
+		st, err := OpenStore(path, "test")
 		if err != nil {
 			t.Fatalf("OpenStore: %v", err)
 		}
@@ -117,7 +117,7 @@ func TestOpenStoreRefusesANewerSchema(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "state.db")
 
-	st, err := OpenStore(path)
+	st, err := OpenStore(path, "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestOpenStoreRefusesANewerSchema(t *testing.T) {
 
 	stampVersion(t, path, schemaVersion+1)
 
-	_, err = OpenStore(path)
+	_, err = OpenStore(path, "test")
 	if !errors.Is(err, ErrSchemaVersion) {
 		t.Fatalf("error = %v, want a schema-version refusal", err)
 	}

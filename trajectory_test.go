@@ -17,7 +17,7 @@ import (
 func agentNodeResult(t *testing.T, pipelinePath string) map[string]any {
 	t.Helper()
 
-	st, err := store.OpenStore(statePath(pipelinePath))
+	st, err := store.OpenStore(statePath(pipelinePath, ""), pipelineName(pipelinePath))
 	if err != nil {
 		t.Fatalf("open state store: %v", err)
 	}

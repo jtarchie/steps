@@ -14,7 +14,7 @@ import (
 func stepEvents(t *testing.T, pipelinePath string) []store.RunEventRow {
 	t.Helper()
 
-	st, err := store.OpenStore(statePath(pipelinePath))
+	st, err := store.OpenStore(statePath(pipelinePath, ""), pipelineName(pipelinePath))
 	if err != nil {
 		t.Fatalf("open state store: %v", err)
 	}

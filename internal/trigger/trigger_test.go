@@ -69,7 +69,7 @@ func loadConfig(t *testing.T, dir, yaml string) *config.Config {
 func mustOpenStore(t *testing.T, dir string) *store.Store {
 	t.Helper()
 
-	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"))
+	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

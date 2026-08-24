@@ -77,6 +77,7 @@ var buildVersion = "dev"
 
 // RunCmd runs a single job's plan once, exactly as steps has always done.
 type RunCmd struct {
+	StateFlags     `embed:""`
 	Pipeline       string            `arg:""                                                                                         help:"path to the pipeline YAML file"`
 	Job            string            `help:"job name to run (defaults to the pipeline's only job)"`
 	Pin            map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                                        name:"pin"`
@@ -153,7 +154,7 @@ func (r *RunCmd) Run() error {
 		return err
 	}
 
-	st, provider, cleanup, err := setup(cfg, r.Pipeline, r.KeepWorkspace)
+	st, provider, cleanup, err := setup(cfg, r.Pipeline, r.StateFlags, r.KeepWorkspace)
 	if err != nil {
 		return err
 	}
@@ -212,6 +213,7 @@ func (r *RunCmd) Run() error {
 // every job in the pipeline, and runs whichever jobs a version change
 // affects — see internal/trigger.
 type WatchCmd struct {
+	StateFlags     `embed:""`
 	Pipeline       string            `arg:""                                                                                         help:"path to the pipeline YAML file"`
 	Interval       time.Duration     `default:"30s"                                                                                  help:"how often to check trigger: true resources"`
 	Once           bool              `help:"poll once, run whatever that triggers, and exit (for cron or a timer)"                   name:"once"`
@@ -236,7 +238,7 @@ func (w *WatchCmd) Run() error {
 		return err
 	}
 
-	st, provider, cleanup, err := setup(cfg, w.Pipeline, w.KeepWorkspace)
+	st, provider, cleanup, err := setup(cfg, w.Pipeline, w.StateFlags, w.KeepWorkspace)
 	if err != nil {
 		return err
 	}
@@ -270,10 +272,11 @@ func (w *WatchCmd) Run() error {
 // point for a self-verifying fixture — every runnable example in docs/*.md
 // is one (see docs_test.go).
 type TestCmd struct {
-	Pipeline string            `arg:""                                                                         help:"path to the pipeline YAML file"`
-	Var      map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                     name:"var"`
-	Worker   map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)" name:"worker"`
-	VarsFile string            `help:"YAML file of pipeline vars"                                              name:"vars-file"`
+	StateFlags `embed:""`
+	Pipeline   string            `arg:""                                                                         help:"path to the pipeline YAML file"`
+	Var        map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                     name:"var"`
+	Worker     map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)" name:"worker"`
+	VarsFile   string            `help:"YAML file of pipeline vars"                                              name:"vars-file"`
 }
 
 // Run loads the pipeline, runs every job (force), and reports pass/fail per
@@ -286,7 +289,7 @@ func (t *TestCmd) Run() error {
 		return err
 	}
 
-	st, provider, cleanup, err := setup(cfg, t.Pipeline, false)
+	st, provider, cleanup, err := setup(cfg, t.Pipeline, t.StateFlags, false)
 	if err != nil {
 		return err
 	}
@@ -448,11 +451,12 @@ func renderProblems(problems []config.Problem) string {
 // out what a run would skip meant starting one — the wrong trade when the
 // question is "is my cache in the state I think it is?".
 type PlanCmd struct {
-	Pipeline string            `arg:""                                                     help:"path to the pipeline YAML file"`
-	Job      string            `help:"job to plan (defaults to the pipeline's only job)"`
-	Pin      map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"    name:"pin"`
-	Var      map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..." name:"var"`
-	VarsFile string            `help:"YAML file of pipeline vars"                          name:"vars-file"`
+	StateFlags `embed:""`
+	Pipeline   string            `arg:""                                                     help:"path to the pipeline YAML file"`
+	Job        string            `help:"job to plan (defaults to the pipeline's only job)"`
+	Pin        map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"    name:"pin"`
+	Var        map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..." name:"var"`
+	VarsFile   string            `help:"YAML file of pipeline vars"                          name:"vars-file"`
 }
 
 // Run loads the pipeline, plans the selected job, and prints one line per
@@ -469,7 +473,7 @@ func (p *PlanCmd) Run() error {
 		return err
 	}
 
-	st, err := store.OpenStore(statePath(p.Pipeline))
+	st, err := store.OpenStore(statePath(p.Pipeline, p.State), resolvePipelineName(p.Pipeline, p.Name))
 	if err != nil {
 		return fmt.Errorf("could not open state store: %w", err)
 	}
@@ -523,13 +527,14 @@ func (p *PlanCmd) Run() error {
 // sqlite and knowing the schema, which the vendored pure-Go driver means may
 // not even be installed.
 type RunsCmd struct {
-	Pipeline string `arg:""                                                  help:"path to the pipeline YAML file"`
-	Job      string `help:"only show runs of this job"`
-	Limit    int    `default:"20"                                            help:"maximum number of rows to show"`
-	Steps    bool   `help:"show individual steps instead of job outcomes"`
-	Queue    bool   `help:"show the watch trigger queue instead of job runs"`
-	Cost     bool   `help:"show what each run's agent steps spent"`
-	RunID    string `help:"break one run's agent spend down per step"        name:"run"`
+	StateFlags `embed:""`
+	Pipeline   string `arg:""                                                  help:"path to the pipeline YAML file"`
+	Job        string `help:"only show runs of this job"`
+	Limit      int    `default:"20"                                            help:"maximum number of rows to show"`
+	Steps      bool   `help:"show individual steps instead of job outcomes"`
+	Queue      bool   `help:"show the watch trigger queue instead of job runs"`
+	Cost       bool   `help:"show what each run's agent steps spent"`
+	RunID      string `help:"break one run's agent spend down per step"        name:"run"`
 }
 
 // Run opens the pipeline's state store read-only and prints the requested
@@ -537,7 +542,7 @@ type RunsCmd struct {
 // one: a read command that leaves a .steps/ behind would be a surprising
 // thing for `steps runs` to do on a fresh checkout.
 func (r *RunsCmd) Run() error {
-	path := statePath(r.Pipeline)
+	path := statePath(r.Pipeline, r.State)
 
 	_, err := os.Stat(path)
 	if err != nil {
@@ -546,7 +551,7 @@ func (r *RunsCmd) Run() error {
 		return nil
 	}
 
-	st, err := store.OpenStore(path)
+	st, err := store.OpenStore(path, resolvePipelineName(r.Pipeline, r.Name))
 	if err != nil {
 		return fmt.Errorf("could not open state store: %w", err)
 	}
@@ -1185,8 +1190,10 @@ func run(args []string) error {
 // (logging, not returning, any close error — mirroring the deferred
 // close-error handling both commands used inline before this helper
 // existed).
-func setup(cfg *config.Config, pipelinePath string, keepWorkspace bool) (*store.Store, workspace.Provider, func(), error) {
-	st, err := store.OpenStore(statePath(pipelinePath))
+func setup(
+	cfg *config.Config, pipelinePath string, flags StateFlags, keepWorkspace bool,
+) (*store.Store, workspace.Provider, func(), error) {
+	st, err := store.OpenStore(statePath(pipelinePath, flags.State), resolvePipelineName(pipelinePath, flags.Name))
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("could not open state store: %w", err)
 	}
@@ -1231,24 +1238,72 @@ func wrapRunErr(err error) error {
 	return nil
 }
 
+// StateFlags are the two flags every command that opens a state database
+// carries: WHERE the database is, and WHAT this pipeline is called inside it.
+//
+// Embedded rather than repeated because they always travel together — a
+// --state naming a shared file is exactly when --name starts to matter.
+type StateFlags struct {
+	State string            `help:"path to the sqlite state database (default: .steps/<pipeline>.db beside the YAML)"      name:"state"`
+	Name  map[string]string `help:"name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml (repeatable)" name:"name"`
+}
+
 // statePath returns the sqlite database path for pipeline's persisted job
-// state: under .steps/ beside the pipeline YAML, named for the FILE.
+// state: under .steps/ beside the pipeline YAML, named for the FILE — unless
+// --state names one, which is how several pipelines come to share a file.
 //
-// Per file, not per directory. Everything in the database is keyed by a name
-// the pipeline chose for itself — job, resource, queue row — so two pipelines
-// in one folder are two namespaces, not one, and a shared `.steps/state.db`
-// silently merged them: one pipeline's version change could enqueue a job the
-// other then claimed and ran, resource version history accumulated under one
-// name for both, and `steps web app.yml infra.yml` handed the same store to
-// two drainers (defeating the SetMaxOpenConns(1) serialization store.go
-// relies on). That layout is also the one README and docs/web.md advertise.
+// Per file BY DEFAULT, not per directory, and that default is load-bearing on
+// its own. Two pipelines in one folder are two namespaces, and a `.steps/state.db`
+// that merged them by accident of layout was a bug: one pipeline's version
+// change could enqueue a job the other then claimed and ran. Sharing is now
+// something an operator asks for, and the database keeps them apart when they
+// do — every row is scoped to a pipelines row (see internal/store/schema.go).
 //
-// There is no migration, per this repo's no-migration rule: an older
-// `.steps/state.db` is simply not read any more. The first run after this
-// re-seeds its cold start, which triggers nothing — the safe direction to be
-// wrong in.
-func statePath(pipeline string) string {
+// There is no migration, per this repo's no-migration rule: a database from an
+// older schema is refused rather than upgraded.
+func statePath(pipeline, state string) string {
+	if state != "" {
+		return state
+	}
+
 	return filepath.Join(filepath.Dir(pipeline), ".steps", filepath.Base(pipeline)+".db")
+}
+
+// pipelineName is a pipeline's identity inside a state database: the YAML's
+// base name without its extension.
+//
+// The same string web.Slugify produces, and deliberately so — the UI's /p/<slug>
+// route and the database's pipelines.name are one identity, not two that have to
+// be kept in agreement.
+func pipelineName(pipeline string) string {
+	return web.Slugify(pipeline)
+}
+
+// resolvePipelineName applies the --name overrides to one pipeline path.
+//
+// The map is keyed by NAME, matching how it is typed (--name infra=infra/ci.yml)
+// and giving uniqueness for free: two paths cannot claim one name, because the
+// second assignment would replace the first rather than collide silently.
+// Nothing matching means the default — the base name — which is what makes the
+// flag needed only when a shared --state has two pipeline.yml in it.
+func resolvePipelineName(pipeline string, names map[string]string) string {
+	want, err := filepath.Abs(pipeline)
+	if err != nil {
+		want = filepath.Clean(pipeline)
+	}
+
+	for name, path := range names {
+		got, err := filepath.Abs(path)
+		if err != nil {
+			got = filepath.Clean(path)
+		}
+
+		if got == want {
+			return name
+		}
+	}
+
+	return pipelineName(pipeline)
 }
 
 // selectJob resolves which job to run: the explicit name if given, or the
@@ -1395,8 +1450,9 @@ func (p *PreflightCmd) Run() error {
 // triggering it and says so once, in output that has long since scrolled past
 // by the time anyone wonders why the nightly summary stopped arriving.
 type JobsCmd struct {
-	Pipeline string `arg:""                                     help:"path to the pipeline YAML file"`
-	Resume   string `help:"job to take out of the paused state"`
+	StateFlags `embed:""`
+	Pipeline   string `arg:""                                     help:"path to the pipeline YAML file"`
+	Resume     string `help:"job to take out of the paused state"`
 }
 
 // Run lists paused jobs, or resumes one.
@@ -1406,7 +1462,7 @@ func (j *JobsCmd) Run() error {
 		return fmt.Errorf("could not load pipeline: %w", err)
 	}
 
-	st, _, cleanup, err := setup(cfg, j.Pipeline, false)
+	st, _, cleanup, err := setup(cfg, j.Pipeline, j.StateFlags, false)
 	if err != nil {
 		return err
 	}
@@ -1521,6 +1577,7 @@ func loadWithVars(path string, flags map[string]string, varsFile string) (*confi
 // reach the port; --listen exists for the person who has decided that is what
 // they want, not as a default.
 type WebCmd struct {
+	StateFlags    `embed:""`
 	Pipeline      []string          `arg:""                                                                         help:"path(s) to pipeline YAML files"`
 	Listen        string            `default:"127.0.0.1:8088"                                                       help:"address to serve on"`
 	Interval      time.Duration     `default:"30s"                                                                  help:"how often to check trigger: true resources"`
@@ -1558,21 +1615,16 @@ func (w *WebCmd) Run() error {
 	}
 	defer cleanup()
 
-	// Tried for every pipeline, even under --no-watch: the lock guards more
-	// than polling. See claimWatchLocks.
-	claims := claimWatchLocks(pipelines)
-	defer releaseWatchLocks(claims)
-
 	// Before either loop below exists, because ResetStaleRunning is only safe
 	// with no concurrent writer — see web.PrepareQueue.
-	for i, target := range pipelines {
-		web.PrepareQueue(ctx, target, claims[i].owned)
-	}
-
-	// Held only long enough to decide whether that recovery was ours to do:
-	// keeping it would block the `steps watch` this flag exists to defer to.
-	if w.NoWatch {
-		releaseWatchLocks(claims)
+	//
+	// --no-watch is what says this process is NOT the queue's owner: it exists
+	// to hand the polling to a separate `steps watch`, and re-queueing that
+	// watcher's in-flight rows would defeat the serial:/max_in_flight it is
+	// enforcing. The flag an operator typed decides it, rather than a race for
+	// a lock file — see store.ResetStaleRunning for why there is no longer one.
+	for _, target := range pipelines {
+		web.PrepareQueue(ctx, target, !w.NoWatch)
 	}
 
 	var runner web.Runner
@@ -1609,7 +1661,7 @@ func (w *WebCmd) Run() error {
 		local.Drain(ctx, pipelines)
 	}()
 
-	w.startPolling(ctx, &background, pipelines, claims)
+	w.startPolling(ctx, &background, pipelines)
 
 	fmt.Printf("steps web: http://%s\n", w.Listen)
 
@@ -1633,28 +1685,21 @@ func (w *WebCmd) Run() error {
 // BROWSER's ability to add work, which is a statement about the HTTP surface,
 // not about what this process does on its own. `--listen 0.0.0.0 --read-only`
 // is a build box that still has to notice new versions.
-func (w *WebCmd) startPolling(
-	ctx context.Context, background *sync.WaitGroup, pipelines []*web.Pipeline, claims []pipelineWatch,
-) {
+func (w *WebCmd) startPolling(ctx context.Context, background *sync.WaitGroup, pipelines []*web.Pipeline) {
 	if w.NoWatch {
 		fmt.Println("steps web: not polling (--no-watch)")
 
 		return
 	}
 
-	for i, target := range pipelines {
+	for _, target := range pipelines {
 		// Said per pipeline, not counted up: a banner that reports "polling 3
-		// pipelines" while two of them gave up is worse than no banner, and
-		// which ones gave up is the part an operator needs.
-		switch {
-		case !claims[i].owned:
-			fmt.Printf("steps web: %s is watched by another process; serving it without polling\n", target.Slug)
-			slog.Info("web.poll_lock_held", "pipeline", target.Slug)
-
-			continue
-		case len(trigger.Resources(target.Cfg)) == 0:
-			// Not a failure: plenty of pipelines are run by hand, and the UI
-			// is exactly where you would run them from.
+		// pipelines" while one of them gave up is worse than no banner, and
+		// which one gave up is the part an operator needs.
+		//
+		// Not a failure: plenty of pipelines are run by hand, and the UI is
+		// exactly where you would run them from.
+		if len(trigger.Resources(target.Cfg)) == 0 {
 			fmt.Printf("steps web: %s has no trigger: true get; serving it without polling\n", target.Slug)
 
 			continue
@@ -1675,57 +1720,14 @@ func (w *WebCmd) startPolling(
 	}
 }
 
-// pipelineWatch is what this process learned when it tried to take a
-// pipeline's single-watcher lock: whether it owns it, and how to give it back.
-type pipelineWatch struct {
-	owned   bool
-	release func()
-}
-
-// claimWatchLocks tries the single-watcher lock for every served pipeline.
-//
-// It runs even under --no-watch, because the lock guards two things, not one.
-// Polling is the obvious one — two pollers against a state.db claim each
-// other's work. The other is RECOVERY: re-queueing stranded rows reads every
-// running row as an abandoned leftover, which is only true when no other
-// watcher is alive, and `steps web` next to `steps watch` is a pairing this
-// command's docs actively recommend.
-//
-// A held lock is not fatal here, unlike in watch: serving is this command's
-// job and polling is the extra, so it gives up that pipeline's polling and
-// keeps serving it — and keeps the other pipelines' polling.
-func claimWatchLocks(pipelines []*web.Pipeline) []pipelineWatch {
-	claims := make([]pipelineWatch, len(pipelines))
-
-	for i, target := range pipelines {
-		release, held, err := target.Store.AcquireWatchLock()
-
-		switch {
-		case err != nil:
-			slog.Error("web.watch_lock", "pipeline", target.Slug, "error", err)
-		case held:
-			slog.Info("web.watch_lock_held", "pipeline", target.Slug)
-		default:
-			// Once, so the --no-watch early release and the deferred one at
-			// shutdown are not two closes of the same lock file.
-			claims[i] = pipelineWatch{owned: true, release: sync.OnceFunc(release)}
-		}
-	}
-
-	return claims
-}
-
-func releaseWatchLocks(claims []pipelineWatch) {
-	for _, claim := range claims {
-		if claim.release != nil {
-			claim.release()
-		}
-	}
-}
-
 // load opens every pipeline named on the command line, along with its store,
 // workspace provider, and event bus.
 func (w *WebCmd) load() ([]*web.Pipeline, map[string]workspace.Provider, func(), error) {
+	err := w.checkNamesAreDistinct()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
 	var (
 		pipelines []*web.Pipeline
 		closers   []func()
@@ -1747,14 +1749,14 @@ func (w *WebCmd) load() ([]*web.Pipeline, map[string]workspace.Provider, func(),
 			return nil, nil, nil, err
 		}
 
-		st, provider, closeOne, err := setup(cfg, path, w.KeepWorkspace)
+		st, provider, closeOne, err := setup(cfg, path, w.StateFlags, w.KeepWorkspace)
 		if err != nil {
 			cleanup()
 
 			return nil, nil, nil, err
 		}
 
-		slug := web.Slugify(path)
+		slug := resolvePipelineName(path, w.Name)
 		bus := events.New(pipeline.StoreSink(st))
 
 		// Bus first, store second: cleanup runs these in order, and the bus
@@ -1771,18 +1773,46 @@ func (w *WebCmd) load() ([]*web.Pipeline, map[string]workspace.Provider, func(),
 	return pipelines, providers, cleanup, nil
 }
 
+// checkNamesAreDistinct refuses two pipelines that would answer to one name.
+//
+// Before any store is opened, deliberately: a name IS a pipeline's identity in
+// the state database, so opening them first would register both against one
+// row and leave the second's path overwriting the first's before the error
+// surfaced. Two app/pipeline.yml and infra/pipeline.yml under one --state is
+// the case, and it is a question only the operator can answer — hence --name
+// rather than a generated suffix, which would be an identity nobody could
+// predict and every rerun would have to rediscover.
+func (w *WebCmd) checkNamesAreDistinct() error {
+	seen := map[string]string{}
+
+	for _, path := range w.Pipeline {
+		name := resolvePipelineName(path, w.Name)
+
+		if other, clash := seen[name]; clash {
+			return fmt.Errorf(
+				"web: %s and %s are both named %q; give one a distinct --name, e.g. --name %s-2=%s",
+				other, path, name, name, path)
+		}
+
+		seen[name] = path
+	}
+
+	return nil
+}
+
 // ApprovalsCmd lists approval: steps waiting for a decision.
 //
 // A parked approval that nobody is told about is useless in practice, so this
 // is the "what is waiting on me?" command. It reads the same rows the audit
 // trail is made of.
 type ApprovalsCmd struct {
-	Pipeline string `arg:"" help:"path to the pipeline YAML file"`
+	StateFlags `embed:""`
+	Pipeline   string `arg:""   help:"path to the pipeline YAML file"`
 }
 
 // Run prints every pending approval.
 func (a *ApprovalsCmd) Run() error {
-	st, cleanup, err := openStore(a.Pipeline)
+	st, cleanup, err := openStore(a.Pipeline, a.StateFlags)
 	if err != nil {
 		return err
 	}
@@ -1824,31 +1854,33 @@ func (a *ApprovalsCmd) Run() error {
 // authorization check. Someone will ask "can anyone approve?" the day this
 // ships, and the answer is yes, on purpose, for now.
 type ApproveCmd struct {
-	Pipeline string `arg:""                                       help:"path to the pipeline YAML file"`
-	ID       int64  `arg:""                                       help:"the approval id, from steps approvals"`
-	Reason   string `help:"note to record alongside the decision"`
+	StateFlags `embed:""`
+	Pipeline   string `arg:""                                       help:"path to the pipeline YAML file"`
+	ID         int64  `arg:""                                       help:"the approval id, from steps approvals"`
+	Reason     string `help:"note to record alongside the decision"`
 }
 
 // Run approves the named approval.
 func (a *ApproveCmd) Run() error {
-	return decideApproval(a.Pipeline, a.ID, "approved", a.Reason)
+	return decideApproval(a.Pipeline, a.StateFlags, a.ID, "approved", a.Reason)
 }
 
 // RejectCmd records a no.
 type RejectCmd struct {
-	Pipeline string `arg:""                                    help:"path to the pipeline YAML file"`
-	ID       int64  `arg:""                                    help:"the approval id, from steps approvals"`
-	Reason   string `help:"why — recorded with the decision"`
+	StateFlags `embed:""`
+	Pipeline   string `arg:""                                    help:"path to the pipeline YAML file"`
+	ID         int64  `arg:""                                    help:"the approval id, from steps approvals"`
+	Reason     string `help:"why — recorded with the decision"`
 }
 
 // Run rejects the named approval.
 func (r *RejectCmd) Run() error {
-	return decideApproval(r.Pipeline, r.ID, "rejected", r.Reason)
+	return decideApproval(r.Pipeline, r.StateFlags, r.ID, "rejected", r.Reason)
 }
 
 // decideApproval records a decision against a pipeline's store.
-func decideApproval(pipelinePath string, id int64, status, reason string) error {
-	st, cleanup, err := openStore(pipelinePath)
+func decideApproval(pipelinePath string, flags StateFlags, id int64, status, reason string) error {
+	st, cleanup, err := openStore(pipelinePath, flags)
 	if err != nil {
 		return err
 	}
@@ -1879,13 +1911,13 @@ func currentUser() string {
 
 // openStore opens a pipeline's state store without building any workspace —
 // the read-only path the approval commands need.
-func openStore(pipelinePath string) (*store.Store, func(), error) {
+func openStore(pipelinePath string, flags StateFlags) (*store.Store, func(), error) {
 	cfg, err := config.LoadConfig(pipelinePath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("could not load pipeline: %w", err)
 	}
 
-	st, _, cleanup, err := setup(cfg, pipelinePath, false)
+	st, _, cleanup, err := setup(cfg, pipelinePath, flags, false)
 	if err != nil {
 		return nil, nil, err
 	}

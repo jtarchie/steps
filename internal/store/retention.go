@@ -95,22 +95,22 @@ func (s *Store) PruneRuns(ctx context.Context, jobName string, limit int, keepRu
 
 	defer func() { _ = tx.Rollback() }()
 
-	deleted, err := pruneRunRows(ctx, tx, jobName, limit, keepRunID)
+	deleted, err := pruneRunRows(ctx, tx, s.pipelineID, jobName, limit, keepRunID)
 	if err != nil {
 		return err
 	}
 
-	prunedNodes, err := pruneNodes(ctx, tx, jobName, limit*nodesPerRetainedRun)
+	prunedNodes, err := pruneNodes(ctx, tx, s.pipelineID, jobName, limit*nodesPerRetainedRun)
 	if err != nil {
 		return err
 	}
 
-	err = pruneJobRuns(ctx, tx, jobName, limit*chainsPerRetainedRun)
+	err = pruneJobRuns(ctx, tx, s.pipelineID, jobName, limit*chainsPerRetainedRun)
 	if err != nil {
 		return err
 	}
 
-	err = sweepAfterNodePrune(ctx, tx, prunedNodes)
+	err = sweepAfterNodePrune(ctx, tx, s.pipelineID, prunedNodes)
 	if err != nil {
 		return err
 	}
@@ -135,12 +135,12 @@ func (s *Store) PruneRuns(ctx context.Context, jobName string, limit int, keepRu
 // fewer runs than its cap, and every build of it would otherwise take the
 // exclusive write lock (the DSN opens transactions IMMEDIATE) to rewrite nothing
 // while a `steps web` on the same file waits.
-func sweepAfterNodePrune(ctx context.Context, tx *sql.Tx, prunedNodes bool) error {
+func sweepAfterNodePrune(ctx context.Context, tx *sql.Tx, pipelineID int64, prunedNodes bool) error {
 	if !prunedNodes {
 		return nil
 	}
 
-	err := clearDanglingParents(ctx, tx)
+	err := clearDanglingParents(ctx, tx, pipelineID)
 	if err != nil {
 		return err
 	}
@@ -160,18 +160,20 @@ func sweepAfterNodePrune(ctx context.Context, tx *sql.Tx, prunedNodes bool) erro
 // started_at is compared as text, which is only correct because it is written in
 // a zero-padded fixed-width layout; see sortableNano for what went wrong when it
 // was not.
-func pruneRunRows(ctx context.Context, tx *sql.Tx, jobName string, limit int, keepRunID string) (bool, error) {
+func pruneRunRows(
+	ctx context.Context, tx *sql.Tx, pipelineID int64, jobName string, limit int, keepRunID string,
+) (bool, error) {
 	result, err := tx.ExecContext(ctx, `
 		DELETE FROM runs
-		WHERE job_name = ?
+		WHERE pipeline_id = ? AND job_name = ?
 		  AND status <> 'running'
 		  AND id <> ?
 		  AND id NOT IN (
-		      SELECT id FROM runs WHERE job_name = ?
+		      SELECT id FROM runs WHERE pipeline_id = ? AND job_name = ?
 		      ORDER BY started_at DESC, rowid DESC
 		      LIMIT ?
 		  )
-	`, jobName, keepRunID, jobName, limit)
+	`, pipelineID, jobName, keepRunID, pipelineID, jobName, limit)
 	if err != nil {
 		return false, fmt.Errorf("could not prune runs of %q: %w", jobName, err)
 	}
@@ -202,17 +204,21 @@ func pruneRunRows(ctx context.Context, tx *sql.Tx, jobName string, limit int, ke
 // one run a child's rowid is lower than its parent's, and without this exemption
 // a cap boundary landing mid-run would take children out from under a live
 // build.
-func pruneNodes(ctx context.Context, tx *sql.Tx, jobName string, keep int) (bool, error) {
+func pruneNodes(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName string, keep int) (bool, error) {
 	result, err := tx.ExecContext(ctx, `
 		DELETE FROM nodes
-		WHERE job_name = ?
-		  AND hash NOT IN (SELECT hash FROM run_events WHERE hash <> '')
+		WHERE pipeline_id = ? AND job_name = ?
+		  AND hash NOT IN (
+		      SELECT e.hash FROM run_events e
+		      JOIN runs r ON r.id = e.run_id
+		      WHERE e.hash <> '' AND r.pipeline_id = ?
+		  )
 		  AND rowid NOT IN (
-		      SELECT rowid FROM nodes WHERE job_name = ?
+		      SELECT rowid FROM nodes WHERE pipeline_id = ? AND job_name = ?
 		      ORDER BY rowid DESC
 		      LIMIT ?
 		  )
-	`, jobName, jobName, keep)
+	`, pipelineID, jobName, pipelineID, pipelineID, jobName, keep)
 	if err != nil {
 		return false, fmt.Errorf("could not prune the nodes of %q: %w", jobName, err)
 	}
@@ -240,12 +246,12 @@ func pruneNodes(ctx context.Context, tx *sql.Tx, jobName string, keep int) (bool
 // dangling links, all of them a do: block's child and its successor. So this
 // normalizes two different things that look identical from here, and cannot
 // distinguish them. Cosmetic either way.
-func clearDanglingParents(ctx context.Context, tx *sql.Tx) error {
+func clearDanglingParents(ctx context.Context, tx *sql.Tx, pipelineID int64) error {
 	_, err := tx.ExecContext(ctx, `
 		UPDATE nodes SET parent_hash = NULL
-		WHERE parent_hash IS NOT NULL
-		  AND parent_hash NOT IN (SELECT hash FROM nodes)
-	`)
+		WHERE pipeline_id = ? AND parent_hash IS NOT NULL
+		  AND parent_hash NOT IN (SELECT hash FROM nodes WHERE pipeline_id = ?)
+	`, pipelineID, pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not clear dangling node parents: %w", err)
 	}
@@ -265,16 +271,16 @@ func clearDanglingParents(ctx context.Context, tx *sql.Tx) error {
 //
 // This table carries no reference to nodes (see the schema), so its bound is
 // independent of theirs by construction.
-func pruneJobRuns(ctx context.Context, tx *sql.Tx, jobName string, keep int) error {
+func pruneJobRuns(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName string, keep int) error {
 	_, err := tx.ExecContext(ctx, `
 		DELETE FROM job_runs
-		WHERE job_name = ?
+		WHERE pipeline_id = ? AND job_name = ?
 		  AND rowid NOT IN (
-		      SELECT rowid FROM job_runs WHERE job_name = ?
+		      SELECT rowid FROM job_runs WHERE pipeline_id = ? AND job_name = ?
 		      ORDER BY rowid DESC
 		      LIMIT ?
 		  )
-	`, jobName, jobName, keep)
+	`, pipelineID, jobName, pipelineID, jobName, keep)
 	if err != nil {
 		return fmt.Errorf("could not prune the chain cache of %q: %w", jobName, err)
 	}
@@ -290,8 +296,12 @@ func pruneJobRuns(ctx context.Context, tx *sql.Tx, jobName string, keep int) err
 // RESTRICT for the same reason — it turns getting this wrong into an error
 // instead of a dangling node.
 //
-// Not scoped to a job: content is shared across jobs by construction, so
-// "referenced by nothing" is the only question that can be asked about it.
+// Not scoped to a job, and — since a state file may hold several pipelines —
+// not to a pipeline either: content is shared across both by construction, so
+// "referenced by nothing" is the only question that can be asked about it. The
+// anti-join must therefore stay pipeline-blind; narrowing it to this pipeline's
+// nodes would delete rows another pipeline still points at, which the RESTRICT
+// on that reference would turn into a failed prune.
 func pruneNodeContent(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `
 		DELETE FROM node_content
@@ -331,15 +341,15 @@ func (s *Store) PruneTriggerQueue(ctx context.Context, jobName string, limit int
 
 	_, err := s.db.ExecContext(ctx, `
 		DELETE FROM trigger_queue
-		WHERE job_name = ?
+		WHERE pipeline_id = ? AND job_name = ?
 		  AND status NOT IN ('pending', 'running')
 		  AND id NOT IN (
 		      SELECT id FROM trigger_queue
-		      WHERE job_name = ? AND status NOT IN ('pending', 'running')
+		      WHERE pipeline_id = ? AND job_name = ? AND status NOT IN ('pending', 'running')
 		      ORDER BY id DESC
 		      LIMIT ?
 		  )
-	`, jobName, jobName, limit)
+	`, s.pipelineID, jobName, s.pipelineID, jobName, limit)
 	if err != nil {
 		return fmt.Errorf("could not prune the trigger queue of %q: %w", jobName, err)
 	}

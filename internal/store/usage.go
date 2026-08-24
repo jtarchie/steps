@@ -72,8 +72,8 @@ const usageColumns = `run_id, step_index, step_name, job_name, node_hash,
 // index — the cells of a matrix, the members of an ensemble — never collide.
 func (s *Store) RecordAgentUsage(ctx context.Context, usage AgentUsage) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO agent_usage (`+usageColumns+`, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO agent_usage (pipeline_id, `+usageColumns+`, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (run_id, node_hash) DO UPDATE SET
 			step_index = excluded.step_index,
 			step_name = excluded.step_name,
@@ -98,6 +98,7 @@ func (s *Store) RecordAgentUsage(ctx context.Context, usage AgentUsage) error {
 			raw_meta = excluded.raw_meta,
 			created_at = excluded.created_at
 	`,
+		s.pipelineID,
 		usage.RunID, usage.StepIndex, usage.StepName, usage.JobName, usage.NodeHash,
 		usage.ModelReq, usage.ModelServed,
 		usage.Prompt, usage.Completion, usage.Total,
@@ -124,7 +125,8 @@ func (s *Store) RunTokensSpent(ctx context.Context, runID string) (int, error) {
 	var total int
 
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(SUM(total_tokens), 0) FROM agent_usage WHERE run_id = ?`, runID).Scan(&total)
+		`SELECT COALESCE(SUM(total_tokens), 0) FROM agent_usage WHERE pipeline_id = ? AND run_id = ?`,
+		s.pipelineID, runID).Scan(&total)
 	if err != nil {
 		return 0, fmt.Errorf("could not read spend for run %q: %w", runID, err)
 	}
@@ -135,8 +137,9 @@ func (s *Store) RunTokensSpent(ctx context.Context, runID string) (int, error) {
 // RunUsage is every agent step's spend for one run, in step order.
 func (s *Store) RunUsage(ctx context.Context, runID string) ([]AgentUsage, error) {
 	return collect(ctx, s.db, "usage for run "+runID,
-		`SELECT `+usageColumns+` FROM agent_usage WHERE run_id = ? ORDER BY step_index, rowid`,
-		[]any{runID}, func(rows *sql.Rows) (AgentUsage, error) {
+		`SELECT `+usageColumns+` FROM agent_usage
+		 WHERE pipeline_id = ? AND run_id = ? ORDER BY step_index, rowid`,
+		[]any{s.pipelineID, runID}, func(rows *sql.Rows) (AgentUsage, error) {
 			var usage AgentUsage
 
 			return usage, rows.Scan(&usage.RunID, &usage.StepIndex, &usage.StepName, &usage.JobName, &usage.NodeHash,
@@ -158,10 +161,11 @@ func (s *Store) RunCostTotals(ctx context.Context, limit int) ([]RunTotals, erro
 		       SUM(COALESCE(cost_usd, 0)), COUNT(*),
 		       SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END)
 		FROM agent_usage
+		WHERE pipeline_id = ?
 		GROUP BY run_id
 		ORDER BY MAX(created_at) DESC
 		LIMIT ?
-	`, []any{limit}, func(rows *sql.Rows) (RunTotals, error) {
+	`, []any{s.pipelineID, limit}, func(rows *sql.Rows) (RunTotals, error) {
 		var (
 			totals RunTotals
 			cost   float64

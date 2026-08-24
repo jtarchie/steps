@@ -33,8 +33,8 @@ func (s *Store) LastCheckedVersion(ctx context.Context, resourceName string) (st
 	var versionJSON string
 
 	err := s.db.QueryRowContext(ctx,
-		`SELECT version_json FROM resource_checks WHERE resource_name = ?`,
-		resourceName,
+		`SELECT version_json FROM resource_checks WHERE pipeline_id = ? AND resource_name = ?`,
+		s.pipelineID, resourceName,
 	).Scan(&versionJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
@@ -53,12 +53,12 @@ func (s *Store) LastCheckedVersion(ctx context.Context, resourceName string) (st
 // mirroring how job_runs only ever records succeeded chains.
 func (s *Store) RecordCheckedVersion(ctx context.Context, resourceName, versionJSON string) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO resource_checks (resource_name, version_json, checked_at)
-		VALUES (?, ?, ?)
-		ON CONFLICT(resource_name) DO UPDATE SET
+		INSERT INTO resource_checks (pipeline_id, resource_name, version_json, checked_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(pipeline_id, resource_name) DO UPDATE SET
 			version_json = excluded.version_json,
 			checked_at   = excluded.checked_at
-	`, resourceName, versionJSON, now())
+	`, s.pipelineID, resourceName, versionJSON, now())
 	if err != nil {
 		return fmt.Errorf("could not record checked version for %q: %w", resourceName, err)
 	}
@@ -69,8 +69,9 @@ func (s *Store) RecordCheckedVersion(ctx context.Context, resourceName, versionJ
 // CheckedResources lists every resource version the watcher has recorded.
 func (s *Store) CheckedResources(ctx context.Context) ([]CheckedResource, error) {
 	return collect(ctx, s.db, "resource checks",
-		`SELECT resource_name, version_json, checked_at FROM resource_checks ORDER BY resource_name`,
-		nil, func(rows *sql.Rows) (CheckedResource, error) {
+		`SELECT resource_name, version_json, checked_at FROM resource_checks
+		 WHERE pipeline_id = ? ORDER BY resource_name`,
+		[]any{s.pipelineID}, func(rows *sql.Rows) (CheckedResource, error) {
 			var (
 				row       CheckedResource
 				checkedAt string
@@ -97,7 +98,7 @@ func (s *Store) RecordPassedVersion(ctx context.Context, jobName, resourceName, 
 	// A `steps run` resolves its own versions and never goes near the poller,
 	// so this is the path by which a manually-run job's versions enter
 	// history at all.
-	err = ensureVersion(ctx, tx, resourceName, versionJSON)
+	err = ensureVersion(ctx, tx, s.pipelineID, resourceName, versionJSON)
 	if err != nil {
 		return err
 	}
@@ -107,11 +108,11 @@ func (s *Store) RecordPassedVersion(ctx context.Context, jobName, resourceName, 
 	// vouches for them, or the row would keep pointing at the oldest build
 	// that saw it and a newer coherent set would be invisible.
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO job_versions (job_name, resource_name, version_json, recorded_at, build_id)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT (job_name, resource_name, version_json)
+		INSERT INTO job_versions (pipeline_id, job_name, resource_name, version_json, recorded_at, build_id)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (pipeline_id, job_name, resource_name, version_json)
 		DO UPDATE SET build_id = excluded.build_id, recorded_at = excluded.recorded_at
-	`, jobName, resourceName, versionJSON, now(), buildID)
+	`, s.pipelineID, jobName, resourceName, versionJSON, now(), buildID)
 	if err != nil {
 		return fmt.Errorf("could not record a passed version for job %q: %w", jobName, err)
 	}
@@ -129,9 +130,9 @@ func (s *Store) RecordPassedVersion(ctx context.Context, jobName, resourceName, 
 func (s *Store) PassedVersions(ctx context.Context, jobName string, limit int) ([]PassedVersion, error) {
 	return collect(ctx, s.db, "job versions", `
 		SELECT resource_name, version_json, recorded_at
-		FROM job_versions WHERE job_name = ?
+		FROM job_versions WHERE pipeline_id = ? AND job_name = ?
 		ORDER BY recorded_at DESC LIMIT ?
-	`, []any{jobName, limit}, func(rows *sql.Rows) (PassedVersion, error) {
+	`, []any{s.pipelineID, jobName, limit}, func(rows *sql.Rows) (PassedVersion, error) {
 		var (
 			row        PassedVersion
 			recordedAt string
@@ -169,7 +170,7 @@ func (s *Store) HasPassedVersionSet(ctx context.Context, jobName string, want ma
 	// COUNT(*) so a resource appearing twice under one build cannot stand in
 	// for a resource that is missing.
 	clauses := make([]string, 0, len(want))
-	args := []any{jobName}
+	args := []any{s.pipelineID, jobName}
 
 	for resourceName, versionJSON := range want {
 		clauses = append(clauses, "(resource_name = ? AND version_json = ?)")
@@ -180,7 +181,7 @@ func (s *Store) HasPassedVersionSet(ctx context.Context, jobName string, want ma
 
 	query := `
 		SELECT 1 FROM job_versions
-		WHERE job_name = ? AND build_id <> ''
+		WHERE pipeline_id = ? AND job_name = ? AND build_id <> ''
 		  AND (` + strings.Join(clauses, " OR ") + `)
 		GROUP BY build_id
 		HAVING COUNT(DISTINCT resource_name) = ?
@@ -207,8 +208,9 @@ func (s *Store) ConsumedMark(ctx context.Context, jobName, resourceName string) 
 	var mark sql.NullInt64
 
 	err := s.db.QueryRowContext(ctx,
-		`SELECT check_order FROM job_version_cursor WHERE job_name = ? AND resource_name = ?`,
-		jobName, resourceName).Scan(&mark)
+		`SELECT check_order FROM job_version_cursor
+		 WHERE pipeline_id = ? AND job_name = ? AND resource_name = ?`,
+		s.pipelineID, jobName, resourceName).Scan(&mark)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
@@ -235,11 +237,11 @@ func (s *Store) RecordConsumedMark(ctx context.Context, jobName, resourceName st
 	}
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO job_version_cursor (job_name, resource_name, check_order)
-		VALUES (?, ?, ?)
-		ON CONFLICT (job_name, resource_name)
+		INSERT INTO job_version_cursor (pipeline_id, job_name, resource_name, check_order)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (pipeline_id, job_name, resource_name)
 		DO UPDATE SET check_order = MAX(check_order, excluded.check_order)
-	`, jobName, resourceName, order)
+	`, s.pipelineID, jobName, resourceName, order)
 	if err != nil {
 		return fmt.Errorf("could not record the cursor for job %q: %w", jobName, err)
 	}

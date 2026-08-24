@@ -68,7 +68,7 @@ func (s *Store) RecordVersions(ctx context.Context, resourceName string, version
 
 	defer func() { _ = tx.Rollback() }()
 
-	added, err := insertNewVersions(ctx, tx, resourceName, versions)
+	added, err := insertNewVersions(ctx, tx, s.pipelineID, resourceName, versions)
 	if err != nil {
 		return 0, err
 	}
@@ -81,13 +81,13 @@ func (s *Store) RecordVersions(ctx context.Context, resourceName string, version
 	// cascading away consumed marks so jobs re-fan-out each cycle. The cap
 	// therefore bounds what has scrolled AWAY, and a window larger than the
 	// cap is simply kept whole.
-	floor, err := minReportedOrder(ctx, tx, resourceName, versions)
+	floor, err := minReportedOrder(ctx, tx, s.pipelineID, resourceName, versions)
 	if err != nil {
 		return 0, err
 	}
 
 	if limit > 0 {
-		err = pruneVersions(ctx, tx, resourceName, limit, floor)
+		err = pruneVersions(ctx, tx, s.pipelineID, resourceName, limit, floor)
 		if err != nil {
 			return 0, err
 		}
@@ -109,8 +109,10 @@ func (s *Store) RecordVersions(ctx context.Context, resourceName string, version
 // written and RowsAffected is 0 — the order neither advances nor gaps. A row
 // only a run had filed matches both, taking a fresh order (see
 // RecordVersions).
-func insertNewVersions(ctx context.Context, tx *sql.Tx, resourceName string, versions []map[string]any) (int, error) {
-	next, err := nextCheckOrder(ctx, tx, resourceName)
+func insertNewVersions(
+	ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, versions []map[string]any,
+) (int, error) {
+	next, err := nextCheckOrder(ctx, tx, pipelineID, resourceName)
 	if err != nil {
 		return 0, err
 	}
@@ -124,12 +126,12 @@ func insertNewVersions(ctx context.Context, tx *sql.Tx, resourceName string, ver
 		}
 
 		result, err := tx.ExecContext(ctx, `
-			INSERT INTO resource_versions (resource_name, version_json, check_order, from_check)
-			VALUES (?, ?, ?, 1)
-			ON CONFLICT (resource_name, version_json)
+			INSERT INTO resource_versions (pipeline_id, resource_name, version_json, check_order, from_check)
+			VALUES (?, ?, ?, ?, 1)
+			ON CONFLICT (pipeline_id, resource_name, version_json)
 			DO UPDATE SET from_check = 1, check_order = excluded.check_order
 			WHERE resource_versions.from_check = 0
-		`, resourceName, encoded, next)
+		`, pipelineID, resourceName, encoded, next)
 		if err != nil {
 			return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
 		}
@@ -146,7 +148,9 @@ func insertNewVersions(ctx context.Context, tx *sql.Tx, resourceName string, ver
 
 // minReportedOrder is the lowest check_order among the versions a check just
 // reported — the floor below which pruning is safe.
-func minReportedOrder(ctx context.Context, tx *sql.Tx, resourceName string, versions []map[string]any) (int64, error) {
+func minReportedOrder(
+	ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, versions []map[string]any,
+) (int64, error) {
 	const chunk = 500
 
 	var floor int64 = 1<<62 - 1
@@ -154,8 +158,8 @@ func minReportedOrder(ctx context.Context, tx *sql.Tx, resourceName string, vers
 	for start := 0; start < len(versions); start += chunk {
 		end := min(start+chunk, len(versions))
 
-		args := make([]any, 0, end-start+1)
-		args = append(args, resourceName)
+		args := make([]any, 0, end-start+2)
+		args = append(args, pipelineID, resourceName)
 
 		for _, version := range versions[start:end] {
 			encoded, err := EncodeVersion(version)
@@ -169,7 +173,8 @@ func minReportedOrder(ctx context.Context, tx *sql.Tx, resourceName string, vers
 		var lowest sql.NullInt64
 
 		err := tx.QueryRowContext(ctx,
-			`SELECT MIN(check_order) FROM resource_versions WHERE resource_name = ? AND version_json IN (`+
+			`SELECT MIN(check_order) FROM resource_versions
+			 WHERE pipeline_id = ? AND resource_name = ? AND version_json IN (`+
 				placeholders(end-start)+`)`, args...).Scan(&lowest)
 		if err != nil {
 			return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
@@ -190,11 +195,12 @@ func minReportedOrder(ctx context.Context, tx *sql.Tx, resourceName string, vers
 // correctly but leave gaps that make "the 50 oldest of this resource" a
 // scan rather than a range. Safe against a concurrent writer because the DSN
 // opens transactions IMMEDIATE, so this read already holds the write lock.
-func nextCheckOrder(ctx context.Context, tx *sql.Tx, resourceName string) (int64, error) {
+func nextCheckOrder(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string) (int64, error) {
 	var highest sql.NullInt64
 
 	err := tx.QueryRowContext(ctx,
-		`SELECT MAX(check_order) FROM resource_versions WHERE resource_name = ?`, resourceName).Scan(&highest)
+		`SELECT MAX(check_order) FROM resource_versions WHERE pipeline_id = ? AND resource_name = ?`,
+		pipelineID, resourceName).Scan(&highest)
 	if err != nil {
 		return 0, fmt.Errorf("could not read version order for %q: %w", resourceName, err)
 	}
@@ -211,16 +217,18 @@ func nextCheckOrder(ctx context.Context, tx *sql.Tx, resourceName string) (int64
 // small the cap (see RecordVersions). The cascade takes a pruned version's
 // green record with it, so nothing is left referring to a version that no
 // longer exists.
-func pruneVersions(ctx context.Context, tx *sql.Tx, resourceName string, limit int, floor int64) error {
+func pruneVersions(
+	ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, limit int, floor int64,
+) error {
 	_, err := tx.ExecContext(ctx, `
 		DELETE FROM resource_versions
-		WHERE resource_name = ? AND check_order < ? AND check_order NOT IN (
+		WHERE pipeline_id = ? AND resource_name = ? AND check_order < ? AND check_order NOT IN (
 			SELECT check_order FROM resource_versions
-			WHERE resource_name = ?
+			WHERE pipeline_id = ? AND resource_name = ?
 			ORDER BY check_order DESC
 			LIMIT ?
 		)
-	`, resourceName, floor, resourceName, limit)
+	`, pipelineID, resourceName, floor, pipelineID, resourceName, limit)
 	if err != nil {
 		return fmt.Errorf("could not prune versions for %q: %w", resourceName, err)
 	}
@@ -245,9 +253,9 @@ func pruneVersions(ctx context.Context, tx *sql.Tx, resourceName string, limit i
 func (s *Store) ResourceVersions(ctx context.Context, resourceName string) ([]map[string]any, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT version_json FROM resource_versions
-		WHERE resource_name = ? AND from_check = 1
+		WHERE pipeline_id = ? AND resource_name = ? AND from_check = 1
 		ORDER BY check_order
-	`, resourceName)
+	`, s.pipelineID, resourceName)
 	if err != nil {
 		return nil, fmt.Errorf("could not read versions for %q: %w", resourceName, err)
 	}
@@ -290,7 +298,8 @@ func (s *Store) ResourceVersions(ctx context.Context, resourceName string) ([]ma
 // unpolled resource would repeat its whole fan-out every time.
 func (s *Store) VersionOrders(ctx context.Context, resourceName string) (map[string]int64, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT version_json, check_order FROM resource_versions WHERE resource_name = ?`, resourceName)
+		`SELECT version_json, check_order FROM resource_versions WHERE pipeline_id = ? AND resource_name = ?`,
+		s.pipelineID, resourceName)
 	if err != nil {
 		return nil, fmt.Errorf("could not read version order for %q: %w", resourceName, err)
 	}
@@ -332,7 +341,7 @@ func (s *Store) RecordVersionOrder(ctx context.Context, resourceName, versionJSO
 
 	defer func() { _ = tx.Rollback() }()
 
-	err = ensureVersion(ctx, tx, resourceName, versionJSON)
+	err = ensureVersion(ctx, tx, s.pipelineID, resourceName, versionJSON)
 	if err != nil {
 		return 0, err
 	}
@@ -340,8 +349,9 @@ func (s *Store) RecordVersionOrder(ctx context.Context, resourceName, versionJSO
 	var order int64
 
 	err = tx.QueryRowContext(ctx,
-		`SELECT check_order FROM resource_versions WHERE resource_name = ? AND version_json = ?`,
-		resourceName, versionJSON).Scan(&order)
+		`SELECT check_order FROM resource_versions
+		 WHERE pipeline_id = ? AND resource_name = ? AND version_json = ?`,
+		s.pipelineID, resourceName, versionJSON).Scan(&order)
 	if err != nil {
 		return 0, fmt.Errorf("could not read version order for %q: %w", resourceName, err)
 	}
@@ -363,8 +373,8 @@ func (s *Store) RecordVersionOrder(ctx context.Context, resourceName, versionJSO
 // path goes near the poller. Recording that a job used a version implies the
 // version existed, so the implication is made explicit here rather than
 // left to fail as a constraint violation.
-func ensureVersion(ctx context.Context, tx *sql.Tx, resourceName, versionJSON string) error {
-	next, err := nextCheckOrder(ctx, tx, resourceName)
+func ensureVersion(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName, versionJSON string) error {
+	next, err := nextCheckOrder(ctx, tx, pipelineID, resourceName)
 	if err != nil {
 		return err
 	}
@@ -372,10 +382,10 @@ func ensureVersion(ctx context.Context, tx *sql.Tx, resourceName, versionJSON st
 	// from_check stays 0: this records that a version was USED, which is not
 	// the same as a check reporting what exists. See ResourceVersions.
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO resource_versions (resource_name, version_json, check_order, from_check)
-		VALUES (?, ?, ?, 0)
-		ON CONFLICT (resource_name, version_json) DO NOTHING
-	`, resourceName, versionJSON, next)
+		INSERT INTO resource_versions (pipeline_id, resource_name, version_json, check_order, from_check)
+		VALUES (?, ?, ?, ?, 0)
+		ON CONFLICT (pipeline_id, resource_name, version_json) DO NOTHING
+	`, pipelineID, resourceName, versionJSON, next)
 	if err != nil {
 		return fmt.Errorf("could not record version for %q: %w", resourceName, err)
 	}
@@ -476,8 +486,8 @@ func (s *Store) GreenVersions(ctx context.Context, resourceName string, upstream
 // resource — the raw material GreenVersions intersects.
 func (s *Store) passedVersionSet(ctx context.Context, jobName, resourceName string) (map[string]bool, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT version_json FROM job_versions WHERE job_name = ? AND resource_name = ?`,
-		jobName, resourceName)
+		`SELECT version_json FROM job_versions WHERE pipeline_id = ? AND job_name = ? AND resource_name = ?`,
+		s.pipelineID, jobName, resourceName)
 	if err != nil {
 		return nil, fmt.Errorf("could not read passed versions for job %q: %w", jobName, err)
 	}

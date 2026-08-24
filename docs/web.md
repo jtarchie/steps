@@ -13,9 +13,11 @@ them. Several pipelines at once:
 steps web app.yml infra.yml nightly.yml
 ```
 
-Each is routed under `/p/<basename>/`, because state is per-pipeline by
-construction — each YAML gets its own `.steps/<filename>.db`, so two
-pipelines never share a database, not even two sitting in one directory.
+Each is routed under `/p/<name>/`, where the name is the YAML's base name
+unless `--name` says otherwise. By default each pipeline gets its own
+`.steps/<filename>.db`, so two never share a database — not even two sitting in
+one directory. `--state` is how you ask them to; see
+[One database, several pipelines](#one-database-several-pipelines).
 
 ## What it shows
 
@@ -172,31 +174,22 @@ steps web pipeline.yml --interval 5m        # slower
 steps web pipeline.yml --no-watch           # serve only; something else polls
 ```
 
-- **One poller per pipeline, each with its own state.** Every pipeline has
-  its own database (`.steps/<filename>.db`), so two served pipelines never
-  contend — and within one pipeline, the poller is handed the store handle its
-  drain already uses rather than opening a second one. `trigger.Poll`'s doc
-  comment has the why; the short version is that a store is a single pooled
-  connection, so sharing it queues the poll's writes behind the drain's
-  instead of adding a second connection to fight for the same write lock.
-- **The single-watcher lock is shared with `steps watch`.** Two pollers
-  against one database claim each other's work, so whichever starts second
-  gives way — but not in the same way. `steps watch` exists to poll, so it
-  refuses to start and says so. `steps web` exists to serve, so it keeps
-  serving that pipeline and skips only its polling, saying which one:
-
-  ```
-  steps web: nightly is watched by another process; serving it without polling
-  ```
-
-  Started the other way round, a later `steps watch` is the one that refuses —
-  stop the web process, or start it with `--no-watch`.
-- **The lock guards recovery, not just polling**, which is why `--no-watch`
-  still takes it for a moment at startup. Re-queueing rows a crashed process
-  left claimed reads every running row as abandoned — true only when no other
-  watcher is alive. A `steps web` that skipped the lock and recovered anyway
-  would flip a live `steps watch`'s in-flight job back to pending and run it a
-  second time.
+- **One poller per pipeline.** Within one pipeline the poller is handed the
+  store handle its drain already uses rather than opening a second one.
+  `trigger.Poll`'s doc comment has the why; the short version is that a store
+  is a single pooled connection, so sharing it queues the poll's writes behind
+  the drain's instead of adding a second connection to fight for the same
+  write lock.
+- **One `steps` process per state database.** Two pollers against one database
+  claim each other's work, and startup recovery — re-queueing rows a crashed
+  process left claimed — reads every `running` row as abandoned, which is true
+  only when nothing else is alive. Nothing enforces this; running a `steps
+  watch` and a polling `steps web` against one database is a deployment
+  mistake, not a supported pairing.
+- **`--no-watch` is how you pair them anyway.** It says this process does not
+  own the queue, so it neither polls nor recovers stranded rows, leaving both
+  to a separate `steps watch`. That flag, not a race for a lock file, is what
+  keeps the served process off a live watcher's in-flight job.
 - **A pipeline with no `trigger: true` get is not an error here.** `steps
   watch` refuses it (there is nothing to poll and that is all it does); `steps
   web` notes it in the log and serves, because plenty of pipelines are run by
@@ -208,6 +201,46 @@ steps web pipeline.yml --no-watch           # serve only; something else polls
   refresh would renew — is printed once as `(transient — polling anyway)` and
   left to the loop, which retries by its nature. `--no-preflight` skips the
   check entirely. It runs inside the poller, so it never delays serving.
+
+## One database, several pipelines
+
+`--state` points any command at a specific sqlite file, and several pipelines
+may share one:
+
+```bash
+steps web app.yml infra.yml --state /var/lib/steps/state.db
+steps run app.yml --job deploy --state /var/lib/steps/state.db
+```
+
+One file to back up, and one file to delete. What it is *not* is a merge:
+inside the database every row carries the pipeline it belongs to, so histories,
+resource versions, queues, serial groups and the merkle cache stay separate.
+Two pipelines each with a job named `build` running an identical task do not
+share a cache entry, and one pipeline's `run_history:` cap never reaps
+another's runs.
+
+A pipeline's identity in the file is its **name**, which defaults to the YAML's
+base name — `infra/pipeline.yml` is `pipeline`. That is also its `/p/<name>/`
+route. When two files would claim one name, `--name` settles it:
+
+```bash
+steps web app/pipeline.yml infra/pipeline.yml --state shared.db \
+  --name app=app/pipeline.yml --name infra=infra/pipeline.yml
+```
+
+The name is the identity, not the path — so a checkout that moves keeps its
+history, and renaming the YAML (or changing `--name`) starts a new pipeline
+with empty state. Nothing in a content-addressed cache can tell a rename from a
+different pipeline, so this is the honest reading rather than a limitation.
+
+Run ids stay globally unique, but `--resume` and `--replay` still refuse an id
+belonging to a different pipeline in the same file: continuing another
+pipeline's run would reuse its workspace and step indexes against this
+pipeline's plan.
+
+There is no migration path. A database written by a different schema is refused
+on open with a message saying so; the answer is to delete the file, which costs
+run history and cache and nothing else.
 
 ## Security
 
@@ -232,5 +265,7 @@ mean to hand out the controls too.
 --no-preflight   skip the pre-poll health check of models and MCP servers
 --read-only      serve without trigger, approval, or resume controls
 --keep-workspace leave build workspaces on disk
+--state          sqlite state database (default .steps/<pipeline>.db per YAML)
+--name           name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml
 --var / --vars-file   pipeline vars, as everywhere else
 ```

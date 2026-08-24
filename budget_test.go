@@ -187,7 +187,7 @@ func TestAgentUsageIsPersisted(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	st, err := store.OpenStore(statePath(path))
+	st, err := store.OpenStore(statePath(path, ""), pipelineName(path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ jobs:
 		t.Fatalf("run: %v", err)
 	}
 
-	st, err := store.OpenStore(statePath(path))
+	st, err := store.OpenStore(statePath(path, ""), pipelineName(path))
 	if err != nil {
 		t.Fatal(err)
 	}

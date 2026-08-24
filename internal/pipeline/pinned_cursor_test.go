@@ -63,7 +63,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, "state.db"))
+	st, err := store.OpenStore(filepath.Join(dir, "state.db"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, "state.db"))
+	st, err := store.OpenStore(filepath.Join(dir, "state.db"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}

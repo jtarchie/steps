@@ -41,7 +41,7 @@ func TestStoreUsesWAL(t *testing.T) {
 func mustOpenStore(t *testing.T, path string) *Store {
 	t.Helper()
 
-	store, err := OpenStore(path)
+	store, err := OpenStore(path, "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

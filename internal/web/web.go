@@ -37,11 +37,15 @@ import (
 const historyLimit = 200
 
 // Pipeline is one loaded pipeline the server serves, with its own config and
-// its own store — pipelines never share a state database (see statePath in
-// main), so they never share one here either.
+// its own store handle. Two served pipelines may now share a state FILE (see
+// --state), but never a store handle: each one is scoped to its own pipeline
+// row, which is what keeps their histories and caches apart.
 type Pipeline struct {
-	// Slug is the URL-safe identity a route carries: the YAML's base name
-	// without extension, deduplicated across pipelines that share one.
+	// Slug is the URL-safe identity a route carries, and the same string the
+	// state database records as this pipeline's name — one identity, not two
+	// that have to be kept in agreement. It is the YAML's base name without
+	// extension unless --name overrides it, and two pipelines resolving to one
+	// slug is refused at startup (see New).
 	Slug  string
 	Path  string
 	Cfg   *config.Config

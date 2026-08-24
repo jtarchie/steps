@@ -88,9 +88,10 @@ func scanRunRow(sc rowScanner) (RunRow, error) {
 // StartRun records a run and the workspace its steps will share.
 func (s *Store) StartRun(ctx context.Context, id, jobName, workspaceDir string) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO runs (id, job_name, workspace, status, started_at) VALUES (?, ?, ?, 'running', ?)
+		INSERT INTO runs (id, pipeline_id, job_name, workspace, status, started_at)
+		VALUES (?, ?, ?, ?, 'running', ?)
 		ON CONFLICT (id) DO UPDATE SET status = 'running', workspace = excluded.workspace
-	`, id, jobName, workspaceDir, nowNano())
+	`, id, s.pipelineID, jobName, workspaceDir, nowNano())
 	if err != nil {
 		return fmt.Errorf("could not record run %q: %w", id, err)
 	}
@@ -111,7 +112,8 @@ func (s *Store) StartRun(ctx context.Context, id, jobName, workspaceDir string) 
 // Clearing it on failure breaks resume; clearing it on success breaks replay.
 func (s *Store) FinishRun(ctx context.Context, id, status string) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE runs SET status = ?, finished_at = ? WHERE id = ?`, status, nowNano(), id)
+		`UPDATE runs SET status = ?, finished_at = ? WHERE id = ? AND pipeline_id = ?`,
+		status, nowNano(), id, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not finish run %q: %w", id, err)
 	}
@@ -139,7 +141,8 @@ func (s *Store) RecordRunStep(ctx context.Context, runID string, index int, name
 // empty argument through them would put replay's vocabulary in the path of
 // code that has nothing to do with it.
 func (s *Store) RecordRunParent(ctx context.Context, runID, parentID string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE runs SET parent_run_id = ? WHERE id = ?`, parentID, runID)
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE runs SET parent_run_id = ? WHERE id = ? AND pipeline_id = ?`, parentID, runID, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not record the parent of run %q: %w", runID, err)
 	}
@@ -149,14 +152,22 @@ func (s *Store) RecordRunParent(ctx context.Context, runID, parentID string) err
 
 // FindRun reads a run in the resume shape, which predates finished_at and is
 // what --resume needs.
+//
+// Scoped like everything else, and here that is load-bearing rather than
+// uniform: run ids are globally unique (pipeline.NewRunID is random), so in a
+// shared state file `steps run a.yml --resume <id>` would otherwise happily
+// continue a run of b.yml — reusing another pipeline's workspace and step
+// indexes against this pipeline's plan. The id not being found is the right
+// answer, and the message says which pipeline was asked.
 func (s *Store) FindRun(ctx context.Context, id string) (Run, error) {
 	var run Run
 
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, job_name, workspace, status, started_at FROM runs WHERE id = ?`, id).
+		`SELECT id, job_name, workspace, status, started_at FROM runs WHERE id = ? AND pipeline_id = ?`,
+		id, s.pipelineID).
 		Scan(&run.ID, &run.JobName, &run.Workspace, &run.Status, &run.StartedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Run{}, fmt.Errorf("no run %q was recorded", id)
+		return Run{}, fmt.Errorf("no run %q was recorded for pipeline %q", id, s.pipeline)
 	}
 
 	if err != nil {
@@ -198,10 +209,10 @@ func (s *Store) ListRuns(ctx context.Context, jobName string, limit int) ([]RunR
 	return collect(ctx, s.db, "runs", `
 		SELECT `+runColumns+`
 		FROM runs
-		WHERE (? = '' OR job_name = ?)
+		WHERE pipeline_id = ? AND (? = '' OR job_name = ?)
 		ORDER BY started_at DESC, rowid DESC
 		LIMIT ?
-	`, []any{jobName, jobName, limit}, scanRunRowFrom)
+	`, []any{s.pipelineID, jobName, jobName, limit}, scanRunRowFrom)
 }
 
 // LatestRunByJob returns the most recent run for every job that has one,
@@ -210,9 +221,11 @@ func (s *Store) LatestRunByJob(ctx context.Context) (map[string]RunRow, error) {
 	rows, err := collect(ctx, s.db, "latest runs", `
 		SELECT `+runColumnsR+`
 		FROM runs r
-		JOIN (SELECT job_name, MAX(started_at) AS latest FROM runs GROUP BY job_name) m
+		JOIN (SELECT job_name, MAX(started_at) AS latest FROM runs
+		      WHERE pipeline_id = ? GROUP BY job_name) m
 		  ON m.job_name = r.job_name AND m.latest = r.started_at
-	`, nil, scanRunRowFrom)
+		WHERE r.pipeline_id = ?
+	`, []any{s.pipelineID, s.pipelineID}, scanRunRowFrom)
 	if err != nil {
 		return nil, err
 	}
@@ -238,17 +251,18 @@ func (s *Store) RunsUsingNode(ctx context.Context, hash string, limit int) ([]Ru
 	return collect(ctx, s.db, "runs using node", `
 		SELECT `+runColumnsR+`
 		FROM runs r
-		WHERE r.id IN (SELECT DISTINCT run_id FROM run_events WHERE hash = ?)
+		WHERE r.pipeline_id = ?
+		  AND r.id IN (SELECT DISTINCT run_id FROM run_events WHERE hash = ?)
 		ORDER BY r.started_at DESC
 		LIMIT ?
-	`, []any{hash, limit}, scanRunRowFrom)
+	`, []any{s.pipelineID, hash, limit}, scanRunRowFrom)
 }
 
 // FindRunRow reads one run in the history shape, with its finish timestamp —
 // so a single run's page and the run list render from identical data.
 func (s *Store) FindRunRow(ctx context.Context, id string) (RunRow, bool, error) {
-	return s.oneRun(ctx, `SELECT `+runColumns+` FROM runs WHERE id = ?`,
-		fmt.Sprintf("could not read run %q", id), id)
+	return s.oneRun(ctx, `SELECT `+runColumns+` FROM runs WHERE id = ? AND pipeline_id = ?`,
+		fmt.Sprintf("could not read run %q", id), id, s.pipelineID)
 }
 
 // FirstRunSince returns the oldest run of a job started at or after `since`,
@@ -262,10 +276,11 @@ func (s *Store) FirstRunSince(ctx context.Context, jobName string, since time.Ti
 	return s.oneRun(ctx, `
 		SELECT `+runColumns+`
 		FROM runs
-		WHERE job_name = ? AND started_at >= ?
+		WHERE pipeline_id = ? AND job_name = ? AND started_at >= ?
 		ORDER BY started_at, rowid
 		LIMIT 1
-	`, fmt.Sprintf("could not look for a run of %q", jobName), jobName, since.UTC().Format(sortableNano))
+	`, fmt.Sprintf("could not look for a run of %q", jobName),
+		s.pipelineID, jobName, since.UTC().Format(sortableNano))
 }
 
 // oneRun reads a single RunRow, reporting ok=false rather than an error when

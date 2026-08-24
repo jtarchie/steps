@@ -217,7 +217,7 @@ func webServerFor(t *testing.T, pipelinePath string) (*web.Server, *web.Pipeline
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	st, err := store.OpenStore(statePath(pipelinePath))
+	st, err := store.OpenStore(statePath(pipelinePath, ""), pipelineName(pipelinePath))
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

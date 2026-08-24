@@ -89,9 +89,9 @@ func (s *Store) RecordNode(ctx context.Context, node NodeRecord, jobName, status
 	}
 
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO nodes (hash, parent_hash, kind, job_name, resource, step_index, content_hash, result, status, error, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(hash) DO UPDATE SET
+		INSERT INTO nodes (pipeline_id, hash, parent_hash, kind, job_name, resource, step_index, content_hash, result, status, error, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(pipeline_id, hash) DO UPDATE SET
 			parent_hash  = excluded.parent_hash,
 			kind         = excluded.kind,
 			job_name     = excluded.job_name,
@@ -103,7 +103,7 @@ func (s *Store) RecordNode(ctx context.Context, node NodeRecord, jobName, status
 			error        = excluded.error,
 			created_at   = excluded.created_at
 	`,
-		node.Hash, nullableHash(node.ParentHash), node.Kind, jobName, node.Resource, node.StepIndex,
+		s.pipelineID, node.Hash, nullableHash(node.ParentHash), node.Kind, jobName, node.Resource, node.StepIndex,
 		contentHash, nullableString(resultJSON), status, errText(execErr), now(),
 	)
 	if err != nil {
@@ -152,8 +152,8 @@ func (s *Store) HasNodeSucceeded(ctx context.Context, jobName, hash string) (boo
 	var count int
 
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM nodes WHERE hash = ? AND job_name = ? AND status = 'succeeded'`,
-		hash, jobName).Scan(&count)
+		`SELECT COUNT(*) FROM nodes WHERE pipeline_id = ? AND hash = ? AND job_name = ? AND status = 'succeeded'`,
+		s.pipelineID, hash, jobName).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("could not read node %q: %w", hash, err)
 	}
@@ -167,10 +167,10 @@ func (s *Store) ListNodes(ctx context.Context, jobName string, limit int) ([]Nod
 	return collect(ctx, s.db, "nodes", `
 		SELECT hash, kind, job_name, resource, step_index, status, error, result, created_at
 		FROM nodes
-		WHERE (? = '' OR job_name = ?)
+		WHERE pipeline_id = ? AND (? = '' OR job_name = ?)
 		ORDER BY created_at DESC, rowid DESC
 		LIMIT ?
-	`, []any{jobName, jobName, limit}, func(rows *sql.Rows) (NodeRow, error) {
+	`, []any{s.pipelineID, jobName, jobName, limit}, func(rows *sql.Rows) (NodeRow, error) {
 		var (
 			row            NodeRow
 			errCol, result sql.NullString
@@ -195,7 +195,9 @@ func (s *Store) NodesByHash(ctx context.Context, hashes []string) (map[string]No
 		return found, nil
 	}
 
-	args := make([]any, 0, len(hashes))
+	args := make([]any, 0, len(hashes)+1)
+	args = append(args, s.pipelineID)
+
 	for _, hash := range hashes {
 		args = append(args, hash)
 	}
@@ -213,7 +215,7 @@ func (s *Store) NodesByHash(ctx context.Context, hashes []string) (map[string]No
 		       n.created_at, c.content, COALESCE(n.parent_hash, '')
 		FROM nodes n
 		JOIN node_content c ON c.content_hash = n.content_hash
-		WHERE n.hash IN (`+placeholders(len(hashes))+`)`, args, func(rows *sql.Rows) (NodeRow, error) {
+		WHERE n.pipeline_id = ? AND n.hash IN (`+placeholders(len(hashes))+`)`, args, func(rows *sql.Rows) (NodeRow, error) {
 		var (
 			row            NodeRow
 			errCol, result sql.NullString
@@ -365,11 +367,11 @@ func (s *Store) SaveNodeTranscript(ctx context.Context, hash, transcript string)
 	transcript = truncateTranscript(transcript)
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO node_transcripts (hash, transcript)
-		VALUES (?, ?)
-		ON CONFLICT (hash) DO UPDATE SET
+		INSERT INTO node_transcripts (pipeline_id, hash, transcript)
+		VALUES (?, ?, ?)
+		ON CONFLICT (pipeline_id, hash) DO UPDATE SET
 			transcript = excluded.transcript
-	`, hash, transcript)
+	`, s.pipelineID, hash, transcript)
 	if err != nil {
 		return fmt.Errorf("could not save transcript for node %q: %w", hash, err)
 	}
@@ -384,7 +386,8 @@ func (s *Store) NodeTranscript(ctx context.Context, hash string) (string, bool, 
 	var transcript string
 
 	err := s.db.QueryRowContext(ctx,
-		`SELECT transcript FROM node_transcripts WHERE hash = ?`, hash).Scan(&transcript)
+		`SELECT transcript FROM node_transcripts WHERE pipeline_id = ? AND hash = ?`,
+		s.pipelineID, hash).Scan(&transcript)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}

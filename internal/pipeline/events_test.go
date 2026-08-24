@@ -232,7 +232,7 @@ jobs:
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"))
+	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -345,7 +345,7 @@ func runFixturePipeline(t *testing.T, yaml string, wantFailure bool) []events.Ev
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"))
+	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

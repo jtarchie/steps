@@ -31,10 +31,10 @@ func (s *Store) RecordJobOutcome(ctx context.Context, jobName string, succeeded 
 	}
 
 	err = s.db.QueryRowContext(ctx, `
-		INSERT INTO job_breaker (job_name, consecutive) VALUES (?, 1)
-		ON CONFLICT (job_name) DO UPDATE SET consecutive = job_breaker.consecutive + 1
+		INSERT INTO job_breaker (pipeline_id, job_name, consecutive) VALUES (?, ?, 1)
+		ON CONFLICT (pipeline_id, job_name) DO UPDATE SET consecutive = job_breaker.consecutive + 1
 		RETURNING consecutive
-	`, jobName).Scan(&consecutive)
+	`, s.pipelineID, jobName).Scan(&consecutive)
 	if err != nil {
 		return false, 0, fmt.Errorf("could not record failure for job %q: %w", jobName, err)
 	}
@@ -44,8 +44,8 @@ func (s *Store) RecordJobOutcome(ctx context.Context, jobName string, succeeded 
 	}
 
 	_, err = s.db.ExecContext(ctx,
-		`UPDATE job_breaker SET paused_at = ? WHERE job_name = ? AND paused_at IS NULL`,
-		now(), jobName)
+		`UPDATE job_breaker SET paused_at = ? WHERE pipeline_id = ? AND job_name = ? AND paused_at IS NULL`,
+		now(), s.pipelineID, jobName)
 	if err != nil {
 		return false, consecutive, fmt.Errorf("could not pause job %q: %w", jobName, err)
 	}
@@ -58,8 +58,9 @@ func (s *Store) RecordJobOutcome(ctx context.Context, jobName string, succeeded 
 // the natural way to confirm a fix.
 func (s *Store) ResetJobFailures(ctx context.Context, jobName string) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO job_breaker (job_name, consecutive, paused_at) VALUES (?, 0, NULL)
-		 ON CONFLICT (job_name) DO UPDATE SET consecutive = 0, paused_at = NULL`, jobName)
+		`INSERT INTO job_breaker (pipeline_id, job_name, consecutive, paused_at) VALUES (?, ?, 0, NULL)
+		 ON CONFLICT (pipeline_id, job_name) DO UPDATE SET consecutive = 0, paused_at = NULL`,
+		s.pipelineID, jobName)
 	if err != nil {
 		return fmt.Errorf("could not reset the failure count for job %q: %w", jobName, err)
 	}
@@ -72,7 +73,8 @@ func (s *Store) IsJobPaused(ctx context.Context, jobName string) (bool, error) {
 	var pausedAt sql.NullString
 
 	err := s.db.QueryRowContext(ctx,
-		`SELECT paused_at FROM job_breaker WHERE job_name = ?`, jobName).Scan(&pausedAt)
+		`SELECT paused_at FROM job_breaker WHERE pipeline_id = ? AND job_name = ?`,
+		s.pipelineID, jobName).Scan(&pausedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -90,8 +92,8 @@ func (s *Store) IsJobPaused(ctx context.Context, jobName string) (bool, error) {
 func (s *Store) PausedJobs(ctx context.Context) ([]PausedJob, error) {
 	return collect(ctx, s.db, "paused jobs",
 		`SELECT job_name, consecutive, paused_at FROM job_breaker
-		 WHERE paused_at IS NOT NULL ORDER BY paused_at`,
-		nil, func(rows *sql.Rows) (PausedJob, error) {
+		 WHERE pipeline_id = ? AND paused_at IS NOT NULL ORDER BY paused_at`,
+		[]any{s.pipelineID}, func(rows *sql.Rows) (PausedJob, error) {
 			var job PausedJob
 
 			return job, rows.Scan(&job.Name, &job.Consecutive, &job.PausedAt)

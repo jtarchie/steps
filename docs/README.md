@@ -25,7 +25,7 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 
 | Page | What it covers |
 |---|---|
-| [web.md](web.md) | The browser UI: run transcripts, the dependency graph, live runs, triggering |
+| [web.md](web.md) | The browser UI: run transcripts, the dependency graph, live runs, triggering, and sharing one state database between pipelines |
 | [agents-internals.md](agents-internals.md) | How agent steps work underneath: transport, tool-call repair, compaction, caching |
 | [conformance.md](conformance.md) | Which Concourse behaviors steps matches, which it doesn't, and which are verified |
 

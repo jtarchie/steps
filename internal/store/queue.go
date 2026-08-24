@@ -37,10 +37,10 @@ type QueueRow struct {
 // what it looks like: the job is already queued.
 func (s *Store) EnqueueJob(ctx context.Context, jobName, reason string) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO trigger_queue (job_name, reason, status, enqueued_at)
-		VALUES (?, ?, 'pending', ?)
-		ON CONFLICT (job_name) WHERE status = 'pending' DO NOTHING
-	`, jobName, reason, now())
+		INSERT INTO trigger_queue (pipeline_id, job_name, reason, status, enqueued_at)
+		VALUES (?, ?, ?, 'pending', ?)
+		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' DO NOTHING
+	`, s.pipelineID, jobName, reason, now())
 	if err != nil {
 		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
 	}
@@ -76,26 +76,29 @@ func (s *Store) ClaimNextJob(ctx context.Context) (int64, string, bool, error) {
 		SET status = 'running', started_at = ?
 		WHERE id = (
 			SELECT id FROM trigger_queue AS tq
-			WHERE tq.status = 'pending'
+			WHERE tq.pipeline_id = ? AND tq.status = 'pending'
 			  AND (
 			      SELECT COUNT(*) FROM trigger_queue AS r
-			      WHERE r.job_name = tq.job_name AND r.status = 'running'
+			      WHERE r.pipeline_id = tq.pipeline_id AND r.job_name = tq.job_name AND r.status = 'running'
 			  ) < COALESCE(
-			      (SELECT c.max_in_flight FROM job_concurrency AS c WHERE c.job_name = tq.job_name),
+			      (SELECT c.max_in_flight FROM job_concurrency AS c
+			       WHERE c.pipeline_id = tq.pipeline_id AND c.job_name = tq.job_name),
 			      1
 			  )
 			  AND NOT EXISTS (
 			      SELECT 1
 			      FROM job_serial_groups AS mine
-			      JOIN job_serial_groups AS theirs ON theirs.group_name = mine.group_name
+			      JOIN job_serial_groups AS theirs
+			        ON theirs.pipeline_id = mine.pipeline_id AND theirs.group_name = mine.group_name
 			      JOIN trigger_queue AS busy
-			        ON busy.job_name = theirs.job_name AND busy.status = 'running'
-			      WHERE mine.job_name = tq.job_name
+			        ON busy.pipeline_id = theirs.pipeline_id
+			       AND busy.job_name = theirs.job_name AND busy.status = 'running'
+			      WHERE mine.pipeline_id = tq.pipeline_id AND mine.job_name = tq.job_name
 			  )
 			ORDER BY tq.id LIMIT 1
 		)
 		RETURNING id, job_name
-	`, now()).Scan(&id, &jobName)
+	`, now(), s.pipelineID).Scan(&id, &jobName)
 	if err == sql.ErrNoRows {
 		return 0, "", false, nil
 	}
@@ -116,8 +119,8 @@ func (s *Store) CompleteJob(ctx context.Context, id int64, status string, runErr
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE trigger_queue
 		SET status = ?, finished_at = ?, error = ?
-		WHERE id = ?
-	`, status, now(), errText(runErr), id)
+		WHERE id = ? AND pipeline_id = ?
+	`, status, now(), errText(runErr), id, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not complete job (id %d): %w", id, err)
 	}
@@ -125,9 +128,23 @@ func (s *Store) CompleteJob(ctx context.Context, id int64, status string, runErr
 	return nil
 }
 
-// ResetStaleRunning flips every running row back to pending — called once
-// at Watch startup so a killed (or gracefully but incompletely shut down)
-// watch process doesn't strand claimed work forever.
+// ResetStaleRunning flips this pipeline's running rows back to pending —
+// called once at Watch startup so a killed (or gracefully but incompletely
+// shut down) watch process doesn't strand claimed work forever.
+//
+// It assumes ONE steps process is polling a pipeline at a time, and that
+// assumption is now the whole guard. A file lock used to enforce it, so that a
+// second `steps watch` (or a `steps web` that polls) would give way rather than
+// treat a live build's row as an abandoned leftover — flip it, let the job be
+// claimed twice, and silently defeat serial:/max_in_flight. The lock is gone
+// deliberately: a state file belongs to one process, and the ways to run two
+// against it (a watch beside a polling web) are a deployment mistake rather
+// than a case to support. `steps web --no-watch` is still how a UI defers the
+// polling to a separate watcher.
+//
+// The rows are scoped to this pipeline because a state file may hold several,
+// and one pipeline's watcher starting up must not reach into another's
+// in-flight builds.
 //
 // A running row may coexist with a pending row for the same job (a version
 // change enqueued while that job was mid-run). Flipping the running row to
@@ -145,12 +162,13 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 	// builds is read from resource_versions when it runs.
 	_, err := s.db.ExecContext(ctx, `
 		DELETE FROM trigger_queue
-		WHERE status = 'running'
+		WHERE pipeline_id = ? AND status = 'running'
 		  AND EXISTS (
 		      SELECT 1 FROM trigger_queue AS p
-		      WHERE p.job_name = trigger_queue.job_name AND p.status = 'pending'
+		      WHERE p.pipeline_id = trigger_queue.pipeline_id
+		        AND p.job_name = trigger_queue.job_name AND p.status = 'pending'
 		  )
-	`)
+	`, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not clear superseded running jobs: %w", err)
 	}
@@ -161,17 +179,19 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 	// right: the job needs to run, not to run N times.
 	_, err = s.db.ExecContext(ctx, `
 		DELETE FROM trigger_queue
-		WHERE status = 'running' AND rowid NOT IN (
-			SELECT MIN(rowid) FROM trigger_queue WHERE status = 'running' GROUP BY job_name
+		WHERE pipeline_id = ? AND status = 'running' AND rowid NOT IN (
+			SELECT MIN(rowid) FROM trigger_queue
+			WHERE pipeline_id = ? AND status = 'running' GROUP BY job_name
 		)
-	`)
+	`, s.pipelineID, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not collapse stale running jobs: %w", err)
 	}
 
 	_, err = s.db.ExecContext(ctx, `
-		UPDATE trigger_queue SET status = 'pending', started_at = NULL WHERE status = 'running'
-	`)
+		UPDATE trigger_queue SET status = 'pending', started_at = NULL
+		WHERE pipeline_id = ? AND status = 'running'
+	`, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not reset stale running jobs: %w", err)
 	}
@@ -185,9 +205,10 @@ func (s *Store) ListTriggerQueue(ctx context.Context, limit int) ([]QueueRow, er
 	return collect(ctx, s.db, "trigger_queue", `
 		SELECT id, job_name, reason, status, enqueued_at, started_at, finished_at, error
 		FROM trigger_queue
+		WHERE pipeline_id = ?
 		ORDER BY id DESC
 		LIMIT ?
-	`, []any{limit}, func(rows *sql.Rows) (QueueRow, error) {
+	`, []any{s.pipelineID, limit}, func(rows *sql.Rows) (QueueRow, error) {
 		var (
 			row                       QueueRow
 			started, finished, errCol sql.NullString
@@ -216,8 +237,8 @@ func (s *Store) SyncSerialGroups(ctx context.Context, groups map[string][]string
 	return s.replaceAll(ctx, "serial groups", "job_serial_groups", func(exec execFunc) error {
 		for jobName, names := range groups {
 			for _, group := range names {
-				err := exec(`INSERT INTO job_serial_groups (job_name, group_name) VALUES (?, ?)
-					 ON CONFLICT (job_name, group_name) DO NOTHING`, jobName, group)
+				err := exec(`INSERT INTO job_serial_groups (pipeline_id, job_name, group_name) VALUES (?, ?, ?)
+					 ON CONFLICT (pipeline_id, job_name, group_name) DO NOTHING`, s.pipelineID, jobName, group)
 				if err != nil {
 					return fmt.Errorf("could not record serial group %q for job %q: %w", group, jobName, err)
 				}
@@ -235,7 +256,8 @@ func (s *Store) SyncSerialGroups(ctx context.Context, groups map[string][]string
 func (s *Store) SyncMaxInFlight(ctx context.Context, limits map[string]int) error {
 	return s.replaceAll(ctx, "job concurrency", "job_concurrency", func(exec execFunc) error {
 		for jobName, limit := range limits {
-			err := exec(`INSERT INTO job_concurrency (job_name, max_in_flight) VALUES (?, ?)`, jobName, limit)
+			err := exec(`INSERT INTO job_concurrency (pipeline_id, job_name, max_in_flight) VALUES (?, ?, ?)`,
+				s.pipelineID, jobName, limit)
 			if err != nil {
 				return fmt.Errorf("could not record concurrency for job %q: %w", jobName, err)
 			}
@@ -248,9 +270,11 @@ func (s *Store) SyncMaxInFlight(ctx context.Context, limits map[string]int) erro
 // execFunc is one statement inside replaceAll's transaction.
 type execFunc func(query string, args ...any) error
 
-// replaceAll empties table and refills it from fill, in one transaction. Both
-// config-synced tables are declarative mirrors of the YAML, so a partial
-// rewrite is never a valid state to leave behind.
+// replaceAll empties THIS PIPELINE's rows in table and refills them from fill,
+// in one transaction. Both config-synced tables are declarative mirrors of the
+// YAML, so a partial rewrite is never a valid state to leave behind — and the
+// delete is scoped, since a shared state file holds other pipelines' mirrors
+// of their own YAML.
 func (s *Store) replaceAll(ctx context.Context, what, table string, fill func(execFunc) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -260,7 +284,7 @@ func (s *Store) replaceAll(ctx context.Context, what, table string, fill func(ex
 	defer func() { _ = tx.Rollback() }()
 
 	//nolint:gosec // G202: table is a package-internal literal, never input
-	_, err = tx.ExecContext(ctx, `DELETE FROM `+table)
+	_, err = tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE pipeline_id = ?`, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not clear %s: %w", what, err)
 	}
@@ -293,11 +317,14 @@ func (s *Store) SerialGroupHolder(ctx context.Context, jobName string) (string, 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT busy.job_name
 		FROM job_serial_groups AS mine
-		JOIN job_serial_groups AS theirs ON theirs.group_name = mine.group_name
-		JOIN trigger_queue AS busy ON busy.job_name = theirs.job_name AND busy.status = 'running'
-		WHERE mine.job_name = ?
+		JOIN job_serial_groups AS theirs
+		  ON theirs.pipeline_id = mine.pipeline_id AND theirs.group_name = mine.group_name
+		JOIN trigger_queue AS busy
+		  ON busy.pipeline_id = theirs.pipeline_id
+		 AND busy.job_name = theirs.job_name AND busy.status = 'running'
+		WHERE mine.pipeline_id = ? AND mine.job_name = ?
 		LIMIT 1
-	`, jobName).Scan(&holder)
+	`, s.pipelineID, jobName).Scan(&holder)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}

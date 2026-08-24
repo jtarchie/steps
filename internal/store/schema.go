@@ -9,9 +9,29 @@ package store
 //
 // It is a detector, not a migration counter. There is still no upgrade path
 // and deliberately so; the answer to a mismatch remains deleting the file.
-const schemaVersion = 1
+const schemaVersion = 2
 
 const schema = `
+-- Which pipelines this database holds. One state file may carry several (see
+-- the --state flag), and this table is what keeps them strangers: every
+-- pipeline-scoped table below carries a pipeline_id, and deleting a row here
+-- takes that pipeline's entire history with it.
+--
+-- The name is the identity, not the path. It defaults to the YAML's base name
+-- and can be set with --name, because two repositories each holding a
+-- pipeline.yml are two pipelines and one file name. Renaming is therefore a
+-- new identity with new state, which is the honest answer: nothing in a
+-- content-addressed cache can tell a rename from a different pipeline.
+--
+-- path is recorded for humans reading the database (steps runs, the web UI's
+-- pipeline list) and is deliberately NOT unique: the same file checked out at
+-- two paths under two names is a legitimate thing to do.
+CREATE TABLE IF NOT EXISTS pipelines (
+    id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    path TEXT NOT NULL
+);
+
 -- The interned merkle preimage: what each node's hash was computed FROM.
 --
 -- Its own table because the same content repeats across builds and used to be
@@ -32,13 +52,26 @@ const schema = `
 -- Retention sweeps the unreferenced rows explicitly (see PruneRuns), and the
 -- RESTRICT on the referencing side is what makes a mistake there an error
 -- rather than a dangling node.
+--
+-- The one pipeline-scoped table's exception, and safely so: the key IS the
+-- content's hash, so two pipelines landing on the same row landed there by
+-- agreeing byte for byte. Sharing it leaks nothing a pipeline did not already
+-- write, and the RESTRICT below is what stops one pipeline's retention from
+-- sweeping a row another still points at.
 CREATE TABLE IF NOT EXISTS node_content (
     content_hash TEXT PRIMARY KEY,
     content      TEXT NOT NULL
 );
 
+-- Scoped by pipeline, and this is the table where that matters most. A node
+-- hash folds in kind, content and parent (merkle.HashNode) but NOT the
+-- pipeline, so two pipelines each running a job named build over a
+-- byte-identical task produce the same hash — and in a shared database the
+-- second one would read the first one's success and skip work it never did.
+-- The hash is unique to a chain, not to a database.
 CREATE TABLE IF NOT EXISTS nodes (
-    hash        TEXT PRIMARY KEY,
+    pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    hash        TEXT NOT NULL,
     -- NULL for a chain's first step, which has no parent. It was '', which is
     -- the wrong shape for an absent reference — sqlite reads an empty string as
     -- a value that must exist and a NULL as nothing to check — and the reads
@@ -64,13 +97,14 @@ CREATE TABLE IF NOT EXISTS nodes (
     result      TEXT,
     status      TEXT NOT NULL,
     error       TEXT,
-    created_at  TEXT NOT NULL
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (pipeline_id, hash)
 );
-CREATE INDEX IF NOT EXISTS idx_nodes_parent_hash ON nodes(parent_hash);
+CREATE INDEX IF NOT EXISTS idx_nodes_parent_hash ON nodes(pipeline_id, parent_hash);
 -- Retention scans nodes by job (ordering by rowid, not created_at — see
 -- pruneNodes) and sweeps node_content by what nodes still point at; both are
 -- full scans without these.
-CREATE INDEX IF NOT EXISTS idx_nodes_job ON nodes(job_name);
+CREATE INDEX IF NOT EXISTS idx_nodes_job ON nodes(pipeline_id, job_name);
 CREATE INDEX IF NOT EXISTS idx_nodes_content_hash ON nodes(content_hash);
 
 -- root_hash names a node and deliberately does not reference one, for two
@@ -92,22 +126,26 @@ CREATE INDEX IF NOT EXISTS idx_nodes_content_hash ON nodes(content_hash);
 -- what it holds: a chain last green before the retention window is one whose
 -- content nobody is about to submit again.
 CREATE TABLE IF NOT EXISTS job_runs (
+    pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
     job_name   TEXT NOT NULL,
     root_hash  TEXT NOT NULL,
     status     TEXT NOT NULL,
     error      TEXT,
     created_at TEXT NOT NULL,
-    PRIMARY KEY (job_name, root_hash)
+    PRIMARY KEY (pipeline_id, job_name, root_hash)
 );
 
 CREATE TABLE IF NOT EXISTS resource_checks (
-    resource_name TEXT PRIMARY KEY,
+    pipeline_id   INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    resource_name TEXT NOT NULL,
     version_json  TEXT NOT NULL,
-    checked_at    TEXT NOT NULL
+    checked_at    TEXT NOT NULL,
+    PRIMARY KEY (pipeline_id, resource_name)
 );
 
 CREATE TABLE IF NOT EXISTS trigger_queue (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
     job_name    TEXT NOT NULL,
     reason      TEXT NOT NULL,
     status      TEXT NOT NULL,
@@ -119,7 +157,7 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
 -- At most one pending row per job at a time; a running row isn't covered,
 -- so a version change mid-run still enqueues a fresh pending row for after.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_job
-    ON trigger_queue(job_name) WHERE status = 'pending';
+    ON trigger_queue(pipeline_id, job_name) WHERE status = 'pending';
 
 -- Every version steps has ever seen of a resource. The thing whose absence
 -- was, until now, the one STRUCTURAL divergence from Concourse: without it a
@@ -146,15 +184,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_job
 -- creates a parent for the foreign key but says nothing about what else
 -- exists. Treating those as history would let one remembered version hide
 -- every version a check would have reported.
+--
+-- Scoped per pipeline rather than shared by resource name, matching Concourse,
+-- where a pipeline is the isolation boundary. Two pipelines naming a resource
+-- "repo" have said nothing about it being the same repo — their source: blocks
+-- are independent — so merging their histories would let one pipeline's check
+-- decide what the other builds.
 CREATE TABLE IF NOT EXISTS resource_versions (
+    pipeline_id   INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
     resource_name TEXT NOT NULL,
     version_json  TEXT NOT NULL,
     check_order   INTEGER NOT NULL,
     from_check    INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (resource_name, version_json)
+    PRIMARY KEY (pipeline_id, resource_name, version_json)
 );
 CREATE INDEX IF NOT EXISTS idx_resource_versions_order
-    ON resource_versions(resource_name, check_order);
+    ON resource_versions(pipeline_id, resource_name, check_order);
 
 -- Which resource versions each job has SUCCESSFULLY run against. It is what
 -- passed: reads.
@@ -175,14 +220,15 @@ CREATE INDEX IF NOT EXISTS idx_resource_versions_order
 -- history cap set below what a slow downstream job needs will hold that job
 -- back. See resourceVersionCap.
 CREATE TABLE IF NOT EXISTS job_versions (
+    pipeline_id   INTEGER NOT NULL,
     job_name      TEXT NOT NULL,
     resource_name TEXT NOT NULL,
     version_json  TEXT NOT NULL,
     recorded_at   TEXT NOT NULL,
     build_id      TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (job_name, resource_name, version_json),
-    FOREIGN KEY (resource_name, version_json)
-        REFERENCES resource_versions(resource_name, version_json) ON DELETE CASCADE
+    PRIMARY KEY (pipeline_id, job_name, resource_name, version_json),
+    FOREIGN KEY (pipeline_id, resource_name, version_json)
+        REFERENCES resource_versions(pipeline_id, resource_name, version_json) ON DELETE CASCADE
 );
 
 -- How far a job has FANNED OUT under get: version: every -- the highest
@@ -214,17 +260,23 @@ CREATE TABLE IF NOT EXISTS job_versions (
 -- an order that no longer exists still separates what is above it from what
 -- is below.
 CREATE TABLE IF NOT EXISTS job_version_cursor (
+    pipeline_id   INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
     job_name      TEXT NOT NULL,
     resource_name TEXT NOT NULL,
     check_order   INTEGER NOT NULL,
-    PRIMARY KEY (job_name, resource_name)
+    PRIMARY KEY (pipeline_id, job_name, resource_name)
 );
 
 -- One row per run invocation, with the steps it got through. It is what
 -- --resume reads: not "has this content succeeded before" (that is the merkle
 -- cache) but "did THIS run already do this step".
+-- id stays globally unique (pipeline.NewRunID is random), so run-scoped tables
+-- below need no pipeline of their own — they reach it through this row, and
+-- cascade with it. The column here is what scopes the LISTINGS, and what lets
+-- --resume refuse a run id belonging to a different pipeline in the same file.
 CREATE TABLE IF NOT EXISTS runs (
     id         TEXT PRIMARY KEY,
+    pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
     job_name   TEXT NOT NULL,
     -- Kept for the life of the row, though it looks like dead weight once a run
     -- ends. Clearing it was tried and reverted: --resume continues a FAILED run
@@ -243,7 +295,7 @@ CREATE TABLE IF NOT EXISTS runs (
     parent_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL
 );
 -- Retention orders a job's runs by recency to find the ones past the cap.
-CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(job_name, started_at);
+CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(pipeline_id, job_name, started_at);
 
 CREATE TABLE IF NOT EXISTS run_steps (
     run_id     TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
@@ -256,6 +308,7 @@ CREATE TABLE IF NOT EXISTS run_steps (
 -- depend on external chat history.
 CREATE TABLE IF NOT EXISTS approvals (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    pipeline_id  INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
     job_name     TEXT NOT NULL,
     message      TEXT NOT NULL,
     status       TEXT NOT NULL,
@@ -273,25 +326,30 @@ CREATE TABLE IF NOT EXISTS approvals (
 -- written (see config.Job.EffectiveMaxInFlight), so this column is the final
 -- answer rather than one of several things to combine here.
 CREATE TABLE IF NOT EXISTS job_concurrency (
-    job_name      TEXT PRIMARY KEY,
-    max_in_flight INTEGER NOT NULL
+    pipeline_id   INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    job_name      TEXT NOT NULL,
+    max_in_flight INTEGER NOT NULL,
+    PRIMARY KEY (pipeline_id, job_name)
 );
 
 -- Which serial groups each job belongs to. Synced from config at startup; it
 -- lives in the database so the claim can stay a single atomic statement
 -- rather than a read-then-claim with a race in the middle.
 CREATE TABLE IF NOT EXISTS job_serial_groups (
+    pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
     job_name   TEXT NOT NULL,
     group_name TEXT NOT NULL,
-    PRIMARY KEY (job_name, group_name)
+    PRIMARY KEY (pipeline_id, job_name, group_name)
 );
 
 -- The watch circuit breaker: how many times in a row a job has failed, and
 -- whether that has taken it out of the rotation.
 CREATE TABLE IF NOT EXISTS job_breaker (
-    job_name    TEXT PRIMARY KEY,
+    pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    job_name    TEXT NOT NULL,
     consecutive INTEGER NOT NULL,
-    paused_at   TEXT
+    paused_at   TEXT,
+    PRIMARY KEY (pipeline_id, job_name)
 );
 
 -- Everything a run did, in the order it did it: the persisted side of the
@@ -376,12 +434,18 @@ CREATE INDEX IF NOT EXISTS idx_run_events_hash ON run_events(hash);
 -- raw_meta keeps the provider's whole usage block. The schema has no
 -- versioning and no migration path, so a field not captured today cannot be
 -- backfilled tomorrow.
+--
+-- pipeline_id is here only to complete the compound reference to nodes, whose
+-- key gained a pipeline; the row's own scope already arrives through run_id.
+-- Nothing needs a second cascade from pipelines: deleting one takes its nodes,
+-- and these rows go with them.
 CREATE TABLE IF NOT EXISTS agent_usage (
     run_id            TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    pipeline_id       INTEGER NOT NULL,
     step_index        INTEGER NOT NULL,
     step_name         TEXT NOT NULL,
     job_name          TEXT NOT NULL,
-    node_hash         TEXT NOT NULL REFERENCES nodes(hash) ON DELETE CASCADE,
+    node_hash         TEXT NOT NULL,
     model_requested   TEXT NOT NULL,
     model_served      TEXT NOT NULL,
     prompt_tokens     INTEGER NOT NULL,
@@ -394,7 +458,8 @@ CREATE TABLE IF NOT EXISTS agent_usage (
     duration_ms       INTEGER NOT NULL,
     raw_meta          TEXT NOT NULL,
     created_at        TEXT NOT NULL,
-    PRIMARY KEY (run_id, node_hash)
+    PRIMARY KEY (run_id, node_hash),
+    FOREIGN KEY (pipeline_id, node_hash) REFERENCES nodes(pipeline_id, hash) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_agent_usage_run ON agent_usage(run_id, step_index);
 
@@ -408,8 +473,11 @@ CREATE INDEX IF NOT EXISTS idx_agent_usage_run ON agent_usage(run_id, step_index
 -- missing: internal/agent caps a single tool RESULT, but a conversation has
 -- unboundedly many turns, so the row itself needs MaxTranscriptBytes.
 CREATE TABLE IF NOT EXISTS node_transcripts (
-    hash       TEXT PRIMARY KEY REFERENCES nodes(hash) ON DELETE CASCADE,
-    transcript TEXT NOT NULL
+    pipeline_id INTEGER NOT NULL,
+    hash       TEXT NOT NULL,
+    transcript TEXT NOT NULL,
+    PRIMARY KEY (pipeline_id, hash),
+    FOREIGN KEY (pipeline_id, hash) REFERENCES nodes(pipeline_id, hash) ON DELETE CASCADE
 );
 `
 

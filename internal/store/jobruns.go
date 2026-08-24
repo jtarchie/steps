@@ -23,13 +23,13 @@ type JobRunRow struct {
 // (jobName, rootHash).
 func (s *Store) RecordJobRun(ctx context.Context, jobName, rootHash, status string, runErr error) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO job_runs (job_name, root_hash, status, error, created_at)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(job_name, root_hash) DO UPDATE SET
+		INSERT INTO job_runs (pipeline_id, job_name, root_hash, status, error, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(pipeline_id, job_name, root_hash) DO UPDATE SET
 			status     = excluded.status,
 			error      = excluded.error,
 			created_at = excluded.created_at
-	`, jobName, rootHash, status, errText(runErr), now())
+	`, s.pipelineID, jobName, rootHash, status, errText(runErr), now())
 	if err != nil {
 		return fmt.Errorf("could not record job run (job %q, root %q): %w", jobName, rootHash, err)
 	}
@@ -43,8 +43,8 @@ func (s *Store) HasSucceeded(ctx context.Context, jobName, rootHash string) (boo
 	var status string
 
 	err := s.db.QueryRowContext(ctx,
-		`SELECT status FROM job_runs WHERE job_name = ? AND root_hash = ?`,
-		jobName, rootHash,
+		`SELECT status FROM job_runs WHERE pipeline_id = ? AND job_name = ? AND root_hash = ?`,
+		s.pipelineID, jobName, rootHash,
 	).Scan(&status)
 	if err == sql.ErrNoRows {
 		return false, nil
@@ -73,15 +73,15 @@ func (s *Store) HasSucceededBatch(ctx context.Context, jobName string, rootHashe
 
 		chunk := rootHashes[start:end]
 
-		args := make([]any, 0, len(chunk)+1)
-		args = append(args, jobName)
+		args := make([]any, 0, len(chunk)+2)
+		args = append(args, s.pipelineID, jobName)
 
 		for _, hash := range chunk {
 			args = append(args, hash)
 		}
 
 		found, err := collect(ctx, s.db, "job_runs",
-			`SELECT root_hash FROM job_runs WHERE job_name = ? AND status = 'succeeded' AND root_hash IN (`+
+			`SELECT root_hash FROM job_runs WHERE pipeline_id = ? AND job_name = ? AND status = 'succeeded' AND root_hash IN (`+
 				placeholders(len(chunk))+`)`,
 			args, func(rows *sql.Rows) (string, error) {
 				var hash string
@@ -106,10 +106,10 @@ func (s *Store) ListJobRuns(ctx context.Context, jobName string, limit int) ([]J
 	return collect(ctx, s.db, "job_runs", `
 		SELECT job_name, root_hash, status, error, created_at
 		FROM job_runs
-		WHERE (? = '' OR job_name = ?)
+		WHERE pipeline_id = ? AND (? = '' OR job_name = ?)
 		ORDER BY created_at DESC, rowid DESC
 		LIMIT ?
-	`, []any{jobName, jobName, limit}, func(rows *sql.Rows) (JobRunRow, error) {
+	`, []any{s.pipelineID, jobName, jobName, limit}, func(rows *sql.Rows) (JobRunRow, error) {
 		var (
 			row       JobRunRow
 			errCol    sql.NullString

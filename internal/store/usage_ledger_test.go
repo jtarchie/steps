@@ -15,7 +15,7 @@ import (
 func TestAgentUsageAccumulatesAcrossAttempts(t *testing.T) {
 	t.Parallel()
 
-	st, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	st, err := OpenStore(filepath.Join(t.TempDir(), "state.db"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestAgentUsageAccumulatesAcrossAttempts(t *testing.T) {
 func TestAgentUsageCostSurvivesAnUnpricedAttempt(t *testing.T) {
 	t.Parallel()
 
-	st, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	st, err := OpenStore(filepath.Join(t.TempDir(), "state.db"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestAgentUsageCostSurvivesAnUnpricedAttempt(t *testing.T) {
 func TestAgentUsageNeverPricedStaysNull(t *testing.T) {
 	t.Parallel()
 
-	st, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	st, err := OpenStore(filepath.Join(t.TempDir(), "state.db"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -50,7 +50,7 @@ func newSetsFixture(t *testing.T, gets ...config.Step) *setsFixture {
 		Jobs: []config.Job{{Name: "build", Plan: plan}},
 	}
 
-	st, err := store.OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	st, err := store.OpenStore(filepath.Join(t.TempDir(), "state.db"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}

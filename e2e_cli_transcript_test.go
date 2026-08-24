@@ -254,7 +254,7 @@ func agentUsageFor(t *testing.T, path string) store.AgentUsage {
 func openStoreFor(t *testing.T, path string) *store.Store {
 	t.Helper()
 
-	st, err := store.OpenStore(statePath(path))
+	st, err := store.OpenStore(statePath(path, ""), pipelineName(path))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
