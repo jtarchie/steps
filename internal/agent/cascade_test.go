@@ -213,3 +213,100 @@ func TestDecideCascadeStopsAtTheDeadline(t *testing.T) {
 		}
 	}
 }
+
+// TestDecidePreflightPinIsTotal enumerates the whole input space of the other
+// pin decision, for the same reason TestDecideCascadeIsTotal does: a
+// process-lifetime preference changed on a guess is how a run strands itself.
+func TestDecidePreflightPinIsTotal(t *testing.T) {
+	t.Parallel()
+
+	for _, pinned := range []bool{false, true} {
+		for _, primaryHealthy := range []bool{false, true} {
+			for _, pinnedHealthy := range []bool{false, true} {
+				t.Run(pinCaseName(pinned, primaryHealthy, pinnedHealthy), func(t *testing.T) {
+					t.Parallel()
+
+					got := decidePreflightPin(pinned, primaryHealthy, pinnedHealthy)
+					want := expectedPinAction(pinned, primaryHealthy, pinnedHealthy)
+
+					if got != want {
+						t.Errorf("decidePreflightPin(%v, %v, %v) = %v, want %v",
+							pinned, primaryHealthy, pinnedHealthy, got, want)
+					}
+				})
+			}
+		}
+	}
+}
+
+// expectedPinAction states the rules independently of the implementation's
+// control flow, so the two have to agree rather than one paraphrasing the
+// other:
+//
+//   - With no pin there is nothing to reconsider.
+//   - A recovered primary ends the reason the pin existed.
+//   - A dead pinned source has to re-decide too, or fixing the first blind
+//     spot just trades it for a worse one.
+func expectedPinAction(pinned, primaryHealthy, pinnedHealthy bool) pinAction {
+	switch {
+	case !pinned:
+		return leavePin
+	case primaryHealthy:
+		return dropPin
+	case !pinnedHealthy:
+		return dropPin
+	default:
+		return leavePin
+	}
+}
+
+func pinCaseName(pinned, primaryHealthy, pinnedHealthy bool) string {
+	parts := []string{}
+
+	for _, flag := range []struct {
+		on   bool
+		text string
+	}{
+		{pinned, "pinned"},
+		{primaryHealthy, "primaryHealthy"},
+		{pinnedHealthy, "pinnedHealthy"},
+	} {
+		if flag.on {
+			parts = append(parts, flag.text)
+		}
+	}
+
+	if len(parts) == 0 {
+		return "nothing"
+	}
+
+	return strings.Join(parts, "+")
+}
+
+// TestDecidePreflightPinKeepsAServingFallback is the status quo this must not
+// break, asserted directly: while the primary is still down and the fallback
+// is still answering, the pin is exactly what should happen — re-deciding
+// there is how a flapping primary would oscillate an agent between models.
+func TestDecidePreflightPinKeepsAServingFallback(t *testing.T) {
+	t.Parallel()
+
+	if got := decidePreflightPin(true, false, true); got != leavePin {
+		t.Errorf("a serving fallback under a dead primary got %v, want the pin left alone", got)
+	}
+}
+
+// TestDecidePreflightPinNeverTouchesAnUnpinnedAgent guards the one case where
+// acting would be a regression rather than a fix: an agent with no pin has
+// nothing to return to, and dropPin there would be a write for no reason.
+func TestDecidePreflightPinNeverTouchesAnUnpinnedAgent(t *testing.T) {
+	t.Parallel()
+
+	for _, primaryHealthy := range []bool{false, true} {
+		for _, pinnedHealthy := range []bool{false, true} {
+			if got := decidePreflightPin(false, primaryHealthy, pinnedHealthy); got != leavePin {
+				t.Errorf("decidePreflightPin(false, %v, %v) = %v, want the pin left alone",
+					primaryHealthy, pinnedHealthy, got)
+			}
+		}
+	}
+}

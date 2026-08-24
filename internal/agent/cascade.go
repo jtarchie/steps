@@ -190,3 +190,47 @@ func decideCascade(result sourceOutcome, hasNext, deadlineSpent, swapped bool) c
 	// rather than silently taking some other case's branch.
 	return cascadeVerdict{action: returnResult, pin: leavePin}
 }
+
+// decidePreflightPin answers the question the mid-run cascade deliberately
+// does not: how long should a pin stay true?
+//
+// A pin is process-lifetime, and until this existed it had no way back. The
+// reasoning for its scope still holds — a `steps watch` that failed over
+// should not re-probe a known-dead primary on every poll — but "never
+// re-probe" and "never reconsider" are different rules, and only the first
+// one was wanted. An outage that lasted ninety seconds could move an agent to
+// a possibly-worse model for days, silently: agent.failover fires once, at
+// the swap, and nothing afterwards says the agent is still on the fallback.
+//
+// The information to decide was already being gathered on a schedule and then
+// discarded. Preflight probes the primary once per run and caches the answer
+// (defaults.preflight.cache:), so acting on it here costs no new request and
+// no new tunable.
+//
+// Two facts, gathered independently, and either one is enough to re-decide:
+//
+//   - primaryHealthy: the agent's own source answered. The reason for the pin
+//     is gone, so the pin goes with it.
+//   - pinnedHealthy: the source the agent is actually running on answered.
+//     Fixing the first blind spot without this one would trade it for a worse
+//     one, because a pinned source that DIES is otherwise discovered by a step
+//     failing rather than by the probe — preflight never looked at it.
+//
+// pinnedHealthy is meaningless when nothing is pinned and is ignored there.
+//
+// This runs at the preflight boundary and nowhere else, which is what keeps a
+// flapping primary from splitting one job across two models: a run re-decides
+// once, before it starts, and a step's source is settled when it starts.
+func decidePreflightPin(pinned, primaryHealthy, pinnedHealthy bool) pinAction {
+	if !pinned {
+		// Nothing to reconsider. An unhealthy primary with no pin is the
+		// ordinary failover path, which is not this function's business.
+		return leavePin
+	}
+
+	if primaryHealthy || !pinnedHealthy {
+		return dropPin
+	}
+
+	return leavePin
+}

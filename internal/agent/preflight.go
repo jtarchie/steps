@@ -163,6 +163,13 @@ func Preflight(ctx context.Context, cfg *config.Config, agentNames []string, set
 			// move earlier. probeModelCached already collapses the network
 			// cost to one request.
 			probeErr := probeModelCached(ctx, ri, settings)
+
+			// Before acting on the probe: a pin is durable state, and this
+			// is the only boundary that reconsiders it. Ordering matters —
+			// releasing here is what lets the failOver below re-decide from
+			// scratch for an agent whose pinned fallback has since died.
+			reconsiderPin(ctx, agent, ri, settings, probeErr == nil)
+
 			if probeErr == nil {
 				healthyEndpoints[ri.BaseURL] = true
 			} else if !failOver(ctx, agent, ri, settings) {
@@ -289,6 +296,71 @@ func failOver(ctx context.Context, agent *config.Agent, primary config.ResolvedI
 	}
 
 	return false
+}
+
+// reconsiderPin re-decides, once per run, whether an agent should still be
+// running on the fallback it was pinned to.
+//
+// The pin's SCOPE is unchanged — it still lasts for the life of the process,
+// so a `steps watch` does not re-probe a known-dead primary on every poll.
+// What it gains is an exit condition. Preflight already probes the primary
+// here and already caches the answer, so the fact needed to release a pin was
+// being gathered on a schedule and thrown away.
+//
+// The pinned source is probed too, and only when there is a pin. Releasing on
+// a recovered primary WITHOUT this would trade one blind spot for a worse one:
+// preflight looks only at the primary, so a pinned fallback that dies is
+// otherwise discovered by a step failing rather than by the probe. Both facts
+// feed one pure decision (decidePreflightPin), which is what keeps this from
+// becoming another conjunction nobody can enumerate.
+//
+// Dropping the pin is not the same as choosing a source: the caller carries on
+// to its ordinary failover path, so an agent whose primary is still down and
+// whose pin just died re-decides from scratch rather than being stranded.
+func reconsiderPin(
+	ctx context.Context,
+	agent *config.Agent,
+	primary config.ResolvedInvocation,
+	settings *config.Preflight,
+	primaryHealthy bool,
+) {
+	selection, pinned := selectedSource(agent.Name)
+	if !pinned {
+		return
+	}
+
+	// Probed only for a pinned agent, and through the same cache the primary
+	// probe uses, so a run adds at most one request per pinned agent.
+	pinnedHealthy := false
+
+	candidate, err := primary.WithSource(selection.source, agent)
+	if err == nil {
+		pinnedHealthy = probeModelCached(ctx, candidate, settings) == nil
+	}
+
+	if decidePreflightPin(pinned, primaryHealthy, pinnedHealthy) != dropPin {
+		return
+	}
+
+	clearSource(agent.Name)
+
+	// As loud as leaving was. agent.failover warns on the way out, and an
+	// operator watching for model-quality changes needs both edges — a silent
+	// return is how a quality shift gets attributed to the wrong change.
+	if primaryHealthy {
+		slog.Warn("agent.failover.returned",
+			"agent", agent.Name,
+			"from", candidate.ModelName,
+			"to", primary.ModelName,
+			"reason", "the primary model answered preflight again")
+
+		return
+	}
+
+	slog.Warn("agent.failover.pin_lost",
+		"agent", agent.Name,
+		"model", candidate.ModelName,
+		"reason", "the pinned fallback stopped answering preflight; re-deciding from the primary")
 }
 
 // sourceSelection is which fallback: entry an agent is running on: the source
