@@ -235,6 +235,12 @@ func checkCLIAgentSettings(agent Agent) error {
 // internal/agent's own turn loop, which a CLI agent does not run, so accepting
 // them would promise a constraint nothing applies. max_output_bytes survives —
 // it is enforced inside the tool implementation, which the bridge reuses.
+//
+// timeout: splits along that same line, which is why it is only half
+// rejected: a custom or MCP tool is BRIDGED (the child calls the very impl
+// the deadline is bound to, so it holds), while every built-in is run by the
+// CLI natively — the bridge never sees the call, and a deadline written
+// there would be a fence that silently does not bind.
 func (c *Config) checkCLIAgentTools(agent Agent) error {
 	for _, spec := range agent.Tools {
 		name := ToolSpecName(spec)
@@ -248,6 +254,9 @@ func (c *Config) checkCLIAgentTools(agent Agent) error {
 				agent.Name, name, CLISourcePrefix)
 		case len(spec.Args) > 0:
 			return fmt.Errorf("agent %q: tool %q sets args, which is not supported with a cli source (%s...); pin the value inside the tool's run: instead",
+				agent.Name, name, CLISourcePrefix)
+		case spec.Timeout != "" && spec.Builtin != "":
+			return fmt.Errorf("agent %q: builtin tool %q sets timeout, which is not supported with a cli source (%s...); the cli runs its built-ins itself — bound a custom or mcp tool instead, or the step",
 				agent.Name, name, CLISourcePrefix)
 		case spec.Agent != "":
 			return fmt.Errorf("agent %q: tool %q grants a sub-agent, which is not supported with a cli source (%s...); delegate with a separate agent step instead",

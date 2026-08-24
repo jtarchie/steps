@@ -505,6 +505,10 @@
                 "type": "string"
               },
               "description": "web_fetch only, and only where the tool is granted (an agents: entry): bare hostnames the tool may reach \u2014 no scheme, path, port or wildcard. Each entry matches itself and its subdomains, on every redirect hop. Empty/absent means any http(s) URL."
+            },
+            "timeout": {
+              "type": "string",
+              "description": "Bounds ONE call of this tool (e.g. 30s, 5m); the step's own deadline still holds. An expired call is reported to the model as an error it can react to, not an aborted step. Only where the tool is granted, except on an inline custom tool."
             }
           }
         },
@@ -543,6 +547,10 @@
                 "type": "string"
               },
               "description": "Pinned arguments the model can neither see nor set."
+            },
+            "timeout": {
+              "type": "string",
+              "description": "Bounds ONE call of this tool (e.g. 30s, 5m); the step's own deadline still holds. An expired call is reported to the model as an error it can react to, not an aborted step. Only where the tool is granted, except on an inline custom tool."
             }
           }
         },
@@ -559,6 +567,10 @@
             },
             "description": {
               "type": "string"
+            },
+            "timeout": {
+              "type": "string",
+              "description": "Bounds ONE call of this tool (e.g. 30s, 5m); the step's own deadline still holds. An expired call is reported to the model as an error it can react to, not an aborted step. Only where the tool is granted, except on an inline custom tool."
             }
           }
         },
@@ -593,6 +605,10 @@
             },
             "max_output_bytes": {
               "type": "integer"
+            },
+            "timeout": {
+              "type": "string",
+              "description": "Bounds ONE call of this tool (e.g. 30s, 5m); the step's own deadline still holds. An expired call is reported to the model as an error it can react to, not an aborted step. Only where the tool is granted, except on an inline custom tool."
             }
           }
         }

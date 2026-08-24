@@ -10,6 +10,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"time"
 
 	"google.golang.org/genai"
 
@@ -146,6 +147,10 @@ func buildAgentTools(ctx context.Context, cfg *config.Config, specs []config.Too
 		}
 
 		resolved, err := resolveToolSpec(ctx, cfg, spec, builtins)
+		if err == nil {
+			err = resolved.bound(spec)
+		}
+
 		if err == nil {
 			if resolved.closer != nil {
 				closers = append(closers, resolved.closer)
@@ -284,6 +289,76 @@ func customToolDecl(spec config.ToolSpec) (*genai.FunctionDeclaration, toolImpl)
 	}
 
 	return decl, execCustomTool(spec, params)
+}
+
+// bound wraps every impl this spec produced in its timeout:, if it set one.
+// It happens here — at build time, on the impl itself — rather than in the
+// conversation loop, because the loop is not the only caller: a CLI-backed
+// step's bridge (see clibridge.go) hands the child the SAME impls over MCP,
+// and a deadline the delegated path silently dropped would be a fence that
+// exists only on one of two backends.
+func (r resolvedSpec) bound(spec config.ToolSpec) error {
+	if spec.Timeout == "" {
+		return nil
+	}
+
+	timeout, err := config.ParseTimeout(spec.Timeout)
+	if err != nil {
+		return fmt.Errorf("agent tool %q: %w", config.ToolSpecName(spec), err)
+	}
+
+	if timeout <= 0 {
+		return nil
+	}
+
+	for name, impl := range r.impls {
+		r.impls[name] = withToolTimeout(name, timeout, impl)
+	}
+
+	return nil
+}
+
+// withToolTimeout bounds one call of impl to d, reporting an expiry to the
+// model as ordinary tool-result data ({"error": ...}) — the tool contract is
+// that no failure aborts an attempt, and running out of time is a failure
+// like any other. Whatever the impl managed to return is preserved alongside
+// it, so a partial result is not thrown away to say why it stopped.
+//
+// It is an "error" rather than a softer note ({"timed_out": true}) because
+// error is the one channel three separate readers already agree on:
+// requiredCallSucceeded (a required: tool that ran out of time has NOT been
+// satisfied, and the loop must keep forcing it), the CLI bridge's IsError
+// (a delegated child must see the same failure a hosted model does), and
+// assert: tool_calls. A neutral key would read as success to all three.
+//
+// The distinction being drawn on the way out is between THIS call's deadline
+// and the enclosing step's: a parent that is itself done (its own timeout:,
+// or SIGINT) is an abort, and dressing it up as the tool's own deadline
+// would misreport why the run ended.
+//
+// A tool that ignores its context — the purely local built-ins take none —
+// still runs to completion; the deadline reports on it rather than
+// interrupting it. Killing an impl mid-write would trade a slow tool for a
+// half-written file.
+func withToolTimeout(name string, d time.Duration, impl toolImpl) toolImpl {
+	return func(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
+		callCtx, cancel := context.WithTimeout(ctx, d)
+		defer cancel()
+
+		response := impl(callCtx, args, env)
+
+		if !errors.Is(callCtx.Err(), context.DeadlineExceeded) || ctx.Err() != nil {
+			return response
+		}
+
+		if response == nil {
+			response = map[string]any{}
+		}
+
+		response["error"] = fmt.Sprintf("%s: timed out after %s and was cancelled; anything it returned is partial", name, d)
+
+		return response
+	}
 }
 
 // closeAll closes every closer, ignoring individual errors — used only on

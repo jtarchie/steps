@@ -507,6 +507,18 @@ var docScenarios = map[string]docScenario{
 		),
 	},
 
+	// A tool that hangs, bounded by its own timeout: rather than the step's.
+	// The model calls it, is handed the expiry as ordinary tool-result data
+	// on its next turn, and answers on the strength of what it could not
+	// learn — which is the whole point of reporting the deadline instead of
+	// killing the step.
+	"internals-tool-timeout": {
+		fake: scripted(
+			callsTool("tail_log", map[string]any{"service": "widgetd"}),
+			says("The log tailer timed out, so the rollout status is unknown."),
+		),
+	},
+
 	"attempts-agent-timeout": {
 		fake: scripted(
 			says("No safety issues found."),

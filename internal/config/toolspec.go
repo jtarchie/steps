@@ -92,6 +92,26 @@ type ToolSpec struct {
 	// sub-agent tool, whose result is another agent's considered answer, not
 	// a data dump. Valid on custom tools and on all three MCP grant forms.
 	MaxOutputBytes int
+	// Timeout bounds one call of this tool (empty/unset = no per-call bound;
+	// the step's own deadline still holds). An expired call comes back to the
+	// model as {"error": "... timed out after ..."} — ordinary data it can
+	// react to on its next turn, the same as a nonzero exit — never an
+	// aborted attempt: a deadline says how long a tool may take, not that the
+	// step is over.
+	//
+	// Valid on every tool form, unlike max_output_bytes: a deadline collides
+	// with no designed per-tool contract, and run_shell — a builtin — is the
+	// likeliest thing in the system to hang. It binds only where the tool is
+	// GRANTED, except on an inline custom tool, which a step defines rather
+	// than selects (see validateToolTimeoutShape).
+	//
+	// It is enforced through the call's context, so it stops what honors one:
+	// shell-backed tools (killed, per shell.CancelWaitDelay), MCP calls,
+	// sub-agent conversations, web_fetch. The purely local built-ins
+	// (read_file, list_dir, search_files, write_file, edit_file) take no
+	// context and so run to completion — an over-deadline call there is
+	// reported, not interrupted.
+	Timeout string
 }
 
 // UnmarshalYAML decodes a ToolSpec from either a scalar (builtin name) or a
@@ -110,7 +130,7 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 	case yaml.MappingNode:
 		err := rejectUnknownKeys(value, "agent tool",
 			"builtin", "name", "description", "run", "agent", "mcp", "tool", "tools",
-			"required", "max_calls", "max_output_bytes", "args", "allow")
+			"required", "max_calls", "max_output_bytes", "timeout", "args", "allow")
 		if err != nil {
 			return err
 		}
@@ -127,6 +147,7 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 			Required       bool              `yaml:"required"`
 			MaxCalls       int               `yaml:"max_calls"`
 			MaxOutputBytes int               `yaml:"max_output_bytes"`
+			Timeout        string            `yaml:"timeout"`
 			Args           map[string]string `yaml:"args"`
 			Allow          []string          `yaml:"allow"`
 		}
@@ -138,6 +159,7 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 
 		t.Builtin, t.Name, t.Description, t.Run, t.Agent, t.Required = m.Builtin, m.Name, m.Description, m.Run, m.Agent, m.Required
 		t.MaxCalls, t.Args, t.MaxOutputBytes, t.Allow = m.MaxCalls, m.Args, m.MaxOutputBytes, m.Allow
+		t.Timeout = m.Timeout
 		t.MCP, t.MCPTool, t.MCPTools = m.MCP, m.Tool, m.Tools
 
 		return nil

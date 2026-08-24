@@ -223,7 +223,7 @@ Every tool path the model uses is relative to `dir:`, which is the point: a mode
 
 ## Custom tools, `required:`, and call guards
 
-A custom tool is a `tools:` entry with `name`/`description`/`run` — a [templated](templating.md) shell command whose parameter schema is inferred from the `{{ .args.* }}` references in its `run:`. It can be marked `required: true`: the step can't complete until that tool has *succeeded*. It may also set `max_calls:` (a per-conversation budget) and `args:` (pinned values the model never sees):
+A custom tool is a `tools:` entry with `name`/`description`/`run` — a [templated](templating.md) shell command whose parameter schema is inferred from the `{{ .args.* }}` references in its `run:`. It can be marked `required: true`: the step can't complete until that tool has *succeeded*. It may also set `max_calls:` (a per-conversation budget), `args:` (pinned values the model never sees), and `timeout:` (a deadline for one call — see [agents-internals.md](agents-internals.md#bounding-one-tool-call)):
 
 ```yaml test=agents-custom-tool
 agents:
@@ -950,6 +950,7 @@ These are load errors, not silent no-ops, because a setting that reads as config
 | `compact_after_tokens:`, `context_window:` | the CLI compacts its own conversation |
 | `budget.tokens:` | nothing counts tokens until the subprocess exits (use `budget.usd:`) |
 | `required:`, `max_calls:`, `args:` on a tool | enforced by the turn loop the CLI replaces |
+| `timeout:` on a **built-in** tool | the CLI runs its built-ins itself; on a custom or MCP tool it is bridged, so it binds and is accepted |
 | sub-agent tools, in either direction | a sub-agent nests inside a turn loop there is none of |
 | a CLI agent as a task's `fix:` agent | same reason |
 | `network: none` together with `image:` | the CLI reaches its steps-provided tools over a connection back to this process |

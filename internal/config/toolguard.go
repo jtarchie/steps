@@ -1,7 +1,7 @@
 package config
 
-// Per-tool guards — required:, max_calls:, args:, max_output_bytes: — and
-// which tool forms each is valid on.
+// Per-tool guards — required:, max_calls:, args:, max_output_bytes:,
+// timeout: — and which tool forms each is valid on.
 
 import (
 	"fmt"
@@ -106,6 +106,11 @@ func checkToolCallGuardSpecs(context string, pos toolPosition, specs []ToolSpec)
 		}
 
 		err = validateWebFetchAllowShape(context, pos, spec)
+		if err != nil {
+			return err
+		}
+
+		err = validateToolTimeoutShape(context, pos, spec)
 		if err != nil {
 			return err
 		}
@@ -233,6 +238,43 @@ func validateMaxOutputBytesShape(context string, spec ToolSpec) error {
 		return fmt.Errorf(
 			"%s: sub-agent tool %q: max_output_bytes is only valid on custom tools and mcp grants",
 			context, spec.Agent,
+		)
+	}
+
+	return nil
+}
+
+// validateToolTimeoutShape enforces the two things a per-tool timeout: must
+// be: a positive duration, and written where the tool is GRANTED.
+//
+// The position rule is the same one allow: has, for the same mechanical
+// reason: resolveEffectiveTools resolves a step's bare-name selection by
+// substituting the agent's own spec, so a deadline written on the selection
+// is dropped on the way through. An INLINE custom tool is the exception —
+// a step defines that one rather than selecting it, so its spec is what
+// runs, deadline included.
+func validateToolTimeoutShape(context string, pos toolPosition, spec ToolSpec) error {
+	if spec.Timeout == "" {
+		return nil
+	}
+
+	d, err := ParseTimeout(spec.Timeout)
+	if err != nil {
+		return fmt.Errorf("%s: tool %q: %w", context, ToolSpecName(spec), err)
+	}
+
+	if d == 0 {
+		return fmt.Errorf(
+			"%s: tool %q: timeout must be a positive duration (omit it entirely for no per-call deadline)",
+			context, ToolSpecName(spec),
+		)
+	}
+
+	inlineCustom := spec.Name != "" && spec.Run != ""
+	if pos != grantPosition && !inlineCustom {
+		return fmt.Errorf(
+			"%s: tool %q: timeout: binds only where the tool is granted — move it to the agents: entry's tools:, and select it here by bare name",
+			context, ToolSpecName(spec),
 		)
 	}
 

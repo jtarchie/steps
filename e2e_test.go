@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // End-to-end tests: one pipeline, one scripted provider, assertions at every
@@ -1147,4 +1148,70 @@ func logField(line, key string) string {
 	}
 
 	return ""
+}
+
+// TestEndToEndToolTimeoutIsData drives a custom tool whose command outlives
+// its own timeout:, and pins the two halves of what that must mean. The
+// hung command is killed at ITS deadline rather than the step's, and the
+// model is told so as ordinary tool-result data on its next turn — a tool
+// that ran out of time is a fact the agent reacts to, exactly like a nonzero
+// exit, not an aborted attempt.
+//
+// The wall-clock assertion is the load-bearing half: an agent step's
+// implicit deadline is 30 minutes, so without a per-tool bound this fixture
+// still passes, 30 seconds later.
+func TestEndToEndToolTimeoutIsData(t *testing.T) {
+	dir := t.TempDir()
+	fake := newFakeLLM(t,
+		callsTool("watch", map[string]any{"service": "widgetd"}),
+		says("The watch tool ran out of time; nothing to report."),
+	)
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: watcher
+  source:
+    endpoint: %s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools:
+  - name: watch
+    description: Tail the deploy log until it settles.
+    run: sleep 30 && echo {{ .args.service | shellquote }}
+    timeout: 1s
+
+jobs:
+- name: watch
+  plan:
+  - agent: watcher
+    messages:
+      - Check on the deploy.
+`, fake.URL))
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	start := time.Now()
+
+	mustRun(t, path)
+
+	if elapsed := time.Since(start); elapsed > 15*time.Second {
+		t.Errorf("run took %s; the hung tool was left to spend the step's deadline instead of its own", elapsed)
+	}
+
+	results := fake.request(2).toolResults()
+	if len(results) != 1 {
+		t.Fatalf("request 2 carried %d tool results, want 1; got %v", len(results), results)
+	}
+
+	if !strings.Contains(results[0], "timed out after 1s") {
+		t.Errorf("the timed-out tool did not report why to the model; got %q", results[0])
+	}
+
+	// The step itself succeeded: the model answered on the strength of what
+	// it was told, and a tool deadline is not a step failure.
+	assertSucceeded(t, storeNodes(t, path), "agent", "watcher")
 }

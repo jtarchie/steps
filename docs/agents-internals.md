@@ -271,6 +271,64 @@ It is rejected on **built-ins**, which already carry their own output contract (
 
 **Not part of the merkle hash.** Like `timeout:`/`attempts:`, `compact_after_tokens:` is operational — it changes how a conversation manages its own context budget, not the result it's aiming for — so it never enters a step's hashed content and cannot invalidate a cached step, in either direction.
 
+### Bounding one tool call
+
+A step's `timeout:` bounds the whole conversation, so a tool that hangs spends the budget every later turn was going to use — and the step dies without ever telling the model what went wrong. `timeout:` on a **grant** bounds one call of that one tool instead:
+
+```yaml test=internals-tool-timeout
+agents:
+- name: watcher
+  source: { model: lmstudio/qwen2.5-coder }
+  tools:
+  - name: tail_log
+    description: Tail the deploy log for the named service.
+    run: tail -f /var/log/{{ .args.service | shellquote }}.log
+    timeout: 1s
+
+jobs:
+- name: watch
+  plan:
+  - agent: watcher
+    messages:
+      - "Check whether widgetd finished its rollout."
+    assert:
+      tool_calls:
+      - name: tail_log
+      stdout: rollout status is unknown
+  assert:
+    execution: [watcher]
+    outcome: succeeded
+```
+
+**An expired call is data, not a dead step.** The call is cancelled and the model is told, on its next turn, in the same shape every other tool failure arrives in:
+
+```json
+{"error": "tail_log: timed out after 1s and was cancelled; anything it returned is partial"}
+```
+
+So the agent reacts — narrows the command, tries another route, or reports what it could not learn (the example above asserts exactly that: the step *succeeds*, having said the rollout status is unknown). It is an `error` rather than a softer note because that is the one channel the rest of the machinery already reads: a `required:` tool that ran out of time has **not** been satisfied and will still be forced, a delegated `@cli/` child sees the same failure a hosted model does, and `assert:` sees it too. Whatever the tool managed to return is kept alongside the error rather than discarded.
+
+**It is valid on every tool form** — unlike `max_output_bytes:`, a deadline collides with no designed per-tool contract, and `run_shell` is the likeliest thing in the system to hang:
+
+```yaml fragment
+tools:
+- builtin: run_shell
+  timeout: 10m
+- mcp: gopls
+  timeout: 30s
+- agent: researcher
+  description: Answers a question about the codebase.
+  timeout: 5m
+```
+
+**It binds where the tool is granted.** A step's `tools:` list *selects* from what its agent granted, and a selection is resolved by substituting the agent's own spec — so a deadline written there would be silently dropped, and the loader refuses it instead. The exception is an inline custom tool, which a step *defines* rather than selects: that spec is what runs, deadline included.
+
+**What it can actually stop** is whatever honors a context: shell-backed tools (killed, then given `shell.CancelWaitDelay` to die), MCP calls, sub-agent conversations, `web_fetch`. The purely local built-ins (`read_file`, `list_dir`, `search_files`, `write_file`, `edit_file`) take no context and run to completion — an over-deadline call there is *reported*, not interrupted, because killing an impl mid-write trades a slow tool for a half-written file.
+
+`web_fetch` already has a 30-second per-fetch bound of its own; an explicit `timeout:` on it is the declared trade in either direction.
+
+**Not part of the merkle hash.** Like the step-level `timeout:`/`attempts:`, a tool deadline is operational — so adding or tightening one re-runs nothing. The alternative is worse than it sounds: capping a tool that hangs would invalidate every completed step of the pipeline you were trying to rescue.
+
 ## Transcript persistence
 
 Every agent step persists two records with different bounds, because they serve different readers:

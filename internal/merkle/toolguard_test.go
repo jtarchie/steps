@@ -149,3 +149,30 @@ func TestMaxOutputBytesHashBustsWhenSet(t *testing.T) {
 		t.Error("changing max_output_bytes should change the hash")
 	}
 }
+
+// TestToolTimeoutIsNotHashed pins the other side of the rule the pinned hash
+// above states: a per-call timeout: never reaches the content map, so adding
+// or tightening one re-runs nothing.
+//
+// It is a deadline, and deadlines are not part of a step's identity anywhere
+// else in steps either — a step's own timeout:, attempts: and
+// max_context_bytes: are all unhashed (see docs/attempts-timeout.md). The
+// alternative is worse than it sounds: capping a tool that hangs would
+// invalidate every completed step of the pipeline it was trying to rescue.
+func TestToolTimeoutIsNotHashed(t *testing.T) {
+	t.Parallel()
+
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
+
+	unset := mustAgentHash(t, agentCfg([]config.ToolSpec{{Name: "post_review", Run: "gh pr review"}}, ""), step)
+	set := mustAgentHash(t, agentCfg([]config.ToolSpec{{Name: "post_review", Run: "gh pr review", Timeout: "30s"}}, ""), step)
+	changed := mustAgentHash(t, agentCfg([]config.ToolSpec{{Name: "post_review", Run: "gh pr review", Timeout: "5m"}}, ""), step)
+
+	if unset != set {
+		t.Error("setting a tool timeout changed the hash; a deadline is not part of a step's identity")
+	}
+
+	if set != changed {
+		t.Error("changing a tool timeout changed the hash")
+	}
+}
