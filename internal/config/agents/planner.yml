@@ -8,4 +8,9 @@ tools:
   - search_files
   - agent: "@builtin/explorer"
 max_turns: 25
+# The default is 100_000, which is the wrong ceiling for the one role whose job
+# is to see a change entire: a planner that reads a large codebase or diff and
+# then writes a plan about it should never be silently truncated on the way in.
+# Measured on this repo's own review pipeline, not guessed.
+max_context_bytes: 400000
 temperature: 0.2

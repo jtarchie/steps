@@ -12,3 +12,9 @@ tools:
   - search_files
   - agent: "@builtin/explorer"
 max_turns: 50
+max_context_bytes: 400000
+# 50 turns against the default 30m deadline is the incoherent pair: a builder
+# that runs shell, reads, edits and re-runs would reliably die on time rather
+# than on turns, which tells its author nothing about what went wrong. The
+# three numbers on this profile are chosen together.
+timeout: 1h

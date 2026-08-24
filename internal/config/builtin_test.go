@@ -49,6 +49,71 @@ jobs:
 	}
 }
 
+// TestBuiltinAgentDialsAreWellFormed holds every shipped profile to the shape
+// the others rely on: a turn count to correlate against, and no dial set to a
+// value that caps nothing.
+func TestBuiltinAgentDialsAreWellFormed(t *testing.T) {
+	t.Parallel()
+
+	names, err := ListBuiltinAgentNames()
+	if err != nil {
+		t.Fatalf("ListBuiltinAgentNames: %v", err)
+	}
+
+	if len(names) == 0 {
+		t.Fatal("no built-in agents, want the shipped profiles")
+	}
+
+	for _, name := range names {
+		agent, err := ReadBuiltinAgent(name)
+		if err != nil {
+			t.Fatalf("ReadBuiltinAgent(%q): %v", name, err)
+		}
+
+		// Without a turn count there is nothing for the other two dials to be
+		// correlated WITH, which is the whole reason a profile states them.
+		if agent.MaxTurns == nil {
+			t.Errorf("@builtin/%s sets no max_turns", name)
+		}
+
+		// A dial a profile does set must be a real value rather than the zero
+		// one, which reads as "no cap" and is never what a role means.
+		if agent.MaxContextBytes != nil && *agent.MaxContextBytes <= 0 {
+			t.Errorf("@builtin/%s sets max_context_bytes: %d, which caps nothing", name, *agent.MaxContextBytes)
+		}
+
+		if agent.Timeout == "" {
+			continue
+		}
+
+		_, err = ParseTimeout(agent.Timeout)
+		if err != nil {
+			t.Errorf("@builtin/%s sets timeout: %q, which does not parse: %v", name, agent.Timeout, err)
+		}
+	}
+}
+
+// TestBuiltinReadingRolesRaiseTheContextCeiling pins the finding the dials
+// encode. A turn count on its own is not an opinion about a role: the default
+// 100_000 bytes is the wrong ceiling for the roles whose whole job is to see
+// something entire, and a profile that left it there would describe a workload
+// nobody has.
+func TestBuiltinReadingRolesRaiseTheContextCeiling(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"planner", "reviewer", "builder"} {
+		agent, err := ReadBuiltinAgent(name)
+		if err != nil {
+			t.Fatalf("ReadBuiltinAgent(%q): %v", name, err)
+		}
+
+		if agent.MaxContextBytes == nil || *agent.MaxContextBytes <= DefaultMaxContextBytes {
+			t.Errorf("@builtin/%s does not raise max_context_bytes above the %d default; its job is to read a lot",
+				name, DefaultMaxContextBytes)
+		}
+	}
+}
+
 // Anything the entry sets still wins over the profile — the same "inline wins"
 // rule a file: include follows.
 func TestBuiltinAgentOverrideWins(t *testing.T) {

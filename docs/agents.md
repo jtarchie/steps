@@ -719,6 +719,43 @@ jobs:
 - **`defaults:` is a fallback, never an override.** Anything an agent states for itself wins; `defaults.model` fills in only for an agent whose `source:` names no model, which is what lets a whole pipeline be pointed at a different model by editing one line.
 - **`preflight:` composes both ways** — tune it pipeline-wide under `defaults:`, opt one agent out with `preflight: false`. See [the preflight section](README.md#commands).
 
+## Built-in agent profiles: `@builtin/<name>`
+
+Four agents ship with steps — `explorer`, `planner`, `reviewer`, `builder` — each a persona, a tool grant, and a set of dials chosen for one role. A profile supplies everything about an agent except the one thing only you know, which is which model to call:
+
+```yaml test=agents-builtin
+agents:
+- name: "@builtin/reviewer"                          # quotes required -- YAML reserves a leading @
+  source: { model: openrouter/qwen/qwen3.7-flash }   # the one thing the profile cannot supply
+
+jobs:
+- name: gate
+  plan:
+  - agent: "@builtin/reviewer"
+    messages:
+      - "Review the change for correctness."
+    assert:
+      stdout: no correctness problems
+  assert:
+    execution: ["@builtin/reviewer"]
+    outcome: succeeded
+```
+
+**An entry for a built-in name supplies what it sets and inherits the rest.** It is not all-or-nothing: naming `@builtin/reviewer` to give it a model keeps the persona and tool grant that were the reason to reference it. Anything you *do* state wins, exactly as it does for a `file:` include — so `tools: [read_file]` on the entry above narrows the grant without touching the persona.
+
+**The dials are the point, and they come as a set.** A turn count on its own is not an opinion about a role: 50 turns against a deadline that cannot fit them is a step that reliably dies on time rather than on turns, and a large context ceiling with too few turns is a step that reads a lot and cannot act on it. Each profile therefore states the dials its own turn count makes wrong, and inherits the defaults where they are already right:
+
+| profile | `max_turns` | `max_context_bytes` | `timeout` | the role |
+|---|---|---|---|---|
+| `explorer` | 15 | *default* | 10m | find a thing and answer in one message; still going at ten minutes means stuck |
+| `planner` | 25 | 400,000 | *default* | read a codebase or a change entire, then write a plan about it |
+| `reviewer` | 30 | 400,000 | *default* | trace control flow, callers and error paths across several files |
+| `builder` | 50 | 400,000 | 1h | run shell, read, edit, re-run — the one role 30 minutes genuinely does not fit |
+
+`max_context_bytes:` is raised on the three reading-heavy roles because the 100,000-byte default is the wrong ceiling for a step whose whole job is to see something entire — measured on this repo's own review pipeline, not guessed. Where a profile states nothing, `defaults:` and then the built-in default apply as usual.
+
+**Changing a profile's dials re-runs work.** `max_turns:` and `max_context_bytes:` fold into a step's hash the way every model dial does, so an agent referencing a built-in whose context ceiling changed is no longer the same step and will not be skipped. `timeout:` never hashes, so that one is free.
+
 ## Budgets: `budget.tokens`
 
 An agent step can loop, hold a long conversation where every turn re-sends the whole history, and retry. `budget:` is the ceiling on that — the AI equivalent of `timeout:`:

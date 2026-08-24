@@ -7,4 +7,8 @@ tools:
   - list_dir
   - search_files
 max_turns: 30
+# Same reasoning as the planner: tracing control flow, callers and error paths
+# across several files is a reading-heavy job, and 100_000 bytes is a ceiling a
+# real review reaches.
+max_context_bytes: 400000
 temperature: 0.1

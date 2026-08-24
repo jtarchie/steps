@@ -449,6 +449,18 @@ var docScenarios = map[string]docScenario{
 	// apart by their differentiated prompts; routed on content because they
 	// run concurrently. A request whose last message is a tool result is a
 	// member being told its vote landed.
+	// A built-in profile supplies the persona and the tool grant, so the
+	// pipeline names only a model. The reviewer answers straight from the
+	// message rather than reading anything: what the example is about is the
+	// profile resolving at all, not the tools it happens to carry.
+	"agents-builtin": {
+		fake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			return newFakeLLM(t, says("I found no correctness problems."))
+		},
+	},
+
 	"agents-ensemble": {
 		fake: func(t *testing.T) *fakeLLM {
 			t.Helper()

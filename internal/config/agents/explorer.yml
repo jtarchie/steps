@@ -9,3 +9,7 @@ tools:
   - search_files
   - run_shell
 max_turns: 15
+# A search that is still going after ten minutes is stuck, not thorough: this
+# agent answers in one message and its 15 turns are meant to be quick ones.
+# The default deadline is 30m, sized for a conversation six times as long.
+timeout: 10m
