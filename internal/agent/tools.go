@@ -148,14 +148,19 @@ func buildAgentTools(ctx context.Context, cfg *config.Config, specs []config.Too
 
 		resolved, err := resolveToolSpec(ctx, cfg, spec, builtins)
 		if err == nil {
-			err = resolved.bound(spec)
-		}
-
-		if err == nil {
+			// The closer is collected BEFORE anything else can fail. A
+			// resolve that succeeded may already hold a live MCP connection
+			// (or, for a sub-agent, its child's), and a later failure that
+			// returned without collecting it would leak exactly what the
+			// closeAll below exists to prevent.
 			if resolved.closer != nil {
 				closers = append(closers, resolved.closer)
 			}
 
+			err = resolved.bound(spec)
+		}
+
+		if err == nil {
 			err = tools.add(resolved, &decls)
 		}
 
@@ -307,8 +312,12 @@ func (r resolvedSpec) bound(spec config.ToolSpec) error {
 		return fmt.Errorf("agent tool %q: %w", config.ToolSpecName(spec), err)
 	}
 
+	// Refused rather than treated as "unbounded", matching
+	// validateToolTimeoutShape: this path is reachable without LoadConfig
+	// (RunFix, tests), and a deadline that silently did not bind is the
+	// failure this check exists to prevent.
 	if timeout <= 0 {
-		return nil
+		return fmt.Errorf("agent tool %q: timeout must be a positive duration (omit it entirely for no per-call deadline)", config.ToolSpecName(spec))
 	}
 
 	for name, impl := range r.impls {
@@ -318,28 +327,33 @@ func (r resolvedSpec) bound(spec config.ToolSpec) error {
 	return nil
 }
 
-// withToolTimeout bounds one call of impl to d, reporting an expiry to the
-// model as ordinary tool-result data ({"error": ...}) — the tool contract is
-// that no failure aborts an attempt, and running out of time is a failure
-// like any other. Whatever the impl managed to return is preserved alongside
-// it, so a partial result is not thrown away to say why it stopped.
+// withToolTimeout bounds one call of impl to d, telling the model why a call
+// that ran out of time came back empty-handed — as ordinary tool-result data
+// ({"error": ...}), since the tool contract is that no failure aborts an
+// attempt.
 //
-// It is an "error" rather than a softer note ({"timed_out": true}) because
-// error is the one channel three separate readers already agree on:
-// requiredCallSucceeded (a required: tool that ran out of time has NOT been
-// satisfied, and the loop must keep forcing it), the CLI bridge's IsError
-// (a delegated child must see the same failure a hosted model does), and
-// assert: tool_calls. A neutral key would read as success to all three.
+// It EXPLAINS a failure rather than declaring one, which is the whole of why
+// writing to the error key is safe here. Two readers act on that key —
+// requiredCallSucceeded (a required: tool that failed has not been satisfied
+// and will still be forced) and the CLI bridge's IsError — and a result that
+// already reads as SUCCESS is left completely alone, so neither verdict is
+// ever flipped by this wrapper. That matters most for the impls that take no
+// context at all (read_file, list_dir, search_files, write_file, edit_file):
+// they run to completion regardless of the deadline, and a write_file that
+// wrote the whole file must not be relabeled a failure — nor re-forced, nor
+// re-run by a model told its work was cancelled. Killing an impl mid-write
+// to make the deadline literal would trade a slow tool for a half-written
+// file.
 //
-// The distinction being drawn on the way out is between THIS call's deadline
-// and the enclosing step's: a parent that is itself done (its own timeout:,
-// or SIGINT) is an abort, and dressing it up as the tool's own deadline
-// would misreport why the run ended.
+// The impl's own diagnostic is kept in the message rather than replaced by
+// it: for web_fetch that error names the URL that hung, for a sub-agent the
+// child's failure, and a deadline is a less useful thing to know than what
+// was being waited on.
 //
-// A tool that ignores its context — the purely local built-ins take none —
-// still runs to completion; the deadline reports on it rather than
-// interrupting it. Killing an impl mid-write would trade a slow tool for a
-// half-written file.
+// The distinction drawn on the way out is between THIS call's deadline and
+// the enclosing step's: a parent that is itself done (its own timeout:, or
+// SIGINT) is an abort, and dressing it up as the tool's own deadline would
+// misreport why the run ended.
 func withToolTimeout(name string, d time.Duration, impl toolImpl) toolImpl {
 	return func(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
 		callCtx, cancel := context.WithTimeout(ctx, d)
@@ -351,11 +365,20 @@ func withToolTimeout(name string, d time.Duration, impl toolImpl) toolImpl {
 			return response
 		}
 
+		if requiredCallSucceeded(response) {
+			return response
+		}
+
 		if response == nil {
 			response = map[string]any{}
 		}
 
-		response["error"] = fmt.Sprintf("%s: timed out after %s and was cancelled; anything it returned is partial", name, d)
+		msg := fmt.Sprintf("%s: timed out after %s — its context was cancelled, so anything it returned may be partial", name, d)
+		if previous, ok := response["error"].(string); ok && previous != "" {
+			msg += ": " + previous
+		}
+
+		response["error"] = msg
 
 		return response
 	}

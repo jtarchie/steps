@@ -103,14 +103,20 @@ type ToolSpec struct {
 	// with no designed per-tool contract, and run_shell — a builtin — is the
 	// likeliest thing in the system to hang. It binds only where the tool is
 	// GRANTED, except on an inline custom tool, which a step defines rather
-	// than selects (see validateToolTimeoutShape).
+	// than selects (see validateToolTimeoutShape). The one exception to
+	// "every form" is a cli source, which runs its built-ins itself: there a
+	// timeout: on a BUILT-IN is refused (checkCLIAgentTools), while a custom
+	// or MCP tool — bridged, so the deadline binds — is accepted.
 	//
 	// It is enforced through the call's context, so it stops what honors one:
-	// shell-backed tools (killed, per shell.CancelWaitDelay), MCP calls,
-	// sub-agent conversations, web_fetch. The purely local built-ins
-	// (read_file, list_dir, search_files, write_file, edit_file) take no
-	// context and so run to completion — an over-deadline call there is
-	// reported, not interrupted.
+	// shell-backed tools (the sh -c process is killed, though not its own
+	// grandchildren — see shell.cancelWaitDelay), MCP calls, sub-agent
+	// conversations. The purely local built-ins (read_file, list_dir,
+	// search_files, write_file, edit_file) take no context and so run to
+	// completion; an over-deadline call there is reported only if it failed
+	// on its own, never relabeled from success (see withToolTimeout).
+	// web_fetch carries a hard 30s client-side cap of its own, so a timeout:
+	// there can only tighten.
 	Timeout string
 }
 

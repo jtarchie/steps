@@ -514,7 +514,7 @@ var docScenarios = map[string]docScenario{
 	// killing the step.
 	"internals-tool-timeout": {
 		fake: scripted(
-			callsTool("tail_log", map[string]any{"service": "widgetd"}),
+			callsTool("await_rollout", map[string]any{"service": "widgetd"}),
 			says("The log tailer timed out, so the rollout status is unknown."),
 		),
 	},

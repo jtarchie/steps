@@ -280,9 +280,10 @@ agents:
 - name: watcher
   source: { model: lmstudio/qwen2.5-coder }
   tools:
-  - name: tail_log
-    description: Tail the deploy log for the named service.
-    run: tail -f /var/log/{{ .args.service | shellquote }}.log
+  - name: await_rollout
+    description: Wait for the named service to finish rolling out.
+    run: |
+      until grep -q done {{ .args.service | shellquote }}.log 2>/dev/null; do sleep 1; done
     timeout: 1s
 
 jobs:
@@ -293,20 +294,24 @@ jobs:
       - "Check whether widgetd finished its rollout."
     assert:
       tool_calls:
-      - name: tail_log
+      - name: await_rollout
       stdout: rollout status is unknown
   assert:
     execution: [watcher]
     outcome: succeeded
 ```
 
-**An expired call is data, not a dead step.** The call is cancelled and the model is told, on its next turn, in the same shape every other tool failure arrives in:
+The polling loop above never finds its marker, so the call is cancelled at one second and the step carries on — that block is executed as written by the docs suite, deadline and all.
+
+**An expired call is data, not a dead step.** The model is told on its next turn, in the same shape every other tool failure arrives in:
 
 ```json
-{"error": "tail_log: timed out after 1s and was cancelled; anything it returned is partial"}
+{"error": "await_rollout: timed out after 1s — its context was cancelled, so anything it returned may be partial: command \"until grep -q done widgetd.log...\" failed: signal: killed"}
 ```
 
-So the agent reacts — narrows the command, tries another route, or reports what it could not learn (the example above asserts exactly that: the step *succeeds*, having said the rollout status is unknown). It is an `error` rather than a softer note because that is the one channel the rest of the machinery already reads: a `required:` tool that ran out of time has **not** been satisfied and will still be forced, a delegated `@cli/` child sees the same failure a hosted model does, and `assert:` sees it too. Whatever the tool managed to return is kept alongside the error rather than discarded.
+So the agent reacts — narrows the command, tries another route, or reports what it could not learn (the example above asserts exactly that: the step *succeeds*, having said the rollout status is unknown). The tool's own diagnostic is kept in the message rather than replaced by it, because *what was being waited on* is more useful than *that something was*.
+
+**It explains a failure; it never declares one.** Two readers act on the `error` key — `required:` satisfaction and the `@cli/` bridge's error flag — and a result that already reads as **success is left completely alone**. That is what keeps the context-ignoring built-ins honest: `write_file` on a loaded filesystem can return past its deadline having written the whole file, and relabeling that a failure would re-force a `required:` tool and tell a model to redo work already on disk. (`assert: tool_calls:` matches on name and arguments only — it does not read success, so it cannot see a timeout either way.)
 
 **It is valid on every tool form** — unlike `max_output_bytes:`, a deadline collides with no designed per-tool contract, and `run_shell` is the likeliest thing in the system to hang:
 
@@ -323,9 +328,13 @@ tools:
 
 **It binds where the tool is granted.** A step's `tools:` list *selects* from what its agent granted, and a selection is resolved by substituting the agent's own spec — so a deadline written there would be silently dropped, and the loader refuses it instead. The exception is an inline custom tool, which a step *defines* rather than selects: that spec is what runs, deadline included.
 
-**What it can actually stop** is whatever honors a context: shell-backed tools (killed, then given `shell.CancelWaitDelay` to die), MCP calls, sub-agent conversations, `web_fetch`. The purely local built-ins (`read_file`, `list_dir`, `search_files`, `write_file`, `edit_file`) take no context and run to completion — an over-deadline call there is *reported*, not interrupted, because killing an impl mid-write trades a slow tool for a half-written file.
+**What it can actually stop** is whatever honors a context: shell-backed tools, MCP calls, sub-agent conversations. The purely local built-ins (`read_file`, `list_dir`, `search_files`, `write_file`, `edit_file`) take no context and run to completion — an over-deadline call there is *reported* (and only if it failed on its own), never interrupted, because killing an impl mid-write trades a slow tool for a half-written file.
 
-`web_fetch` already has a 30-second per-fetch bound of its own; an explicit `timeout:` on it is the declared trade in either direction.
+**A killed shell tool does not take its own children with it.** The `sh -c` process is signalled and given `shell.CancelWaitDelay` to die, but grandchildren it spawned are not reaped — a known shortcut of the shell layer, whose complete fix is a process group per command. This matters more with a per-tool deadline than it did without one: the step no longer ends when the tool does, so a `terraform apply` bounded at `timeout: 2m` can keep writing into the same workspace the agent goes on reading for another twenty minutes. Bound work like that at the step, or make the command clean up after itself.
+
+`web_fetch` carries a hard 30-second client-side cap of its own, independent of the call's context, so a `timeout:` there can only **tighten**: a longer one does not raise the ceiling, and the fetch still fails at 30 seconds.
+
+**It bounds one call, not the turn.** A model can request several calls of the same tool in a single turn; they execute in sequence, each with its own fresh deadline, so `timeout: 10m` across eight parallel calls is still eighty minutes of the step's budget. `max_calls:` is what bounds the count; the step's own `timeout:` remains the ceiling.
 
 **Not part of the merkle hash.** Like the step-level `timeout:`/`attempts:`, a tool deadline is operational — so adding or tightening one re-runs nothing. The alternative is worse than it sounds: capping a tool that hangs would invalidate every completed step of the pipeline you were trying to rescue.
 
