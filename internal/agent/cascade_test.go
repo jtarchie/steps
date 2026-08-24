@@ -261,26 +261,7 @@ func expectedPinAction(pinned, primaryHealthy, pinnedHealthy bool) pinAction {
 }
 
 func pinCaseName(pinned, primaryHealthy, pinnedHealthy bool) string {
-	parts := []string{}
-
-	for _, flag := range []struct {
-		on   bool
-		text string
-	}{
-		{pinned, "pinned"},
-		{primaryHealthy, "primaryHealthy"},
-		{pinnedHealthy, "pinnedHealthy"},
-	} {
-		if flag.on {
-			parts = append(parts, flag.text)
-		}
-	}
-
-	if len(parts) == 0 {
-		return "nothing"
-	}
-
-	return strings.Join(parts, "+")
+	return fmt.Sprintf("pinned=%v_primary=%v_pinnedSource=%v", pinned, primaryHealthy, pinnedHealthy)
 }
 
 // TestDecidePreflightPinKeepsAServingFallback is the status quo this must not

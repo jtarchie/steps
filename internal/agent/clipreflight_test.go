@@ -1,9 +1,6 @@
 package agent
 
 import (
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -41,18 +38,15 @@ func emptyPath(t *testing.T) {
 }
 
 // fakeProbeEndpoint serves the smallest valid chat completion, so a hosted
-// fallback's preflight probe succeeds without a real provider.
+// fallback's preflight probe succeeds without a real provider. One response
+// body for the package: a second copy drifted from this one immediately, and
+// the next change to what a probe requires would only have reached one.
 func fakeProbeEndpoint(t *testing.T) string {
 	t.Helper()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"id":"probe","object":"chat.completion","model":"gpt-4o",
-			"choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`)
-	}))
-	t.Cleanup(server.Close)
+	url, _ := togglableProbeEndpoint(t)
 
-	return server.URL + "/v1/"
+	return url
 }
 
 func TestPreflightCLIBinaryMissing(t *testing.T) {

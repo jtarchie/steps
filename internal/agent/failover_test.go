@@ -320,10 +320,10 @@ func TestSeedResumeStateStartsFreshWithoutACheckpoint(t *testing.T) {
 // TestPinnedSourceOnlyAfterServing is the difference between preferring a
 // source that WORKED and one that was merely chosen.
 //
-// Pinning on selection stranded the process: a cascade that then exhausted
-// every source left the pin pointing at something that never answered, nothing
-// un-pinned it, and preflight only ever probes the PRIMARY — so no later run
-// re-examined the choice for the life of the process.
+// Pinning on selection stranded the run: a cascade that then exhausted every
+// source left the pin pointing at something that never answered, and every
+// step until the next pre-run probe aimed at it. reconsiderPin bounds how
+// long that lasts; it does not make writing a bad pin free.
 func TestPinnedSourceOnlyAfterServing(t *testing.T) {
 	ResetProbeCache()
 	t.Cleanup(ResetProbeCache)

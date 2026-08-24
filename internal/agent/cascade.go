@@ -81,13 +81,16 @@ const (
 	// leavePin: no evidence worth acting on. The default, and what every
 	// ambiguous case resolves to — a pin is a durable, process-lifetime
 	// preference, and changing it on a guess is how a run strands itself on
-	// a source nothing will re-examine.
+	// a source the next probe may not get to for a whole poll interval.
 	leavePin pinAction = iota
 	// pinThisSource: this source served, so prefer it from here on.
 	pinThisSource
-	// dropPin: the cascade tried alternatives and none of them served, so
-	// the next step should start over from the agent's primary rather than
-	// keep preferring whichever source was tried last.
+	// dropPin: stop preferring the pinned source. Two decisions produce it,
+	// for unrelated reasons: decideCascade, when the cascade tried the
+	// alternatives and none served, so the next step should start over from
+	// the primary rather than keep preferring whichever was tried last; and
+	// decidePreflightPin, when the pre-run probe says the reason for the pin
+	// is gone or the pinned source is.
 	dropPin
 )
 
@@ -192,39 +195,22 @@ func decideCascade(result sourceOutcome, hasNext, deadlineSpent, swapped bool) c
 }
 
 // decidePreflightPin answers the question the mid-run cascade deliberately
-// does not: how long should a pin stay true?
+// does not: how long should a pin stay true? Until this existed, forever —
+// an outage lasting ninety seconds could move a `steps watch` agent onto a
+// possibly-worse model for days, and silently, since agent.failover fires
+// once at the swap and nothing afterwards says the agent is still there.
 //
-// A pin is process-lifetime, and until this existed it had no way back. The
-// reasoning for its scope still holds — a `steps watch` that failed over
-// should not re-probe a known-dead primary on every poll — but "never
-// re-probe" and "never reconsider" are different rules, and only the first
-// one was wanted. An outage that lasted ninety seconds could move an agent to
-// a possibly-worse model for days, silently: agent.failover fires once, at
-// the swap, and nothing afterwards says the agent is still on the fallback.
+// Either fact is enough on its own to end a pin: the reason for it is gone,
+// or the thing it points at is. Both, because releasing on a recovered
+// primary alone would trade one blind spot for a worse one — see
+// reconsiderPin, which gathers them.
 //
-// The information to decide was already being gathered on a schedule and then
-// discarded. Preflight probes the primary once per run and caches the answer
-// (defaults.preflight.cache:), so acting on it here costs no new request and
-// no new tunable.
-//
-// Two facts, gathered independently, and either one is enough to re-decide:
-//
-//   - primaryHealthy: the agent's own source answered. The reason for the pin
-//     is gone, so the pin goes with it.
-//   - pinnedHealthy: the source the agent is actually running on answered.
-//     Fixing the first blind spot without this one would trade it for a worse
-//     one, because a pinned source that DIES is otherwise discovered by a step
-//     failing rather than by the probe — preflight never looked at it.
-//
-// pinnedHealthy is meaningless when nothing is pinned and is ignored there.
-//
-// This runs at the preflight boundary and nowhere else, which is what keeps a
-// flapping primary from splitting one job across two models: a run re-decides
-// once, before it starts, and a step's source is settled when it starts.
+// Pure and total for the same reason decideCascade is: every defect this pair
+// of functions has closed was a wrong predicate mutating durable state.
 func decidePreflightPin(pinned, primaryHealthy, pinnedHealthy bool) pinAction {
 	if !pinned {
-		// Nothing to reconsider. An unhealthy primary with no pin is the
-		// ordinary failover path, which is not this function's business.
+		// An unhealthy primary with no pin is the ordinary failover path,
+		// which is not this function's business.
 		return leavePin
 	}
 

@@ -110,8 +110,13 @@ func (c *resultCache) store(key string, err error, now time.Time) {
 	c.entries[key] = cacheEntry{at: now, err: err}
 }
 
-// ResetProbeCache clears everything preflight has verified. Tests use it to
-// stay independent of each other.
+// ResetProbeCache clears everything preflight has verified AND every source
+// pin it (or a mid-run cascade) selected. Tests use it to stay independent of
+// each other; a test about the pin's own lifetime wants only the first half,
+// since wiping the pin is what such a test is trying to observe.
+//
+// Every caller must be a serial test: this is process-wide state for all
+// agents, so a `t.Parallel()` test that reached it would clear another's.
 func ResetProbeCache() {
 	probeCache.mu.Lock()
 	probeCache.entries = map[string]cacheEntry{}
@@ -154,6 +159,15 @@ func Preflight(ctx context.Context, cfg *config.Config, agentNames []string, set
 		// CLI probe reads ri.Image to decide whether to look on this host's
 		// PATH or inside the image. Getting that backwards checked the wrong
 		// thing entirely.
+		//
+		// A pin is process-wide and says nothing about which invocation asked,
+		// so it is reconsidered once per agent rather than once per
+		// invocation. Two invocations of one agent can legitimately disagree
+		// — a CLI reached both on this host and under an `image:` probes
+		// separately (cliProbeKey) — and letting the second re-decide let it
+		// undo the failover the first had just recorded.
+		pinDecided, keepPin := false, false
+
 		for _, ri := range agentInvocations(cfg, name) {
 			// Every agent gets its own decision, even when several share a
 			// model. Deduping by (endpoint, model) and skipping the later
@@ -164,15 +178,21 @@ func Preflight(ctx context.Context, cfg *config.Config, agentNames []string, set
 			// cost to one request.
 			probeErr := probeModelCached(ctx, ri, settings)
 
-			// Before acting on the probe: a pin is durable state, and this
-			// is the only boundary that reconsiders it. Ordering matters —
-			// releasing here is what lets the failOver below re-decide from
-			// scratch for an agent whose pinned fallback has since died.
-			reconsiderPin(ctx, agent, ri, settings, probeErr == nil)
+			// Before acting on the probe: a pin is durable state, and this is
+			// the only boundary that reconsiders it.
+			if !pinDecided {
+				keepPin = reconsiderPin(ctx, agent, ri, settings, probeErr == nil)
+				pinDecided = true
+			}
 
+			// keepPin suppresses failOver, and has to: failOver re-selects
+			// from fallback index 0 unconditionally, so an agent pinned
+			// further down the list would be silently moved back to whichever
+			// earlier entry answers a probe — abandoning a source that served
+			// a whole conversation for one that answered a single token.
 			if probeErr == nil {
 				healthyEndpoints[ri.BaseURL] = true
-			} else if !failOver(ctx, agent, ri, settings) {
+			} else if !keepPin && !failOver(ctx, agent, ri, settings) {
 				failures = append(failures, modelFailure{name: name, ri: ri, err: probeErr})
 			}
 
@@ -299,50 +319,79 @@ func failOver(ctx context.Context, agent *config.Agent, primary config.ResolvedI
 }
 
 // reconsiderPin re-decides, once per run, whether an agent should still be
-// running on the fallback it was pinned to.
+// running on the fallback it was pinned to, and reports whether the pin was
+// deliberately KEPT.
 //
-// The pin's SCOPE is unchanged — it still lasts for the life of the process,
-// so a `steps watch` does not re-probe a known-dead primary on every poll.
-// What it gains is an exit condition. Preflight already probes the primary
-// here and already caches the answer, so the fact needed to release a pin was
-// being gathered on a schedule and thrown away.
+// The pin's SCOPE is unchanged — it still lasts for the life of the process.
+// What it gains is an exit condition, from a fact preflight was already
+// gathering on a schedule and discarding: the primary's own probe, cached
+// under defaults.preflight.cache:.
 //
-// The pinned source is probed too, and only when there is a pin. Releasing on
-// a recovered primary WITHOUT this would trade one blind spot for a worse one:
-// preflight looks only at the primary, so a pinned fallback that dies is
-// otherwise discovered by a step failing rather than by the probe. Both facts
-// feed one pure decision (decidePreflightPin), which is what keeps this from
-// becoming another conjunction nobody can enumerate.
+// The pinned source is probed too, because releasing on a recovered primary
+// WITHOUT that would trade one blind spot for a worse one — preflight looks
+// only at the primary, so a pinned fallback that dies is otherwise discovered
+// by a step failing. Both facts feed one pure decision (decidePreflightPin).
 //
-// Dropping the pin is not the same as choosing a source: the caller carries on
-// to its ordinary failover path, so an agent whose primary is still down and
-// whose pin just died re-decides from scratch rather than being stranded.
+// The reported bool matters as much as the mutation. Dropping a pin is not
+// choosing a source, so the caller falls through to its ordinary failover
+// path; KEEPING one has to stop that path, since failOver re-selects from
+// fallback index 0 whatever the pin says.
 func reconsiderPin(
 	ctx context.Context,
 	agent *config.Agent,
 	primary config.ResolvedInvocation,
 	settings *config.Preflight,
 	primaryHealthy bool,
-) {
+) bool {
 	selection, pinned := selectedSource(agent.Name)
 	if !pinned {
-		return
+		return false
 	}
 
-	// Probed only for a pinned agent, and through the same cache the primary
-	// probe uses, so a run adds at most one request per pinned agent.
-	pinnedHealthy := false
-
 	candidate, err := primary.WithSource(selection.source, agent)
-	if err == nil {
+	if err != nil {
+		// Unusable rather than unwell, and it has to say so: keeping this pin
+		// fails every step of the run on the same resolution error, but
+		// reporting it through the health path below would blame a probe that
+		// was never sent and name the model it left as "".
+		if clearSourceIf(agent.Name, selection) {
+			slog.Warn("agent.failover.pin_lost",
+				"agent", agent.Name,
+				"error", err,
+				"reason", "the pinned fallback no longer resolves; re-deciding from the primary")
+		}
+
+		return false
+	}
+
+	// Probed only where its answer can still change the verdict:
+	// decidePreflightPin short-circuits on primaryHealthy, and this is a real
+	// request against a provider the agent is about to stop using — one that
+	// can spend the whole ProbeTimeout if the fallback is the thing hanging.
+	pinnedHealthy := false
+	if !primaryHealthy {
 		pinnedHealthy = probeModelCached(ctx, candidate, settings) == nil
 	}
 
-	if decidePreflightPin(pinned, primaryHealthy, pinnedHealthy) != dropPin {
-		return
+	// A cancelled run learned nothing about either source: both probes fail
+	// for a reason about the operator, not the endpoint. decideCascade calls
+	// that sourceUnproven and leaves the pin alone; so does this. It reports
+	// false rather than true so the caller still records the failure.
+	if ctx.Err() != nil {
+		return false
 	}
 
-	clearSource(agent.Name)
+	if decidePreflightPin(pinned, primaryHealthy, pinnedHealthy) != dropPin {
+		return true
+	}
+
+	// Compare-and-delete, not delete: this decision spans a network probe, and
+	// a concurrently-running job's mid-run cascade can pin a source that has
+	// actually SERVED inside that window. A blind delete would discard it on a
+	// reading taken before it existed.
+	if !clearSourceIf(agent.Name, selection) {
+		return false
+	}
 
 	// As loud as leaving was. agent.failover warns on the way out, and an
 	// operator watching for model-quality changes needs both edges — a silent
@@ -354,13 +403,15 @@ func reconsiderPin(
 			"to", primary.ModelName,
 			"reason", "the primary model answered preflight again")
 
-		return
+		return false
 	}
 
 	slog.Warn("agent.failover.pin_lost",
 		"agent", agent.Name,
 		"model", candidate.ModelName,
 		"reason", "the pinned fallback stopped answering preflight; re-deciding from the primary")
+
+	return false
 }
 
 // sourceSelection is which fallback: entry an agent is running on: the source
@@ -380,7 +431,11 @@ type sourceSelection struct {
 // selectedSources records which fallback an agent is running on, for the life
 // of the process. Process-scoped like probeCache and for the same reason: a
 // `steps watch` that failed over should stay failed over rather than
-// re-probing a known-dead primary on every poll.
+// re-failing-over on every poll. reconsiderPin is its one exit condition.
+//
+// Keyed by agent NAME alone, which is a real limit rather than a decision: one
+// process can serve several pipelines (`steps web app.yml infra.yml`), and two
+// pipelines that both declare an agent called `reviewer` share this entry.
 //
 //nolint:gochecknoglobals // process-lifetime selection, deliberately shared across runs
 var selectedSources = struct {
@@ -393,9 +448,9 @@ var selectedSources = struct {
 //
 // Callers pin a source that has PROVED itself — answered a preflight probe,
 // or served a conversation through to its own conclusion — never one merely
-// chosen. Pinning on selection alone can strand the process on a source that
-// never answered: nothing un-pins it, and preflight only ever probes the
-// PRIMARY, so it would never notice.
+// chosen. Pinning on selection alone strands the process on a source that
+// never answered until reconsiderPin's next probe notices, which is a whole
+// run's worth of steps aimed at something known not to work.
 func selectSource(agentName string, source config.AgentSource, index int) {
 	selectedSources.mu.Lock()
 	defer selectedSources.mu.Unlock()
@@ -406,11 +461,36 @@ func selectSource(agentName string, source config.AgentSource, index int) {
 // clearSource drops an agent's pin, so the next run resolves from its primary
 // again. Called when a cascade tried every source and none served: continuing
 // to prefer the last one tried would be preferring a source that just failed.
+// reconsiderPin drops a pin for its own reasons, through clearSourceIf.
 func clearSource(agentName string) {
 	selectedSources.mu.Lock()
 	defer selectedSources.mu.Unlock()
 
 	delete(selectedSources.by, agentName)
+}
+
+// clearSourceIf drops an agent's pin only while it still holds the selection
+// the caller evaluated, reporting whether it did.
+//
+// The unconditional clearSource is right for the mid-run cascade, whose read
+// and write are the same step of the same conversation. It is wrong for a
+// decision that spans network probes: `steps watch --max-concurrent` and a
+// multi-pipeline `steps web` both run jobs as concurrent goroutines against
+// this one map, so another job's cascade can pin a source that has actually
+// SERVED while this one is still probing. Losing that write to a stale
+// reading is how an agent goes back to a primary that just died mid-run.
+func clearSourceIf(agentName string, expected sourceSelection) bool {
+	selectedSources.mu.Lock()
+	defer selectedSources.mu.Unlock()
+
+	current, ok := selectedSources.by[agentName]
+	if !ok || current != expected {
+		return false
+	}
+
+	delete(selectedSources.by, agentName)
+
+	return true
 }
 
 // selectedSource returns the fallback selection preflight (or a served
@@ -503,7 +583,14 @@ func probeModelCached(ctx context.Context, ri config.ResolvedInvocation, setting
 	// A CLI target is keyed on its own axis: "" is a perfectly ordinary
 	// BaseURL for a CLI source, so a shared key space would let a CLI agent
 	// and an endpoint-less HTTP one collide.
-	key := "model|" + ri.BaseURL + "|" + ri.ModelName
+	//
+	// APIKeyEnv is part of the key — an env var NAME, never its value —
+	// because a probe exercises the credential too. A `fallback:` entry that
+	// differs from its primary only in api_key_env is the documented key-
+	// rotation shape (see nextViableFallback), and without this the fallback
+	// read the PRIMARY's cached failure: a source that was serving runs
+	// looked dead to reconsiderPin and to failOver alike.
+	key := "model|" + ri.BaseURL + "|" + ri.ModelName + "|" + ri.APIKeyEnv
 	if ri.CLI != "" {
 		key = cliProbeKey(ri)
 	}
