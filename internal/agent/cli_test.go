@@ -15,7 +15,7 @@ import (
 
 // firstAttempt is the plan a step's opening invocation runs under.
 func firstAttempt() cliAttempt {
-	return cliAttempt{session: "11111111-2222-4333-8444-555555555555", maxTurns: 12, prompt: "Review the diff."}
+	return cliAttempt{session: "11111111-2222-4333-8444-555555555555", maxTurns: 12, budgetUSD: unlimitedBudget, prompt: "Review the diff."}
 }
 
 // argValue returns the value following flag in an argument vector, or "".
@@ -467,10 +467,24 @@ func TestCLIArgsBudgetUSD(t *testing.T) {
 	prepared := cliPrepared(t, []string{"read_file"})
 	prepared.ri.BudgetUSD = 0.25
 
-	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
+	plan := firstAttempt()
+	plan.budgetUSD = remainingCLIBudget(prepared.ri.BudgetUSD, 0)
+
+	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", plan)
 
 	if got := argValue(args, "--max-budget-usd"); got != "0.25" {
 		t.Errorf("--max-budget-usd = %q, want 0.25", got)
+	}
+
+	// What the child is handed is the step's REMAINDER, so a retry after a
+	// crashed attempt is metered on what is left rather than starting over.
+	// cliArgs reads the plan and never the declared ceiling, which is what
+	// makes that true of every attempt after the first.
+	retried := firstAttempt()
+	retried.budgetUSD = remainingCLIBudget(prepared.ri.BudgetUSD, 0.10)
+
+	if got := argValue(cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", retried), "--max-budget-usd"); got != "0.15" {
+		t.Errorf("a retry's --max-budget-usd = %q, want 0.15 -- what is left of 0.25", got)
 	}
 
 	// Unset means no ceiling, not a zero one -- a "0" would stop the run
@@ -601,12 +615,12 @@ func TestCLIStepStateAccumulatesAcrossAttempts(t *testing.T) {
 	// Attempt 1: emitted a verdict through the bridge and made two calls,
 	// then died before reporting a result (so no text, no turns).
 	first := newFakeBridgeObservation(t, "approve", "looks fine", []recordedToolCall{{name: "verdict", ok: true}})
-	state.absorb(cliRunResult{turns: 0, trajectory: []recordedToolCall{{name: "Read", ok: true}}}, first)
+	state.absorb("sonnet", cliRunResult{turns: 0, trajectory: []recordedToolCall{{name: "Read", ok: true}}}, first)
 
 	// Attempt 2: resumed, finished, said nothing about a verdict because it
 	// had already given one.
 	second := newFakeBridgeObservation(t, "", "", nil)
-	state.absorb(cliRunResult{text: "done", turns: 3, trajectory: []recordedToolCall{{name: "Write", ok: true}}}, second)
+	state.absorb("sonnet", cliRunResult{text: "done", turns: 3, trajectory: []recordedToolCall{{name: "Write", ok: true}}}, second)
 
 	result := state.result("sonnet", nil)
 
@@ -634,8 +648,8 @@ func TestCLIStepStateKeepsEarlierAnswer(t *testing.T) {
 	t.Parallel()
 
 	state := newCLIStepState()
-	state.absorb(cliRunResult{text: "the real answer", turns: 2}, newFakeBridgeObservation(t, "reject", "", nil))
-	state.absorb(cliRunResult{}, newFakeBridgeObservation(t, "", "", nil))
+	state.absorb("sonnet", cliRunResult{text: "the real answer", turns: 2}, newFakeBridgeObservation(t, "reject", "", nil))
+	state.absorb("sonnet", cliRunResult{}, newFakeBridgeObservation(t, "", "", nil))
 
 	result := state.result("sonnet", nil)
 	if result.text != "the real answer" || result.verdict != "reject" {

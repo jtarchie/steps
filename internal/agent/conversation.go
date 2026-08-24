@@ -433,6 +433,12 @@ func seedResumeState(conv agentConversation) resumeCheckpoint {
 // from it (the CLI path spends turns across attempts and does exactly that).
 const unlimitedTurns = -1
 
+// unlimitedBudget is the same trick for a step that declared no budget: usd.
+// It has to be a sentinel rather than 0 because 0 is already the spelling
+// cliArgs reads as "pass no --max-budget-usd at all", which is what an
+// EXHAUSTED ceiling must never become.
+const unlimitedBudget = -1.0
+
 // maxIgnoredForces is how many turns in a row the model may answer with text
 // while a forced tool call goes unmade before the attempt is failed.
 //

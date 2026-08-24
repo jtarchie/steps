@@ -45,6 +45,12 @@ type cliRunResult struct {
 	cachedTokens int
 	// costUSD is the CLI's own figure for what the run cost.
 	costUSD float64
+	// streamed is every assistant turn's usage added up as it arrived. It
+	// duplicates the result event's figures on a run that finished, and it is
+	// the ONLY account of one that did not: a child that died mid-conversation
+	// emits no result event, so costUSD and the usage fields above are all
+	// zero however much it actually spent. See estimateCLICost.
+	streamed cliUsage
 	// isError is the CLI's own verdict on its run — it exited having failed
 	// at the task, as distinct from having crashed (which shows up as an exit
 	// status instead).
@@ -69,6 +75,11 @@ type cliEvent struct {
 	Subtype string `json:"subtype"`
 	Message struct {
 		Content []cliContentBlock `json:"content"`
+		// Usage on an ASSISTANT event is that turn's own bill, reported as the
+		// turn happens rather than at the end. It is the only account of a
+		// crashed attempt's spend there is: total_cost_usd rides the terminal
+		// result event, which a child that died never emits.
+		Usage cliUsage `json:"usage"`
 	} `json:"message"`
 	Result   string   `json:"result"`
 	NumTurns int      `json:"num_turns"`
@@ -77,32 +88,44 @@ type cliEvent struct {
 	// TotalCostUSD is what the CLI says the run cost. The only provider path
 	// steps has that reports a dollar figure at all — the HTTP ones report
 	// tokens and leave pricing to whoever knows the rate card.
-	TotalCostUSD float64 `json:"total_cost_usd"`
-	Usage        struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-		// Cached prompt tokens are counted as input, and counting them is not
-		// optional: a cached conversation reports nearly all of its prompt
-		// under these two, so reading input_tokens alone under-reports spend
-		// by orders of magnitude (9 vs 21560 in one observed run) and leaves a
-		// job budget: unable to trip.
-		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-	} `json:"usage"`
+	TotalCostUSD float64  `json:"total_cost_usd"`
+	Usage        cliUsage `json:"usage"`
+}
+
+// cliUsage is one bill in the CLI's own units. It appears twice in the schema
+// and means the same thing both times: on the terminal result event it is the
+// whole run's, and on an assistant event it is that turn's.
+type cliUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	// Cached prompt tokens are counted as input, and counting them is not
+	// optional: a cached conversation reports nearly all of its prompt
+	// under these two, so reading input_tokens alone under-reports spend
+	// by orders of magnitude (9 vs 21560 in one observed run) and leaves a
+	// job budget: unable to trip.
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+}
+
+// prompt is everything the CLI charged for input on this bill.
+func (u cliUsage) prompt() int {
+	return u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens
+}
+
+// cached is the share of that input the provider did not have to read again.
+// Both fields count: a creation write is what makes the next run's read free,
+// and reporting only the reads calls the first run of a cached conversation
+// 0% cached.
+func (u cliUsage) cached() int {
+	return u.CacheCreationInputTokens + u.CacheReadInputTokens
 }
 
 // promptTokens is everything the CLI charged for input on this run.
-func (e cliEvent) promptTokens() int {
-	return e.Usage.InputTokens + e.Usage.CacheCreationInputTokens + e.Usage.CacheReadInputTokens
-}
+func (e cliEvent) promptTokens() int { return e.Usage.prompt() }
 
 // cachedTokens is the share of that input the provider did not have to read
-// again. Both fields count: a creation write is what makes the next run's read
-// free, and reporting only the reads calls the first run of a cached
-// conversation 0% cached.
-func (e cliEvent) cachedTokens() int {
-	return e.Usage.CacheCreationInputTokens + e.Usage.CacheReadInputTokens
-}
+// again.
+func (e cliEvent) cachedTokens() int { return e.Usage.cached() }
 
 // cliContentBlock is one block of an assistant or user message: the tool_use
 // blocks are the calls, the tool_result blocks are their outcomes.
@@ -158,6 +181,7 @@ func parseCLIStream(reader io.Reader, rec *transcriptRecorder) (cliRunResult, er
 		case "assistant":
 			recordCLIToolCalls(&result, index, event)
 			recordCLITurn(rec, event)
+			addCLIUsage(&result.streamed, event.Message.Usage)
 		case "user":
 			markCLIToolResults(&result, index, event)
 			recordCLIResults(rec, result.trajectory, index, event)
@@ -186,6 +210,17 @@ func parseCLIStream(reader io.Reader, rec *transcriptRecorder) (cliRunResult, er
 	}
 
 	return result, nil
+}
+
+// addCLIUsage folds one turn's bill into a running total. Each assistant
+// event reports its OWN call's usage, so a multi-turn run's cost is the sum:
+// every turn re-reads the prompt and is billed for it again, cache reads
+// included.
+func addCLIUsage(total *cliUsage, turn cliUsage) {
+	total.InputTokens += turn.InputTokens
+	total.OutputTokens += turn.OutputTokens
+	total.CacheCreationInputTokens += turn.CacheCreationInputTokens
+	total.CacheReadInputTokens += turn.CacheReadInputTokens
 }
 
 // recordCLIToolCalls appends this assistant turn's tool calls to the

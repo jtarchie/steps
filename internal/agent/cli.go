@@ -189,6 +189,11 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 			// through, and cliArgs omits the flag so the CLI applies its own
 			// (absent) default.
 			maxTurns: remainingCLITurns(prepared.ri.MaxTurns, state.turns),
+			// The dollar budget is per STEP for the same reason the turn
+			// budget is, and the remainder is ours to track for a sharper
+			// one: the child enforces the ceiling it was handed and knows
+			// nothing of the attempt before it.
+			budgetUSD: remainingCLIBudget(prepared.ri.BudgetUSD, state.costUSD),
 		}
 
 		plan.prompt = cliAttemptPrompt(plan.resume, attempt > 0, sent, state, prepared)
@@ -200,6 +205,15 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 			// the thing actually worth investigating.
 			return retry.Stop(outcome.Fail(fmt.Errorf("agent %q: exhausted its %d-turn budget across %d attempt(s); last failure: %w",
 				prepared.ri.AgentName, prepared.ri.MaxTurns, attempt, lastErr)))
+		}
+
+		// Same shape, same reason, for the other ceiling on this step: a
+		// retry with nothing left to spend cannot do the work, and paying a
+		// provider to discover that is the outcome budget: usd exists to
+		// prevent.
+		if plan.outOfBudget() {
+			return retry.Stop(outcome.Fail(fmt.Errorf("agent %q: exhausted its $%v budget across %d attempt(s), spending $%.4f; last failure: %w",
+				prepared.ri.AgentName, prepared.ri.BudgetUSD, attempt, state.costUSD, lastErr)))
 		}
 
 		attemptErr := runCLIAttempt(attemptCtx, prepared, runtime, plan, state)
@@ -481,6 +495,26 @@ func remainingCLITurns(maxTurns, spent int) int {
 	return max(maxTurns-spent, 0)
 }
 
+// remainingCLIBudget is the step's dollar ceiling less what earlier attempts
+// spent, with an undeclared budget carried through as the sentinel rather than
+// turned into a number — for the same reason remainingCLITurns does it, and
+// with the same collision to avoid. Here the collision is sharper: 0 is
+// already the "no budget declared" spelling on the way in (cliArgs omits the
+// flag), so a plain subtraction reaching 0 would read as "spend freely" —
+// the exact opposite of the exhausted ceiling it represents.
+//
+// An overspent budget floors at 0, which outOfBudget then reads as exhausted.
+// A CLI can legitimately come back having spent more than it was given: the
+// flag is a circuit breaker it trips mid-conversation, not a hard cap, and the
+// call in flight when it trips is still paid for.
+func remainingCLIBudget(budgetUSD, spent float64) float64 {
+	if budgetUSD <= 0 {
+		return unlimitedBudget
+	}
+
+	return max(budgetUSD-spent, 0)
+}
+
 // cliAttempt is one invocation's session state: which conversation it joins,
 // whether it is starting or continuing it, what it may still spend, and what
 // it is told.
@@ -488,7 +522,10 @@ type cliAttempt struct {
 	session  string
 	resume   bool
 	maxTurns int
-	prompt   string
+	// budgetUSD is what is LEFT of the step's dollar ceiling, or
+	// unlimitedBudget when it declared none.
+	budgetUSD float64
+	prompt    string
 	// home is the per-step directory a containerized CLI gets as its $HOME
 	// (empty on the host path). Per-step, not per-attempt: a resumed attempt
 	// needs the transcript the previous one wrote there.
@@ -501,6 +538,12 @@ type cliAttempt struct {
 // read as the most exhausted budget of all.
 func (p cliAttempt) outOfTurns() bool {
 	return p.maxTurns != unlimitedTurns && p.maxTurns <= 0
+}
+
+// outOfBudget reports whether earlier attempts have spent the step's whole
+// dollar ceiling. Sentinel before number, exactly as outOfTurns does it.
+func (p cliAttempt) outOfBudget() bool {
+	return p.budgetUSD != unlimitedBudget && p.budgetUSD <= 0
 }
 
 // cliStepState is everything a step has observed across its attempts.
@@ -535,8 +578,9 @@ func newCLIStepState() *cliStepState {
 	return &cliStepState{satisfied: map[string]bool{}}
 }
 
-// absorb folds one attempt's observations in.
-func (s *cliStepState) absorb(run cliRunResult, bridge *cliBridge) {
+// absorb folds one attempt's observations in. The model is needed only to
+// price an attempt that died before reporting its own spend — see attemptCost.
+func (s *cliStepState) absorb(model string, run cliRunResult, bridge *cliBridge) {
 	verdict, note, satisfied, bridgeCalls := bridge.observed()
 
 	s.turns += run.turns
@@ -546,7 +590,7 @@ func (s *cliStepState) absorb(run cliRunResult, bridge *cliBridge) {
 	// conversation, so what a resumed run spent adds to what the first one
 	// did rather than replacing it.
 	s.cachedTokens += run.cachedTokens
-	s.costUSD += run.costUSD
+	s.costUSD += attemptCost(model, run)
 
 	// Last non-empty wins, matching the answer and the verdict below: a
 	// crashed attempt reports no subtype and must not erase how an earlier
@@ -688,7 +732,7 @@ func runCLIAttempt(
 
 	run, runErr := execCLI(ctx, prepared, runtime, mcpConfig, plan)
 
-	state.absorb(run, bridge)
+	state.absorb(prepared.ri.ModelName, run, bridge)
 	prepared.conv.usage.addTokens(run.inputTokens, run.outputTokens)
 
 	if runErr != nil {

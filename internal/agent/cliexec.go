@@ -336,8 +336,13 @@ func cliArgs(prepared preparedAgentStep, runtime cliRuntime, mcpConfig string, p
 	// The CLI meters itself in dollars and can stop mid-conversation, which is
 	// the one circuit breaker available across the process boundary — a token
 	// count here only ever arrives after the spending is done.
-	if prepared.ri.BudgetUSD > 0 {
-		args = append(args, "--max-budget-usd", strconv.FormatFloat(prepared.ri.BudgetUSD, 'f', -1, 64))
+	//
+	// What the child is handed is the step's REMAINDER, not its declared
+	// ceiling: budget: usd bounds the step, and a retry that started over with
+	// the full figure would let three attempts spend three budgets. See
+	// remainingCLIBudget.
+	if plan.budgetUSD != unlimitedBudget {
+		args = append(args, "--max-budget-usd", strconv.FormatFloat(plan.budgetUSD, 'f', -1, 64))
 	}
 
 	natives, allowed := cliToolPermissions(prepared.conv, runtime)

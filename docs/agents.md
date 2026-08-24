@@ -963,6 +963,10 @@ These are load errors, not silent no-ops, because a setting that reads as config
 
 A CLI agent takes `budget: {usd: 0.50}` rather than `budget: {tokens:}`. The two runners meter different things and neither converts into the other honestly — each takes the unit it can enforce, and the other spelling is a load error. A job-level `budget:` stays in tokens and still counts what a CLI agent spent (reported on exit, folded into the job total).
 
+**The ceiling bounds the STEP, not the attempt.** Each attempt is handed what is left of `usd:` rather than the whole figure, so an agent with `attempts: 3` and `budget: {usd: 0.50}` spends at most about fifty cents in total, not a dollar fifty. When the remainder reaches zero the attempts stop and the step fails naming the spend — the same thing an exhausted `max_turns:` does, and for the same reason: paying a provider to discover there is nothing left to spend is the outcome the ceiling exists to prevent.
+
+*About:* a subprocess that CRASHES never reports what it spent — the dollar figure rides the terminal event a dead child never emits — so its share is priced from the token usage it streamed before dying, using a rate card covering the models the CLI runtimes run. A model outside that card is debited nothing, which is how every model behaved before the ceiling carried across attempts at all. The estimate is only ever used to decide how much budget is left; recorded cost stays exactly what the provider reported, so a run whose cost nobody reported still records none.
+
 `fallback:` works in both directions — a CLI agent can fall back to a hosted provider, and a hosted agent to a CLI. Preflight checks a CLI target by looking for its binary on `PATH` (or, containerized, by probing the image).
 
 ## Ensembles: asking several agents the same question
