@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jtarchie/steps/internal/wire"
@@ -85,6 +86,12 @@ type session struct {
 	attempted bool
 	startErr  error
 	closed    bool
+	// broken records that the conversation died after it opened — a read or a
+	// write hit a dead transport — so the next ensure redials instead of
+	// pushing frames into a pipe nobody holds. Atomic rather than under mu,
+	// because reads and writes run outside the mutex while ensure consults it
+	// under one.
+	broken    atomic.Bool
 	transport *transport
 	encoder   *wire.Encoder
 	decoder   *wire.Decoder
@@ -135,11 +142,18 @@ func short(build string) string {
 	return build
 }
 
-// ensure connects, greets, and sends the step's tree, once.
+// ensure connects, greets, and sends the step's tree, once per conversation.
 //
-// A failure sticks. An unreachable host, a rejected key or a failed binary
-// push must not be retried once per run_shell in a conversation: the first
-// answer is the true one and every retry costs another timeout.
+// A failure to OPEN sticks. An unreachable host, a rejected key or a failed
+// binary push must not be retried once per run_shell in a conversation: the
+// first answer is the true one and every retry costs another timeout. A
+// conversation that BROKE after opening is the opposite case: the worker was
+// fine and then went away mid-step — a crash, a dropped tunnel — and without a
+// fresh dial every retry an attempts: budget pays for fails against the same
+// dead pipe, for a reason the pipeline author can neither see nor fix. The
+// redial re-sends the step's LOCAL tree, which already holds everything
+// earlier commands fetched back; whatever the dead worker held beyond that
+// died with it.
 func (s *session) ensure(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -148,12 +162,24 @@ func (s *session) ensure(ctx context.Context) error {
 		return errSessionClosed
 	}
 
-	if s.attempted {
+	if s.attempted && !s.broken.Load() {
 		return s.startErr
+	}
+
+	if s.transport != nil {
+		// The transport under the dead conversation is dead weight, and
+		// redialling without releasing it would leak a child process or an
+		// SSH connection per retry.
+		//nolint:contextcheck // deliberately not the caller's context; see abandon
+		s.abandon()
 	}
 
 	s.attempted = true
 	s.startErr = s.connect(ctx)
+	// Cleared AFTER connect: a failure while reopening is an open failure,
+	// and those stick. Only a conversation that broke after a successful open
+	// earns a redial, and it just spent it.
+	s.broken.Store(false)
 
 	return s.startErr
 }
@@ -310,7 +336,7 @@ func (s *session) readHello() (wire.Frame, error) {
 	answered := make(chan result, 1)
 
 	go func() {
-		frame, err := s.read()
+		frame, err := s.readFrame()
 		answered <- result{frame: frame, err: err}
 	}()
 
@@ -410,15 +436,30 @@ func (s *session) nextOp() uint32 {
 func (s *session) write(frame wire.Frame, payload any) error {
 	err := s.encoder.WriteJSON(frame.Type, frame.Op, payload)
 	if err != nil {
+		s.broken.Store(true)
+
 		return fmt.Errorf("%w", err)
 	}
 
 	return nil
 }
 
-// read returns the next frame, turning an error frame from the shim into a Go
-// error so callers never have to check for it.
+// read is readFrame, marking the conversation broken on a transport failure so
+// ensure redials. Every reader goes through here except readHello's goroutine,
+// which can outlive an abandoned handshake: its late error must not un-stick
+// an open failure ensure has already recorded.
 func (s *session) read() (wire.Frame, error) {
+	frame, err := s.readFrame()
+	if err != nil {
+		s.broken.Store(true)
+	}
+
+	return frame, err
+}
+
+// readFrame returns the next frame, turning an error frame from the shim into
+// a Go error so callers never have to check for it.
+func (s *session) readFrame() (wire.Frame, error) {
 	frame, err := s.decoder.Read()
 	if err != nil {
 		// A transport that died mid-step is infrastructure, and saying so
