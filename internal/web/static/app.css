@@ -352,6 +352,11 @@ td.faint, .faint { color: var(--faint); }
 .stephead .name { font-weight: 600; }
 .step.skipped .stephead .name { color: var(--dim); font-weight: 400; }
 .stephead .note { color: var(--faint); }
+/* Beats .stephead .note on specificity, which the bare .spendwarn rule does
+   not — without this the "stopped early" badge renders in the same faint grey
+   as the ordinary verdict note beside it, and the distinction it exists for
+   never reaches the screen. */
+.stephead .spendwarn { color: var(--yellow); }
 .stephead .dur { margin-left: auto; color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .stephead .chev { color: var(--faint); width: 12px; flex: none; }
 .chev-icon::before { content: "▸"; }

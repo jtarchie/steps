@@ -23,15 +23,22 @@ one directory. `--state` is how you ask them to; see
 
 | Route | Answers |
 |---|---|
+| `/` | With several pipelines served: what this process holds, and one run feed across all of them, newest first. With one, it redirects straight through |
 | `/p/:pipeline` | Which jobs exist, how each last run went, and which jobs feed which — list or `git log`-style graph |
-| `…/jobs/:job` | This job's dependencies in both directions, its run history with a duration trend, and the resource versions it has passed against |
+| `…/jobs/:job` | This job's dependencies in both directions, its run history with a duration trend, the resource versions it has passed against, and the resolved limits each agent step runs under |
 | `…/runs/:run` | **The transcript**: every step in plan order, what it did, and — for agent steps — what the model said and which tools it called |
 | `…/nodes/:hash` | What a merkle hash is made of, and every run that reused it: the cache's receipt |
 | `…/approvals` | Pending `approval:` steps, and the decisions already made |
 | `…/resources` | Latest checked version per resource, and any job the circuit breaker has paused |
 | `/docs` | These docs, rendered with syntax-highlighted examples — the same pages `steps docs` shows in a terminal |
 
-Press `/` anywhere for a jump palette over pipelines, jobs, and recent runs.
+Press `/` anywhere for a jump palette over pipelines, jobs, and recent runs — across **every** pipeline this process serves, not only the one whose page you are on. The one you are on ranks first, and a hit from anywhere else says which pipeline it belongs to.
+
+### Agent dials
+
+A job page lists the **resolved** limits of each agent step in its plan: turns, context ceiling, and deadline, after the step, the agent and the built-in default have all had their say. It exists so "why did this step stop at 30 turns" is answerable without cross-referencing three files, and it shows `uncapped` rather than `0` for a dial an author explicitly removed — `0` in a limit column reads as the opposite of what it means.
+
+It covers the agents a *step* names. A task's `fix:` agent and a step's sub-agent `tools:` grants run under limits of their own and are not listed.
 
 ## The transcript
 
@@ -39,6 +46,7 @@ The run page is the point of the whole thing. It renders a run the way the
 terminal does — steps in order, prefixed by kind, colored by outcome — with
 the things a scrollback cannot give you:
 
+- **A step that stopped early says so.** An agent whose turn budget ran out is asked to answer from what it already gathered, and the answer is *degraded* — afterwards it is indistinguishable from a confident one unless the record says otherwise. It carries a `stopped early` badge, live and on reload alike. Its neighbour on the spend panel answers the other half: a response cut off mid-sentence by the model's own output limit.
 - **A plan is a tree, and it renders as one.** A block step (`across:`,
   `in_parallel:`, `race:`, `ensemble:`, `do:`, `try:`) holds the steps that ran
   inside it, indented under a guide rail, and folding the block folds its whole

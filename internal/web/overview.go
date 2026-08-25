@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 
@@ -155,6 +156,13 @@ func (s *Server) recentRunsAcross(ctx context.Context, limit int) ([]overviewRun
 // turns" used to mean cross-referencing all three, which is why the numbers
 // that decide it belong on the page that lists the step.
 type agentDialView struct {
+	// Where is the step this row describes, as VisitSteps labels it — the
+	// plan position, and the hook when it is one. Without it two rows for one
+	// agent are byte-identical, which defeats the section's own purpose: "why
+	// did THIS step stop at N turns" is unanswerable when several rows claim
+	// different Ns for the same name, and a hook agent that only runs on
+	// failure reads as an ordinary plan step.
+	Where string
 	Agent string
 	// Turns is the tool-calling cap. Zero means the author removed it.
 	Turns int
@@ -164,6 +172,10 @@ type agentDialView struct {
 	// Timeout is the per-attempt deadline as written; empty means the
 	// built-in default applies.
 	Timeout string
+	// Broken is why this step's invocation would not resolve, empty for the
+	// ordinary case. A row with it carries no numbers, because there are
+	// none.
+	Broken string
 }
 
 // Uncapped reports a dial an author explicitly removed, which the page shows
@@ -174,29 +186,60 @@ func (a agentDialView) UncappedTurns() bool { return a.Turns == 0 }
 // UncappedContext is the same for the context ceiling.
 func (a agentDialView) UncappedContext() bool { return a.ContextBytes == 0 }
 
+// UncappedTimeout is the same for the deadline, and it is the one that had to
+// be spelled out rather than left to the template.
+//
+// A deadline is a STRING here, and `timeout: 0` is the documented way to say
+// a step has no wall-clock ceiling (agentTimeout returns noAgentDeadline for
+// it). Any non-empty string is truthy in a Go template, so the most dangerous
+// dial state on the page rendered as the smallest possible number — beside
+// two columns that correctly said "uncapped" — and an operator auditing for
+// runaway spend would read it as tightly bounded.
+func (a agentDialView) UncappedTimeout() bool {
+	if a.Timeout == "" {
+		return false
+	}
+
+	parsed, err := config.ParseTimeout(a.Timeout)
+
+	return err == nil && parsed == 0
+}
+
 // agentDials resolves the effective limits of every agent step in a job.
+// It covers the agents a step names DIRECTLY. A task's `fix:` agent and a
+// step's sub-agent `tools:` grants run real conversations under limits of
+// their own and are not listed — Job.AgentNames walks all three, this walks
+// one — so the heading says "steps", not "agents".
 func agentDials(cfg *config.Config, job config.Job) []agentDialView {
 	var dials []agentDialView
 
 	// Through VisitSteps rather than over job.Plan, because a plan is a TREE:
 	// do:, in_parallel:, across: and try: all hold steps, and an agent nested
 	// in one runs under limits just as worth seeing.
-	_ = job.VisitSteps(func(_ string, step *config.Step) error {
+	_ = job.VisitSteps(func(label string, step *config.Step) error {
 		if step.Agent == "" {
 			return nil
 		}
 
+		where := strings.TrimPrefix(label, fmt.Sprintf("job %q ", job.Name))
+
 		ri, err := cfg.ResolveAgentInvocation(*step)
 		if err != nil {
-			// Skipped rather than surfaced: an unresolvable agent is already
-			// a load error, so reaching here means something stranger, and a
-			// job page that refuses to render is a worse answer than one
-			// missing a row.
-			//nolint:nilerr // deliberately non-fatal; see above
+			// Shown, not dropped. Not every resolution failure is caught at
+			// load — `reasoning_effort:` is validated here and nowhere else,
+			// and an endpoint credential is deferred on purpose — so a
+			// silently missing row would leave the page confidently listing
+			// the job's other agents and looking complete while omitting the
+			// one that is broken. That is the failure this section exists to
+			// surface, not to hide.
+			dials = append(dials, agentDialView{Where: where, Agent: step.Agent, Broken: err.Error()})
+
+			//nolint:nilerr // the error is rendered as the row above; see Broken
 			return nil
 		}
 
 		dials = append(dials, agentDialView{
+			Where:        where,
 			Agent:        ri.AgentName,
 			Turns:        ri.MaxTurns,
 			ContextBytes: ri.MaxContextBytes,

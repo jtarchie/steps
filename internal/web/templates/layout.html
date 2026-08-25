@@ -170,15 +170,31 @@
   var hits = [];
   var sel = 0;
 
+  // Built as nodes, not as markup. Every value here is a job name, a run id
+  // or a pipeline slug, and none of them is validated -- a job name may hold
+  // any characters at all. Since the palette began answering about OTHER
+  // served pipelines, a name written in one pipeline renders on every other
+  // pipeline's page, so an innerHTML template would let a repo you merely
+  // serve alongside your own run script on a page you never left.
   function draw() {
-    list.innerHTML = hits.map(function (h, i) {
-      return '<li class="' + (i === sel ? 'sel' : '') + '" data-url="' + h.url + '">' +
-        '<span class="kind">' + h.kind + '</span><span>' + h.name + '</span>' +
-        '<span class="hint">' + (h.hint || '') + '</span></li>';
-    }).join('');
-    list.querySelectorAll('li').forEach(function (li) {
+    list.textContent = '';
+    hits.forEach(function (h, i) {
+      var li = document.createElement('li');
+      if (i === sel) { li.className = 'sel'; }
+      li.dataset.url = h.url;
+      li.appendChild(el('span', 'kind', h.kind));
+      li.appendChild(el('span', '', h.name));
+      li.appendChild(el('span', 'hint', h.hint || ''));
       li.addEventListener('click', function () { window.location = li.dataset.url; });
+      list.appendChild(li);
     });
+  }
+
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) { node.className = cls; }
+    node.textContent = text;
+    return node;
   }
 
   var pending;
@@ -187,7 +203,11 @@
     pending = setTimeout(function () {
       fetch('/p/{{.Nav.Current}}/search?q=' + encodeURIComponent(input.value))
         .then(function (r) { return r.json(); })
-        .then(function (data) { hits = data || []; sel = 0; draw(); });
+        .then(function (data) { hits = data || []; sel = 0; draw(); })
+        // Without this a non-JSON body (an error page) throws inside the
+        // promise and the palette sits on whatever it drew last, saying
+        // nothing.
+        .catch(function () { hits = []; sel = 0; draw(); });
     }, 80);
   }
 

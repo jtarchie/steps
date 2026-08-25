@@ -115,7 +115,8 @@ func (s *Server) flushEvents(c echo.Context, runID string, after int64) (int64, 
 	}
 
 	for _, row := range rows {
-		writeSSE(c.Response(), "event", liveEvent{RunEventRow: row, Response: s.answerFor(c, row)})
+		answer, wrapped := s.finishedAgentStep(c, row)
+		writeSSE(c.Response(), "event", liveEvent{RunEventRow: row, Response: answer, WrappedUp: wrapped})
 		after = row.Seq
 	}
 
@@ -140,19 +141,27 @@ func (s *Server) flushEvents(c echo.Context, runID string, after int64) (int64, 
 // same bytes the server-rendered page ships — so handing those bytes to the
 // client is not a second trust decision. Re-implementing a markdown parser in
 // the browser to avoid it would be, and would drift.
-func (s *Server) answerFor(c echo.Context, row store.RunEventRow) template.HTML {
+func (s *Server) finishedAgentStep(c echo.Context, row store.RunEventRow) (answer template.HTML, wrappedUp bool) {
 	if row.Type != events.TypeStepFinished || row.StepKind != "agent" || row.Hash == "" {
-		return ""
+		return "", false
 	}
 
 	node, ok, err := pipelineOf(c).Store.FindNode(c.Request().Context(), row.Hash)
 	if err != nil || !ok || node.Result == "" {
-		return ""
+		return "", false
 	}
 
-	answer, _ := decodeResult(node.Result)["response"].(string)
+	// One decode, every marker the row carries. Pulling only "response" out
+	// of this map is what left "stopped early" reload-only: the fact was
+	// already in hand and dropped on the floor, so a reader watching a
+	// reviewer exhaust its turn budget saw the wrap-up answer arrive looking
+	// exactly like a confident one.
+	result := decodeResult(node.Result)
 
-	return renderProse(answer)
+	text, _ := result["response"].(string)
+	wrapped, _ := result["wrapped_up"].(bool)
+
+	return renderProse(text), wrapped
 }
 
 // liveEvent is the wire shape of one event. Deliberately close to the stored
@@ -160,6 +169,11 @@ func (s *Server) answerFor(c echo.Context, row store.RunEventRow) template.HTML 
 type liveEvent struct {
 	store.RunEventRow
 	Response template.HTML
+	// WrappedUp mirrors stepView.WrappedUp for the live path. internal/web's
+	// standing rule: anything the server draws for a finished step, the
+	// stream has to draw too, or a reader who watched and a reader who
+	// reloaded see different rows.
+	WrappedUp bool
 }
 
 // MarshalJSON renders the event with the derived fields a client needs
@@ -176,6 +190,7 @@ func (e liveEvent) MarshalJSON() ([]byte, error) {
 		"step_id":        e.StepID,
 		"parent_step_id": e.ParentStepID,
 		"response":       string(e.Response),
+		"wrapped_up":     e.WrappedUp,
 		"status":         e.Status,
 		"hash":           e.Hash,
 		"text":           e.Text,

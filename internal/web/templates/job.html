@@ -63,17 +63,19 @@
 </div>
 
 {{if .Dials}}
-<h2 class="eyebrow">Agent dials <span class="unbold">— the limits each agent step actually runs under</span></h2>
+<h2 class="eyebrow">Agent dials <span class="unbold">— the limits each agent STEP runs under (a fix: or sub-agent has its own)</span></h2>
 <div class="tablewrap">
   <table class="kv">
-    <thead><tr><th>Agent</th><th class="num">Turns</th><th class="num">Context</th><th>Deadline</th></tr></thead>
+    <thead><tr><th>Agent</th><th>Step</th><th class="num">Turns</th><th class="num">Context</th><th>Deadline</th></tr></thead>
     <tbody>
       {{range .Dials}}
       <tr>
         <td>{{.Agent}}</td>
-        <td class="num">{{if .UncappedTurns}}<span class="faint">uncapped</span>{{else}}{{.Turns}}{{end}}</td>
+        <td class="dim">{{.Where}}</td>
+        {{if .Broken}}<td colspan="3"><span class="err">{{.Broken}}</span></td>
+        {{else}}<td class="num">{{if .UncappedTurns}}<span class="faint">uncapped</span>{{else}}{{.Turns}}{{end}}</td>
         <td class="num">{{if .UncappedContext}}<span class="faint">uncapped</span>{{else}}{{thousands .ContextBytes}}{{end}}</td>
-        <td class="dim">{{if .Timeout}}{{.Timeout}}{{else}}<span class="faint">default</span>{{end}}</td>
+        <td class="dim">{{if .UncappedTimeout}}<span class="faint">uncapped</span>{{else if .Timeout}}{{.Timeout}}{{else}}<span class="faint">default</span>{{end}}</td>{{end}}
       </tr>
       {{end}}
     </tbody>

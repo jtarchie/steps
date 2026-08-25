@@ -510,6 +510,15 @@
 
     // The server draws this for a finished step, so the stream has to too:
     // a reader watching live and one who reloaded must see the same row.
+    if (e.wrapped_up) {
+      var nameEl = node.querySelector(':scope > .stephead .name');
+      if (nameEl && !node.querySelector(':scope > .stephead .spendwarn')) {
+        var warn = el('span', 'note spendwarn', 'stopped early');
+        warn.title = 'The turn budget ran out; this answer was written from what the model had already gathered';
+        nameEl.insertAdjacentElement('afterend', warn);
+      }
+    }
+
     if (e.worker) {
       var head = node.querySelector(':scope > .stephead .headmeta');
       var slot = head && head.querySelector(':scope > .dur');

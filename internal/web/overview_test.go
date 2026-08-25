@@ -1,10 +1,14 @@
 package web
 
 import (
+	"context"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
@@ -199,9 +203,67 @@ func TestSearchSpansServedPipelines(t *testing.T) {
 	}
 
 	// A hit in another pipeline has to say so, or the palette offers two
-	// identically-named jobs with no way to tell them apart.
-	if !strings.Contains(body, `infra`) {
-		t.Error("a cross-pipeline hit does not name its pipeline")
+	// identically-named jobs with no way to tell them apart. Asserted on the
+	// hint VALUE: "the body mentions infra" was already implied by the two
+	// assertions above, so it could not fail.
+	if !strings.Contains(body, `"name":"infra-job","hint":"infra"`) {
+		t.Errorf("a cross-pipeline job hit does not name its pipeline: %s", body)
+	}
+
+	if !strings.Contains(body, `"hint":"infra running"`) {
+		t.Errorf("a cross-pipeline run hit does not name its pipeline: %s", body)
+	}
+
+	// ...and the current pipeline's own hits do not, since repeating the page
+	// you are already on is noise.
+	_, own := get(t, server, "/p/infra/search?q=infra-job")
+	if !strings.Contains(own, `"name":"infra-job","hint":""`) {
+		t.Errorf("a hit in the current pipeline carries a redundant hint: %s", own)
+	}
+}
+
+// TestSearchReachesOtherPipelinesPastTheCap is the defect the first version
+// of this feature shipped with: the cap is global and the current pipeline
+// went first, so its own runs — up to searchRunDepth of them — filled every
+// slot and no neighbour was ever reached. Only a fixture with no history
+// could miss it.
+func TestSearchReachesOtherPipelinesPastTheCap(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := testPipelines(t, "app", "infra")
+
+	for i := range searchHitLimit + 5 {
+		id := fmt.Sprintf("app-run-%02d", i)
+
+		err := pipelines[0].Store.StartRun(t.Context(), id, "app-job", t.TempDir())
+		if err != nil {
+			t.Fatalf("StartRun(%s): %v", id, err)
+		}
+	}
+
+	_, body := get(t, server, "/p/app/search?q=job")
+
+	if !strings.Contains(body, `"url":"/p/infra/jobs/infra-job"`) {
+		t.Errorf("a pipeline with more than a screenful of runs never reaches its neighbour: %s", body)
+	}
+}
+
+// TestSearchFiltersOnThePipelineFromEitherSide: the hint carries the slug
+// only for OTHER pipelines, so filtering on what is RENDERED made the same
+// query answer differently depending on which page it was typed on — and it
+// stopped working on the one page where an operator is most likely to type
+// that pipeline's name.
+func TestSearchFiltersOnThePipelineFromEitherSide(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipelines(t, "app", "infra")
+
+	for _, from := range []string{"app", "infra"} {
+		_, body := get(t, server, "/p/"+from+"/search?q=infra")
+
+		if !strings.Contains(body, `"url":"/p/infra/jobs/infra-job"`) {
+			t.Errorf("searching for infra from %s did not find its job: %s", from, body)
+		}
 	}
 }
 
@@ -257,7 +319,7 @@ func TestRunPageMarksAWrappedUpStep(t *testing.T) {
 		t.Fatalf("run page = %d", code)
 	}
 
-	if !strings.Contains(body, "stopped early") {
+	if !strings.Contains(body, `<span class="note spendwarn"`) {
 		t.Errorf("the run page does not mark a wrapped-up step: %s", body)
 	}
 }
@@ -283,7 +345,7 @@ func TestRunPageLeavesAnOrdinaryStepAlone(t *testing.T) {
 	mustRecordResult(t, pipeline, "ok-hash", map[string]any{"response": "all done", "turns": 4})
 
 	_, body := get(t, server, "/p/demo/runs/run-ok")
-	if strings.Contains(body, "stopped early") {
+	if strings.Contains(body, `<span class="note spendwarn"`) {
 		t.Error("a step that finished on its own was marked as stopped early")
 	}
 }
@@ -313,7 +375,7 @@ func agentJobPipeline(t *testing.T) *Server {
 agents:
   - name: reviewer
     source: { model: openrouter/qwen/qwen3.7-flash }
-    max_turns: 30
+    max_turns: 17
     max_context_bytes: 400000
 
 jobs:
@@ -323,6 +385,8 @@ jobs:
         max_turns: 8
         timeout: 20m
         messages: ["go"]
+      - agent: reviewer
+        messages: ["again"]
 `)
 
 	cfg, err := config.LoadConfig(path)
@@ -362,13 +426,17 @@ func TestJobPageShowsResolvedAgentDials(t *testing.T) {
 		t.Fatalf("job page = %d", code)
 	}
 
-	// The step's own max_turns, not the agent's.
+	// The step's own max_turns wins over the agent's...
 	if !strings.Contains(body, ">8<") {
 		t.Errorf("the job page does not show the resolved turn cap of 8: %s", body)
 	}
 
-	if strings.Contains(body, ">30<") {
-		t.Error("the job page shows the agent's 30 turns, which this step overrode")
+	// ...and the second step, which states none, inherits the AGENT's. 17
+	// rather than 30 on purpose: 30 is defaultMaxAgentTurns, so a fixture
+	// using it cannot tell the agent tier from the built-in constant, and a
+	// regression dropping the agent lookup entirely would pass.
+	if !strings.Contains(body, ">17<") {
+		t.Errorf("the job page does not show the agent's own turn cap: %s", body)
 	}
 
 	// Inherited from the agent, since the step states none.
@@ -391,5 +459,53 @@ func TestJobPageOmitsDialsWithoutAgents(t *testing.T) {
 	_, body := get(t, server, "/p/demo/jobs/build")
 	if strings.Contains(body, "Agent dials") {
 		t.Error("a job with no agent steps renders the dials section")
+	}
+}
+
+// TestLiveStreamCarriesWrappedUp is internal/web's standing rule asserted:
+// anything the server draws for a finished step, the stream has to draw too.
+// The marker was reload-only, so a reader watching an agent exhaust its turn
+// budget saw the wrap-up answer arrive looking exactly like a confident one
+// — and the fact was already in the map answerFor decodes, dropped on the
+// floor beside the response it did take.
+func TestLiveStreamCarriesWrappedUp(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-live-wrap", "build", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-live-wrap", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1, Status: "succeeded", Hash: "live-wrap-hash"},
+	})
+
+	mustRecordResult(t, pipeline, "live-wrap-hash", map[string]any{"response": "partial", "wrapped_up": true})
+
+	err = pipeline.Store.FinishRun(ctx, "run-live-wrap", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	done := make(chan string, 1)
+
+	go func() {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/p/demo/runs/run-live-wrap/events", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		done <- rec.Body.String()
+	}()
+
+	select {
+	case body := <-done:
+		if !strings.Contains(body, `"wrapped_up":true`) {
+			t.Errorf("the stream does not carry wrapped_up: %q", body)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("SSE stream did not close for a finished run")
 	}
 }
