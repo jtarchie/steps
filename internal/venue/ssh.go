@@ -234,14 +234,14 @@ func sshConfig(ctx context.Context, settings connection) (*ssh.ClientConfig, err
 func authMethods(ctx context.Context, settings connection) ([]ssh.AuthMethod, error) {
 	var methods []ssh.AuthMethod
 
-	for _, identity := range settings.identities {
-		method, err := keyFile(identity.path)
+	for _, candidate := range settings.identities {
+		method, err := keyFile(candidate.path)
 		if err != nil {
 			// A key the operator named is an answer they already gave, so a
 			// bad one is an error. One a config file named is a candidate --
 			// a Host * block routinely names a key that is absent here or
 			// encrypted, and OpenSSH just moves on to the next.
-			if identity.explicit {
+			if candidate.explicit {
 				return nil, err
 			}
 
@@ -324,7 +324,16 @@ func hostKeyCallback(settings connection) (ssh.HostKeyCallback, error) {
 	}
 
 	files := settings.knownHosts
-	if len(files) == 0 {
+
+	switch {
+	case settings.ambientHosts:
+		// A per-host file the operator's ssh_config names may simply not exist
+		// yet, and OpenSSH reads an absent known_hosts as empty -- the host is
+		// then unknown, which is already a refusal. Falling back to
+		// ~/.ssh/known_hosts is NOT that answer: it would check against a file
+		// the operator's own config excluded.
+		files = existingFiles(files)
+	case len(files) == 0:
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return nil, fmt.Errorf("locating known_hosts: %w", err)
@@ -339,6 +348,20 @@ func hostKeyCallback(settings connection) (ssh.HostKeyCallback, error) {
 	}
 
 	return callback, nil
+}
+
+// existingFiles drops the names that are not there.
+func existingFiles(paths []string) []string {
+	kept := make([]string, 0, len(paths))
+
+	for _, path := range paths {
+		_, err := os.Stat(path)
+		if err == nil {
+			kept = append(kept, path)
+		}
+	}
+
+	return kept
 }
 
 // pinnedHostKey verifies a worker against a fingerprint the operator supplied.

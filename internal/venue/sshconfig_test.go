@@ -223,9 +223,9 @@ func TestSSHConfigRefusesWhatItCannotHonour(t *testing.T) {
 			want:   "ProxyJump",
 		},
 		// A Match block is refused whether or not this alias appears to select
-		// it: Match is resolved approximately here (no exec, no localuser),
-		// and a block that decides where a connection goes is exactly the one
-		// an approximation must not get wrong.
+		// it: only `Match host` and `Match all` are read at all, and neither is
+		// resolved the way ssh resolves it, so a block that decides where a
+		// connection goes is the one an approximation must not get wrong.
 		"inside a Match block": {
 			config: "Match user someone-else\n\tProxyJump bastion\n",
 			want:   "ProxyJump",
@@ -372,6 +372,143 @@ func TestSSHConfigRefusesKnownHostsNone(t *testing.T) {
 	worker := mustParseWorker(t, "ssh://box?ssh_config="+config)
 
 	_, err := connectionFor(worker)
+	if !errors.Is(err, errSSHConfig) {
+		t.Fatalf("error = %v, want a refusal", err)
+	}
+}
+
+// TestSSHConfigKnownHostsIsAList covers the shape OpenSSH's own default has:
+// one UserKnownHostsFile naming several files. Taken whole it is a name no
+// file has, and every dial fails on opening it.
+func TestSSHConfigKnownHostsIsAList(t *testing.T) {
+	t.Parallel()
+
+	config := writeSSHConfig(t, "Host box\n\tUserKnownHostsFile /a/known_hosts /b/known_hosts\n")
+
+	conn, err := connectionFor(mustParseWorker(t, "ssh://box?ssh_config="+config))
+	if err != nil {
+		t.Fatalf("connectionFor: %v", err)
+	}
+
+	if len(conn.knownHosts) != 2 || conn.knownHosts[0] != "/a/known_hosts" || conn.knownHosts[1] != "/b/known_hosts" {
+		t.Errorf("knownHosts = %+v, want both files", conn.knownHosts)
+	}
+}
+
+// TestSSHConfigKnownHostsNoneLosesToAPin keeps the refusal to the question it
+// answers. A mapping that pins the key has already said which machine this is,
+// and refusing it with "pin it with ?hostkey=" tells an operator to do what
+// they did.
+func TestSSHConfigKnownHostsNoneLosesToAPin(t *testing.T) {
+	t.Parallel()
+
+	config := writeSSHConfig(t, "Host *\n\tUserKnownHostsFile none\n")
+	pin := "SHA256:" + strings.Repeat("A", 43)
+
+	conn, err := connectionFor(mustParseWorker(t, "ssh://box?ssh_config="+config+"&hostkey="+pin))
+	if err != nil {
+		t.Fatalf("connectionFor: %v", err)
+	}
+
+	if conn.hostKey != pin {
+		t.Errorf("hostKey = %q, want the pin the mapping named", conn.hostKey)
+	}
+}
+
+// TestSSHConfigHonoursOptingOutOfAProxy covers `ProxyJump none`, which is how
+// one host says it is NOT behind the bastion a wildcard block put everything
+// behind. Refusing it refuses the one spelling that means "dial me directly".
+func TestSSHConfigHonoursOptingOutOfAProxy(t *testing.T) {
+	t.Parallel()
+
+	config := writeSSHConfig(t, "Host box\n\tProxyJump none\n\tProxyCommand none\n\tHostName real.example\n\nHost *\n\tProxyJump bastion\n")
+
+	conn, err := connectionFor(mustParseWorker(t, "ssh://box?ssh_config="+config))
+	if err != nil {
+		t.Fatalf("connectionFor: %v", err)
+	}
+
+	if conn.address != "real.example:22" {
+		t.Errorf("address = %q, want the host that opted out of the proxy", conn.address)
+	}
+}
+
+// TestSSHConfigExpandsHostNameTokens covers `HostName %h.internal`, which is
+// most of why a short alias is written at all. Unexpanded it is a literal that
+// resolves to nothing.
+func TestSSHConfigExpandsHostNameTokens(t *testing.T) {
+	t.Parallel()
+
+	config := writeSSHConfig(t, "Host box\n\tHostName %h.internal.example\n")
+
+	conn, err := connectionFor(mustParseWorker(t, "ssh://box?ssh_config="+config))
+	if err != nil {
+		t.Fatalf("connectionFor: %v", err)
+	}
+
+	if conn.address != "box.internal.example:22" {
+		t.Errorf("address = %q, want %%h replaced by the alias", conn.address)
+	}
+}
+
+// TestSSHConfigRefusesAHiddenMatchBlock is the refusal held against the two
+// ways a Match block hides from a scan: behind an Include of its own, and at
+// the bottom of a chain of them. Both were honoured and neither was refused.
+func TestSSHConfigRefusesAHiddenMatchBlock(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]func(t *testing.T) string{
+		"an Include inside the Match block": func(t *testing.T) string {
+			t.Helper()
+
+			inner := filepath.Join(t.TempDir(), "inner.conf")
+			mustWrite(t, inner, "HostName elsewhere.invalid\n")
+
+			return writeSSHConfig(t, "Match host box\n\tInclude "+inner+"\n")
+		},
+		// As deep as the parser will follow one. A scan that stopped a level
+		// short read a different file set than the parser did, which is the
+		// one thing the two must not do.
+		"as deep as the parser reads": func(t *testing.T) string {
+			t.Helper()
+
+			dir := t.TempDir()
+			for level := 1; level <= 5; level++ {
+				body := "Include " + filepath.Join(dir, fmt.Sprintf("l%d.conf", level+1)) + "\n"
+				if level == 5 {
+					body = "Match host box\n\tHostName elsewhere.invalid\n"
+				}
+
+				mustWrite(t, filepath.Join(dir, fmt.Sprintf("l%d.conf", level)), body)
+			}
+
+			return writeSSHConfig(t, "Include "+filepath.Join(dir, "l1.conf")+"\n")
+		},
+	}
+
+	for name, fixture := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			worker := mustParseWorker(t, "ssh://box?ssh_config="+fixture(t))
+
+			_, err := connectionFor(worker)
+			if !errors.Is(err, errSSHConfig) {
+				t.Fatalf("error = %v, want a refusal naming the Match block", err)
+			}
+		})
+	}
+}
+
+// TestSSHConfigRefusesARewrittenHostname covers CanonicalizeHostname, which
+// turns a short name into a different one — the same hazard as a bastion, and
+// silent for the same reason.
+func TestSSHConfigRefusesARewrittenHostname(t *testing.T) {
+	t.Parallel()
+
+	config := writeSSHConfig(t, "Host box\n\tCanonicalizeHostname yes\n\tCanonicalDomains internal.example\n")
+
+	_, err := connectionFor(mustParseWorker(t, "ssh://box?ssh_config="+config))
 	if !errors.Is(err, errSSHConfig) {
 		t.Fatalf("error = %v, want a refusal", err)
 	}

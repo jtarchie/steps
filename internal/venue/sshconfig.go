@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	osuser "os/user"
 	"path/filepath"
 	"strings"
 
@@ -43,8 +44,11 @@ const noKnownHosts = "none"
 
 // includeDepth caps Include recursion while scanning, matching the parser's
 // own limit — the two must agree, or a file one of them reads is a file the
-// other never saw.
-const includeDepth = 5
+// other never saw. The parser counts UP from the top file and stops when the
+// count exceeds five, so six files deep is what it reads and six is what this
+// counts down from; five left a Match block in the deepest include honoured
+// and never scanned.
+const includeDepth = 6
 
 // identity is a private key to offer, and whether the operator named it.
 //
@@ -75,7 +79,13 @@ type connection struct {
 	// knownHosts is empty when neither the URL nor the config named a file,
 	// leaving hostKeyCallback's own default in place.
 	knownHosts []string
-	hostKey    string
+	// ambientHosts says knownHosts came from the config rather than the URL.
+	// A file a config names per host may simply not exist yet, and OpenSSH
+	// reads an absent known_hosts as empty rather than failing on it — but
+	// falling back to ~/.ssh/known_hosts would consult a file the operator's
+	// own config excluded, so the two cases cannot share a code path.
+	ambientHosts bool
+	hostKey      string
 }
 
 // connectionFor works out how to reach a worker.
@@ -101,7 +111,11 @@ func connectionFor(worker Worker) (connection, error) {
 	}
 
 	conn.dialAt(ambient, host, port)
-	conn.fillPaths(ambient)
+
+	err = conn.fillPaths(ambient, host)
+	if err != nil {
+		return connection{}, err
+	}
 
 	return conn, nil
 }
@@ -110,7 +124,10 @@ func connectionFor(worker Worker) (connection, error) {
 // the mapping gave none.
 func (c *connection) dialAt(ambient ambientSettings, host, port string) {
 	if ambient.hostname != "" {
-		host = ambient.hostname
+		// %h inside a HostName is the name it was looked up BY, which is what
+		// makes `HostName %h.internal` — the reason half these files exist —
+		// name a machine rather than a literal percent sign.
+		host = expandHostname(ambient.hostname, host)
 	}
 
 	if port == "" {
@@ -136,7 +153,7 @@ func (c *connection) dialAt(ambient ambientSettings, host, port string) {
 // is actually being dialled: %h is the Hostname the file supplied rather than
 // the name it was looked up by, which is what OpenSSH substitutes and what a
 // per-host key is named after. Runs after dialAt for exactly that reason.
-func (c *connection) fillPaths(ambient ambientSettings) {
+func (c *connection) fillPaths(ambient ambientSettings, alias string) error {
 	host, port := splitHostPort(c.address)
 
 	if len(c.identities) == 0 {
@@ -145,11 +162,30 @@ func (c *connection) fillPaths(ambient ambientSettings) {
 		}
 	}
 
-	if len(c.knownHosts) == 0 {
-		for _, path := range ambient.knownHosts {
-			c.knownHosts = append(c.knownHosts, expandPath(path, host, port, c.user))
-		}
+	// A pin, or a file the URL named, is already an answer about which key to
+	// expect. What the config says about known_hosts cannot change it —
+	// including its refusal to have one, which is why the refusal below is
+	// here rather than where the file is read.
+	if c.hostKey != "" || len(c.knownHosts) > 0 {
+		return nil
 	}
+
+	for _, path := range ambient.knownHosts {
+		// OpenSSH's "none" means do not check. A feature whose whole job is
+		// running commands on another machine does not get to stop checking
+		// which machine that is — the same call hostKeyCallback makes about
+		// InsecureIgnoreHostKey, for the same reason.
+		if strings.EqualFold(path, noKnownHosts) {
+			return fmt.Errorf("%w: UserKnownHostsFile none is set for %q, and a worker's host key is always checked — pin it with ?hostkey= or name a file with ?known_hosts=",
+				errSSHConfig, alias)
+		}
+
+		c.knownHosts = append(c.knownHosts, expandPath(path, host, port, c.user))
+	}
+
+	c.ambientHosts = len(c.knownHosts) > 0
+
+	return nil
 }
 
 // ambientSettings is what a config file had to say about one alias.
@@ -181,7 +217,7 @@ func readSSHConfig(worker Worker, alias string) (ambientSettings, error) {
 		return ambientSettings{}, fmt.Errorf("%w: reading %q: %w", errSSHConfig, path, err)
 	}
 
-	err = scanUnsupported(path, contents, includeDepth)
+	err = scanUnsupported(path, contents, includeDepth, false)
 	if err != nil {
 		return ambientSettings{}, err
 	}
@@ -198,17 +234,39 @@ func readSSHConfig(worker Worker, alias string) (ambientSettings, error) {
 	return resolveAlias(config, alias, path)
 }
 
+// refusedDirectives decide where a connection goes, or which key proves the
+// machine at the other end is the right one, and this venue implements none of
+// them. Each carries the value that means "not set", because a host opting
+// itself out of a wildcard block — `ProxyJump none` under a `Host *` that sets
+// one — is saying dial me directly, which is exactly what this does.
+var refusedDirectives = []struct {
+	directive string
+	off       string
+}{
+	{"ProxyJump", "none"},
+	{"ProxyCommand", "none"},
+	{"ProxyUseFdpass", "no"},
+	// CanonicalizeHostname turns a short name into a different one by
+	// appending CanonicalDomains, which is the same hazard as a bastion: a
+	// name resolved one way here and another way by ssh reaches two machines.
+	{"CanonicalizeHostname", "no"},
+	// HostKeyAlias says which known_hosts entry proves the host. Ignoring it
+	// would check a real machine against the wrong recorded key and report a
+	// mismatch — the alarm this venue exists to raise, raised falsely.
+	{"HostKeyAlias", ""},
+}
+
 // resolveAlias reads the five directives of the subset, having first refused
-// the three it does not implement.
+// the ones it does not implement.
 func resolveAlias(config *ssh_config.Config, alias, path string) (ambientSettings, error) {
-	for _, directive := range []string{"ProxyJump", "ProxyCommand", "ProxyUseFdpass"} {
-		value, err := config.Get(alias, directive)
+	for _, refused := range refusedDirectives {
+		value, err := config.Get(alias, refused.directive)
 		if err != nil {
-			return ambientSettings{}, fmt.Errorf("%w: reading %s from %q: %w", errSSHConfig, directive, path, err)
+			return ambientSettings{}, fmt.Errorf("%w: reading %s from %q: %w", errSSHConfig, refused.directive, path, err)
 		}
 
-		if value != "" {
-			return ambientSettings{}, unsupportedDirective(path, directive, alias)
+		if value != "" && !strings.EqualFold(value, refused.off) {
+			return ambientSettings{}, unsupportedDirective(path, refused.directive, alias)
 		}
 	}
 
@@ -244,17 +302,11 @@ func resolveAlias(config *ssh_config.Config, alias, path string) (ambientSetting
 		return ambientSettings{}, fmt.Errorf("%w: reading UserKnownHostsFile from %q: %w", errSSHConfig, path, err)
 	}
 
+	// One UserKnownHostsFile names a LIST — OpenSSH's own default is two files
+	// — so the value is fields, not a path. Taken whole it becomes one name
+	// that cannot exist, and every dial fails on opening it.
 	for _, file := range knownHosts {
-		// OpenSSH's "none" means do not check. A feature whose whole job is
-		// running commands on another machine does not get to stop checking
-		// which machine that is — the same call hostKeyCallback makes about
-		// InsecureIgnoreHostKey, for the same reason.
-		if strings.EqualFold(file, noKnownHosts) {
-			return ambientSettings{}, fmt.Errorf("%w: %q sets UserKnownHostsFile none for %q, and a worker's host key is always checked — pin it with ?hostkey= or name a file with ?known_hosts=",
-				errSSHConfig, path, alias)
-		}
-
-		settings.knownHosts = append(settings.knownHosts, file)
+		settings.knownHosts = append(settings.knownHosts, strings.Fields(file)...)
 	}
 
 	return settings, nil
@@ -283,38 +335,40 @@ func sshConfigPath(worker Worker) (string, bool) {
 }
 
 // subsetDirectives are the keywords this venue acts on, canonically spelt: the
-// five it honours, and the three it refuses to honour.
+// five it honours, and the five it refuses to honour.
 var subsetDirectives = map[string]string{
-	"hostname":           "HostName",
-	"port":               "Port",
-	"user":               "User",
-	"identityfile":       "IdentityFile",
-	"userknownhostsfile": "UserKnownHostsFile",
-	"proxyjump":          "ProxyJump",
-	"proxycommand":       "ProxyCommand",
-	"proxyusefdpass":     "ProxyUseFdpass",
+	"hostname":             "HostName",
+	"port":                 "Port",
+	"user":                 "User",
+	"identityfile":         "IdentityFile",
+	"userknownhostsfile":   "UserKnownHostsFile",
+	"proxyjump":            "ProxyJump",
+	"proxycommand":         "ProxyCommand",
+	"proxyusefdpass":       "ProxyUseFdpass",
+	"canonicalizehostname": "CanonicalizeHostname",
+	"hostkeyalias":         "HostKeyAlias",
 }
 
 // scanUnsupported refuses a file whose Match blocks decide anything this venue
 // reads.
 //
-// Match is resolved APPROXIMATELY here — the parser has no exec, and criteria
-// like user and localuser are matched against the alias rather than against
-// what they name — so a Match block is a block whose contents may apply to a
-// connection this end thinks they do not, or the reverse. That is tolerable
-// for a block about agent forwarding and intolerable for one that decides
-// which machine gets the step, so the refusal is scoped to blocks naming a
-// directive in the subset rather than to Match itself.
+// Match is resolved APPROXIMATELY here — `Match host` and `Match all` are all
+// the parser implements, and it matches them against the alias rather than
+// against the resolved hostname — so a Match block is a block whose contents
+// may apply to a connection this end thinks they do not, or the reverse. That
+// is tolerable for a block about agent forwarding and intolerable for one that
+// decides which machine gets the step, so the refusal is scoped to blocks
+// naming a directive in the subset rather than to Match itself. (Every other
+// criterion — exec, user, localuser, final — fails to parse instead, and a
+// file this end cannot parse is refused whole.)
 //
 // Raw text rather than the parsed tree, because an Include's contents are not
 // reachable through the parser's API and a Match block inside an included file
 // is exactly the one nobody remembers writing.
-func scanUnsupported(path string, contents []byte, depth int) error {
+func scanUnsupported(path string, contents []byte, depth int, inMatch bool) error {
 	if depth == 0 {
 		return nil
 	}
-
-	inMatch := false
 
 	for line := range strings.Lines(string(contents)) {
 		keyword, value := splitDirective(line)
@@ -325,7 +379,12 @@ func scanUnsupported(path string, contents []byte, depth int) error {
 		case "match":
 			inMatch = true
 		case "include":
-			err := scanIncluded(value, depth)
+			// Carrying inMatch across the Include: an Include INSIDE a Match
+			// block applies on that block's terms, so what it names is what
+			// the block names -- and a scan that reset the flag let a Match
+			// block redirect a worker's HostName through one line of
+			// indirection.
+			err := scanIncluded(value, depth, inMatch)
 			if err != nil {
 				return err
 			}
@@ -342,11 +401,8 @@ func scanUnsupported(path string, contents []byte, depth int) error {
 
 // scanIncluded follows an Include the way the parser follows one, so the two
 // see the same files.
-func scanIncluded(directive string, depth int) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = ""
-	}
+func scanIncluded(directive string, depth int, inMatch bool) error {
+	home := sshHome()
 
 	for _, pattern := range strings.Fields(directive) {
 		switch {
@@ -368,7 +424,7 @@ func scanIncluded(directive string, depth int) error {
 				continue
 			}
 
-			err = scanUnsupported(match, contents, depth-1)
+			err = scanUnsupported(match, contents, depth-1, inMatch)
 			if err != nil {
 				return err
 			}
@@ -412,10 +468,7 @@ func unsupportedDirective(path, directive, alias string) error {
 // IdentityFile means silently offering nothing — the failure mode this whole
 // feature is meant to remove.
 func expandPath(raw, host, port, user string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = ""
-	}
+	home := sshHome()
 
 	if strings.HasPrefix(raw, "~/") {
 		raw = filepath.Join(home, raw[2:])
@@ -428,6 +481,31 @@ func expandPath(raw, host, port, user string) string {
 		"%p", port,
 		"%r", user,
 	).Replace(raw)
+}
+
+// expandHostname resolves the tokens OpenSSH substitutes into a HostName,
+// where %h is the name the alias was looked up BY rather than the one being
+// produced. `HostName %h.internal` is the shape this exists for; unexpanded it
+// is a literal that resolves to nothing.
+func expandHostname(raw, alias string) string {
+	return strings.NewReplacer("%%", "%", "%h", alias).Replace(raw)
+}
+
+// sshHome is the home directory OpenSSH resolves ~ and %d against, worked out
+// the way the parser does it.
+//
+// The passwd entry first, $HOME only as a fallback: that is what ssh(1) itself
+// uses, and — the reason it cannot just be os.UserHomeDir — it is what
+// ssh_config's own Include resolution uses. Anywhere the two disagree, a
+// relative Include would be scanned in one directory and parsed from another,
+// which is a file the parser reads and this end never saw.
+func sshHome() string {
+	current, err := osuser.Current()
+	if err == nil && current.HomeDir != "" {
+		return current.HomeDir
+	}
+
+	return os.Getenv("HOME")
 }
 
 // splitHostPort reads a worker URL's host, whose port is optional.
