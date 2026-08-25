@@ -42,14 +42,6 @@ const noSSHConfig = "none"
 // directive in the subset this venue will not honour.
 const noKnownHosts = "none"
 
-// includeDepth caps Include recursion while scanning, matching the parser's
-// own limit — the two must agree, or a file one of them reads is a file the
-// other never saw. The parser counts UP from the top file and stops when the
-// count exceeds five, so six files deep is what it reads and six is what this
-// counts down from; five left a Match block in the deepest include honoured
-// and never scanned.
-const includeDepth = 6
-
 // identity is a private key to offer, and whether the operator named it.
 //
 // The distinction decides what an unusable key means. A key named in the URL
@@ -104,6 +96,12 @@ func connectionFor(worker Worker) (connection, error) {
 	// an alias that resolved to itself would resolve to nothing, which is the
 	// whole reason for reading the file.
 	host, port := splitHostPort(worker.Host)
+
+	// Lowercased first, because ssh(1) lowercases the name it was given before
+	// the file ever sees it. GPU-Box and gpu-box are the same machine to a
+	// config — and to the ProxyJump refusal, which a case difference must not
+	// sidestep by silently missing the block.
+	host = strings.ToLower(host)
 
 	ambient, err := readSSHConfig(worker, host)
 	if err != nil {
@@ -171,11 +169,14 @@ func (c *connection) fillPaths(ambient ambientSettings, alias string) error {
 	}
 
 	for _, path := range ambient.knownHosts {
-		// OpenSSH's "none" means do not check. A feature whose whole job is
-		// running commands on another machine does not get to stop checking
-		// which machine that is — the same call hostKeyCallback makes about
+		// OpenSSH's "none" means do not check, and /dev/null is the common
+		// spelling of the same intent: a file that is always empty knows no
+		// host, so every dial would fail as "host unknown" with no cause an
+		// operator can act on. A feature whose whole job is running commands
+		// on another machine does not get to stop checking which machine that
+		// is — the same call hostKeyCallback makes about
 		// InsecureIgnoreHostKey, for the same reason.
-		if strings.EqualFold(path, noKnownHosts) {
+		if strings.EqualFold(path, noKnownHosts) || path == os.DevNull {
 			return fmt.Errorf("%w: UserKnownHostsFile none is set for %q, and a worker's host key is always checked — pin it with ?hostkey= or name a file with ?known_hosts=",
 				errSSHConfig, alias)
 		}
@@ -217,7 +218,7 @@ func readSSHConfig(worker Worker, alias string) (ambientSettings, error) {
 		return ambientSettings{}, fmt.Errorf("%w: reading %q: %w", errSSHConfig, path, err)
 	}
 
-	err = scanUnsupported(path, contents, includeDepth, false)
+	_, _, err = scanUnsupported(path, contents, map[string]bool{path: true}, scanState{})
 	if err != nil {
 		return ambientSettings{}, err
 	}
@@ -236,24 +237,26 @@ func readSSHConfig(worker Worker, alias string) (ambientSettings, error) {
 
 // refusedDirectives decide where a connection goes, or which key proves the
 // machine at the other end is the right one, and this venue implements none of
-// them. Each carries the value that means "not set", because a host opting
+// them. Each carries the values that mean "not set", because a host opting
 // itself out of a wildcard block — `ProxyJump none` under a `Host *` that sets
-// one — is saying dial me directly, which is exactly what this does.
+// one — is saying dial me directly, which is exactly what this does. A boolean
+// is off as `no` or as `false`: OpenSSH accepts both spellings, and refusing
+// one of them refuses a file that changes nothing.
 var refusedDirectives = []struct {
 	directive string
-	off       string
+	offs      []string
 }{
-	{"ProxyJump", "none"},
-	{"ProxyCommand", "none"},
-	{"ProxyUseFdpass", "no"},
+	{"ProxyJump", []string{"none"}},
+	{"ProxyCommand", []string{"none"}},
+	{"ProxyUseFdpass", []string{"no", "false"}},
 	// CanonicalizeHostname turns a short name into a different one by
 	// appending CanonicalDomains, which is the same hazard as a bastion: a
 	// name resolved one way here and another way by ssh reaches two machines.
-	{"CanonicalizeHostname", "no"},
+	{"CanonicalizeHostname", []string{"no", "false"}},
 	// HostKeyAlias says which known_hosts entry proves the host. Ignoring it
 	// would check a real machine against the wrong recorded key and report a
 	// mismatch — the alarm this venue exists to raise, raised falsely.
-	{"HostKeyAlias", ""},
+	{"HostKeyAlias", nil},
 }
 
 // resolveAlias reads the five directives of the subset, having first refused
@@ -265,7 +268,7 @@ func resolveAlias(config *ssh_config.Config, alias, path string) (ambientSetting
 			return ambientSettings{}, fmt.Errorf("%w: reading %s from %q: %w", errSSHConfig, refused.directive, path, err)
 		}
 
-		if value != "" && !strings.EqualFold(value, refused.off) {
+		if value != "" && !containsFold(refused.offs, value) {
 			return ambientSettings{}, unsupportedDirective(path, refused.directive, alias)
 		}
 	}
@@ -306,10 +309,60 @@ func resolveAlias(config *ssh_config.Config, alias, path string) (ambientSetting
 	// — so the value is fields, not a path. Taken whole it becomes one name
 	// that cannot exist, and every dial fails on opening it.
 	for _, file := range knownHosts {
-		settings.knownHosts = append(settings.knownHosts, strings.Fields(file)...)
+		settings.knownHosts = append(settings.knownHosts, splitPaths(file)...)
 	}
 
 	return settings, nil
+}
+
+// containsFold reports whether value is one of values, ignoring case.
+func containsFold(values []string, value string) bool {
+	for _, candidate := range values {
+		if strings.EqualFold(candidate, value) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// splitPaths reads one UserKnownHostsFile value as the list OpenSSH reads it
+// as: whitespace-separated, with quotes carrying a path with spaces through
+// the split.
+//
+// The parser strips a value's OUTER quotes before this sees it, which leaves
+// `"/a b/hosts"` indistinguishable from two names — except by looking: a whole
+// value that names an existing file is one path. A single space-bearing path
+// that does not exist yet still splits wrongly, which is the parser's
+// ambiguity, not one more stat can resolve.
+func splitPaths(value string) []string {
+	if !strings.Contains(value, `"`) {
+		if strings.Contains(value, " ") {
+			_, err := os.Stat(value) //nolint:gosec // a path the operator's own config names
+			if err == nil {
+				return []string{value}
+			}
+		}
+
+		return strings.Fields(value)
+	}
+
+	var paths []string
+
+	for i, part := range strings.Split(value, `"`) {
+		if i%2 == 1 {
+			// Between quotes: one path, spaces and all.
+			if part != "" {
+				paths = append(paths, part)
+			}
+
+			continue
+		}
+
+		paths = append(paths, strings.Fields(part)...)
+	}
+
+	return paths
 }
 
 // sshConfigPath is the file to read, and whether the operator named it.
@@ -349,6 +402,14 @@ var subsetDirectives = map[string]string{
 	"hostkeyalias":         "HostKeyAlias",
 }
 
+// scanState is where a scan stands in a file: inside a Match block, or in the
+// stretch after an Include whose file opened blocks of its own — where the
+// parser and OpenSSH disagree about which block the next directive belongs to.
+type scanState struct {
+	inMatch    bool
+	unanchored bool
+}
+
 // scanUnsupported refuses a file whose Match blocks decide anything this venue
 // reads.
 //
@@ -364,74 +425,135 @@ var subsetDirectives = map[string]string{
 //
 // Raw text rather than the parsed tree, because an Include's contents are not
 // reachable through the parser's API and a Match block inside an included file
-// is exactly the one nobody remembers writing.
-func scanUnsupported(path string, contents []byte, depth int, inMatch bool) error {
-	if depth == 0 {
-		return nil
-	}
+// is exactly the one nobody remembers writing. Includes are followed with a
+// visited set rather than the parser's own depth cap: scanning MORE than the
+// parser reads can only refuse, never silently honour, so the scan stays a
+// superset of whatever a parser version follows. (A chain deeper than the
+// parser's cap fails to parse anyway, and a file this end cannot parse is
+// refused whole.)
+//
+// The returned state is the file's TRAILING one, and the bool says whether the
+// file opened any Host or Match block — because OpenSSH reads an Include
+// textually, so a block opened inside an included file scopes the parent's
+// next lines, while the parser reads each included file on its own and does
+// not. A subset directive in that disputed stretch is refused until a Host or
+// Match line re-anchors both readers.
+func scanUnsupported(path string, contents []byte, visited map[string]bool, state scanState) (scanState, bool, error) {
+	sawBlock := false
 
 	for line := range strings.Lines(string(contents)) {
 		keyword, value := splitDirective(line)
 
 		switch keyword {
 		case "host":
-			inMatch = false
+			state = scanState{}
+			sawBlock = true
 		case "match":
-			inMatch = true
+			state = scanState{inMatch: true}
+			sawBlock = true
 		case "include":
-			// Carrying inMatch across the Include: an Include INSIDE a Match
-			// block applies on that block's terms, so what it names is what
-			// the block names -- and a scan that reset the flag let a Match
-			// block redirect a worker's HostName through one line of
+			// Carrying the state across the Include: an Include INSIDE a
+			// Match block applies on that block's terms, so what it names is
+			// what the block names -- and a scan that reset the flag let a
+			// Match block redirect a worker's HostName through one line of
 			// indirection.
-			err := scanIncluded(value, depth, inMatch)
+			opened, err := scanIncluded(value, visited, state)
 			if err != nil {
-				return err
+				return state, sawBlock, err
+			}
+
+			if opened {
+				sawBlock = true
+
+				state.unanchored = true
 			}
 		default:
-			canonical, reads := subsetDirectives[keyword]
-			if inMatch && reads {
-				return unsupportedDirective(path, "a Match block naming "+canonical, "")
+			err := refuseDisputedScope(path, keyword, state)
+			if err != nil {
+				return state, sawBlock, err
 			}
 		}
+	}
+
+	return state, sawBlock, nil
+}
+
+// refuseDisputedScope is the scan's verdict on one directive: refused when it
+// is in the subset and sits where the parser and OpenSSH disagree about which
+// block owns it.
+func refuseDisputedScope(path, keyword string, state scanState) error {
+	canonical, reads := subsetDirectives[keyword]
+	if !reads {
+		return nil
+	}
+
+	if state.inMatch {
+		return unsupportedDirective(path, "a Match block naming "+canonical, "")
+	}
+
+	if state.unanchored {
+		return unsupportedDirective(path, canonical+" after an Include that opens a Host or Match block", "")
 	}
 
 	return nil
 }
 
-// scanIncluded follows an Include the way the parser follows one, so the two
-// see the same files.
-func scanIncluded(directive string, depth int, inMatch bool) error {
+// includePath resolves one Include pattern the way the parser resolves it.
+func includePath(pattern, home string) string {
+	switch {
+	case filepath.IsAbs(pattern):
+		return pattern
+	case strings.HasPrefix(pattern, "~/"):
+		return filepath.Join(home, pattern[2:])
+	default:
+		return filepath.Join(home, ".ssh", pattern)
+	}
+}
+
+// scanIncluded follows an Include the way the parser follows one, so the scan
+// sees at least the files the parser reads. It reports whether any included
+// file opened a Host or Match block, and chains each file's trailing state
+// into the next — glob order is read order for both readers, and OpenSSH's
+// textual reading lets one file's trailing block scope the next file's lines.
+func scanIncluded(directive string, visited map[string]bool, state scanState) (bool, error) {
 	home := sshHome()
+	opened := false
 
 	for _, pattern := range strings.Fields(directive) {
-		switch {
-		case filepath.IsAbs(pattern):
-		case strings.HasPrefix(pattern, "~/"):
-			pattern = filepath.Join(home, pattern[2:])
-		default:
-			pattern = filepath.Join(home, ".ssh", pattern)
-		}
-
-		matches, err := filepath.Glob(pattern)
+		matches, err := filepath.Glob(includePath(pattern, home))
 		if err != nil {
 			continue
 		}
 
 		for _, match := range matches {
+			if visited[match] {
+				continue
+			}
+
+			visited[match] = true
+
 			contents, err := os.ReadFile(match) //nolint:gosec // a file the operator's own config includes
 			if err != nil {
 				continue
 			}
 
-			err = scanUnsupported(match, contents, depth-1, inMatch)
+			trailing, saw, err := scanUnsupported(match, contents, visited, state)
 			if err != nil {
-				return err
+				return opened, err
+			}
+
+			if saw {
+				opened = true
+			}
+
+			state = trailing
+			if opened {
+				state.unanchored = true
 			}
 		}
 	}
 
-	return nil
+	return opened, nil
 }
 
 // splitDirective reads one config line as a lowercased keyword and its value.

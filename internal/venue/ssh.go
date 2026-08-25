@@ -232,7 +232,10 @@ func sshConfig(ctx context.Context, settings connection) (*ssh.ClientConfig, err
 // plumbing — but steps reading it to reach a worker is a different act, and
 // the operator asked for it by naming the worker.
 func authMethods(ctx context.Context, settings connection) ([]ssh.AuthMethod, error) {
-	var methods []ssh.AuthMethod
+	var (
+		methods []ssh.AuthMethod
+		skipped []string
+	)
 
 	for _, candidate := range settings.identities {
 		method, err := keyFile(candidate.path)
@@ -240,10 +243,14 @@ func authMethods(ctx context.Context, settings connection) ([]ssh.AuthMethod, er
 			// A key the operator named is an answer they already gave, so a
 			// bad one is an error. One a config file named is a candidate --
 			// a Host * block routinely names a key that is absent here or
-			// encrypted, and OpenSSH just moves on to the next.
+			// encrypted, and OpenSSH just moves on to the next. Remembered
+			// rather than dropped, so an end with nothing to offer can say
+			// which candidates it looked at and why each was passed over.
 			if candidate.explicit {
 				return nil, err
 			}
+
+			skipped = append(skipped, fmt.Sprintf("%s (%v)", candidate.path, err))
 
 			continue
 		}
@@ -257,6 +264,11 @@ func authMethods(ctx context.Context, settings connection) ([]ssh.AuthMethod, er
 	}
 
 	if len(methods) == 0 {
+		if len(skipped) > 0 {
+			return nil, fmt.Errorf("worker %q: %w — the ssh_config named %s, skipped as ssh would skip it",
+				settings.worker.URL, errNoAuth, strings.Join(skipped, "; "))
+		}
+
 		return nil, fmt.Errorf("worker %q: %w", settings.worker.URL, errNoAuth)
 	}
 

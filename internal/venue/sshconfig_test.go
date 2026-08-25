@@ -627,3 +627,186 @@ func mustParseWorker(t *testing.T, raw string) Worker {
 
 	return worker
 }
+
+// TestSSHConfigMatchesTheAliasCaseInsensitively pins what ssh(1) does before
+// it reads the file at all: the name on the command line is lowercased. A
+// case-differing alias that silently skipped its own Host block would also
+// skip that block's ProxyJump — the exact partial read the refusals exist to
+// prevent.
+func TestSSHConfigMatchesTheAliasCaseInsensitively(t *testing.T) {
+	t.Parallel()
+
+	t.Run("resolves", func(t *testing.T) {
+		t.Parallel()
+
+		config := writeSSHConfig(t, "Host gpu-box\n\tHostName real.example\n")
+
+		conn, err := connectionFor(mustParseWorker(t, "ssh://GPU-Box?ssh_config="+config))
+		if err != nil {
+			t.Fatalf("connectionFor: %v", err)
+		}
+
+		if conn.address != "real.example:22" {
+			t.Errorf("address = %q, want the block ssh would have matched", conn.address)
+		}
+	})
+
+	t.Run("refuses", func(t *testing.T) {
+		t.Parallel()
+
+		config := writeSSHConfig(t, "Host gpu-box\n\tProxyJump bastion\n")
+
+		_, err := connectionFor(mustParseWorker(t, "ssh://GPU-Box?ssh_config="+config))
+		if !errors.Is(err, errSSHConfig) {
+			t.Fatalf("error = %v, want the refusal a case difference must not sidestep", err)
+		}
+	})
+}
+
+// TestSSHConfigHonoursBooleanOffSpellings covers the synonym OpenSSH accepts:
+// `CanonicalizeHostname false` turns canonicalization off exactly as `no`
+// does, and refusing it refuses a file that changes nothing.
+func TestSSHConfigHonoursBooleanOffSpellings(t *testing.T) {
+	t.Parallel()
+
+	config := writeSSHConfig(t, "Host box\n\tCanonicalizeHostname false\n\tProxyUseFdpass false\n\tHostName real.example\n")
+
+	conn, err := connectionFor(mustParseWorker(t, "ssh://box?ssh_config="+config))
+	if err != nil {
+		t.Fatalf("connectionFor: %v", err)
+	}
+
+	if conn.address != "real.example:22" {
+		t.Errorf("address = %q, want the host whose booleans are off", conn.address)
+	}
+}
+
+// TestSSHConfigRefusesDevNullKnownHosts covers the common spelling of the same
+// intent `none` declares: a file that is always empty checks nothing, and the
+// refusal has to name the directive rather than fail every dial with "host
+// unknown" and no cause an operator can act on.
+func TestSSHConfigRefusesDevNullKnownHosts(t *testing.T) {
+	t.Parallel()
+
+	config := writeSSHConfig(t, "Host box\n\tUserKnownHostsFile /dev/null\n")
+
+	_, err := connectionFor(mustParseWorker(t, "ssh://box?ssh_config="+config))
+	if !errors.Is(err, errSSHConfig) {
+		t.Fatalf("error = %v, want a refusal naming the directive", err)
+	}
+}
+
+// TestSSHConfigKnownHostsWithSpaces covers a path the parser hands over with
+// its quotes already stripped, and one still carrying them: both name files,
+// not the fragments a whitespace split would leave.
+func TestSSHConfigKnownHostsWithSpaces(t *testing.T) {
+	t.Parallel()
+
+	t.Run("quoted beside another", func(t *testing.T) {
+		t.Parallel()
+
+		config := writeSSHConfig(t, "Host box\n\tUserKnownHostsFile \"/a b/known_hosts\" /c/known_hosts\n")
+
+		conn, err := connectionFor(mustParseWorker(t, "ssh://box?ssh_config="+config))
+		if err != nil {
+			t.Fatalf("connectionFor: %v", err)
+		}
+
+		want := []string{"/a b/known_hosts", "/c/known_hosts"}
+		if len(conn.knownHosts) != 2 || conn.knownHosts[0] != want[0] || conn.knownHosts[1] != want[1] {
+			t.Errorf("knownHosts = %+v, want %v", conn.knownHosts, want)
+		}
+	})
+
+	t.Run("fully quoted", func(t *testing.T) {
+		t.Parallel()
+
+		dir := filepath.Join(t.TempDir(), "with space")
+		mustMkdir(t, dir)
+		hosts := filepath.Join(dir, "known_hosts")
+		mustWrite(t, hosts, "")
+
+		config := writeSSHConfig(t, "Host box\n\tUserKnownHostsFile \""+hosts+"\"\n")
+
+		conn, err := connectionFor(mustParseWorker(t, "ssh://box?ssh_config="+config))
+		if err != nil {
+			t.Fatalf("connectionFor: %v", err)
+		}
+
+		if len(conn.knownHosts) != 1 || conn.knownHosts[0] != hosts {
+			t.Errorf("knownHosts = %+v, want the one file the value names", conn.knownHosts)
+		}
+	})
+}
+
+// TestSSHConfigRefusesADirectiveAnIncludeUnanchors is the block boundary the
+// parser and OpenSSH disagree about: a Host or Match block opened inside an
+// included file scopes the parent's next lines for ssh, but not for the
+// parser, which reads each included file on its own. A subset directive
+// sitting in that disputed stretch is refused until a Host or Match line
+// re-anchors both readers.
+func TestSSHConfigRefusesADirectiveAnIncludeUnanchors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("refused in the disputed stretch", func(t *testing.T) {
+		t.Parallel()
+
+		included := filepath.Join(t.TempDir(), "trailing.conf")
+		mustWrite(t, included, "Match host special\n\tForwardAgent yes\n")
+
+		config := writeSSHConfig(t, "Include "+included+"\nHostName elsewhere.invalid\n")
+
+		_, err := connectionFor(mustParseWorker(t, "ssh://box?ssh_config="+config))
+		if !errors.Is(err, errSSHConfig) {
+			t.Fatalf("error = %v, want a refusal naming HostName", err)
+		}
+
+		if !strings.Contains(err.Error(), "HostName") {
+			t.Errorf("error = %v, want it to name HostName", err)
+		}
+	})
+
+	t.Run("re-anchored by the next Host line", func(t *testing.T) {
+		t.Parallel()
+
+		included := filepath.Join(t.TempDir(), "hosts.conf")
+		mustWrite(t, included, "Host other\n\tHostName other.example\n")
+
+		config := writeSSHConfig(t, "Include "+included+"\nHost box\n\tHostName real.example\n")
+
+		conn, err := connectionFor(mustParseWorker(t, "ssh://box?ssh_config="+config))
+		if err != nil {
+			t.Fatalf("connectionFor: %v", err)
+		}
+
+		if conn.address != "real.example:22" {
+			t.Errorf("address = %q, want the re-anchored block honoured", conn.address)
+		}
+	})
+}
+
+// TestSSHConfigNamesTheKeysItSkipped keeps the skip diagnosable: a candidate
+// key the file named and this end could not use is exactly the answer to "why
+// did nothing authenticate", and an error that never mentions it sends the
+// operator digging with strace.
+func TestSSHConfigNamesTheKeysItSkipped(t *testing.T) {
+	// Not parallel: it clears the agent from the environment.
+	t.Setenv("SSH_AUTH_SOCK", "")
+
+	absent := filepath.Join(t.TempDir(), "gpu_ed25519")
+	config := writeSSHConfig(t, "Host box\n\tIdentityFile "+absent+"\n")
+
+	settings, err := connectionFor(mustParseWorker(t, "ssh://box?ssh_config="+config))
+	if err != nil {
+		t.Fatalf("connectionFor: %v", err)
+	}
+
+	_, err = authMethods(context.Background(), settings)
+	if !errors.Is(err, errNoAuth) {
+		t.Fatalf("error = %v, want the missing credentials", err)
+	}
+
+	if !strings.Contains(err.Error(), absent) {
+		t.Errorf("error = %v, want it to name the skipped candidate %q", err, absent)
+	}
+}
