@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -291,19 +292,101 @@ done
 cat "$LOG"`, binary, root)
 }
 
-// awsInstance matches an EC2 instance id, so a mapping that can never name a
-// machine is refused when it is read rather than at dial time.
-var awsInstance = regexp.MustCompile(`^i-[0-9a-f]{8,}$`)
+// awsInstance matches an EC2 instance id, and awsTemplate a launch template
+// id, so a mapping that can never name a machine is refused when it is read
+// rather than at dial time.
+var (
+	awsInstance = regexp.MustCompile(`^i-[0-9a-f]{8,}$`)
+	awsTemplate = regexp.MustCompile(`^lt-[0-9a-f]{8,}$`)
+)
+
+// applyAWS reads the three aws:// forms.
+//
+//	aws://i-0abc123[/root]          a running instance
+//	aws://stopped/i-0abc123[/root]  a parked instance
+//	aws://launch/lt-0def456[/root]  a launch template to be born from
+//
+// The rung is the authority rather than a query parameter, because it changes
+// what the URL NAMES — an instance in two cases, a template in the third —
+// and a mapping should read as the thing it points at.
+func applyAWS(worker Worker, parsed *url.URL) (Worker, error) {
+	target, root := parsed.Host, parsed.Path
+
+	switch Rung(parsed.Host) {
+	case RungStopped, RungLaunch:
+		worker.Rung = Rung(parsed.Host)
+
+		target, root = splitFirstSegment(parsed.Path)
+		if target == "" {
+			return Worker{}, fmt.Errorf("%w %q: %s needs something to acquire, as in aws://stopped/i-0abc123 or aws://launch/lt-0def456",
+				ErrWorker, worker.URL, parsed.Host)
+		}
+	case RungStatic:
+	}
+
+	if worker.Rung == RungLaunch {
+		worker.Template = target
+	} else {
+		worker.Instance = target
+	}
+
+	// Absolute, for the same reason ssh:// keeps it absolute.
+	worker.Root = root
+
+	return worker, nil
+}
+
+// splitFirstSegment takes the first path segment off, returning it and
+// whatever absolute path remains.
+func splitFirstSegment(path string) (string, string) {
+	trimmed := strings.TrimPrefix(path, "/")
+
+	slash := strings.Index(trimmed, "/")
+	if slash < 0 {
+		return trimmed, ""
+	}
+
+	return trimmed[:slash], trimmed[slash:]
+}
 
 // checkAWS refuses an aws:// mapping this venue cannot act on.
 func checkAWS(worker Worker) error {
-	if !awsInstance.MatchString(worker.Instance) {
-		return fmt.Errorf("%w %q: aws needs an instance id, as in aws://i-0abc123def456789", ErrWorker, worker.URL)
+	err := checkAWSTarget(worker)
+	if err != nil {
+		return err
 	}
 
 	if worker.Shim != "" && worker.Binary != "" {
 		return fmt.Errorf("%w %q: ?binary= and ?shim= are two answers to the same question — push a local binary, or name one already on the instance",
 			ErrWorker, worker.URL)
+	}
+
+	switch worker.Capacity {
+	case "", CapacitySpot, CapacitySpotThenOD, CapacityOnDemand:
+	default:
+		return fmt.Errorf("%w %q: capacity= must be spot, spot-then-od or od", ErrWorker, worker.URL)
+	}
+
+	if worker.Capacity != "" && worker.Rung != RungLaunch {
+		return fmt.Errorf("%w %q: capacity= describes a machine being launched, and this worker names one that already exists",
+			ErrWorker, worker.URL)
+	}
+
+	return nil
+}
+
+// checkAWSTarget refuses a rung whose target is not the kind of id it needs.
+func checkAWSTarget(worker Worker) error {
+	if worker.Rung == RungLaunch {
+		if !awsTemplate.MatchString(worker.Template) {
+			return fmt.Errorf("%w %q: the launch rung needs a launch template id, as in aws://launch/lt-0def4567", ErrWorker, worker.URL)
+		}
+
+		return nil
+	}
+
+	if !awsInstance.MatchString(worker.Instance) {
+		return fmt.Errorf("%w %q: aws needs an instance id, as in aws://i-0abc123def456789", ErrWorker, worker.URL)
 	}
 
 	return nil

@@ -55,7 +55,12 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 	// guard evaluated here about a step that runs elsewhere would be reading a
 	// different machine's answer. Nothing comes back: a guard is closed
 	// without Capture, so it has no outputs to fetch.
-	spec.Worker = workerFor(ctx, step)
+	worker, err := workerFor(ctx, step)
+	if err != nil {
+		return false, fmt.Errorf("guard for %q: %w", label, err)
+	}
+
+	spec.Worker = worker
 	spec.WorkerTag = placementTag(step)
 	spec.ArtifactStore = artifactStoreFrom(ctx)
 	spec.Keep = workspace.Kept(space)

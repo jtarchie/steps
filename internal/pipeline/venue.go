@@ -71,21 +71,65 @@ func artifactStoreFrom(ctx context.Context) string {
 	return raw
 }
 
-// workerFor answers which worker a step runs on, or "" for this machine.
-func workerFor(ctx context.Context, step config.Step) string {
+// leasesKey types the context value carrying one job's venue leases.
+type leasesKey struct{}
+
+// WithLeases installs a job's venue leases and returns the release that has
+// to run when the job ends.
+//
+// Per JOB, not per run and not per step. A worker that has to be acquired —
+// started from stopped, or launched outright — costs 20 to 90 seconds and
+// real money, so the first placed step pays for it, every later step in the
+// job reuses it, and the job's end gives it back. A job with no placed step,
+// or whose placed steps are all cache hits, acquires nothing at all.
+func WithLeases(ctx context.Context) (context.Context, func(context.Context)) {
+	leases := venue.NewLeases(workersFrom(ctx))
+
+	return context.WithValue(ctx, leasesKey{}, leases), func(ctx context.Context) {
+		err := leases.ReleaseAll(ctx)
+		if err != nil {
+			// Logged, never returned: a job that succeeded did succeed, and
+			// a machine that could not be given back is an operational
+			// problem rather than a wrong answer. It is loud because it
+			// costs money for as long as nobody notices.
+			logFrom(ctx).Error("job.worker_release_failed", "error", err)
+			fmt.Printf("warning: a worker acquired for this job could not be released: %v\n", err)
+		}
+	}
+}
+
+func leasesFrom(ctx context.Context) *venue.Leases {
+	leases, _ := ctx.Value(leasesKey{}).(*venue.Leases)
+
+	return leases
+}
+
+// workerFor answers which worker a step runs on, or "" for this machine,
+// acquiring the machine if this is the first step in the job to ask.
+func workerFor(ctx context.Context, step config.Step) (string, error) {
 	tag := placementTag(step)
 	if tag == "" {
-		return ""
+		return "", nil
 	}
 
-	worker, ok := workersFrom(ctx)[tag]
-	if !ok {
-		// Unreachable in a real run: ValidateWorkerPlacement refuses an
-		// unmapped tag before the first step executes.
-		return ""
+	leases := leasesFrom(ctx)
+	if leases == nil {
+		// A caller that never installed leases — every test that builds a
+		// step runner directly. An already-running worker needs none of it.
+		worker, ok := workersFrom(ctx)[tag]
+		if !ok {
+			return "", nil
+		}
+
+		return worker.URL, nil
 	}
 
-	return worker.URL
+	worker, err := leases.Resolve(ctx, tag)
+	if err != nil {
+		return "", fmt.Errorf("worker for tag %q: %w", tag, err)
+	}
+
+	return worker.URL, nil
 }
 
 // placementOf describes where a step ran, for the run record: "tag (address)",

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"time"
 )
 
 // Scheme names how to reach a worker.
@@ -70,8 +71,20 @@ type Worker struct {
 	// all -- the spelling OpenSSH's -F uses, and the answer to every refusal
 	// the subset raises.
 	SSHConfig string
-	// Instance is the EC2 instance an aws:// worker names.
+	// Instance is the EC2 instance an aws:// worker names. On the launch
+	// rung it is empty until one has been acquired.
 	Instance string
+	// Rung is how much has to happen before this worker can be dialed: it is
+	// already running, it is parked, or it does not exist yet.
+	Rung Rung
+	// Template is the launch template a launch-rung worker is born from. It
+	// owns the entire EC2 vocabulary; steps adds none of its own.
+	Template string
+	// Capacity is which EC2 capacity a launch-rung worker asks for.
+	Capacity Capacity
+	// Idle is how long a parked worker stays running after the job that
+	// started it, so back-to-back jobs do not each pay a cold start.
+	Idle time.Duration
 	// Region overrides the ambient AWS region for an aws:// worker.
 	Region string
 	// Shim is an absolute path to a steps binary ALREADY on the instance —
@@ -127,6 +140,12 @@ func ParseWorker(raw string) (Worker, error) {
 	worker.SSHConfig = query.Get("ssh_config")
 	worker.Region = query.Get("region")
 	worker.Shim = query.Get("shim")
+	worker.Capacity = Capacity(query.Get("capacity"))
+
+	worker.Idle, err = parseIdle(worker, query.Get("idle"))
+	if err != nil {
+		return Worker{}, err
+	}
 
 	err = checkHostKey(worker)
 	if err != nil {
@@ -141,6 +160,20 @@ func ParseWorker(raw string) (Worker, error) {
 	}
 
 	return worker, nil
+}
+
+// parseIdle reads how long a parked worker stays up after its job.
+func parseIdle(worker Worker, raw string) (time.Duration, error) {
+	if raw == "" {
+		return defaultIdle, nil
+	}
+
+	idle, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%w %q: idle= must be a duration, as in 5m: %w", ErrWorker, worker.URL, err)
+	}
+
+	return idle, nil
 }
 
 // fingerprintPattern is OpenSSH's own SHA256 spelling: the prefix, then the
@@ -177,12 +210,7 @@ func checkHostKey(worker Worker) error {
 func applyScheme(worker Worker, parsed *url.URL) (Worker, error) {
 	switch worker.Scheme {
 	case SchemeAWS:
-		// The instance is the authority; the path is the scratch root, kept
-		// absolute for the same reason ssh:// keeps it.
-		worker.Instance = parsed.Host
-		worker.Root = parsed.Path
-
-		return worker, nil
+		return applyAWS(worker, parsed)
 	case SchemeSSH:
 		if parsed.Host == "" {
 			return Worker{}, fmt.Errorf("%w %q: ssh needs a host, as in ssh://user@box", ErrWorker, worker.URL)
@@ -225,7 +253,17 @@ func (w Worker) Address() string {
 	}
 
 	if w.Scheme == SchemeAWS {
-		return "aws://" + w.Instance + w.Root
+		// The rung is part of the address: a machine that was launched for
+		// this job is a different fact about where a step ran than one that
+		// was already up, and the run record has to be able to say which.
+		switch w.Rung {
+		case RungLaunch:
+			return "aws://launch/" + w.Template + w.Root
+		case RungStopped:
+			return "aws://stopped/" + w.Instance + w.Root
+		case RungStatic:
+			return "aws://" + w.Instance + w.Root
+		}
 	}
 
 	address := string(w.Scheme) + "://"
