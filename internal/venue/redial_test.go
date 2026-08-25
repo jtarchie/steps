@@ -105,14 +105,15 @@ func TestVenueRedialsAfterTheWorkerDies(t *testing.T) {
 		t.Fatalf("the first command failed: %v", err)
 	}
 
-	err = runner.Run(context.Background(), "kill -9 $PPID")
-	if err == nil {
-		t.Fatal("killing the shim mid-command reported success")
-	}
+	// Whether THIS command reports failure is a race the test must not
+	// depend on: the shim is killed while it is answering, so under load its
+	// exit frame sometimes wins and the kill reads as a clean success. What
+	// is being tested is the command AFTER it.
+	err = killTheShim(t, runner)
 
 	// Infrastructure, not a verdict: a worker that vanished must never read
 	// as the command having run and failed.
-	if shell.IsExitError(err) {
+	if err != nil && shell.IsExitError(err) {
 		t.Fatalf("a dead worker was reported as a command's exit: %v", err)
 	}
 
@@ -128,6 +129,17 @@ func TestVenueRedialsAfterTheWorkerDies(t *testing.T) {
 	if got != "one\n" {
 		t.Errorf("out/second.txt = %q, want %q — the redialled shim did not see the tree the first command produced", got, "one\n")
 	}
+}
+
+// killTheShim ends the worker's process from inside its own command, and
+// reports whatever the venue made of that — which is deliberately not
+// asserted on: see the callers.
+func killTheShim(t *testing.T, runner shell.Runner) error {
+	t.Helper()
+
+	// The shim is gone either way; a session that still looks healthy will
+	// discover it on the next write.
+	return runner.Run(context.Background(), "kill -9 $PPID") //nolint:wrapcheck // handed straight back for the caller to classify
 }
 
 // TestVenueKeepsTheWorkerAfterAShimError pins the boundary the redial guards:

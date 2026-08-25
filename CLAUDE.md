@@ -50,10 +50,14 @@ task kindswitch  # go run ./tools/kindswitch ./... — ~3s. Reports TAGLESS kind
                   # deliberate omission with `//kindswitch:ignore <reason>` on the line
                   # above the switch; a reason is mandatory (a bare directive is ignored
                   # and the switch keeps reporting).
-task test        # go test ./... — ~11s wall (parallel, default). -p 1 (serialized,
-                  # ~26s) only buys deterministic interleaved log output, not correctness
-                  # (verified with -race -count=50 soak testing under CPU load,
-                  # 2026-07-15: no flakes either way) — run it directly if you need that.
+task test        # go test -race ./... — ~5.5m wall. The race detector is ON, and the
+                  # cost is deliberate: a data race is invisible to every other check in
+                  # this sequence (it compiles, it lints clean, it passes until two
+                  # goroutines interleave), and one shipped green through the whole
+                  # sequence in the SSM data channel before this was added. Every venue
+                  # transport is concurrent by construction. -p 1 (serialized) only buys
+                  # deterministic interleaved log output, not correctness — run it
+                  # directly if you need that.
 task build       # go build -v — ~2.5s warm cache. Produces ./steps (~56MB).
 task vuln        # govulncheck ./... — ~5s (first run also fetches the vuln DB over
                   # network). Reports known CVEs actually reachable from the build —

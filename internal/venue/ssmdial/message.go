@@ -58,10 +58,14 @@ func newAgentMessage(now time.Time) *agentMessage {
 var errMalformedMessage = errors.New("malformed agent message")
 
 // marshal renders the message in wire format.
+//
+// Read-only in the receiver, deliberately: a buffered message is re-marshalled
+// by the resend timer while the sender may still hold it, so computing the
+// digest and length into the struct raced two goroutines over the same fields
+// for no gain — they are derived from the payload every time anyway.
 func (m *agentMessage) marshal() ([]byte, error) {
 	digest := sha256.Sum256(m.payload)
-	m.payloadDigest = digest[:]
-	m.payloadLength = uint32(len(m.payload)) //nolint:gosec // a payload this end built, bounded by the caller's own writes
+	length := uint32(len(m.payload)) //nolint:gosec // a payload this end built, bounded by the caller's own writes
 
 	buf := new(bytes.Buffer)
 
@@ -73,9 +77,9 @@ func (m *agentMessage) marshal() ([]byte, error) {
 		m.sequenceNumber,
 		uint64(m.flags),
 		swapUUIDHalves(m.messageID[:]),
-		m.payloadDigest,
+		digest[:],
 		uint32(m.payloadType),
-		m.payloadLength,
+		length,
 		m.payload,
 	}
 
