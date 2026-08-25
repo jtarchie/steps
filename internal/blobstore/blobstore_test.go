@@ -8,8 +8,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeS3 answers the three verbs the store speaks, against a map. Auth is not
@@ -77,6 +79,9 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		_, _ = w.Write(body)
+	case http.MethodDelete:
+		delete(f.objects, r.URL.Path)
+		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -181,5 +186,109 @@ func TestParseRefusals(t *testing.T) {
 
 	if opts.Bucket != "bucket" || opts.Prefix != "a/b" {
 		t.Errorf("Parse = %+v, want bucket %q prefix %q", opts, "bucket", "a/b")
+	}
+}
+
+// TestRawKeyRoundTrip covers the untyped half the venue data plane uses:
+// whole objects by caller-chosen key, presigned for a machine with no AWS
+// identity of its own.
+func TestRawKeyRoundTrip(t *testing.T) {
+	store, fake := newTestStore(t)
+	ctx := context.Background()
+
+	staged := filepath.Join(t.TempDir(), "payload")
+
+	err := os.WriteFile(staged, []byte("packed-bytes"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = store.PutFile(ctx, "wire/abc", staged)
+	if err != nil {
+		t.Fatalf("PutFile: %v", err)
+	}
+
+	assertStoredAt(t, fake, "/cas/team/wire/abc")
+
+	if !hasKey(t, store, "wire/abc") {
+		t.Fatal("Has = false, want true")
+	}
+
+	body, err := store.Get(ctx, "wire/abc")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	got, err := io.ReadAll(body)
+	_ = body.Close()
+
+	if err != nil || string(got) != "packed-bytes" {
+		t.Fatalf("Get = %q, %v; want the uploaded bytes", got, err)
+	}
+
+	err = store.Delete(ctx, "wire/abc")
+	if err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if hasKey(t, store, "wire/abc") {
+		t.Fatal("Has after delete = true, want false")
+	}
+}
+
+func hasKey(t *testing.T, store *Store, key string) bool {
+	t.Helper()
+
+	has, err := store.Has(context.Background(), key)
+	if err != nil {
+		t.Fatalf("Has: %v", err)
+	}
+
+	return has
+}
+
+// TestPresignedURLsWorkWithPlainHTTP is the whole point of presigning: the
+// far end speaks nothing but net/http, and the URL alone carries the
+// authority.
+func TestPresignedURLsWorkWithPlainHTTP(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	putURL, err := store.PresignPut(ctx, "wire/out-1", time.Minute)
+	if err != nil {
+		t.Fatalf("PresignPut: %v", err)
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPut, putURL, strings.NewReader("worker-bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("PUT to the presigned URL: %v", err)
+	}
+
+	_ = response.Body.Close()
+
+	if response.StatusCode >= 300 {
+		t.Fatalf("PUT status = %d", response.StatusCode)
+	}
+
+	getURL, err := store.PresignGet(ctx, "wire/out-1", time.Minute)
+	if err != nil {
+		t.Fatalf("PresignGet: %v", err)
+	}
+
+	response, err = http.Get(getURL) //nolint:noctx,gosec // a test URL this test minted
+	if err != nil {
+		t.Fatalf("GET from the presigned URL: %v", err)
+	}
+
+	got, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+
+	if err != nil || string(got) != "worker-bytes" {
+		t.Fatalf("GET = %q, %v; want what the PUT stored", got, err)
 	}
 }

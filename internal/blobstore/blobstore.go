@@ -22,6 +22,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -112,6 +113,109 @@ func New(ctx context.Context, opts Options) (*Store, error) {
 // key is where one digest's blob lives.
 func (s *Store) key(digest string) string {
 	return path.Join(s.opts.Prefix, "blobs", digest)
+}
+
+// rawKey places a caller-chosen key under the store's prefix. The typed tree
+// API above owns the blobs/ namespace; everything else — the venue data
+// plane's wire/ objects — names its own key through the raw API below.
+func (s *Store) rawKey(key string) string {
+	return path.Join(s.opts.Prefix, key)
+}
+
+// Has reports whether the store holds key.
+func (s *Store) Has(ctx context.Context, key string) (bool, error) {
+	full := s.rawKey(key)
+
+	_, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &s.opts.Bucket, Key: &full})
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("checking %s in %q: %w", key, s.opts.URL, err)
+	}
+
+	return true, nil
+}
+
+// PutFile uploads one local file as the object at key. A file rather than a
+// reader because S3 signs the payload: an upload needs a length and a
+// seekable body.
+func (s *Store) PutFile(ctx context.Context, key, name string) error {
+	file, err := os.Open(name) //nolint:gosec // a path the caller staged
+	if err != nil {
+		return fmt.Errorf("uploading %s to %q: %w", key, s.opts.URL, err)
+	}
+
+	defer func() { _ = file.Close() }()
+
+	full := s.rawKey(key)
+
+	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{Bucket: &s.opts.Bucket, Key: &full, Body: file})
+	if err != nil {
+		return fmt.Errorf("uploading %s to %q: %w", key, s.opts.URL, err)
+	}
+
+	return nil
+}
+
+// Get streams the object at key. The caller closes it.
+func (s *Store) Get(ctx context.Context, key string) (io.ReadCloser, error) {
+	full := s.rawKey(key)
+
+	object, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.opts.Bucket, Key: &full})
+	if err != nil {
+		if isNotFound(err) {
+			return nil, fmt.Errorf("%w: %s is not in %q", ErrMissingBlob, key, s.opts.URL)
+		}
+
+		return nil, fmt.Errorf("fetching %s from %q: %w", key, s.opts.URL, err)
+	}
+
+	return object.Body, nil
+}
+
+// Delete removes the object at key. Absence is success — the object being
+// gone is the outcome asked for.
+func (s *Store) Delete(ctx context.Context, key string) error {
+	full := s.rawKey(key)
+
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &s.opts.Bucket, Key: &full})
+	if err != nil {
+		return fmt.Errorf("deleting %s from %q: %w", key, s.opts.URL, err)
+	}
+
+	return nil
+}
+
+// PresignGet mints a URL that reads key with no credentials but the URL
+// itself — how a venue with zero AWS identity is handed exactly the blobs
+// its job needs and nothing else.
+func (s *Store) PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	full := s.rawKey(key)
+
+	request, err := s3.NewPresignClient(s.client).PresignGetObject(ctx,
+		&s3.GetObjectInput{Bucket: &s.opts.Bucket, Key: &full},
+		s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", fmt.Errorf("presigning a read of %s in %q: %w", key, s.opts.URL, err)
+	}
+
+	return request.URL, nil
+}
+
+// PresignPut is PresignGet for writing key.
+func (s *Store) PresignPut(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	full := s.rawKey(key)
+
+	request, err := s3.NewPresignClient(s.client).PresignPutObject(ctx,
+		&s3.PutObjectInput{Bucket: &s.opts.Bucket, Key: &full},
+		s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", fmt.Errorf("presigning a write of %s in %q: %w", key, s.opts.URL, err)
+	}
+
+	return request.URL, nil
 }
 
 // HasTree reports whether the store already holds digest, so a Put can be
