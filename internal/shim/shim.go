@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/jtarchie/steps/internal/compress"
 	"github.com/jtarchie/steps/internal/wire"
 )
 
@@ -69,6 +70,9 @@ type session struct {
 	opts    Options
 	workdir string
 	keep    bool
+	// compression is what the hello negotiated for tree transfers: the token
+	// this shim echoed back, or empty for raw.
+	compression string
 
 	// cancel stops the command belonging to op, under mu. Both are nil when no
 	// command is running.
@@ -160,6 +164,13 @@ func (s *session) hello(frame wire.Frame) error {
 
 	s.keep = hello.Keep
 
+	// Accepted only when understood: an unknown token is an orchestrator
+	// newer than this binary, and the honest answer is silence — raw is the
+	// floor both ends always share.
+	if hello.Compression == wire.CompressionZstd {
+		s.compression = wire.CompressionZstd
+	}
+
 	// The orchestrator's mapping wins: it is the operator naming a disk on
 	// THIS machine, and it is the same path the binary was pushed under.
 	root := hello.Root
@@ -181,11 +192,12 @@ func (s *session) hello(frame wire.Frame) error {
 	}
 
 	return s.send(wire.FrameHelloOK, frame.Op, wire.HelloOK{
-		Protocol: wire.Protocol,
-		Build:    s.opts.Build,
-		GOOS:     runtime.GOOS,
-		GOARCH:   runtime.GOARCH,
-		Workdir:  s.workdir,
+		Protocol:    wire.Protocol,
+		Build:       s.opts.Build,
+		GOOS:        runtime.GOOS,
+		GOARCH:      runtime.GOARCH,
+		Workdir:     s.workdir,
+		Compression: s.compression,
 	})
 }
 
@@ -199,7 +211,7 @@ func (s *session) upload(op uint32) error {
 
 	reader, done := s.dataReader(op)
 
-	err := wire.UnpackTree(reader, s.workdir)
+	err := s.unpack(reader)
 
 	// Drained BEFORE the acknowledgement, not after. The far end sends its
 	// next operation as soon as it hears this one landed, so a drain that ran
@@ -233,7 +245,7 @@ func (s *session) fetch(frame wire.Frame) error {
 
 	writer := s.dataWriter(frame.Op)
 
-	err = wire.PackPaths(writer, s.workdir, fetch.Paths)
+	err = s.pack(writer, fetch.Paths)
 	if err != nil {
 		return fmt.Errorf("packing the step outputs: %w", err)
 	}
@@ -244,6 +256,64 @@ func (s *session) fetch(frame wire.Frame) error {
 	}
 
 	return s.sendEmpty(wire.FrameEnd, frame.Op)
+}
+
+// unpack reads one tar stream into the work directory, through the negotiated
+// compression. Strict rather than sniffing: after agreeing to zstd, raw bytes
+// are a peer that forgot to compress, and accepting them would leave that bug
+// shipping trees that only sometimes unpack.
+func (s *session) unpack(reader io.Reader) error {
+	if s.compression == wire.CompressionZstd {
+		decoder, err := compress.NewReader(reader)
+		if err != nil {
+			return fmt.Errorf("%w", err)
+		}
+
+		defer func() { _ = decoder.Close() }()
+
+		reader = decoder
+	}
+
+	err := wire.UnpackTree(reader, s.workdir)
+	if err != nil {
+		return err //nolint:wrapcheck // both callers wrap with the operation's own context
+	}
+
+	return nil
+}
+
+// pack writes the named outputs as one tar stream, through the negotiated
+// compression.
+func (s *session) pack(writer io.Writer, paths []string) error {
+	if s.compression == wire.CompressionZstd {
+		encoder, err := compress.NewWriter(writer)
+		if err != nil {
+			return fmt.Errorf("%w", err)
+		}
+
+		err = wire.PackPaths(encoder, s.workdir, paths)
+		if err != nil {
+			_ = encoder.Close()
+
+			return err //nolint:wrapcheck // the caller wraps with the operation's own context
+		}
+
+		// Close is what finishes the zstd frame; an error here is a
+		// truncated stream the far end cannot decode, not a cleanup detail.
+		err = encoder.Close()
+		if err != nil {
+			return fmt.Errorf("%w", err)
+		}
+
+		return nil
+	}
+
+	err := wire.PackPaths(writer, s.workdir, paths)
+	if err != nil {
+		return err //nolint:wrapcheck // the caller wraps with the operation's own context
+	}
+
+	return nil
 }
 
 // errUnopened is any operation arriving before a hello. It cannot happen with

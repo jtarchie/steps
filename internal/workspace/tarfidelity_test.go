@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/compress"
 	"github.com/jtarchie/steps/internal/wire"
 )
 
@@ -119,21 +120,35 @@ func treeShapes() []treeShape {
 func TestPackTreePreservesDigest(t *testing.T) {
 	t.Parallel()
 
-	for _, shape := range treeShapes() {
-		t.Run(shape.name, func(t *testing.T) {
-			t.Parallel()
+	// Every transfer encoding a tree can cross, held to the same digests: the
+	// raw stream, and the zstd wrap the venue negotiates and a blob store
+	// will hold. One test over N encodings, so a new one cannot ship without
+	// standing where the invariant is asserted.
+	codecs := []struct {
+		name      string
+		roundTrip func(t *testing.T, src, dst string)
+	}{
+		{"raw", roundTrip},
+		{"zstd", zstdRoundTrip},
+	}
 
-			src := t.TempDir()
-			shape.build(t, src)
+	for _, codec := range codecs {
+		for _, shape := range treeShapes() {
+			t.Run(codec.name+"/"+shape.name, func(t *testing.T) {
+				t.Parallel()
 
-			dst := t.TempDir()
-			roundTrip(t, src, dst)
+				src := t.TempDir()
+				shape.build(t, src)
 
-			want := mustDigest(t, src)
-			if got := mustDigest(t, dst); got != want {
-				t.Fatalf("digest changed across the round trip:\n  before %s\n  after  %s", want, got)
-			}
-		})
+				dst := t.TempDir()
+				codec.roundTrip(t, src, dst)
+
+				want := mustDigest(t, src)
+				if got := mustDigest(t, dst); got != want {
+					t.Fatalf("digest changed across the round trip:\n  before %s\n  after  %s", want, got)
+				}
+			})
+		}
 	}
 }
 
@@ -240,6 +255,41 @@ func roundTrip(t *testing.T, src, dst string) {
 	}
 
 	err = wire.UnpackTree(&buf, dst)
+	if err != nil {
+		t.Fatalf("UnpackTree: %v", err)
+	}
+}
+
+// zstdRoundTrip is roundTrip through the compressing wrap, exactly as the
+// venue's upload and a blob store's blobs travel.
+func zstdRoundTrip(t *testing.T, src, dst string) {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	encoder, err := compress.NewWriter(&buf)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	err = wire.PackTree(encoder, src)
+	if err != nil {
+		t.Fatalf("PackTree: %v", err)
+	}
+
+	err = encoder.Close()
+	if err != nil {
+		t.Fatalf("closing the zstd stream: %v", err)
+	}
+
+	reader, err := compress.NewReader(&buf)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+
+	defer func() { _ = reader.Close() }()
+
+	err = wire.UnpackTree(reader, dst)
 	if err != nil {
 		t.Fatalf("UnpackTree: %v", err)
 	}

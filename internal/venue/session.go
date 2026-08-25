@@ -96,7 +96,10 @@ type session struct {
 	encoder   *wire.Encoder
 	decoder   *wire.Decoder
 	workdir   string
-	op        uint32
+	// compression is what the handshake negotiated for tree transfers: the
+	// token the shim echoed back, or empty for raw against an older shim.
+	compression string
+	op          uint32
 }
 
 var (
@@ -249,6 +252,10 @@ func (s *session) greet() error {
 		Session:  name,
 		Keep:     s.keep,
 		Root:     s.worker.Root,
+		// Always offered, never required: a shim that echoes it speaks zstd
+		// for the tree transfers, and one that answers with silence — an
+		// older binary — gets raw, the floor both ends always share.
+		Compression: wire.CompressionZstd,
 	})
 	if err != nil {
 		return err
@@ -276,6 +283,7 @@ func (s *session) greet() error {
 	}
 
 	s.workdir = ok.Workdir
+	s.compression = ok.Compression
 
 	return nil
 }
@@ -317,6 +325,14 @@ func (s *session) checkHello(ok wire.HelloOK, build string) error {
 	if lost, lossy := lossyGOOS[ok.GOOS]; lossy {
 		return fmt.Errorf("%w: %s runs %s, which has nowhere to store %s — a tree sent there comes back without one, and nothing reports it",
 			errLossyWorker, s.worker.URL, ok.GOOS, lost)
+	}
+
+	// The shim may accept the offered compression or stay silent; a third
+	// answer is a peer this end cannot decode, said now rather than as a
+	// garbled transfer later.
+	if ok.Compression != "" && ok.Compression != wire.CompressionZstd {
+		return fmt.Errorf("%w: the worker's shim answered with compression %q, which this steps never offered",
+			wire.ErrProtocol, ok.Compression)
 	}
 
 	return nil

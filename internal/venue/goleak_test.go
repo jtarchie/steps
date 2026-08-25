@@ -54,6 +54,9 @@ func serveShim() {
 	// A shim on a filesystem that cannot store an executable bit.
 	case os.Getenv(windowsWorkerEnv) != "":
 		serveWindowsShim()
+	// A shim built before compression existed.
+	case os.Getenv(legacyShimEnv) != "":
+		serveLegacyShim()
 	default:
 		build, err := shim.SelfBuild()
 		if err != nil {

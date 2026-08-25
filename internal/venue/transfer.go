@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/jtarchie/steps/internal/compress"
 	"github.com/jtarchie/steps/internal/wire"
 )
 
@@ -33,9 +34,9 @@ func (s *session) upload(ctx context.Context) error {
 
 	writer := &chunkWriter{encoder: s.encoder, op: op}
 
-	err = wire.PackTree(writer, s.cwd)
+	err = s.packTree(writer)
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return err
 	}
 
 	err = writer.flush()
@@ -163,7 +164,7 @@ func (s *session) receive(op uint32, into string) error {
 	go func() {
 		defer wg.Done()
 
-		unpackErr = wire.UnpackTree(reader, into)
+		unpackErr = s.unpackTree(reader, into)
 		// Closing with the error stops the frame loop below from blocking on a
 		// pipe nobody is reading any more.
 		_ = reader.CloseWithError(unpackErr)
@@ -184,6 +185,56 @@ func (s *session) receive(op uint32, into string) error {
 	}
 
 	return nil
+}
+
+// packTree writes the step's tree into w, through the negotiated compression.
+func (s *session) packTree(w io.Writer) error {
+	if s.compression != wire.CompressionZstd {
+		err := wire.PackTree(w, s.cwd)
+		if err != nil {
+			return fmt.Errorf("%w", err)
+		}
+
+		return nil
+	}
+
+	encoder, err := compress.NewWriter(w)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	err = wire.PackTree(encoder, s.cwd)
+	if err != nil {
+		_ = encoder.Close()
+
+		return fmt.Errorf("%w", err)
+	}
+
+	// Close is what finishes the zstd frame; an error here is a truncated
+	// stream the shim cannot decode, not a cleanup detail.
+	err = encoder.Close()
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	return nil
+}
+
+// unpackTree reads one tar stream into a directory, through the negotiated
+// compression.
+func (s *session) unpackTree(r io.Reader, into string) error {
+	if s.compression == wire.CompressionZstd {
+		decoder, err := compress.NewReader(r)
+		if err != nil {
+			return fmt.Errorf("%w", err)
+		}
+
+		defer func() { _ = decoder.Close() }()
+
+		r = decoder
+	}
+
+	return wire.UnpackTree(r, into) //nolint:wrapcheck // receive wraps with the transfer's own context
 }
 
 // pump forwards this operation's data frames into w until the transfer ends.

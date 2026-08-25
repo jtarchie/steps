@@ -35,7 +35,19 @@ type Hello struct {
 	// only this end knows the mapping: a shim started by an operator over a
 	// bare ssh command has no URL to read it from.
 	Root string `json:"root,omitempty"`
+	// Compression proposes how upload and fetch data payloads are encoded.
+	// The shim echoes what it accepts in HelloOK.Compression, and silence —
+	// an older shim that never learned the field — means raw, so a mixed
+	// pair degrades to uncompressed rather than to a refusal. Negotiated
+	// rather than versioned: the tar stream inside is identical either way,
+	// so this is a transfer detail, not a protocol revision.
+	Compression string `json:"compression,omitempty"`
 }
+
+// CompressionZstd is the one compression the protocol knows. The value is a
+// name, not a family: a new algorithm is a new token both ends must learn,
+// never a variation smuggled under this one.
+const CompressionZstd = "zstd"
 
 // HelloOK is the shim's answer.
 type HelloOK struct {
@@ -47,6 +59,10 @@ type HelloOK struct {
 	// than dictated so the orchestrator can name it in an error and in
 	// --keep-workspace output.
 	Workdir string `json:"workdir"`
+	// Compression is the encoding the shim accepted from Hello.Compression:
+	// the same token back, or empty for raw. Never a counter-proposal — the
+	// orchestrator offers what it speaks, and the shim takes it or leaves it.
+	Compression string `json:"compression,omitempty"`
 }
 
 // Exec asks for one command.

@@ -271,6 +271,7 @@ linters:
             # same reason the two above are.
             - "github.com/kevinburke/ssh_config"
             - "go.uber.org/goleak"
+            - "github.com/jtarchie/steps/internal/compress"
             - "github.com/jtarchie/steps/internal/shell"
             - "github.com/jtarchie/steps/internal/shim"
             - "github.com/jtarchie/steps/internal/wire"
@@ -289,6 +290,7 @@ linters:
           allow:
             - "$gostd"
             - "go.uber.org/goleak"
+            - "github.com/jtarchie/steps/internal/compress"
             - "github.com/jtarchie/steps/internal/shell"
             - "github.com/jtarchie/steps/internal/wire"
         # wire is the framed protocol and tree codec the orchestrator and a
@@ -301,6 +303,19 @@ linters:
             - "**/internal/wire/**"
           allow:
             - "$gostd"
+        # compress is the zstd wrap around wire's tar stream — one package so
+        # every path that ships a tree (the venue's upload, the shim's fetch,
+        # a blob store's blobs) holds the same opinion about the encoding, and
+        # so wire itself stays stdlib-only. Compression is negotiated at the
+        # hello, never assumed, which is what keeps a mixed-version pair on
+        # raw rather than on a stream one side cannot decode. Pure Go, like
+        # every dependency a pushed binary carries.
+        Compress:
+          files:
+            - "**/internal/compress/**"
+          allow:
+            - "$gostd"
+            - "github.com/klauspost/compress/zstd"
         Workspace:
           files:
             - "**/internal/workspace/**"
@@ -308,12 +323,13 @@ linters:
             - "$gostd"
             - "golang.org/x/sys/unix"
             - "github.com/jtarchie/steps/internal/config"
-            # wire is reached from tests only, and deliberately: digestTree is
-            # unexported, and it is the digest that decides whether a tree that
-            # crossed a wire is still the same content. The test proving the
-            # codec preserves it therefore has to sit next to the digest, not
-            # next to the codec.
+            # wire and compress are reached from tests only, and deliberately:
+            # digestTree is unexported, and it is the digest that decides
+            # whether a tree that crossed a wire is still the same content.
+            # The test proving each codec preserves it therefore has to sit
+            # next to the digest, not next to the codecs.
             - "github.com/jtarchie/steps/internal/wire"
+            - "github.com/jtarchie/steps/internal/compress"
         # mcp is the shared MCP client layer (internal/agent's tool source and
         # internal/resource's mcp: backend both build on it), sitting at the
         # same tier as resource/workspace: depends on config, nothing

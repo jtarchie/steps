@@ -13,6 +13,7 @@ require (
 	github.com/frioux/leatherman v0.0.0-20260807130354-76519e141082
 	github.com/go-task/slim-sprig/v3 v3.0.0
 	github.com/kevinburke/ssh_config v1.6.0
+	github.com/klauspost/compress v1.19.2
 	github.com/labstack/echo/v4 v4.15.4
 	github.com/lmittmann/tint v1.2.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
