@@ -82,7 +82,15 @@ func digestEntry(sum hash.Hash, path string, entry fs.DirEntry) error {
 		}
 
 		digestByte(sum, digestKindSymlink)
-		digestField(sum, []byte(target))
+
+		// ToSlash for the same reason the entry's own path gets it: a link
+		// target IS a path, and the same logical link would otherwise hash one
+		// way where separators are slashes and another where they are
+		// backslashes. Free on this side — ToSlash is the identity wherever
+		// Separator is '/', so no digest that already exists moves, and a
+		// backslash in a POSIX target stays the ordinary filename character it
+		// is.
+		digestField(sum, []byte(filepath.ToSlash(target)))
 	case entry.Type().IsRegular():
 		digestByte(sum, digestKindFile)
 
