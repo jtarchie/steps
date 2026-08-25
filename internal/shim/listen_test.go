@@ -122,7 +122,9 @@ func serveTCP(t *testing.T) net.Addr {
 
 	served := make(chan error, 1)
 
-	go func() { served <- ServeListener(ctx, listener, Options{Build: "test", Root: t.TempDir()}) }()
+	go func() {
+		served <- ServeListener(ctx, listener, ListenOptions{Options: Options{Build: "test", Root: t.TempDir()}})
+	}()
 
 	t.Cleanup(func() {
 		cancel()

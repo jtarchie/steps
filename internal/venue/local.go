@@ -26,6 +26,8 @@ func dial(ctx context.Context, worker Worker) (*transport, error) {
 		return dialLocal(worker)
 	case SchemeSSH:
 		return dialSSH(ctx, worker)
+	case SchemeAWS:
+		return dialSSM(ctx, worker)
 	default:
 		return nil, fmt.Errorf("%w: unknown scheme %q", ErrWorker, worker.Scheme)
 	}

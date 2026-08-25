@@ -288,6 +288,11 @@ linters:
             - "github.com/jtarchie/steps/internal/shell"
             - "github.com/jtarchie/steps/internal/shim"
             - "github.com/jtarchie/steps/internal/wire"
+            # ssmdial is the aws:// transport, and the SSM control plane it is
+            # driven from: start a session, send the bootstrap that gets a shim
+            # listening. Both pure Go.
+            - "github.com/jtarchie/steps/internal/venue/ssmdial"
+            - "github.com/aws/aws-sdk-go-v2"
         # shim is the remote half of a placed step: it runs as `steps _shim` on
         # a worker, reads frames from stdin and writes them to stdout, and
         # knows nothing about pipelines — no config, no store, no workspace,

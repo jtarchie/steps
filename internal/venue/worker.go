@@ -34,6 +34,10 @@ const (
 	SchemeLocal Scheme = "local"
 	// SchemeSSH reaches a worker over SSH, pushing this binary to it first.
 	SchemeSSH Scheme = "ssh"
+	// SchemeAWS reaches an EC2 instance through SSM: no inbound port, no
+	// sshd, no host key. The instance dials the control plane outward, which
+	// is what makes a NAT-hidden worker reachable at all.
+	SchemeAWS Scheme = "aws"
 )
 
 // Worker is a parsed worker URL: where a tagged step goes.
@@ -66,6 +70,17 @@ type Worker struct {
 	// all -- the spelling OpenSSH's -F uses, and the answer to every refusal
 	// the subset raises.
 	SSHConfig string
+	// Instance is the EC2 instance an aws:// worker names.
+	Instance string
+	// Region overrides the ambient AWS region for an aws:// worker.
+	Region string
+	// Shim is an absolute path to a steps binary ALREADY on the instance —
+	// one baked into an AMI — so nothing is transferred to start a session.
+	Shim string
+	// ArtifactStore is the --artifact-store URL, which an aws:// worker
+	// reaches its binary through. Filled in from the spec rather than the
+	// URL: it describes the fleet, not this machine.
+	ArtifactStore string
 	// HostKey pins the worker's host key by SHA256 fingerprint, for a machine
 	// that has no known_hosts entry and never will: one acquired on demand,
 	// used, and destroyed. Whatever created it attested its key out of band,
@@ -110,10 +125,19 @@ func ParseWorker(raw string) (Worker, error) {
 	worker.KnownHosts = query.Get("known_hosts")
 	worker.HostKey = query.Get("hostkey")
 	worker.SSHConfig = query.Get("ssh_config")
+	worker.Region = query.Get("region")
+	worker.Shim = query.Get("shim")
 
 	err = checkHostKey(worker)
 	if err != nil {
 		return Worker{}, err
+	}
+
+	if worker.Scheme == SchemeAWS {
+		err = checkAWS(worker)
+		if err != nil {
+			return Worker{}, err
+		}
 	}
 
 	return worker, nil
@@ -152,6 +176,13 @@ func checkHostKey(worker Worker) error {
 // applyScheme fills in whatever a scheme needs from the parsed URL.
 func applyScheme(worker Worker, parsed *url.URL) (Worker, error) {
 	switch worker.Scheme {
+	case SchemeAWS:
+		// The instance is the authority; the path is the scratch root, kept
+		// absolute for the same reason ssh:// keeps it.
+		worker.Instance = parsed.Host
+		worker.Root = parsed.Path
+
+		return worker, nil
 	case SchemeSSH:
 		if parsed.Host == "" {
 			return Worker{}, fmt.Errorf("%w %q: ssh needs a host, as in ssh://user@box", ErrWorker, worker.URL)
@@ -175,7 +206,7 @@ func applyScheme(worker Worker, parsed *url.URL) (Worker, error) {
 
 		return worker, nil
 	default:
-		return Worker{}, fmt.Errorf("%w %q: unknown scheme %q, want local: or ssh://", ErrWorker, worker.URL, parsed.Scheme)
+		return Worker{}, fmt.Errorf("%w %q: unknown scheme %q, want local:, ssh:// or aws://", ErrWorker, worker.URL, parsed.Scheme)
 	}
 }
 
@@ -191,6 +222,10 @@ func (w Worker) String() string { return w.URL }
 func (w Worker) Address() string {
 	if w.Scheme == SchemeLocal {
 		return "local:"
+	}
+
+	if w.Scheme == SchemeAWS {
+		return "aws://" + w.Instance + w.Root
 	}
 
 	address := string(w.Scheme) + "://"

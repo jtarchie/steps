@@ -40,6 +40,8 @@ func NewRunner(spec shell.RunnerSpec) (shell.Runner, error) {
 		return nil, err
 	}
 
+	worker.ArtifactStore = spec.ArtifactStore
+
 	return runner{session: &session{
 		worker:  worker,
 		cwd:     spec.Cwd,

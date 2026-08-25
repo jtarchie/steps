@@ -34,6 +34,8 @@ import (
 // mean; identity stays self-computed either way.
 type ShimCmd struct {
 	Listen string `help:"serve the shim protocol on a TCP address instead of stdio, e.g. --listen 127.0.0.1:35207" name:"listen"`
+	Once   bool   `help:"with --listen, serve one connection and exit"                                             name:"once"`
+	Root   string `help:"with --listen, where session scratch directories are made"                                name:"root"`
 }
 
 func (s *ShimCmd) Run() error {
@@ -73,7 +75,10 @@ func (s *ShimCmd) listen(build string) error {
 	// in this mode: the protocol lives on the connections.
 	fmt.Printf("listening on %s\n", listener.Addr())
 
-	err = shim.ServeListener(ctx, listener, shim.Options{Build: build})
+	err = shim.ServeListener(ctx, listener, shim.ListenOptions{
+		Options: shim.Options{Build: build, Root: s.Root},
+		Once:    s.Once,
+	})
 	if err != nil {
 		return fmt.Errorf("shim: %w", err)
 	}

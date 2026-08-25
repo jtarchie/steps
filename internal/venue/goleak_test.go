@@ -2,6 +2,8 @@ package venue
 
 import (
 	ctx "context"
+	"fmt"
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -74,10 +76,56 @@ func serveShim() {
 		os.Exit(1)
 	}
 
+	// A listening shim, when the venue under test asked for one — an aws://
+	// bootstrap starts `_shim --listen`, and a helper that only ever spoke
+	// stdio would leave that whole path untested.
+	if address, once, root, listening := listenArgs(); listening {
+		listener, listenErr := (&net.ListenConfig{}).Listen(ctx.Background(), "tcp", address)
+		if listenErr != nil {
+			os.Exit(1)
+		}
+
+		// The same line the real command prints, which is what the bootstrap
+		// script greps for.
+		fmt.Printf("listening on %s\n", listener.Addr())
+
+		serveErr := shim.ServeListener(ctx.Background(), listener,
+			shim.ListenOptions{Options: shim.Options{Build: build, Root: root}, Once: once})
+		if serveErr != nil {
+			os.Exit(1)
+		}
+
+		os.Exit(0)
+	}
+
 	err = shim.Serve(ctx.Background(), os.Stdin, os.Stdout, shim.Options{Build: build})
 	if err != nil {
 		os.Exit(1)
 	}
 
 	os.Exit(0)
+}
+
+// listenArgs reads the listen flags off argv, the way the real command's kong
+// parser would.
+func listenArgs() (address string, once bool, root string, listening bool) {
+	args := os.Args[2:]
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--listen":
+			if i+1 < len(args) {
+				address, listening = args[i+1], true
+				i++
+			}
+		case "--once":
+			once = true
+		case "--root":
+			if i+1 < len(args) {
+				root = args[i+1]
+				i++
+			}
+		}
+	}
+
+	return address, once, root, listening
 }
