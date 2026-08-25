@@ -303,6 +303,24 @@ linters:
             - "**/internal/wire/**"
           allow:
             - "$gostd"
+        # blobstore is the content-addressed artifact store on S3: trees by
+        # digest, packed exactly as they cross a venue's wire (compress over
+        # wire's tar), reaching S3 through the pure-Go SDK — GET/PUT by key,
+        # never a mounted filesystem. It holds bytes only; which digest means
+        # what stays in internal/store's SQLite, which is what makes bucket
+        # lifecycle expiry safe. Wired in by main and consumed through
+        # workspace's injected interfaces, so neither workspace nor the shim
+        # ever imports an AWS SDK.
+        Blobstore:
+          files:
+            - "**/internal/blobstore/**"
+          allow:
+            - "$gostd"
+            - "github.com/aws/aws-sdk-go-v2"
+            - "github.com/aws/smithy-go"
+            - "go.uber.org/goleak"
+            - "github.com/jtarchie/steps/internal/compress"
+            - "github.com/jtarchie/steps/internal/wire"
         # compress is the zstd wrap around wire's tar stream — one package so
         # every path that ships a tree (the venue's upload, the shim's fetch,
         # a blob store's blobs) holds the same opinion about the encoding, and
