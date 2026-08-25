@@ -25,6 +25,10 @@ func (s *session) upload(ctx context.Context) error {
 	stop := s.watchTransfer(ctx)
 	defer stop()
 
+	if s.dataplane == wire.DataPlaneURLs {
+		return s.uploadViaStore(ctx)
+	}
+
 	op := s.nextOp()
 
 	err := s.writeEmpty(wire.Frame{Type: wire.FrameUpload, Op: op})
@@ -87,6 +91,10 @@ func (s *session) fetch(ctx context.Context) error {
 
 	if len(s.outputs) == 0 {
 		return nil
+	}
+
+	if s.dataplane == wire.DataPlaneURLs {
+		return s.fetchViaStore(ctx)
 	}
 
 	op := s.nextOp()

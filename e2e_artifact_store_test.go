@@ -73,6 +73,7 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		body, ok := f.objects[r.URL.Path]
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><Error><Code>NoSuchKey</Code></Error>`))
 
 			return
 		}
@@ -80,9 +81,29 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.gets++
 
 		_, _ = w.Write(body)
+	case http.MethodDelete:
+		delete(f.objects, r.URL.Path)
+		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+// wireObjects counts the objects the venue data plane stored, as opposed to
+// the step cache's blobs/ mirror.
+func (f *fakeS3) wireObjects() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	count := 0
+
+	for key := range f.objects {
+		if strings.Contains(key, "/wire/") {
+			count++
+		}
+	}
+
+	return count
 }
 
 // artifactStorePipeline is a two-step job whose first step records every real
@@ -162,6 +183,41 @@ func TestEndToEndArtifactStoreRematerializesEvictedOutputs(t *testing.T) {
 	published := readFileString(t, filepath.Join(dir, "published-again.txt"))
 	if published != "payload\n" {
 		t.Errorf("published = %q, want the payload the cached step produced", published)
+	}
+}
+
+// TestEndToEndArtifactStorePlacedStepUsesTheDataPlane is the venue half of
+// the store, through the real CLI: a tagged step's trees move via the store
+// while the tunnel carries control frames — and the step's outputs still land
+// exactly where a local step's would.
+func TestEndToEndArtifactStorePlacedStepUsesTheDataPlane(t *testing.T) {
+	dir := t.TempDir()
+	fake, url := newFakeS3(t)
+
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: remote
+    tags: [box]
+    outputs: [out]
+    run: echo made-remotely > out/f.txt
+  - task: publish
+    inputs: [out]
+    run: cp out/f.txt `+filepath.Join(dir, "published.txt")+`
+`)
+
+	mustRun(t, path,
+		"--worker", "box=local:",
+		"--artifact-store", "s3://cas/team?endpoint="+url+"&region=us-east-1")
+
+	published := readFileString(t, filepath.Join(dir, "published.txt"))
+	if !strings.Contains(published, "made-remotely") {
+		t.Errorf("published = %q, want the placed step's output", published)
+	}
+
+	if fake.wireObjects() == 0 {
+		t.Fatal("the placed step moved no trees through the store — the data plane was not used")
 	}
 }
 

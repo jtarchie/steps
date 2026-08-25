@@ -51,6 +51,26 @@ func workersFrom(ctx context.Context) map[string]venue.Worker {
 	return workers
 }
 
+// artifactStoreKey types the context value carrying the --artifact-store URL.
+type artifactStoreKey struct{}
+
+// WithArtifactStore records the --artifact-store URL so a placed step's venue
+// can offer the worker the URL data plane. The URL was already parsed at the
+// CLI edge; this carries the fact, not a client.
+func WithArtifactStore(ctx context.Context, raw string) context.Context {
+	if raw == "" {
+		return ctx
+	}
+
+	return context.WithValue(ctx, artifactStoreKey{}, raw)
+}
+
+func artifactStoreFrom(ctx context.Context) string {
+	raw, _ := ctx.Value(artifactStoreKey{}).(string)
+
+	return raw
+}
+
 // workerFor answers which worker a step runs on, or "" for this machine.
 func workerFor(ctx context.Context, step config.Step) string {
 	tag := placementTag(step)

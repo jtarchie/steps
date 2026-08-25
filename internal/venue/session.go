@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jtarchie/steps/internal/blobstore"
 	"github.com/jtarchie/steps/internal/wire"
 )
 
@@ -99,7 +100,13 @@ type session struct {
 	// compression is what the handshake negotiated for tree transfers: the
 	// token the shim echoed back, or empty for raw against an older shim.
 	compression string
-	op          uint32
+	// blobs is the artifact store, nil unless --artifact-store was given.
+	// With it, greet offers the URL data plane; without it, or against a shim
+	// that stays silent, trees ride the tunnel — the floor both ends share.
+	blobs *blobstore.Store
+	// dataplane is what the handshake settled: wire.DataPlaneURLs or empty.
+	dataplane string
+	op        uint32
 }
 
 var (
@@ -260,6 +267,7 @@ func (s *session) greet() error {
 		// for the tree transfers, and one that answers with silence — an
 		// older binary — gets raw, the floor both ends always share.
 		Compression: wire.CompressionZstd,
+		DataPlane:   s.offerDataPlane(),
 	})
 	if err != nil {
 		return err
@@ -288,8 +296,20 @@ func (s *session) greet() error {
 
 	s.workdir = ok.Workdir
 	s.compression = ok.Compression
+	s.dataplane = ok.DataPlane
 
 	return nil
+}
+
+// offerDataPlane is the plane greet proposes: URLs when a blob store is
+// configured, nothing otherwise — an offer the venue could not honor would
+// be a lie the first upload exposes.
+func (s *session) offerDataPlane() string {
+	if s.blobs == nil {
+		return ""
+	}
+
+	return wire.DataPlaneURLs
 }
 
 // checkHello decides whether the shim that answered is one this run can use:
@@ -337,6 +357,13 @@ func (s *session) checkHello(ok wire.HelloOK, build string) error {
 	if ok.Compression != "" && ok.Compression != wire.CompressionZstd {
 		return fmt.Errorf("%w: the worker's shim answered with compression %q, which this steps never offered",
 			wire.ErrProtocol, ok.Compression)
+	}
+
+	// Same rule for the data plane: an echo is only valid for what was
+	// offered, and nothing is offered without a store to mint URLs from.
+	if ok.DataPlane != "" && ok.DataPlane != s.offerDataPlane() {
+		return fmt.Errorf("%w: the worker's shim answered with data plane %q, which this steps never offered",
+			wire.ErrProtocol, ok.DataPlane)
 	}
 
 	return nil

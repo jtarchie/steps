@@ -155,9 +155,11 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 
 	// Fetch is the step's declared outputs: what a worker sends back after
 	// every command, so the local tree matches before an assert: reads it.
+	//nolint:contextcheck // NewRunner takes no context; opening the artifact store reads only local config
 	runner, err := venue.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Env: rt.Env, User: rt.User, Network: rt.Network,
 		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes(),
 		Worker: workerFor(ctx, step), WorkerTag: placementTag(step), Fetch: rt.Outputs,
+		ArtifactStore: artifactStoreFrom(ctx),
 		// The same postmortem, on the machine that actually ran the step: a
 		// worker's scratch is the remote half of the step directory, and a
 		// flag whose whole purpose is having the files afterwards would stop

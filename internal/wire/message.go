@@ -42,12 +42,32 @@ type Hello struct {
 	// rather than versioned: the tar stream inside is identical either way,
 	// so this is a transfer detail, not a protocol revision.
 	Compression string `json:"compression,omitempty"`
+	// DataPlane proposes how tree BYTES travel, separately from how frames
+	// do. The one token is DataPlaneURLs: the orchestrator hands the shim a
+	// URL per transfer and the tunnel carries control frames only. Same
+	// degradation contract as Compression — the shim echoes what it accepts,
+	// silence means the tunnel, and the tunnel is always the floor.
+	DataPlane string `json:"data_plane,omitempty"`
 }
 
 // CompressionZstd is the one compression the protocol knows. The value is a
 // name, not a family: a new algorithm is a new token both ends must learn,
 // never a variation smuggled under this one.
 const CompressionZstd = "zstd"
+
+// DataPlaneURLs is tree transfer by presigned URL: the orchestrator PUTs the
+// step tree to a blob store and sends a GET URL; the shim PUTs outputs to a
+// URL it was handed. The worker needs no credentials beyond the URLs
+// themselves, which is the entire design — a venue holds no AWS identity.
+const DataPlaneURLs = "urls"
+
+// Upload is FrameUpload's payload under DataPlaneURLs: where to fetch the
+// step tree, as one zstd-over-tar blob — the same stream the tunnel would
+// have carried. Absent (an empty payload) on the tunnel plane, where the
+// tree follows as data frames.
+type Upload struct {
+	URL string `json:"url"`
+}
 
 // HelloOK is the shim's answer.
 type HelloOK struct {
@@ -63,6 +83,9 @@ type HelloOK struct {
 	// the same token back, or empty for raw. Never a counter-proposal — the
 	// orchestrator offers what it speaks, and the shim takes it or leaves it.
 	Compression string `json:"compression,omitempty"`
+	// DataPlane is the transfer plane the shim accepted from Hello.DataPlane,
+	// under the same take-it-or-leave-it contract.
+	DataPlane string `json:"data_plane,omitempty"`
 }
 
 // Exec asks for one command.
@@ -113,6 +136,10 @@ type Exit struct {
 // a feature that works and one anybody uses.
 type Fetch struct {
 	Paths []string `json:"paths"`
+	// URL, under DataPlaneURLs, is where the shim PUTs the packed outputs —
+	// a presigned write the orchestrator minted for this one fetch. Empty on
+	// the tunnel plane, where the outputs come back as data frames.
+	URL string `json:"url,omitempty"`
 }
 
 // Error reports a failed operation without ending the session.

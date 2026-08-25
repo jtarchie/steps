@@ -277,6 +277,11 @@ linters:
             # same reason the two above are.
             - "github.com/kevinburke/ssh_config"
             - "go.uber.org/goleak"
+            # blobstore is the venue's data plane: with --artifact-store set,
+            # trees move as presigned-URL blobs and the tunnel carries control
+            # frames only — the property the SSM dialer's slow tunnels depend
+            # on. Pure Go, like everything a pushed binary carries.
+            - "github.com/jtarchie/steps/internal/blobstore"
             - "github.com/jtarchie/steps/internal/compress"
             - "github.com/jtarchie/steps/internal/shell"
             - "github.com/jtarchie/steps/internal/shim"

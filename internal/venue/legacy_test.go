@@ -14,15 +14,16 @@ import (
 )
 
 // legacyShimEnv makes the helper-process shim behave like one built before
-// compression existed: the proposal in the hello is invisible to it, so it
-// answers without the field and speaks raw tar both ways.
+// compression and the URL data plane existed: the proposals in the hello are
+// invisible to it, so it answers without the fields, speaks raw tar, and
+// takes its trees over the tunnel.
 const legacyShimEnv = "STEPS_TEST_LEGACY_SHIM"
 
 // serveLegacyShim runs the REAL shim behind a pump that strips the
-// compression proposal from the hello — which is exactly what an older
-// binary's json decoder does with a field it never learned. Everything after
-// the hello is the real shim, so this pins the whole raw path, not a stub's
-// opinion of it.
+// negotiation proposals from the hello — which is exactly what an older
+// binary's json decoder does with fields it never learned. Everything after
+// the hello is the real shim, so this pins the whole floor path, not a
+// stub's opinion of it.
 func serveLegacyShim() {
 	reader, writer := io.Pipe()
 
@@ -49,6 +50,7 @@ func serveLegacyShim() {
 				}
 
 				hello.Compression = ""
+				hello.DataPlane = ""
 
 				err = encoder.WriteJSON(wire.FrameHello, frame.Op, hello)
 				if err != nil {

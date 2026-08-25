@@ -147,6 +147,12 @@ type RunnerSpec struct {
 	// Empty for a step running on this machine, which is what makes the
 	// variable's absence meaningful.
 	WorkerTag string
+	// ArtifactStore is the --artifact-store URL, when one is configured. A
+	// placed step's venue offers it to the worker as the data plane — trees
+	// by presigned URL instead of through the tunnel. A string here rather
+	// than a client, because this package is a leaf that carries facts, and
+	// the venue is where the fact becomes a connection.
+	ArtifactStore string
 	// Fetch names the directories to bring back after each command, which for
 	// a task step are its declared outputs.
 	//

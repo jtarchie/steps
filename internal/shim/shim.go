@@ -73,6 +73,9 @@ type session struct {
 	// compression is what the hello negotiated for tree transfers: the token
 	// this shim echoed back, or empty for raw.
 	compression string
+	// dataplane is how tree bytes travel: wire.DataPlaneURLs when negotiated,
+	// empty for the tunnel.
+	dataplane string
 
 	// cancel stops the command belonging to op, under mu. Both are nil when no
 	// command is running.
@@ -129,11 +132,11 @@ func (s *session) handle(ctx context.Context, frame wire.Frame) (bool, error) {
 	case wire.FrameHello:
 		return false, s.hello(frame)
 	case wire.FrameUpload:
-		return false, s.upload(frame.Op)
+		return false, s.upload(ctx, frame)
 	case wire.FrameExec:
 		return false, s.startExec(ctx, frame)
 	case wire.FrameFetch:
-		return false, s.fetch(frame)
+		return false, s.fetch(ctx, frame)
 	case wire.FrameCancel:
 		s.cancelRunning(frame.Op)
 
@@ -171,6 +174,10 @@ func (s *session) hello(frame wire.Frame) error {
 		s.compression = wire.CompressionZstd
 	}
 
+	if hello.DataPlane == wire.DataPlaneURLs {
+		s.dataplane = wire.DataPlaneURLs
+	}
+
 	// The orchestrator's mapping wins: it is the operator naming a disk on
 	// THIS machine, and it is the same path the binary was pushed under.
 	root := hello.Root
@@ -198,18 +205,29 @@ func (s *session) hello(frame wire.Frame) error {
 		GOARCH:      runtime.GOARCH,
 		Workdir:     s.workdir,
 		Compression: s.compression,
+		DataPlane:   s.dataplane,
 	})
 }
 
-// upload reads FrameData until FrameEnd, unpacking into the work directory as
-// the bytes arrive rather than staging them: a step's tree can be larger than
-// the worker's memory, and there is nothing to gain by holding it twice.
-func (s *session) upload(op uint32) error {
+// upload lands the step's tree in the work directory: fetched from the URL
+// the frame carries under DataPlaneURLs, or read from FrameData frames until
+// FrameEnd on the tunnel — unpacking as the bytes arrive rather than staging
+// them, because a step's tree can be larger than the worker's memory.
+func (s *session) upload(ctx context.Context, frame wire.Frame) error {
 	if s.workdir == "" {
 		return errUnopened
 	}
 
-	reader, done := s.dataReader(op)
+	if s.dataplane == wire.DataPlaneURLs {
+		err := s.downloadTree(ctx, frame)
+		if err != nil {
+			return fmt.Errorf("fetching the step tree: %w", err)
+		}
+
+		return s.sendEnd(frame.Op)
+	}
+
+	reader, done := s.dataReader(frame.Op)
 
 	err := s.unpack(reader)
 
@@ -228,10 +246,10 @@ func (s *session) upload(op uint32) error {
 	// has not arrived yet. Without this the orchestrator could only check its
 	// own writes, and would go on to run the step's command against a tree
 	// this end never accepted.
-	return s.sendEmpty(wire.FrameEnd, op)
+	return s.sendEnd(frame.Op)
 }
 
-func (s *session) fetch(frame wire.Frame) error {
+func (s *session) fetch(ctx context.Context, frame wire.Frame) error {
 	if s.workdir == "" {
 		return errUnopened
 	}
@@ -241,6 +259,15 @@ func (s *session) fetch(frame wire.Frame) error {
 	err := wire.DecodeJSON(frame, &fetch)
 	if err != nil {
 		return fmt.Errorf("%w", err)
+	}
+
+	if s.dataplane == wire.DataPlaneURLs {
+		err = s.uploadOutputs(ctx, fetch)
+		if err != nil {
+			return fmt.Errorf("shipping the step outputs: %w", err)
+		}
+
+		return s.sendEnd(frame.Op)
 	}
 
 	writer := s.dataWriter(frame.Op)
@@ -255,7 +282,7 @@ func (s *session) fetch(frame wire.Frame) error {
 		return fmt.Errorf("%w", err)
 	}
 
-	return s.sendEmpty(wire.FrameEnd, frame.Op)
+	return s.sendEnd(frame.Op)
 }
 
 // unpack reads one tar stream into the work directory, through the negotiated
@@ -295,11 +322,13 @@ func (s *session) send(frameType wire.FrameType, op uint32, payload any) error {
 	return nil
 }
 
-func (s *session) sendEmpty(frameType wire.FrameType, op uint32) error {
+// sendEnd acknowledges one finished operation — the only payloadless frame
+// this end ever initiates.
+func (s *session) sendEnd(op uint32) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	err := s.encoder.Write(wire.Frame{Type: frameType, Op: op})
+	err := s.encoder.Write(wire.Frame{Type: wire.FrameEnd, Op: op})
 	if err != nil {
 		return fmt.Errorf("shim: %w", err)
 	}

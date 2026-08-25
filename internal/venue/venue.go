@@ -3,9 +3,11 @@ package venue
 // The decision one tier above shell's.
 
 import (
+	"context"
 	"fmt"
 	"os"
 
+	"github.com/jtarchie/steps/internal/blobstore"
 	"github.com/jtarchie/steps/internal/shell"
 )
 
@@ -33,13 +35,41 @@ func NewRunner(spec shell.RunnerSpec) (shell.Runner, error) {
 		return nil, fmt.Errorf("%w %q: a step cannot name both a worker and an image", ErrWorker, spec.Worker)
 	}
 
+	blobs, err := artifactStoreFor(spec.ArtifactStore)
+	if err != nil {
+		return nil, err
+	}
+
 	return runner{session: &session{
 		worker:  worker,
 		cwd:     spec.Cwd,
 		outputs: spec.Fetch,
 		env:     withWorkerTag(resolveEnv(spec.Env), spec.WorkerTag),
 		keep:    spec.Keep,
+		blobs:   blobs,
 	}}, nil
+}
+
+// artifactStoreFor opens the blob store a spec names, or nothing — trees then
+// ride the tunnel, which is always the floor.
+func artifactStoreFor(raw string) (*blobstore.Store, error) {
+	if raw == "" {
+		return nil, nil //nolint:nilnil // absence is the documented answer: no store, use the tunnel
+	}
+
+	opts, err := blobstore.Parse(raw)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // blobstore's errors name the URL and the rule it broke
+	}
+
+	// Opening reads only local configuration, so the constructor's missing
+	// context is not hiding a network round trip.
+	store, err := blobstore.New(context.Background(), opts)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // as above
+	}
+
+	return store, nil
 }
 
 // resolveEnv reads the values of the variables a pipeline's env: opted into.

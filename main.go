@@ -178,6 +178,8 @@ func (r *RunCmd) Run() error {
 		return err
 	}
 
+	ctx = pipeline.WithArtifactStore(ctx, r.ArtifactStore)
+
 	jobName := r.Job
 
 	ctx, jobName, err = r.applyContinuation(ctx, st, provider, jobName)
@@ -259,6 +261,8 @@ func (w *WatchCmd) Run() error {
 		return err
 	}
 
+	ctx = pipeline.WithArtifactStore(ctx, w.ArtifactStore)
+
 	slog.Info("pipeline.watch", "pipeline", w.Pipeline, "once", w.Once, "interval", w.Interval, "max_concurrent", w.MaxConcurrent)
 
 	if w.Once {
@@ -306,6 +310,8 @@ func (t *TestCmd) Run() error {
 	if err != nil {
 		return err
 	}
+
+	ctx = pipeline.WithArtifactStore(ctx, t.ArtifactStore)
 
 	var (
 		executed []string
@@ -1241,9 +1247,9 @@ func setup(
 
 // attachArtifactStore wires --artifact-store into the provider's step cache:
 // the blob half from the URL, the index half from the state store the digests
-// are truth in. Refused rather than quietly inert when the pipeline has no
-// durable workspace.root: — a flag explicitly given that mirrors nothing is a
-// misconfiguration, not a default.
+// are truth in. A pipeline with no durable workspace.root: has no step cache
+// to mirror — that half is warned about rather than refused, because the
+// flag's other consumer, a placed step's data plane, works without one.
 func attachArtifactStore(provider workspace.Provider, st *store.Store, raw string) error {
 	if raw == "" {
 		return nil
@@ -1260,7 +1266,9 @@ func attachArtifactStore(provider workspace.Provider, st *store.Store, raw strin
 	}
 
 	if !workspace.AttachArtifactStore(provider, blobs, st) {
-		return fmt.Errorf("--artifact-store %s: the pipeline has no durable workspace.root:, so there is no step cache to mirror — set workspace.root: or drop the flag", raw)
+		slog.Warn("artifact_store.no_step_cache",
+			"store", raw,
+			"why", "no durable workspace.root:, so cached step outputs are not mirrored; placed steps still use the store as their data plane")
 	}
 
 	return nil
@@ -1648,6 +1656,8 @@ func (w *WebCmd) Run() error {
 	if workerErr != nil {
 		return workerErr
 	}
+
+	ctx = pipeline.WithArtifactStore(ctx, w.ArtifactStore)
 
 	pipelines, providers, cleanup, err := w.load()
 	if err != nil {
