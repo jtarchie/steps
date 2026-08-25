@@ -131,19 +131,8 @@ func (s *Server) handleDocs(c echo.Context) error {
 		toc = nil
 	}
 
-	nav := s.nav(c)
-
-	// /docs is a global page, but the shell's tabs and palette are
-	// per-pipeline: with no current pipeline they would render dead "/p//"
-	// links. Defaulting to the first pipeline (the same choice handleIndex
-	// makes) keeps the way back into the app alive.
-	if nav.Current == "" && len(nav.Pipelines) > 0 {
-		nav.Current = nav.Pipelines[0].Slug
-		nav.CurrentPath = nav.Pipelines[0].Path
-	}
-
 	return c.Render(http.StatusOK, "docs", map[string]any{ //nolint:wrapcheck // render errors surface through the shared error handler
-		"Nav":    nav,
+		"Nav":    s.globalNav(c),
 		"Title":  "docs: " + strings.TrimSuffix(name, ".md"),
 		"Groups": docs.Groups(),
 		"Name":   name,

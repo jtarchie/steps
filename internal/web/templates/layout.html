@@ -198,16 +198,30 @@
   }
 
   var pending;
+  // Debouncing bounds how OFTEN a search is sent; it does not order the
+  // answers. One search now fans out over every served pipeline's store, and
+  // under a shared --state file those queries serialize on one connection, so
+  // an earlier keystroke can genuinely answer after a later one and redraw
+  // the palette with results for a query the operator has moved past. The
+  // token is compared before anything is assigned.
+  var generation = 0;
   function search() {
     clearTimeout(pending);
     pending = setTimeout(function () {
+      var mine = ++generation;
       fetch('/p/{{.Nav.Current}}/search?q=' + encodeURIComponent(input.value))
         .then(function (r) { return r.json(); })
-        .then(function (data) { hits = data || []; sel = 0; draw(); })
+        .then(function (data) {
+          if (mine !== generation) { return; }
+          hits = data || []; sel = 0; draw();
+        })
         // Without this a non-JSON body (an error page) throws inside the
         // promise and the palette sits on whatever it drew last, saying
         // nothing.
-        .catch(function () { hits = []; sel = 0; draw(); });
+        .catch(function () {
+          if (mine !== generation) { return; }
+          hits = []; sel = 0; draw();
+        });
     }, 80);
   }
 

@@ -66,7 +66,7 @@ func (s *Server) handleIndex(c echo.Context) error {
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "overview", map[string]any{
-		"Nav":       s.nav(c),
+		"Nav":       s.globalNav(c),
 		"Pipelines": s.overviewPipelines(),
 		"Runs":      runs,
 	})

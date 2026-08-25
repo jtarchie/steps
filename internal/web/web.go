@@ -260,6 +260,25 @@ func (s *Server) handleError(err error, c echo.Context) {
 
 // nav is the shell every page renders inside: which pipelines exist, which
 // one is current, and the counts the top bar reports.
+// globalNav is nav() for a page that has no current pipeline: the overview
+// and /docs both sit above `/p/:pipeline`, so pipelineOf is nil there and the
+// shell's tabs, switcher and jump palette would render dead "/p//" links —
+// which 404, and which the palette's own error handling then swallows, so it
+// simply shows nothing.
+//
+// Anchoring them to the first pipeline keeps the way back into the app alive.
+// It is a display fallback only: nothing on either page is scoped by it.
+func (s *Server) globalNav(c echo.Context) navData {
+	nav := s.nav(c)
+
+	if nav.Current == "" && len(nav.Pipelines) > 0 {
+		nav.Current = nav.Pipelines[0].Slug
+		nav.CurrentPath = nav.Pipelines[0].Path
+	}
+
+	return nav
+}
+
 func (s *Server) nav(c echo.Context) navData {
 	nav := navData{ReadOnly: s.runner == nil}
 

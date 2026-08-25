@@ -509,3 +509,80 @@ func TestLiveStreamCarriesWrappedUp(t *testing.T) {
 		t.Fatal("SSE stream did not close for a finished run")
 	}
 }
+
+// TestLiveStreamCarriesWrappedUpForACachedStep is the same invariant for the
+// case a "finished" gate misses. An agent step that HITS THE CACHE publishes
+// step.skipped carrying its node hash, and the server-rendered page reads
+// that node's result for a skipped row exactly as it does for a finished one
+// — so the badge appeared on reload and not live, which is the divergence
+// this package's rule exists to forbid.
+func TestLiveStreamCarriesWrappedUpForACachedStep(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-cached-wrap", "build", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-cached-wrap", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1},
+		{Type: events.TypeStepSkipped, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1, Status: "skipped", Hash: "cached-wrap-hash", Text: "cached"},
+	})
+
+	mustRecordResult(t, pipeline, "cached-wrap-hash", map[string]any{"response": "partial", "wrapped_up": true})
+
+	err = pipeline.Store.FinishRun(ctx, "run-cached-wrap", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	// The page a reader who reloaded sees.
+	_, page := get(t, server, "/p/demo/runs/run-cached-wrap")
+	if !strings.Contains(page, `<span class="note spendwarn"`) {
+		t.Fatalf("the rendered page does not mark a cached wrapped-up step: %s", page)
+	}
+
+	done := make(chan string, 1)
+
+	go func() {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/p/demo/runs/run-cached-wrap/events", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		done <- rec.Body.String()
+	}()
+
+	select {
+	case body := <-done:
+		// ...and the stream a reader who watched sees.
+		if !strings.Contains(body, `"wrapped_up":true`) {
+			t.Errorf("the stream does not carry wrapped_up for a cached step: %q", body)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("SSE stream did not close for a finished run")
+	}
+}
+
+// TestGlobalPagesKeepAWayBack: the overview and /docs both sit above
+// `/p/:pipeline`, so there is no current pipeline to build the shell's tabs,
+// switcher and jump palette from. Rendered raw they emit "/p//..." links,
+// every one of which 404s — and the palette's own error handling then
+// swallows the HTML error page, so it shows nothing and says nothing. The
+// page that lists the pipelines was the worst place to lose the way to them.
+func TestGlobalPagesKeepAWayBack(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipelines(t, "app", "infra")
+
+	for _, page := range []string{"/", "/docs/README.md"} {
+		_, body := get(t, server, page)
+
+		for _, dead := range []string{`href="/p/"`, "/p//approvals", "/p//resources", "/p//search"} {
+			if strings.Contains(body, dead) {
+				t.Errorf("%s renders the dead link %q", page, dead)
+			}
+		}
+	}
+}

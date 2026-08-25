@@ -142,7 +142,18 @@ func (s *Server) flushEvents(c echo.Context, runID string, after int64) (int64, 
 // client is not a second trust decision. Re-implementing a markdown parser in
 // the browser to avoid it would be, and would drift.
 func (s *Server) finishedAgentStep(c echo.Context, row store.RunEventRow) (answer template.HTML, wrappedUp bool) {
-	if row.Type != events.TypeStepFinished || row.StepKind != "agent" || row.Hash == "" {
+	// Skipped counts, not only finished. A CACHE HIT on an agent step
+	// publishes step.skipped carrying the node hash, and the server-rendered
+	// page reads that node's result for a skipped row exactly as it does for
+	// a finished one (applyStepRow) — so gating on finished alone meant a
+	// reader watching a cached wrapped-up step live saw no badge while a
+	// reader who reloaded did. Same for the answer, which had the divergence
+	// before this marker existed.
+	if row.Type != events.TypeStepFinished && row.Type != events.TypeStepSkipped {
+		return "", false
+	}
+
+	if row.StepKind != "agent" || row.Hash == "" {
 		return "", false
 	}
 
