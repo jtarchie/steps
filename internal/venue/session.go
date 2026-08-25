@@ -240,6 +240,27 @@ func (s *session) greet() error {
 		return err
 	}
 
+	err = s.checkHello(ok, build)
+	if err != nil {
+		return err
+	}
+
+	if ok.Workdir == "" {
+		return errNoWorkdir
+	}
+
+	s.workdir = ok.Workdir
+
+	return nil
+}
+
+// checkHello decides whether the shim that answered is one this run can use:
+// the right protocol, the binary this run pushed, and a machine that can hold
+// what a step's tree carries.
+//
+// Split out of greet because the three are one list of the same shape, while
+// greet's own job is the exchange around them.
+func (s *session) checkHello(ok wire.HelloOK, build string) error {
 	if ok.Protocol != wire.Protocol {
 		return fmt.Errorf("%w: this steps speaks protocol %d and the worker's shim speaks %d — the binary on the worker is not this one",
 			wire.ErrProtocol, wire.Protocol, ok.Protocol)
@@ -271,12 +292,6 @@ func (s *session) greet() error {
 		return fmt.Errorf("%w: %s runs %s, which has nowhere to store %s — a tree sent there comes back without one, and nothing reports it",
 			errLossyWorker, s.worker.URL, ok.GOOS, lost)
 	}
-
-	if ok.Workdir == "" {
-		return errNoWorkdir
-	}
-
-	s.workdir = ok.Workdir
 
 	return nil
 }

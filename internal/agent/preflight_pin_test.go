@@ -285,13 +285,17 @@ func agePin(t *testing.T, scope pinScope, by time.Duration) {
 	selectedSources.mu.Lock()
 	defer selectedSources.mu.Unlock()
 
-	selection, ok := selectedSources.by[scope]
+	record, ok := selectedSources.by[scope]
 	if !ok {
 		t.Fatalf("no pin to age for %+v", scope)
 	}
 
-	selection.since = selection.since.Add(-by)
-	selectedSources.by[scope] = selection
+	// Both clocks, because a pin that is older is older in both senses: it was
+	// installed further back, and whatever last re-decided it did so further
+	// back. Ageing only one would test a state nothing produces.
+	record.since = record.since.Add(-by)
+	record.decided = record.decided.Add(-by)
+	selectedSources.by[scope] = record
 }
 
 // offlinePinConfig is an agent that never gets a pre-run probe: preflight:
@@ -581,5 +585,162 @@ func TestPreflightRedecidesWhenTheSharedPinnedSourceDies(t *testing.T) {
 
 	if _, pinned := selectedSource(scope); pinned {
 		t.Error("the pin survived a fallback this pass had already found dead — every step of the run would go to it")
+	}
+}
+
+// TestAConcurrentRenewalDoesNotDefeatARelease is why pinRecord keeps its
+// clocks OUTSIDE the selection the compare-and-swap guards compare.
+//
+// clearSourceIf exists to lose a race it should lose: another job's cascade
+// pinning a source that has actually served while this pass was probing. With
+// a timestamp inside the compared value it also lost races it should WIN — a
+// concurrent pass that merely renewed the lifetime changed the compared value
+// without changing the source or the index, so a release backed by a fresh
+// probe silently did nothing and the agent stayed on the fallback.
+func TestAConcurrentRenewalDoesNotDefeatARelease(t *testing.T) {
+	scope := testPin("renewed-then-released")
+	source := pinSource("openai/backup", "http://127.0.0.1:1/v1/")
+
+	ResetProbeCache()
+	t.Cleanup(ResetProbeCache)
+
+	selectSource(scope, source, 0)
+
+	record, ok := pinnedSource(scope)
+	if !ok {
+		t.Fatal("nothing was pinned")
+	}
+
+	// Another pass keeps the pin and renews its lifetime, touching neither the
+	// source nor the index.
+	if !renewPinIf(scope, record.selection) {
+		t.Fatal("the renewal did not find the pin it had just read")
+	}
+
+	if !clearSourceIf(scope, record.selection) {
+		t.Error("a release lost to a renewal that changed nothing about which source is pinned")
+	}
+}
+
+// TestARenewalReportsWhetherThePinWasStillThere is the other half of the same
+// guard. reconsiderPin answers keepPin on the strength of this, and a keep
+// suppresses BOTH the caller's failover and its failure record — so a renewal
+// that quietly did nothing, because a concurrent cascade or an expiry had
+// already dropped the pin, produced a green preflight with a dead primary and
+// no pin at all.
+func TestARenewalReportsWhetherThePinWasStillThere(t *testing.T) {
+	scope := testPin("vanished")
+	source := pinSource("openai/backup", "http://127.0.0.1:1/v1/")
+
+	ResetProbeCache()
+	t.Cleanup(ResetProbeCache)
+
+	selectSource(scope, source, 0)
+
+	record, _ := pinnedSource(scope)
+
+	clearSource(scope)
+
+	if renewPinIf(scope, record.selection) {
+		t.Error("renewing reported success for a pin that was no longer there")
+	}
+}
+
+// TestPreflightReportsAnAgentStrandedBetweenTwoDeadSources is the failure the
+// freshness rule created and this closes.
+//
+// Requiring a FRESH fact to release means a cached negative about the pinned
+// source can no longer end the pin — correct, since releasing on a stale
+// reading destroys what a conversation established. What was wrong was
+// reporting that survival as keepPin: the caller reads a keep as "this source
+// is serving", and suppresses both the failover and the recorded failure on
+// the strength of it. So an agent whose primary was freshly dead and whose
+// pinned fallback a probe had already found dead preflighted GREEN, and every
+// step of the job ran at an endpoint preflight itself believed was down.
+func TestPreflightReportsAnAgentStrandedBetweenTwoDeadSources(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	primaryURL, primaryUp := togglableProbeEndpoint(t)
+	sharedURL, sharedUp := togglableProbeEndpoint(t)
+
+	cfg := pinConfig(t, "stranded-pair", primaryURL, sharedURL)
+
+	// A neighbour that RUNS on the first agent's fallback, so the probe that
+	// finds that endpoint dead is sent by another agent's pass. Two Preflight
+	// calls in one pipeline is the ordinary shape: preflight runs per job.
+	cfg.Agents = append(cfg.Agents, config.Agent{ //nolint:exhaustruct // only the source is read
+		Name:     "neighbour",
+		Attempts: cfg.Agents[0].Attempts,
+		Source:   pinSource("openai/backup", sharedURL),
+	})
+
+	scope := agentPinScope(cfg, "stranded-pair")
+
+	primaryUp.Store(false)
+	Preflight(t.Context(), cfg, []string{"stranded-pair"}, &config.Preflight{})
+
+	if _, pinned := selectedSource(scope); !pinned {
+		t.Fatal("no fallback was pinned for an agent whose primary is down")
+	}
+
+	// Both sources are now down, and the neighbour is who finds out about the
+	// fallback.
+	sharedUp.Store(false)
+	expireProbes()
+	Preflight(t.Context(), cfg, []string{"neighbour"}, &config.Preflight{})
+
+	if problems := Preflight(t.Context(), cfg, []string{"stranded-pair"}, &config.Preflight{}); len(problems) == 0 {
+		t.Error("preflight reported no problems for an agent whose primary is dead and whose pinned fallback it has already probed dead")
+	}
+}
+
+// TestPreflightReleasesAnAgentWhoseNeighbourAskedTheQuestion is the ordering
+// bug that made a pin permanent.
+//
+// Preflight runs once per JOB, and several agents legitimately share one
+// endpoint and model — the probe cache collapses them to a single request on
+// purpose. When freshness meant "this pass sent it", whichever agent's pass
+// ran second could never see a fresh positive, so it could never release; and
+// because keeping renews the lifetime, it could never expire either. Ordering
+// alone stranded it on the fallback for the life of the process, with neither
+// agent.failover.returned nor agent.failover.pin_expired ever firing.
+func TestPreflightReleasesAnAgentWhoseNeighbourAskedTheQuestion(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	primaryURL, primaryUp := togglableProbeEndpoint(t)
+	fallbackURL, _ := togglableProbeEndpoint(t)
+
+	cfg := pinConfig(t, "early", primaryURL, fallbackURL)
+	cfg.Agents = append(cfg.Agents, cfg.Agents[0])
+	cfg.Agents[1].Name = "late"
+
+	scopes := map[string]pinScope{
+		"early": agentPinScope(cfg, "early"),
+		"late":  agentPinScope(cfg, "late"),
+	}
+
+	primaryUp.Store(false)
+
+	for name := range scopes {
+		Preflight(t.Context(), cfg, []string{name}, &config.Preflight{})
+	}
+
+	for name, scope := range scopes {
+		if _, pinned := selectedSource(scope); !pinned {
+			t.Fatalf("%q was not pinned by an outage of the model it runs on", name)
+		}
+	}
+
+	// The recovery, seen by two jobs preflighting one after the other.
+	primaryUp.Store(true)
+	expireProbes()
+
+	Preflight(t.Context(), cfg, []string{"early"}, &config.Preflight{})
+	Preflight(t.Context(), cfg, []string{"late"}, &config.Preflight{})
+
+	for name, scope := range scopes {
+		if _, pinned := selectedSource(scope); pinned {
+			t.Errorf("%q is still pinned after the primary answered — for it, only a neighbour's pass had asked", name)
+		}
 	}
 }

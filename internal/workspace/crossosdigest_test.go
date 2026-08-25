@@ -208,33 +208,45 @@ func hasExecutable(t *testing.T, root string) bool {
 func TestDigestTreeReadsALinkTargetAsAPath(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
-	symlink(t, root, filepath.Join("..", "..", "elsewhere"), "up")
+	// The SAME link name in both trees, which is the whole discipline here:
+	// digestTree length-prefixes each entry's relative path before its kind
+	// and target, so two trees whose links are named differently hash
+	// differently whatever the targets say — an assertion built that way
+	// passes with the normalization present, absent, or replaced by anything
+	// at all.
+	const link = "pointer"
 
-	before := mustDigest(t, root)
+	slashed := t.TempDir()
+	symlink(t, slashed, "a/b", link)
 
-	// The same tree, digested again: the normalization must not have changed
-	// what a POSIX target hashes to, since every cache entry in existence was
-	// written without it.
-	if after := mustDigest(t, root); after != before {
-		t.Fatalf("digest is not stable: %s then %s", before, after)
+	backslashed := t.TempDir()
+	symlink(t, backslashed, `a\b`, link)
+
+	// On POSIX these are two different targets: a backslash is an ordinary
+	// filename character, `a\b` names one component, and ToSlash is the
+	// identity — so they must not collide. On Windows the same two trees are
+	// one link written two ways, and the normalization is what makes them
+	// agree. Only the first half is decidable here, and it is the half that
+	// says no existing digest moved.
+	if mustDigest(t, slashed) == mustDigest(t, backslashed) {
+		t.Error("a separator and a literal backslash in a link target hashed alike")
 	}
 
-	// A literal backslash in a POSIX link target is a filename character, not
-	// a separator, and must survive as one.
-	literal := t.TempDir()
-	symlink(t, literal, `weird\name`, "odd")
+	// And the normalization must be the identity on this side, since every
+	// cache entry in existence was written without it.
+	again := t.TempDir()
+	symlink(t, again, "a/b", link)
 
-	target, err := os.Readlink(filepath.Join(literal, "odd"))
+	if mustDigest(t, again) != mustDigest(t, slashed) {
+		t.Error("the same link hashes differently in two trees")
+	}
+
+	target, err := os.Readlink(filepath.Join(backslashed, link))
 	if err != nil {
 		t.Fatalf("readlink: %v", err)
 	}
 
 	if !strings.Contains(target, `\`) {
 		t.Fatalf("the platform rewrote a backslash in a link target (%q); this test cannot say what it pins", target)
-	}
-
-	if mustDigest(t, literal) == mustDigest(t, root) {
-		t.Error("two different link targets hashed alike")
 	}
 }

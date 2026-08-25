@@ -113,7 +113,16 @@ func LoadConfigWithVars(path string, vars map[string]string) (*Config, error) {
 		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
 	}
 
+	// Absolute, because this is an identity and `./app.yml` and `app.yml` are
+	// the same pipeline. Left as typed, the two spellings produced two
+	// independent process-wide scopes for one pipeline — an agent pinned
+	// under one of them and read under the other.
 	cfg.Path = path
+
+	abs, absErr := filepath.Abs(path)
+	if absErr == nil {
+		cfg.Path = abs
+	}
 
 	return &cfg, nil
 }

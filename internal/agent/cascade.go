@@ -195,14 +195,15 @@ func decideCascade(result sourceOutcome, hasNext, deadlineSpent, swapped bool) c
 }
 
 // probeFact is what one pre-run probe established: how the source answered,
-// and whether that answer dates from THIS preflight pass or came out of the
-// cache from an earlier one (defaults.preflight.cache:, up to five minutes
-// old by default).
+// and whether that answer postdates the pin it is being weighed against.
 //
-// Fresh is a property of the answer, not of the caller: several agents may
-// share one target, and the ones that read the first agent's request back out
-// of the cache microseconds later hold a fact from this pass just as much as
-// it does. See probeModelCached.
+// Fresh is a property of the ANSWER measured against the PIN, and neither
+// half of that is incidental. Not of the caller: several agents may share one
+// endpoint and model, the probe cache collapses them to a single request, and
+// the ones that read it back hold the same fact as the one that asked. And
+// not against a clock of its own: what makes an answer able to end a pin is
+// that it was given after the pin existed, since an older one was given
+// before the reason for the pin did. See reconsiderPin.
 //
 // The two travel together because a decision that destroys state may only
 // rest on a fresh fact.

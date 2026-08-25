@@ -97,21 +97,43 @@ func TestVenueRefusesAWorkerThatCannotHoldAnExecutableBit(t *testing.T) {
 	}
 }
 
-// TestVenueAcceptsAWorkerThatReportsNoGOOS is the compatibility edge the
+// TestCheckHelloAcceptsAWorkerThatNamesNoOS is the compatibility edge the
 // refusal must not swallow. GOOS is a field of the handshake, so a shim that
-// leaves it empty — an operator running one by hand over a bare ssh command,
-// or any future shim that answers a shorter hello — has said nothing about
-// its filesystem, and refusing on silence would reject workers that are fine.
+// leaves it empty — one an operator started by hand over a bare ssh command,
+// or any future shim answering a shorter hello — has said nothing about its
+// filesystem, and refusing on silence would reject workers that are fine. The
+// build check beside it takes the same view of an empty Build.
 //
-// It is the same posture the build check next to it takes for an empty Build.
-func TestVenueAcceptsAWorkerThatReportsNoGOOS(t *testing.T) {
-	runner := newLocalRunner(t, localWorker(t, t.TempDir()))
+// Asserted against checkHello directly rather than through a running worker,
+// because the real shim always reports runtime.GOOS: a test driving it would
+// never produce the empty case it is named for, and could not fail however
+// the refusal was written.
+func TestCheckHelloAcceptsAWorkerThatNamesNoOS(t *testing.T) {
+	t.Parallel()
 
-	// The real shim, which reports this machine's own GOOS: never "windows"
-	// anywhere this suite runs, since a Windows worker cannot be built from
-	// here in the first place.
-	err := runner.Run(context.Background(), "true")
-	if err != nil {
-		t.Fatalf("an ordinary worker was refused: %v", err)
+	for _, tc := range []struct {
+		name    string
+		goos    string
+		refused bool
+	}{
+		{"a shim that names no OS", "", false},
+		{"an ordinary worker", "linux", false},
+		{"a worker with nowhere to put an executable bit", "windows", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			session := &session{worker: Worker{URL: "ssh://box"}} //nolint:exhaustruct // checkHello reads the URL and nothing else
+
+			err := session.checkHello(wire.HelloOK{ //nolint:exhaustruct // the handshake fields under test
+				Protocol: wire.Protocol,
+				GOOS:     tc.goos,
+				Workdir:  os.TempDir(),
+			}, "")
+
+			if refused := errors.Is(err, errLossyWorker); refused != tc.refused {
+				t.Errorf("refused = %v (err %v), want %v", refused, err, tc.refused)
+			}
+		})
 	}
 }
