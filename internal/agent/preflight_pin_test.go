@@ -153,6 +153,13 @@ func TestPreflightReturnsToARecoveredPrimary(t *testing.T) {
 	if !strings.Contains(logs.String(), "agent.failover.returned") {
 		t.Errorf("the return was silent:\n%s", logs.String())
 	}
+
+	// And it says WHOSE. These lines fire with no run to place them, so in a
+	// process serving several pipelines that each declare the same agent name
+	// a line naming only the agent is one an operator cannot act on.
+	if !strings.Contains(logs.String(), "pipeline=") {
+		t.Errorf("the release does not name the pipeline it belongs to:\n%s", logs.String())
+	}
 }
 
 // TestPreflightKeepsAServingFallback is the property the fix must not break.
@@ -492,5 +499,87 @@ func TestThePreRunProbeRenewsThePinItKeeps(t *testing.T) {
 	if selection.index != 1 || selection.source.Model != "openai/second" {
 		t.Errorf("selection = %q at index %d, want openai/second at index 1 — the expiry walked it back down the list",
 			selection.source.Model, selection.index)
+	}
+}
+
+// TestPreflightReleasesEveryAgentSharingARecoveredPrimary is the freshness
+// rule applied to the case that makes it a property of the ANSWER rather than
+// of the caller.
+//
+// Two agents on one model is ordinary — a reviewer and a summarizer over the
+// same endpoint — and probeModelCached collapses them to one request on
+// purpose. So within a single pass the first agent sends it and the second
+// reads it back microseconds later. Counting only the sender as having asked
+// stranded every agent but the first on its fallback for the life of the
+// process, since keeping a pin also renews pinLifetime: nothing else would
+// ever have released it.
+func TestPreflightReleasesEveryAgentSharingARecoveredPrimary(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	primaryURL, primaryUp := togglableProbeEndpoint(t)
+	fallbackURL, _ := togglableProbeEndpoint(t)
+
+	cfg := pinConfig(t, "first", primaryURL, fallbackURL)
+	cfg.Agents = append(cfg.Agents, cfg.Agents[0])
+	cfg.Agents[1].Name = "second"
+
+	names := []string{"first", "second"}
+
+	primaryUp.Store(false)
+	Preflight(t.Context(), cfg, names, &config.Preflight{})
+
+	for _, name := range names {
+		if _, pinned := selectedSource(agentPinScope(cfg, name)); !pinned {
+			t.Fatalf("%q was not pinned by an outage of the model it runs on", name)
+		}
+	}
+
+	primaryUp.Store(true)
+	expireProbes()
+	Preflight(t.Context(), cfg, names, &config.Preflight{})
+
+	for _, name := range names {
+		if _, pinned := selectedSource(agentPinScope(cfg, name)); pinned {
+			t.Errorf("%q is still pinned after the shared primary answered this very pass", name)
+		}
+	}
+}
+
+// TestPreflightRedecidesWhenTheSharedPinnedSourceDies is the same collapsing,
+// in the direction that runs steps at a source preflight has just proved
+// dead: one agent's fallback is another's primary, so the probe that finds it
+// down belongs to whichever agent preflight reached first. Read as stale, it
+// left the pin in place — and every step of the run went to it.
+func TestPreflightRedecidesWhenTheSharedPinnedSourceDies(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	primaryURL, primaryUp := togglableProbeEndpoint(t)
+	sharedURL, sharedUp := togglableProbeEndpoint(t)
+
+	cfg := pinConfig(t, "pinned", primaryURL, sharedURL)
+	// The other agent runs ON the first one's fallback, so its probe of that
+	// endpoint lands in the cache before the pinned agent asks about it.
+	cfg.Agents = append(cfg.Agents, config.Agent{
+		Name:     "neighbour",
+		Attempts: cfg.Agents[0].Attempts,
+		Source:   pinSource("openai/backup", sharedURL),
+	})
+
+	scope := agentPinScope(cfg, "pinned")
+
+	primaryUp.Store(false)
+	Preflight(t.Context(), cfg, []string{"neighbour", "pinned"}, &config.Preflight{})
+
+	if _, pinned := selectedSource(scope); !pinned {
+		t.Fatal("the fallback was not pinned by an outage of the primary")
+	}
+
+	// Now the fallback dies too, and the neighbour is the one that finds out.
+	sharedUp.Store(false)
+	expireProbes()
+	Preflight(t.Context(), cfg, []string{"neighbour", "pinned"}, &config.Preflight{})
+
+	if _, pinned := selectedSource(scope); pinned {
+		t.Error("the pin survived a fallback this pass had already found dead — every step of the run would go to it")
 	}
 }

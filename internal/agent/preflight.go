@@ -86,10 +86,12 @@ type resultCache struct {
 	entries map[string]cacheEntry
 }
 
-// lookup returns a cached result when one is still within ttl.
-func (c *resultCache) lookup(key string, ttl time.Duration, now time.Time) (found bool, result error) {
+// lookup returns a cached result when one is still within ttl. The entry
+// carries WHEN the answer was established, which decisions that destroy state
+// need — see probeModelCached.
+func (c *resultCache) lookup(key string, ttl time.Duration, now time.Time) (cacheEntry, bool) {
 	if ttl <= 0 {
-		return false, nil
+		return cacheEntry{}, false
 	}
 
 	c.mu.Lock()
@@ -97,10 +99,10 @@ func (c *resultCache) lookup(key string, ttl time.Duration, now time.Time) (foun
 
 	entry, ok := c.entries[key]
 	if !ok || now.Sub(entry.at) > ttl {
-		return false, nil
+		return cacheEntry{}, false
 	}
 
-	return true, entry.err
+	return entry, true
 }
 
 func (c *resultCache) store(key string, err error, now time.Time) {
@@ -145,6 +147,12 @@ func Preflight(ctx context.Context, cfg *config.Config, agentNames []string, set
 		healthyEndpoints = map[string]bool{}
 		failures         []modelFailure
 		seenServer       = map[string]bool{}
+		// passStart is the boundary "just now" means for every pin decision
+		// this call makes: an answer established at or after it was produced
+		// by THIS pass, whichever agent in it happened to send the request.
+		// Anything older is a cache hit from a previous run, which may keep a
+		// pin but may never release one (see probeFact).
+		passStart = time.Now()
 	)
 
 	for _, name := range withSubAgents(cfg, agentNames) {
@@ -177,13 +185,13 @@ func Preflight(ctx context.Context, cfg *config.Config, agentNames []string, set
 			// dead primary, which is exactly the failure preflight exists to
 			// move earlier. probeModelCached already collapses the network
 			// cost to one request.
-			probeFresh, probeErr := probeModelCached(ctx, ri, settings)
+			probeAt, probeErr := probeModelCached(ctx, ri, settings)
 
 			// Before acting on the probe: a pin is durable state, and this is
 			// the only boundary that reconsiders it.
 			if !pinDecided {
-				keepPin = reconsiderPin(ctx, scope, agent, ri, settings,
-					probeFact{healthy: probeErr == nil, fresh: probeFresh})
+				keepPin = reconsiderPin(ctx, scope, agent, ri, settings, passStart,
+					probeFact{healthy: probeErr == nil, fresh: !probeAt.Before(passStart)})
 				pinDecided = true
 			}
 
@@ -298,6 +306,7 @@ func failOver(ctx context.Context, scope pinScope, agent *config.Agent, primary 
 		_, probeErr := probeModelCached(ctx, candidate, settings)
 		if probeErr != nil {
 			slog.Warn("agent.fallback_unavailable",
+				"pipeline", scope.pipeline,
 				"agent", agent.Name, "fallback", i, "model", candidate.ModelName, "error", probeErr)
 
 			continue
@@ -308,7 +317,12 @@ func failOver(ctx context.Context, scope pinScope, agent *config.Agent, primary 
 		// Loud, not silent. A fallback model can produce meaningfully
 		// different output, and a quality dip caused by an outage must not
 		// look identical to a normal run — otherwise nobody investigates.
+		// Named by pipeline as well as agent: these lines fire with no run to
+		// place them, and one process can be serving several pipelines that
+		// each declare a `reviewer`. An operator watching for a change in
+		// model quality cannot act on a line that does not say whose.
 		slog.Warn("agent.failover",
+			"pipeline", scope.pipeline,
 			"agent", agent.Name,
 			"from", primary.ModelName,
 			"to", candidate.ModelName,
@@ -344,6 +358,7 @@ func reconsiderPin(
 	agent *config.Agent,
 	primary config.ResolvedInvocation,
 	settings *config.Preflight,
+	passStart time.Time,
 	primaryProbe probeFact,
 ) bool {
 	// pinnedSource, not selectedSource: the lifetime is the answer for when
@@ -362,6 +377,7 @@ func reconsiderPin(
 		// was never sent and name the model it left as "".
 		if clearSourceIf(scope, selection) {
 			slog.Warn("agent.failover.pin_lost",
+				"pipeline", scope.pipeline,
 				"agent", agent.Name,
 				"error", err,
 				"reason", "the pinned fallback no longer resolves; re-deciding from the primary")
@@ -379,8 +395,8 @@ func reconsiderPin(
 	// other fact is worth having.
 	pinnedProbe := probeFact{}
 	if !primaryProbe.recovered() {
-		fresh, err := probeModelCached(ctx, candidate, settings)
-		pinnedProbe = probeFact{healthy: err == nil, fresh: fresh}
+		at, err := probeModelCached(ctx, candidate, settings)
+		pinnedProbe = probeFact{healthy: err == nil, fresh: !at.Before(passStart)}
 	}
 
 	// A cancelled run learned nothing about either source: both probes fail
@@ -415,6 +431,7 @@ func reconsiderPin(
 	// defect used to print.
 	if primaryProbe.recovered() {
 		slog.Warn("agent.failover.returned",
+			"pipeline", scope.pipeline,
 			"agent", agent.Name,
 			"from", candidate.ModelName,
 			"to", primary.ModelName,
@@ -424,6 +441,7 @@ func reconsiderPin(
 	}
 
 	slog.Warn("agent.failover.pin_lost",
+		"pipeline", scope.pipeline,
 		"agent", agent.Name,
 		"model", candidate.ModelName,
 		"reason", "the pinned fallback stopped answering preflight; re-deciding from the primary")
@@ -550,9 +568,16 @@ func selectSource(scope pinScope, source config.AgentSource, index int) {
 // compare-and-delete.
 //
 // One caller, deliberately: the pre-run probe, on the branch where it decides
-// to KEEP a pin. That decision means preflight has just asked the primary and
-// been told it is still unwell, which is exactly the fact pinLifetime counts
-// down from.
+// to KEEP a pin — a decision reached by looking at the primary, which is what
+// pinLifetime counts down from.
+//
+// Not necessarily by ASKING it: a keep can rest on two cache hits, so the
+// renewal can push the floor out on an answer up to defaults.preflight.cache:
+// old. That is deliberate. Requiring freshness to renew would expire a pin
+// mid-outage under a long cache window — the failure this exists to prevent —
+// and the cache window is itself the operator statement of how stale a
+// preflight answer may be. What the renewal must never do is RELEASE on such
+// an answer, which is decidePreflightPin's job and is a separate rule.
 //
 // It is what divides the pin's two exits. While preflight runs it re-decides
 // every run from real probes and the clock never runs out; where preflight is
@@ -634,6 +659,7 @@ func selectedSource(scope pinScope) (sourceSelection, bool) {
 		// for a change in model quality needs every edge, and this one moves
 		// an agent back to its primary with no probe behind it.
 		slog.Warn("agent.failover.pin_expired",
+			"pipeline", scope.pipeline,
 			"agent", scope.agent,
 			"model", selection.source.Model,
 			"lifetime", pinLifetime,
@@ -731,15 +757,23 @@ func cliProbeKey(ri config.ResolvedInvocation) string {
 }
 
 // probeModelCached probes a model, or answers from the cache, and reports
-// which of the two it did.
+// WHEN the answer it returns was established.
 //
-// The freshness half is not bookkeeping: a decision that DESTROYS state has
-// to insist on a fact from now. Collapsing it let a cached positive taken
-// before an outage release a pin the mid-run cascade earned during one — the
-// step then ran at the still-broken primary, cascaded, re-pinned, and did it
-// again on the next poll, logging "the primary model answered preflight
-// again" about a question nobody had asked in five minutes.
-func probeModelCached(ctx context.Context, ri config.ResolvedInvocation, settings *config.Preflight) (bool, error) {
+// The timestamp is not bookkeeping: a decision that DESTROYS state has to
+// insist on a fact from now. Collapsing it let a cached positive taken before
+// an outage release a pin the mid-run cascade earned during one — the step
+// then ran at the still-broken primary, cascaded, re-pinned, and did it again
+// on the next poll, logging "the primary model answered preflight again"
+// about a question nobody had asked in five minutes.
+//
+// A time rather than a did-I-send-it bool, because "just now" is a property
+// of the ANSWER and not of the caller. Several agents legitimately share one
+// target, so within a single preflight pass the first of them sends the
+// request and the rest read it back out of the cache microseconds later — all
+// of them holding an answer from this pass. Reporting that as stale stranded
+// every agent but the first on its fallback permanently, since the keep also
+// renews pinLifetime.
+func probeModelCached(ctx context.Context, ri config.ResolvedInvocation, settings *config.Preflight) (time.Time, error) {
 	// A CLI target is keyed on its own axis: "" is a perfectly ordinary
 	// BaseURL for a CLI source, so a shared key space would let a CLI agent
 	// and an endpoint-less HTTP one collide.
@@ -757,17 +791,17 @@ func probeModelCached(ctx context.Context, ri config.ResolvedInvocation, setting
 
 	now := time.Now()
 
-	found, cached := probeCache.lookup(key, settings.CacheWindow(), now)
+	entry, found := probeCache.lookup(key, settings.CacheWindow(), now)
 	if found {
 		slog.Debug("preflight.cached", "target", key)
 
-		return false, cached
+		return entry.at, entry.err
 	}
 
 	err := probeModel(ctx, ri, settings.ProbeTimeout())
 	probeCache.store(key, err, now)
 
-	return true, err
+	return now, err
 }
 
 // probeModel sends the smallest possible completion request and reports how it
@@ -844,11 +878,11 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 	key := "mcp|" + spec.MCP + "|" + spec.MCPTool + "|" + strings.Join(spec.MCPTools, ",")
 	now := time.Now()
 
-	found, cached := probeCache.lookup(key, settings.CacheWindow(), now)
+	entry, found := probeCache.lookup(key, settings.CacheWindow(), now)
 	if found {
 		slog.Debug("preflight.cached", "target", key)
 
-		return cached
+		return entry.err
 	}
 
 	err := probeServer(ctx, cfg, spec, settings.ProbeTimeout())
