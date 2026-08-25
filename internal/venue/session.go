@@ -461,17 +461,25 @@ func (s *session) write(frame wire.Frame, payload any) error {
 }
 
 // read is readFrame, marking the conversation broken on a transport failure so
-// ensure redials. Every reader goes through here except readHello's goroutine,
-// which can outlive an abandoned handshake: its late error must not un-stick
-// an open failure ensure has already recorded.
+// ensure redials. Only a transport failure: an error frame is the shim
+// ANSWERING — an operation that failed over a healthy pipe, which the shim's
+// own loop survives — and redialling on it would abandon the worker's scratch
+// and re-ship the tree for an error a fresh dial cannot fix. Every reader goes
+// through here except readHello's goroutine, which can outlive an abandoned
+// handshake: its late error must not un-stick an open failure ensure has
+// already recorded.
 func (s *session) read() (wire.Frame, error) {
 	frame, err := s.readFrame()
-	if err != nil {
+	if errors.Is(err, errWorkerLost) {
 		s.broken.Store(true)
 	}
 
 	return frame, err
 }
+
+// errWorkerLost is a transport that died mid-conversation, as opposed to an
+// error frame a live shim sent over it.
+var errWorkerLost = errors.New("the connection to the worker was lost")
 
 // readFrame returns the next frame, turning an error frame from the shim into
 // a Go error so callers never have to check for it.
@@ -480,7 +488,7 @@ func (s *session) readFrame() (wire.Frame, error) {
 	if err != nil {
 		// A transport that died mid-step is infrastructure, and saying so
 		// explicitly is what keeps it from being read as a command's verdict.
-		return wire.Frame{}, fmt.Errorf("the connection to the worker was lost: %w", err)
+		return wire.Frame{}, fmt.Errorf("%w: %w", errWorkerLost, err)
 	}
 
 	if frame.Type == wire.FrameError {

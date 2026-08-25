@@ -53,3 +53,36 @@ func TestVenueRedialsAfterTheWorkerDies(t *testing.T) {
 		t.Errorf("out/second.txt = %q, want %q — the redialled shim did not see the tree the first command produced", got, "one\n")
 	}
 }
+
+// TestVenueKeepsTheWorkerAfterAShimError pins the boundary the redial guards:
+// an error frame is the shim answering over a healthy transport — an operation
+// that failed, not a worker that died. Redialling on it would abandon the
+// worker's scratch and re-ship the whole tree for an error a fresh dial cannot
+// fix.
+func TestVenueKeepsTheWorkerAfterAShimError(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	mustMkdir(t, filepath.Join(cwd, "out"))
+
+	runner := newLocalRunner(t, localWorker(t, cwd, "out"))
+
+	// A fifo in a declared output makes the shim's fetch refuse: an error
+	// frame, with the conversation still open.
+	err := runner.Run(context.Background(), "echo kept > scratch.txt; mkfifo out/fifo")
+	if err == nil {
+		t.Fatal("a fifo in an output was fetched")
+	}
+
+	// The next command reaches the SAME shim: its scratch — which the local
+	// tree does not hold — is still there, exactly as it is between any two
+	// commands of a step.
+	err = runner.Run(context.Background(), "rm out/fifo; cat scratch.txt > out/second.txt")
+	if err != nil {
+		t.Fatalf("the command after a shim error failed: %v", err)
+	}
+
+	if got := mustRead(t, filepath.Join(cwd, "out", "second.txt")); got != "kept\n" {
+		t.Errorf("out/second.txt = %q, want %q — the worker was redialled and its scratch lost", got, "kept\n")
+	}
+}
