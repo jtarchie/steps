@@ -147,6 +147,10 @@ func SaveStepCache(ctx context.Context, bw BuildWorkspace, key string, req StepC
 type stepCache struct {
 	backend treeBackend
 	entries *entryStore
+	// blobs and index are the cache's remote mirror, nil unless an
+	// --artifact-store was attached — see blobmirror.go.
+	blobs BlobStore
+	index StepIndex
 }
 
 func newStepCache(backend treeBackend, root string, maxEntries int) (*stepCache, error) {
@@ -212,7 +216,7 @@ func (c *stepCache) actionKey(digests func(string) (string, error), req StepCach
 // All-or-nothing on presence too: an entry missing any declared output is
 // treated as a miss and left alone, so a store interrupted halfway can only
 // ever cost a re-run.
-func (c *stepCache) restore(ctx context.Context, path, artifacts string, req StepCacheRequest) bool {
+func (c *stepCache) restore(ctx context.Context, key, path, artifacts string, req StepCacheRequest) bool {
 	// A request with no outputs has nothing to restore, so every check below
 	// passes vacuously and this would report a hit against an empty cache —
 	// silently skipping a step whose entire result is its side effect.
@@ -223,11 +227,21 @@ func (c *stepCache) restore(ctx context.Context, path, artifacts string, req Ste
 		return false
 	}
 
+	// Local-first: an output whose bytes are here is never re-fetched. Only
+	// what is MISSING — a pruned entry, a fresh machine handed this state —
+	// is asked of the blob mirror, and a mirror that cannot answer leaves
+	// this a plain miss.
+	missing := make([]string, 0, len(req.Outputs))
+
 	for _, out := range req.Outputs {
 		_, err := os.Stat(filepath.Join(path, out))
 		if err != nil {
-			return false
+			missing = append(missing, out)
 		}
+	}
+
+	if len(missing) > 0 && !c.rehydrate(ctx, key, path, missing) {
+		return false
 	}
 
 	staged, err := c.stageOutputs(ctx, path, artifacts, req)
@@ -331,8 +345,9 @@ func (c *stepCache) discardStaged(staged []stagedOutput) {
 	}
 }
 
-// store files a succeeded step's captured outputs under key.
-func (c *stepCache) store(ctx context.Context, path, artifacts string, req StepCacheRequest) error {
+// store files a succeeded step's captured outputs under key, then mirrors
+// the entry to the blob store when one is attached.
+func (c *stepCache) store(ctx context.Context, key, path, artifacts string, digests func(string) (string, error), req StepCacheRequest) error {
 	err := c.backend.removeTree(path)
 	if err != nil {
 		return fmt.Errorf("replacing cache entry: %w", err)
@@ -358,6 +373,7 @@ func (c *stepCache) store(ctx context.Context, path, artifacts string, req StepC
 	}
 
 	c.entries.prune()
+	c.publish(ctx, key, path, digests, req)
 
 	slog.Debug("workspace.step_cache_store", "entry", path)
 
@@ -385,7 +401,7 @@ func (b *isolatingBuild) RestoreStep(ctx context.Context, req StepCacheRequest) 
 		return StepCacheResult{}, fmt.Errorf("unusable step cache key %q", key)
 	}
 
-	hit := b.stepCache.restore(ctx, path, b.artifacts, req)
+	hit := b.stepCache.restore(ctx, key, path, b.artifacts, req)
 
 	// Unconditionally, not only on a hit: a restore that failed PART WAY has
 	// still replaced some artifacts, and a digest remembered for one of those
@@ -412,7 +428,7 @@ func (b *isolatingBuild) StoreStep(ctx context.Context, key string, req StepCach
 		return fmt.Errorf("unusable step cache key %q", key)
 	}
 
-	return b.stepCache.store(ctx, path, b.artifacts, req)
+	return b.stepCache.store(ctx, key, path, b.artifacts, b.artifactDigest, req)
 }
 
 // validateCachedNames holds a request's declared names to the same rules
