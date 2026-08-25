@@ -147,11 +147,12 @@ func short(build string) string {
 
 // ensure connects, greets, and sends the step's tree, once per conversation.
 //
-// A failure to OPEN sticks. An unreachable host, a rejected key or a failed
-// binary push must not be retried once per run_shell in a conversation: the
-// first answer is the true one and every retry costs another timeout. A
-// conversation that BROKE after opening is the opposite case: the worker was
-// fine and then went away mid-step — a crash, a dropped tunnel — and without a
+// The stickiness boundary is the HANDSHAKE. A failure to dial or to greet
+// sticks: an unreachable host, a rejected key, a failed binary push or a shim
+// that never answers gives the same answer every time, and each re-ask costs
+// another timeout. A transport that died any time AFTER a successful hello —
+// mid-upload, mid-command, mid-fetch — is the opposite case: the worker was
+// reachable and then went away, a crash or a dropped tunnel, and without a
 // fresh dial every retry an attempts: budget pays for fails against the same
 // dead pipe, for a reason the pipeline author can neither see nor fix. The
 // redial re-sends the step's LOCAL tree, which already holds everything
@@ -178,11 +179,14 @@ func (s *session) ensure(ctx context.Context) error {
 	}
 
 	s.attempted = true
-	s.startErr = s.connect(ctx)
-	// Cleared AFTER connect: a failure while reopening is an open failure,
-	// and those stick. Only a conversation that broke after a successful open
-	// earns a redial, and it just spent it.
+	// Cleared before the dial rather than after connect: everything that can
+	// mark it again is scoped to the conversation — the handshake's own reads
+	// and writes go through the raw, non-marking paths — so the flag standing
+	// after connect fails means the transport died on a worker that had
+	// already answered its hello, and the next command redials it. A failure
+	// to dial or to greet leaves the flag clear, and sticks.
 	s.broken.Store(false)
+	s.startErr = s.connect(ctx)
 
 	return s.startErr
 }
@@ -246,7 +250,7 @@ func (s *session) greet() error {
 		return err
 	}
 
-	err = s.write(wire.Frame{Type: wire.FrameHello, Op: s.nextOp()}, wire.Hello{
+	err = s.writeRaw(wire.Frame{Type: wire.FrameHello, Op: s.nextOp()}, wire.Hello{
 		Protocol: wire.Protocol,
 		Build:    build,
 		Session:  name,
@@ -449,8 +453,32 @@ func (s *session) nextOp() uint32 {
 	return s.op
 }
 
+// write sends one control frame, marking the conversation broken on a
+// transport failure so ensure redials — see read.
 func (s *session) write(frame wire.Frame, payload any) error {
+	err := s.writeRaw(frame, payload)
+	if err != nil {
+		s.broken.Store(true)
+	}
+
+	return err
+}
+
+// writeRaw is write without the broken marking, for the handshake: a failure
+// before the hello has been answered is an open failure, which sticks, and
+// must not queue a redial.
+func (s *session) writeRaw(frame wire.Frame, payload any) error {
 	err := s.encoder.WriteJSON(frame.Type, frame.Op, payload)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	return nil
+}
+
+// writeEmpty sends one payloadless frame, marking like write.
+func (s *session) writeEmpty(frame wire.Frame) error {
+	err := s.encoder.Write(frame)
 	if err != nil {
 		s.broken.Store(true)
 

@@ -27,12 +27,16 @@ func (s *session) upload(ctx context.Context) error {
 
 	op := s.nextOp()
 
-	err := s.encoder.Write(wire.Frame{Type: wire.FrameUpload, Op: op})
+	err := s.writeEmpty(wire.Frame{Type: wire.FrameUpload, Op: op})
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return err
 	}
 
-	writer := &chunkWriter{encoder: s.encoder, op: op}
+	// The upload runs AFTER a successful hello, so a transport that dies under
+	// it marks the conversation broken and the next command redials — the
+	// same footing as a death mid-command. broke is what carries that marking
+	// out of the chunked writes.
+	writer := &chunkWriter{encoder: s.encoder, op: op, broke: func() { s.broken.Store(true) }}
 
 	err = s.packTree(writer)
 	if err != nil {
@@ -44,9 +48,9 @@ func (s *session) upload(ctx context.Context) error {
 		return err
 	}
 
-	err = s.encoder.Write(wire.Frame{Type: wire.FrameEnd, Op: op})
+	err = s.writeEmpty(wire.Frame{Type: wire.FrameEnd, Op: op})
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return err
 	}
 
 	// Wait for the worker to say it took the tree. A refusal — a full disk, a
@@ -243,6 +247,10 @@ type chunkWriter struct {
 	encoder *wire.Encoder
 	op      uint32
 	buf     []byte
+	// broke reports an encoder failure to the session, because a write that
+	// died mid-upload is the transport gone, not the tree unreadable. nil
+	// when nobody is listening.
+	broke func()
 }
 
 func (w *chunkWriter) Write(p []byte) (int, error) {
@@ -275,6 +283,10 @@ func (w *chunkWriter) flush() error {
 
 	err := w.encoder.Write(wire.Frame{Type: wire.FrameData, Op: w.op, Payload: w.buf})
 	if err != nil {
+		if w.broke != nil {
+			w.broke()
+		}
+
 		return fmt.Errorf("%w", err)
 	}
 

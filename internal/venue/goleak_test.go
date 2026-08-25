@@ -39,34 +39,44 @@ func TestMain(m *testing.M) {
 // worker to impersonate: environment rather than argv because the venue execs
 // a fixed "<binary> _shim". It never returns.
 func serveShim() {
-	switch {
-	// A shim that refuses the tree, so a test can drive the path where a
-	// worker rejects an upload.
-	case os.Getenv(rejectUploadEnv) != "", os.Getenv(breakFetchEnv) != "":
-		serveRejectingShim()
-	// A shim that stops answering once a command starts, so a test can drive
-	// the path where a worker wedges mid-step.
-	case os.Getenv(deafExecEnv) != "":
-		serveDeafShim()
-	// A shim that is not the binary that was pushed.
-	case os.Getenv(wrongBuildEnv) != "":
-		serveWrongBuildShim()
-	// A shim on a filesystem that cannot store an executable bit.
-	case os.Getenv(windowsWorkerEnv) != "":
-		serveWindowsShim()
-	// A shim built before compression existed.
-	case os.Getenv(legacyShimEnv) != "":
-		serveLegacyShim()
-	default:
-		build, err := shim.SelfBuild()
-		if err != nil {
-			os.Exit(1)
-		}
+	variants := []struct {
+		env   string
+		serve func()
+	}{
+		// A shim that refuses the tree, so a test can drive the path where a
+		// worker rejects an upload — and its break-the-fetch sibling.
+		{rejectUploadEnv, serveRejectingShim},
+		{breakFetchEnv, serveRejectingShim},
+		// A shim that stops answering once a command starts, so a test can
+		// drive the path where a worker wedges mid-step.
+		{deafExecEnv, serveDeafShim},
+		// A shim that is not the binary that was pushed.
+		{wrongBuildEnv, serveWrongBuildShim},
+		// A shim on a filesystem that cannot store an executable bit.
+		{windowsWorkerEnv, serveWindowsShim},
+		// A shim built before compression existed.
+		{legacyShimEnv, serveLegacyShim},
+		// A shim that greets and then dies as the tree arrives, once.
+		{dieOnUploadEnv, serveUploadDyingShim},
+		// A shim that crashes on start, counting how often it was asked to.
+		{crashCountEnv, serveCrashingShim},
+	}
 
-		err = shim.Serve(ctx.Background(), os.Stdin, os.Stdout, shim.Options{Build: build})
-		if err != nil {
-			os.Exit(1)
+	for _, variant := range variants {
+		if os.Getenv(variant.env) != "" {
+			variant.serve()
+			os.Exit(0)
 		}
+	}
+
+	build, err := shim.SelfBuild()
+	if err != nil {
+		os.Exit(1)
+	}
+
+	err = shim.Serve(ctx.Background(), os.Stdin, os.Stdout, shim.Options{Build: build})
+	if err != nil {
+		os.Exit(1)
 	}
 
 	os.Exit(0)
