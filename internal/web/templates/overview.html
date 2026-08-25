@@ -1,0 +1,45 @@
+{{define "page"}}
+<h1 class="prompt"><b>steps</b></h1>
+<p class="metaline">{{len .Pipelines}} pipelines<span class="sep">·</span>{{len .Runs}} recent runs</p>
+
+<div class="tablewrap">
+  <table>
+    <thead>
+      <tr><th>Pipeline</th><th class="num">Jobs</th><th>File</th></tr>
+    </thead>
+    <tbody>
+      {{range .Pipelines}}
+      <tr>
+        <td><a href="/p/{{.Slug}}">{{.Slug}}</a></td>
+        <td class="num dim">{{.Jobs}}</td>
+        <td class="dim">{{.Path}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+<h2 class="eyebrow">Recent runs</h2>
+{{if .Runs}}
+<div class="tablewrap">
+  <table>
+    <thead>
+      <tr><th>Pipeline</th><th>Job</th><th>Run</th><th>Started</th><th class="num">Duration</th></tr>
+    </thead>
+    <tbody>
+      {{range .Runs}}
+      <tr>
+        <td><a href="/p/{{.Pipeline}}">{{.Pipeline}}</a></td>
+        <td><a href="/p/{{.Pipeline}}/jobs/{{.JobName}}">{{.JobName}}</a></td>
+        <td><a class="st st-{{statusWord .Status}}" href="/p/{{.Pipeline}}/runs/{{.ID}}">{{statusWord .Status}}</a> <span class="dim">{{short .ID}}</span></td>
+        <td class="dim">{{agoTag .StartedAt}}</td>
+        <td class="num dim">{{elapsedTag .RunRow}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{else}}
+<p class="faint">No runs recorded yet.</p>
+{{end}}
+{{end}}

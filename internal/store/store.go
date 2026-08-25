@@ -167,6 +167,12 @@ func registerPipeline(ctx context.Context, db *sql.DB, name, path string) (int64
 // Pipeline is the name this handle is scoped to.
 func (s *Store) Pipeline() string { return s.pipeline }
 
+// Path is the state file behind this handle. Two handles reporting the same
+// path share a file — which is what --state makes possible, and what lets a
+// caller ask one Reader about several pipelines at once instead of querying
+// each and merging.
+func (s *Store) Path() string { return s.path }
+
 // ErrSchemaVersion is a database some other build of steps wrote.
 var ErrSchemaVersion = errors.New("the state database was written by a different version of steps")
 

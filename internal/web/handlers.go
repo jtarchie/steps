@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -13,20 +12,6 @@ import (
 
 	"github.com/jtarchie/steps/internal/store"
 )
-
-// handleIndex sends the bare root at the first pipeline's board. With one
-// pipeline loaded — the common case — the redirect is invisible.
-func (s *Server) handleIndex(c echo.Context) error {
-	slugs := make([]string, 0, len(s.bySlug))
-	for slug := range s.bySlug {
-		slugs = append(slugs, slug)
-	}
-
-	sort.Strings(slugs)
-
-	//nolint:wrapcheck // echo's redirect error is returned verbatim by every handler here
-	return c.Redirect(http.StatusFound, "/p/"+slugs[0])
-}
 
 // handleJobs renders the board: every job, its latest run, the trigger queue.
 func (s *Server) handleJobs(c echo.Context) error {
