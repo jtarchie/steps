@@ -51,6 +51,9 @@ func serveShim() {
 	// A shim that is not the binary that was pushed.
 	case os.Getenv(wrongBuildEnv) != "":
 		serveWrongBuildShim()
+	// A shim on a filesystem that cannot store an executable bit.
+	case os.Getenv(windowsWorkerEnv) != "":
+		serveWindowsShim()
 	default:
 		build, err := shim.SelfBuild()
 		if err != nil {

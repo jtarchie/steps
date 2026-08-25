@@ -100,7 +100,31 @@ var (
 	errNoWorkdir = errors.New("the worker did not report a work directory")
 	// errWrongBuild is a worker running a steps binary this run did not push.
 	errWrongBuild = errors.New("the worker is not running the binary that was pushed to it")
+	// errLossyWorker is a worker whose filesystem cannot represent something
+	// the step cache treats as content. See lossyGOOS.
+	errLossyWorker = errors.New("the worker's filesystem cannot hold what the step's tree carries")
 )
+
+// lossyGOOS names the operating systems whose filesystem cannot store a file's
+// executable bit, which internal/workspace's digestTree hashes as content.
+//
+// Windows has nowhere to put it: os.Chmod there consults only the write bit,
+// setting or clearing FILE_ATTRIBUTE_READONLY, and returns no error; os.Stat
+// synthesizes 0444 or 0666 for every regular file and ORs in 0111 only for a
+// directory. So a tree unpacks without its executable bits, the repack on the
+// way home reads that back off the filesystem, and the tree that returns is
+// not the tree that went out — silently, since the step cache cannot tell a
+// stripped bit from an edit and no layer raised an error.
+//
+// A map rather than a comparison so a second such platform is a line rather
+// than a rewrite, and js/wasip1 are deliberately absent: neither can run a
+// step's shell in the first place, so they fail earlier and for a plainer
+// reason.
+//
+//nolint:gochecknoglobals // a fact about operating systems, not state
+var lossyGOOS = map[string]string{
+	"windows": "an executable bit",
+}
 
 // short is a build hash cut to something a human can compare in an error.
 func short(build string) string {
@@ -230,6 +254,22 @@ func (s *session) greet() error {
 	if build != "" && ok.Build != "" && ok.Build != build {
 		return fmt.Errorf("%w: the worker is running build %s and this steps pushed %s — remove %s on the worker and run again",
 			errWrongBuild, short(ok.Build), short(build), remoteShimPath(s.worker, build))
+	}
+
+	// Refused rather than warned, matching what the codec does one package
+	// over: wire.PackTree refuses to ship a fifo because dropping an entry
+	// would change what digestTree computes over the extracted copy, and a
+	// cache that quietly disagrees with itself is worse than a step that
+	// refuses to ship one. This is that hazard with a machine in the middle.
+	//
+	// On silence, not refused: an empty GOOS is a shim that said nothing about
+	// its filesystem — one an operator started by hand over a bare ssh
+	// command, say — and rejecting a worker for answering a shorter hello
+	// would break machines that are fine. The build check above takes the
+	// same view of an empty Build.
+	if lost, lossy := lossyGOOS[ok.GOOS]; lossy {
+		return fmt.Errorf("%w: %s runs %s, which has nowhere to store %s — a tree sent there comes back without one, and nothing reports it",
+			errLossyWorker, s.worker.URL, ok.GOOS, lost)
 	}
 
 	if ok.Workdir == "" {
