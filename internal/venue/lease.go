@@ -85,6 +85,28 @@ func (l *Leases) Resolve(ctx context.Context, tag string) (Worker, error) {
 	return held.worker, held.err
 }
 
+// Invalidate gives back the machine held for a tag and forgets it, so the
+// next Resolve acquires a fresh one.
+//
+// What an eviction needs: the instance is gone or going, and the job is not
+// finished with the tag. Releasing here rather than waiting for the job's end
+// is deliberate — a machine EC2 is reclaiming should be handed back at once,
+// and one that is merely draining should not take new work.
+func (l *Leases) Invalidate(ctx context.Context, tag string) {
+	l.mu.Lock()
+	held, ok := l.held[tag]
+	delete(l.held, tag)
+	l.mu.Unlock()
+
+	if !ok || held.release == nil {
+		return
+	}
+
+	// Best effort: the usual reason to be here is that the machine already
+	// went away, where the release is expected to fail.
+	_ = held.release(ctx)
+}
+
 // ReleaseAll returns every machine this job acquired.
 //
 // Best effort and exhaustive: one failure must not strand the others, since

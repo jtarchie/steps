@@ -114,8 +114,15 @@ func (r runner) executeFull(ctx context.Context, command string, p plan) (string
 
 // exchange runs one command and returns its streams, plus nil, a
 // *shell.ExitError, or an infrastructure error.
-func (r runner) exchange(ctx context.Context, command string, p plan) (string, string, error) {
-	err := r.session.ensure(ctx)
+func (r runner) exchange(ctx context.Context, command string, p plan) (outText, errText string, err error) {
+	// Every failure out of this call is re-read once the work is done: a
+	// worker that announced its own end turns an infrastructure failure into
+	// ErrEvicted, which the pipeline retries without spending the author's
+	// attempts: budget. Nothing else about the classification changes — an
+	// ExitError is still the command's own verdict, drained or not.
+	defer func() { err = r.asEviction(err) }()
+
+	err = r.session.ensure(ctx)
 	if err != nil {
 		return "", "", err
 	}
@@ -138,6 +145,30 @@ func (r runner) exchange(ctx context.Context, command string, p plan) (string, s
 	}
 
 	return stdout.result(), stderr.result(), r.runError(command, exit)
+}
+
+// asEviction re-reads an infrastructure failure as an eviction when the
+// worker had already said it was going away.
+//
+// Only an infrastructure failure: a command that RAN and exited nonzero said
+// something about the step, and a machine disappearing afterwards does not
+// unsay it. Turning that into a retry would re-run work whose answer was
+// already given, which is the mirror of the mistake this exists to prevent.
+func (r runner) asEviction(err error) error {
+	if err == nil || shell.IsExitError(err) {
+		return err
+	}
+
+	reason, drained := r.session.drainedBy()
+	if !drained {
+		return err
+	}
+
+	if reason == "" {
+		reason = "no reason given"
+	}
+
+	return fmt.Errorf("%w (%s): %w", ErrEvicted, reason, err)
 }
 
 // runError turns the worker's answer into the error shape the pipeline reads.

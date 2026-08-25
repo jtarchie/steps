@@ -142,6 +142,23 @@ type Fetch struct {
 	URL string `json:"url,omitempty"`
 }
 
+// Draining is a worker announcing its own end: an eviction notice or a
+// rebalance recommendation, seen by the shim and relayed before the machine
+// goes away.
+//
+// Advisory, not fatal. A spot eviction gives about two minutes, so the
+// command in flight may well finish; what this buys the orchestrator is
+// knowing that a failure which follows is infrastructure rather than the
+// step's own verdict.
+type Draining struct {
+	// Reason is what the worker learned, verbatim where possible — an
+	// operator reading a build wants the words the cloud used.
+	Reason string `json:"reason"`
+	// Deadline is when the worker expects to be gone, RFC3339, empty when
+	// the notice carried no time.
+	Deadline string `json:"deadline,omitempty"`
+}
+
 // Error reports a failed operation without ending the session.
 type Error struct {
 	Message string `json:"message"`

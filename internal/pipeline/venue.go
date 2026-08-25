@@ -9,6 +9,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -130,6 +131,49 @@ func workerFor(ctx context.Context, step config.Step) (string, error) {
 	}
 
 	return worker.URL, nil
+}
+
+// venueRetries is how many times a step may be re-placed after its worker was
+// taken away, on top of whatever attempts: the author set.
+//
+// A DELIBERATE divergence from Concourse, which errors the build when a
+// worker vanishes. An eviction is not the step failing and not the step being
+// flaky: attempts: is the author's statement about their own work, and
+// spending it on the cloud reclaiming a spot instance would bill them for
+// something they neither caused nor can fix. Two, not unlimited, because a
+// pool that keeps reclaiming is a capacity problem the build should surface
+// rather than grind against.
+const venueRetries = 2
+
+// withVenueRetry runs a placed step's work, re-acquiring its worker and
+// starting over when the machine is taken away underneath it.
+//
+// Outside the attempts: loop rather than inside, which is what makes the
+// budgets independent: an eviction rewinds to a fresh machine with the step's
+// full attempts: budget intact, and a step that genuinely fails spends only
+// its own.
+func withVenueRetry(ctx context.Context, step config.Step, work func(context.Context) error) error {
+	tag := placementTag(step)
+
+	for attempt := 0; ; attempt++ {
+		err := work(ctx)
+		if err == nil || !errors.Is(err, venue.ErrEvicted) {
+			return err
+		}
+
+		if attempt >= venueRetries || tag == "" {
+			return fmt.Errorf("%w (after %d re-placements)", err, attempt)
+		}
+
+		// The machine is gone or going: hand it back and forget it, so the
+		// next resolve acquires a fresh one.
+		if leases := leasesFrom(ctx); leases != nil {
+			leases.Invalidate(ctx, tag)
+		}
+
+		fmt.Printf("worker for tag %s was reclaimed; re-placing the step\n", tag)
+		logFrom(ctx).Info("job.worker_evicted", "tag", tag, "attempt", attempt+1, "error", err)
+	}
 }
 
 // placementOf describes where a step ran, for the run record: "tag (address)",

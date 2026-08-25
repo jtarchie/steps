@@ -62,6 +62,8 @@ func serveShim() {
 		{dieOnUploadEnv, serveUploadDyingShim},
 		// A shim that crashes on start, counting how often it was asked to.
 		{crashCountEnv, serveCrashingShim},
+		// A shim on a machine being reclaimed.
+		{drainingShimEnv, serveDrainingShim},
 	}
 
 	for _, variant := range variants {

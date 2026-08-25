@@ -106,8 +106,24 @@ type session struct {
 	blobs *blobstore.Store
 	// dataplane is what the handshake settled: wire.DataPlaneURLs or empty.
 	dataplane string
-	op        uint32
+	// drained records that the worker announced its own end — a spot
+	// eviction, a rebalance recommendation. Atomic for the same reason broken
+	// is: it is set from the read path and consulted outside it.
+	drained atomic.Bool
+	// drainReason is what the worker said, under mu.
+	drainReason string
+	op          uint32
 }
+
+// ErrEvicted is a step whose worker was taken away underneath it.
+//
+// Distinct from every other failure on purpose, and the reason is a
+// deliberate divergence from Concourse, which errors a build when a worker
+// vanishes. Infrastructure reclaiming a machine is not the step saying no and
+// not the step being flaky: an author's attempts: budget is their statement
+// about their own work, and spending it on the cloud taking a spot instance
+// would charge them for something they neither caused nor can fix.
+var ErrEvicted = errors.New("the worker was reclaimed while the step was running")
 
 var (
 	// errSessionClosed is a command on a session whose step already finished.
@@ -513,6 +529,43 @@ func (s *session) writeEmpty(frame wire.Frame) error {
 	}
 
 	return nil
+}
+
+// Drained reports whether the worker announced its own end, and what it said.
+func (s *session) drainedBy() (string, bool) {
+	if !s.drained.Load() {
+		return "", false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.drainReason, true
+}
+
+// noteDrain records a worker's eviction notice.
+//
+// Advisory: it fails nothing by itself. A spot notice gives about two
+// minutes, so the command in flight often finishes, and a step that succeeded
+// on a machine that later went away succeeded. What this changes is the
+// CLASSIFICATION of a failure that follows.
+func (s *session) noteDrain(frame wire.Frame) {
+	var notice wire.Draining
+
+	_ = decode(frame, &notice)
+
+	s.mu.Lock()
+	s.drainReason = notice.Reason
+	s.mu.Unlock()
+
+	s.drained.Store(true)
+
+	reason := notice.Reason
+	if reason == "" {
+		reason = "no reason given"
+	}
+
+	fmt.Printf("worker %s is draining: %s\n", s.worker.Address(), reason)
 }
 
 // read is readFrame, marking the conversation broken on a transport failure so

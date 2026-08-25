@@ -228,6 +228,12 @@ func (s *session) pump(op uint32, w io.Writer) error {
 			return err
 		}
 
+		if frame.Type == wire.FrameDraining {
+			s.noteDrain(frame)
+
+			continue
+		}
+
 		if frame.Op != op {
 			return fmt.Errorf("%w: a type %d frame for operation %d arrived during operation %d",
 				wire.ErrProtocol, frame.Type, frame.Op, op)
@@ -243,7 +249,7 @@ func (s *session) pump(op uint32, w io.Writer) error {
 			}
 		case wire.FrameHello, wire.FrameHelloOK, wire.FrameUpload, wire.FrameExec,
 			wire.FrameStdout, wire.FrameStderr, wire.FrameExit, wire.FrameFetch,
-			wire.FrameCancel, wire.FrameError, wire.FrameBye:
+			wire.FrameCancel, wire.FrameError, wire.FrameBye, wire.FrameDraining:
 			return fmt.Errorf("%w: a type %d frame interrupted a transfer", wire.ErrProtocol, frame.Type)
 		}
 	}

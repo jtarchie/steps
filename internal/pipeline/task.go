@@ -117,25 +117,32 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 
-	// One runner for every attempt, not one per attempt. A retry is a second
-	// go at the SAME workspace: locally that falls out of the directory simply
-	// persisting, but a venue session owns a remote scratch and uploads the
-	// tree when it opens, so a per-attempt session would re-upload the
-	// ORIGINAL tree and lose whatever the last attempt wrote outside its
-	// declared outputs. A task that marks progress on disk to skip work it has
-	// already done would then pass here and loop forever on a worker.
-	runner, err := taskRunner(ctx, step, rt, space)
-	if err != nil {
-		return err
-	}
+	// The venue retry wraps the attempts: loop rather than sitting inside it:
+	// a worker reclaimed underneath the step is re-placed on a fresh machine
+	// with the author's attempts: budget untouched. A new runner per venue
+	// attempt, because the machine is a different one.
+	err = withVenueRetry(ctx, step, func(ctx context.Context) error {
+		// One runner for every attempt, not one per attempt. A retry is a
+		// second go at the SAME workspace: locally that falls out of the
+		// directory simply persisting, but a venue session owns a remote
+		// scratch and uploads the tree when it opens, so a per-attempt
+		// session would re-upload the ORIGINAL tree and lose whatever the
+		// last attempt wrote outside its declared outputs. A task that marks
+		// progress on disk to skip work it has already done would then pass
+		// here and loop forever on a worker.
+		runner, runnerErr := taskRunner(ctx, step, rt, space)
+		if runnerErr != nil {
+			return runnerErr
+		}
 
-	defer shell.CloseRunner(runner, rt.Name)
+		defer shell.CloseRunner(runner, rt.Name)
 
-	err = retryWithTimeout(ctx, step.Attempts, rt.Timeout, func(attempt, total int) {
-		fmt.Printf("task: %s (attempt %d/%d)\n", executedStepName(step), attempt, total)
-		logFrom(ctx).Info("job.task.attempt", "task", executedStepName(step), "attempt", attempt, "total_attempts", total)
-	}, func(attemptCtx context.Context) error {
-		return runTaskCommand(attemptCtx, cfg, runner, rt, space.Dir())
+		return retryWithTimeout(ctx, step.Attempts, rt.Timeout, func(attempt, total int) {
+			fmt.Printf("task: %s (attempt %d/%d)\n", executedStepName(step), attempt, total)
+			logFrom(ctx).Info("job.task.attempt", "task", executedStepName(step), "attempt", attempt, "total_attempts", total)
+		}, func(attemptCtx context.Context) error {
+			return runTaskCommand(attemptCtx, cfg, runner, rt, space.Dir())
+		})
 	})
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)

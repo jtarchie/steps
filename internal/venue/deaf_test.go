@@ -54,7 +54,7 @@ func serveDeafShim() {
 			// that follows. Keep reading so the connection stays up.
 		case wire.FrameHelloOK, wire.FrameUpload, wire.FrameStdout, wire.FrameStderr,
 			wire.FrameExit, wire.FrameFetch, wire.FrameData, wire.FrameCancel,
-			wire.FrameError, wire.FrameBye:
+			wire.FrameError, wire.FrameBye, wire.FrameDraining:
 		}
 	}
 }

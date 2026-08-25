@@ -156,7 +156,7 @@ func (p *peer) exec(command string, env map[string]string) (stdout, stderr strin
 			return out.String(), errOut.String(), exit
 		case wire.FrameHello, wire.FrameHelloOK, wire.FrameUpload, wire.FrameExec,
 			wire.FrameFetch, wire.FrameData, wire.FrameEnd, wire.FrameCancel,
-			wire.FrameError, wire.FrameBye:
+			wire.FrameError, wire.FrameBye, wire.FrameDraining:
 			p.t.Fatalf("unexpected type %d frame while running a command", frame.Type)
 		}
 	}

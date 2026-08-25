@@ -47,9 +47,20 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, opts Options) (err 
 		decoder: wire.NewDecoder(in),
 		encoder: wire.NewEncoder(out),
 		opts:    opts,
+		done:    make(chan struct{}),
 	}
 
+	// The one thing this end says unasked: that the machine under it is going
+	// away. Started before the first frame, because an eviction notice can
+	// arrive at any moment and the orchestrator can only learn it from here.
+	session.drains.Add(1)
+
+	go session.watchForDrain(ctx)
+
 	defer func() {
+		close(session.done)
+		session.drains.Wait()
+
 		cleanupErr := session.cleanup()
 		if err == nil {
 			err = cleanupErr
@@ -84,6 +95,12 @@ type session struct {
 	// running tracks commands still in flight, so a session cannot tear its
 	// scratch out from under one on the way out.
 	running sync.WaitGroup
+
+	// done closes when the session ends, stopping the drain watcher; drains
+	// waits for it, so a poll in flight cannot outlive Serve and write to a
+	// closed connection.
+	done   chan struct{}
+	drains sync.WaitGroup
 }
 
 func (s *session) run(ctx context.Context) error {
@@ -144,7 +161,7 @@ func (s *session) handle(ctx context.Context, frame wire.Frame) (bool, error) {
 	case wire.FrameBye:
 		return true, nil
 	case wire.FrameHelloOK, wire.FrameStdout, wire.FrameStderr, wire.FrameExit,
-		wire.FrameData, wire.FrameEnd, wire.FrameError:
+		wire.FrameData, wire.FrameEnd, wire.FrameError, wire.FrameDraining:
 		// Frames the shim sends, never receives.
 		return false, fmt.Errorf("%w: a shim cannot answer a type %d frame", wire.ErrProtocol, frame.Type)
 	default:

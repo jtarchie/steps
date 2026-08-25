@@ -57,7 +57,20 @@ const (
 	FrameError
 	// FrameBye tears the session down: the shim removes its scratch and exits.
 	FrameBye
+	// FrameDraining is the worker saying it is about to go away — a spot
+	// eviction notice, a rebalance recommendation. Unsolicited, and the only
+	// frame that is: it belongs to no operation, so it carries DrainOp rather
+	// than the op of whatever is in flight.
+	//
+	// Last deliberately: the decoder's range check ends here, so a new frame
+	// type goes after this one or the check moves with it.
+	FrameDraining
 )
+
+// DrainOp is the operation id an unsolicited frame carries. Zero is never
+// minted for a real operation — session op counters start at one — so a
+// reader can tell "about the session" from "about the thing I asked for".
+const DrainOp uint32 = 0
 
 // headerBytes is [type:1][op:3][length:4], big-endian.
 const headerBytes = 8
@@ -170,7 +183,7 @@ func (d *Decoder) Read() (Frame, error) {
 	}
 
 	frameType := FrameType(d.header[0])
-	if frameType < FrameHello || frameType > FrameBye {
+	if frameType < FrameHello || frameType > FrameDraining {
 		return Frame{}, fmt.Errorf("%w: unknown frame type %d", ErrProtocol, frameType)
 	}
 

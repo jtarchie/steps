@@ -74,7 +74,7 @@ func serveRejectingShim() {
 			_ = encoder.WriteJSON(wire.FrameExit, frame.Op, wire.Exit{Started: true, Code: 0})
 		case wire.FrameHelloOK, wire.FrameUpload, wire.FrameStdout, wire.FrameStderr,
 			wire.FrameExit, wire.FrameData, wire.FrameCancel,
-			wire.FrameError, wire.FrameBye:
+			wire.FrameError, wire.FrameBye, wire.FrameDraining:
 			// Everything else this stub has no opinion about, including the
 			// data frames of the tree it is refusing.
 		}

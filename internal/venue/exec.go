@@ -38,6 +38,15 @@ func (s *session) run(ctx context.Context, command string, sinks outputSinks) (w
 			return wire.Exit{}, err
 		}
 
+		if frame.Type == wire.FrameDraining {
+			// Unsolicited and about the session rather than this command, so
+			// it is noted and the command carries on: the machine has minutes
+			// left and the work may well finish in them.
+			s.noteDrain(frame)
+
+			continue
+		}
+
 		if frame.Op != op {
 			return wire.Exit{}, fmt.Errorf("%w: a type %d frame for operation %d arrived during operation %d",
 				wire.ErrProtocol, frame.Type, frame.Op, op)
@@ -83,7 +92,7 @@ func deliver(frame wire.Frame, sinks outputSinks) (wire.Exit, bool, error) {
 		return exit, true, nil
 	case wire.FrameHello, wire.FrameHelloOK, wire.FrameUpload, wire.FrameExec,
 		wire.FrameFetch, wire.FrameData, wire.FrameEnd, wire.FrameCancel,
-		wire.FrameError, wire.FrameBye:
+		wire.FrameError, wire.FrameBye, wire.FrameDraining:
 		return wire.Exit{}, false, fmt.Errorf("%w: a type %d frame interrupted a command", wire.ErrProtocol, frame.Type)
 	default:
 		return wire.Exit{}, false, fmt.Errorf("%w: unknown frame type %d", wire.ErrProtocol, frame.Type)
