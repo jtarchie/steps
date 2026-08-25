@@ -216,26 +216,42 @@ func TestDecideCascadeStopsAtTheDeadline(t *testing.T) {
 
 // TestDecidePreflightPinIsTotal enumerates the whole input space of the other
 // pin decision, for the same reason TestDecideCascadeIsTotal does: a
-// process-lifetime preference changed on a guess is how a run strands itself.
+// preference that outlives runs, changed on a guess, is how a run strands
+// itself.
+//
+// Thirty-two cases rather than eight because each probe now carries whether
+// it was actually asked. Freshness is not a detail of one branch — it is a
+// second axis over the whole space, and the combinations that changed
+// (healthy-but-stale, dead-but-stale) are exactly the ones nobody enumerated
+// when they were unrepresentable.
 func TestDecidePreflightPinIsTotal(t *testing.T) {
 	t.Parallel()
 
 	for _, pinned := range []bool{false, true} {
-		for _, primaryHealthy := range []bool{false, true} {
-			for _, pinnedHealthy := range []bool{false, true} {
-				t.Run(pinCaseName(pinned, primaryHealthy, pinnedHealthy), func(t *testing.T) {
+		for _, primary := range allProbeFacts() {
+			for _, pinnedSource := range allProbeFacts() {
+				t.Run(pinCaseName(pinned, primary, pinnedSource), func(t *testing.T) {
 					t.Parallel()
 
-					got := decidePreflightPin(pinned, primaryHealthy, pinnedHealthy)
-					want := expectedPinAction(pinned, primaryHealthy, pinnedHealthy)
+					got := decidePreflightPin(pinned, primary, pinnedSource)
+					want := expectedPinAction(pinned, primary, pinnedSource)
 
 					if got != want {
-						t.Errorf("decidePreflightPin(%v, %v, %v) = %v, want %v",
-							pinned, primaryHealthy, pinnedHealthy, got, want)
+						t.Errorf("decidePreflightPin(%v, %+v, %+v) = %v, want %v",
+							pinned, primary, pinnedSource, got, want)
 					}
 				})
 			}
 		}
+	}
+}
+
+func allProbeFacts() []probeFact {
+	return []probeFact{
+		{healthy: false, fresh: false},
+		{healthy: false, fresh: true},
+		{healthy: true, fresh: false},
+		{healthy: true, fresh: true},
 	}
 }
 
@@ -247,21 +263,25 @@ func TestDecidePreflightPinIsTotal(t *testing.T) {
 //   - A recovered primary ends the reason the pin existed.
 //   - A dead pinned source has to re-decide too, or fixing the first blind
 //     spot just trades it for a worse one.
-func expectedPinAction(pinned, primaryHealthy, pinnedHealthy bool) pinAction {
+//   - Neither counts unless it was established just now. Keeping a pin on a
+//     stale reading changes nothing; releasing on one throws away what a
+//     whole conversation established.
+func expectedPinAction(pinned bool, primary, pinnedSource probeFact) pinAction {
 	switch {
 	case !pinned:
 		return leavePin
-	case primaryHealthy:
+	case primary.healthy && primary.fresh:
 		return dropPin
-	case !pinnedHealthy:
+	case !pinnedSource.healthy && pinnedSource.fresh:
 		return dropPin
 	default:
 		return leavePin
 	}
 }
 
-func pinCaseName(pinned, primaryHealthy, pinnedHealthy bool) string {
-	return fmt.Sprintf("pinned=%v_primary=%v_pinnedSource=%v", pinned, primaryHealthy, pinnedHealthy)
+func pinCaseName(pinned bool, primary, pinnedSource probeFact) string {
+	return fmt.Sprintf("pinned=%v_primary=%v/fresh=%v_pinnedSource=%v/fresh=%v",
+		pinned, primary.healthy, primary.fresh, pinnedSource.healthy, pinnedSource.fresh)
 }
 
 // TestDecidePreflightPinKeepsAServingFallback is the status quo this must not
@@ -271,8 +291,51 @@ func pinCaseName(pinned, primaryHealthy, pinnedHealthy bool) string {
 func TestDecidePreflightPinKeepsAServingFallback(t *testing.T) {
 	t.Parallel()
 
-	if got := decidePreflightPin(true, false, true); got != leavePin {
+	got := decidePreflightPin(true, probeFact{healthy: false, fresh: true}, probeFact{healthy: true, fresh: true})
+	if got != leavePin {
 		t.Errorf("a serving fallback under a dead primary got %v, want the pin left alone", got)
+	}
+}
+
+// TestDecidePreflightPinIgnoresAStaleRecovery is the second defect this
+// closes, at the level where it is decidable.
+//
+// The sequence: t=0 the primary answers and the answer caches. t=1m a
+// conversation takes a 5xx mid-run and the fallback serves, earning a pin.
+// t=2m the next run's "probe" is a pure cache hit returning t=0's success —
+// so the pin was dropped on a question nobody had asked since before the
+// outage, the step ran at the still-broken primary, cascaded, re-pinned, and
+// repeated every poll until the cache entry aged out.
+func TestDecidePreflightPinIgnoresAStaleRecovery(t *testing.T) {
+	t.Parallel()
+
+	staleRecovery := probeFact{healthy: true, fresh: false}
+
+	for _, pinnedSource := range allProbeFacts() {
+		if !pinnedSource.healthy && pinnedSource.fresh {
+			continue // freshly dead: it ends the pin on its own account
+		}
+
+		if got := decidePreflightPin(true, staleRecovery, pinnedSource); got != leavePin {
+			t.Errorf("a cached positive from before the outage got %v (pinned source %+v), want the pin left alone",
+				got, pinnedSource)
+		}
+	}
+}
+
+// TestDecidePreflightPinIgnoresAStaleFailure is the same asymmetry in the
+// other direction, and it is reachable whenever two jobs run at once: this
+// probe reads a cached negative taken before another job's cascade pinned the
+// very source that has since carried a conversation to its end. Dropping the
+// pin there discards evidence that a real conversation paid for, on a reading
+// older than it.
+func TestDecidePreflightPinIgnoresAStaleFailure(t *testing.T) {
+	t.Parallel()
+
+	staleFailure := probeFact{healthy: false, fresh: false}
+
+	if got := decidePreflightPin(true, probeFact{healthy: false, fresh: true}, staleFailure); got != leavePin {
+		t.Errorf("a cached negative about the pinned source got %v, want the pin left alone", got)
 	}
 }
 
@@ -282,11 +345,11 @@ func TestDecidePreflightPinKeepsAServingFallback(t *testing.T) {
 func TestDecidePreflightPinNeverTouchesAnUnpinnedAgent(t *testing.T) {
 	t.Parallel()
 
-	for _, primaryHealthy := range []bool{false, true} {
-		for _, pinnedHealthy := range []bool{false, true} {
-			if got := decidePreflightPin(false, primaryHealthy, pinnedHealthy); got != leavePin {
-				t.Errorf("decidePreflightPin(false, %v, %v) = %v, want the pin left alone",
-					primaryHealthy, pinnedHealthy, got)
+	for _, primary := range allProbeFacts() {
+		for _, pinnedSource := range allProbeFacts() {
+			if got := decidePreflightPin(false, primary, pinnedSource); got != leavePin {
+				t.Errorf("decidePreflightPin(false, %+v, %+v) = %v, want the pin left alone",
+					primary, pinnedSource, got)
 			}
 		}
 	}

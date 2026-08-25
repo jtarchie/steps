@@ -125,7 +125,7 @@ func ResetProbeCache() {
 	selectedSources.mu.Lock()
 	defer selectedSources.mu.Unlock()
 
-	selectedSources.by = map[string]sourceSelection{}
+	selectedSources.by = map[pinScope]sourceSelection{}
 }
 
 // Preflight checks every model and MCP server the named agents need, and
@@ -167,6 +167,7 @@ func Preflight(ctx context.Context, cfg *config.Config, agentNames []string, set
 		// separately (cliProbeKey) — and letting the second re-decide let it
 		// undo the failover the first had just recorded.
 		pinDecided, keepPin := false, false
+		scope := agentPinScope(cfg, agent.Name)
 
 		for _, ri := range agentInvocations(cfg, name) {
 			// Every agent gets its own decision, even when several share a
@@ -176,12 +177,13 @@ func Preflight(ctx context.Context, cfg *config.Config, agentNames []string, set
 			// dead primary, which is exactly the failure preflight exists to
 			// move earlier. probeModelCached already collapses the network
 			// cost to one request.
-			probeErr := probeModelCached(ctx, ri, settings)
+			probeFresh, probeErr := probeModelCached(ctx, ri, settings)
 
 			// Before acting on the probe: a pin is durable state, and this is
 			// the only boundary that reconsiders it.
 			if !pinDecided {
-				keepPin = reconsiderPin(ctx, agent, ri, settings, probeErr == nil)
+				keepPin = reconsiderPin(ctx, scope, agent, ri, settings,
+					probeFact{healthy: probeErr == nil, fresh: probeFresh})
 				pinDecided = true
 			}
 
@@ -192,7 +194,7 @@ func Preflight(ctx context.Context, cfg *config.Config, agentNames []string, set
 			// a whole conversation for one that answered a single token.
 			if probeErr == nil {
 				healthyEndpoints[ri.BaseURL] = true
-			} else if !keepPin && !failOver(ctx, agent, ri, settings) {
+			} else if !keepPin && !failOver(ctx, scope, agent, ri, settings) {
 				failures = append(failures, modelFailure{name: name, ri: ri, err: probeErr})
 			}
 
@@ -286,14 +288,14 @@ func withSubAgents(cfg *config.Config, names []string) []string {
 // is all a probe can produce; a model REFUSING a request is a different class
 // entirely, and falling over on one would silently reroute a legitimate
 // refusal to a possibly less suitable model.
-func failOver(ctx context.Context, agent *config.Agent, primary config.ResolvedInvocation, settings *config.Preflight) bool {
+func failOver(ctx context.Context, scope pinScope, agent *config.Agent, primary config.ResolvedInvocation, settings *config.Preflight) bool {
 	for i := range agent.Fallback {
 		candidate, err := primary.WithSource(agent.Fallback[i].Source, agent)
 		if err != nil {
 			continue // an unresolvable fallback is already a load error
 		}
 
-		probeErr := probeModelCached(ctx, candidate, settings)
+		_, probeErr := probeModelCached(ctx, candidate, settings)
 		if probeErr != nil {
 			slog.Warn("agent.fallback_unavailable",
 				"agent", agent.Name, "fallback", i, "model", candidate.ModelName, "error", probeErr)
@@ -301,7 +303,7 @@ func failOver(ctx context.Context, agent *config.Agent, primary config.ResolvedI
 			continue
 		}
 
-		selectSource(agent.Name, agent.Fallback[i].Source, i)
+		selectSource(scope, agent.Fallback[i].Source, i)
 
 		// Loud, not silent. A fallback model can produce meaningfully
 		// different output, and a quality dip caused by an outage must not
@@ -338,12 +340,16 @@ func failOver(ctx context.Context, agent *config.Agent, primary config.ResolvedI
 // fallback index 0 whatever the pin says.
 func reconsiderPin(
 	ctx context.Context,
+	scope pinScope,
 	agent *config.Agent,
 	primary config.ResolvedInvocation,
 	settings *config.Preflight,
-	primaryHealthy bool,
+	primaryProbe probeFact,
 ) bool {
-	selection, pinned := selectedSource(agent.Name)
+	// pinnedSource, not selectedSource: the lifetime is the answer for when
+	// nothing is asking, and this function is asking. Letting the clock fire
+	// here would delete a pin a real probe is about to re-decide better.
+	selection, pinned := pinnedSource(scope)
 	if !pinned {
 		return false
 	}
@@ -354,7 +360,7 @@ func reconsiderPin(
 		// fails every step of the run on the same resolution error, but
 		// reporting it through the health path below would blame a probe that
 		// was never sent and name the model it left as "".
-		if clearSourceIf(agent.Name, selection) {
+		if clearSourceIf(scope, selection) {
 			slog.Warn("agent.failover.pin_lost",
 				"agent", agent.Name,
 				"error", err,
@@ -365,12 +371,16 @@ func reconsiderPin(
 	}
 
 	// Probed only where its answer can still change the verdict:
-	// decidePreflightPin short-circuits on primaryHealthy, and this is a real
-	// request against a provider the agent is about to stop using — one that
-	// can spend the whole ProbeTimeout if the fallback is the thing hanging.
-	pinnedHealthy := false
-	if !primaryHealthy {
-		pinnedHealthy = probeModelCached(ctx, candidate, settings) == nil
+	// decidePreflightPin short-circuits on a primary that is FRESHLY healthy,
+	// and this is a real request against a provider the agent is about to
+	// stop using — one that can spend the whole ProbeTimeout if the fallback
+	// is the thing hanging. A merely cached positive no longer short-circuits
+	// it, which is the point: that answer cannot end a pin on its own, so the
+	// other fact is worth having.
+	pinnedProbe := probeFact{}
+	if !primaryProbe.recovered() {
+		fresh, err := probeModelCached(ctx, candidate, settings)
+		pinnedProbe = probeFact{healthy: err == nil, fresh: fresh}
 	}
 
 	// A cancelled run learned nothing about either source: both probes fail
@@ -381,7 +391,9 @@ func reconsiderPin(
 		return false
 	}
 
-	if decidePreflightPin(pinned, primaryHealthy, pinnedHealthy) != dropPin {
+	if decidePreflightPin(pinned, primaryProbe, pinnedProbe) != dropPin {
+		renewPinIf(scope, selection)
+
 		return true
 	}
 
@@ -389,14 +401,19 @@ func reconsiderPin(
 	// a concurrently-running job's mid-run cascade can pin a source that has
 	// actually SERVED inside that window. A blind delete would discard it on a
 	// reading taken before it existed.
-	if !clearSourceIf(agent.Name, selection) {
+	if !clearSourceIf(scope, selection) {
 		return false
 	}
 
 	// As loud as leaving was. agent.failover warns on the way out, and an
 	// operator watching for model-quality changes needs both edges — a silent
 	// return is how a quality shift gets attributed to the wrong change.
-	if primaryHealthy {
+	//
+	// recovered(), not healthy: a primary that is healthy only in the cache
+	// cannot be the reason this pin ended, so saying so would report a
+	// recovery nobody had probed for — the exact line the stale-positive
+	// defect used to print.
+	if primaryProbe.recovered() {
 		slog.Warn("agent.failover.returned",
 			"agent", agent.Name,
 			"from", candidate.ModelName,
@@ -426,22 +443,82 @@ func reconsiderPin(
 type sourceSelection struct {
 	source config.AgentSource
 	index  int
+	// since is when this agent last LEFT its primary, which is what the pin's
+	// lifetime is measured from — see pinLifetime. Deliberately not "when the
+	// pin was last written": every step that runs on a pinned fallback and
+	// serves re-pins it (decideCascade returns pinThisSource for a source
+	// that carried a conversation), and refreshing the clock there would mean
+	// a busy pipeline never re-decides at all. Using a fallback says nothing
+	// whatever about the primary it replaced.
+	since time.Time
 }
 
-// selectedSources records which fallback an agent is running on, for the life
-// of the process. Process-scoped like probeCache and for the same reason: a
-// `steps watch` that failed over should stay failed over rather than
-// re-failing-over on every poll. reconsiderPin is its one exit condition.
+// pinScope is WHOSE pin: an agent, in a pipeline.
 //
-// Keyed by agent NAME alone, which is a real limit rather than a decision: one
-// process can serve several pipelines (`steps web app.yml infra.yml`), and two
-// pipelines that both declare an agent called `reviewer` share this entry.
+// The pipeline half is the correction for a collision that was always latent
+// and became live traffic once a pin gained an exit condition. One process
+// serves several pipelines (`steps web app.yml infra.yml`, `steps watch` over
+// a shared state file), two of them may declare an agent called `reviewer`
+// with entirely different source: blocks, and keyed by name alone the first
+// one's outage resolved the second onto an endpoint it never declared —
+// probing it, and running steps against it.
+//
+// It is the same unscoped-global shape internal/store answers with a
+// pipeline_id on every row, one package over, and it takes the same posture:
+// the scope is part of the key, so a caller cannot forget it.
+type pinScope struct {
+	pipeline string
+	agent    string
+}
+
+// agentPinScope names an agent's pin within the pipeline that declared it.
+// config.Path is stamped by the loader, so every real run has one; a Config
+// built in a test rather than loaded shares the empty scope, as everything
+// did before this existed.
+func agentPinScope(cfg *config.Config, agentName string) pinScope {
+	return pinScope{pipeline: cfg.Path, agent: agentName}
+}
+
+// pinLifetime is how long an agent stays on a fallback without anything
+// re-affirming that its primary is still unwell.
+//
+// It exists because the pin's other exit condition — reconsiderPin, at the
+// pre-run probe — lives inside a check three separate switches turn off
+// (`preflight: false` on the agent, `defaults.preflight.disabled:`,
+// `--no-preflight`), while the mid-run cascade that INSTALLS a pin is gated
+// by none of them. A release that is a feature of a check you can disable is
+// not a release: in exactly the configuration docs/agents.md recommends for a
+// cold local model — the one that also names a paid hosted fallback — a
+// ninety-second blip pinned a `steps watch` for the life of the process.
+//
+// So the expiry rides on the pin itself, evaluated wherever one is read, and
+// preflight stays what it always was: the cheaper, better-informed way to
+// reach the same decision sooner, using a real probe instead of a clock.
+//
+// Fifteen minutes is the trade between the two costs. Expiring re-decides
+// from the primary, which with no probe available costs one attempts: cycle
+// against a source that may still be dead — slow, but bounded and paid at
+// most once per lifetime per agent. NOT expiring costs every step of every
+// run on a fallback that may be a paid provider, indefinitely. It is
+// comfortably longer than defaults.preflight.cache: (5m), so a pin still
+// outlives the probe answer that created it when preflight is on at all.
+const pinLifetime = 15 * time.Minute
+
+// selectedSources records which fallback an agent is running on, across runs.
+// Process-scoped like probeCache and for the same reason: a `steps watch`
+// that failed over should stay failed over rather than re-failing-over on
+// every poll.
+//
+// Keyed by pinScope, so a pipeline's pin is its own. It has two exit
+// conditions and needs both: reconsiderPin, which is the informed one and is
+// reachable only when preflight runs, and pinLifetime, which is the one that
+// still works when it does not.
 //
 //nolint:gochecknoglobals // process-lifetime selection, deliberately shared across runs
 var selectedSources = struct {
 	mu sync.Mutex
-	by map[string]sourceSelection
-}{by: map[string]sourceSelection{}}
+	by map[pinScope]sourceSelection
+}{by: map[pinScope]sourceSelection{}}
 
 // selectSource pins an agent to the fallback entry at index for the rest of
 // the process.
@@ -451,22 +528,61 @@ var selectedSources = struct {
 // chosen. Pinning on selection alone strands the process on a source that
 // never answered until reconsiderPin's next probe notices, which is a whole
 // run's worth of steps aimed at something known not to work.
-func selectSource(agentName string, source config.AgentSource, index int) {
+func selectSource(scope pinScope, source config.AgentSource, index int) {
 	selectedSources.mu.Lock()
 	defer selectedSources.mu.Unlock()
 
-	selectedSources.by[agentName] = sourceSelection{source: source, index: index}
+	// A pin already in place keeps its clock (see sourceSelection.since):
+	// re-pinning records WHICH source, and says nothing new about the primary
+	// that the lifetime is counting down from. A cascade moving further down
+	// the list is the same story — it learned about the fallback it just
+	// left, not about the primary.
+	since := time.Now()
+	if existing, ok := selectedSources.by[scope]; ok {
+		since = existing.since
+	}
+
+	selectedSources.by[scope] = sourceSelection{source: source, index: index, since: since}
+}
+
+// renewPinIf restarts a pin's lifetime, while it still holds the selection the
+// caller evaluated — compare-and-set for the same reason clearSourceIf is
+// compare-and-delete.
+//
+// One caller, deliberately: the pre-run probe, on the branch where it decides
+// to KEEP a pin. That decision means preflight has just asked the primary and
+// been told it is still unwell, which is exactly the fact pinLifetime counts
+// down from.
+//
+// It is what divides the pin's two exits. While preflight runs it re-decides
+// every run from real probes and the clock never runs out; where preflight is
+// switched off nothing renews it and the clock is the only exit there is.
+// Without this, a long outage under a perfectly healthy preflight would expire
+// the pin on a schedule and send failOver back down the list from index 0 —
+// demoting an agent that had cascaded past two unwell entries onto whichever
+// one answers a single token, which is the thing keepPin exists to prevent.
+func renewPinIf(scope pinScope, expected sourceSelection) {
+	selectedSources.mu.Lock()
+	defer selectedSources.mu.Unlock()
+
+	current, ok := selectedSources.by[scope]
+	if !ok || current != expected {
+		return
+	}
+
+	current.since = time.Now()
+	selectedSources.by[scope] = current
 }
 
 // clearSource drops an agent's pin, so the next run resolves from its primary
 // again. Called when a cascade tried every source and none served: continuing
 // to prefer the last one tried would be preferring a source that just failed.
 // reconsiderPin drops a pin for its own reasons, through clearSourceIf.
-func clearSource(agentName string) {
+func clearSource(scope pinScope) {
 	selectedSources.mu.Lock()
 	defer selectedSources.mu.Unlock()
 
-	delete(selectedSources.by, agentName)
+	delete(selectedSources.by, scope)
 }
 
 // clearSourceIf drops an agent's pin only while it still holds the selection
@@ -479,16 +595,16 @@ func clearSource(agentName string) {
 // this one map, so another job's cascade can pin a source that has actually
 // SERVED while this one is still probing. Losing that write to a stale
 // reading is how an agent goes back to a primary that just died mid-run.
-func clearSourceIf(agentName string, expected sourceSelection) bool {
+func clearSourceIf(scope pinScope, expected sourceSelection) bool {
 	selectedSources.mu.Lock()
 	defer selectedSources.mu.Unlock()
 
-	current, ok := selectedSources.by[agentName]
+	current, ok := selectedSources.by[scope]
 	if !ok || current != expected {
 		return false
 	}
 
-	delete(selectedSources.by, agentName)
+	delete(selectedSources.by, scope)
 
 	return true
 }
@@ -496,11 +612,46 @@ func clearSourceIf(agentName string, expected sourceSelection) bool {
 // selectedSource returns the fallback selection preflight (or a served
 // mid-run swap) chose for an agent, if any. internal/pipeline has no need for
 // it; the agent step itself applies it.
-func selectedSource(agentName string) (sourceSelection, bool) {
+//
+// Reading is where a pin expires, because reading is the one thing every path
+// to a pin has in common — the pre-run probe, a step resolving its source,
+// the cascade. Hanging the lifetime off any single writer would leave it
+// exactly as skippable as reconsiderPin already is.
+func selectedSource(scope pinScope) (sourceSelection, bool) {
+	selectedSources.mu.Lock()
+
+	selection, ok := selectedSources.by[scope]
+
+	expired := ok && time.Since(selection.since) >= pinLifetime
+	if expired {
+		delete(selectedSources.by, scope)
+	}
+
+	selectedSources.mu.Unlock()
+
+	if expired {
+		// As loud as arriving and as loud as returning: an operator watching
+		// for a change in model quality needs every edge, and this one moves
+		// an agent back to its primary with no probe behind it.
+		slog.Warn("agent.failover.pin_expired",
+			"agent", scope.agent,
+			"model", selection.source.Model,
+			"lifetime", pinLifetime,
+			"reason", "the pin outlived its evidence; re-deciding from the primary")
+
+		return sourceSelection{}, false
+	}
+
+	return selection, ok
+}
+
+// pinnedSource is selectedSource without the lifetime: whatever is recorded,
+// however old. Only reconsiderPin wants this — see the note there.
+func pinnedSource(scope pinScope) (sourceSelection, bool) {
 	selectedSources.mu.Lock()
 	defer selectedSources.mu.Unlock()
 
-	selection, ok := selectedSources.by[agentName]
+	selection, ok := selectedSources.by[scope]
 
 	return selection, ok
 }
@@ -579,7 +730,16 @@ func cliProbeKey(ri config.ResolvedInvocation) string {
 	return "cli|" + ri.CLI + "|" + ri.ModelName + "|" + ri.Image
 }
 
-func probeModelCached(ctx context.Context, ri config.ResolvedInvocation, settings *config.Preflight) error {
+// probeModelCached probes a model, or answers from the cache, and reports
+// which of the two it did.
+//
+// The freshness half is not bookkeeping: a decision that DESTROYS state has
+// to insist on a fact from now. Collapsing it let a cached positive taken
+// before an outage release a pin the mid-run cascade earned during one — the
+// step then ran at the still-broken primary, cascaded, re-pinned, and did it
+// again on the next poll, logging "the primary model answered preflight
+// again" about a question nobody had asked in five minutes.
+func probeModelCached(ctx context.Context, ri config.ResolvedInvocation, settings *config.Preflight) (bool, error) {
 	// A CLI target is keyed on its own axis: "" is a perfectly ordinary
 	// BaseURL for a CLI source, so a shared key space would let a CLI agent
 	// and an endpoint-less HTTP one collide.
@@ -601,13 +761,13 @@ func probeModelCached(ctx context.Context, ri config.ResolvedInvocation, setting
 	if found {
 		slog.Debug("preflight.cached", "target", key)
 
-		return cached
+		return false, cached
 	}
 
 	err := probeModel(ctx, ri, settings.ProbeTimeout())
 	probeCache.store(key, err, now)
 
-	return err
+	return true, err
 }
 
 // probeModel sends the smallest possible completion request and reports how it

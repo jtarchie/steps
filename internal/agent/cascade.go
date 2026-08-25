@@ -194,27 +194,56 @@ func decideCascade(result sourceOutcome, hasNext, deadlineSpent, swapped bool) c
 	return cascadeVerdict{action: returnResult, pin: leavePin}
 }
 
+// probeFact is what one pre-run probe established: how the source answered,
+// and whether it was actually ASKED this time or answered out of the cache
+// (defaults.preflight.cache:, up to five minutes old by default).
+//
+// The two travel together because a decision that destroys state may only
+// rest on the second kind. See probeModelCached.
+type probeFact struct {
+	healthy bool
+	fresh   bool
+}
+
+// recovered reports the one fact strong enough to end a pin on its own: this
+// source answered, and answered just now.
+func (p probeFact) recovered() bool { return p.healthy && p.fresh }
+
 // decidePreflightPin answers the question the mid-run cascade deliberately
-// does not: how long should a pin stay true? Until this existed, forever —
-// an outage lasting ninety seconds could move a `steps watch` agent onto a
-// possibly-worse model for days, and silently, since agent.failover fires
-// once at the swap and nothing afterwards says the agent is still there.
+// does not: is the reason for this pin still true? Until this existed there
+// was no answer at all — an outage lasting ninety seconds could move a
+// `steps watch` agent onto a possibly-worse model for days, and silently,
+// since agent.failover fires once at the swap and nothing afterwards says the
+// agent is still there.
 //
 // Either fact is enough on its own to end a pin: the reason for it is gone,
 // or the thing it points at is. Both, because releasing on a recovered
 // primary alone would trade one blind spot for a worse one — see
 // reconsiderPin, which gathers them.
 //
+// Each fact must be FRESH to release, and this is the asymmetry the function
+// exists to hold: keeping a pin on a stale reading changes nothing, while
+// releasing on one destroys evidence a real conversation paid for. A cached
+// positive from before an outage would otherwise drop a pin the cascade
+// earned during it, and a cached negative from before a recovery would drop
+// one a source has since served a whole conversation on — the second
+// reachable whenever another job cascades while this probe is in flight,
+// which is what clearSourceIf's compare-and-delete already braces for.
+//
 // Pure and total for the same reason decideCascade is: every defect this pair
 // of functions has closed was a wrong predicate mutating durable state.
-func decidePreflightPin(pinned, primaryHealthy, pinnedHealthy bool) pinAction {
+func decidePreflightPin(pinned bool, primary, pinnedSource probeFact) pinAction {
 	if !pinned {
 		// An unhealthy primary with no pin is the ordinary failover path,
 		// which is not this function's business.
 		return leavePin
 	}
 
-	if primaryHealthy || !pinnedHealthy {
+	if primary.recovered() {
+		return dropPin
+	}
+
+	if !pinnedSource.healthy && pinnedSource.fresh {
 		return dropPin
 	}
 

@@ -820,10 +820,11 @@ func assertSpentExactly(t *testing.T, stderr string, wantRequests int) {
 // its failing turn instead of the default three.
 //
 // agentName is a parameter, not a constant, because the mid-run cascade pins
-// its choice of source process-wide (selectedSources, preflight.go) for the
-// life of the test binary — the same behavior a long-lived `steps watch`
-// relies on. Giving each subtest its own agent name is what keeps that real
-// pin from leaking one subtest's outage into the next.
+// its choice of source for the life of the test binary (selectedSources,
+// preflight.go) — the same behavior a long-lived `steps watch` relies on. A
+// pin is scoped to (pipeline, agent) and every subtest writes its pipeline
+// into its own t.TempDir(), so the names need not differ for isolation; they
+// differ so a failure names the subtest that owns it.
 func midRunFailoverPipeline(t *testing.T, dir, agentName, primaryEndpoint, fallbackEndpoint string) string {
 	t.Helper()
 
@@ -870,6 +871,54 @@ func TestEndToEndAgentMidRunFailover(t *testing.T) {
 	t.Run("resumes on the fallback source", testMidRunFailoverResumes)
 	t.Run("a non-transient failure does not fail over", testMidRunFailoverSkipsNonTransient)
 	t.Run("does not re-invoke a required tool the primary already satisfied", testMidRunFailoverDoesNotReinvokeRequiredTool)
+	t.Run("a pin does not cross into another pipeline", testMidRunFailoverPinIsScopedToItsPipeline)
+}
+
+// testMidRunFailoverPinIsScopedToItsPipeline: one process serves several
+// pipelines (`steps web app.yml infra.yml`, and this binary), and two of them
+// may name an agent the same thing while meaning entirely different sources.
+//
+// A pin used to be keyed by agent NAME alone, so the first pipeline's outage
+// reached the second: its step resolved onto an endpoint it never declared —
+// a real request, to another pipeline's fallback provider, for a primary that
+// was answering fine. Both pipelines here declare `crosser`; only the first
+// has anything wrong with it.
+func testMidRunFailoverPinIsScopedToItsPipeline(t *testing.T) {
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	// The pipeline with the outage: its primary completes a turn, then dies,
+	// and its fallback finishes the step — pinning that fallback.
+	outagePrimary := newFakeLLM(t,
+		callsTool("read_file", map[string]any{"path": "prep/NOTES.txt"}),
+		failsWith(http.StatusInternalServerError),
+		failsWith(http.StatusInternalServerError),
+	)
+	outageFallback := newFakeLLM(t, says("Summarized via fallback."))
+
+	mustRun(t, midRunFailoverPipeline(t, t.TempDir(), "crosser", outagePrimary.URL, outageFallback.URL))
+
+	// The healthy pipeline, in its own file, declaring its own `crosser`
+	// against its own endpoints. Its fallback is scripted with nothing at
+	// all: reaching it is the failure this test exists to catch.
+	healthyPrimary := newFakeLLM(t,
+		callsTool("read_file", map[string]any{"path": "prep/NOTES.txt"}),
+		says("Summarized via fallback."),
+	)
+	healthyFallback := newFakeLLM(t)
+
+	mustRun(t, midRunFailoverPipeline(t, t.TempDir(), "crosser", healthyPrimary.URL, healthyFallback.URL))
+
+	if got := healthyPrimary.requestCount(); got != 2 {
+		t.Errorf("the healthy pipeline's own primary served %d requests, want 2 — its step was resolved onto another pipeline's source", got)
+	}
+
+	if got := healthyFallback.requestCount(); got != 0 {
+		t.Errorf("the healthy pipeline fell back %d times with nothing wrong with its primary", got)
+	}
+
+	if got := outageFallback.requestCount(); got != 1 {
+		t.Errorf("the failing pipeline's fallback served %d requests, want 1 — the second pipeline borrowed it", got)
+	}
 }
 
 // testMidRunFailoverResumes: the primary completes a real read_file turn,

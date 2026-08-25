@@ -40,7 +40,7 @@ func TestResolveWithFailoverKeepsThePrimaryForHashing(t *testing.T) {
 	assertFallbackIndex(t, fallbackIndex, -1, "still the primary")
 
 	// Preflight selects the fallback.
-	selectSource("writer", cfg.Agents[0].Fallback[0].Source, 0)
+	selectSource(testPin("writer"), cfg.Agents[0].Fallback[0].Source, 0)
 
 	primary, effective, _, fallbackIndex, err = resolveWithFailover(cfg, step)
 	if err != nil {
@@ -337,15 +337,15 @@ func TestPinnedSourceOnlyAfterServing(t *testing.T) {
 	}
 
 	// The primary serving pins nothing: it is the default already.
-	pinServedSource(agent, -1)
+	pinServedSource(testPin("writer"), agent, -1)
 
-	if _, pinned := selectedSource("writer"); pinned {
+	if _, pinned := selectedSource(testPin("writer")); pinned {
 		t.Error("the primary serving must not pin anything")
 	}
 
-	pinServedSource(agent, 1)
+	pinServedSource(testPin("writer"), agent, 1)
 
-	selection, pinned := selectedSource("writer")
+	selection, pinned := selectedSource(testPin("writer"))
 	if !pinned {
 		t.Fatal("a fallback that served was not pinned")
 	}
@@ -356,9 +356,9 @@ func TestPinnedSourceOnlyAfterServing(t *testing.T) {
 
 	// Nothing served: the pin goes, so the next run resolves from the primary
 	// rather than preferring a source that just failed.
-	releaseSource(agent)
+	releaseSource(testPin("writer"))
 
-	if _, pinned := selectedSource("writer"); pinned {
+	if _, pinned := selectedSource(testPin("writer")); pinned {
 		t.Error("an exhausted cascade left a pin behind — the next run would prefer a dead source")
 	}
 }
@@ -380,9 +380,9 @@ func TestSelectedSourceIndexSurvivesDuplicateSources(t *testing.T) {
 		Fallback: []config.AgentFallback{{Source: shared}, {Source: shared}},
 	}
 
-	pinServedSource(agent, 1)
+	pinServedSource(testPin("writer"), agent, 1)
 
-	selection, pinned := selectedSource("writer")
+	selection, pinned := selectedSource(testPin("writer"))
 	if !pinned {
 		t.Fatal("nothing was pinned")
 	}

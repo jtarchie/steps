@@ -89,9 +89,9 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (c
 
 		switch verdict.pin {
 		case pinThisSource:
-			pinServedSource(agent, index)
+			pinServedSource(prepared.pin, agent, index)
 		case dropPin:
-			releaseSource(agent)
+			releaseSource(prepared.pin)
 		case leavePin:
 		}
 
@@ -162,20 +162,27 @@ type servedSource struct {
 	swapped bool
 }
 
-// pinServedSource records that a fallback entry served a run, so the rest of
-// the process prefers it over a primary that is evidently unwell. index -1
-// means the step ran on the primary, which is the default and needs no pin.
-func pinServedSource(agent *config.Agent, index int) {
+// pinServedSource records that a fallback entry served a run, so later runs
+// of this pipeline's agent prefer it over a primary that is evidently unwell.
+// index -1 means the step ran on the primary, which is the default and needs
+// no pin.
+//
+// The pin it installs has a lifetime (pinLifetime) rather than lasting until
+// something else re-decides it. This is the writer that made that necessary:
+// nothing gates it on preflight, while the release that used to be a pin's
+// only exit lives inside preflight and three separate switches turn preflight
+// off.
+func pinServedSource(scope pinScope, agent *config.Agent, index int) {
 	if index < 0 || index >= len(agent.Fallback) {
 		return
 	}
 
-	selectSource(agent.Name, agent.Fallback[index].Source, index)
+	selectSource(scope, agent.Fallback[index].Source, index)
 }
 
 // releaseSource drops any pin after a cascade in which nothing served.
-func releaseSource(agent *config.Agent) {
-	clearSource(agent.Name)
+func releaseSource(scope pinScope) {
+	clearSource(scope)
 }
 
 // nextViableFallback walks agent.Fallback strictly forward from index,

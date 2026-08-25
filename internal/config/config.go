@@ -32,6 +32,21 @@ type Config struct {
 	// `steps test` must have run (see Assert). It's a self-verification
 	// meta-check, never hashed.
 	Assert *Assert `yaml:"assert,omitempty"`
+	// Path is the file this pipeline was loaded from, stamped by
+	// LoadConfigWithVars. Not YAML, never hashed: it is identity, not
+	// content.
+	//
+	// It exists because one process can serve several pipelines (`steps web
+	// app.yml infra.yml`), and process-wide state keyed by a name a pipeline
+	// chose — an agent, a job — collides across them. A path is the only
+	// discriminator every Config has without a caller remembering to supply
+	// one, which is the same argument store.Store makes for holding its
+	// pipeline_id: the scope has to be impossible to forget.
+	//
+	// A Config built in a test rather than loaded has an empty Path, which
+	// shares one scope with every other such Config, exactly as everything
+	// did before this field existed.
+	Path string `yaml:"-"`
 }
 
 // LoadConfig reads and parses a pipeline YAML file at path.
@@ -97,6 +112,8 @@ func LoadConfigWithVars(path string, vars map[string]string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
 	}
+
+	cfg.Path = path
 
 	return &cfg, nil
 }

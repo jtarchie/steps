@@ -52,6 +52,11 @@ type preparedAgentStep struct {
 	// looking it up again. Never nil in a prepared step — preparation fails
 	// outright if the agent cannot be found (see resolveWithFailover).
 	agent *config.Agent
+	// pin scopes this step's source pin to the pipeline that declared the
+	// agent as well as to the agent itself (see pinScope). Carried on the
+	// prepared step because the mid-run cascade pins and releases, and by
+	// then the Config it would otherwise ask is several calls behind.
+	pin   pinScope
 	space workspace.StepSpace
 	conv  agentConversation
 	llm   model.LLM
@@ -253,6 +258,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	return preparedAgentStep{
 		step: step, ri: ri, primary: primary, fallbackIndex: fallbackIndex, agent: agent,
+		pin:   agentPinScope(cfg, ri.AgentName),
 		space: space, conv: conv, llm: invocationLLM(ri, apiKey),
 		closers: closers, spillDir: spillDir,
 	}, nil
@@ -315,7 +321,7 @@ func resolveWithFailover(cfg *config.Config, step config.Step) (primary, effecti
 		return primary, effective, nil, fallbackIndex, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
-	selection, ok := selectedSource(primary.AgentName)
+	selection, ok := selectedSource(agentPinScope(cfg, primary.AgentName))
 	if !ok {
 		return primary, primary, agent, fallbackIndex, nil
 	}
