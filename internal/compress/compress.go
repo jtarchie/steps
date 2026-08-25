@@ -40,3 +40,49 @@ func NewReader(r io.Reader) (io.ReadCloser, error) {
 
 	return decoder.IOReadCloser(), nil
 }
+
+// Pack writes one stream through fn, zstd-wrapped when compressed says so.
+// The Close that finishes a zstd frame is part of packing rather than
+// cleanup — an unclosed encoder is a truncated stream the far end cannot
+// decode — which is why the wrap lives here once instead of at every call
+// site that ships a tree.
+func Pack(w io.Writer, compressed bool, fn func(io.Writer) error) error {
+	if !compressed {
+		return fn(w)
+	}
+
+	encoder, err := NewWriter(w)
+	if err != nil {
+		return err
+	}
+
+	err = fn(encoder)
+	if err != nil {
+		_ = encoder.Close()
+
+		return err
+	}
+
+	err = encoder.Close()
+	if err != nil {
+		return fmt.Errorf("closing a zstd stream: %w", err)
+	}
+
+	return nil
+}
+
+// Unpack reads one stream through fn, zstd-unwrapped when compressed says so.
+func Unpack(r io.Reader, compressed bool, fn func(io.Reader) error) error {
+	if !compressed {
+		return fn(r)
+	}
+
+	decoder, err := NewReader(r)
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = decoder.Close() }()
+
+	return fn(decoder)
+}

@@ -263,57 +263,19 @@ func (s *session) fetch(frame wire.Frame) error {
 // are a peer that forgot to compress, and accepting them would leave that bug
 // shipping trees that only sometimes unpack.
 func (s *session) unpack(reader io.Reader) error {
-	if s.compression == wire.CompressionZstd {
-		decoder, err := compress.NewReader(reader)
-		if err != nil {
-			return fmt.Errorf("%w", err)
-		}
-
-		defer func() { _ = decoder.Close() }()
-
-		reader = decoder
-	}
-
-	err := wire.UnpackTree(reader, s.workdir)
-	if err != nil {
-		return err //nolint:wrapcheck // both callers wrap with the operation's own context
-	}
-
-	return nil
+	//nolint:wrapcheck // both callers wrap with the operation's own context
+	return compress.Unpack(reader, s.compression == wire.CompressionZstd, func(r io.Reader) error {
+		return wire.UnpackTree(r, s.workdir) //nolint:wrapcheck // both callers wrap with the operation's own context
+	})
 }
 
 // pack writes the named outputs as one tar stream, through the negotiated
 // compression.
 func (s *session) pack(writer io.Writer, paths []string) error {
-	if s.compression == wire.CompressionZstd {
-		encoder, err := compress.NewWriter(writer)
-		if err != nil {
-			return fmt.Errorf("%w", err)
-		}
-
-		err = wire.PackPaths(encoder, s.workdir, paths)
-		if err != nil {
-			_ = encoder.Close()
-
-			return err //nolint:wrapcheck // the caller wraps with the operation's own context
-		}
-
-		// Close is what finishes the zstd frame; an error here is a
-		// truncated stream the far end cannot decode, not a cleanup detail.
-		err = encoder.Close()
-		if err != nil {
-			return fmt.Errorf("%w", err)
-		}
-
-		return nil
-	}
-
-	err := wire.PackPaths(writer, s.workdir, paths)
-	if err != nil {
-		return err //nolint:wrapcheck // the caller wraps with the operation's own context
-	}
-
-	return nil
+	//nolint:wrapcheck // the caller wraps with the operation's own context
+	return compress.Pack(writer, s.compression == wire.CompressionZstd, func(w io.Writer) error {
+		return wire.PackPaths(w, s.workdir, paths) //nolint:wrapcheck // the caller wraps with the operation's own context
+	})
 }
 
 // errUnopened is any operation arriving before a hello. It cannot happen with
