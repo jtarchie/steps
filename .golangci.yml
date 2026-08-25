@@ -262,6 +262,8 @@ linters:
         Venue:
           files:
             - "**/internal/venue/**"
+            # ssmdial is a protocol port with its own tier below; see SSMDial.
+            - "!**/internal/venue/ssmdial/**"
           allow:
             - "$gostd"
             # The SSH client and its sftp subsystem: the whole remote contract
@@ -332,6 +334,23 @@ linters:
             - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/compress"
             - "github.com/jtarchie/steps/internal/wire"
+        # ssmdial is a PORT of the AWS SSM session data-channel protocol, not
+        # a dependency: the protocol has no published specification, and no
+        # community Go client is mature or library-shaped enough to import
+        # (see the package doc for the sources and their licenses). It is a
+        # leaf under venue with no steps imports at all — it speaks a wire
+        # format and nothing about pipelines — so its allow-list is the
+        # websocket, the SSM SDK, and uuid, all pure Go so a cross-built
+        # binary stays pushable.
+        SSMDial:
+          files:
+            - "**/internal/venue/ssmdial/**"
+          allow:
+            - "$gostd"
+            - "github.com/gorilla/websocket"
+            - "github.com/google/uuid"
+            - "github.com/aws/aws-sdk-go-v2"
+            - "go.uber.org/goleak"
         # compress is the zstd wrap around wire's tar stream — one package so
         # every path that ships a tree (the venue's upload, the shim's fetch,
         # a blob store's blobs) holds the same opinion about the encoding, and
