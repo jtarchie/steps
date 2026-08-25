@@ -13,8 +13,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/venue"
 )
 
@@ -151,9 +153,25 @@ const venueRetries = 2
 // Outside the attempts: loop rather than inside, which is what makes the
 // budgets independent: an eviction rewinds to a fresh machine with the step's
 // full attempts: budget intact, and a step that genuinely fails spends only
-// its own.
-func withVenueRetry(ctx context.Context, step config.Step, work func(context.Context) error) error {
+// its own. The step's own wall clock still bounds the WHOLE of it — see
+// budget — because attempts: and timeout: are a contract with the author
+// (docs/attempts-timeout.md) and re-placement must not quietly multiply it.
+//
+// Re-placed only when there is a fresh machine to be had. A tag naming a
+// machine that already exists — every ssh:// worker, a static aws://i-* —
+// resolves to the same address next time round, so retrying would re-run the
+// step against the host that just went away, paying a dial timeout and any
+// side effects the commands already had, twice, to reach the same end.
+func withVenueRetry(ctx context.Context, step config.Step, budget time.Duration, work func(context.Context) error) error {
 	tag := placementTag(step)
+
+	// Enforced by refusing to START a late attempt rather than by bounding
+	// the context: a deadline on the parent would expire at the same instant
+	// as the last attempt's own, and retryWithTimeout reads a live parent as
+	// what separates "the step overran its budget" (a failure) from "the job
+	// was aborted" (an error). Cancelling here would relabel every timed-out
+	// placed step.
+	started := time.Now()
 
 	for attempt := 0; ; attempt++ {
 		err := work(ctx)
@@ -161,8 +179,16 @@ func withVenueRetry(ctx context.Context, step config.Step, work func(context.Con
 			return err
 		}
 
-		if attempt >= venueRetries || tag == "" {
-			return fmt.Errorf("%w (after %d re-placements)", err, attempt)
+		// A build being torn down must not acquire anything: without this, a
+		// Ctrl-C on a drained session reads as an eviction and launches a
+		// fresh instance for a job the user already stopped.
+		if ctx.Err() != nil {
+			return err
+		}
+
+		stop := replacementRefusal(ctx, tag, attempt, budget, started)
+		if stop != "" {
+			return fmt.Errorf("%w (%s)", err, stop)
 		}
 
 		// The machine is gone or going: hand it back and forget it, so the
@@ -174,6 +200,64 @@ func withVenueRetry(ctx context.Context, step config.Step, work func(context.Con
 		fmt.Printf("worker for tag %s was reclaimed; re-placing the step\n", tag)
 		logFrom(ctx).Info("job.worker_evicted", "tag", tag, "attempt", attempt+1, "error", err)
 	}
+}
+
+// replacementRefusal says why this step will not be re-placed, or empty when
+// it will be.
+func replacementRefusal(ctx context.Context, tag string, attempt int, budget time.Duration, started time.Time) string {
+	switch {
+	case attempt >= venueRetries:
+		return fmt.Sprintf("after %d re-placements", attempt)
+	case tag == "":
+		return "the step names no worker"
+	case !canReplace(ctx, tag):
+		// Nothing to acquire: the tag names a machine that already exists, so
+		// the next resolve would hand back the same address and the step
+		// would re-run against the host that just went away.
+		return "its worker names a machine that already exists, so there is no fresh one to take"
+	case budget > 0 && time.Since(started) >= budget:
+		return fmt.Sprintf("the step's own time budget was spent after %d re-placements", attempt)
+	default:
+		return ""
+	}
+}
+
+// canReplace reports whether a tag names something a fresh machine can be
+// acquired for. A worker that already exists has nowhere else to go.
+func canReplace(ctx context.Context, tag string) bool {
+	worker, ok := workersFrom(ctx)[tag]
+
+	return ok && worker.Acquirable()
+}
+
+// releaseIfReclaimed hands back a worker that announced its own end, after a
+// step that finished anyway.
+//
+// The two-minute window means a step often SUCCEEDS on a machine that is
+// going away, and nothing about that success says so. Without this the lease
+// stays bound to the doomed instance and the next step on the tag opens a
+// session against a host that dies at the handshake — which sticks, is not an
+// eviction, and fails the build on a machine steps already knew was dying.
+func releaseIfReclaimed(ctx context.Context, step config.Step, runner shell.Runner) {
+	reason, reclaimed := venue.ReclaimedBy(runner)
+	if !reclaimed {
+		return
+	}
+
+	tag := placementTag(step)
+	if tag == "" {
+		return
+	}
+
+	leases := leasesFrom(ctx)
+	if leases == nil {
+		return
+	}
+
+	fmt.Printf("worker for tag %s finished the step and is being reclaimed; releasing it\n", tag)
+	logFrom(ctx).Info("job.worker_released_after_drain", "tag", tag, "reason", reason)
+
+	leases.Invalidate(ctx, tag)
 }
 
 // placementOf describes where a step ran, for the run record: "tag (address)",

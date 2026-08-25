@@ -4,14 +4,17 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
+	"github.com/jtarchie/steps/internal/retry"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/venue"
 	"github.com/jtarchie/steps/internal/workspace"
@@ -121,7 +124,16 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 	// a worker reclaimed underneath the step is re-placed on a fresh machine
 	// with the author's attempts: budget untouched. A new runner per venue
 	// attempt, because the machine is a different one.
-	err = withVenueRetry(ctx, step, func(ctx context.Context) error {
+	// The budget the author was promised: attempts: x timeout:, exactly as
+	// docs/attempts-timeout.md states it. Re-placement must not multiply a
+	// step's wall clock behind their back, so it bounds every venue attempt
+	// together rather than being re-granted per machine.
+	budget, err := stepBudget(step, rt.Timeout)
+	if err != nil {
+		return fmt.Errorf("task %q: %w", rt.Name, err)
+	}
+
+	err = withVenueRetry(ctx, step, budget, func(ctx context.Context) error {
 		// One runner for every attempt, not one per attempt. A retry is a
 		// second go at the SAME workspace: locally that falls out of the
 		// directory simply persisting, but a venue session owns a remote
@@ -137,11 +149,28 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 
 		defer shell.CloseRunner(runner, rt.Name)
 
+		// After the attempts, whatever they decided: a step that SUCCEEDED on
+		// a machine being reclaimed still leaves a lease bound to it, and the
+		// next step on the tag would open a session against a host that is
+		// about to die.
+		defer releaseIfReclaimed(ctx, step, runner)
+
 		return retryWithTimeout(ctx, step.Attempts, rt.Timeout, func(attempt, total int) {
 			fmt.Printf("task: %s (attempt %d/%d)\n", executedStepName(step), attempt, total)
 			logFrom(ctx).Info("job.task.attempt", "task", executedStepName(step), "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
-			return runTaskCommand(attemptCtx, cfg, runner, rt, space.Dir())
+			err := runTaskCommand(attemptCtx, cfg, runner, rt, space.Dir())
+
+			// An eviction ends the attempts loop rather than spending it. The
+			// machine is gone: every remaining attempt would redial a dead
+			// host, print a "(attempt N/M)" line for it, and bill the author
+			// for a flakiness that is not theirs — which is the whole thing
+			// the venue retry exists to prevent.
+			if errors.Is(err, venue.ErrEvicted) {
+				return retry.Stop(err)
+			}
+
+			return err
 		})
 	})
 	if err != nil {
@@ -156,6 +185,22 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 	return nil
 }
 
+// stepBudget is the total wall clock a step was promised: its timeout: once
+// per attempt it was granted. Zero means unbounded, as an absent timeout:
+// always has.
+func stepBudget(step config.Step, timeout string) (time.Duration, error) {
+	parsed, err := config.ParseTimeout(timeout)
+	if err != nil {
+		return 0, err //nolint:wrapcheck // the caller names the step
+	}
+
+	if parsed <= 0 {
+		return 0, nil
+	}
+
+	return parsed * time.Duration(max(config.AttemptCount(step.Attempts), 1)), nil
+}
+
 // taskRunner builds the runner a task's attempts share.
 func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, space workspace.StepSpace) (shell.Runner, error) {
 	workspaceDir := space.Dir()
@@ -164,7 +209,9 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 	// every command, so the local tree matches before an assert: reads it.
 	worker, err := workerFor(ctx, step)
 	if err != nil {
-		return nil, fmt.Errorf("task %q: %w", rt.Name, err)
+		// Bare: both of this function's error sites are already prefixed by
+		// its caller, and wrapping here produced `task "x": task "x": ...`.
+		return nil, err
 	}
 
 	//nolint:contextcheck // NewRunner takes no context; opening the artifact store reads only local config

@@ -102,6 +102,12 @@ type Worker struct {
 	HostKey string
 }
 
+// Acquirable reports whether this worker names a machine that steps brings
+// into existence — and can therefore bring into existence AGAIN, on another
+// instance, after the first one is taken away. A worker that already exists
+// has nowhere else to go.
+func (w Worker) Acquirable() bool { return w.needsAcquisition() }
+
 // ErrWorker is a worker mapping that cannot be reached as written.
 var ErrWorker = errors.New("invalid worker")
 

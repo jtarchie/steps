@@ -113,7 +113,7 @@ var errNoCapacity = errors.New("no capacity for the requested worker")
 
 // acquire brings a worker's machine into existence and returns the static
 // worker that names it, plus how to give it back.
-func acquire(ctx context.Context, worker Worker) (Worker, func(context.Context) error, error) {
+func acquire(ctx context.Context, worker Worker) (Worker, func(context.Context, bool) error, error) {
 	api, err := ec2For(ctx, worker)
 	if err != nil {
 		return Worker{}, nil, err
@@ -133,7 +133,7 @@ func acquire(ctx context.Context, worker Worker) (Worker, func(context.Context) 
 
 // startParked starts a stopped instance and parks it again when the job is
 // done with it.
-func startParked(ctx context.Context, api ec2API, worker Worker) (Worker, func(context.Context) error, error) {
+func startParked(ctx context.Context, api ec2API, worker Worker) (Worker, func(context.Context, bool) error, error) {
 	_, err := api.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: []string{worker.Instance}})
 	if err != nil {
 		return Worker{}, nil, fmt.Errorf("starting %s for %q: %w", worker.Instance, worker.URL, err)
@@ -144,11 +144,12 @@ func startParked(ctx context.Context, api ec2API, worker Worker) (Worker, func(c
 		return Worker{}, nil, err
 	}
 
-	release := func(ctx context.Context) error {
+	release := func(ctx context.Context, immediate bool) error {
 		// After the idle window, not immediately: a pipeline whose jobs run
 		// back to back would otherwise pay a cold start for every one of
-		// them. ?idle=0 stops it at once.
-		if worker.Idle > 0 {
+		// them. ?idle=0 stops it at once, and so does an immediate release —
+		// a machine being reclaimed is not one anybody is waiting to reuse.
+		if worker.Idle > 0 && !immediate {
 			select {
 			case <-time.After(worker.Idle):
 			case <-ctx.Done():
@@ -168,7 +169,7 @@ func startParked(ctx context.Context, api ec2API, worker Worker) (Worker, func(c
 
 // launchInstance creates one instance from a launch template and terminates
 // it when the job ends.
-func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, func(context.Context) error, error) {
+func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, func(context.Context, bool) error, error) {
 	out, err := api.CreateFleet(ctx, fleetRequest(worker))
 	if err != nil {
 		return Worker{}, nil, fmt.Errorf("launching a worker for %q: %w", worker.URL, err)
@@ -188,7 +189,7 @@ func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, fun
 		return Worker{}, nil, err
 	}
 
-	release := func(ctx context.Context) error {
+	release := func(ctx context.Context, _ bool) error {
 		_, stopErr := api.TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: []string{instance}})
 		if stopErr != nil {
 			return fmt.Errorf("terminating %s for %q: %w", instance, worker.URL, stopErr)

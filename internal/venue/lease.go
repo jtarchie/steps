@@ -29,17 +29,58 @@ type Leases struct {
 }
 
 // lease is one tag's machine: acquired at most once, released at most once.
+//
+// A mutex rather than a sync.Once, and the difference is the whole reason:
+// Invalidate has to be able to WAIT for an acquisition in flight. A once
+// orders its function's completion only against a caller of Do, so a
+// non-calling reader of the fields it wrote gets no happens-before — which is
+// both a data race and, worse, a live instance whose release closure is
+// dropped on the floor while it keeps billing.
 type lease struct {
-	// once guards acquisition, so parallel steps sharing a tag wait for one
-	// machine rather than each starting their own.
-	once sync.Once
+	mu       sync.Mutex
+	acquired bool
 	// worker is what to dial once acquired, and err is why that never
 	// happened. A failure sticks for the job: acquisition is expensive and
 	// the second answer is the first one again.
 	worker Worker
 	err    error
-	// release returns the machine. nil when nothing was acquired.
-	release func(context.Context) error
+	// release returns the machine. Its bool asks for the idle window to be
+	// skipped: parking a machine after a delay is right at the end of a job
+	// and wrong when the machine is being reclaimed. nil when nothing was
+	// acquired.
+	release func(ctx context.Context, immediate bool) error
+}
+
+// resolve acquires this lease's machine once, and waits for whoever is
+// already acquiring it.
+func (l *lease) resolve(ctx context.Context, worker Worker) (Worker, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.acquired {
+		return l.worker, l.err
+	}
+
+	l.acquired = true
+	l.worker, l.release, l.err = acquire(ctx, worker)
+
+	return l.worker, l.err
+}
+
+// give hands the machine back, waiting for any acquisition in flight so a
+// machine that arrives late is still released rather than stranded.
+func (l *lease) give(ctx context.Context, immediate bool) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.release == nil {
+		return nil
+	}
+
+	release := l.release
+	l.release = nil
+
+	return release(ctx, immediate)
 }
 
 // NewLeases prepares a job's leases over the invocation's tag mapping. It
@@ -78,11 +119,7 @@ func (l *Leases) Resolve(ctx context.Context, tag string) (Worker, error) {
 
 	l.mu.Unlock()
 
-	held.once.Do(func() {
-		held.worker, held.release, held.err = acquire(ctx, worker)
-	})
-
-	return held.worker, held.err
+	return held.resolve(ctx, worker)
 }
 
 // Invalidate gives back the machine held for a tag and forgets it, so the
@@ -98,13 +135,17 @@ func (l *Leases) Invalidate(ctx context.Context, tag string) {
 	delete(l.held, tag)
 	l.mu.Unlock()
 
-	if !ok || held.release == nil {
+	if !ok {
 		return
 	}
 
+	// Immediately, skipping any idle window: that window exists so a pipeline
+	// of back-to-back jobs does not pay repeated cold starts, and waiting it
+	// out here would stall the build behind a machine that is already going.
+	//
 	// Best effort: the usual reason to be here is that the machine already
 	// went away, where the release is expected to fail.
-	_ = held.release(ctx)
+	_ = held.give(ctx, true)
 }
 
 // ReleaseAll returns every machine this job acquired.
@@ -126,11 +167,7 @@ func (l *Leases) ReleaseAll(ctx context.Context) error {
 	var failures []error
 
 	for _, one := range held {
-		if one.release == nil {
-			continue
-		}
-
-		err := one.release(ctx)
+		err := one.give(ctx, false)
 		if err != nil {
 			failures = append(failures, err)
 		}

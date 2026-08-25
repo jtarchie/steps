@@ -65,15 +65,32 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 	spec.ArtifactStore = artifactStoreFrom(ctx)
 	spec.Keep = workspace.Kept(space)
 
-	//nolint:contextcheck // NewRunner takes no context; opening the artifact store reads only local config
-	runner, err := venue.NewRunner(spec)
-	if err != nil {
-		return false, err //nolint:wrapcheck // NewRunner's error already names the cause
-	}
+	var (
+		stdout, stderr string
+		exitCode       int
+	)
 
-	defer shell.CloseRunner(runner, label)
+	// The guard runs on the worker too, so it is re-placed on the same terms
+	// the step body is: without this, an eviction during a guard failed the
+	// step red while the identical failure two lines later would have been
+	// retried, and left the lease bound to the dead machine.
+	err = withVenueRetry(ctx, step, 0, func(ctx context.Context) error {
+		//nolint:contextcheck // NewRunner takes no context; opening the artifact store reads only local config
+		runner, runnerErr := venue.NewRunner(spec)
+		if runnerErr != nil {
+			return runnerErr //nolint:wrapcheck // NewRunner's error already names the cause
+		}
 
-	stdout, stderr, exitCode, err := runner.RunCaptureFull(ctx, step.When.Run)
+		defer shell.CloseRunner(runner, label)
+		defer releaseIfReclaimed(ctx, step, runner)
+
+		stdout, stderr, exitCode, runnerErr = runner.RunCaptureFull(ctx, step.When.Run)
+		if runnerErr != nil {
+			return fmt.Errorf("%w", runnerErr)
+		}
+
+		return nil
+	})
 	if err != nil {
 		return false, fmt.Errorf("guard command %q could not run: %w", step.When.Run, err)
 	}
