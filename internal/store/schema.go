@@ -135,6 +135,30 @@ CREATE TABLE IF NOT EXISTS job_runs (
     PRIMARY KEY (pipeline_id, job_name, root_hash)
 );
 
+-- The artifact-store index: which content digests a step's outputs had, keyed
+-- by the same action key the on-disk step cache files them under. This is the
+-- half of #80's split that stays home — S3 holds bytes by digest and NOTHING
+-- else, so the mapping from "this work over these input bytes" to "these
+-- output digests" has to live where truth lives. It is what lets a machine
+-- whose local cache bytes are gone (evicted, or a different machine given
+-- this state file) materialize a step's outputs from the store instead of
+-- re-running the step.
+--
+-- action_key is a workspace-computed hash, not a merkle node hash, and names
+-- no table — there is nothing to reference. Pipeline-scoped like every cache
+-- table (see nodes), and bounded like one too: by COUNT of entries, newest
+-- kept, mirroring the on-disk step cache's own bound — never by age, per this
+-- schema's standing rule about caches. Rows for an entry are replaced
+-- wholesale on record, and losing part of an entry to eviction only costs a
+-- re-run: a lookup missing any declared output reads as a miss.
+CREATE TABLE IF NOT EXISTS step_blobs (
+    pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    action_key  TEXT NOT NULL,
+    output      TEXT NOT NULL,
+    digest      TEXT NOT NULL,
+    PRIMARY KEY (pipeline_id, action_key, output)
+);
+
 CREATE TABLE IF NOT EXISTS resource_checks (
     pipeline_id   INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
     resource_name TEXT NOT NULL,
