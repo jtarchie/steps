@@ -8,6 +8,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -143,4 +144,67 @@ func (s *Server) recentRunsAcross(ctx context.Context, limit int) ([]overviewRun
 	}
 
 	return runs, nil
+}
+
+// agentDialView is one agent step's effective limits, as the job page shows
+// them.
+//
+// The values are RESOLVED, not the ones written on any single object: a step
+// may override its agent, the agent may override the pipeline default, and
+// the default is a constant in Go. Answering "why did this step stop at 30
+// turns" used to mean cross-referencing all three, which is why the numbers
+// that decide it belong on the page that lists the step.
+type agentDialView struct {
+	Agent string
+	// Turns is the tool-calling cap. Zero means the author removed it.
+	Turns int
+	// ContextBytes caps what a context_paths: file may deliver. Zero means
+	// uncapped, which only an explicit 0 produces.
+	ContextBytes int
+	// Timeout is the per-attempt deadline as written; empty means the
+	// built-in default applies.
+	Timeout string
+}
+
+// Uncapped reports a dial an author explicitly removed, which the page shows
+// as a word rather than as 0 — a zero in a limit column reads as "nothing
+// allowed", the opposite of what it means here.
+func (a agentDialView) UncappedTurns() bool { return a.Turns == 0 }
+
+// UncappedContext is the same for the context ceiling.
+func (a agentDialView) UncappedContext() bool { return a.ContextBytes == 0 }
+
+// agentDials resolves the effective limits of every agent step in a job.
+func agentDials(cfg *config.Config, job config.Job) []agentDialView {
+	var dials []agentDialView
+
+	// Through VisitSteps rather than over job.Plan, because a plan is a TREE:
+	// do:, in_parallel:, across: and try: all hold steps, and an agent nested
+	// in one runs under limits just as worth seeing.
+	_ = job.VisitSteps(func(_ string, step *config.Step) error {
+		if step.Agent == "" {
+			return nil
+		}
+
+		ri, err := cfg.ResolveAgentInvocation(*step)
+		if err != nil {
+			// Skipped rather than surfaced: an unresolvable agent is already
+			// a load error, so reaching here means something stranger, and a
+			// job page that refuses to render is a worse answer than one
+			// missing a row.
+			//nolint:nilerr // deliberately non-fatal; see above
+			return nil
+		}
+
+		dials = append(dials, agentDialView{
+			Agent:        ri.AgentName,
+			Turns:        ri.MaxTurns,
+			ContextBytes: ri.MaxContextBytes,
+			Timeout:      ri.Timeout,
+		})
+
+		return nil
+	})
+
+	return dials
 }

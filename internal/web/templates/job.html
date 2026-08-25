@@ -62,6 +62,25 @@
   </table>
 </div>
 
+{{if .Dials}}
+<h2 class="eyebrow">Agent dials <span class="unbold">— the limits each agent step actually runs under</span></h2>
+<div class="tablewrap">
+  <table class="kv">
+    <thead><tr><th>Agent</th><th class="num">Turns</th><th class="num">Context</th><th>Deadline</th></tr></thead>
+    <tbody>
+      {{range .Dials}}
+      <tr>
+        <td>{{.Agent}}</td>
+        <td class="num">{{if .UncappedTurns}}<span class="faint">uncapped</span>{{else}}{{.Turns}}{{end}}</td>
+        <td class="num">{{if .UncappedContext}}<span class="faint">uncapped</span>{{else}}{{thousands .ContextBytes}}{{end}}</td>
+        <td class="dim">{{if .Timeout}}{{.Timeout}}{{else}}<span class="faint">default</span>{{end}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+
 {{if .Versions}}
 <h2 class="eyebrow">Green versions <span class="unbold">— what this job has passed against</span></h2>
 <div class="tablewrap">

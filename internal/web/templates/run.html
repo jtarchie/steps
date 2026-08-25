@@ -703,6 +703,7 @@
     <a class="anchor" href="#{{$anchor}}" title="Link to this step" aria-label="Link to this step">#</a>
     {{if $step.Reason}}<span class="note">{{$step.Reason}}</span>{{end}}
     {{if $step.Verdict}}<span class="note">verdict: {{$step.Verdict}}</span>{{end}}
+    {{if $step.WrappedUp}}<span class="note spendwarn" title="The turn budget ran out; this answer was written from what the model had already gathered">stopped early</span>{{end}}
     <span class="headmeta">
       {{with $step.Rollup}}{{if not .Empty}}<span class="rollup">
         <span>{{.Cells}} step{{if ne .Cells 1}}s{{end}}</span>

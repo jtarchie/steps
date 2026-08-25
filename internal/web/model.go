@@ -291,6 +291,25 @@ func (s stepView) Verdict() string { return s.resultString("verdict") }
 // Note pulls the verdict's note.
 func (s stepView) Note() string { return s.resultString("note") }
 
+// WrappedUp reports a step whose conversation ran out of turns and was asked
+// to answer from what it had already gathered.
+//
+// Worth its own marker for the reason the runner records it at all: the
+// answer is degraded, and afterwards it is indistinguishable from a confident
+// one. It is the counterpart of Truncated() on the spend panel — that one is
+// the model's output being cut off mid-sentence, this one is the step's turn
+// budget running out — and reading them together is how an author tells "the
+// model had nothing more to say" from "the model was stopped".
+func (s stepView) WrappedUp() bool {
+	if s.Result == nil {
+		return false
+	}
+
+	wrapped, _ := s.Result["wrapped_up"].(bool)
+
+	return wrapped
+}
+
 // Response pulls the agent's final answer.
 func (s stepView) Response() string { return s.resultString("response") }
 
