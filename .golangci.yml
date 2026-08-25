@@ -133,6 +133,12 @@ linters:
             - "github.com/modelcontextprotocol/go-sdk/mcp"
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/pipeline"
+            # blobstore is provider setup, like workspace below: main parses
+            # --artifact-store, builds the S3 client, and hands it into the
+            # workspace's injected interfaces — the one place the SDK is
+            # allowed to meet the step cache, so neither workspace nor the
+            # shim ever imports it.
+            - "github.com/jtarchie/steps/internal/blobstore"
             # internal/mcp is a setup/tooling dependency here, not an
             # execution-path one: `steps mcp login`/`steps mcp tools` are
             # standalone auth bootstrap/discovery commands with no

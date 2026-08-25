@@ -30,6 +30,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"gopkg.in/yaml.v3"
 
+	"github.com/jtarchie/steps/internal/blobstore"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
@@ -78,20 +79,21 @@ var buildVersion = "dev"
 // RunCmd runs a single job's plan once, exactly as steps has always done.
 type RunCmd struct {
 	StateFlags     `embed:""`
-	Pipeline       string            `arg:""                                                                                         help:"path to the pipeline YAML file"`
+	Pipeline       string            `arg:""                                                                                                   help:"path to the pipeline YAML file"`
 	Job            string            `help:"job name to run (defaults to the pipeline's only job)"`
-	Pin            map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                                        name:"pin"`
+	Pin            map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                                                  name:"pin"`
 	Force          bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
-	KeepWorkspace  bool              `env:"STEPS_KEEP_WORKSPACE"                                                                     help:"leave the build workspace on disk instead of deleting it"`
-	NoPreflight    bool              `help:"skip the pre-run health check of the job's models and MCP servers"                       name:"no-preflight"`
-	Var            map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                                     name:"var"`
-	Worker         map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)"                 name:"worker"`
-	Resume         string            `help:"continue a failed run from the step that failed"                                         name:"resume"`
-	Replay         string            `help:"fork a recorded run and re-run it from --from onward"                                    name:"replay"`
-	From           string            `help:"with --replay, the step name to re-run from"                                             name:"from"`
-	VarsFile       string            `help:"YAML file of pipeline vars"                                                              name:"vars-file"`
-	VersionHistory int               `help:"how many versions of each resource to remember (pipeline defaults.version_history wins)" name:"version-history"`
-	RunHistory     int               `help:"how many runs of each job to keep (pipeline defaults.run_history wins)"                  name:"run-history"`
+	KeepWorkspace  bool              `env:"STEPS_KEEP_WORKSPACE"                                                                               help:"leave the build workspace on disk instead of deleting it"`
+	NoPreflight    bool              `help:"skip the pre-run health check of the job's models and MCP servers"                                 name:"no-preflight"`
+	Var            map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                                               name:"var"`
+	Worker         map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)"                           name:"worker"`
+	ArtifactStore  string            `help:"mirror cached step outputs to a content-addressed store, e.g. --artifact-store s3://bucket/prefix" name:"artifact-store"`
+	Resume         string            `help:"continue a failed run from the step that failed"                                                   name:"resume"`
+	Replay         string            `help:"fork a recorded run and re-run it from --from onward"                                              name:"replay"`
+	From           string            `help:"with --replay, the step name to re-run from"                                                       name:"from"`
+	VarsFile       string            `help:"YAML file of pipeline vars"                                                                        name:"vars-file"`
+	VersionHistory int               `help:"how many versions of each resource to remember (pipeline defaults.version_history wins)"           name:"version-history"`
+	RunHistory     int               `help:"how many runs of each job to keep (pipeline defaults.run_history wins)"                            name:"run-history"`
 }
 
 // applyContinuation handles the flags that point this invocation at a previous
@@ -154,7 +156,7 @@ func (r *RunCmd) Run() error {
 		return err
 	}
 
-	st, provider, cleanup, err := setup(cfg, r.Pipeline, r.StateFlags, r.KeepWorkspace)
+	st, provider, cleanup, err := setup(cfg, r.Pipeline, r.StateFlags, r.KeepWorkspace, r.ArtifactStore)
 	if err != nil {
 		return err
 	}
@@ -214,20 +216,21 @@ func (r *RunCmd) Run() error {
 // affects — see internal/trigger.
 type WatchCmd struct {
 	StateFlags     `embed:""`
-	Pipeline       string            `arg:""                                                                                         help:"path to the pipeline YAML file"`
-	Interval       time.Duration     `default:"30s"                                                                                  help:"how often to check trigger: true resources"`
-	Once           bool              `help:"poll once, run whatever that triggers, and exit (for cron or a timer)"                   name:"once"`
-	VersionHistory int               `help:"how many versions of each resource to remember (pipeline defaults.version_history wins)" name:"version-history"`
-	RunHistory     int               `help:"how many runs of each job to keep (pipeline defaults.run_history wins)"                  name:"run-history"`
-	MaxConcurrent  int               `default:"1"                                                                                    help:"maximum number of triggered jobs running at once"`
-	Pin            map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                                        name:"pin"`
+	Pipeline       string            `arg:""                                                                                                   help:"path to the pipeline YAML file"`
+	Interval       time.Duration     `default:"30s"                                                                                            help:"how often to check trigger: true resources"`
+	Once           bool              `help:"poll once, run whatever that triggers, and exit (for cron or a timer)"                             name:"once"`
+	VersionHistory int               `help:"how many versions of each resource to remember (pipeline defaults.version_history wins)"           name:"version-history"`
+	RunHistory     int               `help:"how many runs of each job to keep (pipeline defaults.run_history wins)"                            name:"run-history"`
+	MaxConcurrent  int               `default:"1"                                                                                              help:"maximum number of triggered jobs running at once"`
+	Pin            map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                                                  name:"pin"`
 	Force          bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
-	KeepWorkspace  bool              `env:"STEPS_KEEP_WORKSPACE"                                                                     help:"leave the build workspace on disk instead of deleting it"`
-	NoPreflight    bool              `help:"skip the pre-run health check of each job's models and MCP servers"                      name:"no-preflight"`
-	Listen         string            `help:"serve webhook checks on this address, e.g. :8080"                                        name:"listen"`
-	Var            map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                                     name:"var"`
-	Worker         map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)"                 name:"worker"`
-	VarsFile       string            `help:"YAML file of pipeline vars"                                                              name:"vars-file"`
+	KeepWorkspace  bool              `env:"STEPS_KEEP_WORKSPACE"                                                                               help:"leave the build workspace on disk instead of deleting it"`
+	NoPreflight    bool              `help:"skip the pre-run health check of each job's models and MCP servers"                                name:"no-preflight"`
+	Listen         string            `help:"serve webhook checks on this address, e.g. :8080"                                                  name:"listen"`
+	Var            map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                                               name:"var"`
+	Worker         map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)"                           name:"worker"`
+	ArtifactStore  string            `help:"mirror cached step outputs to a content-addressed store, e.g. --artifact-store s3://bucket/prefix" name:"artifact-store"`
+	VarsFile       string            `help:"YAML file of pipeline vars"                                                                        name:"vars-file"`
 }
 
 // Run loads the pipeline and blocks in trigger.Watch until canceled
@@ -238,7 +241,7 @@ func (w *WatchCmd) Run() error {
 		return err
 	}
 
-	st, provider, cleanup, err := setup(cfg, w.Pipeline, w.StateFlags, w.KeepWorkspace)
+	st, provider, cleanup, err := setup(cfg, w.Pipeline, w.StateFlags, w.KeepWorkspace, w.ArtifactStore)
 	if err != nil {
 		return err
 	}
@@ -272,11 +275,12 @@ func (w *WatchCmd) Run() error {
 // point for a self-verifying fixture — every runnable example in docs/*.md
 // is one (see docs_test.go).
 type TestCmd struct {
-	StateFlags `embed:""`
-	Pipeline   string            `arg:""                                                                         help:"path to the pipeline YAML file"`
-	Var        map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                     name:"var"`
-	Worker     map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)" name:"worker"`
-	VarsFile   string            `help:"YAML file of pipeline vars"                                              name:"vars-file"`
+	StateFlags    `embed:""`
+	Pipeline      string            `arg:""                                                                                                   help:"path to the pipeline YAML file"`
+	Var           map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                                               name:"var"`
+	Worker        map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)"                           name:"worker"`
+	ArtifactStore string            `help:"mirror cached step outputs to a content-addressed store, e.g. --artifact-store s3://bucket/prefix" name:"artifact-store"`
+	VarsFile      string            `help:"YAML file of pipeline vars"                                                                        name:"vars-file"`
 }
 
 // Run loads the pipeline, runs every job (force), and reports pass/fail per
@@ -289,7 +293,7 @@ func (t *TestCmd) Run() error {
 		return err
 	}
 
-	st, provider, cleanup, err := setup(cfg, t.Pipeline, t.StateFlags, false)
+	st, provider, cleanup, err := setup(cfg, t.Pipeline, t.StateFlags, false, t.ArtifactStore)
 	if err != nil {
 		return err
 	}
@@ -1191,7 +1195,7 @@ func run(args []string) error {
 // close-error handling both commands used inline before this helper
 // existed).
 func setup(
-	cfg *config.Config, pipelinePath string, flags StateFlags, keepWorkspace bool,
+	cfg *config.Config, pipelinePath string, flags StateFlags, keepWorkspace bool, artifactStore string,
 ) (*store.Store, workspace.Provider, func(), error) {
 	st, err := store.OpenStore(statePath(pipelinePath, flags.State), resolvePipelineName(pipelinePath, flags.Name))
 	if err != nil {
@@ -1212,6 +1216,14 @@ func setup(
 		return nil, nil, nil, fmt.Errorf("workspace: %w", err)
 	}
 
+	err = attachArtifactStore(provider, st, artifactStore)
+	if err != nil {
+		_ = provider.Close()
+		_ = st.Close()
+
+		return nil, nil, nil, err
+	}
+
 	cleanup := func() {
 		closeErr := provider.Close()
 		if closeErr != nil {
@@ -1225,6 +1237,33 @@ func setup(
 	}
 
 	return st, provider, cleanup, nil
+}
+
+// attachArtifactStore wires --artifact-store into the provider's step cache:
+// the blob half from the URL, the index half from the state store the digests
+// are truth in. Refused rather than quietly inert when the pipeline has no
+// durable workspace.root: — a flag explicitly given that mirrors nothing is a
+// misconfiguration, not a default.
+func attachArtifactStore(provider workspace.Provider, st *store.Store, raw string) error {
+	if raw == "" {
+		return nil
+	}
+
+	opts, err := blobstore.Parse(raw)
+	if err != nil {
+		return err //nolint:wrapcheck // blobstore's own errors name the URL and the rule it broke
+	}
+
+	blobs, err := blobstore.New(context.Background(), opts)
+	if err != nil {
+		return err //nolint:wrapcheck // as above
+	}
+
+	if !workspace.AttachArtifactStore(provider, blobs, st) {
+		return fmt.Errorf("--artifact-store %s: the pipeline has no durable workspace.root:, so there is no step cache to mirror — set workspace.root: or drop the flag", raw)
+	}
+
+	return nil
 }
 
 // wrapRunErr adds context to a RunJob/Watch error without adding another
@@ -1462,7 +1501,7 @@ func (j *JobsCmd) Run() error {
 		return fmt.Errorf("could not load pipeline: %w", err)
 	}
 
-	st, _, cleanup, err := setup(cfg, j.Pipeline, j.StateFlags, false)
+	st, _, cleanup, err := setup(cfg, j.Pipeline, j.StateFlags, false, "")
 	if err != nil {
 		return err
 	}
@@ -1578,16 +1617,17 @@ func loadWithVars(path string, flags map[string]string, varsFile string) (*confi
 // they want, not as a default.
 type WebCmd struct {
 	StateFlags    `embed:""`
-	Pipeline      []string          `arg:""                                                                         help:"path(s) to pipeline YAML files"`
-	Listen        string            `default:"127.0.0.1:8088"                                                       help:"address to serve on"`
-	Interval      time.Duration     `default:"30s"                                                                  help:"how often to check trigger: true resources"`
-	NoWatch       bool              `help:"serve without polling trigger: true resources"                           name:"no-watch"`
-	NoPreflight   bool              `help:"skip the pre-poll health check of models and MCP servers"                name:"no-preflight"`
-	ReadOnly      bool              `help:"serve without trigger, approval, or resume controls"                     name:"read-only"`
-	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                                     help:"leave build workspaces on disk instead of deleting them"`
-	Var           map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                     name:"var"`
-	Worker        map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)" name:"worker"`
-	VarsFile      string            `help:"YAML file of pipeline vars"                                              name:"vars-file"`
+	Pipeline      []string          `arg:""                                                                                                   help:"path(s) to pipeline YAML files"`
+	Listen        string            `default:"127.0.0.1:8088"                                                                                 help:"address to serve on"`
+	Interval      time.Duration     `default:"30s"                                                                                            help:"how often to check trigger: true resources"`
+	NoWatch       bool              `help:"serve without polling trigger: true resources"                                                     name:"no-watch"`
+	NoPreflight   bool              `help:"skip the pre-poll health check of models and MCP servers"                                          name:"no-preflight"`
+	ReadOnly      bool              `help:"serve without trigger, approval, or resume controls"                                               name:"read-only"`
+	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                                                               help:"leave build workspaces on disk instead of deleting them"`
+	Var           map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..."                                               name:"var"`
+	Worker        map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)"                           name:"worker"`
+	ArtifactStore string            `help:"mirror cached step outputs to a content-addressed store, e.g. --artifact-store s3://bucket/prefix" name:"artifact-store"`
+	VarsFile      string            `help:"YAML file of pipeline vars"                                                                        name:"vars-file"`
 }
 
 // Run loads every named pipeline, opens its store, and serves until canceled.
@@ -1749,7 +1789,7 @@ func (w *WebCmd) load() ([]*web.Pipeline, map[string]workspace.Provider, func(),
 			return nil, nil, nil, err
 		}
 
-		st, provider, closeOne, err := setup(cfg, path, w.StateFlags, w.KeepWorkspace)
+		st, provider, closeOne, err := setup(cfg, path, w.StateFlags, w.KeepWorkspace, w.ArtifactStore)
 		if err != nil {
 			cleanup()
 
@@ -1917,7 +1957,7 @@ func openStore(pipelinePath string, flags StateFlags) (*store.Store, func(), err
 		return nil, nil, fmt.Errorf("could not load pipeline: %w", err)
 	}
 
-	st, _, cleanup, err := setup(cfg, pipelinePath, flags, false)
+	st, _, cleanup, err := setup(cfg, pipelinePath, flags, false, "")
 	if err != nil {
 		return nil, nil, err
 	}

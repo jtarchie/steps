@@ -141,6 +141,22 @@ Keeping machines out of the pipeline file is what lets the same pipeline run on 
 - **The run record says where each step ran.** A finished placed step carries `tag (address)` — in the web UI's step header and in `run_events` — and a step that ran locally carries nothing, so the rows that left stand out. The address only: `?identity=` and `?hostkey=` describe how to authenticate and are not written to the record. An alias is recorded as the alias, not as whatever `~/.ssh/config` resolved it to that day — the mapping is the stable name for the machine, and the resolution is a connection detail that can differ between the machines running `steps`. Nothing else can answer the question after the fact, since `tags:` is deliberately outside the hash.
 - **Caching**: `tags:` does **not** fold into the node's hash. Placement decides where a step runs, not what it produces, and a tree that crossed the wire digests identically to one that never left — so retagging a step, or repointing a tag at a new machine, does not re-run work that already succeeded.
 
+## Artifact store (`--artifact-store`)
+
+The step cache's remote half: cached step outputs mirrored to a content-addressed store on S3, so bytes evicted locally — or never present on this machine — are materialized back instead of re-earned by running the step. Opt-in, and CLI-only by design: the flag names infrastructure, and pipelines stay portable.
+
+```console
+steps run --artifact-store s3://my-bucket/team-prefix pipeline.yml
+```
+
+- **Requires a durable `workspace.root:`** — the artifact store extends the step cache, and without a durable root there is no step cache to mirror. A run given the flag without one is refused up front rather than quietly mirroring nothing.
+- **The bucket holds bytes, never truth.** Each output travels as one zstd tarball keyed by its content digest, under `<prefix>/blobs/<digest>`. Which digest means what — the mapping from "this work over these input bytes" to "these output digests" — stays in the pipeline's own state database. That split is what makes an S3 lifecycle rule expiring untouched objects always safe: the worst case is a re-upload, never a wrong skip.
+- **A machine handed the state file inherits the cache.** A fresh checkout with the `.steps/<name>.db` and the same flag skips the steps the database says succeeded, fetching their outputs by digest — which is what makes a CI runner that persists only the small state file, not the workspace, warm on its second run.
+- **What arrives is verified, not trusted**: every fetched tree is re-digested before it is installed, and bytes that do not match their key are refused as an ordinary miss. Every mirror failure — store unreachable, blob expired, index unknown — costs a re-run and nothing else; no mirror failure can fail a build that is otherwise working.
+- **Uploads are skipped when the store already holds the digest** (one `HEAD` per output), so an unchanged output is never re-shipped, whoever produced it first.
+- **Credentials and region** come from the ambient AWS configuration — the same chain every AWS tool reads — with `?region=` as an override. `?endpoint=` points at an S3-compatible server that is not AWS (minio and friends), switching to path-style addressing.
+- Applies to `run`, `watch`, `test`, and `web`. `volatile:` steps are never cached, so they are never mirrored either.
+
 ## Container network (`network:`)
 
 `image:` isolates a command's filesystem view but not its network — a containerized `run_shell` an agent wrote has the same egress the host does. For a step whose commands are model-generated, that is usually the isolation you actually wanted:
