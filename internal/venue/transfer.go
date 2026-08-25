@@ -63,7 +63,7 @@ func (s *session) upload(ctx context.Context) error {
 	// rather than at the first command. It matters that this is BEFORE the
 	// exec: a step's command has real side effects, and running it against a
 	// tree the far end rejected is worse than any transfer failure.
-	frame, err := s.read()
+	frame, err := s.awaitOperationFrame()
 	if err != nil {
 		return err
 	}
@@ -223,15 +223,9 @@ func (s *session) unpackTree(r io.Reader, into string) error {
 // pump forwards this operation's data frames into w until the transfer ends.
 func (s *session) pump(op uint32, w io.Writer) error {
 	for {
-		frame, err := s.read()
+		frame, err := s.awaitOperationFrame()
 		if err != nil {
 			return err
-		}
-
-		if frame.Type == wire.FrameDraining {
-			s.noteDrain(frame)
-
-			continue
 		}
 
 		if frame.Op != op {

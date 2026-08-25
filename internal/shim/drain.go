@@ -11,6 +11,7 @@ package shim
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -33,6 +34,11 @@ const drainPoll = 5 * time.Second
 // problems.
 const imdsTimeout = 2 * time.Second
 
+// maxMetadataBytes bounds what is read from the metadata service. Tokens and
+// notices are a few hundred bytes; the cap is what keeps a misdirected
+// endpoint from being read without limit.
+const maxMetadataBytes = 4096
+
 // spotAction is what the metadata service reports when an instance is being
 // reclaimed.
 type spotAction struct {
@@ -49,7 +55,20 @@ type spotAction struct {
 func (s *session) watchForDrain(ctx context.Context) {
 	defer s.drains.Done()
 
-	client := &http.Client{Timeout: imdsTimeout}
+	// advised remembers that the softer notice has been sent, so it is not
+	// repeated while the watcher keeps looking for a real reclamation.
+	advised := false
+
+	// A transport with no proxy, deliberately: the default one reads
+	// HTTP_PROXY from the environment, and Go bypasses only loopback — not
+	// link-local — so an instance with a proxy configured would send every
+	// metadata probe to it and never learn it was being reclaimed.
+	client := &http.Client{
+		Timeout:   imdsTimeout,
+		Transport: &http.Transport{Proxy: nil},
+	}
+
+	defer client.CloseIdleConnections()
 
 	ticker := time.NewTicker(drainPoll)
 	defer ticker.Stop()
@@ -65,8 +84,8 @@ func (s *session) watchForDrain(ctx context.Context) {
 
 		token := imdsToken(ctx, client)
 
-		notice, ok := spotNotice(ctx, client, token)
-		if !ok {
+		notice, terminal := spotNotice(ctx, client, token)
+		if notice.Reason == "" || (advised && !terminal) {
 			continue
 		}
 
@@ -74,7 +93,15 @@ func (s *session) watchForDrain(ctx context.Context) {
 		// orchestrator learns the same thing from the connection dying.
 		_ = s.send(wire.FrameDraining, wire.DrainOp, notice)
 
-		return
+		if terminal {
+			// Nothing more to say: the machine is going, and repeating it
+			// would steal the writer from a command's output for no news.
+			return
+		}
+
+		// An advisory notice is said once and then watched past, in case the
+		// reclamation it warns about actually arrives.
+		advised = true
 	}
 }
 
@@ -100,20 +127,26 @@ func imdsToken(ctx context.Context, client *http.Client) string {
 		return ""
 	}
 
-	token := make([]byte, 128)
+	// Read to completion rather than one Read into a fixed buffer: an
+	// io.Reader may return the body in pieces, and a truncated token is
+	// silently rejected by IMDS — leaving the watcher polling forever on
+	// exactly the instances (HttpTokens=required) this path exists for.
+	token, err := io.ReadAll(io.LimitReader(response.Body, maxMetadataBytes))
+	if err != nil {
+		return ""
+	}
 
-	n, _ := response.Body.Read(token)
-
-	return strings.TrimSpace(string(token[:n]))
+	return strings.TrimSpace(string(token))
 }
 
-// spotNotice asks whether this instance is being reclaimed, and reports the
-// notice when it is.
+// spotNotice asks whether this instance is being reclaimed, reporting the
+// notice and whether it is definite.
 //
-// Two questions, in the order that matters: an eviction is definite and a
-// rebalance recommendation is a warning that one is likely. Both are worth
-// relaying, because both mean the orchestrator should stop trusting this
-// machine with new work.
+// Two questions, in the order that matters: an instance-action is a decision
+// already taken, and a rebalance recommendation is a warning that one is
+// likelier. Both are worth relaying — both mean the orchestrator should stop
+// trusting this machine with new work — but only the first is worth
+// destroying a machine over.
 func spotNotice(ctx context.Context, client *http.Client, token string) (wire.Draining, bool) {
 	action, ok := imdsGet(ctx, client, token, "/latest/meta-data/spot/instance-action")
 	if ok {
@@ -121,18 +154,25 @@ func spotNotice(ctx context.Context, client *http.Client, token string) (wire.Dr
 
 		err := json.Unmarshal([]byte(action), &notice)
 		if err == nil && notice.Action != "" {
+			// Terminal: an instance-action is a decision AWS has already
+			// taken, not a forecast.
 			return wire.Draining{
 				Reason:   "EC2 spot " + notice.Action,
 				Deadline: notice.Time,
+				Terminal: true,
 			}, true
 		}
 
-		return wire.Draining{Reason: "EC2 spot instance-action: " + action}, true
+		return wire.Draining{Reason: "EC2 spot instance-action: " + action, Terminal: true}, true
 	}
 
 	rebalance, ok := imdsGet(ctx, client, token, "/latest/meta-data/events/recommendations/rebalance")
 	if ok {
-		return wire.Draining{Reason: "EC2 rebalance recommendation: " + rebalance}, true
+		// NOT terminal: a rebalance recommendation is a hint that an
+		// interruption is likelier, and may never be followed by one. Worth
+		// saying so the orchestrator stops trusting the machine with new
+		// work; not worth destroying a healthy instance over.
+		return wire.Draining{Reason: "EC2 rebalance recommendation: " + rebalance}, false
 	}
 
 	return wire.Draining{}, false
@@ -162,9 +202,17 @@ func imdsGet(ctx context.Context, client *http.Client, token, path string) (stri
 		return "", false
 	}
 
-	body := make([]byte, 1024)
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxMetadataBytes))
+	if err != nil {
+		return "", false
+	}
 
-	n, _ := response.Body.Read(body)
+	value := strings.TrimSpace(string(body))
+	if value == "" {
+		// A 200 with nothing in it is not a notice. Reporting one would
+		// fabricate an eviction and terminate a healthy machine.
+		return "", false
+	}
 
-	return strings.TrimSpace(string(body[:n])), true
+	return value, true
 }

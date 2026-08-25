@@ -40,3 +40,12 @@ func (e *ExitError) Error() string {
 // *exec.ExitError's own method, which is what lets exitCodeOf ask for the
 // capability rather than the concrete type.
 func (e *ExitError) ExitCode() int { return e.Code }
+
+// SignalledExitCode is the status a command killed by a signal reports.
+//
+// os/exec answers -1 for a locally signalled process, and the venue carries
+// the same sentinel across the wire so the two are indistinguishable to
+// everything downstream. Named because two callers now have to ASK the
+// question — "did this command choose its status, or was it killed?" — and a
+// bare -1 at a call site says neither.
+const SignalledExitCode = -1

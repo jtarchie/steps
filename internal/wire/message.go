@@ -14,7 +14,15 @@ package wire
 // pushed, keyed by that binary's own content hash. Two different versions mean
 // somebody is pointing at a stale or foreign binary, and the useful response
 // is to say so with both hashes rather than to degrade.
-const Protocol = 1
+//
+// 2 added FrameDraining, which is UNSOLICITED — unlike compression and the
+// data plane, it is not something the hello can negotiate, because it arrives
+// whenever the worker learns of its own end rather than in answer to
+// anything. An older shim cannot be told to stay quiet about it and a newer
+// one cannot be told to; the frame either exists for both ends or it kills a
+// session mid-step with "unknown frame type". So it is a version, and a
+// ?binary=-pinned shim from before it says so at the handshake.
+const Protocol = 2
 
 // Hello opens a session.
 type Hello struct {
@@ -154,9 +162,21 @@ type Draining struct {
 	// Reason is what the worker learned, verbatim where possible — an
 	// operator reading a build wants the words the cloud used.
 	Reason string `json:"reason"`
-	// Deadline is when the worker expects to be gone, RFC3339, empty when
-	// the notice carried no time.
+	// Deadline is when the worker expects to be gone, RFC3339, empty when the
+	// notice carried no time. Reported to the operator with the reason; this
+	// end makes no scheduling decision from it, since the only question that
+	// matters — is the machine definitely going — is Terminal's.
 	Deadline string `json:"deadline,omitempty"`
+	// Terminal separates a machine that IS going away from one that merely
+	// might. EC2 says both through the same metadata service: a spot
+	// instance-action is a decision already taken, while a rebalance
+	// recommendation is a hint that need never be followed by anything.
+	//
+	// Carried explicitly because the two must not be treated alike. Acting on
+	// an advisory the way this end acts on a reclamation would terminate a
+	// healthy machine the job paid a minute to acquire, and re-run a step
+	// that had nothing wrong with it.
+	Terminal bool `json:"terminal"`
 }
 
 // Error reports a failed operation without ending the session.

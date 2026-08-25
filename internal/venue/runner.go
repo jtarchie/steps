@@ -85,6 +85,29 @@ func (r runner) WithLabel(label string) shell.Runner {
 // Close releases the worker.
 func (r runner) Close() error { return r.session.close() }
 
+// ReclaimedBy reports whether the worker a runner used said it was definitely
+// going away, and what it said.
+//
+// Asked of a finished runner, because the two-minute window means a step
+// often succeeds on a machine that is being reclaimed — and nothing about
+// that success says so. A caller holding the machine for later steps needs to
+// know to let it go.
+//
+// A runner that is not placed answers false, so a caller need not ask whether
+// it is talking to a venue.
+func ReclaimedBy(runner shell.Runner) (string, bool) {
+	placed, ok := runner.(interface{ reclaimed() (string, bool) })
+	if !ok {
+		return "", false
+	}
+
+	return placed.reclaimed()
+}
+
+// reclaimed is ReclaimedBy's implementation, unexported so the question is
+// asked through the package function rather than by type-asserting a shape.
+func (r runner) reclaimed() (string, bool) { return r.session.reclaimedBy() }
+
 // execute is the error-returning half: a nonzero exit becomes a Go error, as
 // it does for Run, RunStreamedCapture and RunCapture.
 func (r runner) execute(ctx context.Context, command string, p plan) (string, string, error) {
@@ -147,20 +170,31 @@ func (r runner) exchange(ctx context.Context, command string, p plan) (outText, 
 	return stdout.result(), stderr.result(), r.runError(command, exit)
 }
 
-// asEviction re-reads an infrastructure failure as an eviction when the
-// worker had already said it was going away.
+// asEviction re-reads a failure as an eviction when the worker had already
+// said it was definitely going away.
 //
-// Only an infrastructure failure: a command that RAN and exited nonzero said
-// something about the step, and a machine disappearing afterwards does not
-// unsay it. Turning that into a retry would re-run work whose answer was
-// already given, which is the mirror of the mistake this exists to prevent.
+// The line is what the command's exit code MEANS. A command that ran and
+// chose a nonzero status said something about the step, and a machine
+// disappearing afterwards does not unsay it — re-running there would repeat
+// work whose answer was already given. But a reclaimed instance runs its
+// shutdown, init signals the command, and the shim reports that as an exit
+// with code -1 (see internal/shim's exec: a signalled command reports the
+// same sentinel os/exec uses locally). That is the machine ending the
+// command, not the command answering, and it is the SHAPE A REAL EVICTION
+// USUALLY TAKES — a session dying with no exit frame at all is the rarer
+// case. So a signalled exit on a worker under a reclamation notice is
+// infrastructure; every other exit stays the step's own verdict.
 func (r runner) asEviction(err error) error {
-	if err == nil || shell.IsExitError(err) {
+	if err == nil {
+		return nil
+	}
+
+	reason, reclaimed := r.session.reclaimedBy()
+	if !reclaimed {
 		return err
 	}
 
-	reason, drained := r.session.drainedBy()
-	if !drained {
+	if shell.IsExitError(err) && exitCodeOf(err) != shell.SignalledExitCode {
 		return err
 	}
 

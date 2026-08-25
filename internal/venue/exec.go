@@ -33,18 +33,11 @@ func (s *session) run(ctx context.Context, command string, sinks outputSinks) (w
 	defer stop()
 
 	for {
-		frame, err := s.read()
+		// Drain notices are absorbed here rather than ending the command: the
+		// machine has minutes left and the work may well finish in them.
+		frame, err := s.awaitOperationFrame()
 		if err != nil {
 			return wire.Exit{}, err
-		}
-
-		if frame.Type == wire.FrameDraining {
-			// Unsolicited and about the session rather than this command, so
-			// it is noted and the command carries on: the machine has minutes
-			// left and the work may well finish in them.
-			s.noteDrain(frame)
-
-			continue
 		}
 
 		if frame.Op != op {

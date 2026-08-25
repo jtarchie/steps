@@ -174,7 +174,7 @@ func fetchKey() (string, error) {
 
 // awaitEnd reads one frame and requires it to be this operation's FrameEnd.
 func (s *session) awaitEnd(op uint32, what string) error {
-	frame, err := s.read()
+	frame, err := s.awaitOperationFrame()
 	if err != nil {
 		return err
 	}

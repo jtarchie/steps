@@ -106,13 +106,15 @@ type session struct {
 	blobs *blobstore.Store
 	// dataplane is what the handshake settled: wire.DataPlaneURLs or empty.
 	dataplane string
-	// drained records that the worker announced its own end — a spot
-	// eviction, a rebalance recommendation. Atomic for the same reason broken
-	// is: it is set from the read path and consulted outside it.
-	drained atomic.Bool
-	// drainReason is what the worker said, under mu.
-	drainReason string
-	op          uint32
+	// drain holds the worker's own announcement of its end, or nil.
+	//
+	// Deliberately NOT under mu, and this is load-bearing: ensure() holds mu
+	// across connect, which uploads the tree and reads its acknowledgement —
+	// and read absorbs drain notices, so a noteDrain reaching for mu would
+	// deadlock the session against itself on exactly the frame it exists to
+	// handle.
+	drain atomic.Pointer[wire.Draining]
+	op    uint32
 }
 
 // ErrEvicted is a step whose worker was taken away underneath it.
@@ -399,7 +401,12 @@ func (s *session) readHello() (wire.Frame, error) {
 	answered := make(chan result, 1)
 
 	go func() {
-		frame, err := s.readFrame()
+		// Through the non-marking reader, and absorbing drains: a worker
+		// already under a reclamation notice — the ordinary case on a redial,
+		// since the eviction is why the last transport died — would otherwise
+		// have its notice decoded as a zero HelloOK and be reported as
+		// running the wrong binary.
+		frame, err := s.awaitHandshakeFrame()
 		answered <- result{frame: frame, err: err}
 	}()
 
@@ -531,41 +538,57 @@ func (s *session) writeEmpty(frame wire.Frame) error {
 	return nil
 }
 
-// Drained reports whether the worker announced its own end, and what it said.
-func (s *session) drainedBy() (string, bool) {
-	if !s.drained.Load() {
+// reclaimedBy reports whether the worker said it is DEFINITELY going away,
+// and what it said. An advisory rebalance recommendation answers false: it is
+// worth printing and worth not sending new work to, but acting on it the way
+// a reclamation is acted on would destroy a healthy machine.
+func (s *session) reclaimedBy() (string, bool) {
+	notice := s.drain.Load()
+	if notice == nil || !notice.Terminal {
 		return "", false
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return s.drainReason, true
+	return notice.Reason, true
 }
 
-// noteDrain records a worker's eviction notice.
+// noteDrain records a worker's announcement of its own end.
 //
-// Advisory: it fails nothing by itself. A spot notice gives about two
+// Advisory in itself: it fails nothing. A spot notice gives about two
 // minutes, so the command in flight often finishes, and a step that succeeded
-// on a machine that later went away succeeded. What this changes is the
+// on a machine that later went away succeeded. What it changes is the
 // CLASSIFICATION of a failure that follows.
+//
+// A terminal notice is never overwritten by a later advisory one: the machine
+// does not become healthy again because a second, weaker message arrived.
 func (s *session) noteDrain(frame wire.Frame) {
-	var notice wire.Draining
+	notice := new(wire.Draining)
 
-	_ = decode(frame, &notice)
+	err := decode(frame, notice)
+	if err != nil {
+		// A notice this end cannot read is still a worker saying something is
+		// wrong, but not evidence of a reclamation — treating an unparseable
+		// frame as one would arm the eviction path on a decode bug.
+		notice = &wire.Draining{Reason: "an unreadable draining notice"}
+	}
 
-	s.mu.Lock()
-	s.drainReason = notice.Reason
-	s.mu.Unlock()
+	previous := s.drain.Load()
+	if previous != nil && previous.Terminal && !notice.Terminal {
+		return
+	}
 
-	s.drained.Store(true)
+	s.drain.Store(notice)
 
 	reason := notice.Reason
 	if reason == "" {
 		reason = "no reason given"
 	}
 
-	fmt.Printf("worker %s is draining: %s\n", s.worker.Address(), reason)
+	kind := "is draining"
+	if notice.Terminal {
+		kind = "is being reclaimed"
+	}
+
+	fmt.Printf("worker %s %s: %s\n", s.worker.Address(), kind, reason)
 }
 
 // read is readFrame, marking the conversation broken on a transport failure so
@@ -583,6 +606,53 @@ func (s *session) read() (wire.Frame, error) {
 	}
 
 	return frame, err
+}
+
+// awaitHandshakeFrame is awaitOperationFrame for the handshake, reading
+// through readFrame so a late answer cannot un-stick an open failure ensure
+// has already recorded — see read.
+func (s *session) awaitHandshakeFrame() (wire.Frame, error) {
+	for {
+		frame, err := s.readFrame()
+		if err != nil || frame.Type != wire.FrameDraining {
+			return frame, err
+		}
+
+		s.noteDrain(frame)
+	}
+}
+
+// absorbDrains returns the next frame that belongs to an operation, noting
+// and swallowing any unsolicited draining notices before it.
+//
+// One place, for the same reason readFrame turns an error frame into a Go
+// error here rather than at every call site: a drain notice arrives whenever
+// the worker learns of its own end, which is to say during whatever happens
+// to be in flight — a tree upload, a fetch acknowledgement, a command's
+// output. Handled per call site, every reader that forgot it would report the
+// notice as a protocol violation and poison the session with an invented
+// error, on exactly the machines this feature exists for.
+func (s *session) awaitOperationFrame() (wire.Frame, error) {
+	for {
+		frame, err := s.read()
+		if err != nil {
+			return frame, err
+		}
+
+		if frame.Type != wire.FrameDraining {
+			return frame, nil
+		}
+
+		if frame.Op != wire.DrainOp {
+			// A notice claiming an operation is a peer this end does not
+			// understand; the op is what says "about the session" rather than
+			// "about the thing you asked for".
+			return wire.Frame{}, fmt.Errorf("%w: a draining notice arrived for operation %d rather than %d",
+				wire.ErrProtocol, frame.Op, wire.DrainOp)
+		}
+
+		s.noteDrain(frame)
+	}
 }
 
 // errWorkerLost is a transport that died mid-conversation, as opposed to an

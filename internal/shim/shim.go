@@ -53,11 +53,18 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, opts Options) (err 
 	// The one thing this end says unasked: that the machine under it is going
 	// away. Started before the first frame, because an eviction notice can
 	// arrive at any moment and the orchestrator can only learn it from here.
+	//
+	// Its own cancellable context, not the session's: closing a channel
+	// cannot abort a metadata request already in flight, so teardown would
+	// wait out the HTTP timeout on every step.
+	watchCtx, stopWatching := context.WithCancel(ctx)
+
 	session.drains.Add(1)
 
-	go session.watchForDrain(ctx)
+	go session.watchForDrain(watchCtx)
 
 	defer func() {
+		stopWatching()
 		close(session.done)
 		session.drains.Wait()
 
