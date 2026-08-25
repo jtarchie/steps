@@ -266,6 +266,10 @@ linters:
             - "golang.org/x/crypto/ssh/agent"
             - "golang.org/x/crypto/ssh/knownhosts"
             - "github.com/pkg/sftp"
+            # The ssh_config parser, so a worker can be named by the alias the
+            # operator's own ~/.ssh/config already defines. Pure Go for the
+            # same reason the two above are.
+            - "github.com/kevinburke/ssh_config"
             - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/shell"
             - "github.com/jtarchie/steps/internal/shim"

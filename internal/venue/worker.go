@@ -62,6 +62,10 @@ type Worker struct {
 	// KnownHosts overrides ~/.ssh/known_hosts. Host keys are always checked;
 	// this only says against which file.
 	KnownHosts string
+	// SSHConfig overrides ~/.ssh/config, and "none" says to read no config at
+	// all -- the spelling OpenSSH's -F uses, and the answer to every refusal
+	// the subset raises.
+	SSHConfig string
 	// HostKey pins the worker's host key by SHA256 fingerprint, for a machine
 	// that has no known_hosts entry and never will: one acquired on demand,
 	// used, and destroyed. Whatever created it attested its key out of band,
@@ -105,6 +109,7 @@ func ParseWorker(raw string) (Worker, error) {
 	worker.Identity = query.Get("identity")
 	worker.KnownHosts = query.Get("known_hosts")
 	worker.HostKey = query.Get("hostkey")
+	worker.SSHConfig = query.Get("ssh_config")
 
 	err = checkHostKey(worker)
 	if err != nil {

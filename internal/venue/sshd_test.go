@@ -7,7 +7,7 @@ package venue
 // session channel that execs through a shell, the sftp subsystem, and an
 // exit-status reply. The venue is not talking to a mock — the only thing
 // missing is OpenSSH's own configuration surface, which is exactly the part
-// this cannot pin (see TestSSHWorkerAgainstRealOpenSSH for the opt-in that
+// this cannot pin (see TestSSHConfigAgainstRealOpenSSH for the opt-in that
 // can).
 
 import (
@@ -42,6 +42,9 @@ type testSSHD struct {
 	HostKey ssh.PublicKey
 	// Identity is the private key a client authenticates with.
 	Identity string
+	// KnownHosts is the file holding this server's host key, so a test can
+	// name it the way an operator's ssh_config names one.
+	KnownHosts string
 
 	// Uploads counts files written over sftp — how a test asks whether the
 	// binary was pushed, and whether a second session reused it.
@@ -99,7 +102,11 @@ func newTestSSHD(t *testing.T) *testSSHD {
 
 	server.HostKey = hostPub
 	server.Identity = identity
-	server.URL = fmt.Sprintf("ssh://%s/%s?identity=%s&known_hosts=%s",
+	server.KnownHosts = knownHosts
+	// ssh_config=none: this mapping says everything about how to reach the
+	// server, and a test that also read the config of whoever ran it would
+	// pass or fail by their Host * block.
+	server.URL = fmt.Sprintf("ssh://%s/%s?identity=%s&known_hosts=%s&ssh_config=none",
 		server.listener.Addr().String(), server.Root, identity, knownHosts)
 
 	go server.accept(config)
@@ -349,7 +356,7 @@ func commandOf(payload []byte) string {
 func (s *testSSHD) URLWithPin(t *testing.T, fingerprint string) string {
 	t.Helper()
 
-	return fmt.Sprintf("ssh://%s/%s?identity=%s&hostkey=%s",
+	return fmt.Sprintf("ssh://%s/%s?identity=%s&hostkey=%s&ssh_config=none",
 		s.listener.Addr().String(), s.Root, s.Identity, url.QueryEscape(fingerprint))
 }
 

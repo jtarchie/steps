@@ -41,19 +41,27 @@ var (
 )
 
 func dialSSH(ctx context.Context, worker Worker) (*transport, error) {
-	config, err := sshConfig(ctx, worker)
+	// Resolution first, and once: an alias out of the operator's ssh_config
+	// is not a hostname, so everything below -- the address, the credentials,
+	// the file host keys are checked against -- is downstream of it.
+	settings, err := connectionFor(worker)
+	if err != nil {
+		return nil, err
+	}
+
+	config, err := sshConfig(ctx, settings)
 	if err != nil {
 		return nil, err
 	}
 
 	dialer := net.Dialer{Timeout: dialTimeout}
 
-	conn, err := dialer.DialContext(ctx, "tcp", addressOf(worker))
+	conn, err := dialer.DialContext(ctx, "tcp", settings.address)
 	if err != nil {
 		return nil, fmt.Errorf("dialing: %w", err)
 	}
 
-	sshConn, channels, requests, err := ssh.NewClientConn(conn, addressOf(worker), config)
+	sshConn, channels, requests, err := ssh.NewClientConn(conn, settings.address, config)
 	if err != nil {
 		_ = conn.Close()
 
@@ -188,34 +196,20 @@ func closeSession(ctx context.Context, client *ssh.Client, stdin io.WriteCloser,
 	return nil
 }
 
-func addressOf(worker Worker) string {
-	_, _, err := net.SplitHostPort(worker.Host)
-	if err == nil {
-		return worker.Host
-	}
-
-	return net.JoinHostPort(worker.Host, defaultSSHPort)
-}
-
 // sshConfig assembles credentials and host-key verification for a worker.
-func sshConfig(ctx context.Context, worker Worker) (*ssh.ClientConfig, error) {
-	auths, err := authMethods(ctx, worker)
+func sshConfig(ctx context.Context, settings connection) (*ssh.ClientConfig, error) {
+	auths, err := authMethods(ctx, settings)
 	if err != nil {
 		return nil, err
 	}
 
-	hostKeys, err := hostKeyCallback(worker)
+	hostKeys, err := hostKeyCallback(settings)
 	if err != nil {
 		return nil, err
-	}
-
-	user := worker.User
-	if user == "" {
-		user = os.Getenv("USER")
 	}
 
 	return &ssh.ClientConfig{
-		User:            user,
+		User:            settings.user,
 		Auth:            auths,
 		HostKeyCallback: hostKeys,
 		Timeout:         dialTimeout,
@@ -237,13 +231,21 @@ func sshConfig(ctx context.Context, worker Worker) (*ssh.ClientConfig, error) {
 // every key the operator holds, which is a credential capability rather than
 // plumbing — but steps reading it to reach a worker is a different act, and
 // the operator asked for it by naming the worker.
-func authMethods(ctx context.Context, worker Worker) ([]ssh.AuthMethod, error) {
+func authMethods(ctx context.Context, settings connection) ([]ssh.AuthMethod, error) {
 	var methods []ssh.AuthMethod
 
-	if worker.Identity != "" {
-		method, err := keyFile(worker.Identity)
+	for _, identity := range settings.identities {
+		method, err := keyFile(identity.path)
 		if err != nil {
-			return nil, err
+			// A key the operator named is an answer they already gave, so a
+			// bad one is an error. One a config file named is a candidate --
+			// a Host * block routinely names a key that is absent here or
+			// encrypted, and OpenSSH just moves on to the next.
+			if identity.explicit {
+				return nil, err
+			}
+
+			continue
 		}
 
 		methods = append(methods, method)
@@ -255,7 +257,7 @@ func authMethods(ctx context.Context, worker Worker) ([]ssh.AuthMethod, error) {
 	}
 
 	if len(methods) == 0 {
-		return nil, fmt.Errorf("worker %q: %w", worker.URL, errNoAuth)
+		return nil, fmt.Errorf("worker %q: %w", settings.worker.URL, errNoAuth)
 	}
 
 	return methods, nil
@@ -316,24 +318,24 @@ func keyFile(path string) (ssh.AuthMethod, error) {
 // on another machine cannot be the one that stops checking which machine that
 // is; an operator who has not got a known_hosts entry yet is one ssh away from
 // having one.
-func hostKeyCallback(worker Worker) (ssh.HostKeyCallback, error) {
-	if worker.HostKey != "" {
-		return pinnedHostKey(worker.HostKey), nil
+func hostKeyCallback(settings connection) (ssh.HostKeyCallback, error) {
+	if settings.hostKey != "" {
+		return pinnedHostKey(settings.hostKey), nil
 	}
 
-	file := worker.KnownHosts
-	if file == "" {
+	files := settings.knownHosts
+	if len(files) == 0 {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return nil, fmt.Errorf("locating known_hosts: %w", err)
 		}
 
-		file = filepath.Join(home, ".ssh", "known_hosts")
+		files = []string{filepath.Join(home, ".ssh", "known_hosts")}
 	}
 
-	callback, err := knownhosts.New(file)
+	callback, err := knownhosts.New(files...)
 	if err != nil {
-		return nil, fmt.Errorf("reading known_hosts %q (ssh to the worker once to record it, or point at one with ?known_hosts=): %w", file, err)
+		return nil, fmt.Errorf("reading known_hosts %q (ssh to the worker once to record it, or point at one with ?known_hosts=): %w", strings.Join(files, ", "), err)
 	}
 
 	return callback, nil

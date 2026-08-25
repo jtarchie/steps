@@ -288,12 +288,17 @@ func TestSSHWorkerRefusesWithoutCredentials(t *testing.T) {
 	// No agent, no identity: nothing to offer.
 	t.Setenv("SSH_AUTH_SOCK", "")
 
-	worker, err := ParseWorker(stripQuery(server.URL))
+	worker, err := ParseWorker(stripQuery(server.URL) + "?ssh_config=none")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
 
-	_, err = sshConfig(t.Context(), worker)
+	settings, err := connectionFor(worker)
+	if err != nil {
+		t.Fatalf("connectionFor: %v", err)
+	}
+
+	_, err = sshConfig(t.Context(), settings)
 	if !errors.Is(err, errNoAuth) {
 		t.Fatalf("error = %v, want it to name the missing credentials", err)
 	}
