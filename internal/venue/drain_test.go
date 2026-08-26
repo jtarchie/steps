@@ -204,3 +204,42 @@ func TestVenueAbsorbsADrainNoticeDuringATransfer(t *testing.T) {
 		t.Fatalf("a drain notice during the tree upload broke the session: %v", err)
 	}
 }
+
+// TestVenueGuardShapedCallReportsAnEviction pins executeFull's half of the
+// classification. An eviction can WEAR an exit — the shutdown signals the
+// command and the shim reports started-with-code-minus-one — and errors.As
+// sees that ExitError straight through the ErrEvicted wrap. Converted to
+// exit-as-data there, a placed when: guard would read the machine dying as
+// the guard answering no, and silently skip the work it gates.
+func TestVenueGuardShapedCallReportsAnEviction(t *testing.T) {
+	t.Setenv(drainingShimEnv, "signal")
+
+	runner := newLocalRunner(t, localWorker(t, t.TempDir()))
+
+	_, _, _, err := runner.RunCaptureFull(context.Background(), "echo never-runs")
+	if err == nil {
+		t.Fatal("a guard-shaped call on a reclaimed worker returned its exit as data")
+	}
+
+	if !errors.Is(err, ErrEvicted) {
+		t.Fatalf("error = %v, want ErrEvicted", err)
+	}
+}
+
+// TestVenueGuardShapedCallKeepsARealVerdict is the boundary: a command that
+// chose its status is data, drained machine or not — a guard exit of 3 is
+// the guard answering, and must not become an error.
+func TestVenueGuardShapedCallKeepsARealVerdict(t *testing.T) {
+	t.Setenv(drainingShimEnv, "verdict")
+
+	runner := newLocalRunner(t, localWorker(t, t.TempDir()))
+
+	_, _, code, err := runner.RunCaptureFull(context.Background(), "exit 3")
+	if err != nil {
+		t.Fatalf("a command's own verdict was reported as an error: %v", err)
+	}
+
+	if code != 3 {
+		t.Errorf("code = %d, want the guard's own answer", code)
+	}
+}

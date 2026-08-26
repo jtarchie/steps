@@ -128,6 +128,18 @@ func (r runner) executeFull(ctx context.Context, command string, p plan) (string
 		return stdout, stderr, 0, nil
 	}
 
+	// Before the exit-as-data conversion, because an eviction can WEAR an
+	// exit: the reclaimed machine's shutdown signals the command, the shim
+	// reports a started-and-signalled exit, and asEviction wraps it — but
+	// errors.As sees the ExitError through the wrap, so converting here
+	// would return the -1 as data and silently drop the classification.
+	// For a guard that is the worst possible reading: the machine dying
+	// would be recorded as the guard saying no, and the work it gates
+	// skipped with no red anywhere.
+	if errors.Is(runErr, ErrEvicted) {
+		return "", "", -1, fmt.Errorf("command %q: %w", command, runErr)
+	}
+
 	if !shell.IsExitError(runErr) {
 		return "", "", -1, fmt.Errorf("command %q failed to start: %w", command, runErr)
 	}
