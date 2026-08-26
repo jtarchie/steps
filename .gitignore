@@ -21,3 +21,6 @@
 # points TMPDIR here: two checkouts linting at once cannot then block each
 # other. See the lint task.
 .golangci-tmp/
+
+# task cover-diff scratch profile
+/.cover.out

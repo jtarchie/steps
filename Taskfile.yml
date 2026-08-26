@@ -80,6 +80,18 @@ tasks:
     cmds:
       - go test . -run 'Mutation' -count=1
 
+  cover-diff:
+    desc: "Advisory: which changed lines (vs BASE, default HEAD) did no test execute. Born from a measured failure: a whole eviction layer landed uncovered and its deletion shipped green. Run before committing; triage every line it names — add the test, or know exactly why not."
+    cmds:
+      - go test ./... -coverprofile=.cover.out
+      - go run ./tools/coverdiff -profile .cover.out -base {{.BASE | default "HEAD"}}
+      - rm -f .cover.out
+
+  mutate-pkg:
+    desc: "Advisory mutation testing over one package: task mutate-pkg PKG=./internal/venue. Mechanizes the sabotage audit — every LIVED mutant is a code change no test notices. Needs gremlins (task install:tools). --integration because package-scoped mode times out spuriously here; go's build cache keeps unaffected packages cheap, but a package with heavy dependents (venue, pipeline) still costs minutes to hours — scope deliberately."
+    cmds:
+      - gremlins unleash --integration --timeout-coefficient 10 {{.PKG}}
+
   build:
     desc: Build ./steps. CGO_ENABLED=0 is a guard, not an optimization — the planned remote-worker shim cross-compiles this binary for any GOOS/GOARCH and pushes it over SFTP, so a transitive dep that pulls in cgo must fail the build here.
     env:
@@ -102,6 +114,8 @@ tasks:
     cmds:
       - go install golang.org/x/vuln/cmd/govulncheck@latest
       - go install go.uber.org/nilaway/cmd/nilaway@latest
+      # gremlins backs the advisory `task mutate-pkg`; nothing in `task fmt` needs it.
+      - go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
 
   default:
     desc: Alias for `task fmt` — so bare `task` runs the whole validation sequence.
