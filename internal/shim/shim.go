@@ -222,6 +222,10 @@ func (s *session) hello(frame wire.Frame) error {
 		return fmt.Errorf("making the work directory: %w", err)
 	}
 
+	// After MkdirAll, so this describes the filesystem the tree will really
+	// land on rather than whichever ancestor happened to exist.
+	fstype, free := fsInfo(s.workdir)
+
 	return s.send(wire.FrameHelloOK, frame.Op, wire.HelloOK{
 		Protocol:    wire.Protocol,
 		Build:       s.opts.Build,
@@ -230,6 +234,8 @@ func (s *session) hello(frame wire.Frame) error {
 		Workdir:     s.workdir,
 		Compression: s.compression,
 		DataPlane:   s.dataplane,
+		FSType:      fstype,
+		FSFree:      free,
 	})
 }
 

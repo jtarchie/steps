@@ -106,6 +106,11 @@ type session struct {
 	encoder   *wire.Encoder
 	decoder   *wire.Decoder
 	workdir   string
+	// fstype and fsfree describe the filesystem workdir sits on, as the shim
+	// reported it. Empty fstype means the shim could not say — an older one,
+	// or a platform with no answer — and never "an ordinary disk".
+	fstype string
+	fsfree uint64
 	// compression is what the handshake negotiated for tree transfers: the
 	// token the shim echoed back, or empty for raw against an older shim.
 	compression string
@@ -324,8 +329,40 @@ func (s *session) greet() error {
 	s.workdir = ok.Workdir
 	s.compression = ok.Compression
 	s.dataplane = ok.DataPlane
+	s.fstype = ok.FSType
+	s.fsfree = ok.FSFree
+
+	notice := volatileWorkdirNotice(s.worker, ok)
+	if notice != "" {
+		fmt.Println(notice)
+	}
 
 	return nil
+}
+
+// volatileWorkdirNotice is what to say about a workdir that is memory, and
+// empty about one that is not.
+//
+// It earns a warning because the cost is invisible from this end and lands on
+// the step rather than on the operator: an aws:// worker whose URL names no
+// path defaults to the shim's temp directory, which on Amazon Linux 2023 —
+// and Fedora, and recent Debian and Ubuntu — is tmpfs at half the machine's
+// RAM. The pushed binary and the step's tree are then spending the memory the
+// build wanted, and a stop/start loses the content-hash cache entirely.
+//
+// Silence is never warned about: an older shim that cannot say is a different
+// fact from a disk, and a warning nobody can act on is one operators learn to
+// scroll past.
+func volatileWorkdirNotice(worker Worker, ok wire.HelloOK) string {
+	switch ok.FSType {
+	case "tmpfs", "ramfs":
+	default:
+		return ""
+	}
+
+	return fmt.Sprintf(
+		"worker %s: %s is on %s (%d MiB free) — that is memory, not disk: the pushed binary and this step's tree spend it, and a reboot loses both. Name a path on a real disk in the worker URL, as in %s/var/tmp/steps",
+		worker.Address(), ok.Workdir, ok.FSType, ok.FSFree>>20, worker.Address())
 }
 
 // offerDataPlane is the plane greet proposes: URLs when a blob store is

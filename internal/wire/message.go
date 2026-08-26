@@ -94,6 +94,19 @@ type HelloOK struct {
 	// DataPlane is the transfer plane the shim accepted from Hello.DataPlane,
 	// under the same take-it-or-leave-it contract.
 	DataPlane string `json:"data_plane,omitempty"`
+	// FSType names the filesystem Workdir sits on — "btrfs", "tmpfs", or the
+	// hex magic when this shim has no name for that one. Reported because
+	// only this end can see it, and it changes what a step COSTS rather than
+	// what it means: a tmpfs workdir spends the machine's MEMORY on the
+	// pushed binary and the step's tree, and loses both on a reboot.
+	//
+	// Empty means "this shim cannot say" — an older one, or a platform with
+	// no answer — never "an ordinary disk". Anything that requires a
+	// particular filesystem must fail closed on it.
+	FSType string `json:"fstype,omitempty"`
+	// FSFree is the bytes available on that filesystem, so a report can say
+	// how much and not only what.
+	FSFree uint64 `json:"fs_free,omitempty"`
 }
 
 // Exec asks for one command.
