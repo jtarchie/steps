@@ -760,11 +760,22 @@ func probeAgentServers(ctx context.Context, cfg *config.Config, ri config.Resolv
 	var problems []config.Problem
 
 	for _, spec := range ri.ToolSpecs {
-		if spec.MCP == "" || seen[spec.MCP] {
+		// Deduped by GRANT, not by server. Deduping by name meant the
+		// second grant on a server never reached the cache at all, so
+		// whether a bad tool name was caught came down to which agent was
+		// listed first. cfg is fixed for one Preflight, so the grant is the
+		// whole identity here — the definition belongs in the cache key,
+		// which outlives this call.
+		if spec.MCP == "" {
 			continue
 		}
 
-		seen[spec.MCP] = true
+		key := spec.MCP + "|" + spec.MCPTool + "|" + strings.Join(spec.MCPTools, ",")
+		if seen[key] {
+			continue
+		}
+
+		seen[key] = true
 
 		err := probeServerCached(ctx, cfg, spec, settings)
 		if err != nil {
@@ -918,7 +929,26 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 	// strength of a different grant's tool existing. Silent, and only in a
 	// process that had already probed the same server — which is every
 	// `steps watch`.
-	key := "mcp|" + spec.MCP + "|" + spec.MCPTool + "|" + strings.Join(spec.MCPTools, ",")
+	// The DEFINITION, not just the name. The cache is process-wide and
+	// pipeline-blind, and a name is not an identity: under
+	// `steps web app.yml infra.yml` two pipelines may each declare a server
+	// called `test` pointing at different things, and one verdict served
+	// both — a healthy server vouching for a broken neighbour, and a broken
+	// one condemning a healthy neighbour. Naming the definition is stronger
+	// than naming the pipeline: it also separates two revisions of one
+	// pipeline. internal/resource/preflight.go keys its sibling cache the
+	// same way and was immune to both.
+	srv, err := cfg.FindMCPServer(spec.MCP)
+	if err != nil {
+		// A name no server answers to is a config error, identical on every
+		// call, and there is no definition to key it under.
+		return err //nolint:wrapcheck // FindMCPServer already names the server and lists the alternatives
+	}
+
+	key := strings.Join(append(
+		[]string{"mcp", srv.Name, srv.Endpoint, srv.Command, srv.Cwd},
+		append(append([]string{}, srv.Args...), spec.MCPTool, strings.Join(spec.MCPTools, ","))...,
+	), "|")
 	now := time.Now()
 
 	entry, found := probeCache.lookup(key, settings.CacheWindow(), now)
@@ -928,7 +958,7 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 		return entry.err
 	}
 
-	err := probeServer(ctx, cfg, spec, settings.ProbeTimeout())
+	err = probeServer(ctx, *srv, spec, settings.ProbeTimeout())
 	probeCache.store(key, err, now)
 
 	return err
@@ -939,16 +969,11 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 // much as the first: a server that starts but no longer exposes
 // `go_symbol_references` fails the step just as surely as one that never
 // started, and just as late.
-func probeServer(ctx context.Context, cfg *config.Config, spec config.ToolSpec, timeout time.Duration) error {
-	srv, err := cfg.FindMCPServer(spec.MCP)
-	if err != nil {
-		return err //nolint:wrapcheck // FindMCPServer already names the server and lists the alternatives
-	}
-
+func probeServer(ctx context.Context, srv config.MCPServer, spec config.ToolSpec, timeout time.Duration) error {
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	tools, err := stepsmcp.ListServerTools(probeCtx, *srv)
+	tools, err := stepsmcp.ListServerTools(probeCtx, srv)
 	if err != nil {
 		if probeCtx.Err() != nil {
 			return transient(fmt.Errorf("did not start within %s", timeout))

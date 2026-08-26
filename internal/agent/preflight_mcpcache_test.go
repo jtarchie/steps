@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -83,5 +84,71 @@ func TestPreflightStillCachesAnIdenticalGrant(t *testing.T) {
 
 	if *mcp.listCalls != 1 {
 		t.Fatalf("tools/list called %d times for the same grant, want 1", *mcp.listCalls)
+	}
+}
+
+// TestPreflightDoesNotShareOneServersVerdictAcrossPipelines covers the same
+// unscoped-cache class one level up from the grant.
+//
+// The key named the server by NAME alone, and nothing about the definition
+// behind it. Under `steps web app.yml infra.yml` two pipelines may each
+// declare `mcp_servers: [{name: test, ...}]` pointing at entirely different
+// things, and one answer served both: a healthy server vouched for a broken
+// neighbour, and a broken one condemned a healthy neighbour.
+//
+// internal/resource/preflight.go was already immune because it keys on the
+// definition, which is the stronger fix — it distinguishes two pipelines AND
+// two revisions of the same pipeline.
+func TestPreflightDoesNotShareOneServersVerdictAcrossPipelines(t *testing.T) {
+	ResetProbeCache()
+
+	mcp := newCountingMCPServer(t)
+	spec := config.ToolSpec{MCP: "test", MCPTool: "search_issues"}
+	settings := &config.Preflight{}
+
+	live := &config.Config{MCPServers: []config.MCPServer{mcp.server()}}
+	dead := &config.Config{MCPServers: []config.MCPServer{{
+		Name:    "test",
+		Command: "/nonexistent/mcp-server",
+	}}}
+
+	err := probeServerCached(context.Background(), live, spec, settings)
+	if err != nil {
+		t.Fatalf("probing the live server: %v", err)
+	}
+
+	err = probeServerCached(context.Background(), dead, spec, settings)
+	if err == nil {
+		t.Fatal("a pipeline's unstartable server passed preflight on a neighbour's cached verdict")
+	}
+}
+
+// TestPreflightProbesEveryGrantOnAServer is the dedupe half of the same bug.
+//
+// probeAgentServers deduped by server NAME, so the second grant on a server
+// never reached the cache at all — and the per-grant key the cache had just
+// grown existed but was never computed. Whether preflight caught a bad tool
+// name came down to which agent happened to be listed first.
+func TestPreflightProbesEveryGrantOnAServer(t *testing.T) {
+	ResetProbeCache()
+
+	mcp := newCountingMCPServer(t)
+	cfg := &config.Config{MCPServers: []config.MCPServer{mcp.server()}}
+	settings := &config.Preflight{}
+
+	good := config.ResolvedInvocation{ToolSpecs: []config.ToolSpec{{MCP: "test", MCPTool: "search_issues"}}}
+	bad := config.ResolvedInvocation{ToolSpecs: []config.ToolSpec{{MCP: "test", MCPTool: "no_such_tool"}}}
+
+	// The good agent first: the order in which the bug reported nothing.
+	seen := map[string]bool{}
+	problems := probeAgentServers(context.Background(), cfg, good, settings, seen)
+	problems = append(problems, probeAgentServers(context.Background(), cfg, bad, settings, seen)...)
+
+	if len(problems) != 1 {
+		t.Fatalf("got %d problems, want 1 naming no_such_tool: %+v", len(problems), problems)
+	}
+
+	if !strings.Contains(problems[0].Detail, "no_such_tool") {
+		t.Errorf("problem = %q, want it to name the missing tool", problems[0].Detail)
 	}
 }
