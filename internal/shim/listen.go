@@ -15,6 +15,11 @@ import (
 
 // ListenOptions configure a listening shim: the session options every
 // connection gets, plus how long the listener itself lives.
+//
+// The listener is unauthenticated, deliberately: it binds loopback on a
+// machine whose local processes are already inside the trust boundary, the
+// same standing stdio mode gives whoever can exec the binary. A multi-tenant
+// worker is not a machine this contract fits.
 type ListenOptions struct {
 	Options
 	// Once serves a single connection and then stops listening.
@@ -67,6 +72,21 @@ func ServeListener(ctx context.Context, listener net.Listener, opts ListenOption
 		go func() {
 			defer sessions.Done()
 			defer func() { _ = conn.Close() }()
+
+			// The session loop blocks in reads on the connection, which no
+			// context can end — so a shutdown closes the connection out from
+			// under it, or a shim told to stop would live for as long as its
+			// peer felt like staying connected.
+			sessionDone := make(chan struct{})
+			defer close(sessionDone)
+
+			go func() {
+				select {
+				case <-ctx.Done():
+					_ = conn.Close()
+				case <-sessionDone:
+				}
+			}()
 
 			serveErr := Serve(ctx, conn, conn, opts.Options)
 			if serveErr != nil {

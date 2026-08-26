@@ -85,6 +85,12 @@ func dialLocal(worker Worker) (*transport, error) {
 		in:    stdout,
 		out:   stdin,
 		build: build,
+		// Both pipes, not just the reader: a blocked write into a shim that
+		// stopped reading unsticks only when its stdin goes away.
+		interrupt: func() {
+			_ = stdout.Close()
+			_ = stdin.Close()
+		},
 		close: func(ctx context.Context) error {
 			// Closing stdin is the goodbye: the shim sees EOF, removes its
 			// scratch, and exits. Waiting for that is what makes a finished

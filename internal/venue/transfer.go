@@ -221,7 +221,19 @@ func (s *session) unpackTree(r io.Reader, into string) error {
 }
 
 // pump forwards this operation's data frames into w until the transfer ends.
+//
+// A write that fails — the unpacker refusing an entry, a full disk — does not
+// end the READING. The shim is still sending this operation's frames and will
+// resume its loop after them, so a pump that returned early would leave them
+// in the stream for the next operation to read as a protocol violation: the
+// session would be poisoned by its own tidiness, every retry desynced, while
+// the shim executed each retried command and had its answers misread. So the
+// remaining frames are drained and discarded, exactly as the shim's own
+// frameReader drains an upload it rejected, and the write error is returned
+// once the stream is back on a frame boundary.
 func (s *session) pump(op uint32, w io.Writer) error {
+	var failed error
+
 	for {
 		frame, err := s.awaitOperationFrame()
 		if err != nil {
@@ -235,11 +247,15 @@ func (s *session) pump(op uint32, w io.Writer) error {
 
 		switch frame.Type {
 		case wire.FrameEnd:
-			return nil
+			return failed
 		case wire.FrameData:
+			if failed != nil {
+				continue
+			}
+
 			_, err = w.Write(frame.Payload)
 			if err != nil {
-				return fmt.Errorf("%w", err)
+				failed = fmt.Errorf("%w", err)
 			}
 		case wire.FrameHello, wire.FrameHelloOK, wire.FrameUpload, wire.FrameExec,
 			wire.FrameStdout, wire.FrameStderr, wire.FrameExit, wire.FrameFetch,

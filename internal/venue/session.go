@@ -54,6 +54,15 @@ type transport struct {
 	// another architecture, a loader that refused it — because such a shim
 	// never says anything the protocol can carry.
 	diagnostics func() string
+	// interrupt cuts the conversation NOW, from another goroutine, in a way
+	// that unblocks both a blocked read and a blocked write. It exists
+	// because closing in alone is not that: an SSH stdout is a plain Reader
+	// wrapped in a NopCloser, so "close the reader" enforced nothing there —
+	// timeout:, fail_fast, race: and Ctrl-C were all inert against a wedged
+	// ssh:// worker, the exact failure the watchdog exists to end. And a
+	// worker that stopped READING blocks the encoder on backpressure, which
+	// no reader-side close can ever unstick.
+	interrupt func()
 	// exited is closed when the far end's process ends, and is the reliable
 	// way to learn that: an SSH channel's reader does not dependably return
 	// EOF when the remote command dies, so a handshake waiting only on bytes
@@ -618,12 +627,17 @@ func (s *session) awaitHandshakeFrame() (wire.Frame, error) {
 			return frame, err
 		}
 
+		if frame.Op != wire.DrainOp {
+			return wire.Frame{}, fmt.Errorf("%w: a draining notice arrived for operation %d rather than %d",
+				wire.ErrProtocol, frame.Op, wire.DrainOp)
+		}
+
 		s.noteDrain(frame)
 	}
 }
 
-// absorbDrains returns the next frame that belongs to an operation, noting
-// and swallowing any unsolicited draining notices before it.
+// awaitOperationFrame returns the next frame that belongs to an operation,
+// noting and swallowing any unsolicited draining notices before it.
 //
 // One place, for the same reason readFrame turns an error frame into a Go
 // error here rather than at every call site: a drain notice arrives whenever

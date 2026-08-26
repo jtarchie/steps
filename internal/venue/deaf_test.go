@@ -131,3 +131,41 @@ func TestVenueCancellationEndsAnUnacknowledgedUpload(t *testing.T) {
 		t.Fatal("the step never returned: the worker never acknowledged the tree and the read has no deadline, so the build waits on it forever")
 	}
 }
+
+// TestVenueCancellationReachesAWedgedSSHWorker is the same wedge over the
+// transport where the old enforcement quietly did nothing: an SSH stdout is a
+// plain Reader in a NopCloser, so "close the reader" closed nothing, and a
+// wedged ssh:// worker survived timeout:, fail_fast, race: and Ctrl-C — the
+// exact failure the watchdog's own comment says it exists to end. The
+// interrupt hook tears the SSH session itself down, which unblocks both
+// directions.
+func TestVenueCancellationReachesAWedgedSSHWorker(t *testing.T) {
+	t.Setenv(deafExecEnv, "1")
+
+	server := newTestSSHD(t)
+
+	runner := newLocalRunner(t, sshSpec(t, server, t.TempDir()))
+
+	ctx, cancel := context.WithTimeout(context.Background(), shortWait)
+	defer cancel()
+
+	returned := make(chan error, 1)
+
+	go func() { returned <- runner.Run(ctx, "anything") }()
+
+	limit := time.NewTimer(30 * time.Second)
+	defer limit.Stop()
+
+	select {
+	case err := <-returned:
+		if err == nil {
+			t.Fatal("a command a worker never answered reported success")
+		}
+
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("error = %v, want it to carry the deadline", err)
+		}
+	case <-limit.C:
+		t.Fatal("the command never returned over ssh: the interrupt did not reach the wedged worker")
+	}
+}

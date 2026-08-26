@@ -94,7 +94,7 @@ func mirroredBuild(t *testing.T, root string, blobs BlobStore, index StepIndex) 
 	return seededBuild(t, provider, "input-content")
 }
 
-// req is the request shape the round-trip tests share.
+// mirrorRequest is the request shape the round-trip tests share.
 func mirrorRequest() StepCacheRequest {
 	return StepCacheRequest{ContentHash: "content-hash-1", Inputs: []string{"repo"}, Outputs: []string{"out"}}
 }

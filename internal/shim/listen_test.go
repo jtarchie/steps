@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/wire"
 )
@@ -189,4 +190,40 @@ func TestShimServesConcurrentConnections(t *testing.T) {
 
 	first.bye()
 	second.bye()
+}
+
+// TestShimListenerShutsDownWithAClientConnected pins that a shim told to stop
+// actually stops. The session loop blocks in reads on the connection, which
+// no context can end — without closing the connection out from under it, a
+// SIGTERM'd shim lived for as long as its peer felt like staying connected,
+// half-cancelled, killing every command it accepted.
+func TestShimListenerShutsDownWithAClientConnected(t *testing.T) {
+	t.Parallel()
+
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listening: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	served := make(chan error, 1)
+
+	go func() {
+		served <- ServeListener(ctx, listener, ListenOptions{Options: Options{Build: "test", Root: t.TempDir()}})
+	}()
+
+	peer := dialListener(t, listener.Addr())
+	peer.hello("shutdown-under-test")
+
+	cancel()
+
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Errorf("ServeListener: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("ServeListener did not return: the connected session outlived its shutdown")
+	}
 }

@@ -108,6 +108,9 @@ func dialSSM(ctx context.Context, worker Worker) (*transport, error) {
 		in:    channel,
 		out:   channel,
 		build: build,
+		// Closing the channel unblocks its reads via the stop signal and
+		// errors its writes on the dead websocket.
+		interrupt: func() { _ = channel.Close() },
 		close: func(context.Context) error {
 			// Closing the channel is the goodbye. The remote shim serves one
 			// connection and exits (see the bootstrap), so nothing is left

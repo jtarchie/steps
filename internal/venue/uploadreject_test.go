@@ -3,6 +3,7 @@ package venue
 // A worker that refuses the step's tree.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -46,8 +47,16 @@ func serveRejectingShim() {
 		case wire.FrameFetch:
 			// Not an archive. UnpackTree fails, which is every way a transfer
 			// can die after the orchestrator asked for it: a dropped
-			// connection, a truncated stream, a worker that went away.
-			_ = encoder.Write(wire.Frame{Type: wire.FrameData, Op: frame.Op, Payload: []byte("not a tar stream")})
+			// connection, a truncated stream, a worker that went away. MORE
+			// THAN ONE frame, deliberately: the unpacker gives up while
+			// later frames are still in flight, which is what forces the
+			// orchestrator to drain to the operation's end rather than
+			// leave them for the next command to misread.
+			// A full header block of garbage, so the unpacker fails on frame
+			// one rather than waiting for more bytes; the second frame is
+			// then the one an early-returning reader would leave behind.
+			_ = encoder.Write(wire.Frame{Type: wire.FrameData, Op: frame.Op, Payload: bytes.Repeat([]byte("not a tar stream "), 64)})
+			_ = encoder.Write(wire.Frame{Type: wire.FrameData, Op: frame.Op, Payload: []byte("and still not one")})
 			_ = encoder.Write(wire.Frame{Type: wire.FrameEnd, Op: frame.Op})
 		case wire.FrameEnd:
 			if os.Getenv(breakFetchEnv) != "" {
@@ -145,5 +154,32 @@ func TestVenueFailedFetchKeepsTheLocalOutputs(t *testing.T) {
 	_, statErr := os.Stat(kept)
 	if statErr != nil {
 		t.Fatalf("a failed fetch destroyed the local outputs: %v", statErr)
+	}
+}
+
+// TestVenueSurvivesABrokenFetch pins that a fetch the orchestrator cannot
+// unpack costs that command and nothing after it. The shim is still SENDING
+// the operation's frames when the unpack gives up, and it resumes its own
+// loop cleanly — so an orchestrator that stopped reading mid-operation left
+// those frames in the stream, and the next command read them as a protocol
+// violation: a session poisoned by its own tidiness, every retry desynced,
+// while the shim executed each retried command and had its answers misread.
+func TestVenueSurvivesABrokenFetch(t *testing.T) {
+	t.Setenv(breakFetchEnv, "1")
+
+	cwd := t.TempDir()
+	mustMkdir(t, filepath.Join(cwd, "out"))
+
+	runner := newLocalRunner(t, localWorker(t, cwd, "out"))
+
+	err := runner.Run(context.Background(), "true")
+	if err == nil {
+		t.Fatal("the step succeeded despite a fetch that could not be unpacked")
+	}
+
+	// The next command reaches the same session on a clean frame boundary.
+	err = runner.Run(context.Background(), "true")
+	if err == nil || strings.Contains(err.Error(), "arrived during operation") {
+		t.Fatalf("the command after a broken fetch hit a desynced session: %v", err)
 	}
 }

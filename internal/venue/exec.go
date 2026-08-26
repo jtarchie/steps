@@ -148,8 +148,8 @@ func (s *session) watch(ctx context.Context, cancelOp *uint32) func() {
 		select {
 		case <-done:
 		case <-grace.C:
-			if tr != nil {
-				_ = tr.in.Close()
+			if tr != nil && tr.interrupt != nil {
+				tr.interrupt()
 			}
 		}
 	}()

@@ -149,6 +149,11 @@ func startShim(client *ssh.Client, remote, build string) (*transport, error) {
 		diagnostics: diagnostics.String,
 		exited:      exit.done,
 		build:       build,
+		// The session, not the pipes: stdout here is a plain Reader whose
+		// NopCloser close enforces nothing, and a blocked write needs the
+		// channel itself torn down. Closing the SSH session errors both
+		// directions at once.
+		interrupt: func() { _ = session.Close() },
 		close: func(ctx context.Context) error {
 			return closeSession(ctx, client, stdin, exit, diagnostics)
 		},

@@ -20,8 +20,8 @@ import (
 )
 
 // imdsBase is the link-local address every EC2 instance answers metadata on.
-// Unreachable anywhere else, which is what makes the probe self-limiting: a
-// worker that is not an EC2 instance fails the first call and stops.
+// A machine that is not an EC2 instance refuses or blackholes the very first
+// call, and the watcher stops for good then — see watchForDrain.
 const imdsBase = "http://169.254.169.254"
 
 // drainPoll is how often the metadata service is asked. A spot notice gives
@@ -57,7 +57,9 @@ func (s *session) watchForDrain(ctx context.Context) {
 
 	// advised remembers that the softer notice has been sent, so it is not
 	// repeated while the watcher keeps looking for a real reclamation.
+	// everReached distinguishes "not an EC2 instance" from a blip on one.
 	advised := false
+	everReached := false
 
 	// A transport with no proxy, deliberately: the default one reads
 	// HTTP_PROXY from the environment, and Go bypasses only loopback — not
@@ -82,49 +84,70 @@ func (s *session) watchForDrain(ctx context.Context) {
 		case <-ticker.C:
 		}
 
-		token := imdsToken(ctx, client)
-
-		notice, terminal := spotNotice(ctx, client, token)
-		if notice.Reason == "" || (advised && !terminal) {
-			continue
-		}
-
-		// Best effort: a session already gone cannot be told, and the
-		// orchestrator learns the same thing from the connection dying.
-		_ = s.send(wire.FrameDraining, wire.DrainOp, notice)
-
-		if terminal {
-			// Nothing more to say: the machine is going, and repeating it
-			// would steal the writer from a command's output for no news.
+		done, sent := s.pollDrain(ctx, client, advised, &everReached)
+		if done {
 			return
 		}
 
-		// An advisory notice is said once and then watched past, in case the
-		// reclamation it warns about actually arrives.
-		advised = true
+		advised = advised || sent
 	}
 }
 
-// imdsToken fetches an IMDSv2 session token. An instance configured to
-// require IMDSv2 — the default for new AMIs, and enforced in most accounts —
-// answers nothing without one; an instance allowing v1 ignores the header.
-func imdsToken(ctx context.Context, client *http.Client) string {
+// pollDrain runs one probe: done says the watcher's work is over — a machine
+// that cannot have a notice, or a terminal notice already relayed — and sent
+// says an advisory notice went out this round.
+func (s *session) pollDrain(ctx context.Context, client *http.Client, advised bool, everReached *bool) (done, sent bool) {
+	token, reachable := imdsToken(ctx, client)
+	if !reachable && !*everReached {
+		// Not an EC2 instance: the metadata service is link-local and
+		// answers nothing anywhere else. One failed probe settles it for
+		// the life of the session — polling a machine that cannot have a
+		// notice would spend three timeouts a tick for nothing.
+		return true, false
+	}
+
+	if reachable {
+		*everReached = true
+	}
+
+	notice, terminal := spotNotice(ctx, client, token)
+	if notice.Reason == "" || (advised && !terminal) {
+		return false, false
+	}
+
+	// Best effort: a session already gone cannot be told, and the
+	// orchestrator learns the same thing from the connection dying.
+	_ = s.send(wire.FrameDraining, wire.DrainOp, notice)
+
+	// A terminal notice is the watcher's last word: the machine is going,
+	// and repeating it would steal the writer from a command's output for no
+	// news. An advisory one is said once and then watched past, in case the
+	// reclamation it warns about actually arrives.
+	return terminal, !terminal
+}
+
+// imdsToken fetches an IMDSv2 session token, reporting whether the metadata
+// service ANSWERED at all — a 4xx is an answer, a refused or timed-out dial
+// is not, and only the second means this is not an EC2 instance. An instance
+// configured to require IMDSv2 — the default for new AMIs — returns nothing
+// useful without the token; an instance allowing v1 ignores the header.
+func imdsToken(ctx context.Context, client *http.Client) (string, bool) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPut, imdsBase+"/latest/api/token", nil)
 	if err != nil {
-		return ""
+		return "", false
 	}
 
 	request.Header.Set("X-aws-ec2-metadata-token-ttl-seconds", "60")
 
 	response, err := client.Do(request)
 	if err != nil {
-		return ""
+		return "", false
 	}
 
 	defer func() { _ = response.Body.Close() }()
 
 	if response.StatusCode != http.StatusOK {
-		return ""
+		return "", true
 	}
 
 	// Read to completion rather than one Read into a fixed buffer: an
@@ -133,10 +156,10 @@ func imdsToken(ctx context.Context, client *http.Client) string {
 	// exactly the instances (HttpTokens=required) this path exists for.
 	token, err := io.ReadAll(io.LimitReader(response.Body, maxMetadataBytes))
 	if err != nil {
-		return ""
+		return "", true
 	}
 
-	return strings.TrimSpace(string(token))
+	return strings.TrimSpace(string(token)), true
 }
 
 // spotNotice asks whether this instance is being reclaimed, reporting the
