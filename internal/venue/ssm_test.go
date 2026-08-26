@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -44,18 +45,27 @@ type fakeSSM struct {
 	// unmanaged makes DescribeInstanceInformation report nothing, the shape
 	// of an instance SSM cannot reach.
 	unmanaged bool
+	// unmanagedBefore is how many answers report nothing before the agent
+	// registers — a freshly launched instance takes 1-3 minutes to appear.
+	unmanagedBefore int
 
-	mu       sync.Mutex
-	scripts  []string
-	output   string
-	failed   bool
-	commands int
+	mu        sync.Mutex
+	described int
+	scripts   []string
+	output    string
+	failed    bool
+	commands  int
 }
 
 func (f *fakeSSM) DescribeInstanceInformation(
 	_ context.Context, _ *ssm.DescribeInstanceInformationInput, _ ...func(*ssm.Options),
 ) (*ssm.DescribeInstanceInformationOutput, error) {
-	if f.unmanaged {
+	f.mu.Lock()
+	f.described++
+	described := f.described
+	f.mu.Unlock()
+
+	if f.unmanaged || described <= f.unmanagedBefore {
 		return &ssm.DescribeInstanceInformationOutput{}, nil
 	}
 
@@ -240,6 +250,8 @@ func TestVenueRefusesAWindowsSSMWorker(t *testing.T) {
 // often hits first: the instance profile is missing, so SSM has never heard
 // of the machine.
 func TestVenueReportsAnInstanceSSMCannotReach(t *testing.T) {
+	shrinkRegisterWait(t)
+
 	fake := &fakeSSM{unmanaged: true}
 
 	runner := newLocalRunner(t, localSSMWorker(t, fake, t.TempDir()))
@@ -303,5 +315,49 @@ func TestSSMWorkerNeedsABinary(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "?binary=") || !strings.Contains(err.Error(), "?shim=") {
 		t.Errorf("error = %v, want both ways of supplying a binary named", err)
+	}
+}
+
+// shrinkRegisterWait makes the agent-registration wait testable.
+//
+// The real bound is minutes, because that is how long amazon-ssm-agent takes
+// to register a freshly launched instance. The branch worth proving is that
+// the dial retries at all, not how long it is willing to.
+func shrinkRegisterWait(t *testing.T) {
+	t.Helper()
+
+	previousTimeout, previousPoll := registerTimeout, registerPoll
+	registerTimeout, registerPoll = 2*time.Second, 5*time.Millisecond
+
+	t.Cleanup(func() { registerTimeout, registerPoll = previousTimeout, previousPoll })
+}
+
+// TestDialWaitsForTheSSMAgentToRegister pins the other half of what a real
+// launch caught: an instance EC2 calls "running" has no SSM agent registered
+// for another one to three minutes, and asking once fails every time.
+//
+// The comment on waitForRunning promised this wait — "the dial that follows
+// waits for the agent on its own terms" — and nothing implemented it, so the
+// launch rung could not have worked even once EC2 admitted the instance
+// existed.
+func TestDialWaitsForTheSSMAgentToRegister(t *testing.T) {
+	shrinkRegisterWait(t)
+
+	cwd := t.TempDir()
+	mustWrite(t, filepath.Join(cwd, "data", "seed.txt"), "seed\n")
+
+	fake := &fakeSSM{unmanagedBefore: 2}
+	runner := newLocalRunner(t, localSSMWorker(t, fake, cwd))
+
+	err := runner.Run(context.Background(), "true")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if fake.described < 3 {
+		t.Errorf("described = %d, want the unregistered answers to have been retried", fake.described)
 	}
 }

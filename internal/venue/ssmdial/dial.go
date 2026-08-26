@@ -96,7 +96,7 @@ func PlatformOf(ctx context.Context, api API, instance string) (Platform, error)
 
 	if len(out.InstanceInformationList) == 0 {
 		return "", fmt.Errorf("%w: %s is not a managed node SSM can reach — check the instance profile carries AmazonSSMManagedInstanceCore and the agent is running",
-			errNotManaged, instance)
+			ErrNotManaged, instance)
 	}
 
 	if out.InstanceInformationList[0].PlatformType == types.PlatformTypeWindows {
@@ -106,8 +106,14 @@ func PlatformOf(ctx context.Context, api API, instance string) (Platform, error)
 	return PlatformLinux, nil
 }
 
-// errNotManaged is an instance SSM does not know about.
-var errNotManaged = errormsg("instance is not registered with SSM")
+// ErrNotManaged is an instance SSM does not know about.
+//
+// Exported because the answer is ambiguous in time, and only the caller knows
+// which case it is in: a machine acquired seconds ago has an agent that has
+// simply not registered yet, while one that has been running for hours is
+// misconfigured. This package cannot tell those apart, so it names the
+// condition and lets the venue decide whether to wait.
+var ErrNotManaged = errormsg("instance is not registered with SSM")
 
 // errormsg is a tiny error type, so the sentinels in this file read as values
 // rather than as a var block far from their use.

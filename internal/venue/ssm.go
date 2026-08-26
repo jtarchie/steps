@@ -13,6 +13,7 @@ package venue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -84,7 +85,7 @@ func dialSSM(ctx context.Context, worker Worker) (*transport, error) {
 		return nil, err
 	}
 
-	platform, err := ssmdial.PlatformOf(ctx, api, worker.Instance)
+	platform, err := waitForManagedNode(ctx, api, worker)
 	if err != nil {
 		return nil, fmt.Errorf("worker %q: %w", worker.URL, err)
 	}
@@ -127,6 +128,59 @@ func dialSSM(ctx context.Context, worker Worker) (*transport, error) {
 			return channel.Close()
 		},
 	}, nil
+}
+
+// registerTimeout bounds waiting for amazon-ssm-agent to register, and
+// registerPoll is how often it is asked.
+//
+// Variables rather than constants so a test can shrink them: the branch worth
+// proving is that the dial retries at all, and a wait measured in minutes is
+// not one a test suite can sit through.
+//
+//nolint:gochecknoglobals // test seams for a wait measured in minutes
+var (
+	registerTimeout = 4 * time.Minute
+	registerPoll    = 5 * time.Second
+)
+
+// waitForManagedNode waits for SSM to admit it can reach the instance.
+//
+// An instance EC2 already calls "running" has no registered agent for another
+// one to three minutes — hack/aws-fixture.sh waits 180s for exactly this when
+// it provisions one — so asking a single time fails every acquisition. This
+// is the wait waitForRunning's comment has always promised and nothing
+// implemented, which is why the launch rung never worked against real AWS.
+//
+// Unconditional rather than only for acquired workers: by the time anything
+// dials, an acquired machine has been rebuilt as a static one, so the rung is
+// no longer knowable here. The cost is that a genuinely misconfigured
+// instance takes the full bound to say so, in the port's own words.
+func waitForManagedNode(ctx context.Context, api ssmdial.API, worker Worker) (ssmdial.Platform, error) {
+	deadline, cancel := context.WithTimeout(ctx, registerTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(registerPoll)
+	defer ticker.Stop()
+
+	for {
+		platform, err := ssmdial.PlatformOf(deadline, api, worker.Instance)
+		if err == nil {
+			return platform, nil
+		}
+
+		if !errors.Is(err, ssmdial.ErrNotManaged) {
+			return "", fmt.Errorf("asking SSM about %s for %q: %w", worker.Instance, worker.URL, err)
+		}
+
+		select {
+		case <-ticker.C:
+		case <-deadline.Done():
+			// The port's own words about what to check, with how long we were
+			// willing to wait for it.
+			return "", fmt.Errorf("waiting %s for the SSM agent on %s for %q: %w",
+				registerTimeout, worker.Instance, worker.URL, err)
+		}
+	}
 }
 
 // remoteBinary is where the bootstrap fetches the shim from, and under what

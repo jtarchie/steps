@@ -298,6 +298,11 @@ linters:
             # listening. Both pure Go.
             - "github.com/jtarchie/steps/internal/venue/ssmdial"
             - "github.com/aws/aws-sdk-go-v2"
+            # smithy is the SDK's error interface, not a second SDK: EC2 answers
+            # a just-created instance with InvalidInstanceID.NotFound until its
+            # replica catches up, and telling that lag apart from a bad id means
+            # reading ErrorCode() rather than matching on message text.
+            - "github.com/aws/smithy-go"
         # shim is the remote half of a placed step: it runs as `steps _shim` on
         # a worker, reads frames from stdin and writes them to stdout, and
         # knows nothing about pipelines — no config, no store, no workspace,

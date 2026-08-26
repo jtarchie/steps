@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/smithy-go"
 )
 
 // fakeEC2 records what was asked of it and answers with the states a test set
@@ -21,6 +22,10 @@ import (
 type fakeEC2 struct {
 	mu sync.Mutex
 
+	// notFoundBefore is how many describes answer InvalidInstanceID.NotFound
+	// before the instance becomes visible — a fleet's instance is not in
+	// DescribeInstances the moment CreateFleet returns its id.
+	notFoundBefore int
 	// stoppedBefore is how many describes still report "stopped" after a
 	// start, standing in for EC2's read-after-write lag: DescribeInstances
 	// answers from a replica that has not seen the StartInstances yet.
@@ -74,6 +79,13 @@ func (f *fakeEC2) DescribeInstances(_ context.Context, _ *ec2.DescribeInstancesI
 	defer f.mu.Unlock()
 
 	f.describes++
+
+	if f.describes <= f.notFoundBefore {
+		return nil, &smithy.GenericAPIError{
+			Code:    "InvalidInstanceID.NotFound",
+			Message: "The instance ID 'i-0faced0123456789' does not exist",
+		}
+	}
 
 	state := ec2types.InstanceStateNameRunning
 
@@ -752,5 +764,49 @@ func TestLaunchDefaultsToTheBlessedTemplateVersion(t *testing.T) {
 	spec := fake.fleets[0].LaunchTemplateConfigs[0].LaunchTemplateSpecification
 	if aws.ToString(spec.Version) != "$Default" {
 		t.Errorf("fleet version = %q, want $Default", aws.ToString(spec.Version))
+	}
+}
+
+// TestLaunchWaitsForAnInstanceEC2CannotSeeYet is the launch rung against EC2's
+// consistency model, which a real fleet caught and no fake had.
+//
+// CreateFleet returns an instance id, and DescribeInstances then answers
+// InvalidInstanceID.NotFound for a few seconds — the id is real, the replica
+// has not caught up. Read as a hard error, the launch rung fails every time
+// before it ever dials, which is exactly what it did: the rung had never once
+// worked against real AWS.
+//
+// Sibling of the parked rung's stopped-state lag; same cause, different API.
+func TestLaunchWaitsForAnInstanceEC2CannotSeeYet(t *testing.T) {
+	fake := &fakeEC2{notFoundBefore: 1}
+	seamEC2(t, fake)
+
+	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	leases := NewLeases(map[string]Worker{"burst": worker})
+
+	resolved, err := leases.Resolve(context.Background(), "burst")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if resolved.Instance != "i-0faced0123456789" {
+		t.Errorf("resolved instance = %q, want the launched one", resolved.Instance)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if fake.describes < 2 {
+		t.Errorf("describes = %d, want the not-found answer to have been retried", fake.describes)
+	}
+
+	// It must NOT have thrown the machine away: terminating an instance EC2
+	// merely had not indexed yet is how a launch rung leaks money.
+	if len(fake.terminated) != 0 {
+		t.Errorf("terminated = %v, want the instance kept", fake.terminated)
 	}
 }

@@ -26,6 +26,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/smithy-go"
 )
 
 // Rung is how much has to happen before a worker can be dialed.
@@ -343,8 +344,10 @@ func fleetErrors(out *ec2.CreateFleetOutput) string {
 //
 // Running, not "passed its status checks": what has to be true is that the
 // SSM agent can register, and asking EC2 to confirm reachability would add
-// minutes to every acquisition. The dial that follows waits for the agent on
-// its own terms and reports that failure in its own words.
+// minutes to every acquisition. The dial that follows waits for the agent
+// itself, in waitForManagedNode — a promise this comment made for a long time
+// before anything kept it, which is why the launch rung never once worked
+// against real AWS.
 //
 // leaving names the state the instance is departing, and is empty for a
 // machine that did not exist a moment ago. It is what keeps the parked rung
@@ -366,7 +369,12 @@ func waitForRunning(ctx context.Context, api ec2API, worker Worker, instance str
 	for {
 		out, err := api.DescribeInstances(deadline, &ec2.DescribeInstancesInput{InstanceIds: []string{instance}})
 		if err != nil {
-			return fmt.Errorf("waiting for %s for %q: %w", instance, worker.URL, err)
+			err = waitOutInvisible(deadline, ticker, worker, instance, err)
+			if err != nil {
+				return err
+			}
+
+			continue
 		}
 
 		state := instanceState(out)
@@ -423,6 +431,38 @@ func awaitTick(deadline context.Context, ticker *time.Ticker, worker Worker, ins
 	case <-deadline.Done():
 		return fmt.Errorf("waiting for %s for %q: %w", instance, worker.URL, deadline.Err())
 	}
+}
+
+// waitOutInvisible sleeps through EC2's replica lag, or gives back the error
+// that was not lag.
+//
+// The same lag as the departing state waitForRunning tolerates, one step
+// earlier: EC2 hands back an instance id from CreateFleet and then denies the
+// instance exists for a few seconds. Tolerated for the whole acquireTimeout
+// rather than only until the instance is first seen — every id that reaches
+// here came from EC2 itself, CreateFleet's answer or one StartInstances
+// already accepted, so lag is the only thing this can be and a guard against
+// a bad id would be one no test could reach.
+func waitOutInvisible(
+	ctx context.Context, ticker *time.Ticker, worker Worker, instance string, cause error,
+) error {
+	if !notYetVisible(cause) {
+		return fmt.Errorf("waiting for %s for %q: %w", instance, worker.URL, cause)
+	}
+
+	return awaitTick(ctx, ticker, worker, instance)
+}
+
+// notYetVisible reports whether EC2 answered that an instance does not exist.
+//
+// By error CODE, never by message text: the message names the id and is
+// phrased for a human, while the code is the contract. An instance that truly
+// does not exist reports the same thing, which is why the caller only
+// tolerates this before it has ever seen the instance.
+func notYetVisible(err error) bool {
+	var apiErr smithy.APIError
+
+	return errors.As(err, &apiErr) && apiErr.ErrorCode() == "InvalidInstanceID.NotFound"
 }
 
 // instanceState reads the one instance's state out of a describe response.
