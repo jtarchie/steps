@@ -11,6 +11,13 @@
 // Deliberately GET/PUT by key over the pure-Go SDK, never a mounted
 // filesystem: every mount surveyed for #80 fails the working tree (dropped
 // exec bits, missing rename, no-op flock under SQLite).
+//
+// One caveat to the safety claim above, recorded rather than hidden: a blob
+// is never OVERWRITTEN (publishing HEAD-skips an existing key), so if a wrong
+// tree ever lands under a digest — reachable only by racing two processes
+// over one workspace.root, which the one-process-per-state-file doctrine
+// already forbids — the verify-on-fetch turns it into a permanent miss for
+// that digest rather than corruption, and only lifecycle expiry clears it.
 package blobstore
 
 import (
@@ -18,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
@@ -94,6 +102,24 @@ func New(ctx context.Context, opts Options) (*Store, error) {
 	if opts.Region != "" {
 		loaders = append(loaders, awsconfig.WithRegion(opts.Region))
 	}
+
+	// A transport that cannot sit on a black hole: the SDK's defaults bound
+	// dialing and TLS but never the wait for a response, and the blob mirror
+	// runs OUTSIDE any step's timeout — so an endpoint that accepted the
+	// connection and then said nothing hung a build indefinitely, after the
+	// step had already printed success. Response-header only, deliberately:
+	// an overall client timeout would kill legitimate large transfers.
+	loaders = append(loaders, awsconfig.WithHTTPClient(&http.Client{
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			ExpectContinueTimeout: time.Second,
+		},
+	}))
 
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, loaders...)
 	if err != nil {

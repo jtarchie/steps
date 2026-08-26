@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/jtarchie/steps/internal/blobstore"
 	"github.com/jtarchie/steps/internal/shell"
@@ -52,11 +53,23 @@ func NewRunner(spec shell.RunnerSpec) (shell.Runner, error) {
 	}}, nil
 }
 
+// artifactStores caches one client per store URL. Without it every placed
+// step — and every guard, and every SSM bootstrap — rebuilt the client and
+// re-resolved credentials from scratch: on EC2 that is an IMDS round trip per
+// step, and on SSO a token dance, for the same answer every time.
+//
+//nolint:gochecknoglobals // a cache over a config-derived singleton, not state
+var artifactStores sync.Map
+
 // artifactStoreFor opens the blob store a spec names, or nothing — trees then
 // ride the tunnel, which is always the floor.
 func artifactStoreFor(raw string) (*blobstore.Store, error) {
 	if raw == "" {
 		return nil, nil //nolint:nilnil // absence is the documented answer: no store, use the tunnel
+	}
+
+	if cached, ok := artifactStores.Load(raw); ok {
+		return cached.(*blobstore.Store), nil //nolint:forcetypeassert // this map holds one type
 	}
 
 	opts, err := blobstore.Parse(raw)
@@ -71,7 +84,9 @@ func artifactStoreFor(raw string) (*blobstore.Store, error) {
 		return nil, err //nolint:wrapcheck // as above
 	}
 
-	return store, nil
+	cached, _ := artifactStores.LoadOrStore(raw, store)
+
+	return cached.(*blobstore.Store), nil //nolint:forcetypeassert // as above
 }
 
 // resolveEnv reads the values of the variables a pipeline's env: opted into.

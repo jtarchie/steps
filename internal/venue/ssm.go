@@ -22,7 +22,6 @@ import (
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 
-	"github.com/jtarchie/steps/internal/blobstore"
 	"github.com/jtarchie/steps/internal/shim"
 	"github.com/jtarchie/steps/internal/venue/ssmdial"
 )
@@ -176,14 +175,10 @@ func ssmBinary(ctx context.Context, worker Worker) (remoteBinary, string, error)
 // already there, and mints the URL the instance fetches it with. Keyed by the
 // binary's own content hash, so a fleet uploads each build once.
 func publishShim(ctx context.Context, worker Worker, build string) (string, error) {
-	opts, err := blobstore.Parse(worker.ArtifactStore)
+	//nolint:contextcheck // the constructor reads only local configuration; see artifactStoreFor
+	store, err := artifactStoreFor(worker.ArtifactStore)
 	if err != nil {
-		return "", err //nolint:wrapcheck // blobstore names the URL and the rule it broke
-	}
-
-	store, err := blobstore.New(ctx, opts)
-	if err != nil {
-		return "", err //nolint:wrapcheck // as above
+		return "", err
 	}
 
 	key := "bin/" + build
@@ -252,7 +247,7 @@ func startRemoteShim(ctx context.Context, api ssmdial.API, worker Worker, platfo
 // place, so two steps racing cannot serve each other half a binary.
 func bootstrapScript(worker Worker, binary remoteBinary) string {
 	if binary.path != "" {
-		return shimStartScript(worker, binary.path)
+		return "set -eu\n" + shimStartScript(worker, shellQuote(binary.path))
 	}
 
 	root := worker.Root
@@ -260,17 +255,26 @@ func bootstrapScript(worker Worker, binary remoteBinary) string {
 		root = "/tmp"
 	}
 
-	target := fmt.Sprintf("%s/steps-shim/%s/steps", root, binary.build)
+	target := root + "/steps-shim/" + binary.build + "/steps"
 
+	// shellQuote, not %q: this script is handed to a POSIX shell, and Go
+	// quoting leaves $ and backticks live inside its double quotes — the
+	// exact hole ssh.go's own quoting comment documents. curl with a wget
+	// fallback, because minimal images carry one or the other.
 	return fmt.Sprintf(`set -eu
-BIN=%q
+BIN=%s
+URL=%s
 mkdir -p "$(dirname "$BIN")"
 if [ ! -x "$BIN" ]; then
-  curl -fsSL -o "$BIN.$$.part" %q
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL -o "$BIN.$$.part" "$URL"
+  else
+    wget -qO "$BIN.$$.part" "$URL"
+  fi
   chmod 0700 "$BIN.$$.part"
   mv -f "$BIN.$$.part" "$BIN"
 fi
-%s`, target, binary.url, shimStartScript(worker, "$BIN"))
+%s`, shellQuote(target), shellQuote(binary.url), shimStartScript(worker, `"$BIN"`))
 }
 
 // shimStartScript starts a shim in the background and waits for it to say
@@ -283,7 +287,9 @@ fi
 func shimStartScript(worker Worker, binary string) string {
 	root := ""
 	if worker.Root != "" {
-		root = " --root " + worker.Root
+		// Quoted for the same reason the fetch above is: a root with a space
+		// in it should be that root, not two arguments.
+		root = " --root " + shellQuote(worker.Root)
 	}
 
 	return fmt.Sprintf(`LOG=$(mktemp)
