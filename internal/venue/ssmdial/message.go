@@ -164,9 +164,10 @@ func paddedType(t messageType) []byte {
 
 // swapUUIDHalves exchanges a UUID's two 8-byte halves.
 //
-// Not a byte-order quirk of this codec: the SSM agent stores a UUID as two
-// little-endian longs, so the halves appear swapped relative to RFC 4122
-// order. Its own inverse, which is why one function serves both directions.
+// The agent writes the least-significant half first (each half itself
+// big-endian), so the halves appear swapped relative to RFC 4122 order. Its
+// own inverse, which is why one function serves both directions — and getting
+// it wrong produces acknowledgements naming message ids no agent recognizes.
 func swapUUIDHalves(data []byte) []byte {
 	swapped := make([]byte, len(data))
 	copy(swapped, data[8:])

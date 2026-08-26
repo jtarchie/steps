@@ -67,7 +67,15 @@ const (
 	payloadHandshakeResponse   payloadType = 6
 	payloadHandshakeComplete   payloadType = 7
 	payloadEncChallengeRequest payloadType = 8
+	payloadFlag                payloadType = 10
 )
+
+// flagTerminateSession, sent as a Flag payload, tells the agent the session
+// is over. Without it the session lingers server-side — visible in
+// describe-sessions and counted against the instance's concurrent-session
+// limit — until the service times it out, with the agent blocked waiting for
+// a reconnect that is never coming.
+const flagTerminateSession uint32 = 2
 
 // actionType is a client action the agent asks for during the handshake.
 type actionType string
@@ -144,17 +152,32 @@ type channelClosedPayload struct {
 }
 
 // openChannelRequest is the first thing sent on a fresh websocket: the token
-// StartSession minted, which is what authorizes this connection.
+// StartSession minted, which is what authorizes this connection. ClientId
+// and ClientVersion are marked required by the service's own schema — today
+// it tolerates their absence, but "works because unenforced" is not a
+// contract worth holding.
 type openChannelRequest struct {
 	MessageSchemaVersion string `json:"MessageSchemaVersion"`
 	RequestID            string `json:"RequestId"`
 	TokenValue           string `json:"TokenValue"`
+	ClientID             string `json:"ClientId"`
+	ClientVersion        string `json:"ClientVersion"`
 }
 
-// resendInterval is how often unacknowledged outbound messages are re-sent.
-// The agent acknowledges promptly on a healthy channel, so this fires only
-// when something was actually lost.
+// resendInterval is both how often the resend pass runs and how old an
+// unacknowledged message must be before it is re-sent. Age-gated because the
+// outbound window can hold hundreds of messages when a big write was chunked,
+// and re-sending ALL of them every pass would flood the channel with copies
+// of messages whose acks are simply still in flight.
 const resendInterval = 200 * time.Millisecond
+
+// maxOutboundPayload chunks what Write sends. Every known-working client —
+// the official plugin and the agent itself pin StreamDataPayloadSize at 1024
+// — stays at or under a kilobyte, and the messaging service's own frame
+// limit is undocumented; a payload it drops would kill sessions only in
+// production, precisely the class of failure the fake-agent tests cannot
+// see. Matching the fleet is the only defensible number.
+const maxOutboundPayload = 1024
 
 // pingInterval keeps NAT and load-balancer idle timers open. Server-side
 // keepalives are one-directional and do not hold a client-side timer open,

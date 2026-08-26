@@ -5,6 +5,7 @@ package ssmdial
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,7 +32,7 @@ type Channel struct {
 	mu       sync.Mutex
 	seq      int64
 	synSent  bool
-	unacked  map[int64]*agentMessage
+	unacked  map[int64]*unackedMessage
 	closed   bool
 	closeErr error
 
@@ -63,6 +64,13 @@ type Channel struct {
 	now func() time.Time
 }
 
+// unackedMessage is one retained outbound message and when it last went out,
+// so the resend pass re-sends only what has actually had time to be lost.
+type unackedMessage struct {
+	message *agentMessage
+	sentAt  time.Time
+}
+
 // ErrChannelClosed is a session the far end ended. Its message carries the
 // agent's own account, which is the only explanation of a refused port or a
 // terminated session that ever reaches this end.
@@ -87,7 +95,7 @@ func Open(ctx context.Context, streamURL, token string) (*Channel, error) {
 
 	channel := &Channel{
 		ws:         conn,
-		unacked:    map[int64]*agentMessage{},
+		unacked:    map[int64]*unackedMessage{},
 		delivered:  make(chan []byte, 64),
 		handshaked: make(chan struct{}),
 		inBuf:      map[int64][]byte{},
@@ -125,6 +133,8 @@ func (c *Channel) openDataChannel(token string) error {
 		MessageSchemaVersion: "1.0",
 		RequestID:            uuid.NewString(),
 		TokenValue:           token,
+		ClientID:             uuid.NewString(),
+		ClientVersion:        clientVersion,
 	}
 
 	payload, err := json.Marshal(request)
@@ -194,16 +204,21 @@ func (c *Channel) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// Write sends bytes to the forwarded port.
+// Write sends bytes to the forwarded port, in messages no larger than every
+// known client's payload cap — see maxOutboundPayload.
 func (c *Channel) Write(p []byte) (int, error) {
-	message := newAgentMessage(c.now())
-	message.messageType = msgInputStreamData
-	message.payloadType = payloadOutput
-	message.payload = append([]byte(nil), p...)
+	for offset := 0; offset < len(p); offset += maxOutboundPayload {
+		end := min(offset+maxOutboundPayload, len(p))
 
-	err := c.send(message, true)
-	if err != nil {
-		return 0, err
+		message := newAgentMessage(c.now())
+		message.messageType = msgInputStreamData
+		message.payloadType = payloadOutput
+		message.payload = append([]byte(nil), p[offset:end]...)
+
+		err := c.send(message, true)
+		if err != nil {
+			return offset, err
+		}
 	}
 
 	return len(p), nil
@@ -238,7 +253,7 @@ func (c *Channel) send(message *agentMessage, retain bool) error {
 		message.sequenceNumber = c.seq
 
 		if retain {
-			c.unacked[message.sequenceNumber] = message
+			c.unacked[message.sequenceNumber] = &unackedMessage{message: message, sentAt: c.now()}
 		}
 	}
 
@@ -338,7 +353,11 @@ func (c *Channel) outputStream(message *agentMessage) error {
 		// session is encrypted and this end cannot read it. Saying so beats
 		// answering with plaintext the agent will reject.
 		return fmt.Errorf("%w: the session requires KMS encryption, which this client does not implement", errHandshake)
-	case payloadUndefined, payloadHandshakeResponse:
+	case payloadUndefined, payloadHandshakeResponse, payloadFlag:
+		// payloadFlag is agent-to-client only under MUX port forwarding,
+		// which advertising clientVersion 1.1.0 rules out — a basic-mode
+		// agent's write pump sends Output and nothing else. Acknowledged and
+		// dropped if one ever arrives, like anything unrecognized.
 		return c.acknowledge(message)
 	default:
 		return c.acknowledge(message)
@@ -397,9 +416,12 @@ func (c *Channel) answerHandshake(message *agentMessage) error {
 	reply.payloadType = payloadHandshakeResponse
 	reply.payload = payload
 
-	// Not retained for retransmission: the agent answers a handshake response
-	// with handshake_complete rather than an acknowledgement, so a retained
-	// copy would be re-sent forever.
+	// Not retained for retransmission, matching the community clients rather
+	// than the official plugin (which retains it — the agent does acknowledge
+	// handshake responses). The cost of not retaining is no retransmit if
+	// this one TLS-protected frame is lost, which stalls the handshake into
+	// its timeout; accepted as negligible against carrying resend state
+	// through the handshake phase.
 	return c.send(reply, false)
 }
 
@@ -517,13 +539,25 @@ func (c *Channel) channelClosed(message *agentMessage) error {
 	return fmt.Errorf("%w: %s", ErrChannelClosed, payload.Output)
 }
 
-// resendUnacked re-sends everything the agent has not confirmed.
+// resendUnacked re-sends what the agent has not confirmed and has had at
+// least a full interval to — a message younger than that has its ack still
+// legitimately in flight, and re-sending the whole window every pass would
+// flood the channel when a chunked write put hundreds of messages there.
 func (c *Channel) resendUnacked() {
+	now := c.now()
+
 	c.mu.Lock()
 
 	pending := make([]*agentMessage, 0, len(c.unacked))
-	for _, message := range c.unacked {
-		pending = append(pending, message)
+
+	for _, entry := range c.unacked {
+		if now.Sub(entry.sentAt) < resendInterval {
+			continue
+		}
+
+		entry.sentAt = now
+
+		pending = append(pending, entry.message)
 	}
 
 	c.mu.Unlock()
@@ -591,7 +625,19 @@ func (c *Channel) err() error {
 }
 
 // Close ends the session and waits for its goroutines.
+//
+// The terminate flag goes first, best-effort: without it the session lingers
+// server-side against the instance's concurrent-session limit, and the
+// agent's basic port session blocks waiting for a reconnect that is never
+// coming.
 func (c *Channel) Close() error {
+	terminate := newAgentMessage(c.now())
+	terminate.messageType = msgInputStreamData
+	terminate.payloadType = payloadFlag
+	terminate.payload = binary.BigEndian.AppendUint32(nil, flagTerminateSession)
+
+	_ = c.send(terminate, false)
+
 	c.fail(io.EOF)
 
 	c.writeMu.Lock()

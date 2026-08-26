@@ -11,7 +11,9 @@ package ssmdial
 // The fake is a regression net, not a conformance one.
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -40,13 +42,21 @@ type fakeAgent struct {
 	// scramble delivers the agent's own data messages out of order.
 	scramble bool
 
-	mu       sync.Mutex
-	conn     *websocket.Conn
-	seq      int64
-	token    string
-	received [][]byte
-	acked    []int64
-	dropped  bool
+	mu         sync.Mutex
+	conn       *websocket.Conn
+	seq        int64
+	token      string
+	received   [][]byte
+	acked      []int64
+	dropped    bool
+	terminated bool
+}
+
+func (a *fakeAgent) SawTerminate() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return a.terminated
 }
 
 func (a *fakeAgent) Received() [][]byte {
@@ -150,6 +160,11 @@ func (a *fakeAgent) pump() {
 			a.onHandshakeResponse(message)
 		case message.payloadType == payloadOutput:
 			a.onData(message)
+		case message.payloadType == payloadFlag:
+			a.mu.Lock()
+			a.terminated = a.terminated ||
+				(len(message.payload) == 4 && binary.BigEndian.Uint32(message.payload) == flagTerminateSession)
+			a.mu.Unlock()
 		}
 	}
 }
@@ -625,5 +640,73 @@ func TestOpenRespectsItsContext(t *testing.T) {
 	_, err := Open(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), "test-token")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error = %v, want the context's deadline", err)
+	}
+}
+
+// TestChannelChunksLargeWrites pins the payload cap: every known client — the
+// official plugin and the agent itself — stays at or under 1024 bytes per
+// message, and the messaging service's own frame limit is undocumented. A
+// larger frame would work against this fake and die only against production,
+// which is exactly the class of failure these tests otherwise cannot see.
+func TestChannelChunksLargeWrites(t *testing.T) {
+	t.Parallel()
+
+	channel, agent := openFake(t, &fakeAgent{})
+
+	payload := bytes.Repeat([]byte("x"), 5*maxOutboundPayload+7)
+
+	n, err := channel.Write(payload)
+	if err != nil || n != len(payload) {
+		t.Fatalf("Write = %d, %v; want the whole payload accepted", n, err)
+	}
+
+	if got := readAtLeast(t, channel, len(payload)); got != string(payload) {
+		t.Fatal("the chunked payload did not reassemble")
+	}
+
+	received := agent.Received()
+	if len(received) < 6 {
+		t.Fatalf("the agent saw %d messages for a %d-byte write, want it chunked", len(received), len(payload))
+	}
+
+	for i, message := range received {
+		if len(message) > maxOutboundPayload {
+			t.Fatalf("message %d carries %d bytes, over every known client's cap", i, len(message))
+		}
+	}
+}
+
+// TestChannelSaysGoodbye pins the terminate flag: without it the session
+// lingers server-side against the instance's concurrent-session limit, and
+// the agent's port session blocks awaiting a reconnect that is never coming.
+func TestChannelSaysGoodbye(t *testing.T) {
+	t.Parallel()
+
+	channel, agent := openFake(t, &fakeAgent{})
+
+	_, err := channel.Write([]byte("work"))
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	readAtLeast(t, channel, len("work"))
+
+	err = channel.Close()
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+
+	for {
+		if agent.SawTerminate() {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatal("the agent never saw the terminate flag; the session lingers server-side")
+		}
+
+		time.Sleep(10 * time.Millisecond)
 	}
 }
