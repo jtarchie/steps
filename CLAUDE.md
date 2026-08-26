@@ -28,51 +28,12 @@ Trust these instructions. Only search the codebase if something here is missing 
 
 ## Build, test, lint — `task` runs it all
 
-Prerequisites: Go 1.26.6 (`go version`), golangci-lint v2.12+ (`golangci-lint version`; `brew install golangci-lint`), and go-task (`task --version`; `brew install go-task`). SQLite is vendored (`modernc.org/sqlite`, pure Go, no cgo/system SQLite needed). `task install:tools` installs the two remaining CLIs the sequence needs (`govulncheck`, `nilaway`) — neither needs network/Docker/credentials to *run* (govulncheck fetches the vuln DB, which needs network once per invocation).
+Run `task` (bare — an alias for `task fmt`) after any code change. It is the whole sequence, in order, and needs no Docker or credentials; `Taskfile.yml` names each step and why it is there, `task install:tools` installs the CLIs beyond the Go toolchain, and `task --list` is the current inventory. What the Taskfile cannot tell you:
 
-Run `task` (bare — it's an alias for `task fmt`) after any code change; it runs the whole sequence below, in order, and does not require Docker or credentials:
-
-```bash
-task
-```
-
-`task fmt` runs, in order:
-
-```bash
-go fmt ./...     # ~0.3s. Auto-formats; most editors already do this.
-task tidy        # go mod tidy — ~0.1s, currently a no-op — go.mod/go.sum are already
-                  # tidy. If it changes anything, that's a real signal: commit the diff.
-task lint        # golangci-lint run — ~2.2s. ~40 linters enabled (.golangci.yml). MUST
-                  # report "0 issues" before a change is done — a failing lint blocks
-                  # the build, always fix lint before touching logic further.
-task kindswitch  # go run ./tools/kindswitch ./... — ~3s. Reports TAGLESS kind dispatch
-                  # (`switch { case step.Put != "": }`) that omits a kind from
-                  # config.Step's own Kind() table. golangci-lint's `exhaustive` covers
-                  # only the TAGGED spelling (`switch kind {`) — the tagless form is
-                  # `switch true`, with no enum type to reason about, so it is outside
-                  # that analyzer's model, not a config gap. Must exit 0. Suppress a
-                  # deliberate omission with `//kindswitch:ignore <reason>` on the line
-                  # above the switch; a reason is mandatory (a bare directive is ignored
-                  # and the switch keeps reporting).
-task test        # go test -race ./... — ~5.5m wall. The race detector is ON, and the
-                  # cost is deliberate: a data race is invisible to every other check in
-                  # this sequence (it compiles, it lints clean, it passes until two
-                  # goroutines interleave), and one shipped green through the whole
-                  # sequence in the SSM data channel before this was added. Every venue
-                  # transport is concurrent by construction. -p 1 (serialized) only buys
-                  # deterministic interleaved log output, not correctness — run it
-                  # directly if you need that.
-task build       # go build -v — ~2.5s warm cache. Produces ./steps (~56MB).
-task vuln        # govulncheck ./... — ~5s (first run also fetches the vuln DB over
-                  # network). Reports known CVEs actually reachable from the build —
-                  # stdlib CVEs are pinned to the Go *patch* version (`go version`), not
-                  # this repo's code, so a finding here is usually fixed by
-                  # `brew upgrade go`, not an edit. MUST report 0 vulnerabilities.
-task nilaway     # nilaway -exclude-test-files=true ./... || true — ~4s. Uber's
-                  # nil-flow analyzer, advisory only — never gates a change, deliberately
-                  # not added to golangci-lint's run. It has a real false-positive rate
-                  # (e.g. flags slicing a possibly-nil slice, which Go allows).
-```
+- **Lint must report `0 issues`** before a change is done — fix lint before touching logic further.
+- **`task test` runs `-race` and takes ~5.5 minutes.** Deliberate: a data race is invisible to every other check here, and one shipped green through this whole sequence before the flag was added. `-p 1` buys deterministic log interleaving, not correctness.
+- **A govulncheck finding is usually a Go *patch* version issue**, not this repo's code — `brew upgrade go` fixes more of them than an edit does. Must report 0.
+- **`//kindswitch:ignore <reason>`** suppresses a deliberate tagless-switch omission; the reason is mandatory (a bare directive is ignored and the switch keeps reporting).
 
 Two advisory targets sit outside the sequence, run on demand when touching code (not docs): `task cover-diff [BASE=rev]` prints changed lines no test executed, and `task mutate-pkg PKG=./internal/foo` runs gremlins mutation testing over one package (minutes; hours for packages with heavy dependents like venue/pipeline — scope deliberately). Both exist because an untested layer once shipped green; triage what they print rather than gating on them. The opt-in real-AWS conformance tests for the SSM data channel (`STEPS_TEST_AWS_INSTANCE=i-... go test ./internal/venue/ssmdial -run TestRealAWS`) are the only proof of protocol agreement with the real agent — the package's fake-agent tests pin the protocol as this repo reads it, and a shared misreading passes both sides.
 
