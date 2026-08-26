@@ -276,7 +276,7 @@ func fleetRequest(worker Worker) *ec2.CreateFleetInput {
 		LaunchTemplateConfigs: []ec2types.FleetLaunchTemplateConfigRequest{{
 			LaunchTemplateSpecification: &ec2types.FleetLaunchTemplateSpecificationRequest{
 				LaunchTemplateId: aws.String(worker.Template),
-				Version:          aws.String("$Default"),
+				Version:          aws.String(worker.Version),
 			},
 		}},
 		TargetCapacitySpecification: &ec2types.TargetCapacitySpecificationRequest{

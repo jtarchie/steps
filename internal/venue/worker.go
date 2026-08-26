@@ -83,6 +83,12 @@ type Worker struct {
 	Template string
 	// Capacity is which EC2 capacity a launch-rung worker asks for.
 	Capacity Capacity
+	// Version is which launch-template version the launch rung asks for,
+	// always in EC2's own spelling: $Default, $Latest, or a number. A launch
+	// template is a container of numbered immutable versions, so this is the
+	// whole of steps' machine-shape surface — disk, instance type, AMI and
+	// user data all live in a version, which is why there is no ?disk=.
+	Version string
 	// Idle is how long a parked worker stays running after the job that
 	// started it, for an operator who wants back-to-back jobs to skip the
 	// cold start and accepts that the releasing job waits out the window.
@@ -189,6 +195,11 @@ func applyQuery(worker Worker, parsed *url.URL) (Worker, error) {
 	worker.Capacity = Capacity(query.Get("capacity"))
 	worker.IdleSet = query.Has("idle")
 
+	worker.Version, err = parseTemplateVersion(worker, query)
+	if err != nil {
+		return Worker{}, err
+	}
+
 	worker.Idle, err = parseIdle(worker, query.Get("idle"))
 	if err != nil {
 		return Worker{}, err
@@ -213,6 +224,7 @@ var queryKeys = map[string][]Scheme{
 	"shim":        {SchemeAWS},
 	"capacity":    {SchemeAWS},
 	"idle":        {SchemeAWS},
+	"version":     {SchemeAWS},
 }
 
 // checkQueryKeys refuses an option the grammar does not know, or one that
@@ -230,6 +242,44 @@ func checkQueryKeys(worker Worker, query url.Values) error {
 	}
 
 	return nil
+}
+
+// versionNumber is a launch-template version as EC2 numbers them: from 1, so
+// 0 and negatives can only be a mistake.
+var versionNumber = regexp.MustCompile(`^[1-9][0-9]*$`)
+
+// parseTemplateVersion reads which launch-template version to launch from,
+// and normalizes it to the spelling EC2 understands.
+//
+// The bare words are this repo's addition, because a shell eats the real
+// ones: unquoted, ?version=$Latest arrives as ?version= — so the empty value
+// is refused rather than read as "default", which is exactly the silent
+// wrong-machine the bare spellings exist to prevent.
+func parseTemplateVersion(worker Worker, query url.Values) (string, error) {
+	if !query.Has("version") {
+		// Not $Latest: a template someone else edits must not change what a
+		// job that named no version runs on.
+		return "$Default", nil
+	}
+
+	if worker.Rung != RungLaunch {
+		return "", fmt.Errorf("%w %q: version= names a launch-template version, and this worker names a machine that already exists",
+			ErrWorker, worker.URL)
+	}
+
+	switch raw := query.Get("version"); raw {
+	case "$Default", "default":
+		return "$Default", nil
+	case "$Latest", "latest":
+		return "$Latest", nil
+	default:
+		if versionNumber.MatchString(raw) {
+			return raw, nil
+		}
+
+		return "", fmt.Errorf("%w %q: version= must be $Default, $Latest or a version number from 1 — default and latest spell the first two without the $ a shell eats: %q",
+			ErrWorker, worker.URL, raw)
+	}
 }
 
 // parseIdle reads how long a parked worker stays up after its job.

@@ -367,6 +367,14 @@ func TestParseAcquisitionRungs(t *testing.T) {
 		"aws://launch/lt-0def4567890abcde?capacity=cheap",
 		"aws://i-0abc123def456789?capacity=spot", // capacity describes a launch
 		"aws://stopped/i-0abc123def456789?idle=soon",
+		"aws://launch/lt-0def4567890abcde?version=lastest", // the typo the whole check exists for
+		"aws://launch/lt-0def4567890abcde?version=0",       // EC2 numbers versions from 1
+		"aws://launch/lt-0def4567890abcde?version=-1",
+		"aws://launch/lt-0def4567890abcde?version=2.1",
+		"aws://launch/lt-0def4567890abcde?version=",
+		"aws://i-0abc123def456789?version=2",         // no template to have versions
+		"aws://stopped/i-0abc123def456789?version=2", // nor here
+		"ssh://jt@gpu-box?version=2",                 // nor off aws:// entirely
 	} {
 		_, err := ParseWorker(raw)
 		if !errors.Is(err, ErrWorker) {
@@ -647,5 +655,102 @@ func TestLeaseFailsAMachineThatGoesBackToStopped(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "went to stopped") {
 		t.Errorf("error = %v, want it to name the state the machine went to", err)
+	}
+}
+
+// TestParseWorkerReadsLaunchTemplateVersion pins the spellings EC2 accepts,
+// plus the two bare ones this repo adds.
+//
+// $Default and $Latest are EC2's own, and a shell eats them: unquoted,
+// ?version=$Latest arrives as ?version= and would otherwise mean "default"
+// silently. Accepting the bare words gives an operator a spelling that
+// survives the command line, normalized here so everything downstream sees
+// only what EC2 understands.
+func TestParseWorkerReadsLaunchTemplateVersion(t *testing.T) {
+	t.Parallel()
+
+	for raw, want := range map[string]string{
+		"":         "$Default", // unstated: the version the template itself blesses
+		"$Default": "$Default",
+		"$Latest":  "$Latest",
+		"default":  "$Default",
+		"latest":   "$Latest",
+		"1":        "1",
+		"27":       "27",
+	} {
+		url := "aws://launch/lt-0def4567890abcde"
+		if raw != "" {
+			url += "?version=" + raw
+		}
+
+		worker, err := ParseWorker(url)
+		if err != nil {
+			t.Fatalf("ParseWorker(%q): %v", url, err)
+		}
+
+		if worker.Version != want {
+			t.Errorf("ParseWorker(%q).Version = %q, want %q", url, worker.Version, want)
+		}
+	}
+}
+
+// TestLaunchAsksForTheRequestedTemplateVersion is the seam: a version parsed
+// off the URL and never handed to CreateFleet is a knob that reads as
+// configured and launches the default machine anyway — the exact failure the
+// capacity= default was written to avoid.
+func TestLaunchAsksForTheRequestedTemplateVersion(t *testing.T) {
+	fake := &fakeEC2{}
+	seamEC2(t, fake)
+
+	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde?version=7")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	leases := NewLeases(map[string]Worker{"burst": worker})
+
+	_, err = leases.Resolve(context.Background(), "burst")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if len(fake.fleets) != 1 {
+		t.Fatalf("fleets = %d, want one", len(fake.fleets))
+	}
+
+	spec := fake.fleets[0].LaunchTemplateConfigs[0].LaunchTemplateSpecification
+	if aws.ToString(spec.Version) != "7" {
+		t.Errorf("fleet version = %q, want the version the mapping named", aws.ToString(spec.Version))
+	}
+}
+
+// TestLaunchDefaultsToTheBlessedTemplateVersion pins the unstated case:
+// $Default, never $Latest, because $Latest means someone editing a template
+// changes what every job runs on without touching a pipeline.
+func TestLaunchDefaultsToTheBlessedTemplateVersion(t *testing.T) {
+	fake := &fakeEC2{}
+	seamEC2(t, fake)
+
+	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	leases := NewLeases(map[string]Worker{"burst": worker})
+
+	_, err = leases.Resolve(context.Background(), "burst")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	spec := fake.fleets[0].LaunchTemplateConfigs[0].LaunchTemplateSpecification
+	if aws.ToString(spec.Version) != "$Default" {
+		t.Errorf("fleet version = %q, want $Default", aws.ToString(spec.Version))
 	}
 }
