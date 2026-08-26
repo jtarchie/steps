@@ -21,6 +21,10 @@ import (
 type fakeEC2 struct {
 	mu sync.Mutex
 
+	// stoppedBefore is how many describes still report "stopped" after a
+	// start, standing in for EC2's read-after-write lag: DescribeInstances
+	// answers from a replica that has not seen the StartInstances yet.
+	stoppedBefore int
 	// pendingBefore is how many describes report "pending" before the
 	// instance is reported running, standing in for a boot.
 	pendingBefore int
@@ -73,11 +77,15 @@ func (f *fakeEC2) DescribeInstances(_ context.Context, _ *ec2.DescribeInstancesI
 
 	state := ec2types.InstanceStateNameRunning
 
+	// The scripted prefix runs before endState, so a test can say "pending,
+	// then it went away" — the shape endState alone cannot express.
 	switch {
+	case f.describes <= f.stoppedBefore:
+		state = ec2types.InstanceStateNameStopped
+	case f.describes <= f.stoppedBefore+f.pendingBefore:
+		state = ec2types.InstanceStateNamePending
 	case f.endState != "":
 		state = f.endState
-	case f.describes <= f.pendingBefore:
-		state = ec2types.InstanceStateNamePending
 	}
 
 	return &ec2.DescribeInstancesOutput{
@@ -581,5 +589,63 @@ func TestLeaseReleaseAllRunsConcurrently(t *testing.T) {
 
 	if len(fake.stopped) != 3 {
 		t.Errorf("stopped = %v, want all three parked", fake.stopped)
+	}
+}
+
+// TestLeaseWaitsOutTheStoppedStateAfterStarting is the parked rung against
+// EC2's own consistency model, which the fixture caught and no fake had:
+// DescribeInstances keeps answering "stopped" for a second or two after
+// StartInstances succeeded. Read as terminal, that fails the acquisition on
+// its first poll AND runs the failed-acquire cleanup, stopping the machine it
+// just started — so the assertion below is as much about what was NOT called.
+func TestLeaseWaitsOutTheStoppedStateAfterStarting(t *testing.T) {
+	fake := &fakeEC2{stoppedBefore: 1}
+	seamEC2(t, fake)
+
+	worker, err := ParseWorker("aws://stopped/i-0abc123def456789?idle=0")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	leases := NewLeases(map[string]Worker{"parked": worker})
+
+	resolved, err := leases.Resolve(context.Background(), "parked")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if resolved.Instance != "i-0abc123def456789" {
+		t.Errorf("resolved instance = %q, want the parked one", resolved.Instance)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if len(fake.stopped) != 0 {
+		t.Errorf("stopped = %v, want the machine it just started left running", fake.stopped)
+	}
+}
+
+// TestLeaseFailsAMachineThatGoesBackToStopped is the other half: tolerating
+// "stopped" is about the state the instance is LEAVING, so once it has been
+// seen to leave, going back is terminal exactly as it was before.
+func TestLeaseFailsAMachineThatGoesBackToStopped(t *testing.T) {
+	fake := &fakeEC2{pendingBefore: 1, endState: ec2types.InstanceStateNameStopped}
+	seamEC2(t, fake)
+
+	worker, err := ParseWorker("aws://stopped/i-0abc123def456789?idle=0")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	leases := NewLeases(map[string]Worker{"parked": worker})
+
+	_, err = leases.Resolve(context.Background(), "parked")
+	if err == nil {
+		t.Fatal("an instance that went back to stopped was accepted")
+	}
+
+	if !strings.Contains(err.Error(), "went to stopped") {
+		t.Errorf("error = %v, want it to name the state the machine went to", err)
 	}
 }

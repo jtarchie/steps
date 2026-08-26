@@ -141,7 +141,7 @@ func startParked(ctx context.Context, api ec2API, worker Worker) (Worker, func(c
 		return Worker{}, nil, fmt.Errorf("starting %s for %q: %w", worker.Instance, worker.URL, err)
 	}
 
-	err = waitForRunning(ctx, api, worker, worker.Instance)
+	err = waitForRunning(ctx, api, worker, worker.Instance, ec2types.InstanceStateNameStopped)
 	if err != nil {
 		// A machine this end started and cannot use is still a machine
 		// somebody is paying for, and nothing later will stop it: the lease
@@ -219,7 +219,8 @@ func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, fun
 		return Worker{}, nil, fmt.Errorf("%w %q: %s", errNoCapacity, worker.URL, fleetErrors(out))
 	}
 
-	err = waitForRunning(ctx, api, worker, instance)
+	// No state to leave: a fleet's instance did not exist a moment ago.
+	err = waitForRunning(ctx, api, worker, instance, "")
 	if err != nil {
 		// Terminated rather than left behind: a machine this end cannot use
 		// is still a machine somebody is paying for. Its own context, because
@@ -344,12 +345,23 @@ func fleetErrors(out *ec2.CreateFleetOutput) string {
 // SSM agent can register, and asking EC2 to confirm reachability would add
 // minutes to every acquisition. The dial that follows waits for the agent on
 // its own terms and reports that failure in its own words.
-func waitForRunning(ctx context.Context, api ec2API, worker Worker, instance string) error {
+//
+// leaving names the state the instance is departing, and is empty for a
+// machine that did not exist a moment ago. It is what keeps the parked rung
+// honest: DescribeInstances answers from a replica, so it reports "stopped"
+// for a second or two AFTER StartInstances succeeded — read as terminal that
+// fails the acquisition on its first poll and then stops the machine it just
+// started. Tolerated only until the instance is seen to leave, so a start
+// that silently did not take is still bounded by acquireTimeout, and a
+// machine that goes back is terminal exactly as it was.
+func waitForRunning(ctx context.Context, api ec2API, worker Worker, instance string, leaving ec2types.InstanceStateName) error {
 	deadline, cancel := context.WithTimeout(ctx, acquireTimeout)
 	defer cancel()
 
 	ticker := time.NewTicker(acquirePoll)
 	defer ticker.Stop()
+
+	left := leaving == ""
 
 	for {
 		out, err := api.DescribeInstances(deadline, &ec2.DescribeInstancesInput{InstanceIds: []string{instance}})
@@ -358,6 +370,20 @@ func waitForRunning(ctx context.Context, api ec2API, worker Worker, instance str
 		}
 
 		state := instanceState(out)
+
+		if !left && state != leaving {
+			left = true
+		}
+
+		if !left && state == leaving {
+			select {
+			case <-ticker.C:
+				continue
+			case <-deadline.Done():
+				return fmt.Errorf("waiting for %s for %q: %w", instance, worker.URL, deadline.Err())
+			}
+		}
+
 		switch state {
 		case ec2types.InstanceStateNameRunning:
 			return nil
