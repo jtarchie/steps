@@ -38,12 +38,19 @@ tasks:
       # silent pass. Anything else is reported immediately.
       - |
         for attempt in 1 2 3 4 5 6; do
-          if out=$(golangci-lint run 2>&1); then
+          # Status captured from the command, NOT after the if: an if whose
+          # condition is false and which has no else exits 0 by POSIX, so
+          # `status=$?` there read 0 and this task exited 0 on every real
+          # finding. Lint was not a gate at all, and a gosec finding proved it
+          # by sailing through the whole sequence.
+          out=$(golangci-lint run 2>&1)
+          status=$?
+
+          if [ "$status" -eq 0 ]; then
             printf '%s\n' "$out"
             exit 0
           fi
 
-          status=$?
           case "$out" in
             *"parallel golangci-lint is running"*)
               echo "another golangci-lint holds the lock; waiting 15s (attempt $attempt/6)" >&2
