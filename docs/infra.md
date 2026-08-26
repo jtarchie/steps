@@ -129,7 +129,7 @@ Keeping machines out of the pipeline file is what lets the same pipeline run on 
 - **`local:`** runs the step through a shim in a child process on this machine — for trying a tagged pipeline out without a worker, and for debugging the shim itself: `--worker gpu=local:`.
 - Valid on **task steps only**. Invalid on `get`/`put` steps (their commands come from the resource type), on `agent` steps and on a task with `fix:` — an agent's tools and conversation run in the orchestrator, so only its shell commands would move, leaving half a step on each machine. Invalid with `image:`: a worker runs the step's commands directly, so name a worker that already has what the step needs.
 - The remote contract is **sshd and a pushed `steps` binary**, nothing else — no agent to install, no daemon to run. `steps` uploads itself over SFTP on first use, keyed by the binary's own content hash, and reuses it after that.
-- **The URL's path chooses a disk** on the worker: `ssh://jt@gpu-box/mnt/fast` puts both the pushed binary and the step's tree under `/mnt/fast`. Absolute, as written. Omit it and the worker's own temp directory is used, which on a machine whose `/tmp` shares the root filesystem is how a build tree fills it.
+- **The URL's path chooses a disk** on the worker: `ssh://jt@gpu-box/mnt/fast` puts both the pushed binary and the step's tree under `/mnt/fast`. Absolute, as written. Omit it and the worker's own temp directory is used, and `/tmp` is the wrong disk in two different ways. Where it shares the root filesystem, a build tree fills it. Where systemd mounts it as **tmpfs** — the default on Amazon Linux 2023, on Fedora, and on recent Debian and Ubuntu releases — it is *memory*, capped near half the machine's RAM: the pushed binary and the step's tree are then competing with the build for the same resource, and neither survives a reboot, so an acquired worker re-downloads the binary every time it is started. Measured on a `t4g.small`: a 921M tmpfs with 111M of it spent on the shim binary before the step ran. Name a path on a real disk — `aws://i-0abc123def456789/var/tmp/steps` — for anything past a first try.
 - **Authentication** is your SSH agent, or `?identity=/path/to/key` for a specific key (an encrypted key has to go through the agent). Host keys are checked against `~/.ssh/known_hosts`, or `?known_hosts=` — never skipped.
 - **A machine with no `known_hosts` entry** — one acquired on demand, used, and destroyed — is pinned by fingerprint instead: `?hostkey=SHA256:...`, exactly as `ssh-keygen -lf` prints it. Naming both it and `?known_hosts=` is an error rather than a precedence rule. A malformed fingerprint is refused when the mapping is read, not when the worker is dialed: a typo that only failed on connection is indistinguishable from the machine having been replaced, which is the alarm the pin exists to raise.
 - **`~/.ssh/config` fills in what the mapping leaves out**, so a worker can be named the way you already name that machine: `--worker gpu=ssh://gpu-box` takes `HostName`, `User`, `Port`, `IdentityFile` and `UserKnownHostsFile` from the alias's own entry, `Include`s and all — the alias matched the way `ssh` matches it, lowercased first — with `%h`/`%p`/`%r`/`%d` and a leading `~/` expanded the way `ssh` expands them and a `UserKnownHostsFile` naming several files read as several files. Explicit beats ambient — anything written in the worker URL wins, and the file only answers what the URL did not. A key the URL names and `steps` cannot read is an error; one the *file* names is a candidate, so an absent or encrypted `IdentityFile` in a `Host *` block is skipped rather than fatal, exactly as `ssh` skips it, and so is a `UserKnownHostsFile` that does not exist yet — which leaves the host unknown, never unchecked. Point somewhere else with `?ssh_config=/path/to/config`, or read no file at all with `?ssh_config=none` — the spelling `ssh -F none` uses. The user file only: `/etc/ssh/ssh_config` is not read.
@@ -149,6 +149,46 @@ Keeping machines out of the pipeline file is what lets the same pipeline run on 
 - **A worker that dies mid-step is redialed on the next try.** A crashed machine or a dropped tunnel fails the running command as an *error* (never as the command's own verdict), and the step's next command — an `attempts:` retry, typically — opens a fresh connection and re-sends the step's local tree, which already holds everything earlier commands fetched back. The boundary is the handshake: a connection that died any time after the worker answered its hello — even while the tree was still uploading — is redialed, while a host that could not be reached or never answered stays failed for the whole step, since the first answer is the true one and every re-ask would cost another timeout.
 - **The run record says where each step ran.** A finished placed step carries `tag (address)` — in the web UI's step header and in `run_events` — and a step that ran locally carries nothing, so the rows that left stand out. The address only: `?identity=` and `?hostkey=` describe how to authenticate and are not written to the record. An alias is recorded as the alias, not as whatever `~/.ssh/config` resolved it to that day — the mapping is the stable name for the machine, and the resolution is a connection detail that can differ between the machines running `steps`. Nothing else can answer the question after the fact, since `tags:` is deliberately outside the hash.
 - **Caching**: `tags:` does **not** fold into the node's hash. Placement decides where a step runs, not what it produces, and a tree that crossed the wire digests identically to one that never left — so retagging a step, or repointing a tag at a new machine, does not re-run work that already succeeded.
+
+### The life of an `aws://` worker
+
+Three things happen on three different clocks, and knowing which is which explains most of the behaviour above. A **placed step** is one carrying `tags:`; a **shim** is the `steps` binary running in worker mode on the far end; a **rung** is which of the three `aws://` forms you wrote.
+
+```
+steps run --worker aws=aws://...  pipeline.yml
+│
+├─ first placed step
+│   │
+│   ├─► ACQUIRE ── once per JOB, not per step
+│   │     aws://i-0abc...          already running; nothing is acquired
+│   │     aws://stopped/i-0abc...  StartInstances, wait for "running"
+│   │     aws://launch/lt-0def...  CreateFleet, wait for "running"
+│   │
+│   ├─► BOOTSTRAP ── once per CONNECTION (SSM SendCommand)
+│   │     fetch the binary from a 20-minute presigned URL, unless
+│   │       <root>/steps-shim/<content-hash>/steps is already there
+│   │     start  steps _shim --listen 127.0.0.1:0 --once
+│   │
+│   └─► CONNECT ── SSM port-forward session to that loopback port
+│         inputs over, command runs on the host, outputs back
+│         the shim serves ONE connection and exits
+│
+├─ later placed steps: reuse the machine, fresh --once shim each time
+│    (a step that redials after a dropped tunnel bootstraps again too)
+│
+└─ job ends (succeeded, failed, or cancelled)
+    │
+    └─► RELEASE ── once per JOB
+          aws://i-0abc...          nothing; the machine is yours
+          aws://stopped/i-0abc...  StopInstances, after ?idle= if set
+          aws://launch/lt-0def...  TerminateInstances
+```
+
+What that leaves on the instance between steps: the cached binary under `<root>/steps-shim/<content-hash>/`, and nothing else. No steps process runs, because `--once` means the shim exits after the one connection it was started for.
+
+What never happens: a container. A placed step runs its command directly on the worker's host, which is why `tags:` and `image:` are refused together — the machine needs to already have what the step needs, so a toolchain belongs in the AMI. It is also why an `aws://` worker needs no docker daemon, and a stock Amazon Linux 2023 AMI has none.
+
+What the instance never holds: AWS credentials. Artifact bytes arrive over presigned URLs the orchestrator mints per transfer, so the instance profile needs `AmazonSSMManagedInstanceCore` and nothing else — not even read access to the bucket its own inputs came from.
 
 ## Artifact store (`--artifact-store`)
 
