@@ -30,9 +30,17 @@ func TestRealAWSPipelineStepRunsOnAnInstance(t *testing.T) {
 		t.Skip("no AWS fixture — run hack/aws-fixture.sh up and export what it prints")
 	}
 
+	region := os.Getenv("STEPS_TEST_AWS_REGION")
+
 	store := "s3://" + bucket + "/steps-test"
-	if region := os.Getenv("STEPS_TEST_AWS_REGION"); region != "" {
+	worker := "aws://" + instance + "?binary=" + binary
+
+	// The instance's region, named on the mapping: it need not match the
+	// caller's default, and on a profile with no default at all it is the
+	// only thing that says where the instance lives.
+	if region != "" {
 		store += "?region=" + region
+		worker += "&region=" + region
 	}
 
 	dir := t.TempDir()
@@ -56,9 +64,7 @@ jobs:
     run: cp model/report.txt `+filepath.Join(dir, "published.txt")+`
 `)
 
-	mustRun(t, path,
-		"--worker", "aws="+"aws://"+instance+"?binary="+binary,
-		"--artifact-store", store)
+	mustRun(t, path, "--worker", "aws="+worker, "--artifact-store", store)
 
 	published := readFileString(t, filepath.Join(dir, "published.txt"))
 

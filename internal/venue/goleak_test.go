@@ -34,7 +34,23 @@ func TestMain(m *testing.M) {
 		serveShim()
 	}
 
-	goleak.VerifyTestMain(m)
+	goleak.VerifyTestMain(m, sdkPoolIgnores()...)
+}
+
+// sdkPoolIgnores relaxes the leak check for the AWS SDK's own connection
+// pool, and ONLY when the real-AWS tests are the ones running — see the
+// identical note in internal/venue/ssmdial. Every other run keeps the strict
+// check, which is what catches this package's own session goroutines.
+func sdkPoolIgnores() []goleak.Option {
+	if os.Getenv("STEPS_TEST_AWS_INSTANCE") == "" {
+		return nil
+	}
+
+	return []goleak.Option{
+		goleak.IgnoreTopFunction("net/http.(*persistConn).readLoop"),
+		goleak.IgnoreTopFunction("net/http.(*persistConn).writeLoop"),
+		goleak.IgnoreAnyFunction("internal/poll.runtime_pollWait"),
+	}
 }
 
 // serveShim is the far half of a local: venue, told by environment which

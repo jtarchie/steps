@@ -75,6 +75,18 @@ func (f awsFixture) store() string {
 	return url
 }
 
+// options is the query every fixture worker URL carries: the binary to push,
+// and the instance's region — which is NOT necessarily the caller's default,
+// and is exactly what ?region= exists to say.
+func (f awsFixture) options() string {
+	options := "binary=" + f.binary
+	if f.region != "" {
+		options += "&region=" + f.region
+	}
+
+	return options
+}
+
 // spec builds a RunnerSpec pointing at a worker URL, with the fixture's
 // binary pushed through the fixture's artifact store.
 func (f awsFixture) spec(cwd, worker string, outputs ...string) shell.RunnerSpec {
@@ -85,7 +97,7 @@ func (f awsFixture) spec(cwd, worker string, outputs ...string) shell.RunnerSpec
 
 	return shell.RunnerSpec{
 		Cwd:           cwd,
-		Worker:        worker + sep + "binary=" + f.binary,
+		Worker:        worker + sep + f.options(),
 		WorkerTag:     "aws",
 		Fetch:         outputs,
 		ArtifactStore: f.store(),
@@ -171,7 +183,7 @@ func TestRealAWSLaunchRungAcquiresAndTerminates(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
 
-	worker, err := ParseWorker("aws://launch/" + fixture.template + "?capacity=spot-then-od&binary=" + fixture.binary)
+	worker, err := ParseWorker("aws://launch/" + fixture.template + "?capacity=spot-then-od&" + fixture.options())
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
@@ -192,6 +204,13 @@ func TestRealAWSLaunchRungAcquiresAndTerminates(t *testing.T) {
 
 	resolved, err := leases.Resolve(ctx, "burst")
 	if err != nil {
+		// An account that forbids fleet creation cannot answer the question
+		// this test asks, and that is not the code being wrong — said as a
+		// skip so a restricted environment reads differently from a bug.
+		if forbidden(err) {
+			t.Skipf("this account forbids ec2:CreateFleet, so the launch rung cannot be verified here: %v", err)
+		}
+
 		t.Fatalf("acquiring a launched worker: %v", err)
 	}
 
@@ -227,7 +246,7 @@ func TestRealAWSParkedRungStartsAndStops(t *testing.T) {
 	awsCLI(ctx, t, "ec2", "stop-instances", "--instance-ids", fixture.instance)
 	awsCLI(ctx, t, "ec2", "wait", "instance-stopped", "--instance-ids", fixture.instance)
 
-	worker, err := ParseWorker("aws://stopped/" + fixture.instance + "?idle=0&binary=" + fixture.binary)
+	worker, err := ParseWorker("aws://stopped/" + fixture.instance + "?idle=0&" + fixture.options())
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
@@ -279,7 +298,7 @@ func TestRealAWSSpotEviction(t *testing.T) {
 
 	// Spot only: FIS refuses to interrupt an on-demand instance, so a
 	// fallback here would silently make the test vacuous.
-	worker, err := ParseWorker("aws://launch/" + fixture.template + "?capacity=spot&binary=" + fixture.binary)
+	worker, err := ParseWorker("aws://launch/" + fixture.template + "?capacity=spot&" + fixture.options())
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
@@ -300,7 +319,7 @@ func TestRealAWSSpotEviction(t *testing.T) {
 
 	resolved, err := leases.Resolve(ctx, "spot")
 	if err != nil {
-		t.Skipf("no spot capacity for the fixture template right now: %v", err)
+		t.Skipf("could not acquire a spot worker (no capacity, or the account forbids it): %v", err)
 	}
 
 	t.Logf("spot instance %s — interrupting it", resolved.Instance)
@@ -386,6 +405,16 @@ func accountID(ctx context.Context, t *testing.T) string {
 	t.Helper()
 
 	return strings.TrimSpace(awsCLI(ctx, t, "sts", "get-caller-identity", "--query", "Account", "--output", "text"))
+}
+
+// forbidden reports an authorization refusal — an SCP or a missing IAM
+// grant — as distinct from the operation genuinely failing.
+func forbidden(err error) bool {
+	text := err.Error()
+
+	return strings.Contains(text, "UnauthorizedOperation") ||
+		strings.Contains(text, "AccessDenied") ||
+		strings.Contains(text, "not authorized")
 }
 
 // awsCLI shells out rather than importing another SDK: these calls are

@@ -32,6 +32,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
@@ -98,7 +99,24 @@ type Store struct {
 // network round trip is the first blob operation, so a misconfigured store
 // fails on the run that uses it, with the operation in the error.
 func New(ctx context.Context, opts Options) (*Store, error) {
-	loaders := []func(*awsconfig.LoadOptions) error{}
+	loaders := []func(*awsconfig.LoadOptions) error{
+		// Checksums OFF unless the operation requires them, and this is not a
+		// preference — it is what makes a presigned URL usable by the only
+		// thing that ever fetches one.
+		//
+		// The SDK's default (WhenSupported) adds x-amz-checksum-mode to a
+		// GetObject and folds it into SignedHeaders. A presigned URL is then
+		// only valid for a client that sends that header — and every client
+		// that matters here sends nothing but Host: curl in the SSM bootstrap
+		// script, and net/http in the shim's data plane. Real S3 answers those
+		// with SignatureDoesNotMatch, 403, every time.
+		//
+		// It survived review and a full fake-backed test suite because the
+		// httptest fake never verified a signature; only real S3 could say so.
+		awsconfig.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
+		awsconfig.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
+	}
+
 	if opts.Region != "" {
 		loaders = append(loaders, awsconfig.WithRegion(opts.Region))
 	}

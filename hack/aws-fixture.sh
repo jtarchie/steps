@@ -17,6 +17,13 @@
 # carries that tag. Needs the AWS CLI and credentials for an account you do
 # not mind creating and destroying things in.
 #
+# A restricted account may forbid some of this. Organizations SCPs are region
+# scoped often enough to be worth checking before concluding a service is
+# unavailable: set AWS_REGION to one the policy allows. Where an action is
+# refused outright the matching test SKIPS rather than fails — a policy saying
+# no is not the code being wrong — so `ec2:CreateFleet` or FIS being denied
+# costs you the launch-rung and spot-eviction coverage and nothing else.
+#
 # Cost, which is the reason for the shape: t4g.small is free through
 # 2026-12-31 (750h/month, existing accounts included), the SSM agent and
 # Session Manager are free, and a spot interruption via FIS is $0.10 per
@@ -182,7 +189,6 @@ create_lt() {
       \"ImageId\": \"$ami\",
       \"InstanceType\": \"$INSTANCE_TYPE\",
       \"IamInstanceProfile\": {\"Name\": \"$NAME-worker\"},
-      \"SecurityGroupIds\": [\"$sg\"],
       \"NetworkInterfaces\": [{\"DeviceIndex\": 0, \"AssociatePublicIpAddress\": true, \"SubnetId\": \"$subnet\", \"Groups\": [\"$sg\"], \"DeleteOnTermination\": true}],
       \"InstanceInitiatedShutdownBehavior\": \"terminate\",
       \"TagSpecifications\": [{\"ResourceType\": \"instance\", \"Tags\": [{\"Key\": \"$TAG_KEY\", \"Value\": \"1\"}]}]

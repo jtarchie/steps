@@ -49,6 +49,16 @@ var ssmAPIFor = func(ctx context.Context, worker Worker) (ssmdial.API, error) {
 		return nil, fmt.Errorf("%w %q: %w", ErrWorker, worker.URL, err)
 	}
 
+	// Said here rather than left to the SDK, which answers a missing region
+	// with "endpoint rule error, Invalid Configuration: Missing Region" —
+	// true, and no help at all to someone who has just written a worker
+	// mapping. An instance lives in exactly one region, and the mapping is
+	// where a caller says which.
+	if cfg.Region == "" {
+		return nil, fmt.Errorf("%w %q: no AWS region — name the instance's region with ?region=, or set one in the environment or your AWS profile",
+			ErrWorker, worker.URL)
+	}
+
 	return ssmdial.NewAPI(cfg), nil
 }
 

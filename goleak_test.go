@@ -43,5 +43,19 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 
-	goleak.VerifyTestMain(m, goleak.IgnoreTopFunction("github.com/modelcontextprotocol/go-sdk/mcp.(*streamableServerConn).Read"))
+	options := []goleak.Option{
+		goleak.IgnoreTopFunction("github.com/modelcontextprotocol/go-sdk/mcp.(*streamableServerConn).Read"),
+	}
+
+	// The AWS SDK's pooled keep-alive connections, and only when the
+	// real-AWS tests are the ones running — see internal/venue/ssmdial for
+	// the full note. Every other run keeps the strict check.
+	if os.Getenv("STEPS_TEST_AWS_INSTANCE") != "" {
+		options = append(options,
+			goleak.IgnoreTopFunction("net/http.(*persistConn).readLoop"),
+			goleak.IgnoreTopFunction("net/http.(*persistConn).writeLoop"),
+			goleak.IgnoreAnyFunction("internal/poll.runtime_pollWait"))
+	}
+
+	goleak.VerifyTestMain(m, options...)
 }
