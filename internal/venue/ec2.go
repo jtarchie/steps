@@ -371,35 +371,57 @@ func waitForRunning(ctx context.Context, api ec2API, worker Worker, instance str
 
 		state := instanceState(out)
 
-		if !left && state != leaving {
+		if !left {
+			// Still reading the state it was asked to leave: a replica lagging
+			// behind a StartInstances that already succeeded, not an answer.
+			if state == leaving {
+				err = awaitTick(deadline, ticker, worker, instance)
+				if err != nil {
+					return err
+				}
+
+				continue
+			}
+
 			left = true
 		}
 
-		if !left && state == leaving {
-			select {
-			case <-ticker.C:
-				continue
-			case <-deadline.Done():
-				return fmt.Errorf("waiting for %s for %q: %w", instance, worker.URL, deadline.Err())
-			}
+		arrived, err := arrivedOrDead(state, worker, instance)
+		if arrived || err != nil {
+			return err
 		}
 
-		switch state {
-		case ec2types.InstanceStateNameRunning:
-			return nil
-		case ec2types.InstanceStateNameTerminated, ec2types.InstanceStateNameShuttingDown,
-			ec2types.InstanceStateNameStopping, ec2types.InstanceStateNameStopped:
-			// A machine going the other way is never going to arrive: an
-			// eviction, or a hard-TTL shutdown that fired mid-acquisition.
-			return fmt.Errorf("%w %q: %s went to %s while being acquired", ErrWorker, worker.URL, instance, state)
-		case ec2types.InstanceStateNamePending:
+		err = awaitTick(deadline, ticker, worker, instance)
+		if err != nil {
+			return err
 		}
+	}
+}
 
-		select {
-		case <-ticker.C:
-		case <-deadline.Done():
-			return fmt.Errorf("waiting for %s for %q: %w", instance, worker.URL, deadline.Err())
-		}
+// arrivedOrDead reads a polled state as one of the three answers this loop
+// has: it is here, it is never coming, or keep waiting.
+func arrivedOrDead(state ec2types.InstanceStateName, worker Worker, instance string) (bool, error) {
+	switch state {
+	case ec2types.InstanceStateNameRunning:
+		return true, nil
+	case ec2types.InstanceStateNameTerminated, ec2types.InstanceStateNameShuttingDown,
+		ec2types.InstanceStateNameStopping, ec2types.InstanceStateNameStopped:
+		// A machine going the other way is never going to arrive: an
+		// eviction, or a hard-TTL shutdown that fired mid-acquisition.
+		return false, fmt.Errorf("%w %q: %s went to %s while being acquired", ErrWorker, worker.URL, instance, state)
+	case ec2types.InstanceStateNamePending:
+	}
+
+	return false, nil
+}
+
+// awaitTick sleeps until the next poll, or reports the acquisition deadline.
+func awaitTick(deadline context.Context, ticker *time.Ticker, worker Worker, instance string) error {
+	select {
+	case <-ticker.C:
+		return nil
+	case <-deadline.Done():
+		return fmt.Errorf("waiting for %s for %q: %w", instance, worker.URL, deadline.Err())
 	}
 }
 
