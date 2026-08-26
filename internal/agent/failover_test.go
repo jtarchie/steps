@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -28,7 +29,7 @@ func TestResolveWithFailoverKeepsThePrimaryForHashing(t *testing.T) {
 
 	// Before any failover, the two are the same invocation, and there is no
 	// fallback index to resume the mid-run cascade from.
-	primary, effective, _, fallbackIndex, err := resolveWithFailover(cfg, step)
+	primary, effective, _, fallbackIndex, err := resolveWithFailover(context.Background(), cfg, step)
 	if err != nil {
 		t.Fatalf("resolveWithFailover: %v", err)
 	}
@@ -42,7 +43,7 @@ func TestResolveWithFailoverKeepsThePrimaryForHashing(t *testing.T) {
 	// Preflight selects the fallback.
 	selectSource(testPin("writer"), cfg.Agents[0].Fallback[0].Source, 0)
 
-	primary, effective, _, fallbackIndex, err = resolveWithFailover(cfg, step)
+	primary, effective, _, fallbackIndex, err = resolveWithFailover(context.Background(), cfg, step)
 	if err != nil {
 		t.Fatalf("resolveWithFailover after failover: %v", err)
 	}

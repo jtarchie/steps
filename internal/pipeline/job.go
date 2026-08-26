@@ -216,6 +216,9 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 // A load_var: value says nothing about the next run, so it is scoped here too.
 func withRunContext(ctx context.Context, job *config.Job, skipCache bool) context.Context {
 	ctx = agent.WithNewRun(ctx, job.Name)
+	// The instant every agent pin in this job is judged against, so a long
+	// job cannot have a fallback expire out from under its later steps.
+	ctx = agent.WithRunBoundary(ctx)
 	ctx = withForce(ctx, skipCache)
 	ctx = withRunVars(ctx)
 

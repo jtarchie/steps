@@ -206,6 +206,13 @@ const (
 	defaultPreflightCache   = 5 * time.Minute
 )
 
+// PinLifetime is how long an agent stays on a fallback with nothing
+// re-affirming that its primary is still unwell. internal/agent owns the
+// behavior and documents the reasoning at length; the value lives here so
+// validatePreflight can hold defaults.preflight.cache: below it, which is a
+// load-time question about a setting rather than a runtime one.
+const PinLifetime = 15 * time.Minute
+
 // Enabled reports whether preflight runs at all. A nil Preflight (no
 // defaults: block) is enabled.
 func (p *Preflight) Enabled() bool {
@@ -263,6 +270,20 @@ func (c *Config) validatePreflight() error {
 		parsed, err := ParseTimeout(field.value)
 		if err != nil || parsed <= 0 {
 			return fmt.Errorf("defaults.preflight.%s: %q is not a positive duration (e.g. 30s, 5m)", field.name, field.value)
+		}
+
+		// A cache window longer than the pin lifetime makes the lifetime a
+		// number the pipeline no longer obeys. Freshness is measured against
+		// the pin, so every pass inside such a window reads answers that
+		// predate it, cannot release on them, and renews the lifetime anyway
+		// — the real floor becomes the cache window, not the fifteen minutes
+		// the constant advertises. Refused at load, where a setting is still
+		// a setting.
+		if field.name == "cache" && parsed > PinLifetime {
+			return fmt.Errorf(
+				"defaults.preflight.cache: %q is longer than the %s failover pin lifetime, which would keep an agent on a fallback past its own expiry",
+				field.value, PinLifetime,
+			)
 		}
 	}
 

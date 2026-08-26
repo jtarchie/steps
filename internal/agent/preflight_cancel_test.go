@@ -27,11 +27,7 @@ func TestACancelledModelProbeDoesNotCacheItsFailure(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test")
 
 	url, _ := togglableProbeEndpoint(t)
-	ri := config.ResolvedInvocation{
-		BaseURL:   url,
-		ModelName: "openai/probe",
-		APIKeyEnv: "OPENAI_API_KEY",
-	}
+	ri := probeInvocation(url)
 	settings := &config.Preflight{}
 
 	aborted, cancel := context.WithCancel(context.Background())
@@ -80,11 +76,7 @@ func TestARealProbeFailureIsStillCached(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test")
 
 	url, up := togglableProbeEndpoint(t)
-	ri := config.ResolvedInvocation{
-		BaseURL:   url,
-		ModelName: "openai/probe",
-		APIKeyEnv: "OPENAI_API_KEY",
-	}
+	ri := probeInvocation(url)
 	settings := &config.Preflight{}
 
 	up.Store(false)
@@ -99,5 +91,16 @@ func TestARealProbeFailureIsStillCached(t *testing.T) {
 	_, err = probeModelCached(context.Background(), ri, settings)
 	if err == nil {
 		t.Fatal("a real failure was re-probed instead of read from the cache — the window is what keeps a watcher off a dead endpoint")
+	}
+}
+
+// probeInvocation is one hosted model at a test endpoint.
+//
+//nolint:gosec // an env var NAME, not a credential
+func probeInvocation(url string) config.ResolvedInvocation {
+	return config.ResolvedInvocation{
+		BaseURL:   url,
+		ModelName: "openai/probe",
+		APIKeyEnv: "OPENAI_API_KEY",
 	}
 }

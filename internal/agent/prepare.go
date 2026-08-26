@@ -150,7 +150,7 @@ func (p preparedAgentStep) spillDirWouldBeCaptured() bool {
 // with. On error, any workspace.StepSpace already created is closed before
 // returning so the caller never has to.
 func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) (preparedAgentStep, error) {
-	primary, ri, agent, fallbackIndex, err := resolveWithFailover(cfg, step)
+	primary, ri, agent, fallbackIndex, err := resolveWithFailover(ctx, cfg, step)
 	if err != nil {
 		return preparedAgentStep{}, err
 	}
@@ -298,7 +298,7 @@ func invocationLLM(ri config.ResolvedInvocation, apiKey string) model.LLM {
 // lookup happens before anything that could fail for another reason, so
 // there is no partial state where a step has an invocation but no fallback
 // list.
-func resolveWithFailover(cfg *config.Config, step config.Step) (primary, effective config.ResolvedInvocation, agent *config.Agent, fallbackIndex int, err error) {
+func resolveWithFailover(ctx context.Context, cfg *config.Config, step config.Step) (primary, effective config.ResolvedInvocation, agent *config.Agent, fallbackIndex int, err error) {
 	fallbackIndex = -1
 
 	// Looked up FIRST, and unconditionally: the mid-run cascade needs the
@@ -321,7 +321,9 @@ func resolveWithFailover(cfg *config.Config, step config.Step) (primary, effecti
 		return primary, effective, nil, fallbackIndex, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
-	selection, ok := selectedSource(agentPinScope(cfg, primary.AgentName))
+	// Judged against the run's start, not the wall clock: every step of one
+	// job must see the same source (see WithRunBoundary).
+	selection, ok := selectedSourceAt(agentPinScope(cfg, primary.AgentName), runInstant(ctx))
 	if !ok {
 		return primary, primary, agent, fallbackIndex, nil
 	}

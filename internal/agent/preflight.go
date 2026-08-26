@@ -386,7 +386,7 @@ func reconsiderPin(
 		// fails every step of the run on the same resolution error, but
 		// reporting it through the health path below would blame a probe that
 		// was never sent and name the model it left as "".
-		if clearSourceIf(scope, selection) {
+		if clearSourceIf(scope, selection) == clearedPin {
 			slog.Warn("agent.failover.pin_lost",
 				"pipeline", scope.pipeline,
 				"agent", agent.Name,
@@ -428,12 +428,35 @@ func reconsiderPin(
 		return renewPinIf(scope, selection) && pinnedProbe.healthy
 	}
 
+	return releasePin(scope, agent, selection, primary, candidate, primaryProbe)
+}
+
+// releasePin performs reconsiderPin's drop half: the compare-and-delete and
+// the announcement. It reports keepPin for its caller, which is true in
+// exactly one case — the pin it meant to drop is no longer the pin that is
+// there.
+func releasePin(
+	scope pinScope,
+	agent *config.Agent,
+	selection sourceSelection,
+	primary, candidate config.ResolvedInvocation,
+	primaryProbe probeFact,
+) bool {
 	// Compare-and-delete, not delete: this decision spans a network probe, and
 	// a concurrently-running job's mid-run cascade can pin a source that has
 	// actually SERVED inside that window. A blind delete would discard it on a
 	// reading taken before it existed.
-	if !clearSourceIf(scope, selection) {
+	switch clearSourceIf(scope, selection) {
+	case pinReplaced:
+		// Another job's cascade pinned a source that has actually SERVED while
+		// this pass was probing. Reporting no pin sends the caller into
+		// failOver, which re-selects from fallback index 0 unconditionally —
+		// so the guard would save the pin from a stale delete and the
+		// fall-through would overwrite it a statement later.
+		return true
+	case pinAlreadyGone:
 		return false
+	case clearedPin:
 	}
 
 	// As loud as leaving was. agent.failover warns on the way out, and an
@@ -551,7 +574,10 @@ func agentPinScope(cfg *config.Config, agentName string) pinScope {
 // run on a fallback that may be a paid provider, indefinitely. It is
 // comfortably longer than defaults.preflight.cache: (5m), so a pin still
 // outlives the probe answer that created it when preflight is on at all.
-const pinLifetime = 15 * time.Minute
+//
+// The value lives in internal/config so validatePreflight can refuse a
+// defaults.preflight.cache: longer than it — see config.PinLifetime.
+const pinLifetime = config.PinLifetime
 
 // selectedSources records which fallback an agent is running on, across runs.
 // Process-scoped like probeCache and for the same reason: a `steps watch`
@@ -588,15 +614,26 @@ func selectSource(scope pinScope, source config.AgentSource, index int) {
 		decided:   now,
 	}
 
-	// A pin already in place keeps both clocks. Re-pinning records WHICH
-	// source and says nothing new about the primary: every step that runs on a
-	// pinned fallback and serves re-pins it (decideCascade returns
-	// pinThisSource for any source that carried a conversation), so restarting
-	// the lifetime here would mean a busy pipeline never re-decides at all. A
-	// cascade moving further down the list is the same story — it learned
-	// about the fallback it just left, not about the primary it replaced.
+	// since never moves while a pin stands: it dates the PRIMARY's outage,
+	// and nothing that happens among the fallbacks speaks to that.
+	//
+	// decided is the lifetime's clock, and it turns on whether this is the
+	// same pin or a different one. Re-pinning the SAME source says nothing
+	// new — every step that runs on a pinned fallback and serves re-pins it
+	// (decideCascade returns pinThisSource for any source that carried a
+	// conversation), so restarting the lifetime there would mean a busy
+	// pipeline never re-decides at all. A cascade that MOVED is a fresh
+	// decision backed by fresh evidence: the source it just installed carried
+	// a conversation seconds ago. Handing it the old source's spent clock
+	// dropped it on the very next read, and the run then paid a cycle at the
+	// dead primary and another at the dead fallback to arrive back where it
+	// already was — twice inside a window docs/agents.md promises costs one.
 	if existing, ok := selectedSources.by[scope]; ok {
-		record.since, record.decided = existing.since, existing.decided
+		record.since = existing.since
+
+		if existing.selection == record.selection {
+			record.decided = existing.decided
+		}
 	}
 
 	selectedSources.by[scope] = record
@@ -662,19 +699,40 @@ func clearSource(scope pinScope) {
 // value, a concurrent pass that merely renewed the lifetime made this guard
 // fail for a pin whose source and index had not moved at all — turning every
 // such race into a silently lost release rather than a detected one.
-func clearSourceIf(scope pinScope, expected sourceSelection) bool {
+func clearSourceIf(scope pinScope, expected sourceSelection) clearOutcome {
 	selectedSources.mu.Lock()
 	defer selectedSources.mu.Unlock()
 
 	current, ok := selectedSources.by[scope]
-	if !ok || current.selection != expected {
-		return false
+	if !ok {
+		return pinAlreadyGone
+	}
+
+	if current.selection != expected {
+		return pinReplaced
 	}
 
 	delete(selectedSources.by, scope)
 
-	return true
+	return clearedPin
 }
+
+// clearOutcome distinguishes the two ways a compare-and-delete can decline,
+// because they call for opposite handling and one bool conflated them.
+//
+// pinAlreadyGone means there is no pin: the caller should fail over, since
+// nothing is holding the agent anywhere. pinReplaced means a live pin exists
+// that a concurrent writer installed on newer evidence than this pass read —
+// failing over there walks the fallback list from index 0 and demotes the
+// agent off the entry another job's cascade just proved, which is precisely
+// what the guard exists to prevent.
+type clearOutcome int
+
+const (
+	clearedPin clearOutcome = iota
+	pinAlreadyGone
+	pinReplaced
+)
 
 // selectedSource returns the fallback selection preflight (or a served
 // mid-run swap) chose for an agent, if any. internal/pipeline has no need for
@@ -685,11 +743,52 @@ func clearSourceIf(scope pinScope, expected sourceSelection) bool {
 // the cascade. Hanging the lifetime off any single writer would leave it
 // exactly as skippable as reconsiderPin already is.
 func selectedSource(scope pinScope) (sourceSelection, bool) {
+	return selectedSourceAt(scope, time.Now())
+}
+
+// runBoundaryKey carries the instant a run began.
+type runBoundaryKey struct{}
+
+// WithRunBoundary stamps a context with the moment its run started, which is
+// the instant every pin read inside that run is judged against.
+//
+// The lifetime still rides on the pin and is still applied wherever one is
+// read — hanging it off a writer would leave it exactly as skippable as
+// reconsiderPin. What this fixes is WHICH clock the read consults. Reading at
+// wall-clock meant a job of six agent steps could cross the lifetime between
+// steps 4 and 5: the pin vanished mid-job and the remaining steps resolved to
+// a primary that was still down, each paying a full attempts: cycle before
+// cascading and re-pinning. Nothing renews mid-job, because renewPinIf is
+// reachable only from Preflight — once per job, and switched off entirely by
+// --no-preflight, which is the configuration the lifetime exists to serve.
+//
+// Judging against the run's own start makes the release land at a boundary
+// where nothing is half-done, which is what docs/agents.md has always
+// promised: a run decides before it starts, and one job sees a settled source
+// throughout. internal/pipeline stamps this once per job run, beside the
+// OpenRouter session, so concurrent jobs each carry their own.
+func WithRunBoundary(ctx context.Context) context.Context {
+	return context.WithValue(ctx, runBoundaryKey{}, time.Now())
+}
+
+// runInstant is when the current run began, or now for a caller that never
+// declared a run — every non-pipeline caller, and every test.
+func runInstant(ctx context.Context) time.Time {
+	at, ok := ctx.Value(runBoundaryKey{}).(time.Time)
+	if !ok {
+		return time.Now()
+	}
+
+	return at
+}
+
+// selectedSourceAt is selectedSource judged against a caller-chosen instant.
+func selectedSourceAt(scope pinScope, now time.Time) (sourceSelection, bool) {
 	selectedSources.mu.Lock()
 
 	record, ok := selectedSources.by[scope]
 
-	expired := ok && time.Since(record.decided) >= pinLifetime
+	expired := ok && now.Sub(record.decided) >= pinLifetime
 	if expired {
 		delete(selectedSources.by, scope)
 	}

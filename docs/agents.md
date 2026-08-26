@@ -683,7 +683,7 @@ defaults:
   delegate_budget_percent: 10            # the share a sub-agent takes of what is left
   preflight:
     timeout: 30s                         # per pre-run probe
-    cache: 5m                            # a target verified this recently is trusted
+    cache: 5m                            # a target verified this recently is trusted (max 15m)
 
 agents:
 - name: drafter
@@ -908,6 +908,10 @@ jobs:
   *Just now* means **after the pin was installed**, not "asked by this pass". An answer older than the pin was given before the reason for the pin existed, so it cannot say whether that reason is gone; an answer younger than it can, whoever asked. That last part matters because preflight runs once per *job* and several agents legitimately share one endpoint and model, whose probe is collapsed to a single request: counting only the pass that sent it left whichever agent preflighted second unable to ever see a fresh positive — so it could never return to its primary, and since keeping renews the lifetime, never expire either.
 
   **A pin also expires on its own, after 15 minutes.** This is the exit that does not depend on preflight running at all: an agent with `preflight: false`, a pipeline with `defaults.preflight.disabled:`, and a run under `--no-preflight` all skip the pre-run probe, while the mid-run cascade that *installs* a pin is gated by none of them — so without this, a ninety-second blip pinned a long-lived `steps watch` for the life of the process, in exactly the configuration this page recommends for a cold local model. Expiring re-decides from the primary with no probe behind it (`agent.failover.pin_expired`), which is the honest cost of having no probe: one `attempts:` cycle against a source that may still be down, at most once per 15 minutes per agent.
+
+  The clock is read at the **run boundary**, not on each step. A job's agent steps can be minutes apart, and judging the lifetime against the wall clock let a pin vanish between step 4 and step 5 — splitting one job across two models, which is the very thing the paragraph above says deciding-before-the-run prevents. Every step of one run is therefore judged against the instant that run began, so a pin releases where nothing is half-done. Concurrent jobs each carry their own boundary.
+
+  For the same reason `defaults.preflight.cache:` may not be set longer than the 15 minutes, and a pipeline that tries is **rejected at load**. Freshness is measured against the pin, so inside a longer window every probe answer predates the pin, none can release it, and keeping it renews the lifetime anyway: the real floor would silently become the cache window rather than the number documented here.
 
   The clock runs from the last time something decided this pin *having looked at the primary*. A step serving on the pinned fallback re-pins it but does not renew it — using a fallback says nothing about the primary it replaced — while a pre-run probe that keeps the pin does renew it, that being the one decision reached by weighing the primary. (Reached, not necessarily asked: a keep can rest on cached answers, which is deliberate — requiring a fresh probe to *renew* would expire a pin mid-outage under a long cache window. Only a RELEASE demands a fresh fact.) So where preflight runs it re-decides every run from real probes and the lifetime never fires; where preflight is switched off, the lifetime is the only exit there is. It is a floor, not a tunable.
 

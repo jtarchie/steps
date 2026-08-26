@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -333,7 +334,7 @@ func TestAPinSurvivesWithoutPreflightUntilItsLifetimeIsUp(t *testing.T) {
 	// conversation. No preflight ran, and none will.
 	pinServedSource(scope, &cfg.Agents[0], 0)
 
-	_, effective, _, index, err := resolveWithFailover(cfg, step)
+	_, effective, _, index, err := resolveWithFailover(context.Background(), cfg, step)
 	if err != nil {
 		t.Fatalf("resolveWithFailover: %v", err)
 	}
@@ -344,7 +345,7 @@ func TestAPinSurvivesWithoutPreflightUntilItsLifetimeIsUp(t *testing.T) {
 
 	agePin(t, scope, pinLifetime)
 
-	_, effective, _, index, err = resolveWithFailover(cfg, step)
+	_, effective, _, index, err = resolveWithFailover(context.Background(), cfg, step)
 	if err != nil {
 		t.Fatalf("resolveWithFailover after the lifetime: %v", err)
 	}
@@ -617,7 +618,7 @@ func TestAConcurrentRenewalDoesNotDefeatARelease(t *testing.T) {
 		t.Fatal("the renewal did not find the pin it had just read")
 	}
 
-	if !clearSourceIf(scope, record.selection) {
+	if clearSourceIf(scope, record.selection) != clearedPin {
 		t.Error("a release lost to a renewal that changed nothing about which source is pinned")
 	}
 }

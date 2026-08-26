@@ -1,0 +1,32 @@
+# defaults.preflight.cache: is how long a verified model or MCP server stays
+# trusted. The failover pin — how long an agent stays on a fallback with
+# nothing re-affirming that its primary is still unwell — lasts 15 minutes,
+# and a probe answer only counts as evidence about that pin if it POSTDATES
+# it.
+#
+# So a cache window longer than the pin turns the pin's expiry into a number
+# the pipeline no longer obeys: every pass inside the window reads answers
+# that predate the pin, none of them can release it, and keeping it renews
+# the lifetime anyway. The effective floor becomes the cache window, however
+# long that is, while the documented one stays 15 minutes.
+#
+# Rejected at load, where it is still a setting rather than a mystery about
+# why an agent never came back to its primary.
+# expect: is longer than the 15m0s failover pin lifetime
+
+defaults:
+  preflight:
+    cache: 1h
+
+agents:
+- name: writer
+  source:
+    model: openai/gpt-4o
+
+jobs:
+- name: publish
+  plan:
+  - agent: writer
+    inputs: []
+    messages:
+      - Write something.
