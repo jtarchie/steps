@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -290,5 +291,45 @@ func TestPresignedURLsWorkWithPlainHTTP(t *testing.T) {
 
 	if err != nil || string(got) != "worker-bytes" {
 		t.Fatalf("GET = %q, %v; want what the PUT stored", got, err)
+	}
+}
+
+// TestPresignedURLsSignOnlyHost is the hermetic guard for a bug that reached
+// real AWS and nothing before it.
+//
+// The SDK's default checksum behavior adds x-amz-checksum-mode to a GetObject
+// and folds it into SignedHeaders, which makes the URL valid ONLY for a
+// client that sends that header. Everything that ever fetches one of ours
+// sends nothing but Host — curl in the SSM bootstrap, net/http in the shim —
+// so real S3 answered 403 SignatureDoesNotMatch every time, while the fake
+// above answered 200 to anything request-shaped.
+//
+// Signing is offline, so this needs no network and no fixture: it reads the
+// signature the SDK actually produced. Any future option that pulls another
+// header into the signature fails here rather than in production.
+func TestPresignedURLsSignOnlyHost(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	get, err := store.PresignGet(ctx, "wire/probe", time.Minute)
+	if err != nil {
+		t.Fatalf("PresignGet: %v", err)
+	}
+
+	put, err := store.PresignPut(ctx, "wire/probe", time.Minute)
+	if err != nil {
+		t.Fatalf("PresignPut: %v", err)
+	}
+
+	for name, raw := range map[string]string{"GET": get, "PUT": put} {
+		parsed, parseErr := url.Parse(raw)
+		if parseErr != nil {
+			t.Fatalf("%s: unparseable presigned URL: %v", name, parseErr)
+		}
+
+		signed := parsed.Query().Get("X-Amz-SignedHeaders")
+		if signed != "host" {
+			t.Errorf("%s signs %q, want exactly \"host\" — a client that sends only Host gets 403 from real S3", name, signed)
+		}
 	}
 }
