@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"time"
 )
 
@@ -83,8 +84,12 @@ type Worker struct {
 	// Capacity is which EC2 capacity a launch-rung worker asks for.
 	Capacity Capacity
 	// Idle is how long a parked worker stays running after the job that
-	// started it, so back-to-back jobs do not each pay a cold start.
+	// started it, for an operator who wants back-to-back jobs to skip the
+	// cold start and accepts that the releasing job waits out the window.
 	Idle time.Duration
+	// IdleSet distinguishes ?idle= being given from the default, so a rung
+	// the option cannot describe can refuse it.
+	IdleSet bool
 	// Region overrides the ambient AWS region for an aws:// worker.
 	Region string
 	// Shim is an absolute path to a steps binary ALREADY on the instance —
@@ -94,6 +99,11 @@ type Worker struct {
 	// reaches its binary through. Filled in from the spec rather than the
 	// URL: it describes the fleet, not this machine.
 	ArtifactStore string
+	// Query is the mapping's raw query string, kept so a worker that is
+	// RESOLVED to another machine (an acquisition rung becoming the instance
+	// it started) can carry its connection options into the URL it is dialed
+	// by. See asStatic.
+	Query string
 	// HostKey pins the worker's host key by SHA256 fingerprint, for a machine
 	// that has no known_hosts entry and never will: one acquired on demand,
 	// used, and destroyed. Whatever created it attested its key out of band,
@@ -138,17 +148,7 @@ func ParseWorker(raw string) (Worker, error) {
 		return Worker{}, err
 	}
 
-	query := parsed.Query()
-	worker.Binary = query.Get("binary")
-	worker.Identity = query.Get("identity")
-	worker.KnownHosts = query.Get("known_hosts")
-	worker.HostKey = query.Get("hostkey")
-	worker.SSHConfig = query.Get("ssh_config")
-	worker.Region = query.Get("region")
-	worker.Shim = query.Get("shim")
-	worker.Capacity = Capacity(query.Get("capacity"))
-
-	worker.Idle, err = parseIdle(worker, query.Get("idle"))
+	worker, err = applyQuery(worker, parsed)
 	if err != nil {
 		return Worker{}, err
 	}
@@ -166,6 +166,70 @@ func ParseWorker(raw string) (Worker, error) {
 	}
 
 	return worker, nil
+}
+
+// applyQuery reads a mapping's options, refusing what the grammar does not
+// know.
+func applyQuery(worker Worker, parsed *url.URL) (Worker, error) {
+	query := parsed.Query()
+
+	err := checkQueryKeys(worker, query)
+	if err != nil {
+		return Worker{}, err
+	}
+
+	worker.Query = parsed.RawQuery
+	worker.Binary = query.Get("binary")
+	worker.Identity = query.Get("identity")
+	worker.KnownHosts = query.Get("known_hosts")
+	worker.HostKey = query.Get("hostkey")
+	worker.SSHConfig = query.Get("ssh_config")
+	worker.Region = query.Get("region")
+	worker.Shim = query.Get("shim")
+	worker.Capacity = Capacity(query.Get("capacity"))
+	worker.IdleSet = query.Has("idle")
+
+	worker.Idle, err = parseIdle(worker, query.Get("idle"))
+	if err != nil {
+		return Worker{}, err
+	}
+
+	return worker, nil
+}
+
+// queryKeys is every option a worker URL can carry, and which schemes each
+// describes. Refusal on anything else is typo protection with money attached:
+// ?capactiy=od silently launching spot, or ?identity= silently ignored on a
+// scheme that cannot use it, is a mapping that LOOKS configured and is not.
+//
+//nolint:gochecknoglobals // a fact about the grammar, not state
+var queryKeys = map[string][]Scheme{
+	"binary":      {SchemeLocal, SchemeSSH, SchemeAWS},
+	"identity":    {SchemeSSH},
+	"known_hosts": {SchemeSSH},
+	"hostkey":     {SchemeSSH},
+	"ssh_config":  {SchemeSSH},
+	"region":      {SchemeAWS},
+	"shim":        {SchemeAWS},
+	"capacity":    {SchemeAWS},
+	"idle":        {SchemeAWS},
+}
+
+// checkQueryKeys refuses an option the grammar does not know, or one that
+// describes a different scheme than the mapping uses.
+func checkQueryKeys(worker Worker, query url.Values) error {
+	for key := range query {
+		schemes, known := queryKeys[key]
+		if !known {
+			return fmt.Errorf("%w %q: unknown option %q", ErrWorker, worker.URL, key)
+		}
+
+		if !slices.Contains(schemes, worker.Scheme) {
+			return fmt.Errorf("%w %q: %s= does not describe a %s worker", ErrWorker, worker.URL, key, worker.Scheme)
+		}
+	}
+
+	return nil
 }
 
 // parseIdle reads how long a parked worker stays up after its job.

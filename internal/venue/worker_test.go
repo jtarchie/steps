@@ -1,6 +1,7 @@
 package venue
 
 import (
+	"errors"
 	"os/exec"
 	"strings"
 	"testing"
@@ -115,5 +116,70 @@ func TestShellQuoteSurvivesAPathAShellWouldSplit(t *testing.T) {
 		if string(out) != path {
 			t.Errorf("a shell read %q as %q — the remote start command is not one argument", path, out)
 		}
+	}
+}
+
+// TestParseWorkerRefusesOptionsItDoesNotKnow is typo protection with money
+// attached: ?capactiy=od silently launching spot, or ?identity= silently
+// ignored on a scheme that cannot use it, is a mapping that LOOKS configured
+// and is not.
+func TestParseWorkerRefusesOptionsItDoesNotKnow(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{
+		"aws://launch/lt-0def4567890abcde?capactiy=od", // the typo that pays on-demand
+		"ssh://box?identiy=/home/jt/.ssh/id",
+		"aws://i-0abc123def456789?identity=/home/jt/.ssh/id", // right key, wrong scheme
+		"ssh://box?region=us-west-2",
+		"aws://launch/lt-0def4567890abcde?idle=5m", // idle describes parking
+		"aws://i-0abc123def456789?idle=5m",
+		"local:?shim=/usr/local/bin/steps",
+	} {
+		_, err := ParseWorker(raw)
+		if !errors.Is(err, ErrWorker) {
+			t.Errorf("ParseWorker(%q) = %v, want ErrWorker", raw, err)
+		}
+	}
+}
+
+// TestPlacementCheckRefusesBeforeMoneyIsSpent pins that a dial certain to
+// fail is refused with what the invocation already knows — not after an
+// acquisition rung launches a billed instance to discover it.
+func TestPlacementCheckRefusesBeforeMoneyIsSpent(t *testing.T) {
+	t.Parallel()
+
+	bare, err := ParseWorker("aws://launch/lt-0def4567890abcde")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	err = bare.PlacementCheck(true)
+	if err == nil {
+		t.Error("a worker with no way to get a shim passed the placement check")
+	}
+
+	pushed, err := ParseWorker("aws://i-0abc123def456789?binary=/tmp/steps-linux-amd64")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	err = pushed.PlacementCheck(false)
+	if err == nil {
+		t.Error("?binary= without an artifact store passed the placement check")
+	}
+
+	err = pushed.PlacementCheck(true)
+	if err != nil {
+		t.Errorf("a fully specified worker was refused: %v", err)
+	}
+
+	baked, err := ParseWorker("aws://i-0abc123def456789?shim=/usr/local/bin/steps")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	err = baked.PlacementCheck(false)
+	if err != nil {
+		t.Errorf("an AMI-baked worker needs no store and was refused: %v", err)
 	}
 }

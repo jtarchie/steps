@@ -375,6 +375,37 @@ func checkAWS(worker Worker) error {
 			ErrWorker, worker.URL)
 	}
 
+	if worker.IdleSet && worker.Rung != RungStopped {
+		return fmt.Errorf("%w %q: idle= describes how long a PARKED machine stays warm, and this worker is not on the stopped rung",
+			ErrWorker, worker.URL)
+	}
+
+	return nil
+}
+
+// PlacementCheck refuses a mapping whose dial is certain to fail, with what
+// the invocation knows before any step runs. It belongs to run-start
+// validation rather than to ParseWorker, because whether an artifact store is
+// configured is a fact about the INVOCATION, not the URL.
+//
+// The alternative was the shape money dislikes: an acquisition-rung worker
+// launches a real, billed instance before the dial discovers a condition that
+// was decidable while kong was still parsing.
+func (w Worker) PlacementCheck(hasArtifactStore bool) error {
+	if w.Scheme != SchemeAWS {
+		return nil
+	}
+
+	if w.Shim == "" && w.Binary == "" {
+		return fmt.Errorf("%w %q: an aws:// worker needs a shim binary built for it — name a local one with ?binary=/path/to/steps-linux-amd64, or one already on the instance with ?shim=/usr/local/bin/steps",
+			ErrWorker, w.URL)
+	}
+
+	if w.Binary != "" && !hasArtifactStore {
+		return fmt.Errorf("%w %q: ?binary= reaches an aws:// worker through the artifact store, so --artifact-store must be set — or name a binary already on the instance with ?shim=",
+			ErrWorker, w.URL)
+	}
+
 	return nil
 }
 

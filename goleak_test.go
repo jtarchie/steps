@@ -28,6 +28,13 @@ func TestMain(m *testing.M) {
 	// The os/exec TestHelperProcess pattern: same binary, told which half to
 	// be.
 	if len(os.Args) > 1 && os.Args[1] == "_shim" {
+		// One impersonated worker, for the eviction e2e: environment rather
+		// than argv, because the venue execs a fixed "<binary> _shim" — the
+		// same seam the venue package's own variants use.
+		if count := os.Getenv(drainingWorkerEnv); count != "" {
+			serveEvictedWorker(count)
+		}
+
 		err := run(os.Args[1:])
 		if err != nil {
 			os.Exit(1)

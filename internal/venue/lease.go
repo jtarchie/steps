@@ -122,30 +122,55 @@ func (l *Leases) Resolve(ctx context.Context, tag string) (Worker, error) {
 	return held.resolve(ctx, worker)
 }
 
-// Invalidate gives back the machine held for a tag and forgets it, so the
-// next Resolve acquires a fresh one.
+// Abandon forgets the machine held for a tag, so the next Resolve acquires a
+// fresh one — WITHOUT releasing it, and only when it is the machine the
+// caller watched die.
 //
-// What an eviction needs: the instance is gone or going, and the job is not
-// finished with the tag. Releasing here rather than waiting for the job's end
-// is deliberate — a machine EC2 is reclaiming should be handed back at once,
-// and one that is merely draining should not take new work.
-func (l *Leases) Invalidate(ctx context.Context, tag string) {
+// No release, because the one reason to be here is a terminal reclamation:
+// AWS is already destroying the machine, our Stop or Terminate is a call
+// against a corpse, and — the part that matters — a parallel sibling step may
+// still be running on it, inside the two-minute grace the notice promises.
+// Destroying the machine ourselves would cut that grace to zero and turn the
+// sibling's healthy work into a plain connection death its session cannot
+// classify.
+//
+// Identity-checked, because Invalidate-by-tag was a footgun: between one
+// step's eviction and its forget, a sibling can have re-acquired a FRESH
+// machine under the same tag, and a tag-keyed forget would orphan — or
+// worse, release — the machine the sibling just paid for. A lease that is
+// still acquiring, or that resolved to a different machine, is left alone.
+func (l *Leases) Abandon(tag, dialURL string) {
 	l.mu.Lock()
 	held, ok := l.held[tag]
-	delete(l.held, tag)
 	l.mu.Unlock()
 
-	if !ok {
+	if !ok || !held.abandonIf(dialURL) {
 		return
 	}
 
-	// Immediately, skipping any idle window: that window exists so a pipeline
-	// of back-to-back jobs does not pay repeated cold starts, and waiting it
-	// out here would stall the build behind a machine that is already going.
-	//
-	// Best effort: the usual reason to be here is that the machine already
-	// went away, where the release is expected to fail.
-	_ = held.give(ctx, true)
+	l.mu.Lock()
+
+	if l.held[tag] == held {
+		delete(l.held, tag)
+	}
+
+	l.mu.Unlock()
+}
+
+// abandonIf forgets this lease's machine when it is the one named, reporting
+// whether it did. Waits for an acquisition in flight, and never matches one:
+// a machine still being acquired is not the machine anybody watched die.
+func (l *lease) abandonIf(dialURL string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if !l.acquired || l.err != nil || l.worker.URL != dialURL {
+		return false
+	}
+
+	l.release = nil
+
+	return true
 }
 
 // ReleaseAll returns every machine this job acquired.
@@ -164,14 +189,25 @@ func (l *Leases) ReleaseAll(ctx context.Context) error {
 	l.held = map[string]*lease{}
 	l.mu.Unlock()
 
-	var failures []error
+	// Concurrently, because releases can legitimately take a while — a
+	// parked worker's ?idle= hold, a slow Stop — and a job's end waiting out
+	// each one in turn could outlive the whole release budget on the later
+	// ones, stranding running machines behind the earlier ones' patience.
+	failures := make([]error, len(held))
 
-	for _, one := range held {
-		err := one.give(ctx, false)
-		if err != nil {
-			failures = append(failures, err)
-		}
+	var wg sync.WaitGroup
+
+	for i, one := range held {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			failures[i] = one.give(ctx, false)
+		}()
 	}
+
+	wg.Wait()
 
 	return errors.Join(failures...)
 }

@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -53,15 +54,16 @@ const (
 )
 
 // defaultIdle is how long a parked instance is left running after the job
-// that started it, so a pipeline whose jobs run back to back does not pay the
-// start-up cost every time.
+// that started it.
 //
-// Zero would mean stopping the instance the moment a job ends, which for a
-// pipeline of several jobs against one tag is the worst of both worlds: the
-// full boot cost, every job, with the EBS bill anyway. A knob rather than a
-// hardcode because the right answer depends on how often a fleet runs, and
-// ?idle=0 is the honest way to say "stop it immediately".
-const defaultIdle = 5 * time.Minute
+// Zero, and the change from the shipped 5m default is deliberate: the release
+// has to be SYNCHRONOUS (a detached parker dies with a one-shot process,
+// leaving the instance running and billing forever), so a nonzero default
+// meant every job that touched a parked worker visibly hung for five minutes
+// after finishing — a surprise nobody asked for. ?idle= remains for the
+// operator who wants back-to-back jobs to skip the cold start and accepts
+// that the job's end waits out the window, which the release now says aloud.
+const defaultIdle = 0
 
 // acquireTimeout bounds waiting for a machine to reach a usable state. Cloud
 // acquisition is 20-90 seconds; a Windows instance without fast launch is
@@ -141,30 +143,67 @@ func startParked(ctx context.Context, api ec2API, worker Worker) (Worker, func(c
 
 	err = waitForRunning(ctx, api, worker, worker.Instance)
 	if err != nil {
+		// A machine this end started and cannot use is still a machine
+		// somebody is paying for, and nothing later will stop it: the lease
+		// records no release on a failed acquire.
+		//nolint:contextcheck // deliberately not the caller's context: its being cancelled is the likeliest reason to be here
+		stopInstance(api, worker, worker.Instance)
+
 		return Worker{}, nil, err
 	}
 
 	release := func(ctx context.Context, immediate bool) error {
-		// After the idle window, not immediately: a pipeline whose jobs run
-		// back to back would otherwise pay a cold start for every one of
-		// them. ?idle=0 stops it at once, and so does an immediate release —
-		// a machine being reclaimed is not one anybody is waiting to reuse.
+		// After the idle window, not immediately: an operator who set ?idle=
+		// asked for back-to-back jobs to find the machine warm, at the
+		// stated price of the releasing job waiting out the window. An
+		// immediate release skips it — a machine being reclaimed is not one
+		// anybody is waiting to reuse.
 		if worker.Idle > 0 && !immediate {
+			fmt.Printf("worker %s: holding %s for %s before parking (?idle=0 parks immediately)\n",
+				worker.URL, worker.Instance, worker.Idle)
+
 			select {
 			case <-time.After(worker.Idle):
 			case <-ctx.Done():
 			}
 		}
 
-		_, stopErr := api.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{worker.Instance}})
+		// A context of its own for the Stop itself: the wait above may have
+		// consumed the caller's entire budget, and returning without stopping
+		// would leave the machine running with nothing ever trying again.
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+		defer cancel()
+
+		_, stopErr := api.StopInstances(stopCtx, &ec2.StopInstancesInput{InstanceIds: []string{worker.Instance}})
 		if stopErr != nil {
 			return fmt.Errorf("stopping %s for %q: %w", worker.Instance, worker.URL, stopErr)
 		}
 
+		fmt.Printf("worker %s: parked %s\n", worker.URL, worker.Instance)
+
 		return nil
 	}
 
+	fmt.Printf("worker %s: started %s\n", worker.URL, worker.Instance)
+
 	return worker.asStatic(worker.Instance), release, nil
+}
+
+// cleanupTimeout bounds the API call that gives a machine back on a path
+// whose own context may be spent or cancelled — which is exactly when leaving
+// the machine running would be worst.
+const cleanupTimeout = 2 * time.Minute
+
+// stopInstance is the best-effort stop for a machine a failed acquisition
+// leaves running, under its own context for the reason cleanupTimeout gives.
+func stopInstance(api ec2API, worker Worker, instance string) {
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+
+	_, err := api.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{instance}})
+	if err != nil {
+		fmt.Printf("warning: could not stop %s after a failed acquisition for %q: %v\n", instance, worker.URL, err)
+	}
 }
 
 // launchInstance creates one instance from a launch template and terminates
@@ -183,22 +222,45 @@ func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, fun
 	err = waitForRunning(ctx, api, worker, instance)
 	if err != nil {
 		// Terminated rather than left behind: a machine this end cannot use
-		// is still a machine somebody is paying for.
-		_, _ = api.TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: []string{instance}})
+		// is still a machine somebody is paying for. Its own context, because
+		// the likeliest reason to be here is the caller's being cancelled —
+		// and a terminate the SDK aborts before it reaches AWS leaves a
+		// billing instance nothing will ever look for.
+		//nolint:contextcheck // as stopInstance: the caller's context may be the problem
+		terminateInstance(api, worker, instance)
 
 		return Worker{}, nil, err
 	}
 
 	release := func(ctx context.Context, _ bool) error {
-		_, stopErr := api.TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: []string{instance}})
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+		defer cancel()
+
+		_, stopErr := api.TerminateInstances(stopCtx, &ec2.TerminateInstancesInput{InstanceIds: []string{instance}})
 		if stopErr != nil {
 			return fmt.Errorf("terminating %s for %q: %w", instance, worker.URL, stopErr)
 		}
 
+		fmt.Printf("worker %s: terminated %s\n", worker.URL, instance)
+
 		return nil
 	}
 
+	fmt.Printf("worker %s: launched %s\n", worker.URL, instance)
+
 	return worker.asStatic(instance), release, nil
+}
+
+// terminateInstance is stopInstance for a machine that should not exist at
+// all once this end cannot use it.
+func terminateInstance(api ec2API, worker Worker, instance string) {
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+
+	_, err := api.TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: []string{instance}})
+	if err != nil {
+		fmt.Printf("warning: could not terminate %s after a failed acquisition for %q: %v\n", instance, worker.URL, err)
+	}
 }
 
 // fleetRequest asks for exactly one instance from the worker's template.
@@ -224,6 +286,13 @@ func fleetRequest(worker Worker) *ec2.CreateFleetInput {
 	spot := &ec2types.SpotOptionsRequest{AllocationStrategy: ec2types.SpotAllocationStrategyPriceCapacityOptimized}
 
 	switch worker.Capacity {
+	case "":
+		// Explicitly on-demand, not left to the service: AWS has no
+		// "template decides" semantics for a fleet's capacity type, and an
+		// omitted field silently defaulting somewhere is exactly the wrong
+		// property for the knob that decides what a machine costs.
+		request.TargetCapacitySpecification.DefaultTargetCapacityType = ec2types.DefaultTargetCapacityTypeOnDemand
+		request.TargetCapacitySpecification.OnDemandTargetCapacity = aws.Int32(1)
 	case CapacityOnDemand:
 		request.TargetCapacitySpecification.DefaultTargetCapacityType = ec2types.DefaultTargetCapacityTypeOnDemand
 		request.TargetCapacitySpecification.OnDemandTargetCapacity = aws.Int32(1)
@@ -323,9 +392,37 @@ func instanceState(out *ec2.DescribeInstancesOutput) ec2types.InstanceStateName 
 
 // asStatic is this worker as the already-running machine it just became, so
 // everything downstream dials it without knowing how it got there.
+//
+// The URL is REBUILT, and that is the load-bearing part: the pipeline hands a
+// runner the worker's URL as a string, and the venue parses it back — so a
+// launch-rung worker whose URL still said aws://launch/lt-… would re-parse
+// into a template with no instance, and the session would dial nothing at
+// all, on a machine the job had just paid to start. The acquisition-only
+// options are stripped because a static parse refuses them, by design.
 func (w Worker) asStatic(instance string) Worker {
 	w.Rung = RungStatic
 	w.Instance = instance
+	w.URL = staticURL(instance, w.Root, w.Query)
 
 	return w
+}
+
+// staticURL names a running instance the way ParseWorker reads one, keeping
+// every connection option and dropping the acquisition ones.
+func staticURL(instance, root, rawQuery string) string {
+	address := "aws://" + instance + root
+
+	query, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return address
+	}
+
+	query.Del("capacity")
+	query.Del("idle")
+
+	if len(query) == 0 {
+		return address
+	}
+
+	return address + "?" + query.Encode()
 }

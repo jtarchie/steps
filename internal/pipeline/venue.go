@@ -162,7 +162,11 @@ const venueRetries = 2
 // resolves to the same address next time round, so retrying would re-run the
 // step against the host that just went away, paying a dial timeout and any
 // side effects the commands already had, twice, to reach the same end.
-func withVenueRetry(ctx context.Context, step config.Step, budget time.Duration, work func(context.Context) error) error {
+// work reports the dial URL of the machine it ran against alongside its
+// error, because forgetting a lease is identity-checked: the machine to
+// forget is the one THIS attempt watched die, never whatever the tag happens
+// to hold by then — a parallel sibling may have re-acquired already.
+func withVenueRetry(ctx context.Context, step config.Step, budget time.Duration, work func(context.Context) (string, error)) error {
 	tag := placementTag(step)
 
 	// Enforced by refusing to START a late attempt rather than by bounding
@@ -174,7 +178,7 @@ func withVenueRetry(ctx context.Context, step config.Step, budget time.Duration,
 	started := time.Now()
 
 	for attempt := 0; ; attempt++ {
-		err := work(ctx)
+		dialed, err := work(ctx)
 		if err == nil || !errors.Is(err, venue.ErrEvicted) {
 			return err
 		}
@@ -191,10 +195,11 @@ func withVenueRetry(ctx context.Context, step config.Step, budget time.Duration,
 			return fmt.Errorf("%w (%s)", err, stop)
 		}
 
-		// The machine is gone or going: hand it back and forget it, so the
-		// next resolve acquires a fresh one.
+		// Forgotten, never destroyed: AWS is already reclaiming the machine,
+		// and a sibling step may still be finishing its own work inside the
+		// two-minute grace. The next resolve acquires a fresh one.
 		if leases := leasesFrom(ctx); leases != nil {
-			leases.Invalidate(ctx, tag)
+			leases.Abandon(tag, dialed)
 		}
 
 		fmt.Printf("worker for tag %s was reclaimed; re-placing the step\n", tag)
@@ -230,7 +235,7 @@ func canReplace(ctx context.Context, tag string) bool {
 	return ok && worker.Acquirable()
 }
 
-// releaseIfReclaimed hands back a worker that announced its own end, after a
+// releaseIfReclaimed forgets a worker that announced its own end, after a
 // step that finished anyway.
 //
 // The two-minute window means a step often SUCCEEDS on a machine that is
@@ -238,7 +243,7 @@ func canReplace(ctx context.Context, tag string) bool {
 // stays bound to the doomed instance and the next step on the tag opens a
 // session against a host that dies at the handshake — which sticks, is not an
 // eviction, and fails the build on a machine steps already knew was dying.
-func releaseIfReclaimed(ctx context.Context, step config.Step, runner shell.Runner) {
+func releaseIfReclaimed(ctx context.Context, step config.Step, runner shell.Runner, dialed string) {
 	reason, reclaimed := venue.ReclaimedBy(runner)
 	if !reclaimed {
 		return
@@ -254,10 +259,12 @@ func releaseIfReclaimed(ctx context.Context, step config.Step, runner shell.Runn
 		return
 	}
 
-	fmt.Printf("worker for tag %s finished the step and is being reclaimed; releasing it\n", tag)
-	logFrom(ctx).Info("job.worker_released_after_drain", "tag", tag, "reason", reason)
+	fmt.Printf("worker for tag %s finished the step and is being reclaimed; letting it go\n", tag)
+	logFrom(ctx).Info("job.worker_abandoned_after_drain", "tag", tag, "reason", reason)
 
-	leases.Invalidate(ctx, tag)
+	// Forgotten, never destroyed — AWS owns this machine's end, and a
+	// sibling step may still be using its remaining grace. See Abandon.
+	leases.Abandon(tag, dialed)
 }
 
 // placementOf describes where a step ran, for the run record: "tag (address)",
@@ -316,8 +323,19 @@ func ValidateWorkerPlacement(ctx context.Context, job *config.Job) error {
 			return nil
 		}
 
-		if _, ok := workers[tag]; !ok {
+		worker, ok := workers[tag]
+		if !ok {
 			missing[tag] = append(missing[tag], label)
+
+			return nil
+		}
+
+		// With what the invocation already knows: a dial certain to fail is
+		// refused before any step runs — and before an acquisition rung
+		// launches a billed machine to discover it.
+		checkErr := worker.PlacementCheck(artifactStoreFrom(ctx) != "")
+		if checkErr != nil {
+			return fmt.Errorf("--worker %s: %w", tag, checkErr)
 		}
 
 		return nil

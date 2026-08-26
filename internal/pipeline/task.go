@@ -133,7 +133,7 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 
-	err = withVenueRetry(ctx, step, budget, func(ctx context.Context) error {
+	err = withVenueRetry(ctx, step, budget, func(ctx context.Context) (string, error) {
 		// One runner for every attempt, not one per attempt. A retry is a
 		// second go at the SAME workspace: locally that falls out of the
 		// directory simply persisting, but a venue session owns a remote
@@ -142,9 +142,9 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 		// last attempt wrote outside its declared outputs. A task that marks
 		// progress on disk to skip work it has already done would then pass
 		// here and loop forever on a worker.
-		runner, runnerErr := taskRunner(ctx, step, rt, space)
+		dialed, runner, runnerErr := taskRunner(ctx, step, rt, space)
 		if runnerErr != nil {
-			return runnerErr
+			return dialed, runnerErr
 		}
 
 		defer shell.CloseRunner(runner, rt.Name)
@@ -153,9 +153,9 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 		// a machine being reclaimed still leaves a lease bound to it, and the
 		// next step on the tag would open a session against a host that is
 		// about to die.
-		defer releaseIfReclaimed(ctx, step, runner)
+		defer releaseIfReclaimed(ctx, step, runner, dialed)
 
-		return retryWithTimeout(ctx, step.Attempts, rt.Timeout, func(attempt, total int) {
+		return dialed, retryWithTimeout(ctx, step.Attempts, rt.Timeout, func(attempt, total int) {
 			fmt.Printf("task: %s (attempt %d/%d)\n", executedStepName(step), attempt, total)
 			logFrom(ctx).Info("job.task.attempt", "task", executedStepName(step), "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
@@ -201,8 +201,9 @@ func stepBudget(step config.Step, timeout string) (time.Duration, error) {
 	return parsed * time.Duration(max(config.AttemptCount(step.Attempts), 1)), nil
 }
 
-// taskRunner builds the runner a task's attempts share.
-func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, space workspace.StepSpace) (shell.Runner, error) {
+// taskRunner builds the runner a task's attempts share, reporting which
+// machine it dials so an eviction can name what to forget.
+func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, space workspace.StepSpace) (string, shell.Runner, error) {
 	workspaceDir := space.Dir()
 
 	// Fetch is the step's declared outputs: what a worker sends back after
@@ -211,7 +212,7 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 	if err != nil {
 		// Bare: both of this function's error sites are already prefixed by
 		// its caller, and wrapping here produced `task "x": task "x": ...`.
-		return nil, err
+		return "", nil, err
 	}
 
 	//nolint:contextcheck // NewRunner takes no context; opening the artifact store reads only local config
@@ -227,10 +228,10 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 		// decided whether this step's directory survives.
 		Keep: workspace.Kept(space)})
 	if err != nil {
-		return nil, fmt.Errorf("task %q: %w", rt.Name, err)
+		return worker, nil, fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 
-	return runner.WithLabel(rt.Name), nil
+	return worker, runner.WithLabel(rt.Name), nil
 }
 
 // runTaskCommand runs a task's run: command. Without an assert: or fix:, it

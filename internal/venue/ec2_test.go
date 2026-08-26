@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -99,7 +100,7 @@ func (f *fakeEC2) CreateFleet(_ context.Context, in *ec2.CreateFleetInput, _ ...
 	}
 
 	return &ec2.CreateFleetOutput{
-		Instances: []ec2types.CreateFleetInstance{{InstanceIds: []string{"i-0launched1234567"}}},
+		Instances: []ec2types.CreateFleetInstance{{InstanceIds: []string{"i-0faced0123456789"}}},
 	}, nil
 }
 
@@ -215,7 +216,7 @@ func TestLeaseLaunchesAndTerminates(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 
-	if resolved.Instance != "i-0launched1234567" {
+	if resolved.Instance != "i-0faced0123456789" {
 		t.Errorf("resolved instance = %q, want the launched one", resolved.Instance)
 	}
 
@@ -227,7 +228,7 @@ func TestLeaseLaunchesAndTerminates(t *testing.T) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 
-	if len(fake.terminated) != 1 || fake.terminated[0] != "i-0launched1234567" {
+	if len(fake.terminated) != 1 || fake.terminated[0] != "i-0faced0123456789" {
 		t.Errorf("terminated = %v, want the launched instance destroyed", fake.terminated)
 	}
 
@@ -398,5 +399,187 @@ func assertLaunchForm(t *testing.T) {
 
 	if launched.Rung != RungLaunch || launched.Template != "lt-0def4567890abcde" || launched.Capacity != CapacityOnDemand {
 		t.Errorf("parsed = %+v, want the launch template and its capacity", launched)
+	}
+}
+
+// TestLeaseResolvedWorkerDialsTheAcquiredInstance pins the rebuild asStatic
+// does, against the break every reviewer missed: the pipeline hands a runner
+// the worker's URL as a STRING and the venue parses it back — so a launch
+// worker whose URL still said aws://launch/lt-… re-parsed into a template
+// with no instance, and the session dialed nothing at all, on a machine the
+// job had just paid to start.
+func TestLeaseResolvedWorkerDialsTheAcquiredInstance(t *testing.T) {
+	fake := &fakeEC2{}
+	seamEC2(t, fake)
+
+	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde/mnt/fast?capacity=spot&region=us-west-2&shim=/usr/local/bin/steps")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	leases := NewLeases(map[string]Worker{"burst": worker})
+
+	resolved, err := leases.Resolve(context.Background(), "burst")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	// The URL a runner will re-parse has to name the MACHINE, keep the
+	// connection options, and drop the acquisition ones a static parse
+	// refuses.
+	reparsed, err := ParseWorker(resolved.URL)
+	if err != nil {
+		t.Fatalf("the resolved URL %q does not parse: %v", resolved.URL, err)
+	}
+
+	if reparsed.Instance != "i-0faced0123456789" || reparsed.Rung != RungStatic {
+		t.Errorf("re-parsed = %+v, want the launched instance as a static worker", reparsed)
+	}
+
+	if reparsed.Root != "/mnt/fast" || reparsed.Region != "us-west-2" || reparsed.Shim != "/usr/local/bin/steps" {
+		t.Errorf("re-parsed = %+v, want the root and connection options carried over", reparsed)
+	}
+}
+
+// TestLeaseAbandonForgetsWithoutDestroying is the reclamation contract: AWS
+// owns a reclaimed machine's end, and a sibling step may still be spending
+// the two-minute grace on it — so an abandon must not Stop or Terminate
+// anything, only make the next Resolve acquire fresh.
+func TestLeaseAbandonForgetsWithoutDestroying(t *testing.T) {
+	fake := &fakeEC2{}
+	seamEC2(t, fake)
+
+	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	leases := NewLeases(map[string]Worker{"burst": worker})
+
+	first, err := leases.Resolve(context.Background(), "burst")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	leases.Abandon("burst", first.URL)
+
+	fake.mu.Lock()
+	terminated := len(fake.terminated)
+	fake.mu.Unlock()
+
+	if terminated != 0 {
+		t.Fatalf("Abandon destroyed the machine (%d terminates) — a sibling's grace was cut to zero", terminated)
+	}
+
+	// The next resolve acquires a fresh machine rather than the corpse.
+	_, err = leases.Resolve(context.Background(), "burst")
+	if err != nil {
+		t.Fatalf("Resolve after abandon: %v", err)
+	}
+
+	fake.mu.Lock()
+	fleets := len(fake.fleets)
+	fake.mu.Unlock()
+
+	if fleets != 2 {
+		t.Errorf("fleets = %d, want a second acquisition after the abandon", fleets)
+	}
+}
+
+// TestLeaseAbandonIsIdentityChecked pins the fix for the tag-keyed footgun: a
+// stale abandon naming the machine that died must not touch the FRESH lease a
+// parallel sibling has since acquired under the same tag.
+func TestLeaseAbandonIsIdentityChecked(t *testing.T) {
+	fake := &fakeEC2{}
+	seamEC2(t, fake)
+
+	worker, err := ParseWorker("aws://stopped/i-0abc123def456789?idle=0")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	leases := NewLeases(map[string]Worker{"gpu": worker})
+
+	resolved, err := leases.Resolve(context.Background(), "gpu")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	// A stale notice about some other machine: identity mismatch, no-op.
+	leases.Abandon("gpu", "aws://i-0someoneelse1234")
+
+	again, err := leases.Resolve(context.Background(), "gpu")
+	if err != nil {
+		t.Fatalf("Resolve after a mismatched abandon: %v", err)
+	}
+
+	if again.URL != resolved.URL {
+		t.Errorf("a mismatched abandon evicted the lease: %q became %q", resolved.URL, again.URL)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if len(fake.started) != 1 {
+		t.Errorf("the machine was acquired %d times, want once — the mismatched abandon must not have touched it", len(fake.started))
+	}
+
+	// After the abandon that DOES match, job-end release finds nothing: the
+	// machine's fate belongs to AWS, not to ReleaseAll.
+	leases.Abandon("gpu", again.URL)
+
+	err = leases.ReleaseAll(context.Background())
+	if err != nil {
+		t.Fatalf("ReleaseAll: %v", err)
+	}
+
+	if len(fake.stopped) != 0 {
+		t.Errorf("stopped = %v, want an abandoned machine left to AWS", fake.stopped)
+	}
+}
+
+// TestLeaseReleaseAllRunsConcurrently pins that one slow release cannot spend
+// the whole budget the others needed: three parked workers with holds release
+// in one window, not three.
+func TestLeaseReleaseAllRunsConcurrently(t *testing.T) {
+	fake := &fakeEC2{}
+	seamEC2(t, fake)
+
+	workers := map[string]Worker{}
+
+	for _, tag := range []string{"a", "b", "c"} {
+		worker, err := ParseWorker("aws://stopped/i-0abc123def45678" + tag + "?idle=300ms")
+		if err != nil {
+			t.Fatalf("ParseWorker: %v", err)
+		}
+
+		workers[tag] = worker
+	}
+
+	leases := NewLeases(workers)
+
+	for tag := range workers {
+		_, err := leases.Resolve(context.Background(), tag)
+		if err != nil {
+			t.Fatalf("Resolve(%q): %v", tag, err)
+		}
+	}
+
+	started := time.Now()
+
+	err := leases.ReleaseAll(context.Background())
+	if err != nil {
+		t.Fatalf("ReleaseAll: %v", err)
+	}
+
+	if elapsed := time.Since(started); elapsed > 900*time.Millisecond {
+		t.Errorf("ReleaseAll took %s for three 300ms holds — releases are serialized", elapsed)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if len(fake.stopped) != 3 {
+		t.Errorf("stopped = %v, want all three parked", fake.stopped)
 	}
 }
