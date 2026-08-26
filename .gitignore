@@ -24,3 +24,6 @@
 
 # task cover-diff scratch profile
 /.cover.out
+
+# hack/aws-fixture.sh's cross-compiled worker binary
+/.aws-fixture/

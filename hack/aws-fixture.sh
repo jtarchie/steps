@@ -31,7 +31,16 @@
 # (~$0.005/hr) because the alternative — a private subnet — needs three
 # interface VPC endpoints at $21+/month. Run `down` when finished and the
 # whole exercise costs cents.
-set -euo pipefail
+set -eEuo pipefail
+
+# Every discovery helper suppresses stderr so an empty result reads as "None"
+# rather than noise — which, on the failure that actually happens, meant the
+# script died on an assignment and printed nothing at all. An SCP denying
+# ec2:* in one region is the usual cause, and it is invisible without this.
+# The trap only speaks from the top-level shell: an error inside a command
+# substitution fires it once there and again in the parent, and one cause
+# deserves one message.
+trap 'st=$?; [ "$BASH_SUBSHELL" -eq 0 ] || exit "$st"; die "failed at line $LINENO (exit $st). An action denied in $REGION is the usual cause — Organizations SCPs are often region scoped, so try AWS_REGION=<another region>."' ERR
 
 NAME=steps-test
 TAG_KEY=steps-test-fixture
@@ -85,9 +94,13 @@ find_sg() {
     --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null
 }
 
+# Unlike the filter-based lookups above, --launch-template-names ERRORS when
+# the name does not exist rather than returning None — which under `set -e`
+# killed `up` on a fresh account, before it could create the thing it was
+# looking for. Absent is a normal answer here, so it is not an error.
 find_lt() {
   aws_ ec2 describe-launch-templates --launch-template-names "$NAME-lt" \
-    --query 'LaunchTemplates[0].LaunchTemplateId' --output text 2>/dev/null
+    --query 'LaunchTemplates[0].LaunchTemplateId' --output text 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------- up

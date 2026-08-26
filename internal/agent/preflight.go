@@ -853,6 +853,17 @@ func probeModelCached(ctx context.Context, ri config.ResolvedInvocation, setting
 	}
 
 	err := probeModel(ctx, ri, settings.ProbeTimeout())
+
+	// A probe the CALLER abandoned learned nothing about the target. The
+	// probe's own deadline firing IS a fact about the target and is cached;
+	// ctx being done means Ctrl-C, a job deadline, or a shutdown, and
+	// describeProbeError renders both identically, so without this an
+	// aborted build left a healthy model looking dead for the whole cache
+	// window.
+	if ctx.Err() != nil {
+		return now, err
+	}
+
 	probeCache.store(key, err, now)
 
 	return now, err
@@ -959,6 +970,17 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 	}
 
 	err = probeServer(ctx, *srv, spec, settings.ProbeTimeout())
+
+	// A probe the CALLER abandoned learned nothing about the target. The
+	// probe's own deadline firing IS a fact about the target and is cached;
+	// ctx being done means Ctrl-C, a job deadline, or a shutdown, and
+	// describeProbeError renders both identically, so without this an
+	// aborted build left a healthy server looking dead for the whole cache
+	// window.
+	if ctx.Err() != nil {
+		return err
+	}
+
 	probeCache.store(key, err, now)
 
 	return err
