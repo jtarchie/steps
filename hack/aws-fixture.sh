@@ -40,7 +40,7 @@ set -eEuo pipefail
 # The trap only speaks from the top-level shell: an error inside a command
 # substitution fires it once there and again in the parent, and one cause
 # deserves one message.
-trap 'st=$?; [ "$BASH_SUBSHELL" -eq 0 ] || exit "$st"; die "failed at line $LINENO (exit $st). An action denied in $REGION is the usual cause — Organizations SCPs are often region scoped, so try AWS_REGION=<another region>."' ERR
+trap 'st=$?; [ "$BASH_SUBSHELL" -eq 0 ] || exit "$st"; die "failed at line $LINENO (exit $st). expired credentials, or an action denied in $REGION — Organizations SCPs are often region scoped, so try AWS_REGION=<another region>."' ERR
 
 NAME=steps-test
 TAG_KEY=steps-test-fixture
