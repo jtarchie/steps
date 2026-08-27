@@ -50,9 +50,12 @@ type Channel struct {
 	// inOrder reassembles the inbound stream: the agent may retransmit or
 	// deliver out of order, and a client that dropped anything not strictly
 	// increasing would silently lose bytes under load.
-	inSeq        int64
-	inSeqSeeded  bool
-	inDelivered  bool
+	inSeq       int64
+	inSeqSeeded bool
+	// inLowest is the first sequence this stream ever saw. A frame below it
+	// belongs before everything delivered, which is a reordering this client
+	// cannot repair rather than a duplicate it can ignore.
+	inLowest     int64
 	inBuf        map[int64][]byte
 	agentVersion string
 
@@ -460,7 +463,12 @@ func (c *Channel) deliver(message *agentMessage) error {
 		return err
 	}
 
-	for _, chunk := range c.reassemble(message) {
+	run, err := c.reassemble(message)
+	if err != nil {
+		return err
+	}
+
+	for _, chunk := range run {
 		if len(chunk) == 0 {
 			continue
 		}
@@ -475,26 +483,42 @@ func (c *Channel) deliver(message *agentMessage) error {
 	return nil
 }
 
+// ErrOutOfOrder is a frame belonging before everything already delivered.
+var ErrOutOfOrder = errors.New("an SSM frame arrived after the stream had passed it")
+
 // reassemble files one payload by sequence number and returns whatever
 // contiguous run that completed — nothing, when it filled no gap.
-func (c *Channel) reassemble(message *agentMessage) [][]byte {
+//
+// The watermark is seeded from the FIRST frame seen, because AWS never
+// specified where an agent's stream starts and a client that assumed wrong
+// would stall every session rather than lose a rare frame. The cost of that
+// choice is here: a frame that OVERTOOK an earlier one seeds the watermark
+// above it, and the earlier frame then arrives below everything delivered
+// with no honest place to go.
+//
+// Reported rather than dropped. Both are bad, and they are not equally bad: a
+// dropped frame takes bytes out of a step's own output stream with nothing
+// anywhere saying so, and what is left is read downstream as content. An
+// error kills the session, which the step redials.
+func (c *Channel) reassemble(message *agentMessage) ([][]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Seed the expected sequence from the first frame seen. Before anything
-	// has been delivered, a lower number is an earlier frame that overtook
-	// this one rather than a duplicate, so the watermark moves down to it;
-	// once delivery has begun it only moves forward.
 	switch {
 	case !c.inSeqSeeded:
 		c.inSeq = message.sequenceNumber
+		c.inLowest = message.sequenceNumber
 		c.inSeqSeeded = true
-	case message.sequenceNumber < c.inSeq && !c.inDelivered:
-		c.inSeq = message.sequenceNumber
+	case message.sequenceNumber < c.inLowest:
+		// Below everything this stream has ever delivered: not a
+		// retransmission of anything seen, but an earlier frame that lost a
+		// race with the one that seeded the watermark.
+		return nil, fmt.Errorf("%w: frame %d, stream began at %d",
+			ErrOutOfOrder, message.sequenceNumber, c.inLowest)
 	case message.sequenceNumber < c.inSeq:
 		// Already delivered: a retransmission this end has seen. Acknowledged
 		// by the caller so the agent stops, and dropped here.
-		return nil
+		return nil, nil
 	}
 
 	c.inBuf[message.sequenceNumber] = append([]byte(nil), message.payload...)
@@ -504,13 +528,12 @@ func (c *Channel) reassemble(message *agentMessage) [][]byte {
 	for {
 		next, ok := c.inBuf[c.inSeq]
 		if !ok {
-			return run
+			return run, nil
 		}
 
 		run = append(run, next)
 		delete(c.inBuf, c.inSeq)
 		c.inSeq++
-		c.inDelivered = true
 	}
 }
 
