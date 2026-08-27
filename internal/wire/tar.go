@@ -75,6 +75,11 @@ func PackPaths(w io.Writer, root string, names []string) error {
 		roots = make([]string, 0, len(names))
 
 		for _, name := range names {
+			err := packName(name)
+			if err != nil {
+				return fmt.Errorf("packing %q: %w", root, err)
+			}
+
 			roots = append(roots, filepath.Join(root, name))
 		}
 	}
@@ -92,6 +97,24 @@ func PackPaths(w io.Writer, root string, names []string) error {
 	err := writer.Close()
 	if err != nil {
 		return fmt.Errorf("packing %q: %w", root, err)
+	}
+
+	return nil
+}
+
+// packName refuses a name that would pack a tree from outside root.
+//
+// unpackName's twin, and needed for the same reason on the other side: these
+// names arrive from the PEER — the shim tars whatever a fetch frame asked for
+// — so without this a FrameFetch for "../../.ssh" walks a tree outside the
+// work directory and ships it back as data frames. unpackName cannot help
+// there: it runs on the orchestrator, and whoever sent the frame is reading
+// the raw stream.
+func packName(name string) error {
+	clean := filepath.Clean(name)
+	if clean == "" || clean == "." || clean == ".." ||
+		filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%w: %q", ErrUnsafePath, name)
 	}
 
 	return nil
@@ -347,9 +370,23 @@ func unpackFile(dir *os.Root, reader *tar.Reader, header *tar.Header, name strin
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
-	defer func() { _ = file.Close() }()
 
-	_, err = io.Copy(file, reader)
+	err = writeUnpacked(file, reader, header)
+
+	// Checked, not dropped: this is a WRITE, and a delayed-allocation or
+	// network filesystem reports ENOSPC only here. Swallowing it leaves a
+	// truncated file that digestTree then hashes as the step's genuine
+	// content — the silent divergence this file exists to prevent.
+	closeErr := file.Close()
+	if err == nil && closeErr != nil {
+		return fmt.Errorf("finishing %q: %w", name, closeErr)
+	}
+
+	return err
+}
+
+func writeUnpacked(file *os.File, reader *tar.Reader, header *tar.Header) error {
+	_, err := io.Copy(file, reader)
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}

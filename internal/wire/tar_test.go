@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -201,6 +202,56 @@ func TestTreeRoundTripPreservesPermissions(t *testing.T) {
 
 		if got := info.Mode().Perm(); got != mode {
 			t.Errorf("%s came back %04o, want %04o", name, got, mode)
+		}
+	}
+}
+
+// TestPackPathsRefusesAnEscapingName is the read-side trust boundary. The
+// names PackPaths is given arrive from the PEER — the shim tars whatever a
+// FrameFetch asked for — so an unvalidated name walked a tree outside the work
+// directory and shipped it straight back as data frames. unpackName cannot
+// cover it: that guard runs on the orchestrator, and whoever sent the frame is
+// reading the raw stream.
+func TestPackPathsRefusesAnEscapingName(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	outside := filepath.Join(filepath.Dir(root), "secrets-"+filepath.Base(root))
+
+	err := os.MkdirAll(outside, 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = os.RemoveAll(outside) })
+
+	// The marker stands in for whatever is outside the tree; what the test
+	// asserts is that no byte of it reaches the stream.
+	marker := "bytes-from-outside-the-tree"
+
+	err = os.WriteFile(filepath.Join(outside, "private"), []byte(marker), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{
+		"../" + filepath.Base(outside),
+		"a/../../" + filepath.Base(outside),
+		outside,
+		"..",
+		".",
+		"",
+	} {
+		buf := new(bytes.Buffer)
+
+		packErr := PackPaths(buf, root, []string{name})
+		if packErr == nil {
+			t.Errorf("PackPaths accepted %q, want a refusal", name)
+		}
+
+		if strings.Contains(buf.String(), marker) {
+			t.Fatalf("PackPaths shipped a file from outside the tree for %q", name)
 		}
 	}
 }

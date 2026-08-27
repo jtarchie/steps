@@ -109,6 +109,9 @@ type Frame struct {
 type Encoder struct {
 	w      io.Writer
 	header [headerBytes]byte
+	// frame is the header and its payload contiguously, so one frame costs
+	// one Write. See Write.
+	frame []byte
 }
 
 // NewEncoder returns an Encoder writing frames to w.
@@ -130,16 +133,23 @@ func (e *Encoder) Write(frame Frame) error {
 	e.header[3] = byte(frame.Op & 0xff)
 	binary.BigEndian.PutUint32(e.header[4:], uint32(len(frame.Payload))) //nolint:gosec // bounded by MaxFrameBytes above
 
-	_, err := e.w.Write(e.header[:])
-	if err != nil {
-		return fmt.Errorf("writing frame header: %w", err)
-	}
-
 	if len(frame.Payload) == 0 {
+		_, err := e.w.Write(e.header[:])
+		if err != nil {
+			return fmt.Errorf("writing frame header: %w", err)
+		}
+
 		return nil
 	}
 
-	_, err = e.w.Write(frame.Payload)
+	// One Write for the pair, not two. A transport underneath may treat every
+	// call as a MESSAGE rather than as bytes in a stream — the SSM data
+	// channel does, minting a sequence number, a digest and a retransmission
+	// entry per call — so a header written apart from its payload doubles
+	// what every frame costs on the one venue with the least bandwidth.
+	e.frame = append(append(e.frame[:0], e.header[:]...), frame.Payload...)
+
+	_, err := e.w.Write(e.frame)
 	if err != nil {
 		return fmt.Errorf("writing frame payload: %w", err)
 	}
@@ -203,6 +213,16 @@ func (d *Decoder) Read() (Frame, error) {
 
 	_, err = io.ReadFull(d.r, frame.Payload)
 	if err != nil {
+		// A header arrived and its payload did not, so the stream ended
+		// MID-FRAME. io.ReadFull says io.EOF for that when it read nothing at
+		// all, and passing that sentinel up makes a truncated frame
+		// indistinguishable from the orderly close callers check for — the
+		// shim reads it as the orchestrator saying goodbye and exits 0,
+		// discarding the only account of a connection that died.
+		if errors.Is(err, io.EOF) {
+			err = io.ErrUnexpectedEOF
+		}
+
 		return Frame{}, fmt.Errorf("reading %d-byte frame payload: %w", length, err)
 	}
 
