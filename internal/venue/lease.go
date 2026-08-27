@@ -23,9 +23,13 @@ import (
 
 // Leases holds one job's acquired workers, keyed by tag.
 type Leases struct {
-	mu     sync.Mutex
-	held   map[string]*lease
-	source map[string]Worker
+	mu   sync.Mutex
+	held map[string]*lease
+	// retired are machines a step stopped using but that still have to be
+	// given back — see Abandon. Kept out of held so the next Resolve acquires
+	// a fresh one, and kept at all so the job's end still releases them.
+	retired []*lease
+	source  map[string]Worker
 }
 
 // lease is one tag's machine: acquired at most once, released at most once.
@@ -122,17 +126,24 @@ func (l *Leases) Resolve(ctx context.Context, tag string) (Worker, error) {
 	return held.resolve(ctx, worker)
 }
 
-// Abandon forgets the machine held for a tag, so the next Resolve acquires a
-// fresh one — WITHOUT releasing it, and only when it is the machine the
-// caller watched die.
+// Abandon stops using the machine held for a tag, so the next Resolve
+// acquires a fresh one — and only when it is the machine the caller watched
+// die.
 //
-// No release, because the one reason to be here is a terminal reclamation:
-// AWS is already destroying the machine, our Stop or Terminate is a call
-// against a corpse, and — the part that matters — a parallel sibling step may
-// still be running on it, inside the two-minute grace the notice promises.
-// Destroying the machine ourselves would cut that grace to zero and turn the
-// sibling's healthy work into a plain connection death its session cannot
-// classify.
+// Not released HERE, because a parallel sibling step may still be running on
+// it inside the two-minute grace the notice promises: releasing on the spot
+// would cut that grace to zero and turn the sibling's healthy work into a
+// plain connection death its session cannot classify.
+//
+// But still released at the JOB'S end, which is after every sibling by
+// construction. Dropping the release outright assumed a terminal notice means
+// the machine is a corpse, and a spot instance-action is one of terminate,
+// stop or hibernate: only the first destroys anything. Under
+// InstanceInterruptionBehavior=stop the machine is merely STOPPED, so nothing
+// ever terminated it and it billed — with its EBS root volume — for as long
+// as the account lived, with nothing left holding a reference to look for it.
+// Terminating one AWS already terminated is a no-op, so the redundant call on
+// a real reclamation costs nothing.
 //
 // Identity-checked, because Invalidate-by-tag was a footgun: between one
 // step's eviction and its forget, a sibling can have re-acquired a FRESH
@@ -152,25 +163,24 @@ func (l *Leases) Abandon(tag, dialURL string) {
 
 	if l.held[tag] == held {
 		delete(l.held, tag)
+		l.retired = append(l.retired, held)
 	}
 
 	l.mu.Unlock()
 }
 
-// abandonIf forgets this lease's machine when it is the one named, reporting
+// abandonIf gives up this lease's machine when it is the one named, reporting
 // whether it did. Waits for an acquisition in flight, and never matches one:
 // a machine still being acquired is not the machine anybody watched die.
+//
+// The release closure is deliberately kept — the caller moves this lease
+// aside rather than forgetting it, so the job's end still gives the machine
+// back. See Abandon.
 func (l *lease) abandonIf(dialURL string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if !l.acquired || l.err != nil || l.worker.URL != dialURL {
-		return false
-	}
-
-	l.release = nil
-
-	return true
+	return l.acquired && l.err == nil && l.worker.URL == dialURL
 }
 
 // ReleaseAll returns every machine this job acquired.
@@ -181,12 +191,17 @@ func (l *lease) abandonIf(dialURL string) bool {
 func (l *Leases) ReleaseAll(ctx context.Context) error {
 	l.mu.Lock()
 
-	held := make([]*lease, 0, len(l.held))
+	held := make([]*lease, 0, len(l.held)+len(l.retired))
 	for _, one := range l.held {
 		held = append(held, one)
 	}
 
+	// Retired machines are released with the rest: they are exactly the ones
+	// nothing else holds a reference to.
+	held = append(held, l.retired...)
+
 	l.held = map[string]*lease{}
+	l.retired = nil
 	l.mu.Unlock()
 
 	// Concurrently, because releases can legitimately take a while — a

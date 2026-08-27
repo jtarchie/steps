@@ -577,14 +577,18 @@ func TestLeaseAbandonIsIdentityChecked(t *testing.T) {
 	}
 
 	fake.mu.Lock()
-	defer fake.mu.Unlock()
+	started := len(fake.started)
+	fake.mu.Unlock()
 
-	if len(fake.started) != 1 {
-		t.Errorf("the machine was acquired %d times, want once — the mismatched abandon must not have touched it", len(fake.started))
+	if started != 1 {
+		t.Errorf("the machine was acquired %d times, want once — the mismatched abandon must not have touched it", started)
 	}
 
-	// After the abandon that DOES match, job-end release finds nothing: the
-	// machine's fate belongs to AWS, not to ReleaseAll.
+	// After the abandon that DOES match, the machine is no longer bound to
+	// the tag — but the job's end still gives it back. This assertion used to
+	// read the other way, on the theory that a reclaimed machine's fate
+	// belongs to AWS; that is true only of a spot TERMINATE, and a stop or a
+	// hibernate leaves a live instance nothing would ever have released.
 	leases.Abandon("gpu", again.URL)
 
 	err = leases.ReleaseAll(context.Background())
@@ -592,8 +596,11 @@ func TestLeaseAbandonIsIdentityChecked(t *testing.T) {
 		t.Fatalf("ReleaseAll: %v", err)
 	}
 
-	if len(fake.stopped) != 0 {
-		t.Errorf("stopped = %v, want an abandoned machine left to AWS", fake.stopped)
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if len(fake.stopped) != 1 {
+		t.Errorf("stopped = %v, want the abandoned machine still given back at the job's end", fake.stopped)
 	}
 }
 
@@ -840,4 +847,70 @@ func TestLaunchWaitsForAnInstanceEC2CannotSeeYet(t *testing.T) {
 	if len(fake.terminated) != 0 {
 		t.Errorf("terminated = %v, want the instance kept", fake.terminated)
 	}
+}
+
+// TestAbandonedMachineIsStillReleasedAtJobEnd is the spot stop/hibernate
+// leak.
+//
+// A spot instance-action is one of terminate, stop or hibernate, and steps
+// treats all three as terminal — correctly, since all three mean stop using
+// this machine. But only terminate destroys it. Under
+// InstanceInterruptionBehavior=stop the instance is STOPPED and stays alive,
+// so dropping the release closure meant nothing ever called
+// TerminateInstances and the instance plus its EBS root volume billed
+// indefinitely, with nothing left that would look for them.
+//
+// The release stays, but stays DEFERRED to the job's end — which is the other
+// half of why it was dropped: a sibling step may still be finishing inside
+// the two-minute grace, and releasing on the spot would cut that to zero.
+// Job end is after the sibling, by construction.
+func TestAbandonedMachineIsStillReleasedAtJobEnd(t *testing.T) {
+	fake := &fakeEC2{}
+	seamEC2(t, fake)
+
+	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	leases := NewLeases(map[string]Worker{"burst": worker})
+
+	resolved, err := leases.Resolve(context.Background(), "burst")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	// AWS said it is taking the machine; the step is re-placed elsewhere.
+	leases.Abandon("burst", resolved.URL)
+
+	// The next step on the tag must get a FRESH machine, not the doomed one.
+	again, err := leases.Resolve(context.Background(), "burst")
+	if err != nil {
+		t.Fatalf("Resolve after abandon: %v", err)
+	}
+
+	fake.mu.Lock()
+	fleets := len(fake.fleets)
+	fake.mu.Unlock()
+
+	if fleets != 2 {
+		t.Errorf("fleets = %d, want a fresh machine acquired after the abandon", fleets)
+	}
+
+	err = leases.ReleaseAll(context.Background())
+	if err != nil {
+		t.Fatalf("ReleaseAll: %v", err)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	// Both: the abandoned one AND the replacement. Terminating an instance
+	// AWS already terminated is a no-op, so the redundant call on a genuine
+	// terminate costs nothing — while omitting it on a stop bills forever.
+	if len(fake.terminated) != 2 {
+		t.Errorf("terminated = %v, want both the abandoned machine and its replacement", fake.terminated)
+	}
+
+	_ = again
 }
