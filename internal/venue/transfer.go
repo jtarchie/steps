@@ -31,7 +31,7 @@ func (s *session) upload(ctx context.Context) error {
 
 	op := s.nextOp()
 
-	err := s.writeEmpty(wire.Frame{Type: wire.FrameUpload, Op: op})
+	err := s.writeFrame(wire.Frame{Type: wire.FrameUpload, Op: op})
 	if err != nil {
 		return err
 	}
@@ -57,7 +57,7 @@ func (s *session) upload(ctx context.Context) error {
 		return err
 	}
 
-	err = s.writeEmpty(wire.Frame{Type: wire.FrameEnd, Op: op})
+	err = s.writeFrame(wire.Frame{Type: wire.FrameEnd, Op: op})
 	if err != nil {
 		return err
 	}

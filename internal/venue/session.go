@@ -598,8 +598,11 @@ func (s *session) writeRaw(frame wire.Frame, payload any) error {
 	return nil
 }
 
-// writeEmpty sends one payloadless frame, marking like write.
-func (s *session) writeEmpty(frame wire.Frame) error {
+// writeFrame sends a frame exactly as given — its Payload crosses verbatim,
+// which is what the raw-byte frames (tree data, docker streams) need and what
+// write() cannot do, since that one JSON-encodes its argument and ignores the
+// frame's own payload.
+func (s *session) writeFrame(frame wire.Frame) error {
 	err := s.encoder.Write(frame)
 	if err != nil {
 		s.broken.Store(true)

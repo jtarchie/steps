@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"strings"
 	"sync"
 
 	"github.com/jtarchie/steps/internal/wire"
@@ -27,6 +29,27 @@ import (
 
 // defaultDockerSocket is where a daemon listens on a machine that has one.
 const defaultDockerSocket = "/var/run/docker.sock"
+
+// dockerSocketPath answers which daemon THIS machine talks to.
+//
+// DOCKER_HOST before the default, because that variable is already the
+// answer to exactly this question everywhere else — and on a machine whose
+// daemon runs in a VM (colima, Rancher, Docker Desktop) the socket is under
+// the user's home directory, not in /var/run. Only the unix form: a worker
+// pointed at a tcp daemon is one this forwarding has no reason to reach,
+// since the orchestrator could dial that itself.
+func dockerSocketPath(configured string) string {
+	if configured != "" {
+		return configured
+	}
+
+	host := os.Getenv("DOCKER_HOST")
+	if path, ok := strings.CutPrefix(host, "unix://"); ok {
+		return path
+	}
+
+	return defaultDockerSocket
+}
 
 // dockerStreams holds the sockets one session has open, by operation.
 type dockerStreams struct {
@@ -105,10 +128,7 @@ func (s *session) handleDocker(ctx context.Context, frame wire.Frame) error {
 
 // dockerOpen dials the worker's docker socket for one operation.
 func (s *session) dockerOpen(ctx context.Context, frame wire.Frame) error {
-	socket := s.opts.DockerSocket
-	if socket == "" {
-		socket = defaultDockerSocket
-	}
+	socket := dockerSocketPath(s.opts.DockerSocket)
 
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	if err != nil {
@@ -186,11 +206,18 @@ func (s *session) dockerData(frame wire.Frame) error {
 	return nil
 }
 
-// dockerClose ends a stream the peer is done with.
+// dockerClose ends a stream the peer is done with, and always answers.
+//
+// Answered even for an operation this end has never heard of, which is what
+// gives the orchestrator a way to know the wire is quiet again: it owns the
+// connection with a reader while docker streams are open, and it cannot take
+// that reader back until something it sent comes back. A close for an unknown
+// stream is the cheapest such round trip, and is harmless by construction —
+// there was nothing to close.
 func (s *session) dockerClose(frame wire.Frame) error {
 	if conn, ok := s.docker.remove(frame.Op); ok {
 		_ = conn.Close()
 	}
 
-	return nil
+	return s.sendData(wire.FrameDockerClose, frame.Op, nil)
 }
