@@ -17,16 +17,30 @@
 # carries that tag. Needs the AWS CLI and credentials for an account you do
 # not mind creating and destroying things in.
 #
-# A restricted account may forbid some of this. Organizations SCPs are region
-# scoped often enough to be worth checking before concluding a service is
-# unavailable: set AWS_REGION to one the policy allows. Where an action is
-# refused outright the matching test SKIPS rather than fails — a policy saying
+# Use LONG-LIVED credentials — an IAM user's access key, exported or in a
+# profile. Not `aws login`: it mints 15-minute credentials whose refresh token
+# is DPoP-bound and single-use, so concurrent callers retire each other's
+# grant, and the Go SDK cannot perform that refresh at all. The spot-eviction
+# test runs for about 15 minutes, so a console-backed session is guaranteed to
+# die somewhere in the middle of it — and the thing it dies holding is a
+# running spot instance nobody is left to terminate.
+#
+# A restricted account may forbid some of this, and an SCP deny cannot be
+# lifted from inside the account it applies to — no IAM policy outranks one,
+# AdministratorAccess included. Organizations SCPs are region scoped often
+# enough to be worth checking before concluding a service is unavailable: set
+# AWS_REGION to one the policy allows. An account provisioned INTO somebody
+# else's organization cannot be freed at all; it needs one outside any org.
+#
+# Where an action is refused outright the matching test SKIPS rather than fails — a policy saying
 # no is not the code being wrong — so `ec2:CreateFleet` or FIS being denied
 # costs you the launch-rung and spot-eviction coverage and nothing else.
 #
 # Cost, which is the reason for the shape: t4g.small is free through
-# 2026-12-31 (750h/month, existing accounts included), the SSM agent and
-# Session Manager are free, and a spot interruption via FIS is $0.10 per
+# 2026-12-31 (750h/month) on an account created BEFORE the free tier changed
+# on 2025-07-15 — on one created after, EC2 draws down that account's signup
+# credit instead, so this is cheap rather than free. The SSM agent and Session
+# Manager are free either way, and a spot interruption via FIS is $0.10 per
 # action-minute. The instance sits in a PUBLIC subnet with a public IPv4
 # (~$0.005/hr) because the alternative — a private subnet — needs three
 # interface VPC endpoints at $21+/month. Run `down` when finished and the
