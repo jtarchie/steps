@@ -5,6 +5,7 @@ package venue
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"testing"
 	"time"
@@ -167,5 +168,66 @@ func TestVenueCancellationReachesAWedgedSSHWorker(t *testing.T) {
 		}
 	case <-limit.C:
 		t.Fatal("the command never returned over ssh: the interrupt did not reach the wedged worker")
+	}
+}
+
+// failingSink is a stream this end cannot write to: a stdout whose reader
+// closed (`steps ... | head`), a capture spilling to a full disk.
+type failingSink struct{ err error }
+
+func (f failingSink) Write([]byte) (int, error) { return 0, f.err }
+
+// TestRunDrainsToTheExitFrameWhenASinkFails is the seam between a LOCAL
+// failure and the shared stream.
+//
+// A sink that cannot take a command's output used to end the read at once,
+// leaving the rest of that operation's frames — and its FrameExit — in the
+// stream. The session was not marked broken, so the next command reused it and
+// met the leftovers as "a frame for operation N arrived during operation N+1":
+// every later command of the step failed for a reason the worker had nothing
+// to do with. pump() drains for exactly this reason on the transfer path; the
+// command path had no equivalent.
+func TestRunDrainsToTheExitFrameWhenASinkFails(t *testing.T) {
+	t.Parallel()
+
+	toVenue, fromShim := io.Pipe()
+
+	session := &session{
+		decoder: wire.NewDecoder(toVenue),
+		encoder: wire.NewEncoder(io.Discard),
+	}
+
+	t.Cleanup(func() { _ = toVenue.Close() })
+
+	go func() {
+		shim := wire.NewEncoder(fromShim)
+
+		// Two output frames, so the failure lands before the exit and there is
+		// something left to abandon.
+		_ = shim.Write(wire.Frame{Type: wire.FrameStdout, Op: 1, Payload: []byte("first")})
+		_ = shim.Write(wire.Frame{Type: wire.FrameStdout, Op: 1, Payload: []byte("second")})
+		_ = shim.WriteJSON(wire.FrameExit, 1, wire.Exit{Started: true, Code: 0})
+		// The next operation's opening frame. If run stopped early, THIS is
+		// not what the next read finds.
+		_ = shim.Write(wire.Frame{Type: wire.FrameEnd, Op: 2})
+	}()
+
+	sinkErr := errors.New("the stream went away")
+
+	_, err := session.run(context.Background(), "true",
+		outputSinks{stdout: failingSink{err: sinkErr}, stderr: io.Discard})
+	if !errors.Is(err, sinkErr) {
+		t.Fatalf("error = %v, want the sink's own failure", err)
+	}
+
+	// The stream is back on the boundary the next operation starts at.
+	next, err := session.readFrame()
+	if err != nil {
+		t.Fatalf("reading the next operation's frame: %v", err)
+	}
+
+	if next.Type != wire.FrameEnd || next.Op != 2 {
+		t.Errorf("the next frame was a type %d for operation %d, want the next operation's own — the session is desynced",
+			next.Type, next.Op)
 	}
 }

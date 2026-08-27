@@ -128,7 +128,11 @@ type session struct {
 	// deadlock the session against itself on exactly the frame it exists to
 	// handle.
 	drain atomic.Pointer[wire.Draining]
-	op    uint32
+	// op mints operation ids. Atomic because close() takes s.mu and every
+	// other minting path takes nothing, so a teardown racing a transfer was
+	// an unsynchronized read-modify-write that could hand two operations the
+	// same id.
+	op atomic.Uint32
 }
 
 // ErrEvicted is a step whose worker was taken away underneath it.
@@ -531,7 +535,31 @@ func (s *session) close() error {
 
 	// Best effort: a worker that already vanished cannot be told goodbye, and
 	// saying so would replace the real error with a cleanup one.
-	_ = s.encoder.Write(wire.Frame{Type: wire.FrameBye, Op: s.nextOp()})
+	//
+	// Bounded, and off this goroutine, because it is the one frame write in
+	// the package with no watchdog over it. A worker that stopped READING
+	// blocks the encoder on backpressure, which no reader-side close can
+	// unstick -- so writing it inline parked teardown forever, holding s.mu,
+	// never reaching the transport.close that closeTimeout was built to
+	// bound. interrupt is what unblocks a wedged write; see transport.
+	byeOp := s.nextOp()
+	sent := make(chan struct{})
+
+	go func() {
+		defer close(sent)
+
+		_ = s.encoder.Write(wire.Frame{Type: wire.FrameBye, Op: byeOp})
+	}()
+
+	select {
+	case <-sent:
+	case <-ctx.Done():
+		if s.transport.interrupt != nil {
+			s.transport.interrupt()
+		}
+
+		<-sent
+	}
 
 	err := s.transport.close(ctx)
 	s.transport = nil
@@ -544,9 +572,7 @@ func (s *session) close() error {
 }
 
 func (s *session) nextOp() uint32 {
-	s.op++
-
-	return s.op
+	return s.op.Add(1)
 }
 
 // write sends one control frame, marking the conversation broken on a
@@ -617,12 +643,21 @@ func (s *session) noteDrain(frame wire.Frame) {
 		notice = &wire.Draining{Reason: "an unreadable draining notice"}
 	}
 
-	previous := s.drain.Load()
-	if previous != nil && previous.Terminal && !notice.Terminal {
-		return
-	}
+	// Compare-and-swap rather than load-then-store: two goroutines reach here
+	// — the operation reader and readHello's detached one, which outlives the
+	// handshake it was started for — so a plain store lets an advisory notice
+	// clobber a terminal one that landed between the load and the store, and
+	// the reclamation is then billed to the author's attempts: budget.
+	for {
+		previous := s.drain.Load()
+		if previous != nil && previous.Terminal && !notice.Terminal {
+			return
+		}
 
-	s.drain.Store(notice)
+		if s.drain.CompareAndSwap(previous, notice) {
+			break
+		}
+	}
 
 	reason := notice.Reason
 	if reason == "" {
@@ -634,7 +669,15 @@ func (s *session) noteDrain(frame wire.Frame) {
 		kind = "is being reclaimed"
 	}
 
-	fmt.Printf("worker %s %s: %s\n", s.worker.Address(), kind, reason)
+	// The deadline is said, not just carried. It is the one fact that tells an
+	// operator whether the command in flight can finish inside the grace, and
+	// the field's own contract is that it reaches them with the reason.
+	when := ""
+	if notice.Deadline != "" {
+		when = " (expected gone by " + notice.Deadline + ")"
+	}
+
+	fmt.Printf("worker %s %s: %s%s\n", s.worker.Address(), kind, reason, when)
 }
 
 // read is readFrame, marking the conversation broken on a transport failure so

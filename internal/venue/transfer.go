@@ -40,7 +40,12 @@ func (s *session) upload(ctx context.Context) error {
 	// it marks the conversation broken and the next command redials — the
 	// same footing as a death mid-command. broke is what carries that marking
 	// out of the chunked writes.
-	writer := &chunkWriter{encoder: s.encoder, op: op, broke: func() { s.broken.Store(true) }}
+	writer := &chunkWriter{
+		encoder: s.encoder,
+		op:      op,
+		buf:     make([]byte, 0, wire.DataChunkBytes),
+		broke:   func() { s.broken.Store(true) },
+	}
 
 	err = s.packTree(writer)
 	if err != nil {
@@ -97,13 +102,6 @@ func (s *session) fetch(ctx context.Context) error {
 		return s.fetchViaStore(ctx)
 	}
 
-	op := s.nextOp()
-
-	err := s.write(wire.Frame{Type: wire.FrameFetch, Op: op}, wire.Fetch{Paths: s.outputs})
-	if err != nil {
-		return err
-	}
-
 	// Staged, then swapped. Removing the destinations first and unpacking over
 	// them would destroy the step's outputs the moment a transfer died — a
 	// dropped connection, a truncated stream — and the retry that follows
@@ -112,12 +110,25 @@ func (s *session) fetch(ctx context.Context) error {
 	//
 	// Inside cwd deliberately: the swap below is a rename, which needs to stay
 	// on one filesystem.
+	//
+	// BEFORE the ask, not after: a full disk here used to return with the
+	// fetch frame already sent, so the shim answered an operation nobody read
+	// and every later command met the leftovers as "a frame for operation N
+	// arrived during operation N+1" — a poisoned session, for a local failure
+	// the worker had nothing to do with.
 	staging, err := os.MkdirTemp(s.cwd, ".steps-fetch-")
 	if err != nil {
 		return fmt.Errorf("staging the fetched outputs: %w", err)
 	}
 
 	defer func() { _ = os.RemoveAll(staging) }()
+
+	op := s.nextOp()
+
+	err = s.write(wire.Frame{Type: wire.FrameFetch, Op: op}, wire.Fetch{Paths: s.outputs})
+	if err != nil {
+		return err
+	}
 
 	err = s.receive(op, staging)
 	if err != nil {

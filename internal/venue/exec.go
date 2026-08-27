@@ -4,7 +4,9 @@ package venue
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/jtarchie/steps/internal/shell"
@@ -32,6 +34,14 @@ func (s *session) run(ctx context.Context, command string, sinks outputSinks) (w
 	stop := s.watchCancel(ctx, op)
 	defer stop()
 
+	// failed remembers a sink that could not take the output. The READ goes
+	// on regardless, for the reason pump() gives on the transfer path: the
+	// shim is still sending this operation's frames, so returning early would
+	// leave them for the next command to meet as a protocol violation — the
+	// session poisoned by its own tidiness, for a local failure the worker had
+	// nothing to do with.
+	var failed error
+
 	for {
 		// Drain notices are absorbed here rather than ending the command: the
 		// machine has minutes left and the work may well finish in them.
@@ -45,35 +55,41 @@ func (s *session) run(ctx context.Context, command string, sinks outputSinks) (w
 				wire.ErrProtocol, frame.Type, frame.Op, op)
 		}
 
-		exit, done, err := deliver(frame, sinks)
+		exit, done, err := deliver(frame, sinks, failed != nil)
 		if err != nil {
-			return wire.Exit{}, err
+			// A protocol failure means the stream is already not where this
+			// end thinks it is, so reading on would compound it.
+			if !errors.Is(err, errSink) {
+				return wire.Exit{}, err
+			}
+
+			failed = err
 		}
 
 		if done {
+			if failed != nil {
+				return wire.Exit{}, failed
+			}
+
 			return exit, nil
 		}
 	}
 }
 
+// errSink is a failure writing a command's output on THIS end — a closed
+// stdout, a full spill directory — as opposed to a failure on the wire. The
+// distinction is what lets run keep reading to the exit frame.
+var errSink = errors.New("writing a command's output")
+
 // deliver routes one of a running command's frames, reporting whether it ended
-// the command.
-func deliver(frame wire.Frame, sinks outputSinks) (wire.Exit, bool, error) {
+// the command. discard says a sink has already failed, so the payload is read
+// off the wire and dropped rather than retried against it.
+func deliver(frame wire.Frame, sinks outputSinks, discard bool) (wire.Exit, bool, error) {
 	switch frame.Type {
 	case wire.FrameStdout:
-		_, err := sinks.stdout.Write(frame.Payload)
-		if err != nil {
-			return wire.Exit{}, false, fmt.Errorf("writing a command's output: %w", err)
-		}
-
-		return wire.Exit{}, false, nil
+		return wire.Exit{}, false, writeStream(sinks.stdout, frame.Payload, discard)
 	case wire.FrameStderr:
-		_, err := sinks.stderr.Write(frame.Payload)
-		if err != nil {
-			return wire.Exit{}, false, fmt.Errorf("writing a command's output: %w", err)
-		}
-
-		return wire.Exit{}, false, nil
+		return wire.Exit{}, false, writeStream(sinks.stderr, frame.Payload, discard)
 	case wire.FrameExit:
 		var exit wire.Exit
 
@@ -90,6 +106,19 @@ func deliver(frame wire.Frame, sinks outputSinks) (wire.Exit, bool, error) {
 	default:
 		return wire.Exit{}, false, fmt.Errorf("%w: unknown frame type %d", wire.ErrProtocol, frame.Type)
 	}
+}
+
+func writeStream(sink io.Writer, payload []byte, discard bool) error {
+	if discard {
+		return nil
+	}
+
+	_, err := sink.Write(payload)
+	if err != nil {
+		return fmt.Errorf("%w: %w", errSink, err)
+	}
+
+	return nil
 }
 
 // watchCancel sends a cancel frame if ctx ends before the command does, and

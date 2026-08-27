@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -59,6 +60,15 @@ type Channel struct {
 	stopOnce sync.Once
 	loops    sync.WaitGroup
 
+	// closeOnce makes Close idempotent, and that is a contract rather than a
+	// nicety: the aws:// transport wires this one method to BOTH interrupt and
+	// close, so every cancelled step calls it twice. Without this the second
+	// call returns net.ErrClosed from ws.Close and session.close reports a
+	// fabricated cleanup failure on top of the real cancellation. The local:
+	// and ssh: transports already swallow their own second close.
+	closeOnce   sync.Once
+	closeResult error
+
 	// now is the clock, injectable so a test can hold message timestamps
 	// still. Nothing in the protocol compares them.
 	now func() time.Time
@@ -92,6 +102,11 @@ func Open(ctx context.Context, streamURL, token string) (*Channel, error) {
 	if response != nil && response.Body != nil {
 		_ = response.Body.Close()
 	}
+
+	// Bounded before the first read, not after: unmarshal's maxPayloadBytes
+	// check fires only once ReadMessage has already allocated the whole frame,
+	// so the cap it describes has to live here to mean anything.
+	conn.SetReadLimit(maxPayloadBytes + headerLen + 4)
 
 	channel := &Channel{
 		ws:         conn,
@@ -230,9 +245,18 @@ func (c *Channel) send(message *agentMessage, retain bool) error {
 	c.mu.Lock()
 
 	if c.closed {
+		cause := c.closeErr
 		c.mu.Unlock()
 
-		return c.closeErr
+		// net.ErrClosed, never io.EOF. EOF is the READER's answer, and Close
+		// records it as the cause — handing it back from a WRITE makes a dead
+		// tunnel read as an orderly goodbye at every layer above that checks
+		// the sentinel, the shim's own frame loop included.
+		if cause == nil || errors.Is(cause, io.EOF) {
+			return fmt.Errorf("writing to the SSM data channel: %w", net.ErrClosed)
+		}
+
+		return cause
 	}
 
 	if message.messageType == msgAcknowledge {
@@ -271,6 +295,10 @@ func (c *Channel) writeMessage(message *agentMessage) error {
 
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+
+	// Bounded, because writeMu is what Close() has to take to interrupt a
+	// session — see writeTimeout.
+	_ = c.ws.SetWriteDeadline(time.Now().Add(writeTimeout))
 
 	err = c.ws.WriteMessage(websocket.BinaryMessage, data)
 	if err != nil {
@@ -631,6 +659,12 @@ func (c *Channel) err() error {
 // agent's basic port session blocks waiting for a reconnect that is never
 // coming.
 func (c *Channel) Close() error {
+	c.closeOnce.Do(func() { c.closeResult = c.shutdown() })
+
+	return c.closeResult
+}
+
+func (c *Channel) shutdown() error {
 	terminate := newAgentMessage(c.now())
 	terminate.messageType = msgInputStreamData
 	terminate.payloadType = payloadFlag

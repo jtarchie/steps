@@ -262,7 +262,12 @@ func TestNoWorkerIsTheLocalRunner(t *testing.T) {
 
 	defer func() { _ = runner.Close() }()
 
-	if _, remote := runner.(interface{ isVenueRunner() }); remote {
+	// By the shape ReclaimedBy actually asserts, because that is the one a
+	// venue runner really has. The assertion here used to name
+	// isVenueRunner(), a method no type in this repo implements — so it was
+	// false for both answers and the test could not fail however NewRunner
+	// was broken.
+	if _, remote := runner.(interface{ reclaimed() (string, bool) }); remote {
 		t.Error("a spec with no worker produced a venue runner")
 	}
 

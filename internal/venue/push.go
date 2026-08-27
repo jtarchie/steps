@@ -18,6 +18,7 @@ import (
 	"os"
 	"path"
 	"runtime"
+	"sync"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -38,9 +39,9 @@ func pushShim(client *ssh.Client, worker Worker) (remote, build string, err erro
 		return "", "", err
 	}
 
-	build, err = shim.BuildOf(local)
+	build, err = buildOf(worker)
 	if err != nil {
-		return "", "", fmt.Errorf("%w", err)
+		return "", "", err
 	}
 
 	remote = remoteShimPath(worker, build)
@@ -66,6 +67,42 @@ func pushShim(client *ssh.Client, worker Worker) (remote, build string, err erro
 	}
 
 	return remote, build, nil
+}
+
+// localBuilds remembers the content hash of each operator-named binary.
+//
+//nolint:gochecknoglobals // a cache over files that do not change under a run
+var localBuilds sync.Map
+
+// buildOf is the content hash of the binary a worker runs, computed once.
+//
+// A session is dialled per STEP, so hashing what the comments here call a
+// ~56MB binary sat on the critical path of every placed step for an answer
+// that cannot change while the process lives. shim.SelfBuild already memoizes
+// this process's own; an operator-named one is cached by path, on the same
+// footing as the run's own executable.
+func buildOf(worker Worker) (string, error) {
+	if worker.Binary == "" {
+		build, err := shim.SelfBuild()
+		if err != nil {
+			return "", fmt.Errorf("%w", err)
+		}
+
+		return build, nil
+	}
+
+	if cached, ok := localBuilds.Load(worker.Binary); ok {
+		return cached.(string), nil //nolint:forcetypeassert // this map holds one type
+	}
+
+	build, err := shim.BuildOf(worker.Binary)
+	if err != nil {
+		return "", fmt.Errorf("%w", err)
+	}
+
+	cached, _ := localBuilds.LoadOrStore(worker.Binary, build)
+
+	return cached.(string), nil //nolint:forcetypeassert // as above
 }
 
 // localBinary is the binary to push: this process, or one the operator built

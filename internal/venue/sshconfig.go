@@ -141,7 +141,7 @@ func (c *connection) dialAt(ambient ambientSettings, host, port string) {
 	}
 
 	if c.user == "" {
-		c.user = os.Getenv("USER")
+		c.user = localUser()
 	}
 
 	c.address = net.JoinHostPort(host, port)
@@ -611,6 +611,22 @@ func expandPath(raw, host, port, user string) string {
 // is a literal that resolves to nothing.
 func expandHostname(raw, alias string) string {
 	return strings.NewReplacer("%%", "%", "%h", alias).Replace(raw)
+}
+
+// localUser is the account name to log in as when neither the mapping nor the
+// config named one, worked out the way sshHome is and for the same reason.
+//
+// $USER only is not that: it is unset under systemd units, in many containers,
+// and after su without a login shell — and an empty ClientConfig.User fails
+// authentication against a machine `ssh box` reaches fine, with an error that
+// names no cause.
+func localUser() string {
+	current, err := osuser.Current()
+	if err == nil && current.Username != "" {
+		return current.Username
+	}
+
+	return os.Getenv("USER")
 }
 
 // sshHome is the home directory OpenSSH resolves ~ and %d against, worked out

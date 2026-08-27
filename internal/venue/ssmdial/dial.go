@@ -5,6 +5,7 @@ package ssmdial
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -168,8 +169,13 @@ func waitForCommand(ctx context.Context, api API, instance, commandID string) (s
 			InstanceId: aws.String(instance),
 		})
 		// An invocation is briefly unknown right after SendCommand returns, so
-		// an error here is only fatal once the deadline has passed.
-		if err != nil && deadline.Err() != nil {
+		// THAT error is waited out. Every other one is fatal now: tolerating
+		// them all spent the whole commandTimeout on a permanent failure — an
+		// instance profile missing ssm:GetCommandInvocation is the common one
+		// — and then reported the deadline instead of the denial. By the
+		// typed error, never by message text, for the reason ec2.go's
+		// notYetVisible gives.
+		if err != nil && !notYetInvoked(err) {
 			return "", fmt.Errorf("waiting for a command on %s: %w", instance, err)
 		}
 
@@ -195,6 +201,15 @@ func waitForCommand(ctx context.Context, api API, instance, commandID string) (s
 			return "", fmt.Errorf("waiting for a command on %s: %w", instance, deadline.Err())
 		}
 	}
+}
+
+// notYetInvoked reports whether SSM answered that it has no record of the
+// invocation yet, which is the one answer worth waiting out: SendCommand has
+// already succeeded, so the id is real and the control plane is catching up.
+func notYetInvoked(err error) bool {
+	var unknown *types.InvocationDoesNotExist
+
+	return errors.As(err, &unknown)
 }
 
 // errCommandFailed is a bootstrap that ran and did not succeed.

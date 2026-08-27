@@ -183,3 +183,13 @@ const maxOutboundPayload = 1024
 // keepalives are one-directional and do not hold a client-side timer open,
 // which is why this end pings rather than relying on the service.
 const pingInterval = 30 * time.Second
+
+// writeTimeout bounds one websocket write, and it is what makes the venue's
+// watchdog able to reach an aws:// worker at all.
+//
+// Without it a wedged TCP path parks a write inside gorilla forever while it
+// holds writeMu — and writeMu is what Close() must take to interrupt the
+// session. So the cancellation primitive queues behind the thing it exists to
+// cancel, and timeout:, fail_fast, race: and Ctrl-C each end nothing. Every
+// other blocking call in this package is bounded; this one was not.
+const writeTimeout = 30 * time.Second

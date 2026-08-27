@@ -23,7 +23,6 @@ import (
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 
-	"github.com/jtarchie/steps/internal/shim"
 	"github.com/jtarchie/steps/internal/venue/ssmdial"
 )
 
@@ -222,7 +221,7 @@ func ssmBinary(ctx context.Context, worker Worker) (remoteBinary, string, error)
 			ErrWorker, worker.URL)
 	}
 
-	build, err := shim.BuildOf(worker.Binary)
+	build, err := buildOf(worker)
 	if err != nil {
 		return remoteBinary{}, "", fmt.Errorf("worker %q: %w", worker.URL, err)
 	}
@@ -356,11 +355,18 @@ func shimStartScript(worker Worker, binary string) string {
 		root = " --root " + shellQuote(worker.Root)
 	}
 
+	// A counter rather than $(seq 1 100): seq is not in every minimal image,
+	// and a command substitution that fails in a for-list does NOT trip set
+	// -e — the list is simply empty, the loop runs zero times, and the script
+	// cats a log the shim has not written to yet. The dial then fails saying
+	// the shim reported no port while the shim is in fact coming up fine.
 	return fmt.Sprintf(`LOG=$(mktemp)
 nohup %s _shim --listen 127.0.0.1:0 --once%s >"$LOG" 2>&1 &
-for _ in $(seq 1 100); do
+i=0
+while [ "$i" -lt 100 ]; do
   if grep -q 'listening on' "$LOG"; then break; fi
   sleep 0.1
+  i=$((i+1))
 done
 cat "$LOG"`, binary, root)
 }
