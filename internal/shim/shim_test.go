@@ -87,6 +87,17 @@ func (p *peer) send(frameType wire.FrameType, op uint32, payload any) {
 	}
 }
 
+// sendRaw writes a frame whose payload is bytes rather than JSON — the
+// stdout/data/docker frames, which carry no encoding of their own.
+func (p *peer) sendRaw(frameType wire.FrameType, op uint32, payload []byte) {
+	p.t.Helper()
+
+	err := p.encoder.Write(wire.Frame{Type: frameType, Op: op, Payload: payload})
+	if err != nil {
+		p.t.Fatalf("writing a %v frame: %v", frameType, err)
+	}
+}
+
 func (p *peer) sendEmpty(frameType wire.FrameType, op uint32) {
 	p.t.Helper()
 
@@ -94,6 +105,19 @@ func (p *peer) sendEmpty(frameType wire.FrameType, op uint32) {
 	if err != nil {
 		p.t.Fatalf("sending a type %d frame: %v", frameType, err)
 	}
+}
+
+// readAny reads a frame without treating FrameError as fatal, for the tests
+// whose subject IS the error frame.
+func (p *peer) readAny() wire.Frame {
+	p.t.Helper()
+
+	frame, err := p.decoder.Read()
+	if err != nil {
+		p.t.Fatalf("reading a frame: %v", err)
+	}
+
+	return frame
 }
 
 func (p *peer) read() wire.Frame {
@@ -142,7 +166,7 @@ func (p *peer) exec(command string, env map[string]string) (stdout, stderr strin
 	for {
 		frame := p.read()
 
-		switch frame.Type {
+		switch frame.Type { //nolint:exhaustive // a stand-in shim answers only the frames its test sends
 		case wire.FrameStdout:
 			out.Write(frame.Payload)
 		case wire.FrameStderr:

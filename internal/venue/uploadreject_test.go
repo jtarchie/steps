@@ -38,7 +38,7 @@ func serveRejectingShim() {
 			return
 		}
 
-		switch frame.Type {
+		switch frame.Type { //nolint:exhaustive // a stand-in shim answers only the frames its test sends
 		case wire.FrameHello:
 			_ = encoder.WriteJSON(wire.FrameHelloOK, frame.Op, wire.HelloOK{
 				Protocol: wire.Protocol,

@@ -101,7 +101,8 @@ func deliver(frame wire.Frame, sinks outputSinks, discard bool) (wire.Exit, bool
 		return exit, true, nil
 	case wire.FrameHello, wire.FrameHelloOK, wire.FrameUpload, wire.FrameExec,
 		wire.FrameFetch, wire.FrameData, wire.FrameEnd, wire.FrameCancel,
-		wire.FrameError, wire.FrameBye, wire.FrameDraining:
+		wire.FrameError, wire.FrameBye, wire.FrameDraining,
+		wire.FrameDockerOpen, wire.FrameDockerData, wire.FrameDockerClose:
 		return wire.Exit{}, false, fmt.Errorf("%w: a type %d frame interrupted a command", wire.ErrProtocol, frame.Type)
 	default:
 		return wire.Exit{}, false, fmt.Errorf("%w: unknown frame type %d", wire.ErrProtocol, frame.Type)

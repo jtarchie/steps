@@ -62,9 +62,20 @@ const (
 	// frame that is: it belongs to no operation, so it carries DrainOp rather
 	// than the op of whatever is in flight.
 	//
+	FrameDraining
+	// FrameDockerOpen asks the shim to dial the docker socket ON THE WORKER
+	// and treat this op as a byte stream to it. The path is the shim's own,
+	// never the peer's: a socket path from the wire would be a peer choosing
+	// which of the worker's services to talk to.
+	FrameDockerOpen
+	// FrameDockerData carries socket bytes, in whichever direction. Raw, and
+	// opaque — this end parses none of the docker API.
+	FrameDockerData
+	// FrameDockerClose ends one stream, from whichever end noticed first.
+	//
 	// Last deliberately: the decoder's range check ends here, so a new frame
 	// type goes after this one or the check moves with it.
-	FrameDraining
+	FrameDockerClose
 )
 
 // DrainOp is the operation id an unsolicited frame carries. Zero is never
@@ -193,7 +204,7 @@ func (d *Decoder) Read() (Frame, error) {
 	}
 
 	frameType := FrameType(d.header[0])
-	if frameType < FrameHello || frameType > FrameDraining {
+	if frameType < FrameHello || frameType > FrameDockerClose {
 		return Frame{}, fmt.Errorf("%w: unknown frame type %d", ErrProtocol, frameType)
 	}
 

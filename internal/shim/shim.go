@@ -33,6 +33,13 @@ type Options struct {
 	// Root is where session scratch directories are made. Empty takes the
 	// system temp dir.
 	Root string
+	// DockerSocket is the daemon this worker forwards to for a placed step
+	// that names an image. Empty takes /var/run/docker.sock.
+	//
+	// This end's own setting, never the peer's: a socket path arriving on the
+	// wire would let whoever reaches the listener pick which of the worker's
+	// services to be connected to.
+	DockerSocket string
 }
 
 // Serve runs one session over a byte pipe until the peer says goodbye or goes
@@ -49,6 +56,10 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, opts Options) (err 
 		opts:    opts,
 		done:    make(chan struct{}),
 	}
+
+	// A forwarded socket outliving the session that opened it is the same
+	// leak as a shim outliving its dial, one layer down.
+	defer session.docker.closeAll()
 
 	// The one thing this end says unasked: that the machine under it is going
 	// away. Started before the first frame, because an eviction notice can
@@ -108,6 +119,8 @@ type session struct {
 	// closed connection.
 	done   chan struct{}
 	drains sync.WaitGroup
+	// docker holds the forwarded docker-socket streams, by operation.
+	docker dockerStreams
 }
 
 func (s *session) run(ctx context.Context) error {
@@ -161,6 +174,8 @@ func (s *session) handle(ctx context.Context, frame wire.Frame) (bool, error) {
 		return false, s.startExec(ctx, frame)
 	case wire.FrameFetch:
 		return false, s.fetch(ctx, frame)
+	case wire.FrameDockerOpen, wire.FrameDockerData, wire.FrameDockerClose:
+		return false, s.handleDocker(ctx, frame)
 	case wire.FrameCancel:
 		s.cancelRunning(frame.Op)
 

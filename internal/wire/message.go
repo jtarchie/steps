@@ -22,7 +22,11 @@ package wire
 // one cannot be told to; the frame either exists for both ends or it kills a
 // session mid-step with "unknown frame type". So it is a version, and a
 // ?binary=-pinned shim from before it says so at the handshake.
-const Protocol = 2
+// 3 added the docker stream frames. A shim that predates them answers an
+// unknown frame type and kills the session mid-step, which is the same reason
+// FrameDraining was a version rather than a negotiation: a frame either
+// exists for both ends or it is a protocol error.
+const Protocol = 3
 
 // Hello opens a session.
 type Hello struct {
