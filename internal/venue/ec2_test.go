@@ -440,7 +440,11 @@ func TestLeaseResolvedWorkerDialsTheAcquiredInstance(t *testing.T) {
 	fake := &fakeEC2{}
 	seamEC2(t, fake)
 
-	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde/mnt/fast?capacity=spot&region=us-west-2&shim=/usr/local/bin/steps")
+	// version= is here because it is the option that broke this seam: it was
+	// added to the grammar as launch-rung-only without being added to what
+	// the rebuild strips, so the URL a paid-for instance was named by no
+	// longer parsed. Every acquisition-only option belongs in this mapping.
+	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde/mnt/fast?capacity=spot&version=7&region=us-west-2&shim=/usr/local/bin/steps")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
@@ -466,6 +470,33 @@ func TestLeaseResolvedWorkerDialsTheAcquiredInstance(t *testing.T) {
 
 	if reparsed.Root != "/mnt/fast" || reparsed.Region != "us-west-2" || reparsed.Shim != "/usr/local/bin/steps" {
 		t.Errorf("re-parsed = %+v, want the root and connection options carried over", reparsed)
+	}
+}
+
+// TestResolvedWorkerDropsEveryAcquisitionOption is the same seam by the SET
+// rather than by name, so an option added to the grammar and forgotten in the
+// rebuild fails here rather than on a machine the job has already paid for.
+// version= was exactly that: launch-rung-only, refused on a static parse, and
+// left in the URL every step re-parses.
+func TestResolvedWorkerDropsEveryAcquisitionOption(t *testing.T) {
+	seamEC2(t, &fakeEC2{})
+
+	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde?capacity=spot&version=7&shim=/usr/local/bin/steps")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	resolved := worker.asStatic("i-0faced0123456789")
+
+	for _, key := range acquisitionKeys {
+		if strings.Contains(resolved.URL, key+"=") {
+			t.Errorf("resolved URL %q still carries the acquisition-only option %s=", resolved.URL, key)
+		}
+	}
+
+	_, err = ParseWorker(resolved.URL)
+	if err != nil {
+		t.Fatalf("the resolved URL %q does not parse: %v", resolved.URL, err)
 	}
 }
 

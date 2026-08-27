@@ -505,8 +505,9 @@ func staticURL(instance, root, rawQuery string) string {
 		return address
 	}
 
-	query.Del("capacity")
-	query.Del("idle")
+	for _, key := range acquisitionKeys {
+		query.Del(key)
+	}
 
 	if len(query) == 0 {
 		return address

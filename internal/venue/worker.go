@@ -227,6 +227,18 @@ var queryKeys = map[string][]Scheme{
 	"version":     {SchemeAWS},
 }
 
+// acquisitionKeys are the options that describe how a machine is BROUGHT INTO
+// EXISTENCE rather than how it is reached, which is why a static parse refuses
+// every one of them (see checkAWS and parseTemplateVersion).
+//
+// staticURL strips exactly this set when it rebuilds an acquired worker's URL,
+// and it lives here rather than there so the two facts cannot drift: version=
+// was added to queryKeys without being added to the strip list, and the
+// resulting URL launched a billed instance and then failed to re-parse.
+//
+//nolint:gochecknoglobals // as queryKeys: a fact about the grammar, not state
+var acquisitionKeys = []string{"capacity", "idle", "version"}
+
 // checkQueryKeys refuses an option the grammar does not know, or one that
 // describes a different scheme than the mapping uses.
 func checkQueryKeys(worker Worker, query url.Values) error {
