@@ -16,10 +16,6 @@ import (
 func requireDockerVenue(t *testing.T) {
 	t.Helper()
 
-	if os.Getenv("STEPS_TEST_DOCKER") == "" {
-		t.Skip("set STEPS_TEST_DOCKER=1 to run the Docker-backed venue tests")
-	}
-
 	_, err := exec.LookPath("docker")
 	if err != nil {
 		t.Skip("docker not found on PATH")

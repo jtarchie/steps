@@ -13,7 +13,6 @@ package main
 // This is the whole feature as a user sees it, so it is the first test.
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -29,26 +28,6 @@ import (
 // sees, or the step ran somewhere with none of its inputs.
 func TestPlacedStepRunsInAContainer(t *testing.T) {
 	requireDockerE2E(t)
-
-	// The step's tree is bind-mounted into the container by the DAEMON, so it
-	// has to live somewhere the daemon can see. On macOS the daemon runs in a
-	// VM that shares the home directory and not /var/folders, where TMPDIR
-	// points — and docker answers an unshared mount by silently mounting an
-	// EMPTY directory, so the step succeeds and produces nothing. This is the
-	// same constraint docs/infra.md documents for local image: steps; it
-	// reaches placed ones for exactly the same reason.
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skip("no home directory to root a daemon-visible workspace in")
-	}
-
-	shared, err := os.MkdirTemp(home, ".steps-e2e-*")
-	if err != nil {
-		t.Skipf("cannot create a daemon-visible temp dir under %s: %v", home, err)
-	}
-
-	t.Cleanup(func() { _ = os.RemoveAll(shared) })
-	t.Setenv("TMPDIR", shared)
 
 	dir := t.TempDir()
 	published := filepath.Join(dir, "published.txt")

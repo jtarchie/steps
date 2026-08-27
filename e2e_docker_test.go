@@ -12,8 +12,10 @@ package main
 // nonzero exit arriving as tool-result data rather than aborting the step —
 // and none of it was covered.
 //
-// Gated behind STEPS_TEST_DOCKER like every other daemon-dependent test: this
-// pulls an image and is not hermetic.
+// Run whenever a daemon is reachable, and skipped only when one is not. They
+// were opt-in behind STEPS_TEST_DOCKER, which meant the default sequence was
+// green while the feature they cover was broken — the exact way a
+// containerized placed step shipped not working.
 
 import (
 	"context"
@@ -34,10 +36,6 @@ const dockerE2EImage = "alpine:3"
 func requireDockerE2E(t *testing.T) {
 	t.Helper()
 
-	if os.Getenv("STEPS_TEST_DOCKER") == "" {
-		t.Skip("set STEPS_TEST_DOCKER=1 to run the Docker-backed e2e tests (heavyweight: pulls an image)")
-	}
-
 	_, err := exec.LookPath("docker")
 	if err != nil {
 		t.Skip("docker not found on PATH")
@@ -50,6 +48,34 @@ func requireDockerE2E(t *testing.T) {
 	if err != nil {
 		t.Skip("docker daemon not reachable (`docker info` failed)")
 	}
+
+	daemonVisibleTemp(t)
+}
+
+// daemonVisibleTemp points TMPDIR somewhere the daemon can bind-mount.
+//
+// A step's tree is mounted into the container BY THE DAEMON, so it has to
+// live where the daemon can see it. On macOS the daemon runs in a VM that
+// shares the home directory and not /var/folders, where TMPDIR points — and
+// docker answers an unshared mount by silently mounting an EMPTY directory,
+// so the step succeeds and produces nothing. Every docker-backed e2e here
+// builds its workspace under TMPDIR, so this belongs beside the daemon check
+// rather than repeated in each test.
+func daemonVisibleTemp(t *testing.T) {
+	t.Helper()
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory to root a daemon-visible workspace in")
+	}
+
+	shared, err := os.MkdirTemp(home, ".steps-e2e-*")
+	if err != nil {
+		t.Skipf("cannot create a daemon-visible temp dir under %s: %v", home, err)
+	}
+
+	t.Cleanup(func() { _ = os.RemoveAll(shared) })
+	t.Setenv("TMPDIR", shared)
 }
 
 // lastToolResult returns the most recent tool result in a captured request.

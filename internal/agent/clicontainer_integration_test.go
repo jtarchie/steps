@@ -26,10 +26,6 @@ import (
 func requireDockerAgent(t *testing.T) {
 	t.Helper()
 
-	if os.Getenv("STEPS_TEST_DOCKER") == "" {
-		t.Skip("set STEPS_TEST_DOCKER=1 to run the Docker-backed cli tests (heavyweight: starts containers)")
-	}
-
 	_, err := exec.LookPath("docker")
 	if err != nil {
 		t.Skip("docker not found on PATH")

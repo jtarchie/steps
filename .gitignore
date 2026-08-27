@@ -27,3 +27,6 @@
 
 # hack/aws-fixture.sh's cross-compiled worker binary
 /.aws-fixture/
+
+# scratch a shim writes if it is ever handed a relative root
+steps-shim/

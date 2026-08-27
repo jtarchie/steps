@@ -19,21 +19,28 @@ import (
 const unavailableMarker = "__STEPS_DOCKER_BTRFS_UNAVAILABLE__"
 
 // requireDocker skips the calling test unless it's explicitly opted into and
-// a usable Docker daemon is reachable. These tests are heavyweight and
+// a usable Docker daemon is reachable.
+//
+// Opt-in under its OWN variable, deliberately: the docker-backed FEATURE
+// tests elsewhere now run whenever a daemon is reachable, because one of them
+// guarding a shipped feature was optional and the feature shipped broken.
+// These are not those. They use docker as a Linux VM to exercise btrfs, which
+// is the same class as STEPS_TEST_BTRFS_ROOT — minutes long, a ~1GB pull, and
+// apt-get over the network. These tests are heavyweight and
 // non-hermetic — they pull a ~1GB image, apt-get packages over the network,
 // and need a --privileged container to mount a loopback btrfs image — so
 // they must NOT run as part of a plain `go test ./...` (which CLAUDE.md
-// expects to finish in well under a minute). Set STEPS_TEST_DOCKER=1 to run them, mirroring
-// how workspace_btrfs_linux_test.go gates real-btrfs tests behind
-// STEPS_TEST_BTRFS_ROOT. The btrfs backend also has fast, hermetic unit
+// expects to finish in well under a minute). Set STEPS_TEST_BTRFS_DOCKER=1 to
+// run them, mirroring how workspace_btrfs_linux_test.go gates real-btrfs
+// tests behind STEPS_TEST_BTRFS_ROOT. The btrfs backend also has fast, hermetic unit
 // coverage (workspace_test.go, via the copy backend, over the same shared
 // isolatingProvider lifecycle); this suite exercises the btrfs code path
 // specifically.
 func requireDocker(t *testing.T) {
 	t.Helper()
 
-	if os.Getenv("STEPS_TEST_DOCKER") == "" {
-		t.Skip("set STEPS_TEST_DOCKER=1 to run the Docker-backed btrfs tests (heavyweight: pulls an image, needs a privileged container)")
+	if os.Getenv("STEPS_TEST_BTRFS_DOCKER") == "" {
+		t.Skip("set STEPS_TEST_BTRFS_DOCKER=1 to run the btrfs-under-docker suite (pulls ~1GB, needs a privileged container)")
 	}
 
 	_, err := exec.LookPath("docker")
