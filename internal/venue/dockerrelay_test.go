@@ -85,7 +85,7 @@ func TestRelaySurvivesEveryCommandsBracket(t *testing.T) {
 	for round := 1; round <= 3; round++ {
 		var dialErr error
 
-		err = session.withDockerRouting(func() error {
+		err = session.withDockerRouting(context.Background(), func() error {
 			conn, err := (&net.Dialer{}).DialContext(context.Background(), "unix", socket)
 			if err != nil {
 				dialErr = err

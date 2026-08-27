@@ -119,7 +119,7 @@ func (r runner) runContained(ctx context.Context, command string, p plan) (strin
 		code           int
 	)
 
-	err = r.session.withDockerRouting(func() error {
+	err = r.session.withDockerRouting(ctx, func() error {
 		var runErr error
 
 		if p.streamStdout || p.streamStderr {

@@ -108,7 +108,7 @@ func (s *session) openDockerSocket(ctx context.Context, route bool) (string, fun
 // output fetch travel the same connection, and only one reader may own it at
 // a time. Whatever fn does, routing stops before this returns — a step whose
 // command failed still has to be able to fetch what it produced.
-func (s *session) withDockerRouting(fn func() error) error {
+func (s *session) withDockerRouting(ctx context.Context, fn func() error) error {
 	relay := s.relay
 	if relay == nil {
 		return fn()
@@ -121,7 +121,21 @@ func (s *session) withDockerRouting(fn func() error) error {
 	err := fn()
 
 	relay.stopRouting(s)
-	<-done
+
+	handoffErr := awaitHandoff(ctx, done)
+	if handoffErr != nil {
+		// The router may still be blocked in a read, and will end when the
+		// transport does. What must not happen is this call waiting with it:
+		// the wire is desynced either way, so the session is marked broken
+		// and the next command redials rather than talking into it.
+		s.broken.Store(true)
+
+		if err != nil {
+			return err
+		}
+
+		return handoffErr
+	}
 
 	// The worker's own account wins. A shim that cannot reach its daemon says
 	// so in a frame the router is the only reader of, and without this the
@@ -133,6 +147,48 @@ func (s *session) withDockerRouting(fn func() error) error {
 	}
 
 	return err
+}
+
+// dockerHandoffTimeout bounds waiting for the shim to answer the close that
+// hands the wire back, and dockerHandoffGrace is that bound for a caller who
+// has already given up.
+//
+// Variables rather than constants so a test can shrink them: what is worth
+// proving is that the wait ends without the worker's cooperation, not how
+// patient it is.
+//
+//nolint:gochecknoglobals // test seams for a wait on another machine
+var (
+	dockerHandoffTimeout = 30 * time.Second
+	dockerHandoffGrace   = 2 * time.Second
+)
+
+// errHandoffStalled is a worker that never gave the wire back.
+var errHandoffStalled = errors.New("the worker did not finish with the docker socket")
+
+// awaitHandoff waits for the router to let go, on a bound rather than on the
+// worker.
+//
+// The unbounded version of this hung a step on a machine that had stopped
+// answering — which is exactly the machine a cancel is usually racing, so the
+// wait outlived the thing it was waiting to cancel. A caller that has already
+// been cancelled gets the shorter bound, because it is not waiting for an
+// answer any more, only for the goroutine to notice.
+func awaitHandoff(ctx context.Context, done <-chan struct{}) error {
+	bound := dockerHandoffTimeout
+	if ctx.Err() != nil {
+		bound = dockerHandoffGrace
+	}
+
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("%w after %s", errHandoffStalled, bound)
+	}
 }
 
 // stopRouting ends the router by asking the shim to answer.

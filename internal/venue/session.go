@@ -633,7 +633,12 @@ func (s *session) close() error {
 // none of its inputs and reports success.
 func (s *session) teardownContainer() {
 	if s.inner != nil {
-		_ = s.withDockerRouting(func() error { return s.inner.Close() })
+		// Its own context, and deliberately not a caller's: the likeliest
+		// reason teardown is running is that the caller's was just
+		// cancelled, and inheriting that would abandon the docker rm this
+		// exists to perform — leaving a container on the worker that nothing
+		// sweeps. Bounded by the handoff timeout either way.
+		_ = s.withDockerRouting(context.Background(), func() error { return s.inner.Close() })
 		s.inner = nil
 	}
 
