@@ -46,15 +46,7 @@ func (s *session) containerRunner(ctx context.Context) (shell.Runner, error) {
 		return nil, err
 	}
 
-	spec := s.container
-	// The worker is already resolved; what is wanted here is a plain
-	// container runner, aimed elsewhere.
-	spec.Worker = ""
-	spec.WorkerTag = ""
-	spec.DockerHost = "unix://" + socket
-	// The daemon resolves -v against ITS filesystem, so the mount is the
-	// tree the shim unpacked, not this machine's copy of anything.
-	spec.MountPath = s.workdir
+	spec := s.containerSpec("unix://" + socket)
 	// The session's resolved environment, which is where STEPS_WORKER lives.
 	// The exec path sends it in the frame; a container has to be told, or a
 	// script that branches on placement takes the local branch on the very
@@ -71,6 +63,47 @@ func (s *session) containerRunner(ctx context.Context) (shell.Runner, error) {
 	s.inner, s.dockerStop = inner, stop
 
 	return inner, nil
+}
+
+// containerSpec is the spec the worker's container is built from.
+//
+// Separated from the dialling so the decisions in it can be read — and
+// tested — without a live session, because every one of them is about
+// answering with the WORKER's facts rather than this process's.
+func (s *session) containerSpec(dockerHost string) shell.RunnerSpec {
+	spec := s.container
+
+	// The worker is already resolved; what is wanted here is a plain
+	// container runner, aimed elsewhere.
+	spec.Worker = ""
+	spec.WorkerTag = ""
+	spec.DockerHost = dockerHost
+	// The daemon resolves -v against ITS filesystem, so the mount is the
+	// tree the shim unpacked, not this machine's copy of anything.
+	spec.MountPath = s.workdir
+
+	// An explicit user: crosses verbatim — the same contract Concourse has,
+	// where the value is a name the far end resolves. Only the DEFAULT is
+	// decided here, and it has to be decided from the worker: the tree this
+	// container writes into lives there, so the ownership mismatch the
+	// default exists to prevent happens there too, against the identity the
+	// shim runs as. Asking this process would answer about the wrong machine.
+	if spec.User == "" {
+		spec.User = shell.DefaultContainerUserFor(s.goos, idOrUnknown(s.uid), idOrUnknown(s.gid))
+	}
+
+	return spec
+}
+
+// idOrUnknown reads a reported identity, answering -1 when the shim did not
+// send one — an older shim, or a platform with no answer. That defers to the
+// image, which is what an unset user means everywhere else.
+func idOrUnknown(id *int) int {
+	if id == nil {
+		return -1
+	}
+
+	return *id
 }
 
 // runContained runs one command in the worker's container, answering in the

@@ -112,6 +112,10 @@ type session struct {
 	// or a platform with no answer — and never "an ordinary disk".
 	fstype string
 	fsfree uint64
+	// goos, uid and gid are the worker's own, for deciding which user a
+	// container on it should write as. nil uid means the shim did not say.
+	goos     string
+	uid, gid *int
 	// container is the caller's spec, carried so a placed step that names an
 	// image can build the container runner it needs once the workdir is
 	// known. inner is that runner, and dockerStop tears down the forwarded
@@ -361,6 +365,7 @@ func (s *session) greet() error {
 	s.dataplane = ok.DataPlane
 	s.fstype = ok.FSType
 	s.fsfree = ok.FSFree
+	s.goos, s.uid, s.gid = ok.GOOS, ok.UID, ok.GID
 
 	notice := volatileWorkdirNotice(s.worker, ok)
 	if notice != "" {

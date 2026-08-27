@@ -4,6 +4,7 @@ package shim
 // actually landed on.
 
 import (
+	"os"
 	"runtime"
 	"testing"
 )
@@ -65,6 +66,18 @@ func TestShimReportsTheFilesystemUnderItsWorkdir(t *testing.T) {
 
 	if ok.Workdir == "" {
 		t.Error("Workdir is empty")
+	}
+
+	// The identity the container on this worker should write as. Reported for
+	// the same reason the filesystem is: the orchestrator's own answer is
+	// about a different machine, and on Linux acting on it means a --user
+	// nobody on this one has.
+	if ok.UID == nil || ok.GID == nil {
+		t.Fatalf("UID/GID = %v/%v, want the identity this shim runs as", ok.UID, ok.GID)
+	}
+
+	if *ok.UID != os.Getuid() || *ok.GID != os.Getgid() {
+		t.Errorf("reported %d:%d, want this process's %d:%d", *ok.UID, *ok.GID, os.Getuid(), os.Getgid())
 	}
 }
 

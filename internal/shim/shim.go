@@ -268,7 +268,21 @@ func (s *session) hello(frame wire.Frame) error {
 		DataPlane:   s.dataplane,
 		FSType:      fstype,
 		FSFree:      free,
+		UID:         reportableID(os.Getuid()),
+		GID:         reportableID(os.Getgid()),
 	})
+}
+
+// reportableID is an identity the shim can actually vouch for, or nothing.
+//
+// os.Getuid answers -1 on Windows, which is not a uid — reporting it would
+// let the far end compute a --user nobody has.
+func reportableID(id int) *int {
+	if id < 0 {
+		return nil
+	}
+
+	return &id
 }
 
 // upload lands the step's tree in the work directory: fetched from the URL

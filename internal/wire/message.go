@@ -111,6 +111,18 @@ type HelloOK struct {
 	// FSFree is the bytes available on that filesystem, so a report can say
 	// how much and not only what.
 	FSFree uint64 `json:"fs_free,omitempty"`
+	// UID and GID are the identity the shim runs as, for deciding which user
+	// a container on this worker should write as. Pointers because zero is
+	// ROOT and is the common answer under the aws:// bootstrap: a plain int
+	// could not tell "runs as root" from "did not say", and those demand
+	// opposite behaviour.
+	//
+	// Reported rather than assumed for the same reason Workdir is: a placed
+	// containerized step bind-mounts a tree on the WORKER, so the identity
+	// that matters is this end's, and the orchestrator's own is an answer
+	// about a different machine.
+	UID *int `json:"uid,omitempty"`
+	GID *int `json:"gid,omitempty"`
 }
 
 // Exec asks for one command.

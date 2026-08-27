@@ -47,9 +47,28 @@ func containerUser(configured string) string {
 // root, and under this default it fails. That failure is loud and local to the
 // step, which is the trade being made against a silent, remote one.
 func defaultContainerUser() string {
-	if runtime.GOOS != "linux" {
+	return DefaultContainerUserFor(runtime.GOOS, os.Getuid(), os.Getgid())
+}
+
+// DefaultContainerUserFor is defaultContainerUser's rule, applied to a
+// machine's facts rather than this one's.
+//
+// Exported because a PLACED containerized step bind-mounts a tree on the
+// WORKER, so every failure the rule prevents happens there, against the
+// identity the shim runs as — and the platform question is the worker's too.
+// Computing it from this process would answer about the wrong machine
+// entirely: a Linux orchestrator against a root shim yields --user 1000:1000
+// over a root-owned 0700 workdir, which cannot even be read.
+//
+// A negative uid is "cannot say" — Windows has no answer, and neither does a
+// shim too old to send one. That defers to the image, which is what Concourse
+// does with an unset user; it is the right answer wherever the daemon is not
+// bind-mounting a foreign-owned tree, and the only honest one when the
+// identity is unknown.
+func DefaultContainerUserFor(goos string, uid, gid int) string {
+	if goos != "linux" || uid < 0 || gid < 0 {
 		return ""
 	}
 
-	return fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
+	return fmt.Sprintf("%d:%d", uid, gid)
 }
