@@ -162,6 +162,13 @@ func (r runner) exchange(ctx context.Context, command string, p plan) (outText, 
 		return "", "", err
 	}
 
+	// A placed step that names an image runs its command in a container ON
+	// the worker. The tree still went out the venue's way and the outputs
+	// still come back it; only what runs the command differs.
+	if r.session.container.Image != "" {
+		return r.exchangeContained(ctx, command, p)
+	}
+
 	stdout, stderr, sinks := r.sinks(p)
 
 	exit, err := r.session.run(ctx, command, sinks)
@@ -250,6 +257,23 @@ func (s stream) result() string {
 }
 
 // sinks builds the two streams a plan asks for.
+// exchangeContained is exchange's other half: the command runs in a container
+// on the worker, and the step's outputs are fetched back exactly as they are
+// for one that ran beside it.
+func (r runner) exchangeContained(ctx context.Context, command string, p plan) (string, string, error) {
+	stdout, stderr, exit, err := r.runContained(ctx, command, p)
+	if err != nil {
+		return stdout, stderr, err
+	}
+
+	err = r.session.fetch(ctx)
+	if err != nil {
+		return stdout, stderr, err
+	}
+
+	return stdout, stderr, r.runError(command, exit)
+}
+
 func (r runner) sinks(p plan) (stdout, stderr stream, out outputSinks) {
 	stdout = r.stream(p.streamStdout, p.capture, p.maxBytes, p.spillDir, os.Stdout)
 	stderr = r.stream(p.streamStderr, p.capture, p.maxBytes, p.spillDir, os.Stderr)

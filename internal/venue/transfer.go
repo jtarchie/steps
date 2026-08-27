@@ -251,6 +251,10 @@ func (s *session) pump(op uint32, w io.Writer) error {
 			return err
 		}
 
+		if isDockerFrame(frame.Type) {
+			continue
+		}
+
 		if frame.Op != op {
 			return fmt.Errorf("%w: a type %d frame for operation %d arrived during operation %d",
 				wire.ErrProtocol, frame.Type, frame.Op, op)

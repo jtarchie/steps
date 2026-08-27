@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/blobstore"
+	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/wire"
 )
 
@@ -111,6 +112,16 @@ type session struct {
 	// or a platform with no answer — and never "an ordinary disk".
 	fstype string
 	fsfree uint64
+	// container is the caller's spec, carried so a placed step that names an
+	// image can build the container runner it needs once the workdir is
+	// known. inner is that runner, and dockerStop tears down the forwarded
+	// socket it talks through.
+	container  shell.RunnerSpec
+	inner      shell.Runner
+	dockerStop func()
+	// relay carries the forwarded docker streams; it owns the wire only
+	// while a containerized command is running.
+	relay *dockerRelay
 	// compression is what the handshake negotiated for tree transfers: the
 	// token the shim echoed back, or empty for raw against an older shim.
 	compression string
@@ -515,6 +526,19 @@ func (s *session) startupError(cause error) error {
 // is routinely already cancelled by the time cleanup runs, and a cancelled
 // context here would skip the goodbye that frees the worker.
 func (s *session) close() error {
+	// The container half first: its runner owns a container on the worker,
+	// and the socket it talks through owns the wire. Both have to end before
+	// the goodbye goes out, or the goodbye races a reader that still holds
+	// the connection.
+	if s.inner != nil {
+		_ = s.inner.Close()
+		s.inner = nil
+	}
+
+	if s.dockerStop != nil {
+		s.dockerStop()
+		s.dockerStop = nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -736,6 +760,10 @@ func (s *session) awaitOperationFrame() (wire.Frame, error) {
 			return frame, err
 		}
 
+		if isDockerFrame(frame.Type) {
+			continue
+		}
+
 		if frame.Type != wire.FrameDraining {
 			return frame, nil
 		}
@@ -750,6 +778,19 @@ func (s *session) awaitOperationFrame() (wire.Frame, error) {
 
 		s.noteDrain(frame)
 	}
+}
+
+// isDockerFrame reports a frame belonging to a forwarded docker stream.
+//
+// Those outlive the command that opened them: the local client disconnects,
+// both ends relay a close, and the goodbye lands in whatever is reading next
+// — which is the step's output fetch. Swallowed for the same reason a drain
+// notice is: a reader that reported them would turn a step that worked into a
+// protocol violation, and the outputs it produced into nothing. Both readers
+// drop them, and the transfer one must do so BEFORE its operation check,
+// since these belong to no operation it knows.
+func isDockerFrame(frameType wire.FrameType) bool {
+	return frameType == wire.FrameDockerData || frameType == wire.FrameDockerClose
 }
 
 // errWorkerLost is a transport that died mid-conversation, as opposed to an

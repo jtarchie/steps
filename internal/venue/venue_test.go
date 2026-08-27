@@ -241,12 +241,36 @@ func TestVenueCancellationStopsTheCommand(t *testing.T) {
 
 // TestVenueRefusesAnImage pins the load-time rule at the one place a
 // hand-built spec could still get past it.
-func TestVenueRefusesAnImage(t *testing.T) {
+// TestVenueCarriesAnImageToTheWorker pins that a placed step which names an
+// image is accepted and keeps its container settings.
+//
+// This used to be a refusal — a worker ran a step's commands directly, and a
+// container on the worker meant bind-mounting a tree that had just been sent.
+// It now means exactly that, so the spec has to survive: the runner builds
+// its container from it once the handshake reports where the tree landed.
+func TestVenueCarriesAnImageToTheWorker(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewRunner(shell.RunnerSpec{Cwd: t.TempDir(), Worker: "local:", Image: "alpine"})
-	if !errors.Is(err, ErrWorker) {
-		t.Fatalf("error = %v, want a refusal to run on a worker inside an image", err)
+	built, err := NewRunner(shell.RunnerSpec{
+		Cwd: t.TempDir(), Worker: "local:", Image: "alpine", Network: "none",
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	t.Cleanup(func() { _ = built.Close() })
+
+	placed, ok := built.(runner)
+	if !ok {
+		t.Fatalf("runner is %T, not a placed one", built)
+	}
+
+	if placed.session.container.Image != "alpine" {
+		t.Errorf("image = %q, want the step's image carried to the worker", placed.session.container.Image)
+	}
+
+	if placed.session.container.Network != "none" {
+		t.Errorf("network = %q, want the container settings carried with it", placed.session.container.Network)
 	}
 }
 

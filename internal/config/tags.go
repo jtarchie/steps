@@ -28,12 +28,7 @@ func (c *Config) validateTagRules() error {
 		return err
 	}
 
-	err = c.validateTagsRejectAgent()
-	if err != nil {
-		return err
-	}
-
-	return c.validateTagsRejectImage()
+	return c.validateTagsRejectAgent()
 }
 
 // validateTagValues rejects a tag that cannot name anything.
@@ -132,25 +127,4 @@ func (c *Config) resolvedStepFix(step Step) *FixSpec {
 	}
 
 	return task.Fix
-}
-
-// validateTagsRejectImage refuses tags: together with image:.
-//
-// A worker runs a step's commands directly, the way a host-executed step runs
-// them here. Running them in a container on the worker means bind-mounting the
-// tree that was just sent, which is a second transfer problem this does not
-// solve yet — so the combination is refused rather than half-honoured.
-//
-// The image is the RESOLVED one (visitContainerSettings supplies it): tags: on
-// a step whose image comes from the tasks: entry it references is the same
-// mistake, and the step's own image: is empty there.
-func (c *Config) validateTagsRejectImage() error {
-	return c.visitContainerSettings(func(context string, settings containerSettings) error {
-		if len(settings.Tags) > 0 && settings.Image != "" {
-			return fmt.Errorf("%s: tags: and image: cannot be combined — a worker runs a step's commands directly, so name a worker that already has what the step needs",
-				context)
-		}
-
-		return nil
-	})
 }

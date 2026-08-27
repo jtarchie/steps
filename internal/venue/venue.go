@@ -4,7 +4,6 @@ package venue
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"sync"
 
@@ -29,13 +28,6 @@ func NewRunner(spec shell.RunnerSpec) (shell.Runner, error) {
 		return nil, err
 	}
 
-	if spec.Image != "" {
-		// Load-time validation refuses this combination, so reaching it means
-		// a caller built a spec by hand. Saying so beats silently running the
-		// command outside the container it asked for.
-		return nil, fmt.Errorf("%w %q: a step cannot name both a worker and an image", ErrWorker, spec.Worker)
-	}
-
 	blobs, err := artifactStoreFor(spec.ArtifactStore)
 	if err != nil {
 		return nil, err
@@ -50,6 +42,12 @@ func NewRunner(spec shell.RunnerSpec) (shell.Runner, error) {
 		env:     withWorkerTag(resolveEnv(spec.Env), spec.WorkerTag),
 		keep:    spec.Keep,
 		blobs:   blobs,
+		// The container half of a placed step, if it has one. Kept as the
+		// caller's own spec so nothing about what a container means is
+		// re-decided here: the tree still travels the venue's way, and the
+		// command runs through the same code every local containerized step
+		// uses, pointed at the worker's daemon.
+		container: spec,
 	}}, nil
 }
 

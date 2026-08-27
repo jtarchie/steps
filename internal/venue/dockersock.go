@@ -40,6 +40,18 @@ const dockerRelayChunk = 32 * 1024
 // this while a command IS in flight would be a bug, and there is no path that
 // does.
 func (s *session) serveDockerSocket(ctx context.Context) (string, func(), error) {
+	return s.openDockerSocket(ctx, true)
+}
+
+// openDockerSocket is serveDockerSocket, with a say in whether the router
+// starts with it.
+//
+// A step's commands and its OUTPUT FETCH share one connection, so the router
+// cannot own the wire for the session's lifetime: it would read the fetch's
+// frames and the step would come home empty. It runs only while a command is
+// executing — see withDockerRouting — and the listener outlives it, so the
+// socket path stays the one the container runner was built with.
+func (s *session) openDockerSocket(ctx context.Context, route bool) (string, func(), error) {
 	dir, err := os.MkdirTemp("", "steps-docker-")
 	if err != nil {
 		return "", nil, fmt.Errorf("making the docker socket directory: %w", err)
@@ -62,27 +74,66 @@ func (s *session) serveDockerSocket(ctx context.Context) (string, func(), error)
 
 	var wg sync.WaitGroup
 
-	wg.Add(2)
+	wg.Add(1)
 
 	go func() { defer wg.Done(); relay.accept(ctx, listener) }()
-	go func() { defer wg.Done(); relay.route() }()
+
+	if route {
+		wg.Add(1)
+
+		go func() { defer wg.Done(); relay.route() }()
+	}
+
+	s.relay = relay
 
 	stop := sync.OnceFunc(func() {
 		_ = listener.Close()
 		relay.closeAll()
 
-		// The router is blocked in a read on the transport, which closing
-		// local sockets cannot interrupt; only a frame can. This close is for
-		// a stream that never existed, and the shim's answer to it is what
-		// ends the router — after which the session owns its wire again and
-		// can fetch the step's outputs.
-		_ = s.writeFrame(wire.Frame{Type: wire.FrameDockerClose, Op: relay.doneOp})
+		if route {
+			relay.stopRouting(s)
+		}
 
 		wg.Wait()
 		_ = os.RemoveAll(dir)
 	})
 
 	return path, stop, nil
+}
+
+// withDockerRouting runs fn with the router owning the wire, and gives the
+// wire back before returning.
+//
+// The bracket is the whole point: a command's docker traffic and the step's
+// output fetch travel the same connection, and only one reader may own it at
+// a time. Whatever fn does, routing stops before this returns — a step whose
+// command failed still has to be able to fetch what it produced.
+func (s *session) withDockerRouting(fn func() error) error {
+	relay := s.relay
+	if relay == nil {
+		return fn()
+	}
+
+	done := make(chan struct{})
+
+	go func() { defer close(done); relay.route() }()
+
+	err := fn()
+
+	relay.stopRouting(s)
+	<-done
+
+	return err
+}
+
+// stopRouting ends the router by asking the shim to answer.
+//
+// The router is blocked in a read on the transport, which nothing local can
+// interrupt; only a frame can. This close is for a stream that never existed,
+// and the shim's answer to it is what ends the router — after which the
+// session owns its wire again.
+func (d *dockerRelay) stopRouting(s *session) {
+	_ = s.writeFrame(wire.Frame{Type: wire.FrameDockerClose, Op: d.doneOp})
 }
 
 // dockerRelay carries one session's docker streams in both directions.
