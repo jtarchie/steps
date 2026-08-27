@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/jtarchie/steps/internal/compress"
@@ -211,7 +212,7 @@ func (s *session) hello(frame wire.Frame) error {
 		return errReopened
 	}
 
-	err = checkSessionName(hello.Session)
+	err = checkHello(s.opts.Root, hello)
 	if err != nil {
 		return err
 	}
@@ -244,6 +245,18 @@ func (s *session) hello(frame wire.Frame) error {
 	if root == "" {
 		root = os.TempDir()
 	}
+
+	// Cleaned rather than refused-if-unclean: an ssh://host//abs/path mapping
+	// legitimately produces a doubled leading slash, and that is a spelling
+	// of the same directory rather than an attempt to leave it. What is
+	// refused is upward movement, which checkRoot has already done.
+	//
+	// AFTER the default, not before: Clean("") is ".", so cleaning first
+	// turns "no root given" into a RELATIVE root, and the scratch lands
+	// wherever the shim happens to be running. A bind mount then fails
+	// outright (docker requires an absolute source) and Keep has nothing to
+	// leave behind — which is how both of those tests caught it.
+	root = filepath.Clean(root)
 
 	// Named after the session rather than randomly, so a scratch directory
 	// left behind by a crash says which run to blame.
@@ -406,6 +419,55 @@ var errBadSession = errors.New("the session name must be one directory name")
 func checkSessionName(name string) error {
 	if name == "" || name == "." || name == ".." || name != filepath.Base(name) {
 		return fmt.Errorf("%w: %q", errBadSession, name)
+	}
+
+	return nil
+}
+
+// checkHello refuses what a peer should not be able to name.
+//
+// Both halves land in the same filepath.Join, and for a long time only one of
+// them was guarded — which is the shape of the bug, not an accident of
+// review: a path assembled from two peer-supplied parts is only as safe as
+// its weaker part.
+func checkHello(configuredRoot string, hello wire.Hello) error {
+	err := checkSessionName(hello.Session)
+	if err != nil {
+		return err
+	}
+
+	return checkRoot(configuredRoot, hello.Root)
+}
+
+// errBadRoot is a root that is not an absolute path, or that walks upward.
+var errBadRoot = errors.New("the root must be an absolute path that does not walk upward")
+
+// checkRoot refuses a scratch root the peer should not be choosing.
+//
+// checkSessionName's other half: the two are joined into the same path, and
+// only one of them was guarded. A relative root resolves against whatever
+// directory the shim happens to be in, and "/tmp/../../etc" cleans to "/etc"
+// — which, as root under the aws:// bootstrap, is a directory this process
+// would happily create and later remove.
+//
+// It validates the SHAPE of the path and not which path it is, deliberately.
+// Requiring the hello to match the shim's own --root would be stronger, and
+// would break a design this repo states on purpose: the orchestrator's
+// mapping wins, because it is the operator naming a disk on that machine. A
+// tighter rule there is a decision to take, not a side effect of closing this.
+func checkRoot(_ string, requested string) error {
+	if requested == "" {
+		return nil
+	}
+
+	if !filepath.IsAbs(requested) {
+		return fmt.Errorf("%w: %q", errBadRoot, requested)
+	}
+
+	for _, element := range strings.Split(requested, string(filepath.Separator)) {
+		if element == ".." {
+			return fmt.Errorf("%w: %q", errBadRoot, requested)
+		}
 	}
 
 	return nil
