@@ -91,6 +91,9 @@ func (d DockerRunner) Close() error {
 type dockerSession struct {
 	image       string
 	resolvedCwd string
+	// dockerHost is the daemon this session's containers live on. Empty is
+	// this machine's.
+	dockerHost string
 	// envNames are the variables the pipeline's env: opted this command into.
 	// They are passed at container start, so every exec in the session
 	// inherits them.
@@ -158,7 +161,7 @@ func (s *dockerSession) ensure(ctx context.Context) (name, stderr string, err er
 
 	slog.Debug("shell.docker.session_start", "image", s.image, "container", containerName, "cwd", s.resolvedCwd)
 
-	cmd := dockerCommand(ctx, args)
+	cmd := dockerCommand(ctx, s.dockerHost, args)
 
 	var errBuf bytes.Buffer
 
@@ -196,7 +199,7 @@ func (s *dockerSession) ensure(ctx context.Context) (name, stderr string, err er
 		// The corpse has told us what we needed; take it away now rather than
 		// leaving it for the next run's sweep. s.name is deliberately left
 		// unset, so close has nothing to do for this session.
-		RemoveContainer(ctx, containerName)
+		removeContainerOn(ctx, s.dockerHost, containerName)
 
 		return "", s.startOut, s.startErr
 	}
@@ -214,7 +217,7 @@ func (s *dockerSession) ensure(ctx context.Context) (name, stderr string, err er
 // --rm — a self-removing container takes its own postmortem with it.
 func (s *dockerSession) checkAlive(ctx context.Context, name string) error {
 	//nolint:gosec // name is a hex string this package generated
-	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}} {{.State.ExitCode}}", name).Output()
+	out, err := onDaemon(exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}} {{.State.ExitCode}}", name), s.dockerHost).Output()
 	if err != nil {
 		// Cannot tell; assume it is fine rather than failing a working step on
 		// an inspect that did not answer.
@@ -229,7 +232,7 @@ func (s *dockerSession) checkAlive(ctx context.Context, name string) error {
 	}
 
 	return fmt.Errorf("container for image %q exited immediately with code %s (its command was %q; an image with an ENTRYPOINT receives that as arguments rather than replacing it): %s",
-		s.image, exitCode, keepAliveCommand(), containerLogTail(ctx, name))
+		s.image, exitCode, keepAliveCommand(), containerLogTail(ctx, s.dockerHost, name))
 }
 
 // RemoveContainer deletes a container by name, best-effort. Exported so
@@ -237,8 +240,13 @@ func (s *dockerSession) checkAlive(ctx context.Context, name string) error {
 // CLI run: that run has no session to Close, and killing the docker client
 // does not stop the container, so its caller owns teardown.
 func RemoveContainer(ctx context.Context, name string) {
+	removeContainerOn(ctx, "", name)
+}
+
+// removeContainerOn is RemoveContainer against a named daemon.
+func removeContainerOn(ctx context.Context, host, name string) {
 	//nolint:gosec // name is a hex string this package generated
-	out, err := exec.CommandContext(ctx, "docker", "rm", "-f", name).CombinedOutput()
+	out, err := onDaemon(exec.CommandContext(ctx, "docker", "rm", "-f", name), host).CombinedOutput()
 	if err != nil && !containerAlreadyGone(out) {
 		slog.Warn("shell.docker.remove_failed", "container", name, "error", err, "output", string(out))
 	}
@@ -246,9 +254,9 @@ func RemoveContainer(ctx context.Context, name string) {
 
 // containerLogTail returns the last few lines the container produced, which
 // for a failed start is the image's own error message.
-func containerLogTail(ctx context.Context, name string) string {
+func containerLogTail(ctx context.Context, host, name string) string {
 	//nolint:gosec // name is a hex string this package generated
-	out, err := exec.CommandContext(ctx, "docker", "logs", "--tail", "10", name).CombinedOutput()
+	out, err := onDaemon(exec.CommandContext(ctx, "docker", "logs", "--tail", "10", name), host).CombinedOutput()
 	if err != nil {
 		return "(no output)"
 	}
@@ -281,7 +289,7 @@ func (s *dockerSession) close() error {
 
 	slog.Debug("shell.docker.session_close", "container", name)
 
-	out, err := exec.CommandContext(ctx, "docker", "rm", "-f", name).CombinedOutput() //nolint:gosec // name is a hex string this package generated
+	out, err := onDaemon(exec.CommandContext(ctx, "docker", "rm", "-f", name), s.dockerHost).CombinedOutput() //nolint:gosec // name is a hex string this package generated
 	if err != nil {
 		// A container that is already gone is the outcome this wanted, not a
 		// failure. It happens whenever the container exited on its own — the
@@ -346,7 +354,7 @@ func (d DockerRunner) dockerExec(
 		return "", startStderr, startErr
 	}
 
-	cmd := dockerCommand(ctx, dockerExecArgs(name, command, stdin))
+	cmd := dockerCommand(ctx, d.session.dockerHost, dockerExecArgs(name, command, stdin))
 	if stdin {
 		cmd.Stdin = os.Stdin
 	}
@@ -485,8 +493,22 @@ func (d DockerRunner) runCaptureFull(ctx context.Context, command string, maxByt
 // immediate SIGKILL, giving it a chance to exit cleanly before the grace
 // period expires. Whatever the client does, the command running inside the
 // container is bounded by the session's own teardown.
-func dockerCommand(ctx context.Context, args []string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "docker", args...) //nolint:gosec // executing pipeline-defined commands in a pipeline-defined image is this tool's purpose
+// onDaemon aims a docker invocation at one daemon.
+//
+// An empty host is this machine's own, which is every local step. A non-empty
+// one is a worker's, reached through the socket a venue forwards — the whole
+// reason placement and containers can compose without a second implementation
+// of either.
+func onDaemon(cmd *exec.Cmd, host string) *exec.Cmd {
+	if host != "" {
+		cmd.Env = append(os.Environ(), "DOCKER_HOST="+host)
+	}
+
+	return cmd
+}
+
+func dockerCommand(ctx context.Context, host string, args []string) *exec.Cmd {
+	cmd := onDaemon(exec.CommandContext(ctx, "docker", args...), host) //nolint:gosec // executing pipeline-defined commands in a pipeline-defined image is this tool's purpose
 	cmd.Cancel = func() error {
 		return cmd.Process.Signal(syscall.SIGTERM)
 	}

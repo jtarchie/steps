@@ -108,6 +108,17 @@ type RunnerSpec struct {
 	// own resolved host path and set as the workdir; empty (only a resource
 	// check:) mounts nothing.
 	Cwd string
+	// MountPath is where Cwd's tree lives on the DAEMON's filesystem, when
+	// that is not this machine. Set it and Cwd is not resolved locally —
+	// EvalSymlinks would fail on a path that exists on a worker and not here.
+	//
+	// This is the seam a placed containerized step turns on: the tree was
+	// sent to the worker, and the bind mount has to name the worker's copy,
+	// because that is the filesystem the daemon resolves `-v` against.
+	MountPath string
+	// DockerHost is the daemon to run this step's containers on. Empty is
+	// this machine's; a venue sets it to a socket it forwards to a worker.
+	DockerHost string
 	// Env are the variable NAMES the pipeline's env: opted this command into,
 	// on top of hostEnvAllowlist. They resolve against the steps process's own
 	// environment; a name that isn't set is simply absent, which is what lets
@@ -181,7 +192,11 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 
 	var resolvedCwd string
 
-	if spec.Cwd != "" {
+	switch {
+	case spec.MountPath != "":
+		// Already resolved, and resolvable only where it exists.
+		resolvedCwd = spec.MountPath
+	case spec.Cwd != "":
 		var err error
 
 		resolvedCwd, err = ResolveMountPath(spec.Cwd)
@@ -195,6 +210,7 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 		session: &dockerSession{
 			image:       spec.Image,
 			resolvedCwd: resolvedCwd,
+			dockerHost:  spec.DockerHost,
 			envNames:    spec.Env,
 			user:        containerUser(spec.User),
 			network:     spec.Network,
