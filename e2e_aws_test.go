@@ -74,3 +74,70 @@ jobs:
 		}
 	}
 }
+
+// TestRealAWSPlacedStepRunsInAContainer is the composition nothing else can
+// prove: a step placed on a real EC2 instance, running in a container on that
+// instance's own docker daemon, reached through a socket forwarded over the
+// SSM session.
+//
+// Every layer here is the real one — the tunnel is SSM, the daemon is the
+// worker's, the image is pulled by the worker, and the bind mount is resolved
+// by a daemon on another machine. A local: worker proves the plumbing; only
+// this proves it survives the transport it was designed for.
+func TestRealAWSPlacedStepRunsInAContainer(t *testing.T) {
+	instance := os.Getenv("STEPS_TEST_AWS_INSTANCE")
+	bucket := os.Getenv("STEPS_TEST_AWS_BUCKET")
+	binary := os.Getenv("STEPS_TEST_AWS_BINARY")
+
+	if instance == "" || bucket == "" || binary == "" {
+		t.Skip("no AWS fixture — run hack/aws-fixture.sh up and export what it prints")
+	}
+
+	region := os.Getenv("STEPS_TEST_AWS_REGION")
+
+	store := "s3://" + bucket + "/steps-test-image"
+	// A real disk, not the worker's tmpfs /tmp: the daemon bind-mounts this
+	// tree, and the fixture's own warning about memory applies double when a
+	// container is holding it open.
+	worker := "aws://" + instance + "/var/tmp/steps?binary=" + binary
+
+	if region != "" {
+		store += "?region=" + region
+		worker += "&region=" + region
+	}
+
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: prepare
+    outputs: [data]
+    run: echo seed > data/seed.txt
+  - task: remote
+    tags: [aws]
+    image: alpine:3
+    inputs: [data]
+    outputs: [report]
+    run: |
+      cat data/seed.txt > report/out.txt
+      cat /etc/alpine-release >> report/out.txt
+      uname -m >> report/out.txt
+  - task: publish
+    inputs: [report]
+    run: cp report/out.txt `+filepath.Join(dir, "published.txt")+`
+`)
+
+	mustRun(t, path, "--worker", "aws="+worker, "--artifact-store", store)
+
+	published := readFileString(t, filepath.Join(dir, "published.txt"))
+
+	// seed: the input reached the container. 3.: alpine's own release file,
+	// which exists in the image and on neither machine. aarch64: the
+	// Graviton worker, not this one.
+	for _, want := range []string{"seed", "3.", "aarch64"} {
+		if !strings.Contains(published, want) {
+			t.Errorf("published = %q, want it to contain %q", published, want)
+		}
+	}
+}

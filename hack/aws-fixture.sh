@@ -209,7 +209,13 @@ create_lt() {
   say "  creating launch template (ami $ami)"
 
   # The launch template owns the entire EC2 vocabulary — steps adds none of
-  # its own, which is why the aws://launch/ rung needs only this id.
+  # its own, which is why the aws://launch/ rung needs only this id. Docker
+  # is part of that vocabulary: a placed step that names an image runs its
+  # command in a container ON the worker, so a worker without a daemon can
+  # only test half the product. Installed here rather than by switching to
+  # the ECS-optimized AMI, which would bring an ECS agent nobody asked for, a
+  # JSON parameter needing jq, and an unverified assumption about whether it
+  # carries amazon-ssm-agent — which this whole fixture depends on.
   lt=$(aws_ ec2 create-launch-template --launch-template-name "$NAME-lt" \
     --tag-specifications "ResourceType=launch-template,Tags=[{Key=$TAG_KEY,Value=1}]" \
     --launch-template-data "{
@@ -218,6 +224,7 @@ create_lt() {
       \"IamInstanceProfile\": {\"Name\": \"$NAME-worker\"},
       \"NetworkInterfaces\": [{\"DeviceIndex\": 0, \"AssociatePublicIpAddress\": true, \"SubnetId\": \"$subnet\", \"Groups\": [\"$sg\"], \"DeleteOnTermination\": true}],
       \"InstanceInitiatedShutdownBehavior\": \"terminate\",
+      \"UserData\": \"$(printf '#!/bin/bash\ndnf install -y docker\nsystemctl enable --now docker\n' | base64 | tr -d '\n')\",
       \"TagSpecifications\": [{\"ResourceType\": \"instance\", \"Tags\": [{\"Key\": \"$TAG_KEY\", \"Value\": \"1\"}]}]
     }" --query 'LaunchTemplate.LaunchTemplateId' --output text)
 
@@ -252,7 +259,43 @@ create_instance() {
     waited=$((waited + 10))
   done
 
+  wait_for_docker "$id"
+
   printf '%s\n' "$id"
+}
+
+# wait_for_docker blocks until the launch template's user data has finished
+# installing the daemon.
+#
+# Checked here rather than left to a test: the install takes 20-40s and the
+# agent wait above usually outlasts it, but "usually" hands back a worker
+# whose daemon is still coming up, and that surfaces as a confusing failure
+# inside a test instead of a clear one here.
+wait_for_docker() {
+  local id="$1" waited=0 cmd status
+
+  say "  waiting for docker (installed by the launch template's user data)"
+
+  until [ "$waited" -ge 180 ]; do
+    cmd=$(aws_ ssm send-command --instance-ids "$id" \
+      --document-name AWS-RunShellScript \
+      --parameters 'commands=["docker info >/dev/null 2>&1"]' \
+      --query 'Command.CommandId' --output text 2>/dev/null) || true
+
+    if [ -n "$cmd" ]; then
+      sleep 5
+
+      status=$(aws_ ssm get-command-invocation --command-id "$cmd" --instance-id "$id" \
+        --query Status --output text 2>/dev/null) || true
+
+      [ "$status" = "Success" ] && return 0
+    fi
+
+    sleep 5
+    waited=$((waited + 10))
+  done
+
+  die "docker never came up on $id — check the launch template's user data"
 }
 
 create_bucket() {
