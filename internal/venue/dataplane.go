@@ -34,35 +34,25 @@ const wireTTL = 15 * time.Minute
 // These objects are transient by design: a lifecycle rule expiring wire/ is
 // safe, since the worst case is the next session re-uploading.
 func (s *session) uploadViaStore(ctx context.Context) error {
-	key, staged, err := s.packTreeToFile()
-	if staged != "" {
-		defer func() { _ = os.Remove(staged) }()
-	}
-
+	names, err := treeArtifacts(s.cwd)
 	if err != nil {
 		return err
 	}
 
-	has, err := s.blobs.Has(ctx, key)
-	if err != nil {
-		return fmt.Errorf("%w", err)
-	}
+	artifacts := make([]wire.UploadArtifact, 0, len(names))
 
-	if !has {
-		err = s.blobs.PutFile(ctx, key, staged)
-		if err != nil {
-			return fmt.Errorf("%w", err)
+	for _, name := range names {
+		artifact, uploadErr := s.uploadArtifact(ctx, name)
+		if uploadErr != nil {
+			return uploadErr
 		}
-	}
 
-	url, err := s.blobs.PresignGet(ctx, key, wireTTL)
-	if err != nil {
-		return fmt.Errorf("%w", err)
+		artifacts = append(artifacts, artifact)
 	}
 
 	op := s.nextOp()
 
-	err = s.write(wire.Frame{Type: wire.FrameUpload, Op: op}, wire.Upload{URL: url})
+	err = s.write(wire.Frame{Type: wire.FrameUpload, Op: op}, wire.Upload{Artifacts: artifacts})
 	if err != nil {
 		return err
 	}
@@ -72,30 +62,86 @@ func (s *session) uploadViaStore(ctx context.Context) error {
 	return s.awaitEnd(op, "acknowledging the tree")
 }
 
-// packTreeToFile packs the tree as a store blob — zstd over tar — into a
-// temporary file, returning the content key and the file's path. The path
-// comes back even on error so the caller can always clean up.
-func (s *session) packTreeToFile() (key, name string, err error) {
-	staged, err := os.CreateTemp("", "steps-wire-*")
+// treeArtifacts names the top-level entries of a step's tree.
+//
+// Top-level, because that is the grain internal/workspace built the tree at:
+// each entry is one declared input or output, and it is the unit two steps
+// can share. Finer would key on files a step might legitimately change;
+// coarser is the whole tree, which never repeats — two steps of one job
+// declare different outputs, so their trees differ by an empty directory and
+// hash differently.
+func treeArtifacts(cwd string) ([]string, error) {
+	entries, err := os.ReadDir(cwd)
 	if err != nil {
-		return "", "", fmt.Errorf("staging the step tree: %w", err)
+		return nil, fmt.Errorf("reading the step tree: %w", err)
 	}
 
-	defer func() { _ = staged.Close() }()
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
 
-	// The hash is of the tar bytes, before compression: that is the stream
-	// the codec's reproducibility test pins, so the same tree keys the same
-	// way across sessions and processes.
+	return names, nil
+}
+
+// uploadArtifact puts one entry in the store if it is not already there, and
+// says where to get it.
+func (s *session) uploadArtifact(ctx context.Context, name string) (wire.UploadArtifact, error) {
+	digest, staged, err := s.packArtifactToFile(name)
+	if staged != "" {
+		defer func() { _ = os.Remove(staged) }()
+	}
+
+	if err != nil {
+		return wire.UploadArtifact{}, err
+	}
+
+	key := "wire/" + digest
+
+	has, err := s.blobs.Has(ctx, key)
+	if err != nil {
+		return wire.UploadArtifact{}, fmt.Errorf("%w", err)
+	}
+
+	if !has {
+		err = s.blobs.PutFile(ctx, key, staged)
+		if err != nil {
+			return wire.UploadArtifact{}, fmt.Errorf("%w", err)
+		}
+	}
+
+	url, err := s.blobs.PresignGet(ctx, key, wireTTL)
+	if err != nil {
+		return wire.UploadArtifact{}, fmt.Errorf("%w", err)
+	}
+
+	return wire.UploadArtifact{Name: name, Digest: digest, URL: url}, nil
+}
+
+// packArtifactToFile stages one entry and returns the digest of its tar
+// bytes.
+//
+// Hashed before compression, which is the stream the codec's reproducibility
+// test pins — so the same artifact keys the same way across sessions,
+// processes and workers.
+func (s *session) packArtifactToFile(name string) (digest, staged string, err error) {
+	file, err := os.CreateTemp("", "steps-wire-*")
+	if err != nil {
+		return "", "", fmt.Errorf("staging an artifact: %w", err)
+	}
+
+	defer func() { _ = file.Close() }()
+
 	hasher := sha256.New()
 
-	err = compress.Pack(staged, true, func(w io.Writer) error {
-		return wire.PackTree(io.MultiWriter(w, hasher), s.cwd)
+	err = compress.Pack(file, true, func(w io.Writer) error {
+		return wire.PackPaths(io.MultiWriter(w, hasher), s.cwd, []string{name})
 	})
 	if err != nil {
-		return "", staged.Name(), fmt.Errorf("packing the step tree: %w", err)
+		return "", file.Name(), fmt.Errorf("packing artifact %q: %w", name, err)
 	}
 
-	return "wire/" + hex.EncodeToString(hasher.Sum(nil)), staged.Name(), nil
+	return hex.EncodeToString(hasher.Sum(nil)), file.Name(), nil
 }
 
 // fetchViaStore brings the declared outputs back through the store: the shim

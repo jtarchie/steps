@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/jtarchie/steps/internal/compress"
@@ -115,18 +116,82 @@ func (s *session) downloadTree(ctx context.Context, frame wire.Frame) error {
 		return fmt.Errorf("%w", err)
 	}
 
-	if upload.URL == "" {
+	// No artifacts is an empty tree, not a malformed frame: a step with no
+	// declared inputs or outputs has nothing to carry, and the work
+	// directory the hello already made is the whole of what it needs.
+	cache := s.artifactCacheDir()
+
+	for _, artifact := range upload.Artifacts {
+		err = s.placeArtifact(ctx, cache, artifact)
+		if err != nil {
+			return err
+		}
+	}
+
+	return sweepArtifactCache(cache)
+}
+
+// placeArtifact puts one entry in the work directory, fetching it only if
+// this worker does not already hold it.
+//
+// The whole point of the artifact grain: two steps of one job share their
+// inputs and differ only in their outputs, so the second step's big input is
+// already here. Verified by unpacking into the cache under its digest — what
+// arrives is re-read from disk, never trusted because a URL said so.
+func (s *session) placeArtifact(ctx context.Context, cache string, artifact wire.UploadArtifact) error {
+	if artifact.Name == "" || artifact.Digest == "" {
 		return errNoURL
 	}
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, upload.URL, nil)
+	held := filepath.Join(cache, artifact.Digest)
+
+	_, err := os.Stat(held)
+	if err != nil {
+		if artifact.URL == "" {
+			return errNoURL
+		}
+
+		err = fetchArtifact(ctx, artifact.URL, held)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Touched on use, so the sweep evicts what is coldest rather than what is
+	// merely oldest — a base image everybody depends on would otherwise be
+	// the first thing thrown away.
+	now := time.Now()
+	_ = os.Chtimes(held, now, now)
+
+	return copyTree(filepath.Join(held, artifact.Name), filepath.Join(s.workdir, artifact.Name))
+}
+
+// fetchArtifact downloads one artifact and unpacks it under its digest.
+//
+// Into a temporary directory and renamed, so a fetch that dies halfway cannot
+// leave a partial tree under a digest that claims to be complete — the next
+// step would find it, skip the download, and run against half its input.
+func fetchArtifact(ctx context.Context, url, held string) error {
+	err := os.MkdirAll(filepath.Dir(held), 0o700)
+	if err != nil {
+		return fmt.Errorf("making the artifact cache: %w", err)
+	}
+
+	staging, err := os.MkdirTemp(filepath.Dir(held), ".partial-*")
+	if err != nil {
+		return fmt.Errorf("staging an artifact: %w", err)
+	}
+
+	defer func() { _ = os.RemoveAll(staging) }()
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
 
 	response, err := storeClient.Do(request)
 	if err != nil {
-		return storeError("fetching the step tree", err)
+		return storeError("fetching an artifact", err)
 	}
 
 	defer func() { _ = response.Body.Close() }()
@@ -136,10 +201,20 @@ func (s *session) downloadTree(ctx context.Context, frame wire.Frame) error {
 	}
 
 	err = compress.Unpack(response.Body, true, func(r io.Reader) error {
-		return wire.UnpackTree(r, s.workdir)
+		return wire.UnpackTree(r, staging)
 	})
 	if err != nil {
 		return fmt.Errorf("%w", err)
+	}
+
+	err = os.Rename(staging, held)
+	if err != nil && !os.IsExist(err) {
+		// A racing session may have completed the same digest first, which is
+		// the cache working rather than a failure.
+		_, statErr := os.Stat(held)
+		if statErr != nil {
+			return fmt.Errorf("placing an artifact in the cache: %w", err)
+		}
 	}
 
 	return nil

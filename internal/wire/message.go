@@ -22,11 +22,17 @@ package wire
 // one cannot be told to; the frame either exists for both ends or it kills a
 // session mid-step with "unknown frame type". So it is a version, and a
 // ?binary=-pinned shim from before it says so at the handshake.
+// 4 made FrameUpload carry one entry per artifact rather than one blob for
+// the whole tree, so a worker can skip fetching what it already holds. An
+// older shim would read the new payload as an upload with no URL and fail
+// the step rather than the session, which is a worse failure than refusing
+// at the handshake.
+//
 // 3 added the docker stream frames. A shim that predates them answers an
 // unknown frame type and kills the session mid-step, which is the same reason
 // FrameDraining was a version rather than a negotiation: a frame either
 // exists for both ends or it is a protocol error.
-const Protocol = 3
+const Protocol = 4
 
 // Hello opens a session.
 type Hello struct {
@@ -74,10 +80,27 @@ const CompressionZstd = "zstd"
 const DataPlaneURLs = "urls"
 
 // Upload is FrameUpload's payload under DataPlaneURLs: where to fetch the
-// step tree, as one zstd-over-tar blob — the same stream the tunnel would
-// have carried. Absent (an empty payload) on the tunnel plane, where the
-// tree follows as data frames.
+// step's tree, one entry per ARTIFACT rather than one blob for the whole
+// tree. Absent (an empty payload) on the tunnel plane, where the tree follows
+// as data frames.
+//
+// Per artifact because a whole-tree key never repeats. Two steps of one job
+// sharing a large input still declare different outputs, so their trees
+// differ by an empty directory and hash differently — measured: a 64MB input
+// through three steps moved 192MB to the worker, the store deduplicating
+// none of it. The shared bytes are in the artifact, so that is what is named.
 type Upload struct {
+	Artifacts []UploadArtifact `json:"artifacts,omitempty"`
+}
+
+// UploadArtifact is one top-level entry of a step's tree.
+type UploadArtifact struct {
+	// Name is the entry's name in the work directory.
+	Name string `json:"name"`
+	// Digest identifies the CONTENT, so a worker that already holds it can
+	// say so instead of fetching it again.
+	Digest string `json:"digest"`
+	// URL fetches it, and is only used when the worker does not have it.
 	URL string `json:"url"`
 }
 

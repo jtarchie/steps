@@ -47,13 +47,15 @@ func (b *blobHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // packTree is a tree as it lives in the store: zstd over the tar codec.
-func packTree(t *testing.T, src string) []byte {
+// packTree packs named artifacts the way the store plane now sends them:
+// one blob per top-level entry, not one for the whole tree.
+func packTree(t *testing.T, src string, names ...string) []byte {
 	t.Helper()
 
 	var buf bytes.Buffer
 
 	err := compress.Pack(&buf, true, func(w io.Writer) error {
-		return wire.PackTree(w, src)
+		return wire.PackPaths(w, src, names)
 	})
 	if err != nil {
 		t.Fatalf("packing the tree: %v", err)
@@ -79,13 +81,15 @@ func TestShimSpeaksTheURLPlane(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	host.tree = packTree(t, src)
+	host.tree = packTree(t, src, "seed.txt")
 
 	peer := newPeer(t, Options{Build: "test", Root: t.TempDir()})
 	peer.helloWithPlane()
 
 	// Upload: one control frame carrying the URL, then the ack.
-	peer.ackedSend(wire.FrameUpload, wire.Upload{URL: server.URL + "/wire/tree"})
+	peer.ackedSend(wire.FrameUpload, wire.Upload{Artifacts: []wire.UploadArtifact{
+		{Name: "seed.txt", Digest: "deadbeef", URL: server.URL + "/wire/tree"},
+	}})
 
 	stdout, _, exit := peer.exec("cat seed.txt; mkdir -p out; cp seed.txt out/copy.txt", nil)
 	if !exit.Started || exit.Code != 0 || stdout != "seed\n" {
@@ -168,7 +172,9 @@ func TestShimReportsAStoreItCannotReach(t *testing.T) {
 
 	op = peer.next()
 	// A port nothing listens on: the shape of blocked egress.
-	peer.send(wire.FrameUpload, op, wire.Upload{URL: "http://127.0.0.1:1/wire/tree"})
+	peer.send(wire.FrameUpload, op, wire.Upload{Artifacts: []wire.UploadArtifact{
+		{Name: "data", Digest: "unreachable", URL: "http://127.0.0.1:1/wire/tree"},
+	}})
 
 	frame, err := peer.decoder.Read()
 	if err != nil {

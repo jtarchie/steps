@@ -5,6 +5,7 @@ package venue
 
 import (
 	"context"
+	"crypto/rand"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,11 @@ type countingS3 struct {
 	treeGets int
 	outPuts  int
 	outGets  int
+	// treeBytesOut is what the WORKER actually pulled down for step trees,
+	// which is the number the reuse work exists to reduce. Counts, not bytes,
+	// are the wrong measure there: a step that re-fetches a 64MB input it
+	// already has is one GET and a real cost.
+	treeBytesOut int
 }
 
 func newCountingS3(t *testing.T) (*countingS3, string) {
@@ -32,6 +38,12 @@ func newCountingS3(t *testing.T) (*countingS3, string) {
 	fake := &countingS3{objects: map[string][]byte{}}
 	server := httptest.NewServer(fake)
 	t.Cleanup(server.Close)
+
+	// A local: worker takes no root, so its shim caches artifacts under the
+	// system temp dir — which is shared, and would let one test's cache
+	// answer another test's fetch. Per-test here, and inherited by the shim
+	// this process execs.
+	t.Setenv("TMPDIR", t.TempDir())
 
 	t.Setenv("AWS_ACCESS_KEY_ID", "test")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
@@ -90,6 +102,10 @@ func (f *countingS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		f.count(r.URL.Path, r.Method)
 
+		if !strings.Contains(r.URL.Path, "/wire/out-") {
+			f.treeBytesOut += len(body)
+		}
+
 		_, _ = w.Write(body)
 	case http.MethodDelete:
 		delete(f.objects, r.URL.Path)
@@ -126,8 +142,11 @@ func TestVenueMovesTreesThroughTheStore(t *testing.T) {
 		t.Errorf("out/report.txt = %q, want %q", got, "seed\n")
 	}
 
-	if fake.treePuts != 1 || fake.treeGets != 1 {
-		t.Errorf("tree blobs: %d puts, %d gets; want 1 and 1 — the tree did not travel through the store exactly once",
+	// One per ARTIFACT now, not one per tree: this step's cwd holds data/ and
+	// out/, and naming them separately is what lets a later step skip the one
+	// it already has.
+	if fake.treePuts != 2 || fake.treeGets != 2 {
+		t.Errorf("tree blobs: %d puts, %d gets; want 2 and 2 — one per artifact, up once and down once",
 			fake.treePuts, fake.treeGets)
 	}
 
@@ -174,9 +193,12 @@ func TestVenueFallsBackToTheTunnelWithALegacyShim(t *testing.T) {
 func TestVenueRedialReusesTheUploadedTree(t *testing.T) {
 	fake, storeURL := newCountingS3(t)
 
-	// No outputs: nothing is fetched back, so the local tree — and its
-	// content key — is identical across the redial.
-	spec := localWorker(t, t.TempDir())
+	// No outputs: nothing is fetched back, so the tree — and every artifact
+	// key in it — is identical across the redial.
+	cwd := t.TempDir()
+	mustWrite(t, filepath.Join(cwd, "data", "seed.txt"), "seed\n")
+
+	spec := localWorker(t, cwd)
 	spec.ArtifactStore = storeURL
 
 	runner := newLocalRunner(t, spec)
@@ -197,10 +219,66 @@ func TestVenueRedialReusesTheUploadedTree(t *testing.T) {
 	}
 
 	if fake.treePuts != 1 {
-		t.Errorf("tree puts = %d, want 1 — the redial re-uploaded a tree the store already held", fake.treePuts)
+		t.Errorf("tree puts = %d, want 1 — the redial re-uploaded an artifact the store already held", fake.treePuts)
 	}
 
-	if fake.treeGets != 2 {
-		t.Errorf("tree gets = %d, want 2 — each session's shim fetches the tree once", fake.treeGets)
+	// One, not two. The redial opens a NEW session with a new work directory,
+	// and the artifact it needs is one this worker already pulled down for
+	// the session that died — which is the same reuse two steps of a job get,
+	// arriving here for free.
+	if fake.treeGets != 1 {
+		t.Errorf("tree gets = %d, want 1 — the redial re-fetched an artifact the worker already had", fake.treeGets)
+	}
+}
+
+// TestWorkerDoesNotRefetchAnInputItAlreadyHas is phase 3's whole point,
+// stated as the number it moves.
+//
+// Two placed steps of one job share an input and declare different outputs.
+// Their TREES therefore differ — each carries its own output directory — so a
+// whole-tree content key misses on the second step and the worker pulls the
+// shared payload down twice. Measured on a real job: a 64MB input through
+// three steps moved 192MB to the worker, with and without a store.
+//
+// The bytes are in the shared input, not in the tree, so this counts bytes
+// rather than requests: one re-fetch is one GET and a whole payload.
+func TestWorkerDoesNotRefetchAnInputItAlreadyHas(t *testing.T) {
+	fake, storeURL := newCountingS3(t)
+
+	// Incompressible: trees cross zstd-compressed, and a megabyte of one
+	// repeated byte measures nothing at all. The first draft of this test
+	// used exactly that and passed without the feature existing.
+	payload := make([]byte, 1<<20)
+	_, err := rand.Read(payload)
+	if err != nil {
+		t.Fatalf("making an incompressible payload: %v", err)
+	}
+
+	run := func(outputs string) {
+		t.Helper()
+
+		cwd := t.TempDir()
+		mustWrite(t, filepath.Join(cwd, "data", "big.txt"), string(payload))
+		mustMkdir(t, filepath.Join(cwd, outputs))
+
+		spec := localWorker(t, cwd, outputs)
+		spec.ArtifactStore = storeURL
+
+		runner := newLocalRunner(t, spec)
+
+		err := runner.Run(context.Background(), "wc -c < data/big.txt > "+outputs+"/n")
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	}
+
+	run("out1")
+	run("out2")
+
+	// One payload, not two. The slack covers tar and frame overhead on the
+	// second step's own (empty) output directory.
+	if fake.treeBytesOut > 3*len(payload)/2 {
+		t.Errorf("the worker pulled %d bytes of tree for two steps sharing one %d-byte input — it re-fetched what it already had",
+			fake.treeBytesOut, len(payload))
 	}
 }
