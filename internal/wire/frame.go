@@ -99,7 +99,11 @@ const DataChunkBytes = 256 << 10
 // maxOp is the largest operation id the 3-byte field holds. Ids wrap, which is
 // harmless: only one operation is ever in flight, so an id has to collide with
 // itself 16 million operations later to be ambiguous.
-const maxOp = 1<<24 - 1
+const maxOp = MaxOp
+
+// MaxOp is the largest operation id a frame can carry, exported because the
+// side that MINTS ids has to respect the same ceiling the encoder enforces.
+const MaxOp = 1<<24 - 1
 
 // ErrProtocol is a frame that cannot be part of a conversation this code
 // wrote: a bad type, an impossible length, a truncated header.

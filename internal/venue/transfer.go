@@ -73,8 +73,8 @@ func (s *session) upload(ctx context.Context) error {
 	}
 
 	if frame.Type != wire.FrameEnd || frame.Op != op {
-		return fmt.Errorf("%w: the worker answered a type %d frame for operation %d instead of acknowledging the tree",
-			wire.ErrProtocol, frame.Type, frame.Op)
+		return s.desync("the worker answered a type %d frame for operation %d instead of acknowledging the tree",
+			frame.Type, frame.Op)
 	}
 
 	return nil
@@ -255,8 +255,8 @@ func (s *session) pump(op uint32, w io.Writer) error {
 		}
 
 		if frame.Op != op {
-			return fmt.Errorf("%w: a type %d frame for operation %d arrived during operation %d",
-				wire.ErrProtocol, frame.Type, frame.Op, op)
+			return s.desync("a type %d frame for operation %d arrived during operation %d",
+				frame.Type, frame.Op, op)
 		}
 
 		switch frame.Type {

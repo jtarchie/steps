@@ -122,6 +122,13 @@ func (r runner) runContained(ctx context.Context, command string, p plan) (strin
 	err = r.session.withDockerRouting(ctx, func() error {
 		var runErr error
 
+		// Either flag streams BOTH, because shell's container runner has one
+		// streamed variant and streams both through it. No caller asks for
+		// one and not the other today — Run wants both, the capture plans
+		// want neither — so this collapses a distinction nothing currently
+		// makes, rather than silently dropping one somebody asked for. A
+		// caller that does want them split needs a shell API that can, not a
+		// cleverer branch here.
 		if p.streamStdout || p.streamStderr {
 			stdout, stderr, code, runErr = inner.RunCaptureFullLimitedStreamed(ctx, command, p.maxBytes, p.spillDir)
 		} else {

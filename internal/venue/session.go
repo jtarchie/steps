@@ -651,7 +651,20 @@ func (s *session) teardownContainer() {
 }
 
 func (s *session) nextOp() uint32 {
-	return s.op.Add(1)
+	// Wrapped at the ceiling the encoder enforces, and never zero. The
+	// counter is 32-bit and the field is 24, so a long-lived session — a
+	// steps web that keeps placing steps, and now one docker connection per
+	// id — eventually minted an id Encoder.Write refuses outright, killing a
+	// session for arithmetic. Ids only have to be unique among the operations
+	// in flight, which is a handful, so wrapping costs nothing; zero is
+	// skipped because it is DrainOp, and means "about the session" rather
+	// than "about the thing you asked for".
+	op := s.op.Add(1) % wire.MaxOp
+	if op == wire.DrainOp {
+		return 1
+	}
+
+	return op
 }
 
 // write sends one control frame, marking the conversation broken on a
@@ -852,6 +865,21 @@ func (s *session) awaitOperationFrame() (wire.Frame, error) {
 // since these belong to no operation it knows.
 func isDockerFrame(frameType wire.FrameType) bool {
 	return frameType == wire.FrameDockerData || frameType == wire.FrameDockerClose
+}
+
+// desync reports a conversation that lost its place, and marks the session so
+// nothing else uses it.
+//
+// Marking is the point. ensure() reuses a session unless it is broken, and a
+// protocol violation is exactly where reuse is wrong: this end stopped
+// reading mid-stream, so what is still queued belongs to an operation nobody
+// is listening for, and the next command reads it as its own answer. A
+// transport that DIED already marks itself — this is the other way a
+// conversation becomes unusable while the socket stays open.
+func (s *session) desync(format string, args ...any) error {
+	s.broken.Store(true)
+
+	return fmt.Errorf("%w: "+format, append([]any{wire.ErrProtocol}, args...)...)
 }
 
 // errWorkerLost is a transport that died mid-conversation, as opposed to an

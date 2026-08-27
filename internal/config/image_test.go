@@ -82,3 +82,48 @@ func TestImagesSkipsAPlacedStepsImage(t *testing.T) {
 		t.Errorf("Images() = %v, want the un-placed step's image", got)
 	}
 }
+
+// TestImagesSkipsATaskEntryOnlyPlacedStepsUse pins the other half of the
+// placed-step rule.
+//
+// Images() is what the orchestrator pre-pulls and what makes it demand a
+// local daemon. A step's own image: is already skipped when it carries tags:,
+// because that container runs on the worker — but a tasks: entry is visited
+// on its own, knowing nothing about who references it, so an image reached
+// only through a tagged step was still pulled here. On a machine with no
+// daemon that refused the job outright; with one, it pulled an image that
+// will never run — and for a locally BUILT tag, found it, skipped the pull,
+// and left the worker to fail with "Unable to find image".
+func TestImagesSkipsATaskEntryOnlyPlacedStepsUse(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Tasks: []Task{{Name: "remote", Image: "alpine:3", Run: "true"}},
+		Jobs: []Job{{Name: "j", Plan: []Step{
+			{Task: "remote", Tags: []string{"box"}},
+		}}},
+	}
+
+	if got := cfg.Images(); len(got) != 0 {
+		t.Errorf("Images() = %v, want none — that image runs on the worker", got)
+	}
+}
+
+// TestImagesKeepsATaskEntryAnyLocalStepUses is the guard on the guard: one
+// untagged reference is enough to need the image here.
+func TestImagesKeepsATaskEntryAnyLocalStepUses(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Tasks: []Task{{Name: "both", Image: "alpine:3", Run: "true"}},
+		Jobs: []Job{{Name: "j", Plan: []Step{
+			{Task: "both", Tags: []string{"box"}},
+			{Task: "both"},
+		}}},
+	}
+
+	got := cfg.Images()
+	if len(got) != 1 || got[0] != "alpine:3" {
+		t.Errorf("Images() = %v, want alpine:3 — a local step still runs it here", got)
+	}
+}

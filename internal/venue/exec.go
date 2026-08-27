@@ -51,15 +51,21 @@ func (s *session) run(ctx context.Context, command string, sinks outputSinks) (w
 		}
 
 		if frame.Op != op {
-			return wire.Exit{}, fmt.Errorf("%w: a type %d frame for operation %d arrived during operation %d",
-				wire.ErrProtocol, frame.Type, frame.Op, op)
+			return wire.Exit{}, s.desync("a type %d frame for operation %d arrived during operation %d",
+				frame.Type, frame.Op, op)
 		}
 
 		exit, done, err := deliver(frame, sinks, failed != nil)
 		if err != nil {
 			// A protocol failure means the stream is already not where this
-			// end thinks it is, so reading on would compound it.
+			// end thinks it is, so reading on would compound it — and the
+			// session must not be handed to the next command, which would
+			// read this operation's leftovers as its own answer.
 			if !errors.Is(err, errSink) {
+				if errors.Is(err, wire.ErrProtocol) {
+					s.broken.Store(true)
+				}
+
 				return wire.Exit{}, err
 			}
 
