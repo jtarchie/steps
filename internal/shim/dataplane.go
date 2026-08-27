@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -39,6 +40,7 @@ var errNoURL = errors.New("the data plane is urls and the frame carried no url")
 //
 //nolint:gochecknoglobals // one client for the process, as net/http intends
 var storeClient = &http.Client{
+	CheckRedirect: sameHostOnly,
 	Transport: &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
@@ -47,6 +49,58 @@ var storeClient = &http.Client{
 		IdleConnTimeout:       90 * time.Second,
 		ExpectContinueTimeout: time.Second,
 	},
+}
+
+// errOffsiteRedirect is a store sending this transfer somewhere else.
+var errOffsiteRedirect = errors.New("the artifact store redirected to another host")
+
+// sameHostOnly refuses a redirect that leaves the host the URL named.
+//
+// net/http's default follows up to ten redirects anywhere, and GetBody above
+// makes the upload REPLAYABLE — so a 307 from the store, or one injected on a
+// plain-HTTP endpoint or by the worker's own HTTP_PROXY, would re-PUT the
+// whole outputs tree to whatever host answered. A presigned URL redirects
+// within its own service (an S3 region hint) or not at all, so the host is
+// the right boundary and a cross-host hop is the shape of an exfiltration.
+func sameHostOnly(request *http.Request, via []*http.Request) error {
+	if len(via) >= maxStoreRedirects {
+		return fmt.Errorf("%w: %d hops", errOffsiteRedirect, len(via))
+	}
+
+	if request.URL.Host != via[0].URL.Host {
+		return fmt.Errorf("%w: %s to %s", errOffsiteRedirect, via[0].URL.Host, request.URL.Host)
+	}
+
+	return nil
+}
+
+// maxStoreRedirects bounds a store's own in-service hops.
+const maxStoreRedirects = 3
+
+// storeError strips the query from a store URL before the failure is reported.
+//
+// A *url.Error's message embeds the whole request URL, and a presigned one
+// carries X-Amz-Signature — a live, object-scoped credential (write-scoped on
+// the upload side). The shim's errors become a FrameError, which the venue
+// prints, streams to the web UI and writes to the state database, so an
+// ordinary store outage put a working credential in the build log.
+func storeError(action string, err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		redacted := *urlErr
+
+		parsed, parseErr := url.Parse(urlErr.URL)
+		if parseErr == nil {
+			parsed.RawQuery = ""
+			redacted.URL = parsed.String()
+		} else {
+			redacted.URL = "(the store url)"
+		}
+
+		return fmt.Errorf("%s: %w", action, &redacted)
+	}
+
+	return fmt.Errorf("%s: %w", action, err)
 }
 
 // downloadTree streams the blob at the frame's URL into the work directory.
@@ -72,7 +126,7 @@ func (s *session) downloadTree(ctx context.Context, frame wire.Frame) error {
 
 	response, err := storeClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return storeError("fetching the step tree", err)
 	}
 
 	defer func() { _ = response.Body.Close() }()
@@ -136,18 +190,25 @@ func (s *session) uploadOutputs(ctx context.Context, fetch wire.Fetch) error {
 	// this a presigned URL that answers 307 — or a connection reused into a
 	// GOAWAY — cannot replay the body and fails the fetch with a length
 	// mismatch rather than shipping the outputs.
+	//
+	// A fresh handle, NOT a Seek on this one: an *os.File passed as the body
+	// is already an io.ReadCloser, so net/http keeps it verbatim and CLOSES
+	// it after writing it. Seeking the closed file answered os.ErrClosed, so
+	// the replay this exists for failed with "file already closed" and the
+	// outputs still did not ship.
+	path := staged.Name()
 	request.GetBody = func() (io.ReadCloser, error) {
-		_, err := staged.Seek(0, io.SeekStart)
-		if err != nil {
-			return nil, fmt.Errorf("%w", err)
+		replay, openErr := os.Open(path) //nolint:gosec // the path is this process's own os.CreateTemp, three lines up
+		if openErr != nil {
+			return nil, fmt.Errorf("%w", openErr)
 		}
 
-		return io.NopCloser(staged), nil
+		return replay, nil
 	}
 
 	response, err := storeClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return storeError("shipping the step outputs", err)
 	}
 
 	defer func() { _ = response.Body.Close() }()

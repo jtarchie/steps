@@ -75,7 +75,7 @@ func PackPaths(w io.Writer, root string, names []string) error {
 		roots = make([]string, 0, len(names))
 
 		for _, name := range names {
-			err := packName(name)
+			err := packName(root, name)
 			if err != nil {
 				return fmt.Errorf("packing %q: %w", root, err)
 			}
@@ -110,14 +110,65 @@ func PackPaths(w io.Writer, root string, names []string) error {
 // work directory and ships it back as data frames. unpackName cannot help
 // there: it runs on the orchestrator, and whoever sent the frame is reading
 // the raw stream.
-func packName(name string) error {
+func packName(root, name string) error {
 	clean := filepath.Clean(name)
 	if clean == "" || clean == "." || clean == ".." ||
 		filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("%w: %q", ErrUnsafePath, name)
 	}
 
-	return nil
+	return withinRoot(root, clean)
+}
+
+// withinRoot refuses a name whose RESOLVED path leaves root.
+//
+// The lexical check above is not enough on its own, and the gap is reachable:
+// a step's own tree can contain a symlink — the codec round-trips one, target
+// unvalidated, so the peer can plant it with an upload — and filepath.WalkDir
+// Lstats only what it DISCOVERS. A symlink in the argument's own path is
+// resolved by the kernel before the walk begins, so "esc/id_rsa" behind
+// `esc -> /root/.ssh` packs a tree from outside the work directory and ships
+// it back as data frames, which is exactly what packName's own contract says
+// cannot happen.
+//
+// Resolved against the nearest EXISTING ancestor, because a named output that
+// was never produced is deliberately not an error here.
+func withinRoot(root, clean string) error {
+	base, ok := resolvedRoot(root)
+	if !ok {
+		// A root that cannot be resolved cannot contain anything, and the walk
+		// that follows finds nothing either. Not this guard's failure to
+		// report: PackPaths is deliberately silent about a tree that is not
+		// there.
+		return nil
+	}
+
+	full := filepath.Join(base, clean)
+
+	for probe := full; ; probe = filepath.Dir(probe) {
+		resolved, resolveErr := filepath.EvalSymlinks(probe)
+		if resolveErr != nil {
+			if probe == filepath.Dir(probe) {
+				return nil
+			}
+
+			continue
+		}
+
+		if resolved != base && !strings.HasPrefix(resolved, base+string(filepath.Separator)) {
+			return fmt.Errorf("%w: %q resolves outside the tree", ErrUnsafePath, clean)
+		}
+
+		return nil
+	}
+}
+
+// resolvedRoot is root with its own symlinks followed, reporting whether it
+// could be resolved at all.
+func resolvedRoot(root string) (string, bool) {
+	base, err := filepath.EvalSymlinks(root)
+
+	return base, err == nil
 }
 
 // packWalk writes the tree at from into writer, naming every entry relative to

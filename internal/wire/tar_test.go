@@ -255,3 +255,74 @@ func TestPackPathsRefusesAnEscapingName(t *testing.T) {
 		}
 	}
 }
+
+// TestPackPathsRefusesASymlinkedName is the half of the read-side boundary the
+// lexical check cannot see.
+//
+// The names PackPaths is given arrive from the PEER, and so does the TREE: the
+// codec round-trips a symlink with its target unvalidated, so an upload can
+// plant one and the fetch that follows can walk through it. filepath.WalkDir
+// Lstats only what it DISCOVERS — a symlink in the argument's own path is
+// resolved by the kernel before the walk starts — so "esc/private" behind
+// `esc -> <outside>` shipped a file from outside the work directory while
+// every ".." check passed.
+func TestPackPathsRefusesASymlinkedName(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	outside := filepath.Join(filepath.Dir(root), "secrets-"+filepath.Base(root))
+
+	err := os.MkdirAll(outside, 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = os.RemoveAll(outside) })
+
+	marker := "bytes-from-behind-a-symlink"
+
+	err = os.WriteFile(filepath.Join(outside, "private"), []byte(marker), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The link a step's own tree can legitimately contain, or that an upload
+	// can plant.
+	err = os.Symlink(outside, filepath.Join(root, "esc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"esc/private", "esc"} {
+		buf := new(bytes.Buffer)
+
+		packErr := PackPaths(buf, root, []string{name})
+
+		if strings.Contains(buf.String(), marker) {
+			t.Fatalf("PackPaths shipped a file from outside the tree for %q", name)
+		}
+
+		if packErr == nil {
+			t.Errorf("PackPaths accepted %q, want a refusal", name)
+		}
+	}
+
+	// And an ordinary name still packs: the guard must not refuse the tree it
+	// exists to bound.
+	err = os.WriteFile(filepath.Join(root, "kept.txt"), []byte("inside"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	buf := new(bytes.Buffer)
+
+	err = PackPaths(buf, root, []string{"kept.txt"})
+	if err != nil {
+		t.Fatalf("PackPaths refused a name inside the tree: %v", err)
+	}
+
+	if !strings.Contains(buf.String(), "inside") {
+		t.Error("PackPaths shipped nothing for a name inside the tree")
+	}
+}
