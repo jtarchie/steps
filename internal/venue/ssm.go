@@ -340,6 +340,16 @@ fi
 %s`, shellQuote(target), shellQuote(binary.url), shimStartScript(worker, `"$BIN"`))
 }
 
+// bootstrapLinger is how long a bootstrapped shim waits to be dialled before
+// reaping itself.
+//
+// The dial follows the bootstrap within milliseconds when it works at all, so
+// this bounds only the failure: SSM throttling the StartSession, a websocket
+// that will not open, an orchestrator killed between the two calls. Generous
+// rather than tight, because the cost of being wrong in one direction is a
+// step that fails for no reason and in the other is one stranded process.
+const bootstrapLinger = 5 * time.Minute
+
 // shimStartScript starts a shim in the background and waits for it to say
 // which port it took.
 //
@@ -361,14 +371,14 @@ func shimStartScript(worker Worker, binary string) string {
 	// cats a log the shim has not written to yet. The dial then fails saying
 	// the shim reported no port while the shim is in fact coming up fine.
 	return fmt.Sprintf(`LOG=$(mktemp)
-nohup %s _shim --listen 127.0.0.1:0 --once%s >"$LOG" 2>&1 &
+nohup %s _shim --listen 127.0.0.1:0 --once --linger %s%s >"$LOG" 2>&1 &
 i=0
 while [ "$i" -lt 100 ]; do
   if grep -q 'listening on' "$LOG"; then break; fi
   sleep 0.1
   i=$((i+1))
 done
-cat "$LOG"`, binary, root)
+cat "$LOG"`, binary, bootstrapLinger, root)
 }
 
 // awsInstance matches an EC2 instance id, and awsTemplate a launch template

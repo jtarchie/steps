@@ -219,6 +219,14 @@ func TestVenueRunsAStepOnAnSSMWorker(t *testing.T) {
 	if !strings.Contains(fake.scripts[0], "--once") {
 		t.Errorf("the bootstrap left a shim that outlives its session:\n%s", fake.scripts[0])
 	}
+
+	// --once only ends a shim somebody DIALLED. The dial happens after this
+	// script returns, so a failure in between — SSM throttling the session, a
+	// websocket that will not open — leaves a root process in Accept holding
+	// a port, with nothing on this end still referring to it.
+	if !strings.Contains(fake.scripts[0], "--linger") {
+		t.Errorf("the bootstrap left a shim nothing would ever reap:\n%s", fake.scripts[0])
+	}
 }
 
 // TestVenueRefusesAWindowsSSMWorker pins that the refusal happens BEFORE a

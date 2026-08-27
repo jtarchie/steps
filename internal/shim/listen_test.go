@@ -227,3 +227,91 @@ func TestShimListenerShutsDownWithAClientConnected(t *testing.T) {
 		t.Fatal("ServeListener did not return: the connected session outlived its shutdown")
 	}
 }
+
+// TestListenerGivesUpWaitingToBeDialled bounds the shim nobody ever reaches.
+//
+// The aws:// bootstrap starts a detached --once shim and THEN opens the
+// forwarded session. When that second step fails — SSM throttling, a
+// websocket that will not dial — nothing on this end is left to reap the
+// process: it sits in Accept as root, holding a port, until the instance is
+// stopped. On a static or parked worker that is never. Each failed dial
+// stranded another one.
+func TestListenerGivesUpWaitingToBeDialled(t *testing.T) {
+	t.Parallel()
+
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+
+	started := time.Now()
+
+	err = ServeListener(context.Background(), listener, ListenOptions{
+		Options: Options{Build: "test"},
+		Once:    true,
+		Linger:  120 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("ServeListener: %v", err)
+	}
+
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Errorf("ServeListener returned after %s — it was not bounded by Linger", elapsed)
+	}
+}
+
+// TestListenerStopsLingeringOnceDialled proves the bound is cancelled by the
+// first connection rather than merely being survivable.
+//
+// It has to use the multi-connection mode to have any teeth. Under Once the
+// listener is already past Accept when the timer would fire, and closing a
+// LISTENER does not close a connection already accepted — so a session
+// survives an uncancelled timer for a structural reason, and the obvious test
+// passes whether the cancel works or not. The first draft of this test did
+// exactly that, and said so only under sabotage.
+func TestListenerStopsLingeringOnceDialled(t *testing.T) {
+	t.Parallel()
+
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+
+	served := make(chan error, 1)
+	addr := listener.Addr()
+
+	// Cancelled rather than left running: without Once nothing else ends this
+	// listener, and goleak is right to object.
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		served <- ServeListener(ctx, listener, ListenOptions{
+			Options: Options{Build: "test"},
+			Linger:  200 * time.Millisecond,
+		})
+	}()
+
+	first := dialListener(t, addr)
+	first.hello("linger-first")
+
+	// Well past Linger. A timer the first connection did not cancel has now
+	// closed the listener, and the second dial cannot be served.
+	time.Sleep(600 * time.Millisecond)
+
+	second := dialListener(t, addr)
+
+	ok := second.hello("linger-second")
+	if ok.Build != "test" {
+		t.Errorf("Build = %q, want the listener still serving after Linger elapsed", ok.Build)
+	}
+
+	first.bye()
+	second.bye()
+
+	cancel()
+
+	err = <-served
+	if err != nil {
+		t.Fatalf("ServeListener: %v", err)
+	}
+}

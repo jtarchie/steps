@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/jtarchie/steps/internal/shim"
+	"time"
 )
 
 // ShimCmd is the remote half of a step placed on a worker.
@@ -36,6 +37,10 @@ type ShimCmd struct {
 	Listen string `help:"serve the shim protocol on a TCP address instead of stdio, e.g. --listen 127.0.0.1:35207" name:"listen"`
 	Once   bool   `help:"with --listen, serve one connection and exit"                                             name:"once"`
 	Root   string `help:"with --listen, where session scratch directories are made"                                name:"root"`
+	// Linger reaps a shim nobody dialled. The venue passes it on the
+	// bootstrap; a shim started by hand waits forever, which is what somebody
+	// at a terminal means by --listen.
+	Linger time.Duration `help:"with --listen, give up if no connection arrives in this long (0 waits forever)" name:"linger"`
 }
 
 func (s *ShimCmd) Run() error {
@@ -78,6 +83,7 @@ func (s *ShimCmd) listen(build string) error {
 	err = shim.ServeListener(ctx, listener, shim.ListenOptions{
 		Options: shim.Options{Build: build, Root: s.Root},
 		Once:    s.Once,
+		Linger:  s.Linger,
 	})
 	if err != nil {
 		return fmt.Errorf("shim: %w", err)

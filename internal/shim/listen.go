@@ -11,6 +11,8 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // ListenOptions configure a listening shim: the session options every
@@ -29,6 +31,83 @@ type ListenOptions struct {
 	// to tell it to stop, so the shim ends when its one conversation does
 	// rather than lingering on somebody's instance.
 	Once bool
+	// Linger bounds how long to wait for the FIRST connection, and nothing
+	// else. Zero waits forever.
+	//
+	// Once only ends a shim that somebody dialled. The aws:// bootstrap
+	// starts the shim and THEN opens the forwarded session, so a failure in
+	// between — SSM throttling, a websocket that will not dial — leaves a
+	// root process sitting in Accept holding a port, with nothing on the
+	// orchestrator still referring to it. On an instance that is never
+	// stopped, every failed dial stranded another one.
+	//
+	// Deliberately not a bound on the session: a placed step legitimately
+	// runs for hours, and a timer that could interrupt one would be a worse
+	// bug than the leak it replaces.
+	Linger time.Duration
+}
+
+// serveConn runs one accepted connection's session to completion.
+func serveConn(ctx context.Context, conn net.Conn, opts Options) {
+	defer func() { _ = conn.Close() }()
+
+	// The session loop blocks in reads on the connection, which no context
+	// can end — so a shutdown closes the connection out from under it, or a
+	// shim told to stop would live for as long as its peer felt like staying
+	// connected.
+	sessionDone := make(chan struct{})
+	defer close(sessionDone)
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-sessionDone:
+		}
+	}()
+
+	err := Serve(ctx, conn, conn, opts)
+	if err != nil {
+		// Stderr, the same place stdio-mode diagnostics go: stdout is
+		// protocol there and merely unused here, and consistency is what lets
+		// an operator find either.
+		fmt.Fprintf(os.Stderr, "shim: session ended badly: %v\n", err)
+	}
+}
+
+// watchLinger closes the listener if nothing dials it in time, and reports
+// the two things the accept loop needs: a function to call on the first
+// connection, and whether the close was this rather than a broken listener.
+//
+// A zero bound waits forever, which is what somebody running --listen by hand
+// means; the venue passes one because its bootstrap and its dial are separate
+// calls and only the first is guaranteed to happen.
+func watchLinger(listener net.Listener, linger time.Duration, done <-chan struct{}) (func(), *atomic.Bool) {
+	lingered := new(atomic.Bool)
+
+	if linger <= 0 {
+		return func() {}, lingered
+	}
+
+	dialled := make(chan struct{})
+
+	go func() {
+		timer := time.NewTimer(linger)
+		defer timer.Stop()
+
+		select {
+		case <-timer.C:
+			// Recorded before the close, so the Accept it unblocks reads as
+			// this rather than as a listener that broke.
+			lingered.Store(true)
+
+			_ = listener.Close()
+		case <-dialled:
+		case <-done:
+		}
+	}()
+
+	return sync.OnceFunc(func() { close(dialled) }), lingered
 }
 
 // ServeListener serves one session per accepted connection until ctx ends, or
@@ -57,44 +136,25 @@ func ServeListener(ctx context.Context, listener net.Listener, opts ListenOption
 	var sessions sync.WaitGroup
 	defer sessions.Wait()
 
+	first, lingered := watchLinger(listener, opts.Linger, done)
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || lingered.Load() {
 				return nil
 			}
 
 			return fmt.Errorf("shim: accepting a connection: %w", err)
 		}
 
+		first()
 		sessions.Add(1)
 
 		go func() {
 			defer sessions.Done()
-			defer func() { _ = conn.Close() }()
 
-			// The session loop blocks in reads on the connection, which no
-			// context can end — so a shutdown closes the connection out from
-			// under it, or a shim told to stop would live for as long as its
-			// peer felt like staying connected.
-			sessionDone := make(chan struct{})
-			defer close(sessionDone)
-
-			go func() {
-				select {
-				case <-ctx.Done():
-					_ = conn.Close()
-				case <-sessionDone:
-				}
-			}()
-
-			serveErr := Serve(ctx, conn, conn, opts.Options)
-			if serveErr != nil {
-				// Stderr, the same place stdio-mode diagnostics go: stdout is
-				// protocol there and merely unused here, and consistency is
-				// what lets an operator find either.
-				fmt.Fprintf(os.Stderr, "shim: session ended badly: %v\n", serveErr)
-			}
+			serveConn(ctx, conn, opts.Options)
 		}()
 
 		if opts.Once {
