@@ -55,7 +55,7 @@ func (s *session) startExec(ctx context.Context, frame wire.Frame) error {
 
 		exit := s.runCommand(runCtx, frame.Op, request)
 
-		s.endCommand()
+		s.endCommand(frame.Op)
 
 		sendErr := s.send(wire.FrameExit, frame.Op, exit)
 		if sendErr != nil {
@@ -114,9 +114,21 @@ func (s *session) beginCommand(op uint32, cancel context.CancelFunc) {
 	s.cancel, s.cancelOp = cancel, op
 }
 
-func (s *session) endCommand() {
+// endCommand clears the registration for op, and only if it is still the one
+// registered.
+//
+// The op check is cancelRunning's, for the same reason: the frame loop keeps
+// reading while a command runs, so a second exec can register before the first
+// finishes. Clearing unconditionally then deregisters the RUNNING command, and
+// a cancel aimed at it finds nothing and is dropped — timeout:, fail_fast and
+// race: end nothing while the step runs to completion on the worker.
+func (s *session) endCommand(op uint32) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.cancelOp != op {
+		return
+	}
 
 	s.cancel, s.cancelOp = nil, 0
 }

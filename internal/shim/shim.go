@@ -184,6 +184,19 @@ func (s *session) hello(frame wire.Frame) error {
 		return fmt.Errorf("%w", err)
 	}
 
+	// One hello per session. A second would rewrite the workdir a running
+	// command's goroutine is reading — see startExec, which deliberately
+	// leaves the frame loop free — launching the next command somewhere else
+	// and pointing cleanup's RemoveAll at a directory this session never made.
+	if s.workdir != "" {
+		return errReopened
+	}
+
+	err = checkSessionName(hello.Session)
+	if err != nil {
+		return err
+	}
+
 	if hello.Protocol != wire.Protocol {
 		return fmt.Errorf("%w: orchestrator speaks protocol %d, this shim speaks %d — the pushed binary is not the one that pushed it",
 			wire.ErrProtocol, hello.Protocol, wire.Protocol)
@@ -266,10 +279,14 @@ func (s *session) upload(ctx context.Context, frame wire.Frame) error {
 	// later would read that operation's opening frame and throw it away as
 	// leftovers — the step would then wait forever for a reply to a command
 	// nobody kept.
-	done()
+	drainErr := done()
 
 	if err != nil {
 		return fmt.Errorf("unpacking the step tree: %w", err)
+	}
+
+	if drainErr != nil {
+		return drainErr
 	}
 
 	// Acknowledged, because silence is indistinguishable from a refusal that
@@ -339,6 +356,27 @@ func (s *session) pack(writer io.Writer, paths []string) error {
 // a client this repo wrote, which is exactly why it is worth answering
 // explicitly rather than dereferencing an empty path.
 var errUnopened = errors.New("no session: the orchestrator sent an operation before its hello")
+
+// errReopened is a second hello on a session that already answered one.
+var errReopened = errors.New("this session already had its hello")
+
+// errBadSession is a session name that is not a single directory name.
+var errBadSession = errors.New("the session name must be one directory name")
+
+// checkSessionName refuses a name that would leave the root it is joined to.
+//
+// The name lands in the scratch path and cleanup removes that path's PARENT,
+// so "../.." makes the shim delete a tree outside the root it was given.
+// Validated rather than trusted because --listen serves whatever connects: the
+// listener is unauthenticated by design, and under the aws:// bootstrap this
+// process is root.
+func checkSessionName(name string) error {
+	if name == "" || name == "." || name == ".." || name != filepath.Base(name) {
+		return fmt.Errorf("%w: %q", errBadSession, name)
+	}
+
+	return nil
+}
 
 func (s *session) send(frameType wire.FrameType, op uint32, payload any) error {
 	s.mu.Lock()

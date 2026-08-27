@@ -14,8 +14,14 @@ import (
 // other filesystem is reported as its magic, which is what an operator would
 // search for anyway.
 //
+// Keyed by uint32, which is what a magic IS: syscall.Statfs_t.Type is int64 on
+// linux/amd64 and linux/arm64 but int32 on linux/386 and linux/arm, so an
+// int64 conversion sign-extends every magic with the high bit set — btrfs and
+// ramfs among them — and the lookup misses on exactly the 32-bit workers the
+// table is meant to name.
+//
 //nolint:gochecknoglobals // a table of kernel constants, not state
-var fsMagics = map[int64]string{
+var fsMagics = map[uint32]string{
 	0x9123683e: "btrfs",
 	0x01021994: "tmpfs",
 	0x858458f6: "ramfs",
@@ -38,9 +44,11 @@ func fsInfoAt(path string) (string, uint64) {
 		return "", 0
 	}
 
-	name, known := fsMagics[int64(stat.Type)]
+	magic := uint32(stat.Type) //nolint:gosec // a 32-bit magic, however the platform widened it
+
+	name, known := fsMagics[magic]
 	if !known {
-		name = fmt.Sprintf("%#x", uint64(stat.Type))
+		name = fmt.Sprintf("%#x", magic)
 	}
 
 	return name, stat.Bavail * uint64(stat.Bsize)

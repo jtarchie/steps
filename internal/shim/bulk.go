@@ -16,14 +16,14 @@ import (
 // It reads from the decoder directly rather than through a queue because
 // operations are strictly sequential: while a tree is arriving, nothing else
 // can be, so there is no frame to miss and no buffer to size.
-func (s *session) dataReader(op uint32) (io.Reader, func()) {
+func (s *session) dataReader(op uint32) (io.Reader, func() error) {
 	reader := &frameReader{session: s, op: op}
 
 	// The caller may stop early — an unpack that refuses an unsafe entry
 	// returns before the last frame — and the sender is still mid-transfer.
 	// Draining leaves the stream at a frame boundary, so the session can carry
 	// on rather than reading the rest of a tree as commands.
-	return reader, func() { reader.drain() }
+	return reader, reader.drain
 }
 
 type frameReader struct {
@@ -74,20 +74,35 @@ func (r *frameReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// drain consumes whatever is left of this operation's frames.
-func (r *frameReader) drain() {
+// drain consumes whatever is left of this operation's frames, reporting a
+// stream that is no longer where this end thinks it is.
+func (r *frameReader) drain() error {
 	for !r.done {
 		frame, err := r.session.decoder.Read()
 		if err != nil {
-			r.done, r.err = true, err
+			r.done, r.err = true, fmt.Errorf("draining a tree: %w", err)
 
-			return
+			return r.err
 		}
 
-		if frame.Type == wire.FrameEnd || frame.Op != r.op {
+		if frame.Op != r.op {
+			// Reported, not swallowed. A frame for another operation arriving
+			// mid-drain means the stream is ALREADY desynced, and consuming
+			// it silently threw away that operation's opening frame — leaving
+			// the orchestrator waiting forever for a reply to a command
+			// nobody kept, the exact hazard upload()'s own comment names.
+			r.done, r.err = true, fmt.Errorf("%w: a type %d frame for operation %d arrived while draining operation %d",
+				wire.ErrProtocol, frame.Type, frame.Op, r.op)
+
+			return r.err
+		}
+
+		if frame.Type == wire.FrameEnd {
 			r.done = true
 		}
 	}
+
+	return nil
 }
 
 // dataWriter chunks whatever is written to it into FrameData frames.

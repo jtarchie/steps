@@ -3,6 +3,8 @@ package shim
 // Where the step's scratch lands on the worker.
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -59,5 +61,95 @@ func TestShimFallsBackToItsOwnRoot(t *testing.T) {
 
 	if ok := peer.hello(); !strings.HasPrefix(ok.Workdir, own) {
 		t.Errorf("workdir = %q, want it under the shim's own root %q", ok.Workdir, own)
+	}
+}
+
+// TestHelloRefusesAnEscapingSessionName is the trust-boundary check on the one
+// peer-supplied string that becomes a path: the session name is joined into
+// the scratch directory, and cleanup removes that directory's PARENT — so
+// "../.." made the shim delete a tree outside the root it was handed, as root
+// under the aws:// bootstrap, driven by anything that can reach the
+// deliberately unauthenticated --listen socket.
+func TestHelloRefusesAnEscapingSessionName(t *testing.T) {
+	root := t.TempDir()
+
+	// A sibling of the root, holding a file, is what a traversal reaches:
+	// filepath.Join(root, "steps-shim", "../..", "work") cleans to
+	// <parent>/work, whose parent is the directory this lives in.
+	victim := filepath.Join(filepath.Dir(root), "victim-"+filepath.Base(root))
+	err := os.MkdirAll(victim, 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = os.RemoveAll(victim) })
+
+	keep := filepath.Join(victim, "keep.txt")
+	err = os.WriteFile(keep, []byte("do not delete me"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"../..", "..", ".", "", "a/b", "/etc"} {
+		t.Run(name, func(t *testing.T) {
+			peer := newPeer(t, Options{Build: "test", Root: root})
+
+			op := peer.next()
+			peer.send(wire.FrameHello, op, wire.Hello{Protocol: wire.Protocol, Build: "test", Session: name})
+
+			frame, err := peer.decoder.Read()
+			if err != nil {
+				t.Fatalf("reading the shim's answer: %v", err)
+			}
+
+			if frame.Type != wire.FrameError {
+				t.Fatalf("the shim answered a type %d frame for session %q, want a refusal", frame.Type, name)
+			}
+		})
+	}
+
+	_, err = os.Stat(keep)
+	if err != nil {
+		t.Fatalf("the shim deleted a tree outside its root: %v", err)
+	}
+}
+
+// TestSecondHelloIsRefused pins the other half of the hello's trust boundary.
+//
+// hello() writes the workdir, the keep flag and both negotiated tokens, and a
+// command goroutine started by startExec reads the workdir while the frame loop
+// keeps running — so a second hello rewrote state under a running command, and
+// pointed cleanup's RemoveAll at a directory this session never made.
+func TestSecondHelloIsRefused(t *testing.T) {
+	peer := newPeer(t, Options{Build: "test", Root: t.TempDir()})
+
+	first := peer.hello()
+	if first.Workdir == "" {
+		t.Fatal("the first hello reported no workdir")
+	}
+
+	op := peer.next()
+	peer.send(wire.FrameHello, op, wire.Hello{Protocol: wire.Protocol, Build: "test", Session: "a-second-session"})
+
+	frame, err := peer.decoder.Read()
+	if err != nil {
+		t.Fatalf("reading the shim's answer: %v", err)
+	}
+
+	if frame.Type != wire.FrameError {
+		t.Fatalf("the shim answered a type %d frame to a second hello, want a refusal", frame.Type)
+	}
+
+	// And the session still points where the first hello put it.
+	stdout, _, exit := peer.exec("pwd", nil)
+	if !exit.Started || exit.Code != 0 {
+		t.Fatalf("exit = %+v, want the session still usable", exit)
+	}
+
+	// By the session directory rather than the whole path: macOS resolves
+	// /var to /private/var under the command, and what is being pinned is
+	// which SESSION the workdir belongs to.
+	if !strings.Contains(stdout, "/steps-shim/session-under-test/work") {
+		t.Errorf("the command ran in %q, want the first hello's session directory", strings.TrimSpace(stdout))
 	}
 }
