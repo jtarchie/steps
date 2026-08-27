@@ -144,6 +144,15 @@ type session struct {
 	// an unsynchronized read-modify-write that could hand two operations the
 	// same id.
 	op atomic.Uint32
+	// writeMu serializes the encoder, which is wire.Encoder's own stated
+	// contract: "frames must not interleave, so every write goes through one
+	// goroutine or one lock". One goroutine stopped being true when the
+	// docker relay arrived — accept, one pump per open socket, stopRouting,
+	// the cancel watchdog and close()'s goodbye all write — and Encoder.Write
+	// stamps a shared header and a shared payload buffer, so two overlapping
+	// writes put one frame's header in front of another's bytes and the shim
+	// reads a frame nobody sent. The shim has always locked its own.
+	writeMu sync.Mutex
 }
 
 // ErrEvicted is a step whose worker was taken away underneath it.
@@ -282,6 +291,12 @@ func (s *session) connect(ctx context.Context) error {
 // deadline at all, and a worker that has already stopped answering would then
 // hold the step open forever on the cleanup rather than the work.
 func (s *session) abandon() {
+	// Before the transport goes, while the forwarded socket can still reach
+	// the daemon: the container and the socket belong to THIS conversation,
+	// and the handshake that follows mints a new workdir the memoized runner
+	// knows nothing about.
+	s.teardownContainer()
+
 	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
 	defer cancel()
 
@@ -526,19 +541,6 @@ func (s *session) startupError(cause error) error {
 // is routinely already cancelled by the time cleanup runs, and a cancelled
 // context here would skip the goodbye that frees the worker.
 func (s *session) close() error {
-	// The container half first: its runner owns a container on the worker,
-	// and the socket it talks through owns the wire. Both have to end before
-	// the goodbye goes out, or the goodbye races a reader that still holds
-	// the connection.
-	if s.inner != nil {
-		_ = s.inner.Close()
-		s.inner = nil
-	}
-
-	if s.dockerStop != nil {
-		s.dockerStop()
-		s.dockerStop = nil
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -553,6 +555,18 @@ func (s *session) close() error {
 		// step that was skipped or failed before its first command.
 		return nil
 	}
+
+	// The container half first: its runner owns a container on the worker,
+	// and the socket it talks through owns the wire. Both have to end before
+	// the goodbye goes out, or the goodbye races a reader that still holds
+	// the connection.
+	//
+	// Under the mutex, and inside the closed guard, because containerRunner
+	// writes these same three fields from the command path: a cancelled step
+	// closes while its own goroutine is between openDockerSocket returning
+	// and the assignment, and reading them unlocked both raced and saw nil —
+	// skipping the teardown for a container that was about to exist.
+	s.teardownContainer()
 
 	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
 	defer cancel()
@@ -571,6 +585,9 @@ func (s *session) close() error {
 
 	go func() {
 		defer close(sent)
+
+		s.writeMu.Lock()
+		defer s.writeMu.Unlock()
 
 		_ = s.encoder.Write(wire.Frame{Type: wire.FrameBye, Op: byeOp})
 	}()
@@ -595,6 +612,34 @@ func (s *session) close() error {
 	return nil
 }
 
+// teardownContainer ends the container half of a placed step: the container
+// on the worker, then the socket it was driven through.
+//
+// The removal runs INSIDE a routing bracket. `docker rm -f` goes to the
+// worker's daemon over the forwarded socket like every other docker call, and
+// the router is the only thing that carries the daemon's answers back — so
+// running it outside one left the client waiting out its own cleanup timeout
+// while the step's container stayed up on the worker, holding a bind mount to
+// a scratch directory the shim was about to delete. Nothing sweeps a worker:
+// shell's orphan sweep only ever asks this machine's daemon.
+//
+// Called on redial as well as on close. A new handshake means a new workdir,
+// and a container still bind-mounting the old one is a step that runs with
+// none of its inputs and reports success.
+func (s *session) teardownContainer() {
+	if s.inner != nil {
+		_ = s.withDockerRouting(func() error { return s.inner.Close() })
+		s.inner = nil
+	}
+
+	if s.dockerStop != nil {
+		s.dockerStop()
+		s.dockerStop = nil
+	}
+
+	s.relay = nil
+}
+
 func (s *session) nextOp() uint32 {
 	return s.op.Add(1)
 }
@@ -614,6 +659,9 @@ func (s *session) write(frame wire.Frame, payload any) error {
 // before the hello has been answered is an open failure, which sticks, and
 // must not queue a redial.
 func (s *session) writeRaw(frame wire.Frame, payload any) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	err := s.encoder.WriteJSON(frame.Type, frame.Op, payload)
 	if err != nil {
 		return fmt.Errorf("%w", err)
@@ -627,7 +675,10 @@ func (s *session) writeRaw(frame wire.Frame, payload any) error {
 // write() cannot do, since that one JSON-encodes its argument and ignores the
 // frame's own payload.
 func (s *session) writeFrame(frame wire.Frame) error {
+	s.writeMu.Lock()
 	err := s.encoder.Write(frame)
+	s.writeMu.Unlock()
+
 	if err != nil {
 		s.broken.Store(true)
 

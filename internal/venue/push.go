@@ -69,9 +69,10 @@ func pushShim(client *ssh.Client, worker Worker) (remote, build string, err erro
 	return remote, build, nil
 }
 
-// localBuilds remembers the content hash of each operator-named binary.
+// localBuilds remembers the content hash of each operator-named binary, keyed
+// by its path AND its identity on disk.
 //
-//nolint:gochecknoglobals // a cache over files that do not change under a run
+//nolint:gochecknoglobals // a cache over files, invalidated by their own stat
 var localBuilds sync.Map
 
 // buildOf is the content hash of the binary a worker runs, computed once.
@@ -91,7 +92,22 @@ func buildOf(worker Worker) (string, error) {
 		return build, nil
 	}
 
-	if cached, ok := localBuilds.Load(worker.Binary); ok {
+	// Keyed by what the file IS, not only where it is. The map lives as long
+	// as the process, and `steps web` runs for days: an operator who rebuilds
+	// the binary ?binary= names got the stale hash forever, and the failure
+	// was silent rather than loud — remoteShimPath is derived from that hash,
+	// so the push was skipped as already-done AND checkHello compared the
+	// worker against the same stale expectation and matched. The one guard
+	// that catches a wrong binary on a worker was defeated by the cache that
+	// fabricated what it compared against.
+	key := worker.Binary
+
+	info, err := os.Stat(worker.Binary)
+	if err == nil {
+		key = fmt.Sprintf("%s|%d|%d", worker.Binary, info.Size(), info.ModTime().UnixNano())
+	}
+
+	if cached, ok := localBuilds.Load(key); ok {
 		return cached.(string), nil //nolint:forcetypeassert // this map holds one type
 	}
 
@@ -100,7 +116,7 @@ func buildOf(worker Worker) (string, error) {
 		return "", fmt.Errorf("%w", err)
 	}
 
-	cached, _ := localBuilds.LoadOrStore(worker.Binary, build)
+	cached, _ := localBuilds.LoadOrStore(key, build)
 
 	return cached.(string), nil //nolint:forcetypeassert // as above
 }

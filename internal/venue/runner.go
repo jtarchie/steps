@@ -256,7 +256,6 @@ func (s stream) result() string {
 	return s.capture.Result()
 }
 
-// sinks builds the two streams a plan asks for.
 // exchangeContained is exchange's other half: the command runs in a container
 // on the worker, and the step's outputs are fetched back exactly as they are
 // for one that ran beside it.
@@ -274,6 +273,7 @@ func (r runner) exchangeContained(ctx context.Context, command string, p plan) (
 	return stdout, stderr, r.runError(command, exit)
 }
 
+// sinks builds the two streams a plan asks for.
 func (r runner) sinks(p plan) (stdout, stderr stream, out outputSinks) {
 	stdout = r.stream(p.streamStdout, p.capture, p.maxBytes, p.spillDir, os.Stdout)
 	stderr = r.stream(p.streamStderr, p.capture, p.maxBytes, p.spillDir, os.Stderr)

@@ -195,7 +195,7 @@ steps run --worker aws=aws://...  pipeline.yml
 
 What that leaves on the instance between steps: the cached binary under `<root>/steps-shim/<content-hash>/`, and nothing else. No steps process runs, because `--once` means the shim exits after the one connection it was started for.
 
-What never happens: a container. A placed step runs its command directly on the worker's host, which is why `tags:` and `image:` are refused together — the machine needs to already have what the step needs, so a toolchain belongs in the AMI. It is also why an `aws://` worker needs no docker daemon, and a stock Amazon Linux 2023 AMI has none.
+What runs the command: the worker's host, unless the step names an `image:`, in which case the worker's own docker daemon runs it in a container against the copy of the tree the shim unpacked. A stock Amazon Linux 2023 AMI has no daemon, so an `aws://` worker needs one installed — through the launch template's user data, or baked into the AMI — for placed steps that name an image, and needs nothing at all for those that do not.
 
 What the instance never holds: AWS credentials. Artifact bytes arrive over presigned URLs the orchestrator mints per transfer, so the instance profile needs `AmazonSSMManagedInstanceCore` and nothing else — not even read access to the bucket its own inputs came from.
 

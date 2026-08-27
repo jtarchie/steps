@@ -165,8 +165,11 @@ func (s *session) watch(ctx context.Context, cancelOp *uint32) func() {
 		case <-ctx.Done():
 			if cancelOp != nil {
 				// Best effort: a worker already gone cannot be told to stop,
-				// and the read side will report that first.
-				_ = s.encoder.Write(wire.Frame{Type: wire.FrameCancel, Op: *cancelOp})
+				// and the read side will report that first. Through the
+				// session's writer, not the raw encoder: the docker relay put
+				// other goroutines on this encoder, and wire.Encoder stamps a
+				// shared header and payload buffer.
+				_ = s.writeFrame(wire.Frame{Type: wire.FrameCancel, Op: *cancelOp})
 			}
 		case <-done:
 			return

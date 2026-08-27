@@ -88,8 +88,8 @@ func (c *Config) validateTagsRejectAgent() error {
 			// and its run_shell on the runner the task uses. The agent rule
 			// above does not see it, because the step is a task.
 			//
-			// The RESOLVED fix:, for the reason validateTagsRejectImage reads
-			// the resolved image: a step that names a tasks: entry inherits
+			// The RESOLVED fix:, for the same reason the agent rule above reads
+			// a resolved step: a step that names a tasks: entry inherits
 			// that entry's fix: (see ResolveTask), so checking only the step's
 			// own let exactly this split through — the command ran on the
 			// worker while the repair agent read the local workspace.

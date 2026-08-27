@@ -119,6 +119,12 @@ type RunnerSpec struct {
 	// DockerHost is the daemon to run this step's containers on. Empty is
 	// this machine's; a venue sets it to a socket it forwards to a worker.
 	DockerHost string
+	// EnvValues are variables the CALLER supplies with their values rather
+	// than by name, for the ones that exist nowhere in this process's own
+	// environment. A venue's STEPS_WORKER is the case: it names the tag a
+	// placed command is running on, and Env's name-only forwarding cannot
+	// carry a variable nobody set here.
+	EnvValues map[string]string
 	// Env are the variable NAMES the pipeline's env: opted this command into,
 	// on top of hostEnvAllowlist. They resolve against the steps process's own
 	// environment; a name that isn't set is simply absent, which is what lets
@@ -190,6 +196,10 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 		return HostRunner{cwd: spec.Cwd, extraEnv: spec.Env}, nil
 	}
 
+	// A venue only ever hands this to the CONTAINER path — a placed step with
+	// no image runs its command through the shim, which carries the session's
+	// env in the exec frame instead.
+
 	var resolvedCwd string
 
 	switch {
@@ -212,6 +222,7 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 			resolvedCwd: resolvedCwd,
 			dockerHost:  spec.DockerHost,
 			envNames:    spec.Env,
+			envValues:   spec.EnvValues,
 			user:        containerUser(spec.User),
 			network:     spec.Network,
 			privileged:  spec.Privileged,

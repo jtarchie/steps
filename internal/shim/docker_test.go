@@ -6,6 +6,7 @@ package shim
 
 import (
 	"context"
+	"io"
 	"net"
 	"path/filepath"
 	"testing"
@@ -118,4 +119,101 @@ func TestDockerStreamReportsAWorkerWithNoDaemon(t *testing.T) {
 	if reported.Message == "" {
 		t.Error("the error named nothing an author could act on")
 	}
+}
+
+// TestDockerNeedsAHello pins that the one frame handing out a raw proxy
+// to a root docker daemon is behind the handshake, like every other operation.
+//
+// upload, fetch and exec all refuse an operation that arrives before a hello.
+// The docker family did not, so the protocol-version check, the build check
+// and checkSessionName could all be skipped by sending this first — on a
+// listener that is unauthenticated by design and, under the aws:// bootstrap,
+// running as root.
+func TestDockerNeedsAHello(t *testing.T) {
+	peer := newPeer(t, Options{Build: "test", Root: t.TempDir(), DockerSocket: echoSocket(t)})
+
+	op := peer.next()
+	peer.sendEmpty(wire.FrameDockerOpen, op)
+
+	frame := peer.readAny()
+	if frame.Type != wire.FrameError {
+		t.Fatalf("frame type = %v, want a refusal for a docker stream opened before the hello", frame.Type)
+	}
+}
+
+// TestDockerHalfClose is the bug that made every placed containerized step
+// come home empty.
+//
+// A docker connection is not a pipe with one end: the CLI shuts down its WRITE
+// side as soon as it has no stdin left to send — the hijacked exec stream does
+// it immediately — while the daemon is still writing the container's output
+// back. Treating that signal as a teardown closed the socket, so the command
+// reported success with nothing on stdout and the fetch that followed found a
+// tree the container had not finished writing.
+//
+// The double answers only AFTER it sees end-of-request, which is the shape
+// that tells the two behaviours apart: a full close loses the answer entirely.
+func TestDockerHalfClose(t *testing.T) {
+	peer := newPeer(t, Options{Build: "test", Root: t.TempDir(), DockerSocket: lateAnswerSocket(t)})
+	peer.hello()
+
+	op := peer.next()
+	peer.sendEmpty(wire.FrameDockerOpen, op)
+	peer.sendRaw(wire.FrameDockerData, op, []byte("GET /_ping HTTP/1.0\r\n\r\n"))
+
+	// The client is done writing. The daemon is not done answering.
+	peer.sendEmpty(wire.FrameDockerClose, op)
+
+	frame := peer.read()
+	if frame.Type != wire.FrameDockerData {
+		t.Fatalf("frame type = %v after the half close, want the daemon's answer", frame.Type)
+	}
+
+	if string(frame.Payload) != lateAnswer {
+		t.Errorf("payload = %q, want %q — the stream was torn down on a HALF close", frame.Payload, lateAnswer)
+	}
+}
+
+// lateAnswer is what the double writes once it has seen end-of-request.
+const lateAnswer = "the-daemons-answer"
+
+// lateAnswerSocket serves a unix socket that reads a whole request, waits for
+// the client to stop writing, and only then answers — the way a daemon
+// handling a request with no more input to read does.
+func lateAnswerSocket(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "s")
+
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", path)
+	if err != nil {
+		t.Fatalf("listening on %s: %v", path, err)
+	}
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+
+			go func() {
+				defer func() { _ = conn.Close() }()
+
+				_, _ = io.Copy(io.Discard, conn)
+				_, _ = conn.Write([]byte(lateAnswer))
+			}()
+		}
+	}()
+
+	t.Cleanup(func() {
+		_ = listener.Close()
+		<-done
+	})
+
+	return path
 }

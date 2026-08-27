@@ -47,3 +47,38 @@ func TestImagesIsEmptyForAHostOnlyPipeline(t *testing.T) {
 		t.Error("UsesImages() = true for a pipeline that sets no image:")
 	}
 }
+
+// TestImagesSkipsAPlacedStepsImage keeps a worker's image off this machine's
+// daemon.
+//
+// A placed step's container runs on the WORKER's daemon, which does not exist
+// yet when this is asked — a machine acquired for the job has not been
+// acquired. Collecting it here made prepareImages demand a local daemon for a
+// pipeline whose every container lives elsewhere, and pull the image to a
+// machine that will never run it — worse, `docker image inspect` finding a
+// LOCALLY built tag skipped the pull the worker was the one that needed.
+func TestImagesSkipsAPlacedStepsImage(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Jobs: []Job{{Name: "j", Plan: []Step{
+			{Task: "remote", Image: "alpine:3", Tags: []string{"box"}, Run: "true"},
+		}}},
+	}
+
+	if got := cfg.Images(); len(got) != 0 {
+		t.Errorf("Images() = %v, want none — that image runs on the worker's daemon", got)
+	}
+
+	if cfg.UsesImages() {
+		t.Error("UsesImages() = true, so the job demands a local daemon it never uses")
+	}
+
+	// And the same image on a step that is NOT placed is still pulled here,
+	// which is the behaviour this must not cost.
+	cfg.Jobs[0].Plan = append(cfg.Jobs[0].Plan, Step{Task: "local", Image: "alpine:3", Run: "true"})
+
+	if got := cfg.Images(); len(got) != 1 || got[0] != "alpine:3" {
+		t.Errorf("Images() = %v, want the un-placed step's image", got)
+	}
+}

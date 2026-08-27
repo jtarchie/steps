@@ -239,8 +239,6 @@ func TestVenueCancellationStopsTheCommand(t *testing.T) {
 	}
 }
 
-// TestVenueRefusesAnImage pins the load-time rule at the one place a
-// hand-built spec could still get past it.
 // TestVenueCarriesAnImageToTheWorker pins that a placed step which names an
 // image is accepted and keeps its container settings.
 //

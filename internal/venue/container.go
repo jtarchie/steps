@@ -24,6 +24,19 @@ import (
 // image: step makes — an agent that pip-installs in one call finds it in the
 // next.
 func (s *session) containerRunner(ctx context.Context) (shell.Runner, error) {
+	// Under the session mutex, because close() and abandon() read and clear
+	// these same three fields: a cancelled step tears down while this
+	// goroutine is between openDockerSocket returning and the assignment
+	// below, and an unlocked write there left the teardown seeing nil for a
+	// container that was about to exist — leaking it, its listener and its
+	// socket directory, and racing under the detector besides.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return nil, errSessionClosed
+	}
+
 	if s.inner != nil {
 		return s.inner, nil
 	}
@@ -42,6 +55,11 @@ func (s *session) containerRunner(ctx context.Context) (shell.Runner, error) {
 	// The daemon resolves -v against ITS filesystem, so the mount is the
 	// tree the shim unpacked, not this machine's copy of anything.
 	spec.MountPath = s.workdir
+	// The session's resolved environment, which is where STEPS_WORKER lives.
+	// The exec path sends it in the frame; a container has to be told, or a
+	// script that branches on placement takes the local branch on the very
+	// machine the tag was written to select.
+	spec.EnvValues = s.env
 
 	inner, err := shell.NewRunner(spec)
 	if err != nil {

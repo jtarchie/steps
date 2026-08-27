@@ -38,13 +38,12 @@ func (s *session) upload(ctx context.Context) error {
 
 	// The upload runs AFTER a successful hello, so a transport that dies under
 	// it marks the conversation broken and the next command redials — the
-	// same footing as a death mid-command. broke is what carries that marking
-	// out of the chunked writes.
+	// same footing as a death mid-command. writeFrame is what carries that
+	// marking out of the chunked writes.
 	writer := &chunkWriter{
-		encoder: s.encoder,
-		op:      op,
-		buf:     make([]byte, 0, wire.DataChunkBytes),
-		broke:   func() { s.broken.Store(true) },
+		send: s.writeFrame,
+		op:   op,
+		buf:  make([]byte, 0, wire.DataChunkBytes),
 	}
 
 	err = s.packTree(writer)
@@ -284,13 +283,14 @@ func (s *session) pump(op uint32, w io.Writer) error {
 // chunkWriter turns writes into bounded data frames, so a cancel can be heard
 // between chunks rather than queueing behind a whole tree.
 type chunkWriter struct {
-	encoder *wire.Encoder
-	op      uint32
-	buf     []byte
-	// broke reports an encoder failure to the session, because a write that
-	// died mid-upload is the transport gone, not the tree unreadable. nil
-	// when nobody is listening.
-	broke func()
+	// send is the session's serialized frame writer, which is also what marks
+	// the conversation broken: a write that died mid-upload is the transport
+	// gone, not the tree unreadable. The session's own writer rather than the
+	// raw encoder because the docker relay put other goroutines on it, and
+	// wire.Encoder stamps a shared header and payload buffer per frame.
+	send func(wire.Frame) error
+	op   uint32
+	buf  []byte
 }
 
 func (w *chunkWriter) Write(p []byte) (int, error) {
@@ -321,12 +321,8 @@ func (w *chunkWriter) flush() error {
 		return nil
 	}
 
-	err := w.encoder.Write(wire.Frame{Type: wire.FrameData, Op: w.op, Payload: w.buf})
+	err := w.send(wire.Frame{Type: wire.FrameData, Op: w.op, Payload: w.buf})
 	if err != nil {
-		if w.broke != nil {
-			w.broke()
-		}
-
 		return fmt.Errorf("%w", err)
 	}
 

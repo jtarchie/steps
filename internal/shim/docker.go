@@ -23,6 +23,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jtarchie/steps/internal/wire"
 )
@@ -53,6 +54,10 @@ func dockerSocketPath(configured string) string {
 
 // dockerStreams holds the sockets one session has open, by operation.
 type dockerStreams struct {
+	// wg covers the relay goroutines, so none is still writing frames onto a
+	// stream the session has already said goodbye on.
+	wg sync.WaitGroup
+
 	mu     sync.Mutex
 	conns  map[uint32]net.Conn
 	closed bool
@@ -68,6 +73,14 @@ func (d *dockerStreams) add(op uint32, conn net.Conn) bool {
 
 	if d.conns == nil {
 		d.conns = map[uint32]net.Conn{}
+	}
+
+	// Refused, not overwritten. The key comes off the wire, and overwriting
+	// stranded the first socket with its pump goroutine alive — after which
+	// that goroutine's own remove(op) pulled out and closed the SECOND
+	// stream's connection, cross-wiring one teardown onto another's socket.
+	if _, taken := d.conns[op]; taken {
+		return false
 	}
 
 	d.conns[op] = conn
@@ -100,9 +113,12 @@ func (d *dockerStreams) remove(op uint32) (net.Conn, bool) {
 // closeAll ends every stream and refuses later ones, for session teardown: a
 // docker socket outliving the session that opened it is the same leak in
 // miniature as a shim outliving its dial.
+//
+// The wait is the other half: a relay goroutine still in sendData when the
+// session ends would put a data frame on the wire after the goodbye, which in
+// stdio mode is the orchestrator's own protocol stream.
 func (d *dockerStreams) closeAll() {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 
 	d.closed = true
 
@@ -110,7 +126,28 @@ func (d *dockerStreams) closeAll() {
 		_ = conn.Close()
 		delete(d.conns, op)
 	}
+
+	d.mu.Unlock()
+
+	// Bounded: a relay caught mid-write against a peer that stopped READING
+	// has nothing local to unstick it — serveConn's connection close runs
+	// only after Serve returns — so an unbounded wait here would strand the
+	// very process --linger exists to reap.
+	settled := make(chan struct{})
+
+	go func() { defer close(settled); d.wg.Wait() }()
+
+	timer := time.NewTimer(dockerSettleTimeout)
+	defer timer.Stop()
+
+	select {
+	case <-settled:
+	case <-timer.C:
+	}
 }
+
+// dockerSettleTimeout bounds closeAll's wait for the relay goroutines.
+const dockerSettleTimeout = 5 * time.Second
 
 // handleDocker routes the three stream frames, kept as one case in the
 // session's switch so the docker family costs it one branch rather than three.
@@ -128,6 +165,14 @@ func (s *session) handleDocker(ctx context.Context, frame wire.Frame) error {
 
 // dockerOpen dials the worker's docker socket for one operation.
 func (s *session) dockerOpen(ctx context.Context, frame wire.Frame) error {
+	// Behind the handshake, like every other operation. Without this the one
+	// frame that hands out a raw proxy to a root docker daemon was also the
+	// one that needed no hello — so the protocol check, the build check and
+	// checkSessionName could all be skipped by sending this first.
+	if s.workdir == "" {
+		return errUnopened
+	}
+
 	socket := dockerSocketPath(s.opts.DockerSocket)
 
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
@@ -145,7 +190,9 @@ func (s *session) dockerOpen(ctx context.Context, frame wire.Frame) error {
 		return nil
 	}
 
-	go s.pumpDocker(frame.Op, conn)
+	s.docker.wg.Add(1)
+
+	go func() { defer s.docker.wg.Done(); s.pumpDocker(frame.Op, conn) }()
 
 	return nil
 }
@@ -206,15 +253,34 @@ func (s *session) dockerData(frame wire.Frame) error {
 	return nil
 }
 
-// dockerClose ends a stream the peer is done with, and always answers.
+// dockerClose ends the peer's HALF of a stream, or answers for one this end
+// does not have.
 //
-// Answered even for an operation this end has never heard of, which is what
+// Half, because a docker connection is not a pipe with one end. The client
+// shuts down its write side as soon as it has nothing left to send — the
+// hijacked exec stream does it the moment there is no stdin — while the
+// daemon is still writing the container's output back. Closing the socket
+// outright on that signal cut every placed containerized step off from its
+// own output: the command reported success with nothing on stdout, and the
+// fetch that followed found a tree the container had not finished writing.
+// The stream ends when the DAEMON is done, which pumpDocker sees and reports.
+//
+// Answered only for an operation this end has never heard of, which is what
 // gives the orchestrator a way to know the wire is quiet again: it owns the
-// connection with a reader while docker streams are open, and it cannot take
+// connection with a reader while docker streams are open, and cannot take
 // that reader back until something it sent comes back. A close for an unknown
 // stream is the cheapest such round trip, and is harmless by construction —
-// there was nothing to close.
+// there was nothing to close. Answering a stream that IS open would instead
+// tell the orchestrator to drop the connection its answer is still coming on.
 func (s *session) dockerClose(frame wire.Frame) error {
+	if conn, ok := s.docker.get(frame.Op); ok {
+		if half, canHalfClose := conn.(*net.UnixConn); canHalfClose {
+			_ = half.CloseWrite()
+
+			return nil
+		}
+	}
+
 	if conn, ok := s.docker.remove(frame.Op); ok {
 		_ = conn.Close()
 	}

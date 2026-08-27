@@ -197,7 +197,12 @@ func (l *Leases) ReleaseAll(ctx context.Context) error {
 	}
 
 	// Retired machines are released with the rest: they are exactly the ones
-	// nothing else holds a reference to.
+	// nothing else holds a reference to. IMMEDIATELY, though — a machine is
+	// only retired because it was being reclaimed, and holding one out for
+	// its ?idle= window means blocking the job's teardown for that long
+	// warming a machine AWS is destroying. That is the whole reason the flag
+	// exists, and nothing else has ever passed it.
+	retired := len(held)
 	held = append(held, l.retired...)
 
 	l.held = map[string]*lease{}
@@ -218,7 +223,7 @@ func (l *Leases) ReleaseAll(ctx context.Context) error {
 		go func() {
 			defer wg.Done()
 
-			failures[i] = one.give(ctx, false)
+			failures[i] = one.give(ctx, i >= retired)
 		}()
 	}
 

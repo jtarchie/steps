@@ -914,3 +914,50 @@ func TestAbandonedMachineIsStillReleasedAtJobEnd(t *testing.T) {
 
 	_ = again
 }
+
+// TestRetiredMachineIsReleasedWithoutWaitingOutItsIdleWindow pins which
+// release a reclaimed machine gets.
+//
+// A lease is retired only because AWS said it is taking the machine, so
+// holding it out for its ?idle= window means blocking the job's teardown for
+// that long to keep a machine warm that is being destroyed. That is exactly
+// what the immediate flag exists to skip, and nothing had ever passed it.
+func TestRetiredMachineIsReleasedWithoutWaitingOutItsIdleWindow(t *testing.T) {
+	fake := &fakeEC2{}
+	seamEC2(t, fake)
+
+	// Long enough that waiting it out is unmistakable, short enough that a
+	// regression costs the suite seconds rather than minutes.
+	worker, err := ParseWorker("aws://stopped/i-0abc123def456789?idle=5s")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	leases := NewLeases(map[string]Worker{"box": worker})
+
+	resolved, err := leases.Resolve(context.Background(), "box")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	// AWS said it is taking the machine.
+	leases.Abandon("box", resolved.URL)
+
+	started := time.Now()
+
+	err = leases.ReleaseAll(context.Background())
+	if err != nil {
+		t.Fatalf("ReleaseAll: %v", err)
+	}
+
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Errorf("ReleaseAll took %s — it waited out ?idle= on a machine being reclaimed", elapsed)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if len(fake.stopped) != 1 {
+		t.Errorf("stopped = %v, want the retired machine given back", fake.stopped)
+	}
+}

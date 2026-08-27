@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,6 +100,11 @@ type dockerSession struct {
 	// They are passed at container start, so every exec in the session
 	// inherits them.
 	envNames []string
+	// envValues are variables the caller supplies with their values, for the
+	// ones this process's own environment does not hold — a venue's
+	// STEPS_WORKER. They are put on the docker CLIENT's environment and
+	// forwarded by name like every other, so no value reaches an argv.
+	envValues map[string]string
 	// user is the already-resolved --user value (see containerUser); empty
 	// takes the image's own default.
 	user string
@@ -156,12 +163,13 @@ func (s *dockerSession) ensure(ctx context.Context) (name, stderr string, err er
 		return "", "", err
 	}
 
-	args := dockerStartArgs(s.image, containerName, s.resolvedCwd, s.envNames, s.user, s.network,
+	args := dockerStartArgs(s.image, containerName, s.resolvedCwd, s.forwardedNames(), s.user, s.network,
 		s.privileged, s.cpuShares, s.memoryBytes)
 
 	slog.Debug("shell.docker.session_start", "image", s.image, "container", containerName, "cwd", s.resolvedCwd)
 
 	cmd := dockerCommand(ctx, s.dockerHost, args)
+	cmd.Env = withValues(cmd.Env, s.envValues)
 
 	var errBuf bytes.Buffer
 
@@ -505,6 +513,46 @@ func onDaemon(cmd *exec.Cmd, host string) *exec.Cmd {
 	}
 
 	return cmd
+}
+
+// forwardedNames is envNames plus the names the caller supplied values for,
+// so both kinds reach the container through the same `-e NAME`.
+func (s *dockerSession) forwardedNames() []string {
+	if len(s.envValues) == 0 {
+		return s.envNames
+	}
+
+	names := slices.Clone(s.envNames)
+	for name := range s.envValues {
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+
+	slices.Sort(names)
+
+	return names
+}
+
+// withValues puts name=value pairs on a docker client's own environment,
+// which is what `-e NAME` forwards from. Spelling them `-e NAME=value`
+// instead would put every one in the client's argv, where anything able to
+// read the host's process list could see it — the exposure env: exists to
+// avoid.
+func withValues(env []string, values map[string]string) []string {
+	if len(values) == 0 {
+		return env
+	}
+
+	if env == nil {
+		env = os.Environ()
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(values)) {
+		env = append(env, name+"="+values[name])
+	}
+
+	return env
 }
 
 func dockerCommand(ctx context.Context, host string, args []string) *exec.Cmd {

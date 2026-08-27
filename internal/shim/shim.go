@@ -106,10 +106,14 @@ type session struct {
 	// empty for the tunnel.
 	dataplane string
 
-	// cancel stops the command belonging to op, under mu. Both are nil when no
-	// command is running.
-	cancel   context.CancelFunc
-	cancelOp uint32
+	// cancels stops each command still in flight, keyed by its operation and
+	// held under mu. A MAP rather than one registration, because the frame
+	// loop deliberately keeps reading while a command runs — endCommand's own
+	// comment says a second exec can register before the first finishes, and
+	// with a single slot that second registration silently deregistered the
+	// first, so a cancel aimed at it found nothing and timeout:, fail_fast
+	// and race: ended nothing while the step ran to completion on the worker.
+	cancels map[uint32]context.CancelFunc
 	// running tracks commands still in flight, so a session cannot tear its
 	// scratch out from under one on the way out.
 	running sync.WaitGroup

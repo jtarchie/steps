@@ -111,26 +111,25 @@ func (s *session) beginCommand(op uint32, cancel context.CancelFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.cancel, s.cancelOp = cancel, op
+	if s.cancels == nil {
+		s.cancels = map[uint32]context.CancelFunc{}
+	}
+
+	s.cancels[op] = cancel
 }
 
-// endCommand clears the registration for op, and only if it is still the one
-// registered.
+// endCommand clears the registration for op, and only that one.
 //
-// The op check is cancelRunning's, for the same reason: the frame loop keeps
-// reading while a command runs, so a second exec can register before the first
-// finishes. Clearing unconditionally then deregisters the RUNNING command, and
-// a cancel aimed at it finds nothing and is dropped — timeout:, fail_fast and
-// race: end nothing while the step runs to completion on the worker.
+// Per-operation for cancelRunning's reason: the frame loop keeps reading while
+// a command runs, so a second exec can register before the first finishes. A
+// single registration made each of these deregister the OTHER command, and a
+// cancel aimed at it then found nothing and was dropped — timeout:, fail_fast
+// and race: ending nothing while the step ran to completion on the worker.
 func (s *session) endCommand(op uint32) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.cancelOp != op {
-		return
-	}
-
-	s.cancel, s.cancelOp = nil, 0
+	delete(s.cancels, op)
 }
 
 // cancelRunning stops the command belonging to op, and only that one.
@@ -143,7 +142,7 @@ func (s *session) cancelRunning(op uint32) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.cancel != nil && s.cancelOp == op {
-		s.cancel()
+	if cancel, running := s.cancels[op]; running {
+		cancel()
 	}
 }

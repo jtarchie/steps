@@ -173,7 +173,8 @@ func (c *Config) UsesImages() bool {
 	return len(c.Images()) > 0
 }
 
-// Images returns every distinct image: this pipeline can execute in, sorted.
+// Images returns every distinct image: this pipeline runs on THIS machine's
+// daemon, sorted.
 //
 // Used to pull them all before the first step runs. Without that, the first
 // command needing an uncached image pays the pull inside its own step: the
@@ -181,11 +182,20 @@ func (c *Config) UsesImages() bool {
 // (a resource check's parsed output, an agent's tool result), and the download
 // counts against the step's timeout, so a large image on a cold daemon can
 // exhaust a budget meant for the work itself.
+//
+// A PLACED step's image is deliberately absent. Its container runs on the
+// worker's daemon, which does not exist yet when this is asked — a machine
+// acquired for the job has not been acquired — so pulling it here would
+// download it to a machine that will never run it, and `docker image inspect`
+// finding a LOCALLY built tag would skip the pull the worker actually needed.
+// It is also what lets an orchestrator with no daemon at all run a pipeline
+// whose every container lives on a worker, which is the arrangement the
+// feature exists for.
 func (c *Config) Images() []string {
 	seen := map[string]bool{}
 
 	_ = c.visitContainerSettings(func(_ string, settings containerSettings) error {
-		if settings.Image != "" {
+		if settings.Image != "" && len(settings.Tags) == 0 {
 			seen[settings.Image] = true
 		}
 

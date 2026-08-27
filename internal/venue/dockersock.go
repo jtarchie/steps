@@ -16,10 +16,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/jtarchie/steps/internal/wire"
 )
@@ -70,18 +72,16 @@ func (s *session) openDockerSocket(ctx context.Context, route bool) (string, fun
 
 	// The op whose close the shim echoes back, telling the router the wire
 	// is quiet and it may hand the connection back to the session.
-	relay := &dockerRelay{session: s, conns: map[uint32]net.Conn{}, doneOp: s.nextOp()}
+	relay := &dockerRelay{session: s, conns: map[uint32]net.Conn{}, doneOp: s.nextOp(), listener: listener}
 
-	var wg sync.WaitGroup
+	relay.wg.Add(1)
 
-	wg.Add(1)
-
-	go func() { defer wg.Done(); relay.accept(ctx, listener) }()
+	go func() { defer relay.wg.Done(); relay.accept(ctx, listener) }()
 
 	if route {
-		wg.Add(1)
+		relay.wg.Add(1)
 
-		go func() { defer wg.Done(); relay.route() }()
+		go func() { defer relay.wg.Done(); relay.route() }()
 	}
 
 	s.relay = relay
@@ -94,7 +94,7 @@ func (s *session) openDockerSocket(ctx context.Context, route bool) (string, fun
 			relay.stopRouting(s)
 		}
 
-		wg.Wait()
+		relay.settle()
 		_ = os.RemoveAll(dir)
 	})
 
@@ -123,6 +123,15 @@ func (s *session) withDockerRouting(fn func() error) error {
 	relay.stopRouting(s)
 	<-done
 
+	// The worker's own account wins. A shim that cannot reach its daemon says
+	// so in a frame the router is the only reader of, and without this the
+	// step reports the local client's confusion about a socket path on THIS
+	// machine — naming neither the worker nor the cause.
+	reported := relay.failure()
+	if reported != nil {
+		return reported
+	}
+
 	return err
 }
 
@@ -142,14 +151,26 @@ type dockerRelay struct {
 	// doneOp is the stream that never was: the shim echoes its close, and
 	// that echo is the router's signal to stop reading.
 	doneOp uint32
+	// listener is closed when accept gives up, so a later dial fails fast
+	// instead of landing in a backlog nobody is accepting from — which the
+	// client reads as a daemon that is merely slow.
+	listener net.Listener
+	// wg covers every goroutine this relay starts, pumps included: one still
+	// writing when stop() removes the socket directory is a frame arriving on
+	// a wire the session believes it has taken back.
+	wg sync.WaitGroup
 
-	mu     sync.Mutex
-	conns  map[uint32]net.Conn
-	closed bool
+	mu      sync.Mutex
+	conns   map[uint32]net.Conn
+	closed  bool
+	failed  error
+	halfEOF map[uint32]bool
 }
 
 // accept turns each local docker connection into a stream on the wire.
 func (d *dockerRelay) accept(ctx context.Context, listener net.Listener) {
+	defer func() { _ = listener.Close() }()
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -171,11 +192,20 @@ func (d *dockerRelay) accept(ctx context.Context, listener net.Listener) {
 			return
 		}
 
-		go d.pump(ctx, op, conn)
+		d.wg.Add(1)
+
+		go func() { defer d.wg.Done(); d.pump(ctx, op, conn) }()
 	}
 }
 
 // pump relays one local connection's bytes to the worker.
+//
+// A read EOF is a HALF close, never a teardown. The docker CLI shuts down the
+// write side of its hijacked exec/attach connection as soon as it has no
+// stdin left to send, and the container's output is still coming back the
+// other way — so tearing the stream down here cut every placed containerized
+// step off from its own output, and the fetch that followed found a tree the
+// container had not finished writing. The step then succeeded, empty.
 func (d *dockerRelay) pump(_ context.Context, op uint32, conn net.Conn) {
 	buffer := make([]byte, dockerRelayChunk)
 
@@ -188,6 +218,17 @@ func (d *dockerRelay) pump(_ context.Context, op uint32, conn net.Conn) {
 			if writeErr != nil {
 				break
 			}
+		}
+
+		if errors.Is(err, io.EOF) {
+			// Say so, and stop reading — but leave the stream open so the
+			// shim's answers keep arriving. The stream ends when the shim
+			// closes it, or when the session tears everything down.
+			if d.noteHalfClosed(op) {
+				_ = d.session.writeFrame(wire.Frame{Type: wire.FrameDockerClose, Op: op})
+			}
+
+			return
 		}
 
 		if err != nil {
@@ -204,15 +245,27 @@ func (d *dockerRelay) pump(_ context.Context, op uint32, conn net.Conn) {
 // route owns the wire while the socket is up, handing each frame to its
 // stream.
 func (d *dockerRelay) route() {
-	// Whatever ends this — a shim that cannot reach its daemon, a dead
-	// transport, a stray frame — every local docker client must be told, or
-	// it waits for an answer that is never coming. A hang here reads as the
-	// daemon being slow and is far harder to diagnose than an error.
-	defer d.closeAll()
-
 	for {
-		frame, err := d.session.readFrame()
+		// read, not readFrame: a transport that dies while a containerized
+		// command is running has to mark the conversation broken, or the next
+		// command finds a cached nil startErr and pushes frames into a dead
+		// pipe instead of redialling.
+		frame, err := d.session.read()
 		if err != nil {
+			// A shim that could not reach its daemon says so in a FrameError,
+			// which readFrame has already turned into this error — and this
+			// is its only reader. Kept, or the step reports the local client's
+			// confusion about a socket path on THIS machine, naming neither
+			// the worker nor the cause.
+			if !errors.Is(err, errWorkerLost) {
+				d.note(err)
+			}
+
+			// Every local docker client must be told either way, or it waits
+			// for an answer that is never coming — and a hang there reads as
+			// the daemon being slow.
+			d.closeAll()
+
 			return
 		}
 
@@ -222,6 +275,11 @@ func (d *dockerRelay) route() {
 			d.deliver(frame)
 		case wire.FrameDockerClose:
 			if frame.Op == d.doneOp {
+				// The handoff, NOT the end: the wire goes back to the session
+				// and the streams stay open for the next command's bracket.
+				// Closing here latched the relay shut after one command, and
+				// the teardown `docker rm -f` could then never reach the
+				// daemon that holds the step's container.
 				return
 			}
 
@@ -233,9 +291,74 @@ func (d *dockerRelay) route() {
 		default:
 			// Nothing else belongs here, and a frame that arrives anyway is
 			// the shim answering an operation nobody is listening for.
+			d.note(fmt.Errorf("%w: a type %d frame arrived on the docker stream", wire.ErrProtocol, frame.Type))
+			d.closeAll()
+
 			return
 		}
 	}
+}
+
+// note records the worker's account of a docker failure, so withDockerRouting
+// can report it instead of the local client's confusion.
+func (d *dockerRelay) note(cause error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.failed == nil {
+		d.failed = fmt.Errorf("%w %q: the worker's docker daemon: %w", ErrWorker, d.session.worker.URL, cause)
+	}
+}
+
+// settleTimeout bounds how long teardown waits for the relay's goroutines.
+//
+// Bounded rather than absolute: a pump caught mid-write on a wedged transport
+// would otherwise park teardown forever, holding the session mutex and never
+// reaching the transport close that closeTimeout exists to bound — which is
+// the same trade session.close() makes about its goodbye, and a worse bug
+// than the straggler the wait is there to catch.
+const settleTimeout = 5 * time.Second
+
+// settle waits for this relay's goroutines to finish, up to settleTimeout.
+func (d *dockerRelay) settle() {
+	done := make(chan struct{})
+
+	go func() { defer close(done); d.wg.Wait() }()
+
+	timer := time.NewTimer(settleTimeout)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+	case <-timer.C:
+	}
+}
+
+// failure is what the worker said, or nil.
+func (d *dockerRelay) failure() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return d.failed
+}
+
+// noteHalfClosed records that this end is done writing to op, reporting
+// whether it is the first to say so.
+func (d *dockerRelay) noteHalfClosed(op uint32) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.halfEOF == nil {
+		d.halfEOF = map[uint32]bool{}
+	}
+
+	if d.halfEOF[op] {
+		return false
+	}
+
+	d.halfEOF[op] = true
+
+	return true
 }
 
 // deliver writes one stream's bytes to its local connection, ending the
@@ -285,21 +408,28 @@ func (d *dockerRelay) remove(op uint32) (net.Conn, bool) {
 	conn, ok := d.conns[op]
 	if ok {
 		delete(d.conns, op)
+		delete(d.halfEOF, op)
 	}
 
 	return conn, ok
 }
 
+// closeAll ends every stream and refuses later ones. It is the relay's death,
+// never a command's end — see route, which used to run this on its ordinary
+// handoff and left the socket unusable for the rest of the session.
 func (d *dockerRelay) closeAll() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	d.closed = true
 
+	if d.listener != nil {
+		_ = d.listener.Close()
+	}
+
 	for op, conn := range d.conns {
 		_ = conn.Close()
 		delete(d.conns, op)
+		delete(d.halfEOF, op)
 	}
-
-	_ = errors.ErrUnsupported
 }
