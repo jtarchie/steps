@@ -45,7 +45,7 @@ func (p *peer) uploadZstd(src string) {
 		p.t.Fatalf("opening the zstd stream: %v", err)
 	}
 
-	err = wire.PackTree(encoder, src)
+	err = wire.PackPaths(encoder, src, []string{"seed.txt"})
 	if err != nil {
 		p.t.Fatalf("packing %q: %v", src, err)
 	}
@@ -55,8 +55,7 @@ func (p *peer) uploadZstd(src string) {
 		p.t.Fatalf("closing the zstd stream: %v", err)
 	}
 
-	op := p.next()
-	p.sendEmpty(wire.FrameUpload, op)
+	op := p.offerArtifact("seed.txt")
 
 	err = p.encoder.Write(wire.Frame{Type: wire.FrameData, Op: op, Payload: buf.Bytes()})
 	if err != nil {
@@ -195,12 +194,11 @@ func TestShimRefusesRawBytesAfterNegotiatingZstd(t *testing.T) {
 		t.Fatalf("writing the seed: %v", err)
 	}
 
-	op := peer.next()
-	peer.sendEmpty(wire.FrameUpload, op)
+	op := peer.offerArtifact("seed.txt")
 
 	writer := peer.dataWriter(op)
 
-	err = wire.PackTree(writer, src)
+	err = wire.PackPaths(writer, src, []string{"seed.txt"})
 	if err != nil {
 		t.Fatalf("packing %q: %v", src, err)
 	}

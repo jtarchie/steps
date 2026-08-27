@@ -54,6 +54,11 @@ func serveDrainingShim() {
 				// tree is still arriving, which is the longest phase.
 				_ = encoder.WriteJSON(wire.FrameDraining, wire.DrainOp, notice)
 			}
+
+			// An upload is an OFFER now: the worker says whether it needs the
+			// bytes. This stand-in always does, which keeps the tree arriving
+			// as the timing above depends on.
+			_ = encoder.Write(wire.Frame{Type: wire.FrameNeed, Op: frame.Op})
 		case wire.FrameEnd:
 			_ = encoder.Write(wire.Frame{Type: wire.FrameEnd, Op: frame.Op})
 		case wire.FrameExec:

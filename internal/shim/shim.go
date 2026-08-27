@@ -179,7 +179,7 @@ func (s *session) handle(ctx context.Context, frame wire.Frame) (bool, error) {
 		return false, s.startExec(ctx, frame)
 	case wire.FrameFetch:
 		return false, s.fetch(ctx, frame)
-	case wire.FrameDockerOpen, wire.FrameDockerData, wire.FrameDockerClose:
+	case wire.FrameDockerOpen, wire.FrameDockerData, wire.FrameDockerClose, wire.FrameNeed:
 		return false, s.handleDocker(ctx, frame)
 	case wire.FrameCancel:
 		s.cancelRunning(frame.Op)
@@ -316,9 +316,70 @@ func (s *session) upload(ctx context.Context, frame wire.Frame) error {
 		return s.sendEnd(frame.Op)
 	}
 
-	reader, done := s.dataReader(frame.Op)
+	return s.uploadOnTunnel(frame)
+}
 
-	err := s.unpack(reader)
+// uploadOnTunnel answers one artifact offer, asking for the bytes only when
+// this worker does not already hold them.
+//
+// The saving is the same one the store plane gets, on the slower plane: two
+// steps of one job share their inputs, and without this the second pulls the
+// same payload across again.
+func (s *session) uploadOnTunnel(frame wire.Frame) error {
+	var upload wire.Upload
+
+	err := wire.DecodeJSON(frame, &upload)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	if len(upload.Artifacts) != 1 {
+		return fmt.Errorf("%w: a tunnel upload offers one artifact, not %d",
+			wire.ErrProtocol, len(upload.Artifacts))
+	}
+
+	artifact := upload.Artifacts[0]
+	if artifact.Name == "" || artifact.Digest == "" {
+		return fmt.Errorf("%w: an artifact offer named nothing", wire.ErrProtocol)
+	}
+
+	cache := s.artifactCacheDir()
+	held := filepath.Join(cache, artifact.Digest)
+
+	_, err = os.Stat(held)
+	if err == nil {
+		err = placeHeldArtifact(held, artifact.Name, s.workdir)
+		if err != nil {
+			return err
+		}
+
+		// FrameEnd rather than FrameNeed: already here, send nothing.
+		return s.sendEnd(frame.Op)
+	}
+
+	err = s.sendData(wire.FrameNeed, frame.Op, nil)
+	if err != nil {
+		return err
+	}
+
+	return s.receiveArtifact(frame.Op, cache, artifact)
+}
+
+// receiveArtifact reads one artifact's bytes, caches it under its digest, and
+// places it in the work directory.
+func (s *session) receiveArtifact(op uint32, cache string, artifact wire.UploadArtifact) error {
+	held := filepath.Join(cache, artifact.Digest)
+
+	staging, err := stageArtifact(cache)
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = os.RemoveAll(staging) }()
+
+	reader, done := s.dataReader(op)
+
+	err = s.unpackInto(reader, staging)
 
 	// Drained BEFORE the acknowledgement, not after. The far end sends its
 	// next operation as soon as it hears this one landed, so a drain that ran
@@ -328,18 +389,36 @@ func (s *session) upload(ctx context.Context, frame wire.Frame) error {
 	drainErr := done()
 
 	if err != nil {
-		return fmt.Errorf("unpacking the step tree: %w", err)
+		return fmt.Errorf("unpacking an artifact: %w", err)
 	}
 
 	if drainErr != nil {
 		return drainErr
 	}
 
+	// Renamed only once whole, so a transfer that died halfway cannot leave a
+	// partial tree under a digest claiming to be complete — the next step
+	// would find it, ask for nothing, and run against half its input.
+	err = commitArtifact(staging, held)
+	if err != nil {
+		return err
+	}
+
+	err = placeHeldArtifact(held, artifact.Name, s.workdir)
+	if err != nil {
+		return err
+	}
+
+	err = sweepArtifactCache(cache)
+	if err != nil {
+		return err
+	}
+
 	// Acknowledged, because silence is indistinguishable from a refusal that
 	// has not arrived yet. Without this the orchestrator could only check its
 	// own writes, and would go on to run the step's command against a tree
 	// this end never accepted.
-	return s.sendEnd(frame.Op)
+	return s.sendEnd(op)
 }
 
 func (s *session) fetch(ctx context.Context, frame wire.Frame) error {
@@ -378,14 +457,12 @@ func (s *session) fetch(ctx context.Context, frame wire.Frame) error {
 	return s.sendEnd(frame.Op)
 }
 
-// unpack reads one tar stream into the work directory, through the negotiated
-// compression. Strict rather than sniffing: after agreeing to zstd, raw bytes
-// are a peer that forgot to compress, and accepting them would leave that bug
-// shipping trees that only sometimes unpack.
-func (s *session) unpack(reader io.Reader) error {
-	//nolint:wrapcheck // both callers wrap with the operation's own context
+// unpackInto is unpack, into somewhere other than the work directory: an
+// incoming artifact lands in the cache first, under a staging name.
+func (s *session) unpackInto(reader io.Reader, dir string) error {
+	//nolint:wrapcheck // the caller wraps with the operation's own context
 	return compress.Unpack(reader, s.compression == wire.CompressionZstd, func(r io.Reader) error {
-		return wire.UnpackTree(r, s.workdir) //nolint:wrapcheck // both callers wrap with the operation's own context
+		return wire.UnpackTree(r, dir) //nolint:wrapcheck // the caller wraps with the operation's own context
 	})
 }
 

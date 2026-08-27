@@ -58,6 +58,10 @@ func serveRejectingShim() {
 			_ = encoder.Write(wire.Frame{Type: wire.FrameData, Op: frame.Op, Payload: bytes.Repeat([]byte("not a tar stream "), 64)})
 			_ = encoder.Write(wire.Frame{Type: wire.FrameData, Op: frame.Op, Payload: []byte("and still not one")})
 			_ = encoder.Write(wire.Frame{Type: wire.FrameEnd, Op: frame.Op})
+		case wire.FrameUpload:
+			// Asked for, because the refusal this stub exists to test happens
+			// at the END of a tree it accepted the offer of.
+			_ = encoder.Write(wire.Frame{Type: wire.FrameNeed, Op: frame.Op})
 		case wire.FrameEnd:
 			if os.Getenv(breakFetchEnv) != "" {
 				// This mode takes the tree; only the fetch is broken.
@@ -81,7 +85,7 @@ func serveRejectingShim() {
 			_ = exec.CommandContext(context.Background(), "sh", "-c", request.Command).Run() //nolint:gosec // a test stub running the command under test
 
 			_ = encoder.WriteJSON(wire.FrameExit, frame.Op, wire.Exit{Started: true, Code: 0})
-		case wire.FrameHelloOK, wire.FrameUpload, wire.FrameStdout, wire.FrameStderr,
+		case wire.FrameHelloOK, wire.FrameStdout, wire.FrameStderr,
 			wire.FrameExit, wire.FrameData, wire.FrameCancel,
 			wire.FrameError, wire.FrameBye, wire.FrameDraining:
 			// Everything else this stub has no opinion about, including the

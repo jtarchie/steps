@@ -126,6 +126,11 @@ type session struct {
 	// relay carries the forwarded docker streams; it owns the wire only
 	// while a containerized command is running.
 	relay *dockerRelay
+	// sentArtifactBytes is what this session actually put on the tunnel for
+	// step trees. Recorded because it is the number the artifact grain
+	// exists to reduce, and there is no other vantage point: the tunnel is a
+	// pipe to a process, so a test cannot weigh it from outside.
+	sentArtifactBytes atomic.Int64
 	// compression is what the handshake negotiated for tree transfers: the
 	// token the shim echoed back, or empty for raw against an older shim.
 	compression string

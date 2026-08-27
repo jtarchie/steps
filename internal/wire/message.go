@@ -22,6 +22,10 @@ package wire
 // one cannot be told to; the frame either exists for both ends or it kills a
 // session mid-step with "unknown frame type". So it is a version, and a
 // ?binary=-pinned shim from before it says so at the handshake.
+// 5 gave the tunnel the same artifact grain the store plane got in 4: the
+// orchestrator names one artifact and waits to be told whether to send it.
+// An older shim would read a manifest as a tree and unpack nothing.
+//
 // 4 made FrameUpload carry one entry per artifact rather than one blob for
 // the whole tree, so a worker can skip fetching what it already holds. An
 // older shim would read the new payload as an upload with no URL and fail
@@ -32,7 +36,7 @@ package wire
 // unknown frame type and kills the session mid-step, which is the same reason
 // FrameDraining was a version rather than a negotiation: a frame either
 // exists for both ends or it is a protocol error.
-const Protocol = 4
+const Protocol = 5
 
 // Hello opens a session.
 type Hello struct {

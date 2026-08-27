@@ -2,6 +2,7 @@ package shim
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -467,17 +468,70 @@ func TestShimRefusesAMismatchedProtocol(t *testing.T) {
 }
 
 // upload sends a tree the way the venue will.
-func (p *peer) upload(src string) {
+// offerArtifact names one artifact and returns its operation once the shim
+// has asked for the bytes — the tunnel's upload handshake, for tests that
+// then write the payload themselves.
+func (p *peer) offerArtifact(name string) uint32 {
 	p.t.Helper()
 
 	op := p.next()
-	p.sendEmpty(wire.FrameUpload, op)
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
+
+	p.send(wire.FrameUpload, op, wire.Upload{
+		Artifacts: []wire.UploadArtifact{{Name: name, Digest: digest}},
+	})
+
+	answer := p.read()
+	if answer.Type != wire.FrameNeed {
+		p.t.Fatalf("expected the shim to ask for %q, got a type %d frame", name, answer.Type)
+	}
+
+	return op
+}
+
+// upload offers one artifact and sends it if the shim asks, which is the
+// tunnel's grain: the orchestrator names an artifact by digest and the worker
+// answers whether it needs the bytes.
+func (p *peer) upload(src string) {
+	p.t.Helper()
+
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		p.t.Fatalf("reading %q: %v", src, err)
+	}
+
+	for _, entry := range entries {
+		p.uploadArtifact(src, entry.Name())
+	}
+}
+
+// uploadArtifact offers one named entry, keyed by a digest of its own name so
+// two different artifacts never collide and the same one always repeats.
+func (p *peer) uploadArtifact(src, name string) {
+	p.t.Helper()
+
+	op := p.next()
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
+
+	p.send(wire.FrameUpload, op, wire.Upload{
+		Artifacts: []wire.UploadArtifact{{Name: name, Digest: digest}},
+	})
+
+	answer := p.read()
+	if answer.Type == wire.FrameEnd {
+		// Already held by this worker: nothing to send.
+		return
+	}
+
+	if answer.Type != wire.FrameNeed {
+		p.t.Fatalf("expected the shim to ask for the artifact, got a type %d frame", answer.Type)
+	}
 
 	writer := p.dataWriter(op)
 
-	err := wire.PackTree(writer, src)
+	err := wire.PackPaths(writer, src, []string{name})
 	if err != nil {
-		p.t.Fatalf("packing %q: %v", src, err)
+		p.t.Fatalf("packing %q: %v", name, err)
 	}
 
 	err = writer.flush()

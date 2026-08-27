@@ -42,6 +42,10 @@ func serveDeafShim() {
 				Protocol: wire.Protocol,
 				Workdir:  os.TempDir(),
 			})
+		case wire.FrameUpload:
+			// Asked for, so the tree still arrives — what this stub withholds
+			// is the acknowledgement of its END.
+			_ = encoder.Write(wire.Frame{Type: wire.FrameNeed, Op: frame.Op})
 		case wire.FrameEnd:
 			if os.Getenv(deafUploadEnv) != "" {
 				// Never acknowledge the tree: the shape a worker takes when
@@ -53,7 +57,7 @@ func serveDeafShim() {
 		case wire.FrameExec:
 			// The whole point: no stdout, no exit, and no answer to the cancel
 			// that follows. Keep reading so the connection stays up.
-		case wire.FrameHelloOK, wire.FrameUpload, wire.FrameStdout, wire.FrameStderr,
+		case wire.FrameHelloOK, wire.FrameStdout, wire.FrameStderr,
 			wire.FrameExit, wire.FrameFetch, wire.FrameData, wire.FrameCancel,
 			wire.FrameError, wire.FrameBye, wire.FrameDraining:
 		}

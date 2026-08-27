@@ -190,3 +190,47 @@ func copyFile(src, dst string, info os.FileInfo) error {
 
 	return nil
 }
+
+// stageArtifact makes the directory an incoming artifact is unpacked into
+// before it is named by its digest.
+func stageArtifact(cache string) (string, error) {
+	err := os.MkdirAll(cache, 0o700)
+	if err != nil {
+		return "", fmt.Errorf("making the artifact cache: %w", err)
+	}
+
+	staging, err := os.MkdirTemp(cache, ".partial-*")
+	if err != nil {
+		return "", fmt.Errorf("staging an artifact: %w", err)
+	}
+
+	return staging, nil
+}
+
+// commitArtifact names a fully-unpacked artifact by its digest.
+//
+// A racing session completing the same digest first is the cache working, not
+// a failure — both were about to hold identical content.
+func commitArtifact(staging, held string) error {
+	err := os.Rename(staging, held)
+	if err == nil {
+		return nil
+	}
+
+	_, statErr := os.Stat(held)
+	if statErr != nil {
+		return fmt.Errorf("placing an artifact in the cache: %w", err)
+	}
+
+	return nil
+}
+
+// placeHeldArtifact copies one cached artifact into a work directory, and
+// marks it used so the sweep evicts what is coldest rather than what is
+// merely oldest.
+func placeHeldArtifact(held, name, workdir string) error {
+	now := time.Now()
+	_ = os.Chtimes(held, now, now)
+
+	return copyTree(filepath.Join(held, name), filepath.Join(workdir, name))
+}

@@ -87,7 +87,9 @@ func treeArtifacts(cwd string) ([]string, error) {
 // uploadArtifact puts one entry in the store if it is not already there, and
 // says where to get it.
 func (s *session) uploadArtifact(ctx context.Context, name string) (wire.UploadArtifact, error) {
-	digest, staged, err := s.packArtifactToFile(name)
+	// Always zstd on this plane: the blob is stored and fetched by this
+	// code at both ends, so nothing else has an opinion about its encoding.
+	digest, staged, err := s.packArtifactToFile(name, true)
 	if staged != "" {
 		defer func() { _ = os.Remove(staged) }()
 	}
@@ -121,10 +123,12 @@ func (s *session) uploadArtifact(ctx context.Context, name string) (wire.UploadA
 // packArtifactToFile stages one entry and returns the digest of its tar
 // bytes.
 //
-// Hashed before compression, which is the stream the codec's reproducibility
+// Hashed BEFORE compression, which is the stream the codec's reproducibility
 // test pins — so the same artifact keys the same way across sessions,
-// processes and workers.
-func (s *session) packArtifactToFile(name string) (digest, staged string, err error) {
+// processes and workers, and identically whether it travelled compressed or
+// raw. A digest that moved with the encoding would give one worker two names
+// for the same bytes.
+func (s *session) packArtifactToFile(name string, zstd bool) (digest, staged string, err error) {
 	file, err := os.CreateTemp("", "steps-wire-*")
 	if err != nil {
 		return "", "", fmt.Errorf("staging an artifact: %w", err)
@@ -134,7 +138,7 @@ func (s *session) packArtifactToFile(name string) (digest, staged string, err er
 
 	hasher := sha256.New()
 
-	err = compress.Pack(file, true, func(w io.Writer) error {
+	err = compress.Pack(file, zstd, func(w io.Writer) error {
 		return wire.PackPaths(io.MultiWriter(w, hasher), s.cwd, []string{name})
 	})
 	if err != nil {

@@ -72,10 +72,15 @@ const (
 	// opaque — this end parses none of the docker API.
 	FrameDockerData
 	// FrameDockerClose ends one stream, from whichever end noticed first.
+	FrameDockerClose
+	// FrameNeed is the shim asking for an artifact's bytes: the orchestrator
+	// named one by digest, and this end does not have it. Its absence is the
+	// answer too — a FrameEnd instead means the worker already holds it and
+	// nothing needs to cross.
 	//
 	// Last deliberately: the decoder's range check ends here, so a new frame
 	// type goes after this one or the check moves with it.
-	FrameDockerClose
+	FrameNeed
 )
 
 // DrainOp is the operation id an unsolicited frame carries. Zero is never
@@ -208,7 +213,7 @@ func (d *Decoder) Read() (Frame, error) {
 	}
 
 	frameType := FrameType(d.header[0])
-	if frameType < FrameHello || frameType > FrameDockerClose {
+	if frameType < FrameHello || frameType > FrameNeed {
 		return Frame{}, fmt.Errorf("%w: unknown frame type %d", ErrProtocol, frameType)
 	}
 

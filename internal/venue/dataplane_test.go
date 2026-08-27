@@ -282,3 +282,54 @@ func TestWorkerDoesNotRefetchAnInputItAlreadyHas(t *testing.T) {
 			fake.treeBytesOut, len(payload))
 	}
 }
+
+// TestTunnelDoesNotResendAnInputTheWorkerHas is the store test's twin on the
+// other plane.
+//
+// The tunnel is the slower of the two — it is what an SSM session carries at
+// single-digit MB/s — so re-sending a shared input costs more here, not less.
+// Counted by what the shim actually holds: two steps sharing one input leave
+// ONE copy of it in the worker's cache, not two.
+func TestTunnelDoesNotResendAnInputTheWorkerHas(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TMPDIR", root)
+
+	payload := make([]byte, 1<<20)
+
+	_, err := rand.Read(payload)
+	if err != nil {
+		t.Fatalf("making an incompressible payload: %v", err)
+	}
+
+	sent := make([]int64, 0, 2)
+
+	for _, outputs := range []string{"out1", "out2"} {
+		cwd := t.TempDir()
+		mustWrite(t, filepath.Join(cwd, "data", "big.txt"), string(payload))
+		mustMkdir(t, filepath.Join(cwd, outputs))
+
+		placed := newLocalRunner(t, localWorker(t, cwd, outputs))
+
+		runErr := placed.Run(context.Background(), "wc -c < data/big.txt > "+outputs+"/n")
+		if runErr != nil {
+			t.Fatalf("Run: %v", runErr)
+		}
+
+		remote, ok := placed.(runner)
+		if !ok {
+			t.Fatalf("runner is %T, not a placed one", placed)
+		}
+
+		sent = append(sent, remote.session.sentArtifactBytes.Load())
+	}
+
+	if sent[0] < int64(len(payload))/2 {
+		t.Fatalf("the first step sent %d bytes, want the whole input — the test is measuring nothing", sent[0])
+	}
+
+	// The second step's tree shares that input and differs only by an empty
+	// output directory, so what crosses is that directory and nothing else.
+	if sent[1] > int64(len(payload))/2 {
+		t.Errorf("the second step sent %d bytes for an input the worker already had, want almost none", sent[1])
+	}
+}

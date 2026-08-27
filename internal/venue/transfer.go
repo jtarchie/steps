@@ -29,27 +29,95 @@ func (s *session) upload(ctx context.Context) error {
 		return s.uploadViaStore(ctx)
 	}
 
-	op := s.nextOp()
-
-	err := s.writeFrame(wire.Frame{Type: wire.FrameUpload, Op: op})
+	names, err := treeArtifacts(s.cwd)
 	if err != nil {
 		return err
 	}
 
-	// The upload runs AFTER a successful hello, so a transport that dies under
-	// it marks the conversation broken and the next command redials — the
-	// same footing as a death mid-command. writeFrame is what carries that
-	// marking out of the chunked writes.
+	for _, name := range names {
+		err = s.uploadArtifactOnTunnel(name)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// uploadArtifactOnTunnel offers one artifact and sends it only if asked.
+//
+// The same grain the store plane uses, for the same measured reason: two
+// steps of one job share their inputs and differ only in their outputs, so a
+// whole-tree key never repeats and the worker pulls the same payload down
+// again for every step. The tunnel is the slower of the two planes, which
+// makes re-sending worse here, not better.
+//
+// Staged to a file first because the digest has to be known before anything
+// is offered, and packing twice to avoid a temp file would read the whole
+// tree twice instead.
+func (s *session) uploadArtifactOnTunnel(name string) error {
+	// The negotiated encoding, not always zstd: the shim unpacks with
+	// whatever the hello agreed, and a legacy one agreed raw.
+	digest, staged, err := s.packArtifactToFile(name, s.compression == wire.CompressionZstd)
+	if staged != "" {
+		defer func() { _ = os.Remove(staged) }()
+	}
+
+	if err != nil {
+		return err
+	}
+
+	op := s.nextOp()
+
+	err = s.write(wire.Frame{Type: wire.FrameUpload, Op: op},
+		wire.Upload{Artifacts: []wire.UploadArtifact{{Name: name, Digest: digest}}})
+	if err != nil {
+		return err
+	}
+
+	answer, err := s.awaitOperationFrame()
+	if err != nil {
+		return err
+	}
+
+	if answer.Op != op {
+		return s.desync("a type %d frame for operation %d answered an upload offer for %d",
+			answer.Type, answer.Op, op)
+	}
+
+	// Already held: nothing crosses, which is the whole point.
+	if answer.Type == wire.FrameEnd {
+		return nil
+	}
+
+	if answer.Type != wire.FrameNeed {
+		return s.desync("the worker answered a type %d frame to an upload offer", answer.Type)
+	}
+
+	return s.sendArtifact(op, staged)
+}
+
+// sendArtifact streams one staged artifact and waits for the acknowledgement.
+func (s *session) sendArtifact(op uint32, staged string) error {
+	file, err := os.Open(staged) //nolint:gosec // a temp file this process just wrote
+	if err != nil {
+		return fmt.Errorf("reading a staged artifact: %w", err)
+	}
+
+	defer func() { _ = file.Close() }()
+
 	writer := &chunkWriter{
 		send: s.writeFrame,
 		op:   op,
 		buf:  make([]byte, 0, wire.DataChunkBytes),
 	}
 
-	err = s.packTree(writer)
+	sent, err := io.Copy(writer, file)
 	if err != nil {
-		return err
+		return fmt.Errorf("sending an artifact: %w", err)
 	}
+
+	s.sentArtifactBytes.Add(sent)
 
 	err = writer.flush()
 	if err != nil {
@@ -61,23 +129,10 @@ func (s *session) upload(ctx context.Context) error {
 		return err
 	}
 
-	// Wait for the worker to say it took the tree. A refusal — a full disk, a
-	// read-only scratch, an entry it will not write — arrives as an error
-	// frame that read turns into a Go error, and the session fails here
-	// rather than at the first command. It matters that this is BEFORE the
-	// exec: a step's command has real side effects, and running it against a
-	// tree the far end rejected is worse than any transfer failure.
-	frame, err := s.awaitOperationFrame()
-	if err != nil {
-		return err
-	}
-
-	if frame.Type != wire.FrameEnd || frame.Op != op {
-		return s.desync("the worker answered a type %d frame for operation %d instead of acknowledging the tree",
-			frame.Type, frame.Op)
-	}
-
-	return nil
+	// Waited for, as the tree upload always was: a refusal — a full disk, a
+	// read-only scratch — arrives as an error frame here rather than as a
+	// failure in the first command, which has real side effects.
+	return s.awaitEnd(op, "the artifact")
 }
 
 // fetch brings the named directories back into the local tree.
@@ -209,18 +264,6 @@ func (s *session) receive(op uint32, into string) error {
 	return nil
 }
 
-// packTree writes the step's tree into w, through the negotiated compression.
-func (s *session) packTree(w io.Writer) error {
-	err := compress.Pack(w, s.compression == wire.CompressionZstd, func(w io.Writer) error {
-		return wire.PackTree(w, s.cwd)
-	})
-	if err != nil {
-		return fmt.Errorf("%w", err)
-	}
-
-	return nil
-}
-
 // unpackTree reads one tar stream into a directory, through the negotiated
 // compression.
 func (s *session) unpackTree(r io.Reader, into string) error {
@@ -274,7 +317,7 @@ func (s *session) pump(op uint32, w io.Writer) error {
 		case wire.FrameHello, wire.FrameHelloOK, wire.FrameUpload, wire.FrameExec,
 			wire.FrameStdout, wire.FrameStderr, wire.FrameExit, wire.FrameFetch,
 			wire.FrameCancel, wire.FrameError, wire.FrameBye, wire.FrameDraining,
-			wire.FrameDockerOpen, wire.FrameDockerData, wire.FrameDockerClose:
+			wire.FrameDockerOpen, wire.FrameDockerData, wire.FrameDockerClose, wire.FrameNeed:
 			return fmt.Errorf("%w: a type %d frame interrupted a transfer", wire.ErrProtocol, frame.Type)
 		}
 	}
