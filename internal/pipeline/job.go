@@ -260,7 +260,7 @@ func prepareImages(ctx context.Context, cfg *config.Config, jobName string) erro
 
 	// Reclaim containers a previous run was SIGKILLed before it could remove.
 	// Best-effort and silent when there is nothing to do.
-	shell.SweepOrphanedContainers(ctx)
+	shell.SweepOrphanedContainers(ctx, "")
 
 	err = shell.PrepareImages(ctx, cfg.Images())
 	if err != nil {

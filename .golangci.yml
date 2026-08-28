@@ -135,6 +135,18 @@ linters:
             # package's own helper-process variants do. main's shipped code
             # still reaches workers only through internal/pipeline.
             - "github.com/jtarchie/steps/internal/wire"
+            # go/ast, go/parser and go/token are test-only and stay that way:
+            # captureguard_test.go reads every _test.go in the module to hold
+            # one convention that nothing else can check — a test that
+            # redirects the os.Stdout GLOBAL must not also be parallel, since
+            # every fmt.Printf in the code under test reads that variable.
+            # Source inspection otherwise belongs in tools/ (see
+            # tools/kindswitch); this is a test asserting a property of the
+            # tests themselves, and putting it beside them is what makes it
+            # run.
+            - "go/ast"
+            - "go/parser"
+            - "go/token"
             - "github.com/modelcontextprotocol/go-sdk/mcp"
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/pipeline"

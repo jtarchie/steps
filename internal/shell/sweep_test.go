@@ -96,5 +96,23 @@ func TestProcessAliveRejectsAnImpossiblePid(t *testing.T) {
 func TestSweepOrphanedContainersToleratesNoDocker(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // docker cannot be found
 
-	SweepOrphanedContainers(t.Context())
+	SweepOrphanedContainers(t.Context(), "")
+}
+
+// TestSweepHonoursTheDaemonItIsGiven is the half the venue's seam test relies
+// on: a host that is named is a host that is used.
+//
+// Without it the venue could hand the worker's socket across correctly and the
+// sweep would still be tidying this machine — the parameter accepted, ignored,
+// and the leak untouched.
+func TestSweepHonoursTheDaemonItIsGiven(t *testing.T) {
+	requireDocker(t)
+
+	// A daemon that is not there. Honoured, the listing fails and answers
+	// nothing; ignored, this reaches the real local daemon and answers about
+	// containers it was never asked about.
+	orphans := listOrphanedContainers(t.Context(), "unix:///nonexistent/steps-sweep-test.sock")
+	if len(orphans) != 0 {
+		t.Errorf("a sweep aimed at a daemon that does not exist listed %d containers — it is reading the local one", len(orphans))
+	}
 }

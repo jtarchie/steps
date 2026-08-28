@@ -7,7 +7,6 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -64,13 +63,23 @@ func ownerHostname() string {
 // Only containers labeled with THIS hostname are considered, since a pid is
 // meaningful only on the machine that issued it.
 //
+// dockerHost names the daemon to sweep; empty is this machine's own. A WORKER
+// daemon is swept on exactly the same terms and needs no special case, because
+// the labels already answer the question that matters: a container a placed
+// step started carries the ORCHESTRATOR's hostname and the ORCHESTRATOR's pid,
+// so the host filter keeps it to containers this machine is responsible for
+// and the pid is checkable against this machine's process table — which is
+// precisely what ownerHostname was written for. Without pointing it anywhere
+// but here, a placed containerized step whose teardown could not reach the
+// daemon left a container running on a machine nothing ever swept.
+//
 // Entirely best-effort: every failure is logged and none is returned. Running
 // the pipeline matters more than tidying up before it.
-func SweepOrphanedContainers(ctx context.Context) {
+func SweepOrphanedContainers(ctx context.Context, dockerHost string) {
 	ctx, cancel := context.WithTimeout(ctx, dockerSweepTimeout)
 	defer cancel()
 
-	orphans := listOrphanedContainers(ctx)
+	orphans := listOrphanedContainers(ctx, dockerHost)
 	if len(orphans) == 0 {
 		return
 	}
@@ -78,7 +87,7 @@ func SweepOrphanedContainers(ctx context.Context) {
 	for _, id := range orphans {
 		slog.Info("shell.docker.sweep_orphan", "container", id)
 
-		out, err := exec.CommandContext(ctx, "docker", "rm", "-f", id).CombinedOutput() //nolint:gosec // id comes from docker ps, filtered to our own label
+		out, err := dockerCommand(ctx, dockerHost, []string{"rm", "-f", id}).CombinedOutput()
 		if err != nil {
 			slog.Warn("shell.docker.sweep_failed", "container", id, "error", err, "output", string(out))
 		}
@@ -87,12 +96,11 @@ func SweepOrphanedContainers(ctx context.Context) {
 
 // listOrphanedContainers returns the ids of our containers whose owning
 // process is gone.
-func listOrphanedContainers(ctx context.Context) []string {
-	//nolint:gosec // every argument is a constant or this host's own name; no pipeline input reaches here
-	cmd := exec.CommandContext(ctx, "docker", "ps", "--all", "--no-trunc",
-		"--filter", "label="+dockerOwnerLabel+"=steps",
-		"--filter", "label="+dockerHostLabel+"="+ownerHostname(),
-		"--format", "{{.ID}} {{.Label \""+dockerPIDLabel+"\"}}")
+func listOrphanedContainers(ctx context.Context, dockerHost string) []string {
+	cmd := dockerCommand(ctx, dockerHost, []string{"ps", "--all", "--no-trunc",
+		"--filter", "label=" + dockerOwnerLabel + "=steps",
+		"--filter", "label=" + dockerHostLabel + "=" + ownerHostname(),
+		"--format", "{{.ID}} {{.Label \"" + dockerPIDLabel + "\"}}"})
 
 	out, err := cmd.Output()
 	if err != nil {

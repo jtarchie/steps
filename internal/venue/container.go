@@ -16,6 +16,15 @@ import (
 	"github.com/jtarchie/steps/internal/wire"
 )
 
+// sweepContainers is shell's orphan sweep, behind a variable so a test can
+// prove WHICH daemon it was pointed at. That is the whole risk here: the two
+// halves — resolving a worker's socket and sweeping a daemon — are each
+// straightforward, and the bug is a socket that never crosses between them,
+// leaving the sweep quietly tidying the orchestrator's own machine.
+//
+//nolint:gochecknoglobals // a test seam over one function, not state
+var sweepContainers = shell.SweepOrphanedContainers
+
 // containerRunner returns the runner that executes this step's commands in a
 // container on the worker, opening the forwarded socket the first time.
 //
@@ -46,7 +55,24 @@ func (s *session) containerRunner(ctx context.Context) (shell.Runner, error) {
 		return nil, err
 	}
 
-	spec := s.containerSpec("unix://" + socket)
+	dockerHost := "unix://" + socket
+
+	// Reclaim what a killed run left on THIS worker, before starting anything
+	// on it. The mirror of the sweep RunJob does for the local daemon, and the
+	// reason it has to happen here is that a worker's daemon is reachable only
+	// while a socket is forwarded to it: the labels already carry this
+	// orchestrator's hostname and pid, so nothing about the question changes,
+	// but until now nobody ever asked it of a machine other than this one, and
+	// a container a placed step could not tear down ran there until somebody
+	// noticed.
+	//
+	// Per socket rather than per job, which is the finer grain: it is one
+	// `docker ps` with two label filters over a connection already open, and
+	// the alternative is job-level state about workers that only sessions can
+	// reach.
+	sweepContainers(ctx, dockerHost)
+
+	spec := s.containerSpec(dockerHost)
 	// The session's resolved environment, which is where STEPS_WORKER lives.
 	// The exec path sends it in the frame; a container has to be told, or a
 	// script that branches on placement takes the local branch on the very
