@@ -389,10 +389,26 @@ func (c *Channel) outputStream(message *agentMessage) error {
 		// which advertising clientVersion 1.1.0 rules out — a basic-mode
 		// agent's write pump sends Output and nothing else. Acknowledged and
 		// dropped if one ever arrives, like anything unrecognized.
-		return c.acknowledge(message)
+		return c.reserve(message)
 	default:
-		return c.acknowledge(message)
+		return c.reserve(message)
 	}
+}
+
+// reserve acknowledges an output-stream message this end has no use for, and
+// files its sequence number as an empty payload.
+//
+// The number matters even where the bytes do not. The agent draws EVERY
+// output-stream payload from one counter, so a type dropped without filing
+// leaves reassemble waiting on a number nothing will ever supply: every later
+// frame is buffered and never drained, Read blocks with no error and no EOF,
+// and the buffer grows with the whole rest of the step's output. Acknowledged
+// and discarded is right; unnumbered is not.
+func (c *Channel) reserve(message *agentMessage) error {
+	empty := *message
+	empty.payload = nil
+
+	return c.deliver(&empty)
 }
 
 // answerHandshake replies to the agent's opening request.

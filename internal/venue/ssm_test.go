@@ -48,6 +48,12 @@ type fakeSSM struct {
 	// unmanagedBefore is how many answers report nothing before the agent
 	// registers — a freshly launched instance takes 1-3 minutes to appear.
 	unmanagedBefore int
+	// lostBefore is how many answers carry a record whose agent is
+	// ConnectionLost before it comes back Online. The shape of a PARKED
+	// instance that was just started again: SSM keeps the registration while
+	// the machine is stopped, so the record is there the whole time the agent
+	// is reconnecting, and only the ping says so.
+	lostBefore int
 
 	mu        sync.Mutex
 	described int
@@ -74,8 +80,15 @@ func (f *fakeSSM) DescribeInstanceInformation(
 		platform = ssmtypes.PlatformTypeLinux
 	}
 
+	ping := ssmtypes.PingStatusOnline
+	if described <= f.unmanagedBefore+f.lostBefore {
+		ping = ssmtypes.PingStatusConnectionLost
+	}
+
 	return &ssm.DescribeInstanceInformationOutput{
-		InstanceInformationList: []ssmtypes.InstanceInformation{{PlatformType: platform}},
+		InstanceInformationList: []ssmtypes.InstanceInformation{
+			{PlatformType: platform, PingStatus: ping},
+		},
 	}, nil
 }
 
@@ -367,5 +380,36 @@ func TestDialWaitsForTheSSMAgentToRegister(t *testing.T) {
 
 	if fake.described < 3 {
 		t.Errorf("described = %d, want the unregistered answers to have been retried", fake.described)
+	}
+}
+
+// TestDialWaitsForAReconnectingSSMAgent pins the half of the register wait
+// that presence alone cannot see.
+//
+// SSM keeps an instance's registration for weeks after its agent stops
+// answering, so a PARKED machine that was just started again has a record the
+// whole time the agent is reconnecting. Reading the record as reachability
+// made the wait a no-op on exactly the rung whose reconnect it was built for —
+// waitForRunning returns the moment EC2 says "running", and the SendCommand
+// that follows is answered with InvalidInstanceId, which is fatal.
+func TestDialWaitsForAReconnectingSSMAgent(t *testing.T) {
+	shrinkRegisterWait(t)
+
+	cwd := t.TempDir()
+	mustWrite(t, filepath.Join(cwd, "data", "seed.txt"), "seed\n")
+
+	fake := &fakeSSM{lostBefore: 2}
+	runner := newLocalRunner(t, localSSMWorker(t, fake, cwd))
+
+	err := runner.Run(context.Background(), "true")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if fake.described < 3 {
+		t.Errorf("described = %d, want the ConnectionLost answers to have been polled through", fake.described)
 	}
 }

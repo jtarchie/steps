@@ -11,6 +11,7 @@ package venue
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/wire"
@@ -70,7 +71,24 @@ func (s *session) containerRunner(ctx context.Context) (shell.Runner, error) {
 	// `docker ps` with two label filters over a connection already open, and
 	// the alternative is job-level state about workers that only sessions can
 	// reach.
-	sweepContainers(ctx, dockerHost)
+	//
+	// INSIDE a routing bracket, for the same reason the removal in
+	// releaseContainer is: the router is the only thing that carries the
+	// daemon's answers back over the forwarded socket. Run outside one, the
+	// `docker ps` was never answered at all — every placed containerized step
+	// paid the sweep's full 30s timeout, under this mutex, and listed nothing.
+	sweepErr := s.withDockerRouting(ctx, func() error {
+		sweepContainers(ctx, dockerHost)
+
+		return nil
+	})
+	if sweepErr != nil {
+		// Logged rather than returned: a worker whose daemon cannot be asked
+		// what it is already running is still a worker that can run this step,
+		// and the reply is the only place this attempt is visible.
+		slog.Warn("venue.container.sweep_failed",
+			"worker", s.worker.String(), "error", sweepErr)
+	}
 
 	spec := s.containerSpec(dockerHost)
 	// The session's resolved environment, which is where STEPS_WORKER lives.

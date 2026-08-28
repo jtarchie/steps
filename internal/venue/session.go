@@ -140,7 +140,11 @@ type session struct {
 	dockerStop func()
 	// relay carries the forwarded docker streams; it owns the wire only
 	// while a containerized command is running.
-	relay *dockerRelay
+	//
+	// Atomic rather than under s.mu, because releaseContainer reaches
+	// withDockerRouting while already holding s.mu: taking the mutex to read
+	// this would deadlock the one teardown path that must not.
+	relay atomic.Pointer[dockerRelay]
 	// sentArtifactBytes is what this session actually put on the tunnel for
 	// step trees. Recorded because it is the number the artifact grain
 	// exists to reduce, and there is no other vantage point: the tunnel is a
@@ -308,11 +312,6 @@ func (s *session) connect(ctx context.Context) error {
 	return nil
 }
 
-// abandon tears down a transport whose session never opened.
-//
-// Under its own bounded context, never the caller's: the caller's may have no
-// deadline at all, and a worker that has already stopped answering would then
-// hold the step open forever on the cleanup rather than the work.
 // adoptCodec points the session at a new conversation's frames.
 //
 // The ENCODER is replaced under writeMu, not only under s.mu. Writers reach it
@@ -334,6 +333,11 @@ func (s *session) adoptCodec(in io.Reader, out io.Writer) {
 	s.decoder = wire.NewDecoder(in)
 }
 
+// abandon tears down a transport whose session never opened.
+//
+// Under its own bounded context, never the caller's: the caller's may have no
+// deadline at all, and a worker that has already stopped answering would then
+// hold the step open forever on the cleanup rather than the work.
 func (s *session) abandon() {
 	// Before the transport goes, while the forwarded socket can still reach
 	// the daemon: the container and the socket belong to THIS conversation,
@@ -699,7 +703,7 @@ func (s *session) teardownContainer() {
 		s.dockerStop = nil
 	}
 
-	s.relay = nil
+	s.relay.Store(nil)
 }
 
 // releaseContainer removes the worker's container, or says which one it is

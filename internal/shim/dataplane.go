@@ -248,7 +248,15 @@ func (s *session) uploadOutputs(ctx context.Context, fetch wire.Fetch) error {
 		return errNoURL
 	}
 
-	staged, err := os.CreateTemp("", "steps-outputs-*")
+	// Beside the workdir, not in os.TempDir(). A worker URL names a disk
+	// because the root volume is small, and this file is the whole outputs
+	// tarball — staging it on whatever /tmp happens to be (often a tmpfs, and
+	// on the stock AL2023 AMI an 8 GiB root) fails with ENOSPC on a machine
+	// that has room where the pipeline said to put it. It is also the
+	// filesystem the hello reported free space for, so anywhere else makes
+	// that report a lie. Beside rather than inside, so it is never a member of
+	// the tree it is a copy of.
+	staged, err := os.CreateTemp(filepath.Dir(s.workdir), "steps-outputs-*")
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}

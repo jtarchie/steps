@@ -232,7 +232,7 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 			dockerHost:  spec.DockerHost,
 			envNames:    spec.Env,
 			envValues:   spec.EnvValues,
-			user:        containerUser(spec.User),
+			user:        containerUser(spec.User, spec.DockerHost == ""),
 			network:     spec.Network,
 			privileged:  spec.Privileged,
 			cpuShares:   spec.CPUShares,

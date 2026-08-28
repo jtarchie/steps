@@ -131,7 +131,7 @@ func buildLinuxShim(t *testing.T, dir string) string {
 
 	//nolint:gosec // binary is a path under this test's own TempDir
 	cmd := exec.CommandContext(t.Context(), "go", "build", "-o", binary, ".")
-	cmd.Dir = ".."
+	// The repo root, where the main package is: this file is two levels down.
 	cmd.Dir = filepath.Join("..", "..")
 	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+runtime.GOARCH, "CGO_ENABLED=0")
 

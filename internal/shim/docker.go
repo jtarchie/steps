@@ -232,6 +232,12 @@ func (s *session) pumpDocker(op uint32, conn net.Conn) {
 // bigger buffer buys nothing a stream does not already pipeline.
 const dockerChunkBytes = 32 * 1024
 
+// dockerWriteTimeout bounds one write to the worker's daemon socket. Generous,
+// because it is not a latency budget: a daemon still reading is normal, and
+// the only thing being ruled out is one that has stopped forever while holding
+// the session's only reader.
+const dockerWriteTimeout = 30 * time.Second
+
 // dockerData writes the peer's bytes to the socket.
 func (s *session) dockerData(frame wire.Frame) error {
 	conn, ok := s.docker.get(frame.Op)
@@ -240,6 +246,13 @@ func (s *session) dockerData(frame wire.Frame) error {
 		// close in flight, which is ordinary, not an error.
 		return nil
 	}
+
+	// Bounded, because this runs ON the session's frame loop: a daemon that
+	// stops draining its side parks the one goroutine that reads the wire, and
+	// with it every cancel, every goodbye and the orchestrator's own EOF — the
+	// same hazard the store client's own deadline exists for. A stream whose
+	// daemon will not take bytes is ended; the session keeps listening.
+	_ = conn.SetWriteDeadline(time.Now().Add(dockerWriteTimeout))
 
 	_, err := conn.Write(frame.Payload)
 	if err != nil {
@@ -278,15 +291,25 @@ func (s *session) dockerData(frame wire.Frame) error {
 // tell the orchestrator to drop the connection its answer is still coming on.
 func (s *session) dockerClose(frame wire.Frame) error {
 	if conn, ok := s.docker.get(frame.Op); ok {
-		if half, canHalfClose := conn.(*net.UnixConn); canHalfClose {
+		half, canHalfClose := conn.(*net.UnixConn)
+		if canHalfClose && !wire.IsDockerAbort(frame.Payload) {
 			_ = half.CloseWrite()
 
 			return nil
 		}
-	}
 
-	if conn, ok := s.docker.remove(frame.Op); ok {
-		_ = conn.Close()
+		// An abort: the peer's end of this stream is gone, so half-closing
+		// would leave the daemon socket open and pumpDocker reading it — and
+		// every byte it read after that went onto the one wire an aws://
+		// session has, addressed to a stream nothing was left to receive it.
+		if closing, removed := s.docker.remove(frame.Op); removed {
+			_ = closing.Close()
+		}
+
+		// Not echoed. The answer below exists to give the orchestrator a round
+		// trip while it owns the connection with a reader; an abort means it
+		// has already dropped this stream, so there is nobody to answer.
+		return nil
 	}
 
 	return s.sendData(wire.FrameDockerClose, frame.Op, nil)

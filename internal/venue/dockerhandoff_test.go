@@ -41,7 +41,7 @@ func deafSession(t *testing.T) *session {
 		decoder: wire.NewDecoder(reader),
 		encoder: wire.NewEncoder(io.Discard),
 	}
-	session.relay = newTestRelay(session)
+	session.relay.Store(newTestRelay(session))
 
 	return session
 }
@@ -175,7 +175,7 @@ func stalledSession(t *testing.T) (*session, *countingReader, *io.PipeWriter) {
 		decoder: wire.NewDecoder(counter),
 		encoder: wire.NewEncoder(io.Discard),
 	}
-	session.relay = newTestRelay(session)
+	session.relay.Store(newTestRelay(session))
 
 	return session, counter, writer
 }
@@ -250,7 +250,7 @@ func TestSettleWaitsForAStalledRouter(t *testing.T) {
 
 	settled := make(chan struct{})
 
-	go func() { defer close(settled); session.relay.settle() }()
+	go func() { defer close(settled); session.relay.Load().settle() }()
 
 	select {
 	case <-settled:
@@ -305,7 +305,7 @@ func TestAnOrphanedRouterDoesNotBreakTheNextConversation(t *testing.T) {
 	_ = writer.Close()
 
 	waitUntil(t, 5*time.Second, "the orphaned router to finish", func() bool {
-		return relayClosed(session.relay)
+		return relayClosed(session.relay.Load())
 	})
 
 	if session.broken.Load() {

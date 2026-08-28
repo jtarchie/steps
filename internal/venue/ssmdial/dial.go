@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/ssm/types"
 )
@@ -100,11 +101,45 @@ func PlatformOf(ctx context.Context, api API, instance string) (Platform, error)
 			ErrNotManaged, instance)
 	}
 
-	if out.InstanceInformationList[0].PlatformType == types.PlatformTypeWindows {
+	info := out.InstanceInformationList[0]
+
+	// The ping, not merely a record. SSM keeps a registration for weeks after
+	// an agent stops answering, so an instance that was PARKED and has just
+	// been started again has a record the whole time its agent is
+	// reconnecting — reading ConnectionLost, but present. Taking presence for
+	// reachability returned at once, skipping the wait that exists for exactly
+	// this minute, and walked straight into a SendCommand SSM answers with
+	// InvalidInstanceId. Only a launched instance, which has never registered
+	// at all, was ever covered by the empty-list check.
+	if info.PingStatus != types.PingStatusOnline {
+		return "", fmt.Errorf("%w: %s is registered with SSM but its agent is %q, not Online",
+			ErrNotManaged, instance, info.PingStatus)
+	}
+
+	if info.PlatformType == types.PlatformTypeWindows {
 		return PlatformWindows, nil
 	}
 
 	return PlatformLinux, nil
+}
+
+// Retryable reports an SSM answer worth polling through rather than failing
+// on: a throttle, or a transient service or connection error, classified by
+// the SDK's own retryer rather than by message text.
+//
+// Exported because both poll loops need it and they live either side of this
+// package's boundary. The distinction is the whole point: tolerating EVERY
+// error spent a full timeout on a permanent failure and then reported the
+// deadline instead of the denial, while failing on every error abandons a
+// machine that is already launched and billing because one poll was throttled
+// — and these loops poll every two to five seconds, per worker, which is
+// precisely the shape throttling answers.
+func Retryable(err error) bool {
+	retryables := retry.IsErrorRetryables(retry.DefaultRetryables)
+	throttles := retry.IsErrorThrottles(retry.DefaultThrottles)
+
+	return retryables.IsErrorRetryable(err) == aws.TrueTernary ||
+		throttles.IsErrorThrottle(err) == aws.TrueTernary
 }
 
 // ErrNotManaged is an instance SSM does not know about.
@@ -175,7 +210,7 @@ func waitForCommand(ctx context.Context, api API, instance, commandID string) (s
 		// — and then reported the deadline instead of the denial. By the
 		// typed error, never by message text, for the reason ec2.go's
 		// notYetVisible gives.
-		if err != nil && !notYetInvoked(err) {
+		if pollFailed(err) {
 			return "", fmt.Errorf("waiting for a command on %s: %w", instance, err)
 		}
 
@@ -201,6 +236,12 @@ func waitForCommand(ctx context.Context, api API, instance, commandID string) (s
 			return "", fmt.Errorf("waiting for a command on %s: %w", instance, deadline.Err())
 		}
 	}
+}
+
+// pollFailed reports an answer worth giving up on, as against one worth
+// asking again.
+func pollFailed(err error) bool {
+	return err != nil && !notYetInvoked(err) && !Retryable(err)
 }
 
 // notYetInvoked reports whether SSM answered that it has no record of the

@@ -167,7 +167,11 @@ func waitForManagedNode(ctx context.Context, api ssmdial.API, worker Worker) (ss
 			return platform, nil
 		}
 
-		if !errors.Is(err, ssmdial.ErrNotManaged) {
+		// A throttle or a transient service error is polled through, not
+		// failed on: this loop asks every five seconds, per worker, and
+		// giving up on the first one throws away a machine that is already
+		// launched and billing.
+		if !errors.Is(err, ssmdial.ErrNotManaged) && !ssmdial.Retryable(err) {
 			return "", fmt.Errorf("asking SSM about %s for %q: %w", worker.Instance, worker.URL, err)
 		}
 

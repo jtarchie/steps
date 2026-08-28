@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/wire"
 )
@@ -144,5 +145,119 @@ func TestPlaceArtifactRefetchesACacheEntryThatVanished(t *testing.T) {
 	got := mustRead(t, filepath.Join(session.workdir, "data", "seed.txt"))
 	if got != "seed\n" {
 		t.Errorf("placed file = %q, want %q", got, "seed\n")
+	}
+}
+
+// shrinkArtifactCache makes the cap small enough for a test to cross with a
+// few kilobytes.
+func shrinkArtifactCache(t *testing.T, bound int64) {
+	t.Helper()
+
+	previous := artifactCacheBytes
+	artifactCacheBytes = bound
+
+	t.Cleanup(func() { artifactCacheBytes = previous })
+}
+
+// writeCacheEntry makes one cache entry of size bytes, with a modtime that
+// decides how cold it is.
+func writeCacheEntry(t *testing.T, cache, name string, size int, used time.Time) string {
+	t.Helper()
+
+	dir := filepath.Join(cache, name)
+
+	err := os.MkdirAll(dir, 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(filepath.Join(dir, "blob"), make([]byte, size), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.Chtimes(dir, used, used)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return dir
+}
+
+// TestSweepCountsAbandonedStagingTrees pins the accounting half of the
+// staging skip.
+//
+// Not evicting a .partial-* tree is right: it is another session's transfer in
+// flight, and deleting it mid-unpack commits a truncated tree under a digest
+// claiming to be whole. Not COUNTING it was the bug. A shim killed mid-unpack
+// — OOM, spot reclamation, kill -9 — never runs the deferred RemoveAll that
+// would clear it, session cleanup only removes <root>/steps-shim/<session>,
+// and nothing else touches the cache. So the orphan sat there forever while
+// the sweep reported the cache under its cap, and the cap stopped describing
+// the disk.
+func TestSweepCountsAbandonedStagingTrees(t *testing.T) {
+	shrinkArtifactCache(t, 6<<10)
+
+	cache := t.TempDir()
+	old := time.Now().Add(-time.Hour)
+
+	orphan := writeCacheEntry(t, cache, stagingPrefix+"dead", 5<<10, old)
+	entry := writeCacheEntry(t, cache, "digest-a", 4<<10, old.Add(time.Minute))
+
+	err := sweepArtifactCache(cache)
+	if err != nil {
+		t.Fatalf("sweepArtifactCache: %v", err)
+	}
+
+	_, err = os.Stat(orphan)
+	if err != nil {
+		t.Errorf("the staging tree was evicted: %v — a transfer in flight must survive the sweep", err)
+	}
+
+	_, err = os.Stat(entry)
+	if !os.IsNotExist(err) {
+		t.Errorf("the cache holds %d bytes against a %d cap and evicted nothing: the orphan's bytes were not counted",
+			9<<10, artifactCacheBytes)
+	}
+}
+
+// TestSweepKeepsCountingWhatItCouldNotDelete pins the other end of the same
+// total.
+//
+// Subtracting an entry's bytes unconditionally let ONE undeletable entry end
+// the loop having freed nothing: it is the coldest, so it is picked first
+// every sweep, subtracted every sweep, and the cap stops bounding anything
+// from then on. A directory the codec restored read-only is the ordinary way
+// to get one — RemoveAll cannot enter it and does not chmod.
+func TestSweepKeepsCountingWhatItCouldNotDelete(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can remove a read-only directory, so there is no undeletable entry to make")
+	}
+
+	shrinkArtifactCache(t, 6<<10)
+
+	cache := t.TempDir()
+	old := time.Now().Add(-time.Hour)
+
+	stuck := writeCacheEntry(t, cache, "digest-stuck", 5<<10, old)
+	next := writeCacheEntry(t, cache, "digest-next", 4<<10, old.Add(time.Minute))
+
+	// Read-only, which is how RemoveAll gets an entry it cannot delete: it
+	// never chmods, so it cannot enter the directory to unlink what is inside.
+	err := os.Chmod(stuck, 0o500) //nolint:gosec // an undeletable entry is the condition under test
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = os.Chmod(stuck, 0o700) }) //nolint:gosec // restoring what the test narrowed
+
+	err = sweepArtifactCache(cache)
+	if err != nil {
+		t.Fatalf("sweepArtifactCache: %v", err)
+	}
+
+	_, err = os.Stat(next)
+	if !os.IsNotExist(err) {
+		t.Error("the sweep stopped after an eviction that freed nothing, leaving the cache over its cap")
 	}
 }

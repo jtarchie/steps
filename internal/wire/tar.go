@@ -134,6 +134,17 @@ func packName(root, name string) error {
 // Resolved against the nearest EXISTING ancestor, because a named output that
 // was never produced is deliberately not an error here.
 func withinRoot(root, clean string) error {
+	// Absolute first, because the whole check is a prefix comparison and a
+	// relative root has no prefix to be. EvalSymlinks(".") answers "." while
+	// the member under it resolves to a bare "out", which shares neither the
+	// equality nor the "./" prefix — so every name inside the tree was
+	// reported as an escape, and a guard that cannot tell inside from outside
+	// is worse than none.
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return fmt.Errorf("%w: %q: the tree could not be resolved: %w", ErrUnsafePath, clean, err)
+	}
+
 	base, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {

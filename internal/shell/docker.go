@@ -559,10 +559,6 @@ func withValues(env []string, values map[string]string) []string {
 		return env
 	}
 
-	if env == nil {
-		env = os.Environ()
-	}
-
 	for _, name := range slices.Sorted(maps.Keys(values)) {
 		env = append(env, name+"="+values[name])
 	}

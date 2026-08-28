@@ -10,10 +10,26 @@ import (
 )
 
 // containerUser resolves the value handed to `docker run --user`: the
-// pipeline's own user: when it set one, otherwise the platform default.
-func containerUser(configured string) string {
+// pipeline's own user: when it set one, otherwise the platform default — and
+// only when the daemon is THIS machine's.
+//
+// localDaemon is the whole subtlety. A venue forwards a socket to a worker and
+// has already made this decision there, from the worker's platform and the
+// identity its shim runs as; an empty answer out of that is a real answer,
+// meaning "defer to the image" — for a darwin worker, or one whose shim cannot
+// vouch for a uid. Read here as "the pipeline said nothing" it was replaced
+// with the ORCHESTRATOR's uid:gid: a --user computed on one machine for a bind
+// mount on another, which is precisely the wrong-machine answer
+// DefaultContainerUserFor exists to prevent. A Linux orchestrator against a
+// root shim yields --user 1000:1000 over a root-owned 0700 workdir, and the
+// step cannot write the outputs it declares.
+func containerUser(configured string, localDaemon bool) string {
 	if configured != "" {
 		return configured
+	}
+
+	if !localDaemon {
+		return ""
 	}
 
 	return defaultContainerUser()
@@ -46,7 +62,14 @@ func containerUser(configured string) string {
 // packages at run time (apt-get, apk add) or writes to a root-owned path needs
 // root, and under this default it fails. That failure is loud and local to the
 // step, which is the trade being made against a silent, remote one.
-func defaultContainerUser() string {
+//
+// A variable so a test can pin a non-empty answer: on a machine where the
+// platform default is already "" — any darwin orchestrator — a test that reads
+// the ambient value cannot tell "deferred to the image" from "substituted this
+// machine's uid", which is exactly the pair the caller has to keep apart.
+//
+//nolint:gochecknoglobals // a test seam over one platform answer, not state
+var defaultContainerUser = func() string {
 	return DefaultContainerUserFor(runtime.GOOS, os.Getuid(), os.Getgid())
 }
 

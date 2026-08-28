@@ -101,14 +101,34 @@ const MaxFrameBytes = 1 << 20
 // multi-gigabyte transfer.
 const DataChunkBytes = 256 << 10
 
-// maxOp is the largest operation id the 3-byte field holds. Ids wrap, which is
-// harmless: only one operation is ever in flight, so an id has to collide with
-// itself 16 million operations later to be ambiguous.
-const maxOp = MaxOp
-
-// MaxOp is the largest operation id a frame can carry, exported because the
-// side that MINTS ids has to respect the same ceiling the encoder enforces.
+// MaxOp is the largest operation id the 3-byte field holds, exported because
+// the side that MINTS ids has to respect the same ceiling the encoder
+// enforces. Ids wrap, which is harmless: only one operation is ever in flight,
+// so an id has to collide with itself 16 million operations later to be
+// ambiguous.
 const MaxOp = 1<<24 - 1
+
+// dockerAbort is the one payload byte that turns a FrameDockerClose from a
+// half-close into a drop.
+const dockerAbort = 1
+
+// DockerAbortPayload is the FrameDockerClose payload meaning "drop this
+// stream", against the empty payload meaning "I have finished writing".
+//
+// The two are not interchangeable and cannot share a spelling. An empty close
+// is ordinary: the docker CLI shuts down the write side of a hijacked stream
+// the moment it has no stdin left, while the daemon is still writing the
+// container's output back, so ending the stream there cuts a step off from its
+// own output. An abort says the stream is GONE at the sender's end — without a
+// way to say it, a receiver went on reading a socket whose bytes had nowhere
+// to land and putting them on the one wire an aws:// session has, for the rest
+// of that session.
+func DockerAbortPayload() []byte { return []byte{dockerAbort} }
+
+// IsDockerAbort reports a FrameDockerClose that ends the stream outright.
+func IsDockerAbort(payload []byte) bool {
+	return len(payload) == 1 && payload[0] == dockerAbort
+}
 
 // ErrProtocol is a frame that cannot be part of a conversation this code
 // wrote: a bad type, an impossible length, a truncated header.
@@ -143,7 +163,7 @@ func (e *Encoder) Write(frame Frame) error {
 		return fmt.Errorf("%w: frame of %d bytes exceeds the %d limit", ErrProtocol, len(frame.Payload), MaxFrameBytes)
 	}
 
-	if frame.Op > maxOp {
+	if frame.Op > MaxOp {
 		return fmt.Errorf("%w: operation id %d does not fit in the header", ErrProtocol, frame.Op)
 	}
 

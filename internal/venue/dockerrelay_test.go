@@ -199,6 +199,11 @@ func (deadLocalConn) Write(_ []byte) (int, error) { return 0, io.ErrClosedPipe }
 
 func (deadLocalConn) Close() error { return nil }
 
+// SetWriteDeadline is answered because deliver bounds every write: the router
+// is the wire's only reader while a bracket is open, so a client that stops
+// reading would otherwise park it and every frame behind it.
+func (deadLocalConn) SetWriteDeadline(_ time.Time) error { return nil }
+
 // readFrameWithin reads one frame on a bound, so a test that proves a frame
 // was sent fails rather than hangs when it was not.
 func readFrameWithin(t *testing.T, decoder *wire.Decoder, bound time.Duration) wire.Frame {
@@ -304,6 +309,60 @@ func TestOneStreamsFailureLeavesTheRelayServing(t *testing.T) {
 
 	session, fromVenue, fromShim := pipedSession(t)
 
+	opened := refuseFirstStream(fromVenue, fromShim)
+
+	socket, stop, err := session.openDockerSocket(context.Background(), false)
+	if err != nil {
+		t.Fatalf("openDockerSocket: %v", err)
+	}
+
+	defer stop()
+
+	// The command whose one stream the shim refuses. fn does not return until
+	// the refusal is on the wire, so the router meets it inside this bracket
+	// rather than the next one.
+	//
+	// fn FAILS, which is what a docker client whose daemon cannot be reached
+	// actually does — and is what earns the worker's account: the local client
+	// can only report confusion about a socket path on this machine, naming
+	// neither the worker nor the cause.
+	err = session.withDockerRouting(context.Background(), func() error {
+		dialErr := dialAndPoke(socket)
+		awaitOp(t, opened, "the first stream")
+
+		if dialErr != nil {
+			return dialErr
+		}
+
+		return errLocalClientConfusion
+	})
+	if err == nil {
+		t.Error("the bracket reported success though the shim said it could not reach its daemon")
+	}
+
+	if errors.Is(err, errLocalClientConfusion) {
+		t.Error("the bracket reported the local client's error, not the worker's account of why")
+	}
+
+	// The teardown's `docker rm -f`: the only thing that removes the step's
+	// container from the worker.
+	err = session.withDockerRouting(context.Background(), func() error {
+		dialErr := dialAndPoke(socket)
+		awaitOp(t, opened, "the stream after the refused one")
+
+		return dialErr
+	})
+	if err != nil {
+		t.Errorf("the command after a refused stream could not use the forwarded socket: %v", err)
+	}
+}
+
+// refuseFirstStream is a stand-in shim that answers the FIRST docker stream
+// with the error a worker whose daemon is unreachable sends, serves every
+// later one, and echoes closes. The channel reports each open AFTER its
+// answer is on the wire, so a bracket that waits on it knows the router meets
+// that answer inside the bracket rather than the next one.
+func refuseFirstStream(fromVenue *wire.Decoder, fromShim *wire.Encoder) <-chan uint32 {
 	opened := make(chan uint32, 8)
 
 	refuseNext := true
@@ -325,16 +384,36 @@ func TestOneStreamsFailureLeavesTheRelayServing(t *testing.T) {
 						wire.Error{Message: "dialling the docker socket at /var/run/docker.sock: connection refused"})
 				}
 
-				// Announced AFTER the answer, so a bracket that waits on this
-				// knows the answer is already on the wire — and the wire is
-				// ordered, so the router meets it before the echo that ends
-				// the bracket.
 				opened <- frame.Op
 			case wire.FrameDockerClose:
 				_ = fromShim.Write(wire.Frame{Type: wire.FrameDockerClose, Op: frame.Op})
 			}
 		}
 	}()
+
+	return opened
+}
+
+// errLocalClientConfusion stands in for what a docker CLI says when its
+// requests go unanswered: a message about a socket path on THIS machine.
+var errLocalClientConfusion = errors.New("cannot connect to the docker daemon at unix:///tmp/x.sock")
+
+// TestARefusedStreamDoesNotFailACommandThatWorked is the other side of the
+// same latch, and the one that costs a step its outputs.
+//
+// A single `docker run` opens several connections — create, start, attach,
+// wait — and the shim answers a FrameError for any ONE of them it cannot
+// serve: a daemon restarted between two dials, an fd limit, a write to a
+// socket the daemon reset. The worker's account is the right thing to report
+// when the command FAILED. Returned over a command that succeeded, it fails a
+// step whose container ran and exited zero — and runContained returns before
+// the fetch, so the outputs that container produced are never brought home.
+func TestARefusedStreamDoesNotFailACommandThatWorked(t *testing.T) {
+	t.Parallel()
+
+	session, fromVenue, fromShim := pipedSession(t)
+
+	opened := refuseFirstStream(fromVenue, fromShim)
 
 	socket, stop, err := session.openDockerSocket(context.Background(), false)
 	if err != nil {
@@ -343,29 +422,15 @@ func TestOneStreamsFailureLeavesTheRelayServing(t *testing.T) {
 
 	defer stop()
 
-	// The command whose one stream the shim refuses. fn does not return until
-	// the refusal is on the wire, so the router meets it inside this bracket
-	// rather than the next one.
 	err = session.withDockerRouting(context.Background(), func() error {
 		dialErr := dialAndPoke(socket)
-		awaitOp(t, opened, "the first stream")
+		awaitOp(t, opened, "the refused stream")
 
-		return dialErr
-	})
-	if err == nil {
-		t.Error("the bracket reported success though the shim said it could not reach its daemon")
-	}
-
-	// The teardown's `docker rm -f`: the only thing that removes the step's
-	// container from the worker.
-	err = session.withDockerRouting(context.Background(), func() error {
-		dialErr := dialAndPoke(socket)
-		awaitOp(t, opened, "the stream after the refused one")
-
+		// The command itself worked: the container ran and exited zero.
 		return dialErr
 	})
 	if err != nil {
-		t.Errorf("the command after a refused stream could not use the forwarded socket: %v", err)
+		t.Errorf("the bracket failed a command that succeeded: %v", err)
 	}
 }
 

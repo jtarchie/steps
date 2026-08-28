@@ -382,14 +382,23 @@ func (s *session) uploadOnTunnel(frame wire.Frame) error {
 func (s *session) receiveArtifact(op uint32, cache string, artifact wire.UploadArtifact) error {
 	held := filepath.Join(cache, artifact.Digest)
 
+	// Before anything that can fail, because FrameNeed has already gone out:
+	// the orchestrator is streaming the tree right now and reads nothing back
+	// until the end of it. An early return here left its frames with no reader
+	// — the run loop answered each one with a FrameError instead — so both
+	// ends filled their buffers and blocked on their own writes, with no
+	// deadline on either side. A worker whose disk is full then hangs the
+	// build rather than failing it.
+	reader, done := s.dataReader(op)
+
 	staging, err := stageArtifact(cache)
 	if err != nil {
+		_ = done()
+
 		return err
 	}
 
 	defer func() { _ = os.RemoveAll(staging) }()
-
-	reader, done := s.dataReader(op)
 
 	err = unpackVerified(reader, staging, artifact.Digest, s.compression == wire.CompressionZstd)
 
@@ -500,8 +509,18 @@ var errBadSession = errors.New("the session name must be one directory name")
 // One predicate for the session name and the artifact manifest alike: both are
 // names off the wire that reach the filesystem by filepath.Join, and written
 // twice they are two guards that can drift apart.
+//
+// filepath.IsLocal carries the half filepath.Base cannot. Base("/") is "/", so
+// the name-equals-its-own-base test called the root directory a single
+// directory name — and Join collapses it, putting the scratch one level up at
+// <root>/steps-shim/work, whose PARENT cleanup then removes: the shared
+// artifact cache, every concurrent session's live work tree, and the pushed
+// shim binaries, all deleted by a peer sending Session: "/". IsLocal is also
+// the OS's own answer, so a Windows worker refuses "C:foo" and a reserved
+// device name that Base happily returns unchanged.
 func oneDirectoryName(name string) bool {
-	return name != "" && name != "." && name != ".." && name == filepath.Base(name)
+	return name != "" && name != "." && name != ".." &&
+		name == filepath.Base(name) && filepath.IsLocal(name)
 }
 
 // checkSessionName refuses a name that would leave the root it is joined to.

@@ -601,9 +601,6 @@ func (r runView) PlacementRows() []PlacementView {
 // it is bounded by. This is about disks and wire transfers, which every tool
 // a reader will cross-check against — the shim's own tmpfs warning, the EC2
 // console, df — reports in KiB/MiB/GiB.
-//
-// Exported for `steps runs --where`, which prints the same disk and transfer
-// sizes from the same rows.
 func FormatBinaryBytes(n int64) string {
 	const unit = 1024
 

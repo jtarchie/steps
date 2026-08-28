@@ -30,6 +30,11 @@ import (
 // dockerRelayChunk is one read off a local docker connection.
 const dockerRelayChunk = 32 * 1024
 
+// dockerRelayWriteTimeout bounds one write to a local docker client. Generous,
+// because a client still reading is normal and the only thing being ruled out
+// is one that has stopped forever while holding the wire's only reader.
+const dockerRelayWriteTimeout = 30 * time.Second
+
 // serveDockerSocket exposes the worker's docker socket at a path on this
 // machine, returning it and a function that tears the whole thing down.
 //
@@ -85,7 +90,7 @@ func (s *session) openDockerSocket(ctx context.Context, route bool) (string, fun
 		relay.startRouting()
 	}
 
-	s.relay = relay
+	s.relay.Store(relay)
 
 	stop := sync.OnceFunc(func() {
 		_ = listener.Close()
@@ -111,7 +116,7 @@ func (s *session) openDockerSocket(ctx context.Context, route bool) (string, fun
 // a time. Whatever fn does, routing stops before this returns — a step whose
 // command failed still has to be able to fetch what it produced.
 func (s *session) withDockerRouting(ctx context.Context, fn func() error) error {
-	relay := s.relay
+	relay := s.relay.Load()
 	if relay == nil {
 		return fn()
 	}
@@ -158,10 +163,19 @@ func (s *session) withDockerRouting(ctx context.Context, fn func() error) error 
 	// fresh one. This call IS the conversation, so it can.
 	relay.reportLost(s)
 
-	// The worker's own account wins. A shim that cannot reach its daemon says
-	// so in a frame the router is the only reader of, and without this the
-	// step reports the local client's confusion about a socket path on THIS
-	// machine — naming neither the worker nor the cause.
+	// The worker's own account wins — but only over a failure, never over a
+	// success. A shim that cannot reach its daemon says so in a frame the
+	// router is the only reader of, and without this the step reports the
+	// local client's confusion about a socket path on THIS machine, naming
+	// neither the worker nor the cause. What it must not do is fail a command
+	// that WORKED: the docker CLI opens several connections per run, and one
+	// of them being refused while the container ran and exited zero would
+	// report a working step as broken and skip the fetch of the outputs it
+	// produced.
+	if err == nil {
+		return nil
+	}
+
 	reported := relay.failure()
 	if reported != nil {
 		return reported
@@ -379,7 +393,9 @@ func (d *dockerRelay) pump(_ context.Context, op uint32, conn net.Conn) {
 
 	if closing, ok := d.remove(op); ok {
 		_ = closing.Close()
-		_ = d.session.writeFrame(wire.Frame{Type: wire.FrameDockerClose, Op: op})
+		_ = d.session.writeFrame(wire.Frame{
+			Type: wire.FrameDockerClose, Op: op, Payload: wire.DockerAbortPayload(),
+		})
 	}
 }
 
@@ -561,6 +577,14 @@ func (d *dockerRelay) deliver(frame wire.Frame) {
 		return
 	}
 
+	// Bounded, because this runs on the router — the only reader of the wire
+	// while a bracket is open. A local docker client that stops reading (its
+	// own stdout blocked on a consumer that stopped draining) would otherwise
+	// park the router here, and with it every frame behind this one, including
+	// the close that ends the bracket. The client is dropped instead; the
+	// session keeps its wire.
+	_ = conn.SetWriteDeadline(time.Now().Add(dockerRelayWriteTimeout))
+
 	_, err := conn.Write(frame.Payload)
 	if err != nil {
 		if closing, removed := d.remove(frame.Op); removed {
@@ -571,7 +595,14 @@ func (d *dockerRelay) deliver(frame wire.Frame) {
 			// op, keeps reading the worker's daemon socket, and keeps putting
 			// FrameDockerData for a forgotten stream onto the one wire an
 			// aws:// session has, for the rest of that session.
-			_ = d.session.writeFrame(wire.Frame{Type: wire.FrameDockerClose, Op: frame.Op})
+			//
+			// An ABORT, because that is what this is: the local connection is
+			// gone. A plain close is the half-close the CLI sends when it runs
+			// out of stdin, and the shim honours it by leaving the daemon
+			// socket open — which is right there and exactly wrong here.
+			_ = d.session.writeFrame(wire.Frame{
+				Type: wire.FrameDockerClose, Op: frame.Op, Payload: wire.DockerAbortPayload(),
+			})
 		}
 	}
 }

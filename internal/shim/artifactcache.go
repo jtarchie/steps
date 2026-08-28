@@ -36,7 +36,13 @@ import (
 //
 // A worker is somebody else's machine, and filling its disk is a worse
 // failure than re-fetching a tree.
-const artifactCacheBytes = 8 << 30
+//
+// A variable rather than a constant so a test can shrink it: what is worth
+// proving is WHAT the sweep counts and what it frees, not that it can be made
+// to move eight gigabytes.
+//
+//nolint:gochecknoglobals // a test seam over one bound, not state
+var artifactCacheBytes int64 = 8 << 30
 
 // artifactCacheName is the cache's directory name under <root>/steps-shim,
 // beside the per-session scratch directories rather than inside one.
@@ -82,6 +88,15 @@ func sweepArtifactCache(cache string) error {
 		// rename that follows commits a TRUNCATED tree under a digest that
 		// claims to be whole, which is what staging exists to prevent.
 		if strings.HasPrefix(entry.Name(), stagingPrefix) {
+			// Counted even so. Skipping the eviction is the point; skipping
+			// the ACCOUNTING made the cap measure something other than the
+			// disk — a shim killed mid-unpack (OOM, spot reclamation, kill -9)
+			// leaves a full-size staging tree its deferred cleanup never ran
+			// on, and nothing else removes it, so the cache reported itself
+			// under the cap while the directory held the cap plus every
+			// orphan ever left there.
+			total += treeBytes(filepath.Join(cache, entry.Name()))
+
 			continue
 		}
 
@@ -108,8 +123,14 @@ func sweepArtifactCache(cache string) error {
 			break
 		}
 
-		_ = os.RemoveAll(entry.path)
-		total -= entry.bytes
+		// Only what was actually freed. Subtracting unconditionally let one
+		// undeletable entry — a directory the codec restored read-only, which
+		// RemoveAll cannot enter and does not chmod — end the loop having
+		// freed nothing, every sweep, forever: it is the coldest entry, so it
+		// is picked first each time, and the cap stops bounding anything.
+		if os.RemoveAll(entry.path) == nil {
+			total -= entry.bytes
+		}
 	}
 
 	return nil

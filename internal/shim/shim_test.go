@@ -660,3 +660,73 @@ func mustRead(t *testing.T, path string) string {
 
 	return string(content)
 }
+
+// TestAStagingFailureDrainsTheArtifactItAskedFor pins the one ordering that
+// turns a full disk into a hang.
+//
+// FrameNeed is a commitment: the orchestrator starts streaming the moment it
+// hears it, and reads nothing back until the end. So every exit from
+// receiveArtifact after that point has to drain the stream first. A staging
+// failure — ENOSPC, EACCES on a cache directory an earlier root shim made,
+// EROFS — returned before the reader existed, and the frames already in flight
+// fell through to the run loop, which answered each one with a FrameError. Two
+// writers, no readers: both ends fill their buffers and block, with no
+// deadline on either side, and a build that should have failed with a disk
+// error hangs instead.
+//
+// Asserted by making the shim answer, and then still be listening: a wedged
+// session cannot do the second one.
+func TestAStagingFailureDrainsTheArtifactItAskedFor(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can write into a 0500 directory, so the cache cannot be made unstageable")
+	}
+
+	root := t.TempDir()
+	peer := newPeer(t, Options{Build: "test", Root: root})
+
+	ok := peer.hello()
+
+	// The cache is a sibling of the session scratch, and stageArtifact makes
+	// its staging directory inside it. Read-only, so the mkdir fails after
+	// the shim has already sent FrameNeed.
+	cache := filepath.Join(filepath.Dir(filepath.Dir(ok.Workdir)), artifactCacheName)
+
+	err := os.MkdirAll(cache, 0o500)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = os.Chmod(cache, 0o700) }) //nolint:gosec // restoring what the test narrowed
+
+	src := t.TempDir()
+	mustWrite(t, filepath.Join(src, "data", "seed.txt"), "seed\n")
+
+	op := peer.offerArtifact(src, "data")
+
+	writer := peer.dataWriter(op)
+
+	err = wire.PackPaths(writer, src, []string{"data"})
+	if err != nil {
+		t.Fatalf("packing: %v", err)
+	}
+
+	err = writer.flush()
+	if err != nil {
+		t.Fatalf("flushing: %v", err)
+	}
+
+	peer.sendEmpty(wire.FrameEnd, op)
+
+	if frame := peer.readAny(); frame.Type != wire.FrameError {
+		t.Fatalf("the shim answered a type %d frame, want the staging failure reported", frame.Type)
+	}
+
+	// The session survived it. A drain that did not happen leaves the stream
+	// mid-artifact, so this exec reads the rest of a tree as its own answer.
+	_ = os.Chmod(cache, 0o700) //nolint:gosec // restoring what the test narrowed
+
+	stdout, _, exit := peer.exec("echo still-here", nil)
+	if !exit.Started || exit.Code != 0 || stdout != "still-here\n" {
+		t.Errorf("exit = %+v stdout = %q, want the session still usable after the refusal", exit, stdout)
+	}
+}

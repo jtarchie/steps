@@ -254,3 +254,45 @@ func lateAnswerSocket(t *testing.T) string {
 
 	return path
 }
+
+// TestDockerAbortEndsTheStream is the other half of TestDockerHalfClose, and
+// the reason the two cannot share one frame.
+//
+// A half close means the client has stopped writing while the daemon is still
+// answering — tearing the stream down there cut every placed containerized
+// step off from its own output. An ABORT means the client is GONE: the
+// orchestrator's relay could not write to it, dropped the connection, and now
+// has no reader for anything more on that op. Half-closing that one left the
+// daemon socket open and the pump reading it, putting frames for a stream
+// nobody holds onto the single wire an aws:// session has, for the rest of
+// the session.
+func TestDockerAbortEndsTheStream(t *testing.T) {
+	peer := newPeer(t, Options{Build: "test", Root: t.TempDir(), DockerSocket: echoSocket(t)})
+	peer.hello()
+
+	op := peer.next()
+	peer.sendEmpty(wire.FrameDockerOpen, op)
+	peer.sendRaw(wire.FrameDockerData, op, []byte("one"))
+
+	if frame := peer.read(); string(frame.Payload) != "one" {
+		t.Fatalf("payload = %q, want the daemon's echo", frame.Payload)
+	}
+
+	peer.sendRaw(wire.FrameDockerClose, op, wire.DockerAbortPayload())
+
+	// Reopening the SAME op is the observable proof the first was released:
+	// dockerOpen refuses an id the table still holds, and it holds one until
+	// something actually closes it. A half close leaves it held forever,
+	// along with the daemon socket and the goroutine pumping it.
+	peer.sendEmpty(wire.FrameDockerOpen, op)
+	peer.sendRaw(wire.FrameDockerData, op, []byte("two"))
+
+	frame := peer.readAny()
+	if frame.Type == wire.FrameError {
+		t.Fatalf("reopening the aborted stream was refused: %q — the abort only half-closed it", frame.Payload)
+	}
+
+	if string(frame.Payload) != "two" {
+		t.Errorf("payload = %q, want the reopened stream's echo", frame.Payload)
+	}
+}

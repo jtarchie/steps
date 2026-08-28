@@ -90,7 +90,13 @@ func TestHelloRefusesAnEscapingSessionName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, name := range []string{"../..", "..", ".", "", "a/b", "/etc"} {
+	// "/" is the one that reads as harmless and is not: filepath.Base("/") is
+	// "/", so a name-equals-its-own-base guard called the root directory a
+	// single directory name, and Join collapsed it — putting the scratch at
+	// <root>/steps-shim/work, whose PARENT cleanup then removes. One goodbye
+	// took the shared artifact cache, every concurrent session's live work
+	// tree and the pushed shim binaries with it.
+	for _, name := range []string{"../..", "..", ".", "", "a/b", "/etc", "/", "//"} {
 		t.Run(name, func(t *testing.T) {
 			peer := newPeer(t, Options{Build: "test", Root: root})
 

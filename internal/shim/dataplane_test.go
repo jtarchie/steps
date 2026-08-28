@@ -3,10 +3,12 @@ package shim
 import (
 	"bytes"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -184,4 +186,90 @@ func TestShimReportsAStoreItCannotReach(t *testing.T) {
 	if frame.Type != wire.FrameError {
 		t.Fatalf("frame type = %d, want an error frame", frame.Type)
 	}
+}
+
+// TestOutputsAreStagedOnTheDiskTheHelloNamed is the other half of the mapping
+// TestShimPutsTheScratchWhereTheHelloSaid pins.
+//
+// The URL plane packs the whole outputs tarball to a file before the PUT,
+// because S3 needs a length and outputs can be larger than memory. That file
+// went to os.TempDir() regardless of --root — so a worker reached as
+// ssh://box/mnt/fast, named that way precisely because its root volume is
+// small, spilled its biggest artifact onto the small volume and failed with
+// ENOSPC where the pipeline had pointed it at room. It also made the hello's
+// own free-space report describe a filesystem the transfer never touched.
+//
+// Blocked by a PUT the shim cannot complete, so the staging file is still on
+// disk while the assertion runs.
+func TestOutputsAreStagedOnTheDiskTheHelloNamed(t *testing.T) {
+	staging := make(chan struct{})
+	release := make(chan struct{})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+
+			return
+		}
+
+		close(staging)
+		<-release
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	// A temp directory this process owns, so the assertion is about where the
+	// shim chose to write and not about whatever else is in /tmp.
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+
+	root := t.TempDir()
+
+	peer := newPeer(t, Options{Build: "test", Root: root})
+	peer.helloWithPlane()
+
+	_, _, exit := peer.exec("mkdir -p out; echo produced > out/a.txt", nil)
+	if !exit.Started || exit.Code != 0 {
+		t.Fatalf("exit = %+v, want the producing command to succeed", exit)
+	}
+
+	op := peer.next()
+	peer.send(wire.FrameFetch, op, wire.Fetch{Paths: []string{"out"}, URL: server.URL + "/out"})
+
+	<-staging
+
+	if found := globStaging(t, tmp); len(found) != 0 {
+		t.Errorf("the outputs staged in TMPDIR at %v, not on the disk --root named", found)
+	}
+
+	if found := globStaging(t, root); len(found) == 0 {
+		t.Error("nothing staged under the root the hello named")
+	}
+
+	close(release)
+
+	if frame := peer.read(); frame.Type != wire.FrameEnd || frame.Op != op {
+		t.Fatalf("the fetch answered a type %d frame, want its acknowledgement", frame.Type)
+	}
+}
+
+// globStaging finds the outputs tarball anywhere under dir.
+func globStaging(t *testing.T, dir string) []string {
+	t.Helper()
+
+	var found []string
+
+	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err == nil && !entry.IsDir() && strings.HasPrefix(entry.Name(), "steps-outputs-") {
+			found = append(found, path)
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", dir, err)
+	}
+
+	return found
 }

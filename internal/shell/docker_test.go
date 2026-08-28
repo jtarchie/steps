@@ -943,11 +943,11 @@ func TestDockerStartArgsNoUserAddsNoFlag(t *testing.T) {
 func TestContainerUserPrefersTheConfiguredValue(t *testing.T) {
 	t.Parallel()
 
-	if got := containerUser("root"); got != "root" {
+	if got := containerUser("root", true); got != "root" {
 		t.Errorf("containerUser(\"root\") = %q, want root", got)
 	}
 
-	if got := containerUser("1234:5678"); got != "1234:5678" {
+	if got := containerUser("1234:5678", true); got != "1234:5678" {
 		t.Errorf("containerUser(\"1234:5678\") = %q, want it passed through verbatim", got)
 	}
 }

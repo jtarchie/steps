@@ -184,3 +184,65 @@ func TestSessionStartAimsTheWorkersDaemonOverTheStepsOwnEnv(t *testing.T) {
 		t.Errorf("recorded %v, want exactly one docker run", runs)
 	}
 }
+
+// TestRunnerOnAForeignDaemonDoesNotSubstituteThisMachinesUser is the seam the
+// two halves either side of it each passed on their own.
+//
+// A venue decides the container user from the WORKER's facts — its platform,
+// and the identity its shim runs as — and DefaultContainerUserFor answers ""
+// for a darwin worker or one whose shim cannot vouch for a uid, meaning
+// "defer to the image". That answer then arrived here as RunnerSpec.User, and
+// containerUser read empty as "the pipeline said nothing" and substituted THIS
+// process's uid:gid: a --user computed on the orchestrator for a bind mount on
+// the worker. On a Linux orchestrator against a root shim that is `docker run
+// --user 1000:1000` over a root-owned 0700 workdir, and the step cannot write
+// the outputs it declares.
+//
+// No daemon needed: the substitution happens in NewRunner, before anything is
+// dialled.
+func TestRunnerOnAForeignDaemonDoesNotSubstituteThisMachinesUser(t *testing.T) {
+	// Pinned rather than ambient, and not parallel because of it: on darwin
+	// the real platform default is already "", so a test reading it could not
+	// tell the two answers apart on the machine this is most likely run on.
+	previous := defaultContainerUser
+	defaultContainerUser = func() string { return "1000:1000" }
+
+	t.Cleanup(func() { defaultContainerUser = previous })
+
+	runner, err := NewRunner(RunnerSpec{
+		Image:      testImage,
+		MountPath:  "/on/the/worker",
+		DockerHost: "unix:///not/dialled.sock",
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	docker, ok := runner.(DockerRunner)
+	if !ok {
+		t.Fatalf("NewRunner returned %T, want a DockerRunner", runner)
+	}
+
+	if docker.session.user != "" {
+		t.Errorf("user = %q, want empty: the daemon is not this machine's, so this machine's uid is not the answer",
+			docker.session.user)
+	}
+
+	// The other direction, so the fix cannot be "never default": a local
+	// daemon still gets the platform default that exists to stop a container
+	// writing root-owned files into a bind-mounted tree.
+	local, err := NewRunner(RunnerSpec{Image: testImage, MountPath: "/anywhere"})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	localDocker, ok := local.(DockerRunner)
+	if !ok {
+		t.Fatalf("NewRunner returned %T, want a DockerRunner", local)
+	}
+
+	if localDocker.session.user != defaultContainerUser() {
+		t.Errorf("user = %q, want the platform default %q for this machine's own daemon",
+			localDocker.session.user, defaultContainerUser())
+	}
+}

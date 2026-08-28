@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -376,5 +377,58 @@ func TestPackPathsRefusesANameItCannotResolve(t *testing.T) {
 	if !errors.Is(err, ErrUnsafePath) {
 		t.Errorf("PackPaths(%q) = %v, want a refusal: the guard could not resolve the name and answered as though it had",
 			"esc", err)
+	}
+}
+
+// TestPackPathsAcceptsARelativeRoot pins the guard against the one root
+// spelling that has no prefix to be.
+//
+// withinRoot decides "inside the tree" by resolving both the root and the
+// member and comparing prefixes. filepath.EvalSymlinks(".") answers "." while
+// the member under it resolves to a bare "out", which is neither equal to "."
+// nor prefixed by "./" — so every name inside the tree was reported as an
+// escape, and PackPaths wrote nothing while naming a security failure it had
+// not observed. A guard that cannot tell inside from outside is worse than no
+// guard, because it is believed.
+func TestPackPathsAcceptsARelativeRoot(t *testing.T) {
+	root := t.TempDir()
+
+	err := os.MkdirAll(filepath.Join(root, "out"), 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(filepath.Join(root, "out", "a.txt"), []byte("hi\n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(root)
+
+	for _, spelling := range []string{".", "./", ""} {
+		var buffer bytes.Buffer
+
+		err := PackPaths(&buffer, spelling, []string{"out"})
+		if err != nil {
+			t.Errorf("PackPaths(root=%q): %v", spelling, err)
+
+			continue
+		}
+
+		if buffer.Len() == 0 {
+			t.Errorf("PackPaths(root=%q) wrote nothing", spelling)
+		}
+	}
+
+	// The guard still has to fire, or "fixed" would mean "disarmed". A symlink
+	// out of the tree is what it exists to refuse.
+	err = os.Symlink(filepath.Dir(root), filepath.Join(root, "escape"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = PackPaths(io.Discard, ".", []string{"escape"})
+	if !errors.Is(err, ErrUnsafePath) {
+		t.Errorf("PackPaths(escape) = %v, want ErrUnsafePath", err)
 	}
 }

@@ -71,10 +71,10 @@ const chainsPerRetainedRun = 5
 //
 // keepRunID is the run that must survive whatever the cap says — the one whose
 // build is calling this. Without it, retention could delete the run it was
-// invoked from: a RESUMED run keeps its original started_at (StartRun upserts
-// without touching it, which is right — it is when the run started), so a resume
-// of an older run is the OLDEST row, and it reaped itself at the end of its own
-// build. That left its run_steps and agent_usage cascaded away and FindRun
+// invoked from: a RESUMED run keeps its original started_at (StartRun inserts
+// and ResumeRun leaves it alone, which is right — it is when the run started),
+// so a resume of an older run is the OLDEST row, and it reaped itself at the
+// end of its own build. That left its run_steps and agent_usage cascaded away and FindRun
 // answering "no run recorded", making the run permanently unresumable. Pass ""
 // when no run is in play.
 //

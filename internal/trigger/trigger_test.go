@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,6 +45,19 @@ func captureStdout(t *testing.T, fn func()) string {
 	out = w
 	outMu.Unlock()
 
+	// Drained WHILE fn runs, not after. printf holds outMu.RLock across its
+	// Fprintf, so a writer that fills the pipe's 64KiB buffer blocks holding
+	// the read lock — and the restore below takes the write lock, which then
+	// never acquires. w.Close() would unstick it, but it is sequenced after
+	// the restore, so the deadlock is permanent and takes the whole package
+	// out to the go-test timeout.
+	captured := make(chan []byte, 1)
+
+	go func() {
+		data, _ := io.ReadAll(r)
+		captured <- data
+	}()
+
 	fn()
 
 	outMu.Lock()
@@ -50,12 +66,7 @@ func captureStdout(t *testing.T, fn func()) string {
 
 	_ = w.Close()
 
-	data, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("read captured stdout: %v", err)
-	}
-
-	return string(data)
+	return string(<-captured)
 }
 
 // loadConfig writes yaml to a pipeline.yml under dir and parses it.
@@ -958,6 +969,18 @@ jobs:
 // invoke it, this test would fail with a connection error (or hang) instead
 // of cleanly observing the interruption. Not parallel: uses t.Setenv.
 func TestDrainOneFixTaskInterruptedNeverInvokesFixAgent(t *testing.T) {
+	// An endpoint that COUNTS rather than one nothing listens on: a refused
+	// dial and a never-attempted call both surface as an error this test
+	// already tolerates, so the address alone cannot tell them apart.
+	var agentHits atomic.Int64
+
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		agentHits.Add(1)
+
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(endpoint.Close)
+
 	dir := t.TempDir()
 	versionsPath := filepath.Join(dir, "versions.json")
 	writeVersions(t, versionsPath, `[{"ref":"v1"}]`)
@@ -970,7 +993,7 @@ defaults:
 agents:
 - name: fixer
   source:
-    endpoint: http://127.0.0.1:1/v1/
+    endpoint: %s/v1/
     model: test-model
     api_key_env: STEPS_TEST_AGENT_API_KEY
 
@@ -996,7 +1019,7 @@ jobs:
     inputs: []
     run: sleep 1
     fix: fixer
-`, versionsPath))
+`, endpoint.URL, versionsPath))
 
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
@@ -1019,19 +1042,7 @@ jobs:
 	shortCtx, cancel := context.WithTimeout(bgCtx, 200*time.Millisecond)
 	defer cancel()
 
-	// pipeline.go prints "invoking fix agent" via fmt.Printf to os.Stdout
-	// immediately before calling agent.RunFix — capture it so the test proves
-	// the fix agent was never reached, not merely that the final error happens
-	// to satisfy errors.Is(_, DeadlineExceeded) (which an already-expired ctx
-	// would also produce from deep inside a wrongly-attempted agent.RunFix
-	// call, since its own HTTP client respects the same ctx — a weaker check
-	// that wouldn't actually catch runFixTask skipping its cancellation guard).
-	var ran bool
-
-	stdout := captureStdout(t, func() {
-		ran, err = drainOne(shortCtx, cfg, provider, st, nil, false)
-	})
-
+	ran, err := drainOne(shortCtx, cfg, provider, st, nil, false)
 	if !ran || err == nil {
 		t.Fatalf("drainOne (interrupted mid-run): expected ran=true and a non-nil error, got ran=%v err=%v", ran, err)
 	}
@@ -1040,8 +1051,15 @@ jobs:
 		t.Errorf("drainOne error = %v, want it to satisfy errors.Is(_, context.DeadlineExceeded)", err)
 	}
 
-	if strings.Contains(stdout, "invoking fix agent") {
-		t.Errorf("drainOne invoked the fix agent for an interrupted run: stdout = %q", stdout)
+	// Says the thing directly. It replaces a stdout check that could not
+	// fire: "invoking fix agent" is printed by internal/pipeline via plain
+	// fmt.Printf to os.Stdout, while captureStdout swaps only THIS package's
+	// writer, so strings.Contains was asserting on a stream the capture never
+	// saw. A request count is not stream-dependent, and unlike the error
+	// check it cannot be satisfied by an already-expired ctx producing
+	// DeadlineExceeded from inside a wrongly-attempted RunFix.
+	if hits := agentHits.Load(); hits != 0 {
+		t.Errorf("the fix agent's endpoint was called %d times for an interrupted run", hits)
 	}
 
 	// The row must still be recoverable as running (not "failed") — the same

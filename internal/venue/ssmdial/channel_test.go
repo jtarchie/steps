@@ -41,6 +41,11 @@ type fakeAgent struct {
 	dropFirstData bool
 	// scramble delivers the agent's own data messages out of order.
 	scramble bool
+	// interleaveFlag sends a non-Output payload mid-stream, drawn from the
+	// same sequence counter every other output-stream message uses — which is
+	// how the real agent numbers them, and how this fake's own handshake
+	// messages are numbered.
+	interleaveFlag bool
 
 	mu         sync.Mutex
 	conn       *websocket.Conn
@@ -225,6 +230,16 @@ func (a *fakeAgent) onData(message *agentMessage) {
 	a.mu.Unlock()
 
 	a.write(msgOutputStreamData, payloadOutput, message.payload)
+
+	if a.interleaveFlag {
+		// A payload this client drops. It still consumes a sequence number,
+		// so a client that acknowledges and forgets it waits on that number
+		// forever: the frames after it are buffered and never drained, Read
+		// blocks with no error and no EOF, and the step hangs until its own
+		// timeout.
+		a.write(msgOutputStreamData, payloadFlag, []byte{0, 0, 0, 1})
+		a.write(msgOutputStreamData, payloadOutput, []byte("|after"))
+	}
 
 	if !a.scramble {
 		return
@@ -708,5 +723,31 @@ func TestChannelSaysGoodbye(t *testing.T) {
 		}
 
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestChannelKeepsFlowingPastAPayloadItDrops pins the sequence space this
+// client shares with the agent.
+//
+// Only payloadOutput carries bytes, so every other output-stream payload is
+// acknowledged and discarded — correctly. What it must ALSO do is account for
+// the sequence number, because the agent draws every output-stream payload
+// from one counter (this fake's handshake messages prove it: they come off the
+// same seq). A dropped payload whose number was never filed leaves reassembly
+// waiting on it forever: each later frame is buffered and never drained, Read
+// blocks with neither an error nor an EOF, and the buffer grows with the rest
+// of the step's output while the venue's reader sits behind it.
+func TestChannelKeepsFlowingPastAPayloadItDrops(t *testing.T) {
+	t.Parallel()
+
+	channel, _ := openFake(t, &fakeAgent{interleaveFlag: true})
+
+	_, err := channel.Write([]byte("first"))
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if got := readAtLeast(t, channel, len("first|after")); got != "first|after" {
+		t.Errorf("read %q, want the bytes after the dropped payload to arrive", got)
 	}
 }
