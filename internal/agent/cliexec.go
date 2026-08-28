@@ -15,7 +15,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/shell"
@@ -81,20 +80,41 @@ func newCLIStepHome() (string, error) {
 	return home, nil
 }
 
-// buildCLICommand constructs the subprocess for one CLI attempt: the binary
-// itself on the host, or a `docker run` of it when the step resolved an
-// image. Everything the caller wires afterwards (stdin, stdout parsing,
-// stderr, WaitDelay) is identical either way — only what the process IS
+// cliProcess is one CLI attempt, however it is being run: a child of this
+// process on the host, or a container on the daemon.
+//
+// An interface rather than an *exec.Cmd for both, because the container is no
+// longer a subprocess to wire up — it is a container this code talks to over
+// the engine API, and the only things the caller ever did with the command
+// were start it, read its transcript, and wait. Those are the three methods.
+type cliProcess interface {
+	// Start begins the run and returns the stream its transcript arrives on.
+	Start(ctx context.Context, stdin io.Reader, stderr io.Writer) (io.Reader, error)
+	// Wait ends it, reporting a nonzero exit as an error — the same shape
+	// exec.Cmd has, so the caller needs one branch and not two.
+	Wait(ctx context.Context) error
+	// Close releases whatever the run holds, on every exit path including the
+	// ones that never reach Wait.
+	Close()
+}
+
+// buildCLIProcess constructs the run for one CLI attempt: the binary itself on
+// the host, or a container when the step resolved an image. Everything the
+// caller does afterwards is identical either way — only what the process IS
 // differs.
-func buildCLICommand(
+//
+// The second return is the container's name, empty on the host path. It is
+// what makes the run RECLAIMABLE: nothing this end does stops a container, so
+// a caller whose context is cancelled can only tear it down by name.
+func buildCLIProcess(
 	ctx context.Context, prepared preparedAgentStep, binary string, args []string, stepHome string,
-) (*exec.Cmd, string, error) {
+) (cliProcess, string, error) {
 	if prepared.ri.Image == "" {
 		cmd := exec.CommandContext(ctx, binary, args...) //nolint:gosec // binary comes from the static cliProviders table
 		cmd.Dir = prepared.conv.env.dir
 		cmd.Env = cliEnv(prepared.ri)
 
-		return cmd, "", nil
+		return &hostCLIProcess{cmd: cmd}, "", nil
 	}
 
 	resolvedCwd, err := shell.ResolveMountPath(prepared.conv.env.dir)
@@ -147,37 +167,90 @@ func buildCLICommand(
 		})
 	}
 
-	// The api_key_env: value crosses under the CLI's own name, forwarded
-	// value-free (`-e ANTHROPIC_API_KEY`) — the docker client's environment
-	// carries it, its argv never does. The client otherwise inherits this
-	// process's environment, which is what makes the pipeline env: names in
-	// EnvNames resolvable at all (matching how the session container's docker
-	// client behaves).
+	// The api_key_env: value crosses under the CLI's own name, carried by
+	// value. It used to be forwarded value-free so the secret stayed out of
+	// the docker client's argv; there is no argv now, and the value travels in
+	// a request body that no process list shows.
 	//
-	// Both halves are conditioned on the variable actually being EXPORTED,
-	// not merely named. Forwarding the name alone would hand the container
-	// whatever ANTHROPIC_API_KEY this process happens to have — so a pipeline
-	// naming an unset api_key_env: would silently authenticate with the
-	// operator's personal key instead of failing. The host path cannot do
-	// that (shell.HostEnv's allowlist excludes it), and the two must agree.
-	env := os.Environ()
-
+	// Conditioned on the variable actually being EXPORTED, not merely named.
+	// Passing the name alone would hand the container whatever
+	// ANTHROPIC_API_KEY this process happens to have — so a pipeline naming an
+	// unset api_key_env: would silently authenticate with the operator's
+	// personal key instead of failing. The host path cannot do that
+	// (shell.HostEnv's allowlist excludes it), and the two must agree.
 	if key := lookupCLIKey(prepared.ri); key != "" {
-		spec.EnvNames = append(append([]string{}, spec.EnvNames...), cliAPIKeyEnv)
-		env = append(env, cliAPIKeyEnv+"="+key)
+		spec.ExtraEnv[cliAPIKeyEnv] = key
 	}
 
-	//nolint:gosec // running a pipeline-defined image is the point; the image is load-validated and sits after "--"
-	cmd := exec.CommandContext(ctx, "docker", shell.DockerRunArgv(spec)...)
-	cmd.Env = env
+	return &containerCLIProcess{spec: spec}, name, nil
+}
 
-	// A canceled context kills the docker client, which does NOT stop the
-	// container. SIGTERM first, mirroring shell.dockerCommand, so the client
-	// can detach cleanly; the container itself is torn down by name, by
-	// execCLI's deferred RemoveContainer.
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+// hostCLIProcess runs the CLI as a child of this process.
+type hostCLIProcess struct {
+	cmd *exec.Cmd
+}
 
-	return cmd, name, nil
+func (h *hostCLIProcess) Start(_ context.Context, stdin io.Reader, stderr io.Writer) (io.Reader, error) {
+	h.cmd.Stdin = stdin
+	h.cmd.Stderr = stderr
+	h.cmd.WaitDelay = cliWaitDelay
+
+	stdout, err := h.cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("cli stdout: %w", err)
+	}
+
+	err = h.cmd.Start()
+	if err != nil {
+		return nil, fmt.Errorf("starting %s: %w", h.cmd.Path, err)
+	}
+
+	return stdout, nil
+}
+
+// Close is a no-op: a child process owns nothing this end has to release.
+func (h *hostCLIProcess) Close() {}
+
+func (h *hostCLIProcess) Wait(context.Context) error {
+	err := h.cmd.Wait()
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	return nil
+}
+
+// containerCLIProcess runs the CLI in a container on the daemon.
+type containerCLIProcess struct {
+	spec shell.DockerRunSpec
+	run  *shell.ForegroundRun
+}
+
+func (c *containerCLIProcess) Start(ctx context.Context, stdin io.Reader, stderr io.Writer) (io.Reader, error) {
+	run, err := shell.StartForeground(ctx, c.spec, stdin, stderr)
+	if err != nil {
+		return nil, fmt.Errorf("starting the cli container: %w", err)
+	}
+
+	c.run = run
+
+	return run.Stdout, nil
+}
+
+func (c *containerCLIProcess) Wait(ctx context.Context) error {
+	err := c.run.Wait(ctx)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	return nil
+}
+
+// Close releases what the run holds, for the paths that never reach Wait.
+func (c *containerCLIProcess) Close() {
+	if c.run != nil {
+		c.run.Close()
+	}
 }
 
 // cliAPIKeyEnv is the variable the claude CLI reads its key from, whatever
@@ -228,7 +301,7 @@ func execCLI(
 	slog.Debug("agent.cli.exec", "agent", prepared.ri.AgentName, "binary", binary, "args", args,
 		"dir", prepared.conv.env.dir, "image", prepared.ri.Image)
 
-	cmd, container, err := buildCLICommand(ctx, prepared, binary, args, plan.home)
+	process, container, err := buildCLIProcess(ctx, prepared, binary, args, plan.home)
 	if err != nil {
 		return cliRunResult{}, err
 	}
@@ -240,22 +313,17 @@ func execCLI(
 	// matters most are exactly the ones where the caller's context is
 	// already dead. A normal exit has nothing to remove (--rm got there
 	// first) and this is a no-op against an absent container.
+	defer process.Close()
+
 	if container != "" {
 		defer shell.RemoveContainer(context.WithoutCancel(ctx), container)
 	}
 
-	cmd.Stdin = strings.NewReader(plan.prompt)
-	cmd.Stderr = &cliStderrLogger{agent: prepared.ri.AgentName}
-	cmd.WaitDelay = cliWaitDelay
-
-	stdout, err := cmd.StdoutPipe()
+	stdout, err := process.Start(ctx,
+		strings.NewReader(plan.prompt),
+		&cliStderrLogger{agent: prepared.ri.AgentName})
 	if err != nil {
-		return cliRunResult{}, fmt.Errorf("agent %q: cli stdout: %w", prepared.ri.AgentName, err)
-	}
-
-	err = cmd.Start()
-	if err != nil {
-		return cliRunResult{}, fmt.Errorf("agent %q: starting %s: %w", prepared.ri.AgentName, binary, err)
+		return cliRunResult{}, fmt.Errorf("agent %q: %w", prepared.ri.AgentName, err)
 	}
 
 	// Parsed as it arrives, not buffered whole: a step that times out
@@ -267,13 +335,13 @@ func execCLI(
 
 	// Drain whatever is left before waiting. A parse that stopped early (an
 	// over-long line) leaves the child writing into a pipe nobody reads, and
-	// cmd.Wait would then block on a process blocked on us until the step
+	// waiting would then block on a process blocked on us until the step
 	// timeout expired.
 	if parseErr != nil {
 		_, _ = io.Copy(io.Discard, stdout)
 	}
 
-	waitErr := cmd.Wait()
+	waitErr := process.Wait(ctx)
 
 	switch {
 	case parseErr != nil:

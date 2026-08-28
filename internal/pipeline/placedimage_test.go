@@ -8,18 +8,21 @@ import (
 	"testing"
 )
 
-// TestPlacedImageNeedsTheDockerCLIBeforeAWorkerIsDialled crosses the seam
-// between config's narrowing and the fail-fast contract.
+// TestPlacedImageNeedsNoDockerOnTheOrchestrator is the inverse of the test it
+// replaces, and the inversion is the point.
 //
 // Images() deliberately omits a placed step's image — that container runs on
 // the worker's daemon, and an orchestrator with no daemon at all is the
-// arrangement the feature exists for. But gating the WHOLE docker preflight on
-// Images() dropped the CLI check with the daemon check, and the placed
-// containerized path is driven by this machine's docker binary aimed at the
-// forwarded socket. With no docker on PATH the job sailed through preflight,
-// launched and billed a machine, pushed the tree, and only then died inside
-// the step on `exec: "docker": executable file not found in $PATH`.
-func TestPlacedImageNeedsTheDockerCLIBeforeAWorkerIsDialled(t *testing.T) {
+// arrangement the feature exists for. But the container used to be STARTED by
+// this machine's docker binary aimed at the forwarded socket, so the binary
+// had to be here even though the daemon did not, and a missing one had to be
+// caught before a machine was acquired and billed and the tree pushed.
+//
+// The container is created over the socket directly now. There is nothing
+// this machine has to have, so the whole failure mode is gone rather than
+// moved: a job with no docker anywhere on PATH gets as far as dialling the
+// worker, and fails — if it fails — about the worker.
+func TestPlacedImageNeedsNoDockerOnTheOrchestrator(t *testing.T) {
 	// Not t.Parallel(): strips PATH for the whole process.
 	cfg, job, st, provider := fixtureFrom(t, `
 jobs:
@@ -34,8 +37,9 @@ jobs:
 	defer func() { _ = st.Close() }()
 	defer func() { _ = provider.Close() }()
 
-	// A worker nothing can reach, so a run that got as far as dialling says so
-	// in its error rather than passing for the right reason by accident.
+	// A worker nothing can reach, so the run has to get as far as dialling for
+	// its error to say so — which is exactly what distinguishes "went further
+	// than preflight" from "passed for the right reason by accident".
 	ctx, err := WithWorkers(context.Background(), map[string]string{"box": "ssh://nobody@127.0.0.1:1"})
 	if err != nil {
 		t.Fatalf("WithWorkers: %v", err)
@@ -45,10 +49,10 @@ jobs:
 
 	err = RunJob(ctx, cfg, job, nil, provider, st, false)
 	if err == nil {
-		t.Fatal("a placed image: ran to completion with no docker CLI on PATH")
+		t.Fatal("the unreachable worker was never dialled; this test can no longer tell how far the job got")
 	}
 
-	if !strings.Contains(err.Error(), "docker CLI not found on PATH") {
-		t.Errorf("error = %v, want the missing docker CLI reported before the worker was dialled", err)
+	if strings.Contains(err.Error(), "docker CLI not found on PATH") {
+		t.Errorf("error = %v; a placed containerized step needs no docker binary on this machine", err)
 	}
 }

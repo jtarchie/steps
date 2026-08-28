@@ -1,13 +1,23 @@
 package shell
 
-// A one-shot foreground `docker run` for a process the caller drives itself —
-// argv-based (no `sh -c`), stdin attached, stdout/stderr wired by the caller's
-// own exec.Cmd. This exists for internal/agent's containerized CLI subprocess,
-// which the session-container Runner deliberately does not cover: Runner's
-// interface is a command string executed to completion with captured output,
-// and the CLI is a long-running child whose stdout is parsed as it streams.
+// A one-shot foreground container for a process the caller drives itself —
+// argv-based (no `sh -c`), stdin attached, stdout read as it streams. This
+// exists for internal/agent's containerized CLI subprocess, which the
+// session-container Runner deliberately does not cover: Runner's interface is
+// a command string executed to completion with captured output, and the CLI is
+// a long-running child whose transcript is parsed turn by turn, so that a step
+// which times out mid-conversation still has what it managed to do.
 
-import "sort"
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"sort"
+	"sync"
+
+	"github.com/jtarchie/steps/internal/dockerapi"
+)
 
 // hostGatewayMapping makes the host reachable from inside the container by a
 // name that works on Docker Desktop and Linux Docker Engine alike.
@@ -20,7 +30,7 @@ const hostGatewayMapping = HostGatewayName + ":host-gateway"
 // not drift apart.
 const HostGatewayName = "host.docker.internal"
 
-// Mount is one extra bind mount for DockerRunArgv, beyond the working
+// Mount is one extra bind mount for a foreground run, beyond the working
 // directory that ResolvedCwd already mounts.
 type Mount struct {
 	HostPath      string
@@ -58,48 +68,137 @@ type DockerRunSpec struct {
 	MemoryBytes int64
 	// ExtraMounts are additional bind mounts (`-v host:container[:ro]`).
 	ExtraMounts []Mount
-	// ExtraEnv is set as literal `-e NAME=value` — for non-secret values only
-	// (a path like HOME), since argv is visible to the host's process list.
+	// ExtraEnv are variables the caller supplies with their values, for the
+	// ones this process's own environment does not hold.
+	//
+	// This used to be documented as non-secret values only, because it became
+	// `-e NAME=value` in an argv the host's process list could read, and
+	// EnvNames existed to avoid exactly that. Neither is true any more: both
+	// travel in a request body, so the distinction between them is now only
+	// where the value comes from.
 	ExtraEnv map[string]string
 }
 
-// DockerRunArgv builds the argv (after "docker") for one foreground run:
-// `run --rm -i --init --add-host ... [shared flags] [extra mounts/env] --
-// image argv...`.
-//
-// --rm rather than the session container's explicit removal: the container's
-// lifetime IS the process's lifetime, there is no postmortem to keep (the
-// caller holds the process's own stderr), and the daemon removes it even if
-// this process is gone by then. The ownership labels still go on: a SIGKILLed
-// steps can leave the child hanging inside a container nothing will remove
-// until it exits, and the labels are what let SweepOrphanedContainers reclaim
-// it from the next run.
-//
-// --add-host host.docker.internal:host-gateway makes the host reachable by
-// that name on Linux Docker Engine as well as Docker Desktop (which resolves
-// it natively) — it is how a containerized child reaches a server the parent
-// bound on the host, regardless of platform, without claiming --network host.
-func DockerRunArgv(spec DockerRunSpec) []string {
-	args := []string{"run", "--rm", "-i", "--init"}
+// ForegroundRun is a one-shot container this process is driving.
+type ForegroundRun struct {
+	// Stdout is the container's transcript, readable as it arrives. Wait
+	// closes it, so every read happens first.
+	Stdout io.Reader
 
-	if spec.Name != "" {
-		args = append(args, "--name", spec.Name)
+	attached *dockerapi.Attached
+	client   *dockerapi.Client
+	closer   sync.Once
+}
+
+// Close releases the connection the run holds, once however many times it is
+// asked.
+//
+// Wait does this on the way out, so the ordinary path needs nothing. It is
+// exported for the path that has no ordinary way out: a caller whose context
+// was cancelled abandons the run without waiting for it, and the connection —
+// and the pool goroutines behind it — would outlive the step that opened it.
+func (r *ForegroundRun) Close() {
+	r.closer.Do(func() { _ = r.client.Close() })
+}
+
+// StartForeground starts a container from spec with its streams attached.
+//
+// Attached before started, so nothing the process says before this end is
+// listening is lost — for a CLI whose first line announces the session, that
+// line IS the thing a caller needs.
+func StartForeground(ctx context.Context, spec DockerRunSpec, stdin io.Reader, stderr io.Writer) (*ForegroundRun, error) {
+	client, err := dockerapi.New("")
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
 	}
 
-	// Unconditionally, including under `network: host`. Two things were
-	// checked against a real daemon (docker 28.4.0) rather than assumed:
-	// docker accepts this alongside --network host rather than rejecting it,
-	// and the mapping still resolves there. It is also still NEEDED there,
-	// which is the counterintuitive part — when the daemon runs in a VM
-	// (Docker Desktop, colima) "host" networking means the VM's namespace,
-	// not this machine's, so a server bound on this loopback is unreachable
-	// from such a container (verified: it is). Treating host networking as
-	// "loopback already works" is only true when the daemon shares this
-	// kernel, which steps cannot tell from here.
-	args = append(args, "--add-host", hostGatewayMapping)
+	attached, err := client.StartAttached(ctx, foregroundSpec(spec), stdin, stderr)
+	if err != nil {
+		_ = client.Close()
 
-	args = append(args, containerArgs(spec.ResolvedCwd, spec.EnvNames, spec.User, spec.Network,
-		spec.Privileged, spec.CPUShares, spec.MemoryBytes)...)
+		return nil, fmt.Errorf("%w", err)
+	}
+
+	return &ForegroundRun{Stdout: attached.Stdout, attached: attached, client: client}, nil
+}
+
+// Wait ends the run and reports a nonzero exit as an error, matching what
+// exec.Cmd's Wait does for the host path this sits beside — the caller has one
+// branch for both.
+func (r *ForegroundRun) Wait(ctx context.Context) error {
+	defer r.Close()
+
+	code, err := r.attached.Wait(ctx)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	if code != 0 {
+		return &ExitError{Command: "the cli", Code: code}
+	}
+
+	return nil
+}
+
+// foregroundSpec translates a DockerRunSpec into the container to create.
+//
+// --rm rather than explicit removal: the container's lifetime IS the
+// process's, there is no postmortem to keep (the caller holds its stderr), and
+// the daemon removes it even if this process is gone by then. The ownership
+// labels still go on: a SIGKILLed steps can leave the child running inside a
+// container nothing will remove until it exits, and the labels are what let
+// SweepOrphanedContainers reclaim it from the next run.
+func foregroundSpec(spec DockerRunSpec) dockerapi.ContainerSpec {
+	return dockerapi.ContainerSpec{
+		Image:       spec.Image,
+		Cmd:         spec.Argv,
+		Name:        spec.Name,
+		WorkingDir:  spec.ResolvedCwd,
+		Env:         foregroundEnv(spec),
+		Labels:      OwnershipLabels(),
+		User:        spec.User,
+		Network:     spec.Network,
+		Privileged:  spec.Privileged,
+		CPUShares:   int64(spec.CPUShares),
+		MemoryBytes: spec.MemoryBytes,
+		Init:        true,
+		AutoRemove:  true,
+		Mounts:      foregroundMounts(spec),
+		OpenStdin:   true,
+		// Unconditionally, including under `network: host`, and the
+		// counterintuitive part is that it is still NEEDED there: when the
+		// daemon runs in a VM (Docker Desktop, colima) "host" networking means
+		// the VM's namespace, not this machine's, so a server bound on this
+		// loopback is unreachable from such a container. Treating host
+		// networking as "loopback already works" is only true when the daemon
+		// shares this kernel, which steps cannot tell from here.
+		ExtraHosts: []string{hostGatewayMapping},
+	}
+}
+
+// foregroundEnv resolves the names the pipeline opted in, then the values the
+// caller supplied. A name this process does not have is omitted rather than
+// set empty, the same rule the session container follows.
+func foregroundEnv(spec DockerRunSpec) []string {
+	env := make([]string, 0, len(spec.EnvNames)+len(spec.ExtraEnv))
+
+	for _, name := range spec.EnvNames {
+		if value, ok := os.LookupEnv(name); ok {
+			env = append(env, name+"="+value)
+		}
+	}
+
+	// Sorted, so two runs of the same step describe the same container.
+	for _, name := range sortedKeys(spec.ExtraEnv) {
+		env = append(env, name+"="+spec.ExtraEnv[name])
+	}
+
+	return env
+}
+
+// foregroundMounts spells the extra bind mounts the way the daemon takes them.
+func foregroundMounts(spec DockerRunSpec) []string {
+	mounts := make([]string, 0, len(spec.ExtraMounts))
 
 	for _, mount := range spec.ExtraMounts {
 		volume := mount.HostPath + ":" + mount.ContainerPath
@@ -107,23 +206,20 @@ func DockerRunArgv(spec DockerRunSpec) []string {
 			volume += ":ro"
 		}
 
-		args = append(args, "-v", volume)
+		mounts = append(mounts, volume)
 	}
 
-	// Sorted so the argv is deterministic — for tests, and so two runs of the
-	// same step produce the same `docker inspect` output.
-	names := make([]string, 0, len(spec.ExtraEnv))
-	for name := range spec.ExtraEnv {
+	return mounts
+}
+
+// sortedKeys is a deterministic order for a map of environment values.
+func sortedKeys(values map[string]string) []string {
+	names := make([]string, 0, len(values))
+	for name := range values {
 		names = append(names, name)
 	}
 
 	sort.Strings(names)
 
-	for _, name := range names {
-		args = append(args, "-e", name+"="+spec.ExtraEnv[name])
-	}
-
-	args = append(args, "--", spec.Image)
-
-	return append(args, spec.Argv...)
+	return names
 }

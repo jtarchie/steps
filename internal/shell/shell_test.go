@@ -3,6 +3,8 @@ package shell
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -77,14 +79,42 @@ func TestRunShellCaptureFull(t *testing.T) {
 func TestRunShellCaptureFullSignalKilled(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	dir := t.TempDir()
+	ready := filepath.Join(dir, "ready")
+
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Cancelled once the command SAYS it is running, rather than after a fixed
+	// wall-clock delay. A short deadline races the process launch, and loses
+	// it on a loaded machine — the kill then lands before anything started,
+	// which is a start failure, which is the very case this test exists to
+	// tell apart from a signalled one. It failed exactly that way once the
+	// suite around it got heavier.
+	watching := make(chan struct{})
+
+	go func() {
+		defer close(watching)
+
+		for range 2000 {
+			_, statErr := os.Stat(ready)
+			if statErr == nil {
+				cancel()
+
+				return
+			}
+
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	t.Cleanup(func() { cancel(); <-watching })
 
 	// exec replaces the shell with sleep (same PID), so the context's
 	// SIGKILL lands directly on it instead of orphaning a grandchild that
 	// would keep the output pipe open until it exits on its own — keeps
 	// this test fast instead of blocking for the full sleep duration.
-	stdout, _, exitCode, err := RunShellCaptureFull(ctx, "echo partial; exec sleep 5", t.TempDir())
+	stdout, _, exitCode, err := RunShellCaptureFull(ctx, "echo partial; touch "+ready+"; exec sleep 30", dir)
 	if err != nil {
 		t.Fatalf("a signal-killed process must be reported as data, not a Go error (regression: it was misclassified as \"failed to start\"): %v", err)
 	}

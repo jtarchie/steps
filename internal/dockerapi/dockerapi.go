@@ -31,8 +31,7 @@ type Client struct {
 	host string
 }
 
-// errSSHHost is a daemon reached over ssh, which the CLI supports through a
-// connection helper this does not have.
+// errSSHHost is a daemon reached over ssh.
 var errSSHHost = errors.New("an ssh:// docker host is not supported")
 
 // New connects to a daemon. An empty host resolves the same way a docker CLI
@@ -54,14 +53,23 @@ func New(host string) (*Client, error) {
 		host = resolved
 	}
 
-	// ponytail: an ssh:// host needs a connection helper (the CLI shells out
-	// to `ssh` for one). Refused with a message rather than half-supported:
-	// an ssh client without the agent, ProxyJump and ssh_config handling the
-	// real ones have would fail in ways that look like docker problems. The
-	// upgrade path is a dialer built on golang.org/x/crypto/ssh, which
-	// internal/venue already depends on.
+	// Refused rather than dialled, and the reason is about steps rather than
+	// about ssh. Reaching a remote daemon is the easy half — an ssh tunnel to
+	// its socket is a few lines. The hard half is that the daemon resolves a
+	// bind mount against ITS OWN filesystem, so a step whose tree lives here
+	// would mount a path that does not exist there, and docker answers that
+	// by creating an empty directory rather than by failing. The step then
+	// succeeds and produces nothing. That was equally true when this shelled
+	// out to a docker CLI that did support ssh://, which is to say the
+	// support was never the part that worked.
+	//
+	// A worker is the mechanism for this, and it is a different mechanism
+	// rather than a nicer spelling of the same one: it sends the tree, runs
+	// the command against the copy that arrived, and brings the results back.
 	if strings.HasPrefix(host, "ssh://") {
-		return nil, fmt.Errorf("%q: %w; point DOCKER_HOST at a unix socket or tcp address instead", host, errSSHHost)
+		return nil, fmt.Errorf("%q: %w; a remote daemon would resolve this step's bind mount against its own "+
+			"filesystem and find nothing there. Run the step on that machine with a worker (--worker ssh://...), "+
+			"which sends the tree and fetches the results, or point DOCKER_HOST at a local socket", host, errSSHHost)
 	}
 
 	api, err := client.New(client.WithHost(host))

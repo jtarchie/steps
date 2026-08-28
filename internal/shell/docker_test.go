@@ -576,18 +576,24 @@ func TestDockerRunnerEmptyCwdMountsNothing(t *testing.T) {
 	}
 }
 
-// TestValidateDockerCLIWantsTheBinaryNotTheDaemon pins the split a PLACED
-// containerized step turns on. Its container runs on the worker's daemon, so
-// an orchestrator whose own daemon is unreachable is a working arrangement
-// rather than a misconfiguration — but internal/agent still spawns this
-// machine's docker binary for a containerized CLI, and a missing one has to
-// be found before a machine is acquired rather than inside the step.
-func TestValidateDockerCLIWantsTheBinaryNotTheDaemon(t *testing.T) {
-	writeStubDockerBinary(t)
+// TestValidateDockerNeedsOnlyADaemon pins what preflight now asks, and — more
+// to the point — what it no longer asks.
+//
+// There used to be two halves: the docker BINARY on PATH, and a reachable
+// daemon. A PLACED containerized step needed only the first, since its
+// container ran on the worker's daemon and was started by this machine's
+// docker CLI through the forwarded socket. Nothing spawns that CLI any more,
+// so a machine with a reachable daemon and no docker installed runs a
+// containerized pipeline perfectly well, and an orchestrator with neither
+// still runs placed ones.
+func TestValidateDockerNeedsOnlyADaemon(t *testing.T) {
+	requireDocker(t)
 
-	err := ValidateDockerCLI()
+	t.Setenv("PATH", t.TempDir()) // no docker binary anywhere
+
+	err := ValidateDocker(context.Background())
 	if err != nil {
-		t.Errorf("ValidateDockerCLI: %v, want the binary alone to be enough", err)
+		t.Errorf("ValidateDocker: %v; a reachable daemon is the whole requirement", err)
 	}
 
 	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:1")
@@ -595,41 +601,6 @@ func TestValidateDockerCLIWantsTheBinaryNotTheDaemon(t *testing.T) {
 	err = ValidateDocker(context.Background())
 	if err == nil {
 		t.Error("ValidateDocker accepted a daemon that cannot be reached")
-	}
-
-	t.Setenv("PATH", t.TempDir()) // empty PATH: docker cannot be found
-
-	err = ValidateDockerCLI()
-	if err == nil {
-		t.Error("ValidateDockerCLI accepted a machine with no docker binary")
-	}
-}
-
-// writeStubDockerBinary puts something named `docker` on PATH. It is never
-// run — only looked up — which is the whole point of the check it serves.
-func writeStubDockerBinary(t *testing.T) {
-	t.Helper()
-
-	if runtime.GOOS == "windows" {
-		t.Skip("the stub assumes a POSIX executable bit")
-	}
-
-	dir := t.TempDir()
-
-	err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\nexit 0\n"), 0o700) //nolint:gosec // a test fixture that has to be executable
-	if err != nil {
-		t.Fatalf("writing the stub docker: %v", err)
-	}
-
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
-
-func TestValidateDockerMissingBinary(t *testing.T) {
-	t.Setenv("PATH", t.TempDir()) // empty PATH: docker cannot be found
-
-	err := ValidateDocker(context.Background())
-	if err == nil {
-		t.Error("expected an error when docker is not on PATH")
 	}
 }
 

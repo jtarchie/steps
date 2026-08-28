@@ -151,16 +151,27 @@ func TestNewRejectsAnOverlongUnixPath(t *testing.T) {
 	}
 }
 
-// TestNewRefusesAnSSHHost pins that the one address shape this cannot dial
-// says so, rather than failing later as a connection problem.
+// TestNewRefusesAnSSHHost pins that a remote daemon is refused, and — the
+// part that matters more — that the refusal points somewhere.
+//
+// The refusal is not about being unable to dial ssh; that is a few lines. It
+// is that a remote daemon resolves this step's bind mount against its own
+// filesystem, finds nothing, and creates an empty directory instead of
+// failing, so the step succeeds and produces nothing. An operator who reads
+// only "not supported" will go looking for a connection helper. One who is
+// pointed at a worker gets the mechanism that actually sends the tree.
 func TestNewRefusesAnSSHHost(t *testing.T) {
 	_, err := New("ssh://someone@example.invalid")
 	if err == nil {
 		t.Fatal("New accepted an ssh:// host it cannot dial")
 	}
 
-	if !strings.Contains(err.Error(), "ssh://") {
-		t.Errorf("error = %v, want it to name the unsupported address", err)
+	if !strings.Contains(err.Error(), "ssh://someone@example.invalid") {
+		t.Errorf("error = %v, want it to name the address it refused", err)
+	}
+
+	if !strings.Contains(err.Error(), "--worker") {
+		t.Errorf("error = %v, want it to name the mechanism that does work", err)
 	}
 }
 

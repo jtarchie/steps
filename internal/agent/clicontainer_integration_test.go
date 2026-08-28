@@ -11,6 +11,8 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -149,16 +151,36 @@ func runContainer(t *testing.T, prepared preparedAgentStep, home, binary string,
 	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
-	cmd, container, err := buildCLICommand(ctx, prepared, binary, args, home)
+	process, container, err := buildCLIProcess(ctx, prepared, binary, args, home)
 	if err != nil {
-		t.Fatalf("buildCLICommand: %v", err)
+		t.Fatalf("buildCLIProcess: %v", err)
 	}
 
 	t.Cleanup(func() { shell.RemoveContainer(context.Background(), container) })
 
-	out, runErr := cmd.CombinedOutput()
+	var stderr strings.Builder
 
-	return string(out), runErr
+	// An empty stdin rather than none, matching production: the CLI is always
+	// fed a prompt, and a container attached without one would leave anything
+	// that reads stdin waiting instead of seeing an end of file.
+	stdout, err := process.Start(ctx, strings.NewReader(""), &stderr)
+	if err != nil {
+		t.Fatalf("starting the container: %v", err)
+	}
+
+	out, readErr := io.ReadAll(stdout)
+	if readErr != nil {
+		t.Fatalf("reading the container's output: %v", readErr)
+	}
+
+	runErr := process.Wait(ctx)
+	if runErr != nil {
+		runErr = fmt.Errorf("%w", runErr)
+	}
+
+	// Combined, because these tests assert on what the container SAID and
+	// several of the commands they run report through stderr.
+	return string(out) + stderr.String(), runErr
 }
 
 // TestCLIContainerIntegrationRunsArgvIntact is the payoff of not going
@@ -303,10 +325,14 @@ func TestCLIContainerIntegrationBridgeIsReachable(t *testing.T) {
 }
 
 // TestCLIContainerIntegrationRemoveContainerStopsIt is the regression test
-// for a step that outlives its timeout. Killing the docker CLIENT does not
-// stop the container it started — this asserts the container is genuinely
-// still running after the client is gone, and that removing it by name is
-// what actually ends it.
+// for a step that outlives its timeout.
+//
+// It used to be phrased about the docker CLIENT: killing it did not stop the
+// container it started. There is no client process any more, and the property
+// survived the change intact — abandoning THIS end, by cancelling the context
+// the run was started with, stops nothing on the daemon. The container keeps
+// running, keeps spending, and keeps writing into the bind-mounted workspace
+// the next step is about to read. Only the name reclaims it.
 func TestCLIContainerIntegrationRemoveContainerStopsIt(t *testing.T) {
 	requireDockerAgent(t)
 
@@ -315,36 +341,30 @@ func TestCLIContainerIntegrationRemoveContainerStopsIt(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	cmd, container, err := buildCLICommand(ctx, prepared, "sleep", []string{"300"}, home)
+	process, container, err := buildCLIProcess(ctx, prepared, "sleep", []string{"300"}, home)
 	if err != nil {
-		t.Fatalf("buildCLICommand: %v", err)
+		t.Fatalf("buildCLIProcess: %v", err)
 	}
 
 	t.Cleanup(func() { shell.RemoveContainer(context.Background(), container) })
+	t.Cleanup(process.Close)
 
-	err = cmd.Start()
+	_, err = process.Start(ctx, strings.NewReader(""), io.Discard)
 	if err != nil {
 		t.Fatalf("starting the container: %v", err)
 	}
 
 	waitForContainer(t, container, true)
 
-	// SIGKILL rather than the context's SIGTERM, on purpose. The docker CLI
-	// proxies signals to the container by default, so a SIGTERM'd client
-	// takes the container down with it and would hide the very thing this
-	// test is about. A KILL is what Go itself does once WaitDelay expires,
-	// and it forwards nothing.
-	err = cmd.Process.Kill()
-	if err != nil {
-		t.Fatalf("killing the docker client: %v", err)
-	}
+	// Everything this end holds is given up: the context that started the run
+	// is cancelled and its result is never waited for. That is exactly the
+	// shape of a step whose deadline passed.
+	cancel()
 
-	_ = cmd.Wait()
-
-	// This is the bug in one assertion: the client is gone and the container
-	// is not. Nothing but the name can reclaim it now.
+	// This is the bug in one assertion: this end is gone and the container is
+	// not. Nothing but the name can reclaim it now.
 	if !containerRunning(t, container) {
-		t.Fatal("container stopped when its client was killed; this test can no longer detect stranding")
+		t.Fatal("container stopped when its caller gave up; this test can no longer detect stranding")
 	}
 
 	shell.RemoveContainer(context.Background(), container)

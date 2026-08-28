@@ -1,9 +1,15 @@
 package agent
 
-// Tests for running the CLI subprocess inside a container: what command gets
-// built, what crosses into it, and what does not. None of these start a
-// process or need a docker daemon — the argv and the prepared $HOME are the
-// whole contract.
+// Tests for running the CLI inside a container: what container gets built,
+// what crosses into it, and what does not. None of these start anything or
+// need a docker daemon.
+//
+// They used to read an argument vector, because the run was a `docker run`
+// subprocess and its argv was the only artefact. It is a container created
+// through the engine API now, so they read the SPEC — which is the same
+// contract one indirection earlier, and a better oracle: a mount is a mount
+// rather than a substring, and a value that is present is present rather than
+// absent-from-a-joined-string.
 
 import (
 	"os"
@@ -11,7 +17,40 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/shell"
 )
+
+// containerSpecFor builds the containerized run and returns the spec it would
+// create, failing the test if the host path was taken instead.
+func containerSpecFor(t *testing.T, prepared preparedAgentStep, args []string, stepHome string) (shell.DockerRunSpec, string) {
+	t.Helper()
+
+	process, container, err := buildCLIProcess(t.Context(), prepared, "claude", args, stepHome)
+	if err != nil {
+		t.Fatalf("buildCLIProcess: %v", err)
+	}
+
+	containerized, ok := process.(*containerCLIProcess)
+	if !ok {
+		t.Fatalf("process is %T, want a containerized one", process)
+	}
+
+	return containerized.spec, container
+}
+
+// mountedAt returns the container path spec binds hostPath at, and whether it
+// is read-only. Reported rather than matched, so a failure says what the
+// mount actually was.
+func mountedAt(spec shell.DockerRunSpec, hostPath string) (containerPath string, readOnly, found bool) {
+	for _, mount := range spec.ExtraMounts {
+		if mount.HostPath == hostPath {
+			return mount.ContainerPath, mount.ReadOnly, true
+		}
+	}
+
+	return "", false, false
+}
 
 // testCLIImage is the image every containerized case runs; its value is
 // arbitrary, only its presence matters.
@@ -68,52 +107,63 @@ func TestBuildCLICommandHostPathUnchanged(t *testing.T) {
 	prepared := cliPrepared(t, []string{"read_file"})
 	prepared.conv.env.dir = t.TempDir()
 
-	cmd, _, err := buildCLICommand(t.Context(), prepared, "claude", []string{"--print"}, "")
+	process, _, err := buildCLIProcess(t.Context(), prepared, "claude", []string{"--print"}, "")
 	if err != nil {
-		t.Fatalf("buildCLICommand: %v", err)
+		t.Fatalf("buildCLIProcess: %v", err)
 	}
 
-	if !strings.HasSuffix(cmd.Path, "claude") {
-		t.Errorf("cmd.Path = %q, want the claude binary itself", cmd.Path)
+	host, ok := process.(*hostCLIProcess)
+	if !ok {
+		t.Fatalf("process is %T, want a host one", process)
 	}
 
-	if cmd.Dir != prepared.conv.env.dir {
-		t.Errorf("cmd.Dir = %q, want the workspace %q", cmd.Dir, prepared.conv.env.dir)
+	if !strings.HasSuffix(host.cmd.Path, "claude") {
+		t.Errorf("cmd.Path = %q, want the claude binary itself", host.cmd.Path)
+	}
+
+	if host.cmd.Dir != prepared.conv.env.dir {
+		t.Errorf("cmd.Dir = %q, want the workspace %q", host.cmd.Dir, prepared.conv.env.dir)
 	}
 }
 
-// TestBuildCLICommandContainerRunsDocker covers the shape of the containerized
-// invocation: docker, the image, and the CLI's own argv passed through
-// untouched after the separator.
-func TestBuildCLICommandContainerRunsDocker(t *testing.T) {
+// TestBuildCLICommandContainerRunsTheImage covers the shape of the
+// containerized run: the image, and the CLI's own argv reaching it untouched.
+//
+// Untouched is the whole point and the reason there is no `sh -c` anywhere
+// here: an argument containing spaces, quotes or JSON braces —
+// --append-system-prompt is exactly that — is one argument, and a shell in
+// between is where it would come apart.
+func TestBuildCLICommandContainerRunsTheImage(t *testing.T) {
 	isolateHome(t)
 
 	prepared := containerPrepared(t)
 
-	cmd, _, err := buildCLICommand(t.Context(), prepared, "claude", []string{"--print", "--model", "sonnet"}, t.TempDir())
+	spec, _ := containerSpecFor(t, prepared, []string{"--print", "--model", "sonnet"}, t.TempDir())
+
+	if spec.Image != testCLIImage {
+		t.Errorf("image = %q, want %q", spec.Image, testCLIImage)
+	}
+
+	want := []string{"claude", "--print", "--model", "sonnet"}
+	if !slices.Equal(spec.Argv, want) {
+		t.Errorf("argv = %v, want %v", spec.Argv, want)
+	}
+
+	if spec.ResolvedCwd != resolved(t, prepared.conv.env.dir) {
+		t.Errorf("cwd = %q, want the workspace", spec.ResolvedCwd)
+	}
+}
+
+// resolved is the workspace path as the daemon will be told it.
+func resolved(t *testing.T, dir string) string {
+	t.Helper()
+
+	path, err := shell.ResolveMountPath(dir)
 	if err != nil {
-		t.Fatalf("buildCLICommand: %v", err)
+		t.Fatalf("ResolveMountPath: %v", err)
 	}
 
-	if !strings.HasSuffix(cmd.Path, "docker") {
-		t.Errorf("cmd.Path = %q, want docker", cmd.Path)
-	}
-
-	// cmd.Dir must stay empty: the container's own -w is the working
-	// directory, and setting cmd.Dir would only move the docker CLIENT.
-	if cmd.Dir != "" {
-		t.Errorf("cmd.Dir = %q, want empty for a containerized run", cmd.Dir)
-	}
-
-	sep := slices.Index(cmd.Args, "--")
-	if sep < 0 {
-		t.Fatalf("args = %v, want a -- separator", cmd.Args)
-	}
-
-	want := []string{testCLIImage, "claude", "--print", "--model", "sonnet"}
-	if got := cmd.Args[sep+1:]; !slices.Equal(got, want) {
-		t.Errorf("positionals = %v, want %v", got, want)
-	}
+	return path
 }
 
 // TestBuildCLICommandMountsHomeAndSetsIt is the pair that makes the CLI able
@@ -125,19 +175,23 @@ func TestBuildCLICommandMountsHomeAndSetsIt(t *testing.T) {
 	prepared := containerPrepared(t)
 	stepHome := t.TempDir()
 
-	cmd, _, err := buildCLICommand(t.Context(), prepared, "claude", nil, stepHome)
-	if err != nil {
-		t.Fatalf("buildCLICommand: %v", err)
+	spec, _ := containerSpecFor(t, prepared, nil, stepHome)
+
+	at, readOnly, found := mountedAt(spec, stepHome)
+	if !found {
+		t.Fatalf("mounts = %v, want the step home mounted", spec.ExtraMounts)
 	}
 
-	joined := strings.Join(cmd.Args, " ")
-
-	if !strings.Contains(joined, "-v "+stepHome+":"+cliContainerHome+" ") {
-		t.Errorf("args = %v, want the step home mounted at %s", cmd.Args, cliContainerHome)
+	if at != cliContainerHome {
+		t.Errorf("step home mounted at %q, want %q", at, cliContainerHome)
 	}
 
-	if !strings.Contains(joined, "-e HOME="+cliContainerHome) {
-		t.Errorf("args = %v, want HOME set to %s", cmd.Args, cliContainerHome)
+	if readOnly {
+		t.Error("the step home is mounted read-only; the CLI could not write its transcript")
+	}
+
+	if spec.ExtraEnv["HOME"] != cliContainerHome {
+		t.Errorf("HOME = %q, want %q", spec.ExtraEnv["HOME"], cliContainerHome)
 	}
 }
 
@@ -149,14 +203,21 @@ func TestBuildCLICommandMountsCredentialsWhenPresent(t *testing.T) {
 
 	prepared := containerPrepared(t)
 
-	cmd, _, err := buildCLICommand(t.Context(), prepared, "claude", nil, t.TempDir())
-	if err != nil {
-		t.Fatalf("buildCLICommand: %v", err)
+	spec, _ := containerSpecFor(t, prepared, nil, t.TempDir())
+
+	at, readOnly, found := mountedAt(spec, credentials)
+	if !found {
+		t.Fatalf("mounts = %v, want the credentials file mounted", spec.ExtraMounts)
 	}
 
-	want := "-v " + credentials + ":" + cliContainerHome + "/.claude/.credentials.json:ro"
-	if !strings.Contains(strings.Join(cmd.Args, " "), want) {
-		t.Errorf("args = %v, want to contain %q", cmd.Args, want)
+	if at != cliContainerHome+"/.claude/.credentials.json" {
+		t.Errorf("credentials mounted at %q, want the CLI's own path", at)
+	}
+
+	// Read-only bounds a hostile image to READING the one token it was
+	// deliberately given.
+	if !readOnly {
+		t.Error("the credentials file is mounted writable, want read-only")
 	}
 }
 
@@ -169,13 +230,12 @@ func TestBuildCLICommandOmitsCredentialsWhenAbsent(t *testing.T) {
 
 	prepared := containerPrepared(t)
 
-	cmd, _, err := buildCLICommand(t.Context(), prepared, "claude", nil, t.TempDir())
-	if err != nil {
-		t.Fatalf("buildCLICommand: %v", err)
-	}
+	spec, _ := containerSpecFor(t, prepared, nil, t.TempDir())
 
-	if strings.Contains(strings.Join(cmd.Args, " "), ".credentials.json") {
-		t.Errorf("args = %v, want no credentials mount when the file does not exist", cmd.Args)
+	for _, mount := range spec.ExtraMounts {
+		if strings.Contains(mount.HostPath, ".credentials.json") {
+			t.Errorf("mounts = %v, want no credentials mount when the file does not exist", spec.ExtraMounts)
+		}
 	}
 }
 
@@ -188,49 +248,34 @@ func TestBuildCLICommandDoesNotMountTheWholeClaudeDir(t *testing.T) {
 
 	prepared := containerPrepared(t)
 
-	cmd, _, err := buildCLICommand(t.Context(), prepared, "claude", nil, t.TempDir())
-	if err != nil {
-		t.Fatalf("buildCLICommand: %v", err)
-	}
+	spec, _ := containerSpecFor(t, prepared, nil, t.TempDir())
 
-	for _, unwanted := range []string{
-		"-v " + filepath.Join(home, ".claude") + ":",
-		"-v " + home + ":",
-	} {
-		if strings.Contains(strings.Join(cmd.Args, " "), unwanted) {
-			t.Errorf("args = %v, must not mount %q", cmd.Args, unwanted)
+	for _, unwanted := range []string{filepath.Join(home, ".claude"), home} {
+		if _, _, found := mountedAt(spec, unwanted); found {
+			t.Errorf("mounts = %v, must not mount %q", spec.ExtraMounts, unwanted)
 		}
 	}
 }
 
-// TestBuildCLICommandForwardsAPIKeyByNameOnly: the key reaches the container,
-// but its VALUE must never appear in the docker client's argv, where the
-// host's process list would expose it.
-func TestBuildCLICommandForwardsAPIKeyByNameOnly(t *testing.T) {
+// TestBuildCLICommandCarriesTheAPIKeyUnderTheCLIsName: whatever the pipeline
+// called its api_key_env:, the value reaches the container as the variable the
+// CLI actually reads.
+//
+// This used to also assert the value stayed OUT of an argv, because the run
+// was a docker command line the host's process list could read. There is no
+// command line now — the value travels in a request body — so what is left to
+// pin is that it arrives, and arrives renamed.
+func TestBuildCLICommandCarriesTheAPIKeyUnderTheCLIsName(t *testing.T) {
 	isolateHome(t)
 	t.Setenv("MY_KEY", "sk-secret-value")
 
 	prepared := containerPrepared(t)
 	prepared.ri.APIKeyEnv = "MY_KEY"
 
-	cmd, _, err := buildCLICommand(t.Context(), prepared, "claude", nil, t.TempDir())
-	if err != nil {
-		t.Fatalf("buildCLICommand: %v", err)
-	}
+	spec, _ := containerSpecFor(t, prepared, nil, t.TempDir())
 
-	joined := strings.Join(cmd.Args, " ")
-
-	if strings.Contains(joined, "sk-secret-value") {
-		t.Fatalf("args = %v, leaked the key value into argv", cmd.Args)
-	}
-
-	if !strings.Contains(joined, "-e ANTHROPIC_API_KEY") {
-		t.Errorf("args = %v, want ANTHROPIC_API_KEY forwarded by name", cmd.Args)
-	}
-
-	// The docker client's own environment is what supplies the value.
-	if !slices.Contains(cmd.Env, "ANTHROPIC_API_KEY=sk-secret-value") {
-		t.Errorf("cmd.Env does not carry the key for the docker client to forward")
+	if spec.ExtraEnv[cliAPIKeyEnv] != "sk-secret-value" {
+		t.Errorf("%s = %q, want the value of the pipeline's api_key_env", cliAPIKeyEnv, spec.ExtraEnv[cliAPIKeyEnv])
 	}
 }
 
@@ -337,32 +382,25 @@ func TestBuildCLICommandNamesTheContainer(t *testing.T) {
 
 	prepared := containerPrepared(t)
 
-	cmd, container, err := buildCLICommand(t.Context(), prepared, "claude", nil, t.TempDir())
-	if err != nil {
-		t.Fatalf("buildCLICommand: %v", err)
-	}
+	spec, container := containerSpecFor(t, prepared, nil, t.TempDir())
 
 	if container == "" {
 		t.Fatal("no container name returned; a canceled step could not reclaim it")
 	}
 
-	if !strings.Contains(strings.Join(cmd.Args, " "), "--name "+container) {
-		t.Errorf("args = %v, want --name %s", cmd.Args, container)
-	}
-
-	// Cancellation must reach the client as SIGTERM rather than an immediate
-	// kill, matching shell.dockerCommand, so it can detach cleanly.
-	if cmd.Cancel == nil {
-		t.Error("cmd.Cancel is nil; a canceled context would SIGKILL the docker client outright")
+	// The name the caller was given has to be the name the container gets, or
+	// the reclaim removes nothing and reports success.
+	if spec.Name != container {
+		t.Errorf("spec names %q but the caller was told %q; the reclaim would miss it", spec.Name, container)
 	}
 
 	// The host path has no container, so nothing to name or reclaim.
 	hostPrepared := cliPrepared(t, []string{"read_file"})
 	hostPrepared.conv.env.dir = t.TempDir()
 
-	_, hostContainer, err := buildCLICommand(t.Context(), hostPrepared, "claude", nil, "")
+	_, hostContainer, err := buildCLIProcess(t.Context(), hostPrepared, "claude", nil, "")
 	if err != nil {
-		t.Fatalf("buildCLICommand (host): %v", err)
+		t.Fatalf("buildCLIProcess (host): %v", err)
 	}
 
 	if hostContainer != "" {
@@ -383,12 +421,18 @@ func TestBuildCLICommandDoesNotForwardAmbientKey(t *testing.T) {
 	prepared := containerPrepared(t)
 	prepared.ri.APIKeyEnv = "NOT_EXPORTED"
 
-	cmd, _, err := buildCLICommand(t.Context(), prepared, "claude", nil, t.TempDir())
-	if err != nil {
-		t.Fatalf("buildCLICommand: %v", err)
+	spec, _ := containerSpecFor(t, prepared, nil, t.TempDir())
+
+	if _, carried := spec.ExtraEnv[cliAPIKeyEnv]; carried {
+		t.Errorf("%s = %q, carried the ambient key for an unexported api_key_env",
+			cliAPIKeyEnv, spec.ExtraEnv[cliAPIKeyEnv])
 	}
 
-	if strings.Contains(strings.Join(cmd.Args, " "), "-e ANTHROPIC_API_KEY") {
-		t.Errorf("args = %v, forwarded the ambient key for an unexported api_key_env", cmd.Args)
+	// And nothing else smuggled it in either: the container's environment must
+	// not contain that value at all.
+	for name, value := range spec.ExtraEnv {
+		if value == "sk-ambient-personal-key" {
+			t.Errorf("%s carries the operator's ambient key", name)
+		}
 	}
 }

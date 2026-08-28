@@ -57,9 +57,15 @@ func (c *Client) ListContainers(ctx context.Context, labels map[string]string) (
 // of a run that cleaned up perfectly well. This used to be decided by matching
 // the words "No such container" in the CLI's output, a sentence the daemon was
 // free to reword at any time; the daemon now says which kind of failure it is.
+//
+// So is a container the daemon is ALREADY removing, which it reports as a
+// conflict rather than as a missing container. That is the ordinary outcome
+// for a self-removing container whose caller also reclaims it by name — the
+// belt and the braces arriving together — and calling it a failure fills the
+// log of a perfectly clean run with warnings about the cleanup working twice.
 func (c *Client) RemoveContainer(ctx context.Context, id string) error {
 	_, err := c.api.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true})
-	if err != nil && !errdefs.IsNotFound(err) {
+	if err != nil && !errdefs.IsNotFound(err) && !errdefs.IsConflict(err) {
 		return fmt.Errorf("removing container %s: %w", id, err)
 	}
 

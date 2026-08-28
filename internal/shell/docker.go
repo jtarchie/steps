@@ -8,10 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -650,69 +648,6 @@ func (s *dockerSession) containerEnv() []string {
 	return env
 }
 
-// containerArgs is the flag block for a one-shot foreground run
-// (DockerRunArgv): ownership labels, working-directory mount, user, network,
-// privilege, limits, and env forwarding.
-//
-// ponytail: the last argv builder left. The session container is created
-// through the engine API and needs none of this; internal/agent still spawns
-// a `docker run` for its containerized CLI subprocess, which is a foreground
-// process whose stdout it parses as it streams. It goes when that does.
-func containerArgs(
-	resolvedCwd string, envNames []string, user, network string,
-	privileged bool, cpuShares int, memoryBytes int64,
-) []string {
-	// Labels are how a container survives its creator. If this process is
-	// SIGKILLed, nothing runs Close, and the only thing left is a container
-	// with a name and no explanation — the keepalive expiring 24h later was
-	// the sole cleanup. These let the NEXT run recognize it as ours and whose
-	// it was; see SweepOrphanedContainers.
-	args := []string{
-		"--label", dockerOwnerLabel + "=steps",
-		"--label", fmt.Sprintf("%s=%d", dockerPIDLabel, os.Getpid()),
-		"--label", dockerHostLabel + "=" + ownerHostname(),
-	}
-
-	if resolvedCwd != "" {
-		args = append(args, "-v", resolvedCwd+":"+resolvedCwd, "-w", resolvedCwd)
-	}
-
-	if user != "" {
-		args = append(args, "--user", user)
-	}
-
-	if network != "" {
-		args = append(args, "--network", network)
-	}
-
-	if privileged {
-		args = append(args, "--privileged")
-	}
-
-	// Zero omits the flag entirely rather than passing 0, which docker reads
-	// as "no limit" — the same thing, but spelled in a way that makes a
-	// misconfiguration look deliberate in `docker inspect`.
-	if cpuShares > 0 {
-		args = append(args, "--cpu-shares", strconv.Itoa(cpuShares))
-	}
-
-	if memoryBytes > 0 {
-		args = append(args, "--memory", strconv.FormatInt(memoryBytes, 10))
-	}
-
-	// `-e NAME` (no value) tells the docker CLI to forward the value from its
-	// OWN environment, which is ours. Spelling it `-e NAME=value` instead
-	// would put the secret in the docker client's argv, where anything able
-	// to read the host's process list could see it for as long as the command
-	// runs — a worse exposure than the one env: exists to avoid. A name that
-	// is unset here is simply not set in the container.
-	for _, name := range envNames {
-		args = append(args, "-e", name)
-	}
-
-	return args
-}
-
 // keepAliveCommand is what the session container runs so it stays up between
 // execs: a bounded sleep, so a container nothing ever removes still stops on
 // its own. It needs nothing from the image beyond the `sh` and `sleep` that
@@ -762,48 +697,18 @@ func checkMountPath(path string) error {
 	return nil
 }
 
-// errDockerMissing is the CLI half of the preflight, shared by both checks so
-// a pipeline that needs docker only as a client reports the same thing as one
-// that needs the daemon too.
-var errDockerMissing = errors.New("docker CLI not found on PATH, but this pipeline configures image")
-
-// ValidateDockerCLI fails fast when the docker BINARY is missing.
+// ValidateDocker fails fast when a pipeline configures image: but the daemon
+// is not usable. Mirrors internal/workspace's Provider.Validate() precedent —
+// check once at startup, before any step runs.
 //
-// Split from ValidateDocker for a PLACED containerized step: its container
-// runs on the worker's daemon, reached through the socket the venue forwards,
-// so asking the LOCAL daemon proves nothing and a daemonless orchestrator is
-// a supported arrangement. Gating both halves on the local daemon check let a
-// placed-only pipeline pass preflight, acquire and bill a machine, push the
-// tree, and only then die inside the step.
-//
-// ponytail: the binary half is nearly obsolete. Container execution talks to
-// the engine directly now, so a session needs no `docker` on PATH at all;
-// internal/agent still spawns one for its containerized CLI subprocess, and
-// this stays until that does. When it goes, a daemonless orchestrator stops
-// needing the binary too, which removes a whole failure mode rather than
-// moving it.
-func ValidateDockerCLI() error {
-	_, err := exec.LookPath("docker")
-	if err != nil {
-		return errDockerMissing
-	}
-
-	return nil
-}
-
-// ValidateDocker fails fast when a pipeline configures image: but docker
-// isn't usable: the docker CLI must be on PATH and the daemon must answer.
-// Mirrors internal/workspace's Provider.Validate() precedent — check once at
-// startup, before any step runs.
+// The daemon and nothing else. There used to be a docker BINARY half as well,
+// because container execution spawned one; it does not, so a machine with a
+// reachable daemon and no docker installed is now a perfectly good machine to
+// run a containerized pipeline on.
 //
 // Which daemon is dockerapi's question, not this one's, and it is not the same
 // question as "is DOCKER_HOST set" — see internal/dockerapi/host.go.
 func ValidateDocker(ctx context.Context) error {
-	err := ValidateDockerCLI()
-	if err != nil {
-		return err
-	}
-
 	client, err := dockerapi.New("")
 	if err != nil {
 		return fmt.Errorf("%w", err)

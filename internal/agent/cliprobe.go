@@ -3,15 +3,16 @@ package agent
 // Preflight for a CLI target: is the binary there, and can it authenticate?
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 // probeCLI answers preflight's question for a CLI target: is the binary
@@ -57,23 +58,36 @@ func probeCLI(ctx context.Context, ri config.ResolvedInvocation, timeout time.Du
 // The cost of asking is one short container start, paid once per (image, cli,
 // model) per cache window rather than per poll.
 //
-// --pull=never is what keeps that cost bounded. RunJob pulls every image
-// before it reaches preflight, so the image is already local; without the
-// flag, an image that somehow is not would be pulled inside this probe's
-// timeout, turning a slow download into "the image cannot run the cli" —
-// blaming the image for the network. A genuinely absent image fails here
-// with docker saying exactly that, which is the truth.
+// Nothing is pulled, which is what keeps that cost bounded. RunJob pulls every
+// image before it reaches preflight, so the image is already local. The old
+// shape had to say --pull=never to get this, because `docker run` pulls on
+// first use and an image that somehow was not there would be downloaded inside
+// this probe's timeout — turning a slow network into "the image cannot run the
+// cli". Creating a container never pulls, so the guard is now the default
+// rather than a flag, and a genuinely absent image fails here saying so.
 func probeCLIImage(ctx context.Context, ri config.ResolvedInvocation, binary string, timeout time.Duration) error {
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	var errBuf bytes.Buffer
+	var errBuf strings.Builder
 
-	//nolint:gosec // image is validated at load (no leading '-') and binary comes from the static cliProviders table
-	cmd := exec.CommandContext(probeCtx, "docker", "run", "--rm", "--pull=never", "--", ri.Image, binary, "--version")
-	cmd.Stderr = &errBuf
+	run, err := shell.StartForeground(probeCtx, shell.DockerRunSpec{
+		Image: ri.Image,
+		Argv:  []string{binary, "--version"},
+	}, strings.NewReader(""), &errBuf)
+	if err != nil {
+		return fmt.Errorf("agent %q: image %q cannot run %q: %w", ri.AgentName, ri.Image, binary, err)
+	}
 
-	err := cmd.Run()
+	defer run.Close()
+
+	// Drained rather than discarded unread: the probe does not care what a
+	// version string says, but a container blocked writing into a stream
+	// nobody reads would never exit, and this would report a timeout instead
+	// of an answer.
+	_, _ = io.Copy(io.Discard, run.Stdout)
+
+	err = run.Wait(probeCtx)
 	if err != nil {
 		return fmt.Errorf("agent %q: image %q cannot run %q (%s): %w",
 			ri.AgentName, ri.Image, binary, strings.TrimSpace(errBuf.String()), err)
