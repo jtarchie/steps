@@ -12,10 +12,13 @@ package shell
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -558,5 +561,118 @@ func requireImagePresent(t *testing.T, image string) {
 	err := exec.CommandContext(ctx, "docker", "image", "inspect", "--", image).Run()
 	if err != nil {
 		t.Skipf("%s is not on the daemon; this test is about NOT pulling", image)
+	}
+}
+
+// TestContractResolvesTheDaemonFromADockerContext pins the answer to "which
+// daemon" when nothing in the environment says.
+//
+// Today the docker CLI answers it: with DOCKER_HOST unset it reads
+// config.json for a current context and looks that context up in its own
+// store, which is how `docker context use colima` works and how a great many
+// machines are actually configured. Nothing in this repo implements that, so
+// nothing in this repo tested it — it arrived free with the binary. It stops
+// being free the moment the daemon is reached any other way, and the failure
+// is total rather than partial: every containerized step on such a machine
+// goes looking for a socket at /var/run/docker.sock that is not there.
+//
+// DOCKER_CONFIG points the whole lookup at a directory this test writes, so
+// the operator's own configuration is neither read nor disturbed.
+func TestContractResolvesTheDaemonFromADockerContext(t *testing.T) {
+	requireDocker(t)
+
+	host := currentDockerHost(t)
+	dir := mountableTempDir(t)
+
+	writeDockerContext(t, "steps-test-context", host)
+
+	// Unset, so the context store is the only thing left that knows.
+	t.Setenv("DOCKER_HOST", "")
+
+	err := os.Unsetenv("DOCKER_HOST")
+	if err != nil {
+		t.Fatalf("unsetting DOCKER_HOST: %v", err)
+	}
+
+	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: dir})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	defer CloseRunner(runner, "test")
+
+	stdout, stderr, exitCode, err := runner.RunCaptureFull(context.Background(), "echo reached")
+	if err != nil {
+		t.Fatalf("RunCaptureFull: %v", err)
+	}
+
+	if exitCode != 0 || strings.TrimSpace(stdout) != "reached" {
+		t.Errorf("exit %d, stdout %q, stderr %q; want the daemon found through the current context alone",
+			exitCode, stdout, stderr)
+	}
+}
+
+// TestContractValidateDockerUsesTheContextToo is the same question asked of
+// preflight, which is where the failure would actually be reported.
+func TestContractValidateDockerUsesTheContextToo(t *testing.T) {
+	requireDocker(t)
+
+	writeDockerContext(t, "steps-test-context", currentDockerHost(t))
+
+	t.Setenv("DOCKER_HOST", "")
+
+	err := os.Unsetenv("DOCKER_HOST")
+	if err != nil {
+		t.Fatalf("unsetting DOCKER_HOST: %v", err)
+	}
+
+	err = ValidateDocker(context.Background())
+	if err != nil {
+		t.Errorf("ValidateDocker: %v; want the daemon reachable through the current context", err)
+	}
+}
+
+// writeDockerContext builds a throwaway docker configuration directory whose
+// current context names host, and points DOCKER_CONFIG at it.
+//
+// The layout is docker's own: config.json names the context, and the context
+// itself lives under contexts/meta/<sha256 of its name>/meta.json.
+func writeDockerContext(t *testing.T, name, host string) {
+	t.Helper()
+
+	root := t.TempDir()
+	digest := sha256.Sum256([]byte(name))
+	metaDir := filepath.Join(root, "contexts", "meta", hex.EncodeToString(digest[:]))
+
+	err := os.MkdirAll(metaDir, 0o700)
+	if err != nil {
+		t.Fatalf("making the context directory: %v", err)
+	}
+
+	meta := map[string]any{
+		"Name":     name,
+		"Metadata": map[string]any{},
+		"Endpoints": map[string]any{
+			"docker": map[string]any{"Host": host, "SkipTLSVerify": false},
+		},
+	}
+
+	writeJSON(t, filepath.Join(metaDir, "meta.json"), meta)
+	writeJSON(t, filepath.Join(root, "config.json"), map[string]any{"currentContext": name})
+
+	t.Setenv("DOCKER_CONFIG", root)
+}
+
+func writeJSON(t *testing.T, path string, value any) {
+	t.Helper()
+
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("encoding %s: %v", path, err)
+	}
+
+	err = os.WriteFile(path, encoded, 0o600)
+	if err != nil {
+		t.Fatalf("writing %s: %v", path, err)
 	}
 }
