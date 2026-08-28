@@ -53,7 +53,7 @@ func (s *Store) RecordPlacement(ctx context.Context, placement Placement) error 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO run_placements (`+placementColumns+`, pipeline_id, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(run_id, node_hash) DO UPDATE SET
+		ON CONFLICT(pipeline_id, run_id, node_hash) DO UPDATE SET
 			step_index = excluded.step_index,
 			step_name  = excluded.step_name,
 			job_name   = excluded.job_name,

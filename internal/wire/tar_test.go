@@ -326,3 +326,55 @@ func TestPackPathsRefusesASymlinkedName(t *testing.T) {
 		t.Error("PackPaths shipped nothing for a name inside the tree")
 	}
 }
+
+// TestPackPathsRefusesANameItCannotResolve is the other half of the same
+// guard: the lexical check passed, the resolution did not happen, and the
+// answer must not be "accepted".
+//
+// withinRoot climbs to the nearest resolvable ancestor because a named output
+// that was never produced is deliberately tolerated — fs.ErrNotExist, and
+// only that. Every other reason a probe fails (EACCES on the link's own
+// target, ELOOP on a cycle, a stale mount) is a path this end cannot vouch
+// for, and climbing past it reaches the root, which resolves by construction,
+// and returns nil for a name nobody checked. Measured on one link a single
+// chmod apart: a 0700 target refused, a 0000 target accepted.
+func TestPackPathsRefusesANameItCannotResolve(t *testing.T) {
+	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, where a 0000 directory is still traversable and the resolution never fails")
+	}
+
+	root := t.TempDir()
+	outside := t.TempDir()
+
+	err := os.MkdirAll(filepath.Join(outside, "inner"), 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// One level deeper than the link's own target, so what fails is the
+	// resolution of the LINK — not of a name below an unreadable directory,
+	// which the loop would still refuse on the ancestor it can resolve.
+	err = os.Symlink(filepath.Join(outside, "inner"), filepath.Join(root, "esc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Restored before TempDir's own cleanup, which cannot remove a directory
+	// it may not traverse. Registered after it, so it runs first.
+	t.Cleanup(func() { _ = os.Chmod(outside, 0o700) }) //nolint:gosec // a directory, restored so TempDir can traverse it
+
+	err = os.Chmod(outside, 0o000)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	buf := new(bytes.Buffer)
+
+	err = PackPaths(buf, root, []string{"esc"})
+	if !errors.Is(err, ErrUnsafePath) {
+		t.Errorf("PackPaths(%q) = %v, want a refusal: the guard could not resolve the name and answered as though it had",
+			"esc", err)
+	}
+}

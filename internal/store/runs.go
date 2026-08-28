@@ -184,9 +184,15 @@ func (s *Store) CompletedRunSteps(ctx context.Context, runID string) (map[int]st
 		name  string
 	}
 
+	// Joined to runs for the pipeline, which run_steps has no column of its
+	// own for. Run ids are minted without a uniqueness check, so an unscoped
+	// read here would hand one run another's completed steps and --resume
+	// would skip work it never did.
 	steps, err := collect(ctx, s.db, "the steps of run "+runID,
-		`SELECT step_index, step_name FROM run_steps WHERE run_id = ?`,
-		[]any{runID}, func(rows *sql.Rows) (step, error) {
+		`SELECT s.step_index, s.step_name FROM run_steps s
+		 JOIN runs r ON r.id = s.run_id
+		 WHERE s.run_id = ? AND r.pipeline_id = ?`,
+		[]any{runID, s.pipelineID}, func(rows *sql.Rows) (step, error) {
 			var one step
 
 			return one, rows.Scan(&one.index, &one.name)

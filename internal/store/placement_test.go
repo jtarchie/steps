@@ -151,3 +151,168 @@ func onlyPlacement(ctx context.Context, t *testing.T, store *Store, runID string
 }
 
 func hashOf(n int) string { return fmt.Sprintf("%064x", n) }
+
+// TestPlacementKeyIsScopedToItsPipeline holds the same rule one level down: it
+// is the KEY that has to carry the pipeline, not only the read.
+//
+// merkle.HashNode folds kind, content and parent but NOT the pipeline, so two
+// pipelines each running a job named build over a byte-identical task produce
+// the same node hash — which is exactly why nodes is keyed (pipeline_id, hash).
+// Run ids are eight characters of rand.Text() minted per pipeline, so they
+// collide too. Keyed on (run_id, node_hash) alone, the second pipeline's upsert
+// lands on the first's row and rewrites every column except the one saying
+// whose it is: one pipeline then reports the other's machine, and the other
+// reports nothing at all.
+func TestPlacementKeyIsScopedToItsPipeline(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "shared.db")
+
+	web, err := OpenStore(path, "web")
+	if err != nil {
+		t.Fatalf("OpenStore web: %v", err)
+	}
+
+	defer func() { _ = web.Close() }()
+
+	infra, err := OpenStore(path, "infra")
+	if err != nil {
+		t.Fatalf("OpenStore infra: %v", err)
+	}
+
+	defer func() { _ = infra.Close() }()
+
+	// Every part of the key the two can agree on by accident: one job name, one
+	// content hash, one run id.
+	const (
+		runID   = "SHARED01"
+		jobName = "build"
+	)
+
+	placeAt(ctx, t, web, Placement{
+		RunID: runID, StepName: "unit", JobName: jobName, NodeHash: hashOf(7),
+		Tag: "web", Address: "ssh://web", GOOS: "linux", GOARCH: "amd64",
+		Workdir: "/tmp/web", FSType: "ext4",
+	})
+	placeAt(ctx, t, infra, Placement{
+		RunID: runID, StepName: "unit", JobName: jobName, NodeHash: hashOf(7),
+		Tag: "infra", Address: "ssh://infra", GOOS: "linux", GOARCH: "amd64",
+		Workdir: "/tmp/infra", FSType: "ext4",
+	})
+
+	if got := onlyPlacement(ctx, t, web, runID).Address; got != "ssh://web" {
+		t.Errorf("web's run ran on %q, want ssh://web — the other pipeline's upsert landed on its row", got)
+	}
+
+	if got := onlyPlacement(ctx, t, infra, runID).Address; got != "ssh://infra" {
+		t.Errorf("infra's run ran on %q, want ssh://infra", got)
+	}
+}
+
+// TestPlacementRePlacementKeepsTheMachineThatFinished covers the one path that
+// writes this key twice: a step evicted off machine A and re-placed onto B
+// (pipeline/venue.go's withVenueRetry). The row describes a machine, and the
+// machine the work ran on is the one that finished it — so the second write
+// must win outright rather than be dropped as a duplicate.
+func TestPlacementRePlacementKeepsTheMachineThatFinished(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	reclaimed := "i-000000000000000aa"
+	replaced := "i-000000000000000bb"
+
+	placeAt(ctx, t, store, Placement{
+		RunID: "EVICTED1", StepIndex: 0, StepName: "unit", JobName: "build", NodeHash: hashOf(1),
+		Tag: "spot", Address: "aws://" + reclaimed, InstanceID: &reclaimed,
+		GOOS: "linux", GOARCH: "arm64", Workdir: "/var/tmp/a", FSType: "btrfs",
+		FSFree: 1 << 30, Image: "golang:1.25", BytesSent: 1_000,
+	})
+
+	err := store.RecordPlacement(ctx, Placement{
+		RunID: "EVICTED1", StepIndex: 0, StepName: "unit", JobName: "build", NodeHash: hashOf(1),
+		Tag: "spot", Address: "aws://" + replaced, InstanceID: &replaced,
+		GOOS: "linux", GOARCH: "arm64", Workdir: "/var/tmp/b", FSType: "ext4",
+		FSFree: 2 << 30, Image: "golang:1.25", BytesSent: 2_000,
+	})
+	if err != nil {
+		t.Fatalf("RecordPlacement of the re-placement: %v", err)
+	}
+
+	got := onlyPlacement(ctx, t, store, "EVICTED1")
+
+	if got.Address != "aws://"+replaced {
+		t.Errorf("address = %q, want the machine that finished the step (%q)", got.Address, "aws://"+replaced)
+	}
+
+	if got.InstanceID == nil || *got.InstanceID != replaced {
+		t.Errorf("instance_id = %q, want %q — the reclaimed machine is not where this ran",
+			derefOr(got.InstanceID, "<nothing>"), replaced)
+	}
+
+	// The whole description has to move together, or the row reports a machine
+	// that never existed: B's address with A's filesystem.
+	if got.Workdir != "/var/tmp/b" || got.FSType != "ext4" || got.FSFree != 2<<30 || got.BytesSent != 2_000 {
+		t.Errorf("workdir/fstype/fs_free/bytes_sent = %q/%q/%d/%d, want /var/tmp/b/ext4/%d/2000",
+			got.Workdir, got.FSType, got.FSFree, got.BytesSent, 2<<30)
+	}
+}
+
+// TestPlacementsReadBackInPlanOrder: a run's placements are a report someone
+// reads top to bottom against the plan they wrote, so step 0 comes first
+// whatever order the steps finished in — and a fan-out finishes them in none.
+func TestPlacementsReadBackInPlanOrder(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	// Recorded last-step-first, under hashes whose own order matches the order
+	// they were written — so nothing about the storage happens to be plan order.
+	for _, step := range []struct {
+		index int
+		hash  string
+	}{
+		{2, hashOf(1)},
+		{0, hashOf(2)},
+		{1, hashOf(3)},
+	} {
+		placeAt(ctx, t, store, Placement{
+			RunID: "ORDER001", StepIndex: step.index, StepName: fmt.Sprintf("step-%d", step.index),
+			JobName: "build", NodeHash: step.hash, Tag: "box", Address: "ssh://box",
+			GOOS: "linux", GOARCH: "amd64", Workdir: "/tmp/w", FSType: "ext4",
+		})
+	}
+
+	placements, err := store.RunPlacements(ctx, "ORDER001")
+	if err != nil {
+		t.Fatalf("RunPlacements: %v", err)
+	}
+
+	if len(placements) != 3 {
+		t.Fatalf("read back %d placements, want 3: %+v", len(placements), placements)
+	}
+
+	for want, placement := range placements {
+		if placement.StepIndex != want {
+			t.Errorf("placement %d is step %d, want %d — the read is not in plan order",
+				want, placement.StepIndex, want)
+		}
+	}
+}
+
+// derefOr renders a pointer column for a failure message, where nil is a real
+// answer rather than a bug — see Placement.
+func derefOr(value *string, absent string) string {
+	if value == nil {
+		return absent
+	}
+
+	return *value
+}

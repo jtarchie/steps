@@ -235,6 +235,17 @@ func withRunContext(ctx context.Context, job *config.Job, skipCache bool) contex
 // Present images are a local inspect, so a warm run — including every
 // subsequent job under `steps watch` — costs nothing.
 func prepareImages(ctx context.Context, cfg *config.Config, jobName string) error {
+	// A placed step's container is started by THIS machine's docker CLI aimed
+	// at the worker's daemon, so the binary has to be here even though the
+	// daemon does not — and has to be missed now rather than after a machine
+	// has been acquired and billed and the tree pushed.
+	if cfg.UsesPlacedImages() {
+		err := shell.ValidateDockerCLI()
+		if err != nil {
+			return fmt.Errorf("job %q: a placed step configures image: but docker is unavailable: %w", jobName, err)
+		}
+	}
+
 	if !cfg.UsesImages() {
 		return nil
 	}

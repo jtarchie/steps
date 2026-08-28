@@ -93,3 +93,42 @@ func TestPlacementOfAnUnplacedRunnerIsFalse(t *testing.T) {
 		t.Error("a local runner reported a placement — there is no worker to describe")
 	}
 }
+
+// TestPlacementCountsWhatTheStorePlanePushed is the same promise on the other
+// plane — the one aws:// actually uses, since --artifact-store is mandatory
+// for a `?binary=` worker.
+//
+// The counter had exactly one writer, on the tunnel, so a placement made
+// through the store reported 0 B structurally. Every reader then rendered a
+// lie in the honest direction's own words: the run page documents 0 B as "a
+// step whose inputs were already there", which made a cold worker that pulled
+// the entire tree indistinguishable from a perfect cache hit.
+func TestPlacementCountsWhatTheStorePlanePushed(t *testing.T) {
+	_, storeURL := newCountingS3(t)
+
+	cwd := t.TempDir()
+	// Content nothing has pushed before, for the reason the tunnel twin
+	// gives: the store is content-addressed, and a fixed string would already
+	// be there.
+	mustWrite(t, filepath.Join(cwd, "data", "seed.txt"), cwd+"\n")
+
+	spec := localWorker(t, cwd)
+	spec.ArtifactStore = storeURL
+
+	runner := newLocalRunner(t, spec)
+
+	err := runner.Run(context.Background(), "test -s data/seed.txt")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	placement, ok := PlacementOf(runner)
+	if !ok {
+		t.Fatal("PlacementOf reported nothing after a command ran")
+	}
+
+	if placement.BytesSent <= 0 {
+		t.Errorf("bytes_sent = %d after a tree demonstrably moved through the store, want what was pushed into it",
+			placement.BytesSent)
+	}
+}

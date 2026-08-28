@@ -11,6 +11,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -1138,5 +1139,136 @@ func assertEachPipelineAtItsOwnCap(ctx context.Context, t *testing.T, shared []*
 	want := keep * len(shared)
 	if got := countRows(ctx, t, shared[0], "runs"); got != want {
 		t.Errorf("the file holds %d runs, want %d — one pipeline's prune reached another's", got, want)
+	}
+}
+
+// recordFailedStep writes what a step that FAILED leaves behind: its node, and
+// the step_finished event carrying no hash at all — which is the whole reason
+// an events-only exemption could not see it.
+func recordFailedStep(
+	ctx context.Context, t *testing.T, store *Store,
+	runID, jobName string, index int, hash, name, kind string,
+) {
+	t.Helper()
+
+	err := store.RecordNode(ctx, NodeRecord{
+		Hash: hash, Kind: kind, StepIndex: index,
+		Resource: name, Content: map[string]any{"body": name},
+	}, jobName, "failed", nil, errors.New("boom"))
+	if err != nil {
+		t.Fatalf("RecordNode %s: %v", name, err)
+	}
+
+	err = store.AppendRunEvent(ctx, RunEventRow{
+		RunID: runID, Type: "step_finished", StepIndex: index,
+		StepName: name, StepKind: kind, Status: "failed",
+		Hash: "", At: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("AppendRunEvent %s: %v", name, err)
+	}
+}
+
+// fillNodeCache records later builds' cache entries, which is the pressure that
+// makes pruneNodes delete anything at all.
+func fillNodeCache(ctx context.Context, t *testing.T, store *Store, jobName string, count int) {
+	t.Helper()
+
+	for i := range count {
+		err := store.RecordNode(ctx, NodeRecord{
+			Hash: hashOf(i + 1), Kind: "task", StepIndex: 0,
+			Resource: "later", Content: map[string]any{"body": i},
+		}, jobName, "succeeded", nil, nil)
+		if err != nil {
+			t.Fatalf("RecordNode filler %d: %v", i, err)
+		}
+	}
+}
+
+// TestPruneKeepsWhatASurvivingRunPointsAt is record LOSS rather than orphan
+// prevention, and it runs the other way round from the cascade tests above.
+//
+// run_placements and agent_usage both cascade off nodes, and the NODE cap is a
+// different bound from the RUN cap — twenty cached nodes per retained run, of
+// which a busy job burns through far more than it keeps runs. pruneNodes
+// exempted only the hashes a surviving run's EVENTS name, and a failed step
+// publishes step_finished with an empty hash after its placement and its usage
+// row are already written under the real one. So a retained run kept its green
+// records and lost exactly its red ones — backwards from what someone debugging
+// a placed step or paying for a failed agent needs.
+func TestPruneKeepsWhatASurvivingRunPointsAt(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	const (
+		runID   = "FAILED01"
+		jobName = "build"
+		keep    = 1
+	)
+
+	err := store.StartRun(ctx, runID, jobName, "/tmp/ws")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	// Two failed steps, so sabotaging either exemption shows up on its own table
+	// rather than being carried by the other's node.
+	placedHash, agentHash := hashOf(900_001), hashOf(900_002)
+
+	recordFailedStep(ctx, t, store, runID, jobName, 0, placedHash, "unit", "task")
+	recordFailedStep(ctx, t, store, runID, jobName, 1, agentHash, "review", "agent")
+
+	err = store.RecordPlacement(ctx, Placement{
+		RunID: runID, StepIndex: 0, StepName: "unit", JobName: jobName, NodeHash: placedHash,
+		Tag: "spot", Address: "aws://i-0123456789abcdef0", GOOS: "linux", GOARCH: "arm64",
+		Workdir: "/var/tmp/w", FSType: "btrfs", FSFree: 1 << 30, BytesSent: 4_096,
+	})
+	if err != nil {
+		t.Fatalf("RecordPlacement: %v", err)
+	}
+
+	err = store.RecordAgentUsage(ctx, AgentUsage{
+		RunID: runID, StepIndex: 1, StepName: "review", JobName: jobName, NodeHash: agentHash,
+		ModelReq: "haiku", Prompt: 1_000, Completion: 100, Total: 1_100,
+		FinishReason: "error", DurationMS: 900,
+	})
+	if err != nil {
+		t.Fatalf("RecordAgentUsage: %v", err)
+	}
+
+	fillNodeCache(ctx, t, store, jobName, keep*nodesPerRetainedRun+5)
+
+	err = store.PruneRuns(ctx, jobName, keep, runID)
+	if err != nil {
+		t.Fatalf("PruneRuns: %v", err)
+	}
+
+	_, err = store.FindRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("the run itself was reaped, so this proves nothing about its records: %v", err)
+	}
+
+	placements, err := store.RunPlacements(ctx, runID)
+	if err != nil {
+		t.Fatalf("RunPlacements: %v", err)
+	}
+
+	if len(placements) != 1 {
+		t.Errorf("a retained run reports %d placements, want 1 — the node cap reaped the record of where its failed step ran",
+			len(placements))
+	}
+
+	usage, err := store.RunUsage(ctx, runID)
+	if err != nil {
+		t.Fatalf("RunUsage: %v", err)
+	}
+
+	if len(usage) != 1 {
+		t.Errorf("a retained run reports %d usage rows, want 1 — the node cap reaped what its failed agent step spent",
+			len(usage))
 	}
 }

@@ -55,7 +55,7 @@ var stepMutationSkips = map[string]string{ //nolint:gochecknoglobals // a test's
 	"approval": "an approval parks the run until a person answers, which is why its example is noexec=approval — there is no run to mutate",
 	"on_abort": "only SIGINT/SIGTERM mid-run reaches it, and a fixture that signals itself is testing the harness; pinned by TestConformanceAbortFiresOnAbortHook and TestRunHooksAbortGracePeriod instead",
 
-	"image":            "needs a docker daemon, which the doc corpus never has; every example using it is noexec=docker",
+	"image":            "needs a docker daemon, which the doc corpus never has, so no example using it executes: four noexec=docker blocks in infra.md and the noexec=credentials walkthrough in aws-workers.md",
 	"env":              "same: only spelled in noexec=docker blocks, since the point is what a containerized command inherits",
 	"user":             "same: noexec=docker",
 	"network":          "same: noexec=docker",

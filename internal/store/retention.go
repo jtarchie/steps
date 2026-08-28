@@ -204,6 +204,20 @@ func pruneRunRows(
 // one run a child's rowid is lower than its parent's, and without this exemption
 // a cap boundary landing mid-run would take children out from under a live
 // build.
+//
+// Events are not the only way a surviving run points at a node, and reading them
+// as if they were cost real records. run_placements and agent_usage both cascade
+// off nodes, and both are written under a hash the run's events may never carry:
+// a FAILED step returns a zero stepResult (pipeline/task.go), so the
+// step_finished its walk publishes carries an EMPTY hash — after recordPlacement
+// has already filed the row under the real one. A run well inside run_history:
+// therefore kept every GREEN record and lost exactly its RED ones, which is the
+// opposite of what someone debugging a placed step or auditing what a failed
+// agent spent is looking for. What those two tables hold is HISTORY, bounded by
+// the run cap; letting the CACHE's cap reach them made two bounds out of one.
+//
+// Both clauses are questions about SURVIVING runs only because pruneRunRows has
+// already run: a deleted run's placements and usage rows cascaded away with it.
 func pruneNodes(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName string, keep int) (bool, error) {
 	result, err := tx.ExecContext(ctx, `
 		DELETE FROM nodes
@@ -213,12 +227,14 @@ func pruneNodes(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName strin
 		      JOIN runs r ON r.id = e.run_id
 		      WHERE e.hash <> '' AND r.pipeline_id = ?
 		  )
+		  AND hash NOT IN (SELECT node_hash FROM run_placements WHERE pipeline_id = ?)
+		  AND hash NOT IN (SELECT node_hash FROM agent_usage WHERE pipeline_id = ?)
 		  AND rowid NOT IN (
 		      SELECT rowid FROM nodes WHERE pipeline_id = ? AND job_name = ?
 		      ORDER BY rowid DESC
 		      LIMIT ?
 		  )
-	`, pipelineID, jobName, pipelineID, pipelineID, jobName, keep)
+	`, pipelineID, jobName, pipelineID, pipelineID, pipelineID, pipelineID, jobName, keep)
 	if err != nil {
 		return false, fmt.Errorf("could not prune the nodes of %q: %w", jobName, err)
 	}

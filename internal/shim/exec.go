@@ -45,7 +45,12 @@ func (s *session) startExec(ctx context.Context, frame wire.Frame) error {
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
-	s.beginCommand(frame.Op, cancel)
+
+	if !s.beginCommand(frame.Op, cancel) {
+		cancel()
+
+		return fmt.Errorf("%w: operation %d is already running", wire.ErrProtocol, frame.Op)
+	}
 
 	s.running.Add(1)
 
@@ -106,8 +111,14 @@ func (s *session) runCommand(ctx context.Context, op uint32, request wire.Exec) 
 	return wire.Exit{Started: false, Code: -1, Reason: err.Error()}
 }
 
-// beginCommand records what a cancel for op should stop.
-func (s *session) beginCommand(op uint32, cancel context.CancelFunc) {
+// beginCommand records what a cancel for op should stop, refusing an op that
+// already has a command.
+//
+// Refused, not overwritten, for dockerStreams.add's reason one file over: the
+// key comes off the wire, so two execs sharing an op made the FIRST command's
+// endCommand delete the SECOND's registration — after which a cancel aimed at
+// it found nothing, and timeout:, fail_fast and race: ended nothing.
+func (s *session) beginCommand(op uint32, cancel context.CancelFunc) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -115,7 +126,13 @@ func (s *session) beginCommand(op uint32, cancel context.CancelFunc) {
 		s.cancels = map[uint32]context.CancelFunc{}
 	}
 
+	if _, taken := s.cancels[op]; taken {
+		return false
+	}
+
 	s.cancels[op] = cancel
+
+	return true
 }
 
 // endCommand clears the registration for op, and only that one.

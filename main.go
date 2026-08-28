@@ -2079,95 +2079,95 @@ func (r *RunsCmd) printRunCost(ctx context.Context, st *store.Store) error {
 // and real billing lands a day later — and a confident wrong number in a cost
 // column is worse than no column. Anyone holding their own rate card can
 // price these rows.
+//
+// Rendered through web.PlacementView, the same type the run page draws: one
+// spelling of what a machine was, so the browser and the terminal cannot
+// disagree about it. They did — the terminal's copy never learned which
+// filesystems are memory.
 func (r *RunsCmd) printPlacements(ctx context.Context, st *store.Store) error {
-	runID, err := r.placementRun(ctx, st)
-	if err != nil || runID == "" {
+	run, ok, err := r.placementRun(ctx, st)
+	if err != nil || !ok {
 		return err
 	}
 
-	placements, err := st.RunPlacements(ctx, runID)
+	placements, err := st.RunPlacements(ctx, run.ID)
 	if err != nil {
 		return fmt.Errorf("could not read placements: %w", err)
 	}
 
-	// Distinguished from "this run had no placed steps", which is the
-	// ordinary case for a pipeline that names no worker.
 	if len(placements) == 0 {
-		fmt.Printf("run %s ran every step on this machine\n", runID)
+		// Distinguished from "this run had no placed steps", which is the
+		// ordinary case for a pipeline that names no worker. Past tense only
+		// about a run that is over: a placement is recorded when the step
+		// finishes, so a run still in flight has nothing recorded YET.
+		if run.Status == "running" {
+			fmt.Printf("no placed steps recorded for run %s yet\n", run.ID)
+		} else {
+			fmt.Printf("run %s ran every step on this machine\n", run.ID)
+		}
 
 		return nil
 	}
 
-	fmt.Printf("%-24s  %-12s  %-13s  %-22s  %9s  %s\n",
+	fmt.Printf("%-24s  %-12s  %-13s  %-28s  %9s  %s\n",
 		"STEP", "TAG", "PLATFORM", "FILESYSTEM", "SENT", "MACHINE")
 
+	memory := false
+
 	for _, placed := range placements {
-		fmt.Printf("%-24s  %-12s  %-13s  %-22s  %9s  %s\n",
+		view := web.PlacementView{Placement: placed}
+
+		filesystem := view.Filesystem()
+		if view.Volatile() {
+			filesystem += " [RAM]"
+			memory = true
+		}
+
+		fmt.Printf("%-24s  %-12s  %-13s  %-28s  %9s  %s\n",
 			truncateName(placed.StepName, 24), truncateName(placed.Tag, 12),
-			placed.GOOS+"/"+placed.GOARCH, placedFilesystem(placed),
-			humanBytes(placed.BytesSent), placedMachine(placed))
+			view.Platform(), filesystem, view.Sent(), view.Machine())
+	}
+
+	if memory {
+		fmt.Println("\n[RAM] that workdir is memory, not disk: the pushed binary and the step's tree spend it, and a reboot loses both. Name a path on a real disk in the worker URL.")
 	}
 
 	return nil
 }
 
 // placementRun is the run --where reports on: the one named, or the newest.
-func (r *RunsCmd) placementRun(ctx context.Context, st *store.Store) (string, error) {
+//
+// A named run is looked up rather than taken on trust. RunPlacements is
+// pipeline-scoped, so a typo — or a run belonging to another pipeline sharing
+// this state file — reads back as zero rows, and the caller would print that
+// as a run that ran every step here: a positive claim about a run this
+// pipeline has never seen.
+func (r *RunsCmd) placementRun(ctx context.Context, st *store.Store) (store.RunRow, bool, error) {
 	if r.RunID != "" {
-		return r.RunID, nil
+		run, ok, err := st.FindRunRow(ctx, r.RunID)
+		if err != nil {
+			return store.RunRow{}, false, fmt.Errorf("could not read run: %w", err)
+		}
+
+		if !ok {
+			fmt.Printf("no run %s in this pipeline\n", r.RunID)
+		}
+
+		return run, ok, nil
 	}
 
 	runs, err := st.ListRuns(ctx, r.Job, 1)
 	if err != nil {
-		return "", fmt.Errorf("could not read runs: %w", err)
+		return store.RunRow{}, false, fmt.Errorf("could not read runs: %w", err)
 	}
 
 	if len(runs) == 0 {
 		fmt.Println("no runs recorded")
 
-		return "", nil
+		return store.RunRow{}, false, nil
 	}
 
-	return runs[0].ID, nil
-}
-
-// placedFilesystem is what the tree landed on, or a stated silence.
-//
-// Empty is never rendered as an ordinary disk: an older shim, or a platform
-// with no statfs, genuinely cannot say — and tmpfs, the answer this column
-// exists to surface, would otherwise hide behind a plausible blank.
-func placedFilesystem(placed store.Placement) string {
-	if placed.FSType == "" {
-		return "not reported"
-	}
-
-	return fmt.Sprintf("%s (%s free)", placed.FSType, humanBytes(placed.FSFree))
-}
-
-// placedMachine names the machine, and the image if the step ran in one.
-func placedMachine(placed store.Placement) string {
-	if placed.Image == "" {
-		return placed.Address
-	}
-
-	return placed.Address + " in " + placed.Image
-}
-
-// humanBytes renders a byte count at the largest unit that leaves a number
-// worth reading.
-func humanBytes(n int64) string {
-	const unit = 1024
-
-	if n < unit {
-		return strconv.FormatInt(n, 10) + " B"
-	}
-
-	size, exp := float64(n)/unit, 0
-	for size >= unit && exp < 3 {
-		size, exp = size/unit, exp+1
-	}
-
-	return fmt.Sprintf("%.1f %s", size, [...]string{"KiB", "MiB", "GiB", "TiB"}[exp])
+	return runs[0], true, nil
 }
 
 // humanTokens groups a token count with thin separators, so 4102338 reads as

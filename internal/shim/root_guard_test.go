@@ -27,7 +27,7 @@ func TestHelloRefusesARootThatIsNotAnAbsolutePath(t *testing.T) {
 		"/tmp/../../etc",
 		".",
 	} {
-		peer := newPeer(t, Options{Build: "test"})
+		peer := newPeer(t, Options{Build: "test", Root: t.TempDir()})
 
 		op := peer.next()
 		peer.send(wire.FrameHello, op, wire.Hello{
@@ -55,13 +55,77 @@ func TestHelloRefusesARootThatIsNotAnAbsolutePath(t *testing.T) {
 	}
 }
 
+// TestAFailedHelloDoesNotOpenTheSession is the assignment order inside hello().
+//
+// A hello that fails only earns a FrameError — the run loop keeps the session
+// alive — and every handshake gate is `s.workdir == ""`, so setting the path
+// before the MkdirAll that has to succeed OPENED upload, exec, fetch and the
+// raw root-docker proxy on a session whose scratch was never made. errReopened
+// then refused the corrected hello that would have fixed it, and cleanup
+// removed a path this session never created.
+//
+// Reached with a root checkRoot accepts on purpose: it validates the SHAPE of
+// the path, and a well-shaped absolute path can still name a file.
+func TestAFailedHelloDoesNotOpenTheSession(t *testing.T) {
+	peer := newPeer(t, Options{Build: "test", Root: t.TempDir()})
+
+	op := peer.next()
+	peer.send(wire.FrameHello, op, wire.Hello{
+		Protocol: wire.Protocol, Build: "test",
+		Session: "failed-hello-under-test", Root: "/dev/null/x",
+	})
+
+	frame := peer.readAny()
+	if frame.Type != wire.FrameError {
+		t.Fatalf("frame type = %v, want an error for a root the shim cannot make", frame.Type)
+	}
+
+	op = peer.next()
+	peer.send(wire.FrameExec, op, wire.Exec{Command: "echo unreachable"})
+
+	frame = peer.readAny()
+	if frame.Type != wire.FrameError {
+		t.Fatalf("frame type = %v after a failed hello, want the operation refused rather than run", frame.Type)
+	}
+
+	var reported wire.Error
+
+	err := wire.DecodeJSON(frame, &reported)
+	if err != nil {
+		t.Fatalf("decoding the error: %v", err)
+	}
+
+	if !strings.Contains(reported.Message, "no session") {
+		t.Errorf("exec after a failed hello reported %q, want the unopened-session refusal", reported.Message)
+	}
+
+	// And the session is not wedged: the orchestrator can correct the root it
+	// named and carry on.
+	op = peer.next()
+	peer.send(wire.FrameHello, op, wire.Hello{
+		Protocol: wire.Protocol, Build: "test",
+		Session: "failed-hello-under-test", Root: t.TempDir(),
+	})
+
+	var ok wire.HelloOK
+
+	err = wire.DecodeJSON(peer.read(), &ok)
+	if err != nil {
+		t.Fatalf("decoding the corrected hello: %v", err)
+	}
+
+	if ok.Workdir == "" {
+		t.Error("the corrected hello reported no work directory")
+	}
+}
+
 // TestHelloAcceptsAnAbsoluteRoot pins that the guard does not break the
 // feature it protects: the worker URL's path is how an operator names a disk
 // on the worker, and that is an ordinary absolute path.
 func TestHelloAcceptsAnAbsoluteRoot(t *testing.T) {
 	root := t.TempDir()
 
-	peer := newPeer(t, Options{Build: "test"})
+	peer := newPeer(t, Options{Build: "test", Root: t.TempDir()})
 	op := peer.next()
 
 	peer.send(wire.FrameHello, op, wire.Hello{

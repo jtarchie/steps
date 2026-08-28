@@ -329,6 +329,7 @@ func writeFakeDocker(t *testing.T, exitCode int, stdout, stderr string) (argvFil
 
 	script := "#!/bin/sh\n" +
 		"printf '%s\\n' \"$*\" >> " + argvFile + "\n" +
+		"printf '%s %s\\n' \"$1\" \"$DOCKER_HOST\" >> " + daemonFile(argvFile) + "\n" +
 		"case \"$1\" in\n" +
 		"  run)     printf 'fakecontainerid\\n'; printf '%s' \"$FAKE_DOCKER_RUN_STDERR\" >&2; exit \"${FAKE_DOCKER_RUN_EXIT:-0}\" ;;\n" +
 		"  inspect) printf '%s\\n' \"${FAKE_DOCKER_STATE:-true 0}\"; exit 0 ;;\n" +
@@ -352,6 +353,26 @@ func writeFakeDocker(t *testing.T, exitCode int, stdout, stderr string) (argvFil
 	t.Setenv("FAKE_DOCKER_EXIT", strconv.Itoa(exitCode))
 
 	return argvFile
+}
+
+// daemonFile is where the fake records the daemon each invocation was aimed
+// at, beside the argv it recorded — a second file rather than a second field
+// on every argv line, so the tests that read only the argv are unaffected.
+func daemonFile(argvFile string) string {
+	return filepath.Join(filepath.Dir(argvFile), "daemons.txt")
+}
+
+// recordedDaemons returns "<subcommand> <DOCKER_HOST>" for each invocation the
+// fake saw, in order.
+func recordedDaemons(t *testing.T, argvFile string) []string {
+	t.Helper()
+
+	recorded, err := os.ReadFile(daemonFile(argvFile))
+	if err != nil {
+		t.Fatalf("read recorded daemons: %v", err)
+	}
+
+	return strings.Split(strings.TrimRight(string(recorded), "\n"), "\n")
 }
 
 // recordedArgv returns each docker invocation the fake recorded, in order.
@@ -799,6 +820,33 @@ func TestDockerRunnerRunCaptureLogsStderrOnFailure(t *testing.T) {
 
 	if !strings.Contains(logBuf.String(), "boom from stderr") {
 		t.Errorf("debug log = %q, want it to contain the captured stderr", logBuf.String())
+	}
+}
+
+// TestValidateDockerCLIWantsTheBinaryNotTheDaemon pins the split a PLACED
+// containerized step turns on. Its container runs on the worker's daemon, so
+// an orchestrator where `docker info` fails is a working arrangement rather
+// than a misconfiguration — but the client aimed at the forwarded socket is
+// this machine's docker binary, and a missing one has to be found before a
+// machine is acquired rather than inside the step.
+func TestValidateDockerCLIWantsTheBinaryNotTheDaemon(t *testing.T) {
+	writeFakeDocker(t, 1, "", "cannot connect to the docker daemon")
+
+	err := ValidateDockerCLI()
+	if err != nil {
+		t.Errorf("ValidateDockerCLI: %v, want the binary alone to be enough", err)
+	}
+
+	err = ValidateDocker(context.Background())
+	if err == nil {
+		t.Error("ValidateDocker accepted a daemon that cannot be reached")
+	}
+
+	t.Setenv("PATH", t.TempDir()) // empty PATH: docker cannot be found
+
+	err = ValidateDockerCLI()
+	if err == nil {
+		t.Error("ValidateDockerCLI accepted a machine with no docker binary")
 	}
 }
 

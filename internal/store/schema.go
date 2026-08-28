@@ -12,7 +12,10 @@ package store
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 3
+// 4 put pipeline_id into the keys of run_placements and agent_usage. Without
+// it, two pipelines sharing a state file collided on (run_id, node_hash) and
+// one upserted over the other's row.
+const schemaVersion = 4
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -462,10 +465,16 @@ CREATE INDEX IF NOT EXISTS idx_run_events_hash ON run_events(hash);
 -- versioning and no migration path, so a field not captured today cannot be
 -- backfilled tomorrow.
 --
--- pipeline_id is here only to complete the compound reference to nodes, whose
--- key gained a pipeline; the row's own scope already arrives through run_id.
--- Nothing needs a second cascade from pipelines: deleting one takes its nodes,
--- and these rows go with them.
+-- pipeline_id LEADS the key, and declares no cascade of its own: deleting a
+-- pipeline takes its nodes, and these rows go with them.
+--
+-- It is in the key because leaving it out was a reproduced corruption. A node
+-- hash folds in kind, content and parent but NOT the pipeline (see nodes), and
+-- a run id is minted per pipeline — so two pipelines in one state file, each
+-- with a job named build over an identical agent step, agree on both halves of
+-- (run_id, node_hash). The conflict then took the ACCUMULATING branch below,
+-- which is right for a retried step and catastrophic across pipelines: one
+-- pipeline was billed for tokens it never spent, and the other reported none.
 CREATE TABLE IF NOT EXISTS agent_usage (
     run_id            TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     pipeline_id       INTEGER NOT NULL,
@@ -485,10 +494,16 @@ CREATE TABLE IF NOT EXISTS agent_usage (
     duration_ms       INTEGER NOT NULL,
     raw_meta          TEXT NOT NULL,
     created_at        TEXT NOT NULL,
-    PRIMARY KEY (run_id, node_hash),
+    PRIMARY KEY (pipeline_id, run_id, node_hash),
     FOREIGN KEY (pipeline_id, node_hash) REFERENCES nodes(pipeline_id, hash) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_agent_usage_run ON agent_usage(run_id, step_index);
+-- Two jobs, both on the node hash. Retention asks "does a surviving run still
+-- point at this node" on every build, for the reason idx_run_events_hash exists;
+-- and sqlite needs the same index again on every cascade off nodes, to find the
+-- rows hanging under a hash it is deleting. Without it both are a full scan of
+-- this table inside the write transaction holding the exclusive lock.
+CREATE INDEX IF NOT EXISTS idx_agent_usage_node ON agent_usage(pipeline_id, node_hash);
 
 -- Where a placed step actually ran, and what it cost in bytes rather than in
 -- money.
@@ -505,6 +520,15 @@ CREATE INDEX IF NOT EXISTS idx_agent_usage_run ON agent_usage(run_id, step_index
 -- The nullable columns are the ones a worker may genuinely not have: only an
 -- aws:// worker has an instance, and only a shim that can answer reports a
 -- uid — where empty means "did not say" and never "root".
+--
+-- pipeline_id LEADS the key, and that is the correction of a reproduced
+-- corruption rather than tidiness. A node hash folds in kind, content and
+-- parent but not the pipeline (see nodes), and a run id is eight characters of
+-- rand.Text() minted per pipeline — so two pipelines in one state file, each
+-- with a job named build over an identical task, agree on both halves of
+-- (run_id, node_hash). Keyed on those alone the second one's upsert landed on
+-- the first one's row and rewrote every column but the one saying whose it
+-- was: one pipeline reported the other's machine, the other reported none.
 CREATE TABLE IF NOT EXISTS run_placements (
     run_id        TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     pipeline_id   INTEGER NOT NULL,
@@ -525,10 +549,14 @@ CREATE TABLE IF NOT EXISTS run_placements (
     image         TEXT NOT NULL,
     bytes_sent    INTEGER NOT NULL,
     created_at    TEXT NOT NULL,
-    PRIMARY KEY (run_id, node_hash),
+    PRIMARY KEY (pipeline_id, run_id, node_hash),
     FOREIGN KEY (pipeline_id, node_hash) REFERENCES nodes(pipeline_id, hash) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_run_placements_run ON run_placements(run_id, step_index);
+-- The retention anti-join and the cascade child lookup, exactly as
+-- idx_agent_usage_node above serves them for that table. The primary key cannot:
+-- node_hash is its last column, not a prefix.
+CREATE INDEX IF NOT EXISTS idx_run_placements_node ON run_placements(pipeline_id, node_hash);
 
 -- Full agent conversation transcripts, one row per agent node, kept OUT of
 -- nodes.result deliberately: result rides along on every node listing (the

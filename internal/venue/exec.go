@@ -42,6 +42,11 @@ func (s *session) run(ctx context.Context, command string, sinks outputSinks) (w
 	// nothing to do with.
 	var failed error
 
+	// One flag per sink, not one for both. A shared flag meant a stdout that
+	// could not be written stopped recording STDERR as well — and on a step
+	// that is failing, that is the only account of why it did.
+	var dropped droppedSinks
+
 	for {
 		// Drain notices are absorbed here rather than ending the command: the
 		// machine has minutes left and the work may well finish in them.
@@ -55,7 +60,7 @@ func (s *session) run(ctx context.Context, command string, sinks outputSinks) (w
 				frame.Type, frame.Op, op)
 		}
 
-		exit, done, err := deliver(frame, sinks, failed != nil)
+		exit, done, err := deliver(frame, sinks, &dropped)
 		if err != nil {
 			// A protocol failure means the stream is already not where this
 			// end thinks it is, so reading on would compound it — and the
@@ -87,15 +92,19 @@ func (s *session) run(ctx context.Context, command string, sinks outputSinks) (w
 // distinction is what lets run keep reading to the exit frame.
 var errSink = errors.New("writing a command's output")
 
+// droppedSinks records which of a command's two sinks has already failed, so
+// the payload for that one is read off the wire and dropped rather than
+// retried against it — while the other keeps recording.
+type droppedSinks struct{ stdout, stderr bool }
+
 // deliver routes one of a running command's frames, reporting whether it ended
-// the command. discard says a sink has already failed, so the payload is read
-// off the wire and dropped rather than retried against it.
-func deliver(frame wire.Frame, sinks outputSinks, discard bool) (wire.Exit, bool, error) {
+// the command.
+func deliver(frame wire.Frame, sinks outputSinks, dropped *droppedSinks) (wire.Exit, bool, error) {
 	switch frame.Type {
 	case wire.FrameStdout:
-		return wire.Exit{}, false, writeStream(sinks.stdout, frame.Payload, discard)
+		return wire.Exit{}, false, writeStream(sinks.stdout, frame.Payload, &dropped.stdout)
 	case wire.FrameStderr:
-		return wire.Exit{}, false, writeStream(sinks.stderr, frame.Payload, discard)
+		return wire.Exit{}, false, writeStream(sinks.stderr, frame.Payload, &dropped.stderr)
 	case wire.FrameExit:
 		var exit wire.Exit
 
@@ -115,13 +124,15 @@ func deliver(frame wire.Frame, sinks outputSinks, discard bool) (wire.Exit, bool
 	}
 }
 
-func writeStream(sink io.Writer, payload []byte, discard bool) error {
-	if discard {
+func writeStream(sink io.Writer, payload []byte, dropped *bool) error {
+	if *dropped {
 		return nil
 	}
 
 	_, err := sink.Write(payload)
 	if err != nil {
+		*dropped = true
+
 		return fmt.Errorf("%w: %w", errSink, err)
 	}
 

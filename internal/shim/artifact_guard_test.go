@@ -30,7 +30,7 @@ func TestUploadRefusesAnArtifactPathThatLeavesItsTree(t *testing.T) {
 		{Name: "out", Digest: "/absolute"},
 		{Name: "out", Digest: "."},
 	} {
-		peer := newPeer(t, Options{Build: "test"})
+		peer := newPeer(t, Options{Build: "test", Root: t.TempDir()})
 		peer.hello()
 
 		op := peer.next()

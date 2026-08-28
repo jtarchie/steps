@@ -854,3 +854,67 @@ func TestNodePageOmitsAnAbsentResult(t *testing.T) {
 		t.Error("node page shows a Result section for a node that recorded none")
 	}
 }
+
+// TestFailedRunNamesWhatChangedSinceTheLastGreen crosses the seam a failed
+// page opens with: attachDiff finds the last green run, reads its steps, and
+// diffAgainst names the ones whose content hash moved.
+//
+// The prior run is read through the narrow path rather than the full page
+// assembler — a diff wants step names and hashes and discards the nodes,
+// spend and machines assembleRun also fetches — so this is what proves the
+// narrow path still carries both halves of what the diff compares.
+func TestFailedRunNamesWhatChangedSinceTheLastGreen(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	steps := func(compileHash string) []store.RunEventRow {
+		return []store.RunEventRow{
+			{Type: events.TypeStepStarted, StepIndex: 0, StepName: "repo", StepKind: "get", StepID: 1},
+			{Type: events.TypeStepFinished, StepIndex: 0, StepName: "repo", StepKind: "get", StepID: 1,
+				Status: "succeeded", Hash: strings.Repeat("a", 16)},
+			{Type: events.TypeStepStarted, StepIndex: 1, StepName: "compile", StepKind: "task", StepID: 2},
+			{Type: events.TypeStepFinished, StepIndex: 1, StepName: "compile", StepKind: "task", StepID: 2,
+				Status: "failed", Hash: compileHash},
+		}
+	}
+
+	for _, run := range []struct {
+		id, status, hash string
+	}{
+		{"green", "succeeded", strings.Repeat("b", 16)},
+		{"red", "failed", strings.Repeat("c", 16)},
+	} {
+		err := pipeline.Store.StartRun(ctx, run.id, "build", "")
+		if err != nil {
+			t.Fatalf("StartRun %s: %v", run.id, err)
+		}
+
+		appendEvents(t, pipeline.Store, run.id, steps(run.hash))
+
+		err = pipeline.Store.FinishRun(ctx, run.id, run.status)
+		if err != nil {
+			t.Fatalf("FinishRun %s: %v", run.id, err)
+		}
+	}
+
+	code, body := get(t, server, "/p/demo/runs/red")
+	if code != http.StatusOK {
+		t.Fatalf("GET run = %d: %s", code, body)
+	}
+
+	if !strings.Contains(body, `class="chg">compile</span>`) {
+		t.Errorf("the failed run does not name the step whose content moved:\n%s", body)
+	}
+
+	// The step both runs share is what makes the note worth reading: naming
+	// everything is the same as naming nothing.
+	if strings.Contains(body, `class="chg">repo</span>`) {
+		t.Error("the diff names a step whose hash did not move")
+	}
+
+	if !strings.Contains(body, "/p/demo/runs/green") {
+		t.Error("the diff note does not link the green run it compared against")
+	}
+}

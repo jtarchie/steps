@@ -145,10 +145,11 @@ func (s *session) downloadTree(ctx context.Context, frame wire.Frame) error {
 // inputs and differ only in their outputs, so the second step's big input is
 // already here.
 //
-// The digest is a KEY, not a proof: nothing here recomputes it over what
-// arrived, so a wrong object committed under it is served to every later step
-// on this worker. See fetchArtifact, which bounds the damage to a transfer
-// that completed rather than one that died halfway.
+// ponytail: the digest is a KEY, not a proof — nothing here recomputes it over
+// what arrived, so a wrong object committed under it is served to every later
+// step on this worker. Upgrade: hash the staged tree the way the orchestrator
+// hashed it and refuse the commit on a mismatch. fetchArtifact bounds the
+// damage only to a transfer that completed rather than one that died halfway.
 func (s *session) placeArtifact(ctx context.Context, cache string, artifact wire.UploadArtifact) error {
 	err := checkArtifact(artifact)
 	if err != nil {
@@ -157,73 +158,86 @@ func (s *session) placeArtifact(ctx context.Context, cache string, artifact wire
 
 	held := filepath.Join(cache, artifact.Digest)
 
-	_, err = os.Stat(held)
+	placed, err := placeIfHeld(held, artifact.Name, s.workdir)
 	if err != nil {
-		if artifact.URL == "" {
-			return errNoURL
-		}
-
-		err = fetchArtifact(ctx, artifact.URL, held)
-		if err != nil {
-			return err
-		}
+		return err
 	}
 
-	return placeHeldArtifact(held, artifact.Name, s.workdir)
-}
-
-// fetchArtifact downloads one artifact and unpacks it under its digest.
-//
-// Into a temporary directory and renamed, so a fetch that dies halfway cannot
-// leave a partial tree under a digest that claims to be complete — the next
-// step would find it, skip the download, and run against half its input.
-func fetchArtifact(ctx context.Context, url, held string) error {
-	err := os.MkdirAll(filepath.Dir(held), 0o700)
-	if err != nil {
-		return fmt.Errorf("making the artifact cache: %w", err)
+	if placed {
+		return nil
 	}
 
-	staging, err := os.MkdirTemp(filepath.Dir(held), stagingPrefix+"*")
+	if artifact.URL == "" {
+		return errNoURL
+	}
+
+	staging, err := fetchArtifact(ctx, artifact.URL, held)
 	if err != nil {
-		return fmt.Errorf("staging an artifact: %w", err)
+		return err
 	}
 
 	defer func() { _ = os.RemoveAll(staging) }()
 
+	// Placed from the staged tree, BEFORE it is committed, for receiveArtifact's
+	// reason: the cache entry is shared with every other shim on this worker
+	// and the staged one is not.
+	err = placeHeldArtifact(staging, artifact.Name, s.workdir)
+	if err != nil {
+		return err
+	}
+
+	return commitArtifact(staging, held)
+}
+
+// fetchArtifact downloads one artifact and unpacks it beside its cache entry,
+// answering the staging directory it landed in.
+//
+// Staged rather than committed here, so a fetch that dies halfway cannot leave
+// a partial tree under a digest that claims to be complete — the next step
+// would find it, skip the download, and run against half its input. The caller
+// places from what this returns and commits it afterwards.
+func fetchArtifact(ctx context.Context, url, held string) (staging string, err error) {
+	staging, err = stageArtifact(filepath.Dir(held))
+	if err != nil {
+		return "", err
+	}
+
+	// Removed on every failure path, and the answer blanked with it, so a
+	// caller cannot place from a directory this already deleted. On success
+	// the tree is the caller's to place and then commit.
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(staging)
+			staging = ""
+		}
+	}()
+
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		// Through the redactor like every other store failure: a *url.Error
+		// from the parse carries the RAW url, signature and all.
+		return staging, storeError("fetching an artifact", err)
 	}
 
 	response, err := storeClient.Do(request)
 	if err != nil {
-		return storeError("fetching an artifact", err)
+		return staging, storeError("fetching an artifact", err)
 	}
 
 	defer func() { _ = response.Body.Close() }()
 
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("the store answered %s", response.Status) //nolint:err113 // carries a status only the far end can act on
+		return staging, fmt.Errorf("the store answered %s", response.Status) //nolint:err113 // carries a status only the far end can act on
 	}
 
 	err = compress.Unpack(response.Body, true, func(r io.Reader) error {
 		return wire.UnpackTree(r, staging)
 	})
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return staging, fmt.Errorf("%w", err)
 	}
 
-	err = os.Rename(staging, held)
-	if err != nil && !os.IsExist(err) {
-		// A racing session may have completed the same digest first, which is
-		// the cache working rather than a failure.
-		_, statErr := os.Stat(held)
-		if statErr != nil {
-			return fmt.Errorf("placing an artifact in the cache: %w", err)
-		}
-	}
-
-	return nil
+	return staging, nil
 }
 
 // uploadOutputs packs the named outputs and PUTs them to the fetch's URL.
@@ -263,7 +277,9 @@ func (s *session) uploadOutputs(ctx context.Context, fetch wire.Fetch) error {
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodPut, fetch.URL, staged)
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		// Through the redactor like every other store failure: a *url.Error
+		// from the parse carries the RAW url, signature and all.
+		return storeError("shipping the step outputs", err)
 	}
 
 	request.ContentLength = size

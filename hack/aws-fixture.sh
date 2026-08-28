@@ -85,8 +85,40 @@ find_instance() {
     --query 'Reservations[].Instances[].InstanceId' --output text 2>/dev/null | tr -s '[:space:]' '\n' | head -1
 }
 
+# find_buckets prints every fixture bucket as "name region", one per line.
+#
+# By the TAG `up` writes, not by the name prefix an earlier version matched:
+# list-buckets is account-global and `down` empties and deletes what this
+# prints, so a prefix match would happily reap an unrelated steps-test-*
+# bucket somebody else owns. The prefix survives as a cheap prefilter; the tag
+# is what authorizes the deletion.
+#
+# The region rides along for the same reason: list-buckets is global but
+# s3api addresses a bucket in its own region, so a fixture created under
+# another AWS_REGION was found here, failed every call silently under
+# `|| true`, and leaked with its objects still billing.
+find_buckets() {
+  local name region tagged
+
+  for name in $(aws_ s3api list-buckets --query "Buckets[?starts_with(Name, '$NAME-')].Name" --output text 2>/dev/null | tr -s '[:space:]' '\n'); do
+    region=$(aws_ s3api get-bucket-location --bucket "$name" --query LocationConstraint --output text 2>/dev/null) || continue
+    # us-east-1 reports a null location constraint, a wart older than this script.
+    case "$region" in None | null | "") region=us-east-1 ;; esac
+
+    tagged=$(aws --region "$region" s3api get-bucket-tagging --bucket "$name" \
+      --query "length(TagSet[?Key=='$TAG_KEY' && Value=='1'])" --output text 2>/dev/null) || continue
+    [ "$tagged" = "1" ] || continue
+
+    printf '%s %s\n' "$name" "$region"
+  done
+}
+
+# find_bucket prints the first fixture bucket in THIS region, or nothing — the
+# one `up` may reuse and the tests can actually address. Absent stays a normal
+# answer rather than an error, and awk reads to EOF rather than exiting on the
+# first match, which would SIGPIPE the loop above mid-call.
 find_bucket() {
-  aws_ s3api list-buckets --query "Buckets[?starts_with(Name, '$NAME-')].Name" --output text 2>/dev/null | tr -s '[:space:]' '\n' | head -1
+  find_buckets | awk -v region="$REGION" '$2 == region && !found { print $1; found = 1 }'
 }
 
 find_vpc() {
@@ -379,7 +411,7 @@ down() {
   need aws
   say "region $REGION — destroying everything tagged $TAG_KEY=1"
 
-  local ids lt sg bucket
+  local ids lt sg bucket bucket_region
   ids=$(aws_ ec2 describe-instances --filters "Name=tag:$TAG_KEY,Values=1" \
     "Name=instance-state-name,Values=pending,running,stopping,stopped" \
     --query 'Reservations[].Instances[].InstanceId' --output text 2>/dev/null | tr -s '[:space:]' ' ')
@@ -405,12 +437,14 @@ down() {
       say "  (security group still in use; re-run down in a minute)"
   fi
 
-  bucket=$(find_bucket)
-  if [ -n "$bucket" ] && [ "$bucket" != "None" ]; then
-    say "  emptying and deleting bucket $bucket"
-    aws_ s3 rm "s3://$bucket" --recursive >/dev/null 2>&1 || true
-    aws_ s3api delete-bucket --bucket "$bucket" >/dev/null 2>&1 || true
-  fi
+  # Every tagged bucket, in whatever region it lives, rather than the first one
+  # in this region: `up` gives each bucket a random suffix, so a re-run after a
+  # partial teardown leaves more than one behind.
+  while read -r bucket bucket_region; do
+    say "  emptying and deleting bucket $bucket ($bucket_region)"
+    aws --region "$bucket_region" s3 rm "s3://$bucket" --recursive >/dev/null 2>&1 || true
+    aws --region "$bucket_region" s3api delete-bucket --bucket "$bucket" >/dev/null 2>&1 || true
+  done < <(find_buckets)
 
   if aws iam get-instance-profile --instance-profile-name "$NAME-worker" >/dev/null 2>&1; then
     say "  deleting instance profile"

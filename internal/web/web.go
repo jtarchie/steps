@@ -36,6 +36,10 @@ import (
 // happened recently; an operator wanting the whole table has sqlite.
 const historyLimit = 200
 
+// runEventLimit bounds one run's transcript, for the page and for the diff
+// that reads a prior run's steps.
+const runEventLimit = 5000
+
 // Pipeline is one loaded pipeline the server serves, with its own config and
 // its own store handle. Two served pipelines may now share a state FILE (see
 // --state), but never a store handle: each one is scoped to its own pipeline

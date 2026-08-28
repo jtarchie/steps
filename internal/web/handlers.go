@@ -154,7 +154,7 @@ func (s *Server) assembleRun(c echo.Context, run store.RunRow) (runView, error) 
 	pipeline := pipelineOf(c)
 	ctx := c.Request().Context()
 
-	rows, err := pipeline.Store.RunEvents(ctx, run.ID, 0, 5000)
+	rows, err := pipeline.Store.RunEvents(ctx, run.ID, 0, runEventLimit)
 	if err != nil {
 		return runView{}, fmt.Errorf("web: %w", err)
 	}
@@ -214,7 +214,7 @@ func (s *Server) attachDiff(c echo.Context, view *runView) error {
 			continue
 		}
 
-		prior, err := s.assembleRun(c, candidate)
+		prior, err := s.priorSteps(c, candidate)
 		if err != nil {
 			return fmt.Errorf("web: %w", err)
 		}
@@ -226,6 +226,23 @@ func (s *Server) attachDiff(c echo.Context, view *runView) error {
 	}
 
 	return nil
+}
+
+// priorSteps reads only what a diff compares: the prior run's step names and
+// the content hashes beside them.
+//
+// The full page assembler would answer three more queries — the nodes behind
+// those hashes, the run's spend, the machines it used — and diffAgainst
+// discards every one of them. buildRunView takes nil results for exactly this
+// reason: a hash comes off the event row, and only a step's rendered RESULT
+// needs the node.
+func (s *Server) priorSteps(c echo.Context, run store.RunRow) (runView, error) {
+	rows, err := pipelineOf(c).Store.RunEvents(c.Request().Context(), run.ID, 0, runEventLimit)
+	if err != nil {
+		return runView{}, fmt.Errorf("web: %w", err)
+	}
+
+	return buildRunView(run, rows, nil), nil
 }
 
 // handleNode renders one merkle node: what its hash is made of, and which

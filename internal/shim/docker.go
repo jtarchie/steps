@@ -187,7 +187,11 @@ func (s *session) dockerOpen(ctx context.Context, frame wire.Frame) error {
 	if !s.docker.add(frame.Op, conn) {
 		_ = conn.Close()
 
-		return nil
+		// Reported, not silent. FrameDockerOpen is fire-and-forget, so silence
+		// is indistinguishable from success — and the peer's next
+		// FrameDockerData for this op then resolves to the FIRST stream,
+		// writing one client's bytes into another client's socket.
+		return fmt.Errorf("%w: docker stream %d is already open", wire.ErrProtocol, frame.Op)
 	}
 
 	s.docker.wg.Add(1)

@@ -212,7 +212,7 @@ func (s *session) hello(frame wire.Frame) error {
 		return errReopened
 	}
 
-	err = checkHello(s.opts.Root, hello)
+	err = checkHello(hello)
 	if err != nil {
 		return err
 	}
@@ -260,12 +260,20 @@ func (s *session) hello(frame wire.Frame) error {
 
 	// Named after the session rather than randomly, so a scratch directory
 	// left behind by a crash says which run to blame.
-	s.workdir = filepath.Join(root, "steps-shim", hello.Session, "work")
+	workdir := filepath.Join(root, "steps-shim", hello.Session, "work")
 
-	err = os.MkdirAll(s.workdir, 0o700)
+	err = os.MkdirAll(workdir, 0o700)
 	if err != nil {
 		return fmt.Errorf("making the work directory: %w", err)
 	}
+
+	// Assigned only once the directory exists. Every handshake gate is
+	// `s.workdir == ""` and a failed hello only earns a FrameError — the
+	// session survives it — so assigning first meant a hello that failed here
+	// OPENED upload, exec, fetch and the raw docker proxy, while errReopened
+	// refused the corrected hello and cleanup removed a path this session
+	// never made.
+	s.workdir = workdir
 
 	// After MkdirAll, so this describes the filesystem the tree will really
 	// land on rather than whichever ancestor happened to exist.
@@ -348,13 +356,12 @@ func (s *session) uploadOnTunnel(frame wire.Frame) error {
 	cache := s.artifactCacheDir()
 	held := filepath.Join(cache, artifact.Digest)
 
-	_, err = os.Stat(held)
-	if err == nil {
-		err = placeHeldArtifact(held, artifact.Name, s.workdir)
-		if err != nil {
-			return err
-		}
+	placed, err := placeIfHeld(held, artifact.Name, s.workdir)
+	if err != nil {
+		return err
+	}
 
+	if placed {
 		// FrameEnd rather than FrameNeed: already here, send nothing.
 		return s.sendEnd(frame.Op)
 	}
@@ -369,6 +376,12 @@ func (s *session) uploadOnTunnel(frame wire.Frame) error {
 
 // receiveArtifact reads one artifact's bytes, caches it under its digest, and
 // places it in the work directory.
+//
+// ponytail: the digest is a KEY here, not a proof — nothing recomputes it over
+// what arrived, so whatever the peer sent is cached under the name it chose
+// and served to every later step on this worker. Upgrade: hash the staged tree
+// the way the orchestrator hashed it and refuse the commit on a mismatch. The
+// same note is on placeArtifact, which is this decision on the store plane.
 func (s *session) receiveArtifact(op uint32, cache string, artifact wire.UploadArtifact) error {
 	held := filepath.Join(cache, artifact.Digest)
 
@@ -398,15 +411,20 @@ func (s *session) receiveArtifact(op uint32, cache string, artifact wire.UploadA
 		return drainErr
 	}
 
-	// Renamed only once whole, so a transfer that died halfway cannot leave a
-	// partial tree under a digest claiming to be complete — the next step
-	// would find it, ask for nothing, and run against half its input.
-	err = commitArtifact(staging, held)
+	// Placed from the staged tree, BEFORE it is committed: what was just
+	// unpacked is certainly here, while the cache entry is shared with every
+	// other shim on this worker and can be swept, or already occupied by the
+	// half-removed remains of one. A step must not fail over the cache's own
+	// bookkeeping.
+	err = placeHeldArtifact(staging, artifact.Name, s.workdir)
 	if err != nil {
 		return err
 	}
 
-	err = placeHeldArtifact(held, artifact.Name, s.workdir)
+	// Renamed only once whole, so a transfer that died halfway cannot leave a
+	// partial tree under a digest claiming to be complete — the next step
+	// would find it, ask for nothing, and run against half its input.
+	err = commitArtifact(staging, held)
 	if err != nil {
 		return err
 	}
@@ -488,6 +506,16 @@ var errReopened = errors.New("this session already had its hello")
 // errBadSession is a session name that is not a single directory name.
 var errBadSession = errors.New("the session name must be one directory name")
 
+// oneDirectoryName reports whether a peer-supplied component stays inside the
+// directory it is joined to.
+//
+// One predicate for the session name and the artifact manifest alike: both are
+// names off the wire that reach the filesystem by filepath.Join, and written
+// twice they are two guards that can drift apart.
+func oneDirectoryName(name string) bool {
+	return name != "" && name != "." && name != ".." && name == filepath.Base(name)
+}
+
 // checkSessionName refuses a name that would leave the root it is joined to.
 //
 // The name lands in the scratch path and cleanup removes that path's PARENT,
@@ -496,8 +524,16 @@ var errBadSession = errors.New("the session name must be one directory name")
 // listener is unauthenticated by design, and under the aws:// bootstrap this
 // process is root.
 func checkSessionName(name string) error {
-	if name == "" || name == "." || name == ".." || name != filepath.Base(name) {
+	if !oneDirectoryName(name) {
 		return fmt.Errorf("%w: %q", errBadSession, name)
+	}
+
+	// The artifact cache is a SIBLING of the session scratch, so a session by
+	// that name IS the shared cache: the sweep enumerates that session's live
+	// work directory as a cache entry, and its goodbye removes every artifact
+	// every other session on this worker had cached.
+	if name == artifactCacheName {
+		return fmt.Errorf("%w: %q is the artifact cache", errBadSession, name)
 	}
 
 	return nil
@@ -523,7 +559,7 @@ var errBadArtifact = errors.New("an artifact's name and digest must each be one 
 // TOP-LEVEL entries of a step's tree, and a digest is a hash.
 func checkArtifact(artifact wire.UploadArtifact) error {
 	for _, part := range []string{artifact.Name, artifact.Digest} {
-		if part == "" || part == "." || part == ".." || part != filepath.Base(part) {
+		if !oneDirectoryName(part) {
 			return fmt.Errorf("%w: %q/%q", errBadArtifact, artifact.Name, artifact.Digest)
 		}
 	}
@@ -537,13 +573,13 @@ func checkArtifact(artifact wire.UploadArtifact) error {
 // them was guarded — which is the shape of the bug, not an accident of
 // review: a path assembled from two peer-supplied parts is only as safe as
 // its weaker part.
-func checkHello(configuredRoot string, hello wire.Hello) error {
+func checkHello(hello wire.Hello) error {
 	err := checkSessionName(hello.Session)
 	if err != nil {
 		return err
 	}
 
-	return checkRoot(configuredRoot, hello.Root)
+	return checkRoot(hello.Root)
 }
 
 // errBadRoot is a root that is not an absolute path, or that walks upward.
@@ -557,12 +593,13 @@ var errBadRoot = errors.New("the root must be an absolute path that does not wal
 // — which, as root under the aws:// bootstrap, is a directory this process
 // would happily create and later remove.
 //
-// It validates the SHAPE of the path and not which path it is, deliberately.
-// Requiring the hello to match the shim's own --root would be stronger, and
-// would break a design this repo states on purpose: the orchestrator's
-// mapping wins, because it is the operator naming a disk on that machine. A
-// tighter rule there is a decision to take, not a side effect of closing this.
-func checkRoot(_ string, requested string) error {
+// It validates the SHAPE of the path and not which path it is, deliberately —
+// which is why the shim's own --root is not a parameter here. Requiring the
+// hello to match it would be stronger, and would break a design this repo
+// states on purpose: the orchestrator's mapping wins, because it is the
+// operator naming a disk on that machine. A tighter rule there is a decision
+// to take, not a side effect of closing this.
+func checkRoot(requested string) error {
 	if requested == "" {
 		return nil
 	}

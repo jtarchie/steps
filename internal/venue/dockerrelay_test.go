@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"sync"
@@ -188,4 +189,196 @@ func readWholeFrames(decoder *wire.Decoder, count int) error {
 	}
 
 	return nil
+}
+
+// deadLocalConn is a docker client that went away — a CLI killed by a step's
+// cancel or timeout. Writes to it fail; nothing else about it is asked.
+type deadLocalConn struct{ net.Conn }
+
+func (deadLocalConn) Write(_ []byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func (deadLocalConn) Close() error { return nil }
+
+// readFrameWithin reads one frame on a bound, so a test that proves a frame
+// was sent fails rather than hangs when it was not.
+func readFrameWithin(t *testing.T, decoder *wire.Decoder, bound time.Duration) wire.Frame {
+	t.Helper()
+
+	type result struct {
+		frame wire.Frame
+		err   error
+	}
+
+	answered := make(chan result, 1)
+
+	go func() {
+		frame, err := decoder.Read()
+		answered <- result{frame: frame, err: err}
+	}()
+
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+
+	select {
+	case answer := <-answered:
+		if answer.err != nil {
+			t.Fatalf("reading what the venue sent: %v", answer.err)
+		}
+
+		return answer.frame
+	case <-timer.C:
+		t.Fatal("the venue sent nothing within the bound")
+
+		return wire.Frame{}
+	}
+}
+
+// TestRelayTellsTheShimWhenALocalWriteFails pins the half of the stream's end
+// that only one side was doing.
+//
+// pump pairs its remove() with a close frame; deliver dropped the stream
+// silently. Once deliver has removed the op, the relay's own pump for it
+// skips the frame too — its remove returns !ok — so the shim never hears it,
+// keeps the op in its table, and keeps reading the worker's daemon socket
+// into FrameDockerData for a stream nobody holds, onto the ONE wire an aws://
+// session has, for the rest of the session.
+func TestRelayTellsTheShimWhenALocalWriteFails(t *testing.T) {
+	t.Parallel()
+
+	session, fromVenue, _ := pipedSession(t)
+
+	relay := newTestRelay(session)
+
+	const op = 7
+
+	if !relay.add(op, deadLocalConn{}) {
+		t.Fatal("the relay refused a stream it had never seen")
+	}
+
+	relay.deliver(wire.Frame{Type: wire.FrameDockerData, Op: op, Payload: []byte("bytes for a client that left")})
+
+	if _, still := relay.get(op); still {
+		t.Error("the relay kept a stream whose local end could not be written to")
+	}
+
+	frame := readFrameWithin(t, fromVenue, 5*time.Second)
+	if frame.Type != wire.FrameDockerClose || frame.Op != op {
+		t.Errorf("the venue sent a type %d frame for operation %d, want a close for %d — the shim was never told the stream ended",
+			frame.Type, frame.Op, op)
+	}
+}
+
+// dialAndPoke opens the forwarded socket and sends something down it, which
+// is all a stream has to do here — the shim in these tests answers frames,
+// not docker's API.
+func dialAndPoke(socket string) error {
+	conn, err := (&net.Dialer{}).Dial("unix", socket)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	defer func() { _ = conn.Close() }()
+
+	_, err = conn.Write([]byte("GET /_ping HTTP/1.0\r\n\r\n"))
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	return nil
+}
+
+// TestOneStreamsFailureLeavesTheRelayServing is the second latch that made the
+// forwarded socket single-use — this one on an ordinary, per-stream event.
+//
+// A FrameError names the OPERATION it belongs to, and every docker-stream one
+// the shim sends is about a single stream: a dockerOpen that could not dial
+// the daemon (a restart, an fd limit), a dockerData whose write got EPIPE.
+// route() read it through the session's decoder, which discards the op, so it
+// arrived as a plain Go error and took the relay's death branch — closeAll,
+// which latches `closed` and shuts the listener, with nothing anywhere to
+// clear it and openDockerSocket running once per session. From that instant
+// the teardown `docker rm -f` could not reach the daemon holding the step's
+// container, and nothing sweeps a worker.
+func TestOneStreamsFailureLeavesTheRelayServing(t *testing.T) {
+	t.Parallel()
+
+	session, fromVenue, fromShim := pipedSession(t)
+
+	opened := make(chan uint32, 8)
+
+	refuseNext := true
+
+	go func() {
+		for {
+			frame, err := fromVenue.Read()
+			if err != nil {
+				return
+			}
+
+			//nolint:exhaustive // a stand-in shim answers only the frames its test sends
+			switch frame.Type {
+			case wire.FrameDockerOpen:
+				if refuseNext {
+					refuseNext = false
+
+					_ = fromShim.WriteJSON(wire.FrameError, frame.Op,
+						wire.Error{Message: "dialling the docker socket at /var/run/docker.sock: connection refused"})
+				}
+
+				// Announced AFTER the answer, so a bracket that waits on this
+				// knows the answer is already on the wire — and the wire is
+				// ordered, so the router meets it before the echo that ends
+				// the bracket.
+				opened <- frame.Op
+			case wire.FrameDockerClose:
+				_ = fromShim.Write(wire.Frame{Type: wire.FrameDockerClose, Op: frame.Op})
+			}
+		}
+	}()
+
+	socket, stop, err := session.openDockerSocket(context.Background(), false)
+	if err != nil {
+		t.Fatalf("openDockerSocket: %v", err)
+	}
+
+	defer stop()
+
+	// The command whose one stream the shim refuses. fn does not return until
+	// the refusal is on the wire, so the router meets it inside this bracket
+	// rather than the next one.
+	err = session.withDockerRouting(context.Background(), func() error {
+		dialErr := dialAndPoke(socket)
+		awaitOp(t, opened, "the first stream")
+
+		return dialErr
+	})
+	if err == nil {
+		t.Error("the bracket reported success though the shim said it could not reach its daemon")
+	}
+
+	// The teardown's `docker rm -f`: the only thing that removes the step's
+	// container from the worker.
+	err = session.withDockerRouting(context.Background(), func() error {
+		dialErr := dialAndPoke(socket)
+		awaitOp(t, opened, "the stream after the refused one")
+
+		return dialErr
+	})
+	if err != nil {
+		t.Errorf("the command after a refused stream could not use the forwarded socket: %v", err)
+	}
+}
+
+// awaitOp waits for the stand-in shim to have been asked to open a stream.
+func awaitOp(t *testing.T, opened <-chan uint32, what string) {
+	t.Helper()
+
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+
+	select {
+	case <-opened:
+	case <-timer.C:
+		t.Fatalf("the shim was never asked to open %s — the relay had stopped serving", what)
+	}
 }

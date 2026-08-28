@@ -173,3 +173,64 @@ func TestImagesKeepsAnAgentSharingAPlacedTasksName(t *testing.T) {
 		t.Errorf("Images() = %v, want registry/agent:1 — the agent entry is used locally", got)
 	}
 }
+
+// TestUsesPlacedImagesSeesWhatImagesSkips is the other side of the narrowing
+// above.
+//
+// Images() answers "what does THIS machine's daemon run", and gating the whole
+// docker preflight on it threw away the CLI half with the daemon half — but a
+// placed container is still started by this machine's docker binary, aimed at
+// the worker's daemon through the socket the venue forwards. The two shapes
+// Images() skips are the two this must see.
+func TestUsesPlacedImagesSeesWhatImagesSkips(t *testing.T) {
+	t.Parallel()
+
+	ownImage := &Config{
+		Jobs: []Job{{Name: "j", Plan: []Step{
+			{Task: "remote", Image: "alpine:3", Tags: []string{"box"}, Run: "true"},
+		}}},
+	}
+
+	if ownImage.UsesImages() || !ownImage.UsesPlacedImages() {
+		t.Errorf("UsesImages() = %v, UsesPlacedImages() = %v, want false and true for a step image that runs on a worker",
+			ownImage.UsesImages(), ownImage.UsesPlacedImages())
+	}
+
+	entry := &Config{
+		Tasks: []Task{{Name: "remote", Image: "alpine:3", Run: "true"}},
+		Jobs: []Job{{Name: "j", Plan: []Step{
+			{Task: "remote", Tags: []string{"box"}},
+		}}},
+	}
+
+	if entry.UsesImages() || !entry.UsesPlacedImages() {
+		t.Errorf("UsesImages() = %v, UsesPlacedImages() = %v, want false and true for a task entry only placed steps use",
+			entry.UsesImages(), entry.UsesPlacedImages())
+	}
+}
+
+// TestUsesPlacedImagesIsFalseWithoutPlacement keeps the new preflight off the
+// pipelines it has nothing to say about: a pipeline that never containerizes,
+// and one whose containers all run here (where the daemon check covers the
+// binary anyway).
+func TestUsesPlacedImagesIsFalseWithoutPlacement(t *testing.T) {
+	t.Parallel()
+
+	hostOnly := &Config{
+		Tasks: []Task{{Name: "t", Run: "true"}},
+		Jobs:  []Job{{Name: "j", Plan: []Step{{Task: "t"}}}},
+	}
+
+	if hostOnly.UsesPlacedImages() {
+		t.Error("UsesPlacedImages() = true for a pipeline with no image: at all")
+	}
+
+	local := &Config{
+		Tasks: []Task{{Name: "t", Image: "alpine:3", Run: "true"}},
+		Jobs:  []Job{{Name: "j", Plan: []Step{{Task: "t"}}}},
+	}
+
+	if local.UsesPlacedImages() {
+		t.Error("UsesPlacedImages() = true for an image this machine runs itself")
+	}
+}

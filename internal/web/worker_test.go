@@ -126,9 +126,13 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 		t.Fatalf("GET run = %d: %s", code, body)
 	}
 
+	// The identity is asserted WITH its cell, because a bare "0:0" is also a
+	// substring of the run's own timestamp — 3210 of a day's 86400 stamps
+	// contain one — so the loose form passed with the cell deleted, and the
+	// uid-0-is-root-not-silence contract went unproven on those days.
 	for _, want := range []string{
 		"gpu", "linux/arm64", "btrfs (38.3 GiB free)", "64.0 MiB",
-		"0:0", "aws://" + instance + " in golang:1.25",
+		">0:0<", "aws://" + instance + " in golang:1.25",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the run page does not show %q", want)
@@ -168,7 +172,7 @@ func TestRunPageKeepsTheMachinesPanelOffAnUnplacedRun(t *testing.T) {
 func TestPlacementStatesWhatTheWorkerCouldNotSay(t *testing.T) {
 	t.Parallel()
 
-	silent := placementView{}
+	silent := PlacementView{}
 	if got := silent.Filesystem(); got != "not reported" {
 		t.Errorf("Filesystem with no answer = %q, want a stated silence", got)
 	}
@@ -179,26 +183,35 @@ func TestPlacementStatesWhatTheWorkerCouldNotSay(t *testing.T) {
 
 	// tmpfs is marked, because it is memory: the pushed binary and the step's
 	// tree spend the machine's RAM and a reboot loses both.
-	if !(placementView{Placement: store.Placement{FSType: "tmpfs"}}).Volatile() {
+	if !(PlacementView{Placement: store.Placement{FSType: "tmpfs"}}).Volatile() {
 		t.Error("a tmpfs workdir is not marked volatile")
 	}
 
-	if (placementView{Placement: store.Placement{FSType: "btrfs"}}).Volatile() {
+	if (PlacementView{Placement: store.Placement{FSType: "btrfs"}}).Volatile() {
 		t.Error("an ordinary disk is marked volatile")
 	}
 }
 
 // TestPlacementRendersTheBareCases: an ssh:// worker running a step on the
-// host names one thing, not two, and a step whose inputs the worker ALREADY
-// HELD honestly cost nothing to reach — the panel has to be able to say 0 B
-// without it reading as a broken counter.
+// host names one thing, not two.
 func TestPlacementRendersTheBareCases(t *testing.T) {
 	t.Parallel()
 
-	bare := placementView{Placement: store.Placement{Address: "ssh://box"}}
+	bare := PlacementView{Placement: store.Placement{Address: "ssh://box"}}
 	if got := bare.Machine(); got != "ssh://box" {
 		t.Errorf("Machine = %q, want just the host — there is no container to name", got)
 	}
+}
+
+// TestFormatBinaryBytesCoversEveryUnitAndItsBoundary is the ONE table for
+// this formatter: the run page and `steps runs --where` print the same sizes
+// through it, and the two copies it replaces had already disagreed.
+//
+// A step whose inputs the worker ALREADY HELD honestly cost nothing to reach,
+// so 0 B has to render without reading as a broken counter — and the
+// boundary cases are the bug the merge found.
+func TestFormatBinaryBytesCoversEveryUnitAndItsBoundary(t *testing.T) {
+	t.Parallel()
 
 	for _, want := range []struct {
 		bytes int64
@@ -207,10 +220,19 @@ func TestPlacementRendersTheBareCases(t *testing.T) {
 		{0, "0 B"},
 		{1023, "1023 B"},
 		{1024, "1.0 KiB"},
+		{67 << 20, "67.0 MiB"},
 		{41_083_355_136, "38.3 GiB"},
+		// One byte short of the next unit: the divide-while-over-1024 loop
+		// stops here, and %.1f then rounds the remainder back over the
+		// boundary — 1024.0 MiB is not a size anything else reports.
+		{(1 << 20) - 1, "1.0 MiB"},
+		{(1 << 30) - 1, "1.0 GiB"},
+		{(1 << 40) - 1, "1.0 TiB"},
+		// Clamped at TiB rather than running off the unit table.
+		{5 << 50, "5120.0 TiB"},
 	} {
-		if got := formatBinaryBytes(want.bytes); got != want.text {
-			t.Errorf("formatBinaryBytes(%d) = %q, want %q", want.bytes, got, want.text)
+		if got := FormatBinaryBytes(want.bytes); got != want.text {
+			t.Errorf("FormatBinaryBytes(%d) = %q, want %q", want.bytes, got, want.text)
 		}
 	}
 }

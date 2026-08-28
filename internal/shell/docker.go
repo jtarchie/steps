@@ -169,7 +169,8 @@ func (s *dockerSession) ensure(ctx context.Context) (name, stderr string, err er
 	slog.Debug("shell.docker.session_start", "image", s.image, "container", containerName, "cwd", s.resolvedCwd)
 
 	cmd := dockerCommand(ctx, s.dockerHost, args)
-	cmd.Env = withValues(cmd.Env, s.envValues)
+	// Daemon last, over the step's own values: see onDaemonEnv.
+	cmd.Env = onDaemonEnv(withValues(os.Environ(), s.envValues), s.dockerHost)
 
 	var errBuf bytes.Buffer
 
@@ -496,11 +497,6 @@ func (d DockerRunner) runCaptureFull(ctx context.Context, command string, maxByt
 	return stdout, stderr, code, nil
 }
 
-// dockerCommand builds the exec.Cmd for `docker <args...>`, wired so a
-// context cancellation sends SIGTERM to the docker CLI client rather than an
-// immediate SIGKILL, giving it a chance to exit cleanly before the grace
-// period expires. Whatever the client does, the command running inside the
-// container is bounded by the session's own teardown.
 // onDaemon aims a docker invocation at one daemon.
 //
 // An empty host is this machine's own, which is every local step. A non-empty
@@ -509,10 +505,23 @@ func (d DockerRunner) runCaptureFull(ctx context.Context, command string, maxByt
 // of either.
 func onDaemon(cmd *exec.Cmd, host string) *exec.Cmd {
 	if host != "" {
-		cmd.Env = append(os.Environ(), "DOCKER_HOST="+host)
+		cmd.Env = onDaemonEnv(os.Environ(), host)
 	}
 
 	return cmd
+}
+
+// onDaemonEnv puts the daemon's address on an environment, and must be the
+// LAST thing that touches DOCKER_HOST: os/exec keeps the last duplicate, so a
+// step whose env: names DOCKER_HOST would otherwise start its container on
+// the ORCHESTRATOR's daemon while every other call of the session — exec,
+// inspect, logs, rm — still went to the worker's.
+func onDaemonEnv(env []string, host string) []string {
+	if host == "" {
+		return env
+	}
+
+	return append(env, "DOCKER_HOST="+host)
 }
 
 // forwardedNames is envNames plus the names the caller supplied values for,
@@ -539,6 +548,12 @@ func (s *dockerSession) forwardedNames() []string {
 // instead would put every one in the client's argv, where anything able to
 // read the host's process list could see it — the exposure env: exists to
 // avoid.
+//
+// Supplied values WIN here, the opposite of HostEnvWithValues: this builds the
+// docker client's lookup table on the orchestrator, where the pipeline's env:
+// is the authority, while that one builds a command's real environment on a
+// worker, whose own PATH/HOME/TMPDIR must survive. Neither order is a bug the
+// other fixed.
 func withValues(env []string, values map[string]string) []string {
 	if len(values) == 0 {
 		return env
@@ -555,6 +570,11 @@ func withValues(env []string, values map[string]string) []string {
 	return env
 }
 
+// dockerCommand builds the exec.Cmd for `docker <args...>`, wired so a
+// context cancellation sends SIGTERM to the docker CLI client rather than an
+// immediate SIGKILL, giving it a chance to exit cleanly before the grace
+// period expires. Whatever the client does, the command running inside the
+// container is bounded by the session's own teardown.
 func dockerCommand(ctx context.Context, host string, args []string) *exec.Cmd {
 	cmd := onDaemon(exec.CommandContext(ctx, "docker", args...), host) //nolint:gosec // executing pipeline-defined commands in a pipeline-defined image is this tool's purpose
 	cmd.Cancel = func() error {
@@ -732,14 +752,38 @@ func checkMountPath(path string) error {
 	return nil
 }
 
+// errDockerMissing is the CLI half of the preflight, shared by both checks so
+// a pipeline that needs docker only as a client reports the same thing as one
+// that needs the daemon too.
+var errDockerMissing = errors.New("docker CLI not found on PATH, but this pipeline configures image")
+
+// ValidateDockerCLI fails fast when the docker BINARY is missing.
+//
+// Split from ValidateDocker for a PLACED containerized step: its container
+// runs on the worker's daemon, reached through the socket the venue forwards,
+// so `docker info` here proves nothing and a daemonless orchestrator is a
+// supported arrangement — but the client driving that socket is this
+// machine's docker binary. Gating both halves on the local daemon check let a
+// placed-only pipeline pass preflight, acquire and bill a machine, push the
+// tree, and only then die inside the step on `exec: "docker": executable file
+// not found in $PATH`.
+func ValidateDockerCLI() error {
+	_, err := exec.LookPath("docker")
+	if err != nil {
+		return errDockerMissing
+	}
+
+	return nil
+}
+
 // ValidateDocker fails fast when a pipeline configures image: but docker
 // isn't usable: the docker CLI must be on PATH and `docker info` must
 // succeed (daemon reachable). Mirrors internal/workspace's Provider.
 // Validate() precedent — check once at startup, before any step runs.
 func ValidateDocker(ctx context.Context) error {
-	_, err := exec.LookPath("docker")
+	err := ValidateDockerCLI()
 	if err != nil {
-		return errors.New("docker CLI not found on PATH, but this pipeline configures image")
+		return err
 	}
 
 	var errBuf bytes.Buffer

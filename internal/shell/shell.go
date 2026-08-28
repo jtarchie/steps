@@ -192,13 +192,13 @@ type RunnerSpec struct {
 // has no label (see WithLabel) until a caller that wants prefixed output
 // opts in explicitly.
 func NewRunner(spec RunnerSpec) (Runner, error) {
+	// Dropping spec.EnvValues here is not a silent loss: a venue only ever
+	// hands this to the CONTAINER path — a placed step with no image runs its
+	// command through the shim, which carries the session's env in the exec
+	// frame instead.
 	if spec.Image == "" {
 		return HostRunner{cwd: spec.Cwd, extraEnv: spec.Env}, nil
 	}
-
-	// A venue only ever hands this to the CONTAINER path — a placed step with
-	// no image runs its command through the shim, which carries the session's
-	// env in the exec frame instead.
 
 	var resolvedCwd string
 

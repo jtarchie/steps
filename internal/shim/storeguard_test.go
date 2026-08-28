@@ -7,8 +7,11 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/wire"
 )
 
 func redirectTo(t *testing.T, from, to string) error {
@@ -74,5 +77,40 @@ func TestStoreErrorsDoNotCarryTheSignature(t *testing.T) {
 	// Still says which object, or the message names nothing an operator can act on.
 	if !strings.Contains(message, "bucket.s3.amazonaws.com/wire/abc") {
 		t.Errorf("a store failure lost the object it was about: %s", message)
+	}
+}
+
+// TestStoreErrorsDoNotCarryTheSignatureFromAParseFailure is the redactor on the
+// other path a *url.Error reaches a caller from.
+//
+// http.NewRequestWithContext answers a URL it cannot parse with one, carrying
+// the RAW url — signature and all — and both request-construction sites wrapped
+// it bare while their sibling Do() calls redacted. The message becomes a
+// FrameError the venue prints, streams to the web UI and writes to the state
+// database, so this is the same exposure through a different door.
+func TestStoreErrorsDoNotCarryTheSignatureFromAParseFailure(t *testing.T) {
+	// An invalid port: a URL an orchestrator could plausibly mint, and one
+	// net/url refuses — reached through the real construction path rather than
+	// a hand-built *url.Error.
+	signed := "https://bucket.s3.amazonaws.com:notaport/wire/abc?X-Amz-Signature=deadbeefcafe"
+
+	_, fetchErr := fetchArtifact(t.Context(), signed, filepath.Join(t.TempDir(), "held"))
+	if fetchErr == nil {
+		t.Fatal("a url net/http cannot parse was accepted on the download path")
+	}
+
+	session := &session{workdir: t.TempDir()}
+
+	putErr := session.uploadOutputs(t.Context(), wire.Fetch{URL: signed})
+	if putErr == nil {
+		t.Fatal("a url net/http cannot parse was accepted on the upload path")
+	}
+
+	for _, err := range []error{fetchErr, putErr} {
+		for _, secret := range []string{"X-Amz-Signature", "deadbeefcafe"} {
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("a store failure carried %q: %s", secret, err)
+			}
+		}
 	}
 }

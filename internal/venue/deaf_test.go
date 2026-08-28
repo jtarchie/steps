@@ -3,10 +3,14 @@ package venue
 // A worker that stops answering mid-command.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -233,5 +237,128 @@ func TestRunDrainsToTheExitFrameWhenASinkFails(t *testing.T) {
 	if next.Type != wire.FrameEnd || next.Op != 2 {
 		t.Errorf("the next frame was a type %d for operation %d, want the next operation's own — the session is desynced",
 			next.Type, next.Op)
+	}
+}
+
+// blockedWriter is a worker that stopped READING: the encoder parks on
+// backpressure and no reader-side close can unstick it. Only interrupt can.
+type blockedWriter struct {
+	released chan struct{}
+	once     sync.Once
+}
+
+func (b *blockedWriter) Write(_ []byte) (int, error) {
+	<-b.released
+
+	return 0, io.ErrClosedPipe
+}
+
+func (b *blockedWriter) Close() error {
+	b.release()
+
+	return nil
+}
+
+func (b *blockedWriter) release() { b.once.Do(func() { close(b.released) }) }
+
+// TestSessionCloseBoundsTheTransportOnItsOwn is the repo's cleanup-context
+// rule applied to the half that was still borrowing.
+//
+// close() spends one budget on two jobs. The goodbye is bounded and written
+// off-goroutine precisely because a worker that stopped reading parks it —
+// and on that exact path it spends the WHOLE budget, after which the release
+// that follows was handed the spent context. A dead context is not a slow
+// release, it is a different one: local's waitFor takes <-ctx.Done()
+// immediately and SIGKILLs the shim before its cleanup runs, and ssh's drops
+// the connection rather than waiting for the remote shim to exit — leaving
+// scratch on a worker nothing sweeps.
+func TestSessionCloseBoundsTheTransportOnItsOwn(t *testing.T) {
+	previous := closeTimeout
+	closeTimeout = 100 * time.Millisecond
+
+	t.Cleanup(func() { closeTimeout = previous })
+
+	writer := &blockedWriter{released: make(chan struct{})}
+
+	var (
+		spent     atomic.Bool
+		unbounded atomic.Bool
+	)
+
+	session := &session{
+		encoder: wire.NewEncoder(writer),
+		decoder: wire.NewDecoder(strings.NewReader("")),
+	}
+	session.transport = &transport{
+		in:  io.NopCloser(strings.NewReader("")),
+		out: writer,
+		// What close() reaches for when the goodbye will not go out.
+		interrupt: writer.release,
+		close: func(ctx context.Context) error {
+			spent.Store(ctx.Err() != nil)
+
+			_, ok := ctx.Deadline()
+			unbounded.Store(!ok)
+
+			return nil
+		},
+	}
+
+	err := session.close()
+	if err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if spent.Load() {
+		t.Error("the transport release was handed a context the goodbye had already spent — it aborts before reaching the worker")
+	}
+
+	if unbounded.Load() {
+		t.Error("the transport release was handed an unbounded context — a wedged worker holds the teardown open forever")
+	}
+}
+
+// failingWriter is an output sink this end cannot write to — a closed stdout,
+// a full spill directory.
+type failingWriter struct{}
+
+func (failingWriter) Write(_ []byte) (int, error) { return 0, io.ErrClosedPipe }
+
+// TestAFailedStdoutDoesNotSilenceStderr: run keeps reading to the exit frame
+// after a sink fails, deliberately, so the session is not poisoned by its own
+// tidiness. But it dropped the OTHER stream too — one shared discard flag for
+// both — and on a step that is failing, the stderr it stops recording is the
+// only account of why.
+func TestAFailedStdoutDoesNotSilenceStderr(t *testing.T) {
+	t.Parallel()
+
+	session, fromVenue, fromShim := pipedSession(t)
+
+	go func() {
+		for {
+			frame, err := fromVenue.Read()
+			if err != nil {
+				return
+			}
+
+			if frame.Type != wire.FrameExec {
+				continue
+			}
+
+			_ = fromShim.Write(wire.Frame{Type: wire.FrameStdout, Op: frame.Op, Payload: []byte("out")})
+			_ = fromShim.Write(wire.Frame{Type: wire.FrameStderr, Op: frame.Op, Payload: []byte("the reason it failed")})
+			_ = fromShim.WriteJSON(wire.FrameExit, frame.Op, wire.Exit{Code: 1, Started: true})
+		}
+	}()
+
+	var stderr bytes.Buffer
+
+	_, err := session.run(context.Background(), "anything", outputSinks{stdout: failingWriter{}, stderr: &stderr})
+	if !errors.Is(err, errSink) {
+		t.Fatalf("run = %v, want the sink failure it hit", err)
+	}
+
+	if stderr.String() != "the reason it failed" {
+		t.Errorf("stderr = %q, want the worker's account: a failure on one sink stopped recording the other", stderr.String())
 	}
 }

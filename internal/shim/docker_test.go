@@ -10,6 +10,7 @@ import (
 	"net"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/wire"
 )
@@ -138,6 +139,42 @@ func TestDockerNeedsAHello(t *testing.T) {
 	frame := peer.readAny()
 	if frame.Type != wire.FrameError {
 		t.Fatalf("frame type = %v, want a refusal for a docker stream opened before the hello", frame.Type)
+	}
+}
+
+// TestDockerRefusesASecondOpen is what a fire-and-forget frame owes its peer
+// when it cannot do as it was asked.
+//
+// add() has always refused a duplicate; what was missing was saying so.
+// FrameDockerOpen gets no acknowledgement, so silence is indistinguishable from
+// success — and the peer's next FrameDockerData for that op then resolves to the
+// FIRST stream, writing one client's bytes into another client's socket.
+func TestDockerRefusesASecondOpen(t *testing.T) {
+	peer := newPeer(t, Options{Build: "test", Root: t.TempDir(), DockerSocket: echoSocket(t)})
+	peer.hello()
+
+	op := peer.next()
+	peer.sendEmpty(wire.FrameDockerOpen, op)
+	peer.sendEmpty(wire.FrameDockerOpen, op)
+
+	// Read under a bound, because SILENCE is the answer under test: a plain
+	// read would hang on the defect rather than report it.
+	answered := make(chan wire.FrameType, 1)
+
+	go func() {
+		frame, err := peer.decoder.Read()
+		if err == nil {
+			answered <- frame.Type
+		}
+	}()
+
+	select {
+	case frameType := <-answered:
+		if frameType != wire.FrameError {
+			t.Fatalf("frame type = %v for a second open on operation %d, want a refusal", frameType, op)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a second open on an operation already open was answered with silence, which reads as success")
 	}
 }
 

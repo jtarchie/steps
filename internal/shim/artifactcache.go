@@ -33,13 +33,22 @@ import (
 // failure than re-fetching a tree.
 const artifactCacheBytes = 8 << 30
 
+// artifactCacheName is the cache's directory name under <root>/steps-shim,
+// beside the per-session scratch directories rather than inside one.
+//
+// Named once and reserved by checkSessionName from the same constant: a
+// session called this IS the shared cache, so the sweep walks a live work
+// directory as a cache entry and cleanup's RemoveAll takes every other
+// session's cache with it.
+const artifactCacheName = "artifacts"
+
 // artifactCacheDir is where this shim keeps artifacts between sessions.
 //
 // Beside the session scratch and not inside it: the scratch is removed when
 // its session ends, and a cache that died with the step that filled it would
 // never be reused by anything.
 func (s *session) artifactCacheDir() string {
-	return filepath.Join(filepath.Dir(filepath.Dir(s.workdir)), "artifacts")
+	return filepath.Join(filepath.Dir(filepath.Dir(s.workdir)), artifactCacheName)
 }
 
 // sweepArtifactCache brings the cache back under its cap, coldest first.
@@ -246,6 +255,17 @@ func copyFile(root *os.Root, src, rel string, info os.FileInfo) error {
 		return fmt.Errorf("writing %q: %w", rel, err)
 	}
 
+	// Chmod on the descriptor, after the write, for wire.UnpackTree's reason:
+	// OpenFile's mode argument is masked by this process's umask, which strips
+	// exactly the executable bit the orchestrator hashes — and PackPaths ships
+	// what is here back as the step's outputs, so the loss travels home.
+	err = to.Chmod(info.Mode().Perm())
+	if err != nil {
+		_ = to.Close()
+
+		return fmt.Errorf("writing %q: %w", rel, err)
+	}
+
 	// Closed explicitly: a delayed-allocation filesystem reports ENOSPC here
 	// and nowhere else, and a truncated artifact would be cached as complete.
 	err = to.Close()
@@ -294,12 +314,43 @@ func commitArtifact(staging, held string) error {
 	return nil
 }
 
-// placeHeldArtifact copies one cached artifact into a work directory, and
-// marks it used so the sweep evicts what is coldest rather than what is
-// merely oldest.
-func placeHeldArtifact(held, name, workdir string) error {
+// placeIfHeld places a cached artifact, answering false when this worker does
+// not hold it after all.
+//
+// An entry that vanishes mid-copy is a cache MISS, not a failure. The cache is
+// shared by every shim on the worker — two placed steps are two sessions in
+// one process, and the aws:// bootstrap runs one PROCESS per placed step over
+// the same --root — so a sweep can evict what another session is reading, and
+// no lock this end could take covers the cross-process case. The reader that
+// loses that race fetches, which is what a miss already does.
+func placeIfHeld(held, name, workdir string) (bool, error) {
+	_, err := os.Stat(held)
+	if err != nil {
+		return false, nil //nolint:nilerr // not holding it is the ordinary answer, not a failure
+	}
+
+	err = placeHeldArtifact(held, name, workdir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// placeHeldArtifact copies one artifact tree into a work directory, and marks
+// it used so the sweep evicts what is coldest rather than what is merely
+// oldest.
+//
+// The tree is the cache entry on a hit and the staging directory on a miss:
+// after a transfer the caller places what it just unpacked, because that is
+// the copy nobody else can take away.
+func placeHeldArtifact(tree, name, workdir string) error {
 	now := time.Now()
-	_ = os.Chtimes(held, now, now)
+	_ = os.Chtimes(tree, now, now)
 
 	root, err := os.OpenRoot(workdir)
 	if err != nil {
@@ -308,5 +359,5 @@ func placeHeldArtifact(held, name, workdir string) error {
 
 	defer func() { _ = root.Close() }()
 
-	return copyTree(root, filepath.Join(held, name), name)
+	return copyTree(root, filepath.Join(tree, name), name)
 }

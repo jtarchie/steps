@@ -2,7 +2,6 @@ package shim
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -475,7 +474,7 @@ func (p *peer) offerArtifact(name string) uint32 {
 	p.t.Helper()
 
 	op := p.next()
-	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
+	digest := digestOf(name)
 
 	p.send(wire.FrameUpload, op, wire.Upload{
 		Artifacts: []wire.UploadArtifact{{Name: name, Digest: digest}},
@@ -511,7 +510,7 @@ func (p *peer) uploadArtifact(src, name string) {
 	p.t.Helper()
 
 	op := p.next()
-	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
+	digest := digestOf(name)
 
 	p.send(wire.FrameUpload, op, wire.Upload{
 		Artifacts: []wire.UploadArtifact{{Name: name, Digest: digest}},

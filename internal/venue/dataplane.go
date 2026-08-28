@@ -110,6 +110,18 @@ func (s *session) uploadArtifact(ctx context.Context, name string) (wire.UploadA
 		if err != nil {
 			return wire.UploadArtifact{}, fmt.Errorf("%w", err)
 		}
+
+		// Counted here and only here, so a blob the store already held is not
+		// billed to a session that did not push it — which is the same thing
+		// the tunnel's counter means, and the reason a placement can say
+		// whether a worker was cold.
+		//
+		// ponytail: what the WORKER pulled is still uncounted, so a step whose
+		// blobs were all already in the store reads 0 B even against a cold
+		// machine. Honestly fixing that is a protocol change — the shim
+		// reporting the bytes it fetched in its acknowledgement — not another
+		// guess made at this end.
+		s.sentArtifactBytes.Add(stagedSize(staged))
 	}
 
 	url, err := s.blobs.PresignGet(ctx, key, wireTTL)
@@ -118,6 +130,19 @@ func (s *session) uploadArtifact(ctx context.Context, name string) (wire.UploadA
 	}
 
 	return wire.UploadArtifact{Name: name, Digest: digest, URL: url}, nil
+}
+
+// stagedSize is how big the blob this end just pushed was, or zero if the
+// staged file cannot be measured. Zero rather than an error: a byte count is
+// a report, and failing an upload that SUCCEEDED because its accounting did
+// not would be the worse answer.
+func stagedSize(staged string) int64 {
+	info, err := os.Stat(staged)
+	if err != nil {
+		return 0
+	}
+
+	return info.Size()
 }
 
 // packArtifactToFile stages one entry and returns the digest of its tar

@@ -32,7 +32,13 @@ import (
 // reason: Close runs from deferred paths whose context is routinely already
 // cancelled — a timed-out step, a Ctrl-C — and those are precisely the cases
 // where leaving scratch on somebody else's machine would be worst.
-const closeTimeout = 30 * time.Second
+//
+// A variable rather than a constant so a test can shrink it, on the same
+// terms as the docker handoff's bounds: what is worth proving about a
+// teardown is that each half gets a budget, not how generous it is.
+//
+//nolint:gochecknoglobals // a test seam for a wait on another machine
+var closeTimeout = 30 * time.Second
 
 // helloTimeout bounds the handshake.
 //
@@ -279,8 +285,7 @@ func (s *session) connect(ctx context.Context) error {
 	}
 
 	s.transport = transport
-	s.encoder = wire.NewEncoder(transport.out)
-	s.decoder = wire.NewDecoder(transport.in)
+	s.adoptCodec(transport.in, transport.out)
 
 	err = s.greet()
 	if err != nil {
@@ -308,6 +313,27 @@ func (s *session) connect(ctx context.Context) error {
 // Under its own bounded context, never the caller's: the caller's may have no
 // deadline at all, and a worker that has already stopped answering would then
 // hold the step open forever on the cleanup rather than the work.
+// adoptCodec points the session at a new conversation's frames.
+//
+// The ENCODER is replaced under writeMu, not only under s.mu. Writers reach it
+// through writeMu — and some of them outlive the conversation they were
+// started for: a docker relay's accept goroutine and one pump per open stream
+// keep writing until the relay settles. s.mu is a lock no writer ever holds,
+// so a redial and a leftover write shared none, which is a torn pointer read
+// rather than a merely stale one.
+//
+// The DECODER needs no such treatment, and could not usefully have it: every
+// reader that can outlive a conversation captures it instead — readHello's
+// detached goroutine and dockerRelay both do — leaving the operation path,
+// which runs on the very goroutine that calls this, as its only other reader.
+func (s *session) adoptCodec(in io.Reader, out io.Writer) {
+	s.writeMu.Lock()
+	s.encoder = wire.NewEncoder(out)
+	s.writeMu.Unlock()
+
+	s.decoder = wire.NewDecoder(in)
+}
+
 func (s *session) abandon() {
 	// Before the transport goes, while the forwarded socket can still reach
 	// the daemon: the container and the socket belong to THIS conversation,
@@ -495,13 +521,20 @@ func (s *session) readHello() (wire.Frame, error) {
 	// unblocks it.
 	answered := make(chan result, 1)
 
+	// Captured now rather than reached for in the goroutine: this one outlives
+	// the handshake it was started for, and a redial replaces the field under
+	// it. Same reasoning as exec.go's captured transport and dockerRelay's own
+	// decoder — every reader that can outlive a conversation holds the codec
+	// that conversation opened.
+	decoder := s.decoder
+
 	go func() {
 		// Through the non-marking reader, and absorbing drains: a worker
 		// already under a reclamation notice — the ordinary case on a redial,
 		// since the eviction is why the last transport died — would otherwise
 		// have its notice decoded as a zero HelloOK and be reported as
 		// running the wrong binary.
-		frame, err := s.awaitHandshakeFrame()
+		frame, err := s.awaitHandshakeFrame(decoder)
 		answered <- result{frame: frame, err: err}
 	}()
 
@@ -621,7 +654,17 @@ func (s *session) close() error {
 		<-sent
 	}
 
-	err := s.transport.close(ctx)
+	// Its own budget, not the goodbye's leftovers. On the exact path the
+	// bounded goodbye exists for — a worker that stopped reading — the wait
+	// above spends the whole of ctx, and handing that spent context on turns
+	// the release into no release at all: local's waitFor takes <-ctx.Done()
+	// straight away and SIGKILLs the shim before its own cleanup runs, and
+	// ssh's closeSession drops the connection rather than waiting for the
+	// remote shim to exit, leaving scratch on a worker nothing sweeps.
+	releaseCtx, releaseCancel := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
+	defer releaseCancel()
+
+	err := s.transport.close(releaseCtx)
 	s.transport = nil
 
 	if err != nil {
@@ -647,21 +690,7 @@ func (s *session) close() error {
 // none of its inputs and reports success.
 func (s *session) teardownContainer() {
 	if s.inner != nil {
-		// Its own context, and deliberately not a caller's: the likeliest
-		// reason teardown is running is that the caller's was just
-		// cancelled, and inheriting that would abandon the docker rm this
-		// exists to perform — leaving a container on the worker that nothing
-		// sweeps. Bounded by the handoff timeout either way.
-		err := s.withDockerRouting(context.Background(), func() error { return s.inner.Close() })
-		if err != nil {
-			// Logged, because nothing else can see it: this is the only account
-			// of a removal that did not happen, and the container it names is
-			// on a machine whose daemon no local sweep ever asks. Not returned
-			// — teardown runs on paths that have already decided the step's
-			// verdict.
-			slog.Warn("venue.container.teardown_failed", "worker", s.worker.String(), "error", err)
-		}
-
+		s.releaseContainer()
 		s.inner = nil
 	}
 
@@ -671,6 +700,40 @@ func (s *session) teardownContainer() {
 	}
 
 	s.relay = nil
+}
+
+// releaseContainer removes the worker's container, or says which one it is
+// leaving behind.
+//
+// A broken conversation cannot carry the removal. `docker rm -f` travels the
+// forwarded socket like every other docker call, so a wire that answers
+// nothing — or that a stalled router still owns — turns the attempt into a
+// second reader on one decoder waiting out a reply nobody will bring. The
+// worker is named rather than the container id, which lives inside shell's
+// session: it is what an operator needs to go and look, and no local sweep
+// ever asks that machine's daemon.
+func (s *session) releaseContainer() {
+	if s.broken.Load() {
+		slog.Warn("venue.container.abandoned",
+			"worker", s.worker.String(), "image", s.container.Image, "workdir", s.workdir)
+
+		return
+	}
+
+	// Its own context, and deliberately not a caller's: the likeliest reason
+	// teardown is running is that the caller's was just cancelled, and
+	// inheriting that would abandon the docker rm this exists to perform —
+	// leaving a container on the worker that nothing sweeps. Bounded by the
+	// handoff timeout either way.
+	err := s.withDockerRouting(context.Background(), func() error { return s.inner.Close() })
+	if err != nil {
+		// Logged, because nothing else can see it: this is the only account of
+		// a removal that did not happen, and the container it names is on a
+		// machine whose daemon no local sweep ever asks. Not returned —
+		// teardown runs on paths that have already decided the step's verdict.
+		slog.Warn("venue.container.teardown_failed",
+			"worker", s.worker.String(), "image", s.container.Image, "error", err)
+	}
 }
 
 func (s *session) nextOp() uint32 {
@@ -824,9 +887,9 @@ func (s *session) read() (wire.Frame, error) {
 // awaitHandshakeFrame is awaitOperationFrame for the handshake, reading
 // through readFrame so a late answer cannot un-stick an open failure ensure
 // has already recorded — see read.
-func (s *session) awaitHandshakeFrame() (wire.Frame, error) {
+func (s *session) awaitHandshakeFrame(decoder *wire.Decoder) (wire.Frame, error) {
 	for {
-		frame, err := s.readFrame()
+		frame, err := readFrame(decoder)
 		if err != nil || frame.Type != wire.FrameDraining {
 			return frame, err
 		}
@@ -912,7 +975,14 @@ var errWorkerLost = errors.New("the connection to the worker was lost")
 // readFrame returns the next frame, turning an error frame from the shim into
 // a Go error so callers never have to check for it.
 func (s *session) readFrame() (wire.Frame, error) {
-	frame, err := s.decoder.Read()
+	return readFrame(s.decoder)
+}
+
+// readFrame is session.readFrame against a NAMED decoder, so a reader that can
+// outlive its conversation holds the one that conversation opened rather than
+// whichever the session has since adopted — see readHello and adoptCodec.
+func readFrame(decoder *wire.Decoder) (wire.Frame, error) {
+	frame, err := decoder.Read()
 	if err != nil {
 		// A transport that died mid-step is infrastructure, and saying so
 		// explicitly is what keeps it from being read as a command's verdict.

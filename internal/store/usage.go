@@ -74,7 +74,7 @@ func (s *Store) RecordAgentUsage(ctx context.Context, usage AgentUsage) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO agent_usage (pipeline_id, `+usageColumns+`, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (run_id, node_hash) DO UPDATE SET
+		ON CONFLICT (pipeline_id, run_id, node_hash) DO UPDATE SET
 			step_index = excluded.step_index,
 			step_name = excluded.step_name,
 			model_served = excluded.model_served,

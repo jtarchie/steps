@@ -56,3 +56,43 @@ func TestCancelReachesTheFirstOfTwoRunningCommands(t *testing.T) {
 		}
 	}
 }
+
+// TestASecondExecOnTheSameOperationIsRefused is dockerStreams.add's rule on the
+// command registry, which is the other map this session keys by a wire value.
+//
+// Overwriting made the FIRST command's endCommand delete the SECOND's
+// registration, so a FrameCancel aimed at the running command found nothing —
+// and timeout:, fail_fast and race: ended nothing while it ran to completion on
+// the worker.
+func TestASecondExecOnTheSameOperationIsRefused(t *testing.T) {
+	peer := newPeer(t, Options{Build: "test", Root: t.TempDir()})
+	peer.hello()
+
+	op := peer.next()
+	peer.send(wire.FrameExec, op, wire.Exec{Command: "echo running; sleep 30"})
+
+	// Sent only once the first command owns the op, which is the state the
+	// duplicate has to be refused against.
+	frame := peer.read()
+	if frame.Type != wire.FrameStdout {
+		t.Fatalf("frame type = %v, want the first command to announce itself", frame.Type)
+	}
+
+	peer.send(wire.FrameExec, op, wire.Exec{Command: "echo second"})
+
+	frame = peer.readAny()
+	if frame.Type != wire.FrameError {
+		t.Fatalf("frame type = %v for a second exec on operation %d, want a refusal", frame.Type, op)
+	}
+
+	// The first command still owns the registration, so the cancel that ends
+	// this session reaches it.
+	peer.sendEmpty(wire.FrameCancel, op)
+
+	for {
+		next := peer.read()
+		if next.Type == wire.FrameExit && next.Op == op {
+			return
+		}
+	}
+}

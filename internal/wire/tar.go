@@ -156,6 +156,15 @@ func withinRoot(root, clean string) error {
 	for probe := full; ; probe = filepath.Dir(probe) {
 		resolved, resolveErr := filepath.EvalSymlinks(probe)
 		if resolveErr != nil {
+			// Classified the way the root above is, and for the same reason.
+			// Climbing is load-bearing for exactly one case — a named output
+			// that was never produced — and generalizing it to EACCES, ELOOP
+			// or a stale mount walks up to a root that resolves by
+			// construction and accepts a name nobody checked.
+			if !errors.Is(resolveErr, fs.ErrNotExist) {
+				return fmt.Errorf("%w: %q: the name could not be resolved: %w", ErrUnsafePath, clean, resolveErr)
+			}
+
 			if probe == filepath.Dir(probe) {
 				return nil
 			}

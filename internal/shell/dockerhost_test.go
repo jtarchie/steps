@@ -134,3 +134,53 @@ func TestRunnerMountsAPathItDidNotResolve(t *testing.T) {
 		t.Errorf("output = %s, want the mount path to have been used verbatim", out)
 	}
 }
+
+// TestSessionStartAimsTheWorkersDaemonOverTheStepsOwnEnv crosses the seam
+// where a placed containerized step carries two settings that land on the same
+// variable: the daemon the venue forwarded, and the values the pipeline's env:
+// resolved on the orchestrator.
+//
+// Both are written onto the docker client's environment and os/exec keeps the
+// LAST duplicate, so a step whose env: names DOCKER_HOST — anything with
+// colima, Rancher Desktop, rootless or a remote daemon exported — started its
+// container on the ORCHESTRATOR while exec, inspect, logs and rm all still
+// went to the worker. The container came up on the wrong machine with
+// `-v <worker path>:<worker path>`, which docker silently creates as an empty
+// local directory, and every later call reported "No such container".
+func TestSessionStartAimsTheWorkersDaemonOverTheStepsOwnEnv(t *testing.T) {
+	argvFile := writeFakeDocker(t, 0, "", "")
+
+	const forwarded = "unix:///tmp/steps-worker-forwarded.sock"
+
+	runner, err := NewRunner(RunnerSpec{
+		Image:      "alpine",
+		MountPath:  "/worker/tree",
+		DockerHost: forwarded,
+		Env:        []string{"DOCKER_HOST"},
+		EnvValues:  map[string]string{"DOCKER_HOST": "unix:///orchestrator.sock"},
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	_, _, _, err = runner.RunCaptureFull(context.Background(), "true")
+	if err != nil {
+		t.Fatalf("RunCaptureFull: %v", err)
+	}
+
+	CloseRunner(runner, "test")
+
+	for _, line := range recordedDaemons(t, argvFile) {
+		verb, host, _ := strings.Cut(line, " ")
+		if host != forwarded {
+			t.Errorf("docker %s ran against %q, want the forwarded socket %q", verb, host, forwarded)
+		}
+	}
+
+	// The start is the invocation that regressed, so it is named rather than
+	// left to the loop: a session whose container never started would satisfy
+	// that loop without ever having aimed a `docker run` anywhere.
+	if runs := invocationsOf(recordedArgv(t, argvFile), "run"); len(runs) != 1 {
+		t.Errorf("recorded %v, want exactly one docker run", runs)
+	}
+}

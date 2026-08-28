@@ -1,63 +1,151 @@
 package main
 
-// How a placement renders when the worker could not answer.
+// What `steps runs --where` says, and about which run.
+//
+// The rendering itself is web.PlacementView's, tested once in internal/web —
+// the browser and the terminal draw these rows through the same type. What is
+// only testable here is what the CLI does AROUND those rows: which run it
+// reports on, and the marker a terminal has no colour for.
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// TestPlacedFilesystemStatesItsSilence: an empty fstype is a shim that could
-// not say — an older one, or a platform with no statfs — and never an
-// ordinary disk. Rendering it blank hides exactly the answer this column
-// exists to surface, since tmpfs is what a reader is scanning for.
-func TestPlacedFilesystemStatesItsSilence(t *testing.T) {
-	t.Parallel()
+// whereFixture writes a pipeline and a state database beside it, with the
+// caller's rows already in it. No pipeline is executed: `steps runs` reads the
+// database and never loads the YAML, and every case here is about a run that
+// cannot be produced by running one.
+func whereFixture(t *testing.T, record func(context.Context, *store.Store)) string {
+	t.Helper()
 
-	if got := placedFilesystem(store.Placement{}); got != "not reported" {
-		t.Errorf("placedFilesystem with no answer = %q, want a stated silence", got)
+	path := writePipeline(t, t.TempDir(), `
+jobs:
+- name: build
+  plan:
+  - task: compile
+    run: "true"
+`)
+
+	st, err := store.OpenStore(statePath(path, ""), pipelineName(path))
+	if err != nil {
+		t.Fatalf("open state store: %v", err)
 	}
 
-	got := placedFilesystem(store.Placement{FSType: "tmpfs", FSFree: 848 << 20})
-	if got != "tmpfs (848.0 MiB free)" {
-		t.Errorf("placedFilesystem = %q, want the type and what is left on it", got)
+	record(context.Background(), st)
+
+	err = st.Close()
+	if err != nil {
+		t.Fatalf("close state store: %v", err)
 	}
+
+	return path
 }
 
-// TestPlacedMachineNamesTheImage, because a containerized placed step has two
-// answers to "where did this run" and the image is the one that changes.
-func TestPlacedMachineNamesTheImage(t *testing.T) {
-	t.Parallel()
-
-	bare := store.Placement{Address: "aws://i-0123456789abcdef0"}
-	if got := placedMachine(bare); got != "aws://i-0123456789abcdef0" {
-		t.Errorf("placedMachine = %q, want just the machine", got)
-	}
-
-	boxed := store.Placement{Address: "aws://i-0123456789abcdef0", Image: "golang:1.25"}
-	if got := placedMachine(boxed); got != "aws://i-0123456789abcdef0 in golang:1.25" {
-		t.Errorf("placedMachine = %q, want the machine and the image", got)
-	}
-}
-
-func TestHumanBytes(t *testing.T) {
-	t.Parallel()
-
-	for _, want := range []struct {
-		bytes int64
-		text  string
-	}{
-		{0, "0 B"},
-		{1023, "1023 B"},
-		{1024, "1.0 KiB"},
-		{67 << 20, "67.0 MiB"},
-		{41_083_355_136, "38.3 GiB"},
-		// Clamped at TiB rather than running off the unit table.
-		{5 << 50, "5120.0 TiB"},
-	} {
-		if got := humanBytes(want.bytes); got != want.text {
-			t.Errorf("humanBytes(%d) = %q, want %q", want.bytes, got, want.text)
+// TestWhereWillNotVouchForARunItDoesNotHave.
+//
+// RunPlacements is pipeline-scoped, so a typo — or a run belonging to another
+// pipeline in a shared state file — reads back as zero rows, exactly like a
+// run that placed nothing. Reporting that as "ran every step on this machine"
+// is a positive claim about a run this pipeline has never seen, made with
+// exit 0.
+func TestWhereWillNotVouchForARunItDoesNotHave(t *testing.T) {
+	path := whereFixture(t, func(ctx context.Context, st *store.Store) {
+		err := st.StartRun(ctx, "mid-flight", "build", "")
+		if err != nil {
+			t.Fatalf("StartRun: %v", err)
 		}
+	})
+
+	var err error
+
+	out := captureStdout(t, func() {
+		err = run([]string{"runs", path, "--where", "--run", "never-happened"})
+	})
+	if err != nil {
+		t.Fatalf("steps runs --where --run: %v", err)
+	}
+
+	if strings.Contains(out, "ran every step") {
+		t.Errorf("--where vouched for a run this pipeline does not have:\n%s", out)
+	}
+
+	if !strings.Contains(out, "never-happened") {
+		t.Errorf("--where does not say which run it could not find:\n%s", out)
+	}
+
+	// A run still in flight records its placements as its steps finish, so
+	// the same past-tense claim is just as wrong about one that exists.
+	out = captureStdout(t, func() {
+		err = run([]string{"runs", path, "--where", "--run", "mid-flight"})
+	})
+	if err != nil {
+		t.Fatalf("steps runs --where --run: %v", err)
+	}
+
+	if strings.Contains(out, "ran every step") {
+		t.Errorf("--where spoke in the past tense about a running run:\n%s", out)
+	}
+}
+
+// TestWhereMarksAMemoryWorkdir is the drift this renderer was merged to end:
+// the run page warned about a tmpfs workdir in the colour it warns about
+// everything, and the terminal — where someone debugging a placed step looks
+// FIRST — printed it as an ordinary disk.
+//
+// tmpfs on a worker is RAM: the pushed binary and the step's tree spend the
+// machine's memory, and a reboot loses both.
+func TestWhereMarksAMemoryWorkdir(t *testing.T) {
+	hash := strings.Repeat("d", 64)
+
+	path := whereFixture(t, func(ctx context.Context, st *store.Store) {
+		err := st.StartRun(ctx, "in-memory", "build", "")
+		if err != nil {
+			t.Fatalf("StartRun: %v", err)
+		}
+
+		err = st.RecordNode(ctx, store.NodeRecord{
+			Hash: hash, Kind: "task", StepIndex: 0, Resource: "compile",
+			Content: map[string]any{"body": "x"},
+		}, "build", "succeeded", nil, nil)
+		if err != nil {
+			t.Fatalf("RecordNode: %v", err)
+		}
+
+		err = st.RecordPlacement(ctx, store.Placement{
+			RunID: "in-memory", StepIndex: 0, StepName: "compile", JobName: "build",
+			NodeHash: hash, Tag: "gpu", Address: "ssh://box",
+			GOOS: "linux", GOARCH: "arm64",
+			Workdir: "/tmp/steps/work", FSType: "tmpfs", FSFree: 848 << 20,
+			BytesSent: 4096,
+		})
+		if err != nil {
+			t.Fatalf("RecordPlacement: %v", err)
+		}
+
+		err = st.FinishRun(ctx, "in-memory", "succeeded")
+		if err != nil {
+			t.Fatalf("FinishRun: %v", err)
+		}
+	})
+
+	var err error
+
+	out := captureStdout(t, func() {
+		err = run([]string{"runs", path, "--where", "--run", "in-memory"})
+	})
+	if err != nil {
+		t.Fatalf("steps runs --where --run: %v", err)
+	}
+
+	if !strings.Contains(out, "tmpfs (848.0 MiB free) [RAM]") {
+		t.Errorf("--where reports a tmpfs workdir as an ordinary disk:\n%s", out)
+	}
+
+	if !strings.Contains(out, "memory, not disk") {
+		t.Errorf("--where marks the row and never says what the marker means:\n%s", out)
 	}
 }

@@ -527,39 +527,44 @@ func (r runView) UsageRows() []usageView {
 	return rows
 }
 
-// placementView is one placed step's machine as the template reads it.
-type placementView struct {
+// PlacementView is one placed step's machine as the template reads it.
+//
+// Exported because `steps runs --where` renders the same rows through it. Two
+// spellings of "which machine" had already drifted: the CLI's copy never
+// learned Volatile, so the terminal — where an operator debugging a placed
+// step looks first — reported a tmpfs workdir as an ordinary disk.
+type PlacementView struct {
 	store.Placement
 }
 
 // Platform is what the worker reported itself to be.
-func (p placementView) Platform() string { return p.GOOS + "/" + p.GOARCH }
+func (p PlacementView) Platform() string { return p.GOOS + "/" + p.GOARCH }
 
 // Filesystem is what the tree landed on, or a stated silence.
 //
 // Empty is never drawn as an ordinary disk: a shim on a platform with no
 // statfs genuinely cannot say, and tmpfs — the answer this column exists to
 // surface — would otherwise hide behind a plausible blank.
-func (p placementView) Filesystem() string {
+func (p PlacementView) Filesystem() string {
 	if p.FSType == "" {
 		return "not reported"
 	}
 
-	return p.FSType + " (" + formatBinaryBytes(p.FSFree) + " free)"
+	return p.FSType + " (" + FormatBinaryBytes(p.FSFree) + " free)"
 }
 
 // Volatile marks a workdir that is MEMORY, so the row can say so in the
 // colour every other warning on this page uses. It is the single most
 // expensive thing a worker URL can get wrong and the least visible.
-func (p placementView) Volatile() bool { return p.FSType == "tmpfs" || p.FSType == "ramfs" }
+func (p PlacementView) Volatile() bool { return p.FSType == "tmpfs" || p.FSType == "ramfs" }
 
 // Sent is what actually crossed to reach this machine. A worker keeps what it
 // receives, so a step whose inputs were already there honestly reads 0 B.
-func (p placementView) Sent() string { return formatBinaryBytes(p.BytesSent) }
+func (p PlacementView) Sent() string { return FormatBinaryBytes(p.BytesSent) }
 
 // Identity is who the step ran as, blank when the shim did not say — never an
 // invented 0, which would read as root.
-func (p placementView) Identity() string {
+func (p PlacementView) Identity() string {
 	if p.UID == nil || p.GID == nil {
 		return ""
 	}
@@ -568,7 +573,7 @@ func (p placementView) Identity() string {
 }
 
 // Machine names the host, and the image if the step ran in a container on it.
-func (p placementView) Machine() string {
+func (p PlacementView) Machine() string {
 	if p.Image == "" {
 		return p.Address
 	}
@@ -580,35 +585,44 @@ func (p placementView) Machine() string {
 func (r runView) HasPlacements() bool { return len(r.Placements) > 0 }
 
 // PlacementRows wraps the raw rows for the template.
-func (r runView) PlacementRows() []placementView {
-	rows := make([]placementView, 0, len(r.Placements))
+func (r runView) PlacementRows() []PlacementView {
+	rows := make([]PlacementView, 0, len(r.Placements))
 	for _, placed := range r.Placements {
-		rows = append(rows, placementView{Placement: placed})
+		rows = append(rows, PlacementView{Placement: placed})
 	}
 
 	return rows
 }
 
-// formatBinaryBytes renders a disk or transfer size in BINARY units,
+// FormatBinaryBytes renders a disk or transfer size in BINARY units,
 // deliberately unlike formatBytes.
 //
 // That one is decimal so an agent's payload is comparable to the byte limits
 // it is bounded by. This is about disks and wire transfers, which every tool
 // a reader will cross-check against — the shim's own tmpfs warning, the EC2
 // console, df — reports in KiB/MiB/GiB.
-func formatBinaryBytes(n int64) string {
+//
+// Exported for `steps runs --where`, which prints the same disk and transfer
+// sizes from the same rows.
+func FormatBinaryBytes(n int64) string {
 	const unit = 1024
 
 	if n < unit {
 		return strconv.FormatInt(n, 10) + " B"
 	}
 
+	units := [...]string{"KiB", "MiB", "GiB", "TiB"}
+
+	// The step up happens where the RENDERED value would, not where the exact
+	// one does: %.1f rounds, so anything from 1023.95 up prints as "1024.0" —
+	// a size back over the unit boundary it was just divided under. One byte
+	// short of a GiB read as 1024.0 MiB.
 	size, exp := float64(n)/unit, 0
-	for size >= unit && exp < 3 {
+	for size >= unit-0.05 && exp < len(units)-1 {
 		size, exp = size/unit, exp+1
 	}
 
-	return fmt.Sprintf("%.1f %s", size, [...]string{"KiB", "MiB", "GiB", "TiB"}[exp])
+	return fmt.Sprintf("%.1f %s", size, units[exp])
 }
 
 // Running reports a run still in flight, which is what decides whether the

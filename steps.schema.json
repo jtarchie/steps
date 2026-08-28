@@ -988,7 +988,7 @@
             "type": "string",
             "minLength": 1
           },
-          "description": "task steps only. Names the worker the step's commands run on; the invocation maps the name to a machine with --worker. One entry: there is no worker pool to intersect against. Invalid with image:, on agent steps, and on a task with fix:."
+          "description": "task steps only. Names the worker the step's commands run on; the invocation maps the name to a machine with --worker. One entry: there is no worker pool to intersect against. Composes with image:, which runs the command in a container on that worker. Invalid on agent steps, and on a task with fix:."
         },
         "context_paths": {
           "type": "array",
