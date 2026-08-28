@@ -456,10 +456,16 @@ func notePlacement(ctx context.Context, runner shell.Runner) {
 //
 // Best-effort, like the agent's usage row and for the same reason: a
 // bookkeeping write must never turn a step that did its work into a failed
-// one. Called only AFTER the step's node is recorded — run_placements has a
-// foreign key into nodes so that retention reaping a node takes this with it,
-// which also means the row cannot be written before the node exists.
-func recordPlacement(ctx context.Context, runner stepRunner, sink *placementSink, index int, name, hash string) {
+// one. For a step that HAS a node, called only after that node is recorded:
+// the foreign key that lets retention reap the two together also means the
+// row cannot be written first.
+//
+// slot is what identifies the row within the run: a plan step's node hash, or
+// a hook's scope label. node is that hash again when the step HAS one and
+// EMPTY when it does not — a hook is deliberately not merkle-hashed, so it has
+// no node for retention to reap the row alongside, and cascades off its run
+// instead.
+func recordPlacement(ctx context.Context, runner stepRunner, sink *placementSink, index int, name, slot, node string) {
 	if runner.st == nil {
 		return
 	}
@@ -487,7 +493,8 @@ func recordPlacement(ctx context.Context, runner stepRunner, sink *placementSink
 		StepIndex:  index,
 		StepName:   name,
 		JobName:    runner.jobName,
-		NodeHash:   hash,
+		Slot:       slot,
+		NodeHash:   node,
 		Tag:        placement.Tag,
 		Address:    placement.Address,
 		InstanceID: instance,

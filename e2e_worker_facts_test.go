@@ -91,6 +91,7 @@ jobs:
 	}
 
 	assertMachineFacts(t, placement)
+	assertBytesCrossed(t, placement)
 }
 
 // assertMachineFacts holds the half of a placement that comes from the
@@ -112,9 +113,15 @@ func assertMachineFacts(t *testing.T, placement store.Placement) {
 	if placement.FSType == "" {
 		t.Error("fstype is empty — a tmpfs workdir is the failure this column exists to name")
 	}
+}
 
-	// The tree went somewhere, so bytes moved. Zero here would mean the
-	// column is wired to something that never counts.
+// assertBytesCrossed is separate from the facts above because zero is an
+// honest answer: a worker KEEPS what it receives, and a step whose tree is
+// empty or already held sends nothing. Only a caller that knows bytes had to
+// move can assert that they did.
+func assertBytesCrossed(t *testing.T, placement store.Placement) {
+	t.Helper()
+
 	if placement.BytesSent <= 0 {
 		t.Errorf("bytes_sent = %d, want the tree that was pushed to the worker", placement.BytesSent)
 	}
@@ -243,4 +250,55 @@ func latestRunID(t *testing.T, pipelinePath string) string {
 	}
 
 	return runs[0].ID
+}
+
+// TestEndToEndRecordsWhereAHookRan is the gap a placement record must not
+// have: a hook that carries tags: really does acquire a machine.
+//
+// Hooks run outside the plan's merkle chain — deliberately, since "run this
+// when the step fails" must never be skipped because it succeeded last time —
+// so a hook has no node, and the placement row keyed on a node hash had
+// nothing to hang off. What that meant in practice is that the one place an
+// operator would least expect a machine to be running is the one place the
+// record said nothing: an `ensure:` hook on an aws://launch/ worker launches
+// and bills an instance, and `steps runs --where` reported that the run never
+// left this machine.
+func TestEndToEndRecordsWhereAHookRan(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: "false"
+    on_failure:
+      task: tell-someone
+      tags: [gpu]
+      run: "true"
+`)
+
+	// The job fails: the point is the hook that ran because it did.
+	err := run([]string{path, "--worker", "gpu=local:"})
+	if err == nil {
+		t.Fatal("the pipeline was supposed to fail so its on_failure hook would run")
+	}
+
+	placements := runPlacements(t, path)
+
+	if len(placements) != 1 {
+		t.Fatalf("recorded %d placements, want the hook's one: %+v", len(placements), placements)
+	}
+
+	if placements[0].StepName != "tell-someone" {
+		t.Errorf("placement names step %q, want the hook that ran on a worker", placements[0].StepName)
+	}
+
+	if placements[0].Tag != "gpu" {
+		t.Errorf("tag = %q, want the tag that chose the machine", placements[0].Tag)
+	}
+
+	// Not assertBytesCrossed: this hook declares no inputs, so its tree is
+	// empty and nothing legitimately crosses. What is being proven is that a
+	// hook records the machine at all.
+	assertMachineFacts(t, placements[0])
 }

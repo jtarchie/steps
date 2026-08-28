@@ -229,6 +229,11 @@ func TestSweepCountsAbandonedStagingTrees(t *testing.T) {
 // every sweep, subtracted every sweep, and the cap stops bounding anything
 // from then on. A directory the codec restored read-only is the ordinary way
 // to get one — RemoveAll cannot enter it and does not chmod.
+//
+// What it leaves behind is a TOMBSTONE rather than a half-entry under the
+// digest: evictArtifact renames first, so the entry is out of service even
+// when the delete fails, and the next sweep counts the tombstone and tries
+// again. See TestEvictionNeverLeavesAPartialEntryUnderItsDigest.
 func TestSweepKeepsCountingWhatItCouldNotDelete(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root can remove a read-only directory, so there is no undeletable entry to make")
@@ -249,7 +254,10 @@ func TestSweepKeepsCountingWhatItCouldNotDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Cleanup(func() { _ = os.Chmod(stuck, 0o700) }) //nolint:gosec // restoring what the test narrowed
+	// Unlocked by walking rather than by path: eviction renames before it
+	// deletes, so by cleanup time this directory is under a tombstone name
+	// and the path the test narrowed no longer exists.
+	t.Cleanup(func() { unlockTree(cache) })
 
 	err = sweepArtifactCache(cache)
 	if err != nil {

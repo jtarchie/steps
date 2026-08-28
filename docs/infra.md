@@ -162,6 +162,8 @@ Keeping machines out of the pipeline file is what lets the same pipeline run on 
 
   The run page draws the same rows on a **machines** panel beside the spend one, with a `tmpfs` workdir marked in warning colour — see [web.md](web.md#the-transcript).
 
+  **A tagged hook is reported too.** `on_failure:`, `ensure:` and their siblings really do acquire a machine — on `aws://launch/` that means launching and billing an instance — and it is the place an operator is least likely to expect one running. A hook is deliberately outside the merkle chain, so that a hook never gets skipped for having succeeded before; that means it has no cached node, and its row is identified by the hook's own scope (`step 0 (task "build") (on_failure hook)`) instead of a content hash.
+
   **Facts, never a price.** There is no cost column, deliberately: what an instance-hour actually cost is not knowable from inside a run — list prices ignore Savings Plans and Reserved Instances, a spot instance's paid price is reported by no API, and real billing lands up to a day later. A confident wrong number under `COST` is worse than no column, and anyone holding their own rate card can price these rows. This is the opposite call from `steps runs --cost`, where the *provider* reports the dollars and steps only records what it was told (and shows nothing when it was told nothing).
 
 - **Caching**: `tags:` does **not** fold into the node's hash. Placement decides where a step runs, not what it produces, and a tree that crossed the wire digests identically to one that never left — so retagging a step, or repointing a tag at a new machine, does not re-run work that already succeeded.

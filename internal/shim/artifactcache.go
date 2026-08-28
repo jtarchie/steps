@@ -81,7 +81,13 @@ func sweepArtifactCache(cache string) error {
 	kept := make([]held, 0, len(entries))
 	total := int64(0)
 
+	total += reclaimTombstones(cache, entries)
+
 	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), tombstonePrefix) {
+			continue
+		}
+
 		// A staging directory is another session's transfer in flight, not a
 		// cache entry: the cache is shared by every shim on the worker, and
 		// evicting one of these deletes a tree mid-unpack — after which the
@@ -128,12 +134,40 @@ func sweepArtifactCache(cache string) error {
 		// RemoveAll cannot enter and does not chmod — end the loop having
 		// freed nothing, every sweep, forever: it is the coldest entry, so it
 		// is picked first each time, and the cap stops bounding anything.
-		if os.RemoveAll(entry.path) == nil {
+		//
+		// evictArtifact renames before it deletes, so a failure here has still
+		// taken the entry out of service; what it leaves is a tombstone the
+		// next sweep counts and retries, never a half-entry under a digest.
+		if evictArtifact(entry.path) == nil {
 			total -= entry.bytes
 		}
 	}
 
 	return nil
+}
+
+// reclaimTombstones deletes what a previous sweep could not finish, and
+// answers the bytes of whatever still refuses to go.
+//
+// Reclaimed before anything live is considered: a tombstone is already
+// unreachable to every reader, so there is nothing to weigh it against.
+// Counted when it survives, for the reason staging directories are — bytes
+// the cap cannot see are bytes the cap does not bound.
+func reclaimTombstones(cache string, entries []os.DirEntry) int64 {
+	var stuck int64
+
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), tombstonePrefix) {
+			continue
+		}
+
+		tombstone := filepath.Join(cache, entry.Name())
+		if os.RemoveAll(tombstone) != nil {
+			stuck += treeBytes(tombstone)
+		}
+	}
+
+	return stuck
 }
 
 // treeBytes is what one cached artifact occupies, best effort.
@@ -297,6 +331,58 @@ func copyFile(root *os.Root, src, rel string, info os.FileInfo) error {
 	err = to.Close()
 	if err != nil {
 		return fmt.Errorf("writing %q: %w", rel, err)
+	}
+
+	return nil
+}
+
+// tombstonePrefix names an entry the sweep has taken out of service.
+//
+// Eviction renames before it deletes, and that ordering is the whole of what
+// makes a cache HIT trustworthy. os.RemoveAll is not atomic: interrupted —
+// SIGKILLed by an OOM or a spot reclamation, or simply holding a child it
+// cannot unlink — it leaves part of the tree behind UNDER THE DIGEST. Both
+// readers ask only whether that name exists, and the offer they answer tells
+// the orchestrator to send nothing, so a half-entry is served as whole to
+// every later step asking for that digest, and the re-fetch that would repair
+// it is exactly what the false hit prevents. A content-addressed cache never
+// re-reads what it holds, so it never heals.
+//
+// A rename either happened or it did not. After one, the only name a reader
+// can see is a complete entry, and the mess is under a name only the sweep
+// looks at.
+const tombstonePrefix = ".evicting-"
+
+// evictArtifact takes one entry out of service and then deletes it.
+//
+// Renamed FIRST, and the entry is left alone entirely if that rename fails:
+// deleting in place is the thing being avoided, so falling back to it would
+// give up the property on exactly the disks least able to afford it. An entry
+// that could not be renamed stays whole, stays counted, and is tried again by
+// the next sweep.
+func evictArtifact(entry string) error {
+	tombstone, err := os.MkdirTemp(filepath.Dir(entry), tombstonePrefix+"*")
+	if err != nil {
+		return fmt.Errorf("evicting a cached artifact: %w", err)
+	}
+
+	// MkdirTemp made the name; rename needs it not to exist.
+	err = os.Remove(tombstone)
+	if err != nil {
+		return fmt.Errorf("evicting a cached artifact: %w", err)
+	}
+
+	err = os.Rename(entry, tombstone)
+	if err != nil {
+		return fmt.Errorf("evicting a cached artifact: %w", err)
+	}
+
+	err = os.RemoveAll(tombstone)
+	if err != nil {
+		// The entry is already unreachable to every reader, which is the part
+		// that mattered. What is left is garbage the next sweep counts and
+		// tries again.
+		return fmt.Errorf("removing an evicted artifact: %w", err)
 	}
 
 	return nil

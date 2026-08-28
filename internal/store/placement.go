@@ -17,10 +17,22 @@ import (
 // aws:// bootstrap — so an int could not tell "ran as root" from "did not
 // say", and those mean opposite things to a reader.
 type Placement struct {
-	RunID      string
-	StepIndex  int
-	StepName   string
-	JobName    string
+	RunID     string
+	StepIndex int
+	StepName  string
+	JobName   string
+	// Slot is what makes this placement unique within its run: a plan step's
+	// node hash, or a hook's scope label. A hook is not merkle-hashed, so it
+	// has no node to be keyed on.
+	Slot string
+	// NodeHash is the node this placement belongs to, EMPTY for a hook. It is
+	// what lets retention reaping a node take the placement with it; a hook
+	// row has no node and cascades off its run instead.
+	//
+	// A string rather than a pointer, unlike InstanceID and UID beside it: a
+	// hash is never legitimately empty, so there is no zero value to confuse
+	// with absence, and nodes.parent_hash already spells the same distinction
+	// this way (see nullableHash).
 	NodeHash   string
 	Tag        string
 	Address    string
@@ -38,7 +50,7 @@ type Placement struct {
 
 // placementColumns is what RecordPlacement writes and RunPlacements reads
 // back, in the field order of Placement.
-const placementColumns = `run_id, step_index, step_name, job_name, node_hash,
+const placementColumns = `run_id, step_index, step_name, job_name, slot, node_hash,
 	tag, address, instance_id,
 	goos, goarch, workdir, fstype, fs_free, uid, gid,
 	image, bytes_sent`
@@ -52,9 +64,10 @@ const placementColumns = `run_id, step_index, step_name, job_name, node_hash,
 func (s *Store) RecordPlacement(ctx context.Context, placement Placement) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO run_placements (`+placementColumns+`, pipeline_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(pipeline_id, run_id, node_hash) DO UPDATE SET
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(pipeline_id, run_id, slot) DO UPDATE SET
 			step_index = excluded.step_index,
+			node_hash  = excluded.node_hash,
 			step_name  = excluded.step_name,
 			job_name   = excluded.job_name,
 			tag         = excluded.tag,
@@ -70,7 +83,8 @@ func (s *Store) RecordPlacement(ctx context.Context, placement Placement) error 
 			image      = excluded.image,
 			bytes_sent = excluded.bytes_sent,
 			created_at = excluded.created_at`,
-		placement.RunID, placement.StepIndex, placement.StepName, placement.JobName, placement.NodeHash,
+		placement.RunID, placement.StepIndex, placement.StepName, placement.JobName,
+		placement.Slot, nullableHash(placement.NodeHash),
 		placement.Tag, placement.Address, placement.InstanceID,
 		placement.GOOS, placement.GOARCH, placement.Workdir, placement.FSType, placement.FSFree,
 		placement.UID, placement.GID,
@@ -103,10 +117,14 @@ func collectPlacements(rows *sql.Rows) ([]Placement, error) {
 	var placements []Placement
 
 	for rows.Next() {
-		var placement Placement
+		var (
+			placement Placement
+			nodeHash  sql.NullString
+		)
 
 		err := rows.Scan(
-			&placement.RunID, &placement.StepIndex, &placement.StepName, &placement.JobName, &placement.NodeHash,
+			&placement.RunID, &placement.StepIndex, &placement.StepName, &placement.JobName,
+			&placement.Slot, &nodeHash,
 			&placement.Tag, &placement.Address, &placement.InstanceID,
 			&placement.GOOS, &placement.GOARCH, &placement.Workdir, &placement.FSType, &placement.FSFree,
 			&placement.UID, &placement.GID,
@@ -114,6 +132,8 @@ func collectPlacements(rows *sql.Rows) ([]Placement, error) {
 		if err != nil {
 			return nil, fmt.Errorf("reading a placement: %w", err)
 		}
+
+		placement.NodeHash = nodeHash.String
 
 		placements = append(placements, placement)
 	}

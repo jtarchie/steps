@@ -183,7 +183,7 @@ func syntheticBuild(ctx context.Context, t *testing.T, store *Store, jobName str
 
 	err = store.RecordPlacement(ctx, Placement{
 		RunID: runID, StepIndex: 1, StepName: "unit", JobName: jobName,
-		NodeHash: hashes[1], Tag: "linux-arm64",
+		NodeHash: hashes[1], Slot: hashes[1], Tag: "linux-arm64",
 		Address: "aws://" + instance, InstanceID: &instance,
 		GOOS: "linux", GOARCH: "arm64",
 		Workdir: "/var/tmp/steps/001-90319-83c7c0781e2ab799/work",
@@ -1223,7 +1223,7 @@ func TestPruneKeepsWhatASurvivingRunPointsAt(t *testing.T) {
 	recordFailedStep(ctx, t, store, runID, jobName, 1, agentHash, "review", "agent")
 
 	err = store.RecordPlacement(ctx, Placement{
-		RunID: runID, StepIndex: 0, StepName: "unit", JobName: jobName, NodeHash: placedHash,
+		RunID: runID, StepIndex: 0, StepName: "unit", JobName: jobName, NodeHash: placedHash, Slot: placedHash,
 		Tag: "spot", Address: "aws://i-0123456789abcdef0", GOOS: "linux", GOARCH: "arm64",
 		Workdir: "/var/tmp/w", FSType: "btrfs", FSFree: 1 << 30, BytesSent: 4_096,
 	})

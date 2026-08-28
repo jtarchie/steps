@@ -117,7 +117,7 @@ func TestWhereMarksAMemoryWorkdir(t *testing.T) {
 
 		err = st.RecordPlacement(ctx, store.Placement{
 			RunID: "in-memory", StepIndex: 0, StepName: "compile", JobName: "build",
-			NodeHash: hash, Tag: "gpu", Address: "ssh://box",
+			NodeHash: hash, Slot: hash, Tag: "gpu", Address: "ssh://box",
 			GOOS: "linux", GOARCH: "arm64",
 			Workdir: "/tmp/steps/work", FSType: "tmpfs", FSFree: 848 << 20,
 			BytesSent: 4096,

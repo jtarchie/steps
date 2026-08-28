@@ -9,13 +9,17 @@ package store
 //
 // It is a detector, not a migration counter. There is still no upgrade path
 // and deliberately so; the answer to a mismatch remains deleting the file.
+// 5 keyed run_placements on a slot rather than a node hash, and made the hash
+// nullable, so a tagged HOOK — which has no node, and really does acquire a
+// billed machine — records the machine that ran it.
+//
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
 // 4 put pipeline_id into the keys of run_placements and agent_usage. Without
 // it, two pipelines sharing a state file collided on (run_id, node_hash) and
 // one upserted over the other's row.
-const schemaVersion = 4
+const schemaVersion = 5
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -535,7 +539,19 @@ CREATE TABLE IF NOT EXISTS run_placements (
     step_index    INTEGER NOT NULL,
     step_name     TEXT NOT NULL,
     job_name      TEXT NOT NULL,
-    node_hash     TEXT NOT NULL,
+    -- slot is what makes this placement unique within its run: a plan step's
+    -- node hash, or a hook's scope label. Hooks are deliberately NOT
+    -- merkle-hashed — "run this when the step fails" must never be skipped
+    -- because it succeeded last time — so they have no node to be keyed on,
+    -- and keying on one meant the record said nothing about the machine a
+    -- tagged hook acquired and billed.
+    slot          TEXT NOT NULL,
+    -- The node this placement belongs to, when it has one. NULL for a hook.
+    -- SQLite exempts a row from a composite foreign key when any child column
+    -- is NULL, so a hook row satisfies the reference below by having none —
+    -- and it still cascades off its RUN, which is the only reaping that can
+    -- reach it.
+    node_hash     TEXT,
     tag           TEXT NOT NULL,
     address       TEXT NOT NULL,
     instance_id   TEXT,
@@ -549,7 +565,7 @@ CREATE TABLE IF NOT EXISTS run_placements (
     image         TEXT NOT NULL,
     bytes_sent    INTEGER NOT NULL,
     created_at    TEXT NOT NULL,
-    PRIMARY KEY (pipeline_id, run_id, node_hash),
+    PRIMARY KEY (pipeline_id, run_id, slot),
     FOREIGN KEY (pipeline_id, node_hash) REFERENCES nodes(pipeline_id, hash) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_run_placements_run ON run_placements(run_id, step_index);

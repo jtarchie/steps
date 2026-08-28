@@ -14,6 +14,12 @@ import (
 func placeAt(ctx context.Context, t *testing.T, store *Store, placement Placement) {
 	t.Helper()
 
+	// A plan step's slot IS its node hash; only a hook needs a different one,
+	// and a hook has no node to record here.
+	if placement.Slot == "" {
+		placement.Slot = placement.NodeHash
+	}
+
 	ensureRun(ctx, t, store, placement.RunID, placement.JobName)
 
 	err := store.RecordNode(ctx, NodeRecord{
@@ -234,7 +240,8 @@ func TestPlacementRePlacementKeepsTheMachineThatFinished(t *testing.T) {
 	})
 
 	err := store.RecordPlacement(ctx, Placement{
-		RunID: "EVICTED1", StepIndex: 0, StepName: "unit", JobName: "build", NodeHash: hashOf(1),
+		RunID: "EVICTED1", StepIndex: 0, StepName: "unit", JobName: "build",
+		NodeHash: hashOf(1), Slot: hashOf(1),
 		Tag: "spot", Address: "aws://" + replaced, InstanceID: &replaced,
 		GOOS: "linux", GOARCH: "arm64", Workdir: "/var/tmp/b", FSType: "ext4",
 		FSFree: 2 << 30, Image: "golang:1.25", BytesSent: 2_000,
@@ -315,4 +322,66 @@ func derefOr(value *string, absent string) string {
 	}
 
 	return *value
+}
+
+// TestPlacementWithoutANodeIsStillKeyed is what the slot column buys.
+//
+// A hook has no node — it is deliberately outside the merkle chain, so that
+// "run this when the step fails" is never skipped for having succeeded before
+// — and its placement row therefore carries no node hash. Keyed on that hash,
+// the row has no key at all: SQLite tolerates NULLs in a PRIMARY KEY column
+// and treats every NULL as distinct in a unique index, so the upsert never
+// fires and the same hook recorded twice becomes two rows describing one
+// machine. Keyed on the slot, it is one row that updates.
+//
+// The nullable hash is what makes the row legal in the first place: the
+// composite foreign key into nodes is exempt when a child column is NULL, and
+// a hook row cascades off its RUN instead.
+func TestPlacementWithoutANodeIsStillKeyed(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	ensureRun(ctx, t, store, "HOOKRUN1", "build")
+
+	hook := Placement{
+		RunID: "HOOKRUN1", StepIndex: 0, StepName: "tell-someone", JobName: "build",
+		Slot: `step 0 (task "work") (on_failure hook)`,
+		Tag:  "gpu", Address: "ssh://first", GOOS: "linux", GOARCH: "arm64",
+		Workdir: "/tmp/w", FSType: "ext4",
+	}
+
+	err := store.RecordPlacement(ctx, hook)
+	if err != nil {
+		t.Fatalf("RecordPlacement: %v", err)
+	}
+
+	// The same hook again — a re-placed step is the shape that does this —
+	// on the machine it ended on.
+	hook.Address = "ssh://second"
+
+	err = store.RecordPlacement(ctx, hook)
+	if err != nil {
+		t.Fatalf("RecordPlacement again: %v", err)
+	}
+
+	placements, err := store.RunPlacements(ctx, "HOOKRUN1")
+	if err != nil {
+		t.Fatalf("RunPlacements: %v", err)
+	}
+
+	if len(placements) != 1 {
+		t.Fatalf("a hook recorded twice left %d rows, want 1: %+v", len(placements), placements)
+	}
+
+	if placements[0].Address != "ssh://second" {
+		t.Errorf("address = %q, want the machine it ended on", placements[0].Address)
+	}
+
+	if placements[0].NodeHash != "" {
+		t.Errorf("node_hash = %q, want none — a hook has no node, and claiming one fails the foreign key", placements[0].NodeHash)
+	}
 }

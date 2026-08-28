@@ -85,7 +85,7 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 		// A step that FAILED on a worker is the one whose machine somebody
 		// wants named — an architecture, a filesystem, a stale image. Same
 		// reasoning as recording a failed agent step's spend.
-		recordPlacement(ctx, r, placed, i, name, hash)
+		recordPlacement(ctx, r, placed, i, name, hash, hash)
 
 		return stepResult{}, wrapped
 	}
@@ -96,7 +96,7 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 	}
 
 	// After the node, never before: run_placements references it.
-	recordPlacement(ctx, r, placed, i, name, hash)
+	recordPlacement(ctx, r, placed, i, name, hash, hash)
 
 	// After the node is recorded, so a run that could not record its own
 	// outcome does not leave behind an entry claiming the work is done.

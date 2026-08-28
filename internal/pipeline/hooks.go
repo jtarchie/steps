@@ -134,7 +134,19 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 			return fmt.Errorf("task %q: %w", step.Task, err)
 		}
 
-		return executeTask(ctx, scope.cfg, step, rt, scope.bw)
+		// A hook carrying tags: acquires a machine like any other placed step
+		// — on an aws://launch/ worker it launches and bills an instance — and
+		// this is the one place an operator would least expect one to be
+		// running. Keyed on the scope's label rather than a node hash, because
+		// a hook has no node: it must never be skipped for having succeeded
+		// before, so it is deliberately outside the merkle chain.
+		ctx, placed := withPlacementSink(ctx)
+
+		err = executeTask(ctx, scope.cfg, step, rt, scope.bw)
+
+		recordPlacement(ctx, scope.stepRunner, placed, 0, executedStepName(step), scope.label, "")
+
+		return err
 	case config.StepKindPut:
 		_, err := executePut(ctx, scope.cfg, step, scope.bw)
 

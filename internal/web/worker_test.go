@@ -107,7 +107,7 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 
 	err = pipeline.Store.RecordPlacement(ctx, store.Placement{
 		RunID: "placed", StepIndex: 0, StepName: "compile", JobName: "build",
-		NodeHash: hash, Tag: "gpu", Address: "aws://" + instance, InstanceID: &instance,
+		NodeHash: hash, Slot: hash, Tag: "gpu", Address: "aws://" + instance, InstanceID: &instance,
 		GOOS: "linux", GOARCH: "arm64",
 		Workdir: "/var/tmp/steps/work", FSType: "btrfs", FSFree: 41_083_355_136,
 		UID: &root, GID: &root, Image: "golang:1.25", BytesSent: 67_108_864,
