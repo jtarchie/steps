@@ -204,7 +204,16 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 
 	switch {
 	case spec.MountPath != "":
-		// Already resolved, and resolvable only where it exists.
+		// Already resolved, and resolvable only where it exists — this path is
+		// on the WORKER. Still checked for the one thing that is not about
+		// resolution: `docker -v` splits on ':', so a colon here misparses the
+		// mount rather than failing, which is the shape a silently-empty
+		// bind mount takes.
+		err := checkMountPath(spec.MountPath)
+		if err != nil {
+			return nil, fmt.Errorf("worker mount path: %w", err)
+		}
+
 		resolvedCwd = spec.MountPath
 	case spec.Cwd != "":
 		var err error

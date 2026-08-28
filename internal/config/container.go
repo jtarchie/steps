@@ -17,10 +17,25 @@ type containerSettings struct {
 	Network    string
 	Privileged bool
 	Limits     *ContainerLimits
-	// Tags rides along so the rule that refuses tags: with image: reads the
-	// RESOLVED image, which is the only place a step inheriting one from the
-	// tasks: entry it references can be caught.
+	// Tags rides along so a rule about a step's placement reads the RESOLVED
+	// image, which is the only place a step inheriting one from the tasks:
+	// entry it references can be seen.
 	Tags []string
+	// Entry identifies a NAMED entry these settings came from — the kind and
+	// the name — and is zero for a step's own.
+	//
+	// Carried rather than parsed back out of the context string: three
+	// collections put their names into one label format, so a resource_type
+	// called "build" reads there as the task called "build", and a rule that
+	// keys on the name alone silently answers about the wrong entry.
+	Entry entryRef
+}
+
+// entryRef names one tasks:, agents: or resource_types: entry. The kind is
+// half the identity: the three are separate name spaces.
+type entryRef struct {
+	Kind string
+	Name string
 }
 
 func (rt ResourceType) containerSettings() containerSettings {
@@ -33,6 +48,13 @@ func (a Agent) containerSettings() containerSettings {
 
 func (t Task) containerSettings() containerSettings {
 	return containerSettings{Image: t.Image, Env: t.Env, User: t.User, Network: t.Network, Privileged: t.Privileged, Limits: t.Limits}
+}
+
+// from labels settings with the named entry they were read from.
+func (c containerSettings) from(kind, name string) containerSettings {
+	c.Entry = entryRef{Kind: kind, Name: name}
+
+	return c
 }
 
 func (s Step) containerSettings() containerSettings {
@@ -48,7 +70,7 @@ func (c *Config) visitContainerSettings(fn func(context string, settings contain
 	for i := range c.ResourceTypes {
 		rt := c.ResourceTypes[i]
 
-		err := fn(fmt.Sprintf("resource_type %q", rt.Name), rt.containerSettings())
+		err := fn(fmt.Sprintf("resource_type %q", rt.Name), rt.containerSettings().from("resource_type", rt.Name))
 		if err != nil {
 			return err
 		}
@@ -57,7 +79,7 @@ func (c *Config) visitContainerSettings(fn func(context string, settings contain
 	for i := range c.Agents {
 		agent := c.Agents[i]
 
-		err := fn(fmt.Sprintf("agent %q", agent.Name), agent.containerSettings())
+		err := fn(fmt.Sprintf("agent %q", agent.Name), agent.containerSettings().from("agent", agent.Name))
 		if err != nil {
 			return err
 		}
@@ -66,7 +88,7 @@ func (c *Config) visitContainerSettings(fn func(context string, settings contain
 	for i := range c.Tasks {
 		task := c.Tasks[i]
 
-		err := fn(fmt.Sprintf("task %q", task.Name), task.containerSettings())
+		err := fn(fmt.Sprintf("task %q", task.Name), task.containerSettings().from("task", task.Name))
 		if err != nil {
 			return err
 		}

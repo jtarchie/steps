@@ -196,7 +196,7 @@ func (c *Config) Images() []string {
 
 	placedOnly := c.placedOnlyEntries()
 
-	_ = c.visitContainerSettings(func(context string, settings containerSettings) error {
+	_ = c.visitContainerSettings(func(_ string, settings containerSettings) error {
 		if settings.Image == "" || len(settings.Tags) > 0 {
 			return nil
 		}
@@ -206,7 +206,12 @@ func (c *Config) Images() []string {
 		// step that uses it is placed. Named entries are kept only when some
 		// step runs them HERE; a step's own image: is already covered by the
 		// tags: check above.
-		if name, named := entryName(context); named && placedOnly[name] {
+		//
+		// Keyed by KIND and name. A resource_type's check, in and out always
+		// run on this machine, so it can never be placed — and it shares a
+		// label format with the two collections that can, which is how a
+		// resource_type named like a placed task lost its pre-pull.
+		if placedOnly[settings.Entry] {
 			return nil
 		}
 
@@ -234,20 +239,20 @@ func (c *Config) Images() []string {
 // otherwise silently drop an image the pre-pull was supposed to fetch, and
 // the step would fail on a machine that could have had it. Narrowing what is
 // skipped is worth more here than pruning what is unused.
-func (c *Config) placedOnlyEntries() map[string]bool {
-	referenced, local := map[string]bool{}, map[string]bool{}
+func (c *Config) placedOnlyEntries() map[entryRef]bool {
+	referenced, local := map[entryRef]bool{}, map[entryRef]bool{}
 
 	for _, job := range c.Jobs {
 		_ = job.visitSteps(func(_ string, step *Step) error {
-			for _, name := range []string{step.Task, step.Agent} {
-				if name == "" {
+			for _, entry := range []entryRef{{Kind: "task", Name: step.Task}, {Kind: "agent", Name: step.Agent}} {
+				if entry.Name == "" {
 					continue
 				}
 
-				referenced[name] = true
+				referenced[entry] = true
 
 				if len(step.Tags) == 0 {
-					local[name] = true
+					local[entry] = true
 				}
 			}
 
@@ -255,24 +260,13 @@ func (c *Config) placedOnlyEntries() map[string]bool {
 		})
 	}
 
-	placedOnly := map[string]bool{}
+	placedOnly := map[entryRef]bool{}
 
-	for name := range referenced {
-		if !local[name] {
-			placedOnly[name] = true
+	for entry := range referenced {
+		if !local[entry] {
+			placedOnly[entry] = true
 		}
 	}
 
 	return placedOnly
-}
-
-// entryName reads the name back out of a visitContainerSettings context like
-// `task "build"`, so a named entry can be told from a step.
-func entryName(context string) (string, bool) {
-	open := strings.IndexByte(context, '"')
-	if open < 0 || !strings.HasSuffix(context, `"`) {
-		return "", false
-	}
-
-	return context[open+1 : len(context)-1], true
 }

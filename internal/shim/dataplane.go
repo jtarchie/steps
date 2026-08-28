@@ -55,21 +55,28 @@ var storeClient = &http.Client{
 // errOffsiteRedirect is a store sending this transfer somewhere else.
 var errOffsiteRedirect = errors.New("the artifact store redirected to another host")
 
-// sameHostOnly refuses a redirect that leaves the host the URL named.
+// sameHostOnly refuses a redirect that leaves the origin the URL named.
 //
 // net/http's default follows up to ten redirects anywhere, and GetBody above
 // makes the upload REPLAYABLE — so a 307 from the store, or one injected on a
 // plain-HTTP endpoint or by the worker's own HTTP_PROXY, would re-PUT the
 // whole outputs tree to whatever host answered. A presigned URL redirects
-// within its own service (an S3 region hint) or not at all, so the host is
-// the right boundary and a cross-host hop is the shape of an exfiltration.
+// within its own service (an S3 region hint) or not at all, so the origin is
+// the right boundary and a hop off it is the shape of an exfiltration.
+//
+// The SCHEME is half of that origin, and the cheaper half to attack: an
+// on-path answer cannot change the host a presigned URL names but can
+// downgrade https to http, at which point the same body and the same live
+// X-Amz-Signature travel in the clear — which is the whole exposure this
+// guard was added for, reached without ever leaving the host.
 func sameHostOnly(request *http.Request, via []*http.Request) error {
 	if len(via) >= maxStoreRedirects {
 		return fmt.Errorf("%w: %d hops", errOffsiteRedirect, len(via))
 	}
 
-	if request.URL.Host != via[0].URL.Host {
-		return fmt.Errorf("%w: %s to %s", errOffsiteRedirect, via[0].URL.Host, request.URL.Host)
+	if request.URL.Host != via[0].URL.Host || request.URL.Scheme != via[0].URL.Scheme {
+		return fmt.Errorf("%w: %s://%s to %s://%s", errOffsiteRedirect,
+			via[0].URL.Scheme, via[0].URL.Host, request.URL.Scheme, request.URL.Host)
 	}
 
 	return nil
@@ -136,16 +143,21 @@ func (s *session) downloadTree(ctx context.Context, frame wire.Frame) error {
 //
 // The whole point of the artifact grain: two steps of one job share their
 // inputs and differ only in their outputs, so the second step's big input is
-// already here. Verified by unpacking into the cache under its digest — what
-// arrives is re-read from disk, never trusted because a URL said so.
+// already here.
+//
+// The digest is a KEY, not a proof: nothing here recomputes it over what
+// arrived, so a wrong object committed under it is served to every later step
+// on this worker. See fetchArtifact, which bounds the damage to a transfer
+// that completed rather than one that died halfway.
 func (s *session) placeArtifact(ctx context.Context, cache string, artifact wire.UploadArtifact) error {
-	if artifact.Name == "" || artifact.Digest == "" {
-		return errNoURL
+	err := checkArtifact(artifact)
+	if err != nil {
+		return err
 	}
 
 	held := filepath.Join(cache, artifact.Digest)
 
-	_, err := os.Stat(held)
+	_, err = os.Stat(held)
 	if err != nil {
 		if artifact.URL == "" {
 			return errNoURL
@@ -157,13 +169,7 @@ func (s *session) placeArtifact(ctx context.Context, cache string, artifact wire
 		}
 	}
 
-	// Touched on use, so the sweep evicts what is coldest rather than what is
-	// merely oldest — a base image everybody depends on would otherwise be
-	// the first thing thrown away.
-	now := time.Now()
-	_ = os.Chtimes(held, now, now)
-
-	return copyTree(filepath.Join(held, artifact.Name), filepath.Join(s.workdir, artifact.Name))
+	return placeHeldArtifact(held, artifact.Name, s.workdir)
 }
 
 // fetchArtifact downloads one artifact and unpacks it under its digest.
@@ -177,7 +183,7 @@ func fetchArtifact(ctx context.Context, url, held string) error {
 		return fmt.Errorf("making the artifact cache: %w", err)
 	}
 
-	staging, err := os.MkdirTemp(filepath.Dir(held), ".partial-*")
+	staging, err := os.MkdirTemp(filepath.Dir(held), stagingPrefix+"*")
 	if err != nil {
 		return fmt.Errorf("staging an artifact: %w", err)
 	}

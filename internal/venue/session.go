@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -643,7 +644,16 @@ func (s *session) teardownContainer() {
 		// cancelled, and inheriting that would abandon the docker rm this
 		// exists to perform — leaving a container on the worker that nothing
 		// sweeps. Bounded by the handoff timeout either way.
-		_ = s.withDockerRouting(context.Background(), func() error { return s.inner.Close() })
+		err := s.withDockerRouting(context.Background(), func() error { return s.inner.Close() })
+		if err != nil {
+			// Logged, because nothing else can see it: this is the only account
+			// of a removal that did not happen, and the container it names is
+			// on a machine whose daemon no local sweep ever asks. Not returned
+			// — teardown runs on paths that have already decided the step's
+			// verdict.
+			slog.Warn("venue.container.teardown_failed", "worker", s.worker.String(), "error", err)
+		}
+
 		s.inner = nil
 	}
 

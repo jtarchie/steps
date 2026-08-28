@@ -11,11 +11,14 @@ package shim
 // differently.
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -59,6 +62,15 @@ func sweepArtifactCache(cache string) error {
 	total := int64(0)
 
 	for _, entry := range entries {
+		// A staging directory is another session's transfer in flight, not a
+		// cache entry: the cache is shared by every shim on the worker, and
+		// evicting one of these deletes a tree mid-unpack — after which the
+		// rename that follows commits a TRUNCATED tree under a digest that
+		// claims to be whole, which is what staging exists to prevent.
+		if strings.HasPrefix(entry.Name(), stagingPrefix) {
+			continue
+		}
+
 		info, statErr := entry.Info()
 		if statErr != nil {
 			continue
@@ -109,6 +121,13 @@ func treeBytes(root string) int64 {
 	return total
 }
 
+// stagedDirMode is what a directory is created with while an artifact is
+// being placed, before its recorded mode is applied. wire.UnpackTree's own
+// constant, for the same two reasons: a recorded 0500 restored on the way
+// past refuses its own children, and a directory created wide and narrowed
+// later is briefly visible.
+const stagedDirMode = 0o700
+
 // copyTree materializes a cached artifact into the work directory.
 //
 // A copy, not a link: the step is about to write into its own tree, and a
@@ -116,7 +135,28 @@ func treeBytes(root string) int64 {
 // filesystem with reflinks this is the obvious place to make it free, which
 // is a further optimization rather than a correctness matter — the bytes that
 // cost are the ones that crossed the network, and those are already saved.
-func copyTree(src, dst string) error {
+//
+// Through os.Root, and never through plain path joins, for the reason
+// wire.UnpackTree is: the cache holds trees a PEER authored, and this codec
+// round-trips a symlink target verbatim — so an artifact can leave a link in
+// the work directory that the next artifact of the same name would otherwise
+// be written THROUGH. That is the write os.Root refuses, and it has to be
+// refused on this path too or the protection only covers the archive and not
+// the copy that stands in for it.
+func copyTree(root *os.Root, src, rel string) error {
+	modes := map[string]os.FileMode{}
+
+	err := copyInto(root, src, rel, modes)
+	if err != nil {
+		return err
+	}
+
+	return applyDirModes(root, modes)
+}
+
+// copyInto copies one entry, recording the directory modes to restore once
+// every child has been written.
+func copyInto(root *os.Root, src, rel string, modes map[string]os.FileMode) error {
 	info, err := os.Lstat(src)
 	if err != nil {
 		return fmt.Errorf("reading a cached artifact: %w", err)
@@ -124,26 +164,48 @@ func copyTree(src, dst string) error {
 
 	switch {
 	case info.IsDir():
-		return copyDir(src, dst, info)
+		return copyDir(root, src, rel, info, modes)
 	case info.Mode()&os.ModeSymlink != 0:
 		target, readErr := os.Readlink(src)
 		if readErr != nil {
 			return fmt.Errorf("reading a cached link: %w", readErr)
 		}
 
-		_ = os.Remove(dst)
+		_ = root.Remove(rel)
 
-		return os.Symlink(target, dst) //nolint:wrapcheck // the path is in the message
+		return root.Symlink(target, rel) //nolint:wrapcheck // the path is in the message
 	default:
-		return copyFile(src, dst, info)
+		return copyFile(root, src, rel, info)
 	}
 }
 
-func copyDir(src, dst string, info os.FileInfo) error {
-	err := os.MkdirAll(dst, info.Mode().Perm())
-	if err != nil {
-		return fmt.Errorf("making %q: %w", dst, err)
+// applyDirModes restores recorded directory modes, deepest first so a
+// directory narrowed by its own mode is not one this still has to write into.
+func applyDirModes(root *os.Root, modes map[string]os.FileMode) error {
+	names := make([]string, 0, len(modes))
+	for name := range modes {
+		names = append(names, name)
 	}
+
+	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+
+	for _, name := range names {
+		err := root.Chmod(name, modes[name])
+		if err != nil {
+			return fmt.Errorf("restoring the mode of %q: %w", name, err)
+		}
+	}
+
+	return nil
+}
+
+func copyDir(root *os.Root, src, rel string, info os.FileInfo, modes map[string]os.FileMode) error {
+	err := root.Mkdir(rel, stagedDirMode)
+	if err != nil && !errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("making %q: %w", rel, err)
+	}
+
+	modes[rel] = info.Mode().Perm()
 
 	entries, err := os.ReadDir(src)
 	if err != nil {
@@ -151,7 +213,7 @@ func copyDir(src, dst string, info os.FileInfo) error {
 	}
 
 	for _, entry := range entries {
-		err = copyTree(filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name()))
+		err = copyInto(root, filepath.Join(src, entry.Name()), filepath.Join(rel, entry.Name()), modes)
 		if err != nil {
 			return err
 		}
@@ -160,7 +222,7 @@ func copyDir(src, dst string, info os.FileInfo) error {
 	return nil
 }
 
-func copyFile(src, dst string, info os.FileInfo) error {
+func copyFile(root *os.Root, src, rel string, info os.FileInfo) error {
 	from, err := os.Open(src) //nolint:gosec // src is this shim's own cache entry, not a peer's path
 	if err != nil {
 		return fmt.Errorf("reading a cached artifact: %w", err)
@@ -168,28 +230,35 @@ func copyFile(src, dst string, info os.FileInfo) error {
 
 	defer func() { _ = from.Close() }()
 
-	//nolint:gosec // dst is under this session's work directory, which checkSessionName bounds
-	to, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
+	// Removed, then O_EXCL: an entry already at this name may be a symlink an
+	// earlier artifact planted, and O_TRUNC would write through it.
+	_ = root.Remove(rel)
+
+	to, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
 	if err != nil {
-		return fmt.Errorf("writing %q: %w", dst, err)
+		return fmt.Errorf("writing %q: %w", rel, err)
 	}
 
 	_, err = io.Copy(to, from)
 	if err != nil {
 		_ = to.Close()
 
-		return fmt.Errorf("writing %q: %w", dst, err)
+		return fmt.Errorf("writing %q: %w", rel, err)
 	}
 
 	// Closed explicitly: a delayed-allocation filesystem reports ENOSPC here
 	// and nowhere else, and a truncated artifact would be cached as complete.
 	err = to.Close()
 	if err != nil {
-		return fmt.Errorf("writing %q: %w", dst, err)
+		return fmt.Errorf("writing %q: %w", rel, err)
 	}
 
 	return nil
 }
+
+// stagingPrefix names a transfer in flight. Shared with the sweep, which must
+// leave another session's staging directory alone.
+const stagingPrefix = ".partial-"
 
 // stageArtifact makes the directory an incoming artifact is unpacked into
 // before it is named by its digest.
@@ -199,7 +268,7 @@ func stageArtifact(cache string) (string, error) {
 		return "", fmt.Errorf("making the artifact cache: %w", err)
 	}
 
-	staging, err := os.MkdirTemp(cache, ".partial-*")
+	staging, err := os.MkdirTemp(cache, stagingPrefix+"*")
 	if err != nil {
 		return "", fmt.Errorf("staging an artifact: %w", err)
 	}
@@ -232,5 +301,12 @@ func placeHeldArtifact(held, name, workdir string) error {
 	now := time.Now()
 	_ = os.Chtimes(held, now, now)
 
-	return copyTree(filepath.Join(held, name), filepath.Join(workdir, name))
+	root, err := os.OpenRoot(workdir)
+	if err != nil {
+		return fmt.Errorf("placing an artifact in %q: %w", workdir, err)
+	}
+
+	defer func() { _ = root.Close() }()
+
+	return copyTree(root, filepath.Join(held, name), name)
 }

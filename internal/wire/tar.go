@@ -134,13 +134,21 @@ func packName(root, name string) error {
 // Resolved against the nearest EXISTING ancestor, because a named output that
 // was never produced is deliberately not an error here.
 func withinRoot(root, clean string) error {
-	base, ok := resolvedRoot(root)
-	if !ok {
-		// A root that cannot be resolved cannot contain anything, and the walk
-		// that follows finds nothing either. Not this guard's failure to
-		// report: PackPaths is deliberately silent about a tree that is not
-		// there.
-		return nil
+	base, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			// A root that is not there cannot contain anything, and the walk
+			// that follows finds nothing either. Not this guard's failure to
+			// report: PackPaths is deliberately silent about a tree that is
+			// not there.
+			return nil
+		}
+
+		// Every other reason — EACCES on an ancestor, ELOOP, a path mid-remount
+		// — leaves a root the CALLER can still walk while this check has no
+		// answer about it. Failing open there silently disarms the whole guard
+		// on exactly the machines where a path is unusual.
+		return fmt.Errorf("%w: %q: the tree could not be resolved: %w", ErrUnsafePath, clean, err)
 	}
 
 	full := filepath.Join(base, clean)
@@ -161,14 +169,6 @@ func withinRoot(root, clean string) error {
 
 		return nil
 	}
-}
-
-// resolvedRoot is root with its own symlinks followed, reporting whether it
-// could be resolved at all.
-func resolvedRoot(root string) (string, bool) {
-	base, err := filepath.EvalSymlinks(root)
-
-	return base, err == nil
 }
 
 // packWalk writes the tree at from into writer, naming every entry relative to
@@ -417,7 +417,7 @@ func unpackFile(dir *os.Root, reader *tar.Reader, header *tar.Header, name strin
 
 	// O_EXCL so an archive cannot overwrite something it already created, and
 	// so a symlink planted by an earlier entry is never followed.
-	file, err := dir.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fs.FileMode(header.Mode)) //nolint:gosec // Mode is normalized to 0644/0755 by packFile
+	file, err := dir.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fs.FileMode(header.Mode)) //nolint:gosec // packFile records only Perm(); os.Root refuses anything wider
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
@@ -446,7 +446,7 @@ func writeUnpacked(file *os.File, reader *tar.Reader, header *tar.Header) error 
 	// is masked by the extracting process's umask, which would strip exactly
 	// the executable bit digestTree hashes. Going through the descriptor also
 	// avoids re-resolving the path, so nothing can be swapped underneath.
-	err = file.Chmod(fs.FileMode(header.Mode)) //nolint:gosec // as above
+	err = file.Chmod(fs.FileMode(header.Mode).Perm()) //nolint:gosec // masked to Perm, as the OpenFile above requires
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}

@@ -213,7 +213,7 @@ func (r runner) asEviction(err error) error {
 		return err
 	}
 
-	if shell.IsExitError(err) && exitCodeOf(err) != shell.SignalledExitCode {
+	if shell.IsExitError(err) && !signalledExit(exitCodeOf(err)) {
 		return err
 	}
 
@@ -222,6 +222,37 @@ func (r runner) asEviction(err error) error {
 	}
 
 	return fmt.Errorf("%w (%s): %w", ErrEvicted, reason, err)
+}
+
+// signalledExit reports the codes that mean "the machine ended this command"
+// rather than "the command answered".
+//
+// Two spellings, because a placed step has two runners. Executed directly, the
+// shim reports os/exec's own -1 for a signalled command. Run in a CONTAINER on
+// the worker, the code comes from `docker exec`, which reports a
+// signal-killed process as 128+N and can never say -1 — so the classification
+// this whole function exists for could not fire on the container path at all,
+// and a reclamation was billed to the pipeline author's attempts: budget as
+// the step's own verdict.
+//
+// Only consulted once the worker has ALREADY said it is being reclaimed, so a
+// container that legitimately exits 137 on a healthy machine — an OOM kill of
+// its own making — is still the command answering.
+func signalledExit(code int) bool {
+	const (
+		sigkillExit = 137
+		sigtermExit = 143
+		sigintExit  = 130
+		sighupExit  = 129
+		sigquitExit = 131
+	)
+
+	switch code {
+	case shell.SignalledExitCode, sighupExit, sigintExit, sigquitExit, sigkillExit, sigtermExit:
+		return true
+	default:
+		return false
+	}
 }
 
 // runError turns the worker's answer into the error shape the pipeline reads.

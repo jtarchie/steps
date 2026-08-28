@@ -127,3 +127,49 @@ func TestImagesKeepsATaskEntryAnyLocalStepUses(t *testing.T) {
 		t.Errorf("Images() = %v, want alpine:3 — a local step still runs it here", got)
 	}
 }
+
+// TestImagesKeepsAResourceTypeSharingAPlacedTasksName is the namespace half.
+//
+// A resource_type's check, in and out always run on THIS machine, so its
+// image can never be one a worker needs — but all three collections put their
+// names into one label format, and keying on the bare name made a
+// resource_type called "build" inherit a placed task's answer and lose its
+// pre-pull. Losing it is not cosmetic: UsesImages() then reports false, which
+// skips the daemon preflight and the orphan sweep as well.
+func TestImagesKeepsAResourceTypeSharingAPlacedTasksName(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		ResourceTypes: []ResourceType{{Name: "build", Image: "registry/rt:1"}},
+		Tasks:         []Task{{Name: "build", Image: "registry/task:1", Run: "true"}},
+		Jobs: []Job{{Name: "j", Plan: []Step{
+			{Task: "build", Tags: []string{"box"}},
+		}}},
+	}
+
+	got := cfg.Images()
+	if len(got) != 1 || got[0] != "registry/rt:1" {
+		t.Errorf("Images() = %v, want registry/rt:1 — a resource type never runs on a worker", got)
+	}
+}
+
+// TestImagesKeepsAnAgentSharingAPlacedTasksName is the same collision between
+// the two collections a step CAN reference, where the name alone is likewise
+// not the identity.
+func TestImagesKeepsAnAgentSharingAPlacedTasksName(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Agents: []Agent{{Name: "shared", Image: "registry/agent:1"}},
+		Tasks:  []Task{{Name: "shared", Image: "registry/task:1", Run: "true"}},
+		Jobs: []Job{{Name: "j", Plan: []Step{
+			{Task: "shared", Tags: []string{"box"}},
+			{Agent: "shared"},
+		}}},
+	}
+
+	got := cfg.Images()
+	if len(got) != 1 || got[0] != "registry/agent:1" {
+		t.Errorf("Images() = %v, want registry/agent:1 — the agent entry is used locally", got)
+	}
+}

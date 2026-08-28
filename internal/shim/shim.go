@@ -179,7 +179,7 @@ func (s *session) handle(ctx context.Context, frame wire.Frame) (bool, error) {
 		return false, s.startExec(ctx, frame)
 	case wire.FrameFetch:
 		return false, s.fetch(ctx, frame)
-	case wire.FrameDockerOpen, wire.FrameDockerData, wire.FrameDockerClose, wire.FrameNeed:
+	case wire.FrameDockerOpen, wire.FrameDockerData, wire.FrameDockerClose:
 		return false, s.handleDocker(ctx, frame)
 	case wire.FrameCancel:
 		s.cancelRunning(frame.Op)
@@ -188,7 +188,7 @@ func (s *session) handle(ctx context.Context, frame wire.Frame) (bool, error) {
 	case wire.FrameBye:
 		return true, nil
 	case wire.FrameHelloOK, wire.FrameStdout, wire.FrameStderr, wire.FrameExit,
-		wire.FrameData, wire.FrameEnd, wire.FrameError, wire.FrameDraining:
+		wire.FrameData, wire.FrameEnd, wire.FrameError, wire.FrameDraining, wire.FrameNeed:
 		// Frames the shim sends, never receives.
 		return false, fmt.Errorf("%w: a shim cannot answer a type %d frame", wire.ErrProtocol, frame.Type)
 	default:
@@ -339,8 +339,10 @@ func (s *session) uploadOnTunnel(frame wire.Frame) error {
 	}
 
 	artifact := upload.Artifacts[0]
-	if artifact.Name == "" || artifact.Digest == "" {
-		return fmt.Errorf("%w: an artifact offer named nothing", wire.ErrProtocol)
+
+	err = checkArtifact(artifact)
+	if err != nil {
+		return err
 	}
 
 	cache := s.artifactCacheDir()
@@ -496,6 +498,34 @@ var errBadSession = errors.New("the session name must be one directory name")
 func checkSessionName(name string) error {
 	if name == "" || name == "." || name == ".." || name != filepath.Base(name) {
 		return fmt.Errorf("%w: %q", errBadSession, name)
+	}
+
+	return nil
+}
+
+// errBadArtifact is a manifest naming an artifact whose name or digest is not
+// a single directory name.
+var errBadArtifact = errors.New("an artifact's name and digest must each be one directory name")
+
+// checkArtifact refuses a manifest entry that would leave the tree it names.
+//
+// checkSessionName's rule on the two fields that arrived with the artifact
+// grain, and needed for the same reason: Name is joined onto the work
+// directory and Digest onto the artifact cache, so a separator or a ".." in
+// either walks out of both — as root, under the aws:// bootstrap, on a
+// listener that is unauthenticated by design.
+//
+// The tar codec's os.Root sandbox cannot cover these. It guards what a tar
+// HEADER names; these come from the manifest beside it, and reach the
+// filesystem before any archive is opened.
+//
+// One name each is the shape the venue already sends: treeArtifacts packs the
+// TOP-LEVEL entries of a step's tree, and a digest is a hash.
+func checkArtifact(artifact wire.UploadArtifact) error {
+	for _, part := range []string{artifact.Name, artifact.Digest} {
+		if part == "" || part == "." || part == ".." || part != filepath.Base(part) {
+			return fmt.Errorf("%w: %q/%q", errBadArtifact, artifact.Name, artifact.Digest)
+		}
 	}
 
 	return nil

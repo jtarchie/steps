@@ -134,15 +134,25 @@ func (s *session) packArtifactToFile(name string, zstd bool) (digest, staged str
 		return "", "", fmt.Errorf("staging an artifact: %w", err)
 	}
 
-	defer func() { _ = file.Close() }()
-
 	hasher := sha256.New()
 
 	err = compress.Pack(file, zstd, func(w io.Writer) error {
 		return wire.PackPaths(io.MultiWriter(w, hasher), s.cwd, []string{name})
 	})
+
+	// Checked, not dropped, because the DIGEST is taken off the tar stream and
+	// not off this file: a delayed-allocation or network filesystem reports
+	// ENOSPC only here, and a short file published under the full tree's
+	// content key is a poisoning nothing downstream can detect — both caches
+	// are content-addressed and neither re-reads what it holds.
+	closeErr := file.Close()
+
 	if err != nil {
 		return "", file.Name(), fmt.Errorf("packing artifact %q: %w", name, err)
+	}
+
+	if closeErr != nil {
+		return "", file.Name(), fmt.Errorf("staging artifact %q: %w", name, closeErr)
 	}
 
 	return hex.EncodeToString(hasher.Sum(nil)), file.Name(), nil
@@ -230,8 +240,13 @@ func (s *session) awaitEnd(op uint32, what string) error {
 	}
 
 	if frame.Type != wire.FrameEnd || frame.Op != op {
-		return fmt.Errorf("%w: the worker answered a type %d frame for operation %d instead of %s",
-			wire.ErrProtocol, frame.Type, frame.Op, what)
+		// Marked, not merely reported: an answer for the wrong operation means
+		// the conversation lost its place, so the frames this one did not
+		// consume are still queued for whatever reads next. The run loop and
+		// the tunnel pump already say so; the store plane said nothing and was
+		// reused.
+		return s.desync("the worker answered a type %d frame for operation %d instead of %s",
+			frame.Type, frame.Op, what)
 	}
 
 	return nil

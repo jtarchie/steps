@@ -10,10 +10,11 @@ import (
 	"time"
 )
 
-// requireDocker skips the calling test unless it's explicitly opted into and
-// a usable Docker daemon is reachable. Mirrors internal/workspace's
-// docker_btrfs_test.go precedent: heavyweight/non-hermetic tests (pulls an
-// image) must not run as part of a plain `go test ./...`.
+// requireDocker skips the calling test unless a usable Docker daemon is
+// reachable. Not opt-in: a test guarding a shipped feature does not get to be
+// optional, and one that was is how a containerized placed step shipped not
+// working. A test that BIND-MOUNTS needs mountableTempDir as well — the
+// daemon may be in a VM that cannot see this process's temp directory.
 func requireDocker(t *testing.T) {
 	t.Helper()
 

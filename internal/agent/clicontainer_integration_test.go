@@ -21,8 +21,9 @@ import (
 	"github.com/jtarchie/steps/internal/shell"
 )
 
-// requireDockerAgent skips unless explicitly opted into and a usable daemon
-// with the test image is reachable.
+// requireDockerAgent skips the calling test unless a usable daemon with the
+// test image is reachable. Not opt-in: a test guarding a shipped feature does
+// not get to be optional.
 func requireDockerAgent(t *testing.T) {
 	t.Helper()
 

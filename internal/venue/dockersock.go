@@ -114,6 +114,11 @@ func (s *session) withDockerRouting(ctx context.Context, fn func() error) error 
 		return fn()
 	}
 
+	// Cleared for THIS bracket: the relay outlives every command, and a
+	// write-once verdict noted during an earlier one would be returned in
+	// place of every later command's real result — including the teardown's.
+	relay.clearFailure()
+
 	done := make(chan struct{})
 
 	go func() { defer close(done); relay.route() }()
@@ -390,6 +395,14 @@ func (d *dockerRelay) settle() {
 	}
 }
 
+// clearFailure forgets the worker's account of an earlier command.
+func (d *dockerRelay) clearFailure() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.failed = nil
+}
+
 // failure is what the worker said, or nil.
 func (d *dockerRelay) failure() error {
 	d.mu.Lock()
@@ -439,6 +452,15 @@ func (d *dockerRelay) add(op uint32, conn net.Conn) bool {
 	defer d.mu.Unlock()
 
 	if d.closed {
+		return false
+	}
+
+	// Refused, not overwritten — the same rule the shim's own table keeps, and
+	// for the same reason: overwriting strands the first socket with its pump
+	// goroutine alive, after which that goroutine's own remove(op) pulls out
+	// and closes the SECOND stream's connection. Op ids wrap at wire.MaxOp, so
+	// a long-lived session genuinely repeats one.
+	if _, taken := d.conns[op]; taken {
 		return false
 	}
 

@@ -66,4 +66,14 @@ func TestContainerSpecMountsTheWorkersTree(t *testing.T) {
 	if spec.Worker != "" {
 		t.Errorf("worker = %q, want it cleared — this runner is a plain container", spec.Worker)
 	}
+
+	// The spine of the whole feature, and the one line neither half's tests
+	// crossed: the socket is proven to forward and the runner is proven to
+	// honour DockerHost, but nothing carried the resolved socket ACROSS. Drop
+	// it and every placed image: step runs on the ORCHESTRATOR's daemon,
+	// against a mount path that exists only on the worker — and a local:
+	// worker cannot tell, because both ends are the same daemon there.
+	if spec.DockerHost != "unix:///tmp/x.sock" {
+		t.Errorf("docker host = %q, want the worker's forwarded socket", spec.DockerHost)
+	}
 }

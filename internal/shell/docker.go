@@ -711,11 +711,25 @@ func ResolveMountPath(cwd string) (string, error) {
 		return "", fmt.Errorf("%w", err)
 	}
 
-	if strings.Contains(resolved, ":") {
-		return "", fmt.Errorf("path %q contains ':', which is not supported for a docker bind mount", resolved)
+	return resolved, checkMountPath(resolved)
+}
+
+// errMountPathColon is a bind mount source docker cannot be told about.
+var errMountPathColon = errors.New("contains ':', which is not supported for a docker bind mount")
+
+// checkMountPath refuses a path `docker -v` cannot express.
+//
+// Separate from ResolveMountPath because a REMOTE mount path skips the
+// resolution — only the worker can follow its own symlinks — but not this:
+// `-v source:target` splits on the character, so a colon anywhere turns one
+// mount into a misparsed two, which docker either refuses confusingly or
+// honours as something nobody asked for.
+func checkMountPath(path string) error {
+	if strings.Contains(path, ":") {
+		return fmt.Errorf("path %q %w", path, errMountPathColon)
 	}
 
-	return resolved, nil
+	return nil
 }
 
 // ValidateDocker fails fast when a pipeline configures image: but docker
