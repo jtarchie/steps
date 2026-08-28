@@ -18,6 +18,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/jtarchie/steps/internal/dockerapi"
 )
 
 // errSessionClosed is returned when a command is issued through a runner
@@ -773,23 +775,28 @@ func ValidateDockerCLI() error {
 }
 
 // ValidateDocker fails fast when a pipeline configures image: but docker
-// isn't usable: the docker CLI must be on PATH and `docker info` must
-// succeed (daemon reachable). Mirrors internal/workspace's Provider.
-// Validate() precedent — check once at startup, before any step runs.
+// isn't usable: the docker CLI must be on PATH and the daemon must answer.
+// Mirrors internal/workspace's Provider.Validate() precedent — check once at
+// startup, before any step runs.
+//
+// Which daemon is dockerapi's question, not this one's, and it is not the same
+// question as "is DOCKER_HOST set" — see internal/dockerapi/host.go.
 func ValidateDocker(ctx context.Context) error {
 	err := ValidateDockerCLI()
 	if err != nil {
 		return err
 	}
 
-	var errBuf bytes.Buffer
-
-	cmd := exec.CommandContext(ctx, "docker", "info")
-	cmd.Stderr = &errBuf
-
-	err = cmd.Run()
+	client, err := dockerapi.New("")
 	if err != nil {
-		return fmt.Errorf("docker daemon unreachable (docker info failed: %s): %w", errBuf.String(), err)
+		return fmt.Errorf("%w", err)
+	}
+
+	defer func() { _ = client.Close() }()
+
+	err = client.Ping(ctx)
+	if err != nil {
+		return fmt.Errorf("%w", err)
 	}
 
 	return nil

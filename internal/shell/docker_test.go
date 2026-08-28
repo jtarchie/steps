@@ -830,12 +830,17 @@ func TestDockerRunnerRunCaptureLogsStderrOnFailure(t *testing.T) {
 // this machine's docker binary, and a missing one has to be found before a
 // machine is acquired rather than inside the step.
 func TestValidateDockerCLIWantsTheBinaryNotTheDaemon(t *testing.T) {
-	writeFakeDocker(t, 1, "", "cannot connect to the docker daemon")
+	writeFakeDocker(t, 1, "", "")
 
 	err := ValidateDockerCLI()
 	if err != nil {
 		t.Errorf("ValidateDockerCLI: %v, want the binary alone to be enough", err)
 	}
+
+	// The daemon half is a real connection now rather than a subprocess exit,
+	// so an unreachable one is spelled as an address nothing answers on. The
+	// binary is still there — which is the distinction under test.
+	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:1")
 
 	err = ValidateDocker(context.Background())
 	if err == nil {

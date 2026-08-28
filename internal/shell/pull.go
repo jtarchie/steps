@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"time"
+
+	"github.com/jtarchie/steps/internal/dockerapi"
 )
 
 // dockerPullTimeout bounds one image pull. Generous: a large image on a slow
@@ -27,22 +28,36 @@ const dockerPullTimeout = 30 * time.Minute
 // step's timeout, so a big image on a cold daemon can burn a budget meant for
 // the work. Pulling up front makes it startup cost, visible as such.
 //
-// Present images are skipped via `docker image inspect`, which is a local
-// call: a warm run adds a few milliseconds and no network at all. That check
-// is also what keeps a locally-built image (one that exists in no registry)
-// working — it is found, so nothing is pulled.
+// Present images are skipped by asking the daemon, which is a local call: a
+// warm run adds a few milliseconds and no network at all. That check is also
+// what keeps a locally-built image (one that exists in no registry) working —
+// it is found, so nothing is pulled.
 //
-// Progress streams to the terminal rather than being captured. It is startup
+// Progress goes to the terminal rather than being captured. It is startup
 // output for the operator, not a command's result.
+//
+// One client for the whole sweep rather than one per image: connecting is the
+// expensive half of asking about an image that is already there.
 func PrepareImages(ctx context.Context, images []string) error {
+	if len(images) == 0 {
+		return nil
+	}
+
+	client, err := dockerapi.New("")
+	if err != nil {
+		return fmt.Errorf("preparing images: %w", err)
+	}
+
+	defer func() { _ = client.Close() }()
+
 	for _, image := range images {
-		if imagePresent(ctx, image) {
+		if client.ImagePresent(ctx, image) {
 			slog.Debug("shell.docker.image_present", "image", image)
 
 			continue
 		}
 
-		err := pullImage(ctx, image)
+		err := pullImage(ctx, client, image)
 		if err != nil {
 			return err
 		}
@@ -51,29 +66,16 @@ func PrepareImages(ctx context.Context, images []string) error {
 	return nil
 }
 
-// imagePresent reports whether the daemon already has image locally.
-func imagePresent(ctx context.Context, image string) bool {
-	cmd := exec.CommandContext(ctx, "docker", "image", "inspect", "--", image) //nolint:gosec // image is validated at load time (checkImageValue) and passed positionally
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-
-	return cmd.Run() == nil
-}
-
-func pullImage(ctx context.Context, image string) error {
+func pullImage(ctx context.Context, client *dockerapi.Client, image string) error {
 	ctx, cancel := context.WithTimeout(ctx, dockerPullTimeout)
 	defer cancel()
 
 	fmt.Printf("pulling image: %s\n", image)
 	slog.Debug("shell.docker.image_pull", "image", image)
 
-	cmd := exec.CommandContext(ctx, "docker", "pull", "--", image) //nolint:gosec // image is validated at load time (checkImageValue) and passed positionally
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	err := cmd.Run()
+	err := client.Pull(ctx, image, os.Stdout)
 	if err != nil {
-		return fmt.Errorf("pulling image %q: %w", image, err)
+		return fmt.Errorf("%w", err)
 	}
 
 	return nil

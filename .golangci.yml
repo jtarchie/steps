@@ -186,12 +186,34 @@ linters:
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/web"
             - "github.com/jtarchie/steps/internal/workspace"
-        # Leaves: no internal deps, stdlib only.
+        # dockerapi is the docker engine client, and the ONLY package allowed
+        # to hold one. It exists because internal/shell is depended on by
+        # nearly everything and had been stdlib-only: putting an engine client
+        # directly in that leaf would make "stdlib only" false for every
+        # package that reaches it, the same reasoning that put an ssh client in
+        # venue rather than in shell. It answers two questions a docker CLI
+        # used to answer for free and a library does not — which daemon
+        # (DOCKER_HOST, then DOCKER_CONTEXT, then the current context in the
+        # config store) and which credentials (config.json auths and the
+        # credential helpers) — so it is where those belong rather than a thin
+        # alias over the SDK.
+        DockerAPI:
+          files:
+            - "**/internal/dockerapi/**"
+          allow:
+            - "$gostd"
+            - "github.com/moby/moby/api"
+            - "github.com/moby/moby/client"
+            - "github.com/containerd/errdefs"
+            - "go.uber.org/goleak"
+        # Leaves: no internal deps, stdlib only apart from the engine client
+        # that container execution is now built on.
         Shell:
           files:
             - "**/internal/shell/**"
           allow:
             - "$gostd"
+            - "github.com/jtarchie/steps/internal/dockerapi"
         Template:
           files:
             - "**/internal/template/**"
