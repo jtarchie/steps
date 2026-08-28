@@ -115,6 +115,24 @@ the things a scrollback cannot give you:
   `unpriced` rather than `$0.00`, which would read as free, and a run where
   only some steps did says `$0.42+3?` — a bill for three of six steps
   presented as the whole one is the same lie in the other direction.
+- **Which machines the run used**, on a `machines` panel beside the spend one,
+  for a run that placed any step: the tag, the platform the worker reported,
+  the filesystem the tree landed on and the space left there, how many bytes
+  had to be pushed to it, the identity it ran as, and the machine — plus the
+  image if the step ran in a container on it. A `tmpfs` workdir is marked in
+  warning colour, because it is *memory* and the reader is scanning for
+  exactly that. A worker that could not report a filesystem reads `not
+  reported` rather than a blank that looks like an ordinary disk, and a shim
+  that named no identity leaves the cell empty rather than inventing `0:0`,
+  which would read as root.
+
+  There is deliberately **no cost column**: what an instance-hour actually
+  cost is not knowable from inside a run — list prices ignore Savings Plans
+  and Reserved Instances, a spot instance's paid price is reported by no API,
+  and real billing lands up to a day later. That is the opposite call from
+  spend above, where the *provider* reports the dollars and steps only records
+  what it was told. `steps runs <pipeline> --where` reads the same rows in a
+  terminal.
 - **Every hash is a link** to the node page, and **every step has one too** —
   the `#` beside its name is a URL you can paste at someone, and it opens the
   step it names.

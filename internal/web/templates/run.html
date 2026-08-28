@@ -64,6 +64,32 @@
 </section>
 {{end}}
 
+{{if $run.HasPlacements}}
+<section class="spend placement">
+  <div class="spendhead">
+    <span class="lbl">machines</span>
+    <span class="spendmeta">{{len $run.Placements}} placed step(s)</span>
+    <span class="spendmeta" title="What an instance-hour cost is not knowable from inside a run — list prices ignore Savings Plans, a spot instance's paid price is reported by no API, and real billing lands a day later. These are the facts; price them against your own rate card.">facts, not a price</span>
+  </div>
+  <div class="spendscroll">
+  <table class="spendtable">
+    <tr><th>step</th><th>tag</th><th>platform</th><th>filesystem</th><th class="num">sent</th><th>user</th><th>machine</th></tr>
+    {{range $run.PlacementRows}}
+    <tr>
+      <td>{{.StepName}}</td>
+      <td>{{.Tag}}</td>
+      <td class="model">{{.Platform}}</td>
+      <td>{{if .Volatile}}<span class="spendwarn" title="This is memory, not disk: the pushed binary and the step's tree spend it, and a reboot loses both. Name a path on a real disk in the worker URL.">{{.Filesystem}}</span>{{else}}<span class="dim">{{.Filesystem}}</span>{{end}}</td>
+      <td class="num">{{.Sent}}</td>
+      <td class="model">{{.Identity}}</td>
+      <td class="model">{{.Machine}}</td>
+    </tr>
+    {{end}}
+  </table>
+  </div>
+</section>
+{{end}}
+
 <div class="keyhint" aria-hidden="true">
   <span><kbd>j</kbd>/<kbd>k</kbd> move</span>
   <span><kbd>e</kbd>/<kbd>c</kbd> expand / collapse all</span>

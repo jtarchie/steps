@@ -763,6 +763,12 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
 .spendtable td { padding: .35rem .75rem; border-top: 1px solid var(--line); }
 .spendtable .num { text-align: right; font-variant-numeric: tabular-nums; }
 .spendtable .model { color: var(--dim); }
+/* The machines panel shares the spend panel's furniture on purpose: both
+   answer a question about the whole run rather than one step, and inventing a
+   second visual language for the second one would only make them look
+   unrelated. It needs a wider floor -- seven columns, and an aws:// address
+   plus an image is long. */
+.placement .spendtable { min-width: 720px; }
 
 /* /docs — the embedded documentation, rendered server-side. Prose pages in
  * a transcript UI: same ground, same rules, sans for the reading voice.

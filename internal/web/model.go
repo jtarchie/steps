@@ -392,6 +392,10 @@ type runView struct {
 	// run with no agent steps, which is what keeps the panel off a page that
 	// has nothing to say about spend.
 	Usage []store.AgentUsage
+	// Placements is what the machines this run's placed steps ran on said
+	// about themselves. Empty for a run with no placed steps, which keeps
+	// the panel off every page of every pipeline that names no worker.
+	Placements []store.Placement
 	// LastSeq is the highest event sequence this view already renders, and it
 	// is what the live stream must resume AFTER.
 	//
@@ -521,6 +525,90 @@ func (r runView) UsageRows() []usageView {
 	}
 
 	return rows
+}
+
+// placementView is one placed step's machine as the template reads it.
+type placementView struct {
+	store.Placement
+}
+
+// Platform is what the worker reported itself to be.
+func (p placementView) Platform() string { return p.GOOS + "/" + p.GOARCH }
+
+// Filesystem is what the tree landed on, or a stated silence.
+//
+// Empty is never drawn as an ordinary disk: a shim on a platform with no
+// statfs genuinely cannot say, and tmpfs — the answer this column exists to
+// surface — would otherwise hide behind a plausible blank.
+func (p placementView) Filesystem() string {
+	if p.FSType == "" {
+		return "not reported"
+	}
+
+	return p.FSType + " (" + formatBinaryBytes(p.FSFree) + " free)"
+}
+
+// Volatile marks a workdir that is MEMORY, so the row can say so in the
+// colour every other warning on this page uses. It is the single most
+// expensive thing a worker URL can get wrong and the least visible.
+func (p placementView) Volatile() bool { return p.FSType == "tmpfs" || p.FSType == "ramfs" }
+
+// Sent is what actually crossed to reach this machine. A worker keeps what it
+// receives, so a step whose inputs were already there honestly reads 0 B.
+func (p placementView) Sent() string { return formatBinaryBytes(p.BytesSent) }
+
+// Identity is who the step ran as, blank when the shim did not say — never an
+// invented 0, which would read as root.
+func (p placementView) Identity() string {
+	if p.UID == nil || p.GID == nil {
+		return ""
+	}
+
+	return strconv.Itoa(*p.UID) + ":" + strconv.Itoa(*p.GID)
+}
+
+// Machine names the host, and the image if the step ran in a container on it.
+func (p placementView) Machine() string {
+	if p.Image == "" {
+		return p.Address
+	}
+
+	return p.Address + " in " + p.Image
+}
+
+// HasPlacements keeps the panel off a run that never left this machine.
+func (r runView) HasPlacements() bool { return len(r.Placements) > 0 }
+
+// PlacementRows wraps the raw rows for the template.
+func (r runView) PlacementRows() []placementView {
+	rows := make([]placementView, 0, len(r.Placements))
+	for _, placed := range r.Placements {
+		rows = append(rows, placementView{Placement: placed})
+	}
+
+	return rows
+}
+
+// formatBinaryBytes renders a disk or transfer size in BINARY units,
+// deliberately unlike formatBytes.
+//
+// That one is decimal so an agent's payload is comparable to the byte limits
+// it is bounded by. This is about disks and wire transfers, which every tool
+// a reader will cross-check against — the shim's own tmpfs warning, the EC2
+// console, df — reports in KiB/MiB/GiB.
+func formatBinaryBytes(n int64) string {
+	const unit = 1024
+
+	if n < unit {
+		return strconv.FormatInt(n, 10) + " B"
+	}
+
+	size, exp := float64(n)/unit, 0
+	for size >= unit && exp < 3 {
+		size, exp = size/unit, exp+1
+	}
+
+	return fmt.Sprintf("%.1f %s", size, [...]string{"KiB", "MiB", "GiB", "TiB"}[exp])
 }
 
 // Running reports a run still in flight, which is what decides whether the

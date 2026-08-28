@@ -189,6 +189,13 @@ func (s *Server) assembleRun(c echo.Context, run store.RunRow) (runView, error) 
 		view.Usage = usage
 	}
 
+	// Same terms: a run page that cannot say which machines it used is worth
+	// more than one that 500s over it, and a run predating this table has none.
+	placements, err := pipeline.Store.RunPlacements(ctx, run.ID)
+	if err == nil {
+		view.Placements = placements
+	}
+
 	return view, nil
 }
 
