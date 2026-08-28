@@ -27,6 +27,7 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 |---|---|
 | [web.md](web.md) | The browser UI: run transcripts, the dependency graph, live runs, triggering, and sharing one state database between pipelines |
 | [agents-internals.md](agents-internals.md) | How agent steps work underneath: transport, tool-call repair, compaction, caching |
+| [aws-workers.md](aws-workers.md) | Standing up an `aws://` worker by hand with the AWS CLI: IAM, security group, launch template, instance, bucket — and running a pipeline on it |
 | [conformance.md](conformance.md) | Which Concourse behaviors steps matches, which it doesn't, and which are verified |
 
 ## Commands
