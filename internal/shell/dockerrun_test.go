@@ -11,6 +11,8 @@ package shell
 // a mount is a mount rather than a substring of a joined string.
 
 import (
+	"context"
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -237,4 +239,79 @@ func TestForegroundEnvIsDeterministic(t *testing.T) {
 			t.Fatalf("env varied between builds: %v then %v", first, foregroundSpec(spec).Env)
 		}
 	}
+}
+
+// TestStartForegroundRunsAContainerAndReportsItsExit exercises the foreground
+// run against a real daemon from the package that owns it.
+//
+// It is otherwise reached only through internal/agent, one package away, which
+// is exactly the arrangement that lets a production path go untested while
+// every suite stays green.
+func TestStartForegroundRunsAContainerAndReportsItsExit(t *testing.T) {
+	requireDocker(t)
+
+	var stderr strings.Builder
+
+	run, err := StartForeground(t.Context(), DockerRunSpec{
+		Image: testImage,
+		Argv:  []string{"sh", "-c", "cat; echo to-stderr >&2; exit 6"},
+	}, strings.NewReader("fed in\n"), &stderr)
+	if err != nil {
+		t.Fatalf("StartForeground: %v", err)
+	}
+
+	t.Cleanup(run.Close)
+
+	stdout, err := io.ReadAll(run.Stdout)
+	if err != nil {
+		t.Fatalf("reading the transcript: %v", err)
+	}
+
+	waitErr := run.Wait(t.Context())
+	if waitErr == nil {
+		t.Fatal("Wait reported success for a command that exited 6")
+	}
+
+	// A nonzero exit is the command's own verdict, so it has to classify as
+	// one — the CLI this exists for exits nonzero when it REPORTS a task
+	// failure, and calling that infrastructure would retry it at full cost
+	// for a conclusion already reached.
+	if !IsExitError(waitErr) {
+		t.Errorf("IsExitError(%v) = false, want a nonzero exit to read as the command's own answer", waitErr)
+	}
+
+	if exitCodeOf(waitErr) != 6 {
+		t.Errorf("exit code = %d, want 6", exitCodeOf(waitErr))
+	}
+
+	if strings.TrimSpace(string(stdout)) != "fed in" {
+		t.Errorf("stdout = %q, want what was written to stdin", stdout)
+	}
+
+	if strings.TrimSpace(stderr.String()) != "to-stderr" {
+		t.Errorf("stderr = %q, want only the stderr line", stderr.String())
+	}
+}
+
+// TestStartForegroundCloseIsSafeWithoutWaiting pins the path a timed-out step
+// takes: it abandons the run rather than waiting for it, and the connection
+// must not outlive the step that opened it.
+func TestStartForegroundCloseIsSafeWithoutWaiting(t *testing.T) {
+	requireDocker(t)
+
+	run, err := StartForeground(t.Context(), DockerRunSpec{
+		Image: testImage,
+		Name:  "steps-test-foreground-abandoned",
+		Argv:  []string{"sh", "-c", "sleep 120"},
+	}, strings.NewReader(""), io.Discard)
+	if err != nil {
+		t.Fatalf("StartForeground: %v", err)
+	}
+
+	t.Cleanup(func() { RemoveContainer(context.Background(), "steps-test-foreground-abandoned") })
+
+	// Twice, because a deferred Close beside an explicit one is the shape the
+	// caller actually writes.
+	run.Close()
+	run.Close()
 }

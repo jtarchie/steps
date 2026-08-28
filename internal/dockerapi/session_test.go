@@ -6,6 +6,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 // startSession creates and starts a keepalive container for a test, removing
@@ -207,5 +208,75 @@ func TestCreateContainerReportsAnAbsentImage(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "steps-test-no-such-image") {
 		t.Errorf("error = %v, want it to name the image", err)
+	}
+}
+
+// TestSettleForCatchesAContainerThatDiesInsideTheBound is the question a
+// session start actually asks, asked directly.
+//
+// It is otherwise only reached through internal/shell, one package away, and
+// it is the subtlest thing here: the bound ELAPSING is a successful answer
+// ("still up") rather than a failure, while the caller's own context ending is
+// a real one, and the two arrive on the same channel.
+func TestSettleForCatchesAContainerThatDiesInsideTheBound(t *testing.T) {
+	client := requireDaemon(t)
+
+	id := startSession(t, client, ContainerSpec{Cmd: []string{"sh", "-c", "exit 5"}})
+
+	died, code, err := client.SettleFor(t.Context(), id, 30*time.Second)
+	if err != nil {
+		t.Fatalf("SettleFor: %v", err)
+	}
+
+	if !died {
+		t.Fatal("SettleFor said a container running `exit 5` is still up")
+	}
+
+	if code != 5 {
+		t.Errorf("exit code = %d, want the container's own 5", code)
+	}
+}
+
+// TestSettleForLeavesALiveContainerAlone pins the half that runs on every
+// healthy step: the bound elapses, and that is the answer rather than an
+// error. Reported as a failure, every containerized step would die at its
+// own start.
+func TestSettleForLeavesALiveContainerAlone(t *testing.T) {
+	client := requireDaemon(t)
+
+	id := startSession(t, client, ContainerSpec{})
+
+	started := time.Now()
+
+	died, _, err := client.SettleFor(t.Context(), id, 200*time.Millisecond)
+	if err != nil {
+		t.Fatalf("SettleFor: %v, want the bound elapsing to be an answer and not a failure", err)
+	}
+
+	if died {
+		t.Error("SettleFor said a sleeping container had died")
+	}
+
+	// And it waited rather than answering instantly, which is the whole
+	// mechanism: a container that dies a few milliseconds in is still running
+	// at the moment the start returns.
+	if elapsed := time.Since(started); elapsed < 150*time.Millisecond {
+		t.Errorf("SettleFor returned after %s, want it to have waited out its bound", elapsed)
+	}
+}
+
+// TestSettleForReportsACancelledCaller pins the case that must NOT be read as
+// "still up": the caller gave up, which says nothing about the container.
+func TestSettleForReportsACancelledCaller(t *testing.T) {
+	client := requireDaemon(t)
+
+	id := startSession(t, client, ContainerSpec{})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, _, err := client.SettleFor(ctx, id, 30*time.Second)
+	if err == nil {
+		t.Error("SettleFor reported a healthy container for a caller that had already given up")
 	}
 }

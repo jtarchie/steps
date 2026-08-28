@@ -14,7 +14,6 @@ import (
 	"io"
 	"os"
 	"sort"
-	"sync"
 
 	"github.com/jtarchie/steps/internal/dockerapi"
 )
@@ -87,18 +86,21 @@ type ForegroundRun struct {
 
 	attached *dockerapi.Attached
 	client   *dockerapi.Client
-	closer   sync.Once
 }
 
-// Close releases the connection the run holds, once however many times it is
-// asked.
+// Close releases the connection the run holds.
 //
 // Wait does this on the way out, so the ordinary path needs nothing. It is
 // exported for the path that has no ordinary way out: a caller whose context
 // was cancelled abandons the run without waiting for it, and the connection —
 // and the pool goroutines behind it — would outlive the step that opened it.
+//
+// Safe to repeat, which callers rely on: a deferred Close beside the one Wait
+// already did is the shape they actually write. It is safe because closing a
+// client only releases idle connections, not because anything here counts —
+// a Close that ever grows state of its own has to make itself idempotent.
 func (r *ForegroundRun) Close() {
-	r.closer.Do(func() { _ = r.client.Close() })
+	_ = r.client.Close()
 }
 
 // StartForeground starts a container from spec with its streams attached.
