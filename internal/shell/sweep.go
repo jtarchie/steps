@@ -23,6 +23,20 @@ const (
 	dockerHostLabel  = "steps.host"
 )
 
+// OwnershipLabels are stamped on every container this tool starts.
+//
+// They are how a container survives its creator. If this process is SIGKILLed,
+// nothing runs Close, and the only thing left is a container with a name and
+// no explanation; these let the NEXT run recognise it as ours and whose it
+// was. See SweepOrphanedContainers.
+func OwnershipLabels() map[string]string {
+	return map[string]string{
+		dockerOwnerLabel: "steps",
+		dockerPIDLabel:   strconv.Itoa(os.Getpid()),
+		dockerHostLabel:  ownerHostname(),
+	}
+}
+
 // dockerSweepTimeout bounds the whole orphan sweep. It runs before the first
 // step, so it must not be able to hang a run: past this the sweep gives up and
 // the (worst case) orphan waits for the next one.

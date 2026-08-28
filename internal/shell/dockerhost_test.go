@@ -77,7 +77,7 @@ func TestRunnerTargetsANamedDaemon(t *testing.T) {
 	absent, err := NewRunner(RunnerSpec{
 		Image:      testImage,
 		Cwd:        dir,
-		DockerHost: "unix://" + filepath.Join(t.TempDir(), "no-daemon.sock"),
+		DockerHost: "tcp://127.0.0.1:1",
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
@@ -135,114 +135,52 @@ func TestRunnerMountsAPathItDidNotResolve(t *testing.T) {
 	}
 }
 
-// TestSessionStartAimsTheWorkersDaemonOverTheStepsOwnEnv crosses the seam
-// where a placed containerized step carries two settings that land on the same
-// variable: the daemon the venue forwarded, and the values the pipeline's env:
-// resolved on the orchestrator.
+// TestStepEnvCannotRedirectTheSessionsDaemon crosses the seam where a placed
+// containerized step carries two settings that used to land on the same
+// variable.
 //
-// Both are written onto the docker client's environment and os/exec keeps the
-// LAST duplicate, so a step whose env: names DOCKER_HOST — anything with
+// Both were written onto the docker client's environment, and os/exec keeps
+// the LAST duplicate, so a step whose env: named DOCKER_HOST — anything with
 // colima, Rancher Desktop, rootless or a remote daemon exported — started its
 // container on the ORCHESTRATOR while exec, inspect, logs and rm all still
-// went to the worker. The container came up on the wrong machine with
-// `-v <worker path>:<worker path>`, which docker silently creates as an empty
-// local directory, and every later call reported "No such container".
-func TestSessionStartAimsTheWorkersDaemonOverTheStepsOwnEnv(t *testing.T) {
-	argvFile := writeFakeDocker(t, 0, "", "")
-
-	const forwarded = "unix:///tmp/steps-worker-forwarded.sock"
-
-	runner, err := NewRunner(RunnerSpec{
-		Image:      "alpine",
-		MountPath:  "/worker/tree",
-		DockerHost: forwarded,
-		Env:        []string{"DOCKER_HOST"},
-		EnvValues:  map[string]string{"DOCKER_HOST": "unix:///orchestrator.sock"},
-	})
-	if err != nil {
-		t.Fatalf("NewRunner: %v", err)
-	}
-
-	_, _, _, err = runner.RunCaptureFull(context.Background(), "true")
-	if err != nil {
-		t.Fatalf("RunCaptureFull: %v", err)
-	}
-
-	CloseRunner(runner, "test")
-
-	for _, line := range recordedDaemons(t, argvFile) {
-		verb, host, _ := strings.Cut(line, " ")
-		if host != forwarded {
-			t.Errorf("docker %s ran against %q, want the forwarded socket %q", verb, host, forwarded)
-		}
-	}
-
-	// The start is the invocation that regressed, so it is named rather than
-	// left to the loop: a session whose container never started would satisfy
-	// that loop without ever having aimed a `docker run` anywhere.
-	if runs := invocationsOf(recordedArgv(t, argvFile), "run"); len(runs) != 1 {
-		t.Errorf("recorded %v, want exactly one docker run", runs)
-	}
-}
-
-// TestRunnerOnAForeignDaemonDoesNotSubstituteThisMachinesUser is the seam the
-// two halves either side of it each passed on their own.
+// went to the worker. The container came up on the wrong machine with a bind
+// mount docker silently created as an empty local directory, and every later
+// call reported no such container.
 //
-// A venue decides the container user from the WORKER's facts — its platform,
-// and the identity its shim runs as — and DefaultContainerUserFor answers ""
-// for a darwin worker or one whose shim cannot vouch for a uid, meaning
-// "defer to the image". That answer then arrived here as RunnerSpec.User, and
-// containerUser read empty as "the pipeline said nothing" and substituted THIS
-// process's uid:gid: a --user computed on the orchestrator for a bind mount on
-// the worker. On a Linux orchestrator against a root shim that is `docker run
-// --user 1000:1000` over a root-owned 0700 workdir, and the step cannot write
-// the outputs it declares.
-//
-// No daemon needed: the substitution happens in NewRunner, before anything is
-// dialled.
-func TestRunnerOnAForeignDaemonDoesNotSubstituteThisMachinesUser(t *testing.T) {
-	// Pinned rather than ambient, and not parallel because of it: on darwin
-	// the real platform default is already "", so a test reading it could not
-	// tell the two answers apart on the machine this is most likely run on.
-	previous := defaultContainerUser
-	defaultContainerUser = func() string { return "1000:1000" }
+// The collision is gone by construction: the daemon is now an argument to the
+// client and the step's env: is a value in a request body, so one cannot reach
+// the other. What is asserted here is that both still WORK — the session talks
+// to the daemon it was given, and the variable arrives in the container with
+// the value the pipeline chose — because a fix that made the variable
+// unsettable would pass a test that only checked the daemon.
+func TestStepEnvCannotRedirectTheSessionsDaemon(t *testing.T) {
+	requireDocker(t)
 
-	t.Cleanup(func() { defaultContainerUser = previous })
+	const decoy = "unix:///orchestrator-should-not-be-used.sock"
 
 	runner, err := NewRunner(RunnerSpec{
 		Image:      testImage,
-		MountPath:  "/on/the/worker",
-		DockerHost: "unix:///not/dialled.sock",
+		Cwd:        mountableTempDir(t),
+		DockerHost: currentDockerHost(t),
+		Env:        []string{"DOCKER_HOST"},
+		EnvValues:  map[string]string{"DOCKER_HOST": decoy},
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
-	docker, ok := runner.(DockerRunner)
-	if !ok {
-		t.Fatalf("NewRunner returned %T, want a DockerRunner", runner)
-	}
+	t.Cleanup(func() { CloseRunner(runner, "test") })
 
-	if docker.session.user != "" {
-		t.Errorf("user = %q, want empty: the daemon is not this machine's, so this machine's uid is not the answer",
-			docker.session.user)
-	}
-
-	// The other direction, so the fix cannot be "never default": a local
-	// daemon still gets the platform default that exists to stop a container
-	// writing root-owned files into a bind-mounted tree.
-	local, err := NewRunner(RunnerSpec{Image: testImage, MountPath: "/anywhere"})
+	stdout, stderr, code, err := runner.RunCaptureFull(context.Background(), `printf '%s' "$DOCKER_HOST"`)
 	if err != nil {
-		t.Fatalf("NewRunner: %v", err)
+		t.Fatalf("RunCaptureFull: %v (stderr %q)", err, stderr)
 	}
 
-	localDocker, ok := local.(DockerRunner)
-	if !ok {
-		t.Fatalf("NewRunner returned %T, want a DockerRunner", local)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q; the session did not reach the daemon it was given", code, stderr)
 	}
 
-	if localDocker.session.user != defaultContainerUser() {
-		t.Errorf("user = %q, want the platform default %q for this machine's own daemon",
-			localDocker.session.user, defaultContainerUser())
+	if stdout != decoy {
+		t.Errorf("DOCKER_HOST inside the container = %q, want the pipeline's own value %q", stdout, decoy)
 	}
 }

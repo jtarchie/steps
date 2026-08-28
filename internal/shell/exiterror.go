@@ -5,15 +5,15 @@ package shell
 import "fmt"
 
 // ExitError is a command that started and then exited nonzero (or was killed
-// by a signal) on a machine this process does not own — a worker at the far
-// end of a venue.
+// by a signal) somewhere os/exec cannot see it: on a worker at the far end of
+// a venue, or in a container this process talks to over the engine API.
 //
 // It exists because the whole pipeline decides "the step said no" from "the
-// machinery broke" by asking IsExitError, and until now the only answer was
-// *exec.ExitError — a type that carries an *os.ProcessState, has no
-// constructor, and so can only ever describe a child of THIS process. A venue
-// reporting a remote failure as a plain error would classify every red remote
-// step as infrastructure, firing on_error where the pipeline author wrote
+// machinery broke" by asking IsExitError, and *exec.ExitError — the only
+// answer there used to be — carries an *os.ProcessState, has no constructor,
+// and so can only ever describe a child of THIS process. Neither a venue nor
+// a container has one. Reporting either as a plain error would classify every
+// red step as infrastructure, firing on_error where the pipeline author wrote
 // on_failure.
 //
 // The inverse matters just as much and is why a venue must NOT reach for this
@@ -24,7 +24,9 @@ type ExitError struct {
 	// Command is the shell string that failed, for the message.
 	Command string
 	// Venue names the machine, because a red build on a fleet that does not
-	// say which box sends the operator to look at the wrong one.
+	// say which box sends the operator to look at the wrong one. Empty for a
+	// container on the daemon this process is already talking to, where the
+	// caller names the image instead.
 	Venue string
 	// Code is the exit status, or -1 for a signalled command — the same
 	// sentinel exitCodeOf reports for a local kill, so the two are
@@ -33,6 +35,10 @@ type ExitError struct {
 }
 
 func (e *ExitError) Error() string {
+	if e.Venue == "" {
+		return fmt.Sprintf("command %q exited with status %d", e.Command, e.Code)
+	}
+
 	return fmt.Sprintf("command %q on worker %q exited with status %d", e.Command, e.Venue, e.Code)
 }
 

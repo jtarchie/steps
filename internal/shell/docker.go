@@ -1,14 +1,12 @@
 package shell
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/jtarchie/steps/internal/dockerapi"
@@ -119,6 +116,10 @@ type dockerSession struct {
 	memoryBytes int64
 
 	mu sync.Mutex
+	// client is the connection to the daemon, opened with the container and
+	// released by close. Held rather than reopened per command: connecting is
+	// the expensive half of an exec against a container that is already up.
+	client *dockerapi.Client
 	// attempted records that start has been tried, so a failure is sticky:
 	// a bad image must not be re-pulled once per command in an agent's
 	// conversation.
@@ -128,23 +129,27 @@ type dockerSession struct {
 	// leave attempted set and startErr nil, and the next command would exec
 	// against an empty container name — a malformed docker invocation
 	// reported as an opaque exit code.
-	closed   bool
+	closed bool
+	// name is what the container was called, and id is what the daemon calls
+	// it. Both are kept: the name is what a sweep and a human recognise, the
+	// id is what every later request names.
 	name     string
+	id       string
 	startOut string
 	startErr error
 }
 
 // ensure starts the container if it has not been started yet, returning its
-// name.
+// id.
 //
-// A failure to start is reported exactly as the underlying `docker run`
-// reported it — the same *exec.ExitError, carrying the same exit code (125
-// for a daemon-side error such as an unknown image) and the same stderr that
-// a per-command `docker run` used to produce. That is what keeps a bad image
-// surfacing to an agent as ordinary tool-result data rather than a crash, and
-// keeps a containerized task's failure classifying as a task failure via
-// IsExitError, exactly as before this became a session.
-func (s *dockerSession) ensure(ctx context.Context) (name, stderr string, err error) {
+// A daemon-side refusal — an unknown image is the one that matters — is
+// reported as an *ExitError carrying 125, the status `docker run` used to exit
+// with for exactly this. That is what keeps a bad image surfacing to an agent
+// as ordinary tool-result data rather than a crash, and keeps a containerized
+// task's failure classifying as a task failure via IsExitError. A container
+// that started and then DIED is a different answer and deliberately not an
+// ExitError: see checkAlive.
+func (s *dockerSession) ensure(ctx context.Context) (id, stderr string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -153,7 +158,7 @@ func (s *dockerSession) ensure(ctx context.Context) (name, stderr string, err er
 	}
 
 	if s.attempted {
-		return s.name, s.startOut, s.startErr
+		return s.id, s.startOut, s.startErr
 	}
 
 	s.attempted = true
@@ -165,42 +170,35 @@ func (s *dockerSession) ensure(ctx context.Context) (name, stderr string, err er
 		return "", "", err
 	}
 
-	args := dockerStartArgs(s.image, containerName, s.resolvedCwd, s.forwardedNames(), s.user, s.network,
-		s.privileged, s.cpuShares, s.memoryBytes)
+	client, err := dockerapi.New(s.dockerHost)
+	if err != nil {
+		s.startErr = fmt.Errorf("connecting to the daemon for image %q: %w", s.image, err)
+
+		return "", "", s.startErr
+	}
+
+	s.client = client
 
 	slog.Debug("shell.docker.session_start", "image", s.image, "container", containerName, "cwd", s.resolvedCwd)
 
-	cmd := dockerCommand(ctx, s.dockerHost, args)
-	// Daemon last, over the step's own values: see onDaemonEnv.
-	cmd.Env = onDaemonEnv(withValues(os.Environ(), s.envValues), s.dockerHost)
+	containerID, startErr := s.start(ctx, containerName)
+	if startErr != nil {
+		s.startOut = startErr.Error()
+		s.startErr = &ExitError{Command: "starting a container from image " + s.image, Code: dockerDaemonRefusedCode}
 
-	var errBuf bytes.Buffer
-
-	cmd.Stdout = io.Discard // the container id; we already know its name
-	cmd.Stderr = &errBuf
-
-	runErr := cmd.Run()
-	if runErr != nil {
-		s.startOut = errBuf.String()
-		// Deliberately NOT wrapped: callers inspect this with errors.As for
-		// *exec.ExitError (IsExitError, exitCodeOf, processStarted) to decide
-		// whether a containerized command failed or never ran, and wrapping
-		// text around it here would be cosmetic while the shape is load-bearing.
-		s.startErr = runErr
-
-		slog.Debug("shell.docker.session_start_failed", "image", s.image, "exit_code", exitCodeOf(runErr), "stderr", s.startOut)
+		slog.Debug("shell.docker.session_start_failed", "image", s.image, "error", startErr)
 
 		return "", s.startOut, s.startErr
 	}
 
-	// `docker run -d` reports whether the container was STARTED, not whether
-	// it is still up: it exits 0 for a container that died a millisecond
-	// later. That is the normal outcome for an image with an ENTRYPOINT, since
-	// `sh -c <keepalive>` becomes arguments TO that entrypoint rather than
-	// replacing it — alpine/git runs `git sh -c ...` and exits. Taking exit 0
-	// as success left every later exec reporting "No such container", which
-	// says nothing about the actual cause.
-	deadErr := s.checkAlive(ctx, containerName)
+	// Starting reports that the container STARTED, not that it is still up:
+	// it succeeds for one that died a millisecond later. That is the normal
+	// outcome for an image with an ENTRYPOINT, since the keepalive becomes
+	// arguments TO that entrypoint rather than replacing it — alpine/git runs
+	// `git sh -c ...` and exits. Taking success at face value left every later
+	// exec reporting a container that does not exist, which says nothing about
+	// the actual cause.
+	deadErr := s.checkAlive(ctx, containerID)
 	if deadErr != nil {
 		s.startOut = deadErr.Error()
 		s.startErr = deadErr
@@ -208,42 +206,125 @@ func (s *dockerSession) ensure(ctx context.Context) (name, stderr string, err er
 		slog.Debug("shell.docker.session_died", "image", s.image, "container", containerName, "error", deadErr)
 
 		// The corpse has told us what we needed; take it away now rather than
-		// leaving it for the next run's sweep. s.name is deliberately left
+		// leaving it for the next run's sweep. s.id is deliberately left
 		// unset, so close has nothing to do for this session.
-		removeContainerOn(ctx, s.dockerHost, containerName)
+		reclaim(removalContext(ctx), s.client, containerID)
 
 		return "", s.startOut, s.startErr
 	}
 
-	s.name = containerName
+	s.name, s.id = containerName, containerID
 
-	return s.name, "", nil
+	return s.id, "", nil
+}
+
+// dockerDaemonRefusedCode is the status a daemon-side refusal reports. 125 is
+// what `docker run` exited with for one, and the value is load-bearing rather
+// than cosmetic: docs/infra.md documents it, and an agent shown this as a tool
+// result sees the same number it always did.
+const dockerDaemonRefusedCode = 125
+
+// start creates and starts the session's container.
+func (s *dockerSession) start(ctx context.Context, name string) (string, error) {
+	spec := dockerapi.ContainerSpec{
+		Image:       s.image,
+		Cmd:         []string{"sh", "-c", keepAliveCommand()},
+		Name:        name,
+		WorkingDir:  s.resolvedCwd,
+		Env:         s.containerEnv(),
+		Labels:      OwnershipLabels(),
+		User:        s.user,
+		Network:     s.network,
+		Privileged:  s.privileged,
+		CPUShares:   int64(s.cpuShares),
+		MemoryBytes: s.memoryBytes,
+		// A real PID 1, so processes an exec leaves behind are reaped rather
+		// than accumulating in a long agent conversation's container.
+		Init: true,
+		// Deliberately NOT self-removing: a container that removes itself
+		// takes its own postmortem with it, and the postmortem is the whole
+		// diagnosis when an image rejects the keepalive.
+		AutoRemove: false,
+	}
+
+	id, err := s.client.CreateContainer(ctx, spec)
+	if err != nil {
+		return "", fmt.Errorf("%w", err)
+	}
+
+	err = s.client.StartContainer(ctx, id)
+	if err != nil {
+		// Created but not running: nothing else will ever name it, so it has
+		// to be reclaimed here.
+		reclaim(removalContext(ctx), s.client, id)
+
+		return "", fmt.Errorf("%w", err)
+	}
+
+	return id, nil
 }
 
 // checkAlive reports why the container is no longer running, or nil if it is.
 //
 // The diagnosis is the point: the container's own exit code and first lines of
 // output are what say the image rejected the command, and they are gone the
-// moment anything removes it. This is why the container is NOT started with
-// --rm — a self-removing container takes its own postmortem with it.
-func (s *dockerSession) checkAlive(ctx context.Context, name string) error {
-	//nolint:gosec // name is a hex string this package generated
-	out, err := onDaemon(exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}} {{.State.ExitCode}}", name), s.dockerHost).Output()
+// moment anything removes it. This is why the container is NOT created with
+// AutoRemove — a self-removing container takes its own postmortem with it.
+//
+// Deliberately a plain error rather than an *ExitError. The container did not
+// run the step's command and exit nonzero; it never got as far as accepting
+// one, which is an infrastructure failure and has to classify as such.
+func (s *dockerSession) checkAlive(ctx context.Context, id string) error {
+	died, exitCode, err := s.client.SettleFor(ctx, id, dockerSettleBound)
 	if err != nil {
 		// Cannot tell; assume it is fine rather than failing a working step on
-		// an inspect that did not answer.
-		slog.Debug("shell.docker.inspect_failed", "container", name, "error", err)
+		// a question the daemon did not answer.
+		slog.Debug("shell.docker.settle_failed", "container", id, "error", err)
 
 		return nil
 	}
 
-	running, exitCode, ok := strings.Cut(strings.TrimSpace(string(out)), " ")
-	if !ok || running == "true" {
+	if !died {
 		return nil
 	}
 
-	return fmt.Errorf("container for image %q exited immediately with code %s (its command was %q; an image with an ENTRYPOINT receives that as arguments rather than replacing it): %s",
-		s.image, exitCode, keepAliveCommand(), containerLogTail(ctx, s.dockerHost, name))
+	return fmt.Errorf("container for image %q exited immediately with code %d (its command was %q; an image with an ENTRYPOINT receives that as arguments rather than replacing it): %s",
+		s.image, exitCode, keepAliveCommand(), logTailOrNothing(s.client.ContainerLogTail(ctx, id, dockerLogTailLines)))
+}
+
+// dockerSettleBound is how long a container is given to die at birth before
+// it is taken to be up.
+//
+// Short, because every healthy containerized step pays it once. Long enough
+// that an image whose entrypoint swallows the keepalive — which exits in
+// single-digit milliseconds — is reliably caught, since the alternative is
+// every later command reporting a container that does not exist and naming
+// neither the image nor the reason.
+const dockerSettleBound = 300 * time.Millisecond
+
+// dockerLogTailLines is how much of a dead container's output is quoted back.
+// Enough for an image's own error message, short enough to read in a step's
+// failure.
+const dockerLogTailLines = 10
+
+// logTailOrNothing keeps a silent container from producing an error that
+// trails off mid-sentence.
+func logTailOrNothing(logs string) string {
+	if logs == "" {
+		return "(no output)"
+	}
+
+	return logs
+}
+
+// removalContext bounds a teardown that must not depend on the caller's own
+// context.
+//
+// The likeliest reason a removal runs is that the caller was just cancelled,
+// and a cleanup using that context would abort before reaching the daemon and
+// leak the container it was reclaiming.
+func removalContext(ctx context.Context) context.Context {
+	return context.WithoutCancel(ctx)
 }
 
 // RemoveContainer deletes a container by name, best-effort. Exported so
@@ -256,70 +337,66 @@ func RemoveContainer(ctx context.Context, name string) {
 
 // removeContainerOn is RemoveContainer against a named daemon.
 func removeContainerOn(ctx context.Context, host, name string) {
-	//nolint:gosec // name is a hex string this package generated
-	out, err := onDaemon(exec.CommandContext(ctx, "docker", "rm", "-f", name), host).CombinedOutput()
-	if err != nil && !containerAlreadyGone(out) {
-		slog.Warn("shell.docker.remove_failed", "container", name, "error", err, "output", string(out))
-	}
-}
-
-// containerLogTail returns the last few lines the container produced, which
-// for a failed start is the image's own error message.
-func containerLogTail(ctx context.Context, host, name string) string {
-	//nolint:gosec // name is a hex string this package generated
-	out, err := onDaemon(exec.CommandContext(ctx, "docker", "logs", "--tail", "10", name), host).CombinedOutput()
+	client, err := dockerapi.New(host)
 	if err != nil {
-		return "(no output)"
+		slog.Warn("shell.docker.remove_failed", "container", name, "error", err)
+
+		return
 	}
 
-	logs := strings.TrimSpace(string(out))
-	if logs == "" {
-		return "(no output)"
-	}
+	defer func() { _ = client.Close() }()
 
-	return logs
+	reclaim(ctx, client, name)
 }
 
-// close removes the container. It builds its own bounded context rather than
-// taking the caller's: Close runs from deferred cleanup paths whose context is
-// routinely already canceled (a timed-out step, Ctrl-C), and those are exactly
-// the cases where leaving a container running would be worst.
+// reclaim removes a container, best effort.
+//
+// Best effort because every caller is on a teardown path: the container is
+// already unwanted, and a failure to take it away is something to report
+// rather than something to propagate over whatever was actually going wrong.
+// The sweep on the next run is the backstop.
+func reclaim(ctx context.Context, client *dockerapi.Client, id string) {
+	err := client.RemoveContainer(ctx, id)
+	if err != nil {
+		slog.Warn("shell.docker.remove_failed", "container", id, "error", err)
+	}
+}
+
+// close removes the container and releases the connection.
+//
+// It builds its own bounded context rather than taking the caller's: Close
+// runs from deferred cleanup paths whose context is routinely already
+// canceled (a timed-out step, Ctrl-C), and those are exactly the cases where
+// leaving a container running would be worst.
 func (s *dockerSession) close() error {
 	s.mu.Lock()
-	name := s.name
-	s.name = ""
+	id, client := s.id, s.client
+	s.id, s.name, s.client = "", "", nil
 	s.closed = true
 	s.mu.Unlock()
 
-	if name == "" {
+	if client == nil {
+		return nil
+	}
+
+	defer func() { _ = client.Close() }()
+
+	if id == "" {
 		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), dockerCleanupTimeout)
 	defer cancel()
 
-	slog.Debug("shell.docker.session_close", "container", name)
+	slog.Debug("shell.docker.session_close", "container", id)
 
-	out, err := onDaemon(exec.CommandContext(ctx, "docker", "rm", "-f", name), s.dockerHost).CombinedOutput() //nolint:gosec // name is a hex string this package generated
-	if err != nil {
-		// A container that is already gone is the outcome this wanted, not a
-		// failure. It happens whenever the container exited on its own — the
-		// keepalive expiring, a daemon restart — and reporting it would put an
-		// ERROR in the log of a step that cleaned up perfectly well.
-		if containerAlreadyGone(out) {
-			return nil
-		}
-
-		return fmt.Errorf("removing container %s: %w: %s", name, err, out)
-	}
+	// A container that is already gone is the outcome this wanted, not a
+	// failure — it happens whenever the container exited on its own, the
+	// keepalive expiring or a daemon restart — and RemoveContainer already
+	// says so.
+	reclaim(ctx, client, id)
 
 	return nil
-}
-
-// containerAlreadyGone reports whether a docker rm failure is just the
-// container not existing.
-func containerAlreadyGone(dockerOutput []byte) bool {
-	return strings.Contains(string(dockerOutput), "No such container")
 }
 
 // NewContainerName mints a random, collision-free container name. Random
@@ -359,45 +436,50 @@ func NewContainerName() (string, error) {
 // file is always a host path.
 func (d DockerRunner) dockerExec(
 	ctx context.Context, command string, stdin, streamStdout, streamStderr bool, maxBytes int, spillDir string,
-) (stdout, stderr string, runErr error) {
-	name, startStderr, startErr := d.session.ensure(ctx)
+) (stdout, stderr string, exitCode int, runErr error) {
+	id, startStderr, startErr := d.session.ensure(ctx)
 	if startErr != nil {
-		return "", startStderr, startErr
-	}
-
-	cmd := dockerCommand(ctx, d.session.dockerHost, dockerExecArgs(name, command, stdin))
-	if stdin {
-		cmd.Stdin = os.Stdin
+		return "", startStderr, exitCodeOf(startErr), startErr
 	}
 
 	outWriter := newCaptureWriter(maxBytes, spillDir)
 	errWriter := newCaptureWriter(maxBytes, spillDir)
 
-	flushStdout, flushStderr := func() {}, func() {}
+	outTarget, flushStdout := io.Writer(outWriter), func() {}
+	errTarget, flushStderr := io.Writer(errWriter), func() {}
 
 	if streamStdout {
-		var stdoutW io.Writer
+		var live io.Writer
 
-		stdoutW, flushStdout = prefixedStream(d.label, os.Stdout)
-		cmd.Stdout = io.MultiWriter(stdoutW, outWriter)
-	} else {
-		cmd.Stdout = outWriter
+		live, flushStdout = prefixedStream(d.label, os.Stdout)
+		outTarget = io.MultiWriter(live, outWriter)
 	}
 
 	if streamStderr {
-		var stderrW io.Writer
+		var live io.Writer
 
-		stderrW, flushStderr = prefixedStream(d.label, os.Stderr)
-		cmd.Stderr = io.MultiWriter(stderrW, errWriter)
-	} else {
-		cmd.Stderr = errWriter
+		live, flushStderr = prefixedStream(d.label, os.Stderr)
+		errTarget = io.MultiWriter(live, errWriter)
 	}
 
-	runErr = cmd.Run()
+	opts := dockerapi.ExecOptions{
+		// The command is a shell string, so it runs through `sh -c` exactly as
+		// it did — a pipeline writes shell, not an argv.
+		Cmd:    []string{"sh", "-c", command},
+		Stdout: outTarget,
+		Stderr: errTarget,
+	}
+
+	if stdin {
+		opts.Stdin = os.Stdin
+	}
+
+	code, execErr := d.session.client.Exec(ctx, id, opts)
+
 	flushStdout()
 	flushStderr()
 
-	return outWriter.result(), errWriter.result(), runErr
+	return outWriter.result(), errWriter.result(), code, execErr
 }
 
 // Run runs command in the step's container, streaming stdout/stderr live and
@@ -419,15 +501,38 @@ func (d DockerRunner) RunStreamedCapture(ctx context.Context, command string, ma
 func (d DockerRunner) runStreamed(ctx context.Context, command string, maxBytes int) (stdout, stderr string, err error) {
 	slog.Debug("shell.docker.run", "image", d.Image, "command", command, "cwd", d.session.resolvedCwd)
 
-	stdout, stderr, runErr := d.dockerExec(ctx, command, true, true, true, maxBytes, "")
+	stdout, stderr, code, runErr := d.dockerExec(ctx, command, true, true, true, maxBytes, "")
 
-	slog.Debug("shell.docker.run", "image", d.Image, "command", command, "exit_code", exitCodeOf(runErr))
+	slog.Debug("shell.docker.run", "image", d.Image, "command", command, "exit_code", code)
 
-	if runErr != nil {
-		return stdout, stderr, fmt.Errorf("command %q failed in image %q: %w", command, d.Image, wrapIfCanceled(ctx, runErr))
+	failure := commandFailure(command, code, runErr)
+	if failure != nil {
+		return stdout, stderr, fmt.Errorf("command %q failed in image %q: %w", command, d.Image, wrapIfCanceled(ctx, failure))
 	}
 
 	return stdout, stderr, nil
+}
+
+// commandFailure turns a command's outcome into the error Run and RunCapture
+// report, or nil for a clean one.
+//
+// The two halves classify differently and it matters. A command that ran and
+// exited nonzero is an *ExitError, so the pipeline reads it as the step
+// saying no. Anything that stopped the command from running at all — a
+// container that would not stay up, a session already closed, a daemon that
+// stopped answering — is passed through as it came, so it stays infrastructure
+// and fires on_error rather than on_failure. A start the DAEMON refused is
+// already an *ExitError by the time it gets here; see ensure.
+func commandFailure(command string, code int, runErr error) error {
+	if runErr != nil {
+		return runErr
+	}
+
+	if code == 0 {
+		return nil
+	}
+
+	return &ExitError{Command: command, Code: code}
 }
 
 // RunCapture runs command in the step's container, capturing stdout and
@@ -438,25 +543,26 @@ func (d DockerRunner) runStreamed(ctx context.Context, command string, maxBytes 
 func (d DockerRunner) RunCapture(ctx context.Context, command string) ([]byte, error) {
 	slog.Debug("shell.docker.capture", "image", d.Image, "command", command, "cwd", d.session.resolvedCwd)
 
-	stdout, stderr, runErr := d.dockerExec(ctx, command, true, false, true, 0, "")
+	stdout, stderr, code, runErr := d.dockerExec(ctx, command, true, false, true, 0, "")
 
 	slog.Debug("shell.docker.capture", "image", d.Image, "command", command,
-		"exit_code", exitCodeOf(runErr), "output_bytes", len(stdout), "output", stdout, "stderr", stderr)
+		"exit_code", code, "output_bytes", len(stdout), "output", stdout, "stderr", stderr)
 
-	if runErr != nil {
-		return nil, fmt.Errorf("command %q failed in image %q: %w", command, d.Image, wrapIfCanceled(ctx, runErr))
+	failure := commandFailure(command, code, runErr)
+	if failure != nil {
+		return nil, fmt.Errorf("command %q failed in image %q: %w", command, d.Image, wrapIfCanceled(ctx, failure))
 	}
 
 	return []byte(stdout), nil
 }
 
 // RunCaptureFull runs command in the step's container, capturing
-// stdout/stderr separately with no stdin attached. Docker-level failures (bad
-// image, daemon unreachable) surface via docker's own exit codes (commonly 125
-// for daemon-side errors, 126/127 for a command the container couldn't
-// run/find) exactly like any other nonzero exit — as data via exitCode, not
-// a Go error, even a signal-killed one (e.g. from a canceled ctx). Only a
-// failure to start the docker CLI client itself returns a non-nil error. A
+// stdout/stderr separately with no stdin attached. Daemon-level refusals (a
+// bad image) surface as the same 125 `docker run` reported, and a command the
+// container could not run or find as its own 126/127 — exactly like any other
+// nonzero exit, as data via exitCode rather than a Go error, even a
+// signal-killed one (e.g. from a canceled ctx). Only a failure to have a
+// container at all returns a non-nil error. A
 // caller that needs to tell "this result may be incomplete because ctx was
 // canceled while the command ran" apart from an ordinary exit code checks
 // ctx.Err() itself (or CanceledError) after this returns, rather than
@@ -486,54 +592,39 @@ func (d DockerRunner) RunCaptureFullLimitedStreamed(ctx context.Context, command
 func (d DockerRunner) runCaptureFull(ctx context.Context, command string, maxBytes int, spillDir string, stream bool) (stdout, stderr string, exitCode int, err error) {
 	slog.Debug("shell.docker.capture_full", "image", d.Image, "command", command, "cwd", d.session.resolvedCwd)
 
-	stdout, stderr, runErr := d.dockerExec(ctx, command, false, stream, stream, maxBytes, spillDir)
+	stdout, stderr, code, runErr := d.dockerExec(ctx, command, false, stream, stream, maxBytes, spillDir)
 
-	if !processStarted(runErr) {
+	// processStarted is what separates "the container refused this" — which is
+	// an answer, reported as data — from "there was never a container to
+	// refuse it", which is not.
+	if runErr != nil && !processStarted(runErr) {
 		return "", "", -1, fmt.Errorf("docker failed to start for image %q: %w", d.Image, runErr)
 	}
-
-	code := exitCodeOf(runErr)
 
 	slog.Debug("shell.docker.capture_full", "image", d.Image, "command", command, "exit_code", code)
 
 	return stdout, stderr, code, nil
 }
 
-// onDaemon aims a docker invocation at one daemon.
+// containerEnv resolves the pipeline's env: names into the NAME=value pairs
+// the container is created with.
 //
-// An empty host is this machine's own, which is every local step. A non-empty
-// one is a worker's, reached through the socket a venue forwards — the whole
-// reason placement and containers can compose without a second implementation
-// of either.
-func onDaemon(cmd *exec.Cmd, host string) *exec.Cmd {
-	if host != "" {
-		cmd.Env = onDaemonEnv(os.Environ(), host)
-	}
-
-	return cmd
-}
-
-// onDaemonEnv puts the daemon's address on an environment, and must be the
-// LAST thing that touches DOCKER_HOST: os/exec keeps the last duplicate, so a
-// step whose env: names DOCKER_HOST would otherwise start its container on
-// the ORCHESTRATOR's daemon while every other call of the session — exec,
-// inspect, logs, rm — still went to the worker's.
-func onDaemonEnv(env []string, host string) []string {
-	if host == "" {
-		return env
-	}
-
-	return append(env, "DOCKER_HOST="+host)
-}
-
-// forwardedNames is envNames plus the names the caller supplied values for,
-// so both kinds reach the container through the same `-e NAME`.
-func (s *dockerSession) forwardedNames() []string {
-	if len(s.envValues) == 0 {
-		return s.envNames
-	}
-
+// The values travel in the request body rather than in any argument vector,
+// which is strictly better than the `-e NAME` trick this replaced: that
+// existed to keep a secret out of the docker client's argv, where anything
+// able to read the host's process list could see it. There is no argv now.
+//
+// A name this process does not have is OMITTED rather than set empty, which
+// is what lets a pipeline name an optional variable without every operator
+// having to define it — set-but-empty is a different answer to a script that
+// tests for the variable's presence.
+//
+// Caller-supplied values WIN over this process's own. A venue's STEPS_WORKER
+// is the case: the pipeline's env: is the authority on the orchestrator, and
+// the variable names a fact about the worker that nothing here has set.
+func (s *dockerSession) containerEnv() []string {
 	names := slices.Clone(s.envNames)
+
 	for name := range s.envValues {
 		if !slices.Contains(names, name) {
 			names = append(names, name)
@@ -542,96 +633,31 @@ func (s *dockerSession) forwardedNames() []string {
 
 	slices.Sort(names)
 
-	return names
-}
+	env := make([]string, 0, len(names))
 
-// withValues puts name=value pairs on a docker client's own environment,
-// which is what `-e NAME` forwards from. Spelling them `-e NAME=value`
-// instead would put every one in the client's argv, where anything able to
-// read the host's process list could see it — the exposure env: exists to
-// avoid.
-//
-// Supplied values WIN here, the opposite of HostEnvWithValues: this builds the
-// docker client's lookup table on the orchestrator, where the pipeline's env:
-// is the authority, while that one builds a command's real environment on a
-// worker, whose own PATH/HOME/TMPDIR must survive. Neither order is a bug the
-// other fixed.
-func withValues(env []string, values map[string]string) []string {
-	if len(values) == 0 {
-		return env
-	}
+	for _, name := range names {
+		if value, ok := s.envValues[name]; ok {
+			env = append(env, name+"="+value)
 
-	for _, name := range slices.Sorted(maps.Keys(values)) {
-		env = append(env, name+"="+values[name])
+			continue
+		}
+
+		if value, ok := os.LookupEnv(name); ok {
+			env = append(env, name+"="+value)
+		}
 	}
 
 	return env
 }
 
-// dockerCommand builds the exec.Cmd for `docker <args...>`, wired so a
-// context cancellation sends SIGTERM to the docker CLI client rather than an
-// immediate SIGKILL, giving it a chance to exit cleanly before the grace
-// period expires. Whatever the client does, the command running inside the
-// container is bounded by the session's own teardown.
-func dockerCommand(ctx context.Context, host string, args []string) *exec.Cmd {
-	cmd := onDaemon(exec.CommandContext(ctx, "docker", args...), host) //nolint:gosec // executing pipeline-defined commands in a pipeline-defined image is this tool's purpose
-	cmd.Cancel = func() error {
-		return cmd.Process.Signal(syscall.SIGTERM)
-	}
-	cmd.WaitDelay = dockerKillGrace
-
-	return cmd
-}
-
-// dockerStartArgs builds the argv (after "docker") that starts a step's
-// container: `run -d --rm --init --name <name> [-v resolvedCwd:resolvedCwd -w
-// resolvedCwd] -- image sh -c sleep <lifetime>`.
+// containerArgs is the flag block for a one-shot foreground run
+// (DockerRunArgv): ownership labels, working-directory mount, user, network,
+// privilege, limits, and env forwarding.
 //
-// resolvedCwd is already an absolute, symlink-free path (see
-// ResolveMountPath, called once by NewRunner at construction) mounted at that
-// identical host path so host-side readers of the same directory (agent
-// read_file/list_dir, workspace Capture) stay coherent. An empty resolvedCwd
-// (only resource check: today) mounts nothing and runs in the image's default
-// workdir.
-//
-// --init supplies a real PID 1. That matters more here than it did for a
-// one-shot `docker run`: processes an exec leaves behind reparent to PID 1,
-// and the keepalive is a `sleep` that would never reap them, so without tini
-// a long agent conversation would accumulate zombies in its own container.
-//
-// The keepalive is a bounded `sleep` rather than an endless loop: see
-// dockerSessionLifetime for why an abandoned container has to be able to stop
-// on its own.
-//
-// There is deliberately no --rm. A self-removing container takes its own
-// postmortem with it, and the postmortem is the whole diagnosis when an image
-// rejects the keepalive — see checkAlive. Removal is explicit instead: Close
-// for the normal path, checkAlive for a container that died at birth, and
-// SweepOrphanedContainers for a run that was killed before either could run.
-//
-// The literal "--" immediately before image is load-bearing, not decorative:
-// it tells docker's flag parser that everything after it is positional, so an
-// image value docker's parser would otherwise read as a flag (e.g.
-// "--privileged", "-v /:/host") can't be smuggled into the docker run
-// invocation itself — it can only ever be looked up as an (invalid) image
-// name. config.validateImageValues rejects such a value at LoadConfig time
-// too; this is defense in depth for any image string that reaches here by
-// another path.
-func dockerStartArgs(
-	image, name, resolvedCwd string, envNames []string, user, network string,
-	privileged bool, cpuShares int, memoryBytes int64,
-) []string {
-	args := []string{"run", "-d", "--init", "--name", name}
-
-	args = append(args, containerArgs(resolvedCwd, envNames, user, network, privileged, cpuShares, memoryBytes)...)
-
-	return append(args, "--", image, "sh", "-c", keepAliveCommand())
-}
-
-// containerArgs is the flag block shared by every container this package
-// starts — the session container (dockerStartArgs) and a one-shot foreground
-// run (DockerRunArgv): ownership labels, working-directory mount, user,
-// network, privilege, limits, and env forwarding.
+// ponytail: the last argv builder left. The session container is created
+// through the engine API and needs none of this; internal/agent still spawns
+// a `docker run` for its containerized CLI subprocess, which is a foreground
+// process whose stdout it parses as it streams. It goes when that does.
 func containerArgs(
 	resolvedCwd string, envNames []string, user, network string,
 	privileged bool, cpuShares int, memoryBytes int64,
@@ -695,20 +721,6 @@ func keepAliveCommand() string {
 	return fmt.Sprintf("sleep %d", int(dockerSessionLifetime.Seconds()))
 }
 
-// dockerExecArgs builds the argv (after "docker") for one command in an
-// already-running session container: `exec [-i] -- <name> sh -c command`. The
-// container's workdir was set at start, so exec inherits it rather than
-// repeating -w.
-func dockerExecArgs(name, command string, stdin bool) []string {
-	args := []string{"exec"}
-
-	if stdin {
-		args = append(args, "-i")
-	}
-
-	return append(args, "--", name, "sh", "-c", command)
-}
-
 // ResolveMountPath returns cwd as an absolute path with symlinks resolved,
 // so the host path handed to `docker run -v` matches the real filesystem
 // location Docker Desktop (or the daemon) actually shares. Rejects a
@@ -759,12 +771,17 @@ var errDockerMissing = errors.New("docker CLI not found on PATH, but this pipeli
 //
 // Split from ValidateDocker for a PLACED containerized step: its container
 // runs on the worker's daemon, reached through the socket the venue forwards,
-// so `docker info` here proves nothing and a daemonless orchestrator is a
-// supported arrangement — but the client driving that socket is this
-// machine's docker binary. Gating both halves on the local daemon check let a
+// so asking the LOCAL daemon proves nothing and a daemonless orchestrator is
+// a supported arrangement. Gating both halves on the local daemon check let a
 // placed-only pipeline pass preflight, acquire and bill a machine, push the
-// tree, and only then die inside the step on `exec: "docker": executable file
-// not found in $PATH`.
+// tree, and only then die inside the step.
+//
+// ponytail: the binary half is nearly obsolete. Container execution talks to
+// the engine directly now, so a session needs no `docker` on PATH at all;
+// internal/agent still spawns one for its containerized CLI subprocess, and
+// this stays until that does. When it goes, a daemonless orchestrator stops
+// needing the binary too, which removes a whole failure mode rather than
+// moving it.
 func ValidateDockerCLI() error {
 	_, err := exec.LookPath("docker")
 	if err != nil {

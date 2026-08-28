@@ -3,18 +3,18 @@ package shell
 import (
 	"github.com/jtarchie/steps/internal/dockerapi"
 	"os"
-	"slices"
 	"strconv"
 	"testing"
 )
 
-// TestDockerStartArgsCarriesOwnershipLabels is what makes an orphan
-// recoverable at all: a SIGKILLed run leaves a container and nothing else, so
-// everything the next run needs to identify it has to already be on it.
-func TestDockerStartArgsCarriesOwnershipLabels(t *testing.T) {
+// TestOwnershipLabelsIdentifyThisRun is what makes an orphan recoverable at
+// all: a SIGKILLed run leaves a container and nothing else, so everything the
+// next run needs to identify it has to already be on it — whose tool it is,
+// which machine's process table the pid belongs to, and which pid.
+func TestOwnershipLabelsIdentifyThisRun(t *testing.T) {
 	t.Parallel()
 
-	args := dockerStartArgs("alpine", "steps-abc", "", nil, "", "", false, 0, 0)
+	labels := OwnershipLabels()
 
 	want := map[string]string{
 		dockerOwnerLabel: "steps",
@@ -23,15 +23,9 @@ func TestDockerStartArgsCarriesOwnershipLabels(t *testing.T) {
 	}
 
 	for key, value := range want {
-		if !slices.Contains(args, key+"="+value) {
-			t.Errorf("args = %v, want a --label %s=%s", args, key, value)
+		if labels[key] != value {
+			t.Errorf("label %s = %q, want %q", key, labels[key], value)
 		}
-	}
-
-	// Before the -- separator, or docker reads them as the container's argv.
-	sep := slices.Index(args, "--")
-	if last := slices.Index(args[sep:], "--label"); last >= 0 {
-		t.Errorf("args = %v, want every --label before the -- separator", args)
 	}
 }
 
