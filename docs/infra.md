@@ -375,7 +375,7 @@ jobs:
 ```
 
 - **Names, never values.** `env: [DEPLOY_TOKEN=hunter2]` is rejected at load time, following `api_key_env:`/`webhook_token_env:`. The reason is concrete: these fields are hashed into the merkle content map, which is written to `state.db` — a literal would be persisted in cleartext.
-- **Works on both execution paths.** On the host the named variables are added to the allowlist; in a container they're passed as `docker run -e NAME` (no value), so the secret never appears in an argv the host's process list would expose.
+- **Works on both execution paths.** On the host the named variables are added to the allowlist; in a container their values are sent to the daemon in the request that creates it, so the secret never appears in an argument vector the host's process list would expose.
 - **An unset variable contributes nothing** rather than an empty value, so a command can still tell "not configured" from "configured empty" — with the colon-less shell forms (`${VAR+set}`, as above, or `${VAR-fallback}`); `${VAR:-fallback}` collapses the two.
 - **Step-level override**: a `task`/`agent` step's `env:` replaces the referenced entry's for that step only. Unlike `image:` this is *declared*-wins, not non-empty-wins — an explicit `env: []` means "nothing beyond the baseline", which is a real thing to want. Invalid on `get`/`put` steps (set it on the resource type).
 - **Caching**: the variable **names** fold into the node's hash. The values do not — a value changing is the operator's environment moving under the pipeline, which steps has never claimed to hash.

@@ -131,23 +131,23 @@ type RunnerSpec struct {
 	// a pipeline name an optional variable without every operator having to
 	// define it.
 	Env []string
-	// User is the container's user:, passed straight to `docker run --user`.
+	// User is the container's user:, passed straight to the daemon.
 	// Empty takes the platform default — see defaultContainerUser, which is
 	// where the Linux file-ownership problem is actually handled. Ignored for
 	// host execution, which always runs as whoever started steps.
 	User string
-	// Network is the container's network:, passed straight to `docker run
-	// --network`; "none" cuts the container off from the network entirely.
+	// Network is the container's network mode; "none" cuts the container off
+	// from the network entirely.
 	// Empty takes docker's own default. Meaningless for host execution, which
 	// config rejects at load time rather than silently ignoring.
 	Network string
-	// Privileged runs the container with `docker run --privileged`. Ignored
+	// Privileged runs the container privileged. Ignored
 	// for host execution, which config rejects at load time.
 	Privileged bool
-	// CPUShares is `docker run --cpu-shares`: a relative weight, not a core
-	// count. Zero omits the flag.
+	// CPUShares is a relative weight, not a core
+	// count. Zero leaves it unset.
 	CPUShares int
-	// MemoryBytes is `docker run --memory`, in bytes. Zero omits the flag.
+	// MemoryBytes is the memory limit, in bytes. Zero leaves it unset.
 	// A container over it is OOM-killed, which surfaces as exit 137.
 	MemoryBytes int64
 	// Worker is the venue a step's tags: resolved to — a worker URL, already
@@ -206,9 +206,9 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 	case spec.MountPath != "":
 		// Already resolved, and resolvable only where it exists — this path is
 		// on the WORKER. Still checked for the one thing that is not about
-		// resolution: `docker -v` splits on ':', so a colon here misparses the
-		// mount rather than failing, which is the shape a silently-empty
-		// bind mount takes.
+		// resolution: a bind mount is spelled `source:target`, so a colon here
+		// misparses the mount rather than failing, which is the shape a
+		// silently-empty bind mount takes.
 		err := checkMountPath(spec.MountPath)
 		if err != nil {
 			return nil, fmt.Errorf("worker mount path: %w", err)

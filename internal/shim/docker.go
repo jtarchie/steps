@@ -3,7 +3,7 @@ package shim
 // The docker socket, carried on the session's own connection.
 //
 // A placed step that names an image runs its command in a container ON the
-// worker, and the orchestrator drives that with its own docker client rather
+// worker, and the orchestrator drives that with its own engine client rather
 // than teaching the shim what a container is: this file forwards bytes to the
 // worker's docker socket and parses none of them. The shim stays what its
 // depguard entry says it is — a binary that runs a command in a directory —

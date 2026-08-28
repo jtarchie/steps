@@ -153,12 +153,20 @@ func TestDockerRunnerIntegrationCancellationTerminatesWithinGrace(t *testing.T) 
 
 	_, _, _, runErr := runner.RunCaptureFull(ctx, "sleep 30")
 
+	// The command itself keeps running in the container until the session is
+	// torn down — the same as before, when the thing being killed was a docker
+	// client rather than a read. What has to end promptly is the WAIT, because
+	// a cancel is usually racing the very thing it means to stop, and a wait
+	// that outlived it would be worse than useless. Bounded well under the
+	// command's own 30s, so a cancel that did nothing fails here.
+	const bound = 10 * time.Second
+
 	elapsed := time.Since(start)
-	if elapsed > dockerKillGrace+5*time.Second {
-		t.Errorf("took %s to terminate after cancellation, want well under the %s grace window", elapsed, dockerKillGrace)
+	if elapsed > bound {
+		t.Errorf("took %s to return after cancellation, want well under %s", elapsed, bound)
 	}
 
-	_ = runErr // a killed docker client's own exit status varies; only timing is asserted here
+	_ = runErr // the reported status of a cut-off command varies; only timing is asserted here
 }
 
 // TestDockerRunnerIntegrationStatePersistsAcrossCommands is the behavior the

@@ -21,16 +21,8 @@ import (
 // whose container has already been torn down.
 var errSessionClosed = errors.New("shell: the step's container has been closed")
 
-// dockerKillGrace bounds how long a canceled docker CLI client is given to
-// exit cleanly (SIGTERM) before Go force-kills it. Unlike the per-command
-// `docker run` this replaced, a force-killed client can no longer strand a
-// container: the container is named and owned by the session, so Close's
-// `docker rm -f` tears it down regardless of what happened to any individual
-// exec client.
-const dockerKillGrace = 10 * time.Second
-
-// dockerCleanupTimeout bounds the `docker rm -f` a session issues at Close,
-// which runs from cleanup paths that must not depend on a caller's (possibly
+// dockerCleanupTimeout bounds the removal a session issues at Close, which
+// runs from cleanup paths that must not depend on a caller's (possibly
 // already-canceled) context — mirroring internal/workspace's btrfs backend.
 const dockerCleanupTimeout = 30 * time.Second
 
@@ -48,14 +40,13 @@ const dockerSessionLifetime = 24 * time.Hour
 // DockerRunner runs commands inside one container per step: the session is
 // started lazily on the first command and torn down by Close.
 //
-// It used to be a fresh `docker run --rm` per command, which had three
+// It used to be a fresh throwaway container per command, which had three
 // problems this shape fixes at once. State did not carry between calls — an
 // agent's `pip install x` followed by `python y` as two run_shell calls
 // simply did not work, and no amount of prompting reliably stops a model from
 // trying. Every call paid full container-start latency, which an agent
-// conversation pays dozens of times. And a force-killed client stranded a
-// container the daemon only reaped later, because nothing on our side knew
-// its name.
+// conversation pays dozens of times. And a container the caller lost track of
+// was reaped only much later, because nothing on our side knew its name.
 //
 // The working directory is bind-mounted at its own (resolved) host path and
 // set as the container's workdir, so host-side readers (agent
@@ -99,8 +90,7 @@ type dockerSession struct {
 	envNames []string
 	// envValues are variables the caller supplies with their values, for the
 	// ones this process's own environment does not hold — a venue's
-	// STEPS_WORKER. They are put on the docker CLIENT's environment and
-	// forwarded by name like every other, so no value reaches an argv.
+	// STEPS_WORKER.
 	envValues map[string]string
 	// user is the already-resolved --user value (see containerUser); empty
 	// takes the image's own default.
@@ -141,8 +131,8 @@ type dockerSession struct {
 // id.
 //
 // A daemon-side refusal — an unknown image is the one that matters — is
-// reported as an *ExitError carrying 125, the status `docker run` used to exit
-// with for exactly this. That is what keeps a bad image surfacing to an agent
+// reported as an *ExitError carrying 125, the status `docker run` exits with
+// for exactly this. That is what keeps a bad image surfacing to an agent
 // as ordinary tool-result data rather than a crash, and keeps a containerized
 // task's failure classifying as a task failure via IsExitError. A container
 // that started and then DIED is a different answer and deliberately not an
@@ -217,7 +207,7 @@ func (s *dockerSession) ensure(ctx context.Context) (id, stderr string, err erro
 }
 
 // dockerDaemonRefusedCode is the status a daemon-side refusal reports. 125 is
-// what `docker run` exited with for one, and the value is load-bearing rather
+// what `docker run` exits with for one, and the value is load-bearing rather
 // than cosmetic: docs/infra.md documents it, and an agent shown this as a tool
 // result sees the same number it always did.
 const dockerDaemonRefusedCode = 125
@@ -327,8 +317,8 @@ func removalContext(ctx context.Context) context.Context {
 
 // RemoveContainer deletes a container by name, best-effort. Exported so
 // internal/agent can reclaim the one-shot container behind its containerized
-// CLI run: that run has no session to Close, and killing the docker client
-// does not stop the container, so its caller owns teardown.
+// CLI run: that run has no session to Close, and nothing this end does stops
+// a container, so its caller owns teardown.
 func RemoveContainer(ctx context.Context, name string) {
 	removeContainerOn(ctx, "", name)
 }
@@ -556,7 +546,7 @@ func (d DockerRunner) RunCapture(ctx context.Context, command string) ([]byte, e
 
 // RunCaptureFull runs command in the step's container, capturing
 // stdout/stderr separately with no stdin attached. Daemon-level refusals (a
-// bad image) surface as the same 125 `docker run` reported, and a command the
+// bad image) surface as the same 125 `docker run` reports, and a command the
 // container could not run or find as its own 126/127 — exactly like any other
 // nonzero exit, as data via exitCode rather than a Go error, even a
 // signal-killed one (e.g. from a canceled ctx). Only a failure to have a
@@ -657,12 +647,11 @@ func keepAliveCommand() string {
 }
 
 // ResolveMountPath returns cwd as an absolute path with symlinks resolved,
-// so the host path handed to `docker run -v` matches the real filesystem
-// location Docker Desktop (or the daemon) actually shares. Rejects a
-// resolved path containing ':' — docker's own `-v host:container` volume
-// spec splits on that character, so a path containing one would be silently
-// misparsed into the wrong mount (or rejected by docker with a confusing
-// error) rather than failing clearly here. Exported for internal/agent's
+// so the host path handed to the daemon as a bind mount matches the real
+// filesystem location Docker Desktop (or the daemon) actually shares. Rejects
+// a resolved path containing ':' — a bind mount is spelled `host:container`,
+// so a path containing one would be silently misparsed into the wrong mount
+// (or rejected with a confusing error) rather than failing clearly here. Exported for internal/agent's
 // containerized CLI run (DockerRunArgv), which must mount the same directory
 // at the same resolved path the step's session container uses.
 func ResolveMountPath(cwd string) (string, error) {
@@ -682,13 +671,13 @@ func ResolveMountPath(cwd string) (string, error) {
 // errMountPathColon is a bind mount source docker cannot be told about.
 var errMountPathColon = errors.New("contains ':', which is not supported for a docker bind mount")
 
-// checkMountPath refuses a path `docker -v` cannot express.
+// checkMountPath refuses a path a bind mount cannot express.
 //
 // Separate from ResolveMountPath because a REMOTE mount path skips the
 // resolution — only the worker can follow its own symlinks — but not this:
-// `-v source:target` splits on the character, so a colon anywhere turns one
-// mount into a misparsed two, which docker either refuses confusingly or
-// honours as something nobody asked for.
+// a bind mount is `source:target`, so a colon anywhere turns one mount into a
+// misparsed two, which the daemon either refuses confusingly or honours as
+// something nobody asked for.
 func checkMountPath(path string) error {
 	if strings.Contains(path, ":") {
 		return fmt.Errorf("path %q %w", path, errMountPathColon)

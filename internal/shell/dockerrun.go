@@ -48,9 +48,8 @@ type DockerRunSpec struct {
 	Image string
 	Argv  []string
 	// Name is the container's --name. It is what makes the run RECLAIMABLE:
-	// killing the docker client does not stop the container it started, so a
-	// caller whose context is canceled can only tear the container down if it
-	// knows its name. Mint one with NewContainerName and remove it with
+	// nothing this end does stops a container, so a caller whose context is
+	// canceled can only tear it down if it knows its name. Mint one with NewContainerName and remove it with
 	// RemoveContainer. Empty lets docker name it, which should be reserved
 	// for runs nobody needs to interrupt.
 	Name string
@@ -58,8 +57,9 @@ type DockerRunSpec struct {
 	// exactly like a session container (see dockerStartArgs). Callers resolve
 	// it with ResolveMountPath. Empty mounts nothing.
 	ResolvedCwd string
-	// EnvNames are forwarded value-free (`-e NAME`), same reasoning as the
-	// session container: the value must not appear in the docker client's argv.
+	// EnvNames are the variable NAMES the pipeline opted in; their values are
+	// resolved from this process's environment, and a name it does not have is
+	// simply absent from the container.
 	EnvNames    []string
 	User        string
 	Network     string
