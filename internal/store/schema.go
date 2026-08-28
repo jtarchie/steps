@@ -9,7 +9,10 @@ package store
 //
 // It is a detector, not a migration counter. There is still no upgrade path
 // and deliberately so; the answer to a mismatch remains deleting the file.
-const schemaVersion = 2
+// 3 added run_placements. An older database opened without it and every
+// INSERT naming it failed — and the run-event sink only warns, so the build
+// went green having recorded nothing.
+const schemaVersion = 3
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -486,6 +489,46 @@ CREATE TABLE IF NOT EXISTS agent_usage (
     FOREIGN KEY (pipeline_id, node_hash) REFERENCES nodes(pipeline_id, hash) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_agent_usage_run ON agent_usage(run_id, step_index);
+
+-- Where a placed step actually ran, and what it cost in bytes rather than in
+-- money.
+--
+-- Facts, never a price. The rate a machine bills at is not something this
+-- process can know honestly: list prices ignore Savings Plans and Reserved
+-- Instances, a spot instance's paid price is reported by no API, and real
+-- billing arrives up to a day later. What IS knowable at run time is which
+-- machine, of what shape, running what, holding which filesystem, and how
+-- many bytes it had to be sent — which is also what a person debugging a
+-- placed step actually needs. Anyone who knows their own rate card can price
+-- these rows; steps does not guess on their behalf.
+--
+-- The nullable columns are the ones a worker may genuinely not have: only an
+-- aws:// worker has an instance, and only a shim that can answer reports a
+-- uid — where empty means "did not say" and never "root".
+CREATE TABLE IF NOT EXISTS run_placements (
+    run_id        TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    pipeline_id   INTEGER NOT NULL,
+    step_index    INTEGER NOT NULL,
+    step_name     TEXT NOT NULL,
+    job_name      TEXT NOT NULL,
+    node_hash     TEXT NOT NULL,
+    tag           TEXT NOT NULL,
+    address       TEXT NOT NULL,
+    instance_id   TEXT,
+    goos          TEXT NOT NULL,
+    goarch        TEXT NOT NULL,
+    workdir       TEXT NOT NULL,
+    fstype        TEXT NOT NULL,
+    fs_free       INTEGER NOT NULL,
+    uid           INTEGER,
+    gid           INTEGER,
+    image         TEXT NOT NULL,
+    bytes_sent    INTEGER NOT NULL,
+    created_at    TEXT NOT NULL,
+    PRIMARY KEY (run_id, node_hash),
+    FOREIGN KEY (pipeline_id, node_hash) REFERENCES nodes(pipeline_id, hash) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_run_placements_run ON run_placements(run_id, step_index);
 
 -- Full agent conversation transcripts, one row per agent node, kept OUT of
 -- nodes.result deliberately: result rides along on every node listing (the

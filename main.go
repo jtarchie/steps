@@ -544,6 +544,7 @@ type RunsCmd struct {
 	Steps      bool   `help:"show individual steps instead of job outcomes"`
 	Queue      bool   `help:"show the watch trigger queue instead of job runs"`
 	Cost       bool   `help:"show what each run's agent steps spent"`
+	Where      bool   `help:"show the machines a run's placed steps ran on"`
 	RunID      string `help:"break one run's agent spend down per step"        name:"run"`
 }
 
@@ -570,6 +571,10 @@ func (r *RunsCmd) Run() error {
 	ctx := context.Background()
 
 	switch {
+	// Before --run, which it composes with: --where --run <id> asks about one
+	// run's machines, and --where alone asks about the latest.
+	case r.Where:
+		return r.printPlacements(ctx, st)
 	// --run implies the per-step breakdown rather than needing --cost beside
 	// it. Naming a run is unambiguous about what is wanted, and a flag that
 	// reads as configured while binding nothing is the shape this codebase
@@ -2063,6 +2068,106 @@ func (r *RunsCmd) printRunCost(ctx context.Context, st *store.Store) error {
 	}
 
 	return nil
+}
+
+// printPlacements says which machines a run's placed steps ran on, and what
+// those machines turned out to be.
+//
+// The answer to "it passes locally and fails on the fleet". Facts and never a
+// price: what an instance-hour cost is not knowable from here — list prices
+// ignore Savings Plans, a spot instance's paid price is reported by no API,
+// and real billing lands a day later — and a confident wrong number in a cost
+// column is worse than no column. Anyone holding their own rate card can
+// price these rows.
+func (r *RunsCmd) printPlacements(ctx context.Context, st *store.Store) error {
+	runID, err := r.placementRun(ctx, st)
+	if err != nil || runID == "" {
+		return err
+	}
+
+	placements, err := st.RunPlacements(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("could not read placements: %w", err)
+	}
+
+	// Distinguished from "this run had no placed steps", which is the
+	// ordinary case for a pipeline that names no worker.
+	if len(placements) == 0 {
+		fmt.Printf("run %s ran every step on this machine\n", runID)
+
+		return nil
+	}
+
+	fmt.Printf("%-24s  %-12s  %-13s  %-22s  %9s  %s\n",
+		"STEP", "TAG", "PLATFORM", "FILESYSTEM", "SENT", "MACHINE")
+
+	for _, placed := range placements {
+		fmt.Printf("%-24s  %-12s  %-13s  %-22s  %9s  %s\n",
+			truncateName(placed.StepName, 24), truncateName(placed.Tag, 12),
+			placed.GOOS+"/"+placed.GOARCH, placedFilesystem(placed),
+			humanBytes(placed.BytesSent), placedMachine(placed))
+	}
+
+	return nil
+}
+
+// placementRun is the run --where reports on: the one named, or the newest.
+func (r *RunsCmd) placementRun(ctx context.Context, st *store.Store) (string, error) {
+	if r.RunID != "" {
+		return r.RunID, nil
+	}
+
+	runs, err := st.ListRuns(ctx, r.Job, 1)
+	if err != nil {
+		return "", fmt.Errorf("could not read runs: %w", err)
+	}
+
+	if len(runs) == 0 {
+		fmt.Println("no runs recorded")
+
+		return "", nil
+	}
+
+	return runs[0].ID, nil
+}
+
+// placedFilesystem is what the tree landed on, or a stated silence.
+//
+// Empty is never rendered as an ordinary disk: an older shim, or a platform
+// with no statfs, genuinely cannot say — and tmpfs, the answer this column
+// exists to surface, would otherwise hide behind a plausible blank.
+func placedFilesystem(placed store.Placement) string {
+	if placed.FSType == "" {
+		return "not reported"
+	}
+
+	return fmt.Sprintf("%s (%s free)", placed.FSType, humanBytes(placed.FSFree))
+}
+
+// placedMachine names the machine, and the image if the step ran in one.
+func placedMachine(placed store.Placement) string {
+	if placed.Image == "" {
+		return placed.Address
+	}
+
+	return placed.Address + " in " + placed.Image
+}
+
+// humanBytes renders a byte count at the largest unit that leaves a number
+// worth reading.
+func humanBytes(n int64) string {
+	const unit = 1024
+
+	if n < unit {
+		return strconv.FormatInt(n, 10) + " B"
+	}
+
+	size, exp := float64(n)/unit, 0
+	for size >= unit && exp < 3 {
+		size, exp = size/unit, exp+1
+	}
+
+	return fmt.Sprintf("%.1f %s", size, [...]string{"KiB", "MiB", "GiB", "TiB"}[exp])
 }
 
 // humanTokens groups a token count with thin separators, so 4102338 reads as

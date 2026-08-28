@@ -117,6 +117,14 @@ type session struct {
 	// container on it should write as. nil uid means the shim did not say.
 	goos     string
 	uid, gid *int
+	// goarch is the worker's, recorded rather than used: nothing here
+	// branches on it, but "which architecture did this actually run on" is
+	// the first question asked of a step that passed locally and failed
+	// placed.
+	goarch string
+	// tag is the --worker tag the step named, kept so a placement record can
+	// say which mapping chose this machine and not only which machine.
+	tag string
 	// container is the caller's spec, carried so a placed step that names an
 	// image can build the container runner it needs once the workdir is
 	// known. inner is that runner, and dockerStop tears down the forwarded
@@ -371,7 +379,7 @@ func (s *session) greet() error {
 	s.dataplane = ok.DataPlane
 	s.fstype = ok.FSType
 	s.fsfree = ok.FSFree
-	s.goos, s.uid, s.gid = ok.GOOS, ok.UID, ok.GID
+	s.goos, s.goarch, s.uid, s.gid = ok.GOOS, ok.GOARCH, ok.UID, ok.GID
 
 	notice := volatileWorkdirNotice(s.worker, ok)
 	if notice != "" {

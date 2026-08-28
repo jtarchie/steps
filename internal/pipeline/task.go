@@ -73,10 +73,19 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 
 	fmt.Printf("task: %s\n", name)
 
+	// Where the step ran is answered by the machine itself, several frames
+	// below here and only once the step is done with it, so it comes back
+	// through a sink rather than a return value.
+	ctx, placed := withPlacementSink(ctx)
+
 	err = executeTask(ctx, r.cfg, step, rt, r.bw)
 	if err != nil {
 		wrapped := fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 		recordStepFailure(ctx, r, node, wrapped)
+		// A step that FAILED on a worker is the one whose machine somebody
+		// wants named — an architecture, a filesystem, a stale image. Same
+		// reasoning as recording a failed agent step's spend.
+		recordPlacement(ctx, r, placed, i, name, hash)
 
 		return stepResult{}, wrapped
 	}
@@ -85,6 +94,9 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 	}
+
+	// After the node, never before: run_placements references it.
+	recordPlacement(ctx, r, placed, i, name, hash)
 
 	// After the node is recorded, so a run that could not record its own
 	// outcome does not leave behind an entry claiming the work is done.
@@ -154,6 +166,11 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 		// next step on the tag would open a session against a host that is
 		// about to die.
 		defer releaseIfReclaimed(ctx, step, runner, dialed)
+
+		// After the attempts too, and for the same reason: a session dials
+		// lazily and counts bytes as it goes, so the facts about the machine
+		// are only whole once the step is finished with it.
+		defer notePlacement(ctx, runner)
 
 		return dialed, retryWithTimeout(ctx, step.Attempts, rt.Timeout, func(attempt, total int) {
 			fmt.Printf("task: %s (attempt %d/%d)\n", executedStepName(step), attempt, total)

@@ -41,7 +41,8 @@ steps test <pipeline>       run every job and check assert: directives
 steps web <pipeline>...     serve the browser UI, polling as it serves
 steps validate <pipeline>   check the file, and that this machine can run it
 steps plan <pipeline>       show what a run would execute vs skip
-steps runs <pipeline>       show what past runs recorded (--cost for spend)
+steps runs <pipeline>       show what past runs recorded (--cost for spend,
+                            --where for the machines placed steps ran on)
 steps preflight <pipeline>  check a job's models and MCP servers are live
 steps jobs <pipeline>       list jobs the circuit breaker paused, or resume one
 steps approvals <pipeline>  list approval: steps waiting for a decision

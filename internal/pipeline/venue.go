@@ -13,10 +13,13 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/venue"
 )
 
@@ -381,4 +384,125 @@ func sortedKeys[V any](m map[string]V) []string {
 	sort.Strings(keys)
 
 	return keys
+}
+
+// placementSinkKey types the context value carrying one step's placement
+// facts.
+type placementSinkKey struct{}
+
+// placementSink is where a step leaves what its worker said about itself, for
+// the enclosing step to record once the node that row references exists.
+//
+// It is a handoff and not a return value because the facts are only whole at
+// a point nothing on the call path can see: a session dials LAZILY, so the
+// workdir and filesystem arrive with the first command, and the byte count is
+// final only when the runner closes. The one place that knows all of it is a
+// defer inside the venue-retry closure, several frames below the caller that
+// has the node hash.
+//
+// Last write wins, which is the answer a re-placed step wants: a step evicted
+// off one machine and finished on another ran on the second, and the first
+// is already reported as an eviction.
+type placementSink struct {
+	mu    sync.Mutex
+	last  venue.Placement
+	noted bool
+}
+
+func (s *placementSink) note(placement venue.Placement) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.last, s.noted = placement, true
+}
+
+func (s *placementSink) taken() (venue.Placement, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.last, s.noted
+}
+
+// withPlacementSink gives one step somewhere to leave its placement facts.
+//
+// Installed per STEP rather than per job: the sink is keyed by nothing, so a
+// job-wide one would have parallel steps overwriting each other's machine.
+func withPlacementSink(ctx context.Context) (context.Context, *placementSink) {
+	sink := &placementSink{}
+
+	return context.WithValue(ctx, placementSinkKey{}, sink), sink
+}
+
+// notePlacement records what a finished runner's worker said about itself.
+//
+// Deferred rather than called after the runner is built, because a session
+// that has not been asked to run anything has not dialed and has nothing to
+// say — and because BytesSent is only whole once the step is done with it.
+func notePlacement(ctx context.Context, runner shell.Runner) {
+	sink, _ := ctx.Value(placementSinkKey{}).(*placementSink)
+	if sink == nil {
+		return
+	}
+
+	placement, ok := venue.PlacementOf(runner)
+	if !ok {
+		return
+	}
+
+	sink.note(placement)
+}
+
+// recordPlacement persists where a step ran, if it ran anywhere but here.
+//
+// Best-effort, like the agent's usage row and for the same reason: a
+// bookkeeping write must never turn a step that did its work into a failed
+// one. Called only AFTER the step's node is recorded — run_placements has a
+// foreign key into nodes so that retention reaping a node takes this with it,
+// which also means the row cannot be written before the node exists.
+func recordPlacement(ctx context.Context, runner stepRunner, sink *placementSink, index int, name, hash string) {
+	if runner.st == nil {
+		return
+	}
+
+	placement, ok := sink.taken()
+	if !ok {
+		return
+	}
+
+	runID := events.RunID(ctx)
+	if runID == "" {
+		return
+	}
+
+	var instance *string
+	if placement.Instance != "" {
+		instance = &placement.Instance
+	}
+
+	// Detached: the likeliest reason a placed step is finishing is that it was
+	// cancelled or timed out, and those are precisely the runs whose machine
+	// somebody wants named.
+	err := runner.st.RecordPlacement(context.WithoutCancel(ctx), store.Placement{
+		RunID:      runID,
+		StepIndex:  index,
+		StepName:   name,
+		JobName:    runner.jobName,
+		NodeHash:   hash,
+		Tag:        placement.Tag,
+		Address:    placement.Address,
+		InstanceID: instance,
+		GOOS:       placement.GOOS,
+		GOARCH:     placement.GOARCH,
+		Workdir:    placement.Workdir,
+		FSType:     placement.FSType,
+		//nolint:gosec // a filesystem's free bytes does not reach 2^63
+		FSFree:    int64(placement.FSFree),
+		UID:       placement.UID,
+		GID:       placement.GID,
+		Image:     placement.Image,
+		BytesSent: placement.BytesSent,
+	})
+	if err != nil {
+		logFrom(ctx).Warn("job.placement_unrecorded", "job", runner.jobName, "step", name, "error", err)
+	}
 }

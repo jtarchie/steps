@@ -40,6 +40,7 @@ func NewRunner(spec shell.RunnerSpec) (shell.Runner, error) {
 		cwd:     spec.Cwd,
 		outputs: spec.Fetch,
 		env:     withWorkerTag(resolveEnv(spec.Env), spec.WorkerTag),
+		tag:     spec.WorkerTag,
 		keep:    spec.Keep,
 		blobs:   blobs,
 		// The container half of a placed step, if it has one. Kept as the

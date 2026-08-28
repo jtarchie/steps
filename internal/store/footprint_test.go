@@ -175,6 +175,25 @@ func syntheticBuild(ctx context.Context, t *testing.T, store *Store, jobName str
 		t.Fatalf("RecordAgentUsage: %v", err)
 	}
 
+	// One placed step per build, so the measured footprint is a build that
+	// used a worker — the case that costs the most to record.
+	instance := "i-0123456789abcdef0"
+	uid, gid := 0, 0
+
+	err = store.RecordPlacement(ctx, Placement{
+		RunID: runID, StepIndex: 1, StepName: "unit", JobName: jobName,
+		NodeHash: hashes[1], Tag: "linux-arm64",
+		Address: "aws://" + instance, InstanceID: &instance,
+		GOOS: "linux", GOARCH: "arm64",
+		Workdir: "/var/tmp/steps/001-90319-83c7c0781e2ab799/work",
+		FSType:  "btrfs", FSFree: 41_083_355_136,
+		UID: &uid, GID: &gid,
+		Image: "public.ecr.aws/docker/library/golang:1.25", BytesSent: 67_108_864,
+	})
+	if err != nil {
+		t.Fatalf("RecordPlacement: %v", err)
+	}
+
 	err = store.SaveNodeTranscript(ctx, hashes[3], transcriptJSON(transcriptBytes))
 	if err != nil {
 		t.Fatalf("SaveNodeTranscript: %v", err)
@@ -411,7 +430,7 @@ func TestFootprintPerBuildIsBounded(t *testing.T) {
 		t.Errorf("runs = %d rows, want %d — the cap is not being applied", got, keep)
 	}
 
-	for _, table := range []string{"run_events", "run_steps", "agent_usage", "node_transcripts", "nodes"} {
+	for _, table := range []string{"run_events", "run_steps", "agent_usage", "run_placements", "node_transcripts", "nodes"} {
 		if countRows(ctx, t, store, table) == 0 {
 			t.Errorf("%s is empty; the prune took the retained builds with it", table)
 		}
@@ -453,6 +472,10 @@ func TestFootprintNoOrphansSurviveAPrune(t *testing.T) {
 			`SELECT COUNT(*) FROM agent_usage a WHERE NOT EXISTS (SELECT 1 FROM runs r WHERE r.id = a.run_id)`},
 		{"agent_usage rows whose node is gone",
 			`SELECT COUNT(*) FROM agent_usage a WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.hash = a.node_hash)`},
+		{"run_placements rows whose run is gone",
+			`SELECT COUNT(*) FROM run_placements p WHERE NOT EXISTS (SELECT 1 FROM runs r WHERE r.id = p.run_id)`},
+		{"run_placements rows whose node is gone",
+			`SELECT COUNT(*) FROM run_placements p WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.hash = p.node_hash)`},
 		{"node_transcripts rows whose node is gone",
 			`SELECT COUNT(*) FROM node_transcripts t WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.hash = t.hash)`},
 		// Only universal because syntheticPlan is a LINEAR chain, where every
@@ -733,6 +756,8 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 		{"run_steps", "run_id", "runs", "CASCADE"},
 		{"agent_usage", "run_id", "runs", "CASCADE"},
 		{"agent_usage", "node_hash", "nodes", "CASCADE"},
+		{"run_placements", "run_id", "runs", "CASCADE"},
+		{"run_placements", "node_hash", "nodes", "CASCADE"},
 		{"node_transcripts", "hash", "nodes", "CASCADE"},
 		{"nodes", "content_hash", "node_content", "RESTRICT"},
 		{"runs", "parent_run_id", "runs", "SET NULL"},
